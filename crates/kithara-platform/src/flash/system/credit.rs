@@ -1,6 +1,14 @@
-use std::{marker::PhantomData, mem, panic::Location, sync::atomic::Ordering};
+use std::{
+    marker::PhantomData,
+    mem,
+    panic::Location,
+    sync::{
+        Weak,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
-use super::{Core, FLASH, FlashInner, SyncHolder};
+use super::{Core, FLASH, FlashInner, SyncHolder, WaiterId};
 use crate::{
     backend::thread::current,
     common::thread_id::ACTIVE_NAMED_THREADS,
@@ -228,6 +236,39 @@ impl Drop for HeldSlot {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum AsyncKey {
+    Timed((u64, WaiterId)),
+    Indef(WaiterId),
+    Yield(WaiterId),
+}
+
+/// Unique receipt retaining one grant credit through wake and poll latency.
+/// Drop removes an ungranted entry or settles that credit on the creating
+/// engine, whose weak identity does not keep a stopped engine alive.
+pub(crate) struct AsyncHandle {
+    pub(super) owner: Weak<FlashInner>,
+    pub(super) granted: Arc<AtomicBool>,
+    pub(super) key: AsyncKey,
+    pub(super) task: Option<u64>,
+}
+
+impl AsyncHandle {
+    /// Observe an engine grant only while its owner is alive. A different
+    /// clock advance cannot resolve this waiter; only its firer sets the flag.
+    pub(crate) fn granted(&self) -> bool {
+        self.granted.load(Ordering::Acquire) && self.owner.strong_count() != 0
+    }
+}
+
+impl Drop for AsyncHandle {
+    fn drop(&mut self) {
+        if let Some(owner) = self.owner.upgrade() {
+            owner.release_async_wait(self);
+        }
+    }
+}
+
 impl Core {
     /// Move a finished task's `active_async` slot into a [`HeldSlot`]. Adding
     /// to `active` cannot enable an advance, so this runs no advance rule.
@@ -330,6 +371,42 @@ pub(crate) fn reset_credit() {
 }
 
 impl FlashInner {
+    /// Settle one unique async receipt after consume or cancellation. The
+    /// grant and entry removal share this lock with the firer, so either the
+    /// entry is removed before grant or its retained credit is returned once.
+    fn release_async_wait(&self, handle: &AsyncHandle) {
+        let mut s = self.core.lock();
+        match handle.key {
+            AsyncKey::Timed(key) => {
+                s.sched.timed.remove(&key);
+            }
+            AsyncKey::Indef(id) => {
+                s.sched.indef.remove(&id);
+            }
+            AsyncKey::Yield(id) => {
+                s.sched.yielders.remove(&id);
+            }
+        }
+        if handle.granted.load(Ordering::Acquire) {
+            match handle.task.and_then(|id| s.registry.task_diag.get_mut(&id)) {
+                Some(task) => {
+                    debug_assert!(task.grants > 0, "async grant without task credit");
+                    task.grants -= 1;
+                }
+                None => {
+                    debug_assert!(s.registry.active > 0, "async grant without retained credit");
+                    s.registry.active -= 1;
+                }
+            }
+            if let Some(id) = handle.task {
+                s.registry.remove_settled_task(id);
+            }
+        }
+        let adv = s.try_advance(&self.clock);
+        drop(s);
+        adv.fire();
+    }
+
     /// Enters one wrapped wait under `core` and returns the [`WaitGuard`] to consume
     /// once `token.wait()` returns. First-wait uncounted threads become `Parked`
     /// without decrementing `active`; their first wake adds the credit and marks

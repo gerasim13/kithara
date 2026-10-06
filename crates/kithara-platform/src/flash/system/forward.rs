@@ -2,9 +2,9 @@ use std::{panic::Location, task::Waker};
 
 use super::{
     CvId, FLASH,
-    credit::WaitGuard,
+    credit::{AsyncHandle, WaitGuard},
     gate::TaskGate,
-    sched::{AsyncHandle, ParkRole, WakeBatch},
+    sched::{ParkRole, WakeBatch},
     wake::Token,
 };
 use crate::{

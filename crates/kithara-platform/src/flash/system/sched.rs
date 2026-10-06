@@ -1,17 +1,14 @@
 use std::{
     backtrace::Backtrace,
     panic::Location,
-    sync::{
-        Weak,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::AtomicBool,
     task::Waker,
     time::Duration as StdDuration,
 };
 
 use super::{
     Clock, Core, CvDesc, CvId, FlashInner, Registry, WaiterId,
-    credit::{self, HeldSlot, WaitGuard},
+    credit::{self, AsyncHandle, AsyncKey, HeldSlot, WaitGuard},
     gate::TaskGate,
     inner::TaskRecord,
     state::{AtomicTaskState, ParkOutcome, TaskDiag, TaskState, WakeOutcome},
@@ -169,7 +166,7 @@ impl Registry {
                 .sum::<usize>()
     }
 
-    fn remove_settled_task(&mut self, id: u64) {
+    pub(super) fn remove_settled_task(&mut self, id: u64) {
         if self
             .task_diag
             .get(&id)
@@ -867,44 +864,8 @@ impl FlashInner {
     }
 }
 
-/// Async waiter cancel plus the notify/channel signal surface.
+/// Async waiter registration plus the notify/channel signal surface.
 impl FlashInner {
-    /// Settle one unique async receipt after consume or cancellation. The
-    /// grant and entry removal share this lock with the firer, so either the
-    /// entry is removed before grant or its retained credit is returned once.
-    fn release_async_wait(&self, handle: &AsyncHandle) {
-        let mut s = self.core.lock();
-        match handle.key {
-            AsyncKey::Timed(key) => {
-                s.sched.timed.remove(&key);
-            }
-            AsyncKey::Indef(id) => {
-                s.sched.indef.remove(&id);
-            }
-            AsyncKey::Yield(id) => {
-                s.sched.yielders.remove(&id);
-            }
-        }
-        if handle.granted.load(Ordering::Acquire) {
-            match handle.task.and_then(|id| s.registry.task_diag.get_mut(&id)) {
-                Some(task) => {
-                    debug_assert!(task.grants > 0, "async grant without task credit");
-                    task.grants -= 1;
-                }
-                None => {
-                    debug_assert!(s.registry.active > 0, "async grant without retained credit");
-                    s.registry.active -= 1;
-                }
-            }
-            if let Some(id) = handle.task {
-                s.registry.remove_settled_task(id);
-            }
-        }
-        let adv = s.try_advance(&self.clock);
-        drop(s);
-        adv.fire();
-    }
-
     /// Register an UNTIMED async channel waiter for `cvid`. Unlike
     /// [`FlashInner::register_notify_async`] this NEVER consumes a permit: a sim
     /// channel (`tokio::sync::mpsc`/`oneshot`) holds its own queue as the source of
@@ -1008,39 +969,6 @@ impl FlashInner {
         drop(s);
         for t in woken {
             t.fire();
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum AsyncKey {
-    Timed((u64, WaiterId)),
-    Indef(WaiterId),
-    Yield(WaiterId),
-}
-
-/// Unique receipt retaining one grant credit through wake and poll latency.
-/// Drop removes an ungranted entry or settles that credit on the creating
-/// engine, whose weak identity does not keep a stopped engine alive.
-pub(crate) struct AsyncHandle {
-    owner: Weak<FlashInner>,
-    granted: Arc<AtomicBool>,
-    key: AsyncKey,
-    task: Option<u64>,
-}
-
-impl AsyncHandle {
-    /// Observe an engine grant only while its owner is alive. A different
-    /// clock advance cannot resolve this waiter; only its firer sets the flag.
-    pub(crate) fn granted(&self) -> bool {
-        self.granted.load(Ordering::Acquire) && self.owner.strong_count() != 0
-    }
-}
-
-impl Drop for AsyncHandle {
-    fn drop(&mut self) {
-        if let Some(owner) = self.owner.upgrade() {
-            owner.release_async_wait(self);
         }
     }
 }

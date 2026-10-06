@@ -6,7 +6,8 @@
 //! to the global; primitive-path tests and production use those forwards.
 
 /// Participant credit accounting (dedicated pacers, bridged waits, blocking
-/// pacer bracket) split out of the scheduler — see `credit.rs`.
+/// pacer bracket and async waiter receipts) split out of the scheduler — see
+/// `credit.rs`.
 pub(super) mod credit;
 /// Hang-dump rendering: the `fmt::Display for FlashInner` snapshot of counters,
 /// quiescence pinners, parked waiters and engine primitives — see `dump.rs`.
@@ -37,6 +38,7 @@ pub(super) mod state;
 /// Waiter wake handles ([`wake::Token`] / [`wake::Wake`]).
 pub(super) mod wake;
 
+pub(in crate::flash) use credit::AsyncHandle;
 pub(in crate::flash) use forward::{
     async_acquire, describe_cvid, dump, next_condvar_id, park_timed_unparkable,
     register_channel_async, register_condvar_timed, register_condvar_untimed,
@@ -47,4 +49,4 @@ pub(in crate::flash) use inner::{
     Clock, Core, CvDesc, CvId, FLASH, FlashInner, Registry, SyncHolder, WaiterId,
 };
 pub(in crate::flash) use pace::{real_io_enter, real_io_exit};
-pub(in crate::flash) use sched::{AsyncHandle, ParkRole};
+pub(in crate::flash) use sched::ParkRole;
