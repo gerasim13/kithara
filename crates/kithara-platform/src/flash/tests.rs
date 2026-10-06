@@ -1346,7 +1346,7 @@ fn ambient_blocking_closure_pins_virtual_clock() {
 /// 50ms real release, opposite verdict on the sibling's 10ms virtual park.
 #[kithara::test(native, flash(false))]
 fn a_yielding_blocking_closure_releases_the_virtual_clock() {
-    let waited = park_beside_a_waiting_closure(crate::thread::yield_now);
+    let waited = park_beside_a_waiting_closure(crate::thread::yield_now, park_for_10ms);
     assert!(
         waited < Duration::from_millis(40),
         "a yielding blocking closure held the virtual clock for its whole real \
@@ -1363,9 +1363,10 @@ fn a_yielding_blocking_closure_releases_the_virtual_clock() {
 /// with a quarter of a virtual second spent.
 #[kithara::test(native, flash(false))]
 fn a_backing_off_blocking_closure_releases_the_virtual_clock() {
-    let waited = park_beside_a_waiting_closure(|| {
-        crate::thread::paced_backoff(Duration::from_millis(1));
-    });
+    let waited = park_beside_a_waiting_closure(
+        || crate::thread::paced_backoff(Duration::from_millis(1)),
+        park_for_10ms,
+    );
     assert!(
         waited < Duration::from_millis(40),
         "a backing-off blocking closure held the virtual clock for its whole real \
@@ -1373,10 +1374,34 @@ fn a_backing_off_blocking_closure_releases_the_virtual_clock() {
     );
 }
 
+/// A gate poll is a deadline the clock owes a stop, not a backstop under an
+/// edge, even though it parks a thread. A yielder beside it used to be turned
+/// back at the current instant whenever every other park was a thread park,
+/// so a loop that backed off until a backpressured worker's poll moved its
+/// data froze the clock short of that poll. That is how
+/// `packaged_abr_switch_keeps_player_continuity` spun at 1.07 virtual seconds
+/// through millions of yields.
+#[kithara::test(native, flash(false))]
+fn a_yielding_closure_lets_the_clock_reach_a_gate_poll() {
+    let waited = park_beside_a_waiting_closure(crate::thread::yield_now, || {
+        let gate = ThreadGate::default();
+        assert!(!gate.wait_poll_timeout(gate.current(), Duration::from_millis(10)));
+    });
+    assert!(
+        waited < Duration::from_millis(40),
+        "a yielding blocking closure kept the clock short of a 10ms gate poll, \
+         which took {waited:?} real to fire"
+    );
+}
+
+fn park_for_10ms() {
+    forward::park_for(Duration::from_millis(10));
+}
+
 /// Run an ambient `spawn_blocking` closure that loops on `wait` until a helper
 /// releases it ~50ms real later, and return the real time a 10ms virtual engine
-/// park took meanwhile.
-fn park_beside_a_waiting_closure(wait: fn()) -> Duration {
+/// `park` took meanwhile.
+fn park_beside_a_waiting_closure(wait: fn(), park: fn()) -> Duration {
     let _g = guard();
     reset();
     let _a = ambient_scope(true);
@@ -1403,7 +1428,7 @@ fn park_beside_a_waiting_closure(wait: fn()) -> Duration {
         release_timer.store(1, Ordering::Release);
     });
     let start = RealInstant::now();
-    forward::park_for(Duration::from_millis(10));
+    park();
     let waited = start.elapsed();
     releaser.join().expect("releaser thread");
     rt.block_on(handle).expect("blocking closure joined");
