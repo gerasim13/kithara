@@ -4,7 +4,6 @@ use kithara_audio::SeekOutcome;
 use kithara_bufpool::HasPool;
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::Arc;
-use tracing::warn;
 
 use super::{PlayerRuntime, SelectTransition};
 use crate::{
@@ -186,18 +185,7 @@ where
 
     /// Update crossfade duration unless the owning player is closed.
     pub fn set_crossfade_duration(&self, seconds: f32) {
-        if let Err(error) = self.try_set_crossfade_duration(seconds) {
-            warn!(?error, seconds, "crossfade duration update rejected");
-        }
-    }
-
-    /// Submit a crossfade duration while the player is open.
-    ///
-    /// # Errors
-    /// Returns a closed-owner or slot command admission error.
-    pub fn try_set_crossfade_duration(&self, seconds: f32) -> Result<(), PlayError> {
-        self.runtime
-            .with_open_result(|runtime| runtime.try_set_crossfade_duration(seconds))
+        self.command(|runtime| runtime.set_crossfade_duration(seconds));
     }
 
     /// Update the default playback rate unless the owning player is closed.

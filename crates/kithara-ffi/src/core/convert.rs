@@ -547,9 +547,7 @@ impl TryFrom<&PlayerEvent> for FfiPlayerEvent {
             },
             PlayerEvent::PlaybackStarted { .. }
             | PlayerEvent::CurrentItemChanged { .. }
-            | PlayerEvent::PrerollCompleted { .. }
-            | PlayerEvent::PrefetchRequested
-            | PlayerEvent::HandoverRequested { .. } => return Err(NotForwarded),
+            | PlayerEvent::PrerollCompleted { .. } => return Err(NotForwarded),
         })
     }
 }

@@ -44,7 +44,7 @@ where
     pub fn set_crossfade_settings(&self, settings: CrossfadeSettings) -> Result<(), PlayError> {
         let settings = settings.validate()?;
         self.with_open_result(|queue| {
-            queue.player.try_set_crossfade_duration(settings.duration)?;
+            queue.player.set_crossfade_duration(settings.duration);
             let relinked = queue.config.crossfade_settings().link() != settings.link();
             queue.config.set_crossfade_settings(settings);
             if relinked && let Some(armed) = queue.player.armed_next() {

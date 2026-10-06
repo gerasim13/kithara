@@ -30,7 +30,7 @@ impl PendingNextState {
     }
 }
 
-/// Internal auto-advance state for the next queue item.
+/// The successor armed on the deck for the next queue item.
 ///
 /// `Playlist` owns the current index; `PendingNext` only tracks the
 /// already-enqueued successor and whether it has been activated.

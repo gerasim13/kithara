@@ -405,20 +405,6 @@ pub enum PlayerEvent {
         item: ItemRole,
         fault: PlaybackFault,
     },
-    /// Leading track entered the prefetch window — arm the next slot.
-    PrefetchRequested,
-    /// A track entered its crossfade window — commit the armed slot.
-    /// Suppressed when `crossfade_duration == 0` (audio thread handles
-    /// handover at EOF).
-    ///
-    /// Carries [`ItemRole`] for the same reason
-    /// [`ItemDidPlayToEnd`](Self::ItemDidPlayToEnd) does: the request names
-    /// the track that is running out, and a consumer whose cursor has
-    /// already moved to the successor must be able to see that this
-    /// handover was already performed.
-    HandoverRequested {
-        item: ItemRole,
-    },
 }
 
 #[derive(Clone, Debug, Event)]

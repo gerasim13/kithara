@@ -97,16 +97,6 @@ fn player_crossfade_duration() {
 }
 
 #[kithara::test]
-fn player_prefetch_duration() {
-    let player = player();
-    assert!((player.prefetch_duration() - 3.5).abs() < f32::EPSILON);
-    player.set_prefetch_duration(8.0);
-    assert!((player.prefetch_duration() - 8.0).abs() < f32::EPSILON);
-    player.set_prefetch_duration(-1.0);
-    assert!((player.prefetch_duration() - 0.0).abs() < f32::EPSILON);
-}
-
-#[kithara::test]
 fn player_events_subscribe() {
     let player = player();
     let mut rx = player.subscribe::<PlayerEvent>();
@@ -162,7 +152,6 @@ fn player_config_custom() {
         .worker(worker())
         .session(mock::session())
         .crossfade_duration(2.0)
-        .prefetch_duration(5.0)
         .default_rate(0.5)
         .gapless_mode(GaplessMode::MediaOnly)
         .eq_layout(generate_log_spaced_bands(5))
@@ -216,14 +205,12 @@ fn player_config_builder() {
         .session(mock::session())
         .default_rate(0.5)
         .crossfade_duration(2.5)
-        .prefetch_duration(7.0)
         .max_slots(8)
         .eq_layout(generate_log_spaced_bands(5))
         .build();
     assert_eq!(config.max_slots, 8);
     assert!((config.default_rate.load() - 0.5).abs() < f32::EPSILON);
     assert!((config.crossfade_duration.load() - 2.5).abs() < f32::EPSILON);
-    assert!((config.prefetch_duration.load() - 7.0).abs() < f32::EPSILON);
     assert_eq!(config.eq_layout.len(), 5);
 }
 
@@ -294,29 +281,6 @@ fn player_keeps_explicit_worker_and_shared_pools() {
             .build(),
     );
     assert!(std::ptr::eq(player.worker().pools(), worker.pools()));
-}
-
-#[kithara::test]
-fn auto_advance_enabled_default_and_toggle() {
-    let player = player();
-    assert!(player.auto_advance_enabled(), "default must be on");
-    player.set_auto_advance_enabled(false);
-    assert!(!player.auto_advance_enabled());
-    player.set_auto_advance_enabled(true);
-    assert!(player.auto_advance_enabled());
-}
-
-#[kithara::test]
-fn auto_advance_disabled_via_config() {
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(mock::SAMPLE_RATE)
-            .worker(worker())
-            .session(mock::session())
-            .auto_advance_enabled(false)
-            .build(),
-    );
-    assert!(!player.auto_advance_enabled());
 }
 
 #[kithara::test]

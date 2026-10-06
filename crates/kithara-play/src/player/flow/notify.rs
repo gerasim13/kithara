@@ -49,12 +49,6 @@ where
         }
 
         match notification {
-            PlayerNotification::Requested => {
-                self.handle_track_requested();
-            }
-            PlayerNotification::HandoverRequested { .. } => {
-                self.handle_handover_requested(item);
-            }
             PlayerNotification::RateChanged { rate } => {
                 self.core
                     .engine
@@ -83,23 +77,6 @@ where
         }
     }
 
-    fn handle_handover_requested(&self, item: Option<ItemRole>) {
-        if self.crossfade_duration() <= 0.0 {
-            return;
-        }
-        if let Some(item) = item {
-            self.core
-                .engine
-                .bus()
-                .publish(PlayerEvent::HandoverRequested { item });
-        }
-        if self.auto_advance_enabled()
-            && let Some(idx) = self.armed_next()
-        {
-            let _ = self.commit_next(idx, self.configured_crossfade());
-        }
-    }
-
     /// The role is read before `retire_activated_at_end` runs, so the
     /// phase still describes the arena as it was when the track stopped.
     fn handle_track_playback_stopped(
@@ -116,19 +93,6 @@ where
         self.retire_activated_at_end();
     }
 
-    fn handle_track_requested(&self) {
-        self.core
-            .engine
-            .bus()
-            .publish(PlayerEvent::PrefetchRequested);
-        if self.auto_advance_enabled() {
-            let next_index = self.current_index() + 1;
-            if next_index < self.item_count() {
-                let _ = self.arm_next(next_index, self.configured_crossfade().link());
-            }
-        }
-    }
-
     /// Name the item a start or stop notification is about, together with
     /// its role in the arena. `None` for notifications that do not name an
     /// item at all.
@@ -142,8 +106,7 @@ where
     fn item_role(&self, slot_id: SlotId, notification: &PlayerNotification) -> Option<ItemRole> {
         let (src, id) = match notification {
             PlayerNotification::PlaybackStarted { src, item_id, .. }
-            | PlayerNotification::PlaybackStopped { src, item_id, .. }
-            | PlayerNotification::HandoverRequested { src, item_id } => (src, *item_id),
+            | PlayerNotification::PlaybackStopped { src, item_id, .. } => (src, *item_id),
             _ => return None,
         };
         let track = TrackRef::new(id, slot_id, Arc::clone(src));

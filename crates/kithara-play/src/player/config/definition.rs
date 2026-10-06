@@ -73,15 +73,6 @@ pub struct PlayerConfig<S> {
         debug(skip)
     )]
     pub eq_layout: Vec<EqBandConfig>,
-    /// Built-in auto-advance handler. The queue overwrites this for every queue-driven
-    /// player at construction, so it is not a document key.
-    #[config(
-        value(bool, self.auto_advance_enabled.load()),
-        wrap(default = true, with = RelaxedAtomicBool::new),
-        patch(skip),
-        debug(skip)
-    )]
-    pub auto_advance_enabled: RelaxedAtomicBool,
     /// Make audio-thread reads block on a producer-ring underrun instead of
     /// zero-filling the block. Offline (faster-than-real-time) harnesses opt
     /// in so rendered output never stretches with inserted silence while the
@@ -115,16 +106,6 @@ pub struct PlayerConfig<S> {
     /// An injected [`EventBus`] keeps its own capacity and identity.
     #[config(builder(default = default_event_bus_capacity()))]
     pub event_bus_capacity: NonZeroUsize,
-    /// Secondary lead time before EOF at which the next queued item is loaded. The
-    /// queue overwrites this for every queue-driven player at construction, so it is
-    /// not a document key.
-    #[config(
-        value(f32, self.prefetch_duration.load()),
-        wrap(default = consts::DEFAULT_PREFETCH_DURATION, with = RelaxedAtomicF32::new),
-        patch(skip),
-        debug(skip)
-    )]
-    pub prefetch_duration: RelaxedAtomicF32,
     /// Maximum concurrent slots of the engine this player builds.
     /// Default: 4.
     #[config(builder(default = consts::DEFAULT_MAX_SLOTS))]
@@ -202,11 +183,9 @@ mod tests {
         let config = config();
 
         assert!(!config.block_on_underrun);
-        assert!(config.auto_advance_enabled.load());
         assert!((config.crossfade_duration.load() - 1.0).abs() < f32::EPSILON);
         assert!((config.default_rate.load() - 1.0).abs() < f32::EPSILON);
         assert_eq!(config.event_bus_capacity.get(), 1024);
-        assert!((config.prefetch_duration.load() - 3.5).abs() < f32::EPSILON);
         assert_eq!(config.max_slots, 4);
     }
 
@@ -253,19 +232,6 @@ mod document_tests {
             .expect_err("a typo must not be silently ignored");
 
         assert!(error.to_string().contains("slot_ceiling"), "{error}");
-    }
-
-    /// `prefetch_duration` is a real field on [`PlayerConfig`] but must not
-    /// be document-reachable: the queue always overwrites it at construction
-    /// (see the field's doc comment).
-    ///
-    /// [`PlayerConfig`]: super::PlayerConfig
-    #[kithara::test(native, flash(false))]
-    fn the_queue_owned_prefetch_field_is_not_a_document_key() {
-        let error = serde_yaml_ng::from_str::<PlayerConfigPatch>("prefetch_duration: 8.0\n")
-            .expect_err("a queue-owned field must not be settable from a document");
-
-        assert!(error.to_string().contains("prefetch_duration"), "{error}");
     }
 
     /// `block_on_underrun` is a real field on [`PlayerConfig`] but must not

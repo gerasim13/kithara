@@ -52,14 +52,12 @@ pub struct DeckMixer {
 /// The tracks a deck holds, how they mix, and what the control side reads of them.
 pub(super) struct Deck {
     pub(super) playback: Arc<PlaybackShared>,
-    pub(super) crossfade: crate::CrossfadeSettings,
     /// How loud the deck sounds, as its parts last set it.
     pub(super) mix: DeckMixSettings,
     pub(super) notif_tx: HeapProd<PlayerNotification>,
     pub(super) sample_rate: NonZeroU32,
     pub(super) render: RenderPass,
     pub(super) tracks: TrackSlots,
-    pub(super) prefetch_duration: f32,
     /// Media seconds every track consumes per output second.
     pub(super) rate: f32,
     /// The ramp every track starts and stops with.
@@ -218,9 +216,7 @@ impl DeckMixer {
                 playback: inputs.playback,
                 sample_rate: shape.sample_rate,
                 render: RenderPass::new(pools, shape, config, mix.gain()),
-                crossfade: crate::CrossfadeSettings::default(),
                 mix,
-                prefetch_duration: 0.0,
                 rate: 1.0,
                 declick: config.declick(),
                 tracks: TrackSlots::new(config.slots()),

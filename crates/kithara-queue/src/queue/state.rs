@@ -150,7 +150,6 @@ where
                 .cancel(cancel.child())
                 .build()
         });
-        player.set_auto_advance_enabled(false);
         player.set_crossfade_duration(crossfade_settings.duration);
         let bus = player.bus().clone();
         let player_control = player.control();

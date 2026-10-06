@@ -7,7 +7,7 @@ use kithara_platform::sync::Arc;
 use kithara_warp::RenderReader;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
-use super::{PlayerResource, fade::TrackFade, gate::TrackGate, triggers::TrackTriggers};
+use super::{PlayerResource, fade::TrackFade, gate::TrackGate};
 use crate::{CrossfadeSettings, bridge::TrackState, consts::DEFAULT_DECLICK, worker::ServiceClass};
 
 /// Per-track state in the processor arena.
@@ -24,7 +24,6 @@ pub struct PlayerTrack {
     pub(super) item_id: TrackId,
     #[field(get, copy)]
     pub(super) state: TrackState,
-    pub(super) triggers: TrackTriggers,
     /// The track that starts on the frame after this one's last.
     #[field(get, copy)]
     pub(super) successor: Option<TrackId>,
@@ -40,13 +39,6 @@ pub struct PlayerTrack {
     #[field(get)]
     pub(super) ended_at_eof: bool,
     pub(super) state_dirty: bool,
-    /// Lead time before EOF at which the prefetch trigger fires.
-    ///
-    /// Effective preload threshold is
-    /// `max(prefetch_duration, fade_duration) + block_seconds`, so prefetch
-    /// is at least as eager as the crossfade trigger and can be set
-    /// independently to cover network/probe latency.
-    pub(super) prefetch_duration: f32,
     /// Last observed duration snapshot.
     ///
     /// Mirrors `PlayerResource::duration()` (post-gapless-trim, visible
@@ -55,10 +47,10 @@ pub struct PlayerTrack {
     /// Cumulative *media* frames this track has served into the mix output,
     /// scaled by the resource's current effective playback rate.
     ///
-    /// Used as the source of truth for near-end trigger position so the
-    /// trigger reflects what has been rendered to the audio output, not the
-    /// decoder's pre-buffered position (which can be ~200 ms ahead of the
-    /// mixer thanks to `PlayerResource`'s scratch buffer).
+    /// The source of truth for the published position, so it reflects what
+    /// has been rendered to the audio output, not the decoder's pre-buffered
+    /// position (which can be ~200 ms ahead of the mixer thanks to
+    /// `PlayerResource`'s scratch buffer).
     pub(super) served_media_frames: f64,
     pub(super) sample_rate: u32,
     /// Slot seek epoch this track has been re-based onto.
@@ -82,8 +74,6 @@ impl PlayerTrack {
         #[builder(finish_fn)] resource: Box<PlayerResource>,
         sample_rate: NonZeroU32,
         item_id: TrackId,
-        #[builder(default)] crossfade: CrossfadeSettings,
-        #[builder(default)] prefetch_duration: f32,
         /// Slot seek epoch already published when this track loaded — a track
         /// planted after earlier seeks starts level with them, not behind.
         #[builder(default)]
@@ -104,12 +94,10 @@ impl PlayerTrack {
             seek_epoch,
             state: TrackState::Preloading,
             state_dirty: false,
-            triggers: TrackTriggers::default(),
             successor: None,
             epoch: 0,
-            fade: TrackFade::new(crossfade, sample_rate),
+            fade: TrackFade::default(),
             gate: TrackGate::new(!stopped, declick, sample_rate),
-            prefetch_duration: prefetch_duration.max(0.0),
             sample_rate: sample_rate.get(),
             served_media_frames: 0.0,
             ended_at_eof: false,
@@ -123,7 +111,6 @@ impl PlayerTrack {
         self.set_state(TrackState::FadingIn);
         let sample_rate = NonZeroU32::new(self.sample_rate).unwrap_or(NonZeroU32::MIN);
         self.fade.fade_in(settings, sample_rate);
-        self.triggers.reset();
     }
 
     /// Start a fade-out: transitions to `FadingOut`, targets `FULLY_WET` (silent).
@@ -157,7 +144,6 @@ impl PlayerTrack {
         self.set_state(TrackState::Playing);
         let sample_rate = NonZeroU32::new(self.sample_rate).unwrap_or(NonZeroU32::MIN);
         self.fade.play(sample_rate);
-        self.triggers.reset();
         self.ended_at_eof = false;
     }
 
@@ -226,8 +212,7 @@ impl PlayerTrack {
     ///
     /// Tracks `served_media_frames / sample_rate` — i.e. what has actually
     /// been mixed into the output, on the media clock — so the value matches
-    /// the trigger evaluator and `duration` instead of the decoder's
-    /// pre-buffered position.
+    /// `duration` instead of the decoder's pre-buffered position.
     #[must_use]
     pub fn position(&self) -> f64 {
         let sample_rate = self.sample_rate.max(1);
@@ -243,7 +228,6 @@ impl PlayerTrack {
         self.resource.reset_for_seek();
         let frames = seek_frame_index(seconds, self.sample_rate, self.observed_duration);
         self.served_media_frames = AsPrimitive::as_(frames);
-        self.triggers.reset();
         self.ended_at_eof = false;
     }
 
@@ -253,11 +237,6 @@ impl PlayerTrack {
         self.fade.update_sample_rate(sample_rate);
         self.gate.update_sample_rate(sample_rate);
         self.sample_rate = sample_rate.get();
-    }
-
-    /// Update the prefetch lead time used for the preload trigger.
-    pub const fn set_prefetch_duration(&mut self, prefetch_duration: f32) {
-        self.prefetch_duration = prefetch_duration.max(0.0);
     }
 
     /// Set the track state and mark as dirty.

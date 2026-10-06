@@ -166,9 +166,7 @@ impl Router {
             | PlayerEvent::VolumeChanged { .. }
             | PlayerEvent::MuteChanged { .. }
             | PlayerEvent::CurrentItemChanged { .. }
-            | PlayerEvent::PrerollCompleted { .. }
-            | PlayerEvent::PrefetchRequested
-            | PlayerEvent::HandoverRequested { .. } => return,
+            | PlayerEvent::PrerollCompleted { .. } => return,
         };
         let Some(track_id) = target else { return };
         let Some(item) = self.items.lock().get(&track_id).cloned() else {
@@ -187,9 +185,7 @@ impl Router {
             | PlayerEvent::VolumeChanged { .. }
             | PlayerEvent::MuteChanged { .. }
             | PlayerEvent::CurrentItemChanged { .. }
-            | PlayerEvent::PrerollCompleted { .. }
-            | PlayerEvent::PrefetchRequested
-            | PlayerEvent::HandoverRequested { .. } => return,
+            | PlayerEvent::PrerollCompleted { .. } => return,
         };
         item.deliver(ffi_event);
     }

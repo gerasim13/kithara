@@ -13,7 +13,7 @@ use kithara::{
         sync::Arc,
         time::{self, Duration},
     },
-    play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc},
+    play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc, SuccessorLink},
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
     stream::AudioCodec,
 };
@@ -266,7 +266,7 @@ async fn two_tracks_gapless_stitch_continuity_metric(
     let first = create_resource(&harness, &trimmed.1, temp_dir.path()).await;
     let second = create_resource(&harness, &trimmed_stitch.1, temp_dir.path()).await;
 
-    let [first_id, second_id] = load_tagged_queue(&harness, [first, second]).await;
+    let [_, second_id] = load_tagged_queue(&harness, [first, second]).await;
 
     let (rendered, events) = render_until_item_end(&harness, second_id).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
@@ -276,7 +276,6 @@ async fn two_tracks_gapless_stitch_continuity_metric(
         "rendered PCM must cover the stitch window; left_frames={}, stitch_frame={stitch_frame}, events={events:?}",
         left.len()
     );
-    assert_prefetch_before_first_end(&events, first_id);
 
     let switch_peak = peak_first_diff(&left, stitch_frame, ContinuityMetric::HALF_WINDOW_FRAMES);
     let (control_peak, control_count) = gapless_control_peak(&left, stitch_frame);
@@ -313,7 +312,6 @@ async fn fused_gapless_tail_compensation_restores_exact_length_at_stitch(
         "FUSED_GAPLESS_DEFICIT compensated_db={compensated_db:.2} uncompensated_db={uncompensated_db:.2}"
     );
 
-    assert_prefetch_before_first_end(&compensated.events, compensated.first_id);
     assert_eq!(compensated.first_frames, FUSED_FIXTURE_IDEAL_DEVICE_FRAMES);
     assert_eq!(
         uncompensated.first_frames,
@@ -451,7 +449,6 @@ async fn render_apple_fused_deficit_seam(
     })
     .expect("first fused item must emit ItemDidPlayToEnd");
 
-    assert_prefetch_before_first_end(&events, first_id);
     assert!(
         stitch_frame < left.len(),
         "fused stitch frame must be inside rendered PCM; stitch_frame={stitch_frame}, left_frames={}, events={events:?}",
@@ -825,7 +822,7 @@ async fn render_synthetic_fused_deficit_seam(
         Some(Arc::from("fused-deficit-2")),
     );
 
-    let [first_id, second_id] = load_tagged_queue(&harness, [first, second]).await;
+    let [_, second_id] = load_tagged_queue(&harness, [first, second]).await;
 
     let (rendered, events) = render_until_item_end(&harness, second_id).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
@@ -838,7 +835,6 @@ async fn render_synthetic_fused_deficit_seam(
         left,
         events,
         first_frames: first_frame_count,
-        first_id,
     };
     harness.close().await;
     result
@@ -899,8 +895,10 @@ fn left_frames_from_chunks(chunks: impl IntoIterator<Item = AudioChunk>) -> Vec<
         .collect()
 }
 
-/// Loads the queue and returns the identity the player will report back
-/// for each item, in the order they were given.
+/// Loads the items onto the deck, starts the first and arms the second as its
+/// gapless successor, as the queue does ahead of the first item's end.
+/// Returns the identity the player will report back for each item, in the
+/// order they were given.
 async fn load_tagged_queue<const N: usize>(
     harness: &OfflinePlayer,
     items: [Resource; N],
@@ -917,6 +915,12 @@ async fn load_tagged_queue<const N: usize>(
             player
                 .select_item(0, kithara::play::SelectionPlayback::Play)
                 .expect("select first queue item");
+            if N > 1 {
+                let armed = player
+                    .arm_next(1, SuccessorLink::Gapless)
+                    .expect("arm the second item as the gapless successor");
+                assert!(armed.is_some(), "the second item must hold a resource");
+            }
         })
         .await;
     ids
@@ -926,7 +930,6 @@ struct SyntheticSeamRender {
     left: Vec<f32>,
     events: Vec<TimedPlayerEvent>,
     first_frames: usize,
-    first_id: TrackId,
 }
 
 #[cfg(all(
@@ -1192,27 +1195,6 @@ where
         .iter()
         .find(|timed| predicate(&timed.event))
         .map(|timed| timed.frame_end)
-}
-
-fn assert_prefetch_before_first_end(events: &[TimedPlayerEvent], first_item_id: TrackId) {
-    let prefetch = events
-        .iter()
-        .position(|timed| matches!(&timed.event, PlayerEvent::PrefetchRequested))
-        .expect("PrefetchRequested must fire so the test exercises arm_next");
-    let first_end = events
-        .iter()
-        .position(|timed| {
-            matches!(
-                &timed.event,
-                PlayerEvent::ItemDidPlayToEnd { item, .. }
-                    if item.id() == first_item_id
-            )
-        })
-        .expect("first item must emit ItemDidPlayToEnd");
-    assert!(
-        prefetch < first_end,
-        "PrefetchRequested must precede the first ItemDidPlayToEnd; events={events:?}"
-    );
 }
 
 fn peak_first_diff(left: &[f32], center: usize, half: usize) -> f32 {

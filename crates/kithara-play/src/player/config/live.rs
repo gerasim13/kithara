@@ -16,17 +16,9 @@ impl<S> PlayerConfig<S> {
     pub(crate) fn normalize_live_values(&self) {
         self.default_rate
             .store(self.default_rate().max(Self::MIN_PLAYBACK_RATE));
-        self.prefetch_duration
-            .store(self.prefetch_duration().max(0.0));
     }
 
     delegate! {
-        to self.auto_advance_enabled {
-            #[call(load)]
-            pub(crate) fn auto_advance_enabled(&self) -> bool;
-            #[call(store)]
-            pub(crate) fn set_auto_advance_enabled(&self, enabled: bool);
-        }
         to self.crossfade_duration {
             #[call(load)]
             pub(crate) fn crossfade_duration(&self) -> f32;
@@ -39,28 +31,14 @@ impl<S> PlayerConfig<S> {
             #[call(load)]
             pub(crate) fn is_muted(&self) -> bool;
         }
-        to self.prefetch_duration {
-            #[call(load)]
-            pub(crate) fn prefetch_duration(&self) -> f32;
-        }
         to self.volume {
             #[call(load)]
             pub(crate) fn volume(&self) -> f32;
         }
     }
 
-    pub(crate) fn set_crossfade_duration(
-        &self,
-        seconds: f32,
-        send: impl FnOnce(DeckPart) -> Result<(), PlayError>,
-    ) -> Result<(), PlayError> {
-        let clamped = seconds.max(0.0);
-        match send(DeckPart::SetFadeDuration(clamped)) {
-            Ok(()) | Err(PlayError::NoActiveSlot) => {}
-            Err(error) => return Err(error),
-        }
-        self.crossfade_duration.store(clamped);
-        Ok(())
+    pub(crate) fn set_crossfade_duration(&self, seconds: f32) {
+        self.crossfade_duration.store(seconds.max(0.0));
     }
 
     pub(crate) fn set_default_rate(&self, rate: f32) -> f32 {
@@ -81,20 +59,6 @@ impl<S> PlayerConfig<S> {
         }
         self.muted.store(muted);
         bus.publish(PlayerEvent::MuteChanged { muted });
-        Ok(())
-    }
-
-    pub(crate) fn set_prefetch_duration(
-        &self,
-        seconds: f32,
-        send: impl FnOnce(DeckPart) -> Result<(), PlayError>,
-    ) -> Result<(), PlayError> {
-        let clamped = seconds.max(0.0);
-        match send(DeckPart::SetPrefetchDuration(clamped)) {
-            Ok(()) | Err(PlayError::NoActiveSlot) => {}
-            Err(error) => return Err(error),
-        }
-        self.prefetch_duration.store(clamped);
         Ok(())
     }
 
@@ -134,33 +98,6 @@ mod tests {
             .sample_rate(mock::SAMPLE_RATE)
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .build()
-    }
-
-    #[kithara::test]
-    fn rejected_live_commands_leave_requested_values_unchanged() {
-        let config = config();
-        let rejected = || PlayError::SlotChannelFull {
-            slot: SlotId::new(1),
-        };
-
-        assert!(matches!(
-            config.set_crossfade_duration(2.0, |_| Err(rejected())),
-            Err(PlayError::SlotChannelFull { .. })
-        ));
-        assert_eq!(config.values().crossfade_duration, 1.0);
-
-        assert!(matches!(
-            config.set_prefetch_duration(5.0, |_| Err(rejected())),
-            Err(PlayError::SlotChannelFull { .. })
-        ));
-        assert_eq!(config.values().prefetch_duration, 3.5);
-
-        assert!(
-            config
-                .set_crossfade_duration(2.0, |_| Err(PlayError::NoActiveSlot))
-                .is_ok()
-        );
-        assert_eq!(config.values().crossfade_duration, 2.0);
     }
 
     #[kithara::test]

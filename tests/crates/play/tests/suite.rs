@@ -13,6 +13,7 @@ mod common {
 }
 pub use kithara_integration_tests::gapless as gapless_common;
 
+mod bare_deck;
 mod crossfade_hls_to_mp3_repeats;
 mod hls_seek_middle_no_queue;
 mod hls_seek_middle_stress;

@@ -327,9 +327,7 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
                     | PlayerEvent::VolumeChanged { .. }
                     | PlayerEvent::MuteChanged { .. }
                     | PlayerEvent::CurrentItemChanged { .. }
-                    | PlayerEvent::PrerollCompleted { .. }
-                    | PlayerEvent::PrefetchRequested
-                    | PlayerEvent::HandoverRequested { .. } => {}
+                    | PlayerEvent::PrerollCompleted { .. } => {}
                 }
             }
         }

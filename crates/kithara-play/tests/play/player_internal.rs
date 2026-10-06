@@ -133,7 +133,6 @@ fn prepared_player<const N: usize>(
     labels: [&'static str; N],
 ) -> PlayerImpl<TestPools> {
     let (player, _session) = make_fixture_player(crossfade_duration);
-    player.set_auto_advance_enabled(false);
     for label in labels {
         player.insert(
             make_tagged_resource(constant_half, label, 0.05),
@@ -413,7 +412,6 @@ fn seek_seconds_updates_position_optimistically() {
 #[kithara::test]
 fn arm_next_returns_none_for_empty_slot(constant_half: &'static [u8]) {
     let (player, _session) = make_fixture_player(0.0);
-    player.set_auto_advance_enabled(false);
     player.reserve_slots(2);
     let first = make_tagged_resource(constant_half, "item-1", 0.05);
     player.replace_item(0, first, TrackId::allocate());

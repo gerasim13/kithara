@@ -162,7 +162,7 @@ mod tests {
     #[kithara::test]
     #[case(crate::bridge::DeckPart::StopAll)]
     #[case(crate::bridge::DeckPart::StartAll)]
-    #[case(crate::bridge::DeckPart::SetFadeDuration(0.25))]
+    #[case(crate::bridge::DeckPart::SetRate(1.25))]
     fn player_node_with_inputs(#[case] part: crate::bridge::DeckPart) {
         let (node, mut control) = make_node();
         assert!(node.active);

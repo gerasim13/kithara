@@ -23,7 +23,6 @@ mod local_track_plays;
 mod mp3_plays_to_its_end;
 mod packaged_drm_seek;
 mod play_before_the_load_lands;
-mod player_queue_api_regressions;
 mod playlist_stall_fails_load;
 mod select_after_eof;
 mod track_switch_race;

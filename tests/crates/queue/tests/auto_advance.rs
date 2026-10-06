@@ -659,10 +659,9 @@ async fn a_crossfade_at_double_speed_starts_its_duration_before_the_outgoing_end
 }
 
 /// Sanity guard: if `Queue::tick` regresses to skipping
-/// `process_notifications`, this test must fail. We confirm the
-/// fix-under-test by asserting both `PrefetchRequested` and `HandoverRequested`
-/// reach the bus during a cf>0 cycle — purely event-level, but pinned to
-/// the real `Queue::tick` path.
+/// `process_notifications`, this test must fail. The audio thread's end of
+/// the first track reaches the bus during a cf>0 cycle — purely event-level,
+/// but pinned to the real `Queue::tick` path.
 #[kithara::test(tokio)]
 async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
     use kithara::{platform::tokio::sync::broadcast::error::TryRecvError, play::PlayerEvent};
@@ -690,8 +689,6 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
         .await
         .expect("select track A");
 
-    let mut prefetch_seen = false;
-    let mut handover_seen = false;
     let mut item_end_seen = false;
 
     for _ in 0..MAX_BLOCKS {
@@ -700,29 +697,17 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
 
         loop {
             match rx.try_recv().map(|env| env.event) {
-                Ok(TestEvent::Player(PlayerEvent::PrefetchRequested)) => prefetch_seen = true,
-                Ok(TestEvent::Player(PlayerEvent::HandoverRequested { .. })) => {
-                    handover_seen = true;
-                }
                 Ok(TestEvent::Player(PlayerEvent::ItemDidPlayToEnd { .. })) => item_end_seen = true,
                 Ok(_) => {}
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
                 Err(TryRecvError::Lagged(_)) => continue,
             }
         }
-        if prefetch_seen && handover_seen && item_end_seen {
+        if item_end_seen {
             break;
         }
     }
 
-    assert!(
-        prefetch_seen,
-        "PrefetchRequested must reach the bus via Queue::tick → process_notifications"
-    );
-    assert!(
-        handover_seen,
-        "HandoverRequested must reach the bus via Queue::tick → process_notifications"
-    );
     assert!(
         item_end_seen,
         "ItemDidPlayToEnd must reach the bus via Queue::tick → process_notifications"
@@ -990,8 +975,7 @@ async fn a_middle_track_is_heard_in_the_middle_of_its_own_span() {
     let c = assets::constant_wav_four_1_5s();
     let _ = append_loaded(&harness, &queue, &c).await;
     // The app starts a catalog row exactly this way, with no fade into the
-    // first track, and it is the arrangement that leaves the engine's own
-    // handover trigger disarmed for that track.
+    // first track.
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await

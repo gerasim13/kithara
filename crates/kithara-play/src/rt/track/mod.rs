@@ -4,7 +4,6 @@ mod feeder;
 mod gate;
 mod read;
 mod sink;
-mod triggers;
 
 pub use core::PlayerTrack;
 

@@ -6,10 +6,7 @@ use kithara_warp::{PresentationFrontier, RenderContext, WarpMapRevision};
 use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapProd, traits::Producer};
 
-use super::{
-    PlayerTrack, ReadOutcome, RtSink,
-    triggers::{TrackTriggers, TriggerInput, TriggerTrack},
-};
+use super::{PlayerTrack, ReadOutcome, RtSink};
 use crate::bridge::{
     PlaybackFault, PlayerNotification, RtMetrics, TrackPlaybackStopReason, TrackState,
 };
@@ -65,15 +62,6 @@ impl PlayerTrack {
             output_frames.mul_add(f64::from(playback_rate), self.served_media_frames);
     }
 
-    fn check_notifications(
-        triggers: &mut TrackTriggers,
-        notification_tx: &mut HeapProd<PlayerNotification>,
-        track: TriggerTrack<'_>,
-        input: TriggerInput,
-    ) {
-        triggers.check(notification_tx, track, input);
-    }
-
     fn handle_failed_end(
         &mut self,
         notification_tx: &mut HeapProd<PlayerNotification>,
@@ -122,23 +110,6 @@ impl PlayerTrack {
         self.gate.apply(scratch_bufs, range.clone());
         self.fade
             .mix_range(scratch_bufs, mix_bufs, range, range_len);
-        Self::check_notifications(
-            &mut self.triggers,
-            sink.notifications,
-            TriggerTrack {
-                src: self.resource.src(),
-                item_id: self.item_id,
-            },
-            TriggerInput {
-                duration,
-                frames_until_eof,
-                position,
-                block_frames: range_len,
-                fade_duration: self.fade.duration(),
-                prefetch_duration: self.prefetch_duration,
-                sample_rate: self.sample_rate,
-            },
-        );
         if self.state == TrackState::FadingOut && self.fade.settled() && frames_until_eof == Some(0)
         {
             self.handle_natural_end(sink.notifications, sink.seek_epoch);
@@ -174,14 +145,6 @@ impl PlayerTrack {
         if published_seek_epoch != self.seek_epoch {
             return;
         }
-        self.triggers.mark_prefetch_requested();
-        self.triggers.emit_handover_requested(
-            notification_tx,
-            TriggerTrack {
-                src: self.resource.src(),
-                item_id: self.item_id,
-            },
-        );
         self.set_state(TrackState::Finished);
         self.ended_at_eof = true;
         notification_tx
@@ -210,29 +173,11 @@ impl PlayerTrack {
         let position = self.position();
         self.observed_duration = if position > 0.0 { position } else { duration };
         let duration = self.observed_duration;
-        let block_frames = range.len();
         let mix_range = range.start..range.start + frames;
 
         self.gate.apply(scratch_bufs, mix_range.clone());
         self.fade
             .mix_range(scratch_bufs, mix_bufs, mix_range, frames);
-        Self::check_notifications(
-            &mut self.triggers,
-            notification_tx,
-            TriggerTrack {
-                src: self.resource.src(),
-                item_id: self.item_id,
-            },
-            TriggerInput {
-                block_frames,
-                duration,
-                position,
-                fade_duration: self.fade.duration(),
-                frames_until_eof: Some(0),
-                prefetch_duration: self.prefetch_duration,
-                sample_rate: self.sample_rate,
-            },
-        );
         self.handle_natural_end(notification_tx, published_seek_epoch);
 
         TrackReadOutcome::Partial { frames, duration }

@@ -73,26 +73,9 @@ impl<S> PlayerRuntime<S> {
         Ok(())
     }
 
-    /// Enable or disable the built-in linear auto-advance handler.
-    pub fn set_auto_advance_enabled(&self, enabled: bool) {
-        self.core.config.set_auto_advance_enabled(enabled);
-    }
-
-    /// Set crossfade duration in seconds.
+    /// Set the crossfade duration, in seconds, of transitions nobody gives settings of their own.
     pub fn set_crossfade_duration(&self, seconds: f32) {
-        if let Err(error) = self.try_set_crossfade_duration(seconds) {
-            warn!(?error, seconds, "crossfade duration update rejected");
-        }
-    }
-
-    /// Submit a crossfade duration to the active slot, or retain it for the next slot.
-    ///
-    /// # Errors
-    /// Returns a slot command admission error without changing the retained value.
-    pub(crate) fn try_set_crossfade_duration(&self, seconds: f32) -> Result<(), PlayError> {
-        self.core
-            .config
-            .set_crossfade_duration(seconds, |cmd| self.send_to_slot(cmd))
+        self.core.config.set_crossfade_duration(seconds);
     }
 
     /// Set the playback rate used by `play()` and `select_item()`, and apply it
@@ -122,28 +105,6 @@ impl<S> PlayerRuntime<S> {
         ) {
             warn!(?error, muted, "mute update rejected");
         }
-    }
-
-    /// Set prefetch lead time in seconds.
-    ///
-    /// Canonical owner of this knob is `kithara_queue::Queue` — prefer
-    /// `Queue::set_prefetch_duration` for queue-driven applications.
-    /// Controls how early the next queued item is loaded into the processor
-    /// before EOF. Independent of crossfade activation.
-    pub fn set_prefetch_duration(&self, seconds: f32) {
-        if let Err(error) = self.try_set_prefetch_duration(seconds) {
-            warn!(?error, seconds, "prefetch duration update rejected");
-        }
-    }
-
-    /// Submit a prefetch duration to the active slot, or retain it for the next slot.
-    ///
-    /// # Errors
-    /// Returns a slot command admission error without changing the retained value.
-    pub(crate) fn try_set_prefetch_duration(&self, seconds: f32) -> Result<(), PlayError> {
-        self.core
-            .config
-            .set_prefetch_duration(seconds, |cmd| self.send_to_slot(cmd))
     }
 
     /// Set the requested rate target, clamped to [`MIN_SPEED`].

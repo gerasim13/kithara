@@ -88,9 +88,9 @@ to the single `decoder` field.
 - **Events:** `tokio::sync::broadcast` via `player.subscribe()` /
   `engine.subscribe()` (`PlayerEvent`, `EngineEvent`,
   `SessionEvent`, `DjEvent`).
-- **Queue auto-advance:** `PlayerImpl` publishes `PrefetchRequested` /
-  `HandoverRequested`; `kithara-queue::Queue` disables the built-in linear policy
-  and selects the loaded successor itself.
+- **Successors:** a player never advances on its own. Its owner arms the next
+  item (`arm_next`) and commits it (`commit_next`); `kithara-queue::Queue` does
+  this ahead of the current item's end.
 - **Cancel:** the player's `CancelScope` is derived from `PlayerConfig.cancel`;
   the master cancel lives at the consumer-crate top.
 

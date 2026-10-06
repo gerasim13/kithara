@@ -306,14 +306,13 @@ impl<S> PlayerRuntime<S> {
             /// from the last announced item, so a `play()` resume of the same item
             /// stays quiet.
             pub(crate) fn announce_current_item(&self, index: usize);
-            /// Drop the resource at `index` so the auto-advance prefetch path
-            /// (`arm_next`) cannot plant it into the audio thread.
+            /// Drop the resource at `index` so `arm_next` cannot plant it into
+            /// the audio thread.
             ///
             /// Used by the queue when a previously-loaded track is cancelled by
             /// a later `select` — without this, a slow track whose loader
-            /// raced ahead of the override stays in `items` and the next
-            /// `TrackRequested` notification near EOF would arm it for
-            /// handover, surfacing as a barge-in.
+            /// raced ahead of the override stays in `items`, where it could
+            /// still be armed as the successor and surface as a barge-in.
             pub fn clear_item(&self, index: usize);
             /// Insert a resource under the queue's identity for it at a
             /// specific position, or append to the end.
@@ -401,36 +400,13 @@ mod tests {
         assert_eq!(player.crossfade_duration(), 3.0);
         assert_eq!(player.core.config.values().crossfade_duration, 3.0);
 
-        player.set_auto_advance_enabled(false);
         player.set_default_rate(0.75);
-        player.set_prefetch_duration(4.0);
         player.set_volume(0.4);
         player.set_muted(true);
         let values = player.core.config.values();
-        assert!(!values.auto_advance_enabled);
         assert_eq!(values.default_rate, 0.75);
-        assert_eq!(values.prefetch_duration, 4.0);
         assert_eq!(values.volume, 0.4);
         assert!(values.muted);
-    }
-
-    #[kithara::test]
-    fn checked_crossfade_update_respects_closed_owner() {
-        let player = player();
-        player
-            .try_set_crossfade_duration(2.0)
-            .expect("idle player retains the next slot's setting");
-        assert_eq!(player.core.config.values().crossfade_duration, 2.0);
-
-        player
-            .make_control()
-            .close()
-            .expect("fixture player closes");
-        assert!(matches!(
-            player.try_set_crossfade_duration(3.0),
-            Err(PlayError::Closed)
-        ));
-        assert_eq!(player.core.config.values().crossfade_duration, 2.0);
     }
 
     #[cfg(not(target_arch = "wasm32"))]

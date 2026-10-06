@@ -56,43 +56,21 @@ fn make_track_with(
     duration_secs: f64,
     item_id: TrackId,
 ) -> PlayerTrack {
-    make_track_with_crossfade_duration(constant_half, duration_secs, item_id, 1.0)
-}
-
-fn make_track_with_crossfade_duration(
-    constant_half: &'static [u8],
-    duration_secs: f64,
-    item_id: TrackId,
-    crossfade_duration: f32,
-) -> PlayerTrack {
     let src: Arc<str> = Arc::from("test.mp3");
     let resource = Resource::from_reader(
         TestPcmReader::with_pcm(AUDIO_SPEC, duration_secs, constant_half),
         None,
     );
-    make_track_from_resource_with_crossfade_duration(resource, src, item_id, crossfade_duration)
+    make_track_from_resource(resource, src, item_id)
 }
 
 fn make_track_from_resource(resource: Resource, src: Arc<str>, item_id: TrackId) -> PlayerTrack {
-    make_track_from_resource_with_crossfade_duration(resource, src, item_id, 1.0)
-}
-
-fn make_track_from_resource_with_crossfade_duration(
-    resource: Resource,
-    src: Arc<str>,
-    item_id: TrackId,
-    crossfade_duration: f32,
-) -> PlayerTrack {
     let player_resource = PlayerResource::new(resource, src, &pools())
         .expect("player resource fits the test pool budget");
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
     PlayerTrack::builder()
         .sample_rate(sample_rate)
         .item_id(item_id)
-        .crossfade(CrossfadeSettings {
-            duration: crossfade_duration,
-            ..CrossfadeSettings::default()
-        })
         .build(Box::new(player_resource))
 }
 
@@ -433,83 +411,13 @@ async fn read_outcome_partial_then_eof(constant_half: &'static [u8]) {
 }
 
 #[kithara::test(tokio)]
-async fn handover_emits_once_when_position_crosses_fade_threshold(constant_half: &'static [u8]) {
-    let mut track =
-        make_track_with_crossfade_duration(constant_half, 10.0, TrackId::allocate(), 0.2);
-    let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
-    let mut notification_tx = tx;
-    let mut scratch_l = [0.0; 512];
-    let mut scratch_r = [0.0; 512];
-    let mut mix_l = [0.0; 512];
-    let mut mix_r = [0.0; 512];
-    let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
-    let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
-
-    track.play();
-    track.seek(9.79);
-
-    let mut handover_count = 0;
-    let mut saw_eof_stop = false;
-
-    for _ in 0..4 {
-        let _ = track.read(
-            &mut scratch_bufs,
-            &mut mix_bufs,
-            0..512,
-            &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
-        );
-        for notification in collect_notifications(&mut rx) {
-            match notification {
-                PlayerNotification::HandoverRequested { .. } => {
-                    handover_count += 1;
-                }
-                PlayerNotification::PlaybackStopped {
-                    src,
-                    reason: TrackPlaybackStopReason::Eof,
-                    ..
-                } if src.as_ref() == "test.mp3" => {
-                    saw_eof_stop = true;
-                }
-                _ => {}
-            }
-        }
-
-        if handover_count > 0 {
-            break;
-        }
-    }
-
-    assert_eq!(handover_count, 1);
-    assert!(
-        !saw_eof_stop,
-        "threshold-triggered handover should precede EOF"
-    );
-
-    let _ = track.read(
-        &mut scratch_bufs,
-        &mut mix_bufs,
-        0..512,
-        &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
-    );
-    let notifications = collect_notifications(&mut rx);
-    assert!(
-        notifications.iter().all(|notification| !matches!(
-            notification,
-            PlayerNotification::HandoverRequested { .. }
-        )),
-        "TrackHandoverRequested must not be emitted twice in one playback cycle"
-    );
-}
-
-#[kithara::test(tokio)]
-async fn handover_uses_buffered_eof_when_duration_is_overestimated(constant_half: &'static [u8]) {
+async fn a_buffered_eof_corrects_an_overestimated_duration(constant_half: &'static [u8]) {
     let src = Arc::from("misreported.mp3");
     let resource = Resource::from_reader(
         MockReader::misreported_duration(AUDIO_SPEC, 900, constant_half),
         Some(Arc::clone(&src)),
     );
-    let mut track =
-        make_track_from_resource_with_crossfade_duration(resource, src, TrackId::allocate(), 0.0);
+    let mut track = make_track_from_resource(resource, src, TrackId::allocate());
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(16).split();
     let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
@@ -538,13 +446,6 @@ async fn handover_uses_buffered_eof_when_duration_is_overestimated(constant_half
     ));
     let notifications = collect_notifications(&mut rx);
     assert!(
-        notifications.iter().any(|notification| matches!(
-            notification,
-            PlayerNotification::HandoverRequested { .. }
-        )),
-        "handover must be emitted before the EOF block when the resource has already observed EOF"
-    );
-    assert!(
         !notifications.iter().any(|notification| {
             matches!(
                 notification,
@@ -554,277 +455,6 @@ async fn handover_uses_buffered_eof_when_duration_is_overestimated(constant_half
                 }
             )
         }),
-        "first full block must only request preload, not emit EOF"
+        "the first full block must not emit EOF"
     );
-}
-
-#[kithara::test(tokio)]
-async fn handover_backstops_eof_when_threshold_was_not_reached_earlier(
-    constant_half: &'static [u8],
-) {
-    let mut track = make_track_with_crossfade_duration(constant_half, 0.01, ITEM, 0.0);
-    let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
-    let mut notification_tx = tx;
-    let mut scratch_l = [0.0; 512];
-    let mut scratch_r = [0.0; 512];
-    let mut mix_l = [0.0; 512];
-    let mut mix_r = [0.0; 512];
-    let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
-    let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
-
-    track.play();
-
-    let outcome = track.read(
-        &mut scratch_bufs,
-        &mut mix_bufs,
-        0..512,
-        &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
-    );
-    assert!(matches!(outcome, TrackReadOutcome::Partial { .. }));
-
-    let notifications = collect_notifications(&mut rx);
-    let handover_count = notifications
-        .iter()
-        .filter(|notification| matches!(notification, PlayerNotification::HandoverRequested { .. }))
-        .count();
-    let eof_stop_count = notifications
-        .iter()
-        .filter(|notification| {
-            matches!(
-                notification,
-                PlayerNotification::PlaybackStopped {
-                    src,
-                    item_id,
-                    reason: TrackPlaybackStopReason::Eof,
-                    ..
-                }
-                if src.as_ref() == "test.mp3"
-                    && *item_id == ITEM
-            )
-        })
-        .count();
-
-    assert_eq!(handover_count, 1);
-    assert_eq!(eof_stop_count, 1);
-}
-
-#[kithara::test(tokio)]
-async fn handover_is_not_duplicated_at_eof_after_early_trigger(constant_half: &'static [u8]) {
-    let mut track = make_track_with_crossfade_duration(constant_half, 5.0, ITEM, 0.2);
-    let (tx, mut rx) = HeapRb::<PlayerNotification>::new(64).split();
-    let mut notification_tx = tx;
-    let mut scratch_l = [0.0; 512];
-    let mut scratch_r = [0.0; 512];
-    let mut mix_l = [0.0; 512];
-    let mut mix_r = [0.0; 512];
-    let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
-    let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
-
-    track.play();
-
-    let mut handover_count = 0;
-    let mut eof_stop_count = 0;
-
-    for _ in 0..600 {
-        let _ = track.read(
-            &mut scratch_bufs,
-            &mut mix_bufs,
-            0..512,
-            &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
-        );
-
-        for notification in collect_notifications(&mut rx) {
-            match notification {
-                PlayerNotification::HandoverRequested { .. } => {
-                    handover_count += 1;
-                }
-                PlayerNotification::PlaybackStopped {
-                    src,
-                    item_id,
-                    reason: TrackPlaybackStopReason::Eof,
-                    ..
-                } if src.as_ref() == "test.mp3" && item_id == ITEM => {
-                    eof_stop_count += 1;
-                }
-                _ => {}
-            }
-        }
-
-        if eof_stop_count == 1 {
-            break;
-        }
-    }
-
-    assert_eq!(handover_count, 1);
-    assert_eq!(eof_stop_count, 1);
-}
-
-#[kithara::test(tokio)]
-#[case::inside_lead_window(10.0, 2.0, Some(8.5))]
-#[case::shorter_than_lead_window(0.5, 5.0, None)]
-async fn prefetch_fires_before_handover(
-    constant_half: &'static [u8],
-    #[case] duration: f64,
-    #[case] prefetch_duration: f32,
-    #[case] seek_position: Option<f64>,
-) {
-    let mut track =
-        make_track_with_crossfade_duration(constant_half, duration, TrackId::allocate(), 0.0);
-    track.set_prefetch_duration(prefetch_duration);
-    let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
-    let mut notification_tx = tx;
-    let mut scratch_l = [0.0; 512];
-    let mut scratch_r = [0.0; 512];
-    let mut mix_l = [0.0; 512];
-    let mut mix_r = [0.0; 512];
-    let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
-    let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
-
-    track.play();
-    if let Some(position) = seek_position {
-        track.seek(position);
-    }
-
-    let _ = track.read(
-        &mut scratch_bufs,
-        &mut mix_bufs,
-        0..512,
-        &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
-    );
-
-    let notifications = collect_notifications(&mut rx);
-    let saw_prefetch = notifications
-        .iter()
-        .any(|notification| matches!(notification, PlayerNotification::Requested));
-    let saw_handover = notifications
-        .iter()
-        .any(|notification| matches!(notification, PlayerNotification::HandoverRequested { .. }));
-    assert!(
-        saw_prefetch,
-        "TrackRequested (preload) must fire inside the prefetch lead window"
-    );
-    assert!(
-        !saw_handover,
-        "TrackHandoverRequested must not fire while pos < dur - fade"
-    );
-}
-
-#[kithara::test(tokio)]
-async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold(
-    constant_half: &'static [u8],
-) {
-    let mut track =
-        make_track_with_crossfade_duration(constant_half, 10.0, TrackId::allocate(), 0.2);
-    track.set_prefetch_duration(2.0);
-    let (tx, mut rx) = HeapRb::<PlayerNotification>::new(64).split();
-    let mut notification_tx = tx;
-    let mut scratch_l = [0.0; 512];
-    let mut scratch_r = [0.0; 512];
-    let mut mix_l = [0.0; 512];
-    let mut mix_r = [0.0; 512];
-    let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
-    let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
-
-    track.play();
-    track.seek(8.5);
-
-    let _ = track.read(
-        &mut scratch_bufs,
-        &mut mix_bufs,
-        0..512,
-        &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
-    );
-    let after_prefetch = collect_notifications(&mut rx);
-    assert!(
-        after_prefetch
-            .iter()
-            .any(|notification| matches!(notification, PlayerNotification::Requested))
-    );
-    assert!(
-        after_prefetch.iter().all(|notification| !matches!(
-            notification,
-            PlayerNotification::HandoverRequested { .. }
-        ))
-    );
-
-    track.seek(9.79);
-
-    let mut saw_handover = false;
-    for _ in 0..4 {
-        let _ = track.read(
-            &mut scratch_bufs,
-            &mut mix_bufs,
-            0..512,
-            &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
-        );
-        for notification in collect_notifications(&mut rx) {
-            if matches!(notification, PlayerNotification::HandoverRequested { .. }) {
-                saw_handover = true;
-            }
-        }
-        if saw_handover {
-            break;
-        }
-    }
-    assert!(
-        saw_handover,
-        "handover trigger must fire near EOF after prefetch already fired"
-    );
-}
-
-#[kithara::test(tokio)]
-async fn prefetch_and_handover_both_fire_when_thresholds_coincide(constant_half: &'static [u8]) {
-    let mut track =
-        make_track_with_crossfade_duration(constant_half, 10.0, TrackId::allocate(), 0.2);
-    track.set_prefetch_duration(0.0);
-    let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
-    let mut notification_tx = tx;
-    let mut scratch_l = [0.0; 512];
-    let mut scratch_r = [0.0; 512];
-    let mut mix_l = [0.0; 512];
-    let mut mix_r = [0.0; 512];
-    let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
-    let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
-
-    track.play();
-    track.seek(5.0);
-    let _ = track.read(
-        &mut scratch_bufs,
-        &mut mix_bufs,
-        0..512,
-        &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
-    );
-    let mid = collect_notifications(&mut rx);
-    assert!(mid.iter().all(|notification| !matches!(
-        notification,
-        PlayerNotification::Requested | PlayerNotification::HandoverRequested { .. }
-    )));
-
-    track.seek(9.79);
-    let mut prefetch_count = 0;
-    let mut handover_count = 0;
-    for _ in 0..4 {
-        let _ = track.read(
-            &mut scratch_bufs,
-            &mut mix_bufs,
-            0..512,
-            &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
-        );
-        for notification in collect_notifications(&mut rx) {
-            match notification {
-                PlayerNotification::Requested => {
-                    prefetch_count += 1;
-                }
-                PlayerNotification::HandoverRequested { .. } => {
-                    handover_count += 1;
-                }
-                _ => {}
-            }
-        }
-        if handover_count > 0 && prefetch_count > 0 {
-            break;
-        }
-    }
-    assert_eq!(prefetch_count, 1, "prefetch must fire exactly once");
-    assert_eq!(handover_count, 1, "handover must fire exactly once");
 }

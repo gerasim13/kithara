@@ -327,12 +327,6 @@ impl OfflinePlayer {
                 TestEvent::Player(
                     PlayerEvent::ItemDidPlayToEnd { .. } | PlayerEvent::ItemDidFail { .. },
                 ) => Some(NotificationKind::PlaybackStopped),
-                TestEvent::Player(PlayerEvent::PrefetchRequested) => {
-                    Some(NotificationKind::Requested)
-                }
-                TestEvent::Player(PlayerEvent::HandoverRequested { .. }) => {
-                    Some(NotificationKind::HandoverRequested)
-                }
                 _ => None,
             })
             .collect()
@@ -390,10 +384,8 @@ impl OfflinePlayer {
 /// Test observation tags retained for scenario assertions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationKind {
-    HandoverRequested,
     PlaybackStarted,
     PlaybackStopped,
-    Requested,
 }
 
 /// Thin wrapper around [`Resource::from_reader`] for tests.

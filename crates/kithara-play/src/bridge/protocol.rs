@@ -74,10 +74,6 @@ pub enum DeckPart {
     StopAll,
     /// Change how loud the deck sounds from this frame on.
     Mix(DeckMixSettingsChange),
-    /// Update the fade duration.
-    SetFadeDuration(f32),
-    /// Update the prefetch lead time.
-    SetPrefetchDuration(f32),
     /// Update the media seconds every track consumes per output second.
     SetRate(f32),
 }
@@ -116,8 +112,6 @@ impl fmt::Debug for DeckPart {
             Self::StartAll => f.write_str("StartAll"),
             Self::StopAll => f.write_str("StopAll"),
             Self::Mix(change) => f.debug_tuple("Mix").field(change).finish(),
-            Self::SetFadeDuration(d) => f.debug_tuple("SetFadeDuration").field(d).finish(),
-            Self::SetPrefetchDuration(d) => f.debug_tuple("SetPrefetchDuration").field(d).finish(),
             Self::SetRate(rate) => f.debug_tuple("SetRate").field(rate).finish(),
         }
     }
@@ -238,22 +232,6 @@ pub enum PlayerNotification {
         /// carry the epoch too but are never fenced on it.
         seek_epoch: u64,
     },
-    /// The next track should be loaded into the processor (position
-    /// reached the prefetch lead window before EOF). Preload-only —
-    /// handlers must not start fade-in or change the current item.
-    Requested,
-    /// Time to hand over to the next track (position reached
-    /// `crossfade_duration + block_seconds` before EOF, or natural EOF was
-    /// observed). Handlers may activate the already-preloaded successor;
-    /// when `crossfade_duration == 0` the activation defers to the
-    /// playback-stopped path instead.
-    ///
-    /// `src` and `item_id` name the track that is running out, for the same
-    /// reason [`PlaybackStopped`](Self::PlaybackStopped) carries them: the
-    /// request is minted by one track while any number of others render, and
-    /// a consumer that has already advanced past it must be able to tell
-    /// that this handover is not about the track it now holds.
-    HandoverRequested { src: Arc<str>, item_id: TrackId },
     /// A track change occurred: old track fading out, new track fading in.
     Changed { src: Arc<str> },
     /// A track started fading in.
@@ -278,9 +256,8 @@ impl PlayerNotification {
             | Self::Changed { src }
             | Self::FadingIn { src }
             | Self::FadingOut { src }
-            | Self::HandoverRequested { src, .. }
             | Self::PlaybackStopped { src, .. } => Some(src),
-            Self::PlaybackStarted { .. } | Self::Requested | Self::RateChanged { .. } => None,
+            Self::PlaybackStarted { .. } | Self::RateChanged { .. } => None,
         }
     }
 }
@@ -294,14 +271,6 @@ mod tests {
 
     #[kithara::test]
     #[case(PlayerNotification::Loaded { src: Arc::from("a.mp3") }, "Loaded")]
-    #[case(PlayerNotification::Requested, "Requested")]
-    #[case(
-        PlayerNotification::HandoverRequested {
-            src: Arc::from("ending.mp3"),
-            item_id: TrackId::allocate(),
-        },
-        "HandoverRequested"
-    )]
     #[case(PlayerNotification::FadingIn { src: Arc::from("a.mp3") }, "FadingIn")]
     #[case(PlayerNotification::RateChanged { rate: 1.25 }, "RateChanged")]
     #[case(

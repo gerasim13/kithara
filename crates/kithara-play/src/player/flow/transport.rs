@@ -108,8 +108,6 @@ where
             return;
         }
 
-        let _ = self.send_to_slot(DeckPart::SetFadeDuration(self.crossfade_duration()));
-        let _ = self.send_to_slot(DeckPart::SetPrefetchDuration(self.prefetch_duration()));
         let _ = self.send_to_slot(DeckPart::SetRate(rate));
         let loaded = self.load_current_item().unwrap_or_else(|error| {
             warn!(%error, "failed to allocate track playback buffers");
@@ -249,7 +247,6 @@ where
         self.ensure_engine_started()?;
         self.ensure_slot()?;
 
-        let _ = self.send_to_slot(DeckPart::SetPrefetchDuration(self.prefetch_duration()));
         let _ = self.send_to_slot(DeckPart::SetRate(self.core.lanes.next().speed()));
 
         if armed_for_index {

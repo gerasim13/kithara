@@ -13,17 +13,6 @@ use crate::{
 };
 
 impl Deck {
-    fn apply_fade_duration(&mut self, duration: f32) {
-        self.crossfade.duration = duration;
-    }
-
-    fn apply_prefetch_duration(&mut self, duration: f32) {
-        self.prefetch_duration = duration.max(0.0);
-        for (_, track) in self.tracks.iter_mut() {
-            track.set_prefetch_duration(self.prefetch_duration);
-        }
-    }
-
     fn apply_rate(&mut self, rate: f32) {
         self.rate = rate;
         for (_, track) in self.tracks.iter_mut() {
@@ -156,12 +145,6 @@ impl Deck {
                 self.mix.apply_change(change);
                 self.render.set_gain(self.mix.gain());
             }
-            DeckPart::SetFadeDuration(duration) => {
-                self.apply_fade_duration(duration);
-            }
-            DeckPart::SetPrefetchDuration(duration) => {
-                self.apply_prefetch_duration(duration);
-            }
             DeckPart::SetRate(rate) => {
                 self.apply_rate(rate);
             }
@@ -209,8 +192,6 @@ impl Deck {
         let mut track = PlayerTrack::builder()
             .sample_rate(self.sample_rate)
             .item_id(item_id)
-            .crossfade(self.crossfade)
-            .prefetch_duration(self.prefetch_duration)
             .seek_epoch(self.playback.seek_epoch.load(Ordering::SeqCst))
             .declick(self.declick)
             .stopped(!self.playback.playing.load(Ordering::SeqCst))

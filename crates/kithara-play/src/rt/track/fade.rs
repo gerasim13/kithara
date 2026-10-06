@@ -25,24 +25,22 @@ pub(super) struct TrackFade {
     gain: f32,
 }
 
-impl TrackFade {
-    pub(super) fn new(settings: CrossfadeSettings, sample_rate: NonZeroU32) -> Self {
-        let frames = Self::frames(settings.duration, sample_rate);
+/// A fade that holds its track silent until `fade_in` or `play` starts it.
+impl Default for TrackFade {
+    fn default() -> Self {
         Self {
-            settings,
-            direction: Direction::In,
-            frame: 0,
-            frames,
-            settled: frames == 0,
+            settings: CrossfadeSettings::default(),
+            direction: Direction::Out,
+            frame: 1,
+            frames: 0,
+            settled: true,
             from: 0.0,
             gain: 0.0,
         }
     }
+}
 
-    pub(super) const fn duration(&self) -> f32 {
-        self.settings.duration
-    }
-
+impl TrackFade {
     pub(super) fn fade_in(&mut self, settings: CrossfadeSettings, sample_rate: NonZeroU32) {
         self.start(Direction::In, settings, sample_rate);
     }
@@ -168,7 +166,7 @@ mod tests {
     fn rendered_linear_fade_reaches_both_exact_endpoints() {
         let settings = CrossfadeSettings::new(0.004, CrossfadeCurve::Linear, 1.0, 0.5)
             .expect("valid settings");
-        let mut fade = TrackFade::new(settings, NonZeroU32::new(1_000).expect("nonzero"));
+        let mut fade = TrackFade::default();
         fade.fade_in(settings, NonZeroU32::new(1_000).expect("nonzero"));
         let mut input_l = [1.0; 4];
         let mut input_r = [1.0; 4];
@@ -214,7 +212,7 @@ mod tests {
             let last = cast::<usize, f32>(LAW_FRAMES - 1).unwrap_or(f32::MAX);
             settings.gains(frame / last)
         };
-        let mut fade = TrackFade::new(settings, sample_rate);
+        let mut fade = TrackFade::default();
 
         fade.fade_in(settings, sample_rate);
         let rising = sounded(&mut fade);

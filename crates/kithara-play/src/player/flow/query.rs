@@ -122,17 +122,12 @@ impl<S> PlayerRuntime<S> {
             pub const fn engine(&self) -> &EngineImpl<S>;
         }
         to self.core.config {
-            /// Whether the built-in linear auto-advance handler is enabled.
-            #[must_use]
-            pub fn auto_advance_enabled(&self) -> bool;
             /// Get crossfade duration in seconds.
             pub fn crossfade_duration(&self) -> f32;
             /// Default playback-rate target used by `play()` and `select_item()`.
             pub fn default_rate(&self) -> f32;
             /// Returns `true` if the player is muted.
             pub fn is_muted(&self) -> bool;
-            /// Get prefetch lead time in seconds.
-            pub fn prefetch_duration(&self) -> f32;
             /// Get current volume (0.0..=1.0).
             pub fn volume(&self) -> f32;
         }

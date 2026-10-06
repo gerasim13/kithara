@@ -95,9 +95,7 @@ fn rate_events(events: Vec<PlayerEvent>) -> Vec<f32> {
             | PlayerEvent::CurrentItemChanged { .. }
             | PlayerEvent::PrerollCompleted { .. }
             | PlayerEvent::ItemDidPlayToEnd { .. }
-            | PlayerEvent::ItemDidFail { .. }
-            | PlayerEvent::PrefetchRequested
-            | PlayerEvent::HandoverRequested { .. } => None,
+            | PlayerEvent::ItemDidFail { .. } => None,
         })
         .collect()
 }
