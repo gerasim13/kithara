@@ -473,10 +473,9 @@ fn a_ready_pull_request_schedules_exactly_the_lanes_a_branch_push_does() {
 
 /// The product suite is what a `test run` naming no lane runs. Every lane a
 /// branch push schedules for it runs one command, apart from the toggles it
-/// asks for and the directory it builds in, so the clocks it is run under are
-/// the only difference between their counts. Only a branch push narrows it to
-/// the lanes the push touched; a ready pull request runs it whole, as the
-/// default branch does.
+/// asks for, so the clocks it is run under are the only difference between
+/// their counts. Only a branch push narrows it to the lanes the push touched;
+/// a ready pull request runs it whole, as the default branch does.
 #[test]
 fn the_product_suite_lanes_differ_only_in_their_toggles_and_narrow_only_on_a_branch_push() {
     let config = xtask_config();
@@ -529,12 +528,11 @@ fn the_product_suite_lanes_differ_only_in_their_toggles_and_narrow_only_on_a_bra
                 .copied()
                 .filter(|arg| !arg.starts_with("--flash=") && !arg.starts_with("--no-block="))
                 .collect();
-            let mut env = step
+            let env = step
                 .get("env")
                 .and_then(toml::Value::as_table)
                 .cloned()
                 .unwrap_or_default();
-            env.remove("CARGO_TARGET_DIR");
             let tools = lane.get("tools").map_or_else(Vec::new, strings);
             let depth = lane
                 .get("fetch_depth")

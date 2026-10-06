@@ -64,6 +64,11 @@ pub(crate) struct CiHost {
     /// profiles predate the field, and refusing to load would kill every lane.
     #[serde(default = "default_cores")]
     pub(crate) cores: usize,
+    /// What the Linux guest's Docker build cache is held to, as positive
+    /// decimal gigabytes such as `10GB`. Every cleanup prunes it to this size,
+    /// oldest first. Defaulted for the same reason `build_cache_size` is.
+    #[serde(default = "default_docker_build_cache_size")]
+    pub(crate) docker_build_cache_size: String,
     /// Maximum jobs admitted at once.
     ///
     /// Runner rendering and per-job cache partitioning share this value.
@@ -194,6 +199,7 @@ impl CiHost {
             bail!("CI host profile cleanup_deadline_seconds must be positive");
         }
         self.build_cache_budget_bytes()?;
+        self.docker_build_cache_budget_bytes()?;
         if self.soft_cleanup_bytes == 0
             || self.soft_cleanup_bytes >= self.aggressive_cleanup_bytes
             || self.aggressive_cleanup_bytes >= self.reject_bytes
@@ -281,6 +287,11 @@ impl CiHost {
     pub(crate) fn build_cache_budget_bytes(&self) -> Result<u64> {
         parse_build_cache_size(&self.build_cache_size)
             .context("CI host profile build_cache_size is invalid")
+    }
+
+    pub(crate) fn docker_build_cache_budget_bytes(&self) -> Result<u64> {
+        parse_build_cache_size(&self.docker_build_cache_size)
+            .context("CI host profile docker_build_cache_size is invalid")
     }
 
     pub(crate) fn cleanup_deadline(&self) -> Duration {
@@ -375,9 +386,7 @@ impl CiHost {
 }
 
 #[derive(Debug, derive_more::Display, derive_more::Error)]
-#[display(
-    "build_cache_size {value:?} must be a positive whole number followed by GB and fit in u64 bytes"
-)]
+#[display("{value:?} must be a positive whole number followed by GB and fit in u64 bytes")]
 #[error(ignore)]
 pub(crate) struct BuildCacheSizeError {
     value: String,
@@ -396,6 +405,12 @@ pub(crate) struct BuildCacheSizeError {
 /// fleet actually builds and what its volume can spare.
 pub(crate) fn default_build_cache_size() -> String {
     "25GB".to_owned()
+}
+
+/// About what this host's image builds kept on 2026-10-05: 9.1 GB in 27
+/// records, after weeks of pruning by age alone.
+fn default_docker_build_cache_size() -> String {
+    "10GB".to_owned()
 }
 
 /// The Mac mini this fleet was sized on.
@@ -577,6 +592,34 @@ mod tests {
             CiHost::load(&path).unwrap().build_cache_size,
             default_build_cache_size()
         );
+    }
+
+    #[test]
+    fn ci_host_load_accepts_a_profile_without_a_docker_build_cache_size() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("host.toml");
+        let host = super::super::fixture().host;
+        host.write(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let without: String = text
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("docker_build_cache_size"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        fs::write(&path, without).unwrap();
+
+        assert_eq!(
+            CiHost::load(&path).unwrap().docker_build_cache_size,
+            default_docker_build_cache_size()
+        );
+    }
+
+    #[test]
+    fn ci_host_rejects_a_docker_build_cache_size_that_is_not_whole_gigabytes() {
+        let mut host = super::super::fixture().host;
+        host.docker_build_cache_size = "10G".to_owned();
+
+        assert!(host.validate().is_err());
     }
 
     /// A deadline every installed profile predates, so refusing to load
