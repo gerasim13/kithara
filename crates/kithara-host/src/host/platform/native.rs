@@ -6,12 +6,11 @@ use kithara_platform::sync::Arc;
 use kithara_play::{PlayError, player::PlayerControlSource};
 use kithara_warp::BeatGridId;
 
-#[cfg(feature = "offline")]
-use super::decks::Decks;
 use super::{
     super::{Host, HostOwned},
     PlatformResult,
     deck_pass::{DeckPass, DeckThread},
+    decks::Decks,
 };
 use crate::{
     HostSettings,
@@ -35,13 +34,17 @@ impl<S> PlatformResult<Self> for StartedPlatform<S> {
 
 pub(in crate::host) struct Platform<S> {
     decks: DeckPass,
+    /// The decks the Host stopped ticking as it closed. They drop with the
+    /// platform, after the session that renders them has shut down.
+    retired: Decks,
     marker: PhantomData<fn() -> S>,
 }
 
 impl<S> Platform<S> {
-    /// Drops the Host's decks while the session they talk to still runs.
+    /// Stops ticking the Host's decks and keeps them until the platform
+    /// drops, after the session shutdown that stops their stream.
     pub(in crate::host) fn close(platform: &mut Self, _host_id: BeatGridId) {
-        platform.decks.close();
+        platform.retired = platform.decks.close();
     }
 
     #[cfg(feature = "offline")]
@@ -49,9 +52,10 @@ impl<S> Platform<S> {
         Self::owner(DeckPass::Blocks(Decks::default()))
     }
 
-    const fn owner(decks: DeckPass) -> Self {
+    fn owner(decks: DeckPass) -> Self {
         Self {
             decks,
+            retired: Decks::default(),
             marker: PhantomData,
         }
     }

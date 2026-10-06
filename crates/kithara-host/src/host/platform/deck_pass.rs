@@ -20,12 +20,12 @@ pub(super) enum DeckPass {
 }
 
 impl DeckPass {
-    /// Drops every deck before the session they talk to shuts down.
-    pub(super) fn close(&mut self) {
+    /// Stops ticking the decks and hands every one back.
+    pub(super) fn close(&mut self) -> Decks {
         match self {
             Self::Clock(thread) => thread.close(),
             #[cfg(feature = "offline")]
-            Self::Blocks(decks) => drop(std::mem::take(decks)),
+            Self::Blocks(decks) => std::mem::take(decks),
         }
     }
 
@@ -67,7 +67,7 @@ enum DeckMsg {
 /// per session pump interval, with no caller driving it.
 pub(super) struct DeckThread {
     tx: Option<mpsc::Sender<DeckMsg>>,
-    thread: Option<JoinHandle<()>>,
+    thread: Option<JoinHandle<Decks>>,
 }
 
 impl DeckThread {
@@ -79,14 +79,17 @@ impl DeckThread {
         }
     }
 
-    /// Stops the thread once it drops its decks.
-    fn close(&mut self) {
+    /// Stops the thread and takes back the decks it held. A thread that
+    /// panicked dropped them as it unwound.
+    fn close(&mut self) -> Decks {
         drop(self.tx.take());
-        if let Some(thread) = self.thread.take()
-            && thread.join().is_err()
-        {
+        let Some(thread) = self.thread.take() else {
+            return Decks::default();
+        };
+        thread.join().unwrap_or_else(|_| {
             warn!("host deck thread panicked");
-        }
+            Decks::default()
+        })
     }
 
     fn release(&self, id: BeatGridId) -> Result<Deck, PlayError> {
@@ -110,7 +113,7 @@ impl DeckThread {
     }
 }
 
-fn run(rx: &mpsc::Receiver<DeckMsg>) {
+fn run(rx: &mpsc::Receiver<DeckMsg>) -> Decks {
     let mut decks = Decks::default();
     let mut deadline = Instant::now() + consts::SESSION_PUMP_INTERVAL;
     while let Ok(message) = receive_message(rx, !decks.is_empty(), deadline) {
@@ -124,6 +127,7 @@ fn run(rx: &mpsc::Receiver<DeckMsg>) {
             deadline = Instant::now() + consts::SESSION_PUMP_INTERVAL;
         }
     }
+    decks
 }
 
 fn hand_back(decks: &mut Decks, id: BeatGridId, reply_tx: &mpsc::Sender<Result<Deck, PlayError>>) {
@@ -140,9 +144,13 @@ mod tests {
     use kithara_platform::{sync::Arc, thread::sleep};
     use kithara_play::{
         Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply, SessionBinding,
-        SessionDispatcher, player::PlayerControlSource,
+        SessionDispatcher,
+        player::{PlayerControl, PlayerControlSource},
     };
-    use kithara_test_utils::{bufpool::pools, kithara};
+    use kithara_test_utils::{
+        bufpool::{TestPools, pools},
+        kithara,
+    };
 
     use super::*;
 
@@ -162,7 +170,9 @@ mod tests {
         }
     }
 
-    fn deck(ticks: &Arc<AtomicUsize>) -> (BeatGridId, Deck) {
+    /// A deck on a session that counts its ticks, with a control that tells
+    /// whether the deck has been dropped.
+    fn deck(ticks: &Arc<AtomicUsize>) -> (BeatGridId, Deck, PlayerControl<TestPools>) {
         let mut player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(consts::DEFAULT_SAMPLE_RATE)
@@ -175,13 +185,14 @@ mod tests {
                 consts::DEFAULT_SAMPLE_RATE,
             ))
             .expect("the deck binds its session");
-        (id, Box::new(player))
+        let control = player.control();
+        (id, Box::new(player), control)
     }
 
     #[kithara::test]
     fn the_deck_thread_ticks_a_held_deck_until_it_is_released() {
         let ticks = Arc::new(AtomicUsize::new(0));
-        let (id, held) = deck(&ticks);
+        let (id, held, _) = deck(&ticks);
         let mut pass = DeckPass::Clock(DeckThread::spawn());
 
         pass.hold(id, held).expect("the thread takes the deck");
@@ -198,14 +209,40 @@ mod tests {
             "a released deck is no longer ticked"
         );
         drop(released);
-        pass.close();
+        drop(pass.close());
+    }
+
+    /// Closing a realtime pass stops its clock but keeps its decks alive: the
+    /// Host drops them only once the session that renders them has shut down.
+    #[kithara::test]
+    fn closing_the_deck_thread_stops_its_clock_and_keeps_its_decks() {
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let (id, held, control) = deck(&ticks);
+        let mut pass = DeckPass::Clock(DeckThread::spawn());
+
+        pass.hold(id, held).expect("the thread takes the deck");
+        let decks = pass.close();
+        let at_close = ticks.load(Ordering::Relaxed);
+        sleep(consts::SESSION_PUMP_INTERVAL * 3);
+
+        assert_eq!(
+            ticks.load(Ordering::Relaxed),
+            at_close,
+            "a closed pass ticks no deck"
+        );
+        assert!(
+            !control.is_closed(),
+            "the deck outlives the pass that held it"
+        );
+        drop(decks);
+        assert!(control.is_closed(), "the deck drops with its holder");
     }
 
     #[cfg(feature = "offline")]
     #[kithara::test]
     fn an_offline_pass_ticks_its_decks_only_ahead_of_a_block() {
         let ticks = Arc::new(AtomicUsize::new(0));
-        let (id, held) = deck(&ticks);
+        let (id, held, _) = deck(&ticks);
         let mut pass = DeckPass::Blocks(Decks::default());
 
         pass.hold(id, held).expect("the pass takes the deck");
@@ -218,6 +255,6 @@ mod tests {
 
         pass.tick_block();
         assert_eq!(ticks.load(Ordering::Relaxed), 1);
-        pass.close();
+        drop(pass.close());
     }
 }
