@@ -1413,7 +1413,7 @@ steps = [{ args = ["deps", "semver"], label = "public API compatibility" }]
 role = "gate"
 kinds = ["weekly", "release"]
 timeout_minutes = 60
-fetch_depth = 0
+history = true
 
 # One browser per job: the two engines fail for unrelated reasons, and Chromium
 # owns the WebCodecs target while Firefox keeps the full integration suite. Both
@@ -1770,11 +1770,14 @@ timeout_minutes = 360
 # The scan reports where it found something, not merely how many: without the
 # findings it announced "leaks found: 5" and stopped, which is a number nobody
 # can act on. Values stay redacted, so neither the log nor the report repeats a
-# secret while naming the rule, the file and the commit.
+# secret while naming the rule, the file and the commit. It scans every commit
+# behind the one checked out: a secret added and removed again is still in the
+# history that gets pushed.
 [ext.ci.lanes.linux-secrets]
 cache_group = "linux"
 label = "Linux"
 os = "linux"
+history = true
 tools = ["gitleaks"]
 program = "gitleaks"
 steps = [
@@ -1897,7 +1900,9 @@ steps = [
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
 kinds_github = ["main", "branch", "merge-request"]
-timeout_minutes = 60
+# The real-clock lane's budget: a build directory the host budget evicted
+# rebuilds whole at two jobs, which took 58 minutes on the trusted runner.
+timeout_minutes = 120
 
 [ext.ci.lanes.linux-doc]
 cache_group = "linux"
@@ -2128,7 +2133,6 @@ timeout_minutes = 90
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 publishes_sources = true
@@ -2141,7 +2145,6 @@ timeout_minutes = 60
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["lint", "arch"], label = "architecture checks" }]
@@ -2155,7 +2158,6 @@ timeout_minutes = 30
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 steps = [
@@ -2174,7 +2176,6 @@ timeout_minutes = 60
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["perf", "memory"], label = "memory budgets" }]
@@ -2232,7 +2233,6 @@ cache_group = "linux"
 label = "Linux"
 freshness = "checksum"
 os = "linux"
-fetch_depth = 0
 tools = ["cargo", "just", "sccache"]
 program = "just"
 steps = [
@@ -2311,7 +2311,7 @@ timeout_minutes = 60
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 0
+history = true
 queue = "heavy-linux"
 tools = ["cargo", "just"]
 program = "just"
@@ -2336,7 +2336,6 @@ timeout_minutes = 360
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "similarity-report", path = "target/similarity" }
@@ -2350,7 +2349,6 @@ timeout_minutes = 120
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "architecture", path = "target/architecture" }
@@ -2374,7 +2372,6 @@ timeout_minutes = 120
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "coverage-risk", path = "target/quality-lab/\ncoverage/" }
@@ -2384,13 +2381,12 @@ kinds = []
 kinds_github = ["nightly", "weekly"]
 timeout_minutes = 240
 
-# `just ci health` fetches the `main` baseline itself with `git fetch
-# --depth=1`, so the checkout ahead of it only needs the tip.
+# `just ci health` fetches the `main` baseline itself before semver compares
+# against it, so the checkout ahead of it only needs the tip.
 [ext.ci.lanes.quality-health]
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "health-report", path = "target/health-report.md\ntarget/health-logs/" }
@@ -2408,7 +2404,6 @@ timeout_minutes = 120
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "quality-report", path = "target/consolidated-quality-report.md" }
