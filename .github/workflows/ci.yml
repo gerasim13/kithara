@@ -151,7 +151,7 @@ jobs:
       ui_required: ${{ steps.ui.outputs.ui_required }}
     env:
       CARGO_TARGET_DIR: /cache/target
-      KITHARA_CI_CACHE_ROOT: /cache/target/.kithara-ci
+      KITHARA_CI_CACHE_ROOT: /cache/lanes/.kithara-ci
     steps:
       - name: Confirm the runner is reachable
         run: just --version

@@ -2151,6 +2151,16 @@ fn a_ui_owned_branch_push_routes_to_the_gpu_suite_and_requires_its_verdict() {
 /// runner that had not yet seen a commit compiled xtask for it again.
 #[test]
 fn a_lane_leaves_its_build_directory_to_the_slot_it_claims() {
+    let workflow = github_workflow("ci.yml");
+    let gate = workflow_job(workflow_jobs(&workflow), "gate");
+    let gate_env = mapping_field(gate, "env")
+        .as_mapping()
+        .expect("the gate has an environment");
+    assert_eq!(
+        mapping_field(gate_env, "KITHARA_CI_CACHE_ROOT").as_str(),
+        Some("/cache/lanes/.kithara-ci"),
+        "UI selection reuses the host's xtask bootstrap"
+    );
     for name in ["lane.yml", "ui.yml", "android.yml"] {
         let workflow = github_workflow(name);
         let env = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "env")
