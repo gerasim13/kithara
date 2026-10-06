@@ -345,14 +345,15 @@ impl<'s> MpaReader<'s> {
                     );
 
                     let mut n_ref_frames = 0;
-                    let mut ref_frame = &pending.frames[(pending.n_parsed - 1) & REF_FRAMES_MASK];
+                    let mut ref_frame =
+                        &pending.frames[(pending.n_parsed - 1) & consts::REF_FRAMES_MASK];
 
                     if main_data_begin > 0 {
                         let max_ref_frames = std::cmp::min(pending.n_parsed, pending.frames.len());
 
                         while n_ref_frames < max_ref_frames {
                             ref_frame = &pending.frames
-                                [(pending.n_parsed - n_ref_frames - 1) & REF_FRAMES_MASK];
+                                [(pending.n_parsed - n_ref_frames - 1) & consts::REF_FRAMES_MASK];
 
                             if pos - ref_frame.pos >= main_data_begin {
                                 break;
@@ -684,19 +685,16 @@ fn is_frame_header_similar(header: &FrameHeader, sync: u32) -> bool {
     false
 }
 
-const MAX_REF_FRAMES: usize = 4;
-const REF_FRAMES_MASK: usize = MAX_REF_FRAMES - 1;
-
 struct PendingSeek {
     required_ts: Timestamp,
     mode: SeekMode,
-    frames: [FramePos; MAX_REF_FRAMES],
+    frames: [FramePos; consts::MAX_REF_FRAMES],
     n_parsed: usize,
 }
 
 impl PendingSeek {
     fn remember(&mut self, frame: FramePos) {
-        self.frames[self.n_parsed & REF_FRAMES_MASK] = frame;
+        self.frames[self.n_parsed & consts::REF_FRAMES_MASK] = frame;
         self.n_parsed += 1;
     }
 }
