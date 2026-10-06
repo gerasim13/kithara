@@ -1280,16 +1280,52 @@ fn scheduled_stress_respects_the_repository_switch_and_runner_pool() {
     let condition = mapping_field(stress, "if")
         .as_str()
         .expect("scheduled stress condition is a string");
+    let [_, weekly] = dispatch_crons(&workflow)[..] else {
+        panic!("one cron per cadence");
+    };
+    let cadence = dispatch_cadence(weekly);
+    let nightly_only = format!(
+        "({}) == 'nightly'",
+        cadence.trim_start_matches("${{ ").trim_end_matches(" }}")
+    );
     for contract in [
         "vars.KITHARA_STRESS_ENABLED == 'true'",
         "vars.KITHARA_STRESS_RUNNER_LABELS != ''",
-        "(inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'",
+        nightly_only.as_str(),
     ] {
         assert!(
             condition.contains(contract),
             "scheduled stress omits `{contract}`"
         );
     }
+}
+
+/// The crons `dispatch.yml` is scheduled by, in declaration order.
+fn dispatch_crons(workflow: &Value) -> Vec<&str> {
+    let triggers = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "on")
+        .as_mapping()
+        .expect("on is a mapping");
+    mapping_field(triggers, "schedule")
+        .as_sequence()
+        .expect("schedule is a sequence")
+        .iter()
+        .map(|entry| {
+            mapping_field(
+                entry.as_mapping().expect("a schedule entry is a mapping"),
+                "cron",
+            )
+            .as_str()
+            .expect("a cron is a string")
+        })
+        .collect()
+}
+
+/// How every dispatched job resolves its cadence: the input when started by
+/// hand, otherwise which of the two crons fired.
+fn dispatch_cadence(weekly_cron: &str) -> String {
+    format!(
+        "${{{{ inputs.kind || (github.event.schedule == '{weekly_cron}' && 'weekly' || 'nightly') }}}}"
+    )
 }
 
 /// Eleven crons fired the same workflow so that one job ran and ten skipped,
@@ -1304,20 +1340,24 @@ fn the_dispatcher_has_one_cron_per_cadence() {
         .as_mapping()
         .expect("on is a mapping");
 
-    let crons: Vec<&str> = mapping_field(triggers, "schedule")
-        .as_sequence()
-        .expect("schedule is a sequence")
-        .iter()
-        .map(|entry| {
-            mapping_field(
-                entry.as_mapping().expect("a schedule entry is a mapping"),
-                "cron",
-            )
-            .as_str()
-            .expect("a cron is a string")
-        })
-        .collect();
-    assert_eq!(crons, ["0 1 * * *", "0 8 * * 6"]);
+    let crons = dispatch_crons(&workflow);
+    let [nightly, weekly] = crons.as_slice() else {
+        panic!("one cron per cadence, a night and a week: {crons:?}");
+    };
+    assert!(
+        nightly.ends_with(" * * *") && !weekly.ends_with(" * * *"),
+        "the first cron fires every day, the second on one day of the week: {crons:?}"
+    );
+    // GitHub starts a schedule late when load peaks, and it peaks at the top
+    // of every hour: a night declared for 01:00 started between 06:02 and
+    // 07:11, inside the morning's pushes it was scheduled to stay out of.
+    for cron in &crons {
+        assert_ne!(
+            cron.split_whitespace().next(),
+            Some("0"),
+            "cron `{cron}` fires at the top of the hour"
+        );
+    }
 
     // Started by hand, the cadence is chosen rather than inferred, and `only`
     // is how one lane runs on its own instead of a role's whole selection.
@@ -1348,8 +1388,8 @@ fn the_dispatcher_has_one_cron_per_cadence() {
     // reads the weekly cron differently from the others: a cadence resolved
     // two ways is a night that half-runs.
     let jobs = workflow_jobs(&workflow);
-    let cadence =
-        "${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}";
+    let cadence = dispatch_cadence(weekly);
+    let cadence = cadence.as_str();
     for role in ["gate", "platforms", "deep", "quality"] {
         let job = workflow_job(jobs, role);
         assert_eq!(
@@ -1397,6 +1437,40 @@ fn the_dispatcher_has_one_cron_per_cadence() {
             "job `{name}` starts without checking that a pool serves it"
         );
     }
+}
+
+/// The dispatcher had no group of its own, so nothing superseded a run: a
+/// branch that dispatched its night on every push queued a whole night per
+/// push, each waiting its turn on the fleet behind the last. A run started
+/// again for the same branch, cadence and selection makes the one before it
+/// obsolete; a different selection, or the other cadence, is another question
+/// and keeps its run.
+#[test]
+fn a_newer_dispatch_of_one_selection_supersedes_the_older() {
+    let workflow = github_workflow("dispatch.yml");
+    let concurrency = workflow_concurrency(&workflow);
+    let group = mapping_field(concurrency, "group")
+        .as_str()
+        .expect("the dispatch group is a string");
+    let [_, weekly] = dispatch_crons(&workflow)[..] else {
+        panic!("one cron per cadence");
+    };
+    let cadence = dispatch_cadence(weekly);
+    for part in [
+        "github.ref",
+        cadence.trim_start_matches("${{ ").trim_end_matches(" }}"),
+        "inputs.only",
+        "inputs.mutants",
+    ] {
+        assert!(
+            group.contains(part),
+            "the dispatch group omits `{part}`: {group}"
+        );
+    }
+    assert_eq!(
+        mapping_field(concurrency, "cancel-in-progress").as_bool(),
+        Some(true)
+    );
 }
 
 #[test]
