@@ -297,10 +297,16 @@ impl<S> PlayerRuntime<S> {
 
     /// Send a part to the current slot's deck for its next block.
     pub(crate) fn send_to_slot(&self, part: DeckPart) -> Result<(), PlayError> {
+        self.send_batch_to_slot(vec![part])
+    }
+
+    /// Send `commands` to the current slot's deck for its next block, admitted together or not
+    /// at all.
+    pub(crate) fn send_batch_to_slot(&self, commands: Vec<DeckPart>) -> Result<(), PlayError> {
         let slot_id = self
             .require_active_slot()
             .map_err(|TransitionError::WrongPhase| PlayError::NoActiveSlot)?;
-        self.core.engine.send_slot_cmd(slot_id, part)
+        self.core.engine.send_slot_cmd(slot_id, commands)
     }
 
     /// Snapshot of the active slot under a short phase lock.

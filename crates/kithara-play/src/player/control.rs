@@ -35,7 +35,9 @@ where
     /// prepared resource.
     ///
     /// # Errors
-    /// Returns a closed-owner error or the failure to allocate its buffers.
+    /// Returns a closed-owner error, the failure to allocate its buffers, or
+    /// the deck's refusal for want of room. Nothing is armed then, and the
+    /// item's resource is spent: it must be loaded again.
     pub fn arm_next(
         &self,
         index: usize,

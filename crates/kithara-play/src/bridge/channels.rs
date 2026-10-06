@@ -119,19 +119,29 @@ impl SlotControl {
 
     /// Sends `part` to apply at the start of the deck's next block.
     ///
+    /// # Errors
+    ///
+    /// Returns the batch whole when the deck's capacity of batches is in flight.
+    pub fn send(&mut self, part: DeckPart) -> Result<Seq, SendError<DeckProtocol>> {
+        self.send_batch(vec![part])
+    }
+
+    /// Sends `commands` to apply together, in order, at the start of the deck's next block: the
+    /// deck admits all of them or none.
+    ///
     /// The receipts that came back since the last send are dropped first: they return the
     /// credits, and every batch for the next block applies.
     ///
     /// # Errors
     ///
     /// Returns the batch whole when the deck's capacity of batches is in flight.
-    pub fn send(&mut self, part: DeckPart) -> Result<Seq, SendError<DeckProtocol>> {
+    pub fn send_batch(&mut self, commands: Vec<DeckPart>) -> Result<Seq, SendError<DeckProtocol>> {
         self.deck.receipts().for_each(drop);
         self.deck.send(
             When::Next,
             Batch {
                 basis: Vec::new(),
-                commands: vec![part],
+                commands,
             },
         )
     }

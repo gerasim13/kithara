@@ -244,32 +244,40 @@ impl<S> EngineImpl<S> {
         Ok(())
     }
 
-    /// Sends `part` to the slot's deck for its next block. A resource crossing to the audio
-    /// thread leaves its seek handle here, since seeking takes locks. Bindings apply only once the
-    /// batch is accepted; the resource releases when it returns as trash.
-    pub(crate) fn send_slot_cmd(&self, slot: SlotId, part: DeckPart) -> Result<(), PlayError> {
+    /// Sends `commands` to the slot's deck as one batch, applied together in its next block. A
+    /// resource crossing to the audio thread leaves its seek handle here, since seeking takes
+    /// locks. Bindings apply only once the batch is accepted; the resource releases when it
+    /// returns as trash.
+    pub(crate) fn send_slot_cmd(
+        &self,
+        slot: SlotId,
+        commands: Vec<DeckPart>,
+    ) -> Result<(), PlayError> {
         let mut slots = self.slots.lock();
         let result = slots
             .get_mut(slot)
             .map_or(Err(PlayError::SlotNotFound(slot)), |handle| {
-                let bindings = match &part {
-                    DeckPart::Attach { resource, item_id } => {
-                        Some((*item_id, resource.seek_handle(), resource.render_reader()))
-                    }
-                    _ => None,
-                };
+                let bindings: Vec<_> = commands
+                    .iter()
+                    .filter_map(|command| match command {
+                        DeckPart::Attach { resource, item_id } => {
+                            Some((*item_id, resource.seek_handle(), resource.render_reader()))
+                        }
+                        _ => None,
+                    })
+                    .collect();
                 let result = handle
-                    .send(part)
+                    .send_batch(commands)
                     .map(drop)
                     .map_err(|_| PlayError::SlotChannelFull { slot });
-                if result.is_ok()
-                    && let Some((item_id, seek, render)) = bindings
-                {
-                    if let Some(seek) = seek {
-                        handle.bind_seek(item_id, seek);
-                    }
-                    if let Some(render) = render {
-                        handle.bind_render(item_id, render);
+                if result.is_ok() {
+                    for (item_id, seek, render) in bindings {
+                        if let Some(seek) = seek {
+                            handle.bind_seek(item_id, seek);
+                        }
+                        if let Some(render) = render {
+                            handle.bind_render(item_id, render);
+                        }
                     }
                 }
                 result

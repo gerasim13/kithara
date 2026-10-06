@@ -369,8 +369,13 @@ impl Deck {
             .for_each(|(_, track)| track.set_host_sample_rate(sample_rate));
     }
 
+    /// Take the track at `slot` off the deck, with every chain that names it: a track attached
+    /// again under the same id starts only when told to.
     pub(super) fn unload_slot(&mut self, slot: TrackSlot) {
         if let Some(track) = self.tracks.remove_at(slot) {
+            for (_, held) in self.tracks.iter_mut() {
+                held.unchain(track.item_id());
+            }
             self.retire(track);
         }
     }
@@ -677,6 +682,108 @@ mod tests {
         assert!(
             (adopted.duration() - SUCCESSOR_SECONDS).abs() < 1e-3,
             "{adopted:?}"
+        );
+    }
+
+    /// A successor that starts and ends inside the block it is stitched in still reports its
+    /// start, with the epoch it leads under, before its end: the control side takes that epoch
+    /// on from the start receipt alone.
+    #[kithara::test(tokio)]
+    async fn a_successor_ending_in_its_stitch_block_reports_its_start_first(
+        constant_half: &'static [u8],
+    ) {
+        let (mut processor, mut control) = processor();
+        let playback = Arc::clone(processor.playback());
+        let ending = TrackId::allocate();
+        let successor = TrackId::allocate();
+        for (src, seconds, item_id) in [("ending", 0.005, ending), ("successor", 0.002, successor)]
+        {
+            control
+                .send(DeckPart::Attach {
+                    resource: pcm_resource(constant_half, src, seconds),
+                    item_id,
+                })
+                .ok();
+        }
+        let epoch = playback.issue_epoch();
+        control
+            .send(DeckPart::Chain {
+                from: ending,
+                to: successor,
+                epoch,
+            })
+            .ok();
+        control.send(DeckPart::StartAll).ok();
+        render(&mut processor);
+        processor
+            .track_mut(ending)
+            .expect("the ending track is attached")
+            .play();
+        while control.notif_rx.try_pop().is_some() {}
+
+        render(&mut processor);
+        let mut receipts = Vec::new();
+        while let Some(notification) = control.notif_rx.try_pop() {
+            match notification {
+                PlayerNotification::PlaybackStarted {
+                    item_id,
+                    epoch: started,
+                    ..
+                } if item_id == successor => receipts.push(("started", Some(started))),
+                PlayerNotification::PlaybackStopped { item_id, .. } if item_id == successor => {
+                    receipts.push(("stopped", None));
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(receipts, [("started", Some(epoch)), ("stopped", None)]);
+    }
+
+    /// Withdrawing a chained successor takes the chain with it: attached again under the same
+    /// id, it waits for its own start instead of being stitched in by the stale chain.
+    #[kithara::test(tokio)]
+    async fn a_withdrawn_successor_is_not_stitched_in_once_attached_again(
+        constant_half: &'static [u8],
+    ) {
+        let (mut processor, mut control) = processor();
+        let playback = Arc::clone(processor.playback());
+        let ending = TrackId::allocate();
+        let successor = TrackId::allocate();
+        for (src, seconds, item_id) in [("ending", 0.005, ending), ("successor", 60.0, successor)] {
+            control
+                .send(DeckPart::Attach {
+                    resource: pcm_resource(constant_half, src, seconds),
+                    item_id,
+                })
+                .ok();
+        }
+        control
+            .send(DeckPart::Chain {
+                from: ending,
+                to: successor,
+                epoch: playback.issue_epoch(),
+            })
+            .ok();
+        control.send(DeckPart::Withdraw { item_id: successor }).ok();
+        control
+            .send(DeckPart::Attach {
+                resource: pcm_resource(constant_half, "successor", 60.0),
+                item_id: successor,
+            })
+            .ok();
+        control.send(DeckPart::StartAll).ok();
+        render(&mut processor);
+        processor
+            .track_mut(ending)
+            .expect("the ending track is attached")
+            .play();
+
+        render(&mut processor);
+        render(&mut processor);
+        assert_eq!(
+            processor.track(successor).map(PlayerTrack::state),
+            Some(TrackState::Preloading),
+            "nothing started the successor attached again"
         );
     }
 

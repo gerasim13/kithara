@@ -61,7 +61,9 @@ where
     /// Session seconds before the current track ends at which the queue
     /// readies its successor: a consumed one reloads, so its load has that
     /// long before it plays, and a loaded one is armed on the deck. A longer
-    /// crossfade leads instead.
+    /// crossfade leads instead. The queue readies a successor on its tick, so
+    /// a lead shorter than the interval between ticks can miss a gapless
+    /// track's end.
     /// Fixed for the queue's lifetime. Default: 3.5. Stays `f32`
     /// seconds rather than the campaign's `humantime` duration convention:
     /// the value already reaches 10 setter and 14 read call sites as a bare

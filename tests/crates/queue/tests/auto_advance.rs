@@ -436,6 +436,105 @@ async fn a_gapless_queue_meets_its_next_track_without_a_gap() {
     harness.close().await;
 }
 
+/// A successor the deck has no room for is not armed: its resource went with
+/// the attach the deck refused, so the queue reloads it, and it still meets
+/// the current track without a gap.
+#[kithara::test(tokio)]
+async fn a_successor_the_deck_had_no_room_for_reloads_and_meets_its_predecessor() {
+    /// `constant_wav_*_1_5s`: 1.5 s at 44.1 kHz.
+    const TRACK_FRAMES: usize = 66_150;
+    const SILENCE: f32 = 0.005;
+    /// Between A's level (≈0.1) and B's (≈0.8).
+    const TRACK_B_LEVEL: f32 = 0.45;
+    const STITCH_TOLERANCE_FRAMES: usize = BLOCK_FRAMES / 8;
+    const LEAD_SECS: f32 = 0.5;
+    /// Blocks A plays before the first tick that arms: ≈1.1 s, inside the
+    /// lead of its 1.5 s end.
+    const UNTICKED_BLOCKS: usize = 95;
+    /// More batches than the deck's command ring holds.
+    const FLOOD: usize = 64;
+
+    let harness = OfflinePlayer::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
+            .crossfade_duration(0.0)
+            .build(),
+        SAMPLE_RATE,
+    )
+    .await;
+    let config = QueueConfig::builder()
+        .player(harness.take_player())
+        .crossfade_settings(kithara::play::CrossfadeSettings {
+            duration: 0.0,
+            ..kithara::play::CrossfadeSettings::default()
+        })
+        .prefetch_duration(LEAD_SECS)
+        .build();
+    let queue = harness.insert_control(Queue::new(config)).await;
+    let a = assets::constant_wav_quiet_1_5s();
+    let id_a = append_loaded(&harness, &queue, &a).await;
+    let b = assets::constant_wav_loud_1_5s();
+    let id_b = append_loaded(&harness, &queue, &b).await;
+    harness
+        .run(&queue, move |q| q.select(id_a, Transition::None))
+        .await
+        .expect("select track A");
+
+    // A tick takes A's start on, so its playhead is published; A is far from
+    // its end, so nothing is armed yet.
+    let mut pcm = harness.render(BLOCK_FRAMES).await;
+    let _ = harness.run(&queue, QueueControl::tick).await;
+    for _ in 1..UNTICKED_BLOCKS {
+        pcm.extend(harness.render(BLOCK_FRAMES).await);
+    }
+    harness
+        .run(&queue, |q| {
+            for _ in 0..FLOOD {
+                q.set_volume(1.0);
+            }
+        })
+        .await;
+    let _ = harness.run(&queue, QueueControl::tick).await;
+    assert_eq!(
+        queue.track(id_b).map(|entry| entry.status),
+        Some(TrackStatus::Consumed),
+        "B's resource went with the attach the deck refused, so B must reload"
+    );
+
+    let mut events = queue.subscribe();
+    pcm.extend(harness.render(BLOCK_FRAMES).await);
+    let _ = harness.run(&queue, QueueControl::tick).await;
+    wait_for_loader_done_event(&mut events, &queue, id_b, LOCAL_LOAD_DEADLINE)
+        .await
+        .expect("track B reloads");
+    for _ in 0..TRACK_FRAMES / BLOCK_FRAMES {
+        let _ = harness.run(&queue, QueueControl::tick).await;
+        pcm.extend(harness.render(BLOCK_FRAMES).await);
+    }
+
+    let onset = first_onset_frame(&pcm, SILENCE)
+        .expect("track A must produce non-silence within the render budget");
+    let left = deinterleave_left(&pcm, usize::from(CHANNELS));
+    let a_end = onset + TRACK_FRAMES;
+    let gap = max_silence_run(&left, onset, a_end + TRACK_FRAMES / 3, SILENCE);
+    assert_eq!(
+        gap, 0,
+        "B must follow A with no silence between them: {gap} silent frames \
+         (onset={onset}, A ends at {a_end})"
+    );
+    let rise = left[onset..]
+        .iter()
+        .position(|sample| sample.abs() > TRACK_B_LEVEL)
+        .map(|offset| onset + offset)
+        .expect("track B must be heard within the render budget");
+    assert!(
+        rise.abs_diff(a_end) <= STITCH_TOLERANCE_FRAMES,
+        "B's first frame must be the one after A's last: rise={rise}, A ends at {a_end}"
+    );
+    drop(queue);
+    harness.close().await;
+}
+
 /// Blocks rendered with ticks after a gapless queue starts its first track,
 /// long enough for the queue to arm the next one behind it.
 const ARMING_BLOCKS: usize = 16;

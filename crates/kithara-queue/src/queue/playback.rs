@@ -127,7 +127,9 @@ where
         }
     }
 
-    /// Arm the loaded successor at `index`; `false` when the deck did not.
+    /// Arm the loaded successor at `index`; `false` when the deck did not. An
+    /// arm that fails spends the entry's resource, so it is consumed and
+    /// reloads once it is wanted again.
     fn arm_successor(&self, index: usize, id: TrackId, link: SuccessorLink) -> bool {
         match self.player.arm_next(index, link) {
             Ok(Some(_)) => true,
@@ -140,6 +142,7 @@ where
             }
             Err(error) => {
                 debug!(%error, id = id.as_u64(), index, "the successor would not arm");
+                self.set_status(id, TrackStatus::Consumed);
                 false
             }
         }

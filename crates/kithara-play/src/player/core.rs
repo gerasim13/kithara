@@ -119,11 +119,18 @@ impl<S> PlayerRuntime<S> {
         Ok(())
     }
 
-    /// Hand `items[index]` to the processor. Its presentation is returned, not
-    /// published: the item may be attached ahead of the one playing.
+    /// Hand `items[index]` to the processor, chained behind the `behind` track
+    /// when one is named, so the deck plays it on the frame after that track's
+    /// last. Its presentation is returned, not published: the item may be
+    /// attached ahead of the one playing.
+    ///
+    /// # Errors
+    /// The deck admits the item and its chain together or not at all. On any
+    /// error the item's resource is spent: it must be loaded again.
     pub(crate) fn enqueue_to_processor(
         &self,
         index: usize,
+        behind: Option<TrackId>,
     ) -> Result<Option<EnqueuedItem>, PlayError>
     where
         S: HasPool<f32>,
@@ -138,13 +145,20 @@ impl<S> PlayerRuntime<S> {
             return Ok(None);
         };
         let src = Arc::clone(item.player_resource.src());
-        let loaded = self
-            .send_to_slot(DeckPart::Attach {
-                item_id: item.item_id,
-                resource: Box::new(item.player_resource),
-            })
-            .is_ok();
-        if loaded && let Some(lane) = item.lane {
+        let mut commands = vec![DeckPart::Attach {
+            item_id: item.item_id,
+            resource: Box::new(item.player_resource),
+        }];
+        if let Some(from) = behind {
+            let playback = self.slot_playback().ok_or(PlayError::NoActiveSlot)?;
+            commands.push(DeckPart::Chain {
+                from,
+                to: item.item_id,
+                epoch: playback.issue_epoch(),
+            });
+        }
+        self.send_batch_to_slot(commands)?;
+        if let Some(lane) = item.lane {
             self.core.lanes.load(item.item_id, lane);
         }
         Ok(Some(EnqueuedItem {

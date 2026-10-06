@@ -23,12 +23,15 @@ impl<S> PlayerRuntime<S> {
         }
         let id = self.core.engine.allocate_slot()?;
         self.enter_loading_with_slot(id);
-        for change in [
-            DeckMixSettingsChange::Volume(FaderValue::from(self.volume())),
-            DeckMixSettingsChange::Muted(self.is_muted()),
-        ] {
-            self.core.engine.send_slot_cmd(id, DeckPart::Mix(change))?;
-        }
+        self.core.engine.send_slot_cmd(
+            id,
+            vec![
+                DeckPart::Mix(DeckMixSettingsChange::Volume(FaderValue::from(
+                    self.volume(),
+                ))),
+                DeckPart::Mix(DeckMixSettingsChange::Muted(self.is_muted())),
+            ],
+        )?;
         Ok(id)
     }
 

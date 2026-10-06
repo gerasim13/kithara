@@ -70,6 +70,7 @@ impl PlayerTrack {
         if self.state == TrackState::Finished {
             return;
         }
+        self.notify_state_change(notification_tx);
         self.set_state(TrackState::Finished);
         notification_tx
             .try_push(PlayerNotification::PlaybackStopped {
@@ -134,6 +135,9 @@ impl PlayerTrack {
     /// auto-advance out from under the seek the processor is about to apply.
     /// Holding costs the caller one block of silence: the seek command that
     /// releases the hold is already on its way.
+    ///
+    /// A track that started inside this block reports its start first, so the
+    /// epoch it leads under reaches the control side even when it ends here.
     fn handle_natural_end(
         &mut self,
         notification_tx: &mut HeapProd<PlayerNotification>,
@@ -145,6 +149,7 @@ impl PlayerTrack {
         if published_seek_epoch != self.seek_epoch {
             return;
         }
+        self.notify_state_change(notification_tx);
         self.set_state(TrackState::Finished);
         self.ended_at_eof = true;
         notification_tx

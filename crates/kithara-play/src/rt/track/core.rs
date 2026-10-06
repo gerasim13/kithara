@@ -125,6 +125,13 @@ impl PlayerTrack {
         self.successor = Some(successor);
     }
 
+    /// Drop the chain to `successor`, which has left the deck.
+    pub fn unchain(&mut self, successor: TrackId) {
+        if self.successor == Some(successor) {
+            self.successor = None;
+        }
+    }
+
     /// Lead under `epoch` from the next time this track leads.
     pub const fn lead_under(&mut self, epoch: u64) {
         self.epoch = epoch;

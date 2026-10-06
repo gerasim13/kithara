@@ -86,7 +86,8 @@ where
     /// If a different next is already armed, it is unloaded first.
     /// Idempotent for the same index. Returns `Some(src)` on success;
     /// `None` if `items[index]` is empty (loader hasn't filled it yet) or
-    /// `index` is out of range.
+    /// `index` is out of range. On an error nothing is armed and the item's
+    /// resource is spent.
     fn arm_next(&self, index: usize, link: SuccessorLink) -> Result<Option<Arc<str>>, PlayError> {
         let current_index = self.current_index();
         if index >= self.item_count() {
@@ -115,31 +116,19 @@ where
             self.unload_pending(&pending);
         }
 
+        let behind = match link {
+            SuccessorLink::Gapless => self.core.items.item_id(current_index),
+            SuccessorLink::Fade => None,
+        };
         let Some(EnqueuedItem {
             item_id,
             src,
             duration_seconds,
             presentation,
-        }) = self.enqueue_to_processor(index)?
+        }) = self.enqueue_to_processor(index, behind)?
         else {
             return Ok(None);
         };
-        if link == SuccessorLink::Gapless
-            && let Some(leading) = self.core.items.item_id(current_index)
-            && let Some(playback) = self.slot_playback()
-            && self
-                .send_to_slot(DeckPart::Chain {
-                    from: leading,
-                    to: item_id,
-                    epoch: playback.issue_epoch(),
-                })
-                .is_err()
-        {
-            tracing::warn!(
-                ?item_id,
-                "the command ring refused the chain: the successor waits for its commit"
-            );
-        }
         if let Some(pending_slot) = self.phase.lock().pending_mut() {
             *pending_slot = Some(PendingNext {
                 item_id,
@@ -925,5 +914,56 @@ mod tests {
             ),
             "the armed successor must stay on the deck"
         );
+    }
+
+    /// A deck that has room for one more batch takes a gapless successor
+    /// whole: its attach and the chain behind the leading item are admitted
+    /// together, so a successor is never armed without its chain.
+    #[kithara::test]
+    fn a_gapless_successor_is_chained_in_the_batch_that_attaches_it() {
+        let (player, audio_thread, ids) = deck_with_armed_successor();
+        player.unarm_next();
+        audio_thread.take_commands();
+        let mut capacity = 0;
+        while player.send_to_slot(DeckPart::StopAll).is_ok() {
+            capacity += 1;
+        }
+        audio_thread.take_commands();
+        for _ in 1..capacity {
+            player
+                .send_to_slot(DeckPart::StopAll)
+                .expect("the ring has room below its capacity");
+        }
+
+        player
+            .arm_next(2, SuccessorLink::Gapless)
+            .expect("one batch has room")
+            .expect("the successor holds a resource");
+
+        assert!(
+            audio_thread.take_commands().iter().any(|command| matches!(
+                command,
+                DeckPart::Chain { from, to, .. } if *from == ids[0] && *to == ids[2]
+            )),
+            "the armed successor must be chained behind the leading item"
+        );
+    }
+
+    /// An arm the full deck refuses fails and leaves no successor armed:
+    /// nothing reached the processor to stitch in.
+    #[kithara::test]
+    fn an_arm_the_deck_has_no_room_for_fails_and_arms_nothing() {
+        let (player, audio_thread, _) = deck_with_armed_successor();
+        player.unarm_next();
+        audio_thread.take_commands();
+        while player.send_to_slot(DeckPart::StopAll).is_ok() {}
+
+        let armed = player.arm_next(2, SuccessorLink::Gapless);
+
+        assert!(
+            matches!(armed, Err(PlayError::SlotChannelFull { .. })),
+            "the refused arm must fail: {armed:?}"
+        );
+        assert_eq!(player.armed_next(), None);
     }
 }

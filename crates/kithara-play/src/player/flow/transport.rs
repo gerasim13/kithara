@@ -74,7 +74,7 @@ where
             duration_seconds,
             presentation,
             ..
-        }) = self.enqueue_to_processor(index)?
+        }) = self.enqueue_to_processor(index, None)?
         else {
             return Ok(false);
         };
@@ -110,7 +110,7 @@ where
 
         let _ = self.send_to_slot(DeckPart::SetRate(rate));
         let loaded = self.load_current_item().unwrap_or_else(|error| {
-            warn!(%error, "failed to allocate track playback buffers");
+            warn!(%error, "the current item did not reach the deck");
             false
         });
         let _ = self.send_to_slot(DeckPart::StartAll);
