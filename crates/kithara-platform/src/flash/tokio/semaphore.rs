@@ -178,7 +178,7 @@ impl Drop for AcquireOwned {
                     .wakers
                     .retain(|w| !w.will_wake(&waker));
             }
-            Some(Parked::Engine(handle)) => system::cancel_async_wait(&handle),
+            Some(Parked::Engine(handle)) => drop(handle),
             None => {}
         }
     }

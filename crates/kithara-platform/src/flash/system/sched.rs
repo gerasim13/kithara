@@ -1,7 +1,10 @@
 use std::{
     backtrace::Backtrace,
     panic::Location,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Weak,
+        atomic::{AtomicBool, Ordering},
+    },
     task::Waker,
     time::Duration as StdDuration,
 };
@@ -10,6 +13,7 @@ use super::{
     Clock, Core, CvDesc, CvId, FlashInner, Registry, WaiterId,
     credit::{self, HeldSlot, WaitGuard},
     gate::TaskGate,
+    inner::TaskRecord,
     state::{AtomicTaskState, ParkOutcome, TaskDiag, TaskState, WakeOutcome},
     wake::{Token, Wake},
 };
@@ -129,16 +133,42 @@ impl Entry {
 }
 
 impl Registry {
-    /// Firer-side accounting for a batch of woken waiters, under the `core`
-    /// lock: bump `active` ONLY for SYNC (OS-thread) wakes — the bump covers
-    /// their real OS wake latency, and a woken thread does NOT re-increment on
-    /// return; async (Task) wakes are counted in `active_async` by the spawn
-    /// poll-wrapper when next polled, not by the firer. Every wake is marked
-    /// granted under the lock so a racing cancel stays consistent.
+    /// Retain each grant in its task record or as an untracked active credit
+    /// before publication. Unique async receipts settle their creating owner.
     fn account_woken(&mut self, woken: &[Wake]) {
-        self.active += woken.iter().filter(|w| !w.is_task()).count();
         for w in woken {
+            match w.task().and_then(|(id, _)| self.task_diag.get_mut(&id)) {
+                Some(task) => task.grants += 1,
+                None => self.active += 1,
+            }
             w.mark_granted_under_lock();
+        }
+    }
+
+    fn pinning_grants(&self) -> usize {
+        self.task_diag
+            .iter()
+            .filter(|(id, task)| {
+                task.grants != 0
+                    && !task.diag.grants_unpollable_behind(
+                        &self.bridged,
+                        self.active_async_holders.contains_key(*id),
+                    )
+            })
+            .map(|(_, task)| task.grants)
+            .sum()
+    }
+
+    /// All retained credits, including grants whose owners are unpollable.
+    pub(super) fn total_active(&self) -> usize {
+        self.active + self.task_diag.values().map(|task| task.grants).sum::<usize>()
+    }
+
+    fn remove_settled_task(&mut self, id: u64) {
+        if self.task_diag.get(&id).is_some_and(|task| {
+            task.grants == 0 && task.diag.state.load() == TaskState::Done
+        }) {
+            self.task_diag.remove(&id);
         }
     }
 
@@ -173,7 +203,7 @@ impl Registry {
             .filter(|id| {
                 self.task_diag
                     .get(id)
-                    .is_some_and(|diag| diag.stranded_behind(&self.bridged))
+                    .is_some_and(|task| task.diag.stranded_behind(&self.bridged))
             })
             .count();
         self.active_async.saturating_sub(stranded)
@@ -228,7 +258,7 @@ impl Core {
     /// No `pinning_async` veto: a paced target exists only while a real I/O op is in flight, where
     /// the pin must not suppress it (see `try_advance`).
     pub(super) fn pace_target(&self, _clock: &Clock) -> Option<StdDuration> {
-        if self.registry.active != 0 {
+        if self.registry.active != 0 || self.registry.pinning_grants() != 0 {
             return None;
         }
         if self.sched.real_io == 0 {
@@ -251,20 +281,29 @@ impl Core {
         self.try_advance(clock)
     }
 
-    /// Evaluate the advance rule while holding the `core` lock. Returns the
-    /// [`WakeBatch`] whose wakes the caller fires AFTER releasing the lock
-    /// (firing under the lock would make the woken thread immediately contend
-    /// on the engine lock) via [`WakeBatch::fire`]. Operates only on `timed` —
-    /// it never fires `indef`, which has no deadline. Fires nothing unless
-    /// every participant is parked (`active == 0`) and at least one timed
-    /// waiter exists.
-    ///
-    /// Quiescence requires both the sync and async participant counts at zero, except async slots
-    /// no thread can currently poll (`pinning_async`), which do not block the advance while a paced
-    /// op is in flight.
+    /// Drain eligible grants while holding core; each batch removes waiters.
+    /// Unpollable grants retain credit without preventing a bridge deadline.
+    /// The caller fires the accumulated wakes only after unlocking.
     pub(super) fn try_advance(&mut self, clock: &Clock) -> WakeBatch {
+        let WakeBatch(mut woken) = self.try_advance_once(clock);
+        if woken.is_empty() {
+            return WakeBatch(woken);
+        }
+        loop {
+            let WakeBatch(next) = self.try_advance_once(clock);
+            if next.is_empty() {
+                return WakeBatch(woken);
+            }
+            woken.extend(next);
+        }
+    }
+
+    fn try_advance_once(&mut self, clock: &Clock) -> WakeBatch {
         let paced = self.sched.real_io != 0 && self.sched.pace_anchor.is_some();
-        if self.registry.active != 0 || (!paced && self.registry.pinning_async() != 0) {
+        if self.registry.active != 0
+            || (!paced && self.registry.pinning_async() != 0)
+            || self.registry.pinning_grants() != 0
+        {
             self.sched.advance_counts.blocked += 1;
             return WakeBatch(Vec::new());
         }
@@ -516,12 +555,6 @@ impl FlashInner {
 
 /// Async-yield and condvar waiter surface: registers plus the condvar signal.
 impl FlashInner {
-    /// Drop path for a [`FlashInner::register_yield_async`] waiter cancelled
-    /// before it resolved.
-    pub(in crate::flash) fn cancel_yield(&self, id: WaiterId) {
-        self.core.lock().sched.yielders.remove(&id);
-    }
-
     /// Register a TIMED condvar waiter (woken by the deadline OR a signal for
     /// `cvid`). The caller holds the DOMAIN guard when calling this (lock order
     /// domain -> core). Accounts the wait via
@@ -575,19 +608,12 @@ impl FlashInner {
         (token, adv, wait)
     }
 
-    /// Registers an async yield waiter parked until a quiescent clock advance and
-    /// returns its ID, grant flag and [`WakeBatch`] for the caller to fire.
-    /// Pending yield releases the task's `active_async` slot through the spawn gate;
-    /// resolution requires `active == active_async == 0` and is never immediate.
-    /// During a participated poll the advance is a no-op until the gate parks.
-    /// An initial advance, lone-yield rescue or later advance grants and re-polls;
-    /// firing the batch also releases a quiescent non-participated `block_on` whose
-    /// only await is this yield.
-    pub(in crate::flash) fn register_yield_async(
-        &self,
-        waker: Waker,
-    ) -> (WaiterId, Arc<AtomicBool>, WakeBatch) {
+    /// Register a yield waiter and return its receipt plus the wakes to fire
+    /// after unlocking. A grant retains one active credit until consume/drop;
+    /// the task's separate async slot belongs to its gate.
+    pub(in crate::flash) fn register_yield_async(&self, waker: Waker) -> (AsyncHandle, WakeBatch) {
         let granted = Arc::new(AtomicBool::new(false));
+        let task = ctx::cur_async();
         let mut s = self.core.lock();
         let id = s.registry.fresh_id();
         s.sched.yielders.insert(
@@ -595,12 +621,20 @@ impl FlashInner {
             Wake::Task {
                 waker,
                 granted: Arc::clone(&granted),
-                task: ctx::cur_async(),
+                task,
             },
         );
         let adv = s.try_advance(&self.clock);
         drop(s);
-        (id, granted, adv)
+        (
+            AsyncHandle {
+                owner: self.pacer.owner(),
+                granted,
+                key: AsyncKey::Yield(id),
+                task: task.map(|(id, _)| id),
+            },
+            adv,
+        )
     }
 
     /// Wake condvar waiters for `cvid`: `all == true` wakes every matching waiter
@@ -660,6 +694,7 @@ impl FlashInner {
         waker: Waker,
     ) -> (Option<AsyncHandle>, WakeBatch) {
         let granted = Arc::new(AtomicBool::new(false));
+        let task = ctx::cur_async();
         let parked = Parked::here();
         let mut s = self.core.lock();
         if s.sched.notify_permits.remove(&cvid) {
@@ -673,7 +708,7 @@ impl FlashInner {
                 Wake::Task {
                     waker,
                     granted: Arc::clone(&granted),
-                    task: ctx::cur_async(),
+                    task,
                 },
                 parked,
             ),
@@ -682,28 +717,25 @@ impl FlashInner {
         drop(s);
         (
             Some(AsyncHandle {
+                owner: self.pacer.owner(),
                 granted,
-                timed_key: None,
-                indef_key: Some(id),
+                key: AsyncKey::Indef(id),
+                task: task.map(|(id, _)| id),
             }),
             adv,
         )
     }
 
-    /// Register a TIMED async sleep waiter `delta_nanos` from the CURRENT virtual
-    /// instant, then run the advance rule. The deadline is computed from the clock
-    /// read INSIDE the lock (so no advance can slip between reading the clock and
-    /// inserting — a deadline is therefore never below the current clock, the
-    /// "no backward" invariant). Registration touches no counter: the task is
-    /// already counted in `active_async` by its poll-wrapper for the current poll,
-    /// and the waiter is removed by [`FlashInner::cancel_async_wait`] if the future
-    /// is dropped before it fires.
+    /// Register a sleep relative to the clock read under core, so its deadline
+    /// cannot fall below the clock. Its handle removes an ungranted waiter on
+    /// drop or settles the retained active credit after grant.
     pub(in crate::flash) fn register_sleep_async(
         &self,
         delta_nanos: u64,
         waker: Waker,
     ) -> (AsyncHandle, WakeBatch) {
         let granted = Arc::new(AtomicBool::new(false));
+        let task = ctx::cur_async();
         let mut s = self.core.lock();
         let deadline_nanos = self.clock.now_nanos().saturating_add(delta_nanos);
         let id = s.registry.fresh_id();
@@ -716,7 +748,7 @@ impl FlashInner {
                 Wake::Task {
                     waker,
                     granted: Arc::clone(&granted),
-                    task: ctx::cur_async(),
+                    task,
                 },
             ),
         );
@@ -724,9 +756,10 @@ impl FlashInner {
         drop(s);
         (
             AsyncHandle {
+                owner: self.pacer.owner(),
                 granted,
-                timed_key: Some(key),
-                indef_key: None,
+                key: AsyncKey::Timed(key),
+                task: task.map(|(id, _)| id),
             },
             adv,
         )
@@ -736,14 +769,9 @@ impl FlashInner {
 /// Async task slot accounting: the spawn-time acquire plus the gate FSM
 /// transitions coupled to the counter under the `core` lock.
 impl FlashInner {
-    /// Acquire an `active_async` slot for a RUNNABLE async task queued to be polled
-    /// (just spawned). Adding a participant can never enable an advance, so this does
-    /// NOT run the advance rule. Called once by [`participate`](crate::flash::participate) at
-    /// construction; the PARKED→RUNNABLE wake re-acquire goes through
-    /// [`FlashInner::gate_wake_parked`], which couples the acquire to the state CAS
-    /// under the lock.
-    /// Returns the task's gate, whose [`TaskDiag`] the registry keeps a second
-    /// handle to until the task completes or drops.
+    /// Acquire a Runnable task slot and install its canonical grant record.
+    /// The gate shares diagnostics with that record, which remains after Done
+    /// until its final grant receipt settles.
     pub(in crate::flash) fn async_acquire(&self, loc: &'static Location<'static>) -> Arc<TaskGate> {
         let mut s = self.core.lock();
         let id = s.registry.next_task_id;
@@ -751,7 +779,13 @@ impl FlashInner {
         s.registry.active_async += 1;
         s.registry.active_async_holders.insert(id, loc);
         let gate = TaskGate::new(id, loc, Arc::new(TaskDiag::default()));
-        s.registry.task_diag.insert(id, gate.diag());
+        s.registry.task_diag.insert(
+            id,
+            TaskRecord {
+                diag: gate.diag(),
+                grants: 0,
+            },
+        );
         gate
     }
 
@@ -761,7 +795,7 @@ impl FlashInner {
     pub(super) fn gate_complete(&self, state: &AtomicTaskState, id: u64) -> HeldSlot {
         let mut s = self.core.lock();
         state.store(TaskState::Done);
-        s.registry.task_diag.remove(&id);
+        s.registry.remove_settled_task(id);
         s.hold_async(id)
     }
 
@@ -770,8 +804,9 @@ impl FlashInner {
     /// `RunningNotified`), moves into a [`HeldSlot`] for the task's joiner.
     pub(super) fn gate_drop(&self, state: &AtomicTaskState, id: u64) -> Option<HeldSlot> {
         let mut s = self.core.lock();
-        s.registry.task_diag.remove(&id);
-        match state.swap(TaskState::Done) {
+        let previous = state.swap(TaskState::Done);
+        s.registry.remove_settled_task(id);
+        match previous {
             TaskState::Runnable | TaskState::Running | TaskState::RunningNotified => {
                 Some(s.hold_async(id))
             }
@@ -827,22 +862,40 @@ impl FlashInner {
 
 /// Async waiter cancel plus the notify/channel signal surface.
 impl FlashInner {
-    /// Drop path for an async waiter future cancelled before it resolved (e.g. it
-    /// lost a `tokio::select!`). Just remove its still-parked entry, if any. Async
-    /// waiters never hold a counter slot (the firer does not bump `active_async` —
-    /// the poll-wrapper owns that count per-poll), so there is nothing to release:
-    /// the surrounding task stays counted by its poll-wrapper either way.
-    pub(in crate::flash) fn cancel_async_wait(&self, handle: &AsyncHandle) {
+    /// Settle one unique async receipt after consume or cancellation. The
+    /// grant and entry removal share this lock with the firer, so either the
+    /// entry is removed before grant or its retained credit is returned once.
+    fn release_async_wait(&self, handle: &AsyncHandle) {
         let mut s = self.core.lock();
-        match (handle.timed_key, handle.indef_key) {
-            (Some(key), _) => {
+        match handle.key {
+            AsyncKey::Timed(key) => {
                 s.sched.timed.remove(&key);
             }
-            (_, Some(id)) => {
+            AsyncKey::Indef(id) => {
                 s.sched.indef.remove(&id);
             }
-            _ => {}
+            AsyncKey::Yield(id) => {
+                s.sched.yielders.remove(&id);
+            }
         }
+        if handle.granted.load(Ordering::Acquire) {
+            match handle.task.and_then(|id| s.registry.task_diag.get_mut(&id)) {
+                Some(task) => {
+                    debug_assert!(task.grants > 0, "async grant without task credit");
+                    task.grants -= 1;
+                }
+                None => {
+                    debug_assert!(s.registry.active > 0, "async grant without retained credit");
+                    s.registry.active -= 1;
+                }
+            }
+            if let Some(id) = handle.task {
+                s.registry.remove_settled_task(id);
+            }
+        }
+        let adv = s.try_advance(&self.clock);
+        drop(s);
+        adv.fire();
     }
 
     /// Register an UNTIMED async channel waiter for `cvid`. Unlike
@@ -859,6 +912,7 @@ impl FlashInner {
         waker: Waker,
     ) -> (AsyncHandle, WakeBatch) {
         let granted = Arc::new(AtomicBool::new(false));
+        let task = ctx::cur_async();
         let parked = Parked::here();
         let mut s = self.core.lock();
         let id = s.registry.fresh_id();
@@ -869,7 +923,7 @@ impl FlashInner {
                 Wake::Task {
                     waker,
                     granted: Arc::clone(&granted),
-                    task: ctx::cur_async(),
+                    task,
                 },
                 parked,
             ),
@@ -878,9 +932,10 @@ impl FlashInner {
         drop(s);
         (
             AsyncHandle {
+                owner: self.pacer.owner(),
                 granted,
-                timed_key: None,
-                indef_key: Some(id),
+                key: AsyncKey::Indef(id),
+                task: task.map(|(id, _)| id),
             },
             adv,
         )
@@ -950,24 +1005,36 @@ impl FlashInner {
     }
 }
 
-/// Handle an async waiter future holds for the lifetime of one park. Carries the
-/// engine key so a cancelled (dropped-before-resolve) future can remove its
-/// still-parked entry, and the `granted` flag the firer sets so the future can
-/// tell a real wake from a cancel and balance `active` exactly.
+#[derive(Clone, Copy)]
+enum AsyncKey {
+    Timed((u64, WaiterId)),
+    Indef(WaiterId),
+    Yield(WaiterId),
+}
+
+/// Unique receipt retaining one grant credit through wake and poll latency.
+/// Drop removes an ungranted entry or settles that credit on the creating
+/// engine, whose weak identity does not keep a stopped engine alive.
 pub(crate) struct AsyncHandle {
+    owner: Weak<FlashInner>,
     granted: Arc<AtomicBool>,
-    indef_key: Option<WaiterId>,
-    timed_key: Option<(u64, WaiterId)>,
+    key: AsyncKey,
+    task: Option<u64>,
 }
 
 impl AsyncHandle {
-    /// True once the engine (or a signal) selected this waiter. The future
-    /// resolves `Ready` on its next poll. Counting is GRANT-driven (only the
-    /// firer sets this), so a clock jump via some OTHER advance never resolves
-    /// the waiter early. No counter is touched on resolve — the task's
-    /// `active_async` slot is owned by the spawn poll-wrapper.
+    /// Observe an engine grant only while its owner is alive. A different
+    /// clock advance cannot resolve this waiter; only its firer sets the flag.
     pub(crate) fn granted(&self) -> bool {
-        self.granted.load(Ordering::Acquire)
+        self.granted.load(Ordering::Acquire) && self.owner.strong_count() != 0
+    }
+}
+
+impl Drop for AsyncHandle {
+    fn drop(&mut self) {
+        if let Some(owner) = self.owner.upgrade() {
+            owner.release_async_wait(self);
+        }
     }
 }
 
@@ -1032,8 +1099,8 @@ impl FlashInner {
 
     delegate::delegate! {
         to self.core {
-            /// Test-only: number of currently RUNNING participants.
-            #[expr($.registry.active)]
+            /// Test-only: retained credits, including stranded task grants.
+            #[expr($.registry.total_active())]
             #[call(lock)]
             pub(in crate::flash) fn active_count(&self) -> usize;
             /// Test-only: number of async tasks the engine currently counts as

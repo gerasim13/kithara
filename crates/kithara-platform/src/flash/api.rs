@@ -3,7 +3,6 @@ use std::{
     marker::PhantomData,
     ops::{Add, AddAssign, Sub},
     pin::Pin,
-    sync::atomic::{AtomicBool, Ordering},
     task::{Context, Poll},
 };
 
@@ -12,11 +11,9 @@ use pin_project_lite::pin_project;
 pub use super::participant::{Participating, participate};
 use super::{
     ctx::{self, ModeSnapshot, flash_ambient, flash_enabled},
-    ids::WaiterId,
     system::{self, FLASH},
 };
 pub use crate::common::time::Duration;
-use crate::sync::Arc;
 
 /// RAII bracket for ONE real I/O operation in flight (a socket send / response
 /// or body-chunk await in `kithara-net`). While at least one scope is live the
@@ -48,8 +45,8 @@ impl Drop for RealIoScope {
 /// on the quiescence engine on its first poll, then resolves once the engine
 /// crosses that deadline. Collapses to zero wall-clock (the clock jumps when all
 /// participants park). Resolution is GRANT-driven (`handle.granted()`), never a
-/// bare clock check; the task's `active_async` slot is owned by the spawn
-/// poll-wrapper gate ([`Participating`]), so this future touches no counter.
+/// bare clock check. Its unique handle retains the grant credit until consumed
+/// or dropped; the task's separate async slot belongs to its poll-wrapper gate.
 pub(crate) struct FlashSleep {
     handle: Option<system::AsyncHandle>,
     delta_nanos: u64,
@@ -98,14 +95,6 @@ impl Future for FlashSleep {
     }
 }
 
-impl Drop for FlashSleep {
-    fn drop(&mut self) {
-        if let Some(handle) = self.handle.take() {
-            system::cancel_async_wait(&handle);
-        }
-    }
-}
-
 /// Engine-backed `tokio::task::yield_now` under `flash`. A cooperative async
 /// yield must let the virtual clock advance — in real time, time passes while a
 /// task yields and other work (a server throttle) makes progress. This parks the
@@ -116,7 +105,7 @@ impl Drop for FlashSleep {
 /// that pins `active_async` and freezes the clock (the bug a naive `yield_now`
 /// causes under quiescence).
 pub struct FlashYield {
-    handle: Option<(WaiterId, Arc<AtomicBool>)>,
+    handle: Option<system::AsyncHandle>,
     done: bool,
 }
 
@@ -127,26 +116,18 @@ impl Future for FlashYield {
         if self.done {
             return Poll::Ready(());
         }
-        if let Some((_, granted)) = self.handle.as_ref() {
-            if granted.load(Ordering::Acquire) {
+        if let Some(handle) = self.handle.as_ref() {
+            if handle.granted() {
                 self.done = true;
                 self.handle = None;
                 return Poll::Ready(());
             }
             return Poll::Pending;
         }
-        let (id, granted, adv) = system::register_yield_async(cx.waker().clone());
-        self.handle = Some((id, granted));
+        let (handle, adv) = system::register_yield_async(cx.waker().clone());
+        self.handle = Some(handle);
         adv.fire();
         Poll::Pending
-    }
-}
-
-impl Drop for FlashYield {
-    fn drop(&mut self) {
-        if let Some((id, _)) = self.handle.take() {
-            system::cancel_yield(id);
-        }
     }
 }
 
@@ -245,16 +226,8 @@ pub(crate) fn advance(delta: Duration) {
     FLASH.clock.advance(duration_to_nanos(delta));
 }
 
-/// Reset the timeline to its base and clear the quiescence engine. For unit
-/// tests that share one process; production tests get per-test process
-/// isolation from nextest. See `FlashInner::reset` for the ordering contract.
-///
-/// Crate-private and gated to the two configurations that reach it: this
-/// rewinds a process-wide clock, so a caller outside the engine could zero the
-/// timeline under someone else's running test. Callers are this crate's own
-/// unit tests and the loom harness (`backend/flash_loom/mod.rs`), which owns the
-/// per-iteration boundary. Product tests get process isolation instead and must
-/// not have it.
+/// Reset a drained unit-test/loom run. No old waiter, grant receipt or
+/// participant may remain reachable; nextest isolates product tests.
 #[cfg(any(test, feature = "loom"))]
 #[inline]
 pub(crate) fn reset() {

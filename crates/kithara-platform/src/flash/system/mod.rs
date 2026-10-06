@@ -38,10 +38,10 @@ pub(super) mod state;
 pub(super) mod wake;
 
 pub(in crate::flash) use forward::{
-    async_acquire, cancel_async_wait, cancel_yield, describe_cvid, dump, next_condvar_id,
-    park_timed_unparkable, register_channel_async, register_condvar_timed,
-    register_condvar_untimed, register_notify_async, register_sleep_async, register_yield_async,
-    signal_channel, signal_condvar, signal_notify, sleep_timed, unpark, yield_until_advance,
+    async_acquire, describe_cvid, dump, next_condvar_id, park_timed_unparkable, register_channel_async,
+    register_condvar_timed, register_condvar_untimed, register_notify_async, register_sleep_async,
+    register_yield_async, signal_channel, signal_condvar, signal_notify, sleep_timed, unpark,
+    yield_until_advance,
 };
 pub(in crate::flash) use inner::{
     Clock, Core, CvDesc, CvId, FLASH, FlashInner, Registry, SyncHolder, WaiterId,

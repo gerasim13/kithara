@@ -203,7 +203,7 @@ impl<T> Drop for Receiver<T> {
         }
         drop(inner);
         if let Some(Parked::Engine(handle)) = self.pending.take() {
-            system::cancel_async_wait(&handle);
+            drop(handle);
         }
     }
 }

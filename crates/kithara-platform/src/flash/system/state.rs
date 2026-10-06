@@ -160,6 +160,24 @@ impl TaskDiag {
             && self.sole_poller.load(Ordering::Relaxed)
             && self.state.load() == TaskState::Runnable
     }
+
+    /// A grant is unpollable behind a sole bridged driver or its own blocked
+    /// poll. An executing poll still owns its slot, even before driver publish.
+    pub(super) fn grants_unpollable_behind(
+        &self,
+        bridged: &BTreeSet<ThreadKey>,
+        owns_slot: bool,
+    ) -> bool {
+        self.driver()
+            .is_some_and(|driver| bridged.contains(&driver))
+            && match self.state.load() {
+                TaskState::Parked | TaskState::Runnable => {
+                    self.sole_poller.load(Ordering::Relaxed)
+                }
+                TaskState::Running | TaskState::RunningNotified => !owns_slot,
+                TaskState::Done => false,
+            }
+    }
 }
 
 /// Whether the runtime driving the current poll polls its tasks on exactly ONE

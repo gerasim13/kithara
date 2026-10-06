@@ -1,7 +1,7 @@
-use std::{panic::Location, sync::atomic::AtomicBool, task::Waker};
+use std::{panic::Location, task::Waker};
 
 use super::{
-    CvId, FLASH, WaiterId,
+    CvId, FLASH,
     credit::WaitGuard,
     gate::TaskGate,
     sched::{AsyncHandle, ParkRole, WakeBatch},
@@ -56,13 +56,8 @@ pub(crate) fn yield_until_advance() {
 
 /// Process-engine forward of
 /// [`FlashInner::register_yield_async`](super::FlashInner::register_yield_async).
-pub(crate) fn register_yield_async(waker: Waker) -> (WaiterId, Arc<AtomicBool>, WakeBatch) {
+pub(crate) fn register_yield_async(waker: Waker) -> (AsyncHandle, WakeBatch) {
     FLASH.register_yield_async(waker)
-}
-
-/// Process-engine forward of [`FlashInner::cancel_yield`](super::FlashInner::cancel_yield).
-pub(crate) fn cancel_yield(id: WaiterId) {
-    FLASH.cancel_yield(id);
 }
 
 /// Process-engine forward of
@@ -100,12 +95,6 @@ pub(crate) fn register_notify_async(cvid: CvId, waker: Waker) -> (Option<AsyncHa
 /// Process-engine forward of [`FlashInner::async_acquire`](super::FlashInner::async_acquire).
 pub(crate) fn async_acquire(loc: &'static Location<'static>) -> Arc<TaskGate> {
     FLASH.async_acquire(loc)
-}
-
-/// Process-engine forward of
-/// [`FlashInner::cancel_async_wait`](super::FlashInner::cancel_async_wait).
-pub(crate) fn cancel_async_wait(handle: &AsyncHandle) {
-    FLASH.cancel_async_wait(handle);
 }
 
 /// Process-engine forward of [`FlashInner::signal_notify`](super::FlashInner::signal_notify).
