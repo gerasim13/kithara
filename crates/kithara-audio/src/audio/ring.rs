@@ -196,10 +196,8 @@ impl RingConsumer {
         if matches!(wait, Wait::Never)
             || receive_is_nonblocking(self.preloaded, self.block_on_underrun)
         {
-            if let Some(fetch) =
-                try_pop_and_wake(&mut self.audio_rx, ctx.worker, self.consumer_wake_mode)
-            {
-                return RecvOutcome::Item(fetch);
+            if let Some(outcome) = self.try_recv_outcome(ctx) {
+                return outcome;
             }
             // An empty ring is the consumer's demand for the next chunk. The
             // producer parks itself as soon as it reports backpressure and is
@@ -213,16 +211,31 @@ impl RingConsumer {
         self.recv_outcome_blocking(ctx)
     }
 
+    fn try_recv_outcome(&mut self, ctx: RecvCtx<'_>) -> Option<RecvOutcome> {
+        if let Some(fetch) =
+            try_pop_and_wake(&mut self.audio_rx, ctx.worker, self.consumer_wake_mode)
+        {
+            return Some(RecvOutcome::Item(fetch));
+        }
+        if self.audio_rx.write_is_held() {
+            return None;
+        }
+        // The last push can race the first empty pop. Observing producer release
+        // publishes that push, so drain its terminal marker before reporting closure.
+        Some(
+            try_pop_and_wake(&mut self.audio_rx, ctx.worker, self.consumer_wake_mode)
+                .map_or(RecvOutcome::Closed, RecvOutcome::Item),
+        )
+    }
+
     #[kithara::flash(true)]
     #[kithara::measure(label = "audio.ring.wait")]
     #[kithara::hang_watchdog(ctx = ConsumerHangCtx)]
     fn recv_outcome_blocking(&mut self, ctx: RecvCtx<'_>) -> RecvOutcome {
         loop {
-            if let Some(fetch) =
-                try_pop_and_wake(&mut self.audio_rx, ctx.worker, self.consumer_wake_mode)
-            {
+            if let Some(outcome) = self.try_recv_outcome(ctx) {
                 hang_reset!();
-                return RecvOutcome::Item(fetch);
+                return outcome;
             }
             if ctx.cancel.is_some_and(CancelToken::is_cancelled) {
                 hang_reset!();
@@ -230,11 +243,9 @@ impl RingConsumer {
             }
             wake_worker(ctx.worker, self.consumer_wake_mode);
             let since = self.reader_wake.current();
-            if let Some(fetch) =
-                try_pop_and_wake(&mut self.audio_rx, ctx.worker, self.consumer_wake_mode)
-            {
+            if let Some(outcome) = self.try_recv_outcome(ctx) {
                 hang_reset!();
-                return RecvOutcome::Item(fetch);
+                return outcome;
             }
             if ctx.cancel.is_some_and(CancelToken::is_cancelled) {
                 hang_reset!();

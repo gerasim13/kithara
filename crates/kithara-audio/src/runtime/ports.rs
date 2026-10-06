@@ -31,7 +31,8 @@ pub(crate) trait WakeSignal: Send + Sync + 'static {
 /// [`try_push`]: Outlet::try_push
 /// [`flush`]: Outlet::flush
 pub(crate) struct Outlet<T> {
-    producer: HeapProd<T>,
+    /// Held during every operation; teardown takes it before waking the consumer.
+    producer: Option<HeapProd<T>>,
     overflow: Option<T>,
     wake: Option<Arc<dyn WakeSignal>>,
 }
@@ -39,7 +40,12 @@ pub(crate) struct Outlet<T> {
 impl<T> Outlet<T> {
     /// Whether one item can enter the ring without occupying overflow.
     pub(crate) fn can_push_direct(&self) -> bool {
-        self.overflow.is_none() && !self.producer.is_full()
+        self.overflow.is_none()
+            && !self
+                .producer
+                .as_ref()
+                .expect("outlet producer is held until teardown")
+                .is_full()
     }
 
     /// Try to drain the parked overflow item into the ring buffer.
@@ -122,13 +128,27 @@ impl<T> Outlet<T> {
     }
 
     fn try_push_ring(&mut self, item: T) -> Result<(), T> {
-        match self.producer.try_push(item) {
+        match self
+            .producer
+            .as_mut()
+            .expect("outlet producer is held until teardown")
+            .try_push(item)
+        {
             Ok(()) => {
                 self.notify();
                 Ok(())
             }
             Err(item) => Err(item),
         }
+    }
+}
+
+impl<T> Drop for Outlet<T> {
+    fn drop(&mut self) {
+        drop(self.producer.take());
+        drop(self.overflow.take());
+        self.notify();
+        self.flush_wake_signals();
     }
 }
 
@@ -142,6 +162,8 @@ impl<T> Inlet<T> {
         to self.consumer {
             /// Pop an item from the inlet. Returns `None` if empty.
             pub(crate) fn try_pop(&mut self) -> Option<T>;
+            /// Whether the ring's sole producer still holds its write end.
+            pub(crate) fn write_is_held(&self) -> bool;
         }
     }
 }
@@ -156,7 +178,7 @@ pub(crate) fn connect<T>(
     let (producer, consumer) = rb.split();
     (
         Outlet {
-            producer,
+            producer: Some(producer),
             wake,
             overflow: None,
         },
