@@ -229,8 +229,6 @@ rand = { workspace = true }
 
 reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
 tokio = { workspace = true, features = ["process"] }
-tokio-stream = { workspace = true }
-tower = { workspace = true }
 tower-http = { workspace = true }
 
 # Mocking

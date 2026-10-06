@@ -174,7 +174,6 @@ libc = { version = "0.2" }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
 num-complex = { version = "0.4", features = ["bytemuck", "libm"] }
 percent-encoding = { version = "2" }
-proc-macro2 = { version = "1", features = ["span-locations"] }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
 rustc-hash = { version = "1" }
@@ -268,7 +267,6 @@ num-complex = { version = "0.4", features = ["bytemuck", "libm"] }
 objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSOperation", "NSPathUtilities", "NSRange", "NSString", "NSThread", "NSURL", "NSURLAuthenticationChallenge", "NSURLCredential", "NSURLProtectionSpace", "NSURLRequest", "NSURLResponse", "NSURLSession", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "block2", "objc2-core-foundation", "std"] }
 percent-encoding = { version = "2" }
-proc-macro2 = { version = "1", features = ["span-locations"] }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
 rustc-hash = { version = "1" }
@@ -364,7 +362,6 @@ num-complex = { version = "0.4", features = ["bytemuck", "libm"] }
 objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSOperation", "NSPathUtilities", "NSRange", "NSString", "NSThread", "NSURL", "NSURLAuthenticationChallenge", "NSURLCredential", "NSURLProtectionSpace", "NSURLRequest", "NSURLResponse", "NSURLSession", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "block2", "objc2-core-foundation", "std"] }
 percent-encoding = { version = "2" }
-proc-macro2 = { version = "1", features = ["span-locations"] }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
 rustc-hash = { version = "1" }
@@ -515,7 +512,6 @@ libc = { version = "0.2" }
 ndk = { version = "0.9", features = ["audio"] }
 num-complex = { version = "0.4", features = ["bytemuck", "libm"] }
 percent-encoding = { version = "2" }
-proc-macro2 = { version = "1", features = ["span-locations"] }
 raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
@@ -601,7 +597,6 @@ libc = { version = "0.2" }
 ndk = { version = "0.9", features = ["audio"] }
 num-complex = { version = "0.4", features = ["bytemuck", "libm"] }
 percent-encoding = { version = "2" }
-proc-macro2 = { version = "1", features = ["span-locations"] }
 raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }

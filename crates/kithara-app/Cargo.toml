@@ -123,7 +123,6 @@ kithara = { workspace = true, default-features = false, features = ["download", 
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 clap = { workspace = true }
-crabtime = { workspace = true }
 iced = { workspace = true, optional = true, features = ["tiny-skia"] }
 rfd = { workspace = true, optional = true }
 sha2 = { workspace = true }
