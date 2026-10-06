@@ -871,10 +871,7 @@ mod tests {
         feature = "stretch-signalsmith",
         case::signalsmith(StretchKind::Signalsmith, true)
     )]
-    #[cfg_attr(
-        feature = "stretch-bungee",
-        case::bungee(StretchKind::Bungee, true)
-    )]
+    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee, true))]
     #[cfg_attr(feature = "stretch-glide", case::glide(StretchKind::Glide, true))]
     fn upstream_terminal_failure_keeps_its_classification(
         #[case] backend: StretchKind,
