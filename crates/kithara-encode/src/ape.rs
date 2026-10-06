@@ -7,7 +7,6 @@ type WideChar = u16;
 #[cfg(not(windows))]
 type WideChar = u32;
 
-/// Monkey's Audio SDK 13.27, MACLib.h: paths are native wchar_t strings.
 unsafe extern "system" {
     fn CompressFileW2(
         input: *const WideChar,

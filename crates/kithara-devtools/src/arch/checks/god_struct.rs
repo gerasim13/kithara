@@ -346,7 +346,6 @@ mod tests {
         assert_eq!(hit(&after, "crates/x/src/a.rs::G"), Some((3, 16)));
     }
 
-    /// Field-count policy belongs to pub_struct_open_fields, not behaviour checks.
     #[test]
     fn fields_alone_do_not_flag_a_struct() {
         let scans = vec![scan("crates/x/src/cfg.rs", &[("Cfg", 30)], &[("Cfg", 2)])];

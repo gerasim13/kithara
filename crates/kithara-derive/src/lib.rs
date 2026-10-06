@@ -16,21 +16,7 @@ mod vocabulary;
 #[cfg(feature = "config")]
 config::retained::config_derives!();
 
-/// Implements `Default` by calling the type's existing no-input builder.
-#[cfg(feature = "built-default")]
-#[proc_macro_derive(BuiltDefault)]
-pub fn built_default(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    config::built::expand(input)
-}
-/// `#[derive(Patch)]` — generate `<Struct>Patch`, the shape a configuration
-/// document may say about a configuration struct, and the `apply` that merges
-/// one onto the other. Its options are `#[patch(...)]`, or the `patch(...)`
-/// group of a configuration type's `#[config(...)]`.
-#[cfg(feature = "patch")]
-#[proc_macro_derive(Patch, attributes(patch, config))]
-pub fn patch(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    config::expand(input)
-}
+config::config_derives!();
 
 ui_derives!();
 
