@@ -836,6 +836,7 @@ mod tests {
     struct FailedSource {
         seek: Arc<SeekState>,
         failure: TrackFailureKind,
+        chunks: VecDeque<AudioChunk>,
     }
 
     #[cfg(any(
@@ -852,7 +853,11 @@ mod tests {
         }
 
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
-            TrackStep::Failed(self.failure)
+            self.chunks
+                .pop_front()
+                .map_or(TrackStep::Failed(self.failure), |chunk| {
+                    TrackStep::Produced(Fetch::data(chunk, self.seek.epoch()))
+                })
         }
     }
 
@@ -883,6 +888,7 @@ mod tests {
         let raw = FailedSource {
             seek: Arc::new(SeekState::new()),
             failure,
+            chunks: VecDeque::new(),
         };
         let config = kithara_warp::WarpConfig::builder()
             .backend(backend)
@@ -905,6 +911,101 @@ mod tests {
         let step = source.step_track();
         assert!(matches!(step, TrackStep::Failed(actual) if actual == failure));
         assert!(!source.quantum_failed);
+    }
+
+    #[cfg(any(
+        feature = "stretch-identity",
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
+    #[kithara::test(native)]
+    #[cfg_attr(
+        feature = "stretch-identity",
+        case::identity(StretchKind::Identity, false)
+    )]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith(StretchKind::Signalsmith, true)
+    )]
+    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee, true))]
+    #[cfg_attr(feature = "stretch-glide", case::glide(StretchKind::Glide, true))]
+    fn upstream_terminal_failure_keeps_its_classification_after_buffered_pcm(
+        #[case] backend: StretchKind,
+        #[case] staged: bool,
+        quarter: Vec<f32>,
+    ) {
+        let pools = pools();
+        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test sample rate"));
+        let failure = TrackFailureKind::RecreateFailed { offset: 91 };
+        let raw = FailedSource {
+            seek: Arc::new(SeekState::new()),
+            failure,
+            chunks: VecDeque::from([
+                chunk_with_frames(&pools, spec, 0, 4096, &quarter),
+                chunk_with_frames(&pools, spec, 4096, 17, &quarter),
+            ]),
+        };
+        let config = kithara_warp::WarpConfig::builder()
+            .backend(backend)
+            .speed(0.5)
+            .keylock(true)
+            .render_quantum_frames(NonZeroUsize::new(128).expect("test quantum"))
+            .build();
+        let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
+        let effects: Vec<Box<dyn AudioEffect>> = vec![Box::<BufferThenHalveFrames>::default()];
+        let drain = EffectDrain::new(effects.len(), &pools).expect("buffered effect drain");
+        let mut source = WarpSource::new(
+            raw,
+            renderer,
+            effects,
+            drain,
+            spec,
+            pools.clone(),
+            idle_inbox(),
+        );
+        let mut staged_prefix_seen = false;
+        let mut produced_nonzero_pcm = false;
+        let mut terminal_seen = false;
+        for _ in 0..128 {
+            flush_deferred(&mut source);
+            assert_eq!(source.warp.requires_staging(), staged);
+            let step = source.step_track();
+            staged_prefix_seen |= source.pending_input.as_ref().is_some_and(|pending| {
+                pending.consumed_frames > 0 && pending.consumed_frames < pending.chunk.frames()
+            });
+            match step {
+                TrackStep::Produced(Fetch::Data { data, epoch, .. }) => {
+                    assert_eq!(epoch, 0);
+                    assert!(data.frames() > 0);
+                    assert_eq!(data.samples.len(), data.frames() * 2);
+                    assert!(data.samples.iter().all(|sample| sample.is_finite()));
+                    produced_nonzero_pcm |= data.samples.iter().any(|sample| *sample != 0.0);
+                }
+                TrackStep::StateChanged => {}
+                TrackStep::Failed(actual) => {
+                    assert_eq!(actual, failure);
+                    assert!(source.source.chunks.is_empty());
+                    assert!(held_source_frames(&source.effects) > 0);
+                    assert!(matches!(source.drain_state, DrainState::Open));
+                    assert!(!source.quantum_failed);
+                    terminal_seen = true;
+                    break;
+                }
+                _ => panic!("buffered PCM must produce or preserve the upstream failure"),
+            }
+        }
+        assert!(
+            produced_nonzero_pcm,
+            "the configured backend must render PCM before failure"
+        );
+        assert!(terminal_seen, "the upstream failure must remain terminal");
+        assert_eq!(staged_prefix_seen, staged);
+        for _ in 0..3 {
+            flush_deferred(&mut source);
+            assert!(matches!(source.step_track(), TrackStep::Failed(actual) if actual == failure));
+            assert!(held_source_frames(&source.effects) > 0);
+        }
     }
 
     #[derive(Default)]

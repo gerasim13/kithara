@@ -23,7 +23,7 @@ use kithara_integration_tests::{
     kithara,
     offline::{OfflinePlayer, append_source_loaded, asset_source, offline_queue_fixture},
 };
-use kithara_test_fixtures::{asset::Asset, assets};
+use kithara_test_fixtures::{asset::Asset, assets, signal::rms};
 use kithara_test_utils::cancel_token;
 
 use crate::bufpool_ext::TestPools;
@@ -38,11 +38,22 @@ async fn render_loop(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayer,
     block_budget: usize,
-) {
-    for _ in 0..block_budget {
-        let _ = harness.run(queue, QueueControl::tick).await;
-        let _ = harness.render(BLOCK_FRAMES).await;
+) -> Vec<f32> {
+    let mut output = Vec::with_capacity(block_budget * BLOCK_FRAMES * 2);
+    for block in 0..block_budget {
+        harness
+            .run(queue, QueueControl::tick)
+            .await
+            .expect("tick queue before rendering");
+        let samples = harness.render(BLOCK_FRAMES).await;
+        assert_eq!(samples.len(), BLOCK_FRAMES * 2, "stereo block {block}");
+        assert!(
+            samples.iter().all(|sample| sample.is_finite()),
+            "master PCM must be finite in block {block}"
+        );
+        output.extend(samples);
     }
+    output
 }
 
 fn status_of(queue: &QueueControl<TestPools>, id: TrackId) -> TrackStatus {
@@ -156,7 +167,27 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
         })
         .await;
     harness.run(&queue, QueueControl::play).await;
-    render_loop(&queue, &harness, WARMUP_BLOCKS).await;
+    let samples = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
+    for (block, samples) in samples.chunks_exact(BLOCK_FRAMES * 2).enumerate() {
+        let level = rms(samples);
+        assert!(
+            level > 0.0,
+            "real source master PCM must be nonzero before cancellation in block {block}: rms={level}"
+        );
+    }
+    assert_eq!(
+        harness
+            .player()
+            .rt_metrics()
+            .expect("the real source owns an active render slot")
+            .underruns(),
+        0,
+        "the pre-cancellation render must not conceal producer starvation"
+    );
+    assert!(
+        harness.player().is_playing(),
+        "the real source must still be playing before cancellation"
+    );
     assert!(
         harness.position() > 0.0,
         "the selected real source must have played"
@@ -168,7 +199,10 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
 
     source_cancel.cancel();
     render_loop(&queue, &harness, WARMUP_BLOCKS).await;
-    harness.run(&queue, QueueControl::tick).await;
+    harness
+        .run(&queue, QueueControl::tick)
+        .await
+        .expect("tick queue after source cancellation");
 
     let fault = PlaybackFault::Source(TrackFailureKind::SourceCancelled);
     let reason = fault.to_string();

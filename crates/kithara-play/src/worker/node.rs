@@ -923,7 +923,7 @@ mod tests {
     use kithara_audio::{
         Audio, AudioConfig, AudioEvent, AudioRead, AudioReadError, AudioSource, ChunkOutcome,
         DecodeErrorKind, FailureSource, Fetch, NoResamplerBackend, PreloadGate, PreparedAudio,
-        SourceEnd, TrackFailureKind, TrackStep, WaitingReason, mock::AudioSourceMock,
+        SeekOutcome, SourceEnd, TrackFailureKind, TrackStep, WaitingReason, mock::AudioSourceMock,
     };
     use kithara_command::{ChannelConfig, channel};
     use kithara_effects::EffectDrain;
@@ -1140,8 +1140,14 @@ mod tests {
             let mut node = decoder_node(lane, seek_obs);
             assert_eq!(node.tick(), TickResult::Done, "{failure:?}");
             if seek_before_read {
-                let epoch = audio.seek_handle().begin(Duration::from_millis(10));
-                assert_eq!(epoch, 1);
+                let target = Duration::from_millis(10);
+                assert_eq!(
+                    audio.seek_handle().begin(target),
+                    SeekOutcome::Landed {
+                        target,
+                        landed_at: target,
+                    },
+                );
                 assert_eq!(node.seek_obs.epoch(), 1);
             }
             let expected = if seek_before_read {
