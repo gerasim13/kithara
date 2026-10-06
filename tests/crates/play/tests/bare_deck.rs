@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-//! A deck plays the item it was given and nothing else on its own: the next
-//! item reaches it only when its owner arms or selects it.
+//! A deck plays the item it was given and nothing else on its own: past the
+//! item's end it still leads that item until its owner selects another.
 
 use std::num::NonZeroU32;
 
@@ -17,12 +17,11 @@ use kithara_integration_tests::offline::{
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
-/// A tenth of a second per item, so the first one ends a few blocks in.
+/// A tenth of a second, so the item ends a few blocks in.
 const ITEM_FRAMES: usize = 4_410;
-/// Several times the first item, so a self-advancing deck would be heard.
+/// Several times the item, so the deck renders well past its end.
 const BLOCKS: usize = 40;
-const QUIET: f32 = 0.25;
-const LOUD: f32 = 0.75;
+const LEVEL: f32 = 0.25;
 
 fn constant_item(value: f32) -> Resource {
     let spec = AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate"));
@@ -30,7 +29,7 @@ fn constant_item(value: f32) -> Resource {
 }
 
 #[kithara::test(tokio)]
-async fn a_bare_deck_stops_at_the_end_of_its_item() {
+async fn a_bare_deck_keeps_its_item_past_the_end() {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
@@ -39,13 +38,12 @@ async fn a_bare_deck_stops_at_the_end_of_its_item() {
         SAMPLE_RATE,
     )
     .await;
+    let item = TrackId::allocate();
     harness
-        .with_player(|player| {
-            player.insert(constant_item(QUIET), TrackId::allocate(), None);
-            player.insert(constant_item(LOUD), TrackId::allocate(), None);
+        .with_player(move |player| {
             player
-                .select_item(0, SelectionPlayback::Play)
-                .expect("select the first item");
+                .select(item, Some(constant_item(LEVEL)), SelectionPlayback::Play)
+                .expect("select the item");
         })
         .await;
 
@@ -55,16 +53,16 @@ async fn a_bare_deck_stops_at_the_end_of_its_item() {
         peak = block.iter().map(|sample| sample.abs()).fold(peak, f32::max);
         let _ = harness.tick_and_drain().await;
     }
-    let current = harness.with_player(PlayerControl::current_index).await;
+    let current = harness.with_player(PlayerControl::current_item).await;
     harness.close().await;
 
     assert!(
-        peak > QUIET * 0.5,
+        peak > LEVEL * 0.5,
         "the selected item must be heard; peak={peak}"
     );
-    assert!(
-        peak < (QUIET + LOUD) / 2.0,
-        "a deck without an owner must not play the next item; peak={peak}"
+    assert_eq!(
+        current,
+        Some(item),
+        "a deck without an owner must keep its item"
     );
-    assert_eq!(current, 0, "a deck without an owner must keep its item");
 }

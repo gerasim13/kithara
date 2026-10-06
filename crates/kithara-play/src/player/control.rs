@@ -30,21 +30,21 @@ where
         Self { runtime }
     }
 
-    /// Attach the prepared item at `index` to the deck ahead of the current
-    /// one, joined to it by `link`. `Ok(None)` when the item holds no
-    /// prepared resource.
+    /// Attach `resource` to the deck as `item`, ahead of the current item and
+    /// joined to it by `link`.
     ///
     /// # Errors
     /// Returns a closed-owner error, the failure to allocate its buffers, or
     /// the deck's refusal for want of room. Nothing is armed then, and the
-    /// item's resource is spent: it must be loaded again.
+    /// resource is spent: the item must be loaded again.
     pub fn arm_next(
         &self,
-        index: usize,
+        item: TrackId,
+        resource: Resource,
         link: SuccessorLink,
-    ) -> Result<Option<Arc<str>>, PlayError> {
+    ) -> Result<(), PlayError> {
         self.runtime
-            .with_open_result(|runtime| runtime.arm_next(index, link))
+            .with_open_result(|runtime| runtime.arm_next(item, resource, link))
     }
 
     /// Drop the armed successor from the deck without committing it.
@@ -58,18 +58,8 @@ where
         self.runtime.bus().clone()
     }
 
-    /// Discard one prepared player item.
-    pub fn clear_item(&self, index: usize) {
-        self.command(|runtime| runtime.clear_item(index));
-    }
-
     fn command(&self, command: impl FnOnce(&PlayerRuntime<S>)) {
         let _ = self.runtime.with_open(command);
-    }
-
-    /// Insert a resource into the resident player's queue.
-    pub fn insert(&self, resource: Resource, item_id: TrackId, at_position: Option<usize>) {
-        self.command(|runtime| runtime.insert(resource, item_id, at_position));
     }
 
     /// Restart the current output route.
@@ -132,30 +122,9 @@ where
         self.command(PlayerRuntime::process_notifications);
     }
 
-    /// Remove every queued player resource.
+    /// Drop every track the deck holds and release its slot.
     pub fn remove_all_items(&self) {
         self.command(PlayerRuntime::remove_all_items);
-    }
-
-    /// Remove one queued resource.
-    pub fn remove_at(&self, index: usize) -> Result<Option<Resource>, PlayError> {
-        self.runtime.with_open(|runtime| runtime.remove_at(index))
-    }
-
-    /// Plant a completed resource into an existing player slot.
-    pub fn replace_item(
-        &self,
-        index: usize,
-        resource: Resource,
-        item_id: TrackId,
-    ) -> Result<(), PlayError> {
-        self.runtime
-            .with_open(|runtime| runtime.replace_item(index, resource, item_id))
-    }
-
-    /// Reserve queue slots in the resident player.
-    pub fn reserve_slots(&self, count: usize) {
-        self.command(|runtime| runtime.reserve_slots(count));
     }
 
     /// Reset all EQ bands.
@@ -169,20 +138,36 @@ where
             .with_open_result(|runtime| runtime.seek_seconds(seconds))
     }
 
-    /// Apply a completed selection through the resident player runtime.
-    pub fn select_item(&self, index: usize, playback: SelectionPlayback) -> Result<(), PlayError> {
+    /// Make `item` current with the configured crossfade.
+    ///
+    /// # Errors
+    /// As [`Self::select_with_crossfade`].
+    pub fn select(
+        &self,
+        item: TrackId,
+        resource: Option<Resource>,
+        playback: SelectionPlayback,
+    ) -> Result<(), PlayError> {
         self.runtime
-            .with_open_result(|runtime| runtime.select_item(index, playback))
+            .with_open_result(|runtime| runtime.select(item, resource, playback))
     }
 
-    /// Apply a completed selection through the resident player runtime.
-    pub fn select_item_with_crossfade(
+    /// Make `item` current: a given `resource` loads as `item`; without one
+    /// the deck commits its armed successor `item` or reselects its current
+    /// item.
+    ///
+    /// # Errors
+    /// Returns a closed-owner error, [`PlayError::ItemConsumed`] when the deck
+    /// holds no `item` and no resource came, or the load's failure. The
+    /// resource is spent on any error.
+    pub fn select_with_crossfade(
         &self,
-        index: usize,
+        item: TrackId,
+        resource: Option<Resource>,
         transition: SelectTransition,
     ) -> Result<(), PlayError> {
         self.runtime
-            .with_open_result(|runtime| runtime.select_item_with_crossfade(index, transition))
+            .with_open_result(|runtime| runtime.select_with_crossfade(item, resource, transition))
     }
 
     /// Update crossfade duration unless the owning player is closed.
@@ -248,15 +233,12 @@ where
             /// Configured crossfade duration in seconds.
             #[must_use]
             pub fn crossfade_duration(&self) -> f32;
-            /// Current queue item index in the resident player.
+            /// The item the deck leads, as last announced.
             #[must_use]
-            pub fn current_index(&self) -> usize;
-            /// Index of the successor armed on the deck and not yet committed.
+            pub fn current_item(&self) -> Option<TrackId>;
+            /// The successor armed on the deck and not yet committed.
             #[must_use]
-            pub fn armed_next(&self) -> Option<usize>;
-            /// Whether one player item still owns a prepared resource.
-            #[must_use]
-            pub fn item_has_resource(&self, index: usize) -> bool;
+            pub fn armed_next(&self) -> Option<TrackId>;
             /// Latest playback position.
             #[must_use]
             pub fn position_seconds(&self) -> Option<f64>;

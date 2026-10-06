@@ -33,13 +33,16 @@ async fn render_no_switch_control(constant_half: &'static [u8]) -> Vec<f32> {
     .await;
     harness
         .with_player(move |player| {
-            player.insert(
-                resource_from_reader(TestPcmReader::with_pcm(spec, 3.0, constant_half)),
-                TrackId::allocate(),
-                None,
-            );
             player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
+                .select(
+                    TrackId::allocate(),
+                    Some(resource_from_reader(TestPcmReader::with_pcm(
+                        spec,
+                        3.0,
+                        constant_half,
+                    ))),
+                    kithara::play::SelectionPlayback::Play,
+                )
                 .expect("select no-switch control item");
         })
         .await;

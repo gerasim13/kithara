@@ -9,7 +9,7 @@ use kithara_platform::{
         atomic::{AtomicU64, Ordering},
     },
 };
-use kithara_play::{ResourceConfig, ResourceSrc};
+use kithara_play::{Resource, ResourceConfig, ResourceSrc};
 
 use crate::{
     attempts::{AttemptGuard, Ticket},
@@ -126,6 +126,9 @@ where
     pub(crate) source: TrackSource<S>,
     pub(crate) status: TrackStatus,
     observer: AudioObserverSlot,
+    /// The finished load, held while the track is `Loaded` until the deck
+    /// takes it.
+    resource: Option<Resource>,
 }
 
 impl<S> TrackRecord<S>
@@ -142,6 +145,7 @@ where
             source,
             load: None,
             observer: AudioObserverSlot::default(),
+            resource: None,
         }
     }
 
@@ -182,6 +186,20 @@ where
             inner: Mutex::new(Vec::new()),
             next_generation: AtomicU64::new(0),
         }
+    }
+
+    /// Hold a finished load for `id` until the deck takes it: fill the
+    /// metadata the caller left unset from the decoder's tags and mark the
+    /// track `Loaded`. No-op when `id` is not present.
+    pub(crate) fn admit(&self, id: TrackId, resource: Resource) {
+        let mut guard = self.lock();
+        let Some(record) = guard.iter_mut().find(|record| record.id == id) else {
+            return;
+        };
+        record.metadata.fill_missing_from(resource.metadata());
+        record.resource = Some(resource);
+        drop(guard);
+        self.set_status(id, TrackStatus::Loaded);
     }
 
     /// Attach decoded-audio observation to this track's current resource, or
@@ -359,10 +377,12 @@ where
     /// Atomically mutate `record.status` and publish
     /// [`QueueEvent::TrackStatusChanged`]. `Cancelled` and `Loaded` also
     /// abort the track's live attempt: a cancelled track never keeps
-    /// loading, and a track whose resource is already in the player has
-    /// nothing left to load. Without the latter an attempt that outlives
-    /// the resource it was meant to fetch reports its own outcome
-    /// afterwards and overwrites a track that is already playable.
+    /// loading, and a track whose resource is already loaded has nothing
+    /// left to load. Without the latter an attempt that outlives the
+    /// resource it was meant to fetch reports its own outcome afterwards
+    /// and overwrites a track that is already playable. Every status but
+    /// `Loaded` drops the resource the record holds: only a loaded track
+    /// has audio waiting for the deck.
     /// No-op when `id` is not present (caller raced `Queue::remove`).
     pub(crate) fn set_status(&self, id: TrackId, status: TrackStatus) {
         let mut guard = self.lock();
@@ -373,10 +393,23 @@ where
         let aborted = matches!(status, TrackStatus::Cancelled | TrackStatus::Loaded)
             .then(|| record.load.take())
             .flatten();
+        let dropped = (!matches!(status, TrackStatus::Loaded))
+            .then(|| record.resource.take())
+            .flatten();
         drop(guard);
         drop(aborted);
+        drop(dropped);
         self.bus
             .publish(QueueEvent::TrackStatusChanged { id, status });
+    }
+
+    /// Hand `id`'s loaded resource to the caller, which gives it to the deck.
+    /// `None` once the deck holds it, or before the track loads.
+    pub(crate) fn take_resource(&self, id: TrackId) -> Option<Resource> {
+        self.lock()
+            .iter_mut()
+            .find(|record| record.id == id)
+            .and_then(|record| record.resource.take())
     }
 
     /// Original source for `id`, if still queued.

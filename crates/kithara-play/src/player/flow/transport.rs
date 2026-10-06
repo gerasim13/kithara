@@ -11,6 +11,7 @@ use crate::{
     api::{CrossfadeSettings, PlayerStatus, SelectionPlayback, TrackId},
     bridge::DeckPart,
     error::PlayError,
+    resource::Resource,
 };
 
 /// Captured transport intent and complete fade profile for one selection.
@@ -59,32 +60,23 @@ where
         }
     }
 
-    /// Load the current queue item into the active slot.
-    ///
-    /// Takes the resource out of the queue (replacing with `None`), wraps it
-    /// in `PlayerResource`, and sends `Attach` + `FadeIn` to the processor.
-    ///
-    /// `false` means the slot held no resource, so nothing reached the
-    /// processor and the item is not current.
-    fn load_current_item(&self) -> Result<bool, PlayError> {
-        self.load_current_item_with(self.configured_crossfade())
-    }
-
-    fn load_current_item_with(&self, crossfade: CrossfadeSettings) -> Result<bool, PlayError> {
-        let index = self.current_index();
-        let Some(EnqueuedItem {
+    /// Hand `resource` to the deck as `item` and make it the leading track
+    /// with `crossfade`, starting where a seek held before it existed.
+    fn load_current(
+        &self,
+        item: TrackId,
+        resource: Resource,
+        crossfade: CrossfadeSettings,
+    ) -> Result<(), PlayError> {
+        let EnqueuedItem {
             item_id,
             duration_seconds,
             presentation,
-            ..
-        }) = self.enqueue_to_processor(index, None)?
-        else {
-            return Ok(false);
-        };
+        } = self.enqueue_to_processor(item, resource, None)?;
         self.adopt_presentation(item_id, duration_seconds, presentation);
         self.start_playback_with(item_id, duration_seconds, crossfade);
         self.apply_start_position();
-        Ok(true)
+        Ok(())
     }
 
     /// Pause playback. The effective rate becomes `0.0` when RT applies the command.
@@ -94,11 +86,8 @@ where
         debug!(phase = ?self.phase_kind(), "pause");
     }
 
-    /// Start playback from the configured default-rate target.
-    ///
-    /// Announces the current item only once a slot is loaded; announcing while the load is still in
-    /// flight would mark the index current early and make a later select skip re-enqueuing the
-    /// arriving resource.
+    /// Start or resume what the deck holds at the configured default-rate
+    /// target. Loads nothing: a selection hands the deck its item.
     pub fn play(&self) {
         let rate = self.core.tracks.lock().next().speed();
 
@@ -112,17 +101,10 @@ where
         }
 
         let _ = self.send_to_slot(DeckPart::SetRate(rate));
-        let loaded = self.load_current_item().unwrap_or_else(|error| {
-            warn!(%error, "the current item did not reach the deck");
-            false
-        });
         let _ = self.send_to_slot(DeckPart::StartAll);
 
         self.enter_playing();
         self.set_status(PlayerStatus::ReadyToPlay);
-        if loaded {
-            self.announce_current_item(self.current_index());
-        }
         debug!(rate, phase = ?self.phase_kind(), "play");
     }
 
@@ -190,35 +172,48 @@ where
         Ok(outcome)
     }
 
-    /// Select and load a queue item by index, using the configured
-    /// crossfade duration for the transition.
-    pub fn select_item(&self, index: usize, playback: SelectionPlayback) -> Result<(), PlayError> {
-        self.select_item_with_crossfade(
-            index,
+    /// Make `item` the current item with the configured crossfade. See
+    /// [`Self::select_with_crossfade`].
+    ///
+    /// # Errors
+    /// As [`Self::select_with_crossfade`].
+    pub fn select(
+        &self,
+        item: TrackId,
+        resource: Option<Resource>,
+        playback: SelectionPlayback,
+    ) -> Result<(), PlayError> {
+        self.select_with_crossfade(
+            item,
+            resource,
             SelectTransition {
                 playback,
-                crossfade: CrossfadeSettings {
-                    duration: self.crossfade_duration(),
-                    ..CrossfadeSettings::default()
-                },
+                crossfade: self.configured_crossfade(),
             },
         )
     }
 
-    /// Select and load a queue item by index, applying an explicit
-    /// crossfade duration for this one transition only.
+    /// Make `item` the current item, applying an explicit crossfade for this
+    /// one transition only.
     ///
-    /// Does not mutate the player-configured crossfade — subsequent
-    /// calls to [`select_item`](Self::select_item) fall back to
+    /// A given `resource` is loaded as `item`, and the armed successor is
+    /// withdrawn. Without one the deck must already hold `item`: the armed
+    /// successor is committed, and the current item is reselected in place.
+    ///
+    /// Does not mutate the player-configured crossfade — subsequent calls to
+    /// [`select`](Self::select) fall back to
     /// [`crossfade_duration`](Self::crossfade_duration). Pass `0.0` for an
     /// immediate cut (no fade); matches `AVQueuePlayer`'s manual-selection
     /// idiom.
     ///
-    /// Reselecting the already-current item is valid even though its resource was consumed by the
-    /// load that made it current: the resource now lives in the processor as the playing track.
-    pub fn select_item_with_crossfade(
+    /// # Errors
+    /// [`PlayError::ItemConsumed`] when no resource came and the deck holds no
+    /// `item`, or the failure to start the engine or load the resource. On
+    /// any error the resource is spent: the item must be loaded again.
+    pub fn select_with_crossfade(
         &self,
-        index: usize,
+        item: TrackId,
+        resource: Option<Resource>,
         transition: SelectTransition,
     ) -> Result<(), PlayError> {
         let SelectTransition {
@@ -226,25 +221,9 @@ where
             crossfade,
         } = transition;
         let crossfade = crossfade.validate()?;
-        let items_len = self.item_count();
-        if index >= items_len {
-            return Err(PlayError::IndexOutOfRange {
-                index,
-                len: items_len,
-            });
-        }
-
-        let reselecting_current =
-            index == self.core.items.current_index() && self.core.items.is_announced(index);
-        let has_resource = self.core.items.has_resource(index);
-
-        let armed_for_index = self
-            .phase
-            .lock()
-            .pending()
-            .is_some_and(|p| !p.state.activated() && p.index == index);
-        if !armed_for_index && !reselecting_current && !has_resource {
-            return Err(PlayError::ItemConsumed { index });
+        let armed = self.armed_next() == Some(item);
+        if resource.is_none() && !armed && self.current_item() != Some(item) {
+            return Err(PlayError::ItemConsumed { item });
         }
 
         self.ensure_engine_started()?;
@@ -253,13 +232,14 @@ where
         let rate = self.core.tracks.lock().next().speed();
         let _ = self.send_to_slot(DeckPart::SetRate(rate));
 
-        if armed_for_index {
-            self.commit_next(index, crossfade)?;
-        } else if !reselecting_current {
-            self.unarm_next_internal(Some(index));
-            self.core.items.set_current(index);
-            self.load_current_item_with(crossfade)?;
-            self.announce_current_item(index);
+        match resource {
+            Some(resource) => {
+                self.unarm_next_internal(Some(item));
+                self.load_current(item, resource, crossfade)?;
+                self.core.current.announce(item);
+            }
+            None if armed => self.commit_next(item, crossfade)?,
+            None => {}
         }
 
         self.apply_playback(playback);

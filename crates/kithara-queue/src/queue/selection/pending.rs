@@ -17,9 +17,10 @@ where
 {
     /// Synchronous-select counterpart to [`Self::override_pending_select`]:
     /// the user picked a `Loaded` track, so any other in-flight load is
-    /// stale. Drop pending and mark the stale track [`TrackStatus::Cancelled`]
-    /// so its `spawn_apply_after_load` completion path does not barge
-    /// in on top of the just-selected track.
+    /// stale. Drop pending and mark the stale track [`TrackStatus::Cancelled`],
+    /// which drops a resource it already loaded, so neither its
+    /// `spawn_apply_after_load` completion path nor the successor arming
+    /// barges in on top of the just-selected track.
     pub(in crate::queue) fn cancel_stale_pending(&self, applying_id: TrackId) {
         let stale = {
             let mut p = self.lock_pending_select_mut();
@@ -32,23 +33,6 @@ where
         };
         if let Some(stale_id) = stale {
             self.set_status(stale_id, TrackStatus::Cancelled);
-            self.evict_player_item(stale_id);
-        }
-    }
-
-    /// Drop a cancelled track's resource from the player so the queue
-    /// cannot arm it as the successor. The
-    /// `spawn_apply_after_load` completion path already skips
-    /// `replace_item` on a cancelled status, but a fast loader can
-    /// finish *before* the override runs and leave the resource in
-    /// `items[index]`. This evict closes that race.
-    fn evict_player_item(&self, id: TrackId) {
-        let index = {
-            let guard = self.lock_tracks();
-            guard.iter().position(|entry| entry.id == id)
-        };
-        if let Some(index) = index {
-            self.player.clear_item(index);
         }
     }
 
@@ -70,7 +54,6 @@ where
         drop(pending);
         if let Some(prev_id) = prev_id {
             self.set_status(prev_id, TrackStatus::Cancelled);
-            self.evict_player_item(prev_id);
         }
     }
 

@@ -6,7 +6,7 @@ use kithara::{
     decode::{GaplessMode, SilenceTrimParams},
     events::TrackId,
     platform::time::{self, Duration, Instant},
-    play::{Resource, ResourceConfig, ResourceSrc, player::PlayerControl},
+    play::{Resource, ResourceConfig, ResourceSrc},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -65,10 +65,15 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
     let resource = create_delayed_gapless_hls_resource(&harness, &master, temp_dir.path()).await;
 
     harness
-        .with_player(move |player| player.insert(resource, TrackId::allocate(), None))
-        .await;
-
-    harness.with_player(PlayerControl::play).await;
+        .with_player(move |player| {
+            player.select(
+                TrackId::allocate(),
+                Some(resource),
+                kithara::play::SelectionPlayback::Play,
+            )
+        })
+        .await
+        .expect("select the startup item");
     let _ = harness.tick_and_drain().await;
 
     let deadline = started_at + STARTUP_TIMEOUT;

@@ -81,7 +81,7 @@ impl<S> PlayerRuntime<S> {
         self.core.config.set_crossfade_duration(seconds);
     }
 
-    /// Set the playback rate used by `play()` and `select_item()`, and apply it
+    /// Set the playback rate used by `play()` and `select()`, and apply it
     /// as a target to playback that is already running.
     ///
     /// While paused the live rate is 0.0 and must stay there — a rate change is

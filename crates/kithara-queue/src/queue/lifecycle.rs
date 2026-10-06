@@ -138,7 +138,6 @@ where
                 }
             }
         };
-        self.player.reserve_slots(self.len());
         self.bus.publish(QueueEvent::TrackAdded { id, index });
         let ids = self
             .tracks()
@@ -224,16 +223,18 @@ where
             None
         };
 
-        let index = {
+        let removed = {
             let mut guard = self.lock_tracks_mut();
             let pos = guard
                 .iter()
                 .position(|e| e.id == id)
                 .ok_or(QueueError::UnknownTrackId(id))?;
-            guard.remove(pos);
-            pos
+            guard.remove(pos)
         };
-        let _ = self.player.remove_at(index)?;
+        drop(removed);
+        if self.player.armed_next() == Some(id) {
+            self.player.unarm_next();
+        }
         self.bus.publish(QueueEvent::TrackRemoved { id });
 
         let entries = self.tracks();

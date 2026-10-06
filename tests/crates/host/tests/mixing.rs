@@ -113,13 +113,10 @@ impl MixHarness {
         self.host
             .run(move || {
                 for (player, reader) in players.iter().zip(readers) {
-                    player.reserve_slots(1);
                     player
-                        .replace_item(0, resource_from_reader(reader), TrackId::allocate())
-                        .expect("replace player item");
-                    player
-                        .select_item_with_crossfade(
-                            0,
+                        .select_with_crossfade(
+                            TrackId::allocate(),
+                            Some(resource_from_reader(reader)),
                             SelectTransition {
                                 playback: kithara::play::SelectionPlayback::Play,
                                 crossfade: kithara::play::CrossfadeSettings {

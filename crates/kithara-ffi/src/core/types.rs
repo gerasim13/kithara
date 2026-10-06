@@ -51,9 +51,8 @@ impl From<PlayError> for FfiError {
                 reason: format!("position {position:?}"),
             },
             PlayError::EngineNotRunning => Self::EngineNotRunning,
-            err @ (PlayError::IndexOutOfRange { .. }
-            | PlayError::ItemConsumed { .. }
-            | PlayError::ArmIndexMismatch { .. }
+            err @ (PlayError::ItemConsumed { .. }
+            | PlayError::ArmedItemMismatch { .. }
             | PlayError::EqBandOutOfRange { .. }
             | PlayError::InvalidParameter { .. }) => Self::InvalidArgument {
                 reason: err.to_string(),
@@ -1044,8 +1043,8 @@ mod tests {
         PlayError::ItemFailed { reason: "bad codec".into() },
         (|f: &FfiError| matches!(f, FfiError::ItemFailed { .. })) as fn(&FfiError) -> bool
     )]
-    #[case::index_out_of_range(
-        PlayError::IndexOutOfRange { index: 3, len: 2 },
+    #[case::item_consumed(
+        PlayError::ItemConsumed { item: TrackId::from(3_u64) },
         (|f: &FfiError| matches!(f, FfiError::InvalidArgument { .. })) as fn(&FfiError) -> bool
     )]
     #[case::internal_fallback(PlayError::ArenaFull, (|f: &FfiError| matches!(f, FfiError::Internal { .. })) as fn(&FfiError) -> bool)]

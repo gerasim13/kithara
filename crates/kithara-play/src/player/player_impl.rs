@@ -24,12 +24,12 @@ use crate::{
         PlayerConfig, PlayerControl,
         config::TrackSettings,
         staging::SyncStaging,
-        state::{ItemQueue, PlayerPhase, TrackGrid, Tracks},
+        state::{CurrentItem, PlayerPhase, TrackGrid, Tracks},
     },
     worker::EngineLoad,
 };
 
-/// Concrete Player implementation managing items queue.
+/// Concrete Player implementation: one deck and the tracks it holds.
 #[derive(kithara_config::ConfigOwner)]
 #[config_owner(PlayerConfig<S>, runtime.core.config)]
 pub struct PlayerImpl<S> {
@@ -122,7 +122,7 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
             engine_load: Arc::new(EngineLoad::default()),
             status: Mutex::default(),
             start_position: Mutex::default(),
-            items: ItemQueue::new(bus),
+            current: CurrentItem::new(bus),
             track_grid,
             tracks,
         };

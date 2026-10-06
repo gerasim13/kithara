@@ -12,7 +12,7 @@ use super::{
     PlayerConfig,
     lifecycle::{CloseAdmission, PlayerLifecycle},
     staging::SyncStaging,
-    state::{ItemPresentation, ItemQueue, PlayerPhase, TrackGrid, Tracks},
+    state::{CurrentItem, ItemPresentation, PlayerPhase, TrackGrid, Tracks},
     track::Behind,
 };
 use crate::{
@@ -21,6 +21,7 @@ use crate::{
     engine::EngineImpl,
     error::PlayError,
     resource::Resource,
+    rt::track::PlayerResource,
     session::SessionBinding,
     worker::EngineLoad,
 };
@@ -29,7 +30,6 @@ use crate::{
 /// it becomes the current item.
 pub(crate) struct EnqueuedItem {
     pub(crate) item_id: TrackId,
-    pub(crate) src: Arc<str>,
     pub(crate) duration_seconds: f64,
     pub(crate) presentation: ItemPresentation,
 }
@@ -47,8 +47,8 @@ fn track_frames(duration_seconds: f64, rate: u32) -> Option<u64> {
 
 /// Phase-neutral state shared across every player phase.
 ///
-/// Field order is drop order: `items` and `engine` release every registered
-/// track before this Player releases its [`PlayWorker`] clone.
+/// Field order is drop order: `engine` releases every registered track before
+/// this Player releases its [`PlayWorker`] clone.
 pub(crate) struct PlayerCore<S> {
     /// Live shared cost meter of the audio engine (decode + effects).
     /// Constructed once and kept address-stable for the player's lifetime.
@@ -57,8 +57,8 @@ pub(crate) struct PlayerCore<S> {
     /// Host lifecycle explicitly detaches the engine session lane before the
     /// worker owner drops.
     pub(crate) engine: EngineImpl<S>,
-    /// Undelivered resources unregister before the worker owner drops.
-    pub(crate) items: ItemQueue,
+    /// The item the deck leads, as last announced.
+    pub(crate) current: CurrentItem,
     /// Status kept explicit (not derived from phase): `set_status` emits
     /// `StatusChanged` only on change and its values are not 1:1 with phase.
     pub(crate) status: Mutex<PlayerStatus>,
@@ -77,13 +77,12 @@ pub(crate) struct PlayerCore<S> {
     pub(crate) tracks: Mutex<Tracks>,
 }
 
-/// Concrete Player implementation managing items queue.
+/// Concrete Player implementation: one deck and the tracks it holds.
 ///
 /// Owns an [`EngineImpl`] and sends commands to the active slot's processor.
-/// When `play()` is called, the engine is lazily started and a slot is
-/// allocated. The current queue item is taken out of the queue, wrapped in
-/// [`PlayerResource`](crate::rt::track::PlayerResource), and sent
-/// to the processor via `DeckPart::Attach`.
+/// A selection hands the deck the resource of the item it makes current,
+/// wrapped in [`PlayerResource`], and sends it to the processor via
+/// `DeckPart::Attach`; the item list lives with the caller.
 ///
 /// Internally the player is a phase-split typestate: `phase` is a typed
 /// `Mutex<PlayerPhase>` carrying the slot / ABR handle / armed-next, while
@@ -120,32 +119,38 @@ impl<S> PlayerRuntime<S> {
         Ok(())
     }
 
-    /// Hand `items[index]` to the processor, chained behind the `behind` track
-    /// when one is named, so the deck plays it on the frame after that track's
-    /// last. Its presentation is returned, not published: the item may be
-    /// attached ahead of the one playing.
+    /// Hand `resource` to the processor as `item_id`, chained behind the
+    /// `behind` track when one is named, so the deck plays it on the frame
+    /// after that track's last. Its presentation is returned, not published:
+    /// the item may be attached ahead of the one playing.
     ///
     /// # Errors
     /// The deck admits the item and its chain together or not at all. On any
-    /// error the item's resource is spent: it must be loaded again.
+    /// error the resource is spent: the item must be loaded again.
     pub(crate) fn enqueue_to_processor(
         &self,
-        index: usize,
+        item_id: TrackId,
+        mut resource: Resource,
         behind: Option<TrackId>,
-    ) -> Result<Option<EnqueuedItem>, PlayError>
+    ) -> Result<EnqueuedItem, PlayError>
     where
         S: HasPool<f32>,
     {
-        let Some(item) = self.core.items.take_for_load(
-            index,
-            self.core.engine.master_sample_rate(),
-            self.core.engine.consumer_wake_mode(),
-            self.core.engine.pools(),
-        )?
-        else {
-            return Ok(None);
+        let duration_seconds = resource
+            .duration()
+            .map_or(0.0, |duration| duration.as_secs_f64());
+        let presentation = ItemPresentation {
+            beat_grid: Arc::clone(resource.beat_grid()),
+            abr_handle: resource.abr_handle(),
+            staging: resource.staging(),
         };
-        let src = Arc::clone(item.player_resource.src());
+        let lane = resource.take_lane();
+        if let Some(sample_rate) = NonZeroU32::new(self.core.engine.master_sample_rate()) {
+            resource.set_host_sample_rate(sample_rate);
+        }
+        resource.set_consumer_wake_mode(self.core.engine.consumer_wake_mode());
+        let src = Arc::clone(resource.src());
+        let player_resource = PlayerResource::new(resource, src, self.core.engine.pools())?;
         let behind = match behind {
             Some(track) => {
                 let playback = self.slot_playback().ok_or(PlayError::NoActiveSlot)?;
@@ -157,24 +162,13 @@ impl<S> PlayerRuntime<S> {
             None => None,
         };
         self.with_tracks(|tracks, out| {
-            tracks.load(
-                item.item_id,
-                Box::new(item.player_resource),
-                item.lane,
-                behind,
-                out,
-            )
+            tracks.load(item_id, Box::new(player_resource), lane, behind, out)
         })?;
-        Ok(Some(EnqueuedItem {
-            item_id: item.item_id,
-            src,
-            duration_seconds: item.duration_seconds,
-            presentation: ItemPresentation {
-                beat_grid: item.beat_grid,
-                abr_handle: item.abr_handle,
-                staging: item.staging,
-            },
-        }))
+        Ok(EnqueuedItem {
+            item_id,
+            duration_seconds,
+            presentation,
+        })
     }
 
     /// The track geometry the player publishes now belongs to the item that
@@ -214,10 +208,11 @@ impl<S> PlayerRuntime<S> {
         self.core.engine.cancel();
     }
 
-    /// Remove all items, release the active slot, and stop the engine.
+    /// Drop every track the deck holds, release the active slot, and stop the
+    /// engine.
     ///
-    /// Also clears any held start position, since the item it targeted no longer exists once the
-    /// queue is gone.
+    /// Also clears any held start position, since the item it targeted no
+    /// longer exists once the deck is empty.
     pub fn remove_all_items(&self)
     where
         S: HasPool<f32>,
@@ -225,7 +220,7 @@ impl<S> PlayerRuntime<S> {
         self.unarm_next();
         self.core.staging.unload();
         self.core.track_grid.release();
-        self.core.items.clear_all();
+        self.core.current.clear();
         self.set_status(PlayerStatus::Unknown);
         *self.core.start_position.lock() = None;
         let slot = self.slot();
@@ -248,28 +243,6 @@ impl<S> PlayerRuntime<S> {
             .bus()
             .publish(PlayerEvent::RateChanged { rate: 0.0 });
         debug!("all items removed");
-    }
-
-    /// Remove item at index. Returns the removed resource, or `None` if out of
-    /// bounds or already consumed. The armed successor is unarmed only when it
-    /// is the removed item.
-    pub fn remove_at(&self, index: usize) -> Option<Resource>
-    where
-        S: HasPool<f32>,
-    {
-        let successor_removed = self
-            .phase
-            .lock()
-            .pending_loads_mut()
-            .is_some_and(|loads| loads.removed_at(index));
-        if successor_removed {
-            self.unarm_next();
-        }
-
-        self.core
-            .items
-            .remove_at(index)
-            .map(|queued| queued.resource)
     }
 
     /// Rate the player's master bus runs at. Decoded frames handed to an
@@ -314,33 +287,6 @@ impl<S> PlayerRuntime<S> {
             #[call(reopen)]
             fn reopen_controls(&self);
             pub(crate) fn is_closed(&self) -> bool;
-        }
-        to self.core.items {
-            /// Advance to the next item in the queue.
-            ///
-            /// Does nothing if the current item is already the last one.
-            pub fn advance_to_next_item(&self);
-            /// Sole publisher of `CurrentItemChanged`: emits only when `index` differs
-            /// from the last announced item, so a `play()` resume of the same item
-            /// stays quiet.
-            pub(crate) fn announce_current_item(&self, index: usize);
-            /// Drop the resource at `index` so `arm_next` cannot plant it into
-            /// the audio thread.
-            ///
-            /// Used by the queue when a previously-loaded track is cancelled by
-            /// a later `select` — without this, a slow track whose loader
-            /// raced ahead of the override stays in `items`, where it could
-            /// still be armed as the successor and surface as a barge-in.
-            pub fn clear_item(&self, index: usize);
-            /// Insert a resource under the queue's identity for it at a
-            /// specific position, or append to the end.
-            pub fn insert(&self, resource: Resource, item_id: TrackId, at_position: Option<usize>);
-            /// Replace a consumed (or existing) resource at the given index,
-            /// under the queue's identity for it. Every player event about
-            /// the item reports this id back.
-            pub fn replace_item(&self, index: usize, resource: Resource, item_id: TrackId);
-            /// Pre-allocate empty slots so `replace_item` can fill them by index.
-            pub fn reserve_slots(&self, count: usize);
         }
         to self.core.config.worker {
             /// Typed pool facade used for resources created by this player.

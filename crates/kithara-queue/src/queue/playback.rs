@@ -55,29 +55,18 @@ where
     /// navigation offers at its natural end, while the queue advances, no
     /// selection waits for its load, and the cursor stands on the track the
     /// deck plays. Repeating the current track needs no successor.
-    fn wanted_successor(&self) -> Option<(usize, TrackEntry)> {
+    fn wanted_successor(&self) -> Option<TrackEntry> {
         if self.action_at_item_end() != ActionAtItemEnd::Advance
             || matches!(*self.lock_pending_select_mut(), SelectPhase::Pending(_))
         {
             return None;
         }
         let current = self.current()?;
-        let playing = self
-            .lock_tracks()
-            .get(self.player.current_index())
-            .map(|entry| entry.id);
-        if playing != Some(current.id) {
+        if self.player.current_item() != Some(current.id) {
             return None;
         }
-        let next = self.next_selectable_entry(AdvanceReason::NaturalEof)?;
-        if next.id == current.id {
-            return None;
-        }
-        let index = self
-            .lock_tracks()
-            .iter()
-            .position(|entry| entry.id == next.id)?;
-        Some((index, next))
+        self.next_selectable_entry(AdvanceReason::NaturalEof)
+            .filter(|next| next.id != current.id)
     }
 
     /// Keep the deck's armed successor the one the queue wants. Once the
@@ -96,11 +85,11 @@ where
         }
         let wanted = self.wanted_successor();
         if let Some(armed) = armed
-            && wanted.as_ref().is_none_or(|(index, _)| *index != armed)
+            && wanted.as_ref().is_none_or(|next| next.id != armed)
         {
             self.disarm_successor(armed);
         }
-        let (Some(time), Some((index, next))) = (time, wanted) else {
+        let (Some(time), Some(next)) = (time, wanted) else {
             return;
         };
         match next.status {
@@ -112,7 +101,7 @@ where
                 self.spawn_apply_after_load(next.id, source, LoadClass::Prefetch);
             }
             TrackStatus::Loaded => {
-                if armed != Some(index) && !self.arm_successor(index, next.id, settings.link()) {
+                if armed != Some(next.id) && !self.arm_successor(next.id, settings.link()) {
                     return;
                 }
                 if settings.link() == SuccessorLink::Fade && time.ends_within(settings.duration) {
@@ -127,21 +116,18 @@ where
         }
     }
 
-    /// Arm the loaded successor at `index`; `false` when the deck did not. An
-    /// arm that fails spends the entry's resource, so it is consumed and
-    /// reloads once it is wanted again.
-    fn arm_successor(&self, index: usize, id: TrackId, link: SuccessorLink) -> bool {
-        match self.player.arm_next(index, link) {
-            Ok(Some(_)) => true,
-            Ok(None) => {
-                debug!(
-                    id = id.as_u64(),
-                    index, "the successor has no resource on the deck to arm"
-                );
-                false
-            }
+    /// Hand the loaded successor `id` to the deck to arm; `false` when the
+    /// deck did not arm it. An arm that fails spends the resource, so the
+    /// track is consumed and reloads once it is wanted again.
+    fn arm_successor(&self, id: TrackId, link: SuccessorLink) -> bool {
+        let Some(resource) = self.tracks.take_resource(id) else {
+            debug!(id = id.as_u64(), "the successor has no resource to arm");
+            return false;
+        };
+        match self.player.arm_next(id, resource, link) {
+            Ok(()) => true,
             Err(error) => {
-                debug!(%error, id = id.as_u64(), index, "the successor would not arm");
+                debug!(%error, id = id.as_u64(), "the successor would not arm");
                 self.set_status(id, TrackStatus::Consumed);
                 false
             }
@@ -156,15 +142,12 @@ where
         }
     }
 
-    /// Take the armed successor at `index` off the deck. Arming moved its
-    /// resource onto the deck, so the entry is consumed and reloads once it
-    /// is wanted again.
-    pub(super) fn disarm_successor(&self, index: usize) {
+    /// Take the armed successor `id` off the deck. Arming moved its resource
+    /// onto the deck, so the track is consumed and reloads once it is wanted
+    /// again.
+    pub(super) fn disarm_successor(&self, id: TrackId) {
         self.player.unarm_next();
-        let id = self.lock_tracks().get(index).map(|entry| entry.id);
-        if let Some(id) = id {
-            self.set_status(id, TrackStatus::Consumed);
-        }
+        self.set_status(id, TrackStatus::Consumed);
     }
 
     /// Platform audio-route changed while playback may be active.
@@ -207,12 +190,15 @@ where
         self.freeze_cached_position();
     }
 
-    /// Starts playback, marking a consumed slot or retaining the selection until loading finishes.
-    /// Reconciliation is serialized with load completion.
+    /// Starts what the deck holds, handing it the loaded track it lacks or
+    /// retaining the selection until loading finishes. Reconciliation is
+    /// serialized with load completion.
     pub fn play(&self) {
         self.command(Self::play_inner);
     }
 
+    /// The track play is about: the pending selection, else the one the deck
+    /// holds, else the one the cursor stands on while the deck holds none.
     fn play_inner(&self) {
         let mut phase = self.lock_pending_select_mut();
         if let SelectPhase::Pending(mut pending) = *phase {
@@ -227,24 +213,24 @@ where
             SelectPhase::Pending(pending) => Some(pending),
             SelectPhase::Idle => None,
         };
-        let index = self.player.current_index();
-        if pending.is_none() && self.player.item_has_resource(index) {
-            return;
-        }
-        let current = {
-            let guard = self.lock_tracks();
-            pending
-                .map_or_else(
-                    || guard.get(index),
-                    |pending| guard.iter().find(|entry| entry.id == pending.id),
-                )
-                .map(|entry| (entry.id, entry.status.clone()))
-        };
-        let Some((id, status)) = current else {
+        let target = pending.map(|pending| pending.id).or_else(|| {
+            self.player
+                .current_item()
+                .or_else(|| self.current().map(|entry| entry.id))
+        });
+        let Some((id, status)) =
+            target.and_then(|id| self.track(id).map(|entry| (id, entry.status)))
+        else {
             return;
         };
         match status {
-            TrackStatus::Loaded => self.set_status(id, TrackStatus::Consumed),
+            TrackStatus::Loaded => {
+                let resource = self.tracks.take_resource(id);
+                if let Err(error) = self.player.select(id, resource, SelectionPlayback::Play) {
+                    debug!(%error, id = id.as_u64(), "play could not start the loaded track");
+                }
+                self.set_status(id, TrackStatus::Consumed);
+            }
             TrackStatus::Pending | TrackStatus::Loading | TrackStatus::Slow => {
                 self.override_pending_select(pending.unwrap_or_else(|| PendingSelect {
                     id,

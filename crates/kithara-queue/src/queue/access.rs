@@ -23,21 +23,21 @@ where
     ///
     /// Sourced from the navigation cursor (not the player) so the queue
     /// reports `None` after `advance_to_next` runs off the end of the
-    /// queue (`RepeatMode::Off` exhaustion). The player's own
-    /// `current_index` stays parked at the last-played slot — read it
-    /// via [`Self::current_index`] when the call site needs the
-    /// last-played index even after queue-end.
+    /// queue (`RepeatMode::Off` exhaustion). The deck keeps the last item
+    /// it played — read its position via [`Self::current_index`] when the
+    /// call site needs the last-played index even after queue-end.
     #[must_use]
     pub fn current(&self) -> Option<TrackEntry> {
         let id = self.lock_navigation().current()?;
         self.track(id)
     }
 
-    /// The currently playing track's queue index (player-reported).
+    /// Queue position of the track the deck leads; `None` while it leads
+    /// none, or one the queue no longer holds.
     #[must_use]
     pub fn current_index(&self) -> Option<usize> {
-        let idx = self.player.current_index();
-        if idx < self.len() { Some(idx) } else { None }
+        let id = self.player.current_item()?;
+        self.lock_tracks().iter().position(|entry| entry.id == id)
     }
 
     pub fn set_action_at_item_end(&self, action: ActionAtItemEnd) {

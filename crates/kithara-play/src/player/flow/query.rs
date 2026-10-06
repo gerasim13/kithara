@@ -5,7 +5,7 @@ use kithara_platform::sync::atomic::Ordering;
 use super::super::core::PlayerRuntime;
 use crate::{
     EngineLoadSnapshot, PlayWorker,
-    api::PlayerStatus,
+    api::{PlayerStatus, TrackId},
     bridge::{PlaybackSnapshot, RtMetricsSnapshot},
     engine::EngineImpl,
 };
@@ -15,8 +15,7 @@ impl<S> PlayerRuntime<S> {
     ///
     /// Reads the stash set when an item becomes current (its load, a
     /// crossfade commit or a gapless stitch), not when it is attached — stays
-    /// valid for the whole life of the track, including after `items[idx]`
-    /// has been emptied by the load handoff.
+    /// valid for the whole life of the track.
     #[must_use]
     pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
         self.phase.lock().abr_handle()
@@ -124,7 +123,7 @@ impl<S> PlayerRuntime<S> {
         to self.core.config {
             /// Get crossfade duration in seconds.
             pub fn crossfade_duration(&self) -> f32;
-            /// Default playback-rate target used by `play()` and `select_item()`.
+            /// Default playback-rate target used by `play()` and `select()`.
             pub fn default_rate(&self) -> f32;
             /// Returns `true` if the player is muted.
             pub fn is_muted(&self) -> bool;
@@ -148,21 +147,13 @@ impl<S> PlayerRuntime<S> {
             #[call(playback_snapshot)]
             pub fn rate(&self) -> f32;
         }
-        to self.core.items {
-            /// Current item index in the queue.
-            pub fn current_index(&self) -> usize;
-            /// Get the number of items in the queue (including consumed items).
-            pub fn item_count(&self) -> usize;
-            /// Whether the queue slot at `index` still holds a resource.
-            ///
-            /// Loading an item into the processor empties its slot, so this is the
-            /// owning answer to "has this item been consumed" — the same fact
-            /// [`select_item`](Self::select_item) refuses to guess at. Callers that
-            /// mirror item state read it here instead of inferring the consumption
-            /// from their own bookkeeping.
+        to self.core.current {
+            /// The item the deck leads, as last announced by
+            /// `CurrentItemChanged`; `None` before the first selection and
+            /// once the deck is emptied.
             #[must_use]
-            #[call(has_resource)]
-            pub fn item_has_resource(&self, index: usize) -> bool;
+            #[call(get)]
+            pub fn current_item(&self) -> Option<TrackId>;
         }
     }
 }

@@ -243,12 +243,12 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
     let select_label = label.to_owned();
     harness
         .with_player(move |player| {
-            player.reserve_slots(1);
             player
-                .replace_item(0, resource, TrackId::allocate())
-                .expect("replace quality-switch fixture item");
-            player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
+                .select(
+                    TrackId::allocate(),
+                    Some(resource),
+                    kithara::play::SelectionPlayback::Play,
+                )
                 .unwrap_or_else(|error| {
                     panic!("select {select_label} Kithara App resource: {error}")
                 });

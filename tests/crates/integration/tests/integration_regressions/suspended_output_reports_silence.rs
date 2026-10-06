@@ -68,18 +68,19 @@ async fn loaded_harness(constant_half: &'static [u8]) -> OfflinePlayer {
         OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;
     harness
         .with_player(move |player| {
-            player.insert(
-                resource_from_reader(kithara::audio::mock::TestPcmReader::with_pcm(
-                    AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
-                    1.0,
-                    constant_half,
-                )),
-                TrackId::allocate(),
-                None,
-            );
             player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .expect("select first queue item");
+                .select(
+                    TrackId::allocate(),
+                    Some(resource_from_reader(
+                        kithara::audio::mock::TestPcmReader::with_pcm(
+                            AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
+                            1.0,
+                            constant_half,
+                        ),
+                    )),
+                    kithara::play::SelectionPlayback::Play,
+                )
+                .expect("select the item");
         })
         .await;
 

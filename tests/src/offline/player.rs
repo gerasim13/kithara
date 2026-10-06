@@ -13,7 +13,7 @@ use kithara::{
     },
     play::{
         CrossfadeSettings, DEFAULT_CROSSFADE_DURATION, PlayWorker, PlayWorkerConfig, PlayerConfig,
-        PlayerEvent, PlayerImpl, Resource,
+        PlayerEvent, PlayerImpl, Resource, SelectionPlayback,
         bridge::RtMetricsSnapshot,
         player::{Player, PlayerControl, PlayerControlSource},
     },
@@ -268,11 +268,9 @@ impl OfflinePlayer {
     /// Panics if the product player rejects the resource.
     pub async fn load_and_fadein(&self, resource: Resource) {
         self.with_player(move |control| {
-            control.reserve_slots(1);
             control
-                .replace_item(0, resource, TrackId::allocate())
-                .expect("replace offline player item");
-            control.play();
+                .select(TrackId::allocate(), Some(resource), SelectionPlayback::Play)
+                .expect("select offline player item");
         })
         .await;
     }

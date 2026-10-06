@@ -38,7 +38,7 @@ where
     /// # Errors
     /// Returns [`QueueError::UnknownTrackId`] if `id` is not in the queue,
     /// [`QueueError::NotReady`] if the track is in a terminal failed state,
-    /// or [`QueueError::Play`] if the underlying `select_item` call fails.
+    /// or [`QueueError::Play`] if the deck refuses the selection.
     pub fn select(&self, id: TrackId, transition: Transition) -> Result<(), QueueError> {
         self.with_open_result(|queue| {
             queue.select_with(
@@ -50,9 +50,12 @@ where
         })
     }
 
+    /// Hand the loaded track `id` to the deck: its resource when the queue
+    /// still holds it, or nothing when the deck already does (an armed
+    /// successor, or the track it plays). A refused select has spent the
+    /// resource, so the track is consumed and reloads once it is wanted again.
     pub(in crate::queue) fn select_loaded_item(
         &self,
-        index: usize,
         id: TrackId,
         crossfade: kithara_play::CrossfadeSettings,
         reason: AdvanceReason,
@@ -64,13 +67,18 @@ where
                 settings: crossfade,
             });
         }
-        self.player.select_item_with_crossfade(
-            index,
+        let resource = self.tracks.take_resource(id);
+        if let Err(error) = self.player.select_with_crossfade(
+            id,
+            resource,
             SelectTransition {
                 playback,
                 crossfade,
             },
-        )?;
+        ) {
+            self.set_status(id, TrackStatus::Consumed);
+            return Err(error.into());
+        }
         self.commit_navigation_to(id);
         self.bus.publish(QueueEvent::CurrentTrackAdvance {
             reason,
@@ -136,16 +144,11 @@ where
         reason: AdvanceReason,
         playback: SelectionPlayback,
     ) -> Result<(), QueueError> {
-        let (index, status) = {
-            let guard = self.lock_tracks();
-            guard
-                .iter()
-                .enumerate()
-                .find(|(_, e)| e.id == id)
-                .map(|(i, e)| (i, e.status.clone()))
-                .ok_or(QueueError::UnknownTrackId(id))?
-        };
-        if self.player.current_index() == index
+        let status = self
+            .track(id)
+            .map(|entry| entry.status)
+            .ok_or(QueueError::UnknownTrackId(id))?;
+        if self.player.current_item() == Some(id)
             && matches!(status, TrackStatus::Consumed)
             && matches!(
                 reason,
@@ -180,7 +183,7 @@ where
         }
 
         if let Some(armed) = self.player.armed_next()
-            && armed != index
+            && armed != id
         {
             self.disarm_successor(armed);
         }
@@ -188,7 +191,7 @@ where
         match status {
             TrackStatus::Loaded => {
                 self.cancel_stale_pending(id);
-                self.select_loaded_item(index, id, settings, reason, playback)?;
+                self.select_loaded_item(id, settings, reason, playback)?;
                 Ok(())
             }
             TrackStatus::Pending | TrackStatus::Loading | TrackStatus::Slow => {

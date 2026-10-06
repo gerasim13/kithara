@@ -22,7 +22,7 @@ where
     ) -> Result<Option<TrackId>, QueueError> {
         let Some(next) = self.next_selectable_entry(reason) else {
             let current = self.current().map(|entry| entry.id);
-            let player_index = self.player.current_index();
+            let deck_item = self.player.current_item();
             if matches!(
                 reason,
                 AdvanceReason::NaturalEof
@@ -32,7 +32,7 @@ where
                 debug!(
                     ?reason,
                     ?current,
-                    player_index,
+                    ?deck_item,
                     "navigation has no successor: the queue ends here"
                 );
                 self.lock_navigation_mut().finish();
@@ -41,7 +41,7 @@ where
                 debug!(
                     ?reason,
                     ?current,
-                    player_index,
+                    ?deck_item,
                     "navigation has no successor: staying on the current track"
                 );
             }

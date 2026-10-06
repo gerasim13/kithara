@@ -30,16 +30,11 @@ impl PendingNextState {
     }
 }
 
-/// The successor armed on the deck for the next queue item.
-///
-/// `Playlist` owns the current index; `PendingNext` only tracks the
-/// already-enqueued successor and whether it has been activated.
+/// The successor armed on the deck, and whether it has been activated.
 pub(crate) struct PendingNext {
-    pub(crate) src: Arc<str>,
     pub(crate) state: PendingNextState,
     pub(crate) item_id: TrackId,
     pub(crate) duration_seconds: f64,
-    pub(crate) index: usize,
 }
 
 /// The track the processor reported playing, as a handover settles it.
@@ -123,21 +118,6 @@ impl PendingLoads {
     /// only the processor's report that it played makes it lead.
     pub(crate) fn take_activated(&mut self) -> Option<PendingNext> {
         self.next.take_if(|next| next.state.activated())
-    }
-
-    /// The playlist dropped the item at `index`: whether that was the
-    /// successor, whose index is otherwise shifted down past the gap.
-    pub(crate) fn removed_at(&mut self, index: usize) -> bool {
-        let Some(next) = self.next.as_mut() else {
-            return false;
-        };
-        if next.index == index {
-            return true;
-        }
-        if next.index > index {
-            next.index -= 1;
-        }
-        false
     }
 
     /// Take the successor off the handover. The audio thread may already have

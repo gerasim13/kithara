@@ -1,7 +1,7 @@
 use std::ops::Deref;
 
 use kithara_bufpool::HasPool;
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::time::Duration;
 
 #[cfg(test)]
 use super::super::PlayerImpl;
@@ -14,16 +14,8 @@ use crate::{
     api::{CrossfadeSettings, EngineEvent, SlotId, SuccessorLink, TrackId},
     bridge::{PlayerNotification, TrackPlaybackStopReason},
     error::PlayError,
+    resource::Resource,
 };
-
-/// Outcome of resolving an arm request under the short phase lock, acted on
-/// outside the lock to avoid holding it across `send_to_slot`.
-enum ArmDecision {
-    /// The same index is already armed; return its src verbatim.
-    AlreadyArmed(Arc<str>),
-    /// The slot was cleared; optionally unload the previous pending track.
-    Clear(Option<PendingNext>),
-}
 
 struct ActivatedPending {
     item_id: TrackId,
@@ -53,18 +45,18 @@ impl<S> Handover<'_, S>
 where
     S: HasPool<f32>,
 {
-    /// Mark the armed-next slot at `index` activated under a short lock,
-    /// returning its src. `Ok(None)` when it was already activated.
-    fn activate_pending(&self, index: usize) -> Result<Option<ActivatedPending>, PlayError> {
+    /// Mark the armed successor `item` activated under a short lock.
+    /// `Ok(None)` when it was already activated.
+    fn activate_pending(&self, item: TrackId) -> Result<Option<ActivatedPending>, PlayError> {
         let mut phase = self.phase.lock();
         let pending = phase
             .pending_mut()
             .and_then(|slot| slot.as_mut())
             .ok_or(PlayError::NotReady)?;
-        if pending.index != index {
-            return Err(PlayError::ArmIndexMismatch {
-                requested: index,
-                armed: pending.index,
+        if pending.item_id != item {
+            return Err(PlayError::ArmedItemMismatch {
+                requested: item,
+                armed: pending.item_id,
             });
         }
         let outcome = match std::mem::replace(&mut pending.state, PendingNextState::ActivatedReady)
@@ -80,91 +72,77 @@ where
         Ok(outcome)
     }
 
-    /// Load `items[index]` into the audio-thread arena in `Preloading`
-    /// state, chained behind the leading item for a gapless `link` so the
+    /// Load `resource` as `item` into the audio-thread arena in `Preloading`
+    /// state, chained behind the current item for a gapless `link` so the
     /// deck stitches it in sample-accurately, or left for a crossfade commit.
     ///
-    /// If a different next is already armed, it is unloaded first.
-    /// Idempotent for the same index. Returns `Some(src)` on success;
-    /// `None` if `items[index]` is empty (loader hasn't filled it yet) or
-    /// `index` is out of range. On an error nothing is armed and the item's
-    /// resource is spent.
-    fn arm_next(&self, index: usize, link: SuccessorLink) -> Result<Option<Arc<str>>, PlayError> {
-        let current_index = self.current_index();
-        if index >= self.item_count() {
-            return Ok(None);
-        }
-
+    /// A different armed successor is unloaded first; arming the one already
+    /// armed changes nothing. On an error nothing is armed and the resource is
+    /// spent.
+    fn arm_next(
+        &self,
+        item: TrackId,
+        resource: Resource,
+        link: SuccessorLink,
+    ) -> Result<(), PlayError> {
+        let current = self.current_item();
         let mut phase = self.phase.lock();
-        let decision = match phase.pending() {
-            Some(existing) if existing.index == index => {
-                ArmDecision::AlreadyArmed(existing.src.clone())
-            }
+        let to_unload = match phase.pending() {
+            Some(existing) if existing.item_id == item => return Ok(()),
             Some(existing) => {
-                let preserve = existing.state.activated() && existing.index == current_index;
+                let preserve = existing.state.activated() && Some(existing.item_id) == current;
                 let withdrawn = phase.pending_loads_mut().and_then(PendingLoads::withdraw);
-                ArmDecision::Clear(withdrawn.filter(|_| !preserve))
+                withdrawn.filter(|_| !preserve)
             }
-            None => ArmDecision::Clear(None),
+            None => None,
         };
         drop(phase);
-
-        let to_unload = match decision {
-            ArmDecision::AlreadyArmed(src) => return Ok(Some(src)),
-            ArmDecision::Clear(unload) => unload,
-        };
         if let Some(pending) = to_unload {
             self.unload_pending(&pending);
         }
 
         let behind = match link {
-            SuccessorLink::Gapless => self.core.items.item_id(current_index),
+            SuccessorLink::Gapless => current,
             SuccessorLink::Fade => None,
         };
-        let Some(EnqueuedItem {
+        let EnqueuedItem {
             item_id,
-            src,
             duration_seconds,
             presentation,
-        }) = self.enqueue_to_processor(index, behind)?
-        else {
-            return Ok(None);
-        };
+        } = self.enqueue_to_processor(item, resource, behind)?;
         if let Some(pending_slot) = self.phase.lock().pending_mut() {
             *pending_slot = Some(PendingNext {
                 item_id,
-                index,
                 duration_seconds,
-                src: src.clone(),
                 state: PendingNextState::Armed(presentation),
             });
         }
-        Ok(Some(src))
+        Ok(())
     }
 
-    /// Snapshot of the armed-next index. `None` when no slot is armed
-    /// (or after `commit_next` has consumed it for the current handover).
+    /// The armed successor. `None` when none is armed (or after
+    /// `commit_next` has consumed it for the current handover).
     #[must_use]
-    fn armed_next(&self) -> Option<usize> {
+    fn armed_next(&self) -> Option<TrackId> {
         self.phase
             .lock()
             .pending()
             .filter(|pending| !pending.state.activated())
-            .map(|pending| pending.index)
+            .map(|pending| pending.item_id)
     }
 
-    /// Commit the previously armed next track and start the cross-fade
-    /// with this transition's own `settings`.
+    /// Commit the armed successor `item` and start the cross-fade with this
+    /// transition's own `settings`.
     ///
-    /// Sends `FadeIn` to the audio thread for the armed slot, updates
-    /// the playlist current index, and publishes `CurrentItemChanged`.
+    /// Sends `FadeIn` to the audio thread for the armed track and publishes
+    /// `CurrentItemChanged`.
     ///
     /// # Errors
-    /// - [`PlayError::NotReady`] if no slot is armed.
-    /// - [`PlayError::ArmIndexMismatch`] if `index` does not match
+    /// - [`PlayError::NotReady`] if no successor is armed.
+    /// - [`PlayError::ArmedItemMismatch`] if `item` is not
     ///   [`Self::armed_next`].
-    fn commit_next(&self, index: usize, settings: CrossfadeSettings) -> Result<(), PlayError> {
-        let Some(activated) = self.activate_pending(index)? else {
+    fn commit_next(&self, item: TrackId, settings: CrossfadeSettings) -> Result<(), PlayError> {
+        let Some(activated) = self.activate_pending(item)? else {
             return Ok(());
         };
 
@@ -175,8 +153,7 @@ where
         );
         self.start_playback_with(activated.item_id, activated.duration_seconds, settings);
         self.publish_crossfade_started(settings.duration);
-        self.core.items.set_current(index);
-        self.announce_current_item(index);
+        self.core.current.announce(item);
         Ok(())
     }
 
@@ -194,17 +171,17 @@ where
             });
     }
 
-    /// Drop the armed next slot without committing.
+    /// Drop the armed successor without committing.
     ///
-    /// Unloads the pending item from the audio thread and clears the
-    /// pending slot. Skips the unload if the armed slot has
-    /// already been activated for the current index (the activated track
-    /// is now the leading one — unloading would silence playback).
+    /// Unloads it from the audio thread and clears the pending slot. Skips
+    /// the unload if the successor has already been activated as the current
+    /// item (the activated track is now the leading one — unloading would
+    /// silence playback).
     fn unarm_next(&self) {
-        self.unarm_next_internal(Some(self.current_index()));
+        self.unarm_next_internal(self.current_item());
     }
 
-    fn unarm_next_internal(&self, current_index_hint: Option<usize>) {
+    fn unarm_next_internal(&self, current: Option<TrackId>) {
         let pending = self
             .phase
             .lock()
@@ -213,8 +190,7 @@ where
         let Some(pending) = pending else {
             return;
         };
-        let preserve_active_current = current_index_hint
-            .is_some_and(|index| pending.state.activated() && pending.index == index);
+        let preserve_active_current = pending.state.activated() && Some(pending.item_id) == current;
         if !preserve_active_current {
             if pending.state.activated() {
                 self.core
@@ -249,21 +225,34 @@ impl<S> PlayerRuntime<S>
 where
     S: HasPool<f32>,
 {
+    /// Attach `resource` to the deck as `item`, ahead of the current item and
+    /// joined to it by `link`.
+    ///
+    /// # Errors
+    /// The failure to allocate its buffers or the deck's refusal for want of
+    /// room. Nothing is armed then, and the resource is spent.
     pub fn arm_next(
         &self,
-        index: usize,
+        item: TrackId,
+        resource: Resource,
         link: SuccessorLink,
-    ) -> Result<Option<Arc<str>>, PlayError> {
-        Handover::new(self).arm_next(index, link)
+    ) -> Result<(), PlayError> {
+        Handover::new(self).arm_next(item, resource, link)
     }
 
+    /// The successor armed on the deck and not yet committed.
     #[must_use]
-    pub fn armed_next(&self) -> Option<usize> {
+    pub fn armed_next(&self) -> Option<TrackId> {
         Handover::new(self).armed_next()
     }
 
-    pub fn commit_next(&self, index: usize, settings: CrossfadeSettings) -> Result<(), PlayError> {
-        Handover::new(self).commit_next(index, settings)
+    /// Commit the armed successor `item` with this transition's `settings`.
+    ///
+    /// # Errors
+    /// [`PlayError::NotReady`] without an armed successor,
+    /// [`PlayError::ArmedItemMismatch`] when another is armed.
+    pub fn commit_next(&self, item: TrackId, settings: CrossfadeSettings) -> Result<(), PlayError> {
+        Handover::new(self).commit_next(item, settings)
     }
 
     /// Retire a committed successor once a track ends. An armed one waits for
@@ -279,10 +268,9 @@ where
     /// Settle the successor once the processor reports the track it played,
     /// by its start or its natural or failed end: the armed successor or a
     /// withdrawn one stitched in becomes current, and its start takes on the
-    /// epoch it was stitched in under, so the deck publishes its playhead. One
-    /// removed from the queue since keeps playing unannounced. A withdrawn successor the
-    /// processor reports unloaded can no longer be stitched in and leaves the
-    /// question.
+    /// epoch it was stitched in under, so the deck publishes its playhead. A
+    /// withdrawn successor the processor reports unloaded can no longer be
+    /// stitched in and leaves the question.
     pub(crate) fn settle_withdrawal(&self, slot_id: SlotId, notification: &PlayerNotification) {
         if self.slot() != Some(slot_id) {
             return;
@@ -318,24 +306,20 @@ where
             Some(Played::Withdrawn) => 0.0,
             None => return,
         };
-        let Some(index) = self.core.items.index_of(played) else {
-            return;
-        };
         if let Some(epoch) = epoch
             && let Some(playback) = self.slot_playback()
         {
             playback.take_on(epoch, duration_seconds);
         }
-        self.core.items.set_current(index);
-        self.announce_current_item(index);
+        self.core.current.announce(played);
     }
 
     pub fn unarm_next(&self) {
         Handover::new(self).unarm_next();
     }
 
-    pub(crate) fn unarm_next_internal(&self, current_index_hint: Option<usize>) {
-        Handover::new(self).unarm_next_internal(current_index_hint);
+    pub(crate) fn unarm_next_internal(&self, current: Option<TrackId>) {
+        Handover::new(self).unarm_next_internal(current);
     }
 }
 
@@ -349,6 +333,7 @@ mod tests {
 
     use kithara_audio::mock::{AudioControlMock, AudioReadMock, AudioSessionMock};
     use kithara_events::{Envelope, EventBus};
+    use kithara_platform::sync::Arc;
     use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
     use kithara_warp::BeatGrid;
@@ -379,7 +364,7 @@ mod tests {
                 .build(),
         );
         let err = player
-            .commit_next(1, CrossfadeSettings::default())
+            .commit_next(TrackId::allocate(), CrossfadeSettings::default())
             .expect_err("must error");
         assert!(matches!(err, PlayError::NotReady));
     }
@@ -399,22 +384,21 @@ mod tests {
         player.ensure_slot().expect("slot allocation must succeed");
         let mut rx = player.subscribe();
 
+        let next = TrackId::allocate();
         if let Some(pending_slot) = player.phase.lock().pending_mut() {
             *pending_slot = Some(PendingNext {
-                item_id: TrackId::allocate(),
-                src: Arc::from("next.mp3"),
+                item_id: next,
                 state: PendingNextState::Armed(ItemPresentation {
                     beat_grid: Arc::default(),
                     abr_handle: None,
                     staging: None,
                 }),
-                index: 1,
                 duration_seconds: 162.0,
             });
         }
 
         player
-            .commit_next(1, CrossfadeSettings::default())
+            .commit_next(next, CrossfadeSettings::default())
             .expect("commit_next must succeed");
 
         assert!(matches!(
@@ -451,22 +435,21 @@ mod tests {
             .ensure_engine_started()
             .expect("engine start must succeed");
         player.ensure_slot().expect("slot allocation must succeed");
+        let next = TrackId::allocate();
         if let Some(pending_slot) = player.phase.lock().pending_mut() {
             *pending_slot = Some(PendingNext {
-                item_id: TrackId::allocate(),
-                src: Arc::from("next.mp3"),
+                item_id: next,
                 state: PendingNextState::Armed(ItemPresentation {
                     beat_grid: Arc::default(),
                     abr_handle: None,
                     staging: None,
                 }),
-                index: 1,
                 duration_seconds: 162.0,
             });
         }
 
         player
-            .commit_next(1, CrossfadeSettings::default())
+            .commit_next(next, CrossfadeSettings::default())
             .expect("commit_next must succeed");
         let playback = player
             .slot()
@@ -492,10 +475,10 @@ mod tests {
                 .session(session)
                 .build(),
         );
-        for src in ["first", "second"] {
-            player.insert(resource(src), TrackId::allocate(), None);
-        }
-        player.play();
+        let [first, second] = [TrackId::allocate(), TrackId::allocate()];
+        player
+            .select(first, Some(resource("first")), SelectionPlayback::Play)
+            .expect("the first item loads");
         let lead = audio_thread
             .take_commands()
             .iter()
@@ -505,7 +488,7 @@ mod tests {
             })
             .expect("play fades the first item in");
         player
-            .arm_next(1, SuccessorLink::Gapless)
+            .arm_next(second, resource("second"), SuccessorLink::Gapless)
             .expect("preload accepted");
         let playback = player
             .slot_playback()
@@ -514,7 +497,7 @@ mod tests {
         while player.send_to_slot(DeckPart::StartAll).is_ok() {}
 
         player
-            .commit_next(1, CrossfadeSettings::default())
+            .commit_next(second, CrossfadeSettings::default())
             .expect("commit_next must succeed");
 
         assert_eq!(player.duration_seconds(), Some(64.295));
@@ -556,12 +539,11 @@ mod tests {
             TrackId::allocate(),
             TrackId::allocate(),
         ];
-        for (src, item_id) in ["first", "second", "third"].into_iter().zip(ids) {
-            player.insert(resource(src), item_id, None);
-        }
-        player.play();
         player
-            .arm_next(1, SuccessorLink::Gapless)
+            .select(ids[0], Some(resource("first")), SelectionPlayback::Play)
+            .expect("the first item loads");
+        player
+            .arm_next(ids[1], resource("second"), SuccessorLink::Gapless)
             .expect("preload accepted");
         audio_thread.take_commands();
         (player, audio_thread, ids)
@@ -607,13 +589,13 @@ mod tests {
 
     /// Select `third` while the command ring has room only for the
     /// selection's setting and the successor's withdrawal.
-    fn select_third_with_its_load_refused(player: &PlayerImpl<TestPools>) {
+    fn select_third_with_its_load_refused(player: &PlayerImpl<TestPools>, third: TrackId) {
         for _ in 0..30 {
             player
                 .send_to_slot(DeckPart::StopAll)
                 .expect("fixture leaves room for the setting and the withdrawal");
         }
-        let _ = player.select_item(2, SelectionPlayback::Play);
+        let _ = player.select(third, Some(resource("third")), SelectionPlayback::Play);
     }
 
     /// The audio thread ends `first` and stitches `second` in, before it
@@ -630,7 +612,7 @@ mod tests {
         let (player, audio_thread, ids) = deck_with_armed_successor();
 
         player
-            .select_item(2, SelectionPlayback::Play)
+            .select(ids[2], Some(resource("third")), SelectionPlayback::Play)
             .expect("selection accepted");
         let commands = audio_thread.take_commands();
         assert_eq!(unloaded(&commands), []);
@@ -642,8 +624,8 @@ mod tests {
         player.process_notifications();
 
         assert_eq!(
-            player.current_index(),
-            2,
+            player.current_item(),
+            Some(ids[2]),
             "the selection leads over the successor it fades out"
         );
     }
@@ -655,7 +637,7 @@ mod tests {
     fn a_refused_selection_keeps_a_successor_already_stitched_in_and_reports_it() {
         let (player, audio_thread, ids) = deck_with_armed_successor();
 
-        select_third_with_its_load_refused(&player);
+        select_third_with_its_load_refused(&player, ids[2]);
         let commands = audio_thread.take_commands();
         assert_eq!(unloaded(&commands), []);
         assert!(
@@ -668,7 +650,7 @@ mod tests {
         stitch_second_in(&audio_thread, ids);
         player.process_notifications();
 
-        assert_eq!(player.current_index(), 1);
+        assert_eq!(player.current_item(), Some(ids[1]));
     }
 
     #[kithara::test]
@@ -676,15 +658,15 @@ mod tests {
         let (player, audio_thread, ids) = deck_with_armed_successor();
 
         player
-            .arm_next(2, SuccessorLink::Gapless)
+            .arm_next(ids[2], resource("third"), SuccessorLink::Gapless)
             .expect("re-arm accepted");
         assert_eq!(unloaded(&audio_thread.take_commands()), []);
 
         stitch_second_in(&audio_thread, ids);
         player.process_notifications();
 
-        assert_eq!(player.current_index(), 1);
-        assert_eq!(player.armed_next(), Some(2));
+        assert_eq!(player.current_item(), Some(ids[1]));
+        assert_eq!(player.armed_next(), Some(ids[2]));
     }
 
     /// The audio thread stitches in whichever preload it finds first, so the
@@ -693,14 +675,14 @@ mod tests {
     fn a_re_armed_successor_the_audio_thread_stitched_in_is_promoted() {
         let (player, audio_thread, ids) = deck_with_armed_successor();
         player
-            .arm_next(2, SuccessorLink::Gapless)
+            .arm_next(ids[2], resource("third"), SuccessorLink::Gapless)
             .expect("re-arm accepted");
 
         audio_thread.notify(&ended("first", ids[0]));
         audio_thread.notify(&started("third", ids[2], 0));
         player.process_notifications();
 
-        assert_eq!(player.current_index(), 2);
+        assert_eq!(player.current_item(), Some(ids[2]));
         assert_eq!(player.armed_next(), None);
     }
 
@@ -709,13 +691,13 @@ mod tests {
     #[kithara::test]
     fn a_withdrawn_successor_that_ends_in_its_stitch_block_is_reported() {
         let (player, audio_thread, ids) = deck_with_armed_successor();
-        select_third_with_its_load_refused(&player);
+        select_third_with_its_load_refused(&player, ids[2]);
 
         audio_thread.notify(&ended("first", ids[0]));
         audio_thread.notify(&ended("second", ids[1]));
         player.process_notifications();
 
-        assert_eq!(player.current_index(), 1);
+        assert_eq!(player.current_item(), Some(ids[1]));
     }
 
     /// A cancel the full ring refused never reached the processor, so the
@@ -735,13 +717,13 @@ mod tests {
         );
 
         player
-            .select_item(2, SelectionPlayback::Play)
+            .select(ids[2], Some(resource("third")), SelectionPlayback::Play)
             .expect("selection accepted");
         audio_thread.notify(&ended("third", ids[2]));
         audio_thread.notify(&started("second", ids[1], 0));
         player.process_notifications();
 
-        assert_eq!(player.current_index(), 1);
+        assert_eq!(player.current_item(), Some(ids[1]));
     }
 
     /// A successor that fails on its first render never reports a start, but
@@ -750,7 +732,7 @@ mod tests {
     fn a_re_armed_successor_that_fails_in_its_stitch_block_is_reported() {
         let (player, audio_thread, ids) = deck_with_armed_successor();
         player
-            .arm_next(2, SuccessorLink::Gapless)
+            .arm_next(ids[2], resource("third"), SuccessorLink::Gapless)
             .expect("re-arm accepted");
 
         audio_thread.notify(&ended("first", ids[0]));
@@ -762,7 +744,7 @@ mod tests {
         });
         player.process_notifications();
 
-        assert_eq!(player.current_index(), 2);
+        assert_eq!(player.current_item(), Some(ids[2]));
         assert_eq!(player.armed_next(), None);
     }
 
@@ -776,7 +758,7 @@ mod tests {
         player.unarm_next();
         audio_thread.take_commands();
         player
-            .arm_next(2, SuccessorLink::Gapless)
+            .arm_next(ids[2], resource("third"), SuccessorLink::Gapless)
             .expect("re-arm accepted");
 
         audio_thread.notify(&PlayerNotification::Unloaded {
@@ -787,7 +769,7 @@ mod tests {
         audio_thread.notify(&started("third", ids[2], 0));
         player.process_notifications();
 
-        assert_eq!(player.current_index(), 2);
+        assert_eq!(player.current_item(), Some(ids[2]));
         assert_eq!(player.armed_next(), None);
     }
 
@@ -797,17 +779,17 @@ mod tests {
     fn an_armed_successor_is_not_current_until_the_processor_plays_it() {
         let (player, audio_thread, ids) = deck_with_armed_successor();
         player
-            .arm_next(2, SuccessorLink::Gapless)
+            .arm_next(ids[2], resource("third"), SuccessorLink::Gapless)
             .expect("re-arm accepted");
 
         audio_thread.notify(&ended("first", ids[0]));
         player.process_notifications();
-        assert_eq!(player.current_index(), 0);
-        assert_eq!(player.armed_next(), Some(2));
+        assert_eq!(player.current_item(), Some(ids[0]));
+        assert_eq!(player.armed_next(), Some(ids[2]));
 
         audio_thread.notify(&started("third", ids[2], 0));
         player.process_notifications();
-        assert_eq!(player.current_index(), 2);
+        assert_eq!(player.current_item(), Some(ids[2]));
         assert_eq!(player.armed_next(), None);
     }
 
@@ -818,7 +800,7 @@ mod tests {
     fn a_stitched_successor_is_taken_on_as_it_becomes_current() {
         let (player, audio_thread, ids) = deck_with_armed_successor();
         player
-            .arm_next(2, SuccessorLink::Gapless)
+            .arm_next(ids[2], resource("third"), SuccessorLink::Gapless)
             .expect("re-arm accepted");
         let epoch = chain_epoch(&audio_thread.take_commands(), ids[2]);
         let playback = player
@@ -830,7 +812,7 @@ mod tests {
         audio_thread.notify(&started("third", ids[2], epoch));
         player.process_notifications();
 
-        assert_eq!(player.current_index(), 2);
+        assert_eq!(player.current_item(), Some(ids[2]));
         assert!(playback.publishing().admit(epoch));
     }
 
@@ -842,7 +824,7 @@ mod tests {
         let playing = player.core.track_grid.snapshot().revision();
 
         player
-            .arm_next(2, SuccessorLink::Gapless)
+            .arm_next(ids[2], resource("third"), SuccessorLink::Gapless)
             .expect("re-arm accepted");
         assert_eq!(
             player.core.track_grid.snapshot().revision(),
@@ -868,7 +850,7 @@ mod tests {
         audio_thread.take_commands();
 
         player
-            .arm_next(2, SuccessorLink::Fade)
+            .arm_next(ids[2], resource("third"), SuccessorLink::Fade)
             .expect("crossfade arm accepted");
         let commands = audio_thread.take_commands();
         assert!(commands.iter().any(
@@ -883,9 +865,12 @@ mod tests {
 
         player.unarm_next();
         audio_thread.take_commands();
-        player.insert(resource("fourth"), TrackId::allocate(), None);
         player
-            .arm_next(3, SuccessorLink::Gapless)
+            .arm_next(
+                TrackId::allocate(),
+                resource("fourth"),
+                SuccessorLink::Gapless,
+            )
             .expect("gapless arm accepted");
         assert!(
             audio_thread
@@ -893,27 +878,6 @@ mod tests {
                 .iter()
                 .any(|command| matches!(command, DeckPart::Chain { from, .. } if *from == ids[0])),
             "a gapless successor is chained behind the leading item"
-        );
-    }
-
-    /// Removing an item other than the armed successor keeps it armed, at the
-    /// index the playlist shifted it to.
-    #[kithara::test]
-    fn removing_another_item_keeps_the_armed_successor() {
-        let (player, audio_thread, ids) = deck_with_armed_successor();
-        player
-            .arm_next(2, SuccessorLink::Gapless)
-            .expect("re-arm accepted");
-        audio_thread.take_commands();
-
-        let _ = player.remove_at(1);
-
-        assert_eq!(player.armed_next(), Some(1));
-        assert!(
-            !audio_thread.take_commands().iter().any(
-                |command| matches!(command, DeckPart::Withdraw { item_id } if *item_id == ids[2])
-            ),
-            "the armed successor must stay on the deck"
         );
     }
 
@@ -937,9 +901,8 @@ mod tests {
         }
 
         player
-            .arm_next(2, SuccessorLink::Gapless)
-            .expect("one batch has room")
-            .expect("the successor holds a resource");
+            .arm_next(ids[2], resource("third"), SuccessorLink::Gapless)
+            .expect("one batch has room");
 
         assert!(
             audio_thread.take_commands().iter().any(|command| matches!(
@@ -954,12 +917,12 @@ mod tests {
     /// nothing reached the processor to stitch in.
     #[kithara::test]
     fn an_arm_the_deck_has_no_room_for_fails_and_arms_nothing() {
-        let (player, audio_thread, _) = deck_with_armed_successor();
+        let (player, audio_thread, ids) = deck_with_armed_successor();
         player.unarm_next();
         audio_thread.take_commands();
         while player.send_to_slot(DeckPart::StopAll).is_ok() {}
 
-        let armed = player.arm_next(2, SuccessorLink::Gapless);
+        let armed = player.arm_next(ids[2], resource("third"), SuccessorLink::Gapless);
 
         assert!(
             matches!(armed, Err(PlayError::SlotChannelFull { .. })),

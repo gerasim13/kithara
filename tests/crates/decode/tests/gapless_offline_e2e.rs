@@ -895,8 +895,8 @@ fn left_frames_from_chunks(chunks: impl IntoIterator<Item = AudioChunk>) -> Vec<
         .collect()
 }
 
-/// Loads the items onto the deck, starts the first and arms the second as its
-/// gapless successor, as the queue does ahead of the first item's end.
+/// Starts the first of one or two items on the deck and arms the second as
+/// its gapless successor, as the queue does ahead of the first item's end.
 /// Returns the identity the player will report back for each item, in the
 /// order they were given.
 async fn load_tagged_queue<const N: usize>(
@@ -906,21 +906,18 @@ async fn load_tagged_queue<const N: usize>(
     let ids = [(); N].map(|()| TrackId::allocate());
     harness
         .with_player(move |player| {
-            player.reserve_slots(items.len());
-            for (index, (resource, id)) in items.into_iter().zip(ids.iter().copied()).enumerate() {
+            let mut items = items.into_iter().zip(ids);
+            if let Some((resource, id)) = items.next() {
                 player
-                    .replace_item(index, resource, id)
-                    .expect("replace gapless fixture item");
+                    .select(id, Some(resource), kithara::play::SelectionPlayback::Play)
+                    .expect("select first queue item");
             }
-            player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .expect("select first queue item");
-            if N > 1 {
-                let armed = player
-                    .arm_next(1, SuccessorLink::Gapless)
+            if let Some((resource, id)) = items.next() {
+                player
+                    .arm_next(id, resource, SuccessorLink::Gapless)
                     .expect("arm the second item as the gapless successor");
-                assert!(armed.is_some(), "the second item must hold a resource");
             }
+            assert!(items.next().is_none(), "the deck holds at most two items");
         })
         .await;
     ids

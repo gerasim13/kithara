@@ -144,9 +144,12 @@ fn spawn_player_worker(sender: wasm::HostSender<TestPools>, stage: Arc<AtomicU64
             resource.preload().await.expect("preload the fixture");
             stage.store(5, Ordering::Relaxed);
 
-            control.insert(resource, TrackId(0), None);
             control
-                .select_item(0, kithara::play::SelectionPlayback::Play)
+                .select(
+                    TrackId(0),
+                    Some(resource),
+                    kithara::play::SelectionPlayback::Play,
+                )
                 .expect("select the fixture for playback");
             control.play();
             stage.store(6, Ordering::Relaxed);
@@ -384,9 +387,12 @@ async fn open_deck(
         .await
         .expect("open the fixture as a product resource");
     resource.preload().await.expect("preload the fixture");
-    control.insert(resource, TrackId(0), None);
     control
-        .select_item(0, kithara::play::SelectionPlayback::Pause)
+        .select(
+            TrackId(0),
+            Some(resource),
+            kithara::play::SelectionPlayback::Pause,
+        )
         .expect("select the fixture");
     owner
 }

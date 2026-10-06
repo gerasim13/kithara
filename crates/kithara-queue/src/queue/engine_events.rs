@@ -18,8 +18,8 @@ impl<S> QueueControl<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// `CurrentItemChanged` is edge-triggered and de-duplicated by
-    /// `ItemQueue::announce_current_item`, so a dropped event cannot be recovered by waiting again.
+    /// `CurrentItemChanged` is edge-triggered and de-duplicated by the deck,
+    /// so a dropped event cannot be recovered by waiting again.
     pub(super) fn drain_player_events(&self) {
         let mut lagged = false;
         {
@@ -49,7 +49,7 @@ where
             debug!(
                 %track,
                 ?current,
-                player_index = self.player.current_index(),
+                deck_item = ?self.player.current_item(),
                 "the end names a track the cursor has left: not advancing"
             );
             return false;
@@ -65,9 +65,13 @@ where
         true
     }
 
+    /// The deck announces every item it starts, a removed one included, so
+    /// the queue names only an item it still holds.
     pub(super) fn handle_current_item_changed(&self) {
-        let idx = self.player.current_index();
-        let id = self.lock_tracks().get(idx).map(|e| e.id);
+        let id = self
+            .player
+            .current_item()
+            .filter(|id| self.lock_tracks().iter().any(|entry| entry.id == *id));
         self.write_cached_position(CachedPosition::Unknown);
         self.bus.publish(QueueEvent::CurrentTrackChanged { id });
     }
@@ -159,18 +163,20 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_audio::DecodeErrorKind;
+    use kithara_audio::{DecodeErrorKind, mock::TestPcmReader};
     use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, SlotId, TrackId};
     use kithara_platform::{sync::Arc, time::Duration};
-    use kithara_play::{ItemRole, PlaybackFault, PlayerEvent, TrackRef};
+    use kithara_play::{ItemRole, PlaybackFault, PlayerEvent, Resource, TrackRef};
+    use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
 
     use crate::{
         ActionAtItemEnd, QueueControl,
+        consts::TEST_SAMPLE_RATE,
         event::{QueueEvent, TrackStatus},
         queue::{
             state::tests::{make_queue, wait_for_queue_event},
-            types::SelectPhase,
+            types::{SelectPhase, Transition},
         },
         test_pools::TestPools,
         track::{TrackRecord, TrackSource},
@@ -338,12 +344,20 @@ mod tests {
         assert!(queue.is_paused());
     }
 
+    /// A lagged receiver lost the deck's announcement, so recovery names
+    /// the item the deck holds.
     #[kithara::test(tokio)]
     async fn lagged_player_events_resynchronize_current_track() {
+        const URL: &str = "https://example.com/lagged-events.mp3";
         let queue = make_queue();
-        let id = queue
-            .append("https://example.com/lagged-events.mp3")
-            .expect("open queue accepts a track");
+        let id = queue.append(URL).expect("open queue accepts a track");
+        let reader = TestPcmReader::new(AudioSpec::new(2, TEST_SAMPLE_RATE), 0.01);
+        queue
+            .tracks
+            .admit(id, Resource::from_reader(reader, Some(Arc::from(URL))));
+        queue
+            .select(id, Transition::None)
+            .expect("the loaded track is selected");
 
         for _ in 0..=DEFAULT_EVENT_BUS_CAPACITY {
             queue

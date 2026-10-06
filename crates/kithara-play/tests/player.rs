@@ -3,7 +3,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use kithara_audio::SeekOutcome;
 use kithara_decode::GaplessMode;
 use kithara_effects::eq::generate_log_spaced_bands;
-use kithara_events::{Envelope, EventBus, TryRecvError};
+use kithara_events::{Envelope, EventBus, TrackId, TryRecvError};
 use kithara_platform::time::Duration;
 use kithara_play::{
     PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus,
@@ -33,16 +33,14 @@ fn player() -> PlayerImpl<TestPools> {
 
 #[derive(Clone, Copy)]
 enum PlayerBasicScenario {
-    AdvanceOnEmpty,
     EngineAccessor,
-    QueueStartsEmpty,
+    NothingIsCurrent,
     StartsPaused,
 }
 
 #[kithara::test]
 #[case(PlayerBasicScenario::StartsPaused)]
-#[case(PlayerBasicScenario::QueueStartsEmpty)]
-#[case(PlayerBasicScenario::AdvanceOnEmpty)]
+#[case(PlayerBasicScenario::NothingIsCurrent)]
 #[case(PlayerBasicScenario::EngineAccessor)]
 fn player_basic_behaviors(#[case] scenario: PlayerBasicScenario) {
     let player = player();
@@ -51,12 +49,8 @@ fn player_basic_behaviors(#[case] scenario: PlayerBasicScenario) {
             assert!((player.rate() - 0.0).abs() < f32::EPSILON);
             assert_eq!(player.status(), PlayerStatus::Unknown);
         }
-        PlayerBasicScenario::QueueStartsEmpty => {
-            assert_eq!(player.item_count(), 0);
-        }
-        PlayerBasicScenario::AdvanceOnEmpty => {
-            player.advance_to_next_item();
-            assert_eq!(player.current_index(), 0);
+        PlayerBasicScenario::NothingIsCurrent => {
+            assert_eq!(player.current_item(), None);
         }
         PlayerBasicScenario::EngineAccessor => {
             assert!(!player.engine().is_running());
@@ -325,12 +319,17 @@ fn host_rejects_a_player_built_for_another_sample_rate() {
     ));
 }
 
+/// Without a resource the deck can only commit or reselect what it holds:
+/// selecting any other item must fail loudly instead of announcing
+/// `CurrentItemChanged` while the old audio keeps playing.
 #[kithara::test]
-fn select_item_out_of_range_returns_typed_error() {
+fn selecting_an_item_the_deck_lacks_without_a_resource_is_refused() {
     let player = player();
+    let item = TrackId::allocate();
     let err = player
-        .select_item_with_crossfade(
-            5,
+        .select_with_crossfade(
+            item,
+            None,
             SelectTransition {
                 playback: kithara_play::SelectionPlayback::Pause,
                 crossfade: kithara_play::CrossfadeSettings {
@@ -340,18 +339,21 @@ fn select_item_out_of_range_returns_typed_error() {
             },
         )
         .expect_err("must error");
-    assert!(matches!(
-        err,
-        PlayError::IndexOutOfRange { index: 5, len: 0 }
-    ));
+    assert!(matches!(err, PlayError::ItemConsumed { item: refused } if refused == item));
+    assert_eq!(
+        player.current_item(),
+        None,
+        "bookkeeping must not move on a failed select"
+    );
 }
 
 #[kithara::test]
-fn select_item_rejects_invalid_crossfade_before_index_or_engine_side_effects() {
+fn select_rejects_invalid_crossfade_before_engine_side_effects() {
     let player = player();
     let err = player
-        .select_item_with_crossfade(
-            5,
+        .select_with_crossfade(
+            TrackId::allocate(),
+            None,
             SelectTransition {
                 playback: kithara_play::SelectionPlayback::Pause,
                 crossfade: kithara_play::CrossfadeSettings {
@@ -367,32 +369,6 @@ fn select_item_rejects_invalid_crossfade_before_index_or_engine_side_effects() {
             if name == "crossfade.duration" && value == -1.0
     ));
     assert!(!player.engine().is_running());
-}
-
-/// `enqueue_to_processor` takes the resource out of the slot, so a
-/// select against an emptied (consumed) slot has nothing to load: it
-/// must fail loudly instead of moving the playlist current index / announcing
-/// `CurrentItemChanged` while the old audio keeps playing.
-#[kithara::test]
-fn select_item_on_consumed_slot_errors_without_bookkeeping() {
-    let player = player();
-    player.reserve_slots(2);
-    let result = player.select_item_with_crossfade(
-        1,
-        SelectTransition {
-            playback: kithara_play::SelectionPlayback::Pause,
-            crossfade: kithara_play::CrossfadeSettings {
-                duration: 0.0,
-                ..Default::default()
-            },
-        },
-    );
-    assert!(result.is_err(), "selecting an emptied slot must fail");
-    assert_eq!(
-        player.current_index(),
-        0,
-        "bookkeeping must not move on a failed select"
-    );
 }
 
 /// A player with nothing loaded still owns the position it is handed;

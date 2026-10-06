@@ -279,12 +279,10 @@ mod tests {
     /// Put the slot mid-crossfade: the successor is loaded into this same
     /// slot's arena and already promoted over the outgoing track, exactly
     /// as `commit_next` leaves it.
-    fn activate_pending(player: &PlayerImpl<TestPools>, item_id: TrackId, src: &str) {
+    fn activate_pending(player: &PlayerImpl<TestPools>, item_id: TrackId) {
         let next = PendingNext {
             item_id,
-            src: Arc::from(src),
             state: PendingNextState::ActivatedReady,
-            index: 1,
             duration_seconds: 60.0,
         };
         *player
@@ -435,7 +433,7 @@ mod tests {
     #[kithara::test]
     fn the_outgoing_half_of_a_crossfade_is_not_the_leading_track() {
         let (player, slot) = player_with_slot();
-        activate_pending(&player, consts::PROMOTED, "same.mp3");
+        activate_pending(&player, consts::PROMOTED);
         let mut rx = player.subscribe();
 
         Notifier::new(&player).dispatch_notification(
@@ -459,7 +457,7 @@ mod tests {
     #[kithara::test]
     fn the_promoted_half_of_a_crossfade_is_the_leading_track() {
         let (player, slot) = player_with_slot();
-        activate_pending(&player, consts::PROMOTED, "same.mp3");
+        activate_pending(&player, consts::PROMOTED);
         let mut rx = player.subscribe();
 
         Notifier::new(&player).dispatch_notification(

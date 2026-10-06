@@ -241,7 +241,7 @@ async fn live_remote_resource_decodes_with_duration(
 }
 
 /// Reproduces EXACTLY the app flow: `PlayerImpl` + `prepare_config` + `Resource::new` +
-/// `select_item` + `duration_seconds()`. This is what the GUI reads.
+/// `select_with_crossfade` + `duration_seconds()`. This is what the GUI reads.
 // flash(false): live-internet sockets are invisible to the flash engine; a virtual
 // 500ms pacing sleep would elapse before the real metadata fetch completes.
 #[kithara::test(
@@ -310,7 +310,6 @@ async fn player_mp3_duration_matches_app_flow(
     let player = host
         .insert(player)
         .expect("insert player into playback host");
-    player.reserve_slots(1);
 
     let mut config: ResourceConfig<TestPools> =
         ResourceConfig::for_src(ResourceSrc::parse(url).unwrap())
@@ -330,11 +329,9 @@ async fn player_mp3_duration_matches_app_flow(
         .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
 
     player
-        .replace_item(0, resource, TrackId::allocate())
-        .expect("install live remote resource");
-    player
-        .select_item_with_crossfade(
-            0,
+        .select_with_crossfade(
+            TrackId::allocate(),
+            Some(resource),
             SelectTransition {
                 playback: kithara::play::SelectionPlayback::Play,
                 crossfade: kithara::play::CrossfadeSettings {

@@ -43,7 +43,7 @@ where
         if was_cancelled {
             debug!(
                 id = id.as_u64(),
-                "load was overridden by a later select; skipping replace_item"
+                "load was overridden by a later select; dropping its resource"
             );
             return;
         }
@@ -60,15 +60,7 @@ where
             return;
         };
 
-        let metadata = resource.metadata().clone();
-        if let Err(error) = self.player.replace_item(index, resource, id) {
-            debug!(id = id.as_u64(), %error, "player closed before load could be applied");
-            return;
-        }
-        if let Some(record) = self.tracks.lock().iter_mut().find(|record| record.id == id) {
-            record.metadata.fill_missing_from(&metadata);
-        }
-        self.tracks.set_status(id, TrackStatus::Loaded);
+        self.tracks.admit(id, resource);
         if self
             .tracks
             .lock()
@@ -78,10 +70,10 @@ where
             self.bus.publish(QueueEvent::NextTrackReady { id, index });
         }
 
-        self.apply_pending_selection(id, index);
+        self.apply_pending_selection(id);
     }
 
-    fn apply_pending_selection(&self, id: TrackId, index: usize) {
+    fn apply_pending_selection(&self, id: TrackId) {
         let selection = {
             let mut phase = self.pending_select.lock();
             let selection = match *phase {
@@ -99,13 +91,9 @@ where
         let Some(selection) = selection else {
             return;
         };
-        if let Err(error) = self.select_loaded_item(
-            index,
-            id,
-            selection.settings,
-            selection.reason,
-            selection.playback,
-        ) {
+        if let Err(error) =
+            self.select_loaded_item(id, selection.settings, selection.reason, selection.playback)
+        {
             warn!(id = id.as_u64(), error = %error, "pending select failed");
         }
     }

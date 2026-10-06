@@ -105,10 +105,13 @@ async fn loaded_harness(constant_half: &'static [u8]) -> OfflinePlayer {
         OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;
     harness
         .with_player(move |player| {
-            player.insert(make_resource(constant_half, 1.0), TrackId::allocate(), None);
             player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .expect("select first queue item");
+                .select(
+                    TrackId::allocate(),
+                    Some(make_resource(constant_half, 1.0)),
+                    kithara::play::SelectionPlayback::Play,
+                )
+                .expect("select the item");
         })
         .await;
 

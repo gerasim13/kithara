@@ -1,7 +1,10 @@
 use kithara_bufpool::PoolError;
 use kithara_platform::time::Duration;
 
-use crate::{api::SlotId, session::SessionError};
+use crate::{
+    api::{SlotId, TrackId},
+    session::SessionError,
+};
 
 #[derive(Clone, Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -18,14 +21,11 @@ pub enum PlayError {
     #[error("slot command channel full: {slot:?}")]
     SlotChannelFull { slot: SlotId },
 
-    #[error("item {index} has no resource (already consumed)")]
-    ItemConsumed { index: usize },
+    #[error("item {item:?} is not on the deck and came without a resource")]
+    ItemConsumed { item: TrackId },
 
-    #[error("item index out of range: {index} (len {len})")]
-    IndexOutOfRange { index: usize, len: usize },
-
-    #[error("commit index mismatch: requested {requested}, armed {armed}")]
-    ArmIndexMismatch { requested: usize, armed: usize },
+    #[error("commit mismatch: requested {requested:?}, armed {armed:?}")]
+    ArmedItemMismatch { requested: TrackId, armed: TrackId },
 
     #[error("eq band out of range: {band} (bands: {bands})")]
     EqBandOutOfRange { band: usize, bands: usize },

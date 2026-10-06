@@ -107,12 +107,8 @@ async fn queue_playback_architecture(#[future(awt)] served_mp3: (TestServerHelpe
         TraceRecord::new(5, TraceRecordKind::Receive, "Queue::select")
             .with_correlation(format!("loaded-{resource_id}"))
             .with_resource("Track", &resource_id),
-        TraceRecord::new(
-            6,
-            TraceRecordKind::ResourceTransfer,
-            "PlayerImpl::replace_item",
-        )
-        .with_resource("Decoder", &resource_id),
+        TraceRecord::new(6, TraceRecordKind::ResourceTransfer, "PlayerImpl::select")
+            .with_resource("Decoder", &resource_id),
         TraceRecord::new(7, TraceRecordKind::SpanEnter, "PlayerImpl::play")
             .with_span("playback")
             .with_resource("Track", &resource_id),

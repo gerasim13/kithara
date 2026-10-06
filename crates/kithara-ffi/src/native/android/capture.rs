@@ -132,9 +132,8 @@ fn render(
         })?;
         Ok::<_, CaptureError>(resource)
     })?;
-    control.insert(resource, TrackId::allocate(), None);
     control
-        .select_item(0, SelectionPlayback::Play)
+        .select(TrackId::allocate(), Some(resource), SelectionPlayback::Play)
         .map_err(|err| CaptureError::step("player-select", err))?;
 
     let mut file = File::create(output)

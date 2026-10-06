@@ -41,10 +41,13 @@ pub(super) async fn play_resource(
 ) -> OfflinePlayer {
     harness
         .with_player(move |player| {
-            player.insert(make(), TrackId::allocate(), None);
             player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .expect("select first queue item");
+                .select(
+                    TrackId::allocate(),
+                    Some(make()),
+                    kithara::play::SelectionPlayback::Play,
+                )
+                .expect("select the item");
         })
         .await;
     harness.render(BLOCK_FRAMES).await;
@@ -126,10 +129,13 @@ async fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for(constant_hal
 
     harness
         .with_player(move |player| {
-            player.insert(make_resource(constant_half), TrackId::allocate(), None);
             player
-                .select_item(0, kithara::play::SelectionPlayback::Play)
-                .expect("select first queue item");
+                .select(
+                    TrackId::allocate(),
+                    Some(make_resource(constant_half)),
+                    kithara::play::SelectionPlayback::Play,
+                )
+                .expect("select the item");
         })
         .await;
 

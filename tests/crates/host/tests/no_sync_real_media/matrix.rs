@@ -311,12 +311,15 @@ async fn run_case(
     let mut failures = Vec::new();
 
     let mut decks = Vec::with_capacity(case.media.len());
+    let mut items = Vec::with_capacity(case.media.len());
     for (deck_index, media) in case.media.iter().copied().enumerate() {
-        decks
-            .push(prepare_deck(case, deck_index, media, hls, media_dir, &pool_region, &host).await);
+        let (deck, item) =
+            prepare_deck(case, deck_index, media, hls, media_dir, &pool_region, &host).await;
+        decks.push(deck);
+        items.push(item);
     }
 
-    load_decks(case, &host, &decks).await;
+    load_decks(case, &host, &decks, items).await;
     runtime::record_transport_state(&host, None, "before first render", &mut failures).await;
     runtime::drain_all_events(
         &mut decks,
@@ -957,12 +960,19 @@ fn assess_position_advance(
     }
 }
 
-async fn load_decks(case: &Case, host: &OfflineHostHarness<TestPools>, decks: &[Deck]) {
-    for (deck_index, deck) in decks.iter().enumerate() {
+/// Hand each deck the item it plays, paused.
+async fn load_decks(
+    case: &Case,
+    host: &OfflineHostHarness<TestPools>,
+    decks: &[Deck],
+    items: Vec<Resource>,
+) {
+    for (deck_index, (deck, item)) in decks.iter().zip(items).enumerate() {
         let player = deck.player.control().clone();
         host.run(move || {
-            player.select_item_with_crossfade(
-                0,
+            player.select_with_crossfade(
+                TrackId::allocate(),
+                Some(item),
                 SelectTransition {
                     playback: SelectionPlayback::Pause,
                     crossfade: CrossfadeSettings {
@@ -1000,7 +1010,7 @@ async fn prepare_deck(
     media_dir: &TestTempDir,
     pool_region: &PoolRegion<TestPools>,
     host: &OfflineHostHarness<TestPools>,
-) -> Deck {
+) -> (Deck, Resource) {
     let bus = EventBus::new(16_384);
     let player = PlayerImpl::new(
         PlayerConfig::builder()
@@ -1066,7 +1076,6 @@ async fn prepare_deck(
         .build();
     let reference = open_resource(case, deck_index, "reference", reference_config).await;
     let reference_events = reference.subscribe();
-    player.insert(resource, TrackId::allocate(), None);
     let player = host.insert(player).await.unwrap_or_else(|error| {
         panic!(
             "{} deck {deck_index}: insert player into product Host: {error}",
@@ -1076,7 +1085,7 @@ async fn prepare_deck(
 
     let deck_offset: f64 = deck_index.as_();
     let capture_target_secs = deck_offset.mul_add(CAPTURE_START_STEP_SECS, CAPTURE_START_SECS);
-    Deck {
+    let deck = Deck {
         player,
         reference,
         reference_events,
@@ -1092,7 +1101,8 @@ async fn prepare_deck(
             capture_target_secs,
             ..DeckObservation::default()
         },
-    }
+    };
+    (deck, resource)
 }
 
 #[kithara::flash(io)]

@@ -132,7 +132,7 @@ where
 
     /// Load a [`Resource`] from a prepared config, attaching the observer
     /// left for this track when there is one. Caller is responsible
-    /// for applying it via `PlayerImpl::replace_item` and emitting [`TrackStatus::Loaded`].
+    /// for admitting it into the track list and emitting [`TrackStatus::Loaded`].
     ///
     /// A load that failed on something the network can answer later is not a
     /// verdict on the track: while the selection wants it the ask repeats, so a

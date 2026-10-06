@@ -621,6 +621,74 @@ async fn reselecting_the_playing_track_keeps_its_successor_armed() {
     harness.close().await;
 }
 
+/// A track inserted after the playing one while a successor is armed is the
+/// one that follows it; the successor it displaced plays after it.
+#[kithara::test(tokio)]
+async fn a_track_inserted_after_the_playing_one_follows_it_before_the_armed_successor() {
+    use kithara::{platform::tokio::sync::broadcast::error::TryRecvError, queue::QueueEvent};
+
+    /// `constant_wav_*_1_5s`: 1.5 s at 44.1 kHz.
+    const TRACK_FRAMES: usize = 66_150;
+    /// Between A's level (≈0.1) and C's (≈0.4).
+    const AFTER_A: f32 = 0.25;
+    /// Between C's level (≈0.4) and B's (≈0.8).
+    const AFTER_C: f32 = 0.6;
+    const TRACK_C_LEVEL: f32 = 0.4;
+
+    let (harness, queue, id_a, id_b) = gapless_queue_with_an_armed_successor().await;
+    let c = assets::constant_wav_four_1_5s();
+    let mut events = queue.subscribe();
+    let id_c = harness
+        .run(&queue, move |q| q.insert(asset_source(&c), Some(id_a)))
+        .await
+        .expect("insert track C after A");
+    wait_for_loader_done_event(&mut events, &queue, id_c, LOCAL_LOAD_DEADLINE)
+        .await
+        .expect("track C loads");
+
+    // Taking B off the deck spent its resource, so B reloads once C nears its
+    // end. Offline rendering outruns a load, so the render holds for it the
+    // way real time would.
+    let mut pcm = Vec::new();
+    let mut reloading = false;
+    for _ in 0..2 * TRACK_FRAMES / BLOCK_FRAMES {
+        pcm.extend(render_loop(&queue, &harness, 1).await);
+        loop {
+            match events.try_recv().map(|envelope| envelope.event) {
+                Ok(TestEvent::Queue(QueueEvent::TrackStatusChanged {
+                    id,
+                    status: TrackStatus::Pending,
+                })) if id == id_b => reloading = true,
+                Ok(_) | Err(TryRecvError::Lagged(_)) => {}
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            }
+        }
+        if reloading {
+            break;
+        }
+    }
+    assert!(reloading, "the displaced B reloads behind C");
+    wait_for_loader_done_event(&mut events, &queue, id_b, LOCAL_LOAD_DEADLINE)
+        .await
+        .expect("track B reloads");
+    pcm.extend(render_loop(&queue, &harness, 2 * TRACK_FRAMES / BLOCK_FRAMES).await);
+    let after_a = first_onset_frame(&pcm, AFTER_A).expect("a louder track follows A");
+    let follower = mean_abs_window(&pcm, after_a + TRACK_FRAMES / 4, TRACK_FRAMES / 4)
+        .expect("the follower's window fits");
+    assert!(
+        (follower - TRACK_C_LEVEL).abs() < 0.05,
+        "C must follow A: level {follower}"
+    );
+    let b_after_a = first_onset_frame(&pcm[after_a * usize::from(CHANNELS)..], AFTER_C)
+        .expect("B plays after C");
+    assert!(
+        b_after_a >= TRACK_FRAMES * 9 / 10,
+        "the displaced B must not sound before C has played its length: B at {b_after_a} frames after A"
+    );
+    drop(queue);
+    harness.close().await;
+}
+
 /// cf>0: queue.tick sees the crossfade window open and commits the
 /// successor, the two tracks overlap in the crossfade window and PCM mid-track-B
 /// must show track B's value.

@@ -43,7 +43,7 @@ where
     /// `spawn_apply_after_load` completion and a later `select` that supersedes it both
     /// mutate the same selection state (pending, current, navigation cursor,
     /// `TrackStatus::Cancelled`); without a single serialization point the completion
-    /// can observe-not-cancelled then `select_item` *after* the superseding select
+    /// can observe-not-cancelled then select its track *after* the superseding select
     /// committed, so the superseded track barges in. Held only across the synchronous
     /// apply critical section - never across an `.await`. That section waits on the
     /// player's session, so a contender parks on the gate instead of blocking a lock.
