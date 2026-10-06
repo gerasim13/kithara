@@ -13,8 +13,9 @@ use crate::{PlayError, SessionBinding};
 /// commands the player's handles post when the player wakes it, and ticks it
 /// at the executor's pace. Item, EQ, volume, and event APIs stay on the
 /// concrete handle; the session binds through
-/// [`PlayerControlSource::attach_session`].
-pub trait Player: MaybeSend + MaybeSync + 'static {
+/// [`PlayerControlSource::attach_session`]. Only its holder reaches it, so a
+/// player need not be shared between threads.
+pub trait Player: MaybeSend + 'static {
     /// Stop owned work and detach the player from its playback session.
     fn close(&mut self) -> Result<(), PlayError>;
 

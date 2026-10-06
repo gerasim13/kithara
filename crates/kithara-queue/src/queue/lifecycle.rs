@@ -1,7 +1,6 @@
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
 use kithara_play::SelectionPlayback;
-use smallvec::SmallVec;
 
 use super::{
     Queue,
@@ -51,28 +50,21 @@ where
     }
 
     fn clear_inner(&mut self) {
-        let ids: Vec<TrackId> = {
-            let mut guard = self.lock_tracks_mut();
-            let ids = guard.iter().map(|r| r.id).collect();
-            guard.clear();
-            drop(guard);
+        let ids = self.track_ids();
+        self.tracks.records_mut().clear();
 
-            self.pending_select = SelectPhase::Idle;
-            let mut navigation = self.lock_navigation_mut();
-            let repeat = navigation.repeat_mode();
-            let order = navigation.playback_order();
-            *navigation = NavigationState::new(navigation.history_limit());
-            navigation.set_repeat(repeat);
-            navigation.set_playback_order(order, &[]);
-            drop(navigation);
-            self.write_cached_position(CachedPosition::Unknown);
-            self.autoplay_target = None;
-            self.player.remove_all_items();
-            ids
-        };
+        self.pending_select = SelectPhase::Idle;
+        let repeat = self.navigation.repeat_mode();
+        let order = self.navigation.playback_order();
+        self.navigation = NavigationState::new(self.navigation.history_limit());
+        self.navigation.set_repeat(repeat);
+        self.navigation.set_playback_order(order, &[]);
+        self.position = CachedPosition::Unknown;
+        self.autoplay_target = None;
+        self.player.remove_all_items();
         self.player_rx = self.bus.subscribe();
         for id in ids {
-            self.bus.publish(QueueEvent::TrackRemoved { id });
+            self.announce(QueueEvent::TrackRemoved { id });
         }
     }
 
@@ -114,29 +106,21 @@ where
             });
         }
 
-        let index = {
-            let mut guard = self.lock_tracks_mut();
-            match placement {
-                Placement::Append => {
-                    guard.push(record);
-                    guard.len() - 1
-                }
-                Placement::At(pos) => {
-                    guard.insert(pos, record);
-                    pos
-                }
+        let records = self.tracks.records_mut();
+        let index = match placement {
+            Placement::Append => {
+                records.push(record);
+                records.len() - 1
+            }
+            Placement::At(pos) => {
+                records.insert(pos, record);
+                pos
             }
         };
-        self.bus.publish(QueueEvent::TrackAdded { id, index });
-        let ids = self
-            .tracks()
-            .into_iter()
-            .map(|track| track.id)
-            .collect::<SmallVec<[_; 16]>>();
-        let mut navigation = self.lock_navigation_mut();
-        navigation.reconcile(&ids);
-        navigation.insert(id);
-        drop(navigation);
+        self.announce(QueueEvent::TrackAdded { id, index });
+        let ids = self.track_ids();
+        self.navigation.reconcile(&ids);
+        self.navigation.insert(id);
         self.reconcile_successor();
         self.spawn_apply_after_load(id, source, LoadClass::Prefetch);
         id
@@ -163,16 +147,15 @@ where
         source: TrackSource<S>,
         after: Option<TrackId>,
     ) -> Result<TrackId, QueueError> {
-        let pos = {
-            let guard = self.lock_tracks();
-            match after {
-                None => 0,
-                Some(after_id) => guard
-                    .iter()
-                    .position(|e| e.id == after_id)
-                    .map(|i| i + 1)
-                    .ok_or(QueueError::UnknownTrackId(after_id))?,
-            }
+        let pos = match after {
+            None => 0,
+            Some(after_id) => self
+                .tracks
+                .records()
+                .iter()
+                .position(|e| e.id == after_id)
+                .map(|i| i + 1)
+                .ok_or(QueueError::UnknownTrackId(after_id))?,
         };
         Ok(self.insert_entry(id, source, Placement::At(pos)))
     }
@@ -188,48 +171,34 @@ where
         } else {
             SelectionPlayback::Pause
         };
-        let successor_id = if was_current {
-            let guard = self.lock_tracks();
-            let pos = guard.iter().position(|e| e.id == id);
-            let result = pos.and_then(|p| {
-                let next = guard.get(p + 1);
-                let prev = if p > 0 { guard.get(p - 1) } else { None };
+        let records = self.tracks.records();
+        let pos = records
+            .iter()
+            .position(|e| e.id == id)
+            .ok_or(QueueError::UnknownTrackId(id))?;
+        let successor_id = was_current
+            .then(|| {
+                let next = records.get(pos + 1);
+                let prev = pos.checked_sub(1).and_then(|p| records.get(p));
                 next.or(prev).map(|e| e.id)
-            });
-            drop(guard);
-            result
-        } else {
-            None
-        };
-
-        let removed = {
-            let mut guard = self.lock_tracks_mut();
-            let pos = guard
-                .iter()
-                .position(|e| e.id == id)
-                .ok_or(QueueError::UnknownTrackId(id))?;
-            guard.remove(pos)
-        };
-        drop(removed);
+            })
+            .flatten();
+        drop(self.tracks.records_mut().remove(pos));
         if self.player.armed_next() == Some(id) {
             self.player.unarm_next();
         }
-        self.bus.publish(QueueEvent::TrackRemoved { id });
+        self.announce(QueueEvent::TrackRemoved { id });
 
-        let entries = self.tracks();
-        let ids = entries
-            .iter()
-            .map(|entry| entry.id)
-            .collect::<SmallVec<[_; 16]>>();
-        let order = self.lock_navigation().playback_order();
-        self.lock_navigation_mut().reconcile(&ids);
+        let ids = self.track_ids();
+        let order = self.navigation.playback_order();
+        self.navigation.reconcile(&ids);
 
         if was_current {
             let replacement = match order {
                 PlaybackOrder::Sequential => {
                     successor_id.filter(|candidate| ids.contains(candidate))
                 }
-                PlaybackOrder::Shuffle => self.lock_navigation_mut().next(&ids, false, false),
+                PlaybackOrder::Shuffle => self.navigation.next(&ids, false, false),
             };
             if let Some(next) = replacement {
                 self.select_with(
@@ -344,7 +313,7 @@ mod tests {
         let old = queue
             .append("https://example.com/old.mp3")
             .expect("open queue accepts a track");
-        queue.lock_navigation_mut().select(old, &[old]);
+        queue.navigation.select(old, &[old]);
         queue.player.bus().publish(PlayerEvent::ItemDidPlayToEnd {
             item: ItemRole::Leading(TrackRef::new(
                 old,
@@ -357,9 +326,7 @@ mod tests {
         let replacement = queue
             .append("https://example.com/replacement.mp3")
             .expect("open queue accepts a replacement track");
-        queue
-            .lock_navigation_mut()
-            .select(replacement, &[replacement]);
+        queue.navigation.select(replacement, &[replacement]);
         queue.player.set_rate(1.0);
 
         queue

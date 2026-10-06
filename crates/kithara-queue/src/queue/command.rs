@@ -110,11 +110,13 @@ impl<S> Queue<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// Runs every command posted since the last drain.
+    /// Runs every command posted since the last drain, then publishes what
+    /// the reports among them changed.
     pub(super) fn drain_commands(&mut self) {
         for command in self.mailbox.drain() {
             self.run(command);
         }
+        self.publish();
     }
 
     fn run(&mut self, command: QueueCommand<S>) {

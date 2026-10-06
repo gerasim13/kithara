@@ -5,53 +5,35 @@ use kithara_bufpool::HasPool;
 use kithara_command::{Mailbox, Postbox, mailbox};
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::{
-    CancelScope, CancelToken,
-    sync::{Arc, Mutex, MutexGuard},
-    tokio::runtime::Handle as RuntimeHandle,
+    CancelScope, CancelToken, sync::Arc, tokio::runtime::Handle as RuntimeHandle,
 };
 use kithara_play::{
     PlayError, PlayerImpl,
     player::{PlayerControl, PlayerControlSource},
 };
+use smallvec::SmallVec;
 
 use super::{
     command::QueueCommand,
     engine_events::PlayerBusEvent,
-    types::{AtomicCachedPosition, CachedPosition, SelectPhase},
+    types::{CachedPosition, SelectPhase},
+    view::QueueView,
 };
 use crate::{
-    config::QueueConfig,
-    loader::Loader,
-    navigation::NavigationState,
-    track::{TrackRecord, Tracks},
+    config::QueueConfig, event::QueueEvent, loader::Loader, navigation::NavigationState,
+    track::Tracks,
 };
 
-/// What a queue and every [`QueueControl`] of it read: the tracks, the
-/// navigation, the retained config, the cached position and the player's
-/// published state. Only the queue writes them, on the executor that holds
-/// it.
+/// What a queue and every [`QueueControl`] of it read: the retained config,
+/// the player's published state, and the view the queue publishes of its own.
+/// Only the queue writes them, on the executor that holds it.
 #[doc(hidden)]
 pub struct QueueRuntime<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     pub(super) player: PlayerControl<S>,
-    pub(super) loader: Arc<Loader<S>>,
-    pub(super) navigation: Arc<Mutex<NavigationState>>,
-    /// Sole owner of the `Vec<TrackRecord>` (status, source, and live
-    /// load attempt per track). Shared with [`Loader`] through
-    /// `Arc<Tracks>`, whose attempts report to the queue instead of writing
-    /// it; every status transition goes through
-    /// [`Tracks::set_status`](crate::track::Tracks::set_status) so polling
-    /// and the event stream stay in sync.
-    pub(super) tracks: Arc<Tracks<S>>,
-    /// Authoritative playback position updated on every `tick`. Filters
-    /// transient 0.0 blips the engine reports on pause/resume —
-    /// downstream UIs should read from this field rather than polling
-    /// the engine directly. Read/written lock-free as a typed
-    /// [`CachedPosition`] — [`CachedPosition::Unknown`] before the first
-    /// stable sample.
-    pub(super) cached_position: AtomicCachedPosition,
+    pub(super) view: QueueView<S>,
     /// Master cancel token for queue-owned loader work.
     pub(super) shutdown: CancelToken,
     pub(super) bus: EventBus,
@@ -77,7 +59,7 @@ where
 ///
 /// Owns the resident player and the queue's state, and runs the commands its
 /// [`QueueControl`]s post where an executor holds it. Publishes
-/// [`QueueEvent`](crate::event::QueueEvent) on the shared [`EventBus`]
+/// [`QueueEvent`] on the shared [`EventBus`]
 /// alongside player / audio / hls / file events so `subscribe` returns a
 /// single unified stream.
 pub struct Queue<S>
@@ -86,6 +68,20 @@ where
 {
     pub(super) resident: PlayerImpl<S>,
     pub(super) runtime: Arc<QueueRuntime<S>>,
+    pub(super) loader: Arc<Loader<S>>,
+    pub(super) navigation: NavigationState,
+    /// The track list: status, source, and live load attempt per track.
+    /// Every status transition goes through
+    /// [`Tracks::set_status`](crate::track::Tracks::set_status) so the view
+    /// and the event stream stay in sync.
+    pub(super) tracks: Tracks<S>,
+    /// Playback position updated on every `tick`. Filters transient 0.0
+    /// blips the engine reports on pause/resume, so readers see stable
+    /// values; [`CachedPosition::Unknown`] before the first stable sample.
+    pub(super) position: CachedPosition,
+    /// The queue's own changes since it last published, in order, behind
+    /// the tracks' changes recorded before them.
+    pub(super) events: Vec<QueueEvent>,
     pub(super) postbox: Postbox<QueueCommand<S>>,
     pub(super) mailbox: Mailbox<QueueCommand<S>>,
     pub(super) pending_select: SelectPhase,
@@ -151,34 +147,36 @@ where
         player.set_crossfade_duration(crossfade_settings.duration);
         let bus = player.bus().clone();
         let player_control = player.control();
-        let tracks = Arc::new(Tracks::new(bus.clone()));
+        let tracks = Tracks::default();
+        let mut navigation = NavigationState::new(max_history_size);
+        navigation.set_playback_order(playback_order, &[]);
+        let view = QueueView::new(&tracks, &navigation);
         let (postbox, mailbox) = mailbox();
         let loader = Arc::new(Loader::new(
             player_control.clone(),
             runtime.or_else(|| RuntimeHandle::try_current().ok()),
             store,
             max_concurrent_loads,
-            Arc::clone(&tracks),
+            view.clone(),
             postbox.clone(),
             cancel.child(),
         ));
         let player_rx = player.subscribe();
-        let mut navigation = NavigationState::new(max_history_size);
-        navigation.set_playback_order(playback_order, &[]);
-        let navigation = Arc::new(Mutex::new(navigation));
-        config.navigation = Some(Arc::clone(&navigation));
+        config.view = Some(view.clone());
         Self {
             resident: player,
             runtime: Arc::new(QueueRuntime {
                 player: player_control,
-                loader,
-                tracks,
+                view,
                 bus,
                 config: Arc::new(config),
                 shutdown: cancel,
-                navigation,
-                cached_position: AtomicCachedPosition::unknown(),
             }),
+            loader,
+            navigation,
+            tracks,
+            position: CachedPosition::Unknown,
+            events: Vec::new(),
             postbox,
             mailbox,
             pending_select: SelectPhase::Idle,
@@ -190,6 +188,7 @@ where
     pub(in crate::queue) fn command(&mut self, operation: impl FnOnce(&mut Self)) {
         if !self.is_closed() {
             operation(self);
+            self.publish();
         }
     }
 
@@ -198,7 +197,9 @@ where
         operation: impl FnOnce(&mut Self) -> T,
     ) -> Result<T, PlayError> {
         self.ensure_open()?;
-        Ok(operation(self))
+        let value = operation(self);
+        self.publish();
+        Ok(value)
     }
 
     pub(in crate::queue) fn with_open_result<T, E>(
@@ -209,7 +210,38 @@ where
         E: From<PlayError>,
     {
         self.ensure_open().map_err(E::from)?;
-        operation(self)
+        let result = operation(self);
+        self.publish();
+        result
+    }
+
+    /// Record a change of the queue's own for the next publish to announce,
+    /// after the tracks' changes recorded before it.
+    pub(in crate::queue) fn announce(&mut self, event: QueueEvent) {
+        self.events.extend(self.tracks.drain_events());
+        self.events.push(event);
+    }
+
+    /// Publish what the queue holds now for its handles to read, then
+    /// announce the changes that led to it: a subscriber that hears a change
+    /// reads it.
+    pub(in crate::queue) fn publish(&mut self) {
+        self.events.extend(self.tracks.drain_events());
+        self.runtime
+            .view
+            .publish(&self.tracks, &self.navigation, self.position);
+        for event in self.events.drain(..) {
+            self.runtime.bus.publish(event);
+        }
+    }
+
+    /// Ids of the queued tracks, in queue order.
+    pub(in crate::queue) fn track_ids(&self) -> SmallVec<[TrackId; 16]> {
+        self.tracks
+            .records()
+            .iter()
+            .map(|record| record.id)
+            .collect()
     }
 }
 
@@ -228,28 +260,6 @@ where
     #[must_use]
     pub fn is_closed(&self) -> bool {
         self.shutdown.is_cancelled() || self.player.is_closed()
-    }
-
-    delegate::delegate! {
-        to self.tracks {
-            #[call(lock)]
-            pub(super) fn lock_tracks(&self) -> MutexGuard<'_, Vec<TrackRecord<S>>>;
-            #[call(lock)]
-            pub(super) fn lock_tracks_mut(&self) -> MutexGuard<'_, Vec<TrackRecord<S>>>;
-            pub(super) fn set_status(&self, id: TrackId, status: crate::event::TrackStatus);
-        }
-        to self.cached_position {
-            #[call(load)]
-            pub(super) fn read_cached_position(&self) -> CachedPosition;
-            #[call(store)]
-            pub(super) fn write_cached_position(&self, pos: CachedPosition);
-        }
-        to self.navigation {
-            #[call(lock)]
-            pub(super) fn lock_navigation(&self) -> MutexGuard<'_, NavigationState>;
-            #[call(lock)]
-            pub(super) fn lock_navigation_mut(&self) -> MutexGuard<'_, NavigationState>;
-        }
     }
 }
 
@@ -286,8 +296,8 @@ pub(crate) mod tests {
     use super::*;
     use crate::{
         consts,
-        event::{QueueEvent, TrackStatus},
-        navigation::{ActionAtItemEnd, PlaybackOrder},
+        event::{QueueEvent, QueueRepeatMode, TrackStatus},
+        navigation::{ActionAtItemEnd, PlaybackOrder, RepeatMode},
         test_pools::{TestPools, pools},
     };
 
@@ -486,20 +496,55 @@ pub(crate) mod tests {
         assert_eq!(queue.player.crossfade_duration(), crossfade.duration);
     }
 
+    /// A queue event is heard only with the view that shows it, in the order
+    /// the queue made its changes: a handle that hears a track change reads
+    /// that change.
     #[kithara::test]
-    fn cached_position_unknown_after_construction() {
-        let queue = make_queue();
-        assert_eq!(Option::<f64>::from(queue.read_cached_position()), None);
+    fn a_queue_event_is_heard_with_the_view_that_shows_it() {
+        let mut queue = make_queue();
+        let control = queue.control();
+        let id = queue
+            .append("https://example.com/a.mp3")
+            .expect("an open queue appends");
+        let mut events = queue.subscribe::<QueueEvent>();
+
+        queue.tracks.set_status(id, TrackStatus::Consumed);
+        assert!(
+            events.try_recv().is_err(),
+            "a change is not heard before the queue publishes it"
+        );
+        queue.set_repeat(RepeatMode::All);
+
+        let heard: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+            .map(|envelope| envelope.event)
+            .collect();
+        assert!(
+            matches!(
+                heard.as_slice(),
+                [
+                    QueueEvent::TrackStatusChanged {
+                        id: changed,
+                        status: TrackStatus::Consumed,
+                    },
+                    QueueEvent::RepeatModeChanged {
+                        mode: QueueRepeatMode::All,
+                    },
+                ] if *changed == id
+            ),
+            "the publish announces both changes in order: {heard:?}"
+        );
+        assert_eq!(
+            control.track(id).map(|track| track.status),
+            Some(TrackStatus::Consumed)
+        );
+        assert_eq!(control.repeat_mode(), RepeatMode::All);
     }
 
     #[kithara::test]
-    fn cached_position_round_trips_through_queue() {
+    fn cached_position_unknown_after_construction() {
         let queue = make_queue();
-        queue.write_cached_position(CachedPosition::known(12.5));
-        assert_eq!(
-            Option::<f64>::from(queue.read_cached_position()),
-            Some(12.5)
-        );
+        assert_eq!(queue.position_seconds(), None);
+        assert_eq!(queue.control().position_seconds(), None);
     }
 
     #[kithara::test]

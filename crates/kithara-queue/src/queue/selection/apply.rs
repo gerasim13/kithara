@@ -29,10 +29,11 @@ where
             return;
         }
 
-        let index = {
-            let guard = self.tracks.lock();
-            guard.iter().position(|entry| entry.id == id)
-        };
+        let index = self
+            .tracks
+            .records()
+            .iter()
+            .position(|entry| entry.id == id);
         let Some(index) = index else {
             debug!(
                 id = id.as_u64(),
@@ -44,11 +45,11 @@ where
         self.tracks.admit(id, resource);
         if self
             .tracks
-            .lock()
+            .records()
             .get(index)
             .is_some_and(|entry| entry.id == id)
         {
-            self.bus.publish(QueueEvent::NextTrackReady { id, index });
+            self.announce(QueueEvent::NextTrackReady { id, index });
         }
 
         self.apply_pending_selection(id);

@@ -70,7 +70,7 @@ where
     fn deck_led_on_from(&self, track: TrackId) -> bool {
         let deck_item = self.player.current_item();
         let led_on = deck_item.is_some_and(|item| {
-            item != track && self.lock_tracks().iter().any(|entry| entry.id == item)
+            item != track && self.tracks.records().iter().any(|entry| entry.id == item)
         });
         if led_on {
             debug!(%track, ?deck_item, "the deck led on to its successor: the end moves nothing");
@@ -89,7 +89,7 @@ where
         let id = self
             .player
             .current_item()
-            .filter(|id| self.lock_tracks().iter().any(|entry| entry.id == *id));
+            .filter(|id| self.tracks.records().iter().any(|entry| entry.id == *id));
         if let Some(id) = id
             && let Some(left) = self.current()
             && left.id != id
@@ -100,14 +100,14 @@ where
                 AdvanceReason::NaturalEof
             };
             self.commit_navigation_to(id);
-            self.bus.publish(QueueEvent::CurrentTrackAdvance {
+            self.announce(QueueEvent::CurrentTrackAdvance {
                 reason,
                 id: Some(id),
             });
-            self.set_status(id, TrackStatus::Consumed);
+            self.tracks.set_status(id, TrackStatus::Consumed);
         }
-        self.write_cached_position(CachedPosition::Unknown);
-        self.bus.publish(QueueEvent::CurrentTrackChanged { id });
+        self.position = CachedPosition::Unknown;
+        self.announce(QueueEvent::CurrentTrackChanged { id });
     }
 
     /// Gated on `item` for the same reason as
@@ -126,9 +126,10 @@ where
             return;
         }
         let reason = format!("mid-stream engine failure: {fault}");
-        self.set_status(track.id, TrackStatus::Failed(reason.clone()));
+        self.tracks
+            .set_status(track.id, TrackStatus::Failed(reason.clone()));
         let action = self.action_at_item_end();
-        self.bus.publish(QueueEvent::TrackLoadFailed {
+        self.announce(QueueEvent::TrackLoadFailed {
             reason,
             id: track.id,
             auto_skipped: action == ActionAtItemEnd::Advance,
@@ -226,7 +227,7 @@ mod tests {
             .append("https://example.com/repeated.mp3")
             .expect("open queue accepts second repeated source");
         let ids = [first, second];
-        queue.lock_navigation_mut().select(second, &ids);
+        queue.navigation.select(second, &ids);
         queue.player.set_rate(1.0);
         (first, second)
     }
@@ -321,12 +322,12 @@ mod tests {
             let mut queue = make_queue();
             let first = TrackId::allocate();
             let second = TrackId::allocate();
-            queue.tracks.lock().extend([
+            queue.tracks.records_mut().extend([
                 TrackRecord::new(first, "first".into(), TrackSource::from("first")),
                 TrackRecord::new(second, "second".into(), TrackSource::from("second")),
             ]);
             queue.pending_select = SelectPhase::Idle;
-            queue.lock_navigation_mut().select(first, &[first, second]);
+            queue.navigation.select(first, &[first, second]);
             queue.player.play();
             queue.set_action_at_item_end(action);
             let mut events = queue.subscribe();
@@ -360,12 +361,12 @@ mod tests {
         let mut queue = make_queue();
         let first = TrackId::allocate();
         let second = TrackId::allocate();
-        queue.tracks.lock().extend([
+        queue.tracks.records_mut().extend([
             TrackRecord::new(first, "first".into(), TrackSource::from("first")),
             TrackRecord::new(second, "second".into(), TrackSource::from("second")),
         ]);
         queue.pending_select = SelectPhase::Idle;
-        queue.lock_navigation_mut().select(first, &[first, second]);
+        queue.navigation.select(first, &[first, second]);
         queue.player.play();
         queue.set_action_at_item_end(ActionAtItemEnd::Pause);
 
@@ -397,7 +398,9 @@ mod tests {
         queue
             .select(failed, Transition::None)
             .expect("the first track is selected");
-        queue.set_status(failed, TrackStatus::Failed("decode".into()));
+        queue
+            .tracks
+            .set_status(failed, TrackStatus::Failed("decode".into()));
         let resource = queue.tracks.take_resource(successor);
         queue
             .player
@@ -406,6 +409,7 @@ mod tests {
 
         let mut events = queue.subscribe();
         queue.handle_current_item_changed();
+        queue.publish();
 
         let advanced = wait_for_queue_event(
             &mut events,
@@ -436,7 +440,7 @@ mod tests {
         queue
             .select(last, Transition::None)
             .expect("the last track is selected");
-        queue.lock_navigation_mut().finish();
+        queue.navigation.finish();
 
         let mut events = queue.subscribe();
         queue.handle_current_item_changed();

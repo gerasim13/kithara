@@ -1,14 +1,10 @@
-use kithara_audio::{AudioObserver, AudioObserverRelay, AudioObserverSlot};
+use std::vec;
+
+use kithara_audio::{AudioObserver, AudioObserverSlot};
 use kithara_bufpool::HasPool;
 use kithara_decode::TrackMetadata;
-use kithara_events::{EventBus, TrackId};
-use kithara_platform::{
-    CancelToken,
-    sync::{
-        Arc, Mutex, MutexGuard,
-        atomic::{AtomicU64, Ordering},
-    },
-};
+use kithara_events::TrackId;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_play::{Resource, ResourceConfig, ResourceSrc};
 use tracing::debug;
 
@@ -162,67 +158,80 @@ where
     }
 }
 
+/// One track as the queue's handles read it: what [`TrackEntry`] shows, the
+/// source to rebuild it from, the slot that reaches its decoder, and whether
+/// the user's selection wants its live load attempt.
+pub(crate) struct TrackRow<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    pub(crate) entry: TrackEntry,
+    pub(crate) source: TrackSource<S>,
+    pub(crate) observer: AudioObserverSlot,
+    pub(crate) selected: bool,
+}
+
 /// Authoritative store for the queue's track list.
 ///
-/// Single owner of `Vec<TrackRecord>`. Only the [`Queue`](crate::Queue)
-/// writes it; a load attempt's task reports its transitions to the queue,
-/// which applies them through [`Tracks::apply_report`]. Every status
-/// transition MUST go through [`Tracks::set_status`] (or the attempt ops
-/// below) so the polled view and the reactive
-/// [`QueueEvent::TrackStatusChanged`] stream never drift.
+/// Single owner of `Vec<TrackRecord>`, held by the [`Queue`](crate::Queue)
+/// alone; a load attempt's task reports its transitions to the queue, which
+/// applies them through [`Tracks::apply_report`]. Every status transition
+/// MUST go through [`Tracks::set_status`] (or the attempt ops below), which
+/// records its [`QueueEvent::TrackStatusChanged`] for the queue to announce,
+/// so the published rows and the event stream never drift. Every edit moves
+/// [`Tracks::revision`], which tells the queue the rows it published are out
+/// of date.
+#[derive_where::derive_where(Default)]
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct Tracks<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    next_generation: AtomicU64,
-    bus: EventBus,
-    inner: Mutex<Vec<TrackRecord<S>>>,
+    next_generation: u64,
+    /// Moves with every edit; equal revisions mean equal rows.
+    #[field(get, vis = "pub(crate)", copy)]
+    revision: u64,
+    /// The changes made since the queue last took them, in order.
+    events: Vec<QueueEvent>,
+    /// The records, in queue order.
+    #[field(get, vis = "pub(crate)")]
+    records: Vec<TrackRecord<S>>,
 }
 
 impl<S> Tracks<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    pub(crate) fn new(bus: EventBus) -> Self {
-        Self {
-            bus,
-            inner: Mutex::new(Vec::new()),
-            next_generation: AtomicU64::new(0),
-        }
-    }
-
     /// Hold a finished load for `id` until the deck takes it: fill the
     /// metadata the caller left unset from the decoder's tags and mark the
     /// track `Loaded`. No-op when `id` is not present.
-    pub(crate) fn admit(&self, id: TrackId, resource: Resource) {
-        let mut guard = self.lock();
-        let Some(record) = guard.iter_mut().find(|record| record.id == id) else {
+    pub(crate) fn admit(&mut self, id: TrackId, resource: Resource) {
+        let Some(record) = self.record_mut(id) else {
             return;
         };
         record.metadata.fill_missing_from(resource.metadata());
         record.resource = Some(resource);
-        drop(guard);
         self.set_status(id, TrackStatus::Loaded);
     }
 
-    /// Set the status a live, uncancelled attempt reports and publish it,
+    /// Set the status a live, uncancelled attempt reports and record it,
     /// running `transition` on the attempt first. A report from any other
     /// attempt changes nothing: the track has moved on from it.
-    fn advance(&self, ticket: &Ticket, transition: impl FnOnce(&mut AttemptGuard) -> TrackStatus) {
-        let mut guard = self.lock();
-        let status = guard
-            .iter_mut()
-            .find(|record| record.id == ticket.id)
-            .and_then(|record| {
-                let attempt = record.load.as_mut().filter(|attempt| {
-                    attempt.generation == ticket.generation && !attempt.is_cancelled()
-                })?;
-                record.status = transition(attempt);
-                Some(record.status.clone())
-            });
-        drop(guard);
+    fn advance(
+        &mut self,
+        ticket: &Ticket,
+        transition: impl FnOnce(&mut AttemptGuard) -> TrackStatus,
+    ) {
+        let status = self.record_mut(ticket.id).and_then(|record| {
+            let attempt = record.load.as_mut().filter(|attempt| {
+                attempt.generation == ticket.generation && !attempt.is_cancelled()
+            })?;
+            record.status = transition(attempt);
+            Some(record.status.clone())
+        });
         if let Some(status) = status {
-            self.bus.publish(QueueEvent::TrackStatusChanged {
+            self.events.push(QueueEvent::TrackStatusChanged {
                 id: ticket.id,
                 status,
             });
@@ -231,7 +240,7 @@ where
 
     /// Apply what a load attempt reported. Returns the resource a live
     /// attempt finished with, for the queue to admit.
-    pub(crate) fn apply_report(&self, report: AttemptReport) -> Option<(TrackId, Resource)> {
+    pub(crate) fn apply_report(&mut self, report: AttemptReport) -> Option<(TrackId, Resource)> {
         match report {
             AttemptReport::Started(ticket) => {
                 self.advance(&ticket, |attempt| {
@@ -257,49 +266,28 @@ where
     /// Attach decoded-audio observation to this track's current resource, or
     /// retain it for resource admission when loading has not started yet.
     pub(crate) fn attach_observer(&self, id: TrackId, observer: Box<dyn AudioObserver>) {
-        let slot = self
-            .lock()
-            .iter()
-            .find(|record| record.id == id)
-            .map(|record| record.observer.clone());
-        let Some(slot) = slot else {
-            return;
-        };
-        slot.attach(observer);
-    }
-
-    /// Whether the user's selection wants this track's live attempt.
-    ///
-    /// Read by the attempt itself, so it reflects a selection that arrived
-    /// after the attempt started.
-    pub(crate) fn attempt_selected(&self, id: TrackId) -> bool {
-        let guard = self.lock();
-        let selected = guard
-            .iter()
-            .find(|r| r.id == id)
-            .and_then(|r| r.load.as_ref())
-            .is_some_and(|a| a.selected);
-        drop(guard);
-        selected
+        if let Some(record) = self.find(id) {
+            record.observer.attach(observer);
+        }
     }
 
     /// Register a fresh attempt. Dedupes against a live attempt; replaces
     /// one that is already cancelled but still unwinding.
     pub(crate) fn begin_attempt(
-        &self,
+        &mut self,
         id: TrackId,
         cancel: CancelToken,
         selected: bool,
     ) -> Option<Ticket> {
-        let mut guard = self.lock();
-        let ticket = match guard.iter_mut().find(|r| r.id == id) {
-            Some(record) if record.load.as_ref().is_none_or(AttemptGuard::is_cancelled) => {
-                Some(install(record, &self.next_generation, cancel, selected))
-            }
-            _ => None,
-        };
-        drop(guard);
-        ticket
+        self.revision += 1;
+        let record = self.records.iter_mut().find(|record| {
+            record.id == id && record.load.as_ref().is_none_or(AttemptGuard::is_cancelled)
+        })?;
+        Some(install(record, &mut self.next_generation, cancel, selected))
+    }
+
+    fn find(&self, id: TrackId) -> Option<&TrackRecord<S>> {
+        self.records.iter().find(|record| record.id == id)
     }
 
     /// Attempt finished. While the ticket is its track's live attempt, the
@@ -309,19 +297,15 @@ where
     /// ticket's outcome is dropped: the track moved on, and dropping its guard
     /// cancelled that resource's token.
     fn finish_attempt(
-        &self,
+        &mut self,
         ticket: &Ticket,
         outcome: Result<Box<Resource>, QueueError>,
     ) -> Option<Resource> {
-        let attempt = self
-            .lock()
-            .iter_mut()
-            .find(|record| record.id == ticket.id)
-            .and_then(|record| {
-                record
-                    .load
-                    .take_if(|attempt| attempt.generation == ticket.generation)
-            });
+        let attempt = self.record_mut(ticket.id).and_then(|record| {
+            record
+                .load
+                .take_if(|attempt| attempt.generation == ticket.generation)
+        });
         let Some(mut attempt) = attempt else {
             debug!(
                 id = ticket.id.as_u64(),
@@ -340,41 +324,27 @@ where
         }
     }
 
-    /// Place the cover a load attempt read for `id` and publish
+    /// The slot that reaches `id`'s decoder: what the track's load attempt
+    /// installs its relay from, so an observer attached before or after
+    /// admission lands on the same decoder.
+    pub(crate) fn observer_slot(&self, id: TrackId) -> AudioObserverSlot {
+        self.find(id)
+            .map(|record| record.observer.clone())
+            .unwrap_or_default()
+    }
+
+    /// Place the cover a load attempt read for `id` and record
     /// [`QueueEvent::TrackMetadataChanged`], unless that attempt's token
     /// `attempt` is cancelled: a superseded attempt's cover is dropped.
-    pub(crate) fn place_cover(&self, id: TrackId, attempt: &CancelToken, cover: Arc<Vec<u8>>) {
-        let mut guard = self.lock();
-        let Some(record) = guard
-            .iter_mut()
-            .find(|record| record.id == id)
-            .filter(|_| !attempt.is_cancelled())
-        else {
+    pub(crate) fn place_cover(&mut self, id: TrackId, attempt: &CancelToken, cover: Arc<Vec<u8>>) {
+        if attempt.is_cancelled() {
+            return;
+        }
+        let Some(record) = self.record_mut(id) else {
             return;
         };
         record.metadata.artwork = Some(cover);
-        drop(guard);
-        self.bus.publish(QueueEvent::TrackMetadataChanged { id });
-    }
-
-    /// Lock the underlying `Vec<TrackRecord>` for direct read/write.
-    /// Callers that only need to flip status should prefer
-    /// [`Self::set_status`].
-    pub(crate) fn lock(&self) -> MutexGuard<'_, Vec<TrackRecord<S>>> {
-        self.inner.lock()
-    }
-
-    /// Create the decoder half before resource opening and install its
-    /// control half in canonical per-track state. Any observer attached before
-    /// admission is transferred into the same bounded relay.
-    pub(crate) fn observer_relay(&self, id: TrackId) -> AudioObserverRelay {
-        let slot = self
-            .lock()
-            .iter()
-            .find(|record| record.id == id)
-            .map(|record| record.observer.clone())
-            .unwrap_or_default();
-        slot.relay()
+        self.events.push(QueueEvent::TrackMetadataChanged { id });
     }
 
     /// Move a track's pending load into the interactive lane: replace a
@@ -382,42 +352,63 @@ where
     /// already holding a permit is kept - its download is progressing.
     /// Vacant means the attempt just finished; the completion path owns
     /// what happens next, so no new attempt starts.
-    pub(crate) fn promote_attempt(&self, id: TrackId, cancel: CancelToken) -> Option<Ticket> {
-        let mut guard = self.lock();
-        let ticket = match guard.iter_mut().find(|r| r.id == id) {
-            Some(record)
-                if record
-                    .load
-                    .as_ref()
-                    .is_some_and(|a| a.waiting || a.is_cancelled()) =>
-            {
-                Some(install(record, &self.next_generation, cancel, true))
-            }
-            Some(record) => {
-                if let Some(attempt) = record.load.as_mut() {
-                    attempt.selected = true;
-                }
-                None
-            }
-            None => None,
-        };
-        drop(guard);
-        ticket
+    pub(crate) fn promote_attempt(&mut self, id: TrackId, cancel: CancelToken) -> Option<Ticket> {
+        self.revision += 1;
+        let record = self.records.iter_mut().find(|record| record.id == id)?;
+        if record
+            .load
+            .as_ref()
+            .is_some_and(|attempt| attempt.waiting || attempt.is_cancelled())
+        {
+            return Some(install(record, &mut self.next_generation, cancel, true));
+        }
+        if let Some(attempt) = record.load.as_mut() {
+            attempt.selected = true;
+        }
+        None
     }
 
-    /// Atomically mutate `record.status` and publish
-    /// [`QueueEvent::TrackStatusChanged`]. `Cancelled` and `Loaded` also
-    /// abort the track's live attempt: a cancelled track never keeps
-    /// loading, and a track whose resource is already loaded has nothing
-    /// left to load. Without the latter an attempt that outlives the
-    /// resource it was meant to fetch reports its own outcome afterwards
-    /// and overwrites a track that is already playable. Every status but
-    /// `Loaded` drops the resource the record holds: only a loaded track
-    /// has audio waiting for the deck.
+    fn record_mut(&mut self, id: TrackId) -> Option<&mut TrackRecord<S>> {
+        self.records_mut().iter_mut().find(|record| record.id == id)
+    }
+
+    /// The records for a direct edit. Callers that only need to flip status
+    /// should prefer [`Self::set_status`].
+    pub(crate) fn records_mut(&mut self) -> &mut Vec<TrackRecord<S>> {
+        self.revision += 1;
+        &mut self.records
+    }
+
+    /// Take the changes recorded since the last take, in order, for the
+    /// queue to announce.
+    pub(crate) fn drain_events(&mut self) -> vec::Drain<'_, QueueEvent> {
+        self.events.drain(..)
+    }
+
+    /// The rows the queue publishes for its handles, in queue order.
+    pub(crate) fn rows(&self) -> Arc<[TrackRow<S>]> {
+        self.records
+            .iter()
+            .map(|record| TrackRow {
+                entry: record.entry(),
+                source: record.source.clone(),
+                observer: record.observer.clone(),
+                selected: record.load.as_ref().is_some_and(|attempt| attempt.selected),
+            })
+            .collect()
+    }
+
+    /// Set `record.status` and record [`QueueEvent::TrackStatusChanged`].
+    /// `Cancelled` and `Loaded` also abort the track's live attempt: a
+    /// cancelled track never keeps loading, and a track whose resource is
+    /// already loaded has nothing left to load. Without the latter an
+    /// attempt that outlives the resource it was meant to fetch reports its
+    /// own outcome afterwards and overwrites a track that is already
+    /// playable. Every status but `Loaded` drops the resource the record
+    /// holds: only a loaded track has audio waiting for the deck.
     /// No-op when `id` is not present (caller raced `Queue::remove`).
-    pub(crate) fn set_status(&self, id: TrackId, status: TrackStatus) {
-        let mut guard = self.lock();
-        let Some(record) = guard.iter_mut().find(|r| r.id == id) else {
+    pub(crate) fn set_status(&mut self, id: TrackId, status: TrackStatus) {
+        let Some(record) = self.record_mut(id) else {
             return;
         };
         record.status = status.clone();
@@ -427,41 +418,38 @@ where
         let dropped = (!matches!(status, TrackStatus::Loaded))
             .then(|| record.resource.take())
             .flatten();
-        drop(guard);
         drop(aborted);
         drop(dropped);
-        self.bus
-            .publish(QueueEvent::TrackStatusChanged { id, status });
+        self.events
+            .push(QueueEvent::TrackStatusChanged { id, status });
     }
 
-    /// Hand `id`'s loaded resource to the caller, which gives it to the deck.
-    /// `None` once the deck holds it, or before the track loads.
-    pub(crate) fn take_resource(&self, id: TrackId) -> Option<Resource> {
-        self.lock()
-            .iter_mut()
-            .find(|record| record.id == id)
-            .and_then(|record| record.resource.take())
-    }
-
-    /// Original source for `id`, if still queued.
-    pub(crate) fn source(&self, id: TrackId) -> Option<TrackSource<S>> {
-        self.lock()
-            .iter()
-            .find(|r| r.id == id)
-            .map(|r| r.source.clone())
+    delegate::delegate! {
+        to self {
+            /// Hand `id`'s loaded resource to the caller, which gives it to the deck.
+            /// `None` once the deck holds it, or before the track loads.
+            #[expr($.and_then(|record| record.resource.take()))]
+            #[call(record_mut)]
+            pub(crate) fn take_resource(&mut self, id: TrackId) -> Option<Resource>;
+            /// Original source for `id`, if still queued.
+            #[expr($.map(|record| record.source.clone()))]
+            #[call(find)]
+            pub(crate) fn source(&self, id: TrackId) -> Option<TrackSource<S>>;
+        }
     }
 }
 
 fn install<S>(
     record: &mut TrackRecord<S>,
-    generations: &AtomicU64,
+    generations: &mut u64,
     cancel: CancelToken,
     selected: bool,
 ) -> Ticket
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    let generation = generations.fetch_add(1, Ordering::Relaxed);
+    let generation = *generations;
+    *generations += 1;
     let mut attempt = AttemptGuard::new(generation, cancel);
     attempt.selected = selected;
     record.load = Some(attempt);
@@ -475,7 +463,10 @@ where
 mod tests {
     use kithara_assets::AssetStore;
     use kithara_audio::{AudioObserveError, AudioObserver};
-    use kithara_platform::sync::{Arc, atomic::AtomicUsize};
+    use kithara_platform::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use kithara_signal::{AudioChunk, AudioChunkInfo};
     use kithara_test_utils::kithara;
 
@@ -507,7 +498,7 @@ mod tests {
 
     /// The first track's status.
     fn status(tracks: &Tracks<TestPools>) -> TrackStatus {
-        tracks.lock()[0].status.clone()
+        tracks.records()[0].status.clone()
     }
 
     /// `ticket`'s attempt ended on a cancel.
@@ -527,8 +518,8 @@ mod tests {
     }
 
     fn tracks_with(id: TrackId) -> Tracks<TestPools> {
-        let tracks = Tracks::new(EventBus::default());
-        tracks.lock().push(TrackRecord::new(
+        let mut tracks = Tracks::default();
+        tracks.records_mut().push(TrackRecord::new(
             id,
             String::new(),
             "https://x/a.mp3".into(),
@@ -539,19 +530,18 @@ mod tests {
     /// Two queued tracks, each carrying its own source, so a lookup that
     /// reaches the wrong record is visible rather than indistinguishable.
     fn two_tracks() -> Tracks<TestPools> {
-        let tracks = Tracks::new(EventBus::default());
-        let mut guard = tracks.lock();
-        guard.push(TrackRecord::new(
+        let mut tracks = Tracks::default();
+        let records = tracks.records_mut();
+        records.push(TrackRecord::new(
             TrackId(1),
             String::new(),
             "https://x/first.mp3".into(),
         ));
-        guard.push(TrackRecord::new(
+        records.push(TrackRecord::new(
             TrackId(2),
             String::new(),
             "https://x/second.mp3".into(),
         ));
-        drop(guard);
         tracks
     }
 
@@ -570,7 +560,7 @@ mod tests {
         let tracks = two_tracks();
         let seen = Arc::new(AtomicUsize::new(0));
         tracks.attach_observer(TrackId(2), Box::new(CountingObserver(Arc::clone(&seen))));
-        let mut relay = tracks.observer_relay(TrackId(2));
+        let mut relay = tracks.observer_slot(TrackId(2)).relay();
 
         let chunk = AudioChunk::new(AudioChunkInfo::default(), sample_buffer(&pools, &[]));
         relay.try_observe(&chunk).expect("the observer accepts it");
@@ -584,7 +574,7 @@ mod tests {
         let tracks = two_tracks();
         let seen = Arc::new(AtomicUsize::new(0));
         tracks.attach_observer(TrackId(2), Box::new(CountingObserver(Arc::clone(&seen))));
-        let mut relay = tracks.observer_relay(TrackId(1));
+        let mut relay = tracks.observer_slot(TrackId(1)).relay();
 
         let chunk = AudioChunk::new(AudioChunkInfo::default(), sample_buffer(&pools, &[]));
         relay
@@ -618,26 +608,35 @@ mod tests {
         CancelToken::never().child()
     }
 
+    /// Whether the published row of `id` says the selection wants its
+    /// attempt.
+    fn selected(tracks: &Tracks<TestPools>, id: TrackId) -> bool {
+        tracks
+            .rows()
+            .iter()
+            .any(|row| row.entry.id == id && row.selected)
+    }
+
     #[kithara::test]
     fn begin_dedupes_live_attempt() {
-        let tracks = tracks_with(TrackId(1));
+        let mut tracks = tracks_with(TrackId(1));
         assert!(tracks.begin_attempt(TrackId(1), token(), false).is_some());
         assert!(tracks.begin_attempt(TrackId(1), token(), false).is_none());
     }
 
     #[kithara::test]
     fn selection_reflects_only_the_requested_live_attempt() {
-        let tracks = two_tracks();
-        assert!(!tracks.attempt_selected(TrackId(1)));
+        let mut tracks = two_tracks();
+        assert!(!selected(&tracks, TrackId(1)));
         assert!(tracks.begin_attempt(TrackId(1), token(), false).is_some());
         assert!(tracks.begin_attempt(TrackId(2), token(), true).is_some());
-        assert!(!tracks.attempt_selected(TrackId(1)));
-        assert!(tracks.attempt_selected(TrackId(2)));
+        assert!(!selected(&tracks, TrackId(1)));
+        assert!(selected(&tracks, TrackId(2)));
     }
 
     #[kithara::test]
     fn begin_replaces_cancelled_unwinding_attempt() {
-        let tracks = tracks_with(TrackId(1));
+        let mut tracks = tracks_with(TrackId(1));
         let first_cancel = token();
         let first = tracks
             .begin_attempt(TrackId(1), first_cancel.clone(), false)
@@ -663,7 +662,7 @@ mod tests {
     /// must not decide whether the track is playable.
     #[kithara::test]
     fn a_loaded_track_is_not_failed_by_the_attempt_it_outlived() {
-        let tracks = tracks_with(TrackId(1));
+        let mut tracks = tracks_with(TrackId(1));
         let attempt = tracks
             .begin_attempt(TrackId(1), token(), false)
             .expect("BUG: vacant record must accept an attempt");
@@ -671,12 +670,12 @@ mod tests {
         tracks.set_status(TrackId(1), TrackStatus::Loaded);
         tracks.apply_report(failed(attempt, "HTTP 404"));
 
-        assert!(matches!(tracks.lock()[0].status, TrackStatus::Loaded));
+        assert!(matches!(tracks.records()[0].status, TrackStatus::Loaded));
     }
 
     #[kithara::test]
     fn promote_replaces_waiting_and_cancels_it() {
-        let tracks = tracks_with(TrackId(1));
+        let mut tracks = tracks_with(TrackId(1));
         let parked_cancel = token();
         let parked = tracks
             .begin_attempt(TrackId(1), parked_cancel.clone(), false)
@@ -693,7 +692,7 @@ mod tests {
 
     #[kithara::test]
     fn promote_keeps_attempt_holding_permit() {
-        let tracks = tracks_with(TrackId(1));
+        let mut tracks = tracks_with(TrackId(1));
         let loading = tracks
             .begin_attempt(TrackId(1), token(), false)
             .expect("BUG: vacant record must accept an attempt");
@@ -706,13 +705,13 @@ mod tests {
 
     #[kithara::test]
     fn promote_vacant_is_noop() {
-        let tracks = tracks_with(TrackId(1));
+        let mut tracks = tracks_with(TrackId(1));
         assert!(tracks.promote_attempt(TrackId(1), token()).is_none());
     }
 
     #[kithara::test]
     fn finish_disarms_and_ignores_stale_ticket() {
-        let tracks = tracks_with(TrackId(1));
+        let mut tracks = tracks_with(TrackId(1));
         let first_cancel = token();
         let old = tracks
             .begin_attempt(TrackId(1), first_cancel, false)
@@ -736,18 +735,18 @@ mod tests {
 
     #[kithara::test]
     fn removing_record_cancels_attempt() {
-        let tracks = tracks_with(TrackId(1));
+        let mut tracks = tracks_with(TrackId(1));
         let cancel = token();
         let _ticket = tracks
             .begin_attempt(TrackId(1), cancel.clone(), false)
             .expect("BUG: vacant record must accept an attempt");
-        tracks.lock().clear();
+        tracks.records_mut().clear();
         assert!(cancel.is_cancelled(), "dropping the record aborts the load");
     }
 
     #[kithara::test]
     fn finish_with_failure_sets_failed_once() {
-        let tracks = tracks_with(TrackId(1));
+        let mut tracks = tracks_with(TrackId(1));
         let ticket = tracks
             .begin_attempt(TrackId(1), token(), false)
             .expect("BUG: vacant record must accept an attempt");

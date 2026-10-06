@@ -28,7 +28,7 @@ where
         };
         self.pending_select = SelectPhase::Idle;
         if let Some(stale_id) = stale {
-            self.set_status(stale_id, TrackStatus::Cancelled);
+            self.tracks.set_status(stale_id, TrackStatus::Cancelled);
         }
     }
 
@@ -48,22 +48,22 @@ where
         };
         self.pending_select = SelectPhase::Pending(new);
         if let Some(prev_id) = prev_id {
-            self.set_status(prev_id, TrackStatus::Cancelled);
+            self.tracks.set_status(prev_id, TrackStatus::Cancelled);
         }
     }
 
-    pub(in crate::queue) fn promote_pending_load(&self, id: TrackId) {
+    pub(in crate::queue) fn promote_pending_load(&mut self, id: TrackId) {
         if let Some(source) = self.tracks.source(id) {
-            self.loader.promote_load(id, source);
+            self.loader.promote_load(&mut self.tracks, id, source);
         }
     }
 
     pub(in crate::queue) fn spawn_apply_after_load(
-        &self,
+        &mut self,
         id: TrackId,
         source: TrackSource<S>,
         class: LoadClass,
     ) {
-        self.loader.spawn_load(id, source, class);
+        self.loader.spawn_load(&mut self.tracks, id, source, class);
     }
 }

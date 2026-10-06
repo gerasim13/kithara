@@ -5735,6 +5735,7 @@ dependencies = [
 name = "kithara-queue"
 version = "0.0.1-alpha5"
 dependencies = [
+ "arc-swap",
  "delegate",
  "derive-where",
  "derive_more",

@@ -74,9 +74,7 @@ where
             if relinked && let Some(armed) = queue.player.armed_next() {
                 queue.disarm_successor(armed);
             }
-            queue
-                .bus
-                .publish(QueueEvent::CrossfadeSettingsChanged { settings });
+            queue.announce(QueueEvent::CrossfadeSettingsChanged { settings });
             Ok(())
         })
     }

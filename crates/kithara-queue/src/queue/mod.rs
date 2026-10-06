@@ -4,6 +4,7 @@
 //!
 //! - [`mod@state`] — the [`Queue`] owner, the [`QueueControl`] handle, the
 //!   state both read, and the inherent helpers shared by the impl-block split.
+//! - [`mod@view`] — what the queue publishes of its state for its handles.
 //! - [`mod@command`] — the commands a [`QueueControl`] posts and the owner runs.
 //! - [`mod@handle`] — the [`QueueControl`] methods that post them.
 //! - [`mod@types`] — shared free items (`Transition`, helpers, internal shapes).
@@ -24,11 +25,13 @@ mod player;
 mod selection;
 mod state;
 mod types;
+mod view;
 
 pub(crate) use command::QueueCommand;
 use state::QueueRuntime;
 #[cfg(test)]
 pub(crate) use state::tests::test_session;
+pub(crate) use view::QueueView;
 
 pub use self::{
     state::{Queue, QueueControl},

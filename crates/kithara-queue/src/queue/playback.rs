@@ -1,11 +1,10 @@
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
 use kithara_play::{PlayError, SeekOutcome, SelectionPlayback, SuccessorLink};
-use smallvec::SmallVec;
 use tracing::debug;
 
 use super::{
-    Queue, QueueRuntime,
+    Queue, QueueControl, QueueRuntime,
     types::{CachedPosition, PendingSelect, PlaybackView, SelectPhase, Transition},
 };
 use crate::{
@@ -29,6 +28,63 @@ where
         self.player.is_paused()
     }
 
+    /// The player's live playback state with `position` replaced by the
+    /// queue's cached, 0.0-smoothed one.
+    fn playback_view_at(&self, position: Option<f64>) -> PlaybackView {
+        let mut view = self
+            .player
+            .playback_snapshot()
+            .map(PlaybackView::from)
+            .unwrap_or_default();
+        view.position = position;
+        view
+    }
+}
+
+impl<S> QueueControl<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    /// Single coherent read of the player's live playback state; see
+    /// [`Queue::playback_view`].
+    #[must_use]
+    pub fn playback_view(&self) -> PlaybackView {
+        self.playback_view_at(self.position_seconds())
+    }
+
+    /// Latest monotonic playback position for the current track in seconds;
+    /// see [`Queue::position_seconds`].
+    #[must_use]
+    pub fn position_seconds(&self) -> Option<f64> {
+        self.view.position_seconds()
+    }
+}
+
+impl<S> Queue<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    /// Single coherent read of the player's live playback state.
+    ///
+    /// Pollers (the FFI time thread, `snapshot`) get position, duration,
+    /// decoded frontier, and the playing flag from one call instead of
+    /// several separate accessors. The player-sourced fields come from one
+    /// [`PlaybackSnapshot`](kithara_play::PlaybackSnapshot) via its `From`
+    /// conversion; `position` is then replaced with this queue's cached,
+    /// 0.0-smoothed value.
+    #[must_use]
+    pub fn playback_view(&self) -> PlaybackView {
+        self.playback_view_at(self.position_seconds())
+    }
+
+    /// Latest monotonic playback position for the current track in seconds.
+    /// Updated on every tick; skips transient 0.0 samples the engine
+    /// produces on pause/resume so downstream UIs see stable values.
+    #[must_use]
+    pub fn position_seconds(&self) -> Option<f64> {
+        self.position.into()
+    }
+
     /// Where the current track is, in media seconds, and the rate it plays
     /// at; `None` while paused or before it has a position and a duration.
     fn playback_time(&self) -> Option<super::types::PlaybackTime> {
@@ -43,41 +99,9 @@ where
         })
     }
 
-    /// Single coherent read of the player's live playback state.
-    ///
-    /// Pollers (the FFI time thread, `snapshot`) get position, duration,
-    /// decoded frontier, and the playing flag from one call instead of
-    /// several separate accessors. The player-sourced fields come from one
-    /// [`PlaybackSnapshot`](kithara_play::PlaybackSnapshot) via its `From`
-    /// conversion; `position` is then replaced with this queue's cached,
-    /// 0.0-smoothed value.
-    #[must_use]
-    pub fn playback_view(&self) -> PlaybackView {
-        let mut view = self
-            .player
-            .playback_snapshot()
-            .map(PlaybackView::from)
-            .unwrap_or_default();
-        view.position = self.position_seconds();
-        view
-    }
-
-    /// Latest monotonic playback position for the current track in seconds.
-    /// Updated on every tick; skips transient 0.0 samples the engine
-    /// produces on pause/resume so downstream UIs see stable values.
-    #[must_use]
-    pub fn position_seconds(&self) -> Option<f64> {
-        self.read_cached_position().into()
-    }
-}
-
-impl<S> Queue<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    fn freeze_cached_position(&self) {
+    fn freeze_cached_position(&mut self) {
         if let Some(t) = self.player.position_seconds() {
-            self.write_cached_position(CachedPosition::known(t));
+            self.position = CachedPosition::known(t);
         }
     }
 
@@ -85,7 +109,7 @@ where
     /// navigation offers at its natural end, while the queue advances, no
     /// selection waits for its load, and the cursor stands on the track the
     /// deck plays. Repeating the current track needs no successor.
-    fn wanted_successor(&self) -> Option<TrackEntry> {
+    fn wanted_successor(&mut self) -> Option<TrackEntry> {
         if self.action_at_item_end() != ActionAtItemEnd::Advance
             || matches!(self.pending_select, SelectPhase::Pending(_))
         {
@@ -127,7 +151,7 @@ where
                 let Some(source) = self.tracks.source(next.id) else {
                     return;
                 };
-                self.set_status(next.id, TrackStatus::Pending);
+                self.tracks.set_status(next.id, TrackStatus::Pending);
                 self.spawn_apply_after_load(next.id, source, LoadClass::Prefetch);
             }
             TrackStatus::Loaded => {
@@ -150,7 +174,7 @@ where
     /// Hand the loaded successor `id` to the deck to arm; `false` when the
     /// deck did not arm it. An arm that fails spends the resource, so the
     /// track is consumed and reloads once it is wanted again.
-    fn arm_successor(&self, id: TrackId, link: SuccessorLink) -> bool {
+    fn arm_successor(&mut self, id: TrackId, link: SuccessorLink) -> bool {
         let Some(resource) = self.tracks.take_resource(id) else {
             debug!(id = id.as_u64(), "the successor has no resource to arm");
             return false;
@@ -159,7 +183,7 @@ where
             Ok(()) => true,
             Err(error) => {
                 debug!(%error, id = id.as_u64(), "the successor would not arm");
-                self.set_status(id, TrackStatus::Consumed);
+                self.tracks.set_status(id, TrackStatus::Consumed);
                 false
             }
         }
@@ -176,9 +200,9 @@ where
     /// Take the armed successor `id` off the deck. Arming moved its resource
     /// onto the deck, so the track is consumed and reloads once it is wanted
     /// again.
-    pub(super) fn disarm_successor(&self, id: TrackId) {
+    pub(super) fn disarm_successor(&mut self, id: TrackId) {
         self.player.unarm_next();
-        self.set_status(id, TrackStatus::Consumed);
+        self.tracks.set_status(id, TrackStatus::Consumed);
     }
 
     pub(crate) fn pause(&mut self) {
@@ -227,7 +251,7 @@ where
                 if let Err(error) = self.player.select(id, resource, SelectionPlayback::Play) {
                     debug!(%error, id = id.as_u64(), "play could not start the loaded track");
                 }
-                self.set_status(id, TrackStatus::Consumed);
+                self.tracks.set_status(id, TrackStatus::Consumed);
             }
             TrackStatus::Pending | TrackStatus::Loading | TrackStatus::Slow => {
                 self.override_pending_select(pending.unwrap_or_else(|| PendingSelect {
@@ -248,7 +272,7 @@ where
                     playback: SelectionPlayback::Play,
                     reason: AdvanceReason::UserSelect,
                 });
-                self.set_status(id, TrackStatus::Pending);
+                self.tracks.set_status(id, TrackStatus::Pending);
                 self.spawn_apply_after_load(id, source, LoadClass::Interactive);
             }
             TrackStatus::Consumed | TrackStatus::Cancelled => {}
@@ -262,21 +286,16 @@ where
     /// Resumes seeking after the last track plays to natural EOF and the navigation cursor runs off
     /// the end, leaving `current()` at `None`.
     fn seek_player(&mut self, seconds: f64) -> Result<SeekOutcome, PlayError> {
-        if self.current().is_none() {
-            let id = { self.lock_navigation().last_selected() };
-            if let Some(id) = id {
-                let ids = self
-                    .tracks()
-                    .into_iter()
-                    .map(|track| track.id)
-                    .collect::<SmallVec<[_; 16]>>();
-                self.lock_navigation_mut().select(id, &ids);
-                self.handle_current_item_changed();
-            }
+        if self.current().is_none()
+            && let Some(id) = self.navigation.last_selected()
+        {
+            let ids = self.track_ids();
+            self.navigation.select(id, &ids);
+            self.handle_current_item_changed();
         }
         let outcome = self.player.seek_seconds(seconds)?;
         if let SeekOutcome::Landed { landed_at, .. } = outcome {
-            self.write_cached_position(CachedPosition::known(landed_at.as_secs_f64()));
+            self.position = CachedPosition::known(landed_at.as_secs_f64());
         }
         Ok(outcome)
     }
@@ -298,7 +317,7 @@ where
         Ok(())
     }
 
-    fn update_cached_position(&self) {
+    fn update_cached_position(&mut self) {
         /// Minimum position threshold used to suppress spurious 0.0 reports
         /// on pause/resume. Values above this are considered a valid
         /// non-zero position.
@@ -311,11 +330,11 @@ where
         let Some(t) = self.player.position_seconds() else {
             return;
         };
-        let prev = Option::<f64>::from(self.read_cached_position());
+        let prev = self.position_seconds();
         if t == 0.0 && prev.is_some_and(|p| p > MIN_STABLE_POSITION_SECS) {
             return;
         }
-        self.write_cached_position(CachedPosition::known(t));
+        self.position = CachedPosition::known(t);
     }
 }
 
@@ -351,7 +370,7 @@ mod tests {
             .expect("BUG: tick returned error in test setup");
 
         assert_eq!(
-            queue.lock_navigation().current(),
+            queue.navigation.current(),
             None,
             "navigation must not have advanced"
         );
@@ -362,12 +381,12 @@ mod tests {
         let mut queue = make_queue();
         let a = TrackId::allocate();
         let b = TrackId::allocate();
-        queue.tracks.lock().extend([
+        queue.tracks.records_mut().extend([
             TrackRecord::new(a, "a".into(), TrackSource::from("a")),
             TrackRecord::new(b, "b".into(), TrackSource::from("b")),
         ]);
-        queue.lock_navigation_mut().select(b, &[a, b]);
-        queue.lock_navigation_mut().finish();
+        queue.navigation.select(b, &[a, b]);
+        queue.navigation.finish();
         let mut rx = queue.subscribe();
 
         queue.player.bus().publish(PlayerEvent::ItemDidPlayToEnd {
@@ -383,7 +402,7 @@ mod tests {
             .expect("BUG: tick returned error in test setup");
 
         assert_eq!(
-            queue.lock_navigation().current(),
+            queue.navigation.current(),
             None,
             "stale EOF must not restart the queue"
         );
@@ -402,7 +421,9 @@ mod tests {
         let id = queue
             .append("https://example.com/a.mp3")
             .expect("open queue accepts a track");
-        queue.set_status(id, TrackStatus::Failed("network offline".into()));
+        queue
+            .tracks
+            .set_status(id, TrackStatus::Failed("network offline".into()));
 
         queue.play_inner();
 
@@ -424,10 +445,10 @@ mod tests {
             queue.append("https://example.com/a.mp3")
         }
         .expect("open queue accepts a track");
-        assert!(!queue.tracks.attempt_selected(id));
+        assert!(!queue.view.attempt_selected(id));
 
         queue.play();
 
-        assert!(queue.tracks.attempt_selected(id));
+        assert!(queue.view.attempt_selected(id));
     }
 }

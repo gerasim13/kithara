@@ -1,7 +1,6 @@
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
 use kithara_play::{PlayError, SelectTransition, SelectionPlayback};
-use smallvec::SmallVec;
 
 use super::super::{
     Queue,
@@ -22,13 +21,9 @@ where
     /// loading. Reading a successor never moves the cursor — a read that
     /// committed would strand it on a track that never started, and the next
     /// end-of-item would name a track the cursor had already left.
-    pub(in crate::queue) fn commit_navigation_to(&self, id: TrackId) {
-        let ids = self
-            .tracks()
-            .into_iter()
-            .map(|track| track.id)
-            .collect::<SmallVec<[_; 16]>>();
-        self.lock_navigation_mut().select(id, &ids);
+    pub(in crate::queue) fn commit_navigation_to(&mut self, id: TrackId) {
+        let ids = self.track_ids();
+        self.navigation.select(id, &ids);
     }
 
     pub(crate) fn select(&mut self, id: TrackId, transition: Transition) -> Result<(), QueueError> {
@@ -47,7 +42,7 @@ where
     /// successor, or the track it plays). A refused select has spent the
     /// resource, so the track is consumed and reloads once it is wanted again.
     pub(in crate::queue) fn select_loaded_item(
-        &self,
+        &mut self,
         id: TrackId,
         crossfade: kithara_play::CrossfadeSettings,
         reason: AdvanceReason,
@@ -55,7 +50,7 @@ where
     ) -> Result<(), QueueError> {
         let was_playing = self.player.is_playing();
         if was_playing && crossfade.duration > 0.0 {
-            self.bus.publish(QueueEvent::CrossfadeStarted {
+            self.announce(QueueEvent::CrossfadeStarted {
                 settings: crossfade,
             });
         }
@@ -68,15 +63,15 @@ where
                 crossfade,
             },
         ) {
-            self.set_status(id, TrackStatus::Consumed);
+            self.tracks.set_status(id, TrackStatus::Consumed);
             return Err(error.into());
         }
         self.commit_navigation_to(id);
-        self.bus.publish(QueueEvent::CurrentTrackAdvance {
+        self.announce(QueueEvent::CurrentTrackAdvance {
             reason,
             id: Some(id),
         });
-        self.set_status(id, TrackStatus::Consumed);
+        self.tracks.set_status(id, TrackStatus::Consumed);
         Ok(())
     }
 
@@ -166,7 +161,7 @@ where
                 self.player.pause();
             }
             self.commit_navigation_to(id);
-            self.bus.publish(QueueEvent::CurrentTrackAdvance {
+            self.announce(QueueEvent::CurrentTrackAdvance {
                 reason,
                 id: Some(id),
             });
@@ -203,7 +198,7 @@ where
                     playback,
                     id,
                 });
-                self.set_status(id, TrackStatus::Pending);
+                self.tracks.set_status(id, TrackStatus::Pending);
                 self.spawn_apply_after_load(id, source, LoadClass::Interactive);
                 Ok(())
             }
@@ -261,6 +256,7 @@ mod tests {
                 .expect("BUG: open queue advance must be admitted")
                 .is_none()
         );
+        queue.publish();
         let saw_ended =
             wait_for_queue_event(&mut rx, |ev| matches!(ev, QueueEvent::QueueEnded), 200).await;
         assert!(saw_ended);
@@ -281,7 +277,7 @@ mod tests {
         let mut queue = make_queue();
         let a = append(&mut queue, "https://example.com/a.mp3");
         let b = append(&mut queue, "https://example.com/b.mp3");
-        queue.lock_navigation_mut().select(b, &[a, b]);
+        queue.navigation.select(b, &[a, b]);
         let mut rx = queue.subscribe();
 
         assert!(
@@ -290,6 +286,7 @@ mod tests {
                 .expect("BUG: open queue advance must be admitted")
                 .is_none()
         );
+        queue.publish();
 
         let saw_ended =
             wait_for_queue_event(&mut rx, |ev| matches!(ev, QueueEvent::QueueEnded), 400).await;
@@ -301,9 +298,9 @@ mod tests {
         let mut queue = make_queue();
         let first = append(&mut queue, "https://example.com/a.mp3");
         let second = append(&mut queue, "https://example.com/b.mp3");
-        queue.lock_navigation_mut().select(first, &[first, second]);
-        queue.set_status(first, TrackStatus::Consumed);
-        queue.set_status(second, TrackStatus::Pending);
+        queue.navigation.select(first, &[first, second]);
+        queue.tracks.set_status(first, TrackStatus::Consumed);
+        queue.tracks.set_status(second, TrackStatus::Pending);
 
         assert_eq!(
             queue
@@ -312,7 +309,7 @@ mod tests {
             Some(second)
         );
         assert_eq!(
-            queue.lock_navigation().current(),
+            queue.navigation.current(),
             Some(second),
             "admitted automatic successor must remain authoritative while loading"
         );

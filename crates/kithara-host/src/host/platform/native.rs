@@ -2,7 +2,7 @@ use std::{marker::PhantomData, num::NonZeroU32};
 
 use kithara_bufpool::HasPool;
 use kithara_command::Live;
-use kithara_platform::sync::Arc;
+use kithara_platform::sync::{Arc, Mutex};
 use kithara_play::{PlayError, player::PlayerControlSource};
 use kithara_warp::BeatGridId;
 
@@ -35,8 +35,10 @@ impl<S> PlatformResult<Self> for StartedPlatform<S> {
 pub(in crate::host) struct Platform<S> {
     decks: DeckThread,
     /// The decks the Host stopped ticking as it closed. They drop with the
-    /// platform, after the session that renders them has shut down.
-    retired: Decks,
+    /// platform, after the session that renders them has shut down. Only
+    /// `close` reaches them; the lock lets a Host be shared while a deck,
+    /// which only its holder reaches, need not be.
+    retired: Mutex<Decks>,
     marker: PhantomData<fn() -> S>,
 }
 
@@ -44,7 +46,7 @@ impl<S> Platform<S> {
     /// Stops ticking the Host's decks and keeps them until the platform
     /// drops, after the session shutdown that stops their stream.
     pub(in crate::host) fn close(platform: &mut Self, _host_id: BeatGridId) {
-        platform.retired = platform.decks.close();
+        *platform.retired.lock() = platform.decks.close();
     }
 
     #[cfg(feature = "offline")]
@@ -55,7 +57,7 @@ impl<S> Platform<S> {
     fn owner(decks: DeckThread) -> Self {
         Self {
             decks,
-            retired: Decks::default(),
+            retired: Mutex::new(Decks::default()),
             marker: PhantomData,
         }
     }

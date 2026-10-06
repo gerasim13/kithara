@@ -35,8 +35,8 @@ where
                     ?deck_item,
                     "navigation has no successor: the queue ends here"
                 );
-                self.lock_navigation_mut().finish();
-                self.bus.publish(QueueEvent::QueueEnded);
+                self.navigation.finish();
+                self.announce(QueueEvent::QueueEnded);
             } else {
                 debug!(
                     ?reason,
@@ -69,11 +69,12 @@ where
     /// Read the next selectable entry without mutating navigation. Selection
     /// commits navigation only when the player selection actually commits.
     pub(in crate::queue) fn next_selectable_entry(
-        &self,
+        &mut self,
         reason: AdvanceReason,
     ) -> Option<TrackEntry> {
-        let tracks = self.lock_tracks();
-        let selectable = tracks
+        let selectable = self
+            .tracks
+            .records()
             .iter()
             .filter(|record| {
                 let available = !matches!(
@@ -90,12 +91,10 @@ where
             })
             .map(crate::track::TrackRecord::entry)
             .collect::<Vec<TrackEntry>>();
-        drop(tracks);
         let ids = selectable
             .iter()
             .map(|entry| entry.id)
             .collect::<SmallVec<[_; 16]>>();
-        let mut navigation = self.lock_navigation_mut();
         let automatic = matches!(
             reason,
             AdvanceReason::NaturalEof | AdvanceReason::TrackFailed | AdvanceReason::CrossfadePreArm
@@ -104,9 +103,8 @@ where
             reason,
             AdvanceReason::NaturalEof | AdvanceReason::CrossfadePreArm
         );
-        let allow_wrap = automatic && navigation.repeat_mode() == RepeatMode::All;
-        let id = navigation.next(&ids, allow_repeat_one, allow_wrap)?;
-        drop(navigation);
+        let allow_wrap = automatic && self.navigation.repeat_mode() == RepeatMode::All;
+        let id = self.navigation.next(&ids, allow_repeat_one, allow_wrap)?;
         selectable.into_iter().find(|entry| entry.id == id)
     }
 
@@ -125,12 +123,8 @@ where
         &mut self,
         transition: Transition,
     ) -> Result<Option<TrackId>, QueueError> {
-        let tracks = self.tracks();
-        let ids = tracks
-            .iter()
-            .map(|entry| entry.id)
-            .collect::<SmallVec<[_; 16]>>();
-        let Some(id) = self.lock_navigation_mut().prev(&ids) else {
+        let ids = self.track_ids();
+        let Some(id) = self.navigation.prev(&ids) else {
             return Ok(None);
         };
         self.select_with_reason(id, transition, AdvanceReason::UserPrev)?;

@@ -1,6 +1,5 @@
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
-use kithara_platform::sync::atomic::{AtomicU64, Ordering};
 pub use kithara_play::player::PlaybackView;
 use kithara_play::{CrossfadeSettings, ResourceSrc, SelectionPlayback};
 
@@ -63,8 +62,7 @@ pub(super) enum SelectPhase {
     Pending(PendingSelect),
 }
 
-/// Cached monotonic playback position. Replaces the `f64::NAN` sentinel
-/// stored in `cached_position`; "no value yet" is the explicit
+/// Cached monotonic playback position; "no value yet" is the explicit
 /// [`CachedPosition::Unknown`] variant.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum CachedPosition {
@@ -90,35 +88,6 @@ impl From<CachedPosition> for Option<f64> {
             CachedPosition::Known { seconds } => Some(seconds),
             CachedPosition::Unknown => None,
         }
-    }
-}
-
-/// Lock-free [`CachedPosition`] cell for the `tick` hot path. The
-/// `f64::NAN` bit pattern encodes [`CachedPosition::Unknown`]; any `NaN`
-/// observed on load (including a `NaN` written through `store`)
-/// canonicalises back to `Unknown`.
-pub(super) struct AtomicCachedPosition(AtomicU64);
-
-impl AtomicCachedPosition {
-    pub(super) fn load(&self) -> CachedPosition {
-        let seconds = f64::from_bits(self.0.load(Ordering::Acquire));
-        if seconds.is_nan() {
-            CachedPosition::Unknown
-        } else {
-            CachedPosition::Known { seconds }
-        }
-    }
-
-    pub(super) fn store(&self, pos: CachedPosition) {
-        let bits = match pos {
-            CachedPosition::Unknown => f64::NAN.to_bits(),
-            CachedPosition::Known { seconds } => seconds.to_bits(),
-        };
-        self.0.store(bits, Ordering::Release);
-    }
-
-    pub(super) fn unknown() -> Self {
-        Self(AtomicU64::new(f64::NAN.to_bits()))
     }
 }
 
@@ -211,19 +180,6 @@ mod tests {
             PlaybackTime { dur, pos, rate }.ends_within(window),
             expected
         );
-    }
-
-    #[kithara::test]
-    fn atomic_cached_position_unknown_loads_none() {
-        let cell = AtomicCachedPosition::unknown();
-        assert_eq!(Option::<f64>::from(cell.load()), None);
-    }
-
-    #[kithara::test]
-    fn atomic_cached_position_round_trip_zero() {
-        let cell = AtomicCachedPosition::unknown();
-        cell.store(CachedPosition::known(0.0));
-        assert_eq!(Option::<f64>::from(cell.load()), Some(0.0));
     }
 
     #[kithara::test]
