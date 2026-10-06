@@ -11,6 +11,7 @@ use kithara_platform::{
     time::Instant,
     tokio::sync::{mpsc, oneshot},
 };
+use kithara_test_utils::kithara;
 
 use super::{cmd::FetchCmd, downloader::Downloader, response::FetchResponse};
 use crate::RequestPriority;
@@ -247,6 +248,7 @@ impl PeerHandle {
 
     /// Build a High-priority imperative `InternalCmd` paired with its
     /// response receiver. Shared by [`Self::execute`] and [`Self::batch`].
+    #[kithara::flash(true)]
     fn make_imperative(
         &self,
         cmd: FetchCmd,

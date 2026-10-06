@@ -5,6 +5,7 @@ use kithara_platform::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::{
@@ -147,6 +148,7 @@ impl AbrState {
 
     /// Build an `AbrState` with the initial variant set from `mode`.
     #[must_use]
+    #[kithara::flash(true)]
     pub fn new(mode: AbrMode) -> Self {
         Self::new_at(mode, Instant::now())
     }
