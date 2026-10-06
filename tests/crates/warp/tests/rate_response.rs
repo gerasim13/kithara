@@ -330,7 +330,7 @@ async fn playing_queue(
     let queue = harness.insert(queue).await;
     harness
         .run(queue.control(), move |q| {
-            q.set_default_rate(case.initial_rate)
+            q.set_default_rate(case.initial_rate);
         })
         .await;
     let path = response_source;
