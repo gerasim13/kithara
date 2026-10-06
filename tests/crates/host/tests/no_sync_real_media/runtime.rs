@@ -1,9 +1,7 @@
-use std::collections::VecDeque;
-
 use kithara::{
     audio::{AudioEvent, DecoderEvent, PlaybackResamplerKind, SeekLifecycleStage},
     download::DownloaderEvent,
-    events::{BusEvent, Envelope, EventReceiver},
+    events::{BusEvent, EventReceiver},
     file::FileEvent,
     hls::HlsEvent,
     host::HostOwned,
@@ -17,8 +15,6 @@ use kithara_test_utils::bufpool::TestPools;
 use serde::Serialize;
 
 use super::{Case, SOURCE_RATE};
-
-const MAX_DIAGNOSTIC_EVENTS: usize = 256;
 
 pub(super) struct Deck {
     pub(super) player: HostOwned<PlayerImpl<TestPools>>,
@@ -46,29 +42,6 @@ pub(super) struct DeckObservation {
     pub(super) capture_target_secs: f64,
     pub(super) hls: bool,
     pub(super) label: &'static str,
-    pub(super) diagnostic_events: VecDeque<String>,
-    pub(super) diagnostic_events_evicted: usize,
-}
-
-fn retain_diagnostic(deck: &mut Deck, envelope: &Envelope<TestEvent>, phase: &str) {
-    if !matches!(
-        &envelope.event,
-        TestEvent::Audio(
-            AudioEvent::UnderrunStarted { .. }
-                | AudioEvent::UnderrunEnded { .. }
-                | AudioEvent::BufferHealth { .. }
-                | AudioEvent::EngineLoad { .. }
-        )
-    ) {
-        return;
-    }
-    if deck.observation.diagnostic_events.len() == MAX_DIAGNOSTIC_EVENTS {
-        deck.observation.diagnostic_events.pop_front();
-        deck.observation.diagnostic_events_evicted += 1;
-    }
-    deck.observation
-        .diagnostic_events
-        .push_back(format!("phase={phase} {envelope:?}"));
 }
 
 #[derive(Clone, Copy)]
@@ -95,7 +68,6 @@ pub(super) fn drain_all_events(
         loop {
             match deck.events.try_recv() {
                 Ok(envelope) => {
-                    retain_diagnostic(deck, &envelope, phase);
                     observe_event(deck_index, deck, envelope.event, phase, policy, failures);
                 }
                 Err(TryRecvError::Empty) => break,

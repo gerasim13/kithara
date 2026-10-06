@@ -23,7 +23,6 @@ use kithara_test_fixtures::{SignalAsset, assets::by_name};
 use kithara_test_utils::{
     TestTempDir,
     bufpool::{TestPools, pools},
-    flight,
 };
 use num_traits::AsPrimitive;
 #[cfg(not(target_os = "android"))]
@@ -338,7 +337,6 @@ async fn run_case(
         &mut failures,
     )
     .await;
-    let capture_diagnostics = snapshot_capture_diagnostics(case, &decks);
     let direct_references = capture_references(case, &mut decks, &final_mix, &mut failures).await;
     let direct_reference_pcm = direct_references
         .iter()
@@ -376,9 +374,6 @@ async fn run_case(
         .map(|(label, role, pcm)| oracle::measure_audio_level(label, *role, case.host_rate, pcm))
         .collect::<Vec<_>>();
     oracle::assess_listening_levels(case.label, &audio_levels, &mut failures);
-    if !failures.is_empty() {
-        failures.extend(capture_diagnostics);
-    }
 
     #[cfg(target_os = "android")]
     assert!(
@@ -429,43 +424,6 @@ async fn run_case(
     }
     host.close().await;
     failures
-}
-
-fn snapshot_capture_diagnostics(case: &Case, decks: &[Deck]) -> Vec<String> {
-    let mut diagnostics = Vec::new();
-    for (deck_index, deck) in decks.iter().enumerate() {
-        diagnostics.push(format!(
-            "{} final-mix boundary deck {deck_index} ({}) runtime diagnostics: evicted={}, events={:?}",
-            case.label,
-            deck.observation.label,
-            deck.observation.diagnostic_events_evicted,
-            deck.observation.diagnostic_events,
-        ));
-    }
-    for probe in [
-        "publish",
-        "render_committed",
-        "pcm_consumed",
-        "chunk_admitted",
-        "scheduler_pass",
-    ] {
-        diagnostics.push(format!(
-            "{} final-mix boundary unscoped latest {probe}: {:?}",
-            case.label,
-            usdt_trace::last(probe),
-        ));
-    }
-    diagnostics.push(format!(
-        "{} final-mix boundary unscoped flight events: {:?}",
-        case.label,
-        flight::tail(),
-    ));
-    diagnostics.push(format!(
-        "{} final-mix boundary unscoped flight probes: {:?}",
-        case.label,
-        flight::probes_tail(),
-    ));
-    diagnostics
 }
 
 /// Every signal a case listens to, labelled with its role: each deck's direct
