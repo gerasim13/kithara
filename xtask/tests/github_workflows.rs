@@ -2078,6 +2078,20 @@ fn a_step_that_collects_build_output_reads_the_build_directory() {
         condition.contains("env.KITHARA_LANE_TARGET != ''"),
         "a lane that stopped before it took a slot has nothing to upload: {condition}"
     );
+    assert_eq!(timings["with"]["if-no-files-found"].as_str(), Some("error"));
+}
+
+#[test]
+fn failure_evidence_follows_the_lane_result_without_an_upload_failure_cascade() {
+    let workflow = github_workflow("lane.yml");
+    let job = workflow_job(workflow_jobs(&workflow), "run");
+    let run = named_step(job, "Run the lane");
+    assert_eq!(run["id"].as_str(), Some("run_lane"));
+    let upload = named_step(job, "Upload the lane's report");
+    let condition = upload["if"].as_str().expect("conditional lane report");
+    assert!(condition.contains("steps.run_lane.outcome == 'failure'"));
+    assert!(!condition.contains("failure()"));
+    assert_eq!(upload["with"]["if-no-files-found"].as_str(), Some("error"));
 }
 
 // The executor's whole job is to run a lane the catalog named. A workflow that

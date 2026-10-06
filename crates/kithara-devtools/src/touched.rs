@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
+    path::Path,
     process::Command,
 };
 
@@ -51,20 +52,21 @@ impl fmt::Display for Touched {
 /// The default branch runs the whole scope. A path with no reviewed owner
 /// runs the default lane whole, so a narrow run is an opt-in coverage
 /// reduction, never the result of failing to classify a changed path.
-pub(crate) fn lanes(test: &TestCommandConfig, scope: &[String]) -> Result<Vec<Touched>> {
+pub(crate) fn lanes(root: &Path, test: &TestCommandConfig, scope: &[String]) -> Result<Vec<Touched>> {
     if let Some(unknown) = scope.iter().find(|name| !test.lanes.contains_key(*name)) {
         bail!("test lane `{unknown}` is not configured");
     }
     let scope = &scoped(scope, &test.default_lane);
     let _ = Command::new("git")
+        .current_dir(root)
         .args(["fetch", "--no-tags", "--quiet", "origin", "main"])
         .status();
-    let base = git(&["merge-base", "origin/main", "HEAD"])?;
-    if base == git(&["rev-parse", "HEAD"])? {
+    let base = git(root, &["merge-base", "origin/main", "HEAD"])?;
+    if base == git(root, &["rev-parse", "HEAD"])? {
         return Ok(everything(scope));
     }
     let range = format!("{base}...HEAD");
-    let changed = git(&["diff", "--name-only", &range])?;
+    let changed = git(root, &["diff", "--name-only", &range])?;
     let changed: Vec<&str> = changed.lines().collect();
     Ok(select(
         &test.lanes,
@@ -159,8 +161,9 @@ fn everything(scope: &[String]) -> Vec<Touched> {
     scope.iter().cloned().map(Touched::Whole).collect()
 }
 
-fn git(args: &[&str]) -> Result<String> {
+fn git(root: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
+        .current_dir(root)
         .args(args)
         .output()
         .with_context(|| format!("running git {}", args.join(" ")))?;

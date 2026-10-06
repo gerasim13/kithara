@@ -2,12 +2,12 @@ use std::{
     collections::BTreeMap,
     env,
     ffi::{OsStr, OsString},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::Instant,
 };
 
 use anyhow::{Context, Result, bail};
-use kithara_devtools::common::tools::ToolsConfig;
+use kithara_devtools::common::{project::ProjectConfig, tools::ToolsConfig};
 use toml::Value;
 use tracing::warn;
 
@@ -19,6 +19,31 @@ use crate::{
     config::{CiLaneConfig, CiLanePin, CiLaneStep, LaneFreshness},
     consts,
 };
+
+pub(crate) fn is_selected(
+    root: &Path,
+    lane: &CiLaneConfig,
+    project: &ProjectConfig,
+    kind: PipelineKind,
+) -> Result<bool> {
+    if let Some(reason) = lane.kinds_refused.get(kind.name()) {
+        bail!("{reason}");
+    }
+    if lane.steps.is_empty() {
+        return Ok(true);
+    }
+    for step in &lane.steps {
+        let role = step.program.as_deref().unwrap_or(&lane.program);
+        let args = step.args_by_kind.get(kind.name()).unwrap_or(&step.args);
+        if role != "just" || !args.get(..2).is_some_and(|prefix| prefix == ["test", "run"]) {
+            return Ok(true);
+        }
+        if kithara_devtools::test::is_selected(root, project, &args[2..])? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
 
 /// Run a lane the way `.config/xtask.toml` declares it: the pipeline kinds it
 /// declines, the platform it refuses to run anywhere but on, the tools it needs,
