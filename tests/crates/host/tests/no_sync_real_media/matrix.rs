@@ -1009,7 +1009,6 @@ async fn prepare_deck(
             ))
             .bus(bus)
             .crossfade_duration(0.0)
-            .block_on_underrun(true)
             .sample_rate(
                 NonZeroU32::new(case.host_rate).expect("host sample rate must be non-zero"),
             )
