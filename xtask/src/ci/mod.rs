@@ -16,3 +16,4 @@ mod xcresult;
 
 pub(crate) use build_cache::hold_target_lease;
 pub(crate) use command::{CiArgs, is_standalone, run, run_standalone};
+pub(crate) use config::CiPins;
