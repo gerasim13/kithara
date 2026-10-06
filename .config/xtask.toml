@@ -1960,6 +1960,8 @@ steps = [
     "test",
     "run",
     "--lane=tooling",
+    "-E",
+    "package(xtask) & binary(=self_cache_runner) & test(=shared_bootstrap_and_refresh_follow_dependency_bytes_with_old_mtimes)",
   ], label = "Linux tooling lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
