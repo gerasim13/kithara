@@ -668,7 +668,14 @@ mod tests {
         flash.signal_notify(notify_id);
         assert!(receipt.granted());
         assert!(flash.gate_drop(&diag.state, gate.id()).is_none());
-        assert!(flash.core.lock().registry.task_diag.contains_key(&gate.id()));
+        assert!(
+            flash
+                .core
+                .lock()
+                .registry
+                .task_diag
+                .contains_key(&gate.id())
+        );
         flash
             .core
             .lock()
@@ -685,7 +692,14 @@ mod tests {
         assert_eq!(flash.clock.now_nanos(), base);
 
         drop(receipt);
-        assert!(!flash.core.lock().registry.task_diag.contains_key(&gate.id()));
+        assert!(
+            !flash
+                .core
+                .lock()
+                .registry
+                .task_diag
+                .contains_key(&gate.id())
+        );
         assert!(later.granted());
         drop(later);
         assert_eq!(flash.active_count(), 0);
@@ -709,7 +723,14 @@ mod tests {
             super::super::state::ParkOutcome::Parked
         ));
         assert!(flash.gate_drop(&diag.state, gate.id()).is_none());
-        assert!(!flash.core.lock().registry.task_diag.contains_key(&gate.id()));
+        assert!(
+            !flash
+                .core
+                .lock()
+                .registry
+                .task_diag
+                .contains_key(&gate.id())
+        );
 
         flash.signal_notify(notify_id);
         assert!(receipt.granted());

@@ -161,13 +161,20 @@ impl Registry {
 
     /// All retained credits, including grants whose owners are unpollable.
     pub(super) fn total_active(&self) -> usize {
-        self.active + self.task_diag.values().map(|task| task.grants).sum::<usize>()
+        self.active
+            + self
+                .task_diag
+                .values()
+                .map(|task| task.grants)
+                .sum::<usize>()
     }
 
     fn remove_settled_task(&mut self, id: u64) {
-        if self.task_diag.get(&id).is_some_and(|task| {
-            task.grants == 0 && task.diag.state.load() == TaskState::Done
-        }) {
+        if self
+            .task_diag
+            .get(&id)
+            .is_some_and(|task| task.grants == 0 && task.diag.state.load() == TaskState::Done)
+        {
             self.task_diag.remove(&id);
         }
     }

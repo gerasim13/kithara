@@ -171,9 +171,7 @@ impl TaskDiag {
         self.driver()
             .is_some_and(|driver| bridged.contains(&driver))
             && match self.state.load() {
-                TaskState::Parked | TaskState::Runnable => {
-                    self.sole_poller.load(Ordering::Relaxed)
-                }
+                TaskState::Parked | TaskState::Runnable => self.sole_poller.load(Ordering::Relaxed),
                 TaskState::Running | TaskState::RunningNotified => !owns_slot,
                 TaskState::Done => false,
             }
