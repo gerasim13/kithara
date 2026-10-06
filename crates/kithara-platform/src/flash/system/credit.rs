@@ -7,7 +7,9 @@ use crate::{
     flash::{
         ctx::{self, Credit},
         ids::ThreadKey,
+        join::{Join, hand_over},
     },
+    sync::Arc,
 };
 
 /// `ThreadKey` of the calling OS thread — the key under which it appears in the
@@ -97,14 +99,16 @@ impl DedicatedSlot {
     /// the credit, exactly like a `spawn_named` pacer). The returned
     /// [`PoolParticipant`] settles the exit and restores the pool thread's
     /// previous dedicated flag, so a reused thread does not pace later
-    /// unrelated tasks.
-    pub(crate) fn claim_pooled(self) -> PoolParticipant {
+    /// unrelated tasks. A closure with a `JoinHandle` passes its `join`, which
+    /// the exit hands the credit to.
+    pub(crate) fn claim_pooled(self, join: Option<Arc<Join>>) -> PoolParticipant {
         debug_assert!(!self.named, "claim_pooled on a spawn_named slot");
         let origin = self.origin;
         mem::forget(self);
         let prev = ctx::dedicated();
         mark_dedicated(origin);
         PoolParticipant {
+            join,
             prev_dedicated: prev,
             _not_send: PhantomData,
         }
@@ -151,7 +155,7 @@ impl Drop for DedicatedSlot {
     /// An unconsumed reservation returns the raw `active` count directly on drop, since no thread
     /// ever claimed the slot as credit; this release may itself be the quiescent edge.
     fn drop(&mut self) {
-        FLASH.release_unclaimed_slot();
+        FLASH.release_slot();
         if self.named {
             ACTIVE_NAMED_THREADS.fetch_sub(1, Ordering::Release);
         }
@@ -194,18 +198,55 @@ impl Drop for Participant {
 }
 
 /// RAII making a POOLED blocking thread a dedicated pacer for ONE closure
-/// (see [`DedicatedSlot::claim_pooled`]). Drop settles the credit and
-/// restores the pool thread's previous dedicated flag.
+/// (see [`DedicatedSlot::claim_pooled`]). Drop settles the credit, handing it
+/// to the closure's joiner when it has one, and restores the pool thread's
+/// previous dedicated flag.
 #[must_use]
 pub(crate) struct PoolParticipant {
     _not_send: PhantomData<*mut ()>,
+    join: Option<Arc<Join>>,
     prev_dedicated: bool,
 }
 
 impl Drop for PoolParticipant {
     fn drop(&mut self) {
-        FLASH.on_participant_exit();
+        let running = FLASH.exit_running();
         ctx::set_dedicated(self.prev_dedicated);
+        if running {
+            hand_over(self.join.as_deref(), HeldSlot { _priv: () });
+        }
+    }
+}
+
+/// An `active` count no thread holds as credit any more: the slot of work that
+/// has finished, kept until whoever joins that work has been woken. The
+/// runtime wakes a joiner only after the work has returned, so a slot released
+/// as the work returns leaves a moment in which every participant looks parked
+/// and the clock jumps past the joiner. Drop returns the count, which may be
+/// the quiescent edge.
+#[must_use]
+pub(crate) struct HeldSlot {
+    _priv: (),
+}
+
+impl Drop for HeldSlot {
+    fn drop(&mut self) {
+        FLASH.release_slot();
+    }
+}
+
+impl Core {
+    /// Move a finished task's `active_async` slot into a [`HeldSlot`]. Adding
+    /// to `active` cannot enable an advance, so this runs no advance rule.
+    pub(super) fn hold_async(&mut self, id: u64) -> HeldSlot {
+        debug_assert!(
+            self.registry.active_async > 0,
+            "async hold without a matching acquire"
+        );
+        self.registry.active_async -= 1;
+        self.registry.active_async_holders.remove(&id);
+        self.registry.active += 1;
+        HeldSlot { _priv: () }
     }
 }
 
@@ -355,24 +396,30 @@ impl FlashInner {
     /// Decrement `active` for a thread that EXITS while `Running` — the balancing
     /// half of the bootstrap (`None -> Parked` left `active` untouched; the first
     /// wake then `active += 1`'d it). Called from the spawn bracket after the
-    /// thread's body returns. Reads + clears the credit; if it was `Running`, drops
-    /// it from `active` and fires any advance the drop unblocks.
+    /// thread's body returns. If the credit was `Running`, drops it from `active`
+    /// and fires any advance the drop unblocks.
     pub(in crate::flash) fn on_participant_exit(&self) {
+        if self.exit_running() {
+            self.release_slot();
+        }
+    }
+
+    /// Read and clear the exiting thread's credit. True when it exits
+    /// `Running`: the thread is no longer a holder, but its count is still in
+    /// `active`, and the caller owes its release.
+    fn exit_running(&self) -> bool {
         let was = ctx::credit();
         ctx::set_credit(Credit::None);
         if was != Credit::Running {
-            return;
+            return false;
         }
         let mut s = self.core.lock();
         debug_assert!(
             s.registry.active > 0,
             "exiting running participant must be counted"
         );
-        s.registry.active -= 1;
         s.registry.active_sync_holders.remove(&current_thread_key());
-        let adv = s.try_advance(&self.clock);
-        drop(s);
-        adv.fire();
+        true
     }
 
     /// Reserve a dedicated pacer's slot: raw `active += 1` on the parent,
@@ -381,14 +428,15 @@ impl FlashInner {
         self.core.lock().registry.active += 1;
     }
 
-    /// Return a reservation no thread ever claimed ([`DedicatedSlot`] Drop):
-    /// undo the raw `active += 1` and fire any advance the release unblocks.
-    /// No credit is touched — the slot never became any thread's `Running`.
-    fn release_unclaimed_slot(&self) {
+    /// Return an `active` count no thread holds as credit — a reservation no
+    /// thread ever claimed ([`DedicatedSlot`]), a finished participant's
+    /// [`HeldSlot`], or an exiting thread's cleared credit — and fire any
+    /// advance the release unblocks.
+    fn release_slot(&self) {
         let mut s = self.core.lock();
         debug_assert!(
             s.registry.active > 0,
-            "unclaimed slot release without a matching reserve"
+            "slot release without a matching count"
         );
         s.registry.active -= 1;
         let adv = s.try_advance(&self.clock);

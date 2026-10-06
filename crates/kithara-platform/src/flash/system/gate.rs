@@ -4,7 +4,8 @@ use std::{
 };
 
 use super::{
-    FLASH, credit,
+    FLASH,
+    credit::{self, HeldSlot},
     state::{AtomicTaskState, ParkOutcome, TaskDiag, TaskState, WakeOutcome},
 };
 use crate::{sync::Arc, system::lock::Mutex};
@@ -54,12 +55,6 @@ impl TaskGate {
         })
     }
 
-    /// Poll returned `Ready`: the task is done — release its slot. The `DONE`
-    /// store and the counter decrement happen together under the engine lock.
-    pub(in crate::flash) fn complete(&self) {
-        FLASH.gate_complete(self.state(), self.id);
-    }
-
     /// A second handle to this task's diagnostics, for the engine's registry.
     pub(super) fn diag(&self) -> Arc<TaskDiag> {
         Arc::clone(&self.diag)
@@ -72,10 +67,19 @@ impl TaskGate {
         }
     }
 
-    /// Drop: release the slot iff the task still occupies one (`RUNNABLE`/`RUNNING`/
-    /// `RUNNING_NOTIFIED`). `PARKED` and `DONE` hold none.
-    pub(in crate::flash) fn on_drop(&self) {
-        FLASH.gate_drop_release(self.state(), self.id);
+    delegate::delegate! {
+        to FLASH {
+            /// Poll returned `Ready`: the task is done — its slot is held for its
+            /// joiner. The `DONE` store and the move happen together under the
+            /// engine lock.
+            #[call(gate_complete)]
+            pub(in crate::flash) fn complete(&self, [ self.state() ], [ self.id ]) -> HeldSlot;
+            /// Drop: hold the slot for the joiner iff the task still occupies one
+            /// (`RUNNABLE`/`RUNNING`/`RUNNING_NOTIFIED`). `PARKED` and `DONE` hold
+            /// none.
+            #[call(gate_drop)]
+            pub(in crate::flash) fn on_drop(&self, [ self.state() ], [ self.id ]) -> Option<HeldSlot>;
+        }
     }
 
     /// Poll returned `Pending`: `RUNNING`→`PARKED` releases the slot (a quiescent

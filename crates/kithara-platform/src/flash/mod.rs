@@ -11,6 +11,9 @@ mod diag;
 /// Typed engine ids (`CvId` / `WaiterId` / `ThreadKey`) plus the
 /// stateful-primitive `Backend` construction latch.
 mod ids;
+/// The handoff of finished work's engine slot to its joiner, and the
+/// `JoinHandle` that waits through it.
+mod join;
 mod participant;
 /// Flash-side mirror of the platform tree: re-import stubs where flash
 /// adds no semantics, flash-aware primitives where it does.

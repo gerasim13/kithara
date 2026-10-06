@@ -60,6 +60,14 @@ pub fn yield_now() {
     std::thread::yield_now();
 }
 
+/// Give other threads the CPU while this one stays runnable: the fairness
+/// yield of a loop that still has work. Without the flash engine it is the
+/// same OS yield as [`yield_now`].
+#[inline]
+pub fn yield_runnable() {
+    std::thread::yield_now();
+}
+
 /// Returns `false` on native targets.
 #[inline]
 #[must_use]
