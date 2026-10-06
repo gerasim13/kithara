@@ -1897,7 +1897,9 @@ steps = [
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
 kinds_github = ["main", "branch", "merge-request"]
-timeout_minutes = 60
+# The real-clock lane's budget: a build directory the host budget evicted
+# rebuilds whole at two jobs, which took 58 minutes on the trusted runner.
+timeout_minutes = 120
 
 [ext.ci.lanes.linux-doc]
 cache_group = "linux"
