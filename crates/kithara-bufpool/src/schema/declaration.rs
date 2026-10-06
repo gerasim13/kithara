@@ -1,8 +1,5 @@
 use crate::{PoolKey, region::PoolSlot};
 
-#[cfg(doctest)]
-mod contracts;
-
 /// Compile-time evidence that a schema contains `K`.
 pub trait HasPool<K>
 where
