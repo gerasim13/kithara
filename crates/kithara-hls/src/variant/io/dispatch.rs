@@ -31,9 +31,9 @@ enum AcquireSettle {
 }
 
 /// Settle an acquisition error after `failures` attempts, including this one.
-/// A live tmp claimant owns release, so TmpClaimed requeues without spending the budget.
+/// A live tmp claimant owns release, so `TmpClaimed` requeues without spending the budget.
 /// Other errors spend [`crate::HlsConfig::acquire_attempt_budget`] then fail; endless requeues
-/// would leave a planned slot permanently WaitingDemand without a visible terminal error.
+/// would leave a planned slot permanently `WaitingDemand` without a visible terminal error.
 const fn settle_for(err: &AssetsError, failures: u8, budget: u8) -> AcquireSettle {
     if matches!(err, AssetsError::Storage(StorageError::TmpClaimed(_))) {
         return AcquireSettle::Requeue;
