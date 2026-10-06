@@ -82,6 +82,24 @@ pub(crate) fn stop(child: &mut Child, what: &str) -> Result<ExitStatus> {
     })
 }
 
+/// Asks the owned group to stop, and kills it if its leader is still running
+/// once `grace` is up.
+#[cfg(unix)]
+pub(crate) fn terminate(child: &mut Child, grace: Duration) -> Result<ExitStatus> {
+    let pid = i32::try_from(child.id()).context("child process group id")?;
+    match killpg(Pid::from_raw(pid), Signal::SIGTERM) {
+        Ok(()) | Err(Errno::ESRCH) => {}
+        Err(error) => return Err(error).context("asking the owned group to stop"),
+    }
+    reap(child, grace, "terminated command")?.map_or_else(|| stop(child, "terminated command"), Ok)
+}
+
+/// Windows has no request to stop a process tree, only the kill.
+#[cfg(not(unix))]
+pub(crate) fn terminate(child: &mut Child, _grace: Duration) -> Result<ExitStatus> {
+    stop(child, "terminated command")
+}
+
 pub(crate) fn check(cancel: Option<&Cancel>) -> Result<()> {
     let signal = cancel.map_or(0, |cancel| cancel.pending.load(Ordering::SeqCst));
     if signal != 0 {
@@ -218,7 +236,10 @@ impl Drop for Cancel {
 
 #[cfg(all(test, unix))]
 mod tests {
+    use std::os::unix::process::ExitStatusExt as _;
+
     use super::*;
+    use crate::testing::signals;
 
     fn shell(script: &str) -> Child {
         spawn(
@@ -229,6 +250,51 @@ mod tests {
                 .stderr(Stdio::null()),
         )
         .expect("sh spawns")
+    }
+
+    /// A store asked to stop finishes its writes; one killed loses them.
+    #[test]
+    fn terminate_lets_the_command_stop_on_its_own() {
+        let mut child = spawn(
+            Command::new("sh")
+                .args([
+                    "-c",
+                    "trap 'exit 0' TERM; echo ready; while :; do sleep 0.05; done",
+                ])
+                .stdout(Stdio::piped()),
+        )
+        .unwrap();
+        let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+        let mut ready = String::new();
+        std::io::BufRead::read_line(&mut stdout, &mut ready).unwrap();
+        assert_eq!(ready, "ready\n");
+
+        let status = terminate(&mut child, consts::GRACE).unwrap();
+
+        assert_eq!(status.code(), Some(0), "{status}");
+    }
+
+    /// A command that does not stop when asked is killed once its grace is
+    /// up, so whoever asked is never held by it.
+    #[test]
+    fn terminate_kills_a_command_that_outlives_its_grace() {
+        let mut child = spawn(
+            Command::new("sh")
+                .args([
+                    "-c",
+                    "trap '' TERM; echo ready; while :; do sleep 0.05; done",
+                ])
+                .stdout(Stdio::piped()),
+        )
+        .unwrap();
+        let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+        let mut ready = String::new();
+        std::io::BufRead::read_line(&mut stdout, &mut ready).unwrap();
+        assert_eq!(ready, "ready\n");
+
+        let status = terminate(&mut child, Duration::from_millis(200)).unwrap();
+
+        assert_eq!(status.signal(), Some(Signal::SIGKILL as i32), "{status}");
     }
 
     #[test]
@@ -281,6 +347,7 @@ mod tests {
     #[test]
     fn cancellation_stops_the_child_group_and_preserves_an_unrelated_child() {
         let mut unrelated = shell("sleep 30");
+        let _signals = signals();
         let cancel = Cancel::install().unwrap();
         let mut owned = spawn(
             Command::new("sh")
