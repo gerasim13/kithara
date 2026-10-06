@@ -12,7 +12,7 @@ use crate::{
     item::AudioPlayerItem,
     observer::{FfiKeyProcessor, PlayerObserver, SeekCallback},
     types::{
-        FfiAbrMode, FfiActionAtItemEnd, FfiCrossfadeSettings, FfiDuckingMode, FfiError, FfiKeyRule,
+        FfiAbrMode, FfiActionAtItemEnd, FfiCrossfadeSettings, FfiError, FfiKeyRule,
         FfiPlaybackOrder, FfiPlayerSnapshot, FfiPlayerStatus, FfiRepeatMode,
     },
     web::{bridge::WorkerBridge, commands::WorkerCmd, observer::router::Routes},
@@ -203,10 +203,6 @@ impl WasmInner {
         crate::web::interop::next_request_id()
     }
 
-    pub(crate) fn notify_audio_route_changed(&self, _reason: &str) -> Result<(), FfiError> {
-        Ok(())
-    }
-
     pub(crate) fn notify_interruption(&self, _kind: InterruptionKind) {}
 
     pub(crate) fn pause(&self) {
@@ -372,10 +368,6 @@ impl WasmInner {
         self.try_send(WorkerCmd::SetCrossfade(typed))?;
         *self.crossfade_settings.lock() = settings;
         Ok(())
-    }
-
-    pub(crate) fn set_ducking_mode(&self, mode: FfiDuckingMode) -> Result<(), FfiError> {
-        self.try_send(WorkerCmd::SetDucking(mode.into()))
     }
 
     pub(crate) fn set_eq_gain(&self, band: u32, gain_db: f32) -> Result<(), FfiError> {

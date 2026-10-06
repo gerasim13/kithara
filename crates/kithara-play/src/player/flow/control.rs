@@ -8,10 +8,7 @@ use tracing::warn;
 
 use super::super::core::PlayerRuntime;
 use crate::{
-    api::{
-        InterruptionKind, RouteChangeReason, RouteDescription, SessionDuckingMode, SessionEvent,
-        SlotId,
-    },
+    api::{InterruptionKind, SessionEvent, SlotId},
     error::PlayError,
 };
 
@@ -34,17 +31,6 @@ impl<S> PlayerRuntime<S> {
             ],
         )?;
         Ok(id)
-    }
-
-    /// Notify the audio host that the platform route changed and the
-    /// native output stream must be recreated if playback is active.
-    pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
-        self.core.engine.invalidate_audio_route(reason)?;
-        self.core.engine.bus().publish(SessionEvent::RouteChanged {
-            reason: RouteChangeReason::Unknown,
-            previous_route: RouteDescription::default(),
-        });
-        Ok(())
     }
 
     /// Notify the player that the platform interrupted, or released, the audio
@@ -185,8 +171,6 @@ impl<S> PlayerRuntime<S> {
             /// replaced.
             #[call(set_master_eq_layout)]
             pub fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), PlayError>;
-            /// Lower or restore the whole session output under a competing sound.
-            pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError>;
             /// Pump audio backend/runtime state.
             pub fn tick(&self) -> Result<(), PlayError>;
         }

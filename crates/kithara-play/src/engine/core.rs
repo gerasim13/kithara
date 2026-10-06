@@ -18,7 +18,7 @@ use tracing::{debug, info};
 
 use super::{config::EngineConfig, slots::SlotTable};
 use crate::{
-    api::{EngineEvent, SessionDuckingMode, SlotId},
+    api::{EngineEvent, SlotId},
     error::PlayError,
     session::{RegisteredPlayer, SessionBinding, SessionHandle, SessionSampleRate},
 };
@@ -165,17 +165,6 @@ impl<S> EngineImpl<S> {
         self.config.eq_layout.lock().len()
     }
 
-    pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
-        if !self.running.load() {
-            debug!(
-                reason,
-                "audio route invalidation ignored while engine is stopped"
-            );
-            return Ok(());
-        }
-        self.session.invalidate_audio_route(reason)
-    }
-
     pub fn is_running(&self) -> bool {
         self.running.load()
     }
@@ -275,10 +264,6 @@ impl<S> EngineImpl<S> {
         }
         *self.config.eq_layout.lock() = eq_layout;
         Ok(())
-    }
-
-    pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
-        self.session.set_session_ducking(mode)
     }
 
     pub fn start(&self) -> Result<(), PlayError> {

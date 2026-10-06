@@ -9,7 +9,7 @@ use kithara_render::bridge::RtMetricsSnapshot;
 use super::{PlayerRuntime, SelectTransition};
 use crate::{
     EngineLoadSnapshot, EqBandConfig, InterruptionKind, PlayError, PlaybackSnapshot, PlayerStatus,
-    Resource, ResourceConfig, SelectionPlayback, SessionDuckingMode, SuccessorLink,
+    Resource, ResourceConfig, SelectionPlayback, SuccessorLink,
 };
 
 /// Cloneable runtime capability used by player-owned orchestration.
@@ -60,12 +60,6 @@ where
 
     fn command(&self, command: impl FnOnce(&PlayerRuntime<S>)) {
         let _ = self.runtime.with_open(command);
-    }
-
-    /// Restart the current output route.
-    pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
-        self.runtime
-            .with_open_result(|runtime| runtime.invalidate_audio_route(reason))
     }
 
     /// Whether playback is explicitly paused.
@@ -210,12 +204,6 @@ where
     /// Update live playback rate unless the owning player is closed.
     pub fn set_rate(&self, rate: f32) {
         self.command(|runtime| runtime.set_rate(rate));
-    }
-
-    /// Lower or restore the whole session output under a competing sound.
-    pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
-        self.runtime
-            .with_open_result(|runtime| runtime.set_session_ducking(mode))
     }
 
     /// Update output volume unless the owning player is closed.

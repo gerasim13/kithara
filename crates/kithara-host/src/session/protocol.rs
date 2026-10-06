@@ -36,6 +36,11 @@ pub(crate) enum HostCmd<S> {
     DetachOutputs {
         tap: Tap,
     },
+    /// The platform moved the output to another route: the stream restarts
+    /// and every deck hears the change.
+    InvalidateAudioRoute {
+        reason: String,
+    },
     Shutdown,
 }
 

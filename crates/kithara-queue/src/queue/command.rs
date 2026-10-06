@@ -2,8 +2,7 @@ use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
 use kithara_platform::sync::mpsc::Sender;
 use kithara_play::{
-    CrossfadeSettings, EqBandConfig, InterruptionKind, PlayError, SeekOutcome, SessionDuckingMode,
-    player::Player,
+    CrossfadeSettings, EqBandConfig, InterruptionKind, PlayError, SeekOutcome, player::Player,
 };
 
 use super::{Queue, Transition};
@@ -93,7 +92,6 @@ where
 
 /// A player setting or platform notice the queue passes to its player.
 pub(crate) enum PlayerCall {
-    InvalidateAudioRoute(String),
     NotifyInterruption(InterruptionKind),
     ResetEq,
     SetDefaultRate(f32),
@@ -102,7 +100,6 @@ pub(crate) enum PlayerCall {
     SetLevel(f32),
     SetMuted(bool),
     SetRate(f32),
-    SetSessionDucking(SessionDuckingMode),
     SetVolume(f32),
 }
 
@@ -184,7 +181,6 @@ where
         self.ensure_open()?;
         let player = &self.player;
         match call {
-            PlayerCall::InvalidateAudioRoute(reason) => player.invalidate_audio_route(&reason),
             PlayerCall::NotifyInterruption(kind) => {
                 player.notify_interruption(kind);
                 Ok(())
@@ -205,7 +201,6 @@ where
                 player.set_rate(rate);
                 Ok(())
             }
-            PlayerCall::SetSessionDucking(mode) => player.set_session_ducking(mode),
             PlayerCall::SetVolume(volume) => {
                 player.set_volume(volume);
                 Ok(())

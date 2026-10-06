@@ -12,7 +12,7 @@ mod wire {
     };
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
 
-    use crate::api::{SessionDuckingMode, SessionTransportSnapshot, SlotId};
+    use crate::api::{SessionTransportSnapshot, SlotId};
 
     pub type PlayerId = u64;
 
@@ -99,13 +99,7 @@ mod wire {
             eq_layout: Vec<EqBandConfig>,
             player_id: PlayerId,
         },
-        SetSessionDucking {
-            mode: SessionDuckingMode,
-        },
         QuerySessionTransport,
-        InvalidateAudioRoute {
-            reason: String,
-        },
         QuerySampleRate,
         QueryStreamShape,
         Tick,
@@ -183,10 +177,7 @@ mod handle {
     use kithara_warp::BeatGridId;
 
     use super::wire::{AllocatedSlot, Cmd, PlayerId, RegisteredPlayer, Reply, SessionSampleRate};
-    use crate::{
-        api::{SessionDuckingMode, SlotId},
-        error::PlayError,
-    };
+    use crate::{api::SlotId, error::PlayError};
 
     /// Handle used by resident players to reach their session owner.
     ///
@@ -331,13 +322,6 @@ mod handle {
             }
         }
 
-        pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::InvalidateAudioRoute {
-                reason: reason.to_owned(),
-            })
-            .map(|_| ())
-        }
-
         #[must_use]
         pub(crate) fn pending() -> Self {
             Self(Arc::new(SessionSlot {
@@ -406,10 +390,6 @@ mod handle {
                 player_id,
             })
             .map(|_| ())
-        }
-
-        pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::SetSessionDucking { mode }).map(|_| ())
         }
 
         pub fn start_player(

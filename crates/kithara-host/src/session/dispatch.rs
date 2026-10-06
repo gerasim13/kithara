@@ -2,11 +2,10 @@ use std::num::NonZeroU32;
 
 use firewheel::{FirewheelContext, error::UpdateError};
 use kithara_bufpool::HasPool;
-use kithara_command::When;
 use kithara_config::ConfigOwner;
 #[cfg(any(target_arch = "wasm32", test))]
 use kithara_platform::sync::mpsc;
-use kithara_play::{PlayError, StreamShape};
+use kithara_play::{RouteChangeReason, RouteDescription, SessionEvent, StreamShape};
 use kithara_warp::BeatGridId;
 use tracing::{debug, trace, warn};
 
@@ -20,7 +19,7 @@ use super::{
     transport,
     transport::RouteRestartStatus,
 };
-use crate::host::{HostSettingsChange, HostSettingsExec};
+use crate::host::HostSettingsExec;
 
 /// Runs one Host command after settling the transport's receipts, so the
 /// queue's credits come back and the settings catch up even while no tick
@@ -48,6 +47,8 @@ where
             tap::detach(state, target);
             HostReply::Ok
         }
+        HostCmd::InvalidateAudioRoute { reason } => change_route(state, &reason)
+            .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
         HostCmd::Shutdown => HostReply::Ok,
     }
 }
@@ -137,19 +138,8 @@ where
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
-        Cmd::SetSessionDucking { mode } => {
-            match state.exec(HostSettingsChange::Ducking(mode), When::Next, &mut ()) {
-                Ok(()) => Reply::Ok,
-                Err(PlayError::Session(error)) => Reply::Err(error),
-                Err(error) => Reply::Err(SessionError::Graph(error.to_string())),
-            }
-        }
         Cmd::QuerySessionTransport => match transport::snapshot(state) {
             Ok(snapshot) => Reply::SessionTransport(snapshot),
-            Err(err) => Reply::Err(err),
-        },
-        Cmd::InvalidateAudioRoute { reason } => match invalidate_audio_route(state, &reason) {
-            Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
         Cmd::QuerySampleRate => {
@@ -299,6 +289,20 @@ fn restart_dead_stream<T, S>(state: &mut SessionState<T, S>) -> Reply {
     }
 }
 
+/// Restarts the output on the platform's new route and tells every deck's
+/// listeners the route changed.
+fn change_route<T, S>(state: &mut SessionState<T, S>, reason: &str) -> Result<(), SessionError> {
+    invalidate_audio_route(state, reason)?;
+    let event = SessionEvent::RouteChanged {
+        reason: RouteChangeReason::Unknown,
+        previous_route: RouteDescription::default(),
+    };
+    for deck in state.graph.decks() {
+        deck.bus.publish(event.clone());
+    }
+    Ok(())
+}
+
 pub(super) fn invalidate_audio_route<T, S>(
     state: &mut SessionState<T, S>,
     reason: &str,
@@ -395,7 +399,7 @@ mod tests {
         },
         time::Duration,
     };
-    use kithara_play::{BufferGeometryError, DeckMixerConfig, Tempo};
+    use kithara_play::{BufferGeometryError, DeckMixerConfig, PlayError, Tempo};
     use kithara_test_utils::{
         bufpool::{TestPools, pools},
         kithara,
@@ -591,6 +595,19 @@ mod tests {
                 HostCmd::Configure {
                     change: HostSettingsChange::SampleRate(rate),
                     at: When::Next,
+                },
+            ),
+            HostReply::Ok
+        ));
+    }
+
+    /// Moves the session's output to a new platform route.
+    fn change_route_to(state: &mut TestState, reason: &str) {
+        assert!(matches!(
+            run_host_cmd(
+                state,
+                HostCmd::InvalidateAudioRoute {
+                    reason: reason.to_owned(),
                 },
             ),
             HostReply::Ok
@@ -975,15 +992,7 @@ mod tests {
         );
         let before_route = host_grid(&state);
 
-        assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::InvalidateAudioRoute {
-                    reason: String::from("oldDeviceUnavailable"),
-                },
-            ),
-            Reply::Ok
-        ));
+        change_route_to(&mut state, "oldDeviceUnavailable");
 
         assert_eq!(
             route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
@@ -992,15 +1001,7 @@ mod tests {
         );
         assert_route_boundary(&before_route, &host_grid(&state));
         let first_boundary = host_grid(&state);
-        assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::InvalidateAudioRoute {
-                    reason: String::from("newDeviceAvailable"),
-                },
-            ),
-            Reply::Ok
-        ));
+        change_route_to(&mut state, "newDeviceAvailable");
         assert_eq!(
             route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
             3,
@@ -1545,27 +1546,6 @@ mod tests {
         assert!(
             steepest < (DC - ducked) / 100.0,
             "no step between neighbouring samples on the way down: {steepest}"
-        );
-    }
-
-    #[kithara::test]
-    fn a_ducking_mode_from_a_player_session_is_the_host_setting() {
-        let mut state = test_state(start_route_loss_stream);
-
-        assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::SetSessionDucking {
-                    mode: SessionDuckingMode::Soft,
-                },
-            ),
-            Reply::Ok
-        ));
-
-        assert_eq!(
-            state.settings.config().ducking(),
-            SessionDuckingMode::Soft,
-            "with no render graph the setting changes at once"
         );
     }
 

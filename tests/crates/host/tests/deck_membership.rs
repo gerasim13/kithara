@@ -6,19 +6,17 @@ use kithara::{
     host::{HostConfig, HostSettings},
     play::{
         BufferGeometryError, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
-        SessionError,
+        SessionError, SessionEvent,
     },
     warp::WarpConfig,
 };
 use kithara_integration_tests::{offline::OfflineHostHarness, smoothing::consts};
-use kithara_test_utils::bufpool::pools;
+use kithara_test_utils::bufpool::{Pools, TestPools, pools};
 
-#[kithara::test(tokio)]
-async fn failed_deck_preparation_releases_host_membership() {
-    let region = pools();
-    let sample_rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate");
+/// An offline Host at the suite's rate and block, drawing on `region`.
+async fn offline_host(region: &Pools) -> OfflineHostHarness<TestPools> {
     let config = HostConfig::offline(region.clone())
-        .settings(HostSettings::builder().sample_rate(sample_rate).build())
+        .settings(HostSettings::builder().sample_rate(sample_rate()).build())
         .max_block_frames(
             u32::try_from(consts::BLOCK_FRAMES)
                 .ok()
@@ -26,7 +24,18 @@ async fn failed_deck_preparation_releases_host_membership() {
                 .expect("block size"),
         )
         .build();
-    let host = OfflineHostHarness::new(config).await.expect("offline host");
+    OfflineHostHarness::new(config).await.expect("offline host")
+}
+
+fn sample_rate() -> NonZeroU32 {
+    NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate")
+}
+
+#[kithara::test(tokio)]
+async fn failed_deck_preparation_releases_host_membership() {
+    let region = pools();
+    let sample_rate = sample_rate();
+    let host = offline_host(&region).await;
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let invalid = PlayerImpl::new(
         PlayerConfig::builder()
@@ -88,5 +97,40 @@ async fn failed_deck_preparation_releases_host_membership() {
         deck.pause();
     })
     .await;
+    host.close().await;
+}
+
+#[kithara::test(tokio)]
+async fn a_route_change_reaches_every_deck_the_host_holds() {
+    let region = pools();
+    let host = offline_host(&region).await;
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
+    let mut decks = Vec::new();
+    for _ in 0..2 {
+        let deck = host
+            .insert(PlayerImpl::new(
+                PlayerConfig::builder()
+                    .sample_rate(sample_rate())
+                    .worker(worker.clone())
+                    .build(),
+            ))
+            .await
+            .expect("the Host takes the deck");
+        decks.push((deck.bus().subscribe::<SessionEvent>(), deck));
+    }
+
+    host.invalidate_audio_route("oldDeviceUnavailable")
+        .await
+        .expect("the Host restarts its route");
+
+    for (heard, _deck) in &mut decks {
+        assert!(
+            matches!(
+                heard.try_recv().map(|envelope| envelope.event),
+                Ok(SessionEvent::RouteChanged { .. })
+            ),
+            "every deck the Host holds hears the route change"
+        );
+    }
     host.close().await;
 }

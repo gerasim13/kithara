@@ -129,16 +129,6 @@ impl<S> Host<S> {
         self.root_view.is_empty()
     }
 
-    fn exec_play_ok(&self, cmd: Cmd<S>) -> Result<(), PlayError> {
-        match self.dispatcher.exec(cmd)? {
-            Reply::Ok => Ok(()),
-            Reply::Err(error) => Err(error.into()),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for session command".into(),
-            )),
-        }
-    }
-
     fn exec_host_ok(&self, cmd: HostCmd<S>, what: &'static str) -> Result<(), PlayError> {
         match self.dispatcher.exec_host(cmd).map_err(PlayError::from)? {
             HostReply::Ok => Ok(()),
@@ -167,7 +157,8 @@ impl<S> Host<S> {
         self.exec_host_ok(HostCmd::DetachOutputs { tap }, "output detach")
     }
 
-    /// Restart the current output route while preserving Host-owned graph state.
+    /// Restarts the output on the platform's new route, keeping Host-owned
+    /// graph state, and tells every deck's listeners the route changed.
     ///
     /// # Errors
     /// Returns an error when the session cannot restart its output route.
@@ -175,9 +166,12 @@ impl<S> Host<S> {
     where
         R: Into<String>,
     {
-        self.exec_play_ok(Cmd::InvalidateAudioRoute {
-            reason: reason.into(),
-        })
+        self.exec_host_ok(
+            HostCmd::InvalidateAudioRoute {
+                reason: reason.into(),
+            },
+            "route invalidation",
+        )
     }
 
     /// Reads the rate the output runs at as measured, beside the rate the

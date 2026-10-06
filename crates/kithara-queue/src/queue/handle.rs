@@ -1,9 +1,7 @@
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
 use kithara_platform::sync::mpsc;
-use kithara_play::{
-    CrossfadeSettings, EqBandConfig, InterruptionKind, PlayError, SeekOutcome, SessionDuckingMode,
-};
+use kithara_play::{CrossfadeSettings, EqBandConfig, InterruptionKind, PlayError, SeekOutcome};
 
 use super::{
     QueueControl, Transition,
@@ -110,19 +108,6 @@ where
     /// Returns a queue or player error when the successor cannot be selected.
     pub fn next(&self, transition: Transition) -> Result<Option<TrackId>, QueueError> {
         self.call(|reply| QueueCommand::Next { transition, reply })?
-    }
-
-    /// Platform audio-route changed while playback may be active.
-    ///
-    /// Recreates the native output stream below the queue without
-    /// changing queue state, current item, or track loading.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`QueueError`] when the underlying player cannot restart
-    /// the active audio route.
-    pub fn notify_audio_route_changed(&self, reason: &str) -> Result<(), QueueError> {
-        Ok(self.call_player(PlayerCall::InvalidateAudioRoute(reason.to_owned()))?)
     }
 
     /// The platform interrupted, or released, the audio output.
@@ -273,16 +258,6 @@ where
     /// Set repeat mode.
     pub fn set_repeat(&self, mode: RepeatMode) {
         self.command(|reply| QueueCommand::SetRepeat { mode, reply });
-    }
-
-    /// Lower or restore the whole session output under a competing sound,
-    /// such as a call or a navigation prompt.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`QueueError`] when the session rejects the change.
-    pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), QueueError> {
-        Ok(self.call_player(PlayerCall::SetSessionDucking(mode))?)
     }
 
     /// Replace the entire queue with the given sources.

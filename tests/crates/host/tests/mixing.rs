@@ -87,9 +87,8 @@ impl MixHarness {
     }
 
     async fn set_ducking(&self, mode: SessionDuckingMode) {
-        let player = self.players[0].control().clone();
         self.host
-            .run(move || player.set_session_ducking(mode))
+            .with(move |host| host.set_ducking(mode))
             .await
             .expect("set session ducking");
     }

@@ -43,7 +43,7 @@ use crate::{
     pools::{FfiQueue, FfiQueueControl, FfiResourceConfig, FfiTrackSource, FfiWorker},
     registry::ItemRegistry,
     types::{
-        FfiAbrMode, FfiActionAtItemEnd, FfiCrossfadeSettings, FfiDuckingMode, FfiError, FfiKeyRule,
+        FfiAbrMode, FfiActionAtItemEnd, FfiCrossfadeSettings, FfiError, FfiKeyRule,
         FfiPlaybackOrder, FfiPlayerSnapshot, FfiPlayerStatus, FfiRepeatMode,
     },
 };
@@ -353,17 +353,6 @@ impl NativeInner {
             .collect()
     }
 
-    pub(crate) fn notify_audio_route_changed(&self, reason: &str) -> Result<(), FfiError> {
-        self.queue
-            .notify_audio_route_changed(reason)
-            .map_err(|err| match err {
-                QueueError::Play(err) => FfiError::from(err),
-                other => FfiError::Internal {
-                    description: other.to_string(),
-                },
-            })
-    }
-
     pub(crate) fn remove(&self, item: &AudioPlayerItem) -> Result<(), FfiError> {
         if !*item.inserted.lock() {
             return Err(FfiError::InvalidArgument {
@@ -490,17 +479,6 @@ impl NativeInner {
         self.queue
             .set_crossfade_settings(settings.try_into()?)
             .map_err(FfiError::from)
-    }
-
-    pub(crate) fn set_ducking_mode(&self, mode: FfiDuckingMode) -> Result<(), FfiError> {
-        self.queue
-            .set_session_ducking(mode.into())
-            .map_err(|err| match err {
-                QueueError::Play(err) => FfiError::from(err),
-                other => FfiError::Internal {
-                    description: other.to_string(),
-                },
-            })
     }
 
     pub(crate) fn set_eq_gain(&self, band: u32, gain_db: f32) -> Result<(), FfiError> {
