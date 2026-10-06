@@ -117,9 +117,10 @@ pub(crate) struct CiLaneConfig {
     #[serde(default)]
     pub(crate) publishes_sources: bool,
     pub(crate) timeout_minutes: u32,
-    /// Checkout depth. Zero is full history, which a lane comparing against a
-    /// base revision needs and a shallow clone does not carry.
-    pub(crate) fetch_depth: u32,
+    /// Whether the lane reads the history of the commit it checks out, as a
+    /// comparison against an earlier revision does. Without it the lane runs
+    /// on the tip alone.
+    pub(crate) history: bool,
     pub(crate) artifact: Option<CiLaneArtifact>,
     /// The concurrency group a lane wanting the whole host queues in.
     pub(crate) queue: Option<String>,

@@ -52,7 +52,7 @@ pub(crate) enum Field {
 pub(crate) struct Entry {
     pub(crate) lane: String,
     pub(crate) timeout: u32,
-    pub(crate) depth: u32,
+    pub(crate) history: bool,
     pub(crate) artifact: Option<CiLaneArtifact>,
     pub(crate) queue: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -63,7 +63,7 @@ pub(crate) struct Entry {
 pub(crate) struct Dependent {
     pub(crate) lane: String,
     pub(crate) timeout: u32,
-    pub(crate) depth: u32,
+    pub(crate) history: bool,
     pub(crate) needs: Vec<String>,
     pub(crate) artifact: Option<CiLaneArtifact>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -152,7 +152,7 @@ pub(crate) fn render(
         .map(|(name, lane)| Entry {
             lane: name.clone(),
             timeout: lane.timeout_minutes,
-            depth: lane.fetch_depth,
+            history: lane.history,
             artifact: lane.artifact.clone(),
             queue: lane.queue.clone(),
             runner: github_runner(lane, args.kind),
@@ -189,7 +189,7 @@ pub(crate) fn render(
         .map(|(name, lane)| Dependent {
             lane: name.clone(),
             timeout: lane.timeout_minutes,
-            depth: lane.fetch_depth,
+            history: lane.history,
             needs: lane.needs.clone(),
             artifact: lane.artifact.clone(),
             runner: github_runner(lane, args.kind),
@@ -377,7 +377,7 @@ mod tests {
         assert_eq!(dependent, ["deep-stress-report"]);
         assert_eq!(
             field(&selection, Some(Field::Dependent)).expect("the dependent field renders"),
-            r#"[{"lane":"deep-stress-report","timeout":30,"depth":0,"needs":["deep-stress"],"artifact":{"name":"quality-report","path":"target/consolidated-quality-report.md","when":"failure"}}]"#
+            r#"[{"lane":"deep-stress-report","timeout":30,"history":false,"needs":["deep-stress"],"artifact":{"name":"quality-report","path":"target/consolidated-quality-report.md","when":"failure"}}]"#
         );
     }
 

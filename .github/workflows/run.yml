@@ -118,7 +118,7 @@ jobs:
       lane: ${{ matrix.lane }}
       kind: ${{ inputs.kind }}
       timeout-minutes: ${{ matrix.timeout }}
-      fetch-depth: ${{ matrix.depth }}
+      history: ${{ matrix.history }}
       artifact-name: ${{ matrix.artifact.name || '' }}
       artifact-path: ${{ matrix.artifact.path || '' }}
       artifact-when: ${{ matrix.artifact.when || 'always' }}
@@ -143,7 +143,7 @@ jobs:
       lane: ${{ matrix.lane }}
       kind: ${{ inputs.kind }}
       timeout-minutes: ${{ matrix.timeout }}
-      fetch-depth: ${{ matrix.depth }}
+      history: ${{ matrix.history }}
       download: ${{ join(matrix.needs, ' ') }}
       artifact-name: ${{ matrix.artifact.name || '' }}
       artifact-path: ${{ matrix.artifact.path || '' }}

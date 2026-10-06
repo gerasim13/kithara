@@ -2039,6 +2039,80 @@ fn a_lane_leaves_its_build_directory_to_the_slot_it_claims() {
     }
 }
 
+/// A job checks out the commit it runs, never every branch.
+///
+/// `actions/checkout` at depth zero fetches every branch and tag, and a fleet
+/// runner keeps its checkout between jobs with garbage collection off. Every
+/// lane defaulted to depth zero, so each runner's Git directory carried the
+/// history of every branch the fork ever had, 12 to 20 GB a runner. A lane
+/// that compares against an earlier revision reads the history of the commit
+/// it checked out, which is the only history it compares against.
+#[test]
+fn a_checkout_never_fetches_every_branch() {
+    for name in workflow_file_names() {
+        let workflow = github_workflow(&name);
+        for (job_name, job) in workflow_jobs(&workflow) {
+            let Some(steps) = job.get("steps").and_then(Value::as_sequence) else {
+                continue;
+            };
+            for step in steps.iter().filter_map(Value::as_mapping) {
+                let is_checkout = step
+                    .get("uses")
+                    .and_then(Value::as_str)
+                    .is_some_and(|uses| uses.starts_with("actions/checkout@"));
+                let depth = step
+                    .get("with")
+                    .and_then(Value::as_mapping)
+                    .and_then(|inputs| inputs.get("fetch-depth"));
+                if let (true, Some(depth)) = (is_checkout, depth) {
+                    assert!(
+                        depth.as_u64().is_some_and(|depth| depth > 0),
+                        "{name} job {job_name:?} checks out at depth {depth:?}, which can fetch \
+                         every branch"
+                    );
+                }
+            }
+        }
+    }
+    let workflow = github_workflow("lane.yml");
+    let history = named_step(
+        workflow_job(workflow_jobs(&workflow), "run"),
+        "Fetch the history of the checked-out commit",
+    );
+    assert_eq!(
+        mapping_field(history, "if").as_str(),
+        Some("${{ inputs.history }}"),
+        "only a lane that reads history fetches it"
+    );
+    assert_eq!(
+        mapping_field(history, "run").as_str().map(str::trim),
+        Some(r#"git fetch --no-tags --quiet --depth=2147483647 origin "$(git rev-parse HEAD)""#),
+        "a lane reads the history of the commit it checked out, not of the repository"
+    );
+}
+
+/// A runner keeps its checkout for every later job, and checkout turns garbage
+/// collection off in it, so each job's fetch left one more pack behind: up to
+/// 670 of them on one runner. The lane collects that checkout's garbage on
+/// Git's own thresholds once it has fetched everything it reads.
+#[test]
+fn a_kept_checkout_is_collected_on_gits_own_thresholds() {
+    let workflow = github_workflow("lane.yml");
+    let job = workflow_job(workflow_jobs(&workflow), "run");
+    let collect = "Collect the checkout's garbage";
+    assert_eq!(
+        mapping_field(named_step(job, collect), "run")
+            .as_str()
+            .map(str::trim),
+        Some("git -c gc.auto=6700 -c gc.autoDetach=false gc --auto --quiet")
+    );
+    assert!(
+        step_position(job, "Fetch the history of the checked-out commit")
+            < step_position(job, collect),
+        "the garbage is collected after the last fetch"
+    );
+}
+
 /// A step that reads what the lane built must ask where the lane builds.
 ///
 /// The timing report was collected from a hard-coded `/cache/target`, and

@@ -1413,7 +1413,7 @@ steps = [{ args = ["deps", "semver"], label = "public API compatibility" }]
 role = "gate"
 kinds = ["weekly", "release"]
 timeout_minutes = 60
-fetch_depth = 0
+history = true
 
 # One browser per job: the two engines fail for unrelated reasons, and Chromium
 # owns the WebCodecs target while Firefox keeps the full integration suite. Both
@@ -2130,7 +2130,6 @@ timeout_minutes = 90
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 publishes_sources = true
@@ -2143,7 +2142,6 @@ timeout_minutes = 60
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["lint", "arch"], label = "architecture checks" }]
@@ -2157,7 +2155,6 @@ timeout_minutes = 30
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 steps = [
@@ -2176,7 +2173,6 @@ timeout_minutes = 60
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["perf", "memory"], label = "memory budgets" }]
@@ -2234,7 +2230,6 @@ cache_group = "linux"
 label = "Linux"
 freshness = "checksum"
 os = "linux"
-fetch_depth = 0
 tools = ["cargo", "just", "sccache"]
 program = "just"
 steps = [
@@ -2313,7 +2308,7 @@ timeout_minutes = 60
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 0
+history = true
 queue = "heavy-linux"
 tools = ["cargo", "just"]
 program = "just"
@@ -2338,7 +2333,6 @@ timeout_minutes = 360
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "similarity-report", path = "target/similarity" }
@@ -2352,7 +2346,6 @@ timeout_minutes = 120
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "architecture", path = "target/architecture" }
@@ -2376,7 +2369,6 @@ timeout_minutes = 120
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "coverage-risk", path = "target/quality-lab/\ncoverage/" }
@@ -2392,7 +2384,6 @@ timeout_minutes = 240
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "health-report", path = "target/health-report.md\ntarget/health-logs/" }
@@ -2410,7 +2401,6 @@ timeout_minutes = 120
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "quality-report", path = "target/consolidated-quality-report.md" }
