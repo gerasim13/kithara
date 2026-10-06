@@ -105,6 +105,21 @@ fn spawn_ticker(queue: &Queue<TestPools>) -> QueueTicker {
     QueueTicker::spawn(queue.control(), Duration::from_millis(20))
 }
 
+/// Issues a queue command off the runtime, as the app thread does: a command
+/// waits on the queue's admission while a tick or a load applies.
+async fn command<R>(
+    queue: &Arc<Queue<TestPools>>,
+    f: impl FnOnce(&Queue<TestPools>) -> R + Send + 'static,
+) -> R
+where
+    R: Send + 'static,
+{
+    let queue = Arc::clone(queue);
+    tokio::task::spawn_blocking(move || f(&queue))
+        .await
+        .expect("queue command must join")
+}
+
 /// A local fixture per track: the load has to run and land asynchronously,
 /// but nothing about this test depends on how long it takes — the gate owns
 /// the ordering — so it stays off the shared test server.
@@ -160,15 +175,15 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(
     let mut ticker = spawn_ticker(&queue);
     let mut status_rx = queue.subscribe();
 
-    let ids: Vec<_> = (0..TRACK_COUNT)
-        .map(|index| {
-            queue.append(TrackSource::Config(Box::new(resource_config(
-                &paths[index],
-                &store,
-            ))))
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .expect("queue is open while fixtures are appended");
+    let mut ids = Vec::with_capacity(TRACK_COUNT);
+    for path in &paths {
+        let source = TrackSource::Config(Box::new(resource_config(path, &store)));
+        ids.push(
+            command(&queue, move |q| q.append(source))
+                .await
+                .expect("queue is open while fixtures are appended"),
+        );
+    }
 
     // `play` is issued while every track is still loading, exactly as the iOS
     // surface does, and parks inside the engine start.
@@ -200,8 +215,9 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(
     .await
     .unwrap_or_else(|error| panic!("precondition: {error}"));
 
-    queue
-        .select(ids[1], Transition::None)
+    let second = ids[1];
+    command(&queue, move |q| q.select(second, Transition::None))
+        .await
         .expect("selecting the second track must be accepted");
     wait_for_event(
         &mut status_rx,
@@ -217,8 +233,9 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(
     .await
     .unwrap_or_else(|error| panic!("precondition: {error}"));
 
-    queue
-        .select(ids[0], Transition::None)
+    let first = ids[0];
+    command(&queue, move |q| q.select(first, Transition::None))
+        .await
         .unwrap_or_else(|error| {
             panic!(
                 "switching back to the track `play` consumed was rejected: {error} — the \
@@ -226,6 +243,6 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(
             )
         });
 
-    queue.clear();
+    command(&queue, |q| q.clear()).await;
     ticker.stop().await;
 }

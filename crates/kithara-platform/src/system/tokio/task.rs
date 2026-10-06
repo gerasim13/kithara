@@ -1,5 +1,8 @@
 use std::panic::Location;
 
+/// The fairness yield of a task that still has work: without the flash engine
+/// it is the same scheduler yield as `yield_now`.
+pub use super::backend::task::yield_now as yield_runnable;
 pub use super::backend::task::*;
 use super::runtime::Handle;
 use crate::maybe_send::MaybeSend;

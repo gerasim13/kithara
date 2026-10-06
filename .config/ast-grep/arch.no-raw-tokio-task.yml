@@ -6,12 +6,17 @@ message: |
   - `tokio::spawn` / `tokio::task::spawn` -> `kithara_platform::tokio::task::spawn`
   - `tokio::task::spawn_blocking`         -> `kithara_platform::tokio::task::spawn_blocking`
   - `tokio::task::yield_now`              -> `kithara_platform::tokio::task::yield_now`
+                                             (waiting on another participant) or
+                                             `kithara_platform::tokio::task::yield_runnable`
+                                             (a turn handed back with work in hand)
 
   `spawn` wraps the future in the quiescence poll-wrapper (a raw spawn runs
   UNCOUNTED and lets the virtual clock race past it). `spawn_blocking` propagates
   ambient flash state and reserves an active slot while the blocking closure is
   queued or running. `yield_now` must relinquish the virtual clock (a raw yield
-  self-wakes and pins the clock - a livelock).
+  self-wakes and pins the clock - a livelock). `yield_runnable` keeps the task
+  counted, so the clock cannot pass work it still holds (a raw yield frees the
+  task's slot until its deferred wake lands).
 
       // bad:  tokio::spawn(fut);           tokio::task::yield_now().await;
       // good: use kithara_platform::tokio::task; task::spawn(fut); task::yield_now().await;

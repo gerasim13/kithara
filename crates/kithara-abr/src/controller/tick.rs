@@ -19,7 +19,9 @@ use crate::{
 
 impl AbrController {
     /// Record a bandwidth sample for `peer_id`. Called by the Downloader
-    /// when a fetch completes. Also evaluates the peer at the sample timestamp.
+    /// when a fetch completes. Also evaluates the peer at the sample timestamp,
+    /// read on the clock the downloader ticks the controller with.
+    #[kithara::flash(true)]
     pub fn record_bandwidth(
         self: &Arc<Self>,
         peer_id: AbrPeerId,

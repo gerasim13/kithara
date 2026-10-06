@@ -66,7 +66,8 @@ async fn zvuk_prod_drm_track_plays(#[case] backend: DecoderBackend) {
     let mut rx = ctx.queue.subscribe();
     let track_id = ctx
         .queue
-        .append(source)
+        .run(move |q| q.append(source))
+        .await
         .expect("append production DRM track");
 
     wait_for_loader_done_event(&mut rx, &ctx.queue, track_id, Duration::from_secs(30))
@@ -74,7 +75,8 @@ async fn zvuk_prod_drm_track_plays(#[case] backend: DecoderBackend) {
         .unwrap_or_else(|e| panic!("prod DRM load fail [{PROD_TRACK}]: {e}"));
 
     ctx.queue
-        .select(track_id, Transition::None)
+        .run(move |q| q.select(track_id, Transition::None))
+        .await
         .expect("select");
     wait_for_position_at_least(&ctx.queue, 0.5, Duration::from_secs(15))
         .await
@@ -93,5 +95,8 @@ async fn zvuk_prod_drm_track_plays(#[case] backend: DecoderBackend) {
          {before:.2}→{after:.2} (advance below 0.9s)"
     );
 
-    ctx.queue.remove(track_id).expect("remove");
+    ctx.queue
+        .run(move |q| q.remove(track_id))
+        .await
+        .expect("remove");
 }

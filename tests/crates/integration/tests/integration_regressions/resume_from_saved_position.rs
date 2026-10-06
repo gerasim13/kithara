@@ -118,9 +118,9 @@ async fn playback_starts_from_the_seeked_position(
         played >= SAVE_AFTER_SECS,
         "precondition: playback reached only {played:.2}s"
     );
-    first_queue.pause();
+    first_queue.run(move |q| q.pause()).await;
     let saved = played;
-    first_queue.clear();
+    first_queue.run(move |q| q.clear()).await;
     first_tick.stop().await;
     first_queue.close().await;
     drop(first_downloader);
@@ -156,7 +156,7 @@ async fn playback_starts_from_the_seeked_position(
     .unwrap_or_else(|error| panic!("precondition: {error}"));
     // The app restores the saved position on a freshly loaded, not-yet-playing
     // track and only then starts playback.
-    let outcome = second_queue.seek(saved);
+    let outcome = second_queue.run(move |q| q.seek(saved)).await;
     assert!(
         outcome.is_ok(),
         "precondition: seek to saved position {saved:.2}s failed: {:?}",

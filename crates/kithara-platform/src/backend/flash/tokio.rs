@@ -26,7 +26,8 @@ pub(crate) mod sync {
 }
 
 pub(crate) mod task {
-    pub use super::backend::task::{JoinError, JoinHandle};
+    pub use super::backend::task::JoinError;
+    pub(crate) use super::backend::task::JoinHandle;
 
     pub(crate) fn spawn_blocking<F, R>(f: F) -> JoinHandle<R>
     where
