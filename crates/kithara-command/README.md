@@ -107,8 +107,10 @@ commands are the executor's types.
 checks a field change and hands it over as one batch with an empty basis and
 the single command `wrap` makes of it; the configuration changes only when
 `settle` meets the batch's receipt as applied, so getters read what the
-executor confirmed. `apply` changes a field at once when no executor receives
-it, and `abandon` folds the copies still in flight in `(When, Seq)` order when
-the queue goes away unanswered.
+executor confirmed. Settle receipts in the execution order returned by
+`Sender::receipts()`; reordering them can leave the configuration different
+from the executor's when changes share a field. `apply` changes a field at
+once when no executor receives it, and `abandon` folds the copies still in
+flight in `(When, Seq)` order when the queue goes away unanswered.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-command) for detailed contracts, invariants, and internals.

@@ -107,12 +107,9 @@ fn a_direct_lane_uses_catalog_metadata_without_the_heavy_role_queue() {
         assert!(jobs["run"][field].as_str().unwrap().contains(metadata));
     }
     let checkout = step(&jobs["run"], "Checkout code");
-    assert!(
-        checkout["with"]["fetch-depth"]
-            .as_str()
-            .unwrap()
-            .contains(".depth")
-    );
+    assert_eq!(checkout["with"]["fetch-depth"], Value::Null);
+    let history = step(&jobs["run"], "Fetch the history of the checked-out commit");
+    assert!(history["if"].as_str().unwrap().contains(".history"));
     for field in [
         "LANE_ARTIFACT_NAME",
         "LANE_ARTIFACT_PATH",

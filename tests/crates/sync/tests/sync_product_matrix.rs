@@ -525,7 +525,7 @@ pub(super) struct ProductHarness {
     pub(super) host: OfflineHostHarness<TestPools>,
     /// The limited mix before the metronome: what the oracles read.
     master: TapProbe,
-    /// Records the render commits `transport_revision` reads for this harness.
+    /// Records callback publications read by `transport_revision`.
     _trace: usdt_trace::Scope,
     output_frames: u64,
     paced: bool,
@@ -812,26 +812,16 @@ impl ProductHarness {
         harness
     }
 
-    /// The Host reports its transport from the last render it committed, so a
-    /// harness that hands a revision to `request_sync` must have committed one
-    /// first. The renderer publishes the `render_committed` probe that
-    /// revision is read from, and how many blocks that takes is not fixed:
-    /// builds of one case were seen committing after two blocks and after
-    /// eight.
-    ///
-    /// Rendering only until the read succeeds therefore left each build on
-    /// whichever frame its own race resolved on, and a case that compares two
-    /// builds sample by sample was comparing two different points of the same
-    /// timeline. The warm-up renders a fixed span instead, so every build
-    /// leaves its deck on the same frame, and a span too short for the commit
-    /// fails here naming itself rather than surfacing later as a frame skew.
+    /// Render a fixed span so PCM comparisons start on the same frame, then
+    /// require a renderer commit with a transport revision and a callback
+    /// publication carrying the processed Host transport.
     async fn warm_up_transport(&mut self, case: SyncCase) {
         for _ in 0..WARM_UP_BLOCKS {
             let _ = self.render(case, self.block_frames).await;
         }
         assert!(
             self.host.transport_revision().await.is_ok(),
-            "{}: no render committed a session transport in {WARM_UP_BLOCKS} blocks",
+            "{}: renderer commit or processed Host callback transport missing after {WARM_UP_BLOCKS} blocks",
             case.id
         );
     }

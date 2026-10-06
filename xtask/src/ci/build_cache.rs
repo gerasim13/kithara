@@ -1,6 +1,7 @@
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::{
+    collections::{BTreeMap, BTreeSet},
     env,
     ffi::OsStr,
     fs::{self, File, OpenOptions},
@@ -18,10 +19,51 @@ use super::lane_build;
 use crate::consts;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CacheEntry {
+struct CacheEntry {
     path: PathBuf,
     size_bytes: u64,
     modified: SystemTime,
+    /// The build units inside, so the budget can take the ones no build used
+    /// for longest rather than every build the entry holds.
+    units: Vec<SizedUnit>,
+    /// The lane slot the entry is or lies in. A job holds the slot's lock for
+    /// as long as it builds there, so the removal takes that lock; the scan
+    /// leaves it to any job that claims the slot meanwhile.
+    slot: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SizedUnit {
+    unit: lane_build::UnitUse,
+    size_bytes: u64,
+}
+
+/// What the budget takes from one entry.
+#[derive(Debug, Eq, PartialEq)]
+enum Eviction {
+    /// Every unit went, so the entry goes whole with what Cargo keeps beside
+    /// its units.
+    Whole(CacheEntry),
+    /// The units of the entry no build used for longest.
+    Units(CacheEntry, Vec<SizedUnit>),
+}
+
+impl Eviction {
+    fn entry(&self) -> &CacheEntry {
+        match self {
+            Self::Whole(entry) | Self::Units(entry, _) => entry,
+        }
+    }
+
+    fn size_bytes(&self) -> u64 {
+        match self {
+            Self::Whole(entry) => entry.size_bytes,
+            Self::Units(_, units) => units
+                .iter()
+                .map(|unit| unit.size_bytes)
+                .fold(0_u64, u64::saturating_add),
+        }
+    }
 }
 
 struct CacheContents {
@@ -40,7 +82,24 @@ struct DirectoryScan {
     locks: Vec<FileLock>,
 }
 
-pub(crate) fn select_evictions(mut entries: Vec<CacheEntry>, budget_bytes: u64) -> Vec<CacheEntry> {
+/// The least recently used build units across every entry, until what is left
+/// fits the budget.
+///
+/// A unit is dated by its own last use. What an entry keeps beside its units
+/// is dated by its newest one, so it goes only with the last of them, and the
+/// entry goes whole with it. An entry with no units is that remainder alone.
+fn select_evictions(entries: Vec<CacheEntry>, budget_bytes: u64) -> Vec<Eviction> {
+    struct Item<'a> {
+        used: SystemTime,
+        path: &'a Path,
+        /// The remainder sorts after its entry's units when they tie.
+        remainder: bool,
+        hash: &'a str,
+        entry: usize,
+        unit: Option<usize>,
+        size_bytes: u64,
+    }
+
     let mut remaining_bytes: u128 = entries
         .iter()
         .map(|entry| u128::from(entry.size_bytes))
@@ -50,20 +109,78 @@ pub(crate) fn select_evictions(mut entries: Vec<CacheEntry>, budget_bytes: u64) 
         return Vec::new();
     }
 
-    entries.sort_by(|left, right| {
-        left.modified
-            .cmp(&right.modified)
-            .then_with(|| left.path.cmp(&right.path))
+    let mut items = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let mut newest = entry.modified;
+        let mut unit_bytes = 0_u64;
+        for (position, sized) in entry.units.iter().enumerate() {
+            newest = newest.max(sized.unit.used);
+            unit_bytes = unit_bytes.saturating_add(sized.size_bytes);
+            items.push(Item {
+                used: sized.unit.used,
+                path: &entry.path,
+                remainder: false,
+                hash: &sized.unit.hash,
+                entry: index,
+                unit: Some(position),
+                size_bytes: sized.size_bytes,
+            });
+        }
+        items.push(Item {
+            used: newest,
+            path: &entry.path,
+            remainder: true,
+            hash: "",
+            entry: index,
+            unit: None,
+            size_bytes: entry.size_bytes.saturating_sub(unit_bytes),
+        });
+    }
+    items.sort_by(|left, right| {
+        left.used
+            .cmp(&right.used)
+            .then_with(|| left.path.cmp(right.path))
+            .then_with(|| left.remainder.cmp(&right.remainder))
+            .then_with(|| left.hash.cmp(right.hash))
     });
-    let mut evictions = Vec::new();
-    for entry in entries {
+
+    let mut order = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut whole = BTreeSet::new();
+    let mut taken: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for item in items {
         if remaining_bytes <= budget_bytes {
             break;
         }
-        remaining_bytes = remaining_bytes.saturating_sub(u128::from(entry.size_bytes));
-        evictions.push(entry);
+        remaining_bytes = remaining_bytes.saturating_sub(u128::from(item.size_bytes));
+        if seen.insert(item.entry) {
+            order.push(item.entry);
+        }
+        match item.unit {
+            Some(position) => taken.entry(item.entry).or_default().push(position),
+            None => {
+                whole.insert(item.entry);
+            }
+        }
     }
-    evictions
+
+    let mut entries: Vec<Option<CacheEntry>> = entries.into_iter().map(Some).collect();
+    order
+        .into_iter()
+        .filter_map(|index| {
+            let entry = entries.get_mut(index)?.take()?;
+            let positions = taken.remove(&index).unwrap_or_default();
+            // An entry left with no unit holds nothing a build could reuse.
+            if whole.contains(&index) || positions.len() == entry.units.len() {
+                return Some(Eviction::Whole(entry));
+            }
+            let units = positions
+                .into_iter()
+                .filter_map(|position| entry.units.get(position).cloned())
+                .collect();
+            Some(Eviction::Units(entry, units))
+        })
+        .collect()
 }
 
 /// The budget is what the host can afford in total, not what one checkout may
@@ -142,21 +259,65 @@ fn total_bytes(entries: &[CacheEntry]) -> u64 {
 
 fn evict_to_budget(candidates: Vec<CacheEntry>, held_bytes: u64, budget_bytes: u64) -> Result<()> {
     let bytes_before = total_bytes(&candidates).saturating_add(held_bytes);
-    let evictions = select_evictions(candidates, budget_bytes.saturating_sub(held_bytes));
-    let bytes_freed = total_bytes(&evictions);
-
-    // Cargo fingerprints describe a complete profile tree, so removing files
-    // within one can leave its dependency artifacts inconsistent.
-    for entry in evictions {
-        info!(path = %entry.path.display(), bytes = entry.size_bytes, "evicting build cache");
-        fs::remove_dir_all(&entry.path)
-            .with_context(|| format!("removing build cache entry {}", entry.path.display()))?;
+    let mut bytes_freed = 0_u64;
+    for eviction in select_evictions(candidates, budget_bytes.saturating_sub(held_bytes)) {
+        bytes_freed = bytes_freed.saturating_add(evict(&eviction)?);
     }
     info!(
         bytes_before,
         bytes_freed, held_bytes, budget_bytes, "build cache budget enforced"
     );
     Ok(())
+}
+
+/// Removes what one eviction names and returns the bytes it held.
+///
+/// A unit goes with every file Cargo names after it, the way pruning at a
+/// claim removes one: Cargo rebuilds a unit it finds missing, and the units
+/// that depend on it after it. Units a build still uses are touched by it, so
+/// they are newer than any unit taken before them.
+fn evict(eviction: &Eviction) -> Result<u64> {
+    let entry = eviction.entry();
+    let _slot = match &entry.slot {
+        Some(slot) => match slot_lock(slot)? {
+            (true, _) => {
+                info!(
+                    path = %entry.path.display(),
+                    "keeping the build cache of a lane slot a job claimed after the scan"
+                );
+                return Ok(0);
+            }
+            (false, lock) => lock,
+        },
+        None => None,
+    };
+    let bytes = eviction.size_bytes();
+    match eviction {
+        Eviction::Whole(entry) => {
+            info!(path = %entry.path.display(), bytes, "evicting build cache");
+            fs::remove_dir_all(&entry.path)
+                .with_context(|| format!("removing build cache entry {}", entry.path.display()))?;
+        }
+        Eviction::Units(entry, units) => {
+            let mut by_profile: BTreeMap<&Path, BTreeSet<&str>> = BTreeMap::new();
+            for sized in units {
+                by_profile
+                    .entry(sized.unit.profile.as_path())
+                    .or_default()
+                    .insert(sized.unit.hash.as_str());
+            }
+            info!(
+                path = %entry.path.display(),
+                units = units.len(),
+                bytes,
+                "evicting the build units no build used for longest"
+            );
+            for (profile, hashes) in &by_profile {
+                lane_build::remove_units(profile, hashes)?;
+            }
+        }
+    }
+    Ok(bytes)
 }
 
 /// What a listed entry still is, or nothing when it is already gone.
@@ -199,9 +360,11 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         active: lease_is_held(target_dir, FileLock::try_exclusive),
         locks: Vec::new(),
     };
+    // On GitLab the target is a slot's `cargo` directory, with the slot's lock
+    // beside the slot. The scan only asks whether a job holds it.
     let (held, lock) = slot_lock(parent)?;
     contents.active |= held;
-    contents.locks.extend(lock);
+    let target_slot = lock.map(|_| parent.to_path_buf());
     for entry in entries {
         let entry = entry
             .with_context(|| format!("reading an entry in build cache {}", target_dir.display()))?;
@@ -225,22 +388,62 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         let modified = metadata
             .modified()
             .with_context(|| format!("reading modification time for {}", path.display()))?;
-        let (slot_held, slot) = slot_lock(&path)?;
-        contents.locks.extend(slot);
+        // A free slot is only read here, so a job that claims it during the
+        // scan builds in it rather than in a new, cold one; the removal takes
+        // the lock. Outside a slot the scan keeps what it locked, so no build
+        // starts in what the pass may remove.
+        let (slot_held, free) = slot_lock(&path)?;
+        let slot = free.map(|_| path.clone()).or_else(|| target_slot.clone());
         let scan = scan_directory(&path)?;
-        contents.locks.extend(scan.locks);
+        if slot.is_none() {
+            contents.locks.extend(scan.locks);
+        }
+        let live = scan.active || slot_held;
         let entry = CacheEntry {
-            path,
+            units: if live {
+                Vec::new()
+            } else {
+                entry_units(&path)?
+            },
             size_bytes: scan.bytes,
             modified: scan.last_used.map_or(modified, |used| used.max(modified)),
+            slot,
+            path,
         };
-        if scan.active || slot_held {
+        if live {
             contents.held.push(entry);
         } else {
             contents.entries.push(entry);
         }
     }
     Ok(contents)
+}
+
+/// The build units in `entry`, each with the room its files take.
+fn entry_units(entry: &Path) -> Result<Vec<SizedUnit>> {
+    let units = lane_build::unit_uses(entry)?;
+    let profiles: BTreeSet<&Path> = units.iter().map(|unit| unit.profile.as_path()).collect();
+    let mut sizes: BTreeMap<&Path, BTreeMap<String, u64>> = BTreeMap::new();
+    for profile in profiles {
+        let by_hash = sizes.entry(profile).or_default();
+        for (hash, path) in lane_build::unit_paths(profile)? {
+            let bytes = scan_directory(&path)?.bytes;
+            let size = by_hash.entry(hash).or_default();
+            *size = size.saturating_add(bytes);
+        }
+    }
+    let sized = units
+        .iter()
+        .map(|unit| SizedUnit {
+            size_bytes: sizes
+                .get(unit.profile.as_path())
+                .and_then(|by_hash| by_hash.get(unit.hash.as_str()))
+                .copied()
+                .unwrap_or_default(),
+            unit: unit.clone(),
+        })
+        .collect();
+    Ok(sized)
 }
 
 /// Cargo writes no hidden directory at the top of a build directory, so one
@@ -526,7 +729,16 @@ mod tests {
             path: PathBuf::from(path),
             size_bytes,
             modified: UNIX_EPOCH + Duration::from_secs(age),
+            units: Vec::new(),
+            slot: None,
         }
+    }
+
+    fn evicted(evictions: Vec<Eviction>) -> Vec<PathBuf> {
+        evictions
+            .into_iter()
+            .map(|eviction| eviction.entry().path.clone())
+            .collect()
     }
 
     /// The Linux volume root is scanned, and the lane builds one level down
@@ -673,10 +885,7 @@ mod tests {
             entry("oldest", 10, 1),
             entry("middle", 10, 2),
         ];
-        let paths: Vec<PathBuf> = select_evictions(entries, 0)
-            .into_iter()
-            .map(|entry| entry.path)
-            .collect();
+        let paths = evicted(select_evictions(entries, 0));
 
         assert_eq!(paths, ["oldest", "middle", "newest"].map(PathBuf::from));
     }
@@ -691,10 +900,7 @@ mod tests {
     #[test]
     fn equal_timestamps_break_ties_by_path() {
         let entries = vec![entry("b", 1, 1), entry("a", 1, 1)];
-        let paths: Vec<PathBuf> = select_evictions(entries, 0)
-            .into_iter()
-            .map(|entry| entry.path)
-            .collect();
+        let paths = evicted(select_evictions(entries, 0));
 
         assert_eq!(paths, ["a", "b"].map(PathBuf::from));
     }
@@ -869,27 +1075,137 @@ mod tests {
         assert!(!candidate_entries(directory.path()).unwrap().active);
     }
 
-    /// A slot's lock sits beside the slot, where no scan of the slot finds it.
-    /// A pass that removed a free slot while a job claimed it would leave the
-    /// job building into a tree being deleted.
+    /// One build unit the way Cargo lays it out in `profile`, last used at
+    /// `used` and holding `bytes` of artifacts. Returns every file it wrote.
+    fn unit(
+        profile: &Path,
+        package: &str,
+        hash: &str,
+        used: SystemTime,
+        bytes: usize,
+    ) -> Vec<PathBuf> {
+        let fingerprint = profile
+            .join(".fingerprint")
+            .join(format!("{package}-{hash}"));
+        let stamp = fingerprint.join(format!("lib-{package}"));
+        let artifact = profile
+            .join("deps")
+            .join(format!("lib{package}-{hash}.rlib"));
+        fs::create_dir_all(&fingerprint).unwrap();
+        fs::create_dir_all(artifact.parent().unwrap()).unwrap();
+        fs::write(&stamp, package).unwrap();
+        fs::write(&artifact, vec![0_u8; bytes]).unwrap();
+        File::options()
+            .write(true)
+            .open(&stamp)
+            .unwrap()
+            .set_modified(used)
+            .unwrap();
+        vec![stamp, artifact]
+    }
+
+    /// A lane slot under `lanes`, with the lock beside it a job would take.
+    fn slot(lanes: &Path, name: &str) -> PathBuf {
+        let slot = lanes.join(name);
+        fs::create_dir_all(&slot).unwrap();
+        fs::write(lane_build::lock_of(&slot), b"").unwrap();
+        slot
+    }
+
+    fn slot_lock_file(slot: &Path) -> File {
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lane_build::lock_of(slot))
+            .unwrap()
+    }
+
+    /// A slot holds many builds' worth of units, and only some of them are
+    /// stale. Evicting the oldest slot whole took the latest build of a lane
+    /// with it — the trusted slot `main` builds in is the one used least
+    /// often, so every pass left `main` to rebuild from nothing — while the
+    /// units a busier slot stopped using stayed. The budget weighs units,
+    /// least recently used first, across every slot.
     #[test]
-    fn a_slot_whose_lock_a_job_holds_is_kept_and_a_free_one_is_locked_for_the_pass() {
+    fn the_budget_evicts_the_least_recently_used_units_across_slots() {
         let lanes = tempfile::tempdir().unwrap();
-        let busy = lanes.path().join("review-lane-test-0");
-        let free = lanes.path().join("review-lane-test-1");
+        let now = SystemTime::now();
+        let rarely = slot(lanes.path(), "trusted-lane-test-0");
+        let often = slot(lanes.path(), "review-lane-test-0");
+        let main = unit(
+            &rarely.join("debug"),
+            "main",
+            "0000000000000001",
+            now - 2 * consts::DAY,
+            100_000,
+        );
+        let stale = unit(
+            &often.join("debug"),
+            "stale",
+            "0000000000000002",
+            now - 3 * consts::DAY,
+            100_000,
+        );
+        let branch = unit(
+            &often.join("debug"),
+            "branch",
+            "0000000000000003",
+            now,
+            100_000,
+        );
+        let total = occupied(lanes.path());
+
+        enforce_budget(&[lanes.path().to_path_buf()], total - 1).unwrap();
+
+        assert!(
+            stale.iter().all(|path| !path.exists()),
+            "the unit no build used for longest outlived the budget"
+        );
+        assert!(
+            main.iter().all(|path| path.exists()),
+            "the latest build of the slot used least often went with the stale units"
+        );
+        assert!(
+            branch.iter().all(|path| path.exists()),
+            "a unit the latest build used went while an older one was there to take"
+        );
+    }
+
+    /// Every unit gone leaves nothing a build could reuse, so the slot goes
+    /// whole; its lock stays, so no job locks a file the budget deleted.
+    #[test]
+    fn a_slot_whose_units_all_go_is_removed_and_its_lock_stays() {
+        let lanes = tempfile::tempdir().unwrap();
+        let idle = slot(lanes.path(), "review-lane-test-0");
+        unit(
+            &idle.join("debug"),
+            "idle",
+            "0000000000000001",
+            SystemTime::now() - consts::DAY,
+            100_000,
+        );
+
+        enforce_budget(&[lanes.path().to_path_buf()], 0).unwrap();
+
+        assert!(!idle.exists(), "a slot with no unit left stayed");
+        assert!(
+            lane_build::lock_of(&idle).exists(),
+            "the slot's lock went with it"
+        );
+    }
+
+    /// A job that finds every slot locked builds in a new one, from nothing.
+    /// The pass held the lock of every free slot for as long as it scanned —
+    /// minutes over a fleet's slots — so each job that started meanwhile left
+    /// another cold slot behind. The scan only reads; the removal locks.
+    #[test]
+    fn a_slot_a_job_holds_is_kept_and_a_free_one_stays_claimable_while_scanned() {
+        let lanes = tempfile::tempdir().unwrap();
+        let busy = slot(lanes.path(), "review-lane-test-0");
+        let free = slot(lanes.path(), "review-lane-test-1");
         fs::create_dir_all(busy.join("debug")).unwrap();
         fs::create_dir_all(free.join("debug")).unwrap();
-        let open = |slot: &Path| {
-            OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .read(true)
-                .write(true)
-                .open(lane_build::lock_of(slot))
-                .unwrap()
-        };
-        let job = FileLock::try_exclusive(open(&busy)).unwrap();
-        fs::write(lane_build::lock_of(&free), b"").unwrap();
+        let job = FileLock::try_exclusive(slot_lock_file(&busy)).unwrap();
 
         let contents = candidate_entries(lanes.path()).unwrap();
 
@@ -906,18 +1222,37 @@ mod tests {
             "a slot nobody holds stayed out of the candidates"
         );
         assert!(
-            matches!(
-                FileLock::try_exclusive(open(&free)),
-                Err(TryLockError::WouldBlock)
-            ),
-            "a job could start in the slot this pass may remove"
+            FileLock::try_exclusive(slot_lock_file(&free)).is_ok(),
+            "a job could not claim a free slot the pass was only reading"
         );
-        drop(contents);
+        drop((contents, job));
+    }
+
+    /// The scan no longer keeps a slot from a job, so the removal asks again:
+    /// a slot a job claimed after the scan is the job's, whatever the scan
+    /// found in it.
+    #[test]
+    fn a_slot_a_job_claims_after_the_scan_keeps_its_units() {
+        let lanes = tempfile::tempdir().unwrap();
+        let claimed = slot(lanes.path(), "review-lane-test-0");
+        let build = unit(
+            &claimed.join("debug"),
+            "build",
+            "0000000000000001",
+            SystemTime::now() - consts::DAY,
+            100_000,
+        );
+        let (candidates, held_bytes, locks) = collect(&[lanes.path().to_path_buf()], 0).unwrap();
+        let job = FileLock::try_exclusive(slot_lock_file(&claimed))
+            .expect("the scan left the slot claimable");
+
+        evict_to_budget(candidates, held_bytes, 0).unwrap();
+
         assert!(
-            FileLock::try_exclusive(open(&free)).is_ok(),
-            "the pass kept the free slot's lock after it ended"
+            build.iter().all(|path| path.exists()),
+            "the pass removed units from a slot a job had claimed"
         );
-        drop(job);
+        drop((locks, job));
     }
 
     /// On GitLab the pass starts inside the slot, at its `cargo` directory, and
@@ -925,19 +1260,10 @@ mod tests {
     #[test]
     fn a_gitlab_slot_is_active_while_its_job_holds_the_lock_beside_it() {
         let slots = tempfile::tempdir().unwrap();
-        let slot = slots.path().join("review-macos-aarch64-lane-apple-lint-0");
+        let slot = slot(slots.path(), "review-macos-aarch64-lane-apple-lint-0");
         let cargo = slot.join("cargo");
         fs::create_dir_all(cargo.join("debug")).unwrap();
-        let open = || {
-            OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .read(true)
-                .write(true)
-                .open(lane_build::lock_of(&slot))
-                .unwrap()
-        };
-        let job = FileLock::try_exclusive(open()).unwrap();
+        let job = FileLock::try_exclusive(slot_lock_file(&slot)).unwrap();
 
         assert!(
             candidate_entries(&cargo).unwrap().active,
@@ -948,12 +1274,10 @@ mod tests {
         let contents = candidate_entries(&cargo).unwrap();
         assert!(!contents.active, "a slot no job holds stays reclaimable");
         assert!(
-            matches!(
-                FileLock::try_exclusive(open()),
-                Err(TryLockError::WouldBlock)
-            ),
-            "a job could start in the slot this pass may reclaim"
+            FileLock::try_exclusive(slot_lock_file(&slot)).is_ok(),
+            "a job could not claim a free slot the pass was only reading"
         );
+        drop(contents);
     }
 
     /// The stress lane builds into a directory of its own, and a build cache no

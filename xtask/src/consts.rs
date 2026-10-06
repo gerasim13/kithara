@@ -771,6 +771,8 @@ pub(crate) const MANIFEST_FILE: &str = "manifest.json";
 
 pub(crate) const REFRESH_LOCK: &str = "refresh.lock";
 
+pub(crate) const BUILD_LOCK: &str = "xtask-build.lock";
+
 pub(crate) const STAMP_FILE: &str = "stamp";
 
 pub(crate) const CONTROL_FILE_LIMIT: usize = 16 * 1024;
