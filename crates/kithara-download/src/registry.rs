@@ -345,6 +345,11 @@ impl Registry {
     /// but no new peer/command activity occurred; the downloader
     /// watchdog uses this signal to avoid false panics during quiet
     /// periods.
+    ///
+    /// The tick reads the clock the ABR controller decides on: its deadlines,
+    /// the `now` it ticks with, and the enqueue stamps
+    /// [`BatchGroup::process`] measures queue waits from.
+    #[kithara::flash(true)]
     pub(super) async fn tick(
         &mut self,
         inner: &DownloaderInner,

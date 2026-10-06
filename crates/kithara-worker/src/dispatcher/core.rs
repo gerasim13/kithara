@@ -3,7 +3,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use kithara_platform::{
     CancelToken,
     sync::mpsc::{self, TryRecvError},
-    thread::yield_now,
+    thread::yield_runnable,
     time::{Duration, Instant},
 };
 use kithara_test_macros as kithara;
@@ -315,7 +315,7 @@ pub(super) fn park_after_outcome(
             *progress_streak += 1;
             if *progress_streak >= budgets.fairness_yield_interval.get() {
                 *progress_streak = 0;
-                yield_now();
+                yield_runnable();
             }
         }
         PassOutcome::Waiting | PassOutcome::UpstreamPending | PassOutcome::Backpressured => {

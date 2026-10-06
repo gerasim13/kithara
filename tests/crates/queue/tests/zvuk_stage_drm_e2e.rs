@@ -74,5 +74,8 @@ async fn zvuk_stage_drm_track_plays(#[case] backend: DecoderBackend) {
          {before:.2}→{after:.2} (waited on position advance)"
     );
 
-    ctx.queue.remove(track_id).expect("remove");
+    ctx.queue
+        .run(move |q| q.remove(track_id))
+        .await
+        .expect("remove");
 }

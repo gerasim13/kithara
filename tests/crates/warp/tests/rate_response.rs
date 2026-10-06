@@ -347,7 +347,11 @@ async fn playing_queue(
     .await;
     let queue = Queue::new(QueueConfig::builder().player(harness.take_player()).build());
     let queue = harness.insert(queue).await;
-    queue.set_default_rate(case.initial_rate);
+    harness
+        .run(queue.control(), move |q| {
+            q.set_default_rate(case.initial_rate);
+        })
+        .await;
     let path = response_source;
     let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
         ResourceSrc::parse(path.to_str().expect("utf-8 fixture path"))
@@ -528,10 +532,14 @@ async fn run_case(
         consumed_end <= published_end,
         "{backend} presented transport {consumed_end} is ahead of published transport {published_end}"
     );
-    for command in 0..case.burst {
-        queue.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 });
-    }
-    queue.set_rate(case.target_rate);
+    harness
+        .run(queue.control(), move |q| {
+            for command in 0..case.burst {
+                q.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 });
+            }
+            q.set_rate(case.target_rate);
+        })
+        .await;
     let (acknowledged, revision, at_apply) = capture_until_applied(&harness, &trace, case).await;
     let apply_frame = command_frame + acknowledged.len() / usize::from(CHANNELS);
     samples.extend(acknowledged);
@@ -815,10 +823,14 @@ async fn run_strict_case(
         consumed_end <= published_end,
         "{backend} presented transport {consumed_end} is ahead of published transport {published_end}"
     );
-    for command in 0..case.burst {
-        queue.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 });
-    }
-    queue.set_rate(case.target_rate);
+    harness
+        .run(queue.control(), move |q| {
+            for command in 0..case.burst {
+                q.set_rate(if command.is_multiple_of(2) { 4.0 } else { 0.5 });
+            }
+            q.set_rate(case.target_rate);
+        })
+        .await;
     samples.extend(capture_frames(&harness, case.observation_frames(), case.callback_frames).await);
     let events = response_events(&trace);
     drop(trace);
@@ -914,7 +926,9 @@ async fn rate_multiplier_step_is_ramped_across_blocks(
     let command_frame = samples.len() / usize::from(CHANNELS);
     let before_smoothed = trace.events_of("rate_smoothed").len();
     let before_applied = trace.events_of("rate_applied").len();
-    queue.set_rate(case.target_rate);
+    harness
+        .run(queue.control(), move |q| q.set_rate(case.target_rate))
+        .await;
     samples.extend(capture_frames(&harness, case.smooth_frames * 12, case.callback_frames).await);
     save_response_audio(backend, case, command_frame, &samples);
     let smoothing_events = trace.events_of("rate_smoothed");

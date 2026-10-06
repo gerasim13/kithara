@@ -348,7 +348,10 @@ async fn local_track_plays_end_to_end(
         &label,
     );
 
-    queue.remove(track_id).expect("remove");
+    queue
+        .run(move |q| q.remove(track_id))
+        .await
+        .expect("remove");
     tick_handle.stop().await;
     queue.close().await;
 }
@@ -615,8 +618,9 @@ async fn local_queue_playlist_behavior(
         let dur = queue
             .duration_seconds()
             .ok_or_else(|| "duration unknown".to_string())?;
+        let target = (dur - 3.0).max(0.0);
         queue
-            .run(move |q| q.seek((dur - 3.0).max(0.0)))
+            .run(move |q| q.seek(target))
             .await
             .map_err(|e| format!("seek: {e}"))?;
         wait_for_queue_event(

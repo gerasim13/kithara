@@ -8,7 +8,7 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
     play::{PlayerConfig, PlayerEvent, PlayerImpl, ResourceConfig, ResourceSrc, SeekOutcome},
-    queue::{PlaybackView, Queue, QueueConfig, TrackSource, Transition},
+    queue::{PlaybackView, Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
@@ -47,7 +47,7 @@ struct SeekEvents {
 
 async fn render_and_tick(queue: &OfflineQueue<TestPools>) {
     queue.render(BLOCK_FRAMES).await;
-    queue.tick().expect("tick queue");
+    queue.run(QueueControl::tick).await.expect("tick queue");
 }
 
 fn drain_warmup(
@@ -141,12 +141,14 @@ async fn run_case(
 
     let mut rx = queue.subscribe();
     let id = queue
-        .append(TrackSource::Config(Box::new(cfg)))
+        .run(move |q| q.append(TrackSource::Config(Box::new(cfg))))
+        .await
         .expect("append HLS track");
     queue
-        .select(id, Transition::None)
+        .run(move |q| q.select(id, Transition::None))
+        .await
         .expect("select HLS track");
-    queue.play();
+    queue.run(QueueControl::play).await;
     wait_for_loader_done_event(&mut rx, &queue, id, Duration::from_secs(30))
         .await
         .unwrap_or_else(|error| panic!("precondition: {error}"));
@@ -186,7 +188,8 @@ async fn run_case(
         Target::End => duration,
     };
     let outcome = queue
-        .seek(target)
+        .run(move |q| q.seek(target))
+        .await
         .unwrap_or_else(|error| panic!("seek to {target:.3}s failed: {error}"));
     match target_kind {
         Target::NearEnd => assert!(
@@ -246,7 +249,7 @@ async fn run_case(
          after seeking to {target:.3}s"
     );
 
-    queue.clear();
+    queue.run(QueueControl::clear).await;
     queue.close().await;
 }
 
