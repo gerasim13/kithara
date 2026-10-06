@@ -28,6 +28,8 @@ use ringbuf::{
 };
 
 use super::owner::HostOwner;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::usdt_trace;
 
 const CHANNELS: u16 = 2;
 /// Cadence a device-free harness renders itself at when the test is not
@@ -344,9 +346,13 @@ where
             .await
     }
 
-    /// The Host transport revision in the last callback render context.
+    /// The callback transport revision after a renderer commit was recorded.
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn transport_revision(&self) -> Result<TransportRevision, PlayError> {
+        usdt_trace::last("render_committed")
+            .and_then(|event| event.field("transport_revision"))
+            .and_then(NonZeroU64::new)
+            .ok_or(PlayError::Session(SessionError::TransportNotProcessed))?;
         kithara_test_utils::test::usdt::events_of("publish")
             .into_iter()
             .rev()

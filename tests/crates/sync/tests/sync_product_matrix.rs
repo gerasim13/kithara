@@ -813,14 +813,15 @@ impl ProductHarness {
     }
 
     /// Render a fixed span so PCM comparisons start on the same frame, then
-    /// require a callback publication carrying the processed Host transport.
+    /// require a renderer commit with a transport revision and a callback
+    /// publication carrying the processed Host transport.
     async fn warm_up_transport(&mut self, case: SyncCase) {
         for _ in 0..WARM_UP_BLOCKS {
             let _ = self.render(case, self.block_frames).await;
         }
         assert!(
             self.host.transport_revision().await.is_ok(),
-            "{}: no render committed a session transport in {WARM_UP_BLOCKS} blocks",
+            "{}: renderer commit or processed Host callback transport missing after {WARM_UP_BLOCKS} blocks",
             case.id
         );
     }
