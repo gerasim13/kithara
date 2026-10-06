@@ -554,9 +554,9 @@ fn same_revision(shown: Option<&TrackArtifacts>, next: Option<&TrackArtifacts>) 
 /// solely by the player's volume path.
 pub(crate) fn apply_event(event: &AnalysisEvent, queue: &AppQueueControl, state: &Mutex<UiState>) {
     match *event {
-        AnalysisEvent::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
-            let current_index = queue.current_index();
+        AnalysisEvent::Queue(QueueEvent::CurrentTrackChanged { id }) => {
             let mut st = state.lock();
+            let current_index = id.and_then(|id| st.tracks.iter().position(|track| track.id == id));
             st.current_track_index = current_index;
             st.track_name = current_index
                 .and_then(|idx| st.tracks.get(idx).map(caption))
