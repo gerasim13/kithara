@@ -1,11 +1,11 @@
-use std::num::NonZeroU32;
+use std::{collections::VecDeque, num::NonZeroU32};
 
 use kithara::{
     abr::{AbrHandle, AbrMode},
     audio::{DecoderBackend as DecoderBackendKind, DecoderChangeCause, DecoderEvent},
     decode::DecoderBackend,
     effects::LimiterConfig,
-    events::{EventBus, EventReceiver},
+    events::{Envelope, EventBus, EventReceiver},
     host::{HostConfig, HostSettings},
     platform::{
         time::{Duration, Instant, sleep},
@@ -34,6 +34,7 @@ pub(super) const BLOCK_FRAMES: usize = 512;
 pub(super) const SINE_HZ: f64 = 441.0;
 const SEGMENT_SECS: f64 = 0.5;
 const SEGMENTS_PER_VARIANT: usize = 16;
+const MAX_DIAGNOSTIC_ROWS: usize = 512;
 pub(super) const REQUEST_AT_SECS: f64 = 1.0;
 pub(super) const ACTIVE_SAMPLE_THRESHOLD: f32 = 1.0e-3;
 pub(super) const ORACLE_RATIO: f32 = 3.0;
@@ -118,6 +119,35 @@ pub(super) struct SwitchRender {
     pub(super) capture_frame: i64,
     pub(super) applied_frame: usize,
     pub(super) target_decoder_frame: usize,
+    pub(super) diagnostics: SwitchDiagnostics,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct SwitchDiagnostics {
+    pub(super) events: VecDeque<String>,
+    pub(super) events_evicted: usize,
+    pub(super) blocks: VecDeque<String>,
+    pub(super) blocks_evicted: usize,
+}
+
+fn retain_diagnostic(rows: &mut VecDeque<String>, evicted: &mut usize, row: String) {
+    if rows.len() == MAX_DIAGNOSTIC_ROWS {
+        rows.pop_front();
+        *evicted += 1;
+    }
+    rows.push_back(row);
+}
+
+impl SwitchDiagnostics {
+    fn retain_event(&mut self, envelope: &Envelope<TestEvent>, phase: &str, frame_end: usize) {
+        if matches!(&envelope.event, TestEvent::Audio(_) | TestEvent::Decoder(_)) {
+            retain_diagnostic(
+                &mut self.events,
+                &mut self.events_evicted,
+                format!("phase={phase} drained_frame_end={frame_end} {envelope:?}"),
+            );
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -232,6 +262,15 @@ pub(super) fn drain_decoder_events(
     events: &mut EventReceiver<TestEvent>,
     frame_end: usize,
 ) -> Vec<DecoderObservation> {
+    drain_decoder_events_observed(events, frame_end, "unobserved", None)
+}
+
+fn drain_decoder_events_observed(
+    events: &mut EventReceiver<TestEvent>,
+    frame_end: usize,
+    phase: &str,
+    mut diagnostics: Option<&mut SwitchDiagnostics>,
+) -> Vec<DecoderObservation> {
     let mut decoder_events = Vec::new();
     loop {
         let envelope = match events.try_recv() {
@@ -241,6 +280,9 @@ pub(super) fn drain_decoder_events(
                 panic!("decoder event stream became unreliable at frame {frame_end}: {error}")
             }
         };
+        if let Some(diagnostics) = diagnostics.as_deref_mut() {
+            diagnostics.retain_event(&envelope, phase, frame_end);
+        }
         if let TestEvent::Decoder(DecoderEvent::DecoderChanged {
             backend,
             cause,
@@ -299,6 +341,7 @@ async fn prepare_player(
     initial_variant: usize,
     backend: DecoderBackend,
     label: &str,
+    mut diagnostics: Option<&mut SwitchDiagnostics>,
 ) -> PreparedPlayer {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
@@ -356,7 +399,8 @@ async fn prepare_player(
     let capture_frame = capture_frame_target();
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut active_blocks = 0usize;
-    let mut decoder_events = drain_decoder_events(&mut events, 0);
+    let mut decoder_events =
+        drain_decoder_events_observed(&mut events, 0, "warmup", diagnostics.as_deref_mut());
     loop {
         let rendered = source_frame(player.position(), label);
         let remaining = capture_frame.saturating_sub(rendered);
@@ -364,7 +408,12 @@ async fn prepare_player(
             .unwrap_or(BLOCK_FRAMES)
             .min(BLOCK_FRAMES);
         let block = render_paced(&mut player, request.max(1)).await;
-        decoder_events.extend(drain_decoder_events(&mut events, 0));
+        decoder_events.extend(drain_decoder_events_observed(
+            &mut events,
+            0,
+            "warmup",
+            diagnostics.as_deref_mut(),
+        ));
         if block
             .iter()
             .any(|sample| sample.abs() > ACTIVE_SAMPLE_THRESHOLD)
@@ -430,7 +479,15 @@ pub(super) async fn render_switch(
     transition: Transition,
     backend: DecoderBackend,
 ) -> SwitchRender {
-    let mut prepared = prepare_player(master_url, transition.from, backend, transition.label).await;
+    let mut diagnostics = SwitchDiagnostics::default();
+    let mut prepared = prepare_player(
+        master_url,
+        transition.from,
+        backend,
+        transition.label,
+        Some(&mut diagnostics),
+    )
+    .await;
     prepared
         .abr
         .set_mode(AbrMode::manual(transition.to))
@@ -444,9 +501,29 @@ pub(super) async fn render_switch(
         let rendered_frames = samples.len() / usize::from(CHANNELS);
         let remaining_frames = observation_frames.saturating_sub(rendered_frames);
         let render_frames = remaining_frames.min(BLOCK_FRAMES);
+        let before_render_call_position_secs = prepared.player.player().position_seconds();
+        let before_render_call_metrics = prepared.player.player().rt_metrics();
         samples.extend_from_slice(&render_paced(&mut prepared.player, render_frames).await);
+        let after_paced_return_metrics = prepared.player.player().rt_metrics();
+        let after_paced_return_position_secs = prepared.player.player().position_seconds();
+        let frame_start = rendered_frames;
         let rendered_frames = samples.len() / usize::from(CHANNELS);
-        decoder_events.extend(drain_decoder_events(&mut prepared.events, rendered_frames));
+        let underruns_delta = before_render_call_metrics
+            .zip(after_paced_return_metrics)
+            .and_then(|(before, after)| after.underruns().checked_sub(before.underruns()));
+        retain_diagnostic(
+            &mut diagnostics.blocks,
+            &mut diagnostics.blocks_evicted,
+            format!(
+                "output_frames={frame_start}..{rendered_frames} requested_frames={render_frames} before_render_call_position_secs={before_render_call_position_secs:?} before_render_call_metrics={before_render_call_metrics:?} after_paced_return_position_secs={after_paced_return_position_secs:?} after_paced_return_metrics={after_paced_return_metrics:?} underruns_delta={underruns_delta:?}",
+            ),
+        );
+        decoder_events.extend(drain_decoder_events_observed(
+            &mut prepared.events,
+            rendered_frames,
+            "switch",
+            Some(&mut diagnostics),
+        ));
         if applied_frame.is_none() && prepared.abr.current_variant_index() == Some(transition.to) {
             applied_frame = Some(rendered_frames);
         }
@@ -529,6 +606,7 @@ pub(super) async fn render_switch(
         capture_frame: prepared.capture_frame,
         applied_frame,
         target_decoder_frame,
+        diagnostics,
     };
     prepared.close().await;
     result
@@ -540,7 +618,7 @@ pub(super) async fn render_no_switch_control(
     backend: DecoderBackend,
     label: &str,
 ) -> ControlRender {
-    let mut prepared = prepare_player(master_url, initial_variant, backend, label).await;
+    let mut prepared = prepare_player(master_url, initial_variant, backend, label, None).await;
     prepared
         .abr
         .set_mode(AbrMode::manual(initial_variant))

@@ -76,6 +76,47 @@ fn format_channels(channels: &[ChannelComparison]) -> String {
         .join("; ")
 }
 
+fn print_failure_diagnostics(
+    transition: Transition,
+    switched: &SwitchRender,
+    source: &ControlRender,
+    destination: &ControlRender,
+    channels: &[ChannelComparison],
+) {
+    println!(
+        "QUALITY_SWITCH_DIAGNOSTICS transition={} capture_source_frame={} events_evicted={} blocks_evicted={} after_paced_return_includes_sleep=true event_frames_are_drain_observations=true",
+        transition.label,
+        switched.capture_frame,
+        switched.diagnostics.events_evicted,
+        switched.diagnostics.blocks_evicted,
+    );
+    for block in &switched.diagnostics.blocks {
+        println!("QUALITY_SWITCH_BLOCK transition={} {block}", transition.label);
+    }
+    for event in &switched.diagnostics.events {
+        println!("QUALITY_SWITCH_EVENT transition={} {event}", transition.label);
+    }
+    let frame_count = switched.samples.len() / usize::from(CHANNELS);
+    for channel in channels {
+        for (metric, peak_frame) in [
+            ("excess-step-peak", channel.excess.peak_step_frame),
+            ("excess-residual-peak", channel.excess.peak_residual_frame),
+        ] {
+            let frame_start = peak_frame.saturating_sub(16);
+            let frame_end = peak_frame.saturating_add(17).min(frame_count);
+            let range = frame_start * usize::from(CHANNELS)..frame_end * usize::from(CHANNELS);
+            println!(
+                "QUALITY_SWITCH_PCM transition={} diagnostic_channel={} metric={metric} peak_frame={peak_frame} output_frames={frame_start}..{frame_end} interleaved_channels={CHANNELS} switched={:?} source_control={:?} destination_control={:?}",
+                transition.label,
+                channel.channel,
+                &switched.samples[range.clone()],
+                &source.samples[range.clone()],
+                &destination.samples[range],
+            );
+        }
+    }
+}
+
 fn channel_metric(samples: &[f32], channel: usize) -> ChannelMetric {
     let channels = usize::from(CHANNELS);
     let frames = samples.len() / channels;
@@ -594,6 +635,15 @@ async fn manual_quality_switches_match_time_aligned_no_switch_pcm(#[case] backen
             frames,
             format_channels(&primary.channels),
         );
+        if !primary.failures.is_empty() || !cochlea.is_empty() {
+            print_failure_diagnostics(
+                transition,
+                &switched,
+                &source_control.render,
+                &destination_control.render,
+                &primary.channels,
+            );
+        }
         failures.extend(
             primary
                 .failures
