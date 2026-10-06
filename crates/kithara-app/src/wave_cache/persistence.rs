@@ -16,7 +16,7 @@ use kithara::{
             self,
             runtime::Handle,
             sync::{mpsc, oneshot},
-            task::{JoinError, JoinHandle, spawn_blocking_on, spawn_on},
+            task::{BlockingJoinHandle, JoinError, JoinHandle, spawn_blocking_on, spawn_on},
         },
     },
     worker::{
@@ -411,11 +411,11 @@ enum WriteOutcome {
 }
 
 struct AbortOnDrop<T> {
-    handle: JoinHandle<T>,
+    handle: BlockingJoinHandle<T>,
 }
 
 impl<T> AbortOnDrop<T> {
-    const fn new(handle: JoinHandle<T>) -> Self {
+    const fn new(handle: BlockingJoinHandle<T>) -> Self {
         Self { handle }
     }
 
@@ -433,12 +433,12 @@ impl<T> Drop for AbortOnDrop<T> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn abort_handle<T>(handle: &JoinHandle<T>) {
+fn abort_handle<T>(handle: &BlockingJoinHandle<T>) {
     handle.abort();
 }
 
 #[cfg(target_arch = "wasm32")]
-fn abort_handle<T>(_handle: &JoinHandle<T>) {}
+fn abort_handle<T>(_handle: &BlockingJoinHandle<T>) {}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn abort_join<T>(handle: &JoinHandle<T>) {

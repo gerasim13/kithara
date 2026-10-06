@@ -1,12 +1,19 @@
 use std::panic::Location;
 
-use crate::flash::ids::ThreadKey;
 pub use crate::{
     backend::thread::{
         Duration, JoinHandle, Thread, ThreadId, assert_main_thread, assert_not_main_thread,
         available_parallelism, current, current_thread_id, is_main_thread, is_worker_thread, park,
     },
     common::thread_id::active_named_thread_count,
+};
+use crate::{
+    flash::{
+        ids::ThreadKey,
+        system::credit::{self, DedicatedSlot, Participant},
+        tokio::task::BlockingCompletion,
+    },
+    sync::Arc,
 };
 
 pub(crate) enum GateBackend {
@@ -97,21 +104,56 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    use crate::flash::system::credit::{self, DedicatedSlot, Participant};
+    wrap_pool_task_with_completion(f, None)
+}
 
+/// Capture the completion guard before the queued reservation so even a never-run
+/// closure transfers credit before returning its reservation.
+#[track_caller]
+pub(in crate::flash) fn wrap_pool_task_with_completion<F, R>(
+    f: F,
+    completion: Option<Arc<BlockingCompletion>>,
+) -> impl FnOnce() -> R + Send + 'static
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
     let origin = Location::caller();
     let ambient = crate::flash::ambient_snapshot();
-    let slot = ambient.then(|| DedicatedSlot::reserve(origin));
-    move || {
+    let work = PoolTask {
+        completion: completion.map(PoolCompletion),
+        slot: ambient.then(|| DedicatedSlot::reserve(origin)),
+        body: f,
+    };
+    move || work.run(ambient)
+}
+
+struct PoolTask<F> {
+    /// Completion drops before the queued reservation.
+    completion: Option<PoolCompletion>,
+    slot: Option<DedicatedSlot>,
+    body: F,
+}
+
+impl<F> PoolTask<F> {
+    fn run<R>(self, ambient: bool) -> R
+    where
+        F: FnOnce() -> R,
+    {
         let _ambient = crate::flash::set_ambient_for_spawn(ambient);
         credit::reset_credit();
-        if let Some(slot) = slot {
-            let _pacer = slot.claim_pooled();
-            f()
-        } else {
-            let _exit = Participant::unreserved();
-            f()
-        }
+        let _pacer = self.slot.map(DedicatedSlot::claim_pooled);
+        let _exit = _pacer.is_none().then(Participant::unreserved);
+        let _completion = self.completion;
+        (self.body)()
+    }
+}
+
+struct PoolCompletion(Arc<BlockingCompletion>);
+
+impl Drop for PoolCompletion {
+    fn drop(&mut self) {
+        self.0.finish();
     }
 }
 

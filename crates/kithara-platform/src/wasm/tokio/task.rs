@@ -209,3 +209,6 @@ mod tests {
         }
     }
 }
+
+/// Result handle for synchronous work scheduled off the async worker.
+pub type BlockingJoinHandle<T> = JoinHandle<T>;

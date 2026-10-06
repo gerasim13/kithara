@@ -1,9 +1,10 @@
 use std::{
     future::Future,
-    panic::Location,
+    panic::{AssertUnwindSafe, Location},
     sync::{
         Mutex, MutexGuard, PoisonError,
         atomic::{AtomicUsize, Ordering},
+        mpsc,
     },
     task::{Context, Wake, Waker},
     thread,
@@ -17,6 +18,7 @@ use super::{
     participate, reset,
     system::{FlashInner, credit, forward},
     time::{FlashTimeout, TimeoutError},
+    tokio::task::BlockingJoinHandle,
     yield_now,
 };
 use crate::{
@@ -1331,6 +1333,266 @@ fn ambient_blocking_closure_pins_virtual_clock() {
         "virtual clock advanced past a 10ms deadline while an ambient blocking \
          closure was still running (park returned after {waited:?} real)"
     );
+}
+
+/// The pooled body can finish before Tokio publishes its result. A pending join
+/// must keep the clock still across that gap, including unwind; native wakes that
+/// only yield cooperative budget must not settle the handoff early.
+#[kithara::test(native, flash(false))]
+fn blocking_join_holds_credit_until_native_result_publication() {
+    struct StagedBlocking {
+        handle: BlockingJoinHandle<u8>,
+        completion: Arc<super::tokio::task::BlockingCompletion>,
+        run: mpsc::Sender<()>,
+        exited: mpsc::Receiver<()>,
+        publish: mpsc::Sender<()>,
+    }
+
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .max_blocking_threads(1)
+        .build()
+        .expect("build controlled blocking runtime");
+    let _rt = rt.enter();
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut cx = Context::from_waker(&waker);
+    let staged = |panics: bool| {
+        let (run, run_rx) = mpsc::channel();
+        let (exited_tx, exited) = mpsc::channel();
+        let (publish, publish_rx) = mpsc::channel();
+        let (work, completion) = BlockingJoinHandle::prepare(move || {
+            run_rx.recv().expect("release pooled work");
+            assert!(!panics, "controlled blocking panic");
+            7_u8
+        });
+        let native = tokio::task::spawn_blocking(move || {
+            let result = std::panic::catch_unwind(AssertUnwindSafe(work));
+            exited_tx.send(()).expect("report pooled exit");
+            publish_rx
+                .recv()
+                .expect("release native result publication");
+            match result {
+                Ok(value) => value,
+                Err(panic) => std::panic::resume_unwind(panic),
+            }
+        });
+        let handle = BlockingJoinHandle::new(native, completion.clone());
+        StagedBlocking {
+            handle,
+            completion: completion.expect("ambient completion owner"),
+            run,
+            exited,
+            publish,
+        }
+    };
+
+    for panics in [false, true] {
+        let StagedBlocking {
+            handle,
+            completion,
+            run,
+            exited,
+            publish,
+        } = staged(panics);
+        let abort = handle.abort_handle();
+        assert_eq!(handle.id(), abort.id());
+        assert!(!handle.is_finished());
+        let start = Instant::now();
+        let mut waiting = Box::pin(participate(
+            FlashTimeout {
+                future: handle,
+                sleep: FlashSleep::new(Duration::from_secs(2)),
+            },
+            Location::caller(),
+        ));
+        assert!(waiting.as_mut().poll(&mut cx).is_pending());
+        Wake::wake_by_ref(&completion);
+        assert!(waiting.as_mut().poll(&mut cx).is_pending());
+        run.send(()).expect("let pooled work finish");
+        exited.recv().expect("pooled wrapper exited");
+        assert_eq!(
+            Instant::now().duration_since(start),
+            Duration::ZERO,
+            "pooled exit advanced the deadline before native result publication"
+        );
+        Wake::wake_by_ref(&completion);
+        assert!(waiting.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(
+            Instant::now().duration_since(start),
+            Duration::ZERO,
+            "a nonterminal native wake settled completion credit"
+        );
+        assert!(!abort.is_finished(), "native publication remains held");
+        publish.send(()).expect("publish native result");
+        while super::system::FLASH.active_count() != 0 {
+            thread::yield_now();
+        }
+        let result = loop {
+            if let std::task::Poll::Ready(result) = waiting.as_mut().poll(&mut cx) {
+                break result.expect("virtual deadline must not expire");
+            }
+            thread::yield_now();
+        };
+        if panics {
+            assert!(
+                result
+                    .expect_err("native panic remains a join error")
+                    .is_panic()
+            );
+        } else {
+            assert_eq!(result.expect("native result remains intact"), 7);
+        }
+        drop(waiting);
+        assert_eq!(super::system::FLASH.active_count(), 0);
+        assert_eq!(forward::async_active_count(), 0);
+        assert_eq!(super::system::FLASH.timed_count(), 0);
+    }
+
+    let StagedBlocking {
+        mut handle,
+        completion: _,
+        run,
+        exited,
+        publish,
+    } = staged(false);
+    let mut borrowed = Box::pin(participate(&mut handle, Location::caller()));
+    assert!(borrowed.as_mut().poll(&mut cx).is_pending());
+    run.send(()).expect("finish borrowed join work");
+    exited.recv().expect("borrowed pooled wrapper exited");
+    publish.send(()).expect("publish borrowed native result");
+    while forward::async_active_count() == 0 || super::system::FLASH.active_count() != 0 {
+        thread::yield_now();
+    }
+    assert_eq!(forward::async_active_count(), 1);
+    drop(borrowed);
+    assert_eq!(super::system::FLASH.active_count(), 0);
+    assert_eq!(forward::async_active_count(), 0);
+
+    let start = Instant::now();
+    let mut waiting = Box::pin(participate(
+        FlashTimeout {
+            future: handle,
+            sleep: FlashSleep::new(Duration::from_secs(2)),
+        },
+        Location::caller(),
+    ));
+    let mut waiting = rt
+        .block_on(tokio::task::spawn(async move {
+            let noop = Waker::from(Arc::new(NoopWake));
+            let mut cx = Context::from_waker(&noop);
+            loop {
+                let mut budget = std::pin::pin!(tokio::task::consume_budget());
+                if budget.as_mut().poll(&mut cx).is_pending() {
+                    break;
+                }
+            }
+            assert!(waiting.as_mut().poll(&mut cx).is_pending());
+            assert_eq!(
+                Instant::now().duration_since(start),
+                Duration::ZERO,
+                "a published join must hold credit across a deferred cooperative wake"
+            );
+            assert_eq!(forward::async_active_count(), 0);
+            waiting
+        }))
+        .expect("poll published join with exhausted native budget");
+    rt.block_on(tokio::task::yield_now());
+    assert_eq!(
+        Instant::now().duration_since(start),
+        Duration::ZERO,
+        "a deferred cooperative wake must hand credit to the runnable receiver"
+    );
+    assert_eq!(
+        forward::async_active_count(),
+        1,
+        "a published join must forward its deferred cooperative wake"
+    );
+    let result = waiting.as_mut().poll(&mut cx);
+    assert!(matches!(result, std::task::Poll::Ready(Ok(Ok(7)))));
+    drop(waiting);
+    assert_eq!(super::system::FLASH.active_count(), 0);
+    assert_eq!(forward::async_active_count(), 0);
+    assert_eq!(super::system::FLASH.timed_count(), 0);
+
+    let (blocker_release, blocker_rx) = mpsc::channel();
+    let (entered_tx, entered) = mpsc::channel();
+    let blocker = tokio::task::spawn_blocking(move || {
+        entered_tx.send(()).expect("occupy only pool thread");
+        blocker_rx.recv().expect("release only pool thread");
+    });
+    entered.recv().expect("pool thread occupied");
+    let queued =
+        crate::tokio::task::spawn_blocking::<_, u8>(|| panic!("cancelled queued work ran"));
+    let abort = queued.abort_handle();
+    let mut waiting = Box::pin(participate(
+        FlashTimeout {
+            future: queued,
+            sleep: FlashSleep::new(Duration::from_secs(2)),
+        },
+        Location::caller(),
+    ));
+    assert!(waiting.as_mut().poll(&mut cx).is_pending());
+    abort.abort();
+    blocker_release
+        .send(())
+        .expect("let pool settle cancelled work");
+    while super::system::FLASH.active_count() != 0 {
+        thread::yield_now();
+    }
+    let error = loop {
+        if let std::task::Poll::Ready(result) = waiting.as_mut().poll(&mut cx) {
+            break result
+                .expect("cancelled join does not consume virtual budget")
+                .expect_err("queued abort remains a join error");
+        }
+        thread::yield_now();
+    };
+    assert!(error.is_cancelled());
+    drop(waiting);
+    rt.block_on(blocker).expect("raw pool blocker joined");
+    assert_eq!(super::system::FLASH.active_count(), 0);
+    assert_eq!(forward::async_active_count(), 0);
+    assert_eq!(super::system::FLASH.timed_count(), 0);
+
+    for detached in [false, true] {
+        let StagedBlocking {
+            handle,
+            completion: _,
+            run,
+            exited,
+            publish,
+        } = staged(false);
+        let abort = handle.abort_handle();
+        let retained = if detached {
+            let mut waiting = Box::pin(participate(handle, Location::caller()));
+            assert!(waiting.as_mut().poll(&mut cx).is_pending());
+            drop(waiting);
+            None
+        } else {
+            Some(handle)
+        };
+        run.send(()).expect("finish retained or detached work");
+        exited.recv().expect("retained or detached pooled exit");
+        assert_eq!(
+            super::system::FLASH.active_count(),
+            0,
+            "an unawaited or detached result must not strand completion credit"
+        );
+        assert_eq!(forward::async_active_count(), 0);
+        publish
+            .send(())
+            .expect("publish retained or detached result");
+        while !abort.is_finished() {
+            thread::yield_now();
+        }
+        if let Some(handle) = retained {
+            assert_eq!(rt.block_on(handle).expect("retained result joins later"), 7);
+        }
+        assert_eq!(super::system::FLASH.active_count(), 0);
+    }
 }
 
 /// The other half of what a pooled closure declares: `spin_loop` is work, a

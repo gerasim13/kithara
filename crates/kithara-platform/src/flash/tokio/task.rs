@@ -1,4 +1,10 @@
-use std::{future::Future, panic::Location};
+use std::{
+    fmt,
+    future::Future,
+    panic::Location,
+    pin::Pin,
+    task::{Context, Poll, Wake, Waker},
+};
 
 pub use crate::{
     backend::tokio::task::{JoinError, JoinHandle},
@@ -6,7 +12,10 @@ pub use crate::{
 };
 use crate::{
     backend::tokio::{backend::task, runtime::Handle, task as native_task},
+    flash::system::credit::DedicatedSlot,
     maybe_send::MaybeSend,
+    sync::Arc,
+    system::lock::Mutex,
 };
 
 /// Spawn an async task. Under `flash` (native) the future is wrapped in the
@@ -74,17 +83,18 @@ where
 /// for the closure's lifetime (thread-locals do not cross the pool), so a
 /// blocking computation spawned from a flash test stays flash-eligible.
 #[track_caller]
-pub fn spawn_blocking<F, R>(f: F) -> JoinHandle<R>
+pub fn spawn_blocking<F, R>(f: F) -> BlockingJoinHandle<R>
 where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    native_task::spawn_blocking(crate::flash::thread::wrap_pool_task(f))
+    let (work, completion) = BlockingJoinHandle::prepare(f);
+    BlockingJoinHandle::new(native_task::spawn_blocking(work), completion)
 }
 
 /// Spawn synchronous work without blocking an async runtime worker.
 #[track_caller]
-pub fn spawn_sync<F, R>(f: F) -> JoinHandle<R>
+pub fn spawn_sync<F, R>(f: F) -> BlockingJoinHandle<R>
 where
     F: FnOnce() -> R + MaybeSend + 'static,
     R: MaybeSend + 'static,
@@ -100,10 +110,167 @@ where
 /// Reserves the `active` slot before the pool queues the closure, covering the queue wait; the
 /// slot's `Drop` returns the reservation if the pool never runs it.
 #[track_caller]
-pub fn spawn_blocking_on<F, R>(handle: &Handle, f: F) -> JoinHandle<R>
+pub fn spawn_blocking_on<F, R>(handle: &Handle, f: F) -> BlockingJoinHandle<R>
 where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    handle.spawn_blocking(crate::flash::thread::wrap_pool_task(f))
+    let (work, completion) = BlockingJoinHandle::prepare(f);
+    BlockingJoinHandle::new(handle.spawn_blocking(work), completion)
+}
+
+/// A blocking task's native result handle with its virtual-clock completion handoff.
+/// Dropping the handle detaches the work, matching Tokio's join contract.
+#[must_use = "dropping a blocking join handle detaches its task"]
+pub struct BlockingJoinHandle<R> {
+    inner: JoinHandle<R>,
+    completion: Option<Arc<BlockingCompletion>>,
+}
+
+impl<R> BlockingJoinHandle<R> {
+    #[track_caller]
+    pub(in crate::flash) fn prepare<F>(
+        f: F,
+    ) -> (
+        impl FnOnce() -> R + Send + 'static,
+        Option<Arc<BlockingCompletion>>,
+    )
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let origin = Location::caller();
+        let completion = crate::flash::ambient_snapshot().then(|| {
+            Arc::new(BlockingCompletion {
+                origin,
+                state: Mutex::default(),
+            })
+        });
+        let work = crate::flash::thread::wrap_pool_task_with_completion(f, completion.clone());
+        (work, completion)
+    }
+
+    pub(in crate::flash) fn new(
+        inner: JoinHandle<R>,
+        completion: Option<Arc<BlockingCompletion>>,
+    ) -> Self {
+        if let Some(completion) = &completion {
+            completion.state.lock().native = Some(inner.abort_handle());
+        }
+        Self { inner, completion }
+    }
+
+    delegate::delegate! {
+        to self.inner {
+            /// Abort the task if it has not started running.
+            pub fn abort(&self);
+            /// Obtain a handle that can abort queued work independently of its result owner.
+            pub fn abort_handle(&self) -> task::AbortHandle;
+            /// Return whether the native task has completed.
+            pub fn is_finished(&self) -> bool;
+            /// Return the native task's identity.
+            pub fn id(&self) -> task::Id;
+        }
+    }
+}
+
+impl<R> Future for BlockingJoinHandle<R> {
+    type Output = Result<R, JoinError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let Some(completion) = &this.completion else {
+            return Pin::new(&mut this.inner).poll(cx);
+        };
+        completion.register(cx.waker());
+        let waker = Waker::from(Arc::clone(completion));
+        let outcome = Pin::new(&mut this.inner).poll(&mut Context::from_waker(&waker));
+        if outcome.is_ready() {
+            completion.settle();
+        }
+        outcome
+    }
+}
+
+impl<R> Drop for BlockingJoinHandle<R> {
+    fn drop(&mut self) {
+        if let Some(completion) = &self.completion {
+            completion.settle();
+        }
+    }
+}
+
+impl<R: fmt::Debug> fmt::Debug for BlockingJoinHandle<R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+/// One job owns the handoff between pooled execution and native result publication.
+/// Tokio remains the sole result owner; this state only tracks its registered receiver.
+pub(in crate::flash) struct BlockingCompletion {
+    origin: &'static Location<'static>,
+    state: Mutex<CompletionState>,
+}
+
+#[derive(Default)]
+struct CompletionState {
+    receiver: Option<Waker>,
+    native: Option<task::AbortHandle>,
+    finishing: bool,
+    credit: Option<DedicatedSlot>,
+}
+
+impl BlockingCompletion {
+    /// A native poll can defer its wake even after publication; every such
+    /// scheduling handoff holds credit until the receiver wakes or the poll is Ready.
+    fn register(&self, receiver: &Waker) {
+        let mut state = self.state.lock();
+        state.receiver = Some(receiver.clone());
+        if state.finishing && state.credit.is_none() {
+            state.credit = Some(DedicatedSlot::reserve(self.origin));
+        }
+    }
+
+    /// Runs before the pooled participant or never-claimed reservation is released,
+    /// including panic and queued cancellation. Unobserved results hold no credit.
+    pub(in crate::flash) fn finish(&self) {
+        let mut state = self.state.lock();
+        state.finishing = true;
+        if state.receiver.is_some() && state.credit.is_none() {
+            state.credit = Some(DedicatedSlot::reserve(self.origin));
+        }
+    }
+
+    fn settle(&self) {
+        let credit = {
+            let mut state = self.state.lock();
+            state.receiver = None;
+            state.credit.take()
+        };
+        drop(credit);
+    }
+}
+
+impl Wake for BlockingCompletion {
+    /// Forward readiness and cooperative wakes. Published results return completion
+    /// credit only after the receiver's participating waker acquires runnable credit.
+    fn wake(self: Arc<Self>) {
+        let (receiver, credit) = {
+            let mut state = self.state.lock();
+            if state
+                .native
+                .as_ref()
+                .is_some_and(task::AbortHandle::is_finished)
+            {
+                (state.receiver.take(), state.credit.take())
+            } else {
+                (state.receiver.clone(), None)
+            }
+        };
+        if let Some(receiver) = receiver {
+            receiver.wake();
+        }
+        drop(credit);
+    }
 }

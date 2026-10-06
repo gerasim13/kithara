@@ -52,3 +52,6 @@ where
 {
     handle.spawn_blocking(f)
 }
+
+/// Result handle for synchronous work scheduled off the async worker.
+pub type BlockingJoinHandle<T> = JoinHandle<T>;
