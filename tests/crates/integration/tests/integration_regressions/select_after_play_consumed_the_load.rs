@@ -27,7 +27,7 @@ use kithara::{
     play::{
         AllocatedSlot, Cmd, NodeInputs, PlayError, PlayerConfig, PlayerImpl, Reply, ResourceConfig,
         ResourceSrc, SessionBinding, SessionDispatcher, SessionSampleRate, SharedEq, SlotId,
-        bridge::slot_channels, player::PlayerControlSource,
+        player::PlayerControlSource,
     },
     queue::{Queue, QueueConfig, QueueEvent, TrackSource, Transition},
 };
@@ -39,6 +39,7 @@ use kithara_integration_tests::{
     test_defaults::consts as shared,
     waits::wait_for_event,
 };
+use kithara_render::bridge::slot_channels;
 use kithara_test_fixtures::fixtures::tone_mp3;
 use kithara_test_utils::{TestTempDir, temp_dir};
 
