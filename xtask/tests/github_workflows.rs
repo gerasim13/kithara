@@ -2003,8 +2003,12 @@ fn the_ui_workflow_names_its_lane_instead_of_repeating_it() {
 /// lane's pool under the runner's build root. A workflow that names the build
 /// directory sends every job of the lane to one directory, where the lane
 /// build lock queues them one at a time. What a workflow still names is what
-/// runs before the lane: the xtask bootstrap outlives the checkout on the same
-/// volume as the fixture store.
+/// runs before the lane: the xtask bootstrap, which outlives the checkout.
+///
+/// It sits under the build root every runner mounts, not in one runner's own
+/// directory. Kept per runner, the host held one bootstrap build and one Cargo
+/// home for each of its runners, 10 GB apiece outside every budget, and a
+/// runner that had not yet seen a commit compiled xtask for it again.
 #[test]
 fn a_lane_leaves_its_build_directory_to_the_slot_it_claims() {
     for name in ["lane.yml", "ui.yml", "android.yml"] {
@@ -2029,8 +2033,8 @@ fn a_lane_leaves_its_build_directory_to_the_slot_it_claims() {
             .to_string();
         assert_eq!(
             bootstrap,
-            format!("{cache_root}/target/.kithara-ci"),
-            "{name}: the xtask bootstrap must outlive the checkout"
+            format!("{cache_root}/lanes/.kithara-ci"),
+            "{name}: the xtask bootstrap is one per host, beside the lane slots"
         );
     }
 }
@@ -2282,8 +2286,8 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
     );
     assert_eq!(
         mapping_field(workflow_env, "KITHARA_CI_CACHE_ROOT").as_str(),
-        Some("/cache/target/.kithara-ci"),
-        "matrix selection reuses its xtask bootstrap"
+        Some("/cache/lanes/.kithara-ci"),
+        "matrix selection reuses the host's xtask bootstrap"
     );
     let jobs = workflow_jobs(&workflow);
     assert_eq!(

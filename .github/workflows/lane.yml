@@ -81,9 +81,11 @@ env:
   # What this run produces again rather than reads from the store; empty unless
   # the pipeline was dispatched to refill it.
   KITHARA_FIXTURE_REFRESH: ${{ inputs.fixture-refresh }}
-  # Bootstrap xtask beside the runner's persistent Cargo target. Without this,
-  # every fresh Actions checkout recompiles xtask before the lane can start.
-  KITHARA_CI_CACHE_ROOT: /cache/target/.kithara-ci
+  # Bootstrap xtask under the build root every runner mounts. Without this,
+  # every fresh Actions checkout recompiles xtask before the lane can start;
+  # kept per runner, each runner held its own bootstrap build and Cargo home
+  # and compiled xtask again for a commit another runner had already built.
+  KITHARA_CI_CACHE_ROOT: /cache/lanes/.kithara-ci
   # No build directory here. Everything before the lane, the xtask bootstrap
   # included, builds in the runner's own `CARGO_TARGET_DIR`. `ci lane` takes
   # the first free slot of the lane's pool under `KITHARA_CI_TARGET_ROOT`, so
