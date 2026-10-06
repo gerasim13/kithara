@@ -443,7 +443,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        ConsumerWakeMode,
+        ConsumerWakeMode, TrackFailureKind,
         audio::ReadOutcome,
         test_pools::{Pools, pools, sample_buffer},
     };
@@ -528,6 +528,61 @@ mod tests {
         fn wake(&self) {
             self.stated.fetch_add(1, Ordering::Release);
         }
+    }
+
+    #[kithara::test]
+    #[case::nonblocking(true)]
+    #[case::blocking(false)]
+    fn a_committed_failure_marker_wins_over_producer_closure(#[case] preloaded: bool) {
+        let fixture = RingFixture::new(preloaded);
+        let RingFixture {
+            mut data_tx,
+            mut ring,
+            ..
+        } = fixture;
+        let failure = TrackFailureKind::RecreateFailed { offset: 91 };
+        assert!(data_tx.try_push(Fetch::failure(0, failure)).is_ok());
+        drop(data_tx);
+
+        assert!(ring.recv_valid_chunk(empty_ctx(), Wait::ForProducer).is_none());
+        assert!(matches!(
+            ring.phase,
+            ConsumerPhase::Failed {
+                source: FailureSource::Producer { failure: actual },
+            } if actual == failure
+        ));
+        assert!(ring.recv_valid_chunk(empty_ctx(), Wait::ForProducer).is_none());
+        assert!(matches!(
+            ring.phase,
+            ConsumerPhase::Failed {
+                source: FailureSource::Producer { failure: actual },
+            } if actual == failure
+        ));
+    }
+
+    #[kithara::test]
+    #[case::nonblocking(true)]
+    #[case::blocking(false)]
+    fn committed_pcm_is_drained_before_an_unmarked_producer_closure(#[case] preloaded: bool) {
+        let fixture = RingFixture::new(preloaded);
+        let chunk = fixture.chunk(&[0.25, 0.5]);
+        let RingFixture {
+            mut data_tx,
+            mut ring,
+            ..
+        } = fixture;
+        assert!(data_tx.try_push(Fetch::data(chunk, 0)).is_ok());
+        drop(data_tx);
+
+        assert!(ring.recv_valid_chunk(empty_ctx(), Wait::ForProducer).is_some());
+        assert_eq!(ring.phase, ConsumerPhase::Buffering);
+        assert!(ring.recv_valid_chunk(empty_ctx(), Wait::ForProducer).is_none());
+        assert!(matches!(
+            ring.phase,
+            ConsumerPhase::Failed {
+                source: FailureSource::ChannelClosed,
+            }
+        ));
     }
 
     #[kithara::test]

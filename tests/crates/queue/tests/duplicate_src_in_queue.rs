@@ -7,12 +7,16 @@
 //! which is the wrong track as soon as the second copy is the one
 //! playing.
 
+use std::num::NonZeroUsize;
+
 use kithara::{
-    audio::{DecodeErrorKind, TrackFailureKind},
+    assets::AssetStore,
+    audio::{AudioConfig, DecodeErrorKind, NoResamplerBackend, TrackFailureKind},
     events::{SlotId, TrackId},
-    platform::sync::Arc,
-    play::{ItemRole, PlaybackFault, PlayerEvent, TrackRef},
-    queue::{QueueControl, TrackStatus, Transition},
+    file::{FileConfig, FileSrc},
+    platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError},
+    play::{ItemRole, PlaybackFault, PlayerEvent, Resource, TrackRef},
+    queue::{QueueControl, QueueEvent, TrackStatus, Transition},
 };
 use kithara_integration_tests::{
     event::TestEvent,
@@ -20,6 +24,7 @@ use kithara_integration_tests::{
     offline::{OfflinePlayer, append_source_loaded, asset_source, offline_queue_fixture},
 };
 use kithara_test_fixtures::{asset::Asset, assets};
+use kithara_test_utils::cancel_token;
 
 use crate::bufpool_ext::TestPools;
 
@@ -106,6 +111,131 @@ async fn a_failure_only_flags_the_entry_that_played(#[case] played_entry: bool) 
         matches!(status, TrackStatus::Failed(_)),
         played_entry,
         "only the entry that played may be flagged: {status:?}"
+    );
+    drop(queue);
+    harness.close().await;
+}
+
+#[kithara::test(tokio, flash(false))]
+async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
+    let asset = assets::constant_wav_loud_30s();
+    let SecondCopyPlaying {
+        harness,
+        queue,
+        source,
+        first,
+        playing,
+    } = fixture_playing_the_second_copy(&asset).await;
+    let source_cancel = cancel_token();
+    let pools = harness.worker().pools().clone();
+    let path = asset.path().expect("native WAV fixture path").to_owned();
+    let file = FileConfig::for_src(FileSrc::Local(path))
+        .store(AssetStore::builder(pools.clone()).build())
+        .pools(pools)
+        .cancel(source_cancel.clone())
+        .build();
+    let config = AudioConfig::<_, NoResamplerBackend>::for_stream(file)
+        .audio_buffer_chunks(2)
+        .preload_chunks(NonZeroUsize::MIN)
+        .build();
+    assert!(
+        config.cancel().is_none(),
+        "only the file source owns this cancellation"
+    );
+    let audio = harness.worker().load(config).await.expect("real file lane");
+    let mut resource = Resource::from_reader(audio, Some(Arc::from(source.clone())));
+    resource
+        .preload()
+        .await
+        .expect("the real lane has produced PCM");
+    harness
+        .run(harness.player(), move |player| {
+            player
+                .replace_item(1, resource, playing)
+                .expect("replace selected queue entry");
+        })
+        .await;
+    harness.run(&queue, QueueControl::play).await;
+    render_loop(&queue, &harness, WARMUP_BLOCKS).await;
+    assert!(
+        harness.position() > 0.0,
+        "the selected real source must have played"
+    );
+    assert_eq!(queue.current().map(|entry| entry.id), Some(playing));
+    assert_eq!(status_of(&queue, playing), TrackStatus::Loaded);
+    let sibling_status = status_of(&queue, first);
+    let mut events = queue.subscribe::<TestEvent>();
+
+    source_cancel.cancel();
+    render_loop(&queue, &harness, WARMUP_BLOCKS).await;
+    harness.run(&queue, QueueControl::tick).await;
+
+    let fault = PlaybackFault::Source(TrackFailureKind::SourceCancelled);
+    let reason = fault.to_string();
+    let status = TrackStatus::Failed(reason.clone());
+    assert_eq!(status_of(&queue, playing), status);
+    assert_eq!(status_of(&queue, first), sibling_status);
+    assert!(
+        queue.current().is_none(),
+        "the failed final entry ends the queue"
+    );
+    let mut observed = Vec::new();
+    loop {
+        match events.try_recv() {
+            Ok(envelope) => observed.push(envelope.event),
+            Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            Err(TryRecvError::Lagged(skipped)) => panic!("lost {skipped} terminal events"),
+        }
+    }
+    let failures: Vec<_> = observed
+        .iter()
+        .filter_map(|event| match event {
+            TestEvent::Player(PlayerEvent::ItemDidFail { item, fault }) => Some((item, *fault)),
+            _ => None,
+        })
+        .collect();
+    let [(item, actual)] = failures.as_slice() else {
+        panic!("one real player failure must reach the queue: {failures:?}");
+    };
+    assert!(item.is_leading());
+    assert_eq!(item.track().id, playing);
+    assert_eq!(item.track().src.as_ref(), source);
+    assert_eq!(*actual, fault);
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|event| matches!(
+                event,
+                TestEvent::Queue(QueueEvent::TrackStatusChanged { id, status: actual })
+                    if *id == playing && *actual == status
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|event| matches!(
+                event,
+                TestEvent::Queue(QueueEvent::TrackLoadFailed { id, reason: actual, auto_skipped: true })
+                    if *id == playing && *actual == reason
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|event| matches!(event, TestEvent::Queue(QueueEvent::QueueEnded)))
+            .count(),
+        1
+    );
+    assert!(
+        observed.iter().all(|event| !matches!(
+            event,
+            TestEvent::Player(PlayerEvent::ItemDidPlayToEnd { .. })
+        )),
+        "source cancellation must never publish natural EOF"
     );
     drop(queue);
     harness.close().await;

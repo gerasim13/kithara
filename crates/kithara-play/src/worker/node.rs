@@ -921,9 +921,9 @@ mod tests {
 
     use kithara_assets::AssetStore;
     use kithara_audio::{
-        Audio, AudioConfig, AudioEvent, AudioRead, AudioSource, ChunkOutcome, Fetch,
-        NoResamplerBackend, PreloadGate, PreparedAudio, SourceEnd, TrackFailureKind, TrackStep,
-        WaitingReason, mock::AudioSourceMock,
+        Audio, AudioConfig, AudioEvent, AudioRead, AudioReadError, AudioSource, ChunkOutcome,
+        DecodeErrorKind, FailureSource, Fetch, NoResamplerBackend, PreloadGate, PreparedAudio,
+        SourceEnd, TrackFailureKind, TrackStep, WaitingReason, mock::AudioSourceMock,
     };
     use kithara_command::{ChannelConfig, channel};
     use kithara_effects::EffectDrain;
@@ -1072,6 +1072,135 @@ mod tests {
             repeated.to_string().contains("source cancelled"),
             "{repeated}"
         );
+    }
+
+    #[kithara::test(native, tokio)]
+    #[case::normal(false)]
+    #[case::first_seek(true)]
+    async fn typed_failures_survive_the_real_warp_node_and_reader(#[case] seek_before_read: bool) {
+        let kinds = [
+            DecodeErrorKind::Io,
+            DecodeErrorKind::UnsupportedCodec,
+            DecodeErrorKind::UnsupportedContainer,
+            DecodeErrorKind::InvalidData,
+            DecodeErrorKind::SeekFailed,
+            DecodeErrorKind::SeekOutOfRange,
+            DecodeErrorKind::Parse,
+            DecodeErrorKind::ProbeFailed,
+            DecodeErrorKind::BackendUnavailable,
+            DecodeErrorKind::InvalidSampleRate,
+            DecodeErrorKind::BackendStatus,
+            DecodeErrorKind::Interrupted,
+            DecodeErrorKind::Backend,
+        ];
+        let failures = kinds
+            .into_iter()
+            .map(|kind| TrackFailureKind::Decode { kind })
+            .chain([
+                TrackFailureKind::RecreateFailed { offset: 0 },
+                TrackFailureKind::RecreateFailed { offset: 91 },
+                TrackFailureKind::RecreateFailed { offset: u64::MAX },
+                TrackFailureKind::SourceCancelled,
+                TrackFailureKind::ChannelClosed,
+                TrackFailureKind::Render,
+            ]);
+        for failure in failures {
+            let pools = pools();
+            let prepared = prepared_file_audio(4, 1, None).await.map(|audio, source| {
+                let seek_obs = source.seek_observe();
+                let source = Unimock::new((
+                    AudioSourceMock::step_track
+                        .next_call(matching!())
+                        .returns(TrackStep::Failed(failure)),
+                    AudioSourceMock::decode_epoch
+                        .each_call(matching!())
+                        .returns(0u64),
+                    AudioSourceMock::seek_observe
+                        .each_call(matching!())
+                        .returns(seek_obs),
+                ));
+                let spec = audio.spec();
+                let config = kithara_warp::WarpConfig::builder().build();
+                let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
+                let drain = EffectDrain::new(0, &pools).expect("empty effect drain");
+                let (_lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
+                let source = WarpSource::new(
+                    source,
+                    renderer,
+                    Vec::new(),
+                    drain,
+                    spec,
+                    pools.clone(),
+                    inbox,
+                );
+                (audio, source)
+            });
+            let (mut audio, lane) = prepared.into();
+            let seek_obs = lane.source.seek_observe();
+            let mut node = decoder_node(lane, seek_obs);
+            assert_eq!(node.tick(), TickResult::Done, "{failure:?}");
+            if seek_before_read {
+                let epoch = audio.seek_handle().begin(Duration::from_millis(10));
+                assert_eq!(epoch, 1);
+                assert_eq!(node.seek_obs.epoch(), 1);
+            }
+            let expected = if seek_before_read {
+                FailureSource::ProducerAfterSeek { failure }
+            } else {
+                FailureSource::Producer { failure }
+            };
+            let first = audio.next_chunk().expect_err("typed failure marker");
+            assert!(
+                matches!(first, AudioReadError::Stream { source, .. } if source == expected),
+                "{failure:?}: {first:?}"
+            );
+            let _ = audio.seek_handle().begin(Duration::from_millis(20));
+            let mut samples = [0.0; 16];
+            let repeated = audio
+                .read(&mut samples)
+                .expect_err("failure remains terminal");
+            assert!(
+                matches!(repeated, AudioReadError::Stream { source, .. } if source == expected),
+                "{failure:?}: {repeated:?}"
+            );
+        }
+    }
+
+    #[kithara::test(native, tokio)]
+    async fn an_unmarked_producer_drop_with_a_live_token_is_channel_closed() {
+        let cancel = cancel_token();
+        let (node, mut audio) = real_file_node(cancel.clone()).await;
+        audio
+            .preload()
+            .expect("live empty producer permits nonblocking preload");
+        assert!(audio.is_preloaded());
+        drop(node);
+        assert!(
+            !cancel.is_cancelled(),
+            "producer drop must not cancel the source token"
+        );
+
+        let failure = audio
+            .next_chunk()
+            .expect_err("the producer disappeared without a marker");
+        assert!(matches!(
+            failure,
+            AudioReadError::Stream {
+                source: FailureSource::ChannelClosed,
+                ..
+            }
+        ));
+        let mut samples = [0.0; 16];
+        let repeated = audio
+            .read(&mut samples)
+            .expect_err("closure remains terminal");
+        assert!(matches!(
+            repeated,
+            AudioReadError::Stream {
+                source: FailureSource::ChannelClosed,
+                ..
+            }
+        ));
     }
 
     #[kithara::test(native, tokio)]
