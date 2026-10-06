@@ -557,6 +557,7 @@ mod tests {
             for notified in [false, true] {
                 let flash = FlashInner::new_arc();
                 let base = flash.clock.now_nanos();
+                let hold = flash.test_hold();
                 let gate = flash.async_acquire(std::panic::Location::caller());
                 assert!(gate.try_enter_poll());
                 let poll = credit::AsyncPollGuard::enter(gate.id(), gate.loc());
@@ -571,11 +572,13 @@ mod tests {
                     std::task::Wake::wake_by_ref(&gate);
                 }
 
-                pace_due(&flash, base);
                 let bridge_id = flash.next_condvar_id();
                 let (token, advance, wait) =
                     flash.register_condvar_timed(base + ms(100), bridge_id);
                 advance.fire();
+                assert_eq!(flash.clock.now_nanos(), base);
+                pace_due(&flash, base);
+                drop(hold);
                 assert_eq!(flash.clock.now_nanos(), base + ms(100));
                 assert_eq!(flash.active_count(), 2);
                 token.wait();
@@ -586,6 +589,12 @@ mod tests {
                     flash.register_sleep_async(ms(100), std::task::Waker::noop().clone());
                 advance.fire();
                 pace_due(&flash, base);
+                {
+                    let mut core = flash.core.lock();
+                    let advance = core.try_advance(&flash.clock);
+                    drop(core);
+                    advance.fire();
+                }
                 assert!(!later.granted());
                 assert_eq!(flash.clock.now_nanos(), base + ms(100));
                 drop(receipt);
