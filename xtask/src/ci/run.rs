@@ -7,7 +7,10 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
-use kithara_devtools::{Ctx, common::tools::ToolsConfig};
+use kithara_devtools::{
+    Ctx,
+    common::{project::ProjectConfig, tools::ToolsConfig},
+};
 use tracing::{info, warn};
 
 use super::{
@@ -59,6 +62,13 @@ pub(crate) enum CacheGroup {
 }
 
 impl CacheGroup {
+    /// Everywhere but Windows. `ffmpeg-sys-next` declares a `--cfg` for every
+    /// library version it knows, which is thousands of them, and the command
+    /// Cargo builds for it passes what Windows accepts. Cargo hands that to the
+    /// wrapper through a response file; sccache expands it and spawns the
+    /// compiler with the arguments themselves, which does not fit:
+    /// `failed to spawn rustc.exe: The filename or extension is too long.
+    /// (os error 206)`. The cache is worth less than the lane.
     pub(crate) const fn uses_sccache(self) -> bool {
         !matches!(self, Self::Windows)
     }
@@ -83,23 +93,41 @@ impl Lane {
     /// The residual lanes, by the name a pipeline schedules them under. They
     /// are matched before the configuration is consulted, so a declared lane
     /// cannot shadow one of them.
-    const RESIDUAL: [(&'static str, Self); 8] = [
-        ("apple-swift-test", Self::AppleSwiftTest),
-        ("apple-ios-test", Self::AppleIosTest),
-        ("release-xcframework", Self::ReleaseXcframework),
-        ("release-docs", Self::ReleaseDocs),
-        ("release-wasm", Self::ReleaseWasm),
-        ("release-android", Self::ReleaseAndroid),
-        ("release-publish", Self::ReleasePublish),
-        ("verdict", Self::Verdict),
+    const RESIDUAL: [Self; 8] = [
+        Self::AppleSwiftTest,
+        Self::AppleIosTest,
+        Self::ReleaseXcframework,
+        Self::ReleaseDocs,
+        Self::ReleaseWasm,
+        Self::ReleaseAndroid,
+        Self::ReleasePublish,
+        Self::Verdict,
     ];
+
+    /// The name a pipeline schedules this lane under.
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            Self::AppleSwiftTest => "apple-swift-test",
+            Self::AppleIosTest => "apple-ios-test",
+            Self::ReleaseXcframework => "release-xcframework",
+            Self::ReleaseDocs => "release-docs",
+            Self::ReleaseWasm => "release-wasm",
+            Self::ReleaseAndroid => "release-android",
+            Self::ReleasePublish => "release-publish",
+            Self::Verdict => "verdict",
+            Self::Declared { name, .. } => name,
+        }
+    }
 
     /// A lane name from the command line, against the lanes this repository
     /// actually has. An unknown one fails here rather than on the runner, and
     /// says what it could have been.
     pub(crate) fn parse(name: &str, lanes: &BTreeMap<String, CiLaneConfig>) -> Result<Self> {
-        if let Some((_, lane)) = Self::RESIDUAL.iter().find(|(known, _)| *known == name) {
-            return Ok(lane.clone());
+        if let Some(lane) = Self::RESIDUAL
+            .into_iter()
+            .find(|known| known.name() == name)
+        {
+            return Ok(lane);
         }
         if let Some(declared) = lanes.get(name) {
             let cache_group = CacheGroup::parse(&declared.cache_group)
@@ -110,7 +138,8 @@ impl Lane {
             });
         }
         bail!("`{name}` is not a CI lane; this repository has {}", {
-            let mut names: Vec<&str> = Self::RESIDUAL.iter().map(|(known, _)| *known).collect();
+            let residual = Self::RESIDUAL;
+            let mut names: Vec<&str> = residual.iter().map(Self::name).collect();
             names.extend(lanes.keys().map(String::as_str));
             names.sort_unstable();
             names.join(", ")
@@ -428,7 +457,7 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             args.kind,
             &ctx.root,
             &ci_config,
-            &ctx.config.tools,
+            &ctx.config,
             &swiftpm_cache,
             &ext.ci.lanes,
         );
@@ -457,7 +486,7 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
                 args.kind,
                 &process,
                 &ci_config,
-                &ctx.config.tools,
+                &ctx.config,
                 &swiftpm_cache,
                 &ext.ci.lanes,
             ),
@@ -474,18 +503,20 @@ fn report_lane(
     kind: PipelineKind,
     root: &Path,
     ci_config: &CiConfig,
-    tools: &ToolsConfig,
+    project: &ProjectConfig,
     swiftpm_cache: &Path,
     lanes: &BTreeMap<String, CiLaneConfig>,
 ) -> Result<()> {
-    let process = Process::recording(
-        root,
-        Recording::default().with_reply(
-            tools.program("xcodebuild"),
-            &format!("Xcode {}", ci_config.pins.expected_xcode_version),
-        ),
+    let process = Process::recording(root, executor_replies(ci_config, &project.tools));
+    let outcome = command_lane(
+        lane,
+        kind,
+        &process,
+        ci_config,
+        project,
+        swiftpm_cache,
+        lanes,
     );
-    let outcome = command_lane(lane, kind, &process, ci_config, tools, swiftpm_cache, lanes);
     let recorded = process
         .recorded()
         .context("a recording process keeps its recording")?;
@@ -496,6 +527,18 @@ fn report_lane(
         println!("{} {}", step.program, step.args.join(" "));
     }
     outcome
+}
+
+/// What a recorded lane is told when it asks the executor something: enough to
+/// get past the checks a real executor answers, and a stand-in where the
+/// answer is an identity only a real run produces.
+fn executor_replies(ci_config: &CiConfig, tools: &ToolsConfig) -> Recording {
+    Recording::default()
+        .with_reply(
+            &[tools.program("xcodebuild")],
+            &format!("Xcode {}", ci_config.pins.expected_xcode_version),
+        )
+        .with_reply(&[tools.program("xcrun"), "simctl", "create"], "<simulator>")
 }
 
 /// Every lane that resolves to commands on the executor.
@@ -509,10 +552,11 @@ fn command_lane(
     kind: PipelineKind,
     process: &Process,
     ci_config: &CiConfig,
-    tools: &ToolsConfig,
+    project: &ProjectConfig,
     swiftpm_cache: &Path,
     lanes: &BTreeMap<String, CiLaneConfig>,
 ) -> Result<()> {
+    let tools = &project.tools;
     match lane {
         Lane::ReleaseXcframework
         | Lane::ReleaseDocs
@@ -523,7 +567,14 @@ fn command_lane(
         Lane::AppleSwiftTest => {
             super::lane::apple::swift_test(process, ci_config, tools, swiftpm_cache)
         }
-        Lane::AppleIosTest => super::lane::apple::ios_test(process, ci_config, tools),
+        // The simulator set belongs to the executor's user, which other
+        // projects' lanes may share, so the device is named for both.
+        Lane::AppleIosTest => super::lane::apple::ios_test(
+            process,
+            ci_config,
+            tools,
+            &format!("{}-{}", project.project.name, lane.name()),
+        ),
         Lane::Declared { name, .. } => {
             let declared = lanes.get(name).with_context(|| {
                 format!("ext.ci.lanes.{name} is not declared in .config/xtask.toml")
@@ -548,12 +599,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        super::{
-            config::fixture,
-            process::{Recording, Step},
-        },
+        super::{config::fixture, process::Step},
         CacheGroup, CompilerCache, Lane, PipelineKind, command_lane, compiler_cache_note,
-        execute_lane, sccache_server_is_stopped,
+        execute_lane, executor_replies, sccache_server_is_stopped,
     };
     use crate::{
         Cli,
@@ -654,17 +702,13 @@ mod tests {
         let project = kithara_devtools::common::project::ProjectConfig::load(repo())
             .expect("the project config loads");
         let lane = Lane::parse(name, &ext.ci.lanes).expect("the lane is declared");
-        let recording = Recording::default().with_reply(
-            project.tools.program("xcodebuild"),
-            &format!("Xcode {}", ci_config.pins.expected_xcode_version),
-        );
-        let process = Process::recording(root, recording);
+        let process = Process::recording(root, executor_replies(&ci_config, &project.tools));
         let outcome = command_lane(
             &lane,
             kind,
             &process,
             &ci_config,
-            &project.tools,
+            &project,
             &root.join("target/swiftpm"),
             &ext.ci.lanes,
         )
@@ -836,14 +880,18 @@ mod tests {
     }
 
     /// The conversion runs off what a simulator run leaves behind, so a
-    /// checkout without a result bundle asks `xcrun` for nothing. The snapshot
-    /// resolves the same lane in a checkout that has one.
+    /// checkout without a result bundle asks `xcresulttool` for nothing. The
+    /// snapshot resolves the same lane in a checkout that has one.
     #[test]
     fn a_checkout_without_a_result_bundle_converts_nothing() {
         let (outcome, steps) = resolve("apple-ios-test", PipelineKind::Main);
 
         assert_eq!(outcome, Ok(()));
-        assert!(steps.iter().all(|step| step.program != "xcrun"));
+        assert!(
+            steps
+                .iter()
+                .all(|step| step.args.first().is_none_or(|tool| tool != "xcresulttool"))
+        );
     }
 
     /// Every command lane, resolved but not run, in every pipeline kind it
@@ -869,21 +917,20 @@ mod tests {
                     .expect("every kind has a name")
                     .get_name()
                     .to_owned();
-                let recording = Recording::default()
-                    .with_reply(
-                        project.tools.program("xcodebuild"),
-                        &format!("Xcode {}", ci_config.pins.expected_xcode_version),
-                    )
+                let recording = executor_replies(&ci_config, &project.tools)
                     // Enough for the conversion to resolve; what it makes of
                     // real results is pinned where that conversion lives.
-                    .with_reply("xcrun", r#"{"testNodes":[]}"#);
+                    .with_reply(
+                        &[project.tools.program("xcrun"), "xcresulttool"],
+                        r#"{"testNodes":[]}"#,
+                    );
                 let process = Process::recording(root, recording);
                 let outcome = command_lane(
                     &lane,
                     *kind,
                     &process,
                     &ci_config,
-                    &project.tools,
+                    &project,
                     &root.join("target/swiftpm"),
                     &ext.ci.lanes,
                 );
@@ -1391,7 +1438,7 @@ mod tests {
     fn every_lane() -> Vec<String> {
         let mut names: Vec<String> = Lane::RESIDUAL
             .iter()
-            .map(|(name, _)| (*name).to_owned())
+            .map(|lane| lane.name().to_owned())
             .collect();
         names.extend(declared_lanes().keys().cloned());
         names.sort();

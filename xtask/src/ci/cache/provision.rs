@@ -6,12 +6,13 @@ use std::{
     process::{Command, Stdio},
 };
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde_json::json;
 use tracing::info;
 
 use super::{client::provisioned_environment, required};
 use crate::{
+    child::{self, Cancel},
     ci::host::mac::{read_secret, write_secure},
     consts,
 };
@@ -47,13 +48,16 @@ pub(super) fn credentials() -> Result<()> {
     Ok(())
 }
 
-fn rc(arguments: &[&str]) -> Result<()> {
-    let status = Command::new("rc")
-        .args(arguments)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .context("start cache administration client")?;
+/// Runs one administration step; a stop signal ends it and the setup.
+fn rc(arguments: &[&str], cancel: &Cancel) -> Result<()> {
+    let status = child::run(
+        Command::new("rc")
+            .args(arguments)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null()),
+        Some(cancel),
+    )
+    .context("cache administration client")?;
     // Arguments and client diagnostics can include credentials.
     ensure!(
         status.success(),
@@ -62,7 +66,7 @@ fn rc(arguments: &[&str]) -> Result<()> {
     Ok(())
 }
 
-/// The disk a scope's bucket is allowed, which is not one number for the
+/// The bytes a scope's bucket is allowed, which is not one number for the
 /// fleet.
 ///
 /// The scopes hold different things: the trusted one carries the layers every
@@ -72,15 +76,40 @@ fn rc(arguments: &[&str]) -> Result<()> {
 /// one value - measured as 200 and 800 gibibytes standing against an
 /// environment that still said 50. A scope may name its own, and the shared
 /// value is what a scope that does not is given.
-fn scope_quota(scope: &str, shared: &str) -> String {
+pub(super) fn scope_quota(scope: &str, shared: &str) -> Result<u64> {
     let named = format!(
         "CACHE_BUCKET_QUOTA_{}",
         scope.to_ascii_uppercase().replace('-', "_")
     );
-    env::var(&named).unwrap_or_else(|_| shared.to_owned())
+    let value = env::var(&named).unwrap_or_else(|_| shared.to_owned());
+    size(&value).with_context(|| format!("the quota of the {scope} scope"))
 }
 
-fn scope_bucket(scope: &str) -> Result<String> {
+/// A size as the host writes it. The store is handed the bytes, so its quota
+/// and the evictor's budget cannot read one size two ways.
+fn size(value: &str) -> Result<u64> {
+    let count = value.trim_end_matches(|character: char| character.is_ascii_alphabetic());
+    let shift = match &value[count.len()..] {
+        "KiB" => 10,
+        "MiB" => 20,
+        "GiB" => 30,
+        "TiB" => 40,
+        _ => bail!("{value} is not a whole number of KiB, MiB, GiB or TiB"),
+    };
+    ensure!(
+        !count.is_empty() && count.bytes().all(|byte| byte.is_ascii_digit()),
+        "{value} is not a whole number of KiB, MiB, GiB or TiB"
+    );
+    let bytes = count
+        .parse::<u64>()?
+        .checked_mul(1 << shift)
+        .with_context(|| format!("{value} does not fit in 64 bits"))?;
+    // The store reads zero as no quota at all.
+    ensure!(bytes > 0, "a quota of {value} leaves the bucket no room");
+    Ok(bytes)
+}
+
+pub(super) fn scope_bucket(scope: &str) -> Result<String> {
     ensure!(
         !scope.is_empty()
             && scope.len() <= 48
@@ -93,7 +122,7 @@ fn scope_bucket(scope: &str) -> Result<String> {
     Ok(format!("kithara-{scope}"))
 }
 
-pub(super) fn initialize() -> Result<()> {
+pub(super) fn initialize(cancel: &Cancel) -> Result<()> {
     let scopes = required("CACHE_SCOPES")?;
     let quota = required("CACHE_BUCKET_QUOTA")?;
     let endpoint = required("CACHE_CLIENT_ENDPOINT")?;
@@ -103,83 +132,117 @@ pub(super) fn initialize() -> Result<()> {
         matches!(url.scheme(), "http" | "https") && !endpoint.chars().any(char::is_whitespace),
         "cache endpoint must be an HTTP URL without whitespace"
     );
-    for scope in scopes.split_whitespace() {
-        scope_bucket(scope)?;
-    }
+    let scopes = scopes
+        .split_whitespace()
+        .map(|scope| {
+            scope_bucket(scope)?;
+            Ok((scope, scope_quota(scope, &quota)?))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let root = Path::new("/config");
-    rc(&[
-        "alias",
-        "set",
-        "--",
-        "ci",
-        "http://cache:9000",
-        &read_secret(&root.join("admin-user"))?,
-        &read_secret(&root.join("admin-password"))?,
-    ])?;
-    for scope in scopes.split_whitespace() {
-        initialize_scope(scope, &scope_quota(scope, &quota), &endpoint, uid)?;
+    rc(
+        &[
+            "alias",
+            "set",
+            "--",
+            "ci",
+            consts::CACHE_STORE_URL,
+            &read_secret(&root.join("admin-user"))?,
+            &read_secret(&root.join("admin-password"))?,
+        ],
+        cancel,
+    )?;
+    rc(
+        &[
+            "bucket",
+            "create",
+            "--ignore-existing",
+            &format!("ci/{}", consts::RECENCY_BUCKET),
+        ],
+        cancel,
+    )?;
+    for (scope, quota) in scopes {
+        initialize_scope(scope, quota, &endpoint, uid, cancel)?;
     }
     Ok(())
 }
 
-fn initialize_scope(scope: &str, quota: &str, endpoint: &str, uid: u32) -> Result<()> {
+fn initialize_scope(
+    scope: &str,
+    quota: u64,
+    endpoint: &str,
+    uid: u32,
+    cancel: &Cancel,
+) -> Result<()> {
     let bucket = scope_bucket(scope)?;
     let destination = format!("ci/{bucket}");
     let directory = Path::new("/clients").join(scope);
     fs::create_dir_all(&directory)?;
     let key = secret(&directory.join("access-key"))?;
     let password = secret(&directory.join("secret-key"))?;
-    rc(&["bucket", "create", "--ignore-existing", &destination])?;
-    rc(&["bucket", "quota", "set", &destination, quota])?;
+    rc(
+        &["bucket", "create", "--ignore-existing", &destination],
+        cancel,
+    )?;
+    rc(
+        &["bucket", "quota", "set", &destination, &quota.to_string()],
+        cancel,
+    )?;
     let mut lifecycle = tempfile::NamedTempFile::new()?;
     serde_json::to_writer(&mut lifecycle, &retention())?;
-    rc(&[
-        "bucket",
-        "lifecycle",
-        "rule",
-        "import",
-        &destination,
-        lifecycle
-            .path()
-            .to_str()
-            .context("cache lifecycle path must be UTF-8")?,
-    ])?;
-    rc(&["admin", "user", "add", "ci", &key, &password])?;
+    rc(
+        &[
+            "bucket",
+            "lifecycle",
+            "rule",
+            "import",
+            &destination,
+            lifecycle
+                .path()
+                .to_str()
+                .context("cache lifecycle path must be UTF-8")?,
+        ],
+        cancel,
+    )?;
+    rc(&["admin", "user", "add", "ci", &key, &password], cancel)?;
     let mut policy_file = tempfile::NamedTempFile::new()?;
     serde_json::to_writer(&mut policy_file, &policy(scope, &bucket))?;
-    rc(&[
-        "admin",
-        "policy",
-        "create",
-        "ci",
-        &bucket,
-        policy_file
-            .path()
-            .to_str()
-            .context("cache policy path must be UTF-8")?,
-    ])?;
-    rc(&["admin", "policy", "attach", "ci", &bucket, "--user", &key])?;
+    rc(
+        &[
+            "admin",
+            "policy",
+            "create",
+            "ci",
+            &bucket,
+            policy_file
+                .path()
+                .to_str()
+                .context("cache policy path must be UTF-8")?,
+        ],
+        cancel,
+    )?;
+    rc(
+        &["admin", "policy", "attach", "ci", &bucket, "--user", &key],
+        cancel,
+    )?;
     write_environment(&directory, &bucket, endpoint, &key, &password)?;
-    let status = Command::new("chown")
-        .args(["-R", &uid.to_string()])
-        .arg(&directory)
-        .status()?;
+    let status = child::run(
+        Command::new("chown")
+            .args(["-R", &uid.to_string()])
+            .arg(&directory),
+        Some(cancel),
+    )?;
     ensure!(status.success(), "cache client ownership failed: {status}");
     info!(%scope, "compiler cache scope initialized");
     Ok(())
 }
 
-/// How long each layer in a scope's bucket lives.
+/// How long each snapshot layer in a scope's bucket lives.
 ///
-/// The compiler cache keeps three days. An entry expires by the age of its
-/// write, and a hit does not renew it, so a single day made the first jobs of
-/// every morning, and all of Monday's, recompile dependencies nobody had
-/// changed. Three days spans a weekend and no more, because the smallest
-/// quota bounds it: with every lane slot sharing one key, a day of fleet
-/// traffic wrote about 25 gibibytes, so three days fit even a 200-gibibyte
-/// scope beside its snapshots, while a key split per slot wrote about 127 a
-/// day, and a week of that fills an 800-gibibyte bucket, which then refuses
-/// every write. The snapshot layers are keyed by content
+/// The compiler cache has no age rule. An age rule measures an entry's write,
+/// and a hit does not renew it, so it expired first the entries every build
+/// reads, the ones written longest ago. The evictor keeps that layer under the
+/// scope's quota by last use instead. The snapshot layers are keyed by content
 /// (a target fingerprint, a `Cargo.lock`), so an object still named by a lock
 /// file is still the right answer weeks later, and expiring it daily would
 /// mean paying the full fetch every morning to rebuild the same bytes.
@@ -188,11 +251,6 @@ fn initialize_scope(scope: &str, quota: &str, endpoint: &str, uid: u32) -> Resul
 fn retention() -> serde_json::Value {
     json!({
         "Rules": [
-            {
-                "ID": "compiler-cache", "Status": "Enabled",
-                "Filter": {"Prefix": format!("{SCCACHE_PREFIX}/", SCCACHE_PREFIX = consts::SCCACHE_PREFIX)},
-                "Expiration": {"Days": 3}
-            },
             {
                 "ID": "target-snapshots", "Status": "Enabled",
                 "Filter": {"Prefix": "target-snapshots/"},
@@ -261,9 +319,23 @@ fn write_environment(
 mod tests {
     use super::*;
 
-    /// The retention rule expires only what sits under the compiler-cache
-    /// prefix, so a runner whose environment drops the prefix writes to the
-    /// bucket root, where nothing expires, until the quota refuses every write.
+    /// A stop signal during the setup ends it, so the store is asked to stop
+    /// while Docker still waits for it.
+    #[cfg(unix)]
+    #[test]
+    fn the_setup_stops_at_a_stop_signal() {
+        let _signals = crate::testing::signals();
+        let cancel = Cancel::install().unwrap();
+
+        signal_hook::low_level::raise(signal_hook::consts::signal::SIGTERM).unwrap();
+        let error = rc(&["alias", "list"], &cancel).expect_err("the setup went on");
+
+        assert!(format!("{error:#}").contains("cancelled"), "{error:#}");
+    }
+
+    /// The evictor removes only what sits under the compiler-cache prefix, so
+    /// a runner whose environment drops the prefix writes to the bucket root,
+    /// where nothing is evicted, until the quota refuses every write.
     #[test]
     fn a_provisioned_environment_reaches_the_client_with_its_key_prefix() {
         let directory = tempfile::tempdir().unwrap();
@@ -288,8 +360,29 @@ mod tests {
             env::set_var("CACHE_BUCKET_QUOTA_REVIEW", "800GiB");
         }
 
-        assert_eq!(scope_quota("review", "50GiB"), "800GiB");
-        assert_eq!(scope_quota("trusted", "50GiB"), "50GiB");
+        assert_eq!(scope_quota("review", "50GiB").unwrap(), 800 << 30);
+        assert_eq!(scope_quota("trusted", "50GiB").unwrap(), 50 << 30);
+    }
+
+    /// The store is handed the bytes the evictor keeps the bucket under, so a
+    /// size the two could read apart is refused. The store reads zero as no
+    /// quota, and the evictor would read it as room for nothing.
+    #[test]
+    fn a_quota_is_a_whole_number_of_binary_units() {
+        assert_eq!(size("400GiB").unwrap(), 400 << 30);
+        assert_eq!(size("64MiB").unwrap(), 64 << 20);
+        for value in [
+            "400GB",
+            "400G",
+            "400",
+            "GiB",
+            "+4GiB",
+            "4 GiB",
+            "0GiB",
+            "16777216TiB",
+        ] {
+            assert!(size(value).is_err(), "{value}");
+        }
     }
 
     #[test]
@@ -363,39 +456,48 @@ mod retention_tests {
     fn each_layer_carries_its_own_retention_and_no_rule_is_unfiltered() {
         let rules = retention();
         let rules = rules["Rules"].as_array().expect("rules");
-        assert_eq!(rules.len(), 3);
+        assert!(!rules.is_empty());
 
-        let mut days = std::collections::BTreeMap::new();
         for rule in rules {
             let prefix = rule["Filter"]["Prefix"].as_str().expect("prefix");
             assert!(!prefix.is_empty(), "an unfiltered rule governs every layer");
             assert!(prefix.ends_with('/'), "{prefix} must name a whole prefix");
-            days.insert(
-                prefix.to_owned(),
-                rule["Expiration"]["Days"].as_u64().expect("days"),
-            );
+            assert!(rule["Expiration"]["Days"].as_u64().expect("days") > 0);
         }
-
-        let compiler = days[&format!("{SCCACHE_PREFIX}/", SCCACHE_PREFIX = consts::SCCACHE_PREFIX)];
-        assert!(
-            days["source-snapshots/"] > compiler && days["target-snapshots/"] > compiler,
-            "a content-keyed snapshot must outlive the compiler cache: {days:?}"
-        );
     }
 
-    /// An entry expires by the age of its write, never by its last hit, so a
-    /// retention shorter than a weekend hands Monday's first jobs a cold cache
-    /// for dependencies nobody changed since Friday.
+    /// An age rule measures an entry's write, so it expired first the entries
+    /// every build reads. The compiler cache answers to the evictor alone.
     #[test]
-    fn the_compiler_cache_outlives_a_weekend() {
+    fn no_age_rule_reaches_the_compiler_cache() {
+        let compiler = format!("{}/", consts::SCCACHE_PREFIX);
         let rules = retention();
-        let compiler = rules["Rules"]
-            .as_array()
-            .expect("rules")
-            .iter()
-            .find(|rule| rule["ID"] == "compiler-cache")
-            .expect("a compiler-cache rule");
 
-        assert!(compiler["Expiration"]["Days"].as_u64().expect("days") >= 3);
+        for rule in rules["Rules"].as_array().expect("rules") {
+            let prefix = rule["Filter"]["Prefix"].as_str().expect("prefix");
+            assert!(
+                !compiler.starts_with(prefix) && !prefix.starts_with(&compiler),
+                "{prefix} expires compiler-cache entries by age"
+            );
+        }
+    }
+
+    /// The evictor keeps its records beside the scopes. A scope that could
+    /// name that bucket would hand the records to a client key and put them
+    /// under a quota and eviction.
+    #[test]
+    fn no_scope_names_the_recency_bucket() {
+        let bucket = scope_bucket("a").expect("a valid scope");
+        let prefix = bucket
+            .strip_suffix('a')
+            .expect("a scope ends its bucket name");
+
+        assert!(
+            consts::RECENCY_BUCKET
+                .strip_prefix(prefix)
+                .is_none_or(|scope| scope_bucket(scope).is_err()),
+            "{} is a scope's bucket",
+            consts::RECENCY_BUCKET
+        );
     }
 }

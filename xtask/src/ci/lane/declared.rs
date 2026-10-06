@@ -299,19 +299,13 @@ fn source_layer_access(process: &Process, tools: &ToolsConfig) -> Option<(PathBu
     }
 }
 
-/// Fill in the things a lane cannot spell for itself: where the checkout is,
-/// where its leased build cache lives, and what a reviewed pin currently
-/// holds.
+/// Fill in the things a lane cannot spell for itself: where the checkout is
+/// and what a reviewed pin currently holds.
 fn resolve(value: &str, process: &Process, pins: &CiPins) -> Result<String> {
-    let mut filled = value
-        .replace(
-            consts::ROOT_PLACEHOLDER,
-            &process.root().display().to_string(),
-        )
-        .replace(
-            consts::TARGET_PLACEHOLDER,
-            &process.target_dir().display().to_string(),
-        );
+    let mut filled = value.replace(
+        consts::ROOT_PLACEHOLDER,
+        &process.root().display().to_string(),
+    );
     while let Some(start) = filled.find(consts::PIN_PREFIX) {
         let tail = &filled[start + consts::PIN_PREFIX.len()..];
         let end = tail.find('}').with_context(|| {
@@ -404,8 +398,8 @@ mod tests {
         process::{Recording, Step},
     };
 
-    /// A lane of the given freshness whose one step runs the suite into
-    /// `{target}/suite`.
+    /// A lane of the given freshness whose one step runs the suite and leaves
+    /// its hang dumps under the checkout.
     fn checksum_lane(freshness: LaneFreshness) -> CiLaneConfig {
         CiLaneConfig {
             label: "fixture".to_owned(),
@@ -414,7 +408,10 @@ mod tests {
             steps: vec![CiLaneStep {
                 args: vec!["test".to_owned(), "run".to_owned()],
                 label: "suite".to_owned(),
-                env: BTreeMap::from([("CARGO_TARGET_DIR".to_owned(), "{target}/suite".to_owned())]),
+                env: BTreeMap::from([(
+                    "KITHARA_HANG_DUMP_DIR".to_owned(),
+                    "{root}/target/hang".to_owned(),
+                )]),
                 ..CiLaneStep::default()
             }],
             ..CiLaneConfig::default()
@@ -452,8 +449,8 @@ mod tests {
             Some(&fixture().pins.nightly_toolchain)
         );
         assert_eq!(
-            env.get("CARGO_TARGET_DIR").map(String::as_str),
-            Some("/checkout/target/suite")
+            env.get("KITHARA_HANG_DUMP_DIR").map(String::as_str),
+            Some("/checkout/target/hang")
         );
     }
 

@@ -128,91 +128,123 @@
     KITHARA_LOCAL_DEV=1
 # apple-ios-test / branch
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
     TEST_SERVER_PORT=3444
+  xcrun simctl delete kithara-apple-ios-test
+  xcrun simctl create kithara-apple-ios-test com.apple.CoreSimulator.SimDeviceType.iPhone-17
   just platform apple test --skip-build
+    KITHARA_IOS_DESTINATION=platform=iOS Simulator,id=<simulator>
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun simctl delete <simulator>
   xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / platforms
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
     TEST_SERVER_PORT=3444
+  xcrun simctl delete kithara-apple-ios-test
+  xcrun simctl create kithara-apple-ios-test com.apple.CoreSimulator.SimDeviceType.iPhone-17
   just platform apple test --skip-build
+    KITHARA_IOS_DESTINATION=platform=iOS Simulator,id=<simulator>
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun simctl delete <simulator>
   xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / merge-request
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
     TEST_SERVER_PORT=3444
+  xcrun simctl delete kithara-apple-ios-test
+  xcrun simctl create kithara-apple-ios-test com.apple.CoreSimulator.SimDeviceType.iPhone-17
   just platform apple test --skip-build
+    KITHARA_IOS_DESTINATION=platform=iOS Simulator,id=<simulator>
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun simctl delete <simulator>
   xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / quarantine
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
     TEST_SERVER_PORT=3444
+  xcrun simctl delete kithara-apple-ios-test
+  xcrun simctl create kithara-apple-ios-test com.apple.CoreSimulator.SimDeviceType.iPhone-17
   just platform apple test --skip-build
+    KITHARA_IOS_DESTINATION=platform=iOS Simulator,id=<simulator>
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun simctl delete <simulator>
   xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / main
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
     TEST_SERVER_PORT=3444
+  xcrun simctl delete kithara-apple-ios-test
+  xcrun simctl create kithara-apple-ios-test com.apple.CoreSimulator.SimDeviceType.iPhone-17
   just platform apple test --skip-build
+    KITHARA_IOS_DESTINATION=platform=iOS Simulator,id=<simulator>
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun simctl delete <simulator>
   xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / nightly
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
     TEST_SERVER_PORT=3444
+  xcrun simctl delete kithara-apple-ios-test
+  xcrun simctl create kithara-apple-ios-test com.apple.CoreSimulator.SimDeviceType.iPhone-17
   just platform apple test --skip-build
+    KITHARA_IOS_DESTINATION=platform=iOS Simulator,id=<simulator>
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun simctl delete <simulator>
   xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / weekly
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
     TEST_SERVER_PORT=3444
+  xcrun simctl delete kithara-apple-ios-test
+  xcrun simctl create kithara-apple-ios-test com.apple.CoreSimulator.SimDeviceType.iPhone-17
   just platform apple test --skip-build
+    KITHARA_IOS_DESTINATION=platform=iOS Simulator,id=<simulator>
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun simctl delete <simulator>
   xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-ios-test / release
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
   <root>/target/debug/test_server
     TEST_SERVER_PORT=3444
+  xcrun simctl delete kithara-apple-ios-test
+  xcrun simctl create kithara-apple-ios-test com.apple.CoreSimulator.SimDeviceType.iPhone-17
   just platform apple test --skip-build
+    KITHARA_IOS_DESTINATION=platform=iOS Simulator,id=<simulator>
     KITHARA_LOCAL_DEV=1
     KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
+  xcrun simctl delete <simulator>
   xcrun xcresulttool get test-results tests --path <root>/target/xcresult/ios-test.xcresult --format json
 # apple-lint / branch
   <require os> macos
@@ -336,56 +368,56 @@
   just test wasm safari
 # apple-swift-test / branch
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / platforms
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / merge-request
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / quarantine
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / main
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / nightly
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / weekly
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
     KITHARA_LOCAL_DEV=1
 # apple-swift-test / release
   <require os> macos
-  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
+  <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
   /usr/bin/xcodebuild -version
   just platform apple xcframework --profile debug
   swift test --disable-xctest --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
@@ -2094,14 +2126,12 @@
   <require tools> cargo just sccache
   just test run --touched --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --touched --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2111,14 +2141,12 @@
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2128,14 +2156,12 @@
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2145,14 +2171,12 @@
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2162,14 +2186,12 @@
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2179,14 +2201,12 @@
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2196,14 +2216,12 @@
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2213,14 +2231,12 @@
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target/ci-tests-flash-off
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2230,7 +2246,6 @@
   <require tools> cargo just sccache
   just test run --touched --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2240,7 +2255,6 @@
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2250,7 +2264,6 @@
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2260,7 +2273,6 @@
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2270,7 +2282,6 @@
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2280,7 +2291,6 @@
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2290,7 +2300,6 @@
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2300,7 +2309,6 @@
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
@@ -2366,27 +2374,22 @@
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / platforms
@@ -2394,27 +2397,22 @@
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / merge-request
@@ -2422,27 +2420,22 @@
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / quarantine
@@ -2450,27 +2443,22 @@
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / main
@@ -2478,27 +2466,22 @@
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / nightly
@@ -2506,27 +2489,22 @@
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / weekly
@@ -2534,27 +2512,22 @@
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / release
@@ -2562,27 +2535,22 @@
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-play-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_TARGET_DIR=<root>/target
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-wasm / branch

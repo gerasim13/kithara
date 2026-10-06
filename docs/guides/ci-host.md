@@ -220,8 +220,8 @@ a regression.
 ## Object cache service
 
 Each host runs its own RustFS stack, the compose project `kithara-ci-cache`
-published on `127.0.0.1:19000`; the two hosts share no cache. Jobs and
-`initialize` reach it through the `rc` client.
+published on `127.0.0.1:19000`; the two hosts share no cache. Jobs reach it
+through the `rc` client.
 `docker/ci-cache.compose.yml` declares it, and
 `docker/ci-cache/linux.env.example` and `docker/ci-cache/macos.env.example`
 give the shape of the environment each is started with. The environment itself
@@ -237,9 +237,16 @@ working.
 
 The server needs RustFS 1.0.1 or later. 1.0.0 answers a bucket quota request
 with 503 for about ten seconds after it reports ready (rustfs/rustfs#8014), so
-an `initialize` started on a fresh stack fails at its first quota.
+a setup started on a fresh stack fails at its first quota.
 
-The image carries `xtask`, and `ci cache initialize` builds every bucket
+The stack is one container. Its image carries RustFS, `rc` and `xtask`, and
+runs `xtask ci cache serve`: it writes the administrator's credentials if
+there are none, starts RustFS as its child, waits for it to answer ready,
+creates each scope's bucket, quota, lifecycle and client key, and then runs the
+evictor beside the store. They start and stop together: a stop signal is
+passed to RustFS and waited on, and when either RustFS or the evictor ends,
+the container ends and Docker restarts it. Every start applies the setup
+again, from the code the store is served with. `serve` builds every bucket
 policy from `ci::cache::provision`. So the copy of this repository the image
 was built from, not the repository itself, decides what the live policy says.
 The Linux host's deployment copy is `/etc/kithara-ci/cache-compose/source`;
@@ -270,28 +277,61 @@ there the whole time. The refusal named the bucket with an empty key, which is
 what a `ListBucket` denial always looks like - so it read as a broken client
 rather than a policy that had never been updated.
 
-Quotas are per scope and applied at initialize. Changing one afterwards is
-`rc bucket quota set` against the live bucket; editing the environment file
-changes only what the next initialize would apply.
+Quotas are per scope, written in the host's environment file as a whole number
+of KiB, MiB, GiB or TiB, and handed to the store as bytes each time the stack
+starts. The evictor keeps each bucket under the same number from the same
+file, so a quota changes in the file and takes effect at the next start. One
+set by hand with `rc bucket quota set` parts the store's backstop from the
+evictor's budget until that start puts it back.
 
 The two drift, and the drift is the danger: the live buckets had been raised by
 hand to 200 GiB trusted and 800 GiB review while the environment the stack was
 started with still said 50, and the per-fork scopes existed outside the
-`CACHE_SCOPES` it named - so an initialize run would have flattened every quota
+`CACHE_SCOPES` it named - so a setup run would have flattened every quota
 and known nothing of half the buckets. A scope that needs
 its own size now names it, `CACHE_BUCKET_QUOTA_<SCOPE>`, and
 `CACHE_BUCKET_QUOTA` is what the scopes that say nothing are given. The
 environment on the host states what the buckets actually are, so applying it is
 no longer a way to lose them.
 
-That holds only if `initialize` sees the whole environment. Compose hands a
+That holds only if the setup sees the whole environment. Compose hands a
 container only the variables its file names, and `--env-file` only fills in
 the Compose file itself. Until 2026-10-02 the service named four variables, so
-a per-scope quota never reached it, and every initialize set each scope to
+a per-scope quota never reached it, and every setup set each scope to
 `CACHE_BUCKET_QUOTA`. `just ci cache` now passes the file's absolute path as
 `CACHE_ENV_FILE`, and the service reads it as its `env_file`. A copy of the
 source older than that still flattens the quotas: refresh it before starting
 the stack.
+
+The compiler cache has no age rule: a hit does not renew an object's date, so
+an age rule expires first the entries every build reads. The evictor keeps
+each scope's compiler cache under its quota by last use instead. The store
+posts its audit log to it, one record per request, on the container's
+loopback: the evictor takes the log on trust, and every job shares the network
+the store is published on. RustFS refuses to send to loopback unless the
+origin is allowed, so the stack allows exactly that one. A successful read or
+write of an entry is a use. Every half hour it lists each scope, and once the
+bucket holds four fifths of its quota it removes the entries used longest ago
+until it is under thirteen twentieths. Each finished pass writes the last
+reads to the `ci-cache-recency` bucket, one object per scope, so a restart of
+the evictor loses only the reads since; a record that does not read back is
+set aside. Either only makes entries look older than they are.
+
+RustFS charges a removal to the quota only when it recounts the bucket. The
+evictor asks for one once a twentieth of the quota has left, after it starts,
+and after a removal that failed, and only once the bucket has been idle a
+minute: it requests its own marker, waits for that request to come back
+through the audit log so nothing is queued ahead of it, and rewrites the
+marker. A recount that fails, or whose request never comes back, waits for the
+next pass. The recount holds the bucket's quota lock; on a large bucket it can
+outlast the five seconds a job's first write waits, and that job runs with the
+cache read-only. The idle minute makes that unlikely, not impossible.
+
+The quota stays as the backstop. While the evictor is down nothing is removed,
+and what the store could not deliver waits in its memory up to the queue limit;
+a restart of the store loses it. A lost read only makes an entry look older
+than it is. `docker logs kithara-ci-cache` prints one line per pass and one
+per recount, among the store's own lines.
 
 ## Storage policy
 
@@ -309,17 +349,19 @@ is the whole answer.
 
 `build_cache_size` caps one cache and cannot see whether the volume has room:
 two checkouts each under a 100 GB cap held 183 GB between them while every pass
-reported nothing freed and jobs were already refused. Under `Aggressive` or
-`Reject` the pass also reclaims what the volume is short of the soft floor,
-evicting past the cap. What its sweeps cannot show:
+reported nothing freed and jobs were already refused. Warm builds are the last
+rung: when stale trees, the Docker build cache and the guest trim still leave
+the volume at `Aggressive` or worse, the pass reclaims what it is short of the
+soft floor, evicting past the cap. What its sweeps cannot show:
 
 - The Linux guest's `/var/lib/docker` data disk is not mounted `discard` as its
   root is, so deleted layers stay allocated in a sparse file this volume pays
-  for; every cleanup trims the `colima_profile` instance, whatever the pressure.
+  for; every cleanup holds Docker's build cache to `docker_build_cache_size` and
+  trims the `colima_profile` instance, whatever the pressure.
 - A cache namespace that stops being written to goes invisible rather than
   stale, leaving a retired tool's store behind; `cache_namespaces` lists the
   live ones and cleanup takes the rest whole. A namespace with an owner belongs
-  there even when it is quiet: `target-slots` holds every Linux job's
+  there even when it is quiet: `target-slots` holds every GitLab job's
   `CARGO_TARGET_DIR` and the build-cache budget evicts it one slot at a time.
   An installed profile carries the list verbatim, so adding a name reaches a
   running host only by editing its `/etc/kithara-ci/mac-host.toml` as well.
