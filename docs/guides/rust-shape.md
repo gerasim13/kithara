@@ -97,6 +97,8 @@ let session = Session::new(SessionConfig {
 
 ## File Size And Decomposition
 
+- Use Rust's standard module paths or an inline test module. Add `#[path]` only
+  when the module actually needs a nonstandard source location.
 - Do not let a single `.rs` file grow into a dump of abstractions.
 - Extract large types, big `impl` blocks, or distinct subsystems into their own
   files or modules.

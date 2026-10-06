@@ -114,6 +114,10 @@ impl<C: LiveConfig, P: Protocol> Live<C, P> {
     /// moves into the configuration and a rejected one is dropped. Returns the
     /// copy either way, or `None` when the batch carried no change of this
     /// configuration.
+    ///
+    /// Settle receipts in the order [`Sender::receipts`] yields them: execution
+    /// order, rather than send order. Reordering applied receipts can leave the
+    /// configuration different from the executor's when changes share a field.
     pub fn settle(&mut self, receipt: &Receipt<P>) -> Option<SettledChange<C, P>> {
         let index = self
             .in_flight
@@ -283,6 +287,35 @@ mod tests {
     }
 
     #[kithara::test]
+    fn settling_in_receipt_order_matches_the_executor_when_send_order_differs() {
+        let (mut sender, mut inbox) = pair(4);
+        let mut executor = Executor::default();
+        let mut live = mix();
+        let at = live
+            .send(
+                &mut sender,
+                When::At(Frame(30)),
+                MixChange::Level(1),
+                Part::Mix,
+            )
+            .expect("the channel has room");
+        let next = live
+            .send(&mut sender, When::Next, MixChange::Level(2), Part::Mix)
+            .expect("the channel has room");
+        executor.render(&mut inbox, 0);
+        let settled: Vec<_> = sender
+            .receipts()
+            .map(|receipt| {
+                assert!(live.settle(&receipt).is_some());
+                (receipt.seq(), live.level())
+            })
+            .collect();
+        assert_eq!(settled, [(next, 2), (at, 1)]);
+        assert_eq!(live.config(), &executor.mix);
+        assert_eq!(live.pending().count(), 0);
+    }
+
+    #[kithara::test]
     fn a_change_at_a_frame_applies_at_that_frame() {
         let (mut sender, mut inbox) = pair(4);
         let mut executor = Executor::default();
@@ -397,11 +430,25 @@ mod tests {
         let (mut sender, mut inbox) = pair(1);
         let mut executor = Executor::default();
         let mut live = mix();
-        live.send(&mut sender, When::Next, MixChange::Level(1), Part::Mix)
+        let sent = live
+            .send(&mut sender, When::Next, MixChange::Level(1), Part::Mix)
             .expect("the channel has room");
+        let before = *live.config();
         let full = live.send(&mut sender, When::Next, MixChange::Level(2), Part::Mix);
-        assert!(matches!(full, Err(LiveError::Send(SendError::Full(_)))));
-        assert_eq!(live.pending().count(), 1);
+        let Err(LiveError::Send(SendError::Full(returned))) = full else {
+            panic!("a full channel returns the batch");
+        };
+        assert!(returned.basis.is_empty());
+        assert!(matches!(
+            returned.commands.as_slice(),
+            [Part::Mix(MixChange::Level(2))]
+        ));
+        assert_eq!(live.config(), &before);
+        let pending: Vec<_> = live.pending().collect();
+        assert!(matches!(
+            pending.as_slice(),
+            [(seq, When::Next, MixChange::Level(1))] if *seq == sent
+        ));
         executor.render(&mut inbox, 0);
         let settled = sender
             .receipts()
@@ -414,19 +461,24 @@ mod tests {
 
     #[kithara::test]
     fn abandon_folds_the_copies_in_the_order_the_executor_applies_them() {
-        let (mut sender, _inbox) = pair(4);
+        let (mut sender, mut inbox) = pair(5);
+        let mut executor = Executor::default();
         let mut live = mix();
         for (when, change) in [
             (When::At(Frame(100)), MixChange::Level(1)),
             (When::Next, MixChange::Level(2)),
             (When::At(Frame(50)), MixChange::Level(3)),
             (When::Next, MixChange::Muted(true)),
+            (When::At(Frame(100)), MixChange::Level(4)),
         ] {
             live.send(&mut sender, when, change, Part::Mix)
                 .expect("the channel has room");
         }
+        executor.render(&mut inbox, 0);
+        executor.render(&mut inbox, 64);
         assert!(live.abandon());
-        assert_eq!((live.level(), live.muted()), (1, true));
+        assert_eq!((live.level(), live.muted()), (4, true));
+        assert_eq!(live.config(), &executor.mix);
         assert_eq!(live.pending().count(), 0);
         assert!(!live.abandon(), "nothing is left in flight");
     }
