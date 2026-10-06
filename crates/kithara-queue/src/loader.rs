@@ -170,7 +170,7 @@ where
             if !can_answer_later(&err) {
                 return Err(error);
             }
-            Self::report(&self.postbox, AttemptReport::Retrying { ticket, error });
+            Self::report(&self.postbox, AttemptReport::Stalled { ticket, error });
             hang_tick!();
             debug!(?id, error = %err, "load failed on a cause a later ask can answer; asking again");
         }
@@ -191,7 +191,7 @@ where
             }
         };
         if let Some(ticket) = tracks.promote_attempt(id, cancel.clone()) {
-            let attempt = Attempt {
+            let attempt = AttemptTask {
                 ticket,
                 config,
                 cancel,
@@ -246,10 +246,10 @@ where
     /// start, and load. A cancel before the permit ends it without loading.
     async fn run_attempt(
         &self,
-        attempt: Attempt<S>,
+        attempt: AttemptTask<S>,
         class: LoadClass,
     ) -> Result<Resource, QueueError> {
-        let Attempt {
+        let AttemptTask {
             ticket,
             config,
             cancel: track_cancel,
@@ -286,7 +286,7 @@ where
     fn spawn_attempt(
         self: &Arc<Self>,
         runtime: &RuntimeHandle,
-        attempt: Attempt<S>,
+        attempt: AttemptTask<S>,
         class: LoadClass,
     ) {
         let ticket = attempt.ticket;
@@ -327,7 +327,7 @@ where
         if let Some(ticket) =
             tracks.begin_attempt(id, cancel.clone(), class == LoadClass::Interactive)
         {
-            let attempt = Attempt {
+            let attempt = AttemptTask {
                 ticket,
                 config,
                 cancel,
@@ -380,7 +380,7 @@ where
 /// One load attempt as its task runs it: the ticket it reports under, the
 /// config it loads, its per-track cancel, and the slot that reaches the
 /// track's decoder.
-struct Attempt<S>
+struct AttemptTask<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {

@@ -251,8 +251,8 @@ where
                 self.advance(&ticket, |_| TrackStatus::Slow);
                 None
             }
-            AttemptReport::Retrying { ticket, error } => {
-                self.answer_retry(&ticket, &error);
+            AttemptReport::Stalled { ticket, error } => {
+                self.answer_stall(&ticket, &error);
                 None
             }
             AttemptReport::Cover { id, attempt, cover } => {
@@ -270,7 +270,7 @@ where
     /// here, its track failed with `error`. Dropping its guard armed cuts the
     /// ask off, which frees its lane permit, and leaves the attempt's own
     /// `Finished` stale.
-    fn answer_retry(&mut self, ticket: &Ticket, error: &QueueError) {
+    fn answer_stall(&mut self, ticket: &Ticket, error: &QueueError) {
         let record = self
             .records
             .iter_mut()
@@ -649,8 +649,8 @@ mod tests {
     }
 
     /// `ticket`'s attempt failed on `reason`, which a later ask can answer.
-    fn retrying(ticket: Ticket, reason: &str) -> AttemptReport {
-        AttemptReport::Retrying {
+    fn stalled(ticket: Ticket, reason: &str) -> AttemptReport {
+        AttemptReport::Stalled {
             ticket,
             error: QueueError::Resource(reason.to_owned()),
         }
@@ -669,7 +669,7 @@ mod tests {
             .expect("BUG: vacant record must accept an attempt");
         tracks.apply_report(AttemptReport::Started(ticket));
 
-        tracks.apply_report(retrying(ticket, "connection refused"));
+        tracks.apply_report(stalled(ticket, "connection refused"));
 
         assert_eq!(
             status(&tracks),
@@ -691,7 +691,7 @@ mod tests {
         tracks.apply_report(AttemptReport::Started(ticket));
         assert!(tracks.promote_attempt(TrackId(1), token()).is_none());
 
-        tracks.apply_report(retrying(ticket, "connection refused"));
+        tracks.apply_report(stalled(ticket, "connection refused"));
 
         assert_eq!(status(&tracks), TrackStatus::Loading);
         assert!(!cancel.is_cancelled(), "the wanted attempt was cut off");
