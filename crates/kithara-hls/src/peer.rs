@@ -18,7 +18,7 @@ use kithara_platform::{
     tokio::{
         self,
         sync::mpsc,
-        task::{spawn, yield_now},
+        task::{spawn, yield_runnable},
     },
 };
 use kithara_stream::{Activity, DeferredWake, SeekObserve, WorkerWake};
@@ -199,8 +199,8 @@ where
 
     /// Lets the `on_slow` hook wake `poll_next` when an in-flight fetch stalls past `soft_timeout`,
     /// so `reconcile_escape` runs without an incidental reader-progress wake. The task yields to
-    /// the scheduler after each delivery, since a producer can publish another edge mid-poll,
-    /// letting Flash observe quiescence instead of draining `Notify` permits in one poll.
+    /// the scheduler after each delivery, since a producer can publish another edge mid-poll, and
+    /// stays runnable across that turn: an edge stored while it yields is work it still holds.
     pub(crate) fn activate(
         self: &Arc<Self>,
         coord: Arc<HlsCoord<S>>,
@@ -266,7 +266,7 @@ where
                                 waker.wake_by_ref();
                             }
                         }
-                        yield_now().await;
+                        yield_runnable().await;
                     }
                 }
             }

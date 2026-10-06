@@ -101,20 +101,21 @@ fn dir_size_bytes(root: &Path) -> u64 {
 }
 
 async fn load_and_observe(
-    queue: &QueueControl<TestPools>,
+    queue: &OfflineQueue<TestPools>,
     rx: &mut kithara::events::EventReceiver<TestEvent>,
     handle: &BehaviorHandle,
     downloader: &Downloader,
     store: &AssetStore<TestPools>,
     name: &str,
 ) -> Transfer {
+    let source = TrackSource::Config(Box::new(resource_config(handle, downloader, store, name)));
     let id = queue
-        .append(TrackSource::Config(Box::new(resource_config(
-            handle, downloader, store, name,
-        ))))
+        .run(move |q| q.append(source))
+        .await
         .expect("queue is open while loading the fixture");
     queue
-        .select(id, Transition::None)
+        .run(move |q| q.select(id, Transition::None))
+        .await
         .unwrap_or_else(|error| panic!("select {name}: {error}"));
     observe_transfer(rx, Duration::from_secs(20)).await
 }
@@ -234,6 +235,6 @@ async fn played_tracks_land_in_the_disk_cache(tone_mp3: &'static [u8], temp_dir:
          ({after_first} -> {after_second} bytes)"
     );
 
-    queue.clear();
+    queue.run(QueueControl::clear).await;
     queue.close().await;
 }

@@ -100,7 +100,7 @@ pub(in crate::flash) struct Registry {
     /// Identity of every async task currently holding an `active_async` slot,
     /// keyed by its task id and valued by its spawn site. Inserted on acquire
     /// (`async_acquire` / `gate_wake_parked`), removed on release
-    /// (`gate_park` / `gate_complete` / `gate_drop_release`), so the set always
+    /// (`gate_park` / `gate_complete` / `gate_drop`), so the set always
     /// names exactly the tasks the counter counts. Purely diagnostic: the hang
     /// dump lists it so a quiescence pin reports WHICH task pins it (and where
     /// it was spawned) instead of a bare `active_async=N`.
