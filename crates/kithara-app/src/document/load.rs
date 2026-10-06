@@ -636,7 +636,7 @@ mod tests {
         );
     }
 
-    /// Both sections must compose one built UiConfig. This default-based fixture
+    /// Both sections must compose one built `UiConfig`. This default-based fixture
     /// pins composition; only a separately seeded owner test can distinguish a
     /// whole-struct reset from retention of a pre-existing unnamed value.
     #[cfg(feature = "gui")]
