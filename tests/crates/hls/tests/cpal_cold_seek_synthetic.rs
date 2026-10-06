@@ -94,7 +94,10 @@ async fn cold_seek_far_segment_hls_offline(
     let mut events = queue.subscribe();
 
     let seek_target = 120.0;
-    queue.seek(seek_target).expect("seek accepted");
+    queue
+        .run(move |q| q.seek(seek_target))
+        .await
+        .expect("seek accepted");
     eprintln!("[offline] seek issued target={seek_target:.1}s (of 160s)");
 
     // Wait on the real playback-progress state: the audio pipeline emits

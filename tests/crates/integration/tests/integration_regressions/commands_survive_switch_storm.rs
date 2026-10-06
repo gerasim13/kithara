@@ -195,7 +195,8 @@ async fn commands_still_work_after_a_switch_storm(tone_mp3: &'static [u8], temp_
     }
 
     queue
-        .seek(SEEK_TARGET_SECS)
+        .run(move |q| q.seek(SEEK_TARGET_SECS))
+        .await
         .unwrap_or_else(|error| panic!("final seek failed: {error}"));
     let mut landed = 0.0;
     wait_for_event(
@@ -219,7 +220,7 @@ async fn commands_still_work_after_a_switch_storm(tone_mp3: &'static [u8], temp_
         "seek to {SEEK_TARGET_SECS:.1}s landed at {landed:.3}s after the switch storm"
     );
 
-    queue.pause();
+    queue.run(move |q| q.pause()).await;
     wait_for_playing(&queue, false, Duration::from_secs(30))
         .await
         .unwrap_or_else(|error| panic!("pause was swallowed after the switch storm: {error}"));
@@ -248,7 +249,7 @@ async fn commands_still_work_after_a_switch_storm(tone_mp3: &'static [u8], temp_
         )
     });
 
-    queue.clear();
+    queue.run(move |q| q.clear()).await;
     ticker.stop().await;
     queue.close().await;
 }
