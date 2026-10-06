@@ -273,7 +273,7 @@ impl Core {
                 .sched
                 .timed
                 .values()
-                .all(|e| matches!(e.kind, WaitKind::Thread(_)))
+                .all(|e| matches!(e.kind, WaitKind::Thread(_)) && e.role == ParkRole::Backstop)
         {
             let woken: Vec<Wake> = std::mem::take(&mut self.sched.yielders)
                 .into_values()

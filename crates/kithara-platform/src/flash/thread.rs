@@ -262,7 +262,7 @@ pub fn sleep(duration: Duration) {
 #[inline]
 #[track_caller]
 pub fn paced_backoff(duration: Duration) {
-    if crate::flash::flash_enabled() {
+    if crate::flash::flash_enabled() || crate::flash::ctx::dedicated() {
         crate::flash::system::yield_until_advance();
     } else {
         crate::backend::thread::sleep(duration);

@@ -203,6 +203,79 @@ fn dynamic_is_noop_without_ambient() {
     assert!(!flash_enabled(), "dynamic flash without ambient stays real");
 }
 
+fn assert_spawn_clock_propagation(on_handle: bool) {
+    let _g = guard();
+    reset();
+    let start = RealInstant::now();
+    let parent_thread = thread::current().id();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .build()
+        .expect("build clean worker runtime");
+    let _rt = rt.enter();
+    let frozen = {
+        let _a = ambient_scope(true);
+        let _f = enter_dynamic(true);
+        advance(Duration::from_secs(3_600));
+        Instant::now()
+    };
+
+    for (ambient, active) in [(true, true), (true, false), (false, true)] {
+        let expected_active = ambient && active;
+        let (sampled, sample) = mpsc::channel();
+        let (release, resume) = tokio::sync::oneshot::channel();
+        let future = async move {
+            assert_ne!(thread::current().id(), parent_thread);
+            let sample = || (Instant::now(), flash_enabled(), super::ambient_snapshot());
+            sampled.send(sample()).expect("report first worker poll");
+            resume.await.expect("resume worker task");
+            sample()
+        };
+        let child = {
+            let _a = ambient_scope(ambient);
+            let _f = enter_dynamic(active);
+            if on_handle {
+                crate::tokio::task::spawn_on(rt.handle(), future)
+            } else {
+                crate::tokio::task::spawn(future)
+            }
+        };
+        assert!(!flash_enabled());
+        assert!(!super::ambient_snapshot());
+        let check_sample = |sample: (Instant, bool, bool)| {
+            if expected_active {
+                assert_eq!(sample.0, frozen, "spawned task lost the virtual clock");
+            } else {
+                assert!(sample.0 < frozen, "a real carve must keep the real clock");
+            }
+            assert_eq!(sample.1, expected_active);
+            assert_eq!(sample.2, ambient);
+        };
+        check_sample(sample.recv().expect("observe first worker poll"));
+        let restored = rt
+            .block_on(rt.spawn(async { (flash_enabled(), super::ambient_snapshot()) }))
+            .expect("observe worker after pending poll");
+        assert_eq!(restored, (false, false));
+        release.send(()).expect("release worker task");
+        check_sample(rt.block_on(child).expect("join worker task"));
+        let restored = rt
+            .block_on(rt.spawn(async { (flash_enabled(), super::ambient_snapshot()) }))
+            .expect("observe worker after ready poll");
+        assert_eq!(restored, (false, false));
+    }
+    assert_fast(start);
+}
+
+#[kithara::test(native, flash(false))]
+fn spawned_async_task_inherits_dynamic_clock() {
+    assert_spawn_clock_propagation(false);
+}
+
+#[kithara::test(native, flash(false))]
+fn handle_spawned_async_task_inherits_dynamic_clock() {
+    assert_spawn_clock_propagation(true);
+}
+
 /// The `restore_mode` LIFO guard must catch a non-LIFO mode-scope drop (a
 /// scope restored while a later-created scope is still alive) instead of
 /// silently resurrecting a stale mode. The interleave must be value-visible:
@@ -709,6 +782,82 @@ fn run_deferred_worker_poll(poll_deadline: bool) -> usize {
     producer.join().expect("distant timer panicked");
     assert_eq!(flash.active_count(), 0, "all wake credits must settle");
     observed_ms.load(Ordering::Acquire)
+}
+
+#[kithara::test(native, flash(false))]
+fn required_worker_poll_is_not_starved_by_repeated_yields() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let flash = Arc::clone(&super::system::FLASH);
+    let base = flash.clock.now_nanos();
+    let gate = Arc::new(ThreadGate::default());
+    let deferred = Arc::new(AtomicUsize::new(0));
+    let observed_ms = Arc::new(AtomicUsize::new(0));
+    let coordinator = flash.test_hold();
+    let real_start = RealInstant::now();
+
+    let worker = {
+        let flash = Arc::clone(&flash);
+        let gate = Arc::clone(&gate);
+        let deferred = Arc::clone(&deferred);
+        let observed_ms = Arc::clone(&observed_ms);
+        thread::spawn(move || {
+            bracketed_on(&flash, || {
+                let since = gate.current();
+                assert!(!gate.wait_poll_timeout(since, Duration::from_millis(10)));
+                assert_eq!(
+                    deferred.swap(0, Ordering::AcqRel),
+                    1,
+                    "the required poll must consume work queued without a signal"
+                );
+                observed_ms.store(
+                    ((flash.clock.now_nanos() - base) / 1_000_000) as usize,
+                    Ordering::Release,
+                );
+            });
+        })
+    };
+    while flash.timed_count() != 1 {
+        thread::yield_now();
+    }
+    deferred.store(1, Ordering::Release);
+
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut cx = Context::from_waker(&waker);
+    let mut task = Box::pin(participate(
+        async {
+            for _ in 0..4 {
+                yield_now().await;
+            }
+        },
+        Location::caller(),
+    ));
+    assert!(task.as_mut().poll(&mut cx).is_pending());
+    assert_eq!(forward::diag_yield_count(), 1);
+    drop(coordinator);
+    let first_yield_ms = (flash.clock.now_nanos() - base) / 1_000_000;
+    while task.as_mut().poll(&mut cx).is_pending() {
+        thread::yield_now();
+    }
+    drop(task);
+    worker.join().expect("required poll worker panicked");
+
+    assert_fast(real_start);
+    assert_eq!(observed_ms.load(Ordering::Acquire), 10);
+    assert_eq!(deferred.load(Ordering::Acquire), 0);
+    assert_eq!(flash.active_count(), 0, "sync wake credits must settle");
+    assert_eq!(
+        forward::async_active_count(),
+        0,
+        "async wake credits must settle"
+    );
+    assert_eq!(flash.timed_count(), 0, "thread deadline must settle");
+    assert_eq!(forward::diag_yield_count(), 0, "every yield must settle");
+    assert_eq!(
+        first_yield_ms, 10,
+        "the required thread deadline must be served alongside the first pending yield"
+    );
 }
 
 #[kithara::test(native, flash(false))]
@@ -1643,6 +1792,43 @@ fn a_yielding_blocking_closure_releases_the_virtual_clock() {
         "a yielding blocking closure held the virtual clock for its whole real \
          lifetime: a 10ms deadline took {waited:?} real to fire"
     );
+}
+
+#[kithara::test(native, flash(false))]
+fn a_pooled_backoff_releases_the_virtual_clock() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("build current-thread runtime");
+    let _rt = rt.enter();
+    let coordinator = super::system::FLASH.test_hold();
+    let start = Instant::now_virtual();
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut cx = Context::from_waker(&waker);
+    let mut sibling = std::pin::pin!(FlashSleep::new(Duration::from_millis(10)));
+    assert!(sibling.as_mut().poll(&mut cx).is_pending());
+    let (run, run_rx) = mpsc::channel();
+    let handle = crate::tokio::task::spawn_blocking(move || {
+        run_rx.recv().expect("release pooled backoff");
+        assert!(super::ambient_snapshot());
+        assert!(super::ctx::dedicated());
+        assert!(!flash_enabled());
+        crate::thread::paced_backoff(Duration::ZERO);
+        assert_eq!(
+            Instant::now_virtual().duration_since(start),
+            Duration::from_millis(10),
+            "pooled backoff kept dedicated credit instead of releasing the sibling deadline"
+        );
+    });
+    drop(coordinator);
+    run.send(()).expect("start pooled backoff");
+    rt.block_on(handle).expect("pooled backoff joined");
+    assert!(sibling.as_mut().poll(&mut cx).is_ready());
+    assert_eq!(super::system::FLASH.active_count(), 0);
+    assert_eq!(forward::async_active_count(), 0);
+    assert_eq!(super::system::FLASH.timed_count(), 0);
 }
 
 /// A starved poll loop must not buy virtual time with its own backoff. A dated

@@ -296,9 +296,7 @@ async fn packaged_abr_switch_keeps_player_continuity(
             }) => {
                 if !switch_seen {
                     let pace = position.saturating_sub(consumed);
-                    spawn_blocking(move || paced_backoff(pace))
-                        .await
-                        .expect("packaged ABR pace");
+                    time::sleep(pace).await;
                 }
                 consumed = position;
                 if !reevaluated && consumed >= Duration::from_secs(2) {
@@ -1170,7 +1168,7 @@ fn read_manual_cross_codec_phase(
                 } else {
                     transition_samples += count;
                     if transition_samples >= 17_640 {
-                        paced_backoff(position.saturating_sub(consumed));
+                        pace(position.saturating_sub(consumed));
                     }
                     consumed = position;
                 }
