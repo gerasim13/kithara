@@ -13,7 +13,7 @@ use kithara_devtools::common::{project::ProjectConfig, tools::ToolsConfig};
 use kithara_platform::tokio::{runtime::Builder, task::spawn_blocking};
 use kithara_test_utils::TestHttpServer;
 
-use super::super::run;
+use super::run;
 use crate::{
     child,
     ci::{
@@ -25,8 +25,8 @@ use crate::{
 };
 
 const STALL_URL: &str = "KITHARA_TEST_DEPS_DENY_STALL_URL";
-const LANE_PROBE: &str = "ci::lane::declared::tests::network::deps_deny_stall_probe";
-const HTTP_PROBE: &str = "ci::lane::declared::tests::network::deps_deny_http_probe";
+const LANE_PROBE: &str = "ci::lane::declared::tests::deps_deny_stall_probe";
+const HTTP_PROBE: &str = "ci::lane::declared::tests::deps_deny_http_probe";
 
 #[test]
 fn a_deps_deny_network_stall_fails_within_the_declared_lane_deadline() {
