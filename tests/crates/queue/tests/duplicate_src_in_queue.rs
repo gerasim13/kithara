@@ -13,7 +13,7 @@ use kithara::{
     assets::AssetStore,
     audio::{AudioConfig, DecodeErrorKind, NoResamplerBackend, TrackFailureKind},
     events::{SlotId, TrackId},
-    file::{FileConfig, FileSrc},
+    file::{File, FileConfig, FileSrc},
     platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError},
     play::{ItemRole, PlaybackFault, PlayerEvent, Resource, TrackRef},
     queue::{QueueControl, QueueEvent, TrackStatus, Transition},
@@ -134,7 +134,7 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
         .pools(pools)
         .cancel(source_cancel.clone())
         .build();
-    let config = AudioConfig::<_, NoResamplerBackend>::for_stream(file)
+    let config = AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(file)
         .audio_buffer_chunks(2)
         .preload_chunks(NonZeroUsize::MIN)
         .build();
