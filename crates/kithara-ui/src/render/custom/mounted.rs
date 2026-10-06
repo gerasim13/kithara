@@ -25,6 +25,7 @@ where
     Map: Fn(Widget::Action) -> Action + 'static,
 {
     type Action = Action;
+
     delegate::delegate! {
         to self.widget {
             #[cfg(feature = "masonry")]
