@@ -28,4 +28,8 @@ pub enum QueueError {
     /// Resource construction failed (decoding, config, or I/O).
     #[error("resource error: {0}")]
     Resource(String),
+
+    /// The queue was built with no runtime, so it has nowhere to run a load.
+    #[error("the queue has no runtime to run its loads on")]
+    NoRuntime,
 }

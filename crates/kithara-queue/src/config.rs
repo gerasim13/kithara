@@ -48,9 +48,11 @@ where
     pub store: Option<AssetStore<S>>,
 
     /// Runtime the queue runs its loads and load completions on. `None`
-    /// takes the runtime current where the queue is built; an embedding
-    /// that drives the queue from threads without one (FFI hosts) passes
-    /// its own.
+    /// takes the runtime current where the queue is built; a queue built
+    /// outside one with none passed fails every load with
+    /// [`QueueError::NoRuntime`](crate::QueueError::NoRuntime). The queue
+    /// never runs a load on its caller's runtime: a Host ticks it from a
+    /// thread that has none.
     #[config(skip = "injected runtime", patch(skip), debug(skip))]
     pub runtime: Option<RuntimeHandle>,
 

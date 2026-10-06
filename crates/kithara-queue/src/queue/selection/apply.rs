@@ -110,7 +110,7 @@ where
             return;
         };
         let queue = self.clone();
-        drop(self.loader.spawn(async move {
+        let watch = self.loader.spawn(async move {
             let resource = match handle.await {
                 Ok(Ok(resource)) => resource,
                 Ok(Err(_)) => return,
@@ -122,7 +122,10 @@ where
             drop(task::spawn_sync(move || {
                 queue.apply_loaded(id, resource);
             }));
-        }));
+        });
+        if let Err(error) = watch {
+            warn!(id = id.as_u64(), error = %error, "a finished load has no runtime to apply on");
+        }
     }
 }
 

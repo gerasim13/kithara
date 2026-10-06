@@ -15,7 +15,7 @@ use kithara_platform::{
     tokio::{
         runtime::Handle as RuntimeHandle,
         sync::Semaphore,
-        task::{JoinHandle, spawn, spawn_on},
+        task::{JoinHandle, spawn_on},
     },
 };
 use kithara_play::{
@@ -81,18 +81,20 @@ where
         self.tracks.attach_observer(id, Box::new(observer));
     }
 
+    /// What a load attempt needs before it begins: its config, its
+    /// per-track cancel, and the runtime it runs on.
     fn attempt_config(
         &self,
         id: TrackId,
         source: TrackSource<S>,
-    ) -> Result<(ResourceConfig<S>, CancelToken), QueueError> {
+    ) -> Result<(ResourceConfig<S>, CancelToken, RuntimeHandle), QueueError> {
         let config = self.build_config(id, source)?;
         let Some(cancel) = config.cancel().cloned() else {
             return Err(QueueError::Resource(format!(
                 "track {id:?}: resource config missing per-track cancel"
             )));
         };
-        Ok((config, cancel))
+        Ok((config, cancel, self.runtime()?.clone()))
     }
 
     /// Build a [`ResourceConfig`] for the given [`TrackSource`].
@@ -178,8 +180,8 @@ where
         id: TrackId,
         source: TrackSource<S>,
     ) -> Option<JoinHandle<Result<Resource, QueueError>>> {
-        let (config, cancel) = match self.attempt_config(id, source) {
-            Ok(pair) => pair,
+        let (config, cancel, runtime) = match self.attempt_config(id, source) {
+            Ok(attempt) => attempt,
             Err(err) => {
                 self.tracks
                     .set_status(id, TrackStatus::Failed(err.to_string()));
@@ -187,21 +189,27 @@ where
             }
         };
         let ticket = self.tracks.promote_attempt(id, cancel.clone())?;
-        Some(self.spawn_attempt(ticket, config, cancel, LoadClass::Interactive))
+        Some(self.spawn_attempt(&runtime, ticket, config, cancel, LoadClass::Interactive))
     }
 
     /// Read the track's cover beside its audio, over the attempt's transport
     /// and cancel token, and place it while that attempt is current. The
     /// audio never waits for the cover, and a cover that never arrives leaves
     /// the load untouched.
-    fn read_cover(&self, id: TrackId, config: &ResourceConfig<S>, attempt: &CancelToken) {
+    fn read_cover(
+        runtime: &RuntimeHandle,
+        tracks: &Arc<Tracks<S>>,
+        id: TrackId,
+        config: &ResourceConfig<S>,
+        attempt: &CancelToken,
+    ) {
         let Some(cover) = config.artwork().cloned() else {
             return;
         };
         let config = config.clone();
         let attempt = attempt.clone();
-        let tracks = Arc::clone(&self.tracks);
-        drop(self.spawn(async move {
+        let tracks = Arc::clone(tracks);
+        drop(spawn_on(runtime, async move {
             match config.artifact_fetch().load::<Cover>(&cover).await {
                 Ok(cover) => tracks.place_cover(id, &attempt, Arc::new(cover.into())),
                 Err(ArtifactLoadError::Cancelled { .. }) => {}
@@ -212,14 +220,15 @@ where
 
     fn spawn_attempt(
         self: &Arc<Self>,
+        runtime: &RuntimeHandle,
         ticket: Ticket,
         config: ResourceConfig<S>,
         track_cancel: CancelToken,
         class: LoadClass,
     ) -> JoinHandle<Result<Resource, QueueError>> {
-        self.read_cover(ticket.id, &config, &track_cancel);
+        Self::read_cover(runtime, &self.tracks, ticket.id, &config, &track_cancel);
         let this = Arc::clone(self);
-        self.spawn(async move {
+        spawn_on(runtime, async move {
             let id = ticket.id;
             let cancel = CancelGroup::new(vec![track_cancel.clone(), this.cancel.clone()]);
             let lane = match class {
@@ -258,18 +267,21 @@ where
         })
     }
 
-    /// Spawns queue-owned async work on the queue's runtime, or on the
-    /// caller's current runtime when the queue was built outside one.
+    /// Spawns queue-owned async work on the runtime the queue was built
+    /// with.
     #[track_caller]
-    pub(crate) fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
+    pub(crate) fn spawn<F>(&self, future: F) -> Result<JoinHandle<F::Output>, QueueError>
     where
         F: Future + MaybeSend + 'static,
         F::Output: MaybeSend + 'static,
     {
-        match &self.runtime {
-            Some(runtime) => spawn_on(runtime, future),
-            None => spawn(future),
-        }
+        Ok(spawn_on(self.runtime()?, future))
+    }
+
+    /// The runtime the queue was built with. The queue never borrows the
+    /// calling thread's: a Host ticks it from a thread that has none.
+    fn runtime(&self) -> Result<&RuntimeHandle, QueueError> {
+        self.runtime.as_ref().ok_or(QueueError::NoRuntime)
     }
 
     /// Spawn a fresh async load in the given lane. `None` when a live
@@ -280,8 +292,8 @@ where
         source: TrackSource<S>,
         class: LoadClass,
     ) -> Option<JoinHandle<Result<Resource, QueueError>>> {
-        let (config, cancel) = match self.attempt_config(id, source) {
-            Ok(pair) => pair,
+        let (config, cancel, runtime) = match self.attempt_config(id, source) {
+            Ok(attempt) => attempt,
             Err(err) => {
                 self.tracks
                     .set_status(id, TrackStatus::Failed(err.to_string()));
@@ -291,7 +303,7 @@ where
         let ticket =
             self.tracks
                 .begin_attempt(id, cancel.clone(), class == LoadClass::Interactive)?;
-        Some(self.spawn_attempt(ticket, config, cancel, class))
+        Some(self.spawn_attempt(&runtime, ticket, config, cancel, class))
     }
 
     async fn wait_and_cancel_track(cancel: &CancelGroup, track_cancel: &CancelToken) {
@@ -398,7 +410,7 @@ mod tests {
     use kithara_platform::{
         sync::atomic::{AtomicUsize, Ordering},
         time::{self, Duration},
-        tokio::sync::oneshot,
+        tokio::{sync::oneshot, task::spawn},
     };
     use kithara_play::{
         ArtifactSource, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, StreamShape, mock,
@@ -905,8 +917,15 @@ mod tests {
         assert!(saw_failed, "Failed status event missing");
     }
 
-    #[kithara::test]
-    fn config_failure_without_runtime_updates_tracks_synchronously() {
+    /// A player on a mock session, its track records, and a loader over them.
+    type LoaderParts = (
+        PlayerImpl<TestPools>,
+        Arc<Tracks<TestPools>>,
+        Arc<Loader<TestPools>>,
+    );
+
+    /// A loader built with no runtime, over a player on a mock session.
+    fn loader_without_runtime() -> LoaderParts {
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         let player = PlayerImpl::new(
             PlayerConfig::builder()
@@ -925,8 +944,7 @@ mod tests {
                 )
                 .build(),
         );
-        let bus = player.bus().clone();
-        let tracks = Arc::new(Tracks::new(bus.clone()));
+        let tracks = Arc::new(Tracks::new(player.bus().clone()));
         let loader = Arc::new(Loader::new(
             player.control(),
             None,
@@ -935,6 +953,33 @@ mod tests {
             Arc::clone(&tracks),
             CancelToken::root(),
         ));
+        (player, tracks, loader)
+    }
+
+    /// A queue built with no runtime has nowhere to run a load: the track
+    /// fails, and the load never reaches for whatever runtime the calling
+    /// thread has. A Host's deck thread, which ticks the queue, has none.
+    #[kithara::test]
+    fn a_load_without_a_runtime_fails_its_track() {
+        let (_player, tracks, loader) = loader_without_runtime();
+        let id = TrackId(42);
+        let source = TrackSource::Uri("/kithara/a-track.wav".into());
+        tracks
+            .lock()
+            .push(TrackRecord::new(id, String::new(), source.clone()));
+
+        assert!(loader.spawn_load(id, source, LoadClass::Prefetch).is_none());
+        assert_eq!(
+            tracks.lock()[0].status,
+            TrackStatus::Failed(QueueError::NoRuntime.to_string()),
+            "a load with no runtime fails its track"
+        );
+    }
+
+    #[kithara::test]
+    fn config_failure_without_runtime_updates_tracks_synchronously() {
+        let (player, tracks, loader) = loader_without_runtime();
+        let bus = player.bus().clone();
         let source = TrackSource::Uri("not a url".into());
         let spawn_id = TrackId(42);
         let promote_id = TrackId(43);
