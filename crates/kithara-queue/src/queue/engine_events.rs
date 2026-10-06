@@ -65,13 +65,16 @@ where
         true
     }
 
-    /// Whether the deck left `track` for the successor it held behind it.
+    /// Whether the deck left `track` for a successor the queue still holds.
     /// The deck reports the end it left first, so it already leads the
     /// successor when the queue reads that end, and its announcement, not the
-    /// end, moves the cursor there.
+    /// end, moves the cursor there. A successor removed meanwhile is no
+    /// track to follow, so the end advances past it.
     fn deck_led_on_from(&self, track: TrackId) -> bool {
         let deck_item = self.player.current_item();
-        let led_on = deck_item.is_some_and(|item| item != track);
+        let led_on = deck_item.is_some_and(|item| {
+            item != track && self.lock_tracks().iter().any(|entry| entry.id == item)
+        });
         if led_on {
             debug!(%track, ?deck_item, "the deck led on to its successor: the end moves nothing");
         }
@@ -79,22 +82,22 @@ where
     }
 
     /// The deck announces every item it starts, a removed one included, so
-    /// the queue names only an item it still holds. A queued item the
-    /// cursor has not reached is one the deck took on its own, the successor
-    /// held behind the track that ended or failed: the cursor follows it
-    /// there, so a pause that gates that end's report cannot leave it
-    /// behind, and the deck now holds the item.
+    /// the queue names only an item it still holds. A queued item other than
+    /// the one under the cursor is one the deck took on its own, the
+    /// successor held behind the track that ended or failed: the cursor
+    /// follows it there, so a pause that gates that end's report cannot
+    /// leave it behind, and the deck now holds the item. A queue that ran
+    /// out has no cursor to move, though the deck keeps its last item.
     pub(super) fn handle_current_item_changed(&self) {
         let id = self
             .player
             .current_item()
             .filter(|id| self.lock_tracks().iter().any(|entry| entry.id == *id));
-        let left = self.current();
         if let Some(id) = id
-            && left.as_ref().map(|entry| entry.id) != Some(id)
+            && let Some(left) = self.current()
+            && left.id != id
         {
-            let reason = if left.is_some_and(|entry| matches!(entry.status, TrackStatus::Failed(_)))
-            {
+            let reason = if matches!(left.status, TrackStatus::Failed(_)) {
                 AdvanceReason::TrackFailed
             } else {
                 AdvanceReason::NaturalEof
@@ -427,6 +430,32 @@ mod tests {
         assert!(
             advanced,
             "the cursor leaves the failed track for its failure"
+        );
+    }
+
+    /// A queue that ran out names no current track though the deck keeps the
+    /// last one: recovery from a lag finds no handover there.
+    #[kithara::test(tokio)]
+    async fn lag_recovery_keeps_an_ended_queue_ended() {
+        let queue = make_queue();
+        let last = admitted(&queue, "https://example.com/last.mp3");
+        queue
+            .select(last, Transition::None)
+            .expect("the last track is selected");
+        queue.lock_navigation_mut().finish();
+
+        let mut events = queue.subscribe();
+        queue.handle_current_item_changed();
+
+        assert_eq!(queue.current().map(|entry| entry.id), None);
+        assert!(
+            !wait_for_queue_event(
+                &mut events,
+                |event| matches!(event, QueueEvent::CurrentTrackAdvance { .. }),
+                50
+            )
+            .await,
+            "the ended queue advances nowhere"
         );
     }
 

@@ -625,6 +625,67 @@ async fn a_pause_after_the_deck_stitches_in_the_successor_leaves_the_queue_on_it
     harness.close().await;
 }
 
+/// Removing the successor the deck already stitched in, before a tick reads
+/// the stitch, leaves the queue nothing to follow it to: the end of the track
+/// before it advances to the next track the queue holds.
+#[kithara::test(tokio)]
+async fn removing_a_successor_the_deck_already_stitched_in_advances_past_it() {
+    /// `constant_wav_*_1_5s`: 1.5 s at 44.1 kHz.
+    const TRACK_FRAMES: usize = 66_150;
+
+    let (harness, queue, _, id_b) = gapless_queue_with_an_armed_successor().await;
+    let c = assets::constant_wav_four_1_5s();
+    let id_c = append_loaded(&harness, &queue, &c).await;
+    for _ in 0..TRACK_FRAMES / BLOCK_FRAMES {
+        let _ = harness.render(BLOCK_FRAMES).await;
+    }
+    harness
+        .run(&queue, move |q| q.remove(id_b))
+        .await
+        .expect("remove track B");
+    let _ = harness.run(&queue, QueueControl::tick).await;
+
+    assert_eq!(
+        queue.current().map(|entry| entry.id),
+        Some(id_c),
+        "the queue moves past the removed B to C"
+    );
+    drop(queue);
+    harness.close().await;
+}
+
+/// A track inserted after the playing one follows it even when no tick comes
+/// between the insert and the end: the insert itself takes the successor it
+/// displaced off the deck.
+#[kithara::test(tokio)]
+async fn a_track_inserted_after_the_playing_one_follows_it_without_a_tick_before_the_end() {
+    /// `constant_wav_*_1_5s`: 1.5 s at 44.1 kHz.
+    const TRACK_FRAMES: usize = 66_150;
+
+    let (harness, queue, id_a, _) = gapless_queue_with_an_armed_successor().await;
+    let c = assets::constant_wav_four_1_5s();
+    let mut events = queue.subscribe();
+    let id_c = harness
+        .run(&queue, move |q| q.insert(asset_source(&c), Some(id_a)))
+        .await
+        .expect("insert track C after A");
+    wait_for_loader_done_event(&mut events, &queue, id_c, LOCAL_LOAD_DEADLINE)
+        .await
+        .expect("track C loads");
+    for _ in 0..TRACK_FRAMES / BLOCK_FRAMES {
+        let _ = harness.render(BLOCK_FRAMES).await;
+    }
+    let _ = harness.run(&queue, QueueControl::tick).await;
+
+    assert_eq!(
+        queue.current().map(|entry| entry.id),
+        Some(id_c),
+        "C follows A"
+    );
+    drop(queue);
+    harness.close().await;
+}
+
 /// Selecting the track that already plays leaves the successor armed behind
 /// it where it is.
 #[kithara::test(tokio)]

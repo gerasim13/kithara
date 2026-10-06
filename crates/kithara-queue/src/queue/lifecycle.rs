@@ -104,7 +104,8 @@ where
         })
     }
 
-    /// Inserts a resolved track placement into queue state and starts loading.
+    /// Inserts a resolved track placement into queue state, takes a successor
+    /// it displaces off the deck, and starts loading.
     pub(super) fn insert_entry(
         &self,
         id: TrackId,
@@ -148,6 +149,7 @@ where
         navigation.reconcile(&ids);
         navigation.insert(id);
         drop(navigation);
+        self.reconcile_successor();
         self.spawn_apply_after_load(id, source, LoadClass::Prefetch);
         id
     }
