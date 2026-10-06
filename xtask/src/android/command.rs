@@ -355,7 +355,7 @@ pub(crate) fn run_build(
         // variant (the android MediaCodec variant is target_os-gated
         // and absent when compiling the bindgen bin for the host);
         // kithara-net refuses to build without one HTTP client.
-        "uniffi-bindgen-cli,symphonia,client-reqwest,tls-rustls",
+        "uniffi-bindgen-cli,symphonia,client-reqwest,tls-rustls,stretch-identity",
     ]);
     if matches!(profile, BuildProfile::Release) {
         cmd.arg("--release");

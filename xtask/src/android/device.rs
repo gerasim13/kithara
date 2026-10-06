@@ -762,7 +762,10 @@ mod tests {
         use std::{fs, process::Stdio};
 
         use super::*;
-        use crate::{consts, testing::install_script};
+        use crate::{
+            consts,
+            testing::{install_script, signals},
+        };
 
         fn recording_adb(dir: &Path, trace: &Path, code: i32) -> PathBuf {
             let path = dir.join("adb");
@@ -916,9 +919,19 @@ mod tests {
                 adb,
                 emulator: None,
             };
+            let _signals = signals();
             let cancel = child::Cancel::install().unwrap();
             let mapping = Reverse::create(&device, 34567, Some(&cancel)).unwrap();
-            assert!(child::check(Some(&cancel)).is_err());
+            // A signal from another process can arrive after `create` returns,
+            // and it must arrive before the next signal test installs its own.
+            let sent = Instant::now();
+            while child::check(Some(&cancel)).is_ok() {
+                assert!(
+                    sent.elapsed() < Duration::from_secs(5),
+                    "the stop signal never arrived"
+                );
+                thread::sleep(consts::CHILD_POLL);
+            }
             mapping.remove().unwrap();
             assert_eq!(
                 recorded(&trace),
