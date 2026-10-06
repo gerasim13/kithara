@@ -667,6 +667,17 @@ cargo.packages = ["tools"]
         );
         ctx.config.tools = toml::from_str(&format!("[just]\nprogram = \"{}\"\n", just.display()))
             .expect("parse the tools table");
+        ctx.config.test = toml::from_str(
+            r#"
+default_lane = "workspace"
+default_backend = "http"
+nextest_config = ".config/nextest.toml"
+[net_backends.http]
+[lanes.workspace.cargo]
+workspace = true
+"#,
+        )
+        .expect("fixture test lane");
         fs::write(temp.path().join("Cargo.toml"), consts::PROBE_MANIFEST)
             .expect("write the workspace manifest");
         fs::create_dir_all(temp.path().join("src")).expect("create the package sources");
