@@ -62,6 +62,14 @@ pub fn yield_now() {
     backend::yield_now();
 }
 
+/// Give other threads the CPU while this one stays runnable: the fairness
+/// yield of a loop that still has work. Without the flash engine it is the
+/// same yield as [`yield_now`].
+#[inline]
+pub fn yield_runnable() {
+    backend::yield_now();
+}
+
 #[inline]
 #[must_use]
 pub fn is_worker_thread() -> bool {

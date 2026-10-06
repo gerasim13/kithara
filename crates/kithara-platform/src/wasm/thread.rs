@@ -92,6 +92,11 @@ pub(crate) fn gate_instant(backend: &GateBackend) -> crate::time::Instant {
 #[inline]
 pub fn yield_now() {}
 
+/// The fairness yield of a loop that still has work. A no-op, as
+/// [`yield_now`] is.
+#[inline]
+pub fn yield_runnable() {}
+
 /// Returns `true` when running inside a Web Worker.
 #[inline]
 #[must_use]

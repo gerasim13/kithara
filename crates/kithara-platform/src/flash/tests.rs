@@ -1394,6 +1394,50 @@ fn a_yielding_closure_lets_the_clock_reach_a_gate_poll() {
     );
 }
 
+/// A runnable yield is the opposite promise: the closure still has work, so it
+/// pins the clock as a spinning closure does
+/// ([`ambient_blocking_closure_pins_virtual_clock`]) and the sibling's 10ms
+/// park waits for the closure to finish.
+#[kithara::test(native, flash(false))]
+fn a_runnable_yield_holds_the_virtual_clock() {
+    let waited = park_beside_a_waiting_closure(crate::thread::yield_runnable, park_for_10ms);
+    assert!(
+        waited >= Duration::from_millis(40),
+        "the clock advanced past a closure that yielded with work in hand: a 10ms \
+         deadline fired after {waited:?} real"
+    );
+}
+
+/// The async twin of [`a_runnable_yield_holds_the_virtual_clock`]. A task that
+/// yields with work in hand stays counted across the turn, so a deadline
+/// registered before the yields does not come due. A yield that claimed the
+/// task had nothing to do sent the clock to the next deadline, past work
+/// already queued behind it: a stored `Notify` permit for a segment the reader
+/// was waiting on, skipped by a 30 s ABR re-tick.
+#[kithara::test(native, flash(false))]
+fn a_runnable_task_yield_holds_the_virtual_clock() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
+    let ((), took) = on_virtual_clock(async {
+        let mut deadline = std::pin::pin!(crate::time::sleep(Duration::from_secs(1)));
+        std::future::poll_fn(|cx| {
+            assert!(deadline.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        for _ in 0..4 {
+            crate::tokio::task::yield_runnable().await;
+        }
+    });
+    assert_eq!(
+        took,
+        Duration::ZERO,
+        "a runnable yield let the clock advance to a pending deadline"
+    );
+}
+
 fn park_for_10ms() {
     forward::park_for(Duration::from_millis(10));
 }
