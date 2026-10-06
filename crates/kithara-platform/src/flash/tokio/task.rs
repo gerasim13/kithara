@@ -6,7 +6,7 @@ pub use crate::{
 };
 use crate::{
     backend::tokio::{backend::task, runtime::Handle, task as native_task},
-    flash::join::Join,
+    flash::{Yield, join::Join},
     maybe_send::MaybeSend,
     sync::Arc,
 };
@@ -130,4 +130,15 @@ where
         Some(Arc::clone(&join)),
     ));
     JoinHandle::new(task, join)
+}
+
+/// Hand the worker back to the scheduler once while this task stays runnable.
+///
+/// The fairness yield of a task that still has work. Unlike [`yield_now`], it
+/// never parks on the quiescence engine: the task wakes itself before it
+/// returns `Pending`, so its slot carries over to the re-poll and the virtual
+/// clock cannot advance past the work it holds. `tokio`'s own yield defers
+/// that wake until after the poll, which leaves the slot free in between.
+pub fn yield_runnable() -> Yield {
+    Yield::Real { yielded: false }
 }

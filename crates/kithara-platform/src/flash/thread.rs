@@ -159,6 +159,18 @@ pub fn yield_now() {
     }
 }
 
+/// Give other threads the CPU while this one stays runnable.
+///
+/// The fairness yield of a loop that still has work. Unlike [`yield_now`], it
+/// never parks on the quiescence engine: the thread stays a counted
+/// participant, so the virtual clock cannot advance past the work it holds. A
+/// loop that waits for another participant yields with [`yield_now`] or
+/// [`paced_backoff`] instead.
+#[inline]
+pub fn yield_runnable() {
+    crate::backend::thread::yield_now();
+}
+
 /// Whether a cooperative wait on this thread yields to the quiescence engine.
 ///
 /// A DEDICATED participant does even where the callstack itself is not a flash

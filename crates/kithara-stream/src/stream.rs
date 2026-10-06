@@ -219,7 +219,7 @@ impl<T: StreamType> Stream<T> {
     /// Returns an error if the underlying stream source cannot be created.
     pub async fn new(config: T::Config) -> Result<Self, SourceError> {
         let source = T::create(config).await?;
-        task::yield_now().await;
+        task::yield_runnable().await;
         Ok(Self { source })
     }
 
