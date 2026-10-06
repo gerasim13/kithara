@@ -214,7 +214,7 @@ fn main() {{
     }
 
     fn cargo_build(&self, root: &Path) -> Vec<serde_json::Value> {
-        let pins: toml::Value = fs::read_to_string(
+        let pins: toml::Table = fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../.config/ci-pins.toml"),
         )
         .expect("repository CI pins")
@@ -423,7 +423,10 @@ fn the_default_source_cache_survives_temporary_directory_relocation() {
 fn a_fresh_fetch_and_source_cache_eviction_rebuild_zero_units_on_the_next_cargo_build() {
     let fixture = Fixture::new();
     let root = fixture.cargo_fixture();
-    assert!(!fixture.cached_path().exists(), "the first build must fetch");
+    assert!(
+        !fixture.cached_path().exists(),
+        "the first build must fetch"
+    );
     assert!(
         !root.join("target").exists(),
         "the Cargo target starts empty"
@@ -435,7 +438,9 @@ fn a_fresh_fetch_and_source_cache_eviction_rebuild_zero_units_on_the_next_cargo_
         first.iter().any(|message| {
             message["reason"] == "compiler-artifact"
                 && message["target"]["name"] == "beat_cache_fixture"
-                && !message["fresh"].as_bool().expect("Cargo artifact freshness")
+                && !message["fresh"]
+                    .as_bool()
+                    .expect("Cargo artifact freshness")
         }),
         "the library must compile after the first fetch: {first:?}"
     );
@@ -486,7 +491,11 @@ fn a_fresh_fetch_and_source_cache_eviction_rebuild_zero_units_on_the_next_cargo_
         );
         let rebuilt: Vec<_> = artifacts
             .iter()
-            .filter(|message| !message["fresh"].as_bool().expect("Cargo artifact freshness"))
+            .filter(|message| {
+                !message["fresh"]
+                    .as_bool()
+                    .expect("Cargo artifact freshness")
+            })
             .map(|message| &message["target"]["name"])
             .collect();
         assert!(
