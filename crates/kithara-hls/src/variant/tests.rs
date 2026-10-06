@@ -2513,7 +2513,10 @@ fn wait_range_interrupts_buffered_bytes_while_flushing() {
     );
     write_seg_bytes(&v, &ctx, 0, 4);
     assert!(
-        matches!(v.wait_range(0..4, Some(Duration::ZERO)), Ok(WaitOutcome::Ready)),
+        matches!(
+            v.wait_range(0..4, Some(Duration::ZERO)),
+            Ok(WaitOutcome::Ready)
+        ),
         "committed bytes must be ready before flushing"
     );
 
@@ -2538,7 +2541,10 @@ fn wait_range_interrupts_buffered_bytes_while_flushing() {
 
     SeekControl::complete(&*seek, epoch);
     assert!(
-        matches!(v.wait_range(0..4, Some(Duration::ZERO)), Ok(WaitOutcome::Ready)),
+        matches!(
+            v.wait_range(0..4, Some(Duration::ZERO)),
+            Ok(WaitOutcome::Ready)
+        ),
         "completing the flush must preserve buffered readiness"
     );
 }
