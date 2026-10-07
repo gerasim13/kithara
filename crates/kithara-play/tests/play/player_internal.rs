@@ -15,7 +15,8 @@ use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::sync::Arc;
 use kithara_play::{
     CrossfadeSettings, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent,
-    PlayerImpl, PlayerStatus, Resource, SeekOutcome, SelectionPlayback, SuccessorLink, mock,
+    PlayerImpl, PlayerStatus, Resource, SeekOutcome, SelectionPlayback, SuccessorLink,
+    mock::{self, SessionMock},
 };
 use kithara_test_fixtures::integration_fixtures::constant_half;
 use kithara_test_utils::{
@@ -38,8 +39,9 @@ fn make_tagged_resource(
     )
 }
 
-/// A player its Host has seated on a deck slot.
-fn make_fixture_player(crossfade_duration: f32) -> PlayerImpl<TestPools> {
+/// A player its Host has seated on a deck slot, with the mock that answers
+/// as the slot's audio thread.
+fn make_fixture_player(crossfade_duration: f32) -> (PlayerImpl<TestPools>, Arc<SessionMock>) {
     let mut player = PlayerImpl::new(
         PlayerConfig::builder()
             .bus(EventBus::default())
@@ -48,15 +50,15 @@ fn make_fixture_player(crossfade_duration: f32) -> PlayerImpl<TestPools> {
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .build(),
     );
-    mock::insert(&mut player);
-    player
+    let audio_thread = mock::insert(&mut player);
+    (player, audio_thread)
 }
 
 /// A seated player whose slot is up, holding nothing yet.
-fn prepared_player(crossfade_duration: f32) -> PlayerImpl<TestPools> {
-    let player = make_fixture_player(crossfade_duration);
+fn prepared_player(crossfade_duration: f32) -> (PlayerImpl<TestPools>, Arc<SessionMock>) {
+    let (player, audio_thread) = make_fixture_player(crossfade_duration);
     player.ensure_slot().unwrap();
-    player
+    (player, audio_thread)
 }
 
 /// A prepared player leading `first`, with `second` armed behind it over
@@ -65,8 +67,8 @@ fn deck_with_armed(
     constant_half: &'static [u8],
     crossfade_duration: f32,
     link: SuccessorLink,
-) -> (PlayerImpl<TestPools>, TrackId, TrackId) {
-    let player = prepared_player(crossfade_duration);
+) -> (PlayerImpl<TestPools>, TrackId, TrackId, Arc<SessionMock>) {
+    let (player, audio_thread) = prepared_player(crossfade_duration);
     let (first, second) = (TrackId::allocate(), TrackId::allocate());
     player
         .select(
@@ -82,7 +84,7 @@ fn deck_with_armed(
             link,
         )
         .expect("arm the second item");
-    (player, first, second)
+    (player, first, second, audio_thread)
 }
 
 fn drain_player_events(
@@ -106,7 +108,7 @@ fn drain_player_events(
 #[case(false)]
 #[case(true)]
 async fn player_remove_all_resets_state(constant_half: &'static [u8], #[case] with_item: bool) {
-    let player = prepared_player(0.0);
+    let (player, _audio_thread) = prepared_player(0.0);
     if with_item {
         player
             .select(
@@ -124,7 +126,7 @@ async fn player_remove_all_resets_state(constant_half: &'static [u8], #[case] wi
 
 #[kithara::test]
 fn replay_same_item_does_not_re_emit_current_item_changed(constant_half: &'static [u8]) {
-    let player = prepared_player(0.0);
+    let (player, _audio_thread) = prepared_player(0.0);
     let mut rx = player.subscribe();
 
     player
@@ -162,7 +164,7 @@ fn replay_same_item_does_not_re_emit_current_item_changed(constant_half: &'stati
 /// inline from the audio callback.
 #[kithara::test(tokio)]
 async fn a_selected_resource_adopts_the_session_wake_mode() {
-    let player = prepared_player(0.0);
+    let (player, _audio_thread) = prepared_player(0.0);
     let (reader, recorded) = MockReader::wake_mode_tracking(AUDIO_SPEC);
 
     player
@@ -185,7 +187,7 @@ async fn a_selected_resource_adopts_the_session_wake_mode() {
 fn re_selecting_the_current_item_does_not_re_announce(constant_half: &'static [u8]) {
     // Re-selecting the item the deck already leads (e.g. while paused) must
     // not re-announce: announce gates on identity, not on calls.
-    let player = prepared_player(0.0);
+    let (player, _audio_thread) = prepared_player(0.0);
     let item = TrackId::allocate();
     let mut rx = player.subscribe();
 
@@ -214,7 +216,7 @@ fn re_selecting_the_current_item_does_not_re_announce(constant_half: &'static [u
 
 #[kithara::test]
 fn selecting_another_item_announces_it(constant_half: &'static [u8]) {
-    let player = prepared_player(0.0);
+    let (player, _audio_thread) = prepared_player(0.0);
     let (first, second) = (TrackId::allocate(), TrackId::allocate());
     let mut rx = player.subscribe();
 
@@ -251,13 +253,14 @@ fn selecting_another_item_announces_it(constant_half: &'static [u8]) {
 
 #[kithara::test]
 fn arm_next_arms_the_item(constant_half: &'static [u8]) {
-    let (player, _first, second) = deck_with_armed(constant_half, 0.0, SuccessorLink::Gapless);
+    let (player, _first, second, _audio_thread) =
+        deck_with_armed(constant_half, 0.0, SuccessorLink::Gapless);
     assert_eq!(player.armed_next(), Some(second));
 }
 
 #[kithara::test]
 fn seek_seconds_updates_position_optimistically() {
-    let player = make_fixture_player(0.0);
+    let (player, _audio_thread) = make_fixture_player(0.0);
     player.ensure_slot().unwrap();
 
     let outcome = player.seek_seconds(54.689_879_542).expect("seek must land");
@@ -268,7 +271,8 @@ fn seek_seconds_updates_position_optimistically() {
 
 #[kithara::test]
 fn arm_next_idempotent_for_the_armed_item(constant_half: &'static [u8]) {
-    let (player, _first, second) = deck_with_armed(constant_half, 0.0, SuccessorLink::Gapless);
+    let (player, _first, second, _audio_thread) =
+        deck_with_armed(constant_half, 0.0, SuccessorLink::Gapless);
 
     player
         .arm_next(
@@ -282,7 +286,8 @@ fn arm_next_idempotent_for_the_armed_item(constant_half: &'static [u8]) {
 
 #[kithara::test]
 fn arm_next_replaces_a_previously_armed_item(constant_half: &'static [u8]) {
-    let (player, _first, _second) = deck_with_armed(constant_half, 0.0, SuccessorLink::Gapless);
+    let (player, _first, _second, _audio_thread) =
+        deck_with_armed(constant_half, 0.0, SuccessorLink::Gapless);
     let third = TrackId::allocate();
 
     player
@@ -297,7 +302,8 @@ fn arm_next_replaces_a_previously_armed_item(constant_half: &'static [u8]) {
 
 #[kithara::test]
 fn commit_next_of_another_item_returns_typed_error(constant_half: &'static [u8]) {
-    let (player, _first, second) = deck_with_armed(constant_half, 1.0, SuccessorLink::Fade);
+    let (player, _first, second, _audio_thread) =
+        deck_with_armed(constant_half, 1.0, SuccessorLink::Fade);
     let other = TrackId::allocate();
 
     let err = player
@@ -311,7 +317,8 @@ fn commit_next_of_another_item_returns_typed_error(constant_half: &'static [u8])
 
 #[kithara::test]
 fn commit_next_makes_the_successor_current_and_announces_it(constant_half: &'static [u8]) {
-    let (player, _first, second) = deck_with_armed(constant_half, 1.0, SuccessorLink::Fade);
+    let (player, _first, second, _audio_thread) =
+        deck_with_armed(constant_half, 1.0, SuccessorLink::Fade);
     let mut rx: EventReceiver<PlayerEvent> = player.subscribe();
 
     player
@@ -328,7 +335,8 @@ fn commit_next_makes_the_successor_current_and_announces_it(constant_half: &'sta
 
 #[kithara::test]
 fn commit_next_idempotent_when_already_activated(constant_half: &'static [u8]) {
-    let (player, _first, second) = deck_with_armed(constant_half, 1.0, SuccessorLink::Fade);
+    let (player, _first, second, _audio_thread) =
+        deck_with_armed(constant_half, 1.0, SuccessorLink::Fade);
 
     player
         .commit_next(second, CrossfadeSettings::default())
@@ -341,7 +349,8 @@ fn commit_next_idempotent_when_already_activated(constant_half: &'static [u8]) {
 
 #[kithara::test]
 fn unarm_next_clears_an_armed_successor(constant_half: &'static [u8]) {
-    let (player, first, _second) = deck_with_armed(constant_half, 0.0, SuccessorLink::Gapless);
+    let (player, first, _second, _audio_thread) =
+        deck_with_armed(constant_half, 0.0, SuccessorLink::Gapless);
 
     player.unarm_next();
     assert_eq!(player.armed_next(), None);
@@ -350,7 +359,8 @@ fn unarm_next_clears_an_armed_successor(constant_half: &'static [u8]) {
 
 #[kithara::test]
 fn unarm_next_preserves_activated_current(constant_half: &'static [u8]) {
-    let (player, _first, second) = deck_with_armed(constant_half, 1.0, SuccessorLink::Fade);
+    let (player, _first, second, _audio_thread) =
+        deck_with_armed(constant_half, 1.0, SuccessorLink::Fade);
     player
         .commit_next(second, CrossfadeSettings::default())
         .unwrap();
@@ -361,7 +371,8 @@ fn unarm_next_preserves_activated_current(constant_half: &'static [u8]) {
 
 #[kithara::test]
 fn selecting_another_item_unarms_the_successor(constant_half: &'static [u8]) {
-    let (player, _first, _second) = deck_with_armed(constant_half, 1.0, SuccessorLink::Fade);
+    let (player, _first, _second, _audio_thread) =
+        deck_with_armed(constant_half, 1.0, SuccessorLink::Fade);
     let third = TrackId::allocate();
 
     player
@@ -380,7 +391,8 @@ fn selecting_another_item_unarms_the_successor(constant_half: &'static [u8]) {
 /// instead of loading it again: the deck already holds its audio.
 #[kithara::test]
 fn selecting_the_armed_item_promotes_it(constant_half: &'static [u8]) {
-    let (player, _first, second) = deck_with_armed(constant_half, 1.0, SuccessorLink::Fade);
+    let (player, _first, second, _audio_thread) =
+        deck_with_armed(constant_half, 1.0, SuccessorLink::Fade);
 
     player
         .select(second, None, SelectionPlayback::Play)

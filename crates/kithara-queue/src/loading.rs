@@ -31,6 +31,9 @@ pub(crate) enum LoadReport {
         load: CancelToken,
         cover: Arc<Vec<u8>>,
     },
+    /// The track's token ended the load: a load still waiting for its lane
+    /// is over; one already sent ends with its open's answer.
+    Cancelled { id: TrackId },
 }
 
 /// Why an open the dispatcher answered left its track without a source.

@@ -93,6 +93,7 @@ impl<T, S> HostSettingsExec<()> for SessionState<T, S> {
             .map_err(|error| match error {
                 LiveError::Invalid(error) => error,
                 LiveError::Send(SendError::Full(_)) => SessionError::HostQueueFull.into(),
+                LiveError::Send(SendError::Closed(_)) => PlayError::Closed,
                 LiveError::Send(SendError::Target(_)) => {
                     PlayError::Internal("a host settings batch names a target".to_owned())
                 }

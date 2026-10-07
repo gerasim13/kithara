@@ -234,7 +234,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn leading_failure_marks_the_played_entry_when_sources_repeat() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let (first, second) = selected_second(&mut queue);
 
         queue.handle_item_did_fail(
@@ -271,7 +271,7 @@ mod tests {
     /// report could then say which defect ended the track.
     #[kithara::test(tokio)]
     async fn a_leading_failure_records_the_fault_the_player_reported() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let (_first, second) = selected_second(&mut queue);
 
         queue.handle_item_did_fail(
@@ -295,7 +295,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn background_end_and_failure_leave_the_current_entry_untouched() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let (background, current) = selected_second(&mut queue);
         let item = ItemRole::Background(TrackRef::new(
             background,
@@ -319,7 +319,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn pause_and_none_suppress_natural_eof_progression() {
         for action in [ActionAtItemEnd::Pause, ActionAtItemEnd::None] {
-            let mut queue = make_queue();
+            let (mut queue, _audio_thread) = make_queue();
             let first = TrackId::allocate();
             let second = TrackId::allocate();
             queue.tracks.records_mut().extend([
@@ -360,7 +360,7 @@ mod tests {
     /// on the owner it runs on, posting nothing back to it.
     #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
     async fn a_tick_pauses_at_the_natural_end_it_drains() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let first = TrackId::allocate();
         let second = TrackId::allocate();
         queue.tracks.records_mut().extend([
@@ -394,7 +394,7 @@ mod tests {
     /// ended, and the cursor's move names the failure.
     #[kithara::test(tokio)]
     async fn the_deck_leading_on_past_a_failed_track_advances_for_the_failure() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let failed = admitted(&mut queue, "https://example.com/failed.mp3");
         let successor = admitted(&mut queue, "https://example.com/successor.mp3");
         queue
@@ -437,7 +437,7 @@ mod tests {
     /// last one: recovery from a lag finds no handover there.
     #[kithara::test(tokio)]
     async fn lag_recovery_keeps_an_ended_queue_ended() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let last = admitted(&mut queue, "https://example.com/last.mp3");
         queue
             .select(last, Transition::None)
@@ -465,7 +465,7 @@ mod tests {
     /// the item the deck holds.
     #[kithara::test(tokio)]
     async fn lagged_player_events_resynchronize_current_track() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let id = admitted(&mut queue, "https://example.com/lagged-events.mp3");
         queue
             .select(id, Transition::None)

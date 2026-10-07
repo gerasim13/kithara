@@ -770,6 +770,75 @@ mod tests {
         );
     }
 
+    /// An open in flight ends the moment its track is cancelled, refused
+    /// `Cancelled`, and gives its worker slot back: the next load opens
+    /// instead of finding the worker full.
+    #[kithara::test(native, tokio)]
+    async fn an_open_in_flight_ends_cancelled_and_frees_its_slot() {
+        use axum::Router;
+        use futures::future;
+        use kithara_platform::{time, tokio::sync::mpsc::unbounded_channel};
+        use kithara_test_utils::TestHttpServer;
+
+        let (reached_tx, mut reached) = unbounded_channel();
+        let server = TestHttpServer::new(Router::new().fallback(move || {
+            let reached = reached_tx.clone();
+            async move {
+                let _ = reached.send(());
+                future::pending::<()>().await;
+            }
+        }))
+        .await;
+        let pools = pools();
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::builder(pools.clone())
+                .capacity(NonZeroUsize::MIN)
+                .build(),
+        );
+        let load = |src: ResourceSrc, track: CancelToken| {
+            let mut config: ResourceConfig<TestPools> = ResourceConfig::for_src(src)
+                .store(
+                    AssetStore::builder(pools.clone())
+                        .backend(StorageBackend::Memory)
+                        .build(),
+                )
+                .worker(worker.clone())
+                .build();
+            config.cancel = Some(track);
+            ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay())).open()
+        };
+        let track = CancelToken::never().child();
+        let stalled = load(
+            ResourceSrc::parse(server.url("/stalled.mp3").as_str()).expect("a test URL"),
+            track.clone(),
+        );
+        let cancel_once_reached = async {
+            reached.recv().await.expect("the server holds its sender");
+            track.cancel();
+        };
+
+        let (refused, ()) = time::timeout(
+            Duration::from_secs(2),
+            future::join(stalled, cancel_once_reached),
+        )
+        .await
+        .expect("a cancelled open ends");
+        assert!(
+            matches!(refused, Err(LoadRefusal::Cancelled)),
+            "a cancelled open answered otherwise: {refused:?}"
+        );
+
+        let next = load(
+            ResourceSrc::Path("/kithara/missing.mp3".into()),
+            CancelToken::never().child(),
+        )
+        .await;
+        assert!(
+            matches!(next, Err(LoadRefusal::Open(_))),
+            "the cancelled open kept its worker slot: {next:?}"
+        );
+    }
+
     /// A resource with no per-track cancel wired in (custom reader) drops
     /// without panicking and cancels nothing.
     #[kithara::test(native, flash(false))]

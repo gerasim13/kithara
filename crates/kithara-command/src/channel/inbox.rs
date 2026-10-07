@@ -11,7 +11,7 @@ use ringbuf::{
     traits::{Consumer, Observer, Producer},
 };
 
-use super::{ledger::Ledger, schedule::Schedule, sender::Sent};
+use super::{gate::Gate, ledger::Ledger, schedule::Schedule, sender::Sent};
 use crate::{
     config::ChannelConfig,
     protocol::{Batch, Protocol, Seq, When},
@@ -32,6 +32,8 @@ pub struct Inbox<P: Protocol> {
     wake: Arc<AtomicWaker>,
     /// The sender's owner's waker, rung with each receipt.
     answered: Arc<AtomicWaker>,
+    /// Closed as the inbox drops, so no batch is sent past its last drain.
+    gate: Arc<Gate>,
     ledger: Ledger,
     schedule: Schedule<P>,
     parked: Vec<Parked<P>>,
@@ -126,6 +128,7 @@ impl<P: Protocol> Inbox<P> {
         answers: HeapProd<Receipt<P>>,
         wake: Arc<AtomicWaker>,
         answered: Arc<AtomicWaker>,
+        gate: Arc<Gate>,
         config: ChannelConfig,
     ) -> Self {
         Self {
@@ -133,6 +136,7 @@ impl<P: Protocol> Inbox<P> {
             answers,
             wake,
             answered,
+            gate,
             schedule: Schedule::new(config.capacity.get()),
             parked: Vec::with_capacity(config.capacity.get()),
             ledger: Ledger::new(config.targets),
@@ -290,8 +294,11 @@ impl<P: Protocol> Inbox<P> {
 impl<P: Protocol> Drop for Inbox<P> {
     /// Answers [`Rejection::Unanswered`] for every batch the inbox still
     /// holds, parked, scheduled or not yet drained, and returns each whole,
-    /// so a sender never waits on an executor that is gone.
+    /// so a sender never waits on an executor that is gone. It closes the
+    /// gate first: a later send comes back closed instead of landing past
+    /// the last drain.
     fn drop(&mut self) {
+        self.gate.close();
         self.drain();
         while let Some(parked) = self.parked.pop() {
             self.reply(Receipt {

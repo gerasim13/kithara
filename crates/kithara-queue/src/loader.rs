@@ -294,6 +294,7 @@ where
         if let Some(load) = tracks.begin_load(id, load) {
             self.read_cover(&runtime, id, load);
             self.watch_for_slow_transfer(&runtime, id, load);
+            self.watch_for_cancel(&runtime, id, load);
         }
         self.pump(tracks);
     }
@@ -314,6 +315,37 @@ where
                 self.postbox.clone(),
             ),
         ));
+    }
+
+    /// Watch the load for its track's cancel, which can come from outside
+    /// the queue: a load still waiting for its lane is never sent, so only
+    /// this report ends it.
+    fn watch_for_cancel(&self, runtime: &RuntimeHandle, id: TrackId, load: &TrackLoad<S>) {
+        drop(spawn_on(
+            runtime,
+            report_cancel(
+                id,
+                load.token().clone(),
+                load.watch().clone(),
+                self.postbox.clone(),
+            ),
+        ));
+    }
+}
+
+/// Report [`LoadReport::Cancelled`] to the queue once `watch` ends, when the
+/// track's `token` is what ended it rather than the load's own end.
+async fn report_cancel<S>(
+    id: TrackId,
+    token: CancelToken,
+    watch: CancelToken,
+    postbox: Postbox<QueueCommand<S>>,
+) where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    watch.cancelled().await;
+    if token.is_cancelled() {
+        report(&postbox, LoadReport::Cancelled { id });
     }
 }
 
@@ -590,6 +622,30 @@ mod tests {
         );
     }
 
+    /// A load sent after its runtime went away comes back unsent: the track
+    /// fails instead of loading on a dispatcher that is gone.
+    #[kithara::test]
+    fn a_load_sent_after_its_runtime_dropped_fails_its_track() {
+        let runtime = idle_runtime();
+        let mut fixture = LoaderFixtureSpec::default()
+            .with_runtime(Some(runtime.handle().clone()))
+            .build();
+        drop(runtime);
+
+        let id = TrackId::allocate();
+        let source = queued(&mut fixture.tracks, id, "https://example.com/late.mp3");
+        fixture
+            .loader
+            .spawn_load(&mut fixture.tracks, id, source, LoadClass::Prefetch);
+        settle(&mut fixture.loader, &mut fixture.tracks);
+
+        assert!(
+            matches!(status_of(&fixture.tracks, id), TrackStatus::Failed(_)),
+            "the track waits on a dispatcher that is gone: {:?}",
+            status_of(&fixture.tracks, id)
+        );
+    }
+
     /// Each lane keeps its own count of opens in flight: prefetch never holds
     /// more than its cap, the loads past it wait in queue order, and a
     /// selection still opens beside a full prefetch lane.
@@ -668,6 +724,39 @@ mod tests {
 
         assert!(token.is_cancelled(), "a closed queue's load keeps running");
         assert_eq!(status_of(&fixture.tracks, id), TrackStatus::Cancelled);
+    }
+
+    /// A load whose caller cancelled its track while it waited for its lane
+    /// is never sent; it ends cancelled instead of leaving its track pending.
+    #[kithara::test(native, tokio)]
+    async fn a_load_cancelled_while_it_waits_for_its_lane_ends_cancelled(temp_dir: TestTempDir) {
+        let mut fixture = LoaderFixtureSpec::default().build();
+        let path = |name: &str| temp_dir.path().join(name).to_string_lossy().into_owned();
+        let held = TrackId::allocate();
+        let source = queued(&mut fixture.tracks, held, &path("held.wav"));
+        fixture
+            .loader
+            .spawn_load(&mut fixture.tracks, held, source, LoadClass::Interactive);
+        let waiting = TrackId::allocate();
+        let master = CancelToken::never().child();
+        let source = TrackSource::from(config(&path("waiting.wav"), master.clone()));
+        fixture
+            .tracks
+            .records_mut()
+            .push(TrackRecord::new(waiting, String::new(), source.clone()));
+        fixture
+            .loader
+            .spawn_load(&mut fixture.tracks, waiting, source, LoadClass::Interactive);
+        assert_eq!(
+            status_of(&fixture.tracks, waiting),
+            TrackStatus::Pending,
+            "the selection lane holds one open"
+        );
+
+        master.cancel();
+        fixture
+            .run_until(|tracks| status_of(tracks, waiting) == TrackStatus::Cancelled)
+            .await;
     }
 
     /// The first track's live load, begun from a config the test owns.

@@ -224,7 +224,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn select_unknown_id_errors() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let err = queue
             .select(TrackId(999), Transition::None)
             .expect_err("unknown id should error");
@@ -233,7 +233,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn select_pending_track_stashes_pending_select() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let id = append(&mut queue, "https://example.com/a.mp3");
         let _ = queue.select(id, Transition::None);
         let phase = queue.pending_select;
@@ -248,7 +248,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn advance_to_next_on_empty_emits_queue_ended() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let mut rx = queue.subscribe();
         assert!(
             queue
@@ -264,7 +264,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn manual_next_at_exhaustion_does_not_emit_queue_ended() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let mut rx = queue.subscribe();
         assert_eq!(queue.next(Transition::None).expect("manual next"), None);
         assert!(
@@ -274,7 +274,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn advance_to_next_cycles_then_emits_queue_ended() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let a = append(&mut queue, "https://example.com/a.mp3");
         let b = append(&mut queue, "https://example.com/b.mp3");
         queue.navigation.select(b, &[a, b]);
@@ -295,7 +295,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn admitted_pending_successor_becomes_navigation_authority() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let first = append(&mut queue, "https://example.com/a.mp3");
         let second = append(&mut queue, "https://example.com/b.mp3");
         queue.navigation.select(first, &[first, second]);
@@ -322,7 +322,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn pending_override_latches_profile_without_mutating_default() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let id = append(&mut queue, "https://example.com/a.mp3");
         let configured = kithara_play::CrossfadeSettings::new(
             2.0,

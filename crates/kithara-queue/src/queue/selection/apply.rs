@@ -99,7 +99,7 @@ mod tests {
     /// and fills only the fields they leave unset from the decoder's tags.
     #[kithara::test(tokio, flash(false))]
     async fn admission_fills_unset_metadata_from_the_decoder(cancel_token: CancelToken) {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let url = "https://example.com/opaque.m3u8";
         let mut append = |title: Option<&str>| {
             let config =

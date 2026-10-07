@@ -227,6 +227,15 @@ where
                 }
             }
             LoadReport::Cover { id, load, cover } => self.place_cover(id, &load, cover),
+            LoadReport::Cancelled { id } => {
+                let unsent = self
+                    .find(id)
+                    .and_then(|record| record.load.as_ref())
+                    .is_some_and(|load| load.is_cancelled() && load.sent.is_none());
+                if unsent {
+                    self.set_status(id, TrackStatus::Cancelled);
+                }
+            }
         }
     }
 
@@ -290,9 +299,11 @@ where
         })
     }
 
-    /// `id`'s load went to the dispatcher as `seq`: the track loads.
+    /// `id`'s load went to the dispatcher as `seq`: the track loads. A load
+    /// cancelled since it was taken for its lane is sent all the same, and
+    /// its open's answer settles it.
     pub(crate) fn mark_sent(&mut self, id: TrackId, seq: Seq) {
-        let Some(load) = self.record_mut(id).and_then(TrackRecord::live_load) else {
+        let Some(load) = self.record_mut(id).and_then(|record| record.load.as_mut()) else {
             return;
         };
         load.sent = Some(seq);
@@ -856,6 +867,31 @@ mod tests {
         token.cancel();
         tracks.settle_load(seq, Err(OpenFailure::Final(refusal("cancelled"))));
 
+        assert_eq!(status(&tracks), TrackStatus::Cancelled);
+    }
+
+    /// The caller's cancel reached the load between the queue taking it for
+    /// its lane and the send. The open went out all the same: the load keeps
+    /// its lane until the open's answer settles the track.
+    #[kithara::test]
+    fn a_load_cancelled_as_it_is_sent_settles_on_its_receipt() {
+        let mut seqs = seqs();
+        let mut tracks = tracks_with(TrackId(1));
+        let token = begin(&mut tracks, TrackId(1), LoadClass::Prefetch);
+        let (id, _load) = tracks
+            .next_unsent(LoadClass::Prefetch)
+            .expect("the load waits for its lane");
+        token.cancel();
+        let seq = next_seq(&mut seqs);
+        tracks.mark_sent(id, seq);
+
+        tracks.apply_report(LoadReport::Cancelled { id });
+        assert_eq!(
+            status(&tracks),
+            TrackStatus::Loading,
+            "a sent load ends with its answer"
+        );
+        tracks.settle_load(seq, Err(OpenFailure::Final(refusal("cancelled"))));
         assert_eq!(status(&tracks), TrackStatus::Cancelled);
     }
 

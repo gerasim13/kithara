@@ -305,16 +305,17 @@ mod tests {
         )
     }
 
-    /// A player its Host has seated on a deck slot.
-    fn seated() -> PlayerImpl<TestPools> {
+    /// A player its Host has seated on a deck slot, with the mock that
+    /// answers as the slot's audio thread.
+    fn seated() -> (PlayerImpl<TestPools>, Arc<mock::SessionMock>) {
         let mut player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(mock::SAMPLE_RATE)
                 .worker(worker())
                 .build(),
         );
-        mock::insert(&mut player);
-        player
+        let audio_thread = mock::insert(&mut player);
+        (player, audio_thread)
     }
 
     #[kithara::test(native)]
@@ -592,7 +593,7 @@ mod tests {
 
     #[kithara::test]
     fn remove_all_items_releases_the_slot_and_allows_fresh_playback() {
-        let player = seated();
+        let (player, _audio_thread) = seated();
         player.play();
         assert!(player.slot().is_some(), "setup must take the deck's slot");
 

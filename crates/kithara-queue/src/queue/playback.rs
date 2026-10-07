@@ -352,7 +352,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn spurious_item_did_play_to_end_is_filtered() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let _a = queue.append("https://example.com/a.mp3");
         let _b = queue.append("https://example.com/b.mp3");
 
@@ -377,7 +377,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn eof_after_queue_end_does_not_restart_from_first_track() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let a = TrackId::allocate();
         let b = TrackId::allocate();
         queue.tracks.records_mut().extend([
@@ -416,7 +416,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn play_retries_the_current_track_after_its_prefetch_failed() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let id = queue
             .append("https://example.com/a.mp3")
             .expect("open queue accepts a track");
@@ -437,7 +437,7 @@ mod tests {
     #[case::append(false)]
     #[case::insert(true)]
     async fn play_promotes_the_initial_pending_prefetch(#[case] insert: bool) {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let id = if insert {
             queue.insert("https://example.com/a.mp3", None)
         } else {

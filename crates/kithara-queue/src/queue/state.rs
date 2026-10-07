@@ -287,6 +287,7 @@ pub(crate) mod tests {
     };
     use kithara_play::{
         PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, SessionBinding,
+        mock::SessionMock,
         player::{Player, PlayerControlSource},
     };
     use kithara_test_utils::kithara;
@@ -311,10 +312,12 @@ pub(crate) mod tests {
     }
 
     /// A queue the mock session holds, seated the way a Host's insert seats it.
-    pub(in crate::queue) fn make_queue() -> Queue<TestPools> {
+    /// A queue its Host has seated on a deck slot, with the mock that answers
+    /// as the slot's audio thread.
+    pub(in crate::queue) fn make_queue() -> (Queue<TestPools>, Arc<SessionMock>) {
         let mut queue = Queue::new(queue_config());
-        kithara_play::mock::insert(&mut queue);
-        queue
+        let audio_thread = kithara_play::mock::insert(&mut queue);
+        (queue, audio_thread)
     }
 
     pub(crate) fn test_session() -> SessionBinding {
@@ -363,7 +366,7 @@ pub(crate) mod tests {
 
     #[kithara::test]
     fn queue_new_constructs_without_panic() {
-        let _queue = make_queue();
+        let (_queue, _audio_thread) = make_queue();
     }
 
     #[kithara::test]
@@ -396,7 +399,7 @@ pub(crate) mod tests {
 
     #[kithara::test]
     fn a_control_command_runs_when_the_holder_drains_the_queue() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let control = queue.control();
         let (woke_tx, woke_rx) = mpsc::channel();
         Player::hold(&mut queue, Waker::from(Arc::new(Wakes(woke_tx))));
@@ -439,7 +442,7 @@ pub(crate) mod tests {
     /// until the executor holding the queue drains it.
     #[kithara::test(tokio)]
     async fn a_load_reaches_its_track_only_when_the_holder_drains_the_queue() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let (woke_tx, mut woke_rx) = unbounded_channel();
         Player::hold(&mut queue, Waker::from(Arc::new(WakesTask(woke_tx))));
         let id = queue
@@ -467,7 +470,7 @@ pub(crate) mod tests {
 
     #[kithara::test]
     fn a_closed_queue_rejects_mutation() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
 
         Player::close(&mut queue).expect("unstarted fixture must close");
 
@@ -481,7 +484,7 @@ pub(crate) mod tests {
 
     #[kithara::test]
     fn retained_config_follows_live_queue_controls() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         queue.set_action_at_item_end(ActionAtItemEnd::Pause);
         queue.set_playback_order(PlaybackOrder::Shuffle);
         let mut crossfade = queue.crossfade_settings();
@@ -502,7 +505,7 @@ pub(crate) mod tests {
     /// that change.
     #[kithara::test]
     fn a_queue_event_is_heard_with_the_view_that_shows_it() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let control = queue.control();
         let id = queue
             .append("https://example.com/a.mp3")
@@ -543,14 +546,14 @@ pub(crate) mod tests {
 
     #[kithara::test]
     fn cached_position_unknown_after_construction() {
-        let queue = make_queue();
+        let (queue, _audio_thread) = make_queue();
         assert_eq!(queue.position_seconds(), None);
         assert_eq!(queue.control().position_seconds(), None);
     }
 
     #[kithara::test]
     fn select_phase_idle_after_construction() {
-        let queue = make_queue();
+        let (queue, _audio_thread) = make_queue();
         assert!(matches!(queue.pending_select, SelectPhase::Idle));
     }
 }

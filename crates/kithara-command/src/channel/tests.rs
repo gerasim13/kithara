@@ -686,6 +686,21 @@ fn a_dropped_inbox_answers_every_batch_it_holds() {
     );
 }
 
+/// An inbox that dropped answers nothing more, so a later send comes back
+/// whole instead of waiting on a ring nobody drains.
+#[kithara::test]
+fn a_batch_sent_after_the_inbox_dropped_comes_back_closed() {
+    let (mut sender, inbox) = pair(8, 0);
+
+    drop(inbox);
+
+    let Err(SendError::Closed(returned)) = sender.send(When::Next, batch(1, &[])) else {
+        panic!("a send to a dropped inbox was taken");
+    };
+    assert_eq!(returned.commands, [1], "the batch comes back whole");
+    assert_eq!(sender.receipts().count(), 0, "nothing was sent to answer");
+}
+
 /// An owner holding its sender is woken by each receipt, so it reads the
 /// answer without waiting for a tick of its own.
 #[kithara::test]

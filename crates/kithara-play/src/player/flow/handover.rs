@@ -373,7 +373,7 @@ mod tests {
                 .worker(worker())
                 .build(),
         );
-        mock::insert(&mut player);
+        let _audio_thread = mock::insert(&mut player);
         player.ensure_slot().expect("slot allocation must succeed");
         let mut rx = player.subscribe();
 
@@ -419,7 +419,7 @@ mod tests {
                 .worker(worker())
                 .build(),
         );
-        mock::insert(&mut player);
+        let _audio_thread = mock::insert(&mut player);
         player.ensure_slot().expect("slot allocation must succeed");
         let next = TrackId::allocate();
         if let Some(pending_slot) = player.phase.lock().pending_mut() {

@@ -262,7 +262,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn len_is_empty_reflect_append() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         assert!(queue.is_empty());
         let _ = append(&mut queue, "https://example.com/a.mp3");
         let _ = append(&mut queue, "https://example.com/b.mp3");
@@ -271,7 +271,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn append_returns_monotonic_ids_and_emits_track_added() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let mut rx = queue.subscribe();
         let a = append(&mut queue, "https://example.com/a.mp3");
         let b = append(&mut queue, "https://example.com/b.mp3");
@@ -296,7 +296,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn remove_drops_from_queue_and_emits() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let a = append(&mut queue, "https://example.com/a.mp3");
         let _b = append(&mut queue, "https://example.com/b.mp3");
         let mut rx = queue.subscribe();
@@ -316,7 +316,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn clear_empties_queue() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let _a = append(&mut queue, "https://example.com/a.mp3");
         let _b = append(&mut queue, "https://example.com/b.mp3");
         assert_eq!(queue.len(), 2);
@@ -326,7 +326,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn clear_discards_old_eof_before_reinsert() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let old = queue
             .append("https://example.com/old.mp3")
             .expect("open queue accepts a track");
@@ -359,7 +359,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn set_tracks_replaces_queue() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let _a = append(&mut queue, "https://example.com/a.mp3");
         queue
             .set_tracks(
@@ -377,7 +377,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn insert_after_id_places_next() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let a = append(&mut queue, "https://example.com/a.mp3");
         let b = append(&mut queue, "https://example.com/b.mp3");
         let mid = queue
@@ -390,7 +390,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn track_source_is_keyed_by_id_across_removal() {
-        let mut queue = make_queue();
+        let (mut queue, _audio_thread) = make_queue();
         let a = append(&mut queue, "https://example.com/a.mp3");
         let b = append(&mut queue, "https://example.com/b.mp3");
 

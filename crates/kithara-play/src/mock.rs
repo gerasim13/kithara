@@ -32,6 +32,7 @@ pub struct SessionMock {
 ///
 /// # Panics
 /// Panics when `player` is already bound to a session.
+#[must_use = "the mock answers as the slot's audio thread; dropping it closes the deck"]
 pub fn insert<P: PlayerControlSource>(player: &mut P) -> Arc<SessionMock> {
     let mock = Arc::new(SessionMock::default());
     player

@@ -258,7 +258,7 @@ mod tests {
     };
 
     /// A started player holding one slot — the slot the phase calls current.
-    fn player_with_slot() -> (PlayerImpl<TestPools>, SlotId) {
+    fn player_with_slot() -> (PlayerImpl<TestPools>, SlotId, Arc<mock::SessionMock>) {
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         let mut player = PlayerImpl::new(
             PlayerConfig::builder()
@@ -266,9 +266,9 @@ mod tests {
                 .worker(worker)
                 .build(),
         );
-        mock::insert(&mut player);
+        let audio_thread = mock::insert(&mut player);
         let slot = player.ensure_slot().expect("slot allocation must succeed");
-        (player, slot)
+        (player, slot, audio_thread)
     }
 
     /// Put the slot mid-crossfade: the successor is loaded into this same
@@ -375,7 +375,7 @@ mod tests {
 
     #[kithara::test]
     fn end_of_the_held_slot_is_the_leading_track() {
-        let (player, slot) = player_with_slot();
+        let (player, slot, _audio_thread) = player_with_slot();
         let mut rx = player.subscribe();
 
         Notifier::new(&player).dispatch_notification(slot, &eof_notification());
@@ -396,7 +396,7 @@ mod tests {
     /// while a different track plays; acting on its end cuts that track.
     #[kithara::test]
     fn end_of_a_slot_the_phase_does_not_hold_is_a_background_track() {
-        let (player, slot) = player_with_slot();
+        let (player, slot, _audio_thread) = player_with_slot();
         let background = SlotId::new(slot.value() + 1);
         let mut rx = player.subscribe();
 
@@ -427,7 +427,7 @@ mod tests {
     /// second time off an end that was already accounted for.
     #[kithara::test]
     fn the_outgoing_half_of_a_crossfade_is_not_the_leading_track() {
-        let (player, slot) = player_with_slot();
+        let (player, slot, _audio_thread) = player_with_slot();
         activate_pending(&player, consts::PROMOTED);
         let mut rx = player.subscribe();
 
@@ -451,7 +451,7 @@ mod tests {
     /// being heard, so its own end must still drive the advance.
     #[kithara::test]
     fn the_promoted_half_of_a_crossfade_is_the_leading_track() {
-        let (player, slot) = player_with_slot();
+        let (player, slot, _audio_thread) = player_with_slot();
         activate_pending(&player, consts::PROMOTED);
         let mut rx = player.subscribe();
 
@@ -474,7 +474,7 @@ mod tests {
     /// would otherwise announce itself as the item being heard.
     #[kithara::test]
     fn start_of_a_slot_the_phase_does_not_hold_is_a_background_item() {
-        let (player, slot) = player_with_slot();
+        let (player, slot, _audio_thread) = player_with_slot();
         let background = SlotId::new(slot.value() + 1);
         let mut rx = player.subscribe();
 

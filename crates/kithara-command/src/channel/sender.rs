@@ -7,7 +7,7 @@ use ringbuf::{
     traits::{Consumer, Producer, Split},
 };
 
-use super::Inbox;
+use super::{Inbox, gate::Gate};
 use crate::{
     config::ChannelConfig,
     protocol::{Batch, Protocol, Seq, Target, When},
@@ -23,6 +23,9 @@ pub enum SendError<P: Protocol> {
     /// The basis names a target the channel does not track.
     #[error("the batch basis names a target outside the channel")]
     Target(Batch<P>),
+    /// The inbox is gone: nothing would answer the batch.
+    #[error("the channel's inbox is gone")]
+    Closed(Batch<P>),
 }
 
 /// A batch on its way to the executor, numbered at send.
@@ -50,6 +53,7 @@ pub struct Sender<P: Protocol> {
     /// Rung by the executor with each receipt; wakes `holder` while one holds.
     answered: Arc<AtomicWaker>,
     holder: Option<Waker>,
+    gate: Arc<Gate>,
     next: Seq,
     credits: usize,
     targets: usize,
@@ -101,9 +105,9 @@ impl<P: Protocol> Sender<P> {
     /// # Errors
     ///
     /// Returns the batch whole as [`SendError::Target`] when its basis names a
-    /// target at or past the configured count, and as [`SendError::Full`] when
-    /// the channel's capacity of batches is already in flight. Neither spends
-    /// a number.
+    /// target at or past the configured count, as [`SendError::Closed`] once
+    /// the inbox is gone, and as [`SendError::Full`] when the channel's
+    /// capacity of batches is already in flight. None spends a number.
     pub fn send(&mut self, when: When<P::Clock>, batch: Batch<P>) -> Result<Seq, SendError<P>> {
         if batch
             .basis
@@ -112,6 +116,18 @@ impl<P: Protocol> Sender<P> {
         {
             return Err(SendError::Target(batch));
         }
+        if !self.gate.enter() {
+            return Err(SendError::Closed(batch));
+        }
+        let pushed = self.push(when, batch);
+        self.gate.leave();
+        let seq = pushed?;
+        self.doorbell.0.wake();
+        Ok(seq)
+    }
+
+    /// Spends a credit and a number on `batch` and pushes it into the ring.
+    fn push(&mut self, when: When<P::Clock>, batch: Batch<P>) -> Result<Seq, SendError<P>> {
         let Some(credits) = self.credits.checked_sub(1) else {
             return Err(SendError::Full(batch));
         };
@@ -121,7 +137,6 @@ impl<P: Protocol> Sender<P> {
         }
         self.credits = credits;
         self.next = seq.next();
-        self.doorbell.0.wake();
         Ok(seq)
     }
 }
@@ -138,7 +153,9 @@ pub fn channel<P: Protocol>(config: ChannelConfig) -> (Sender<P>, Inbox<P>) {
     let (answers, receipts) = HeapRb::<Receipt<P>>::new(capacity).split();
     let wake = Arc::new(AtomicWaker::new());
     let answered = Arc::new(AtomicWaker::new());
+    let gate = Arc::new(Gate::default());
     let sender = Sender {
+        gate: Arc::clone(&gate),
         answered: Arc::clone(&answered),
         holder: None,
         commands,
@@ -148,5 +165,8 @@ pub fn channel<P: Protocol>(config: ChannelConfig) -> (Sender<P>, Inbox<P>) {
         credits: capacity,
         targets: config.targets,
     };
-    (sender, Inbox::new(pending, answers, wake, answered, config))
+    (
+        sender,
+        Inbox::new(pending, answers, wake, answered, gate, config),
+    )
 }
