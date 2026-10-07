@@ -7,7 +7,10 @@ use std::{
 
 use pin_project_lite::pin_project;
 
-use super::system::{self, credit::AsyncPollGuard, gate::TaskGate};
+use super::{
+    join::{Join, hand_over},
+    system::{self, credit::AsyncPollGuard, gate::TaskGate},
+};
 use crate::sync::Arc;
 
 pin_project! {
@@ -18,16 +21,19 @@ pin_project! {
     /// window: a task whose waker has fired but which has not yet been re-polled
     /// stays counted, so the virtual clock cannot advance past a runnable task.
     /// Installed at the spawn chokepoint ([`crate::tokio::task::spawn`]) and on the
-    /// test root task, so every async task on the sim path participates.
+    /// test root task, so every async task on the sim path participates. A
+    /// spawned task's slot outlives its end until its joiner is woken (see
+    /// [`Join`]).
     pub struct Participating<F> {
         #[pin]
         fut: F,
         gate: Arc<TaskGate>,
+        join: Option<Arc<Join>>,
     }
 
     impl<F> PinnedDrop for Participating<F> {
         fn drop(this: Pin<&mut Self>) {
-            this.gate.on_drop();
+            hand_over(this.join.as_deref(), this.gate.on_drop());
         }
     }
 }
@@ -52,7 +58,7 @@ impl<F: Future> Future for Participating<F> {
         };
         match outcome {
             Poll::Ready(out) => {
-                this.gate.complete();
+                hand_over(this.join.as_deref(), Some(this.gate.complete()));
                 Poll::Ready(out)
             }
             Poll::Pending => {
@@ -75,5 +81,14 @@ pub fn participate<F: Future>(fut: F, loc: &'static Location<'static>) -> Partic
     Participating {
         fut,
         gate: system::async_acquire(loc),
+        join: None,
+    }
+}
+
+impl<F> Participating<F> {
+    /// The task's `JoinHandle` holds `join`: the task's end hands its slot there.
+    pub(crate) fn joined(mut self, join: Arc<Join>) -> Self {
+        self.join = Some(join);
+        self
     }
 }

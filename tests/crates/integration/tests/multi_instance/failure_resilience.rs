@@ -9,7 +9,7 @@ use kithara::{
         sync::Arc,
         thread,
         time::{Duration, sleep},
-        tokio::task::{BlockingJoinHandle, spawn, spawn_blocking},
+        tokio::task::{JoinHandle, spawn, spawn_blocking},
     },
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
@@ -131,7 +131,7 @@ async fn spawn_instance(
     id: usize,
     wav_data: &Arc<Vec<u8>>,
     cancel_after: Option<u64>,
-) -> BlockingJoinHandle<Outcome> {
+) -> JoinHandle<Outcome> {
     let server = create_server(wav_data).await;
     let temp = TestTempDir::new();
     let cancel = CancelToken::never();
@@ -172,7 +172,7 @@ async fn run_failure_resilience(
     cancelled_count: usize,
 ) {
     let wav_data = Arc::new(concurrent_wav.to_vec());
-    let mut handles: Vec<BlockingJoinHandle<Outcome>> = Vec::new();
+    let mut handles: Vec<JoinHandle<Outcome>> = Vec::new();
 
     for i in 0..healthy_count {
         handles.push(spawn_instance(i, &wav_data, None).await);

@@ -52,7 +52,7 @@ pub(crate) enum Field {
 pub(crate) struct Entry {
     pub(crate) lane: String,
     pub(crate) timeout: u32,
-    pub(crate) depth: u32,
+    pub(crate) history: bool,
     pub(crate) artifact: Option<CiLaneArtifact>,
     pub(crate) queue: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -63,7 +63,7 @@ pub(crate) struct Entry {
 pub(crate) struct Dependent {
     pub(crate) lane: String,
     pub(crate) timeout: u32,
-    pub(crate) depth: u32,
+    pub(crate) history: bool,
     pub(crate) needs: Vec<String>,
     pub(crate) artifact: Option<CiLaneArtifact>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -76,8 +76,8 @@ pub(crate) struct Selection {
     pub(crate) dependent: Vec<Dependent>,
 }
 
-/// The kinds this fleet reads: a lane's own answer where it gives one, the
-/// shared answer otherwise.
+/// The kinds this fleet reads: its declared answer, including an explicit
+/// empty GitHub list, or the shared answer when no GitHub list is declared.
 fn membership(lane: &CiLaneConfig, fleet: Fleet) -> &[String] {
     if fleet == Fleet::Github {
         return lane.kinds_github.as_deref().unwrap_or(&lane.kinds);
@@ -152,7 +152,7 @@ pub(crate) fn render(
         .map(|(name, lane)| Entry {
             lane: name.clone(),
             timeout: lane.timeout_minutes,
-            depth: lane.fetch_depth,
+            history: lane.history,
             artifact: lane.artifact.clone(),
             queue: lane.queue.clone(),
             runner: github_runner(lane, args.kind),
@@ -167,8 +167,9 @@ pub(crate) fn render(
     // still has to answer for this fleet's kind the same way a matrix lane
     // would, or a producer this fleet never runs would drag in a consumer it
     // never asked for either. By name (`--only` naming the producer), the
-    // consumer's own kind does not gate it. Empty membership still leaves the
-    // consumer in its dedicated workflow.
+    // consumer's own membership does not gate it, because that is the whole
+    // point of asking for one lane by name. An explicit empty GitHub list
+    // still excludes the consumer from that fleet.
     let present: BTreeSet<&str> = matrix.iter().map(|entry| entry.lane.as_str()).collect();
     let dependent: Vec<Dependent> = lanes
         .iter()
@@ -181,14 +182,16 @@ pub(crate) fn render(
                 .any(|need| present.contains(need.as_str()))
         })
         .filter(|(_, lane)| {
-            let membership = membership(lane, args.fleet);
-            !membership.is_empty()
-                && (!args.only.is_empty() || membership.iter().any(|entry| entry == kind))
+            !(args.fleet == Fleet::Github && lane.kinds_github.as_ref().is_some_and(Vec::is_empty))
+                && (!args.only.is_empty()
+                    || membership(lane, args.fleet)
+                        .iter()
+                        .any(|entry| entry == kind))
         })
         .map(|(name, lane)| Dependent {
             lane: name.clone(),
             timeout: lane.timeout_minutes,
-            depth: lane.fetch_depth,
+            history: lane.history,
             needs: lane.needs.clone(),
             artifact: lane.artifact.clone(),
             runner: github_runner(lane, args.kind),
@@ -376,7 +379,7 @@ mod tests {
         assert_eq!(dependent, ["deep-stress-report"]);
         assert_eq!(
             field(&selection, Some(Field::Dependent)).expect("the dependent field renders"),
-            r#"[{"lane":"deep-stress-report","timeout":30,"depth":0,"needs":["deep-stress"],"artifact":{"name":"quality-report","path":"target/consolidated-quality-report.md","when":"failure"}}]"#
+            r#"[{"lane":"deep-stress-report","timeout":30,"history":false,"needs":["deep-stress"],"artifact":{"name":"quality-report","path":"target/consolidated-quality-report.md","when":"failure"}}]"#
         );
     }
 
@@ -724,5 +727,195 @@ kinds_github = []
             .filter(|test_lane| !carriers.contains_key(test_lane))
             .collect();
         assert!(unrun.is_empty(), "main runs no lane that carries {unrun:?}");
+    }
+
+    #[test]
+    fn configured_feature_parts_are_both_github_gates_and_gitlab_keeps_full() -> Result<()> {
+        let ctx = Ctx::load()?;
+        let lanes = KitharaExt::from_ctx(&ctx)?.ci.lanes;
+        let parts = ["deps-features-invariants", "deps-features-workspace"];
+        for kind in [PipelineKind::Main, PipelineKind::Nightly] {
+            for only in [Vec::new(), vec!["all"]] {
+                let selected = render(&lanes, &args("gate", kind, &only))?;
+                let features = selected
+                    .matrix
+                    .iter()
+                    .filter(|entry| entry.lane.starts_with("deps-features"))
+                    .map(|entry| entry.lane.as_str())
+                    .collect::<Vec<_>>();
+                assert_eq!(features, parts);
+            }
+            for name in parts {
+                let lane = &lanes[name];
+                assert_eq!(lane.timeout_minutes, 60);
+                assert!(lane.needs.is_empty());
+            }
+        }
+        let selected = render(&lanes, &args("gate", PipelineKind::Nightly, &parts))?;
+        assert_eq!(
+            selected
+                .matrix
+                .iter()
+                .map(|entry| entry.lane.as_str())
+                .collect::<Vec<_>>(),
+            parts,
+        );
+        assert!(
+            render(
+                &lanes,
+                &args("gate", PipelineKind::Nightly, &["deps-features"]),
+            )
+            .is_err(),
+            "the old full lane must not silently stand in for both parts on GitHub",
+        );
+        let weekly = render(&lanes, &args("gate", PipelineKind::Weekly, &[]))?;
+        assert!(
+            weekly
+                .matrix
+                .iter()
+                .all(|entry| !entry.lane.starts_with("deps-features")),
+        );
+        let weekly = render(&lanes, &args("gate", PipelineKind::Weekly, &["all"]))?;
+        let features = weekly
+            .matrix
+            .iter()
+            .filter(|entry| entry.lane.starts_with("deps-features"))
+            .map(|entry| entry.lane.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(features, parts);
+        for only in [Vec::new(), vec!["all"]] {
+            let mut weekly = args("gate", PipelineKind::Weekly, &only);
+            weekly.fleet = Fleet::Gitlab;
+            let selected = render(&lanes, &weekly)?;
+            let features = selected
+                .matrix
+                .iter()
+                .filter(|entry| entry.lane.starts_with("deps-features"))
+                .map(|entry| entry.lane.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(features, ["deps-features-full"]);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn github_membership_distinguishes_inheritance_exclusion_and_override() -> Result<()> {
+        for (own, main_default, weekly_default, full, named) in [
+            (None, 0, 1, 1, true),
+            (Some(Vec::new()), 0, 0, 0, false),
+            (Some(vec!["main".to_owned()]), 1, 0, 1, true),
+        ] {
+            let mut configured = lane("gate", &["weekly"], &[]);
+            configured.kinds_github = own;
+            let catalog = BTreeMap::from([("feature-check".to_owned(), configured)]);
+            for (kind, default) in [
+                (PipelineKind::Main, main_default),
+                (PipelineKind::Weekly, weekly_default),
+            ] {
+                let selected = render(&catalog, &args("gate", kind, &[]))?;
+                assert_eq!(selected.matrix.len(), default);
+                let selected = render(&catalog, &args("gate", kind, &["all"]))?;
+                assert_eq!(selected.matrix.len(), full);
+                let selected = render(&catalog, &args("gate", kind, &["feature-check"]));
+                if named {
+                    assert_eq!(selected?.matrix.len(), 1);
+                } else {
+                    let selected = selected?;
+                    assert!(selected.matrix.is_empty());
+                    assert!(selected.dependent.is_empty());
+                }
+                let mut gitlab = args("gate", kind, &[]);
+                gitlab.fleet = Fleet::Gitlab;
+                let default = usize::from(kind == PipelineKind::Weekly);
+                assert_eq!(render(&catalog, &gitlab)?.matrix.len(), default);
+                for only in [vec!["all"], vec!["feature-check"]] {
+                    gitlab.only = only.into_iter().map(str::to_owned).collect();
+                    assert_eq!(render(&catalog, &gitlab)?.matrix.len(), 1);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn an_explicit_github_exclusion_cannot_follow_a_selected_producer() -> Result<()> {
+        for (own, main_default, weekly_default, requested) in [
+            (None, 0, 1, 1),
+            (Some(Vec::new()), 0, 0, 0),
+            (Some(vec!["main".to_owned()]), 1, 0, 1),
+        ] {
+            let mut dependent = lane("deep", &["weekly"], &["producer"]);
+            dependent.kinds_github = own;
+            let catalog = BTreeMap::from([
+                (
+                    "producer".to_owned(),
+                    lane("deep", &["main", "weekly"], &[]),
+                ),
+                ("report".to_owned(), dependent),
+            ]);
+            for (kind, default) in [
+                (PipelineKind::Main, main_default),
+                (PipelineKind::Weekly, weekly_default),
+            ] {
+                let selected = render(&catalog, &args("deep", kind, &[]))?;
+                assert_eq!(selected.dependent.len(), default);
+                for only in [&["all"][..], &["producer"][..]] {
+                    let selected = render(&catalog, &args("deep", kind, only))?;
+                    assert_eq!(selected.dependent.len(), requested);
+                }
+                let mut gitlab = args("deep", kind, &[]);
+                gitlab.fleet = Fleet::Gitlab;
+                let default = usize::from(kind == PipelineKind::Weekly);
+                assert_eq!(render(&catalog, &gitlab)?.dependent.len(), default);
+                for only in [vec!["all"], vec!["producer"]] {
+                    gitlab.only = only.into_iter().map(str::to_owned).collect();
+                    assert_eq!(render(&catalog, &gitlab)?.dependent.len(), 1);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn gitlab_quality_report_keeps_a_selected_producer_without_shared_kinds() -> Result<()> {
+        let ctx = Ctx::load()?;
+        let mut lanes = KitharaExt::from_ctx(&ctx)?.ci.lanes;
+        assert!(lanes["quality-report"].kinds.is_empty());
+        lanes
+            .get_mut("quality-assess")
+            .expect("the producer is configured")
+            .kinds = vec!["weekly".to_owned()];
+        let mut request = args("quality", PipelineKind::Main, &["quality-assess"]);
+        request.fleet = Fleet::Gitlab;
+        let selected = render(&lanes, &request)?;
+        assert_eq!(
+            selected
+                .matrix
+                .iter()
+                .map(|entry| entry.lane.as_str())
+                .collect::<Vec<_>>(),
+            ["quality-assess"],
+        );
+        assert_eq!(
+            selected
+                .dependent
+                .iter()
+                .map(|entry| entry.lane.as_str())
+                .collect::<Vec<_>>(),
+            ["quality-report"],
+        );
+        let selected = render(
+            &lanes,
+            &args("quality", PipelineKind::Nightly, &["quality-assess"]),
+        )?;
+        assert_eq!(
+            selected
+                .dependent
+                .iter()
+                .map(|entry| entry.lane.as_str())
+                .collect::<Vec<_>>(),
+            ["quality-report"],
+        );
+        Ok(())
     }
 }

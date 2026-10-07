@@ -1185,38 +1185,102 @@
   <require os> linux
   <require tools> cargo just
   just deps deny
-# deps-features / branch
+# deps-features-full / branch
   <require os> linux
   <require tools> cargo just
   just deps hack
-# deps-features / platforms
+# deps-features-full / platforms
   <require os> linux
   <require tools> cargo just
   just deps hack
-# deps-features / merge-request
+# deps-features-full / merge-request
   <require os> linux
   <require tools> cargo just
   just deps hack
-# deps-features / quarantine
+# deps-features-full / quarantine
   <require os> linux
   <require tools> cargo just
   just deps hack
-# deps-features / main
+# deps-features-full / main
   <require os> linux
   <require tools> cargo just
   just deps hack
-# deps-features / nightly
+# deps-features-full / nightly
   <require os> linux
   <require tools> cargo just
   just deps hack
-# deps-features / weekly
+# deps-features-full / weekly
   <require os> linux
   <require tools> cargo just
   just deps hack
-# deps-features / release
+# deps-features-full / release
   <require os> linux
   <require tools> cargo just
   just deps hack
+# deps-features-invariants / branch
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-invariants
+# deps-features-invariants / platforms
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-invariants
+# deps-features-invariants / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-invariants
+# deps-features-invariants / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-invariants
+# deps-features-invariants / main
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-invariants
+# deps-features-invariants / nightly
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-invariants
+# deps-features-invariants / weekly
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-invariants
+# deps-features-invariants / release
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-invariants
+# deps-features-workspace / branch
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-workspace
+# deps-features-workspace / platforms
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-workspace
+# deps-features-workspace / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-workspace
+# deps-features-workspace / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-workspace
+# deps-features-workspace / main
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-workspace
+# deps-features-workspace / nightly
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-workspace
+# deps-features-workspace / weekly
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-workspace
+# deps-features-workspace / release
+  <require os> linux
+  <require tools> cargo just
+  just deps hack-workspace
 # deps-semver / branch
   <require os> linux
   <require tools> cargo just

@@ -9,7 +9,7 @@ use kithara::{
     download::Downloader,
     platform::time::Duration,
     play::{ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_devtools::viz::trace::{TraceRecord, TraceRecordKind};
 use kithara_integration_tests::{
@@ -62,20 +62,24 @@ async fn queue_playback_architecture(#[future(awt)] served_mp3: (TestServerHelpe
     let config = resource_config(url.as_str(), downloader, store);
     let mut events = queue.subscribe();
 
-    let track_id = queue
-        .append(TrackSource::Config(Box::new(config)))
+    let track_id = harness
+        .run(&queue, move |q| {
+            q.append(TrackSource::Config(Box::new(config)))
+        })
+        .await
         .expect("append local MP3");
     wait_for_loader_done_event(&mut events, &queue, track_id, Duration::from_secs(30))
         .await
         .expect("local MP3 load");
-    queue
-        .select(track_id, Transition::None)
+    harness
+        .run(&queue, move |q| q.select(track_id, Transition::None))
+        .await
         .expect("select loaded MP3");
-    queue.play();
+    harness.run(&queue, QueueControl::play).await;
 
     let peak = kithara::platform::time::timeout(Duration::from_secs(30), async {
         for _ in 0..RENDER_BLOCK_BUDGET {
-            let _ = queue.tick();
+            let _ = harness.run(&queue, QueueControl::tick).await;
             let block = harness.render(BLOCK_FRAMES).await;
             let peak = block.iter().copied().map(f32::abs).fold(0.0, f32::max);
             if peak > 0.005 {

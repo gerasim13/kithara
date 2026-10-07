@@ -44,9 +44,10 @@ on:
 # Not inherited from the caller: a called workflow gets its own environment.
 env:
   CARGO_TERM_COLOR: always
-  # Matrix selection compiles xtask, so keep that build across ephemeral jobs.
+  # Matrix selection compiles xtask, so keep that build across ephemeral jobs,
+  # in the one bootstrap every runner of the host shares.
   CARGO_TARGET_DIR: /cache/target
-  KITHARA_CI_CACHE_ROOT: /cache/target/.kithara-ci
+  KITHARA_CI_CACHE_ROOT: /cache/lanes/.kithara-ci
   RUST_BACKTRACE: 1
 
 jobs:
@@ -117,7 +118,7 @@ jobs:
       lane: ${{ matrix.lane }}
       kind: ${{ inputs.kind }}
       timeout-minutes: ${{ matrix.timeout }}
-      fetch-depth: ${{ matrix.depth }}
+      history: ${{ matrix.history }}
       artifact-name: ${{ matrix.artifact.name || '' }}
       artifact-path: ${{ matrix.artifact.path || '' }}
       artifact-when: ${{ matrix.artifact.when || 'always' }}
@@ -142,7 +143,7 @@ jobs:
       lane: ${{ matrix.lane }}
       kind: ${{ inputs.kind }}
       timeout-minutes: ${{ matrix.timeout }}
-      fetch-depth: ${{ matrix.depth }}
+      history: ${{ matrix.history }}
       download: ${{ join(matrix.needs, ' ') }}
       artifact-name: ${{ matrix.artifact.name || '' }}
       artifact-path: ${{ matrix.artifact.path || '' }}

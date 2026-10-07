@@ -1,11 +1,8 @@
 use kithara_audio::{AudioConfig, AudioObserver, ConsumerWakeMode, ResamplerBackend};
 use kithara_bufpool::HasPool;
 use kithara_decode::DecodeError;
-use kithara_download::{Downloader, DownloaderConfig};
 use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::HlsConfig;
-use kithara_net::{HttpClient, NetOptions};
-use kithara_platform::CancelScope;
 use url::Url;
 
 use super::{ResourceConfig, ResourceSrc};
@@ -52,18 +49,9 @@ where
         let mut file_patch = self.file;
         let configured_extension = file_patch.extension.take();
         let extension = named_extension.or(configured_extension);
-        let downloader = self.downloader.clone().unwrap_or_else(|| {
-            let dl_cancel = CancelScope::new(self.cancel.clone()).token();
-            let client = HttpClient::new(NetOptions::default(), pools.clone(), dl_cancel.child());
-            Downloader::new(
-                DownloaderConfig::for_client(client)
-                    .cancel(dl_cancel)
-                    .build(),
-            )
-        });
         let mut file_config = FileConfig::for_src(file_src)
             .store(self.store.clone())
-            .downloader(downloader)
+            .maybe_downloader(self.downloader.clone())
             .maybe_headers(self.headers.clone())
             .maybe_discriminator(self.discriminator.clone())
             .maybe_extension(extension.clone())

@@ -9,6 +9,7 @@ use kithara_platform::{
     tokio,
     tokio::sync::mpsc,
 };
+use kithara_test_utils::kithara;
 
 use super::{
     peers::{Peers, PollStats},
@@ -83,6 +84,11 @@ impl Registry {
     /// but no new peer/command activity occurred; the downloader
     /// watchdog uses this signal to avoid false panics during quiet
     /// periods.
+    ///
+    /// The tick reads the clock the ABR controller decides on: its deadlines,
+    /// the `now` it ticks with, and the enqueue stamps
+    /// [`BatchGroup::process`] measures queue waits from.
+    #[kithara::flash(true)]
     pub(crate) async fn tick(
         &mut self,
         inner: &DownloaderInner,

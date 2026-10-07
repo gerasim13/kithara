@@ -5,6 +5,7 @@ use kithara_platform::{
     sync::Mutex,
     time::{Duration, Instant},
 };
+use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::{decision::AbrDecision, pending::PendingState, view::AbrView};
@@ -52,8 +53,10 @@ impl AbrState {
     const NO_BANDWIDTH_CAP: u64 = 0;
     const NO_SWITCH: u64 = 0;
 
-    /// Build an `AbrState` with the initial variant set from `mode`.
+    /// Build an `AbrState` with the initial variant set from `mode`. The
+    /// session starts on the clock its ticks are evaluated on.
     #[must_use]
+    #[kithara::flash(true)]
     pub fn new(mode: AbrMode) -> Self {
         Self::new_at(mode, Instant::now())
     }

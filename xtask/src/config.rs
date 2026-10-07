@@ -92,10 +92,9 @@ pub(crate) struct CiLaneConfig {
     /// Pipeline kinds this lane runs in. Empty means the lane is reachable
     /// only by name, through a dispatch that asks for it.
     pub(crate) kinds: Vec<String>,
-    /// The GitHub fleet's answer where it honestly differs from `kinds`: 25
-    /// runners on one host buy a check per push that a single Mac mini can
-    /// only afford weekly. Omission uses `kinds`; an empty list leaves the
-    /// lane to its dedicated workflow.
+    /// The GitHub fleet's answer where it differs from `kinds`. Absence
+    /// inherits the shared membership; an explicit empty list excludes the
+    /// lane from GitHub's fan-out, including requests that name it.
     pub(crate) kinds_github: Option<Vec<String>>,
     /// A stable GitHub runner label for lanes whose persistent build cache
     /// must stay on one runner slot. Empty keeps the lane on the shared pool.
@@ -118,9 +117,10 @@ pub(crate) struct CiLaneConfig {
     #[serde(default)]
     pub(crate) publishes_sources: bool,
     pub(crate) timeout_minutes: u32,
-    /// Checkout depth. Zero is full history, which a lane comparing against a
-    /// base revision needs and a shallow clone does not carry.
-    pub(crate) fetch_depth: u32,
+    /// Whether the lane reads the history of the commit it checks out, as a
+    /// comparison against an earlier revision does. Without it the lane runs
+    /// on the tip alone.
+    pub(crate) history: bool,
     pub(crate) artifact: Option<CiLaneArtifact>,
     /// The concurrency group a lane wanting the whole host queues in.
     pub(crate) queue: Option<String>,
@@ -1575,6 +1575,86 @@ lane_unit_window_hours = 0
         assert!(
             error.to_string().contains("lane_unit_window_hours"),
             "the error must name the key: {error}"
+        );
+    }
+
+    #[test]
+    fn github_membership_parsing_keeps_absence_empty_and_nonempty_distinct() {
+        for (declaration, expected) in [
+            ("", None),
+            ("kinds_github = []", Some(Vec::new())),
+            (
+                "kinds_github = [\"main\", \"nightly\"]",
+                Some(vec!["main".to_owned(), "nightly".to_owned()]),
+            ),
+        ] {
+            let lane: super::CiLaneConfig = toml::from_str(&format!(
+                "kinds = [\"weekly\"]\nhistory = true\n{declaration}\n"
+            ))
+            .expect("the lane parses");
+            assert_eq!(lane.kinds_github, expected);
+            assert_eq!(lane.kinds, ["weekly"]);
+            assert!(lane.history);
+        }
+    }
+
+    #[test]
+    fn an_explicit_github_declination_allows_a_gitlab_only_machine() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.ci]
+pins = "ci-pins.toml"
+
+[ext.ci.lanes.apple-thing]
+cache_group = "macos"
+label = "Apple"
+os = "macos"
+program = "just"
+steps = [{ args = ["test"], label = "suite" }]
+role = "platforms"
+kinds = ["weekly"]
+kinds_github = []
+timeout_minutes = 30
+history = true
+"#,
+        );
+        let ci = KitharaExt::from_ctx(&ctx)
+            .expect("parse kithara extension")
+            .ci;
+        ci.validate().expect("GitLab owns the macOS schedule");
+        assert_eq!(ci.lanes["apple-thing"].kinds_github, Some(Vec::new()));
+        assert!(ci.lanes["apple-thing"].history);
+    }
+
+    #[test]
+    fn an_explicit_github_membership_still_rejects_unknown_kinds() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.ci]
+pins = "ci-pins.toml"
+
+[ext.ci.lanes.suite]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+program = "just"
+steps = [{ args = ["test"], label = "suite" }]
+role = "gate"
+kinds = ["weekly"]
+kinds_github = ["unknown"]
+timeout_minutes = 30
+"#,
+        );
+        let error = KitharaExt::from_ctx(&ctx)
+            .expect("parse kithara extension")
+            .ci
+            .validate()
+            .expect_err("an explicit membership must use known pipeline kinds");
+        assert!(
+            error
+                .to_string()
+                .contains("kinds_github names unknown kind"),
+            "{error}"
         );
     }
 }

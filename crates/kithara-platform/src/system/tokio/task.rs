@@ -1,6 +1,7 @@
 use std::panic::Location;
 
-/// Yield a scheduling opportunity to another runnable task.
+/// The fairness yield of a task that still has work: without the flash engine
+/// it is the same scheduler yield as `yield_now`.
 pub use super::backend::task::yield_now as yield_runnable;
 pub use super::backend::task::*;
 use super::runtime::Handle;
@@ -54,6 +55,3 @@ where
 {
     handle.spawn_blocking(f)
 }
-
-/// Result handle for synchronous work scheduled off the async worker.
-pub type BlockingJoinHandle<T> = JoinHandle<T>;

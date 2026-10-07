@@ -416,7 +416,7 @@ fn every_test_lane_judges_freshness_by_checksum() {
 }
 
 /// The kinds a lane enters the GitHub fan-out under: its own `kinds_github`
-/// where it is declared, the shared `kinds` otherwise, and none at all for a lane
+/// where it is present, the shared `kinds` otherwise, and none at all for a lane
 /// that is not Linux-only, because that fan-out has only Linux machines.
 fn github_membership(lane: &toml::Value) -> Vec<&str> {
     let os = lane.get("os").map_or_else(Vec::new, strings);
@@ -424,8 +424,7 @@ fn github_membership(lane: &toml::Value) -> Vec<&str> {
         return Vec::new();
     }
     lane.get("kinds_github")
-        .or_else(|| lane.get("kinds"))
-        .map_or_else(Vec::new, strings)
+        .map_or_else(|| lane.get("kinds").map_or_else(Vec::new, strings), strings)
 }
 
 fn strings(value: &toml::Value) -> Vec<&str> {
@@ -531,11 +530,11 @@ fn the_product_suite_lanes_differ_only_in_their_toggles_and_narrow_only_on_a_bra
                 .cloned()
                 .unwrap_or_default();
             let tools = lane.get("tools").map_or_else(Vec::new, strings);
-            let depth = lane
-                .get("fetch_depth")
-                .and_then(toml::Value::as_integer)
-                .unwrap_or(0);
-            recipes.push((name, (command, env, tools, depth)));
+            let history = lane
+                .get("history")
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(false);
+            recipes.push((name, (command, env, tools, history)));
         }
     }
     let Some(((first, recipe), rest)) = recipes.split_first() else {
@@ -550,5 +549,23 @@ fn the_product_suite_lanes_differ_only_in_their_toggles_and_narrow_only_on_a_bra
             other, recipe,
             "lanes `{first}` and `{name}` build or run the product suite differently"
         );
+    }
+}
+
+#[test]
+fn github_membership_keeps_an_explicit_empty_list_distinct_from_absence() {
+    for (declaration, expected) in [
+        ("", vec!["weekly"]),
+        ("kinds_github = []", Vec::new()),
+        (
+            "kinds_github = [\"main\", \"nightly\"]",
+            vec!["main", "nightly"],
+        ),
+    ] {
+        let lane: toml::Value = toml::from_str(&format!(
+            "os = \"linux\"\nkinds = [\"weekly\"]\n{declaration}\n"
+        ))
+        .expect("the membership fixture parses");
+        assert_eq!(github_membership(&lane), expected);
     }
 }

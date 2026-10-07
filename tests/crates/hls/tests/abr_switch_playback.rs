@@ -295,8 +295,7 @@ async fn packaged_abr_switch_keeps_player_continuity(
                 count, position, ..
             }) => {
                 if !switch_seen {
-                    let pace = position.saturating_sub(consumed);
-                    time::sleep(pace).await;
+                    time::sleep(position.saturating_sub(consumed)).await;
                 }
                 consumed = position;
                 if !reevaluated && consumed >= Duration::from_secs(2) {

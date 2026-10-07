@@ -1375,7 +1375,9 @@ kinds = ["weekly"]
 kinds_github = ["nightly"]
 timeout_minutes = 30
 
-[ext.ci.lanes.deps-features]
+# GitLab's weekly job keeps the complete recipe. GitHub runs both complete
+# parts below as independent gates, each with the existing one-hour backstop.
+[ext.ci.lanes.deps-features-full]
 cache_group = "linux"
 label = "dependency audit"
 os = "linux"
@@ -1384,23 +1386,41 @@ program = "just"
 steps = [{ args = ["deps", "hack"], label = "feature powerset check" }]
 role = "gate"
 kinds = ["weekly"]
-# Not on a branch push. This checks about 375 feature combinations - the count
-# moves as crates and features do - and the workspace is unpublished: the
-# configurations anyone actually builds are the ones the platform lanes name,
-# roughly a dozen. Paying 6.9 to 38.3 minutes of a one-host fleet on every push
-# of every branch to cover the rest is the wrong trade - 30.8 hours of runner time over 117 runs. On the default branch
-# it still gates what lands, and the nightly pass covers the days nothing
-# lands, which is where a dependency update would break a combination with no
-# push to blame. GitLab already said `weekly`; this is the same judgement.
+kinds_github = []
+timeout_minutes = 60
+
+[ext.ci.lanes.deps-features-workspace]
+cache_group = "linux"
+label = "dependency audit"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "deps",
+    "hack-workspace",
+  ], label = "workspace feature powerset check" },
+]
+role = "gate"
+kinds = []
 kinds_github = ["main", "nightly"]
-# The measurement, not a nap: over 117 runs on the fork's runners this lane took
-# 6.9 to 38.3 minutes green, with p95 at 29.5, and the six that failed all
-# failed inside eleven minutes - the shape of a check that stops at the first
-# broken combination, not of one that hangs. Three hours would let a wedged lane
-# hold a one-host fleet for the rest of an evening before anyone learned it was
-# stuck, which is what a backstop exists to prevent. Sixty is the next rung
-# above the worst run measured, and what every other gate lane of this weight
-# already says.
+timeout_minutes = 60
+
+[ext.ci.lanes.deps-features-invariants]
+cache_group = "linux"
+label = "dependency audit"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "deps",
+    "hack-invariants",
+  ], label = "invariant and product feature checks" },
+]
+role = "gate"
+kinds = []
+kinds_github = ["main", "nightly"]
 timeout_minutes = 60
 
 [ext.ci.lanes.deps-semver]
@@ -1413,7 +1433,7 @@ steps = [{ args = ["deps", "semver"], label = "public API compatibility" }]
 role = "gate"
 kinds = ["weekly", "release"]
 timeout_minutes = 60
-fetch_depth = 0
+history = true
 
 # One browser per job: the two engines fail for unrelated reasons, and Chromium
 # owns the WebCodecs target while Firefox keeps the full integration suite. Both
@@ -1770,11 +1790,14 @@ timeout_minutes = 360
 # The scan reports where it found something, not merely how many: without the
 # findings it announced "leaks found: 5" and stopped, which is a number nobody
 # can act on. Values stay redacted, so neither the log nor the report repeats a
-# secret while naming the rule, the file and the commit.
+# secret while naming the rule, the file and the commit. It scans every commit
+# behind the one checked out: a secret added and removed again is still in the
+# history that gets pushed.
 [ext.ci.lanes.linux-secrets]
 cache_group = "linux"
 label = "Linux"
 os = "linux"
+history = true
 tools = ["gitleaks"]
 program = "gitleaks"
 steps = [
@@ -1897,6 +1920,8 @@ steps = [
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
 kinds_github = ["main", "branch", "merge-request"]
+# The real-clock lane's budget: a build directory the host budget evicted
+# rebuilds whole at two jobs, which took 58 minutes on the trusted runner.
 timeout_minutes = 60
 
 [ext.ci.lanes.linux-doc]
@@ -2128,7 +2153,6 @@ timeout_minutes = 90
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 publishes_sources = true
@@ -2141,7 +2165,6 @@ timeout_minutes = 60
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["lint", "arch"], label = "architecture checks" }]
@@ -2155,7 +2178,6 @@ timeout_minutes = 30
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 steps = [
@@ -2174,7 +2196,6 @@ timeout_minutes = 60
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["perf", "memory"], label = "memory budgets" }]
@@ -2232,7 +2253,6 @@ cache_group = "linux"
 label = "Linux"
 freshness = "checksum"
 os = "linux"
-fetch_depth = 0
 tools = ["cargo", "just", "sccache"]
 program = "just"
 steps = [
@@ -2311,7 +2331,7 @@ timeout_minutes = 60
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 0
+history = true
 queue = "heavy-linux"
 tools = ["cargo", "just"]
 program = "just"
@@ -2336,7 +2356,6 @@ timeout_minutes = 360
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "similarity-report", path = "target/similarity" }
@@ -2350,7 +2369,6 @@ timeout_minutes = 120
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "architecture", path = "target/architecture" }
@@ -2374,7 +2392,6 @@ timeout_minutes = 120
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "coverage-risk", path = "target/quality-lab/\ncoverage/" }
@@ -2384,13 +2401,12 @@ kinds = []
 kinds_github = ["nightly", "weekly"]
 timeout_minutes = 240
 
-# `just ci health` fetches the `main` baseline itself with `git fetch
-# --depth=1`, so the checkout ahead of it only needs the tip.
+# `just ci health` fetches the `main` baseline itself before semver compares
+# against it, so the checkout ahead of it only needs the tip.
 [ext.ci.lanes.quality-health]
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "health-report", path = "target/health-report.md\ntarget/health-logs/" }
@@ -2408,7 +2424,6 @@ timeout_minutes = 120
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "quality-report", path = "target/consolidated-quality-report.md" }

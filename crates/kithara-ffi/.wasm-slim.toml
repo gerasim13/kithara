@@ -2,7 +2,8 @@
 template = "balanced"
 
 [size-budget]
-# Current dist baseline is ~28.2 MiB (~28931 KiB).
-target-size-kb = 29000
-warn-threshold-kb = 31000
-max-size-kb = 33000
+# The full uncompressed release bundle measures 4086 KiB.
+# Limits allow 10%, 16%, and 22% growth over that full uncompressed bundle.
+target-size-kb = 4500
+warn-threshold-kb = 4750
+max-size-kb = 5000

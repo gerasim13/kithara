@@ -1287,16 +1287,52 @@ fn scheduled_stress_respects_the_repository_switch_and_runner_pool() {
     let condition = mapping_field(stress, "if")
         .as_str()
         .expect("scheduled stress condition is a string");
+    let [_, weekly] = dispatch_crons(&workflow)[..] else {
+        panic!("one cron per cadence");
+    };
+    let cadence = dispatch_cadence(weekly);
+    let nightly_only = format!(
+        "({}) == 'nightly'",
+        cadence.trim_start_matches("${{ ").trim_end_matches(" }}")
+    );
     for contract in [
         "vars.KITHARA_STRESS_ENABLED == 'true'",
         "vars.KITHARA_STRESS_RUNNER_LABELS != ''",
-        "(inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'",
+        nightly_only.as_str(),
     ] {
         assert!(
             condition.contains(contract),
             "scheduled stress omits `{contract}`"
         );
     }
+}
+
+/// The crons `dispatch.yml` is scheduled by, in declaration order.
+fn dispatch_crons(workflow: &Value) -> Vec<&str> {
+    let triggers = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "on")
+        .as_mapping()
+        .expect("on is a mapping");
+    mapping_field(triggers, "schedule")
+        .as_sequence()
+        .expect("schedule is a sequence")
+        .iter()
+        .map(|entry| {
+            mapping_field(
+                entry.as_mapping().expect("a schedule entry is a mapping"),
+                "cron",
+            )
+            .as_str()
+            .expect("a cron is a string")
+        })
+        .collect()
+}
+
+/// How every dispatched job resolves its cadence: the input when started by
+/// hand, otherwise which of the two crons fired.
+fn dispatch_cadence(weekly_cron: &str) -> String {
+    format!(
+        "${{{{ inputs.kind || (github.event.schedule == '{weekly_cron}' && 'weekly' || 'nightly') }}}}"
+    )
 }
 
 /// Eleven crons fired the same workflow so that one job ran and ten skipped,
@@ -1311,20 +1347,24 @@ fn the_dispatcher_has_one_cron_per_cadence() {
         .as_mapping()
         .expect("on is a mapping");
 
-    let crons: Vec<&str> = mapping_field(triggers, "schedule")
-        .as_sequence()
-        .expect("schedule is a sequence")
-        .iter()
-        .map(|entry| {
-            mapping_field(
-                entry.as_mapping().expect("a schedule entry is a mapping"),
-                "cron",
-            )
-            .as_str()
-            .expect("a cron is a string")
-        })
-        .collect();
-    assert_eq!(crons, ["0 1 * * *", "0 8 * * 6"]);
+    let crons = dispatch_crons(&workflow);
+    let [nightly, weekly] = crons.as_slice() else {
+        panic!("one cron per cadence, a night and a week: {crons:?}");
+    };
+    assert!(
+        nightly.ends_with(" * * *") && !weekly.ends_with(" * * *"),
+        "the first cron fires every day, the second on one day of the week: {crons:?}"
+    );
+    // GitHub starts a schedule late when load peaks, and it peaks at the top
+    // of every hour: a night declared for 01:00 started between 06:02 and
+    // 07:11, inside the morning's pushes it was scheduled to stay out of.
+    for cron in &crons {
+        assert_ne!(
+            cron.split_whitespace().next(),
+            Some("0"),
+            "cron `{cron}` fires at the top of the hour"
+        );
+    }
 
     // Started by hand, the cadence is chosen rather than inferred, and `only`
     // is how one lane runs on its own instead of a role's whole selection.
@@ -1355,8 +1395,8 @@ fn the_dispatcher_has_one_cron_per_cadence() {
     // reads the weekly cron differently from the others: a cadence resolved
     // two ways is a night that half-runs.
     let jobs = workflow_jobs(&workflow);
-    let cadence =
-        "${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}";
+    let cadence = dispatch_cadence(weekly);
+    let cadence = cadence.as_str();
     for role in ["gate", "platforms", "deep", "quality"] {
         let job = workflow_job(jobs, role);
         assert_eq!(
@@ -1404,6 +1444,40 @@ fn the_dispatcher_has_one_cron_per_cadence() {
             "job `{name}` starts without checking that a pool serves it"
         );
     }
+}
+
+/// The dispatcher had no group of its own, so nothing superseded a run: a
+/// branch that dispatched its night on every push queued a whole night per
+/// push, each waiting its turn on the fleet behind the last. A run started
+/// again for the same branch, cadence and selection makes the one before it
+/// obsolete; a different selection, or the other cadence, is another question
+/// and keeps its run.
+#[test]
+fn a_newer_dispatch_of_one_selection_supersedes_the_older() {
+    let workflow = github_workflow("dispatch.yml");
+    let concurrency = workflow_concurrency(&workflow);
+    let group = mapping_field(concurrency, "group")
+        .as_str()
+        .expect("the dispatch group is a string");
+    let [_, weekly] = dispatch_crons(&workflow)[..] else {
+        panic!("one cron per cadence");
+    };
+    let cadence = dispatch_cadence(weekly);
+    for part in [
+        "github.ref",
+        cadence.trim_start_matches("${{ ").trim_end_matches(" }}"),
+        "inputs.only",
+        "inputs.mutants",
+    ] {
+        assert!(
+            group.contains(part),
+            "the dispatch group omits `{part}`: {group}"
+        );
+    }
+    assert_eq!(
+        mapping_field(concurrency, "cancel-in-progress").as_bool(),
+        Some(true)
+    );
 }
 
 #[test]
@@ -2011,8 +2085,12 @@ fn the_ui_workflow_names_its_lane_instead_of_repeating_it() {
 /// lane's pool under the runner's build root. A workflow that names the build
 /// directory sends every job of the lane to one directory, where the lane
 /// build lock queues them one at a time. What a workflow still names is what
-/// runs before the lane: the xtask bootstrap outlives the checkout on the same
-/// volume as the fixture store.
+/// runs before the lane: the xtask bootstrap, which outlives the checkout.
+///
+/// It sits under the build root every runner mounts, not in one runner's own
+/// directory. Kept per runner, the host held one bootstrap build and one Cargo
+/// home for each of its runners, 10 GB apiece outside every budget, and a
+/// runner that had not yet seen a commit compiled xtask for it again.
 #[test]
 fn a_lane_leaves_its_build_directory_to_the_slot_it_claims() {
     for name in ["lane.yml", "ui.yml", "android.yml"] {
@@ -2037,10 +2115,84 @@ fn a_lane_leaves_its_build_directory_to_the_slot_it_claims() {
             .to_string();
         assert_eq!(
             bootstrap,
-            format!("{cache_root}/target/.kithara-ci"),
-            "{name}: the xtask bootstrap must outlive the checkout"
+            format!("{cache_root}/lanes/.kithara-ci"),
+            "{name}: the xtask bootstrap is one per host, beside the lane slots"
         );
     }
+}
+
+/// A job checks out the commit it runs, never every branch.
+///
+/// `actions/checkout` at depth zero fetches every branch and tag, and a fleet
+/// runner keeps its checkout between jobs with garbage collection off. Every
+/// lane defaulted to depth zero, so each runner's Git directory carried the
+/// history of every branch the fork ever had, 12 to 20 GB a runner. A lane
+/// that compares against an earlier revision reads the history of the commit
+/// it checked out, which is the only history it compares against.
+#[test]
+fn a_checkout_never_fetches_every_branch() {
+    for name in workflow_file_names() {
+        let workflow = github_workflow(&name);
+        for (job_name, job) in workflow_jobs(&workflow) {
+            let Some(steps) = job.get("steps").and_then(Value::as_sequence) else {
+                continue;
+            };
+            for step in steps.iter().filter_map(Value::as_mapping) {
+                let is_checkout = step
+                    .get("uses")
+                    .and_then(Value::as_str)
+                    .is_some_and(|uses| uses.starts_with("actions/checkout@"));
+                let depth = step
+                    .get("with")
+                    .and_then(Value::as_mapping)
+                    .and_then(|inputs| inputs.get("fetch-depth"));
+                if let (true, Some(depth)) = (is_checkout, depth) {
+                    assert!(
+                        depth.as_u64().is_some_and(|depth| depth > 0),
+                        "{name} job {job_name:?} checks out at depth {depth:?}, which can fetch \
+                         every branch"
+                    );
+                }
+            }
+        }
+    }
+    let workflow = github_workflow("lane.yml");
+    let history = named_step(
+        workflow_job(workflow_jobs(&workflow), "run"),
+        "Fetch the history of the checked-out commit",
+    );
+    assert_eq!(
+        mapping_field(history, "if").as_str(),
+        Some("${{ inputs.history }}"),
+        "only a lane that reads history fetches it"
+    );
+    assert_eq!(
+        mapping_field(history, "run").as_str().map(str::trim),
+        Some(r#"git fetch --no-tags --quiet --depth=2147483647 origin "$(git rev-parse HEAD)""#),
+        "a lane reads the history of the commit it checked out, not of the repository"
+    );
+}
+
+/// A runner keeps its checkout for every later job, and checkout turns garbage
+/// collection off in it, so each job's fetch left one more pack behind: up to
+/// 670 of them on one runner. The lane collects that checkout's garbage on
+/// Git's own thresholds once it has fetched everything it reads.
+#[test]
+fn a_kept_checkout_is_collected_on_gits_own_thresholds() {
+    let workflow = github_workflow("lane.yml");
+    let job = workflow_job(workflow_jobs(&workflow), "run");
+    let collect = "Collect the checkout's garbage";
+    assert_eq!(
+        mapping_field(named_step(job, collect), "run")
+            .as_str()
+            .map(str::trim),
+        Some("git -c gc.auto=6700 -c gc.autoDetach=false gc --auto --quiet")
+    );
+    assert!(
+        step_position(job, "Fetch the history of the checked-out commit")
+            < step_position(job, collect),
+        "the garbage is collected after the last fetch"
+    );
 }
 
 /// A step that reads what the lane built must ask where the lane builds.
@@ -2290,8 +2442,8 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
     );
     assert_eq!(
         mapping_field(workflow_env, "KITHARA_CI_CACHE_ROOT").as_str(),
-        Some("/cache/target/.kithara-ci"),
-        "matrix selection reuses its xtask bootstrap"
+        Some("/cache/lanes/.kithara-ci"),
+        "matrix selection reuses the host's xtask bootstrap"
     );
     let jobs = workflow_jobs(&workflow);
     assert_eq!(
@@ -2445,25 +2597,33 @@ fn the_windows_lane_runs_the_backend_the_platform_ships() {
 /// through these. Without `FFMPEG_DIR` the crate falls through to vcpkg and
 /// then pkg-config, the guest has neither; without `LIBCLANG_PATH` bindgen
 /// loads no library. Either way a build script panics before a single test
-/// runs — which is what the lane did for as long as it existed. Where they sit
-/// is machine state, so both are read the way the pool's labels are: from a
-/// repository variable rather than pinned in the workflow.
+/// runs. Where they sit is decided by the script that installs them, so that
+/// script says it, machine-wide, the way it says where Monkey's Audio is. The
+/// libraries were once installed by hand and repository variables named
+/// where; rebuilding the guest took the libraries and left the variables
+/// pointing at nothing.
 #[test]
-fn the_windows_lane_is_told_where_the_guest_keeps_its_libraries() {
+fn the_guest_alone_says_where_its_libraries_are() {
     let workflow = github_workflow("windows.yml");
     let job = workflow_job(workflow_jobs(&workflow), "windows");
-    let environment = mapping_field(job, "env")
-        .as_mapping()
-        .expect("the lane names the environment its build scripts read");
+    let provision = fs::read_to_string(
+        workflows_dir()
+            .join("../../.config/windows/provision.ps1")
+            .as_path(),
+    )
+    .expect("the guest's provisioning script is readable");
 
-    for (name, variable) in [
-        ("FFMPEG_DIR", "KITHARA_WINDOWS_FFMPEG_DIR"),
-        ("LIBCLANG_PATH", "KITHARA_WINDOWS_LIBCLANG_PATH"),
-    ] {
-        assert_eq!(
-            mapping_field(environment, name).as_str(),
-            Some(format!("${{{{ vars.{variable} }}}}").as_str()),
-            "`{name}` pins a path instead of reading the machine's own"
+    for name in ["FFMPEG_DIR", "LIBCLANG_PATH"] {
+        assert!(
+            job.get("env").and_then(|env| env.get(name)).is_none(),
+            "the lane restates `{name}`, which the guest already says"
+        );
+        assert!(
+            provision.lines().any(|line| {
+                line.contains(&format!("SetEnvironmentVariable('{name}',"))
+                    && line.contains("'Machine'")
+            }),
+            "the guest's provisioning never says where `{name}` points"
         );
     }
 }
