@@ -8,7 +8,6 @@ mod guard;
 pub(crate) use kithara_test_utils::bufpool as test_pools;
 
 pub mod api;
-pub mod engine;
 pub mod player;
 pub mod policy;
 pub mod resource;
@@ -24,11 +23,10 @@ pub use api::{
     BpmInfo, DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemRole, ItemStatus, MediaTime,
     PlaybackDirection, PlayerEvent, PlayerStatus, PortDescription, PortType, RouteChangeReason,
     RouteDescription, SelectionPlayback, SessionBeat, SessionDuckingMode, SessionEvent,
-    SessionTransportSnapshot, SlotId, StretchBackendKind, SuccessorLink, SyncUnavailable, Tempo,
+    SessionTransportSnapshot, SlotId, StretchBackendKind, SyncUnavailable, Tempo,
     TempoError, TimeControlStatus, TimeRange, TrackBinding, TrackRef, TransportRevision,
     WaitingReason,
 };
-pub use engine::{EngineConfig, EngineImpl};
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;
@@ -39,24 +37,23 @@ pub use kithara_render::{
     InvalidCrossfade, LoadRefusal, PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch,
     RegisteredAudio, ServiceClass, TrackConfig,
     bridge::{
-        MixTapWriter, NodeInputs, PlaybackFault, PlaybackShared, PlaybackSnapshot,
-        PlayerNotification, RtMetricsSnapshot, SlotControl, TrackPlaybackStopReason, TrackState,
-        TrackTransition,
+        DeckEvent, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot, FadeDir, MixTapWriter,
+        PlaybackFault, RtMetricsSnapshot, Slot, SlotSnapshot,
     },
     dispatch,
     rt::{BufferGeometryError, DeckMixerConfig, PlayerNode, StreamShape},
 };
 pub use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot, MIN_SPEED};
 pub use player::{
-    DEFAULT_CROSSFADE_DURATION, DEFAULT_PLAYING_RATE, PlayerConfig, PlayerConfigPatch, PlayerImpl,
-    SelectTransition,
+    Bound, DeckPass, HostedDeck, Outbox, Player, PlayerConfig, PlayerImpl, Position, Settled, TrackCommand,
+    TrackReceipt, TrackSettings, TrackSettingsChange, TrackSnapshot, TrackStatus,
 };
 pub use resource::{
     ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, Cover, MAX_ARTIFACT_BYTES,
-    PlaybackResamplerBackend, Resource, ResourceConfig, ResourceLoad, ResourceSrc, SourceType,
+    OpenedTrack, PlaybackResamplerBackend, Resource, ResourceConfig, ResourceLoad, ResourcePrep,
+    ResourceSrc, SourceType,
 };
 pub use session::{
-    AllocatedSlot, DeckRegistration, OutputSnapshot, PlayerId, SessionBinding, SessionError,
-    SessionOutputView, SessionSampleRate,
+    OutputSnapshot, PlayerId, SessionError, SessionOutputView, SessionSampleRate,
 };
 mod consts;

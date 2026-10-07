@@ -252,12 +252,12 @@ pub(super) mod lifecycle {
                 return Err(SessionError::NoContext);
             }
             let observed_session_grid = state
-                .transport_control
+                .transport_observation
                 .as_mut()
                 .ok_or_else(|| {
-                    graph_state("session transport control is missing during idle shutdown")
+                    graph_state("session transport observation is missing during idle shutdown")
                 })?
-                .observation()
+                .read()
                 .session_grid();
             let mut session_grid_generation = match state.reserved_session_grid {
                 Some(reserved) => reserved
@@ -297,7 +297,8 @@ pub(super) mod lifecycle {
             state.stream = None;
             state.ctx = None;
             state.publish_root();
-            state.transport_control = None;
+            state.transport_queue = None;
+            state.transport_observation = None;
             state.taps = Taps::default();
             state.session_output_node_id = None;
             state.session_limiter_node_id = None;
@@ -495,10 +496,10 @@ mod tests {
         assert!(tick_session(&mut state).is_ok());
 
         let committed = state
-            .transport_control
+            .transport_observation
             .as_mut()
-            .expect("a running stream keeps transport control")
-            .observation()
+            .expect("a running stream keeps the transport observation")
+            .read()
             .snapshot()
             .expect("the rendered block committed the tempo")
             .session_grid();
@@ -792,10 +793,10 @@ mod tests {
         assert!(!state.stream_needs_restart);
         assert!(state.reserved_session_grid.is_none());
         let converged = state
-            .transport_control
+            .transport_observation
             .as_mut()
-            .expect("the restarted stream keeps transport control")
-            .observation()
+            .expect("the restarted stream keeps the transport observation")
+            .read()
             .session_grid()
             .stamp()
             .expect("the restarted transport has a grid revision");

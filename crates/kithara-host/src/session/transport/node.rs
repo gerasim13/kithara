@@ -28,7 +28,7 @@ pub(crate) fn install(
     ctx: &mut FirewheelContext,
     session_grid: SessionGridGeneration,
     settings: HostSettings,
-) -> Result<TransportControl, &'static str> {
+) -> Result<(Sender<HostProtocol>, Output<TransportObservation>), &'static str> {
     let initial = TransportObservation::new(None, session_grid);
     let (observation_input, observation_output) = triple_buffer(&initial);
     let config = ChannelConfig::builder().build();
@@ -50,30 +50,7 @@ pub(crate) fn install(
         .map_err(|_| "session transport observation store slot already exists")?;
     ctx.add_node(SessionTransportNode, None)
         .map_err(|_| "session transport node was rejected by the audio graph")?;
-    Ok(TransportControl {
-        queue,
-        observation: observation_output,
-    })
-}
-
-/// The session owner's half of the transport: the queue it sends Host
-/// changes through and the observation the render graph publishes.
-#[derive(fieldwork::Fieldwork)]
-#[fieldwork(opt_in, vis = "pub(crate)")]
-pub(crate) struct TransportControl {
-    observation: Output<TransportObservation>,
-    #[field(get_mut = queue)]
-    queue: Sender<HostProtocol>,
-}
-
-impl TransportControl {
-    delegate::delegate! {
-        to self.observation {
-            #[expr(*$)]
-            #[call(read)]
-            pub(crate) fn observation(&mut self) -> TransportObservation;
-        }
-    }
+    Ok((queue, observation_output))
 }
 
 pub(crate) struct SessionTransportNode;

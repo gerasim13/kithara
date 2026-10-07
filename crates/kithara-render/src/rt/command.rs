@@ -1,221 +1,277 @@
+use kithara_command::{Due, Inbox, Seq, Target};
 use kithara_config::LiveConfig;
-use kithara_events::TrackId;
-use kithara_platform::sync::{Arc, atomic::Ordering};
-use ringbuf::traits::Producer;
+use kithara_signal::SessionFrame;
 
-use super::{
-    processor::Deck,
-    track::{PlayerResource, PlayerTrack},
-};
-use crate::{
-    CrossfadeSettings,
-    bridge::{
-        DeckApplied, DeckEqChange, DeckPart, DeckTrash, PlayerNotification, TrackState,
-        TrackTransition,
-    },
+use super::{processor::Deck, track::PlayerTrack};
+use crate::bridge::{
+    DeckApplied, DeckEqChange, DeckPart, DeckProtocol, DeckRefusal, Fade, Released, Slot,
+    SlotState,
 };
 
 impl Deck {
-    fn apply_rate(&mut self, rate: f32) {
-        self.rate = rate;
-        for (_, track) in self.tracks.iter_mut() {
-            track.set_playback_rate(rate);
-        }
-    }
-
-    /// Releases the natural-end hold on every loaded track in the slot, including ones this seek
-    /// does not move, since the re-base is slot-wide.
-    fn apply_seek(&mut self, seconds: f64, seek_epoch: u64) {
-        if seek_epoch != self.playback.seek_epoch.load(Ordering::SeqCst) {
+    /// Answer a batch due now: refused as a whole when a part names a slot it cannot apply to,
+    /// parked until its slot ends when it chains a playing track, applied otherwise.
+    pub(super) fn take_due(&mut self, mut due: Due<'_, DeckProtocol>) {
+        if let Err(refusal) = self.validate(due.commands()) {
+            due.refuse(refusal);
             return;
         }
+        let chain = due.commands().iter().find_map(|part| match part {
+            DeckPart::Chain { from, to } => Some((*from, *to)),
+            _ => None,
+        });
+        if let Some((from, to)) = chain
+            && self
+                .tracks
+                .at(from)
+                .is_some_and(|track| track.state() != SlotState::Ended)
+        {
+            let seq = due.defer();
+            if let Some(entry) = self.chains.get_mut(from.index()) {
+                *entry = Some((to, seq));
+            }
+            return;
+        }
+        self.apply_due(due);
+    }
 
-        let mut revived = false;
-        for (_, track) in self.tracks.iter_mut() {
-            track.observe_seek_epoch(seek_epoch);
-            match track.state() {
-                TrackState::FadingIn => {
-                    track.seek(seconds);
-                }
-                TrackState::Playing => {
-                    track.seek(seconds);
-                    track.play();
-                }
-                TrackState::FadingOut => {
-                    track.finish();
-                }
-                TrackState::Finished if track.ended_at_eof() && seconds < track.duration() => {
-                    track.seek(seconds);
-                    track.play();
-                    revived = true;
-                }
-                _ => {}
+    /// Answer the batch chained behind `from`, which ended on `at`: its basis is judged again
+    /// and its parts apply there.
+    pub(super) fn fire_chain(
+        &mut self,
+        inbox: &mut Inbox<DeckProtocol>,
+        from: Slot,
+        at: SessionFrame,
+    ) -> Option<Slot> {
+        let (to, seq) = self.chains.get_mut(from.index())?.take()?;
+        let due = inbox.resume(seq, at)?;
+        let started = match self.validate(due.commands()) {
+            Ok(()) => {
+                self.apply_due(due);
+                true
+            }
+            Err(refusal) => {
+                due.refuse(refusal);
+                false
+            }
+        };
+        self.resolve_orphans(inbox, at);
+        started.then_some(to)
+    }
+
+    /// Answer every chained batch a detach left without its slot.
+    pub(super) fn resolve_orphans(&mut self, inbox: &mut Inbox<DeckProtocol>, at: SessionFrame) {
+        while let Some((seq, slot)) = self.orphans.pop() {
+            if let Some(due) = inbox.resume(seq, at) {
+                due.refuse(DeckRefusal::Empty { slot });
             }
         }
-        if revived {
-            self.set_playing(true);
-        }
     }
 
-    /// Starts or stops every held track with the deck's transport; tracks attached later follow
-    /// it.
-    pub(super) fn set_playing(&mut self, playing: bool) {
-        self.playback.playing.store(playing, Ordering::SeqCst);
-        for (_, track) in self.tracks.iter_mut() {
-            track.steer_gate(playing);
+    /// Apply every part of `due` in order; each comes back in the receipt as what it left: itself
+    /// when it carried no resource, the resource it let go of, or nothing. One part never leaves
+    /// more than one, so the batch never grows on the audio thread.
+    fn apply_due(&mut self, mut due: Due<'_, DeckProtocol>) {
+        let mut applied = DeckApplied::default();
+        let commands = due.commands_mut();
+        for _ in 0..commands.len() {
+            let part = commands.remove(0);
+            if let Some(left) = self.apply(part, &mut applied) {
+                commands.push(left);
+            }
         }
+        due.apply(applied);
     }
 
-    fn clear_all_tracks(&mut self) {
-        for slot in self.tracks.slots() {
-            self.unload_slot(slot);
+    /// Check every part against the slots as the parts before it in the batch leave them.
+    fn validate(&mut self, parts: &[DeckPart]) -> Result<(), DeckRefusal> {
+        self.held.clear();
+        self.held
+            .extend(self.tracks.slots().map(|slot| self.tracks.is_held(slot)));
+        let held = |held: &[bool], slot: Slot| held.get(slot.index()).copied().unwrap_or(false);
+        for part in parts {
+            match part {
+                DeckPart::Attach { slot, .. } => {
+                    if held(&self.held, *slot) {
+                        return Err(DeckRefusal::Occupied { slot: *slot });
+                    }
+                    let Some(entry) = self.held.get_mut(slot.index()) else {
+                        return Err(DeckRefusal::Empty { slot: *slot });
+                    };
+                    *entry = true;
+                }
+                DeckPart::Detach { slot } => {
+                    if !held(&self.held, *slot) {
+                        return Err(DeckRefusal::Empty { slot: *slot });
+                    }
+                    if let Some(entry) = self.held.get_mut(slot.index()) {
+                        *entry = false;
+                    }
+                }
+                DeckPart::Start { slot, .. }
+                | DeckPart::Stop { slot, .. }
+                | DeckPart::Fade { slot, .. }
+                | DeckPart::Seek { slot, .. }
+                | DeckPart::Rate { slot, .. }
+                | DeckPart::Replace { slot, .. } => {
+                    if !held(&self.held, *slot) {
+                        return Err(DeckRefusal::Empty { slot: *slot });
+                    }
+                }
+                DeckPart::Chain { from, to } => {
+                    for slot in [*from, *to] {
+                        if !held(&self.held, slot) {
+                            return Err(DeckRefusal::Empty { slot });
+                        }
+                    }
+                    if self
+                        .chains
+                        .get(from.index())
+                        .is_some_and(Option::is_some)
+                    {
+                        return Err(DeckRefusal::Occupied { slot: *from });
+                    }
+                }
+                DeckPart::Mix(_) | DeckPart::Eq(_) | DeckPart::Released(_) => {}
+            }
         }
-        self.set_playing(false);
-        self.playback.position.store(0.0);
-        self.playback.frontier.store(0.0);
-        self.playback.cached.store(0.0);
-        self.playback.duration.store(0.0);
+        Ok(())
     }
 
-    /// Applies one part of a due batch, noting in `applied` what the batch reports.
-    pub(super) fn apply(&mut self, part: DeckPart, applied: &mut DeckApplied) {
+    /// Apply one part of a due batch, noting in `applied` what the batch reports; answers what
+    /// the part leaves in the receipt.
+    fn apply(&mut self, part: DeckPart, applied: &mut DeckApplied) -> Option<DeckPart> {
         match part {
-            DeckPart::Attach { resource, item_id } => {
-                self.load_track(resource, item_id);
+            DeckPart::Attach { slot, pcm } => {
+                let track = self.track(pcm);
+                self.tracks
+                    .put(slot, track)
+                    .map(|held| released(slot, held.into_resource()))
             }
-            DeckPart::Detach { item_id } => {
-                if let Some(slot) = self.tracks.slot_of(item_id) {
-                    self.unload_slot(slot);
+            DeckPart::Detach { slot } => {
+                for (from, chain) in self.chains.iter_mut().enumerate() {
+                    if let Some((to, seq)) = *chain
+                        && (from == slot.index() || to == slot)
+                    {
+                        *chain = None;
+                        self.orphans.push((seq, slot));
+                    }
                 }
+                self.tracks
+                    .take(slot)
+                    .map(|track| released(slot, track.into_resource()))
             }
-            DeckPart::Withdraw { item_id } => {
-                if self
-                    .tracks
-                    .get(item_id)
-                    .is_some_and(|track| track.state() == TrackState::Preloading)
-                    && let Some(slot) = self.tracks.slot_of(item_id)
-                {
-                    self.unload_slot(slot);
+            DeckPart::Start { slot, fade } => {
+                if let Some(track) = self.tracks.at_mut(slot) {
+                    track.start(fade);
                 }
+                Some(DeckPart::Start { slot, fade })
             }
-            DeckPart::Chain { from, to, epoch } => {
-                if let Some(track) = self.tracks.get_mut(to) {
-                    track.lead_under(epoch);
-                }
-                if let Some(track) = self.tracks.get_mut(from) {
-                    track.chain(to);
-                }
-            }
-            DeckPart::Clear => {
-                self.clear_all_tracks();
-            }
-            DeckPart::Fade(TrackTransition::FadeIn {
-                item_id,
-                settings,
-                epoch,
-            }) => {
-                self.lead(item_id, settings, epoch);
-            }
-            DeckPart::Fade(TrackTransition::FadeOut { item_id, settings }) => {
-                if let Some(track) = self.tracks.get_mut(item_id) {
-                    track.fade_out(settings);
-                }
-            }
-            DeckPart::Seek {
-                seconds,
-                seek_epoch,
-            } => {
-                self.apply_seek(seconds, seek_epoch);
-            }
-            DeckPart::Start { item_id } => {
-                if let Some(track) = self.tracks.get_mut(item_id) {
-                    track.start();
-                }
-            }
-            DeckPart::Stop { item_id } => {
-                if let Some(track) = self.tracks.get_mut(item_id) {
+            DeckPart::Stop { slot, fade } => {
+                if let Some(track) = self.tracks.at_mut(slot) {
                     applied.stopped_at = Some(track.position());
-                    track.stop();
+                    track.stop(fade);
                 }
+                Some(DeckPart::Stop { slot, fade })
             }
-            DeckPart::StartAll => {
-                self.set_playing(true);
+            DeckPart::Fade {
+                slot,
+                settings,
+                dir,
+            } => {
+                if let Some(track) = self.tracks.at_mut(slot) {
+                    track.fade(settings, dir);
+                }
+                Some(DeckPart::Fade {
+                    slot,
+                    settings,
+                    dir,
+                })
             }
-            DeckPart::StopAll => {
-                self.set_playing(false);
+            DeckPart::Chain { from, to } => {
+                if let Some(track) = self.tracks.at_mut(to) {
+                    track.start(Fade::Declick);
+                    track.snap_gate();
+                }
+                Some(DeckPart::Chain { from, to })
             }
             DeckPart::Mix(change) => {
                 self.mix.apply_change(change);
                 self.render.set_gain(self.mix.gain());
-            }
-            DeckPart::SetRate(rate) => {
-                self.apply_rate(rate);
+                Some(DeckPart::Mix(change))
             }
             DeckPart::Eq(DeckEqChange::Gain { band, gain }) => {
                 self.render.set_eq_gain(band, gain);
+                Some(DeckPart::Eq(DeckEqChange::Gain { band, gain }))
             }
-            DeckPart::Eq(DeckEqChange::Layout(layout)) => {
-                if let Some(displaced) = self.render.take_eq_layout(layout) {
-                    self.discard(DeckTrash::Eq(displaced));
+            DeckPart::Eq(DeckEqChange::Layout(layout)) => self
+                .render
+                .take_eq_layout(layout)
+                .map(|old| DeckPart::Released(Released::Eq(old))),
+            DeckPart::Seek {
+                slot,
+                seconds,
+                seek_epoch,
+            } => {
+                if let Some(track) = self.tracks.at_mut(slot) {
+                    track.seek(seconds);
                 }
+                Some(DeckPart::Seek {
+                    slot,
+                    seconds,
+                    seek_epoch,
+                })
             }
+            DeckPart::Rate { slot, rate } => {
+                if let Some(track) = self.tracks.at_mut(slot) {
+                    track.set_playback_rate(rate);
+                }
+                Some(DeckPart::Rate { slot, rate })
+            }
+            DeckPart::Replace { slot, pcm } => self
+                .replace(slot, pcm)
+                .map(|old| released(slot, old)),
+            DeckPart::Released(released) => Some(DeckPart::Released(released)),
         }
     }
 
-    /// Makes `item_id` leading: the track that led fades out as it fades in. A fade-in for a
-    /// track the deck does not hold changes nothing.
-    fn lead(&mut self, item_id: TrackId, settings: CrossfadeSettings, epoch: u64) {
-        let Some(slot) = self.tracks.slot_of(item_id) else {
-            return;
+    /// Swap `slot`'s consumer for `pcm` on this frame: the old one's next frames go to the
+    /// slot's tail ramped down to silence, the new one takes over its transport state.
+    fn replace(
+        &mut self,
+        slot: Slot,
+        pcm: Box<crate::rt::track::PlayerResource>,
+    ) -> Option<Box<crate::rt::track::PlayerResource>> {
+        let mut track = self.track(pcm);
+        let Some(mut old) = self.tracks.take(slot) else {
+            self.tracks.put(slot, track);
+            return None;
         };
-        let old = self
-            .tracks
-            .iter()
-            .find_map(|(_, track)| track.state().is_leading().then(|| track.item_id()))
-            .filter(|old| *old != item_id);
-        if let Some(track) = old.and_then(|old| self.tracks.get_mut(old)) {
-            track.fade_out(settings);
-        }
-        if let Some(track) = self.tracks.at_mut(slot) {
-            track.fade_in(settings);
-            track.lead_under(epoch);
-            self.playback
-                .adopt(epoch, track.position(), track.duration());
-            if old.is_some() {
-                self.notif_tx
-                    .try_push(PlayerNotification::Changed {
-                        src: Arc::clone(track.src()),
-                    })
-                    .ok();
+        track.set_playback_rate(old.playback_rate());
+        if old.state() == SlotState::Playing {
+            track.start(Fade::Declick);
+            track.snap_gate();
+            if let Some(tail) = self.tails.get_mut(slot.index()).and_then(Option::as_mut) {
+                tail.fill(&mut old, &self.metrics);
             }
         }
+        self.tracks.put(slot, track);
+        Some(old.into_resource())
     }
 
-    fn load_track(&mut self, resource: Box<PlayerResource>, item_id: TrackId) {
-        let src = Arc::clone(resource.src());
-        if let Some(slot) = self.tracks.slot_of(item_id) {
-            self.unload_slot(slot);
-        }
-        self.evict_tracks_if_needed();
-
-        resource.set_host_sample_rate(self.sample_rate);
-
-        let mut track = PlayerTrack::builder()
+    fn track(&self, pcm: Box<crate::rt::track::PlayerResource>) -> PlayerTrack {
+        pcm.set_host_sample_rate(self.sample_rate);
+        PlayerTrack::builder()
             .sample_rate(self.sample_rate)
-            .item_id(item_id)
-            .seek_epoch(self.playback.seek_epoch.load(Ordering::SeqCst))
             .declick(self.declick)
-            .stopped(!self.playback.playing.load(Ordering::SeqCst))
-            .build(resource);
-        track.set_playback_rate(self.rate);
-
-        if let Some(rejected) = self.tracks.insert(track) {
-            self.discard(DeckTrash::Track(rejected));
-            return;
-        }
-
-        self.notif_tx
-            .try_push(PlayerNotification::Loaded { src })
-            .ok();
+            .build(pcm)
     }
+}
+
+/// A chained batch whose number a detach orphaned, with the slot that left.
+pub(super) type Orphan = (Seq, Slot);
+
+/// The receipt part for the consumer `slot` let go of.
+fn released(slot: Slot, pcm: Box<crate::rt::track::PlayerResource>) -> DeckPart {
+    DeckPart::Released(Released::Pcm { slot, pcm })
 }

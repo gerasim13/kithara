@@ -17,28 +17,17 @@ mod projection;
 mod target;
 mod timeline;
 
+use fixtures::{WarpRenderer, chunk, f64_of, renderer, spec};
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
     feature = "stretch-glide"
 ))]
-use std::num::NonZero;
+use fixtures::{dominant_bin, expected_bin, flush_serviced, render_serviced};
 
-use fixtures::{WarpRenderer, chunk, f64_of, render_serviced, renderer, spec};
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
     feature = "stretch-glide"
 ))]
-use fixtures::{dominant_bin, expected_bin, flush_serviced};
-use kithara_platform::sync::Arc;
-#[cfg(any(
-    feature = "stretch-signalsmith",
-    feature = "stretch-bungee",
-    feature = "stretch-glide"
-))]
-use kithara_signal::AudioChunkInfo;
-use kithara_signal::{OutputContext, SessionEpoch, SessionFrame};
-use kithara_test_utils::kithara;
-
-use crate::{PresentationFrontier, RenderContext, Warp, WarpConfig, test_pools::pools};
+use crate::WarpConfig;

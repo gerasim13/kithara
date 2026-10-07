@@ -47,7 +47,7 @@ pub async fn dispatch<I: Open>(mut inbox: Inbox<DispatcherProtocol<I>>) {
     poll_fn(|cx| {
         loop {
             while let Poll::Ready(Some((seq, opened))) = opening.poll_next_unpin(cx) {
-                let Some(due) = inbox.resume(seq) else {
+                let Some(due) = inbox.resume(seq, ()) else {
                     continue;
                 };
                 match opened {

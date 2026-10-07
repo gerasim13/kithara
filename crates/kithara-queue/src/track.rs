@@ -2,17 +2,16 @@ use std::vec;
 
 use kithara_audio::{AudioObserver, AudioObserverSlot};
 use kithara_bufpool::HasPool;
-use kithara_command::Seq;
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_platform::{CancelToken, sync::Arc};
-use kithara_play::{Resource, ResourceConfig, ResourceLoad, ResourceSrc};
+use kithara_play::{ResourceConfig, ResourceSrc};
 use tracing::debug;
 
 use crate::{
     error::QueueError,
     event::{QueueEvent, TrackStatus},
-    loading::{LoadClass, LoadReport, OpenFailure, TrackLoad},
+    loading::{LoadReport, TrackLoad},
 };
 
 /// Snapshot of a track entry in the queue.
@@ -47,9 +46,9 @@ pub struct TrackEntry {
 ///   (useful for DRM keys, custom headers, format hints). The queue leaves
 ///   caller-set fields intact.
 ///
-/// `TrackSource` is `Clone` so the queue can respawn a load when a
-/// previously-consumed track is re-selected — re-tapping a track in
-/// the playlist must work without the caller reconstructing anything.
+/// `TrackSource` is `Clone` so the queue can load a track again each time it
+/// plays — re-tapping a track in the playlist must work without the caller
+/// reconstructing anything.
 #[derive(derive_more::From)]
 #[non_exhaustive]
 #[derive_where::derive_where(Clone; S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static)]
@@ -116,18 +115,15 @@ pub(crate) struct TrackRecord<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    pub(crate) load: Option<TrackLoad<S>>,
+    pub(crate) load: Option<TrackLoad>,
     pub(crate) url: Option<String>,
     pub(crate) name: String,
-    /// Taken from the source at append; admission fills its unset fields.
+    /// Taken from the source at append; a load fills its unset fields.
     pub(crate) metadata: TrackMetadata,
     pub(crate) id: TrackId,
     pub(crate) source: TrackSource<S>,
     pub(crate) status: TrackStatus,
     observer: AudioObserverSlot,
-    /// The finished load, held while the track is `Loaded` until the deck
-    /// takes it.
-    resource: Option<Resource>,
 }
 
 impl<S> TrackRecord<S>
@@ -144,7 +140,6 @@ where
             source,
             load: None,
             observer: AudioObserverSlot::default(),
-            resource: None,
         }
     }
 
@@ -158,9 +153,11 @@ where
         }
     }
 
-    /// The track's load while it still runs: present and not cancelled.
-    fn live_load(&mut self) -> Option<&mut TrackLoad<S>> {
-        self.load.as_mut().filter(|load| !load.is_cancelled())
+    /// Whether the track's load was cancelled since it began.
+    fn load_cancelled(&self) -> bool {
+        self.load
+            .as_ref()
+            .is_some_and(|load| load.token().is_cancelled())
     }
 }
 
@@ -178,8 +175,8 @@ where
 /// Authoritative store for the queue's track list.
 ///
 /// Single owner of `Vec<TrackRecord>`, held by the [`Queue`](crate::Queue)
-/// alone; what becomes of a track's load reaches it through the loader the
-/// queue owns. Every status transition MUST go through
+/// alone; what becomes of a track's load reaches it through the deck track
+/// that opened it. Every status transition MUST go through
 /// [`Tracks::set_status`] (or the load ops below), which records its
 /// [`QueueEvent::TrackStatusChanged`] for the queue to announce, so the
 /// published rows and the event stream never drift. Every edit moves
@@ -206,18 +203,6 @@ impl<S> Tracks<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// Hold a finished load for `id` until the deck takes it: fill the
-    /// metadata the caller left unset from the decoder's tags and mark the
-    /// track `Loaded`. No-op when `id` is not present.
-    pub(crate) fn admit(&mut self, id: TrackId, resource: Resource) {
-        let Some(record) = self.record_mut(id) else {
-            return;
-        };
-        record.metadata.fill_missing_from(resource.metadata());
-        record.resource = Some(resource);
-        self.set_status(id, TrackStatus::Loaded);
-    }
-
     /// Apply what a task beside a track's load reported.
     pub(crate) fn apply_report(&mut self, report: LoadReport) {
         match report {
@@ -227,35 +212,84 @@ where
                 }
             }
             LoadReport::Cover { id, load, cover } => self.place_cover(id, &load, cover),
-            LoadReport::Cancelled { id } => {
-                let unsent = self
-                    .find(id)
-                    .and_then(|record| record.load.as_ref())
-                    .is_some_and(|load| load.is_cancelled() && load.sent.is_none());
-                if unsent {
-                    self.set_status(id, TrackStatus::Cancelled);
-                }
-            }
         }
     }
 
-    /// Attach decoded-audio observation to this track's current resource, or
-    /// retain it for resource admission when loading has not started yet.
+    /// Attach decoded-audio observation to this track's decoder, or retain it
+    /// for the next load when loading has not started yet.
     pub(crate) fn attach_observer(&self, id: TrackId, observer: Box<dyn AudioObserver>) {
         if let Some(record) = self.find(id) {
             record.observer.attach(observer);
         }
     }
 
-    /// Give `id` a fresh load and return it. Dedupes against a live load,
-    /// which keeps running; replaces one that is already cancelled.
-    pub(crate) fn begin_load(&mut self, id: TrackId, load: TrackLoad<S>) -> Option<&TrackLoad<S>> {
-        self.revision += 1;
-        let record = self.records.iter_mut().find(|record| {
-            record.id == id && record.load.as_ref().is_none_or(TrackLoad::is_cancelled)
-        })?;
+    /// What reaches `id`'s decoder from the observers attached to it.
+    pub(crate) fn observer(&self, id: TrackId) -> Option<Box<dyn AudioObserver>> {
+        self.find(id)
+            .map(|record| Box::new(record.observer.relay()) as Box<dyn AudioObserver>)
+    }
+
+    /// `id` loads under `load`: a load it replaces is cancelled.
+    pub(crate) fn begin_load(&mut self, id: TrackId, load: TrackLoad) {
+        let Some(record) = self.record_mut(id) else {
+            return;
+        };
         record.load = Some(load);
-        record.load.as_ref()
+        if !matches!(record.status, TrackStatus::Loading | TrackStatus::Slow) {
+            self.set_status(id, TrackStatus::Loading);
+        }
+    }
+
+    /// `id`'s track opened and stands in its slot: the token passes to its
+    /// resource, the metadata the caller left unset fills from the decoder's
+    /// tags, and the track is `Loaded`. `false` when the load was cancelled
+    /// meanwhile: the cancel is the last word on it, and the track is left
+    /// `Cancelled` for the queue to let go.
+    pub(crate) fn loaded(&mut self, id: TrackId, metadata: &TrackMetadata) -> bool {
+        let Some(record) = self.record_mut(id) else {
+            return false;
+        };
+        if record.load_cancelled() {
+            self.set_status(id, TrackStatus::Cancelled);
+            return false;
+        }
+        if let Some(mut load) = record.load.take() {
+            load.disarm();
+        }
+        record.metadata.fill_missing_from(metadata);
+        self.set_status(id, TrackStatus::Loaded);
+        true
+    }
+
+    /// `id`'s open was refused with `error`. Returns whether to ask again.
+    ///
+    /// A cancel is the last word on a load, whatever its open ended with. A
+    /// refusal a later ask can answer keeps a `wanted` track loading, so a
+    /// track chosen during an outage plays once the network answers; a load
+    /// nobody waits for fails. A track no longer loading has nothing to fail.
+    pub(crate) fn refused(
+        &mut self,
+        id: TrackId,
+        error: &QueueError,
+        asks_again: bool,
+        wanted: bool,
+    ) -> bool {
+        let Some(record) = self.find(id) else {
+            return false;
+        };
+        if !matches!(record.status, TrackStatus::Loading | TrackStatus::Slow) {
+            return false;
+        }
+        if record.load_cancelled() {
+            self.set_status(id, TrackStatus::Cancelled);
+            return false;
+        }
+        if asks_again && wanted {
+            debug!(?id, %error, "a wanted load failed on a cause a later ask can answer; asking again");
+            return true;
+        }
+        self.fail(id, error);
+        false
     }
 
     /// Fail `id` with `error`. Its load gives the track's token up rather
@@ -269,105 +303,6 @@ where
 
     fn find(&self, id: TrackId) -> Option<&TrackRecord<S>> {
         self.records.iter().find(|record| record.id == id)
-    }
-
-    /// The selection reached `id`: its live load is wanted, and one still
-    /// waiting moves to the interactive lane; one already sent keeps its
-    /// lane, its download progressing. `false` when `id` has no live load.
-    pub(crate) fn promote_load(&mut self, id: TrackId) -> bool {
-        self.revision += 1;
-        let Some(load) = self.record_mut(id).and_then(TrackRecord::live_load) else {
-            return false;
-        };
-        load.selected = true;
-        if load.sent.is_none() {
-            load.class = LoadClass::Interactive;
-        }
-        true
-    }
-
-    /// The first live load in queue order waiting for `class`'s lane, as the
-    /// dispatcher opens it: its config, with the track's observer slot
-    /// reaching the decoder it builds.
-    pub(crate) fn next_unsent(&self, class: LoadClass) -> Option<(TrackId, ResourceLoad<S>)> {
-        self.records.iter().find_map(|record| {
-            let load = record.load.as_ref().filter(|load| {
-                !load.is_cancelled() && load.sent.is_none() && load.class == class
-            })?;
-            let observer = Box::new(record.observer.relay());
-            Some((record.id, ResourceLoad::new(load.config.clone(), observer)))
-        })
-    }
-
-    /// `id`'s load went to the dispatcher as `seq`: the track loads. A load
-    /// cancelled since it was taken for its lane is sent all the same, and
-    /// its open's answer settles it.
-    pub(crate) fn mark_sent(&mut self, id: TrackId, seq: Seq) {
-        let Some(load) = self.record_mut(id).and_then(|record| record.load.as_mut()) else {
-            return;
-        };
-        load.sent = Some(seq);
-        let loading = self.find(id).is_some_and(|record| {
-            matches!(record.status, TrackStatus::Loading | TrackStatus::Slow)
-        });
-        if !loading {
-            self.set_status(id, TrackStatus::Loading);
-        }
-    }
-
-    /// Settle the open sent as `seq`. Returns the resource it opened, for
-    /// the queue to admit.
-    ///
-    /// An open no live record sent belongs to a load the track moved on from,
-    /// and is dropped. A cancel is the last word on a load, whatever its open
-    /// ended with. A refusal a later ask can answer leaves a selected load
-    /// waiting for its lane again, so a track chosen during an outage plays
-    /// once the network answers; a load nobody selected fails, so nothing
-    /// waits for it.
-    pub(crate) fn settle_load(
-        &mut self,
-        seq: Seq,
-        opened: Result<Resource, OpenFailure>,
-    ) -> Option<(TrackId, Resource)> {
-        let Some(record) = self.records.iter_mut().find(|record| {
-            record
-                .load
-                .as_ref()
-                .is_some_and(|load| load.sent == Some(seq))
-        }) else {
-            debug!(
-                seq = seq.get(),
-                "a superseded load's open ended; dropping it"
-            );
-            return None;
-        };
-        let id = record.id;
-        if record.load.as_ref().is_some_and(TrackLoad::is_cancelled) {
-            self.set_status(id, TrackStatus::Cancelled);
-            return None;
-        }
-        match opened {
-            Ok(resource) => {
-                if let Some(mut load) = record.load.take() {
-                    load.disarm();
-                }
-                Some((id, resource))
-            }
-            Err(OpenFailure::AskAgain(error)) => {
-                match record.load.as_mut().filter(|load| load.selected) {
-                    Some(load) => {
-                        debug!(?id, %error, "a selected load failed on a cause a later ask can answer; asking again");
-                        load.sent = None;
-                    }
-                    None => self.fail(id, &error),
-                }
-                None
-            }
-            Err(OpenFailure::Final(error)) => {
-                self.fail(id, &error);
-                None
-            }
-        }
     }
 
     /// Place the cover a load read for `id` and record
@@ -414,27 +349,18 @@ where
     }
 
     /// Set `record.status` and record [`QueueEvent::TrackStatusChanged`].
-    /// `Cancelled` and `Loaded` also abort the track's live load: a
-    /// cancelled track never keeps loading, and a track whose resource is
-    /// already loaded has nothing left to load. Without the latter a load
-    /// that outlives the resource it was meant to fetch settles afterwards
-    /// and overwrites a track that is already playable. Every status but
-    /// `Loaded` drops the resource the record holds: only a loaded track has
-    /// audio waiting for the deck.
+    /// `Cancelled` also aborts the track's live load: a cancelled track never
+    /// keeps loading.
     /// No-op when `id` is not present (caller raced `Queue::remove`).
     pub(crate) fn set_status(&mut self, id: TrackId, status: TrackStatus) {
         let Some(record) = self.record_mut(id) else {
             return;
         };
         record.status = status.clone();
-        let aborted = matches!(status, TrackStatus::Cancelled | TrackStatus::Loaded)
+        let aborted = matches!(status, TrackStatus::Cancelled)
             .then(|| record.load.take())
             .flatten();
-        let dropped = (!matches!(status, TrackStatus::Loaded))
-            .then(|| record.resource.take())
-            .flatten();
         drop(aborted);
-        drop(dropped);
         self.events
             .push(QueueEvent::TrackStatusChanged { id, status });
     }
@@ -453,39 +379,25 @@ where
         }
     }
 
-    delegate::delegate! {
-        to self {
-            /// Hand `id`'s loaded resource to the caller, which gives it to the deck.
-            /// `None` once the deck holds it, or before the track loads.
-            #[expr($.and_then(|record| record.resource.take()))]
-            #[call(record_mut)]
-            pub(crate) fn take_resource(&mut self, id: TrackId) -> Option<Resource>;
-            /// Original source for `id`, if still queued.
-            #[expr($.map(|record| record.source.clone()))]
-            #[call(find)]
-            pub(crate) fn source(&self, id: TrackId) -> Option<TrackSource<S>>;
-        }
+    /// Original source for `id`, if still queued.
+    pub(crate) fn source(&self, id: TrackId) -> Option<TrackSource<S>> {
+        self.find(id).map(|record| record.source.clone())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::iter;
-
     use kithara_assets::AssetStore;
-    use kithara_audio::{AudioObserveError, AudioObserver, mock::TestPcmReader};
-    use kithara_command::{Batch, ChannelConfig, When, channel};
+    use kithara_audio::{AudioObserveError, AudioObserver};
     use kithara_platform::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
-    use kithara_play::DispatcherProtocol;
-    use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+    use kithara_signal::{AudioChunk, AudioChunkInfo};
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
-        consts::TEST_SAMPLE_RATE,
         loading::tests::config,
         test_pools::{TestPools, pools, sample_buffer},
     };
@@ -518,60 +430,17 @@ mod tests {
         tracks.records()[0].status.clone()
     }
 
-    /// Numbers a real channel gives its sends, as the loader's sends get them.
-    fn seqs() -> impl Iterator<Item = Seq> {
-        let (mut sender, inbox) = channel::<DispatcherProtocol<ResourceLoad<TestPools>>>(
-            ChannelConfig::builder().build(),
-        );
-        iter::from_fn(move || {
-            let _executor = &inbox;
-            sender
-                .send(
-                    When::Next,
-                    Batch {
-                        basis: Vec::new(),
-                        commands: Vec::new(),
-                    },
-                )
-                .ok()
-        })
-    }
-
-    fn next_seq(seqs: &mut impl Iterator<Item = Seq>) -> Seq {
-        seqs.next().expect("the channel has room")
-    }
-
     fn refusal(reason: &str) -> QueueError {
         QueueError::Resource(reason.to_owned())
     }
 
-    /// Begin a `class` load for `id` and return the track's token.
-    fn begin(tracks: &mut Tracks<TestPools>, id: TrackId, class: LoadClass) -> CancelToken {
+    /// Begin a load for `id` and return the track's token.
+    fn begin(tracks: &mut Tracks<TestPools>, id: TrackId) -> CancelToken {
         let token = CancelToken::never().child();
-        let load = TrackLoad::new(config("https://x/a.mp3", token.clone()), class)
+        let load = TrackLoad::new(&config("https://x/a.mp3", token.clone()))
             .expect("the config carries its token");
-        assert!(
-            tracks.begin_load(id, load).is_some(),
-            "BUG: the record must take the load"
-        );
+        tracks.begin_load(id, load);
         token
-    }
-
-    /// Begin a `class` load for the first track and send it as `seq`.
-    fn sent(tracks: &mut Tracks<TestPools>, class: LoadClass, seq: Seq) -> CancelToken {
-        let id = tracks.records()[0].id;
-        let token = begin(tracks, id, class);
-        let (unsent, _load) = tracks
-            .next_unsent(class)
-            .expect("the load waits for its lane");
-        assert_eq!(unsent, id);
-        tracks.mark_sent(id, seq);
-        token
-    }
-
-    fn opened() -> Resource {
-        let reader = TestPcmReader::new(AudioSpec::new(2, TEST_SAMPLE_RATE), 0.01);
-        Resource::from_reader(reader, None)
     }
 
     fn tracks_with(id: TrackId) -> Tracks<TestPools> {
@@ -666,190 +535,96 @@ mod tests {
         assert!(tracks.source(TrackId(3)).is_none());
     }
 
-    /// Whether the selection wants `id`'s live load.
-    fn selected(tracks: &Tracks<TestPools>, id: TrackId) -> bool {
-        tracks
-            .records()
-            .iter()
-            .any(|record| record.id == id && record.load.as_ref().is_some_and(|load| load.selected))
-    }
-
-    /// Nobody selected the load the network refused for now, so nobody waits
-    /// for it: its track fails with the refusal, and the load is not sent
-    /// again.
+    /// Nobody waits for the load the network refused for now: its track fails
+    /// with the refusal, and the load is not asked again.
     #[kithara::test]
-    fn an_unselected_load_refused_for_now_fails_its_track() {
-        let mut seqs = seqs();
+    fn an_unwanted_load_refused_for_now_fails_its_track() {
         let mut tracks = tracks_with(TrackId(1));
-        let seq = next_seq(&mut seqs);
-        sent(&mut tracks, LoadClass::Prefetch, seq);
+        begin(&mut tracks, TrackId(1));
 
-        assert!(
-            tracks
-                .settle_load(
-                    seq,
-                    Err(OpenFailure::AskAgain(refusal("connection refused")))
-                )
-                .is_none()
-        );
+        assert!(!tracks.refused(TrackId(1), &refusal("connection refused"), true, false));
 
         assert_eq!(
             status(&tracks),
             TrackStatus::Failed(refusal("connection refused").to_string())
         );
-        assert!(
-            tracks.next_unsent(LoadClass::Prefetch).is_none(),
-            "an abandoned load was sent again"
-        );
     }
 
-    /// The selection reached the track after its prefetch was sent. The
-    /// queue answers the refusal against the selection as it stands, so the
-    /// track keeps loading: the load waits for its own lane again.
+    /// The queue still wants the track the network refused for now, so the
+    /// track keeps loading and the queue asks again.
     #[kithara::test]
-    fn a_load_selected_after_it_was_sent_is_asked_again() {
-        let mut seqs = seqs();
+    fn a_wanted_load_refused_for_now_is_asked_again() {
         let mut tracks = tracks_with(TrackId(1));
-        let seq = next_seq(&mut seqs);
-        let token = sent(&mut tracks, LoadClass::Prefetch, seq);
-        assert!(tracks.promote_load(TrackId(1)));
+        let token = begin(&mut tracks, TrackId(1));
 
-        tracks.settle_load(
-            seq,
-            Err(OpenFailure::AskAgain(refusal("connection refused"))),
-        );
+        assert!(tracks.refused(TrackId(1), &refusal("connection refused"), true, true));
 
         assert_eq!(status(&tracks), TrackStatus::Loading);
         assert!(!token.is_cancelled(), "the wanted load was cut off");
-        assert!(
-            matches!(
-                tracks.next_unsent(LoadClass::Prefetch),
-                Some((TrackId(1), _))
-            ),
-            "the wanted load is not asked again in its lane"
-        );
     }
 
+    /// A fresh load replaces the one in flight, which is cancelled.
     #[kithara::test]
-    fn begin_dedupes_a_live_load() {
+    fn a_fresh_load_cancels_the_one_it_replaces() {
         let mut tracks = tracks_with(TrackId(1));
-        begin(&mut tracks, TrackId(1), LoadClass::Prefetch);
-        let token = CancelToken::never().child();
-        let second = TrackLoad::new(config("https://x/a.mp3", token), LoadClass::Prefetch)
-            .expect("the config carries its token");
-        assert!(tracks.begin_load(TrackId(1), second).is_none());
+        let first = begin(&mut tracks, TrackId(1));
+        let second = begin(&mut tracks, TrackId(1));
+
+        assert!(first.is_cancelled());
+        assert!(!second.is_cancelled());
+        assert_eq!(status(&tracks), TrackStatus::Loading);
     }
 
+    /// A track already standing in its slot has nothing left to load: a
+    /// refusal that arrives for it changes nothing.
     #[kithara::test]
-    fn selection_reflects_only_the_requested_live_load() {
-        let mut tracks = two_tracks();
-        assert!(!selected(&tracks, TrackId(1)));
-        begin(&mut tracks, TrackId(1), LoadClass::Prefetch);
-        begin(&mut tracks, TrackId(2), LoadClass::Interactive);
-        assert!(!selected(&tracks, TrackId(1)));
-        assert!(selected(&tracks, TrackId(2)));
-    }
-
-    /// A load whose token was cancelled is over, though its open has not
-    /// answered yet: a fresh load replaces it, and the old open's answer
-    /// lands on nothing.
-    #[kithara::test]
-    fn begin_replaces_a_cancelled_load() {
-        let mut seqs = seqs();
+    fn a_loaded_track_is_not_failed_by_a_late_refusal() {
         let mut tracks = tracks_with(TrackId(1));
-        let first = next_seq(&mut seqs);
-        sent(&mut tracks, LoadClass::Prefetch, first).cancel();
+        begin(&mut tracks, TrackId(1));
+        assert!(tracks.loaded(TrackId(1), &TrackMetadata::default()));
 
-        let second = next_seq(&mut seqs);
-        sent(&mut tracks, LoadClass::Prefetch, second);
-        assert!(tracks.settle_load(first, Ok(opened())).is_none());
-        assert_eq!(
-            status(&tracks),
-            TrackStatus::Loading,
-            "the replaced load settled"
-        );
-        assert!(tracks.settle_load(second, Ok(opened())).is_some());
-    }
-
-    /// A track whose resource is already in the player has nothing left
-    /// to load. The open still in flight for it fetches something nobody
-    /// waits for, and which side of that race the machine picks must not
-    /// decide whether the track is playable.
-    #[kithara::test]
-    fn a_loaded_track_is_not_failed_by_the_load_it_outlived() {
-        let mut seqs = seqs();
-        let mut tracks = tracks_with(TrackId(1));
-        let seq = next_seq(&mut seqs);
-        sent(&mut tracks, LoadClass::Prefetch, seq);
-
-        tracks.set_status(TrackId(1), TrackStatus::Loaded);
-        tracks.settle_load(seq, Err(OpenFailure::Final(refusal("HTTP 404"))));
+        tracks.refused(TrackId(1), &refusal("HTTP 404"), false, true);
 
         assert!(matches!(tracks.records()[0].status, TrackStatus::Loaded));
-    }
-
-    /// A prefetch still waiting for its lane is what the selection wants
-    /// next: it moves to the interactive lane instead of waiting behind
-    /// background loads.
-    #[kithara::test]
-    fn promote_moves_a_waiting_load_to_the_interactive_lane() {
-        let mut tracks = tracks_with(TrackId(1));
-        begin(&mut tracks, TrackId(1), LoadClass::Prefetch);
-
-        assert!(tracks.promote_load(TrackId(1)));
-
-        assert!(tracks.next_unsent(LoadClass::Prefetch).is_none());
-        assert!(matches!(
-            tracks.next_unsent(LoadClass::Interactive),
-            Some((TrackId(1), _))
-        ));
-    }
-
-    #[kithara::test]
-    fn promote_keeps_a_sent_load_in_its_lane() {
-        let mut seqs = seqs();
-        let mut tracks = tracks_with(TrackId(1));
-        let token = sent(&mut tracks, LoadClass::Prefetch, next_seq(&mut seqs));
-
-        assert!(tracks.promote_load(TrackId(1)));
-
-        assert!(
-            tracks.next_unsent(LoadClass::Interactive).is_none(),
-            "a load already sent keeps its download"
-        );
-        assert!(!token.is_cancelled());
-    }
-
-    #[kithara::test]
-    fn promote_without_a_live_load_reports_none() {
-        let mut tracks = tracks_with(TrackId(1));
-        assert!(!tracks.promote_load(TrackId(1)));
-        begin(&mut tracks, TrackId(1), LoadClass::Prefetch).cancel();
-        assert!(!tracks.promote_load(TrackId(1)));
     }
 
     /// A load that opened hands its token to the resource and leaves the
     /// record free for the next load.
     #[kithara::test]
     fn an_opened_load_disarms_and_leaves_its_record_vacant() {
-        let mut seqs = seqs();
         let mut tracks = tracks_with(TrackId(1));
-        let seq = next_seq(&mut seqs);
-        let token = sent(&mut tracks, LoadClass::Prefetch, seq);
+        let token = begin(&mut tracks, TrackId(1));
 
-        assert!(matches!(
-            tracks.settle_load(seq, Ok(opened())),
-            Some((TrackId(1), _))
-        ));
+        assert!(tracks.loaded(TrackId(1), &TrackMetadata::default()));
 
         assert!(!token.is_cancelled(), "the resource's token was cancelled");
-        begin(&mut tracks, TrackId(1), LoadClass::Prefetch);
+        assert!(tracks.records()[0].load.is_none());
+    }
+
+    /// A load fills the metadata its caller left unset from the decoder's
+    /// tags, and keeps what the caller set.
+    #[kithara::test]
+    fn an_opened_load_fills_only_the_unset_metadata() {
+        let mut tracks = tracks_with(TrackId(1));
+        tracks.records_mut()[0].metadata.title = Some("caller".to_owned());
+        begin(&mut tracks, TrackId(1));
+
+        let tags = TrackMetadata {
+            title: Some("decoder".to_owned()),
+            artist: Some("decoder".to_owned()),
+            ..TrackMetadata::default()
+        };
+        tracks.loaded(TrackId(1), &tags);
+
+        let metadata = &tracks.records()[0].metadata;
+        assert_eq!(metadata.title.as_deref(), Some("caller"));
+        assert_eq!(metadata.artist.as_deref(), Some("decoder"));
     }
 
     #[kithara::test]
     fn removing_a_record_cancels_its_load() {
         let mut tracks = tracks_with(TrackId(1));
-        let token = begin(&mut tracks, TrackId(1), LoadClass::Prefetch);
+        let token = begin(&mut tracks, TrackId(1));
         tracks.records_mut().clear();
         assert!(token.is_cancelled(), "dropping the record aborts the load");
     }
@@ -859,68 +634,37 @@ mod tests {
     /// instead of loading forever.
     #[kithara::test]
     fn a_load_ended_by_its_cancel_leaves_its_track_cancelled() {
-        let mut seqs = seqs();
         let mut tracks = tracks_with(TrackId(1));
-        let seq = next_seq(&mut seqs);
-        let token = sent(&mut tracks, LoadClass::Prefetch, seq);
+        let token = begin(&mut tracks, TrackId(1));
 
         token.cancel();
-        tracks.settle_load(seq, Err(OpenFailure::Final(refusal("cancelled"))));
+        assert!(!tracks.refused(TrackId(1), &refusal("cancelled"), true, true));
 
         assert_eq!(status(&tracks), TrackStatus::Cancelled);
     }
 
-    /// The caller's cancel reached the load between the queue taking it for
-    /// its lane and the send. The open went out all the same: the load keeps
-    /// its lane until the open's answer settles the track.
+    /// A track the load opened before the caller cancelled it, and that the
+    /// queue settles only afterwards, is not admitted: the cancel is the last
+    /// word on that load.
     #[kithara::test]
-    fn a_load_cancelled_as_it_is_sent_settles_on_its_receipt() {
-        let mut seqs = seqs();
+    fn a_track_whose_load_was_cancelled_is_not_admitted() {
         let mut tracks = tracks_with(TrackId(1));
-        let token = begin(&mut tracks, TrackId(1), LoadClass::Prefetch);
-        let (id, _load) = tracks
-            .next_unsent(LoadClass::Prefetch)
-            .expect("the load waits for its lane");
-        token.cancel();
-        let seq = next_seq(&mut seqs);
-        tracks.mark_sent(id, seq);
-
-        tracks.apply_report(LoadReport::Cancelled { id });
-        assert_eq!(
-            status(&tracks),
-            TrackStatus::Loading,
-            "a sent load ends with its answer"
-        );
-        tracks.settle_load(seq, Err(OpenFailure::Final(refusal("cancelled"))));
-        assert_eq!(status(&tracks), TrackStatus::Cancelled);
-    }
-
-    /// A resource the load opened before the caller cancelled it, and that
-    /// the queue settles only afterwards, is not admitted: the cancel is the
-    /// last word on that load.
-    #[kithara::test]
-    fn a_resource_whose_load_was_cancelled_is_not_admitted() {
-        let mut seqs = seqs();
-        let mut tracks = tracks_with(TrackId(1));
-        let seq = next_seq(&mut seqs);
-        let token = sent(&mut tracks, LoadClass::Prefetch, seq);
+        let token = begin(&mut tracks, TrackId(1));
 
         token.cancel();
 
         assert!(
-            tracks.settle_load(seq, Ok(opened())).is_none(),
-            "a cancelled load's resource reached admission"
+            !tracks.loaded(TrackId(1), &TrackMetadata::default()),
+            "a cancelled load's track was admitted"
         );
         assert_eq!(status(&tracks), TrackStatus::Cancelled);
     }
 
     #[kithara::test]
     fn a_failed_load_fails_its_track() {
-        let mut seqs = seqs();
         let mut tracks = tracks_with(TrackId(1));
-        let seq = next_seq(&mut seqs);
-        sent(&mut tracks, LoadClass::Prefetch, seq);
-        tracks.settle_load(seq, Err(OpenFailure::Final(refusal("boom"))));
+        begin(&mut tracks, TrackId(1));
+        tracks.refused(TrackId(1), &refusal("boom"), false, true);
         assert_eq!(
             status(&tracks),
             TrackStatus::Failed(refusal("boom").to_string())
@@ -932,7 +676,7 @@ mod tests {
     #[kithara::test]
     fn only_a_running_load_turns_its_track_slow() {
         let mut tracks = tracks_with(TrackId(1));
-        begin(&mut tracks, TrackId(1), LoadClass::Prefetch);
+        begin(&mut tracks, TrackId(1));
         let watch = |tracks: &Tracks<TestPools>| {
             tracks.records()[0]
                 .load
@@ -942,13 +686,13 @@ mod tests {
         };
         let ended = watch(&tracks);
         tracks.set_status(TrackId(1), TrackStatus::Cancelled);
-        begin(&mut tracks, TrackId(1), LoadClass::Prefetch);
+        begin(&mut tracks, TrackId(1));
 
         tracks.apply_report(LoadReport::Slow {
             id: TrackId(1),
             watch: ended,
         });
-        assert_eq!(status(&tracks), TrackStatus::Cancelled);
+        assert_eq!(status(&tracks), TrackStatus::Loading);
 
         let running = watch(&tracks);
         tracks.apply_report(LoadReport::Slow {
@@ -961,8 +705,8 @@ mod tests {
     #[kithara::test]
     fn cancelling_loads_cancels_every_live_load() {
         let mut tracks = two_tracks();
-        let first = begin(&mut tracks, TrackId(1), LoadClass::Prefetch);
-        let second = begin(&mut tracks, TrackId(2), LoadClass::Interactive);
+        let first = begin(&mut tracks, TrackId(1));
+        let second = begin(&mut tracks, TrackId(2));
 
         tracks.cancel_loads();
 

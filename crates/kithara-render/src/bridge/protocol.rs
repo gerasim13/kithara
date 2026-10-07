@@ -1,19 +1,19 @@
-use std::{convert::Infallible, fmt};
+use std::fmt;
 
 use kithara_audio::DecodeErrorKind;
-use kithara_command::Protocol;
+use kithara_command::{Protocol, Target};
 use kithara_effects::{GainDb, eq::EqLayout};
-use kithara_events::TrackId;
-use kithara_platform::sync::Arc;
 use kithara_signal::SessionFrame;
 
 use super::DeckMixSettingsChange;
-use crate::rt::track::PlayerResource;
+use crate::{CrossfadeSettings, rt::track::PlayerResource};
 
-/// Types a deck's audio thread speaks: its parts, its clock and its answers.
+/// Types a deck's mixer speaks: its parts, its slots, its clock and its answers.
 ///
-/// Batches name no target and the deck refuses none, so every batch due
-/// inside a block applies.
+/// Every part names the slot its owner assigned; a batch's basis lists the slots whose time it
+/// shifts, so a batch computed before another one moved a slot comes back stale. A receipt
+/// carries the batch's parts back as they applied: a part that took a resource in comes back as
+/// nothing, one that let a resource go comes back as [`DeckPart::Released`].
 #[derive(Debug)]
 pub enum DeckProtocol {}
 
@@ -21,64 +21,130 @@ impl Protocol for DeckProtocol {
     type Applied = DeckApplied;
     type Clock = SessionFrame;
     type Command = DeckPart;
-    type Refusal = Infallible;
-    type Target = Infallible;
+    type Refusal = DeckRefusal;
+    type Target = Slot;
 
     fn frames_since(at: SessionFrame, start: SessionFrame) -> Option<u64> {
         at.frames_since(start)
     }
 }
 
+/// One slot of a deck's mixer, assigned by the deck's owner; the mixer has as many as its
+/// config names.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct Slot(u16);
+
+impl Slot {
+    #[must_use]
+    pub const fn new(index: u16) -> Self {
+        Self(index)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u16 {
+        self.0
+    }
+}
+
+impl Target for Slot {
+    fn index(self) -> usize {
+        usize::from(self.0)
+    }
+}
+
+/// Why the mixer refused a batch; it refuses before applying any part, so nothing of the batch
+/// applied.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeckRefusal {
+    /// A track was attached to a slot that holds one.
+    Occupied { slot: Slot },
+    /// A part named a slot that holds no track.
+    Empty { slot: Slot },
+}
+
 /// What a deck reports of a batch it applied.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DeckApplied {
-    /// The media position, in seconds, the track the batch stopped stood at on the frame the
+    /// The media position, in seconds, the slot the batch stopped stood at on the frame the
     /// batch applied on.
     pub stopped_at: Option<f64>,
 }
 
-/// One change a deck applies on its audio thread.
+/// The envelope a slot enters with on `Start` or leaves with on `Stop`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Fade {
+    /// The mixer's declick ramp.
+    Declick,
+    /// A crossfade half, by [`CrossfadeSettings::gains`].
+    Crossfade(CrossfadeSettings),
+}
+
+/// Which half of [`CrossfadeSettings::gains`] a [`DeckPart::Fade`] follows.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FadeDir {
+    In,
+    Out,
+}
+
+/// One change a deck's mixer applies on its audio thread, on the slot its owner names.
 pub enum DeckPart {
-    /// Put a track into the deck.
+    /// Put a track's PCM consumer into an empty slot, stopped.
     Attach {
-        resource: Box<PlayerResource>,
-        item_id: TrackId,
+        slot: Slot,
+        pcm: Box<PlayerResource>,
     },
-    /// Take a track out of the deck by its queue-item identity.
-    Detach { item_id: TrackId },
-    /// Take a track out only while it is still preloading. The audio thread may
-    /// have stitched it in at the end of the leading track before reading
-    /// this; a promoted track keeps playing.
-    Withdraw { item_id: TrackId },
-    /// Start `to`, a held track still preloading, on the frame after `from`'s last. It leads
-    /// under `epoch`, and publishes the playhead once the control side takes that epoch on.
-    Chain {
-        from: TrackId,
-        to: TrackId,
-        epoch: u64,
+    /// Take the track out of a slot; its consumer comes back in the receipt.
+    Detach { slot: Slot },
+    /// Let a slot sound from this frame on, entering with `fade`.
+    Start { slot: Slot, fade: Fade },
+    /// Take a slot out from this frame on with `fade`; once silent it is not read, so it holds
+    /// its position. The position it stopped at comes back in the receipt.
+    Stop { slot: Slot, fade: Fade },
+    /// Ramp a slot's envelope from its gain on this frame along one half of `settings`; an
+    /// envelope that reaches silence stops the slot and reports [`DeckEvent::Faded`].
+    Fade {
+        slot: Slot,
+        settings: CrossfadeSettings,
+        dir: FadeDir,
     },
-    /// Take every track out of the deck and reset the position/duration
-    /// snapshot to zero. Sent when the queue is explicitly cleared.
-    Clear,
-    /// Start a track's fade in or out.
-    Fade(TrackTransition),
-    /// Seek active tracks to the given position in seconds.
-    Seek { seconds: f64, seek_epoch: u64 },
-    /// Let a held track sound from this frame on, ramped in over the deck's declick.
-    Start { item_id: TrackId },
-    /// Ramp a held track out from this frame on; once silent it is not read, so it holds its
-    /// position until a later `Start`.
-    Stop { item_id: TrackId },
-    /// Start every held track, and every track attached after, from this frame on.
-    StartAll,
-    /// Stop every held track, and attach later tracks stopped, from this frame on.
-    StopAll,
-    /// Change how loud the deck sounds from this frame on.
+    /// Start `to` on the frame after `from`'s last. The batch is judged and applied on that
+    /// frame: one that shifted `from` in between leaves it stale.
+    Chain { from: Slot, to: Slot },
+    /// Change how loud the whole deck sounds from this frame on.
     Mix(DeckMixSettingsChange),
-    /// Update the media seconds every track consumes per output second.
-    SetRate(f32),
-    /// Change the deck's equaliser from this frame on.
+    /// Change the deck's equaliser from this frame on; a displaced layout comes back in the
+    /// receipt.
     Eq(DeckEqChange),
+    /// Re-base a slot's track on a seek its owner began off the audio thread.
+    Seek {
+        slot: Slot,
+        seconds: f64,
+        seek_epoch: u64,
+    },
+    /// Update the media seconds a slot consumes per output second.
+    Rate { slot: Slot, rate: f32 },
+    /// Swap a slot's consumer on this frame: the old one's next `evict_fade` frames play out of
+    /// the slot's tail ramped down to silence, the new one takes the slot in the old one's
+    /// transport state, and the old one comes back in the receipt.
+    Replace {
+        slot: Slot,
+        pcm: Box<PlayerResource>,
+    },
+    /// What a part that carried or displaced a resource comes back as in the receipt: the
+    /// consumer a `Detach` or `Replace` let go of, or the layout an `Eq` change displaced. The
+    /// mixer never takes it as a command.
+    Released(Released),
+}
+
+/// A resource the mixer let go of, returned in the receipt so it drops off the audio thread.
+pub enum Released {
+    /// The consumer `slot` held before a `Detach` or a `Replace` of it.
+    Pcm {
+        slot: Slot,
+        pcm: Box<PlayerResource>,
+    },
+    /// The layout an `Eq` change displaced.
+    Eq(Box<EqLayout>),
 }
 
 /// One change to a deck's equaliser.
@@ -90,101 +156,107 @@ pub enum DeckEqChange {
     Layout(Box<EqLayout>),
 }
 
+/// What the mixer tells its owner of a slot, apart from the receipts: the owner reacts in its
+/// own loop.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeckEvent {
+    /// The slot's track played to its end marker, or its source failed.
+    Ended { slot: Slot, at: SessionFrame },
+    /// The slot's envelope reached silence; the slot stopped.
+    Faded { slot: Slot, at: SessionFrame },
+    /// The slot's consumer had `frames` fewer frames than the block asked for.
+    Underrun {
+        slot: Slot,
+        at: SessionFrame,
+        frames: u32,
+    },
+}
+
 impl fmt::Debug for DeckPart {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Attach { item_id, resource } => f
+            Self::Attach { slot, pcm } => f
                 .debug_struct("Attach")
-                .field("item_id", item_id)
-                .field("src", resource.src())
-                .finish_non_exhaustive(),
-            Self::Detach { item_id } => f.debug_struct("Detach").field("item_id", item_id).finish(),
-            Self::Withdraw { item_id } => f
-                .debug_struct("Withdraw")
-                .field("item_id", item_id)
+                .field("slot", slot)
+                .field("src", pcm.src())
                 .finish(),
-            Self::Chain { from, to, epoch } => f
+            Self::Replace { slot, pcm } => f
+                .debug_struct("Replace")
+                .field("slot", slot)
+                .field("src", pcm.src())
+                .finish(),
+            Self::Detach { slot } => f.debug_struct("Detach").field("slot", slot).finish(),
+            Self::Start { slot, fade } => f
+                .debug_struct("Start")
+                .field("slot", slot)
+                .field("fade", fade)
+                .finish(),
+            Self::Stop { slot, fade } => f
+                .debug_struct("Stop")
+                .field("slot", slot)
+                .field("fade", fade)
+                .finish(),
+            Self::Fade {
+                slot,
+                settings,
+                dir,
+            } => f
+                .debug_struct("Fade")
+                .field("slot", slot)
+                .field("settings", settings)
+                .field("dir", dir)
+                .finish(),
+            Self::Chain { from, to } => f
                 .debug_struct("Chain")
                 .field("from", from)
                 .field("to", to)
-                .field("epoch", epoch)
                 .finish(),
-            Self::Clear => f.write_str("Clear"),
-            Self::Fade(t) => f.debug_tuple("Fade").field(t).finish(),
+            Self::Mix(change) => f.debug_tuple("Mix").field(change).finish(),
+            Self::Eq(change) => f.debug_tuple("Eq").field(change).finish(),
             Self::Seek {
+                slot,
                 seconds,
                 seek_epoch,
             } => f
                 .debug_struct("Seek")
+                .field("slot", slot)
                 .field("seconds", seconds)
                 .field("seek_epoch", seek_epoch)
                 .finish(),
-            Self::Start { item_id } => f.debug_struct("Start").field("item_id", item_id).finish(),
-            Self::Stop { item_id } => f.debug_struct("Stop").field("item_id", item_id).finish(),
-            Self::StartAll => f.write_str("StartAll"),
-            Self::StopAll => f.write_str("StopAll"),
-            Self::Mix(change) => f.debug_tuple("Mix").field(change).finish(),
-            Self::SetRate(rate) => f.debug_tuple("SetRate").field(rate).finish(),
-            Self::Eq(change) => f.debug_tuple("Eq").field(change).finish(),
+            Self::Rate { slot, rate } => f
+                .debug_struct("Rate")
+                .field("slot", slot)
+                .field("rate", rate)
+                .finish(),
+            Self::Released(Released::Pcm { slot, pcm }) => f
+                .debug_struct("Released")
+                .field("slot", slot)
+                .field("src", pcm.src())
+                .finish(),
+            Self::Released(Released::Eq(_)) => f.write_str("Released(Eq)"),
         }
     }
 }
 
-/// State machine for a single track's lifecycle.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum TrackState {
-    /// Track is loaded but not yet playing.
+/// Where a slot's track stands.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SlotState {
+    /// No track.
     #[default]
-    Preloading,
-    /// Track is actively playing at full volume.
+    Empty,
+    /// A track that is not read: never started, stopped, or faded out.
+    Stopped,
+    /// A track that sounds.
     Playing,
-    /// Track is fading in (volume ramping up).
-    FadingIn,
-    /// Track is fading out (volume ramping down).
-    FadingOut,
-    /// Track has finished playback (EOF or stopped).
-    Finished,
-}
-
-impl TrackState {
-    /// Whether the track is the "leading" track (playing or fading in).
-    pub(crate) const fn is_leading(self) -> bool {
-        matches!(self, Self::Playing | Self::FadingIn)
-    }
-
-    /// Whether the track is producing audible audio.
-    pub(crate) const fn is_playing(self) -> bool {
-        matches!(self, Self::Playing | Self::FadingIn | Self::FadingOut)
-    }
-}
-
-/// Transition command for a track.
-#[derive(Debug, Clone, PartialEq)]
-pub enum TrackTransition {
-    /// Start fading in the track with the given queue-item identity.
-    FadeIn {
-        item_id: TrackId,
-        settings: crate::CrossfadeSettings,
-        /// Leading epoch the control side published for this item.
-        epoch: u64,
-    },
-    /// Start fading out the track with the given queue-item identity.
-    FadeOut {
-        item_id: TrackId,
-        settings: crate::CrossfadeSettings,
-    },
+    /// A track that played to its end marker, or whose source failed.
+    Ended,
 }
 
 /// Which fault ended a track before its natural end.
 ///
 /// The classification is `Copy` because it is raised on the audio thread,
 /// which cannot allocate: the decoder's own error is reduced to its kind at
-/// the read that returned it and travels as a code from there. Carrying it
-/// is what lets a consumer tell a decode fault from an output rate the
-/// render context disagrees with, or from a range that context could not
-/// supply -- three different defects that otherwise reach the queue as one
-/// indistinguishable "the engine failed". It is named for the render path
-/// because the decode pipeline already owns its own failure classification.
+/// the read that returned it and travels as a code from there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaybackFault {
     /// The decoder or source returned an error mid-stream.
@@ -202,131 +274,5 @@ impl fmt::Display for PlaybackFault {
             Self::OutputRateMismatch => f.write_str("output sample-rate mismatch"),
             Self::OutputRangeUnavailable => f.write_str("render context has no output range"),
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TrackPlaybackStopReason {
-    /// Playback stopped because the track naturally reached EOF.
-    Eof,
-    /// Playback stopped because the track was explicitly stopped or interrupted.
-    Stop,
-    /// Playback stopped because the underlying decoder / source reported
-    /// a non-recoverable error mid-stream. Distinct from `Eof`: the
-    /// track did NOT play to its natural end. Queue consumers must
-    /// treat this as a track-failed signal, NOT as an auto-advance
-    /// trigger, and the payload says which fault it was.
-    Failed(PlaybackFault),
-}
-
-#[derive(Debug, Clone)]
-pub enum PlayerNotification {
-    /// A track was successfully loaded into the processor arena.
-    Loaded { src: Arc<str> },
-    /// A track was removed from the processor arena.
-    Unloaded { src: Arc<str>, item_id: TrackId },
-    /// A track started audible playback (fade-in completed or `play()`), leading under `epoch`
-    /// if it leads.
-    PlaybackStarted {
-        src: Arc<str>,
-        item_id: TrackId,
-        epoch: u64,
-    },
-    /// A track stopped playback. `src` and `item_id` are read by the
-    /// player to construct the `ItemRole` on `ItemDidPlayToEnd`.
-    PlaybackStopped {
-        src: Arc<str>,
-        item_id: TrackId,
-        reason: TrackPlaybackStopReason,
-        /// The slot seek epoch the track sat at when this stop was minted.
-        /// An `Eof` stop is delivered only while this is still the published
-        /// epoch: a newer published seek revives the track, and the end the
-        /// user left behind must not reach the queue. `Stop` and `Failed`
-        /// carry the epoch too but are never fenced on it.
-        seek_epoch: u64,
-    },
-    /// A track change occurred: old track fading out, new track fading in.
-    Changed { src: Arc<str> },
-    /// A track started fading in.
-    FadingIn { src: Arc<str> },
-    /// A track started fading out.
-    FadingOut { src: Arc<str> },
-    /// The processor applied a new effective live playback rate.
-    RateChanged { rate: f32 },
-}
-
-impl PlayerNotification {
-    /// Returns the track src for variants that carry it.
-    ///
-    /// Used by the offline test harness (`take_notification_kinds`) and by
-    /// tracing call-sites that need to discriminate between concurrent
-    /// tracks beyond what the variant tag alone can express.
-    #[must_use]
-    pub const fn src(&self) -> Option<&Arc<str>> {
-        match self {
-            Self::Loaded { src }
-            | Self::Unloaded { src, .. }
-            | Self::Changed { src }
-            | Self::FadingIn { src }
-            | Self::FadingOut { src }
-            | Self::PlaybackStopped { src, .. } => Some(src),
-            Self::PlaybackStarted { .. } | Self::RateChanged { .. } => None,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_platform::sync::Arc;
-    use kithara_test_utils::kithara;
-
-    use super::*;
-
-    #[kithara::test]
-    #[case(PlayerNotification::Loaded { src: Arc::from("a.mp3") }, "Loaded")]
-    #[case(PlayerNotification::FadingIn { src: Arc::from("a.mp3") }, "FadingIn")]
-    #[case(PlayerNotification::RateChanged { rate: 1.25 }, "RateChanged")]
-    #[case(
-        PlayerNotification::PlaybackStopped {
-            src: Arc::from("ended.mp3"),
-            item_id: TrackId::allocate(),
-            reason: TrackPlaybackStopReason::Eof,
-            seek_epoch: 0,
-        },
-        "PlaybackStopped"
-    )]
-    fn notification_debug_format(#[case] n: PlayerNotification, #[case] variant_name: &str) {
-        let debug = format!("{n:?}");
-        assert!(debug.contains(variant_name));
-    }
-
-    #[kithara::test]
-    fn notification_clone() {
-        let n = PlayerNotification::PlaybackStopped {
-            src: Arc::from("ended.mp3"),
-            item_id: TrackId::allocate(),
-            reason: TrackPlaybackStopReason::Stop,
-            seek_epoch: 0,
-        };
-        let cloned = n.clone();
-        assert!(matches!(
-            &n,
-            PlayerNotification::PlaybackStopped { src, .. } if &**src == "ended.mp3"
-        ));
-        assert!(matches!(
-            cloned,
-            PlayerNotification::PlaybackStopped { ref src, .. } if &**src == "ended.mp3"
-        ));
-    }
-
-    #[kithara::test]
-    fn notification_changed_carries_src() {
-        let n = PlayerNotification::Changed {
-            src: Arc::from("next.mp3"),
-        };
-        let PlayerNotification::Changed { src } = n else {
-            panic!("expected Changed");
-        };
-        assert_eq!(&*src, "next.mp3");
     }
 }

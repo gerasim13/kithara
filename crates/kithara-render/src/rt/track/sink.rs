@@ -1,36 +1,45 @@
-use ringbuf::HeapProd;
+use kithara_signal::SessionFrame;
+use ringbuf::{HeapProd, traits::Producer};
 
-use crate::bridge::{PlayerNotification, RtMetrics};
+use crate::bridge::{DeckEvent, RtMetrics, Slot};
 
-/// What a track reports through for one render block: discrete events the control thread reacts
-/// to, counters it samples, and the slot seek epoch that block is rendering under.
+/// What a track reports through for one render block: the events its owner reacts to, the
+/// counters it samples, and where on the session clock the block starts.
 pub struct RtSink<'a> {
-    pub(super) notifications: &'a mut HeapProd<PlayerNotification>,
+    pub(super) events: &'a mut HeapProd<DeckEvent>,
     pub(super) metrics: &'a RtMetrics,
-    /// Latest seek epoch the control thread has published for this slot,
-    /// sampled once per block. A track whose own epoch is older is rendering
-    /// a position the user has already left.
-    pub(super) seek_epoch: u64,
+    /// The slot the track sits in.
+    pub(super) slot: Slot,
+    /// Session frame of the block's first frame.
+    pub(super) start: SessionFrame,
 }
 
 impl<'a> RtSink<'a> {
     pub const fn new(
-        notifications: &'a mut HeapProd<PlayerNotification>,
+        events: &'a mut HeapProd<DeckEvent>,
         metrics: &'a RtMetrics,
-        seek_epoch: u64,
+        slot: Slot,
+        start: SessionFrame,
     ) -> Self {
         Self {
-            notifications,
+            events,
             metrics,
-            seek_epoch,
+            slot,
+            start,
         }
     }
 
-    pub(super) const fn reborrow(&mut self) -> RtSink<'_> {
-        RtSink {
-            notifications: self.notifications,
-            metrics: self.metrics,
-            seek_epoch: self.seek_epoch,
+    /// Session frame `offset` frames into the block.
+    #[must_use]
+    pub fn at(&self, offset: usize) -> SessionFrame {
+        let offset = i64::try_from(offset).unwrap_or(i64::MAX);
+        SessionFrame::new(i64::from(self.start).saturating_add(offset))
+    }
+
+    /// Hand `event` to the owner; a full ring drops it here and counts it.
+    pub(super) fn report(&mut self, event: DeckEvent) {
+        if self.events.try_push(event).is_err() {
+            self.metrics.record_event_overflow();
         }
     }
 }

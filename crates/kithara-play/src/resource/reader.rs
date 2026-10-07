@@ -10,21 +10,21 @@ use kithara_audio::{
     AudioObserver, AudioReader, ChunkOutcome, ConsumerWakeMode, ReadOutcome, ResamplerBackend,
     SeekOutcome,
 };
-use kithara_bufpool::HasPool;
+use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_command::Sender;
 use kithara_decode::{DecodeError, DecodeResult, TrackMetadata};
 use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{maybe_send::MaybeSendFuture, sync::Arc, time::Duration};
 use kithara_render::{
     LaneProtocol, LoadRefusal, Open,
-    rt::track::{PcmConsumer, PlaybackRate},
+    rt::track::{PcmConsumer, PlaybackRate, PlayerResource},
 };
 use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
 use tracing::warn;
 
 use super::{PlaybackResamplerBackend, ResourceConfig, SourceType};
-use crate::{PlayWorker, TrackConfig};
+use crate::{PlayWorker, TrackConfig, player::TrackSettings};
 
 /// Type-erased audio resource wrapping any `AudioReader`.
 ///
@@ -328,27 +328,99 @@ where
     }
 }
 
+impl<S, B> ResourceLoad<S, B>
+where
+    B: Default,
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    /// The track opens with its renderer where `settings` stand.
+    pub(crate) fn start_at(&mut self, settings: TrackSettings) {
+        self.config.warp = settings.warp(&self.config.warp);
+    }
+}
+
+/// What an open hands the track that asked for it: the consumer its deck slot
+/// reads, the sender of its render lane, and what the track shows of its
+/// source.
+pub struct OpenedTrack {
+    pub pcm: Box<PlayerResource>,
+    pub lane: Option<Sender<LaneProtocol>>,
+    pub duration: Option<Duration>,
+    pub abr: Option<kithara_abr::AbrHandle>,
+    /// What the decoder read of the source's tags.
+    pub metadata: TrackMetadata,
+}
+
+impl Debug for OpenedTrack {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OpenedTrack")
+            .field("src", self.pcm.src())
+            .field("duration", &self.duration)
+            .finish_non_exhaustive()
+    }
+}
+
+impl OpenedTrack {
+    /// Splits `resource` into what its track holds, its consumer waking the
+    /// worker as `wake` says and drawing on `pools`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the pool's refusal of the consumer's buffers.
+    fn new<S>(
+        mut resource: Resource,
+        wake: Option<ConsumerWakeMode>,
+        pools: &PoolRegion<S>,
+    ) -> Result<Self, PoolError>
+    where
+        S: HasPool<f32>,
+    {
+        let lane = resource.take_lane();
+        let duration = resource.duration();
+        let abr = resource.abr_handle();
+        let metadata = resource.metadata().clone();
+        if let Some(wake) = wake {
+            resource.set_consumer_wake_mode(wake);
+        }
+        let src = Arc::clone(&resource.src);
+        let pcm = Box::new(PlayerResource::new(resource.into(), src, pools)?);
+        Ok(Self {
+            pcm,
+            lane,
+            duration,
+            abr,
+            metadata,
+        })
+    }
+}
+
 impl<S, B> Open for ResourceLoad<S, B>
 where
     B: Default + ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    type Opened = Resource;
+    type Opened = OpenedTrack;
 
     /// Ends the moment the track's cancel fires: a cancelled track's open is
     /// never polled, and one in flight drops only after its token reads
     /// cancelled.
-    fn open(self) -> impl MaybeSendFuture<Output = Result<Resource, LoadRefusal>> {
+    fn open(self) -> impl MaybeSendFuture<Output = Result<OpenedTrack, LoadRefusal>> {
         let cancel = self.config.cancel.clone();
+        let wake = self.config.consumer_wake_mode;
+        let worker = self.config.worker.clone();
         let open = Resource::open(self.config, Some(self.observer));
         async move {
-            let Some(cancel) = cancel else {
-                return open.await;
+            let resource = match cancel {
+                None => open.await?,
+                Some(cancel) => match select(pin!(cancel.cancelled()), pin!(open)).await {
+                    Either::Left(((), _open)) => return Err(LoadRefusal::Cancelled),
+                    Either::Right((opened, _cancel)) => opened?,
+                },
             };
-            match select(pin!(cancel.cancelled()), pin!(open)).await {
-                Either::Left(((), _open)) => Err(LoadRefusal::Cancelled),
-                Either::Right((opened, _cancel)) => opened,
-            }
+            let worker = worker.ok_or(DecodeError::InvalidData {
+                detail: "ResourceConfig requires an explicit PlayWorker",
+            })?;
+            Ok(OpenedTrack::new(resource, wake, worker.pools())?)
         }
     }
 }

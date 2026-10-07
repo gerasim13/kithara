@@ -1,65 +1,26 @@
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
-pub use kithara_play::player::PlaybackView;
-use kithara_play::{CrossfadeSettings, ResourceSrc, SelectionPlayback};
+use kithara_play::{Bound, ResourceSrc};
 
-use crate::track::TrackSource;
+use crate::{event::AdvanceReason, track::TrackSource};
 
-/// Transition style for a track switch.
-///
-/// Mirrors the Apple-idiomatic pattern of a namespace-style type with
-/// variants describing "what" — not "how" — so the same method
-/// signature handles both manual and auto-advance cases.
-///
-/// - [`Transition::None`] — immediate cut (0 seconds). Matches
-///   `AVQueuePlayer`'s user-initiated selection idiom.
-/// - [`Transition::Crossfade`] — use the player's configured
-///   [`PlayerImpl::crossfade_duration`](kithara_play::PlayerImpl::crossfade_duration).
-/// - [`Transition::CrossfadeWith`] — explicit override in seconds.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
-pub enum Transition {
-    /// No crossfade; immediate cut.
-    None,
-    /// Use the player's configured crossfade duration.
-    Crossfade,
-    /// Use an explicit crossfade duration (seconds).
-    CrossfadeWith { settings: CrossfadeSettings },
+/// A transition by press and an automatic one alike: the item it goes to and
+/// the side of the frame the item enters on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Transition {
+    pub to: TrackId,
+    pub bound: Bound,
 }
 
-impl Transition {
-    /// Resolve the transition to an actual crossfade duration in
-    /// seconds using `default` for [`Transition::Crossfade`].
-    #[must_use]
-    pub const fn settings(self, default: CrossfadeSettings) -> CrossfadeSettings {
-        match self {
-            Self::None => CrossfadeSettings {
-                duration: 0.0,
-                ..default
-            },
-            Self::Crossfade => default,
-            Self::CrossfadeWith { settings } => settings,
-        }
-    }
-}
-
-/// A pending-select entry: a track id waiting to be applied plus the
-/// [`Transition`] the caller asked for. Stored until loading finishes.
+/// The transition the queue carries out, and why.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct PendingSelect {
-    pub(super) reason: crate::AdvanceReason,
-    pub(super) settings: CrossfadeSettings,
-    pub(super) playback: SelectionPlayback,
-    pub(super) id: TrackId,
-}
-
-/// Pending-select phase. Replaces `Option<PendingSelect>` where `None`
-/// conflated "idle" with "absent"; [`SelectPhase::Idle`] makes the
-/// no-selection state explicit.
-#[derive(Clone, Copy, Debug)]
-pub(super) enum SelectPhase {
-    Idle,
-    Pending(PendingSelect),
+pub(super) struct Target {
+    pub(super) transition: Transition,
+    pub(super) reason: AdvanceReason,
+    /// Scheduled ahead of the current track's end rather than pressed: the
+    /// navigation cursor moves once it applies, and it gives way when nothing
+    /// sounds by the time it enters.
+    pub(super) auto: bool,
 }
 
 /// Cached monotonic playback position; "no value yet" is the explicit
@@ -191,24 +152,20 @@ mod tests {
     }
 
     #[kithara::test]
-    fn select_phase_pending_carries_captured_policy() {
-        let phase = SelectPhase::Pending(PendingSelect {
-            id: TrackId(5),
-            settings: CrossfadeSettings {
-                duration: 0.0,
-                ..CrossfadeSettings::default()
+    fn a_target_carries_its_transition_and_reason() {
+        let bound = Bound::AtOrAfter(kithara_signal::SessionFrame::new(64));
+        let target = Target {
+            transition: Transition {
+                to: TrackId(5),
+                bound,
             },
-            playback: SelectionPlayback::Play,
-            reason: crate::AdvanceReason::UserSelect,
-        });
-        match phase {
-            SelectPhase::Pending(p) => {
-                assert_eq!(p.id, TrackId(5));
-                assert_eq!(p.settings.duration, 0.0);
-                assert_eq!(p.playback, SelectionPlayback::Play);
-                assert_eq!(p.reason, crate::AdvanceReason::UserSelect);
-            }
-            SelectPhase::Idle => panic!("expected Pending"),
-        }
+            reason: AdvanceReason::UserSelect,
+            auto: false,
+        };
+
+        assert_eq!(target.transition.to, TrackId(5));
+        assert_eq!(target.transition.bound, bound);
+        assert_eq!(target.reason, AdvanceReason::UserSelect);
+        assert!(!target.auto);
     }
 }

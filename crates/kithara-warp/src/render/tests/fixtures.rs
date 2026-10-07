@@ -81,6 +81,11 @@ pub(super) fn renderer(config: &WarpConfig) -> WarpRenderer {
     Warp::new((), config).renderer(spec(), pools())
 }
 
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
 pub(super) fn render_serviced(fx: &mut WarpRenderer, input: AudioChunk) -> Option<AudioChunk> {
     fx.prepare(spec());
     let output = fx

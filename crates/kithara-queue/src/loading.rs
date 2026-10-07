@@ -1,21 +1,9 @@
 use kithara_bufpool::HasPool;
-use kithara_command::Seq;
 use kithara_events::TrackId;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_play::ResourceConfig;
 
 use crate::error::QueueError;
-
-/// Which loader lane a load occupies.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LoadClass {
-    /// User-facing selection: one dedicated lane slot, isolated from
-    /// prefetch so a hung background lane cannot starve selection.
-    Interactive,
-    /// Append-time background prefetch, capped by
-    /// [`QueueConfig::max_concurrent_loads`](crate::QueueConfig::max_concurrent_loads).
-    Prefetch,
-}
 
 /// What a task beside a track's load reports to the queue that owns the
 /// track.
@@ -31,39 +19,15 @@ pub(crate) enum LoadReport {
         load: CancelToken,
         cover: Arc<Vec<u8>>,
     },
-    /// The track's token ended the load: a load still waiting for its lane
-    /// is over; one already sent ends with its open's answer.
-    Cancelled { id: TrackId },
 }
 
-/// Why an open the dispatcher answered left its track without a source.
-pub(crate) enum OpenFailure {
-    /// A cause a later ask can answer.
-    AskAgain(QueueError),
-    /// A cause no later ask answers.
-    Final(QueueError),
-}
-
-/// A track's live load: its prepared config, the lane it waits for, and the
-/// open it has in flight. Dropping it armed cancels the track's token, so
-/// removing a track aborts its load; dropping it always ends the tasks that
-/// watch the load.
+/// A track's live load: the token its open and its resource are cancelled
+/// with, and the watch that ends the tasks beside it. Dropping it armed
+/// cancels the track's token, so removing a track aborts its load; dropping
+/// it always ends the tasks that watch the load.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub(crate) struct TrackLoad<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    pub(crate) config: ResourceConfig<S>,
-    /// The lane the load waits for until it is sent; it keeps the lane it
-    /// was sent in.
-    pub(crate) class: LoadClass,
-    /// The user's selection wants this track. A prefetch already sent stays
-    /// in its lane when the selection reaches it; being wanted decides
-    /// whether a refusal a later ask can answer is asked again.
-    pub(crate) selected: bool,
-    /// The open in flight, `None` while the load waits for its lane.
-    pub(crate) sent: Option<Seq>,
+pub(crate) struct TrackLoad {
     /// The track's token; once the load opens it belongs to the resource.
     #[field(get, vis = "pub(crate)")]
     token: CancelToken,
@@ -74,15 +38,15 @@ where
     armed: bool,
 }
 
-impl<S> TrackLoad<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    /// A load of `config` waiting for `class`'s lane.
+impl TrackLoad {
+    /// The load of `config`, owning its per-track token.
     ///
     /// # Errors
     /// [`QueueError::Resource`] when `config` carries no per-track token.
-    pub(crate) fn new(config: ResourceConfig<S>, class: LoadClass) -> Result<Self, QueueError> {
+    pub(crate) fn new<S>(config: &ResourceConfig<S>) -> Result<Self, QueueError>
+    where
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    {
         let Some(token) = config.cancel().cloned() else {
             return Err(QueueError::Resource(
                 "resource config missing per-track cancel".to_owned(),
@@ -91,10 +55,6 @@ where
         Ok(Self {
             watch: token.child(),
             token,
-            config,
-            class,
-            selected: class == LoadClass::Interactive,
-            sent: None,
             armed: true,
         })
     }
@@ -104,16 +64,9 @@ where
     pub(crate) fn disarm(&mut self) {
         self.armed = false;
     }
-
-    pub(crate) fn is_cancelled(&self) -> bool {
-        !self.armed || self.token.is_cancelled()
-    }
 }
 
-impl<S> Drop for TrackLoad<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
+impl Drop for TrackLoad {
     fn drop(&mut self) {
         if self.armed {
             self.token.cancel();
@@ -141,12 +94,9 @@ pub(crate) mod tests {
         config
     }
 
-    fn load(token: &CancelToken) -> TrackLoad<TestPools> {
-        TrackLoad::new(
-            config("https://x/a.mp3", token.clone()),
-            LoadClass::Prefetch,
-        )
-        .expect("the config carries its token")
+    fn load(token: &CancelToken) -> TrackLoad {
+        TrackLoad::new(&config("https://x/a.mp3", token.clone()))
+            .expect("the config carries its token")
     }
 
     #[kithara::test]
@@ -175,7 +125,7 @@ pub(crate) mod tests {
         .store(AssetStore::builder(pools()).build())
         .build();
         assert!(matches!(
-            TrackLoad::new(config, LoadClass::Prefetch),
+            TrackLoad::new(&config),
             Err(QueueError::Resource(_))
         ));
     }

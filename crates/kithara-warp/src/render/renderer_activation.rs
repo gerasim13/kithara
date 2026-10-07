@@ -5,12 +5,8 @@ use kithara_signal::{AudioChunk, AudioChunkInfo, FrameCount};
 use kithara_stretch::{ElasticError, ElasticRequest};
 use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
-use tracing::warn;
 
-use super::{
-    renderer::{PreparedActivation, PreparedQuantum, WarpRenderer},
-    renderer_projection::ProjectionPreparation,
-};
+use super::renderer::{PreparedActivation, PreparedQuantum, WarpRenderer};
 
 impl<S> WarpRenderer<S>
 where
@@ -156,7 +152,7 @@ where
 
     /// Select the next source span that fits the configured output quantum.
     /// A quantum at the renderer's own speed renders at most `output_limit`
-    /// output frames; a projected quantum follows its plan.
+    /// output frames.
     ///
     /// # Errors
     /// Returns pending activation or the geometry/engine admission error.
@@ -173,37 +169,12 @@ where
                 Err(crate::WarpRenderError::OutstandingQuantum)
             };
         }
-        if self.projection.retired.is_some() || self.transition_pending() || self.engine_outdated()
-        {
+        if self.transition_pending() || self.engine_outdated() {
             return Err(crate::WarpRenderError::NeedsService);
         }
-        if !self.requires_staging()
-            && (self.plan.is_some()
-                || self.projection.selected.is_some()
-                || self.projection.active.is_some())
-        {
-            return Err(crate::WarpRenderError::UnsupportedProjection);
+        if !self.requires_staging() && self.plan.is_some() {
+            return Err(crate::WarpRenderError::UnsupportedRegionPlan);
         }
-        if let Some(prepared) = self.continue_resident_projection(meta, remaining)? {
-            self.prepared_quantum = Some(prepared);
-            return Ok(FrameCount::new(prepared.frames));
-        }
-        let remaining = match self.prepare_projection(meta, remaining) {
-            Ok(ProjectionPreparation::Projected(prepared)) => {
-                self.prepared_quantum = Some(prepared);
-                return Ok(FrameCount::new(prepared.frames));
-            }
-            Ok(ProjectionPreparation::Service) => {
-                return Err(crate::WarpRenderError::NeedsService);
-            }
-            Ok(ProjectionPreparation::Pending) => {
-                return Err(crate::WarpRenderError::PendingActivation);
-            }
-            Ok(ProjectionPreparation::Manual(remaining)) => remaining,
-            Err(error) => {
-                return Err(error.into());
-            }
-        };
         let rate = self.rate;
         let preview_frames = self
             .render_quantum_frames
@@ -253,7 +224,6 @@ where
                     active_frames,
                     frames,
                     source_start: meta.frame_offset,
-                    projection: None,
                     landing_frames,
                 })
             });
@@ -270,38 +240,10 @@ where
     }
 
     /// Shrink a prepared source span at true EOF without sampling controls again.
-    pub fn prepare_terminal_quantum(
-        &mut self,
-        meta: AudioChunkInfo,
-        frames: usize,
-    ) -> Option<FrameCount> {
+    pub fn prepare_terminal_quantum(&mut self, frames: usize) -> Option<FrameCount> {
         let mut prepared = self.prepared_quantum.take()?;
         if frames == 0 || frames > prepared.frames {
             return None;
-        }
-        if prepared.projection.is_some() {
-            if self
-                .residency
-                .as_ref()
-                .is_some_and(|resident| resident.prepared.is_some())
-            {
-                prepared.frames = frames;
-                if let Some(projection) = prepared.projection.as_mut() {
-                    projection.output_frames = 0;
-                }
-                self.prepared_quantum = Some(prepared);
-                return Some(FrameCount::new(frames));
-            }
-            match self.resize_projected_quantum(prepared, meta, frames) {
-                Ok(projected) => {
-                    self.prepared_quantum = Some(projected);
-                    return Some(FrameCount::new(projected.frames));
-                }
-                Err(error) => {
-                    warn!(%error, "terminal projected source quantum sizing failed");
-                    return None;
-                }
-            }
         }
         let shrink = prepared.frames - frames;
         if shrink > 0 {

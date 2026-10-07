@@ -1,5 +1,6 @@
 use kithara_config::Config;
-use kithara_render::LaneCommand;
+use kithara_events::TrackId;
+use kithara_render::{LaneCommand, bridge::Slot};
 use kithara_warp::{MIN_SPEED, SpeedCurve, StretchKind, WarpConfig};
 
 use crate::PlayError;
@@ -7,26 +8,28 @@ use crate::PlayError;
 /// What a track plays with that changes while it plays.
 ///
 /// A change of one field goes to the track's render lane as one lane command;
-/// the lane's receipt moves it into the settings the track's owner reads.
+/// the lane's receipt moves it into the settings the track's owner reads. The
+/// track executes its speed itself: it alone knows where its lane stands.
 #[derive(Clone, Copy, Debug, PartialEq, Config)]
-#[config(check(error = PlayError), fields(value, get(copy)))]
-pub(crate) struct TrackSettings {
+#[config(default, check(error = PlayError), fields(value, get(copy)))]
+pub struct TrackSettings {
     /// How fast the track plays, 1.0 at its own tempo.
-    #[config(live, check = check_speed)]
+    #[config(live(owner), check = check_speed, builder(default = 1.0))]
     speed: f32,
     /// Whether the pitch stays put at any speed; only a backend with keylock
     /// keeps it.
-    #[config(live)]
+    #[config(live, builder(default = false))]
     keylock: bool,
     /// The time-stretch backend that renders the track.
-    #[config(live)]
+    #[config(live, builder(default))]
     backend: StretchKind,
 }
 
 impl TrackSettings {
     /// `base` for the renderer of a track that starts where these settings
     /// stand.
-    pub(crate) fn warp(self, base: &WarpConfig) -> WarpConfig {
+    #[must_use]
+    pub fn warp(self, base: &WarpConfig) -> WarpConfig {
         base.starting_at(self.speed, self.keylock, self.backend)
     }
 }
@@ -51,6 +54,19 @@ impl From<TrackSettingsChange> for LaneCommand {
             TrackSettingsChange::Backend(kind) => Self::SetBackend(kind),
         }
     }
+}
+
+/// What one track is built from: the item it plays, the mixer slot its deck
+/// assigned it, and the settings it starts with.
+#[derive(Clone, Copy, Debug, Config)]
+#[config(construction)]
+pub struct PlayerConfig {
+    #[config(value)]
+    pub item: TrackId,
+    #[config(value)]
+    pub slot: Slot,
+    #[config(nested)]
+    pub settings: TrackSettings,
 }
 
 #[cfg(test)]

@@ -48,6 +48,7 @@ kithara-events = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false }
+kithara-signal = { workspace = true }
 kithara-test-utils = { workspace = true }
 kithara-waveform = { workspace = true, default-features = false }
 
@@ -74,7 +75,6 @@ kithara-bufpool = { workspace = true }
 kithara-platform = { workspace = true, features = ["tokio-rt-multi-thread"] }
 kithara-play = { workspace = true, default-features = false, features = ["mock"] }
 kithara-queue = { path = ".", default-features = false, features = ["usdt"] }
-kithara-signal = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang", "temp-dir"] }
 kithara-warp = { workspace = true }
 

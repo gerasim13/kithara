@@ -47,10 +47,12 @@ pub(crate) fn prepare_route_restart<T, S>(
         target
     } else {
         let observed = state
-            .transport_control
+            .transport_observation
             .as_mut()
-            .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?
-            .observation()
+            .ok_or_else(|| {
+                SessionError::Graph("session transport observation is missing".to_owned())
+            })?
+            .read()
             .session_grid();
         if observed.epoch() < axis.epoch() {
             return Err(SessionError::Graph(
@@ -133,10 +135,10 @@ fn finish_route_restart<T, S>(
         state.reserved_session_grid = Some(promoted);
     }
     let observed = state
-        .transport_control
+        .transport_observation
         .as_mut()
-        .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?
-        .observation()
+        .ok_or_else(|| SessionError::Graph("session transport observation is missing".to_owned()))?
+        .read()
         .session_grid();
     if observed != promoted {
         return Err(SessionError::Graph(
@@ -156,10 +158,10 @@ pub(crate) fn observe_commits<T, S>(state: &mut SessionState<T, S>) {
     if state.reserved_session_grid.is_some() {
         return;
     }
-    let Some(control) = state.transport_control.as_mut() else {
+    let Some(observation) = state.transport_observation.as_mut() else {
         return;
     };
-    let observation = control.observation();
+    let observation = *observation.read();
     publish_committed(state, &observation);
 }
 

@@ -128,6 +128,21 @@ impl TrackFade {
         self.settled = self.frames == 0;
     }
 
+    /// Gain the envelope applied to the last mixed frame.
+    pub(super) const fn gain(&self) -> f32 {
+        self.gain
+    }
+
+    /// Whether the envelope is on its way down to silence.
+    pub(super) const fn is_fading_out(&self) -> bool {
+        matches!(self.direction, Direction::Out) && !self.settled
+    }
+
+    /// Frames until the envelope settles.
+    pub(super) const fn remaining(&self) -> u64 {
+        self.frames.saturating_sub(self.frame)
+    }
+
     pub(super) fn stop(&mut self, _sample_rate: NonZeroU32) {
         self.direction = Direction::Out;
         self.frame = 1;

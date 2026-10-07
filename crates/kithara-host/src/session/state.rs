@@ -8,7 +8,7 @@ use firewheel::{
 };
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::PoolRegion;
-use kithara_command::Live;
+use kithara_command::{Live, Sender};
 use kithara_config::ConfigOwner;
 use kithara_events::EventBus;
 use kithara_output::OutputGroup;
@@ -21,13 +21,14 @@ use kithara_warp::{
     BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridStamp, MapAxis, SessionAxis,
 };
 use tracing::{debug, warn};
+use triple_buffer::Output;
 
 use super::{
     dispatch::{restart_stream, sample_rate, stream_shape, trace_stream_info},
     graph::tap,
     protocol::{PlayerId, SessionError, StartStreamFn},
     queue::HostProtocol,
-    transport::{SessionGridGeneration, TransportControl, install},
+    transport::{SessionGridGeneration, TransportObservation, install},
 };
 use crate::{
     api::Tap,
@@ -319,7 +320,10 @@ pub(crate) struct SessionState<T, S> {
     pub(super) session_limiter_node_id: Option<NodeID>,
     pub(super) session_output_node_id: Option<NodeID>,
     pub(super) stream: Option<T>,
-    pub(super) transport_control: Option<TransportControl>,
+    /// The queue Host changes reach the running transport through.
+    pub(super) transport_queue: Option<Sender<HostProtocol>>,
+    /// What the running transport last committed.
+    pub(super) transport_observation: Option<Output<TransportObservation>>,
     pub(super) next_player_id: PlayerId,
     pub(super) root_view: RootView,
     /// The Host settings as the render graph confirmed them, with the
@@ -378,7 +382,8 @@ impl<T, S> SessionState<T, S> {
             start_stream_fn: Box::new(start_stream_fn),
             ctx: None,
             stream: None,
-            transport_control: None,
+            transport_queue: None,
+            transport_observation: None,
             taps: Taps::default(),
             next_player_id: 1,
             session_output_node_id: None,
@@ -476,13 +481,14 @@ fn create_firewheel_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), 
         .reserved_session_grid
         .take()
         .ok_or_else(|| SessionError::Graph("session grid generation is missing".to_owned()))?;
-    let transport_control = match install(&mut ctx, session_grid, *state.settings.config()) {
-        Ok(control) => control,
-        Err(error) => {
-            state.reserved_session_grid = Some(session_grid);
-            return Err(SessionError::Graph(error.into()));
-        }
-    };
+    let (transport_queue, transport_observation) =
+        match install(&mut ctx, session_grid, *state.settings.config()) {
+            Ok(transport) => transport,
+            Err(error) => {
+                state.reserved_session_grid = Some(session_grid);
+                return Err(SessionError::Graph(error.into()));
+            }
+        };
     let stream = match (state.start_stream_fn)(&mut ctx, sample_rate) {
         Ok(stream) => stream,
         Err(error) => {
@@ -492,7 +498,8 @@ fn create_firewheel_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), 
     };
     state.ctx = Some(ctx);
     state.stream = Some(stream);
-    state.transport_control = Some(transport_control);
+    state.transport_queue = Some(transport_queue);
+    state.transport_observation = Some(transport_observation);
     state.stream_needs_restart = false;
     state.publish_root();
     trace_stream_info(state, "start-stream");

@@ -82,13 +82,13 @@ impl<T, S> HostSettingsExec<()> for SessionState<T, S> {
         {
             return Err(PlayError::Late);
         }
-        let Some(control) = self.transport_control.as_mut() else {
+        let Some(queue) = self.transport_queue.as_mut() else {
             self.settings.apply(change)?;
             self.publish_root();
             return Ok(());
         };
         self.settings
-            .send(control.queue(), at, change, HostPart::Settings)
+            .send(queue, at, change, HostPart::Settings)
             .map(drop)
             .map_err(|error| match error {
                 LiveError::Invalid(error) => error,
@@ -122,9 +122,9 @@ impl<T, S> SessionState<T, S> {
 pub(crate) fn settle_receipts<T, S>(state: &mut SessionState<T, S>) {
     let mut applied = false;
     while let Some(receipt) = state
-        .transport_control
+        .transport_queue
         .as_mut()
-        .and_then(|control| control.queue().receipts().next())
+        .and_then(|queue| queue.receipts().next())
     {
         let before = *state.settings.config();
         let Some(settled) = state.settings.settle(&receipt) else {

@@ -7,7 +7,7 @@ use kithara_stretch::{
     ElasticBackendConfig, ElasticBackendConfigPatch, ElasticBackendConfigPatchError, StretchKind,
 };
 
-use crate::{RegionPlan, WarpPlanSlot, consts};
+use crate::{RegionPlan, consts};
 
 /// Fixed resources used to construct one resident [`super::Warp`].
 ///
@@ -16,9 +16,6 @@ use crate::{RegionPlan, WarpPlanSlot, consts};
 #[config(builder(state_mod(vis = "pub")), patch(fallible), fields(value))]
 #[non_exhaustive]
 pub struct WarpConfig {
-    /// Explicit projected selection prepared by the musical policy owner.
-    #[config(skip = "shared projected warp plan handle", builder(default = Arc::new(WarpPlanSlot::default())), get(ref), patch(skip))]
-    plan: Arc<WarpPlanSlot>,
     /// Media seconds consumed per output second a renderer built from this
     /// configuration starts at. Not a document key: the render lane changes it
     /// on a frame.

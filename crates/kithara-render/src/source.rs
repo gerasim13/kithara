@@ -139,7 +139,6 @@ where
         };
         let frames = match self.prepare_quantum(meta, remaining) {
             Ok(frames) => frames,
-            Err(WarpRenderError::PendingActivation) => return,
             Err(WarpRenderError::NeedsService) => {
                 if self.warp.transition_pending() {
                     self.drain_state = DrainState::LiveWarp(self.source.decode_epoch());
@@ -605,11 +604,7 @@ where
                 if frames == 0 {
                     TrackStep::StateChanged
                 } else {
-                    let Some(meta) = self.staged_meta else {
-                        self.quantum_failed = true;
-                        return TrackStep::Failed;
-                    };
-                    let Some(frames) = self.warp.prepare_terminal_quantum(meta, frames) else {
+                    let Some(frames) = self.warp.prepare_terminal_quantum(frames) else {
                         self.quantum_failed = true;
                         return TrackStep::Failed;
                     };

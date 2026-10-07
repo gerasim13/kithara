@@ -1,6 +1,10 @@
 use kithara_bufpool::PoolError;
 use kithara_platform::time::Duration;
-use kithara_render::{InvalidCrossfade, bridge::InvalidMixLevel, rt::BufferGeometryError};
+use kithara_render::{
+    InvalidCrossfade,
+    bridge::{DeckRefusal, InvalidMixLevel},
+    rt::BufferGeometryError,
+};
 
 use crate::{
     api::{SlotId, TrackId},
@@ -19,8 +23,11 @@ pub enum PlayError {
     #[error("no active slot")]
     NoActiveSlot,
 
-    #[error("slot command channel full: {slot:?}")]
-    SlotChannelFull { slot: SlotId },
+    #[error("the {0} queue has no room")]
+    Full(&'static str),
+
+    #[error("the deck refused a batch: {0:?}")]
+    Deck(DeckRefusal),
 
     #[error("item {item:?} is not on the deck and came without a resource")]
     ItemConsumed { item: TrackId },

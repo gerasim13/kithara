@@ -1,17 +1,8 @@
 //! Lower player-to-host session protocol.
 
 mod wire {
-    use std::num::NonZeroUsize;
-
-    use kithara_bufpool::PoolRegion;
-    use kithara_events::EventBus;
-    use kithara_render::{
-        bridge::SlotControl,
-        rt::{BufferGeometryError, DeckMixerConfig},
-    };
+    use kithara_render::rt::BufferGeometryError;
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
-
-    use crate::api::SlotId;
 
     pub type PlayerId = u64;
 
@@ -50,38 +41,6 @@ mod wire {
         RestartFailed { reason: String, r#source: String },
     }
 
-    /// What a deck joins its session with. The Host registers the deck from it
-    /// and builds the deck's slot, answering it as [`AllocatedSlot`].
-    #[non_exhaustive]
-    pub struct DeckRegistration<S> {
-        pub grid_id: BeatGridId,
-        pub bus: EventBus,
-        pub mixer: DeckMixerConfig,
-        pub pools: PoolRegion<S>,
-        pub render_quantum_frames: Option<NonZeroUsize>,
-        pub response_budget_frames: Option<NonZeroUsize>,
-    }
-
-    impl<S> DeckRegistration<S> {
-        /// A deck that asks the session for no playback-buffer geometry.
-        #[must_use]
-        pub const fn new(
-            grid_id: BeatGridId,
-            bus: EventBus,
-            pools: PoolRegion<S>,
-            mixer: DeckMixerConfig,
-        ) -> Self {
-            Self {
-                grid_id,
-                bus,
-                mixer,
-                pools,
-                render_quantum_frames: None,
-                response_budget_frames: None,
-            }
-        }
-    }
-
     /// What the session knows about its output rate.
     #[derive(Clone, Copy)]
     #[non_exhaustive]
@@ -111,18 +70,6 @@ mod wire {
         }
     }
 
-    #[non_exhaustive]
-    pub struct AllocatedSlot {
-        pub control: SlotControl,
-        pub slot: SlotId,
-    }
-
-    impl AllocatedSlot {
-        #[must_use]
-        pub fn new(control: SlotControl, slot: SlotId) -> Self {
-            Self { control, slot }
-        }
-    }
 }
 
 mod binding {
@@ -144,6 +91,9 @@ mod binding {
         pub sample_rate: SessionSampleRate,
         /// The measured stream once one runs, the requested block before.
         pub stream_shape: Option<StreamShape>,
+        /// How the consumers the session's render callback reads wake their
+        /// workers.
+        pub consumer_wake_mode: ConsumerWakeMode,
     }
 
     /// Where a session publishes its output for the decks it holds to read.
@@ -152,21 +102,25 @@ mod binding {
 
     impl SessionOutputView {
         /// A session that has published no output yet: nothing measured, no
-        /// shape, the rate its settings ask for.
+        /// shape, the rate its settings ask for; its render callback wakes the
+        /// workers of the consumers it reads as `consumer_wake_mode` says.
         #[must_use]
-        pub fn new(requested_sample_rate: NonZeroU32) -> Self {
+        pub fn new(requested_sample_rate: NonZeroU32, consumer_wake_mode: ConsumerWakeMode) -> Self {
             Self(Arc::new(ArcSwap::from_pointee(OutputSnapshot {
                 sample_rate: SessionSampleRate::new(None, requested_sample_rate.get()),
                 stream_shape: None,
+                consumer_wake_mode,
             })))
         }
 
         /// The session's output changed: every deck it holds reads this from
         /// now on.
         pub fn publish(&self, sample_rate: SessionSampleRate, stream_shape: Option<StreamShape>) {
+            let consumer_wake_mode = self.get().consumer_wake_mode;
             self.0.store(Arc::new(OutputSnapshot {
                 sample_rate,
                 stream_shape,
+                consumer_wake_mode,
             }));
         }
 
@@ -178,55 +132,10 @@ mod binding {
         }
     }
 
-    /// What a player joins its session with, once.
-    ///
-    /// Decorators may only pass it down to their resident Player.
-    #[derive(Clone, fieldwork::Fieldwork)]
-    #[fieldwork(opt_in)]
-    pub struct SessionBinding {
-        output: SessionOutputView,
-        /// How the audio consumers the player hosts may wake workers.
-        #[field(get, copy, vis = "pub(crate)")]
-        consumer_wake_mode: ConsumerWakeMode,
-        /// The rate the owner's settings name when the player joins.
-        #[field(get, copy, vis = "pub(crate)")]
-        requested_sample_rate: NonZeroU32,
-    }
-
-    impl SessionBinding {
-        /// A binding to the session that publishes `output`.
-        ///
-        /// Every audio consumer the player hosts reads from the session's
-        /// render callback and wakes its workers as `consumer_wake_mode` says.
-        /// The rate is the one the owner's settings name when the player
-        /// joins; a player built for another rate is refused. The session
-        /// starts its output at the rate its settings name then, not at this
-        /// copy.
-        #[doc(hidden)]
-        #[must_use]
-        pub const fn new(
-            output: SessionOutputView,
-            consumer_wake_mode: ConsumerWakeMode,
-            requested_sample_rate: NonZeroU32,
-        ) -> Self {
-            Self {
-                output,
-                consumer_wake_mode,
-                requested_sample_rate,
-            }
-        }
-
-        delegate::delegate! {
-            to self.output {
-                #[call(get)]
-                pub(crate) fn output(&self) -> OutputSnapshot;
-            }
-        }
-    }
 }
 
-pub use binding::{OutputSnapshot, SessionBinding, SessionOutputView};
-pub use wire::{AllocatedSlot, DeckRegistration, PlayerId, SessionError, SessionSampleRate};
+pub use binding::{OutputSnapshot, SessionOutputView};
+pub use wire::{PlayerId, SessionError, SessionSampleRate};
 
 #[cfg(test)]
 mod tests {
@@ -235,25 +144,25 @@ mod tests {
     use kithara_audio::ConsumerWakeMode;
     use kithara_test_utils::kithara;
 
-    use super::{SessionBinding, SessionOutputView, SessionSampleRate};
+    use super::{SessionOutputView, SessionSampleRate};
 
     fn sample_rate() -> NonZeroU32 {
         NonZeroU32::new(48_000).expect("fixture sample rate is non-zero")
     }
 
     #[kithara::test]
-    fn a_binding_reads_what_its_session_publishes_after_it_binds() {
-        let output = SessionOutputView::new(sample_rate());
-        let binding = SessionBinding::new(
-            output.clone(),
-            ConsumerWakeMode::RealtimeDeferred,
-            sample_rate(),
-        );
-        assert_eq!(binding.output().sample_rate.measured, None);
+    fn a_view_reads_what_its_session_publishes_after_it_was_taken() {
+        let output = SessionOutputView::new(sample_rate(), ConsumerWakeMode::RealtimeDeferred);
+        let view = output.clone();
+        assert_eq!(view.get().sample_rate.measured, None);
 
         output.publish(SessionSampleRate::new(Some(44_100), 48_000), None);
 
-        assert_eq!(binding.output().sample_rate.measured, Some(44_100));
-        assert_eq!(binding.output().sample_rate.output(), 44_100);
+        assert_eq!(view.get().sample_rate.measured, Some(44_100));
+        assert_eq!(view.get().sample_rate.output(), 44_100);
+        assert_eq!(
+            view.get().consumer_wake_mode,
+            ConsumerWakeMode::RealtimeDeferred
+        );
     }
 }

@@ -1,18 +1,28 @@
-use std::num::NonZeroUsize;
-
 use kithara_assets::AssetStore;
 use kithara_bufpool::HasPool;
 use kithara_config::Config;
 use kithara_derive::Patch;
-use kithara_platform::{CancelToken, sync::Mutex, tokio::runtime::Handle as RuntimeHandle};
-use kithara_play::{CrossfadeSettings, PlayerImpl};
+use kithara_platform::{CancelToken, time::Duration, tokio::runtime::Handle as RuntimeHandle};
+use kithara_play::{CrossfadeSettings, DeckMixerConfig, ResourcePrep, TrackSettings};
 
-use crate::{ActionAtItemEnd, PlaybackOrder, consts, queue::QueueView};
+use crate::{ActionAtItemEnd, PlaybackOrder, consts};
 
-/// Configuration for a [`Queue`](crate::Queue).
-///
-/// Holds queue-level defaults plus the owned [`PlayerImpl`] instance whose
-/// item list the queue coordinates.
+/// What a [`Queue`](crate::Queue) runs with that changes while it runs. The
+/// queue executes both fields itself; a change at a session frame is refused
+/// as untimed.
+#[derive(Clone, Copy, Debug, PartialEq, Config)]
+#[config(default, fields(value, get(copy)))]
+pub struct QueueSettings {
+    /// How one track hands over to the next.
+    #[config(live, builder(default))]
+    crossfade: CrossfadeSettings,
+    /// Whether the next track starts on the frame after the current one ends
+    /// instead of crossfading into it.
+    #[config(live, builder(default = false))]
+    gapless: bool,
+}
+
+/// The one parameter a [`Queue`](crate::Queue) is built from.
 ///
 /// [`TrackSource::Uri`](crate::TrackSource::Uri) resources share this queue's
 /// store. A caller-supplied [`ResourceConfig`](kithara_play::ResourceConfig)
@@ -24,13 +34,28 @@ pub struct QueueConfig<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// The queue's view, attached when the queue is constructed.
-    #[config(skip = "the queue owns the live traversal order", builder(field = None), patch(skip), debug(skip))]
-    pub(crate) view: Option<QueueView<S>>,
+    /// The deck's mixer: its owner builds it from this when it registers the
+    /// queue; the queue reads its slot count and fade lengths here.
+    #[config(builder(default), patch(skip), debug(skip))]
+    pub mixer: DeckMixerConfig,
 
-    /// Max concurrent background prefetch loads. Default: 3.
-    #[config(sdk, builder(default = consts::DEFAULT_MAX_CONCURRENT_LOADS))]
-    pub max_concurrent_loads: NonZeroUsize,
+    /// The live fields the queue executes itself.
+    #[config(builder(default), patch(skip), debug(skip))]
+    pub settings: QueueSettings,
+
+    /// Session time before the current track ends at which the queue loads
+    /// its successor. Fixed for the queue's lifetime. Default: 3.5 s.
+    #[config(builder(default = consts::DEFAULT_PRELOAD_LEAD), patch(skip), debug(skip))]
+    pub preload_lead: Duration,
+
+    /// The settings a new track starts with; a track change moves them.
+    #[config(builder(default), patch(skip), debug(skip))]
+    pub track: TrackSettings,
+
+    /// What every track the queue loads opens with: the worker, the session
+    /// output and the playback policy.
+    #[config(skip = "injected by the deck's owner", builder(required, with = Some), patch(skip), debug(skip))]
+    pub(crate) prep: Option<ResourcePrep<S>>,
 
     /// Master cancel for the queue. `Some` threads the app master so the
     /// queue subtree cascades from one app-wide owner; `None` falls back
@@ -43,32 +68,12 @@ where
     #[config(skip = "injected asset store", patch(skip), debug(skip))]
     pub store: Option<AssetStore<S>>,
 
-    /// Runtime the queue runs its loads and load completions on. `None`
-    /// takes the runtime current where the queue is built; a queue built
-    /// outside one with none passed fails every load with
-    /// [`QueueError::NoRuntime`](crate::QueueError::NoRuntime). The queue
-    /// never runs a load on its caller's runtime: a Host ticks it from a
-    /// thread that has none.
+    /// Runtime the tasks beside each load run on: the cover read and the
+    /// slow-transfer watch. `None` takes the runtime current where the queue
+    /// is built; a queue built outside one with none passed fails every load
+    /// with [`QueueError::NoRuntime`](crate::QueueError::NoRuntime).
     #[config(skip = "injected runtime", patch(skip), debug(skip))]
     pub runtime: Option<RuntimeHandle>,
-
-    /// Player owned and decorated by this queue.
-    #[config(skip = "player moves to the queue owner", builder(required, with = Some), patch(skip), debug(skip))]
-    pub(crate) player: Option<PlayerImpl<S>>,
-
-    /// Session seconds before the current track ends at which the queue
-    /// readies its successor: a consumed one reloads, so its load has that
-    /// long before it plays, and a loaded one is armed on the deck. A longer
-    /// crossfade leads instead. The queue readies a successor on its tick, so
-    /// a lead shorter than the interval between ticks can miss a gapless
-    /// track's end.
-    /// Fixed for the queue's lifetime. Default: 3.5. Stays `f32`
-    /// seconds rather than the campaign's `humantime` duration convention:
-    /// the value already reaches 10 setter and 14 read call sites as a bare
-    /// `f32`, and converting the type would only churn those for a
-    /// formatting preference.
-    #[config(sdk, builder(default = consts::DEFAULT_PREFETCH_DURATION))]
-    pub prefetch_duration: f32,
 
     /// Whether the queue starts playback by itself once the first track
     /// appended to a queue with nothing selected finishes loading. Off by
@@ -84,84 +89,33 @@ where
     pub max_history_size: usize,
 
     /// Initial queue traversal order; subsequent changes belong to navigation.
-    #[config(value(PlaybackOrder, self.live_playback_order()), sdk, builder(default))]
+    #[config(sdk, builder(default))]
     pub playback_order: PlaybackOrder,
 
-    /// Initial action when the current item ends.
-    #[config(
-        value(ActionAtItemEnd, self.action_at_item_end()),
-        sdk,
-        wrap(default = ActionAtItemEnd::default(), with = Mutex::new),
-        patch(wire = ActionAtItemEnd, from = Mutex::new),
-        debug(skip)
-    )]
-    pub(crate) action_at_item_end: Mutex<ActionAtItemEnd>,
-
-    /// Initial transition settings for the next item.
-    #[config(
-        value(CrossfadeSettings, self.crossfade_settings()),
-        sdk,
-        wrap(default = CrossfadeSettings::default(), with = Mutex::new),
-        patch(wire = CrossfadeSettings, from = Mutex::new),
-        debug(skip)
-    )]
-    pub(crate) crossfade_settings: Mutex<CrossfadeSettings>,
-}
-
-impl<S> QueueConfig<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    pub(crate) fn action_at_item_end(&self) -> ActionAtItemEnd {
-        *self.action_at_item_end.lock()
-    }
-
-    pub(crate) fn crossfade_settings(&self) -> CrossfadeSettings {
-        *self.crossfade_settings.lock()
-    }
-
-    fn live_playback_order(&self) -> PlaybackOrder {
-        self.view
-            .as_ref()
-            .map_or(self.playback_order, QueueView::playback_order)
-    }
-
-    pub(crate) fn set_action_at_item_end(&self, action: ActionAtItemEnd) {
-        *self.action_at_item_end.lock() = action;
-    }
-
-    pub(crate) fn set_crossfade_settings(&self, settings: CrossfadeSettings) {
-        *self.crossfade_settings.lock() = settings;
-    }
+    /// Initial action when the current item ends; subsequent changes belong
+    /// to the queue.
+    #[config(sdk, builder(default))]
+    pub action_at_item_end: ActionAtItemEnd,
 }
 
 #[cfg(test)]
 mod tests {
-    use kithara_play::{PlayWorker, PlayWorkerConfig, PlayerConfig};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{queue::test_session, test_pools::pools};
+    use crate::queue::tests::prep;
 
     pub(super) fn config() -> QueueConfig<crate::test_pools::TestPools> {
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(consts::TEST_SAMPLE_RATE)
-                .worker(worker)
-                .session(test_session())
-                .build(),
-        );
-        QueueConfig::builder().player(player).build()
+        QueueConfig::builder().prep(prep()).build()
     }
 
     #[kithara::test]
-    fn default_config_has_reasonable_loader_cap() {
+    fn default_config_preloads_ahead_of_the_end() {
         let cfg = config();
 
-        assert_eq!(cfg.max_concurrent_loads.get(), 3);
         assert!(cfg.store.is_none());
-        assert!((cfg.prefetch_duration - 3.5).abs() < f32::EPSILON);
+        assert_eq!(cfg.preload_lead, Duration::from_millis(3_500));
+        assert!(!cfg.settings.gapless());
     }
 }
 
@@ -170,11 +124,12 @@ mod document_tests {
     use kithara_test_utils::kithara;
 
     use super::{QueueConfigPatch, tests::config};
+    use crate::PlaybackOrder;
 
     #[kithara::test(native, flash(false))]
-    fn a_document_sets_the_load_cap_and_leaves_the_history_size() {
+    fn a_document_sets_the_order_and_leaves_the_history_size() {
         let patch: QueueConfigPatch =
-            serde_yaml_ng::from_str("max_concurrent_loads: 5\n").expect("the document types");
+            serde_yaml_ng::from_str("playback_order: Shuffle\n").expect("the document types");
         // Seeded off the crate default so a merge that reset every unnamed
         // field could not pass this by coincidence.
         let mut config = config();
@@ -182,7 +137,7 @@ mod document_tests {
 
         config.apply(patch);
 
-        assert_eq!(config.max_concurrent_loads.get(), 5);
+        assert_eq!(config.playback_order, PlaybackOrder::Shuffle);
         assert_eq!(
             config.max_history_size, 37,
             "a key the document does not name must keep its seeded value"

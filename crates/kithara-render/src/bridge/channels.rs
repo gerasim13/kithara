@@ -1,53 +1,87 @@
 use std::num::NonZeroUsize;
 
-use kithara_audio::SeekBegin;
-use kithara_command::{Batch, ChannelConfig, Inbox, SendError, Sender, Seq, When, channel};
-use kithara_effects::eq::EqLayout;
-use kithara_events::TrackId;
+use kithara_command::{ChannelConfig, Inbox, Sender, channel};
 use kithara_output::LiveOutput;
-use kithara_platform::{
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Duration,
+use kithara_platform::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
 };
 use kithara_signal::AudioSpec;
-use kithara_warp::{RenderReader, RenderSnapshot};
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
-    traits::{Observer, Producer, Split},
+    traits::{Consumer, Observer, Producer, Split},
+};
+use triple_buffer::{Input, Output, triple_buffer};
+
+use super::{DeckEvent, DeckProtocol, DeckSnapshot, SlotSnapshot};
+use crate::rt::DeckMixerConfig;
+
+/// Batches a deck's ring holds in flight.
+const RING_CAPACITY: NonZeroUsize = match NonZeroUsize::new(32) {
+    Some(capacity) => capacity,
+    None => unreachable!(),
 };
 
-use super::PlaybackShared;
-use crate::{
-    bridge::{DeckPart, DeckProtocol, PlayerNotification},
-    rt::track::PlayerTrack,
-};
+/// Events a deck's mixer can hold for its owner per slot before it counts an overflow.
+const EVENTS_PER_SLOT: usize = 16;
 
-/// RT-owned channel halves and playback atomics for one player node.
+/// The owner's ends of one deck's mixer: the ring its batches go down and its receipts come
+/// back on, the mixer's events, and the snapshot it publishes once per block.
 #[non_exhaustive]
-pub struct NodeInputs {
-    pub(crate) playback: Arc<PlaybackShared>,
-    pub(crate) deck: Inbox<DeckProtocol>,
-    pub(crate) notif_tx: HeapProd<PlayerNotification>,
-    pub(crate) trash_tx: HeapProd<DeckTrash>,
+pub struct DeckEnds {
+    pub ring: Sender<DeckProtocol>,
+    pub events: DeckEvents,
+    pub snapshot: Output<DeckSnapshot>,
 }
 
-impl NodeInputs {
-    /// The playback state the node shares with its slot's control half.
-    #[must_use]
-    pub fn playback(&self) -> &Arc<PlaybackShared> {
-        &self.playback
+/// The mixer's ends of the same channels, taken by the mixer when it is built.
+#[non_exhaustive]
+pub struct MixerInputs {
+    pub(crate) inbox: Inbox<DeckProtocol>,
+    pub(crate) events: HeapProd<DeckEvent>,
+    pub(crate) snapshot: Input<DeckSnapshot>,
+    pub(crate) config: DeckMixerConfig,
+}
+
+/// Events a deck's mixer reported, in the order it reported them.
+pub struct DeckEvents(HeapCons<DeckEvent>);
+
+impl DeckEvents {
+    /// Every event reported since the last call.
+    pub fn drain(&mut self) -> impl Iterator<Item = DeckEvent> + '_ {
+        std::iter::from_fn(|| self.0.try_pop())
     }
 }
 
-/// What a deck's audio thread hands back to be dropped off it.
-pub enum DeckTrash {
-    /// A track the deck no longer holds.
-    Track(PlayerTrack),
-    /// An EQ layout the deck's equaliser displaced.
-    Eq(Box<EqLayout>),
+/// The channels between a deck's owner and the mixer `config` builds.
+#[must_use]
+pub fn mixer_channels(config: DeckMixerConfig) -> (DeckEnds, MixerInputs) {
+    let slots = config.slots().get();
+    let (ring, inbox) = channel::<DeckProtocol>(
+        ChannelConfig::builder()
+            .capacity(RING_CAPACITY)
+            .targets(slots)
+            .build(),
+    );
+    let (events_tx, events_rx) = HeapRb::<DeckEvent>::new(slots * EVENTS_PER_SLOT).split();
+    let initial = DeckSnapshot {
+        slots: vec![SlotSnapshot::default(); slots],
+        ..DeckSnapshot::default()
+    };
+    let (snapshot_in, snapshot_out) = triple_buffer(&initial);
+    (
+        DeckEnds {
+            ring,
+            events: DeckEvents(events_rx),
+            snapshot: snapshot_out,
+        },
+        MixerInputs {
+            inbox,
+            config,
+            events: events_tx,
+            snapshot: snapshot_in,
+        },
+    )
 }
 
 /// Producer for interleaved stereo mix samples and their drop count.
@@ -93,154 +127,4 @@ impl LiveOutput for MixTapWriter {
             );
         }
     }
-}
-
-/// Control-owned channel halves and shared controls for one allocated slot.
-#[non_exhaustive]
-pub struct SlotControl {
-    pub playback: Arc<PlaybackShared>,
-    pub notif_rx: HeapCons<PlayerNotification>,
-    pub trash_rx: HeapCons<DeckTrash>,
-    pub deck: Sender<DeckProtocol>,
-    render: RenderBindings,
-    seek: SeekBindings,
-}
-
-#[derive(Default)]
-struct SeekBindings(Vec<SeekBinding>);
-
-type SeekBinding = (TrackId, Arc<dyn SeekBegin>);
-
-#[derive(Default)]
-struct RenderBindings(Vec<RenderBinding>);
-
-type RenderBinding = (TrackId, RenderReader);
-
-impl SlotControl {
-    /// Begin a seek on every track this slot holds, off the audio thread.
-    pub fn begin_seek(&self, position: Duration) {
-        for (_, handle) in &self.seek.0 {
-            handle.begin(position);
-        }
-    }
-
-    pub(crate) fn bind_render(&mut self, item_id: TrackId, reader: RenderReader) {
-        self.render.0.push((item_id, reader));
-    }
-
-    /// Record the control half of a track's seek path.
-    pub fn bind_seek(&mut self, item_id: TrackId, handle: Arc<dyn SeekBegin>) {
-        self.seek.0.push((item_id, handle));
-    }
-
-    /// Sends `part` to apply at the start of the deck's next block.
-    ///
-    /// # Errors
-    ///
-    /// Returns the batch whole when the deck's capacity of batches is in flight.
-    pub fn send(&mut self, part: DeckPart) -> Result<Seq, SendError<DeckProtocol>> {
-        self.send_batch(vec![part])
-    }
-
-    /// Sends `commands` to apply together, in order, at the start of the deck's next block: the
-    /// deck admits all of them or none.
-    ///
-    /// The receipts that came back since the last send are dropped first: they return the
-    /// credits, and every batch for the next block applies. A resource crossing to the audio
-    /// thread leaves its seek handle and render reader here once the deck admits it, since
-    /// seeking takes locks; both unbind when the resource returns as trash.
-    ///
-    /// # Errors
-    ///
-    /// Returns the batch whole when the deck's capacity of batches is in flight.
-    pub fn send_batch(&mut self, commands: Vec<DeckPart>) -> Result<Seq, SendError<DeckProtocol>> {
-        let bindings: Vec<_> = commands
-            .iter()
-            .filter_map(|command| match command {
-                DeckPart::Attach { resource, item_id } => {
-                    Some((*item_id, resource.seek_handle(), resource.render_reader()))
-                }
-                _ => None,
-            })
-            .collect();
-        self.deck.receipts().for_each(drop);
-        let seq = self.deck.send(
-            When::Next,
-            Batch {
-                basis: Vec::new(),
-                commands,
-            },
-        )?;
-        for (item_id, seek, render) in bindings {
-            if let Some(seek) = seek {
-                self.bind_seek(item_id, seek);
-            }
-            if let Some(render) = render {
-                self.bind_render(item_id, render);
-            }
-        }
-        Ok(seq)
-    }
-
-    /// The newest render any bound track has published.
-    #[must_use]
-    pub fn latest_render_snapshot(&self) -> Option<RenderSnapshot> {
-        self.render
-            .0
-            .iter()
-            .filter_map(|(_, reader)| reader.load())
-            .max_by_key(|snapshot| {
-                let context = snapshot.context();
-                (
-                    u64::from(context.output().session_epoch()),
-                    i64::from(context.output().output_frames().end),
-                )
-            })
-    }
-
-    /// Forget the exact render reader returned by the processor.
-    pub fn unbind_render(&mut self, item_id: TrackId, reader: &RenderReader) {
-        self.render
-            .0
-            .retain(|(bound_id, bound_reader)| *bound_id != item_id || bound_reader != reader);
-    }
-
-    /// Forget the exact resource generation returned by the processor.
-    pub fn unbind_seek(&mut self, item_id: TrackId, handle: &Arc<dyn SeekBegin>) {
-        self.seek.0.retain(|(bound_id, bound_handle)| {
-            *bound_id != item_id || !Arc::ptr_eq(bound_handle, handle)
-        });
-    }
-}
-
-#[must_use]
-pub fn slot_channels() -> (NodeInputs, SlotControl) {
-    const DECK_CAPACITY: NonZeroUsize = match NonZeroUsize::new(32) {
-        Some(capacity) => capacity,
-        None => unreachable!(),
-    };
-    const NOTIFICATION_CAPACITY: usize = 32;
-    const TRASH_CAPACITY: usize = 64;
-
-    let (sender, inbox) =
-        channel::<DeckProtocol>(ChannelConfig::builder().capacity(DECK_CAPACITY).build());
-    let (notif_tx, notif_rx) = HeapRb::<PlayerNotification>::new(NOTIFICATION_CAPACITY).split();
-    let (trash_tx, trash_rx) = HeapRb::<DeckTrash>::new(TRASH_CAPACITY).split();
-    let playback = Arc::new(PlaybackShared::default());
-
-    let inputs = NodeInputs {
-        deck: inbox,
-        notif_tx,
-        trash_tx,
-        playback: Arc::clone(&playback),
-    };
-    let control = SlotControl {
-        playback,
-        notif_rx,
-        trash_rx,
-        deck: sender,
-        seek: SeekBindings::default(),
-        render: RenderBindings::default(),
-    };
-    (inputs, control)
 }

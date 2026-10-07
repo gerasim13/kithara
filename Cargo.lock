@@ -5852,6 +5852,7 @@ dependencies = [
  "serde_yaml_ng",
  "thiserror 2.0.18",
  "tracing",
+ "triple_buffer 8.1.1",
  "unimock",
 ]
 
@@ -6003,24 +6004,6 @@ dependencies = [
  "signalsmith-stretch",
  "smallvec",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "kithara-sync"
-version = "0.0.1-alpha5"
-dependencies = [
- "bon",
- "delegate",
- "derive_more",
- "fieldwork",
- "kithara-platform",
- "kithara-signal",
- "kithara-test-utils",
- "kithara-warp",
- "kithara-workspace-hack",
- "num-traits",
- "thiserror 2.0.18",
- "tracing",
 ]
 
 [[package]]

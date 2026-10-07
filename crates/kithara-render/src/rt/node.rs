@@ -8,29 +8,27 @@ use firewheel::{
     },
 };
 use kithara_bufpool::{HasPool, PoolRegion};
-#[cfg(test)]
-use kithara_platform::sync::atomic::Ordering;
 use kithara_platform::sync::{Arc, Mutex};
 
 use super::{
     DeckMixerConfig,
     processor::{ContextRequirement, DeckMixer, StreamShape},
 };
-use crate::bridge::{NodeInputs, slot_channels};
+use crate::bridge::{MixerInputs, mixer_channels};
 
-/// A player source node that outputs mixed audio from loaded tracks.
+/// The audio node of one deck: its processor mixes the deck's slots.
 ///
-/// Commands (load, unload, seek, pause, fade) are sent through channels stored
-/// in the node. Only `active` participates in Firewheel parameter updates.
+/// The deck's owner drives it through the ring of [`mixer_channels`]; only
+/// `active` participates in Firewheel parameter updates.
 #[derive(Diff)]
 #[derive_where::derive_where(Clone)]
 pub struct PlayerNode<S> {
     /// Whether the node is active (used by Diff/Patch for graph updates).
     pub(crate) active: bool,
 
-    /// Inputs taken by the processor.
+    /// Mixer ends taken by the first processor.
     #[diff(skip)]
-    inputs: Arc<Mutex<Option<NodeInputs>>>,
+    inputs: Arc<Mutex<Option<MixerInputs>>>,
 
     #[diff(skip)]
     context_requirement: ContextRequirement,
@@ -68,11 +66,11 @@ impl<S> Patch for PlayerNode<S> {
 }
 
 impl<S> PlayerNode<S> {
-    /// Create a player node wired to RT input channels.
-    pub fn new(inputs: NodeInputs, pools: PoolRegion<S>, mixer: DeckMixerConfig) -> Self {
+    /// Create the node of the deck whose mixer ends are `inputs`.
+    pub fn new(inputs: MixerInputs, pools: PoolRegion<S>) -> Self {
         Self {
             pools,
-            mixer,
+            mixer: inputs.config,
             active: true,
             inputs: Arc::new(Mutex::new(Some(inputs))),
             context_requirement: ContextRequirement::Standalone,
@@ -110,12 +108,11 @@ where
             .inputs
             .lock()
             .take()
-            .unwrap_or_else(|| slot_channels().0);
+            .unwrap_or_else(|| mixer_channels(self.mixer).1);
         Ok(DeckMixer::with_context_requirement(
             inputs,
             shape,
             &self.pools,
-            self.mixer,
             self.context_requirement,
         ))
     }
@@ -132,43 +129,46 @@ where
 
 #[cfg(test)]
 mod tests {
+    use kithara_command::{Batch, When};
+    use kithara_signal::SessionFrame;
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::{TestPools, pools};
+    use crate::{
+        bridge::{DeckApplied, DeckEnds, DeckPart, Fade, Slot, SlotState},
+        test_pools::{TestPools, pools},
+    };
 
-    fn make_node() -> (PlayerNode<TestPools>, crate::bridge::SlotControl) {
-        let (inputs, control) = slot_channels();
-        let node = PlayerNode::new(inputs, pools(), DeckMixerConfig::default());
-        (node, control)
+    fn make_node() -> (PlayerNode<TestPools>, DeckEnds) {
+        let (ends, inputs) = mixer_channels(DeckMixerConfig::default());
+        (PlayerNode::new(inputs, pools()), ends)
     }
 
     #[kithara::test]
     fn player_node_defaults_active() {
-        let (node, _control) = make_node();
+        let (node, _ends) = make_node();
         assert!(node.active);
     }
 
     #[kithara::test]
     fn player_node_info_has_stereo_output() {
-        let (node, _control) = make_node();
+        let (node, _ends) = make_node();
         let info = node.info(&EmptyConfig);
         let _ = info;
     }
 
     #[kithara::test]
-    #[case(crate::bridge::DeckPart::StopAll)]
-    #[case(crate::bridge::DeckPart::StartAll)]
-    #[case(crate::bridge::DeckPart::SetRate(1.25))]
-    fn player_node_with_inputs(#[case] part: crate::bridge::DeckPart) {
-        let (node, mut control) = make_node();
+    #[case(DeckPart::Start { slot: Slot::new(0), fade: Fade::Declick })]
+    #[case(DeckPart::Stop { slot: Slot::new(0), fade: Fade::Declick })]
+    #[case(DeckPart::Rate { slot: Slot::new(0), rate: 1.25 })]
+    fn player_node_with_inputs(#[case] part: DeckPart) {
+        let (node, mut ends) = make_node();
         assert!(node.active);
 
-        control
-            .deck
+        ends.ring
             .send(
-                kithara_command::When::Next,
-                kithara_command::Batch {
+                When::Next,
+                Batch {
                     basis: Vec::new(),
                     commands: vec![part],
                 },
@@ -179,31 +179,27 @@ mod tests {
             .lock()
             .as_mut()
             .map(|inputs| {
-                inputs.deck.drain();
-                inputs
-                    .deck
-                    .next_due(kithara_signal::SessionFrame::default(), 1)
-                    .map(|due| {
-                        let parts = due.commands().len();
-                        due.apply(crate::bridge::DeckApplied::default());
-                        parts
-                    })
+                inputs.inbox.drain();
+                inputs.inbox.next_due(SessionFrame::default(), 1).map(|due| {
+                    let parts = due.commands().len();
+                    due.apply(DeckApplied::default());
+                    parts
+                })
             })
             .expect("inputs not yet taken");
         assert_eq!(received, Some(1));
     }
 
     #[kithara::test]
-    fn player_node_playback_accessible() {
-        let (node, _control) = make_node();
-        let playing = node
-            .inputs
-            .lock()
-            .as_ref()
-            .expect("inputs not yet taken")
-            .playback
-            .playing
-            .load(Ordering::Relaxed);
-        assert!(!playing);
+    fn player_node_snapshot_starts_with_empty_slots() {
+        let (_node, mut ends) = make_node();
+        let snapshot = ends.snapshot.read();
+        assert_eq!(snapshot.slots.len(), DeckMixerConfig::default().slots().get());
+        assert!(
+            snapshot
+                .slots
+                .iter()
+                .all(|slot| slot.state == SlotState::Empty)
+        );
     }
 }

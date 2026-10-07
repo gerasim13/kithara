@@ -636,15 +636,6 @@ cargo.packages = [
 cargo.profile = "test-release"
 
 
-[test.lanes.sync]
-default_backend = "none"
-owns = ["crates/kithara-sync/"]
-cargo.packages = ["kithara-sync"]
-cargo.profile = "test-release"
-# kithara-sync's own tests drive no clock or poll, and its only package
-# declares neither toggle.
-undeclared_toggles = ["flash", "no-block"]
-
 [test.lanes.warp]
 default_backend = "none"
 owns = ["crates/kithara-warp/", "tests/crates/warp/"]

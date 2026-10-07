@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use kithara_abr::AbrMode;
 use kithara_assets::AssetStore;
-use kithara_audio::{AudioConfigPatch, AudioDecoderConfig};
+use kithara_audio::{AudioConfigPatch, AudioDecoderConfig, ConsumerWakeMode};
 use kithara_beat::BeatGridModel;
 use kithara_bufpool::HasPool;
 use kithara_config::Config;
@@ -127,6 +127,11 @@ where
     /// [`Self::beat_grid`].
     #[config(skip = "transferred to the resource artifact source")]
     pub(crate) waveform: Option<ArtifactSource<Waveform>>,
+    /// How the consumer a deck slot reads wakes the worker; the session a
+    /// track plays in sets it, so it is not a document key. `None` leaves the
+    /// reader's own mode.
+    #[config(skip = "transferred to the deck slot's consumer")]
+    pub(crate) consumer_wake_mode: Option<ConsumerWakeMode>,
     /// Explicit playback worker. Player preparation fills this field; direct
     /// Resource callers must configure it themselves.
     #[config(skip = "transferred to the playback worker")]

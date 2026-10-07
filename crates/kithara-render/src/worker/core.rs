@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara_audio::{Audio, ResamplerBackend};
-use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_command::{ChannelConfig, channel};
 use kithara_decode::{DecodeError, DecodeResult};
 use kithara_effects::EffectDrain;
@@ -37,13 +37,18 @@ pub enum LoadRefusal {
     /// stopped.
     #[error(transparent)]
     Open(#[from] DecodeError),
+    /// The opened track's consumer found no room in the worker's pools.
+    #[error(transparent)]
+    Pool(#[from] PoolError),
 }
 
 impl From<LoadRefusal> for DecodeError {
     fn from(refusal: LoadRefusal) -> Self {
         match refusal {
             LoadRefusal::Open(error) => error,
-            refusal @ (LoadRefusal::Capacity { .. } | LoadRefusal::Cancelled) => {
+            refusal @ (LoadRefusal::Capacity { .. }
+            | LoadRefusal::Cancelled
+            | LoadRefusal::Pool(_)) => {
                 Self::audio_stream("play worker load", refusal)
             }
         }

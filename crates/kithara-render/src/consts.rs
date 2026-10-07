@@ -2,6 +2,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_dsp::param::{DEFAULT_SETTLE_RATIO, SmootherConfig};
 use kithara_platform::time::Duration;
+use kithara_signal::FrameCount;
 
 /// Tracks a deck holds at once.
 pub(crate) const DEFAULT_DECK_SLOTS: NonZeroUsize = match NonZeroUsize::new(4) {
@@ -14,6 +15,9 @@ pub(crate) const DEFAULT_DECLICK: SmootherConfig = SmootherConfig {
     smooth_seconds: 0.005,
     settle_ratio: DEFAULT_SETTLE_RATIO,
 };
+
+/// Frames of a replaced consumer a slot plays out of its tail.
+pub(crate) const DEFAULT_EVICT_FADE: FrameCount = FrameCount::new(512);
 
 /// Frames in one source chunk of a test lane.
 #[cfg(test)]

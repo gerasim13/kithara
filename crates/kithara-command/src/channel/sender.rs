@@ -4,14 +4,14 @@ use futures::task::AtomicWaker;
 use kithara_platform::sync::Arc;
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
-    traits::{Consumer, Producer, Split},
+    traits::{Consumer, Observer, Producer, Split},
 };
 
 use super::{Inbox, gate::Gate};
 use crate::{
     config::ChannelConfig,
     protocol::{Batch, Protocol, Seq, Target, When},
-    receipt::Receipt,
+    receipt::{Outcome, Receipt},
 };
 
 /// Why a batch was not sent; the batch comes back whole.
@@ -57,6 +57,11 @@ pub struct Sender<P: Protocol> {
     next: Seq,
     credits: usize,
     targets: usize,
+    /// Per target, the last batch sent that shifts it and has not come back
+    /// rejected.
+    shifted: Vec<Option<Seq>>,
+    /// Per target, the last batch that shifted it and came back applied.
+    applied: Vec<Option<Seq>>,
 }
 
 /// The executor's waker, rung by each send and once more as the sender drops.
@@ -95,8 +100,40 @@ impl<P: Protocol> Sender<P> {
         iter::from_fn(move || {
             let receipt = self.receipts.try_pop()?;
             self.credits += 1;
+            self.settle(&receipt);
             Some(receipt)
         })
+    }
+
+    /// The batch a new batch that shifts `target` expects to have shifted it
+    /// last: the last one sent for it, unless that one came back rejected.
+    #[must_use]
+    pub fn basis(&self, target: P::Target) -> Option<Seq> {
+        self.shifted.get(target.index()).copied().flatten()
+    }
+
+    /// Follows `receipt` in the per-target record: an applied batch is the
+    /// last to have shifted its targets, a rejected one shifted nothing.
+    fn settle(&mut self, receipt: &Receipt<P>) {
+        let seq = receipt.seq;
+        for &(target, _) in &receipt.batch.basis {
+            let index = target.index();
+            match receipt.outcome {
+                Outcome::Applied { .. } => {
+                    if let Some(applied) = self.applied.get_mut(index) {
+                        *applied = Some(seq);
+                    }
+                }
+                Outcome::Rejected(_) => {
+                    if let (Some(shifted), Some(applied)) =
+                        (self.shifted.get_mut(index), self.applied.get(index))
+                        && *shifted == Some(seq)
+                    {
+                        *shifted = *applied;
+                    }
+                }
+            }
+        }
     }
 
     /// Sends `batch` to apply at `when`, wakes an executor waiting on its
@@ -131,7 +168,15 @@ impl<P: Protocol> Sender<P> {
         let Some(credits) = self.credits.checked_sub(1) else {
             return Err(SendError::Full(batch));
         };
+        if self.commands.is_full() {
+            return Err(SendError::Full(batch));
+        }
         let seq = self.next;
+        for &(target, _) in &batch.basis {
+            if let Some(shifted) = self.shifted.get_mut(target.index()) {
+                *shifted = Some(seq);
+            }
+        }
         if let Err(sent) = self.commands.try_push(Sent { batch, seq, when }) {
             return Err(SendError::Full(sent.batch));
         }
@@ -164,6 +209,8 @@ pub fn channel<P: Protocol>(config: ChannelConfig) -> (Sender<P>, Inbox<P>) {
         next: Seq::FIRST,
         credits: capacity,
         targets: config.targets,
+        shifted: vec![None; config.targets],
+        applied: vec![None; config.targets],
     };
     (
         sender,

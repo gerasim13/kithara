@@ -4,14 +4,17 @@ use kithara_command::Step;
 use kithara_signal::SessionFrame;
 use ringbuf::traits::Producer;
 
-use crate::bridge::{DeckApplied, DeckPart, NodeInputs, PlaybackShared, PlayerNotification};
+use crate::{
+    bridge::{DeckApplied, DeckEvent, DeckPart, MixerInputs, Released, Slot},
+    rt::track::PlayerResource,
+};
 
-/// Take the batches the deck's inbox holds, each as its parts, as the deck does at its next
-/// block.
+/// Take the batches the deck's inbox holds, each as its parts, and apply them on `at`, as the
+/// mixer does at its next block.
 #[must_use]
-pub fn take_batches(inputs: &mut NodeInputs) -> Vec<Vec<DeckPart>> {
+pub fn take_batches(inputs: &mut MixerInputs, at: SessionFrame) -> Vec<Vec<DeckPart>> {
     let mut batches: Vec<Vec<DeckPart>> = Vec::new();
-    inputs.deck.run_block(SessionFrame::default(), 1, |step| {
+    inputs.inbox.run_block(at, 1, |step| {
         if let Step::Due(mut due) = step {
             batches.push(std::mem::take(due.commands_mut()));
             due.apply(DeckApplied::default());
@@ -20,36 +23,93 @@ pub fn take_batches(inputs: &mut NodeInputs) -> Vec<Vec<DeckPart>> {
     batches
 }
 
-/// Send `notification` to the control side as the deck's audio thread does.
+/// Report `event` to the deck's owner as the mixer does.
 ///
 /// # Errors
-/// Returns the notification when the ring is full.
-pub fn notify(
-    inputs: &mut NodeInputs,
-    notification: PlayerNotification,
-) -> Result<(), PlayerNotification> {
-    inputs.notif_tx.try_push(notification)
+/// Returns the event when the ring is full.
+pub fn report(inputs: &mut MixerInputs, event: DeckEvent) -> Result<(), DeckEvent> {
+    inputs.events.try_push(event)
 }
 
-/// Take on the item `epoch` made leading, publishing its playhead, as the audio thread does.
-pub fn adopt(playback: &PlaybackShared, epoch: u64, position: f64, duration: f64) {
-    playback.adopt(epoch, position, duration);
+/// A deck's mixer with no audio: it holds the consumers attached to its slots and answers every
+/// batch the way the mixer does, its parts back as they applied.
+pub struct MockDeck {
+    inputs: MixerInputs,
+    held: Vec<Option<Box<PlayerResource>>>,
 }
 
-/// Publish the playhead of the track the audio thread renders, taking nothing on.
-pub fn publish_playhead(playback: &PlaybackShared, position: f64, duration: f64) {
-    playback.position.store(position);
-    playback.duration.store(duration);
+impl MockDeck {
+    #[must_use]
+    pub fn new(inputs: MixerInputs) -> Self {
+        let held = std::iter::repeat_with(|| None)
+            .take(inputs.config.slots().get())
+            .collect();
+        Self { inputs, held }
+    }
+
+    /// Applies every batch due by `at` on its own frame; a `Stop` reports the slot at
+    /// `stopped_at` seconds.
+    pub fn block(&mut self, at: SessionFrame, stopped_at: f64) {
+        let held = &mut self.held;
+        self.inputs.inbox.run_block(at, 1, |step| {
+            if let Step::Due(mut due) = step {
+                let mut applied = DeckApplied::default();
+                let commands = due.commands_mut();
+                for _ in 0..commands.len() {
+                    let part = commands.remove(0);
+                    if let Some(left) = hold(held, part, &mut applied, stopped_at) {
+                        commands.push(left);
+                    }
+                }
+                due.apply(applied);
+            }
+        });
+    }
+
+    /// Reports `event` to the deck's owner as the mixer does.
+    ///
+    /// # Errors
+    /// Returns the event when the ring is full.
+    pub fn report(&mut self, event: DeckEvent) -> Result<(), DeckEvent> {
+        report(&mut self.inputs, event)
+    }
+
+    /// The source of the consumer `slot` holds.
+    #[must_use]
+    pub fn held(&self, slot: Slot) -> Option<&str> {
+        self.held
+            .get(usize::from(slot.get()))
+            .and_then(Option::as_ref)
+            .map(|pcm| &**pcm.src())
+    }
 }
 
-/// Publish how far the rendered track is decoded and cached.
-pub fn publish_buffered(playback: &PlaybackShared, frontier: f64, cached: f64) {
-    playback.frontier.store(frontier);
-    playback.cached.store(cached);
-}
-
-/// Whether the track leading under `epoch` describes the playhead now.
-#[must_use]
-pub fn publishes(playback: &PlaybackShared, epoch: u64) -> bool {
-    playback.publishing().admit(epoch)
+/// What `part` leaves in the receipt once `held` applied it.
+fn hold(
+    held: &mut [Option<Box<PlayerResource>>],
+    part: DeckPart,
+    applied: &mut DeckApplied,
+    stopped_at: f64,
+) -> Option<DeckPart> {
+    let entry = |held: &mut [Option<Box<PlayerResource>>], slot: Slot| {
+        held.get_mut(usize::from(slot.get()))
+            .and_then(Option::take)
+            .map(|pcm| DeckPart::Released(Released::Pcm { slot, pcm }))
+    };
+    match part {
+        DeckPart::Attach { slot, pcm } | DeckPart::Replace { slot, pcm } => {
+            let left = entry(held, slot);
+            if let Some(entry) = held.get_mut(usize::from(slot.get())) {
+                *entry = Some(pcm);
+            }
+            left
+        }
+        DeckPart::Detach { slot } => entry(held, slot),
+        DeckPart::Stop { slot, fade } => {
+            applied.stopped_at = Some(stopped_at);
+            Some(DeckPart::Stop { slot, fade })
+        }
+        DeckPart::Eq(crate::bridge::DeckEqChange::Layout(_)) => None,
+        other => Some(other),
+    }
 }

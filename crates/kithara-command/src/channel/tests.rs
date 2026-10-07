@@ -591,11 +591,40 @@ fn a_deferred_batch_is_answered_when_its_executor_resumes_it() {
     );
 
     inbox
-        .resume(seq)
+        .resume(seq, Frame(96))
         .expect("the deferred batch waits in its inbox")
         .apply(());
-    assert_eq!(outcomes(&mut sender), [(seq, applied(64))]);
-    assert!(inbox.resume(seq).is_none(), "an answered batch is gone");
+    assert_eq!(
+        outcomes(&mut sender),
+        [(seq, applied(96))],
+        "a resumed batch applies at the moment it is resumed at"
+    );
+    assert!(
+        inbox.resume(seq, Frame(96)).is_none(),
+        "an answered batch is gone"
+    );
+}
+
+#[kithara::test]
+fn a_deferred_batch_a_later_batch_shifted_under_resumes_stale() {
+    let (mut sender, mut inbox) = pair(8, 1);
+    let deferred = send(&mut sender, When::Next, batch(1, &[(Slot(0), None)]));
+    let shift = send(&mut sender, When::Next, batch(2, &[(Slot(0), None)]));
+    inbox.drain();
+    inbox
+        .next_due(Frame(0), BLOCK)
+        .expect("the first batch is due")
+        .defer();
+    assert_eq!(run_block(&mut inbox, 0, BLOCK), [(0, 2)]);
+
+    assert!(inbox.resume(deferred, Frame(32)).is_none());
+    assert_eq!(
+        outcomes(&mut sender),
+        [
+            (shift, applied(0)),
+            (deferred, Outcome::Rejected(Rejection::Stale))
+        ]
+    );
 }
 
 #[kithara::test]
@@ -611,7 +640,7 @@ fn a_deferred_batch_leaves_the_block_to_the_batches_after_it() {
 
     assert_eq!(run_block(&mut inbox, 0, BLOCK), [(0, 2)]);
     assert_eq!(outcomes(&mut sender), [(next, applied(0))]);
-    drop(inbox.resume(deferred));
+    drop(inbox.resume(deferred, Frame(0)));
     assert_eq!(
         outcomes(&mut sender),
         [(deferred, Outcome::Rejected(Rejection::Unanswered))]
@@ -747,4 +776,33 @@ fn a_released_sender_is_not_woken_by_a_receipt() {
 
     assert_eq!(wakes.count(), 0);
     assert_eq!(sender.receipts().count(), 1);
+}
+
+/// A batch built on the sender's basis for a target applies after the batch
+/// before it shifted that target; once a batch on it comes back rejected, the
+/// basis falls back to the last one that applied.
+#[kithara::test]
+fn the_sender_bases_each_batch_on_the_last_one_that_shifts_its_target() {
+    let (mut sender, mut inbox) = pair(4, 2);
+    assert_eq!(sender.basis(Slot(0)), None);
+
+    let first = send(&mut sender, When::Next, batch(1, &[(Slot(0), None)]));
+    let basis = sender.basis(Slot(0));
+    let second = send(&mut sender, When::Next, batch(2, &[(Slot(0), basis)]));
+    assert_eq!(sender.basis(Slot(0)), Some(second));
+    assert_eq!(sender.basis(Slot(1)), None, "another target is untouched");
+    assert_eq!(run_block(&mut inbox, 0, BLOCK), [(0, 1), (0, 2)]);
+    drop(outcomes(&mut sender));
+
+    let basis = sender.basis(Slot(0));
+    let late = send(&mut sender, When::At(Frame(0)), batch(3, &[(Slot(0), basis)]));
+    assert_eq!(sender.basis(Slot(0)), Some(late));
+    assert!(run_block(&mut inbox, BLOCK as u64, BLOCK).is_empty());
+    assert_eq!(
+        outcomes(&mut sender),
+        [(late, Outcome::Rejected(Rejection::Late))]
+    );
+
+    assert_eq!(sender.basis(Slot(0)), Some(second));
+    assert_ne!(first, second);
 }

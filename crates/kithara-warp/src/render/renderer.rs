@@ -12,13 +12,9 @@ use kithara_test_macros as kithara;
 use num_traits::cast::AsPrimitive;
 use tracing::warn;
 
-use super::{
-    renderer_projection::{ProjectedQuantum, ProjectionState},
-    renderer_target::PreparedTarget,
-};
+use super::renderer_target::PreparedTarget;
 use crate::{
-    ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, SpeedCurve, WarpConfig, WarpCursor,
-    WarpPlanSlot, consts,
+    ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, SpeedCurve, WarpConfig, consts,
 };
 
 /// The speed a renderer renders at and the revision that set it.
@@ -48,7 +44,6 @@ impl RateTarget {
 #[derive(Clone, Copy)]
 pub(super) struct PreparedQuantum {
     pub(super) activation: Option<PreparedActivation>,
-    pub(super) projection: Option<ProjectedQuantum>,
     pub(super) rate: RateTarget,
     pub(super) speed: f32,
     pub(super) source_start: u64,
@@ -76,7 +71,6 @@ impl PreparedActivation {
 /// Unity speed without a region plan is a byte-identical passthrough.
 #[non_exhaustive]
 pub struct WarpRenderer<S> {
-    pub(super) plan_slot: Arc<WarpPlanSlot>,
     pub(super) spec: AudioSpec,
     pub(super) backends: ElasticBackendConfig,
     /// Maximum source frames admitted to one elastic render operation.
@@ -124,7 +118,6 @@ pub struct WarpRenderer<S> {
     /// chunk takes this buffer; the consumed input becomes its replacement.
     pub(super) scratch: Option<SampleBuffer>,
     pub(super) pools: PoolRegion<S>,
-    pub(super) projection: ProjectionState,
     pub(super) context: RenderReader,
     /// Engine kind currently prepared by the scheduler shell.
     pub(super) current_kind: StretchKind,
@@ -197,8 +190,6 @@ where
         });
         Self {
             context,
-            plan_slot: Arc::clone(config.plan()),
-            projection: ProjectionState::new(config),
             residency: target.residency,
             committed: None,
             backends: config.backends(),
@@ -338,13 +329,10 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         output: &AudioChunk,
         applied_rate: f32,
         target_rate: f32,
-        projection: Option<ProjectedQuantum>,
     ) {
         let output_frames = output.frames();
         let request_revision = output.meta.render_revision;
-        if projection.is_none()
-            && let Err(error) = self.advance_speed(target_rate, output_frames)
-        {
+        if let Err(error) = self.advance_speed(target_rate, output_frames) {
             warn!(%error, "time-stretch speed smoothing failed");
         }
         let Some(snapshot) = snapshot else {
@@ -357,7 +345,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 .map(crate::WarpMapRevision::from),
         );
         let Some((committed, session_frame, source_start, source_end)) =
-            self.next_render_snapshot(snapshot, output_frames, projection)
+            self.next_render_snapshot(snapshot, output_frames)
         else {
             return;
         };
@@ -374,12 +362,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
 
     pub(super) fn commit_render(&mut self, snapshot: Option<RenderSnapshot>, output: &AudioChunk) {
         let output_frames = output.frames();
-        let projection = self.projected_tail_cursor(output_frames);
-        if let Some(projection) = projection {
-            self.projection.cursor = Some(projection.end);
-            self.projection.output_frames =
-                self.projection.output_frames.saturating_add(output_frames);
-        }
         let Some(snapshot) = snapshot else {
             return;
         };
@@ -390,7 +372,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 .map(crate::WarpMapRevision::from),
         );
         let Some((committed, output_start, source_start, _)) =
-            self.next_render_snapshot(snapshot, output_frames, projection)
+            self.next_render_snapshot(snapshot, output_frames)
         else {
             return;
         };
@@ -455,7 +437,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         &self,
         snapshot: RenderSnapshot,
         output_frames: usize,
-        projection: Option<ProjectedQuantum>,
     ) -> Option<(RenderSnapshot, i64, u64, u64)> {
         if !self.context.is_current(&snapshot) {
             return None;
@@ -473,20 +454,9 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 |previous| previous.frontier().source(),
             )
             .max(snapshot.frontier().source());
-        let committed = if let Some(quantum) = projection {
-            snapshot.mapped(WarpCursor::new(
-                quantum.end.revision(),
-                source_end,
-                quantum.end.output(),
-            ))
-        } else {
-            snapshot.advance(self.committed.as_ref(), source_end, output_frames)?
-        };
+        let committed = snapshot.advance(self.committed.as_ref(), source_end, output_frames)?;
         let output_frames = i64::try_from(output_frames).ok()?;
-        let output_start = match projection {
-            Some(quantum) => i64::from(quantum.output_start),
-            None => i64::from(committed.frontier().output()).checked_sub(output_frames)?,
-        };
+        let output_start = i64::from(committed.frontier().output()).checked_sub(output_frames)?;
         Some((committed, output_start, source_start, source_end))
     }
 
@@ -547,7 +517,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         let target = self.stretch_target();
         let changed = target != (self.current_kind, self.current_keylock);
         if target.0.capabilities().contains(BackendCapabilities::RATE) {
-            self.reprime_pending |= self.active && self.projection.active.is_none() && changed;
+            self.reprime_pending |= self.active && changed;
         } else {
             self.reprime_pending = false;
             self.backend_transition_pending |= self.active && changed;
@@ -589,7 +559,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 .0
                 .capabilities()
                 .contains(BackendCapabilities::RATE)
-            && self.projection.active.is_none()
             && (target.speed() - self.rate.speed()).abs() > f32::EPSILON
             && !self.unity_passthrough(target.speed())
             && self
@@ -629,10 +598,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     }
 
     pub(super) fn unity_passthrough(&self, speed: f32) -> bool {
-        !self.requires_staging()
-            || (self.projection.active.is_none()
-                && self.plan.is_none()
-                && (speed - 1.0).abs() <= f32::EPSILON)
+        !self.requires_staging() || (self.plan.is_none() && (speed - 1.0).abs() <= f32::EPSILON)
     }
 }
 
@@ -680,7 +646,7 @@ mod tests {
         renderer.rendered_source_end = Some((source, spec.sample_rate));
 
         let (committed, output_start, source_start, source_end) = renderer
-            .next_render_snapshot(snapshot, 32, None)
+            .next_render_snapshot(snapshot, 32)
             .expect("an equal source frontier still commits emitted PCM");
 
         assert_eq!(output_start, i64::from(output));

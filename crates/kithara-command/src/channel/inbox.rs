@@ -41,7 +41,6 @@ pub struct Inbox<P: Protocol> {
 
 /// A due batch its executor answers later.
 struct Parked<P: Protocol> {
-    at: P::Clock,
     seq: Seq,
     basis: Vec<(P::Target, Option<Seq>)>,
     commands: Vec<P::Command>,
@@ -173,17 +172,29 @@ impl<P: Protocol> Inbox<P> {
     }
 
     /// The batch parked under `seq` through [`Due::defer`], due again to
-    /// answer now at the moment and offset it was due at; `None` when no
-    /// batch is parked under that number.
-    pub fn resume(&mut self, seq: Seq) -> Option<Due<'_, P>> {
+    /// answer now at `at`, the moment its condition met; `None` when no batch
+    /// is parked under that number.
+    ///
+    /// Its basis is judged again first: a batch another one shifted a target
+    /// of while it waited is answered [`Rejection::Stale`] here and comes back
+    /// as `None` too.
+    pub fn resume(&mut self, seq: Seq, at: P::Clock) -> Option<Due<'_, P>> {
         let index = self.parked.iter().position(|parked| parked.seq == seq)?;
         let Parked {
-            at,
             seq,
             basis,
             commands,
             offset,
+            ..
         } = self.parked.swap_remove(index);
+        if !self.ledger.is_current(&basis) {
+            self.reply(Receipt {
+                seq,
+                outcome: Outcome::Rejected(Rejection::Stale),
+                batch: Batch { basis, commands },
+            });
+            return None;
+        }
         Some(Due {
             at,
             seq,
@@ -347,7 +358,6 @@ impl<P: Protocol> Due<'_, P> {
     pub fn defer(mut self) -> Seq {
         self.outcome = None;
         let parked = Parked {
-            at: self.at,
             seq: self.seq,
             basis: mem::take(&mut self.basis),
             commands: mem::take(&mut self.commands),

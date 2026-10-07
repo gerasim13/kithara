@@ -145,5 +145,5 @@ pub(crate) fn committed_transport<T, S>(
     if state.reserved_session_grid.is_some() {
         return None;
     }
-    state.transport_control.as_mut()?.observation().snapshot()
+    state.transport_observation.as_mut()?.read().snapshot()
 }

@@ -234,41 +234,11 @@ where
     /// scheduler shell, never from the checked render core.
     pub(super) fn service_target(&mut self, spec: AudioSpec) {
         drop(self.retired_engine.take());
-        drop(self.projection.retired.take());
-        if self.prepared_quantum.is_none()
-            && self
-                .residency
-                .as_ref()
-                .is_none_or(|resident| resident.prepared.is_none())
-        {
-            self.projection.prepared = None;
-        }
-        self.projection.selected = self.plan_slot.load();
-        if self.transition_pending() && spec == self.spec {
-            self.service_scratch();
-            return;
-        }
-        if (self.prepared_quantum.is_some()
-            || self
-                .residency
-                .as_ref()
-                .is_some_and(|resident| resident.prepared.is_some()))
-            && spec == self.spec
-        {
+        if (self.transition_pending() || self.prepared_quantum.is_some()) && spec == self.spec {
             self.service_scratch();
             return;
         }
         let channels = usize::from(self.spec.channels.max(1));
-        if self.projection.selected.is_none() && self.projection.active.is_some() {
-            if self.active || self.pending_frames(channels) > 0 {
-                self.backend_transition_pending = true;
-                self.service_scratch();
-                return;
-            }
-            self.projection.retired = self.projection.active.take();
-            self.projection.cursor = None;
-            self.projection.output_frames = 0;
-        }
         if spec.sample_rate != self.spec.sample_rate
             && let Some(applied) = self.applied_speed.as_mut()
         {

@@ -2,18 +2,21 @@ use std::num::NonZeroU32;
 
 use bon::bon;
 use kithara_dsp::param::SmootherConfig;
-use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use kithara_warp::RenderReader;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{PlayerResource, fade::TrackFade, gate::TrackGate};
-use crate::{CrossfadeSettings, ServiceClass, bridge::TrackState, consts::DEFAULT_DECLICK};
+use crate::{
+    CrossfadeSettings, ServiceClass,
+    bridge::{Fade, FadeDir, SlotState},
+    consts::DEFAULT_DECLICK,
+};
 
-/// Per-track state in the processor arena.
+/// The track a mixer slot holds: its consumer, its transport and its envelope.
 ///
-/// Manages the `MixDSP` fade, track state, cached position/duration,
-/// and notification logic for a single loaded track.
+/// A track that is not playing has its gate shut, so it is silent and not read, and holds its
+/// position until it is started again.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct PlayerTrack {
@@ -21,24 +24,7 @@ pub struct PlayerTrack {
     pub(super) fade: TrackFade,
     pub(super) gate: TrackGate,
     #[field(get, copy)]
-    pub(super) item_id: TrackId,
-    #[field(get, copy)]
-    pub(super) state: TrackState,
-    /// The track that starts on the frame after this one's last.
-    #[field(get, copy)]
-    pub(super) successor: Option<TrackId>,
-    /// The epoch this track leads under: from the `FadeIn` that leads it, or the `Chain` that
-    /// stitches it in behind another.
-    #[field(get, copy)]
-    pub(super) epoch: u64,
-    /// Set only when the track reaches *natural* EOF (`handle_natural_end`).
-    /// Marks a played-out track as eligible to be kept warm at end-of-queue
-    /// and revived by a later in-range seek (Superpowered-style resume).
-    /// Cleared by `seek`/`play`. A `Finished` state from `stop()` or a
-    /// faded-out crossfade leaves this `false`, so those are discarded as usual.
-    #[field(get)]
-    pub(super) ended_at_eof: bool,
-    pub(super) state_dirty: bool,
+    pub(super) state: SlotState,
     /// Last observed duration snapshot.
     ///
     /// Mirrors `PlayerResource::duration()` (post-gapless-trim, visible
@@ -49,134 +35,90 @@ pub struct PlayerTrack {
     ///
     /// The source of truth for the published position, so it reflects what
     /// has been rendered to the audio output, not the decoder's pre-buffered
-    /// position (which can be ~200 ms ahead of the mixer thanks to
-    /// `PlayerResource`'s scratch buffer).
+    /// position.
     pub(super) served_media_frames: f64,
     pub(super) sample_rate: u32,
-    /// Slot seek epoch this track has been re-based onto.
-    ///
-    /// The control thread publishes the next epoch before it sends the matching
-    /// `DeckPart::Seek`, so a render block that sees a newer published epoch is
-    /// rendering a position the user has already left. [`read`](Self::read) uses the
-    /// gap to refuse natural-EOF finalization until the re-base arrives.
-    pub(super) seek_epoch: u64,
 }
 
 #[bon]
 impl PlayerTrack {
-    /// Create a new track in the `Preloading` state.
-    ///
-    /// The `MixDSP` starts at `FULLY_WET` (silent) so that an explicit
-    /// `fade_in()` or `play()` is required to produce audio.
+    /// A stopped track over `resource`: silent and not read until it is started.
     #[builder]
     #[must_use]
     pub fn new(
         #[builder(finish_fn)] resource: Box<PlayerResource>,
         sample_rate: NonZeroU32,
-        item_id: TrackId,
-        /// Slot seek epoch already published when this track loaded — a track
-        /// planted after earlier seeks starts level with them, not behind.
-        #[builder(default)]
-        seek_epoch: u64,
         /// The ramp of the track's start and stop.
         #[builder(default = DEFAULT_DECLICK)]
         declick: SmootherConfig,
-        /// Whether the track is held stopped: it stays silent through a `play()` or a fade until
-        /// it is started.
-        #[builder(default)]
-        stopped: bool,
     ) -> Self {
         let observed_duration = resource.duration();
+        let mut fade = TrackFade::default();
+        fade.play(sample_rate);
         let track = Self {
             resource,
-            item_id,
             observed_duration,
-            seek_epoch,
-            state: TrackState::Preloading,
-            state_dirty: false,
-            successor: None,
-            epoch: 0,
-            fade: TrackFade::default(),
-            gate: TrackGate::new(!stopped, declick, sample_rate),
+            fade,
+            state: SlotState::Stopped,
+            gate: TrackGate::new(false, declick, sample_rate),
             sample_rate: sample_rate.get(),
             served_media_frames: 0.0,
-            ended_at_eof: false,
         };
-        track.update_service_class(TrackState::Preloading);
+        track.update_service_class();
         track
     }
 
-    /// Start a fade-in: transitions to `FadingIn`, targets `FULLY_DRY` (audible).
-    pub fn fade_in(&mut self, settings: CrossfadeSettings) {
-        self.set_state(TrackState::FadingIn);
-        let sample_rate = NonZeroU32::new(self.sample_rate).unwrap_or(NonZeroU32::MIN);
-        self.fade.fade_in(settings, sample_rate);
+    fn rate(&self) -> NonZeroU32 {
+        NonZeroU32::new(self.sample_rate).unwrap_or(NonZeroU32::MIN)
     }
 
-    /// Start a fade-out: transitions to `FadingOut`, targets `FULLY_WET` (silent).
-    pub fn fade_out(&mut self, settings: CrossfadeSettings) {
-        self.set_state(TrackState::FadingOut);
-        let sample_rate = NonZeroU32::new(self.sample_rate).unwrap_or(NonZeroU32::MIN);
-        self.fade.fade_out(settings, sample_rate);
+    /// Let the track sound from the next frame it renders, entering with `fade`.
+    pub fn start(&mut self, fade: Fade) {
+        let rate = self.rate();
+        match fade {
+            Fade::Declick => {
+                self.fade.play(rate);
+                self.gate.steer(true);
+            }
+            Fade::Crossfade(settings) => {
+                self.fade.stop(rate);
+                self.fade.fade_in(settings, rate);
+                self.gate.steer(true);
+                self.gate.snap();
+            }
+        }
+        self.set_state(SlotState::Playing);
     }
 
-    /// Make `successor` the track that starts on the frame after this one's last.
-    pub const fn chain(&mut self, successor: TrackId) {
-        self.successor = Some(successor);
-    }
-
-    /// Drop the chain to `successor`, which has left the deck.
-    pub fn unchain(&mut self, successor: TrackId) {
-        if self.successor == Some(successor) {
-            self.successor = None;
+    /// Take the track out from the next frame it renders with `fade`; once silent it is not read.
+    pub fn stop(&mut self, fade: Fade) {
+        match fade {
+            Fade::Declick => self.gate.steer(false),
+            Fade::Crossfade(settings) => self.fade.fade_out(settings, self.rate()),
+        }
+        if self.state != SlotState::Playing {
+            self.shut();
         }
     }
 
-    /// Lead under `epoch` from the next time this track leads.
-    pub const fn lead_under(&mut self, epoch: u64) {
-        self.epoch = epoch;
-    }
-
-    /// Re-base this track onto a slot seek epoch the processor has applied.
-    ///
-    /// Every loaded track observes the epoch, not just the ones a seek moves:
-    /// a track the seek left alone must still stop counting as behind, or its
-    /// natural end would never finalize.
-    pub const fn observe_seek_epoch(&mut self, epoch: u64) {
-        self.seek_epoch = epoch;
-    }
-
-    /// Instantly start playing at full volume.
-    pub fn play(&mut self) {
-        self.set_state(TrackState::Playing);
-        let sample_rate = NonZeroU32::new(self.sample_rate).unwrap_or(NonZeroU32::MIN);
-        self.fade.play(sample_rate);
-        self.ended_at_eof = false;
-    }
-
-    /// Let the track sound from the next frame it renders, ramped in from silence; a track that
-    /// was not playing plays from where it stands.
-    pub fn start(&mut self) {
-        if !self.state.is_playing() {
-            self.steer_gate(false);
-            self.play();
+    /// Ramp the envelope from its gain on the next frame along one half of `settings`.
+    pub fn fade(&mut self, settings: CrossfadeSettings, dir: FadeDir) {
+        let rate = self.rate();
+        match dir {
+            FadeDir::In => self.fade.fade_in(settings, rate),
+            FadeDir::Out => self.fade.fade_out(settings, rate),
         }
-        self.steer_gate(true);
     }
 
-    /// Ramp the track out from the next frame it renders. Once silent it is not read, so it holds
-    /// its position until it is started again.
-    pub fn stop(&mut self) {
-        self.steer_gate(false);
+    /// Move the gate to where it is steered at once.
+    pub(crate) fn snap_gate(&mut self) {
+        self.gate.snap();
     }
 
-    /// Ramp the track in or out from the next frame it renders; a track that does not play moves
-    /// at once, since nothing of it sounds.
-    pub(crate) fn steer_gate(&mut self, started: bool) {
-        self.gate.steer(started);
-        if !self.state.is_playing() {
-            self.gate.snap();
-        }
+    /// Shut the gate at once: the track is silent from the next frame.
+    pub(super) fn shut(&mut self) {
+        self.gate.steer(false);
+        self.gate.snap();
     }
 
     delegate::delegate! {
@@ -207,13 +149,15 @@ impl PlayerTrack {
             #[call(apply_playback_rate)]
             pub fn set_playback_rate(&mut self, rate: f32);
         }
-        to self.gate {
-            /// Move the track's ramp to where it is steered at once.
-            #[call(snap)]
-            pub(crate) fn snap_gate(&mut self);
-            /// Whether the track has ramped out: it is silent and not read.
-            #[call(is_shut)]
-            pub(crate) fn is_stopped(&self) -> bool;
+    }
+
+    /// The envelope's gain on the last mixed frame.
+    #[must_use]
+    pub fn gain(&self) -> f32 {
+        if self.state == SlotState::Playing {
+            self.fade.gain()
+        } else {
+            0.0
         }
     }
 
@@ -231,16 +175,19 @@ impl PlayerTrack {
     /// Re-base the track on a seek the control thread already begun.
     ///
     /// Lock-free, so it is safe from the audio callback: it drops what the feeder buffered and
-    /// moves the media clock, while the begin half of the seek — the epoch, the event, the wakes —
-    /// happened on the control thread through [`PlayerResource::seek_handle`].
+    /// moves the media clock, while the begin half of the seek happened on the control thread
+    /// through [`PlayerResource::seek_handle`]. A track that ended stands stopped at the new
+    /// position.
     pub fn seek(&mut self, seconds: f64) {
         self.resource.reset_for_seek();
         let frames = seek_frame_index(seconds, self.sample_rate, self.observed_duration);
         self.served_media_frames = AsPrimitive::as_(frames);
-        self.ended_at_eof = false;
+        if self.state == SlotState::Ended {
+            self.set_state(SlotState::Stopped);
+        }
     }
 
-    /// Propagate a stream sample-rate change to the resource and fade.
+    /// Propagate a stream sample-rate change to the resource and envelopes.
     pub fn set_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
         self.resource.set_host_sample_rate(sample_rate);
         self.fade.update_sample_rate(sample_rate);
@@ -248,29 +195,23 @@ impl PlayerTrack {
         self.sample_rate = sample_rate.get();
     }
 
-    /// Set the track state and mark as dirty.
-    ///
-    /// Also updates the shared worker's scheduling priority via
-    /// [`ServiceClass`] bridge: Audible tracks get highest priority.
-    pub(super) fn set_state(&mut self, new_state: TrackState) {
-        if self.state != new_state {
-            self.state = new_state;
-            self.state_dirty = true;
-            self.update_service_class(new_state);
+    /// Hand the consumer back, for the receipt that returns it off the audio thread.
+    #[must_use]
+    pub fn into_resource(self) -> Box<PlayerResource> {
+        self.resource
+    }
+
+    pub(super) fn set_state(&mut self, state: SlotState) {
+        if self.state != state {
+            self.state = state;
+            self.update_service_class();
         }
     }
 
-    /// Instantly finish (silent, finished state).
-    pub fn finish(&mut self) {
-        self.set_state(TrackState::Finished);
-        let sample_rate = NonZeroU32::new(self.sample_rate).unwrap_or(NonZeroU32::MIN);
-        self.fade.stop(sample_rate);
-    }
-
-    /// Map track state to worker scheduling priority and push the update.
-    fn update_service_class(&self, state: TrackState) {
+    /// Map the track's state to the shared worker's scheduling priority.
+    fn update_service_class(&self) {
         self.resource
-            .set_service_class(service_class_for_state(state));
+            .set_service_class(service_class_for_state(self.state));
     }
 }
 
@@ -298,11 +239,11 @@ fn seek_frame_index(seconds: f64, sample_rate: u32, duration: f64) -> u64 {
     ToPrimitive::to_u64(&frames).unwrap_or(0)
 }
 
-const fn service_class_for_state(state: TrackState) -> ServiceClass {
+const fn service_class_for_state(state: SlotState) -> ServiceClass {
     match state {
-        TrackState::Playing | TrackState::FadingIn | TrackState::FadingOut => ServiceClass::Audible,
-        TrackState::Preloading => ServiceClass::Warm,
-        TrackState::Finished => ServiceClass::Idle,
+        SlotState::Playing => ServiceClass::Audible,
+        SlotState::Stopped => ServiceClass::Warm,
+        SlotState::Empty | SlotState::Ended => ServiceClass::Idle,
     }
 }
 
@@ -320,40 +261,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn track_state_is_playing() {
-        assert!(TrackState::Playing.is_playing());
-        assert!(TrackState::FadingIn.is_playing());
-        assert!(TrackState::FadingOut.is_playing());
-        assert!(!TrackState::Preloading.is_playing());
-        assert!(!TrackState::Finished.is_playing());
-    }
-
-    #[kithara::test]
-    fn track_state_is_leading() {
-        assert!(TrackState::Playing.is_leading());
-        assert!(TrackState::FadingIn.is_leading());
-        assert!(!TrackState::FadingOut.is_leading());
-        assert!(!TrackState::Preloading.is_leading());
-        assert!(!TrackState::Finished.is_leading());
-    }
-
-    #[kithara::test]
-    #[case(TrackState::Playing, ServiceClass::Audible)]
-    #[case(TrackState::FadingIn, ServiceClass::Audible)]
-    #[case(TrackState::FadingOut, ServiceClass::Audible)]
-    #[case(TrackState::Preloading, ServiceClass::Warm)]
-    #[case(TrackState::Finished, ServiceClass::Idle)]
-    fn track_state_maps_to_service_class(
-        #[case] state: TrackState,
-        #[case] expected: ServiceClass,
-    ) {
-        let class = match state {
-            TrackState::Playing | TrackState::FadingIn | TrackState::FadingOut => {
-                ServiceClass::Audible
-            }
-            TrackState::Preloading => ServiceClass::Warm,
-            TrackState::Finished => ServiceClass::Idle,
-        };
-        assert_eq!(class, expected);
+    #[case(SlotState::Playing, ServiceClass::Audible)]
+    #[case(SlotState::Stopped, ServiceClass::Warm)]
+    #[case(SlotState::Ended, ServiceClass::Idle)]
+    fn slot_state_maps_to_service_class(#[case] state: SlotState, #[case] expected: ServiceClass) {
+        assert_eq!(service_class_for_state(state), expected);
     }
 }

@@ -1,7 +1,6 @@
 use std::{mem, ops::ControlFlow};
 
 use kithara_bufpool::{HasPool, SampleBuffer};
-use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SampleCount};
 use kithara_stretch::ElasticError;
 use num_traits::ToPrimitive;
@@ -361,42 +360,12 @@ impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
-    pub(super) fn accept_projected_output(
-        &mut self,
-        projection: super::renderer_projection::ProjectedQuantum,
-    ) {
-        if let Some(plan) = self.projection.prepared.take() {
-            let same = self
-                .projection
-                .active
-                .as_ref()
-                .is_some_and(|active| Arc::ptr_eq(active, &plan));
-            if !same {
-                debug_assert!(self.projection.retired.is_none());
-                self.projection.retired = self.projection.active.replace(plan);
-            }
-        }
-        self.projection.cursor = Some(projection.end);
-        self.projection.output_frames = projection
-            .output_offset
-            .saturating_add(projection.output_frames);
-    }
-
     fn finish_flush(
         &mut self,
-        mut output: Option<AudioChunk>,
+        output: Option<AudioChunk>,
         complete: bool,
         snapshot: Option<crate::RenderSnapshot>,
     ) -> Option<AudioChunk> {
-        let rejected = output.as_mut().and_then(|chunk| {
-            let projection = self.projected_tail_cursor(chunk.frames())?;
-            self.trim_projected_eof(chunk, projection).err()
-        });
-        if let Some(error) = rejected {
-            warn!(%error, "projected EOF identity is uncovered");
-            self.defer_scratch(output.map(|chunk| chunk.samples));
-            return None;
-        }
         let output = match output {
             Some(output) if output.frames() == 0 => {
                 self.defer_scratch(Some(output.samples));
@@ -427,22 +396,6 @@ where
         if self.reprime_pending {
             self.retire_for_reprime();
             return None;
-        }
-        if self.backend_transition_pending
-            && self.projection.selected.is_some()
-            && (self.projection.active.is_some() || self.projection.prepared.is_some())
-        {
-            if let Err(error) = self.retain_projected_replacement() {
-                warn!(%error, "projected backend retirement failed");
-            }
-            return None;
-        }
-        if self
-            .residency
-            .as_ref()
-            .is_some_and(|resident| resident.prepared.is_some())
-        {
-            return self.flush_resident_request(snapshot);
         }
         if let Some(scratch) = self.scratch.as_mut() {
             scratch.clear();
@@ -496,13 +449,6 @@ where
         if !self.requires_staging() && self.plan.is_some() {
             return ControlFlow::Break(chunk);
         }
-        if self.projection.active.is_some() || self.projection.selected.is_some() {
-            let frames = self.prepare_quantum(chunk.meta, chunk.frames(), usize::MAX);
-            if !frames.is_ok_and(|frames| frames.get() == chunk.frames()) {
-                return ControlFlow::Break(chunk);
-            }
-            return self.render_quantum(chunk);
-        }
         let snapshot = self.context.load();
         self.prepared_quantum = None;
         let rate = self.rate;
@@ -540,26 +486,9 @@ where
             return None;
         }
 
-        let output = if let Some(prepared) = prepared.filter(|quantum| quantum.projection.is_some())
-        {
-            match self.render_resident_projection(chunk, prepared) {
-                Ok(output) => output,
-                Err(error) => {
-                    warn!(%error, "resident projection rendering failed");
-                    return None;
-                }
-            }
-        } else {
-            self.render_manual(chunk, speed, prepared)
-        };
+        let output = self.render_manual(chunk, speed, prepared);
         if let Some(output) = output.as_ref() {
-            self.commit_rate_render(
-                snapshot,
-                output,
-                speed,
-                target_speed,
-                prepared.and_then(|quantum| quantum.projection),
-            );
+            self.commit_rate_render(snapshot, output, speed, target_speed);
         }
         output
     }
@@ -616,28 +545,17 @@ where
         self.prepared_quantum = None;
         let snapshot = self.context.load();
         chunk.meta.render_revision = prepared.rate.revision();
-        chunk.meta.mapping_revision = prepared
-            .projection
-            .and_then(|projection| std::num::NonZeroU64::new(u64::from(projection.end.revision())));
-        let output = self.render_at(
+        ControlFlow::Continue(self.render_at(
             chunk,
             prepared.speed,
             snapshot,
             Some(prepared),
             prepared.rate.speed(),
-        );
-        if output.is_some()
-            && let Some(projection) = prepared.projection
-        {
-            self.accept_projected_output(projection);
-        }
-        ControlFlow::Continue(output)
+        ))
     }
 
     /// Discard renderer state after a source discontinuity.
     pub fn reset(&mut self) {
-        self.projection.cursor = None;
-        self.projection.output_frames = 0;
         self.reset_pending = true;
         self.clear_render_state();
         self.committed = None;
@@ -649,7 +567,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     /// Retire the running engine's tail into the replacement the re-primed
     /// engine fades from, leaving the held source in the residency.
     fn retire_for_reprime(&mut self) {
-        match self.retain_projected_replacement() {
+        match self.retain_replacement() {
             Ok(()) => {
                 if let Some(pending) = self.pending_source.as_mut() {
                     pending.clear();
@@ -669,7 +587,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     /// Drain the running engine's tail into the replacement the next engine
     /// fades from. A fade still under way blends into that tail on the way, so
     /// the next fade starts from what sounds now.
-    fn retain_projected_replacement(&mut self) -> Result<(), ElasticError> {
+    fn retain_replacement(&mut self) -> Result<(), ElasticError> {
         let channels = usize::from(self.spec.channels.max(1));
         let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
         resident.next_replacement.clear();
@@ -677,9 +595,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         let quantum = self
             .engine
             .as_ref()
-            .ok_or(ElasticError::EnginePreparation(
-                "projected engine is unavailable",
-            ))?
+            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
             .capabilities()
             .latency()
             .output_frames()
@@ -706,7 +622,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 mem::swap(&mut resident.replacement, &mut resident.next_replacement);
                 resident.next_replacement.clear();
                 resident.replacement_offset = 0;
-                resident.primed = false;
                 self.backend_transition_pending = false;
                 self.reprime_pending = false;
                 self.active = false;
@@ -716,122 +631,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             }
         }
         Err(ElasticError::EnginePreparation(
-            "projected backend drain exceeds its capability bound",
+            "backend drain exceeds its capability bound",
         ))
-    }
-}
-
-impl<S: HasPool<f32>> WarpRenderer<S> {
-    /// EOF silence supplies DSP lookahead only; it never extends the recording geometry.
-    fn flush_resident_request(
-        &mut self,
-        snapshot: Option<crate::RenderSnapshot>,
-    ) -> Option<AudioChunk> {
-        let request = self.residency.as_ref()?.prepared?;
-        let channels = usize::from(self.spec.channels.max(1));
-        let result = (|| {
-            let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
-            resident.pad_to(request.source_end, channels)?;
-            let meta = self.last_input_meta.ok_or(ElasticError::EmptySource)?;
-            self.process_resident_projection(meta, channels)
-        })();
-        match result {
-            Ok(Some(mut output)) => {
-                let projection = match self.trim_projected_eof(&mut output, request.projection) {
-                    Ok(projection) => projection,
-                    Err(error) => {
-                        warn!(%error, "projected EOF identity is uncovered");
-                        self.defer_scratch(Some(output.samples));
-                        return None;
-                    }
-                };
-                self.commit_rate_render(
-                    snapshot,
-                    &output,
-                    1.0,
-                    request.rate.speed(),
-                    Some(projection),
-                );
-                self.accept_projected_output(projection);
-                Some(output)
-            }
-            Ok(None) => None,
-            Err(error) => {
-                warn!(%error, "projected EOF completion failed");
-                None
-            }
-        }
-    }
-
-    fn trim_projected_eof(
-        &mut self,
-        output: &mut AudioChunk,
-        mut projection: super::renderer_projection::ProjectedQuantum,
-    ) -> Result<super::renderer_projection::ProjectedQuantum, ElasticError> {
-        let plan = self
-            .projection
-            .prepared
-            .as_ref()
-            .or(self.projection.active.as_ref())
-            .ok_or(ElasticError::EnginePreparation("projected EOF has no plan"))?;
-        let end = self
-            .residency
-            .as_ref()
-            .and_then(|resident| resident.end)
-            .ok_or(ElasticError::EmptySource)?;
-        let source = end
-            .to_f64()
-            .and_then(|end| crate::AssetFrame::new(end).ok())
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let crate::BeatGridQuery::Resolved(end_output) = plan.map().output_at(source) else {
-            return Err(ElasticError::EnginePreparation(
-                "projected source EOF is uncovered",
-            ));
-        };
-        let axis = plan.output_axis().ok_or(ElasticError::EnginePreparation(
-            "projected EOF has no session axis",
-        ))?;
-        let total = self.projected_output_offset(plan, end_output)?;
-        let frames = output
-            .frames()
-            .min(total.saturating_sub(projection.output_offset));
-        let total_frames = projection
-            .output_offset
-            .checked_add(frames)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let output_offset = (total_frames
-            .to_f64()
-            .ok_or(ElasticError::SampleCountOverflow)?
-            * f64::from(axis.sample_rate().get())
-            / f64::from(self.spec.sample_rate.get()))
-        .round()
-        .to_i64()
-        .ok_or(ElasticError::SampleCountOverflow)?;
-        let output_end = crate::SessionFrame::new(
-            i64::from(plan.activation().output())
-                .checked_add(output_offset)
-                .ok_or(ElasticError::SampleCountOverflow)?,
-        );
-        let source = Self::projected_endpoint(plan, output_end, end)?;
-        projection.output_frames = frames;
-        projection.end = plan.map().reanchor(source, output_end);
-        output
-            .samples
-            .truncate(frames * usize::from(self.spec.channels.max(1)));
-        output.meta.frames =
-            u32::try_from(frames).map_err(|_| ElasticError::SampleCountOverflow)?;
-        output.meta.frame_offset = Self::projected_endpoint(plan, projection.output_start, end)?;
-        output.meta.timestamp = self
-            .spec
-            .duration_for(output.meta.frame_offset)
-            .map_err(|_| ElasticError::SampleCountOverflow)?;
-        output.meta.end_timestamp = self
-            .spec
-            .duration_for(source)
-            .map_err(|_| ElasticError::SampleCountOverflow)?;
-        output.meta.mapping_revision =
-            std::num::NonZeroU64::new(u64::from(projection.end.revision()));
-        self.rendered_source_end = Some((source, self.spec.sample_rate));
-        Ok(projection)
     }
 }

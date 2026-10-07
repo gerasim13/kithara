@@ -5,6 +5,7 @@ mod node;
 mod processor;
 mod render;
 mod slots;
+mod tail;
 pub mod track;
 
 pub use config::DeckMixerConfig;
@@ -13,5 +14,5 @@ pub use context::{
 };
 pub use node::PlayerNode;
 pub use processor::{BufferGeometryError, DeckMixer, StreamShape};
-pub(crate) use render::{LeadingPlayhead, RenderPass, RenderTargets};
-pub(crate) use slots::{TrackSlot, TrackSlots};
+pub(crate) use render::RenderPass;
+pub(crate) use slots::TrackSlots;
