@@ -4,7 +4,11 @@ use std::sync::atomic::Ordering;
 
 use crate::{common::thread_id::ACTIVE_NAMED_THREADS, loom::thread as backend};
 pub use crate::{
-    common::{thread_id::active_named_thread_count, time::Duration},
+    common::{
+        thread_class::{ThreadClass, set_current_class},
+        thread_id::active_named_thread_count,
+        time::Duration,
+    },
     loom::thread::JoinHandle,
 };
 

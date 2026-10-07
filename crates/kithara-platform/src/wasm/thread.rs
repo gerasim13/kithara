@@ -9,8 +9,11 @@ use parking_lot_core as _;
 use wasm_bindgen::JsCast;
 use wasm_safe_thread::Builder as WasmThreadBuilder;
 
-pub use crate::common::thread_id::active_named_thread_count;
 use crate::common::thread_id::{ACTIVE_NAMED_THREADS, thread_id_hash};
+pub use crate::common::{
+    thread_class::{ThreadClass, set_current_class},
+    thread_id::active_named_thread_count,
+};
 
 /// Process-wide cell for the wasm-bindgen JS shim filename (without `.js`)
 /// that spawned Workers import for `initSync`. The consumer crate sets this
