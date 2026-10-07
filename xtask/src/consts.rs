@@ -483,6 +483,11 @@ pub(crate) const UNIT_HASH_LEN: usize = 16;
 /// caches in. On the cache share it is a namespace cleanup keeps.
 pub(crate) const CARGO_HOME_DIR: &str = "cargo";
 
+/// The host tree the container runner checks out into, under the build root.
+/// The container sees it where every runner checks out, `workspaces/gitlab`;
+/// the host's runners never do.
+pub(crate) const CONTAINER_BUILDS: &str = "workspaces/colima";
+
 /// The link in a build root every build of the root's runner goes through,
 /// pointed at the build directory of the job that runs.
 pub(crate) const BUILD_ALIAS: &str = "build";

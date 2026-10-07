@@ -7,7 +7,10 @@ use anyhow::{Context, Result, bail};
 use tracing::info;
 
 use super::runners::path_text;
-use crate::ci::{config::CiConfig, process::Process};
+use crate::{
+    ci::{config::CiConfig, process::Process},
+    consts,
+};
 
 pub(super) struct SystemSetup<'a> {
     config: &'a CiConfig,
@@ -485,12 +488,13 @@ fn case_folding_root(config: &CiConfig) -> &Path {
 
 fn checkout_directories(config: &CiConfig) -> Vec<PathBuf> {
     let build_root = config.host.build_root();
-    let mut directories = Vec::with_capacity(3);
+    let mut directories = Vec::with_capacity(4);
     if build_root != config.host.host_root {
         directories.push(build_root.to_path_buf());
     }
     directories.push(build_root.join("workspaces"));
     directories.push(build_root.join("workspaces/gitlab"));
+    directories.push(build_root.join(consts::CONTAINER_BUILDS));
     directories
 }
 
@@ -551,7 +555,6 @@ fn parse_volume_quota(text: &str, device: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::consts;
 
     #[test]
     fn root_container_parser_accepts_current_diskutil_shape() {
@@ -633,6 +636,7 @@ mod tests {
                 "/build-root",
                 "/build-root/workspaces",
                 "/build-root/workspaces/gitlab",
+                "/build-root/workspaces/colima",
             ]
             .map(PathBuf::from)
         );

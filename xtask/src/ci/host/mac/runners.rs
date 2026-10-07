@@ -71,6 +71,7 @@ impl<'a> RunnerManager<'a> {
             &self.config.host.host_root.join("cache/gitlab-runner"),
             &self.config.host.host_root.join("toolchains/shared-bin"),
             &self.config.host.build_root().join("workspaces/gitlab"),
+            &self.config.host.build_root().join(consts::CONTAINER_BUILDS),
             &self.agent_root(),
         ] {
             fs::create_dir_all(path)
@@ -275,11 +276,16 @@ impl<'a> RunnerManager<'a> {
     /// package lock does not reach across the virtual machine. The container
     /// also binds its builds directory from the host, so the checkouts and the
     /// build roots beside them outlive the job the way the shell runners' do.
+    /// It binds a tree of its own there: a lock taken in the virtual machine is
+    /// invisible on the host and the reverse, so a reclaim on either side walks
+    /// only the build directories whose leases it sees.
     fn runner_config(&self, home: &Path, tokens: &Tokens) -> Result<String> {
         let concurrency = self.config.host.job_concurrency;
         let cargo_build_jobs = self.cargo_build_jobs_env();
         let root = self.config.host.host_root.display();
         let builds = self.config.host.build_root().display();
+        let container_builds = self.config.host.build_root().join(consts::CONTAINER_BUILDS);
+        let container_builds = container_builds.display();
         let url = self.config.host.gitlab_origin();
         let cache = self.config.host.cache_root_linux.display();
         let lane_config = consts::MAC_CONFIG_PATH;
@@ -307,7 +313,7 @@ impl<'a> RunnerManager<'a> {
         Ok(format!(
             "concurrent = {concurrency}\ncheck_interval = 3\nshutdown_timeout = 30\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={cache}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"RUSTUP_HOME=/usr/local/rustup\", \"{cargo_build_jobs}\"{docker_sccache_s3}]\n\
-             [runners.docker]\n    host = \"{}\"\n    image = \"{image}\"\n    pull_policy = \"never\"\n    allowed_pull_policies = [\"never\"]\n    allowed_images = [\"{image}\"]\n    cpus = \"5\"\n    memory = \"6500m\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/mac-host.toml:{lane_config}:ro\", \"{builds}/workspaces/gitlab:{builds}/workspaces/gitlab:rw\"]\n\n\
+             [runners.docker]\n    host = \"{}\"\n    image = \"{image}\"\n    pull_policy = \"never\"\n    allowed_pull_policies = [\"never\"]\n    allowed_images = [\"{image}\"]\n    cpus = \"5\"\n    memory = \"6500m\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/mac-host.toml:{lane_config}:ro\", \"{container_builds}:{builds}/workspaces/gitlab:rw\"]\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-macos\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{cargo_build_jobs}\"{sccache_s3}]\n",
@@ -329,8 +335,9 @@ impl<'a> RunnerManager<'a> {
     ///
     /// The mounts name siblings of the CI home rather than the volume root:
     /// colima already mounts the home, and lima rejects one mount nested
-    /// inside another. The builds directory sits on the build volume, beside
-    /// none of them.
+    /// inside another. The container's builds directory sits on the build
+    /// volume, beside none of them, and apart from the tree the host's runners
+    /// build in.
     fn colima_args(&self, colima: &str) -> Vec<String> {
         let root = &self.config.host.host_root;
         let mut args: Vec<String> = [
@@ -367,7 +374,7 @@ impl<'a> RunnerManager<'a> {
                 self.config
                     .host
                     .build_root()
-                    .join("workspaces/gitlab")
+                    .join(consts::CONTAINER_BUILDS)
                     .display()
             ),
         ] {
@@ -1079,10 +1086,6 @@ mod tests {
     /// leaves alone. It names no compiler-cache socket: a socket the runner
     /// names is shared by every checkout it holds, and a job that retires the
     /// server takes it from under the other one.
-    ///
-    /// The Linux runner's checkouts live on the host volume, bound at the same
-    /// path, so the build root a job makes beside its checkout outlives the
-    /// container and the host's evictor reaches it.
     #[test]
     fn every_runner_names_one_cargo_home_and_no_compiler_cache_socket() {
         let config = fixture();
@@ -1120,10 +1123,10 @@ mod tests {
                 .iter()
                 .find_map(|entry| entry.strip_prefix("CARGO_HOME="))
                 .unwrap_or_else(|| panic!("{name} names no Cargo home"));
-            let Some(docker) = runner.get("docker") else {
+            if runner.get("docker").is_none() {
                 shell_homes.insert(name, home);
                 continue;
-            };
+            }
             let namespace = Path::new(home)
                 .strip_prefix(&config.host.cache_root_linux)
                 .unwrap_or_else(|_| panic!("{name} keeps its Cargo home off the cache share"))
@@ -1138,15 +1141,6 @@ mod tests {
                     .any(|kept| OsStr::new(kept) == namespace.as_os_str()),
                 "{name} keeps its Cargo home in {namespace:?}, which cleanup takes whole"
             );
-            let builds = runner["builds_dir"].as_str().expect("a builds directory");
-            assert!(
-                docker["volumes"]
-                    .as_array()
-                    .expect("docker volumes")
-                    .iter()
-                    .any(|volume| volume.as_str() == Some(&format!("{builds}:{builds}:rw"))),
-                "{name} builds in a container directory the host never sees"
-            );
         }
         let homes: Vec<&&str> = shell_homes.values().collect();
         assert_eq!(homes.len(), 3, "every host runner names its home");
@@ -1158,6 +1152,79 @@ mod tests {
             Path::new(homes[0]).starts_with(config.host.build_root()),
             "the host runners' home is not on the build volume: {shell_homes:?}"
         );
+    }
+
+    /// A lock taken inside the virtual machine is invisible on the host, and
+    /// the reverse, so a reclaim on either side may walk only build
+    /// directories whose leases it can see. The container's checkouts, and the
+    /// build roots beside them, sit in a host tree of their own: no host runner
+    /// builds in it, and the virtual machine sees no host runner's tree.
+    #[test]
+    fn the_container_builds_in_a_tree_no_host_runner_shares() {
+        let config = fixture();
+        let process = Process::new(Path::new("/"), BTreeMap::new());
+        let manager = RunnerManager::new(&config, &process);
+        let tokens = Tokens {
+            macos: "glrt-macos".into(),
+            linux: "glrt-linux".into(),
+            android: "glrt-android".into(),
+            release: "glrt-release".into(),
+        };
+        let rendered: toml::Value = toml::from_str(
+            &manager
+                .runner_config(&manager.ci_home(), &tokens)
+                .expect("render runner config"),
+        )
+        .expect("runner config is TOML");
+        let runners = rendered["runners"].as_array().expect("runners");
+        let builds = |runner: &toml::Value| -> PathBuf {
+            PathBuf::from(runner["builds_dir"].as_str().expect("a builds directory"))
+        };
+        let host_trees: Vec<PathBuf> = runners
+            .iter()
+            .filter(|runner| runner.get("docker").is_none())
+            .map(builds)
+            .collect();
+        assert!(!host_trees.is_empty(), "no runner builds on the host");
+        let shares = |path: &Path| {
+            host_trees
+                .iter()
+                .any(|tree| path.starts_with(tree) || tree.starts_with(path))
+        };
+
+        let args = manager.colima_args("colima");
+        for mount in args
+            .windows(2)
+            .filter(|pair| pair[0] == "--mount")
+            .map(|pair| Path::new(pair[1].trim_end_matches(":w")))
+        {
+            assert!(
+                !shares(mount),
+                "the virtual machine mounts {}, where a host runner builds",
+                mount.display()
+            );
+        }
+        let mut containers = 0;
+        for runner in runners
+            .iter()
+            .filter(|runner| runner.get("docker").is_some())
+        {
+            let name = runner["name"].as_str().expect("a runner has a name");
+            let destination = format!(":{}:rw", builds(runner).display());
+            let source = runner["docker"]["volumes"]
+                .as_array()
+                .expect("docker volumes")
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .find_map(|volume| volume.strip_suffix(&destination))
+                .unwrap_or_else(|| panic!("{name} builds in a directory the host never sees"));
+            assert!(
+                !shares(Path::new(source)),
+                "{name} builds in {source}, where a host runner builds"
+            );
+            containers += 1;
+        }
+        assert!(containers > 0, "no runner builds in a container");
     }
 
     /// The runner config and the colima agent are written by two different
