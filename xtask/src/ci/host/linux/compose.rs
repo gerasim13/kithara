@@ -168,7 +168,10 @@ mod tests {
             }
         }
         assert!(
-            yaml.contains("/var/lib/kithara-ci/cargo/review:/cache/cargo"),
+            yaml.contains(&format!(
+                "/var/lib/kithara-ci/cargo/review:{}",
+                consts::CARGO_HOME_MOUNT
+            )),
             "{yaml}"
         );
         assert!(

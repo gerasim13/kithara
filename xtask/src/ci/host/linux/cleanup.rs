@@ -84,7 +84,7 @@ pub(super) fn run(process: &Process, host: &LinuxHost, keep: &[String]) -> Resul
         ],
         "prune the build cache",
     );
-    let target_dirs = target_dirs(host);
+    let target_dirs = target_dirs(host)?;
     build_cache::enforce_budget(&target_dirs, host.build_cache_budget_bytes()?)?;
     Ok(())
 }
@@ -119,16 +119,27 @@ fn orphaned_volumes(listed: &str) -> Vec<&str> {
 
 /// Where the live build caches sit on disk, so their contents can be held to a
 /// budget: each runner's build root, which holds its lanes and its xtask
-/// bootstrap alike.
-fn target_dirs(host: &LinuxHost) -> Vec<PathBuf> {
-    host.runners
+/// bootstrap alike, and the lane directories and xtask bootstraps
+/// `production/main` keeps until this layout replaces its own. One budget over
+/// both is what keeps two layouts on one disk inside one ceiling.
+fn target_dirs(host: &LinuxHost) -> Result<Vec<PathBuf>> {
+    let lanes = host.cache_root.join(consts::PREVIOUS_LANES);
+    let mut dirs: Vec<PathBuf> = host
+        .runners
         .iter()
         .map(|runner| Container::build_root(host, runner))
-        .collect()
+        .collect();
+    dirs.extend(build_cache::previous_build_roots(
+        &lanes.join(consts::PREVIOUS_CACHE_ROOT),
+    )?);
+    dirs.push(lanes);
+    Ok(dirs)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::Path};
+
     use super::*;
 
     fn keep(images: &[&str]) -> Vec<String> {
@@ -161,25 +172,46 @@ mod tests {
         );
     }
 
-    /// The budget is held over every directory a job builds in and nothing
-    /// else: the root each runner's alias points into, which holds its lanes
-    /// and its xtask bootstrap alike.
+    /// The budget is held over every directory a job of either layout builds
+    /// in, and nothing else: every directory a runner binds in, except Cargo's
+    /// home and the checkouts, and each xtask bootstrap the previous layout
+    /// keeps under its cache root.
     #[test]
-    fn the_budget_covers_exactly_the_build_roots_jobs_build_in() {
-        use super::super::container::tests::{mounted_at, told};
+    fn the_budget_covers_every_directory_a_job_builds_in() {
+        use std::collections::BTreeSet;
 
-        let host = crate::ci::host::linux::profile::tests::host_fixture();
-        let roots: Vec<PathBuf> = host
-            .runners
-            .iter()
-            .map(|runner| {
-                let alias = told(runner, "CARGO_TARGET_DIR");
-                let root = alias.parent().expect("the alias sits in a build root");
-                PathBuf::from(mounted_at(&host, runner, root))
-            })
+        use super::super::container::tests::told;
+        use crate::ci::previous_layout::previous_layout;
+
+        let mut host = crate::ci::host::linux::profile::tests::host_fixture();
+        let cache = tempfile::tempdir().expect("a cache root");
+        host.cache_root = cache.path().to_path_buf();
+        let layout = previous_layout().linux;
+        let mut expected = BTreeSet::new();
+        for runner in &host.runners {
+            let home = told(runner, "CARGO_HOME");
+            let checkouts = told(runner, "SCCACHE_BASEDIRS");
+            for (source, at) in Container::mounts(&host, runner) {
+                let source = PathBuf::from(source);
+                let at = Path::new(at);
+                if source.is_absolute() && at != home && !checkouts.starts_with(at) {
+                    expected.insert(source.clone());
+                }
+                if let Ok(below) = layout.named.cache_root.strip_prefix(at) {
+                    for trust in ["review", "trusted"] {
+                        let bootstrap = source.join(below).join("bootstrap").join(trust);
+                        fs::create_dir_all(&bootstrap).expect("a bootstrap directory");
+                        expected.insert(bootstrap);
+                    }
+                }
+            }
+        }
+
+        let budgeted: BTreeSet<PathBuf> = target_dirs(&host)
+            .expect("the budget's directories are listed")
+            .into_iter()
             .collect();
-
-        assert_eq!(target_dirs(&host), roots);
+        assert_eq!(budgeted, expected);
     }
 
     #[test]

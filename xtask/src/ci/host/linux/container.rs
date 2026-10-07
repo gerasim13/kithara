@@ -75,6 +75,15 @@ impl Container<'_> {
                 consts::BUILD_ROOT_MOUNT,
             ),
             ("kithara-ci-fixtures".to_owned(), "/cache/fixtures"),
+            // Every runner shares the one directory `production/main` claims
+            // lane directories in, as main mounts it.
+            (
+                host.cache_root
+                    .join(consts::PREVIOUS_LANES)
+                    .to_string_lossy()
+                    .into_owned(),
+                consts::PREVIOUS_LANES_MOUNT,
+            ),
         ]
     }
 
@@ -100,11 +109,12 @@ impl Container<'_> {
 
     /// What the job is told about where to build and what to reuse.
     ///
-    /// Cargo is told the alias in the build root, the same path in every
-    /// container, so every lane's compilations are keyed alike fleet-wide and
-    /// the compiler cache serves one runner's entries to another. The store
-    /// itself is the one the runner's credentials name; nothing of it is kept
-    /// on this disk.
+    /// Cargo is told the build root, the same path in every container; a lane
+    /// builds behind the alias in it, so every lane's compilations are keyed
+    /// alike fleet-wide and the compiler cache serves one runner's entries to
+    /// another. The store itself is the one the runner's credentials name;
+    /// nothing of it is kept on this disk. `production/main` is told where it
+    /// claims lane directories too, until this layout replaces its own.
     ///
     /// The linker entries come from [`LINUX_LINKER_ENV`](consts::LINUX_LINKER_ENV), which the GitLab lane
     /// executor reads too: one statement of what a Linux job links with rather
@@ -117,10 +127,8 @@ impl Container<'_> {
             .collect();
         environment.extend([
             format!("CARGO_HOME={}", consts::CARGO_HOME_MOUNT),
-            format!(
-                "CARGO_TARGET_DIR={}",
-                root.join(consts::BUILD_ALIAS).display()
-            ),
+            format!("CARGO_TARGET_DIR={}", root.display()),
+            format!("KITHARA_CI_TARGET_ROOT={}", consts::PREVIOUS_LANES_MOUNT),
             format!(
                 "KITHARA_XTASK_TARGET={}",
                 root.join(consts::XTASK_BUILD).display()
@@ -177,6 +185,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::ci::{
         config::workspace_root, environment::CacheTrust, host::linux::profile::tests::host_fixture,
+        previous_layout::previous_layout,
     };
 
     /// The value a runner's job is told for `name`.
@@ -203,27 +212,58 @@ pub(crate) mod tests {
             .0
     }
 
-    /// Cargo is told one path in every container, so every compilation of
-    /// every lane is keyed the same fleet-wide. The directory it names is the
-    /// alias the lane runner points at the lane's own build, inside a root the
-    /// runner keeps to itself: one job per container, so re-pointing it never
-    /// races another job.
+    /// Every container tells one build root, so every compilation of every
+    /// lane is keyed the same fleet-wide. Behind it is the runner's own: the
+    /// lane runner re-points the alias inside it at the lane's build, and one
+    /// job per container means re-pointing it never races another job.
     #[test]
-    fn a_job_builds_behind_the_alias_in_its_runners_own_build_root() {
+    fn a_job_is_told_its_runners_own_build_root() {
         let host = host_fixture();
         let [first, second, ..] = host.runners.as_slice() else {
             panic!("the host fixture serves more than one runner");
         };
-        let alias = told(first, "CARGO_TARGET_DIR");
+        let root = told(first, "CARGO_TARGET_DIR");
 
-        assert_eq!(alias, told(second, "CARGO_TARGET_DIR"));
-        assert_eq!(alias.file_name(), Some(OsStr::new(consts::BUILD_ALIAS)));
-        let root = alias.parent().expect("the alias sits in a build root");
+        assert_eq!(root, told(second, "CARGO_TARGET_DIR"));
         assert_ne!(
-            mounted_at(&host, first, root),
-            mounted_at(&host, second, root),
+            mounted_at(&host, first, &root),
+            mounted_at(&host, second, &root),
             "two jobs re-point one alias"
         );
+    }
+
+    /// A job of the previous layout builds and caches where its workflows and
+    /// its container name. A path no mount holds is the container's own
+    /// throwaway disk, and creating a directory under `/cache` there fails.
+    #[test]
+    fn a_job_finds_every_path_the_previous_layout_names_on_a_mount() {
+        let host = host_fixture();
+        let layout = previous_layout().linux;
+        for runner in &host.runners {
+            let mounts = Container::mounts(&host, runner);
+            let named = std::iter::once(&layout.named.cache_root).chain(&layout.named.paths);
+            for path in named.chain(layout.told.values()) {
+                assert!(
+                    mounts.iter().any(|(_, at)| path.starts_with(at)),
+                    "{} mounts nothing holding {}",
+                    runner.name,
+                    path.display()
+                );
+            }
+        }
+    }
+
+    /// A job of the previous layout is told what it was told: its scripts
+    /// derive where to build and lease from these, and the compiler cache keys
+    /// every compilation by Cargo's variables.
+    #[test]
+    fn a_job_is_told_what_the_previous_layout_told_it() {
+        let host = host_fixture();
+        for runner in &host.runners {
+            for (name, value) in previous_layout().linux.told {
+                assert_eq!(told(runner, &name), value, "{} tells {name}", runner.name);
+            }
+        }
     }
 
     /// The xtask bootstrap is one more build in the runner's build root, under
@@ -233,10 +273,10 @@ pub(crate) mod tests {
     fn a_job_bootstraps_xtask_beside_its_lanes() {
         let host = host_fixture();
         let runner = host.runner("kithara-ci-octocat").expect("runner");
-        let alias = told(runner, "CARGO_TARGET_DIR");
+        let root = told(runner, "CARGO_TARGET_DIR");
         let xtask = told(runner, "KITHARA_XTASK_TARGET");
 
-        assert_eq!(xtask.parent(), alias.parent());
+        assert_eq!(xtask.parent(), Some(root.as_path()));
         assert_eq!(xtask.file_name(), Some(OsStr::new(consts::XTASK_BUILD)));
     }
 

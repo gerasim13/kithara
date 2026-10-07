@@ -653,11 +653,12 @@ fn judged_jobs_stage_only_checkout_cleaned_verdict_evidence() {
     assert!(!clean.contains(".ci-artifacts"));
 }
 
-/// A lane on a host that carries `just` builds behind one alias in a build
-/// root of its own checkout's, beside the checkout rather than in it: the
-/// runner cleans the checkout before every job. The bootstrap build sits in the
-/// same root, and the compiler-cache server is the checkout's, so two jobs on
-/// one runner never share one, nor retire the one the other compiles through.
+/// A lane on a host that carries `just` builds in a build root of its own
+/// checkout's, beside the checkout rather than in it: the runner cleans the
+/// checkout before every job. Cargo is told the root, and the lane runner
+/// builds behind the alias inside it. The bootstrap build sits in the same
+/// root, and the compiler-cache server is the checkout's, so two jobs on one
+/// runner never share one, nor retire the one the other compiles through.
 #[test]
 fn every_lane_run_through_just_builds_in_a_root_beside_its_own_checkout() {
     const CHECKOUT: &str = "${CI_PROJECT_DIR}";
@@ -688,21 +689,16 @@ fn every_lane_run_through_just_builds_in_a_root_beside_its_own_checkout() {
                 .unwrap_or_else(|| panic!("`{job}` names no {key}"))
                 .to_owned()
         };
-        let alias = value("CARGO_TARGET_DIR");
+        let root = value("CARGO_TARGET_DIR");
         let bootstrap = value("KITHARA_XTASK_TARGET");
-        let root = Path::new(&alias)
-            .parent()
-            .expect("an alias sits in a build root");
         assert_eq!(
             Path::new(&bootstrap).parent(),
-            Some(root),
+            Some(Path::new(&root)),
             "`{job}` bootstraps outside the root it builds in"
         );
-        let root = root.to_str().expect("a UTF-8 build root");
+        let sibling = root.strip_prefix(&format!("{CHECKOUT}/../"));
         assert!(
-            root.starts_with(CHECKOUT)
-                && root != CHECKOUT
-                && !root.starts_with(&format!("{CHECKOUT}/")),
+            sibling.is_some_and(|name| !name.is_empty() && name != ".." && !name.contains('/')),
             "`{job}` builds in {root}, not beside its checkout"
         );
         let socket = value("SCCACHE_SERVER_UDS");

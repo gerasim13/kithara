@@ -143,6 +143,17 @@ fn evict_to_budget(candidates: Vec<CacheEntry>, held_bytes: u64, budget_bytes: u
 /// anything in it is removed, so a job that enters it meanwhile finds its path
 /// free and builds in a new directory instead of one being emptied under it.
 fn evict(entry: &CacheEntry) -> Result<u64> {
+    let _slot = match try_hold(&lock_beside(&entry.path))? {
+        Hold::Busy => {
+            info!(
+                path = %entry.path.display(),
+                "keeping the lane slot a job took after the scan"
+            );
+            return Ok(0);
+        }
+        Hold::Absent => None,
+        Hold::Taken(lock) => Some(lock),
+    };
     let _eviction = match lease::evict(&entry.path) {
         Ok(Some(eviction)) => eviction,
         Ok(None) => {
@@ -159,10 +170,17 @@ fn evict(entry: &CacheEntry) -> Result<u64> {
                 .with_context(|| format!("fencing build directory {}", entry.path.display()));
         }
     };
-    if heartbeat_is_fresh(&entry.path.join(lease::HEARTBEAT)) {
+    let Some(_cargo) = hold_cargo_locks(&entry.path)? else {
         info!(
             path = %entry.path.display(),
-            "keeping the build directory a job in a virtual machine took after the scan"
+            "keeping the build directory Cargo started building in after the scan"
+        );
+        return Ok(0);
+    };
+    if taken_below(&entry.path)? {
+        info!(
+            path = %entry.path.display(),
+            "keeping the build directory a job took after the scan"
         );
         return Ok(0);
     }
@@ -177,6 +195,33 @@ fn evict(entry: &CacheEntry) -> Result<u64> {
     info!(path = %entry.path.display(), bytes = entry.size_bytes, "evicting build cache");
     remove_aside(&aside)?;
     Ok(entry.size_bytes)
+}
+
+/// The `.cargo-lock` of every profile in `entry`, held so Cargo cannot start
+/// building in one while it is removed, or `None` when Cargo already holds one.
+fn hold_cargo_locks(entry: &Path) -> Result<Option<Vec<FileLock>>> {
+    let mut held = Vec::new();
+    for dir in levels(entry, consts::CARGO_LOCK_DEPTH)? {
+        match try_hold(&dir.join(consts::CARGO_LOCK))? {
+            Hold::Busy => return Ok(None),
+            Hold::Absent => {}
+            Hold::Taken(lock) => held.push(lock),
+        }
+    }
+    Ok(Some(held))
+}
+
+/// Whether a job has taken `entry` since the scan where the fence on its top
+/// level cannot see it: a fresh heartbeat at any level, or a lease held below
+/// the top.
+fn taken_below(entry: &Path) -> Result<bool> {
+    let levels = levels(entry, consts::LEASE_DEPTH)?;
+    Ok(levels
+        .iter()
+        .any(|dir| heartbeat_is_fresh(&dir.join(lease::HEARTBEAT)))
+        || levels[1..]
+            .iter()
+            .any(|dir| lock_is_held(&dir.join(lease::FILE))))
 }
 
 /// Where `entry` goes before it is removed: a hidden name in the same root,
@@ -309,17 +354,28 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         if is_hidden(&path) {
             continue;
         }
-        let lease_file = path.join(lease::FILE);
-        let used = match still_there(fs::metadata(&lease_file))
-            .with_context(|| format!("reading {}", lease_file.display()))?
-        {
-            Some(lease) => lease
-                .modified()
-                .with_context(|| format!("reading the date of {}", lease_file.display()))?,
-            None => SystemTime::UNIX_EPOCH,
-        };
-        let held =
-            lease_file_is_held(&lease_file) || heartbeat_is_fresh(&path.join(lease::HEARTBEAT));
+        let mut used = SystemTime::UNIX_EPOCH;
+        let mut held = lock_is_held(&lock_beside(&path));
+        for dir in levels(&path, consts::LEASE_DEPTH)? {
+            for mark in [lease::FILE, lease::HEARTBEAT] {
+                let mark = dir.join(mark);
+                if let Some(found) = still_there(fs::metadata(&mark))
+                    .with_context(|| format!("reading {}", mark.display()))?
+                {
+                    let date = found
+                        .modified()
+                        .with_context(|| format!("reading the date of {}", mark.display()))?;
+                    used = used.max(date);
+                }
+            }
+            held = held
+                || lock_is_held(&dir.join(lease::FILE))
+                || heartbeat_is_fresh(&dir.join(lease::HEARTBEAT));
+        }
+        held = held
+            || levels(&path, consts::CARGO_LOCK_DEPTH)?
+                .iter()
+                .any(|dir| lock_is_held(&dir.join(consts::CARGO_LOCK)));
         let entry = CacheEntry {
             size_bytes: directory_bytes(&path)?,
             used,
@@ -384,22 +440,87 @@ fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
     metadata.len()
 }
 
-/// Whether a live job holds the lease at `path`.
+/// Whether a live job holds the lock file at `path`: a lease, a lane slot's
+/// lock, or Cargo's.
 ///
-/// `.cargo-lock` cannot answer that: Cargo holds it only while it compiles, so
-/// a directory whose tests are already running looks abandoned. A reclaim that
-/// believed it deleted a live `target` out from under a sibling job, and the
-/// 1869 tests that then failed to exec their own binaries looked like the
-/// product breaking rather than the CI eating itself. Holders take the lease
-/// shared so several coexist, so only an exclusive request sees them. The
-/// lease is only opened, never made: a directory the scan merely looked at is
-/// not one a job leased.
-fn lease_file_is_held(path: &Path) -> bool {
-    let Ok(file) = OpenOptions::new().read(true).write(true).open(path) else {
-        return false;
-    };
+/// `.cargo-lock` alone cannot answer for a job: Cargo holds it only while it
+/// compiles, so a directory whose tests are already running looks abandoned. A
+/// reclaim that believed it deleted a live `target` out from under a sibling
+/// job, and the 1869 tests that then failed to exec their own binaries looked
+/// like the product breaking rather than the CI eating itself. It answers only
+/// for a build no lease names. Lease holders take the lease shared so several
+/// coexist, so only an exclusive request sees them. The file is only opened,
+/// never made: a directory the scan merely looked at is not one a job took.
+fn lock_is_held(path: &Path) -> bool {
     // Held by a live job, or unreadable — either way, not ours to remove.
-    FileLock::try_exclusive(file).is_err()
+    !matches!(try_hold(path), Ok(Hold::Absent | Hold::Taken(_)))
+}
+
+/// A lock file a job may hold its build by, as an eviction finds it.
+enum Hold {
+    /// There is no such file, so nothing holds the build by it.
+    Absent,
+    /// A job holds it.
+    Busy,
+    /// The eviction holds it, until it drops this.
+    Taken(FileLock),
+}
+
+/// Takes the lock file at `path` when it exists and no job holds it.
+fn try_hold(path: &Path) -> Result<Hold> {
+    let file = match OpenOptions::new().read(true).write(true).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Hold::Absent),
+        Err(error) => return Err(error).with_context(|| format!("opening {}", path.display())),
+    };
+    match FileLock::try_exclusive(file) {
+        Ok(lock) => Ok(Hold::Taken(lock)),
+        Err(TryLockError::WouldBlock) => Ok(Hold::Busy),
+        Err(TryLockError::Error(error)) => {
+            Err(error).with_context(|| format!("locking {}", path.display()))
+        }
+    }
+}
+
+/// The lock `production/main` takes a lane slot by: a file beside the slot,
+/// named after it. A host deployed from this branch serves main too until the
+/// branch merges.
+fn lock_beside(entry: &Path) -> PathBuf {
+    let mut lock = entry.as_os_str().to_owned();
+    lock.push(".lock");
+    PathBuf::from(lock)
+}
+
+/// `entry` and every directory below it down to `depth` levels, nearest
+/// first. A directory gone before it is read was a build's temporary one.
+fn levels(entry: &Path, depth: usize) -> Result<Vec<PathBuf>> {
+    let mut found = vec![entry.to_path_buf()];
+    let mut level = 0..1;
+    for _ in 0..depth {
+        let start = found.len();
+        for index in level {
+            let dir = found[index].clone();
+            let Some(listing) = still_there(fs::read_dir(&dir))
+                .with_context(|| format!("reading build cache {}", dir.display()))?
+            else {
+                continue;
+            };
+            for child in listing {
+                let child = child.with_context(|| {
+                    format!("reading an entry in build cache {}", dir.display())
+                })?;
+                if child
+                    .file_type()
+                    .with_context(|| format!("reading the type of {}", child.path().display()))?
+                    .is_dir()
+                {
+                    found.push(child.path());
+                }
+            }
+        }
+        level = start..found.len();
+    }
+    Ok(found)
 }
 
 fn heartbeat_is_fresh(path: &Path) -> bool {
@@ -426,7 +547,7 @@ pub(crate) struct HeldTarget {
 /// per-runner Docker volume the host budgets directly, and a lease on the
 /// checkout says nothing about a directory outside it. A lane that builds into
 /// a directory of its own claims that one where it names it, so both claims are
-/// the one protocol [`lease`] owns and [`lease_file_is_held`] asks about.
+/// the one protocol [`lease`] owns and [`lock_is_held`] asks about.
 ///
 /// A CI job claims the directory for `checkout` too where its lanes claim
 /// theirs, as [`claim_beside_alias`] says.
@@ -473,10 +594,7 @@ pub(crate) fn build_roots(root: &Path) -> Result<Vec<PathBuf>> {
         if directory.join("Cargo.toml").is_file() {
             continue;
         }
-        if [consts::BUILD_ALIAS, consts::XTASK_BUILD]
-            .iter()
-            .any(|name| fs::symlink_metadata(directory.join(name)).is_ok())
-        {
+        if holds_a_build(&directory) {
             roots.push(directory);
             continue;
         }
@@ -489,10 +607,12 @@ pub(crate) fn build_roots(root: &Path) -> Result<Vec<PathBuf>> {
                     directory.display()
                 )
             })?;
-            if is_hidden(&entry.path()) {
+            let path = entry.path();
+            // A hidden directory is walked only as the root an executor
+            // names: anything else hidden there is not this walk's.
+            if is_hidden(&path) && !holds_a_build(&path) {
                 continue;
             }
-            let path = entry.path();
             let metadata = fs::symlink_metadata(&path)
                 .with_context(|| format!("reading CI workspace metadata for {}", path.display()))?;
             if metadata.file_type().is_dir() {
@@ -502,6 +622,46 @@ pub(crate) fn build_roots(root: &Path) -> Result<Vec<PathBuf>> {
     }
     roots.sort();
     Ok(roots)
+}
+
+/// Every build root a host's budget weighs: those beside the checkouts under
+/// `workspaces`, and those `production/main` keeps under `cache`, the root its
+/// jobs are told.
+pub(crate) fn budget_roots(workspaces: &Path, cache: &Path) -> Result<Vec<PathBuf>> {
+    let mut roots = build_roots(workspaces)?;
+    roots.extend(previous_build_roots(cache)?);
+    Ok(roots)
+}
+
+/// The build roots `production/main` keeps under its cache root while a host
+/// deployed from this branch serves it: its lane slots, where it keeps them
+/// there, and one directory per trust it bootstraps xtask for.
+pub(crate) fn previous_build_roots(cache: &Path) -> Result<Vec<PathBuf>> {
+    let slots = cache.join(consts::PREVIOUS_TARGET_SLOTS);
+    let mut roots: Vec<PathBuf> = slots.is_dir().then_some(slots).into_iter().collect();
+    let bootstrap = cache.join(consts::PREVIOUS_BOOTSTRAP);
+    let listing = match fs::read_dir(&bootstrap) {
+        Ok(listing) => listing,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(roots),
+        Err(error) => {
+            return Err(error).with_context(|| format!("reading {}", bootstrap.display()));
+        }
+    };
+    for entry in listing {
+        let entry = entry.with_context(|| format!("reading {}", bootstrap.display()))?;
+        if entry.file_type()?.is_dir() {
+            roots.push(entry.path());
+        }
+    }
+    Ok(roots)
+}
+
+/// Whether `directory` is a build root: it holds the build alias or xtask's
+/// own build.
+fn holds_a_build(directory: &Path) -> bool {
+    [consts::BUILD_ALIAS, consts::XTASK_BUILD]
+        .iter()
+        .any(|name| fs::symlink_metadata(directory.join(name)).is_ok())
 }
 
 #[cfg(test)]
@@ -563,6 +723,99 @@ mod tests {
         assert_eq!(paths(&contents.held), [build]);
         assert_eq!(paths(&contents.entries), [idle]);
         drop(lease);
+    }
+
+    /// Holds `path`'s lock the way the job that owns it does, creating it.
+    fn locked(path: &Path) -> FileLock {
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        FileLock::try_exclusive(file).unwrap()
+    }
+
+    /// `production/main` takes a lane slot by locking the file beside it, and
+    /// builds in the slot before it leases it. A host deployed from this
+    /// branch serves main too, so its budget leaves a taken slot alone, takes
+    /// an idle one, and leaves both locks where main's next claim opens them.
+    #[test]
+    fn a_slot_whose_lock_is_held_beside_it_survives_the_budget() {
+        let root = tempfile::tempdir().unwrap();
+        let taken = build_dir(root.path(), "review-lane-lint-0", 4096);
+        let idle = build_dir(root.path(), "review-lane-lint-1", 4096);
+        let _claim = locked(&root.path().join("review-lane-lint-0.lock"));
+        drop(locked(&root.path().join("review-lane-lint-1.lock")));
+
+        enforce_budget(&[root.path().to_path_buf()], 0).unwrap();
+
+        assert!(taken.exists(), "a taken slot was evicted");
+        assert!(!idle.exists(), "an idle slot was kept");
+        assert!(root.path().join("review-lane-lint-0.lock").is_file());
+        assert!(root.path().join("review-lane-lint-1.lock").is_file());
+    }
+
+    /// A build no lease names, the network lane's or a bootstrap of xtask, is
+    /// held by Cargo itself while it runs: its lock sits in each profile it
+    /// builds, with or without a target triple.
+    #[test]
+    fn a_build_cargo_is_running_in_survives_the_budget() {
+        let root = tempfile::tempdir().unwrap();
+        let network = build_dir(root.path(), "lane-network", 4096);
+        let bootstrap = root.path().join("target-macos-aarch64-local");
+        let triple = bootstrap.join("aarch64-apple-darwin/debug");
+        fs::create_dir_all(&triple).unwrap();
+        let idle = build_dir(root.path(), "lane-idle", 4096);
+        let _network = locked(&network.join("debug/.cargo-lock"));
+        let _bootstrap = locked(&triple.join(".cargo-lock"));
+        drop(locked(&idle.join("debug/.cargo-lock")));
+
+        enforce_budget(&[root.path().to_path_buf()], 0).unwrap();
+
+        assert!(network.exists(), "a build Cargo runs in was evicted");
+        assert!(
+            bootstrap.exists(),
+            "a triple build Cargo runs in was evicted"
+        );
+        assert!(!idle.exists(), "a build Cargo left was kept");
+    }
+
+    /// `production/main`'s executor slots lease the build inside them, one
+    /// level down. That lease dates the slot, so the slot used last goes last.
+    #[cfg(unix)]
+    #[test]
+    fn a_lease_one_level_down_dates_its_entry() {
+        let root = tempfile::tempdir().unwrap();
+        let recent = build_dir(root.path(), "a-recent", 4096);
+        let stale = build_dir(root.path(), "b-stale", 4096);
+        for (slot, age) in [(&recent, 20), (&stale, 10)] {
+            drop(lease::hold(&slot.join("cargo")).unwrap());
+            File::options()
+                .write(true)
+                .open(slot.join("cargo").join(lease::FILE))
+                .unwrap()
+                .set_modified(UNIX_EPOCH + Duration::from_secs(age))
+                .unwrap();
+        }
+
+        enforce_budget(&[root.path().to_path_buf()], occupied(root.path()) - 1).unwrap();
+
+        assert!(recent.exists(), "the slot used last was evicted");
+        assert!(!stale.exists(), "the slot used first was kept");
+    }
+
+    /// A lease one level down that a job holds keeps its entry.
+    #[test]
+    fn a_lease_held_one_level_down_keeps_its_entry() {
+        let root = tempfile::tempdir().unwrap();
+        let slot = build_dir(root.path(), "review-lane-lint-0", 4096);
+        let _lease = lease::hold(&slot.join("cargo")).unwrap();
+
+        enforce_budget(&[root.path().to_path_buf()], 0).unwrap();
+
+        assert!(slot.exists(), "a slot a job builds in was evicted");
     }
 
     /// The same tree without a holder: the guard above must not answer "held"
@@ -928,6 +1181,45 @@ mod tests {
         fs::create_dir_all(root.path().join("runner-c/0/disrupt/unrelated/debug")).unwrap();
 
         assert_eq!(build_roots(root.path()).unwrap(), expected);
+    }
+
+    /// The build root a GitLab job is told sits beside its checkout under a
+    /// hidden name. A host serves `production/main` until this layout merges,
+    /// and main's room gate walks every directory a builds tree holds that is
+    /// not hidden: in a root a job is building in, that walk meets names gone
+    /// before it reads them and refuses main's job. The budget still finds the
+    /// root.
+    #[cfg(unix)]
+    #[test]
+    fn a_gitlab_jobs_build_root_is_hidden_beside_its_checkout_and_budgeted() {
+        let workspace = crate::ci::config::workspace_root();
+        let common: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+            &fs::read_to_string(workspace.join(".gitlab/ci/common.yml")).unwrap(),
+        )
+        .unwrap();
+        let told = common[".builds-beside-checkout"]["variables"]["CARGO_TARGET_DIR"]
+            .as_str()
+            .expect("a GitLab job is told a build root");
+        let builds = tempfile::tempdir().unwrap();
+        let checkout = builds.path().join("runner/0/disrupt/kithara");
+        fs::create_dir_all(&checkout).unwrap();
+        fs::write(checkout.join("Cargo.toml"), b"").unwrap();
+        let root = PathBuf::from(
+            told.replace("${CI_PROJECT_DIR}", checkout.to_str().unwrap())
+                .replace("${CI_PROJECT_NAME}", "kithara"),
+        );
+        build_dir(&root, "lint", 1);
+        std::os::unix::fs::symlink("lint", root.join(consts::BUILD_ALIAS)).unwrap();
+        let root = fs::canonicalize(&root).unwrap();
+
+        assert_eq!(root.parent(), fs::canonicalize(&checkout).unwrap().parent());
+        assert!(is_hidden(&root), "{} is not hidden", root.display());
+        let found: Vec<PathBuf> = build_roots(builds.path())
+            .unwrap()
+            .iter()
+            .map(|found| fs::canonicalize(found).unwrap())
+            .collect();
+        assert_eq!(found, [root]);
     }
 
     /// A build alias is a link `ci lane` points at the lane's own directory

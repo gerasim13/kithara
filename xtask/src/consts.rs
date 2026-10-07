@@ -156,6 +156,9 @@ pub(crate) const CONTROL_PATHS: &[&str] = &[
     ".config/just/",
     ".config/mutation-suites.toml",
     ".config/nextest.toml",
+    // `production/main`'s compiler wrapper, judged from the base while a host
+    // deployed from this branch serves main.
+    ".config/sccache/",
     ".config/xtask.toml",
     "ci/",
     "docker/",
@@ -301,8 +304,38 @@ pub(crate) const FILE: &str = "/etc/kithara-ci/docker-compose.yml";
 /// Where a Linux runner mounts its own build root.
 pub(crate) const BUILD_ROOT_MOUNT: &str = "/cache/target";
 
-/// Where a Linux runner mounts the Cargo home of its trust.
-pub(crate) const CARGO_HOME_MOUNT: &str = "/cache/cargo";
+/// Where a Linux runner mounts the Cargo home of its trust: the image's own
+/// `CARGO_HOME`, so a job that names no home and one that is told it key their
+/// compilations alike.
+pub(crate) const CARGO_HOME_MOUNT: &str = "/home/runner/.cargo";
+
+/// The host directory, under the cache root, that `production/main` claims its
+/// lane directories in, and where a Linux runner mounts it. A host deployed
+/// from this branch serves main's workflows until the branch merges.
+pub(crate) const PREVIOUS_LANES: &str = "lanes";
+pub(crate) const PREVIOUS_LANES_MOUNT: &str = "/cache/lanes";
+
+/// The cache root `production/main`'s Linux workflows name, under its lanes
+/// directory.
+pub(crate) const PREVIOUS_CACHE_ROOT: &str = ".kithara-ci";
+
+/// Where, under its cache root, `production/main` bootstraps xtask: one
+/// directory per trust, holding one build per machine.
+pub(crate) const PREVIOUS_BOOTSTRAP: &str = "bootstrap";
+
+/// Where, under a Mac host's cache root, `production/main` keeps its lane build
+/// slots, each with its `.lock` beside it.
+pub(crate) const PREVIOUS_TARGET_SLOTS: &str = "target-slots";
+
+/// The cache namespaces `production/main` writes on a Mac host and this layout
+/// does not: its xtask bootstraps, its lane build slots and its compiler-cache
+/// slot locks. Cleanup keeps them whatever the profile lists until the branch
+/// that deployed the host merges.
+pub(crate) const PREVIOUS_CACHE_NAMESPACES: [&str; 3] = [
+    PREVIOUS_BOOTSTRAP,
+    PREVIOUS_TARGET_SLOTS,
+    ".kithara-ci-sccache-slots",
+];
 
 /// What a job reuses, before its build paths and linker entries are added.
 pub(crate) const CACHE_ENVIRONMENT: [&str; 5] = [
@@ -507,6 +540,18 @@ pub(crate) const XTASK_BUILD: &str = "xtask";
 /// What an eviction renames a build directory to before it removes it, ahead
 /// of the directory's own name.
 pub(crate) const EVICTING_PREFIX: &str = ".evicting-";
+
+/// The lock Cargo holds a profile directory by while it builds there.
+pub(crate) const CARGO_LOCK: &str = ".cargo-lock";
+
+/// How far below a build directory Cargo's lock sits: in a profile, under a
+/// target triple or not.
+pub(crate) const CARGO_LOCK_DEPTH: usize = 2;
+
+/// How far below a build directory a job's lease and heartbeat sit: at its
+/// top, or one level down, where `production/main`'s executor slots lease the
+/// build inside them.
+pub(crate) const LEASE_DEPTH: usize = 1;
 
 /// The window build directory tests keep an unused unit for.
 #[cfg(test)]

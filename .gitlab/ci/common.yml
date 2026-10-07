@@ -3,11 +3,13 @@
 # of it, so a compilation is keyed on one path whichever lane ran last and
 # whichever runner slot holds the checkout. The runner cannot name a path per
 # checkout, so these name it from the checkout GitLab gives the job, and give
-# its compiler-cache server a socket no other checkout's job shares.
+# its compiler-cache server a socket no other checkout's job shares. The root
+# is hidden: the host serves production/main's pipelines too until this layout
+# merges, and main's room gate walks every builds directory that is not.
 .builds-beside-checkout:
   variables:
-    CARGO_TARGET_DIR: ${CI_PROJECT_DIR}.target/build
-    KITHARA_XTASK_TARGET: ${CI_PROJECT_DIR}.target/xtask
+    CARGO_TARGET_DIR: ${CI_PROJECT_DIR}/../.${CI_PROJECT_NAME}.target
+    KITHARA_XTASK_TARGET: ${CI_PROJECT_DIR}/../.${CI_PROJECT_NAME}.target/xtask
     SCCACHE_SERVER_UDS: /tmp/kithara-sccache-${CI_RUNNER_SHORT_TOKEN}-${CI_CONCURRENT_PROJECT_ID}.sock
 
 .macos-job:

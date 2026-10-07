@@ -507,6 +507,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::ci::previous_layout::previous_layout;
 
     fn git(dir: &Path, args: &[&str]) {
         let output = Command::new("git")
@@ -717,6 +718,49 @@ mod tests {
             repo.judged_commit(&head, &conflicting, false).unwrap(),
             Judged::Conflict
         );
+    }
+
+    /// The judge runs every compile through the checkout's compiler wrapper,
+    /// so a pull request that edits it chooses how the judge compiles. Each
+    /// layout a deployed host serves names its own; `production/main`'s is
+    /// served until this branch merges.
+    #[test]
+    fn the_compiler_wrapper_is_judged_from_the_base() {
+        let (state, repo, _base, _product, _head, _additive) = repository();
+        let work = state.path().join("work");
+        let path = previous_layout().repository.rustc_wrapper;
+        let path = path.to_str().expect("the wrapper path is text");
+        let wrapper = work.join(path);
+        fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+        fs::write(&wrapper, "trusted\n").unwrap();
+        git(&work, &["add", "--all"]);
+        git(&work, &["commit", "--quiet", "-m", "wrapper"]);
+        let trusted = String::from_utf8(git_in(&work, &["rev-parse", "HEAD"]).unwrap())
+            .unwrap()
+            .trim()
+            .to_owned();
+        git(&work, &["checkout", "--quiet", "-b", "wrapper-edit"]);
+        fs::write(&wrapper, "from patch\n").unwrap();
+        git(&work, &["add", "--all"]);
+        git(&work, &["commit", "--quiet", "-m", "wrapper edit"]);
+        let edited = String::from_utf8(git_in(&work, &["rev-parse", "HEAD"]).unwrap())
+            .unwrap()
+            .trim()
+            .to_owned();
+        git(
+            &work,
+            &[
+                "push",
+                "--quiet",
+                repo.root.to_str().unwrap(),
+                "main",
+                "wrapper-edit",
+            ],
+        );
+
+        let judged = judged(&repo, &trusted, &edited, true);
+
+        assert_eq!(blob(&repo, &judged, path), "trusted\n");
     }
 
     #[test]

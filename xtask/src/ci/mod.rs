@@ -8,6 +8,8 @@ mod environment;
 mod host;
 mod image;
 mod lane;
+#[cfg(test)]
+pub(crate) mod previous_layout;
 pub(crate) mod process;
 mod release;
 mod run;

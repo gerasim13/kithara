@@ -214,7 +214,10 @@ impl<'a> HostStorage<'a> {
         self.rotate_logs()?;
         self.prune_retired_caches(7 * Self::DAY)?;
 
-        let build_roots = build_cache::build_roots(&self.build_root.join("workspaces/gitlab"))?;
+        let build_roots = build_cache::budget_roots(
+            &self.build_root.join("workspaces/gitlab"),
+            &self.host_root.join("cache"),
+        )?;
         build_cache::enforce_budget(&build_roots, self.config.host.build_cache_budget_bytes()?)?;
 
         // Cargo targets are the largest reproducible caches and already have a
@@ -510,6 +513,8 @@ impl<'a> HostStorage<'a> {
                 .host
                 .cache_namespaces
                 .iter()
+                .map(String::as_str)
+                .chain(consts::PREVIOUS_CACHE_NAMESPACES)
                 .any(|namespace| namespace == name.as_ref())
             {
                 continue;
@@ -1208,10 +1213,15 @@ fn reports_open_files(output: &Output) -> bool {
 mod tests {
     use std::{collections::BTreeMap, ffi::OsString, fs::FileTimes, time::SystemTime};
 
+    use kithara_devtools::lock::FileLock;
+
     use super::*;
     #[cfg(unix)]
     use crate::testing::install_script;
-    use crate::{ci::config::fixture, testing::install_double};
+    use crate::{
+        ci::{config::fixture, previous_layout::previous_layout},
+        testing::install_double,
+    };
 
     /// Lane `lint`'s build, holding one artifact, in the root an executor
     /// names beside a checkout under `build_root`.
@@ -1468,6 +1478,29 @@ mod tests {
         }
         for name in ["reapi", "reapi-sccache"] {
             assert!(!cache.join(name).exists(), "{name} is retired");
+        }
+    }
+
+    /// A host deployed from a branch serves `production/main` until the branch
+    /// merges, and main keeps its builds and its compiler-cache slot locks in
+    /// namespaces of its own. Taken whole as retired, they send every main job
+    /// back to a cold build.
+    #[test]
+    fn a_namespace_the_previous_layout_keeps_survives_whatever_the_profile_lists() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = directory.path().join("cache");
+        let namespaces = previous_layout().mac.cache_namespaces;
+        for name in &namespaces {
+            fs::create_dir_all(cache.join(name)).unwrap();
+        }
+        let cfg = config(directory.path());
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
+
+        storage.prune_retired_caches(Duration::ZERO).unwrap();
+
+        for name in &namespaces {
+            assert!(cache.join(name).is_dir(), "main still writes to {name}");
         }
     }
 
@@ -1759,6 +1792,56 @@ mod tests {
         assert!(
             !build.join("debug").exists(),
             "the pass stopped at the build cache ceiling the caches were already under"
+        );
+    }
+
+    /// A host deployed from a branch serves `production/main` until the branch
+    /// merges, and main builds in lane slots and xtask bootstraps under the
+    /// cache root. Out of the budget's sight they grow without bound; weighed,
+    /// an idle one is reclaimed and a slot main has taken, by locking the file
+    /// beside it, is not.
+    #[test]
+    fn a_volume_under_the_floor_reclaims_the_builds_the_previous_layout_keeps() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut cfg = config(directory.path());
+        cfg.host.brew_root = directory.path().join("brew");
+        // A floor past both idle builds, so the pass has to reach each of them.
+        cfg.host.quota_bytes = 1 << 30;
+        cfg.host.reject_bytes = cfg.host.quota_bytes - 15;
+        cfg.host.aggressive_cleanup_bytes = cfg.host.quota_bytes - 30;
+        cfg.host.soft_cleanup_bytes = 0;
+        let cache = directory.path().join("cache");
+        let slots = cache.join(consts::PREVIOUS_TARGET_SLOTS);
+        let idle = slots.join("macos-aarch64-lane-lint-0");
+        let taken = slots.join("macos-aarch64-lane-lint-1");
+        let bootstrap = cache
+            .join(consts::PREVIOUS_BOOTSTRAP)
+            .join("review/target-macos-aarch64-0");
+        for build in [idle.join("cargo"), taken.join("cargo"), bootstrap.clone()] {
+            fs::create_dir_all(build.join("debug")).unwrap();
+            fs::write(build.join("debug/artifact.bin"), vec![0_u8; 200]).unwrap();
+        }
+        let lock = fs::File::create(slots.join("macos-aarch64-lane-lint-1.lock")).unwrap();
+        let _claim = FileLock::try_exclusive(lock).unwrap();
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_available_sequence([
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_AGGRESSIVE,
+            consts::FREE_NORMAL,
+        ]);
+
+        storage.cleanup().unwrap();
+
+        assert!(!idle.join("cargo/debug").exists(), "an idle slot is kept");
+        assert!(
+            !bootstrap.join("debug").exists(),
+            "an idle bootstrap is kept"
+        );
+        assert!(
+            taken.join("cargo/debug/artifact.bin").is_file(),
+            "the pass evicted a slot main has taken"
         );
     }
 

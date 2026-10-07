@@ -279,6 +279,11 @@ impl<'a> RunnerManager<'a> {
     /// It binds a tree of its own there: a lock taken in the virtual machine is
     /// invisible on the host and the reverse, so a reclaim on either side walks
     /// only the build directories whose leases it sees.
+    ///
+    /// Each host runner names a compiler-cache socket of its own, which only
+    /// `production/main`'s jobs read while the host serves them: a job of this
+    /// layout names one per checkout, and a job's variable outranks the
+    /// runner's.
     fn runner_config(&self, home: &Path, tokens: &Tokens) -> Result<String> {
         let concurrency = self.config.host.job_concurrency;
         let cargo_build_jobs = self.cargo_build_jobs_env();
@@ -314,9 +319,9 @@ impl<'a> RunnerManager<'a> {
             "concurrent = {concurrency}\ncheck_interval = 3\nshutdown_timeout = 30\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={cache}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"RUSTUP_HOME=/usr/local/rustup\", \"{cargo_build_jobs}\"{docker_sccache_s3}]\n\
              [runners.docker]\n    host = \"{}\"\n    image = \"{image}\"\n    pull_policy = \"never\"\n    allowed_pull_policies = [\"never\"]\n    allowed_images = [\"{image}\"]\n    cpus = \"5\"\n    memory = \"6500m\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/mac-host.toml:{lane_config}:ro\", \"{container_builds}:{builds}/workspaces/gitlab:rw\"]\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-macos\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{cargo_build_jobs}\"{sccache_s3}]\n",
+             [[runners]]\n  name = \"kithara-mac-mini-macos\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-macos-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
+             [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-android-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
+             [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-release-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n",
             tokens.linux,
             docker_host(home, &self.config.host.colima_profile),
             tokens.macos,
@@ -1083,11 +1088,12 @@ mod tests {
 
     /// A registration names what is the same for every checkout it holds:
     /// one Cargo home per side of the VM boundary, kept on a cache cleanup
-    /// leaves alone. It names no compiler-cache socket: a socket the runner
-    /// names is shared by every checkout it holds, and a job that retires the
-    /// server takes it from under the other one.
+    /// leaves alone. Each host runner also names a compiler-cache socket of
+    /// its own for `production/main`'s jobs, which name none, while the host
+    /// serves main: a job of this layout names one per checkout, and a job's
+    /// variable outranks the runner's.
     #[test]
-    fn every_runner_names_one_cargo_home_and_no_compiler_cache_socket() {
+    fn every_runner_names_one_cargo_home_and_a_compiler_cache_socket_of_its_own() {
         let config = fixture();
         let process = Process::new(Path::new("/"), BTreeMap::new());
         let manager = RunnerManager::new(&config, &process);
@@ -1105,6 +1111,7 @@ mod tests {
         .expect("runner config is TOML");
 
         let mut shell_homes = BTreeMap::new();
+        let mut shell_sockets = BTreeMap::new();
         for runner in rendered["runners"].as_array().expect("runners") {
             let name = runner["name"].as_str().expect("a runner has a name");
             let environment: Vec<&str> = runner["environment"]
@@ -1113,18 +1120,17 @@ mod tests {
                 .iter()
                 .filter_map(toml::Value::as_str)
                 .collect();
-            assert!(
-                !environment
-                    .iter()
-                    .any(|entry| entry.starts_with("SCCACHE_SERVER_UDS=")),
-                "{name} names a compiler-cache socket every checkout it holds would share"
-            );
             let home = environment
                 .iter()
                 .find_map(|entry| entry.strip_prefix("CARGO_HOME="))
                 .unwrap_or_else(|| panic!("{name} names no Cargo home"));
             if runner.get("docker").is_none() {
                 shell_homes.insert(name, home);
+                let socket = environment
+                    .iter()
+                    .find_map(|entry| entry.strip_prefix("SCCACHE_SERVER_UDS="))
+                    .unwrap_or_else(|| panic!("{name} names no compiler-cache socket"));
+                shell_sockets.insert(socket, name);
                 continue;
             }
             let namespace = Path::new(home)
@@ -1144,6 +1150,11 @@ mod tests {
         }
         let homes: Vec<&&str> = shell_homes.values().collect();
         assert_eq!(homes.len(), 3, "every host runner names its home");
+        assert_eq!(
+            shell_sockets.len(),
+            homes.len(),
+            "two host runners share a compiler-cache socket: {shell_sockets:?}"
+        );
         assert!(
             homes.windows(2).all(|pair| pair[0] == pair[1]),
             "the host runners fetch into one home: {shell_homes:?}"

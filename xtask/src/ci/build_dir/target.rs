@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 
 use super::BuildDir;
-use crate::ci::environment::ci_in;
+use crate::{ci::environment::ci_in, consts};
 
 /// A lane asking for a build directory of its own, and how long that
 /// directory keeps a build unit the lane stopped using.
@@ -22,8 +22,8 @@ pub(crate) struct LaneTarget<'a> {
 /// has exactly one answer.
 #[derive(Debug)]
 pub(crate) enum Target {
-    /// A CI job: the executor names its build root's alias, and the lane
-    /// builds in a directory of its own behind it, held while this lives.
+    /// A CI job: the executor names its build root, and the lane builds in a
+    /// directory of its own behind the root's alias, held while this lives.
     Alias { alias: PathBuf, build: BuildDir },
     /// Anywhere else: wherever Cargo was told to build, or the checkout.
     Named(Option<PathBuf>),
@@ -43,8 +43,8 @@ impl Target {
         var: &dyn Fn(&str) -> Option<OsString>,
     ) -> Result<Self> {
         match var("CARGO_TARGET_DIR") {
-            Some(alias) if ci_in(var) => {
-                let alias = PathBuf::from(alias);
+            Some(root) if ci_in(var) => {
+                let alias = Path::new(&root).join(consts::BUILD_ALIAS);
                 let build = BuildDir::enter(checkout, &alias, lane.name, lane.window)?;
                 // Artifact paths name the checkout's `target`; Cargo is told
                 // the alias, the one path every lane's compilations share.
@@ -111,7 +111,7 @@ fn create_target_link(_backing: &Path, _target: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ci::build_dir::fixture::git_checkout, consts};
+    use crate::ci::build_dir::fixture::git_checkout;
 
     fn environment<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
         move |name| {
@@ -129,22 +129,24 @@ mod tests {
         }
     }
 
+    /// A CI job is told its build root, the path both layouts a host serves
+    /// are told, and builds behind the alias inside it. Anywhere else the
+    /// directory Cargo was told is where it builds.
     #[cfg(unix)]
     #[test]
-    fn only_a_ci_job_reads_cargos_directory_as_an_alias() {
+    fn only_a_ci_job_builds_behind_the_alias_in_the_root_cargo_was_told() {
         let checkout = git_checkout(&[]);
         let builds = tempfile::tempdir().unwrap();
-        let alias = builds.path().join(consts::BUILD_ALIAS);
-        let alias_text = alias.to_str().unwrap();
+        let root = builds.path().to_str().unwrap();
 
         match Target::enter(
             checkout.path(),
             lane(),
-            &environment(&[("CARGO_TARGET_DIR", alias_text)]),
+            &environment(&[("CARGO_TARGET_DIR", root)]),
         )
         .unwrap()
         {
-            Target::Named(Some(dir)) => assert_eq!(dir, alias),
+            Target::Named(Some(dir)) => assert_eq!(dir, builds.path()),
             other => panic!("outside a CI job a lane builds where Cargo was told, not {other:?}"),
         }
         assert!(!builds.path().join(lane().name).exists());
@@ -152,12 +154,12 @@ mod tests {
         match Target::enter(
             checkout.path(),
             lane(),
-            &environment(&[("CI", "true"), ("CARGO_TARGET_DIR", alias_text)]),
+            &environment(&[("CI", "true"), ("CARGO_TARGET_DIR", root)]),
         )
         .unwrap()
         {
-            Target::Alias { alias: told, build } => {
-                assert_eq!(told, alias);
+            Target::Alias { alias, build } => {
+                assert_eq!(alias, builds.path().join(consts::BUILD_ALIAS));
                 assert_eq!(build.path(), builds.path().join(lane().name).as_path());
             }
             other @ Target::Named(_) => {

@@ -405,10 +405,11 @@ fn ensure_room_for_a_job(config: &CiConfig, volume: &FsPath) -> Result<()> {
         return Ok(());
     }
     let workspaces = gitlab_workspaces(config.host.build_root());
+    let cache = config.host.host_root.join("cache");
     let deadline = Instant::now() + config.host.job_room_wait();
     loop {
         let free = free_bytes(volume)?;
-        let reclaimed_from = reclaim_build_caches(&workspaces, free, required)?;
+        let reclaimed_from = reclaim_build_caches(&workspaces, &cache, free, required)?;
         let free = free_bytes(volume)?;
         if free >= required {
             return Ok(());
@@ -486,8 +487,13 @@ fn refusal(
 ///
 /// Failing to reclaim is not itself a refusal — the gate re-reads free space
 /// and answers on that.
-fn reclaim_build_caches(workspaces: &FsPath, free: u64, required: u64) -> Result<usize> {
-    let targets = build_cache::build_roots(workspaces)?;
+fn reclaim_build_caches(
+    workspaces: &FsPath,
+    cache: &FsPath,
+    free: u64,
+    required: u64,
+) -> Result<usize> {
+    let targets = build_cache::budget_roots(workspaces, cache)?;
     if targets.is_empty() {
         warn!(
             free_bytes = free,
@@ -607,7 +613,7 @@ mod tests {
     use super::*;
 
     fn reclaim(root: &FsPath) -> usize {
-        reclaim_build_caches(&gitlab_workspaces(root), 0, u64::MAX).unwrap()
+        reclaim_build_caches(&gitlab_workspaces(root), &root.join("cache"), 0, u64::MAX).unwrap()
     }
 
     #[cfg(target_os = "macos")]
@@ -676,7 +682,8 @@ mod tests {
         if env::var_os(consts::LANE_PREPARED).is_some() {
             let root = PathBuf::from(env::var_os(consts::CACHE_ROOT).unwrap());
             let project = PathBuf::from(env::var_os("CI_PROJECT_DIR").unwrap());
-            let alias = PathBuf::from(env::var_os("CARGO_TARGET_DIR").unwrap());
+            let alias =
+                PathBuf::from(env::var_os("CARGO_TARGET_DIR").unwrap()).join(consts::BUILD_ALIAS);
             let ctx = Ctx::new(project.clone(), ProjectConfig::default());
             let mut config = super::super::config::fixture();
             // The gate reads the volume the test runs on; one byte of room is
@@ -794,9 +801,7 @@ mod tests {
             .status()
             .unwrap();
         assert!(init.success());
-        let alias = project
-            .with_file_name("kithara.target")
-            .join(consts::BUILD_ALIAS);
+        let root = project.with_file_name(".kithara.target");
         let output = Command::new(env::current_exe().unwrap())
             .arg("a_gitlab_lane_builds_beside_its_checkout_behind_the_alias")
             .arg("--nocapture")
@@ -811,7 +816,7 @@ mod tests {
             .env("CI", "true")
             .env("GITLAB_CI", "true")
             .env("CI_PROJECT_DIR", &project)
-            .env("CARGO_TARGET_DIR", &alias)
+            .env("CARGO_TARGET_DIR", &root)
             .env("CI_RUNNER_ID", "999")
             .env("CI_CONCURRENT_ID", "1")
             .env("CI_JOB_ID", "29")
@@ -921,7 +926,7 @@ mod tests {
         let checkout = root.join("workspaces/gitlab/runner-a/0/disrupt/kithara");
         fs::create_dir_all(&checkout).unwrap();
         fs::write(checkout.join("Cargo.toml"), "[package]\n").unwrap();
-        let build_root = checkout.with_file_name("kithara.target");
+        let build_root = checkout.with_file_name(".kithara.target");
         let unit = build_root.join(id).join("debug");
         fs::create_dir_all(&unit).unwrap();
         fs::write(unit.join("artifact"), vec![0_u8; 400_000]).unwrap();
@@ -945,6 +950,26 @@ mod tests {
             !build.join("debug/artifact").exists(),
             "an evictable build cache must be reclaimed, not left for the timer"
         );
+    }
+
+    /// A host deployed from a branch serves `production/main` until the branch
+    /// merges, and main's lane slots under the cache root fill the volume the
+    /// job asks room on. The gate reclaims them like the builds beside the
+    /// checkouts.
+    #[test]
+    fn the_gate_reclaims_the_slots_the_previous_layout_keeps() {
+        let root = tempfile::tempdir().unwrap();
+        let build = root
+            .path()
+            .join("cache")
+            .join(consts::PREVIOUS_TARGET_SLOTS)
+            .join("macos-aarch64-lane-lint-0/cargo/debug");
+        fs::create_dir_all(&build).unwrap();
+        fs::write(build.join("artifact"), [0_u8; 8]).unwrap();
+
+        reclaim(root.path());
+
+        assert!(!build.exists(), "an idle slot of main's must be reclaimed");
     }
 
     /// A sibling job holds the directory it builds into while its tests run.

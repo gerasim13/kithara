@@ -328,7 +328,10 @@ label = "run"
             &ctx,
             &environment(&[
                 ("CI", "true"),
-                ("CARGO_TARGET_DIR", alias.to_str().expect("a UTF-8 alias")),
+                (
+                    "CARGO_TARGET_DIR",
+                    builds.path().to_str().expect("a UTF-8 build root"),
+                ),
                 (
                     "GITHUB_ENV",
                     github_env.to_str().expect("a UTF-8 GITHUB_ENV"),
@@ -476,14 +479,16 @@ label = "run"
         let builds = tempfile::tempdir().expect("create the runner's build root");
         let (ctx, args) = trivial_lane(temp.path());
         let github_env = temp.path().join("missing/github-env");
-        let alias = builds.path().join(consts::BUILD_ALIAS);
 
         let result = run_in(
             &args,
             &ctx,
             &environment(&[
                 ("CI", "true"),
-                ("CARGO_TARGET_DIR", alias.to_str().expect("a UTF-8 alias")),
+                (
+                    "CARGO_TARGET_DIR",
+                    builds.path().to_str().expect("a UTF-8 build root"),
+                ),
                 (
                     "GITHUB_ENV",
                     github_env.to_str().expect("a UTF-8 GITHUB_ENV"),
