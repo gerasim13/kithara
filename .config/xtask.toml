@@ -1960,6 +1960,8 @@ steps = [
     "test",
     "run",
     "--lane=tooling",
+    "-E",
+    "package(xtask) & binary(=xtask) & test(=ci::host::linux::container::tests::stable_runner_slots_own_bootstrap_targets_across_registrations)",
   ], label = "Linux tooling lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"

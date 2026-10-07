@@ -97,6 +97,23 @@ pub(crate) struct CiPins {
 }
 
 impl CiPins {
+    /// Bootstrap only owns its compiler pin. A cached build worker must be
+    /// able to compile the owner of unrelated fields added by newer source.
+    pub(crate) fn load_bootstrap_toolchain(path: &Path) -> Result<String> {
+        let text = fs::read_to_string(path)
+            .with_context(|| format!("reading CI pins {}", path.display()))?;
+        let pins: toml::Table =
+            toml::from_str(&text).with_context(|| format!("parsing CI pins {}", path.display()))?;
+        let nightly = pins
+            .get("nightly_toolchain")
+            .and_then(toml::Value::as_str)
+            .context("CI pin nightly_toolchain must be a string")?;
+        if !nightly.starts_with("nightly-") || nightly.chars().any(char::is_whitespace) {
+            bail!("invalid xtask bootstrap nightly pin");
+        }
+        Ok(nightly.to_owned())
+    }
+
     pub(crate) fn load(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("reading CI pins {}", path.display()))?;
@@ -306,6 +323,40 @@ mod tests {
 
     use super::*;
     use crate::{ci::config::profile::workspace_root, consts};
+
+    #[test]
+    fn bootstrap_reads_its_pin_without_weakening_the_ci_contract() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("pins.toml");
+        let original = fs::read_to_string(workspace_root().join(consts::PINS_PATH)).unwrap();
+        let expected = CiPins::load(&workspace_root().join(consts::PINS_PATH))
+            .unwrap()
+            .nightly_toolchain;
+        fs::write(
+            &path,
+            format!("future_bootstrap_input_schema = 1\n{original}"),
+        )
+        .unwrap();
+
+        assert_eq!(CiPins::load_bootstrap_toolchain(&path).unwrap(), expected);
+        let error = CiPins::load(&path).expect_err("the full CI schema remains strict");
+        assert!(format!("{error:#}").contains("unknown field `future_bootstrap_input_schema`"));
+
+        for invalid in [
+            "invalid TOML",
+            "",
+            "nightly_toolchain = 1",
+            "nightly_toolchain = \"\"",
+            "nightly_toolchain = \"stable\"",
+            "nightly_toolchain = \"nightly-2026-01-01\\n\"",
+        ] {
+            fs::write(&path, invalid).unwrap();
+            assert!(
+                CiPins::load_bootstrap_toolchain(&path).is_err(),
+                "{invalid}"
+            );
+        }
+    }
 
     #[test]
     fn digests_are_bounded() {

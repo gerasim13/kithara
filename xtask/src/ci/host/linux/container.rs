@@ -180,6 +180,9 @@ pub(super) fn container<'a>(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::{env, fs, os::unix::fs::PermissionsExt, process::Command};
+
     use super::*;
 
     /// The linker a Linux job links with is part of what a job is told, not a
@@ -227,6 +230,82 @@ mod tests {
                 .any(|destination| Path::new(models).starts_with(destination)),
             "{models} is not on a mount every runner shares"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stable_runner_slots_own_bootstrap_targets_across_registrations() {
+        let host = super::super::profile::tests::host_fixture();
+        let first = host.runner("kithara-ci-octocat").expect("first runner");
+        let second = host
+            .runner("kithara-ci-octocat-gpu")
+            .expect("second runner");
+        let directory = tempfile::tempdir().expect("temp dir");
+        let cache = directory.path().join("cache");
+        let bin = directory.path().join("bin");
+        let tool_log = directory.path().join("tools.log");
+        fs::create_dir(&bin).expect("tool trap directory");
+        for tool in ["cargo", "git"] {
+            let path = bin.join(tool);
+            fs::write(
+                &path,
+                b"#!/bin/sh\nprintf '%s\n' \"$0\" >> \"$BOOTSTRAP_TOOL_LOG\"\nexit 97\n",
+            )
+            .expect("tool trap");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+                .expect("executable tool trap");
+        }
+        let inherited_path = env::var_os("PATH").expect("PATH");
+        let path = env::join_paths(
+            std::iter::once(bin.clone()).chain(env::split_paths(&inherited_path)),
+        )
+        .expect("tool trap PATH");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("repository root");
+        let target = |runner: &LinuxRunner, registration: &str| {
+            let environment = Container::environment(runner);
+            let output = Command::new("just")
+                .current_dir(root)
+                .arg("_xtask-self-target")
+                .env_remove("CI_CONCURRENT_ID")
+                .envs(environment.iter().map(|entry| {
+                    entry.split_once('=').expect("container environment entry")
+                }))
+                .env("KITHARA_CI_CACHE_ROOT", &cache)
+                .env("KITHARA_CACHE_TRUST", runner.cache_trust.as_str())
+                .env("RUNNER_NAME", format!("{}-{registration}", runner.name))
+                .env("CI_JOB_ID", registration)
+                .env("CARGO", bin.join("cargo"))
+                .env("PATH", &path)
+                .env("BOOTSTRAP_TOOL_LOG", &tool_log)
+                .output()
+                .expect("real bootstrap target transport");
+            assert!(
+                output.status.success(),
+                "bootstrap target failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            PathBuf::from(String::from_utf8(output.stdout).expect("target path").trim())
+        };
+        let first_target = target(first, "12345");
+        let second_target = target(second, "12345");
+
+        assert_eq!(first_target, target(first, "54321"));
+        assert_eq!(second_target, target(second, "54321"));
+        assert_ne!(first_target, second_target);
+        let parent = cache.join("bootstrap/review");
+        for (runner, target) in [(first, &first_target), (second, &second_target)] {
+            assert_eq!(target.parent(), Some(parent.as_path()));
+            assert!(
+                target
+                    .file_name()
+                    .expect("target directory")
+                    .to_string_lossy()
+                    .ends_with(&format!("-{}", runner.name))
+            );
+        }
+        assert!(!tool_log.exists(), "target selection invoked Cargo or Git");
     }
 
     #[test]

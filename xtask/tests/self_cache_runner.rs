@@ -8,7 +8,7 @@ use std::{
     process::{Child, Command, Output, Stdio},
     sync::{Arc, Barrier, mpsc},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::{Context, Result, anyhow};
@@ -55,6 +55,10 @@ impl Fixture {
             .parent()
             .context("resolve repository root")?;
         fs::copy(repository.join("justfile"), &justfile)?;
+        fs::copy(
+            repository.join(".config/ci-pins.toml"),
+            root.join(".config/ci-pins.toml"),
+        )?;
         // The justfile runs the compiler through this wrapper whenever sccache
         // is on `PATH`, and `cargo metadata` asks the compiler for its version.
         fs::create_dir_all(root.join(".config/sccache"))?;
@@ -96,6 +100,25 @@ set -eu
 printf '%s\n' "$*" >> "$SELF_CACHE_CARGO_LOG"
 printf 'target=%s\n' "${CARGO_TARGET_DIR-}" >> "$SELF_CACHE_CARGO_LOG"
 exit 97
+"#,
+        )?;
+        write_executable(
+            &fake_bin.join("rustup"),
+            r#"#!/bin/sh
+set -eu
+if [ "$1" = which ]; then printf '%s\n' "$CARGO"; exit 0; fi
+[ "$1" = run ]
+shift 2
+program=$1; shift
+case "$program" in
+  cargo)
+    case "$*" in
+      *' -- self-cache bootstrap'*) exec cargo "$@" ;;
+      *) exec "$SELF_CACHE_TEST_CARGO" "$@" ;;
+    esac
+    ;;
+  *) exec "$program" "$@" ;;
+esac
 "#,
         )?;
         let target = fs::canonicalize(&root)
@@ -142,7 +165,8 @@ exit 98
             .current_dir(&self.root)
             .env("CARGO_TARGET_DIR", &self.target)
             .env("CARGO", env!("CARGO"))
-            .env("XTASK_SELF_CACHE_CARGO", &self.bootstrap_cargo)
+            .env("PATH", self.fake_path()?)
+            .env("SELF_CACHE_TEST_CARGO", &self.bootstrap_cargo)
             .env("SELF_CACHE_BOOTSTRAP_ARTIFACT", &self.bootstrap_artifact)
             .stdin(Stdio::null())
             .output()
@@ -200,7 +224,7 @@ exit 98
             .args(args)
             .current_dir(root)
             .env("CARGO", env!("CARGO"))
-            .env("XTASK_SELF_CACHE_CARGO", &fake_cargo)
+            .env("SELF_CACHE_TEST_CARGO", &fake_cargo)
             .env("PATH", self.fake_path()?)
             .env("SELF_CACHE_CARGO_LOG", &self.cargo_log)
             .env("SELF_CACHE_GIT_LOG", &self.git_log)
@@ -257,7 +281,7 @@ exit 98
             .env("SELF_CACHE_CARGO_LOG", &self.cargo_log)
             .env("SELF_CACHE_GIT_LOG", &self.git_log)
             .env("SELF_CACHE_TEST_XTASK", env!("CARGO_BIN_EXE_xtask"))
-            .env("XTASK_SELF_CACHE_CARGO", &self.bootstrap_cargo)
+            .env("SELF_CACHE_TEST_CARGO", &self.bootstrap_cargo)
             .env("SELF_CACHE_BOOTSTRAP_ARTIFACT", &self.bootstrap_artifact);
         Ok(command)
     }
@@ -319,6 +343,66 @@ shift
 exec "$SELF_CACHE_TEST_XTASK" "$@"
 "#,
         )
+    }
+
+    fn prepare_real_cargo_workspace(&self) -> Result<()> {
+        fs::create_dir_all(self.root.join("dependency/src"))?;
+        fs::write(
+            self.root.join("Cargo.toml"),
+            "[workspace]\nresolver = \"3\"\nmembers = [\"xtask\", \"dependency\"]\n",
+        )?;
+        fs::write(
+            self.root.join("Cargo.lock"),
+            "version = 4\n\n[[package]]\nname = \"dependency\"\nversion = \"0.0.0\"\n\n[[package]]\nname = \"xtask\"\nversion = \"0.0.0\"\ndependencies = [\"dependency\"]\n",
+        )?;
+        fs::write(
+            self.root.join("dependency/Cargo.toml"),
+            "[package]\nname = \"dependency\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        )?;
+        fs::write(
+            self.root.join("xtask/Cargo.toml"),
+            "[package]\nname = \"xtask\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\ndependency = { path = \"../dependency\" }\n",
+        )?;
+        fs::write(
+            self.root.join(".config/xtask.toml"),
+            "[ext.xtask.cache]\nextra_inputs = [\".config/ci-pins.toml\", \"justfile\"]\nkeep_generations = 2\ngeneration_grace_secs = 3600\n",
+        )?;
+        Ok(())
+    }
+
+    fn write_real_cargo_sources(
+        &self,
+        function: &str,
+        value: u8,
+        modified: SystemTime,
+    ) -> Result<(u64, u64)> {
+        let dependency = self.root.join("dependency/src/lib.rs");
+        let caller = self.root.join("xtask/src/main.rs");
+        fs::write(
+            &dependency,
+            format!("pub fn {function}() -> u8 {{ {value} }}\n"),
+        )?;
+        fs::write(
+            &caller,
+            r#"fn main() {
+    let value = dependency::FUNCTION();
+    match std::env::args().nth(1).as_deref() {
+        Some("self-cache") => println!("{}", std::env::current_exe().unwrap().display()),
+        Some("compiler") => println!("{}", env!("RUSTUP_TOOLCHAIN")),
+        _ => println!("{value}"),
+    }
+}
+"#
+            .replace("FUNCTION", function),
+        )?;
+        for path in [&dependency, &caller] {
+            fs::File::open(path)?.set_modified(modified)?;
+            assert_eq!(fs::metadata(path)?.modified()?, modified);
+        }
+        Ok((
+            fs::metadata(&dependency)?.len(),
+            fs::metadata(&caller)?.len(),
+        ))
     }
 
     fn fake_path(&self) -> Result<std::ffi::OsString> {
@@ -892,6 +976,108 @@ printf '%s\n' "$SELF_CACHE_BOOTSTRAP_ARTIFACT"
 }
 
 #[test]
+fn unsupported_bootstrap_probe_uses_outer_publication_owner() -> Result<()> {
+    let fixture = Fixture::new()?;
+    assert_success(&fixture.bootstrap()?);
+    let before = fixture.active_generation()?;
+    let decoder = before
+        .parent()
+        .context("cached generation has no parent")?
+        .join("generation-original-decoder");
+    fs::create_dir(&decoder)?;
+    for file in ["xtask", "manifest.json", "stamp", "lease.lock"] {
+        fs::copy(before.join(file), decoder.join(file))?;
+    }
+    fs::write(
+        fixture.root.join("xtask/src/main.rs"),
+        "fn main() { changed(); }\n",
+    )?;
+    let stale = fixture.cached(&["self-cache", "status"])?;
+    assert_success(&stale);
+    assert_eq!(stale.stdout, b"stale\n");
+    let rejected_probe = fixture._temp.path().join("unsupported-probe.log");
+    let refused_refresh = fixture._temp.path().join("refused-refresh.log");
+    write_executable(
+        &fixture.active_binary()?,
+        r#"#!/bin/sh
+set -eu
+case "$*" in
+  'self-cache probe --bootstrap')
+    printf 'probe --bootstrap\n' >> "$SELF_CACHE_TEST_REJECTED_PROBE"
+    exit 2
+    ;;
+  'self-cache refresh'*)
+    printf '%s\n' "$*" >> "$SELF_CACHE_TEST_REFUSED_REFRESH"
+    exit 96
+    ;;
+esac
+exec "$SELF_CACHE_TEST_DECODER" "$@"
+"#,
+    )?;
+    fixture.install_outer_bootstrap_cargo()?;
+
+    let output = fixture
+        .just_command(&fixture.root, &["_xtask-ready"])?
+        .env("SELF_CACHE_TEST_DECODER", decoder.join("xtask"))
+        .env("SELF_CACHE_TEST_REJECTED_PROBE", &rejected_probe)
+        .env("SELF_CACHE_TEST_REFUSED_REFRESH", &refused_refresh)
+        .output()?;
+
+    assert_success(&output);
+    assert_eq!(fs::read_to_string(rejected_probe)?, "probe --bootstrap\n");
+    assert!(!refused_refresh.exists(), "legacy cached refresh ran");
+    assert_eq!(
+        fs::read_to_string(&fixture.cargo_log)?,
+        format!(
+            "run --locked --manifest-path {}/Cargo.toml -p xtask --bin xtask -- self-cache bootstrap\n",
+            fs::canonicalize(&fixture.root)?.display()
+        )
+    );
+    let current = fixture.active_generation()?;
+    assert_ne!(current, before);
+    assert_ne!(current, decoder);
+    let status = fixture.cached(&["self-cache", "status"])?;
+    assert_success(&status);
+    assert_eq!(status.stdout, b"current\n");
+    assert!(!fixture.git_log.exists());
+    Ok(())
+}
+
+#[test]
+fn malformed_pins_refuse_stale_bootstrap_without_cargo() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let config = fixture.root.join(".config/xtask.toml");
+    fs::write(
+        &config,
+        fs::read_to_string(&config)?.replace(
+            "extra_inputs = []",
+            "extra_inputs = [\".config/ci-pins.toml\"]",
+        ),
+    )?;
+    assert_success(&fixture.bootstrap()?);
+    assert_success(&fixture.cached(&["self-cache", "probe", "--bootstrap"])?);
+    let before = fs::read(locator(&fixture.root)?)?;
+    let pins = fixture.root.join(".config/ci-pins.toml");
+    let original = fs::read_to_string(&pins)?;
+    fs::write(&pins, format!("{original}\n[malformed\n"))?;
+    let stale = fixture.cached(&["self-cache", "status"])?;
+    assert_success(&stale);
+    assert_eq!(stale.stdout, b"stale\n");
+
+    let output = fixture.just(&fixture.root, &["_xtask-ready"], None)?;
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("parsing CI pins"),
+        "unexpected malformed pins error: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read(locator(&fixture.root)?)?, before);
+    fixture.assert_no_tool_process();
+    Ok(())
+}
+
+#[test]
 fn concurrent_public_stale_refreshes_build_once() -> Result<()> {
     let fixture = Arc::new(Fixture::new()?);
     assert_success(&fixture.bootstrap()?);
@@ -1055,7 +1241,7 @@ fn a_stale_ci_self_cache_refreshes_where_the_bootstrap_builds() -> Result<()> {
         .env_remove("CI_CONCURRENT_ID")
         .env("KITHARA_CACHE_TRUST", "review")
         .env("KITHARA_CI_CACHE_ROOT", &cache)
-        .env("XTASK_SELF_CACHE_CARGO", fixture.fake_bin.join("cargo"))
+        .env("SELF_CACHE_TEST_CARGO", fixture.fake_bin.join("cargo"))
         .output()?;
 
     assert!(
@@ -1136,6 +1322,240 @@ fn concurrent_cold_bootstraps_publish_one_generation() -> Result<()> {
 }
 
 #[test]
+fn shared_bootstrap_and_refresh_follow_dependency_bytes_with_old_mtimes() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let pins: toml::Value = toml::from_str(&fs::read_to_string(
+        fixture.root.join(".config/ci-pins.toml"),
+    )?)?;
+    let nightly = pins["nightly_toolchain"]
+        .as_str()
+        .context("fixture nightly pin")?;
+    let stable = pins["stable_toolchain"]
+        .as_str()
+        .context("fixture stable pin")?;
+    let active_toolchain = Command::new("rustup")
+        .args(["show", "active-toolchain"])
+        .env("RUSTUP_TOOLCHAIN", nightly)
+        .output()?;
+    assert_success(&active_toolchain);
+    let active_toolchain = String::from_utf8(active_toolchain.stdout)?;
+    let canonical_toolchain = active_toolchain
+        .split_whitespace()
+        .next()
+        .context("canonical fixture nightly toolchain")?;
+    let compiler_tag = format!("{canonical_toolchain}\n");
+    let compiler = Command::new("rustup")
+        .args(["run", nightly, "rustc", "-vV"])
+        .output()?;
+    assert_success(&compiler);
+    println!(
+        "bootstrap compiler for {nightly}:\n{}",
+        String::from_utf8_lossy(&compiler.stdout)
+    );
+    let stable_cargo = Command::new("rustup")
+        .args(["which", "--toolchain", stable, "cargo"])
+        .output()?;
+    assert_success(&stable_cargo);
+    let stable_cargo = String::from_utf8(stable_cargo.stdout)?;
+    let stable_cargo = stable_cargo.trim();
+    let real_path = env::var_os("PATH").context("real Cargo fixture PATH")?;
+    fixture.prepare_real_cargo_workspace()?;
+    let initial_mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(10);
+    let older_mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(9);
+    let lengths = fixture.write_real_cargo_sources("original", 1, initial_mtime)?;
+    let cold = || -> Result<Output> {
+        fixture
+            .just_command(&fixture.root, &["_xtask-bootstrap"])?
+            .env("PATH", &real_path)
+            .env("CARGO", stable_cargo)
+            .env("RUSTUP_TOOLCHAIN", stable)
+            .env_remove("CARGO_UNSTABLE_CHECKSUM_FRESHNESS")
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()
+            .context("run real cold Cargo bootstrap")
+    };
+    assert_success(&cold()?);
+    let initial = Command::new(&fixture.bootstrap_artifact).output()?;
+    assert_success(&initial);
+    assert_eq!(initial.stdout, b"1\n");
+    assert!(fs::metadata(&fixture.bootstrap_artifact)?.modified()? > initial_mtime);
+    assert_eq!(
+        fixture.write_real_cargo_sources("replaced", 2, older_mtime)?,
+        lengths
+    );
+    assert_success(&cold()?);
+    let replaced = Command::new(&fixture.bootstrap_artifact).output()?;
+    assert_success(&replaced);
+    assert_eq!(replaced.stdout, b"2\n");
+    let legacy_selector = fixture._temp.path().join("legacy-cargo-selector");
+    write_executable(
+        &legacy_selector,
+        "#!/bin/sh\nset -eu\nexec \"${XTASK_SELF_CACHE_CARGO:-$CARGO}\" \"$@\"\n",
+    )?;
+    assert_eq!(
+        fixture.write_real_cargo_sources("legacyxx", 3, older_mtime)?,
+        lengths
+    );
+    let legacy = fixture
+        .just_command(&fixture.root, &["_xtask-build-env"])?
+        .arg(&legacy_selector)
+        .args(["run", "--locked", "--manifest-path"])
+        .arg(fixture.root.join("Cargo.toml"))
+        .args([
+            "-p",
+            "xtask",
+            "--bin",
+            "xtask",
+            "--",
+            "self-cache",
+            "artifact",
+        ])
+        .env("PATH", &real_path)
+        .env("CARGO", stable_cargo)
+        .env("RUSTUP_TOOLCHAIN", stable)
+        .env_remove("CARGO_UNSTABLE_CHECKSUM_FRESHNESS")
+        .env("XTASK_SELF_CACHE_CARGO", "/not-a-cargo-executable")
+        .env("CARGO_TARGET_DIR", &fixture.target)
+        .env("CARGO_NET_OFFLINE", "true")
+        .output()?;
+    assert_success(&legacy);
+    let legacy_result = Command::new(&fixture.bootstrap_artifact).output()?;
+    assert_success(&legacy_result);
+    assert_eq!(legacy_result.stdout, b"3\n");
+    let legacy_compiler = Command::new(&fixture.bootstrap_artifact)
+        .arg("compiler")
+        .output()?;
+    assert_success(&legacy_compiler);
+    assert_eq!(legacy_compiler.stdout, compiler_tag.as_bytes());
+    let refresh = |action: &str| -> Result<Output> {
+        Command::new(env!("CARGO_BIN_EXE_xtask"))
+            .args(["self-cache", action])
+            .current_dir(&fixture.root)
+            .env("PATH", &real_path)
+            .env("CARGO", stable_cargo)
+            .env("RUSTUP_TOOLCHAIN", stable)
+            .env_remove("CARGO_UNSTABLE_CHECKSUM_FRESHNESS")
+            .env("CARGO_TARGET_DIR", &fixture.target)
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()
+            .context("run real supervised Cargo refresh")
+    };
+    assert_success(&refresh("bootstrap")?);
+    let before = fixture.active_generation()?;
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(before.join("manifest.json"))?)?;
+    assert_eq!(
+        manifest["extra_inputs"],
+        serde_json::json!([".config/ci-pins.toml", "justfile"])
+    );
+    assert_eq!(
+        fixture.write_real_cargo_sources("updatedx", 4, older_mtime)?,
+        lengths
+    );
+    assert_success(&refresh("refresh")?);
+    assert_ne!(fixture.active_generation()?, before);
+    let updated = Command::new(fixture.active_binary()?).output()?;
+    assert_success(&updated);
+    assert_eq!(updated.stdout, b"4\n");
+    let refresh_compiler = Command::new(fixture.active_binary()?)
+        .arg("compiler")
+        .output()?;
+    assert_success(&refresh_compiler);
+    assert_eq!(refresh_compiler.stdout, compiler_tag.as_bytes());
+    let current = fixture.active_generation()?;
+    assert_success(&refresh("refresh")?);
+    assert_eq!(fixture.active_generation()?, current);
+    assert!(
+        !fixture.cargo_log.exists(),
+        "real Cargo must bypass fixture mocks"
+    );
+    assert!(!fixture.git_log.exists());
+    Ok(())
+}
+
+/// The real cached owner publishes the native tiny target. That target only
+/// answers artifact and probe requests, so warm reuse runs through the full owner.
+#[test]
+fn cached_bootstrap_rebuilds_across_ci_pin_schema_changes() -> Result<()> {
+    let fixture = Fixture::new()?;
+    assert_success(&fixture.bootstrap()?);
+    let before = fixture.active_generation()?;
+    let pins_path = fixture.root.join(".config/ci-pins.toml");
+    let original_pins = fs::read_to_string(&pins_path)?;
+    let pins: toml::Value = toml::from_str(&original_pins)?;
+    let nightly = pins["nightly_toolchain"]
+        .as_str()
+        .context("fixture nightly pin")?;
+    let stable = pins["stable_toolchain"]
+        .as_str()
+        .context("fixture stable pin")?;
+    let compiler = Command::new("rustup")
+        .args(["show", "active-toolchain"])
+        .env("RUSTUP_TOOLCHAIN", nightly)
+        .output()?;
+    assert_success(&compiler);
+    let compiler = String::from_utf8(compiler.stdout)?;
+    let compiler_tag = format!(
+        "{}\n",
+        compiler
+            .split_whitespace()
+            .next()
+            .context("fixture compiler identity")?
+    );
+    let real_path = env::var_os("PATH").context("real Cargo fixture PATH")?;
+    let native = |entry: &str| -> Result<Output> {
+        fixture
+            .just_command(&fixture.root, &[entry])?
+            .env("PATH", &real_path)
+            .env("CARGO", "/not-a-cargo-executable")
+            .env("RUSTUP_TOOLCHAIN", stable)
+            .env("XTASK_SELF_CACHE_CARGO", "/not-a-cargo-executable")
+            .env_remove("CARGO_UNSTABLE_CHECKSUM_FRESHNESS")
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()
+            .context("run native Cargo through the Just self-cache owner")
+    };
+    fixture.prepare_real_cargo_workspace()?;
+    let initial_mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(10);
+    let older_mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(9);
+    let lengths = fixture.write_real_cargo_sources("original", 1, initial_mtime)?;
+    assert_success(&native("_xtask-bootstrap")?);
+    let initial = Command::new(&fixture.bootstrap_artifact).output()?;
+    assert_success(&initial);
+    assert_eq!(initial.stdout, b"1\n");
+    assert!(fs::metadata(&fixture.bootstrap_artifact)?.modified()? > initial_mtime);
+    fs::write(
+        &pins_path,
+        format!("future_bootstrap_input_schema = 1\n{original_pins}"),
+    )?;
+    assert_eq!(
+        fixture.write_real_cargo_sources("replaced", 2, older_mtime)?,
+        lengths
+    );
+    let status = fixture.cached(&["self-cache", "status"])?;
+    assert_success(&status);
+    assert_eq!(status.stdout, b"stale\n");
+    assert_success(&native("_xtask-ready")?);
+    let current = fixture.active_generation()?;
+    assert_ne!(current, before);
+    let updated = Command::new(fixture.active_binary()?).output()?;
+    assert_success(&updated);
+    assert_eq!(updated.stdout, b"2\n");
+    let updated_compiler = Command::new(fixture.active_binary()?)
+        .arg("compiler")
+        .output()?;
+    assert_success(&updated_compiler);
+    assert_eq!(updated_compiler.stdout, compiler_tag.as_bytes());
+    fixture.assert_no_tool_process();
+
+    write_executable(&fixture.bootstrap_cargo, "#!/bin/sh\nexit 97\n")?;
+    assert_success(&fixture.bootstrap()?);
+    assert_eq!(fixture.active_generation()?, current);
+    fixture.assert_no_tool_process();
+    Ok(())
+}
+
+#[test]
 fn killed_refresh_parent_does_not_leave_builder_descendants() -> Result<()> {
     let fixture = Fixture::new()?;
     assert_success(&fixture.bootstrap()?);
@@ -1167,7 +1587,8 @@ wait "$descendant"
         .current_dir(&fixture.root)
         .env("CARGO_TARGET_DIR", &fixture.target)
         .env("CARGO", env!("CARGO"))
-        .env("XTASK_SELF_CACHE_CARGO", &fake_cargo)
+        .env("PATH", fixture.fake_path()?)
+        .env("SELF_CACHE_TEST_CARGO", &fake_cargo)
         .env("SELF_CACHE_CARGO_PID", &cargo_pid)
         .env("SELF_CACHE_DESCENDANT_PID", &descendant_pid)
         .env("SELF_CACHE_WORKER_PID", &worker_pid)
