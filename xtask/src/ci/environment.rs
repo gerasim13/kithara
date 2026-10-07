@@ -261,7 +261,7 @@ pub(crate) struct CiEnvironment {
     /// Held for the life of the job so a reclaim — this job's own or a sibling
     /// job's — leaves the directory this one builds into alone. The ceiling
     /// still charges its bytes; the claim only says they cannot be taken back.
-    _target: Option<lease::Lease>,
+    _target: lease::Lease,
     /// The lane build directory's pairing with this checkout, when the lane
     /// builds in the fleet's shared root.
     lane_build: Option<LaneBuild>,
@@ -646,7 +646,7 @@ fn prepare_build_target(
     config: &CiConfig,
     isolated_target: bool,
     lane: Option<LaneTarget<'_>>,
-) -> Result<(PathBuf, Option<lease::Lease>, Option<LaneBuild>)> {
+) -> Result<(PathBuf, lease::Lease, Option<LaneBuild>)> {
     let owner = target_owner(config, isolated_target, lane)?;
     let (backing, lane_build) =
         match build_target_dir(project_root, shared_root, trust, target_scope, owner)? {
@@ -662,7 +662,8 @@ fn prepare_build_target(
         };
     // Claimed before anything is reclaimed, including by this job itself. Its
     // bytes still answer to the ceiling; the claim only prevents a live delete.
-    let lease = lease::hold(&backing);
+    let lease = lease::hold(&backing)
+        .with_context(|| format!("lease the CI build cache {}", backing.display()))?;
     let target = expose_build_target(project_root, &backing, cfg!(windows), is_ci())?;
     Ok((target, lease, lane_build))
 }

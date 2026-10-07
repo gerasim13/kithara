@@ -119,7 +119,7 @@ fn work() -> anyhow::Result<()> {
     }
     // Held for the life of the process so the host's build-cache budget
     // leaves the shared target directory alone while work runs in it.
-    let _target_lease = ci::hold_target_lease();
+    let _target_lease = ci::hold_target_lease()?;
     let ctx = Ctx::load()?;
 
     match cli.command {

@@ -4969,6 +4969,7 @@ dependencies = [
  "rayon",
  "regex",
  "roxmltree",
+ "same-file",
  "serde",
  "serde_json",
  "syn 3.0.3",

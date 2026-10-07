@@ -115,7 +115,7 @@ pub(super) struct RefreshLock {
 #[derive(Debug)]
 pub(super) struct BuildLock {
     _lock: FileLock,
-    _lease: Option<kithara_devtools::lease::Lease>,
+    _lease: kithara_devtools::lease::Lease,
 }
 
 pub(crate) fn lease_current() -> Result<Option<GenerationLease>> {
@@ -168,7 +168,8 @@ pub(super) fn build(target: &Path) -> Result<BuildLock> {
     .with_context(|| format!("lock {subject}"))?;
     Ok(BuildLock {
         _lock: lock,
-        _lease: kithara_devtools::lease::hold(target),
+        _lease: kithara_devtools::lease::hold(target)
+            .with_context(|| format!("lease xtask build directory {}", target.display()))?,
     })
 }
 

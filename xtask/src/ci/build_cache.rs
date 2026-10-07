@@ -612,8 +612,13 @@ fn heartbeat_is_fresh(path: &Path, metadata: &fs::Metadata) -> bool {
 /// checkout says nothing about a directory outside it. A lane that builds into
 /// a directory of its own claims that one where it names it, so both claims are
 /// the one protocol [`lease`] owns and [`lease_is_held`] asks about.
-pub(crate) fn hold_target_lease() -> Option<lease::Lease> {
-    lease::hold(&PathBuf::from(env::var_os("CARGO_TARGET_DIR")?))
+pub(crate) fn hold_target_lease() -> Result<Option<lease::Lease>> {
+    env::var_os("CARGO_TARGET_DIR")
+        .map(|target| {
+            let target = PathBuf::from(target);
+            lease::hold(&target).with_context(|| format!("lease {}", target.display()))
+        })
+        .transpose()
 }
 
 /// Every `target` directory under `root`, so a caller can hand them to
@@ -794,9 +799,11 @@ mod tests {
             .unwrap()
             .set_modified(old)
             .unwrap();
-        File::open(&used).unwrap().set_modified(old).unwrap();
         File::open(&idle).unwrap().set_modified(newer).unwrap();
         drop(lease::hold(&used).unwrap());
+        // A lease beats into its directory, which moves the directory's own
+        // date; set it back so only the lease can tell the two apart.
+        File::open(&used).unwrap().set_modified(old).unwrap();
 
         let contents = candidate_entries(root.path()).unwrap();
         assert!(!contents.active);
@@ -811,7 +818,6 @@ mod tests {
             .find(|entry| entry.path == idle)
             .unwrap();
         assert!(used_entry.modified > idle_entry.modified);
-        assert_eq!(fs::metadata(&used).unwrap().modified().unwrap(), old);
     }
 
     /// The same tree without a holder: the guard above must not answer "held"

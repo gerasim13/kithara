@@ -159,7 +159,12 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
             (dir.clone(), dir, None)
         }
     };
-    let _lease = dir.as_deref().and_then(lease::hold);
+    let _lease = dir
+        .as_deref()
+        .map(|dir| {
+            lease::hold(dir).with_context(|| format!("lease the lane build {}", dir.display()))
+        })
+        .transpose()?;
     let process = Process::new(
         &ctx.root,
         executor_vars(cargo_dir.as_deref(), args.kind, build.is_some()),
