@@ -14,5 +14,8 @@ mod run;
 mod verdict;
 mod xcresult;
 
-pub(crate) use build_cache::hold_target_lease;
+pub(crate) use build_cache::hold_target;
+#[cfg(test)]
+pub(crate) use build_dir::fixture;
+pub(crate) use build_dir::{Claim, claim_beside_alias};
 pub(crate) use command::{CiArgs, is_standalone, run, run_standalone};

@@ -45,7 +45,7 @@ impl Target {
         match var("CARGO_TARGET_DIR") {
             Some(alias) if ci_in(var) => {
                 let alias = PathBuf::from(alias);
-                let build = BuildDir::enter(&alias, lane.name, lane.window)?;
+                let build = BuildDir::enter(checkout, &alias, lane.name, lane.window)?;
                 // Artifact paths name the checkout's `target`; Cargo is told
                 // the alias, the one path every lane's compilations share.
                 expose_build_target(checkout, build.path())?;
@@ -111,7 +111,7 @@ fn create_target_link(_backing: &Path, _target: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::consts;
+    use crate::{ci::build_dir::fixture::git_checkout, consts};
 
     fn environment<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
         move |name| {
@@ -132,7 +132,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn only_a_ci_job_reads_cargos_directory_as_an_alias() {
-        let checkout = tempfile::tempdir().unwrap();
+        let checkout = git_checkout(&[]);
         let builds = tempfile::tempdir().unwrap();
         let alias = builds.path().join(consts::BUILD_ALIAS);
         let alias_text = alias.to_str().unwrap();

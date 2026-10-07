@@ -9,8 +9,12 @@
 //! one writer.
 
 mod entry;
+#[cfg(test)]
+pub(crate) mod fixture;
 mod garbage;
+mod sources;
 mod target;
 
 pub(crate) use entry::BuildDir;
+pub(crate) use sources::{Claim, claim_beside_alias};
 pub(crate) use target::{LaneTarget, Target};

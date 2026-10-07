@@ -140,7 +140,10 @@ mod tests {
     use kithara_devtools::lease;
 
     use super::*;
-    use crate::ci::config::{fixture, workspace_root};
+    use crate::ci::{
+        build_dir::fixture::git,
+        config::{fixture, workspace_root},
+    };
 
     /// A lane builds where the executor said. These runners are ephemeral and
     /// the checkout is deleted before the lane starts, so a build directory
@@ -237,10 +240,11 @@ mod tests {
         }
     }
 
-    /// A workspace at `root` declaring one lane whose only step, labelled
+    /// A checkout at `root` declaring one lane whose only step, labelled
     /// `run`, runs `program` as the TOML lines `step` say.
     fn lane_running(root: &Path, program: &str, step: &str) -> (Ctx, LaneArgs) {
         let root = root.to_path_buf();
+        git(&root, &["init", "-q"]);
         fixture()
             .pins
             .write(&root.join("ci-pins.toml"))

@@ -492,6 +492,15 @@ pub(crate) const CONTAINER_BUILDS: &str = "workspaces/colima";
 /// pointed at the build directory of the job that runs.
 pub(crate) const BUILD_ALIAS: &str = "build";
 
+/// The file in a build directory that records the content its builds read.
+pub(crate) const SOURCES_RECORD: &str = "sources.tsv";
+
+/// The header of a sources record a job still holds.
+pub(crate) const SOURCES_HELD: &str = "held";
+
+/// The header of a sources record its job settled.
+pub(crate) const SOURCES_SETTLED: &str = "settled";
+
 /// The directory in a build root that xtask itself is built in.
 pub(crate) const XTASK_BUILD: &str = "xtask";
 
@@ -845,6 +854,11 @@ pub(crate) const SERVICE_CLEANUP_TIMER: &str = "kithara-ci-cleanup.timer";
 pub(crate) const SERVICE_RENEWAL_UNIT: &str = "kithara-ci-windows-renewal.service";
 
 pub(crate) const SERVICE_RENEWAL_TIMER: &str = "kithara-ci-windows-renewal.timer";
+
+/// A package of its own, for the tests that ask Cargo whether it builds.
+#[cfg(test)]
+pub(crate) const PROBE_MANIFEST: &str =
+    "[package]\nname = \"probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\n";
 
 /// How far back from a unit's newest build the build-directory tests keep its
 /// other builds.

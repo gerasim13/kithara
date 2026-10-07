@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsString,
     fs::{self, File, OpenOptions},
     path::{Path, PathBuf},
     time::{Duration, SystemTime},
@@ -10,7 +11,10 @@ use kithara_devtools::lock::{FileLock, Wait};
 use tracing::warn;
 
 use super::layout;
-use crate::consts;
+use crate::{
+    ci::{Claim, claim_beside_alias},
+    consts,
+};
 
 #[derive(Debug)]
 pub(crate) struct GenerationLease {
@@ -111,9 +115,11 @@ pub(super) struct RefreshLock {
 
 /// Held from the start of a build of `xtask` until the binary it built is
 /// copied into a generation: one checkout builds in the directory at a time,
-/// and the host budget leaves the directory alone meanwhile.
+/// and the host budget leaves the directory alone meanwhile. A CI build claims
+/// the directory for its checkout, settled before the next build may start.
 #[derive(Debug)]
 pub(super) struct BuildLock {
+    _sources: Option<Claim>,
     _lock: FileLock,
     _lease: kithara_devtools::lease::Lease,
 }
@@ -144,8 +150,12 @@ pub(super) fn refresh(root: &Path) -> Result<RefreshLock> {
 
 /// The lock lives in the build directory, not the checkout: every runner of a
 /// CI host builds in one directory, and Cargo's own lock ends with the build,
-/// before the binary is copied out of it.
-pub(super) fn build(target: &Path) -> Result<BuildLock> {
+/// before the binary is copied out of it. `var` reads the job's environment.
+pub(super) fn build(
+    checkout: &Path,
+    target: &Path,
+    var: &dyn Fn(&str) -> Option<OsString>,
+) -> Result<BuildLock> {
     fs::create_dir_all(target)
         .with_context(|| format!("create xtask build directory {}", target.display()))?;
     let path = target.join(consts::BUILD_LOCK);
@@ -166,10 +176,12 @@ pub(super) fn build(target: &Path) -> Result<BuildLock> {
         },
     )
     .with_context(|| format!("lock {subject}"))?;
+    let lease = kithara_devtools::lease::hold(target)
+        .with_context(|| format!("lease xtask build directory {}", target.display()))?;
     Ok(BuildLock {
+        _sources: claim_beside_alias(checkout, target, var)?,
         _lock: lock,
-        _lease: kithara_devtools::lease::hold(target)
-            .with_context(|| format!("lease xtask build directory {}", target.display()))?,
+        _lease: lease,
     })
 }
 
@@ -324,6 +336,7 @@ fn old_enough(entry: &fs::DirEntry, grace: Duration) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use std::{
+        ffi::OsString,
         fs::{self, FileTimes},
         path::{Path, PathBuf},
         sync::{
@@ -582,7 +595,8 @@ mod tests {
         let barrier = Arc::new(Barrier::new(2));
         let checkouts = (0..2)
             .map(|_| {
-                let (target, building, most, barrier) = (
+                let (checkout, target, building, most, barrier) = (
+                    temp.path().to_path_buf(),
                     target.clone(),
                     Arc::clone(&building),
                     Arc::clone(&most),
@@ -590,7 +604,7 @@ mod tests {
                 );
                 thread::spawn(move || -> Result<()> {
                     barrier.wait();
-                    let _build = super::build(&target)?;
+                    let _build = super::build(&checkout, &target, &|_| None)?;
                     let now = building.fetch_add(1, Ordering::SeqCst) + 1;
                     most.fetch_max(now, Ordering::SeqCst);
                     thread::sleep(Duration::from_millis(100));
@@ -615,7 +629,7 @@ mod tests {
     fn the_host_budget_leaves_a_build_directory_alone_while_xtask_builds_there() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let target = temp.path().join("target");
-        let _build = super::build(&target)?;
+        let _build = super::build(temp.path(), &target, &|_| None)?;
 
         let lease = fs::OpenOptions::new()
             .create(true)
@@ -627,6 +641,29 @@ mod tests {
             FileLock::try_exclusive(lease),
             Err(TryLockError::WouldBlock)
         ));
+        Ok(())
+    }
+
+    /// In a CI job xtask builds in the runner's build root, beside the alias
+    /// the lanes build through, and claims its directory as a lane claims its
+    /// own: left unclaimed, it would build against the stamps the last lane's
+    /// claim gave the checkout, which say nothing about what xtask built.
+    #[cfg(unix)]
+    #[test]
+    fn a_ci_build_beside_the_alias_claims_the_checkout() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        std::os::unix::fs::symlink("lint", root.path().join(consts::BUILD_ALIAS))?;
+        let target = root.path().join(consts::XTASK_BUILD);
+        let checkout = crate::ci::fixture::git_checkout(&[("src/lib.rs", "")]);
+
+        let _build = super::build(checkout.path(), &target, &|name| {
+            (name == "CI").then(|| OsString::from("true"))
+        })?;
+
+        assert!(
+            target.join(consts::SOURCES_RECORD).is_file(),
+            "xtask built in its directory without claiming it"
+        );
         Ok(())
     }
 }

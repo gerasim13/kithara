@@ -1,7 +1,6 @@
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::{
-    env,
     ffi::{OsStr, OsString},
     fs::{self, OpenOptions},
     io,
@@ -15,6 +14,7 @@ use fs4::TryLockError;
 use kithara_devtools::{lease, lock::FileLock};
 use tracing::{info, warn};
 
+use super::build_dir::{Claim, claim_beside_alias};
 use crate::consts;
 
 /// One build directory in a build root: a lane's, a stress run's, xtask's own.
@@ -411,23 +411,43 @@ fn heartbeat_is_fresh(path: &Path) -> bool {
         .map_or(true, |age| age <= consts::HEARTBEAT_MAX_AGE)
 }
 
-/// Claims `CARGO_TARGET_DIR` for the life of this process, if one is named.
+/// The directory `CARGO_TARGET_DIR` names, held for the life of this process.
+/// The claim is settled before the lease lets the directory go.
+#[derive(Debug)]
+pub(crate) struct HeldTarget {
+    _sources: Option<Claim>,
+    _lease: lease::Lease,
+}
+
+/// Holds the directory `var` names as `CARGO_TARGET_DIR`, if one is named,
+/// for `checkout`'s builds.
 ///
 /// The checkout lease cannot protect it: on Linux runners the target is a
 /// per-runner Docker volume the host budgets directly, and a lease on the
 /// checkout says nothing about a directory outside it. A lane that builds into
 /// a directory of its own claims that one where it names it, so both claims are
 /// the one protocol [`lease`] owns and [`lease_file_is_held`] asks about.
-pub(crate) fn hold_target_lease() -> Result<Option<lease::Lease>> {
-    lease_target(env::var_os("CARGO_TARGET_DIR").map(PathBuf::from))
-}
-
+///
+/// A CI job claims the directory for `checkout` too where its lanes claim
+/// theirs, as [`claim_beside_alias`] says.
+///
 /// A build alias is skipped: it is a link `ci lane` points at the lane's own
-/// directory, and leases that directory itself once it knows the lane.
-fn lease_target(target: Option<PathBuf>) -> Result<Option<lease::Lease>> {
-    target
+/// directory, and holds that directory itself once it knows the lane.
+pub(crate) fn hold_target(
+    checkout: &Path,
+    var: &dyn Fn(&str) -> Option<OsString>,
+) -> Result<Option<HeldTarget>> {
+    var("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
         .filter(|target| target.file_name() != Some(OsStr::new(consts::BUILD_ALIAS)))
-        .map(|target| lease::hold(&target).with_context(|| format!("lease {}", target.display())))
+        .map(|target| {
+            let lease =
+                lease::hold(&target).with_context(|| format!("lease {}", target.display()))?;
+            Ok(HeldTarget {
+                _sources: claim_beside_alias(checkout, &target, var)?,
+                _lease: lease,
+            })
+        })
         .transpose()
 }
 
@@ -492,6 +512,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::ci::build_dir::fixture::git_checkout;
 
     fn entry(path: &str, size_bytes: u64, age: u64) -> CacheEntry {
         CacheEntry {
@@ -917,13 +938,45 @@ mod tests {
     fn a_build_alias_is_not_leased_through() {
         let root = tempfile::tempdir().unwrap();
         let alias = root.path().join(consts::BUILD_ALIAS);
+        let checkout = git_checkout(&[]);
+        let told = alias.clone().into_os_string();
 
-        let lease = lease_target(Some(alias.clone())).unwrap();
+        let held = hold_target(checkout.path(), &|name| {
+            (name == "CARGO_TARGET_DIR").then(|| told.clone())
+        })
+        .unwrap();
 
-        assert!(lease.is_none());
+        assert!(held.is_none());
         assert!(
             fs::symlink_metadata(&alias).is_err(),
             "nothing stands where the alias goes"
+        );
+    }
+
+    /// A job that names its own build directory in the build root, beside
+    /// the alias the lanes build through, claims it as a lane claims its own:
+    /// left unclaimed, it would build against the stamps the last lane's claim
+    /// gave the checkout, which say nothing about what it built.
+    #[cfg(unix)]
+    #[test]
+    fn a_ci_job_claims_the_directory_it_names_beside_the_alias() {
+        let root = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("lint", root.path().join(consts::BUILD_ALIAS)).unwrap();
+        let named = root.path().join("network");
+        let checkout = git_checkout(&[("src/lib.rs", "")]);
+        let told = named.clone().into_os_string();
+
+        let held = hold_target(checkout.path(), &|name| match name {
+            "CARGO_TARGET_DIR" => Some(told.clone()),
+            "CI" => Some(OsString::from("true")),
+            _ => None,
+        })
+        .unwrap();
+
+        assert!(held.is_some());
+        assert!(
+            named.join(consts::SOURCES_RECORD).is_file(),
+            "the job built in its directory without claiming it"
         );
     }
 

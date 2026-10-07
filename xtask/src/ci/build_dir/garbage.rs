@@ -109,6 +109,27 @@ pub(super) fn collect(dir: &Path, window: Duration) -> Result<()> {
     Ok(())
 }
 
+/// Whether Cargo wrote a unit fingerprint in `dir` after `time`.
+///
+/// # Errors
+///
+/// When the directory cannot be listed.
+pub(super) fn built_after(dir: &Path, time: SystemTime) -> Result<bool> {
+    for profile in profiles(dir)? {
+        for unit in entries(&profile.join(".fingerprint"))? {
+            for file in entries(&unit)? {
+                let written = fs::symlink_metadata(&file)
+                    .and_then(|metadata| metadata.modified())
+                    .with_context(|| format!("reading {}", file.display()))?;
+                if written > time {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// Reads every unit of `profile` and the builds Cargo recorded for it.
 fn read_profile(profile: &Path, units: &mut Vec<UnitDir>, builds: &mut Vec<Build>) -> Result<()> {
     for directory in entries(&profile.join(".fingerprint"))? {

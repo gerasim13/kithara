@@ -10,29 +10,33 @@ use anyhow::{Context, Result, ensure};
 use kithara_devtools::lease::{self, Lease};
 use tracing::warn;
 
+use super::sources::{Claim, claim};
 use crate::{ci::build_cache, consts};
 
 /// A job's hold on its build directory: leased, with the root's alias naming
-/// it, for as long as this lives.
+/// it and the checkout claimed for it, for as long as this lives. The claim
+/// settles before the lease goes.
 #[derive(Debug, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get, deref = false)]
 pub(crate) struct BuildDir {
     #[field(get, vis = "pub(crate)")]
     path: PathBuf,
+    _sources: Claim,
     _lease: Lease,
 }
 
 impl BuildDir {
     /// Enters build `id` under the root `alias` sits in: leases `<root>/<id>`,
-    /// points the alias at it and removes the units its builds no longer ask
-    /// for, by `window` (see [`super::garbage`]).
+    /// points the alias at it, removes the units its builds no longer ask
+    /// for, by `window` (see [`super::garbage`]), and claims `checkout` for
+    /// it (see [`super::sources`]).
     ///
     /// # Errors
     ///
     /// When `alias` is not named `build`, `id` is not one plain name the root
-    /// leaves free, or the lease or the link cannot be made. A garbage pass that fails is logged: it only saves
-    /// disk.
-    pub(crate) fn enter(alias: &Path, id: &str, window: Duration) -> Result<Self> {
+    /// leaves free, or the lease, the link or the claim cannot be made. A
+    /// garbage pass that fails is logged: it only saves disk.
+    pub(crate) fn enter(checkout: &Path, alias: &Path, id: &str, window: Duration) -> Result<Self> {
         ensure!(
             alias.file_name() == Some(OsStr::new(consts::BUILD_ALIAS)),
             "{} names no build alias: an executor names `<root>/{}` and the lane builds behind it",
@@ -53,8 +57,10 @@ impl BuildDir {
                 path.display()
             );
         }
+        let sources = claim(checkout, &path)?;
         Ok(Self {
             path,
+            _sources: sources,
             _lease: lease,
         })
     }
@@ -126,19 +132,30 @@ mod tests {
     use std::{fs, path::Path};
 
     use kithara_devtools::lease;
+    use tempfile::TempDir;
 
     use super::BuildDir;
-    use crate::{ci::build_cache, consts};
+    use crate::{
+        ci::{build_cache, build_dir::fixture::git_checkout},
+        consts,
+    };
 
     fn alias(root: &Path) -> std::path::PathBuf {
         root.join("build")
+    }
+
+    /// Enters build `id` for a checkout of its own.
+    fn enter(alias: &Path, id: &str) -> anyhow::Result<(BuildDir, TempDir)> {
+        let checkout = git_checkout(&[]);
+        BuildDir::enter(checkout.path(), alias, id, consts::GARBAGE_WINDOW)
+            .map(|build| (build, checkout))
     }
 
     #[test]
     fn entering_points_the_alias_at_the_build_directory() {
         let root = tempfile::tempdir().unwrap();
 
-        let build = BuildDir::enter(&alias(root.path()), "lint", consts::GARBAGE_WINDOW).unwrap();
+        let (build, _checkout) = enter(&alias(root.path()), "lint").unwrap();
 
         assert_eq!(build.path(), &root.path().join("lint"));
         assert_eq!(
@@ -152,9 +169,9 @@ mod tests {
     fn the_next_build_re_points_the_alias_and_keeps_the_last_one() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("lint/debug")).unwrap();
-        drop(BuildDir::enter(&alias(root.path()), "lint", consts::GARBAGE_WINDOW).unwrap());
+        drop(enter(&alias(root.path()), "lint").unwrap());
 
-        let usdt = BuildDir::enter(&alias(root.path()), "usdt", consts::GARBAGE_WINDOW).unwrap();
+        let (usdt, _checkout) = enter(&alias(root.path()), "usdt").unwrap();
 
         assert_eq!(
             fs::read_link(alias(root.path())).unwrap(),
@@ -168,7 +185,7 @@ mod tests {
     fn an_entered_build_directory_is_leased() {
         let root = tempfile::tempdir().unwrap();
 
-        let build = BuildDir::enter(&alias(root.path()), "lint", consts::GARBAGE_WINDOW).unwrap();
+        let (build, _checkout) = enter(&alias(root.path()), "lint").unwrap();
 
         assert!(lease::evict(build.path()).unwrap().is_none());
     }
@@ -182,7 +199,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(alias(root.path()).join("debug")).unwrap();
 
-        let build = BuildDir::enter(&alias(root.path()), "lint", consts::GARBAGE_WINDOW).unwrap();
+        let (build, _checkout) = enter(&alias(root.path()), "lint").unwrap();
 
         assert_eq!(
             fs::read_link(alias(root.path())).unwrap(),
@@ -213,7 +230,7 @@ mod tests {
             "..",
         ] {
             assert!(
-                BuildDir::enter(&alias(root.path()), id, consts::GARBAGE_WINDOW).is_err(),
+                enter(&alias(root.path()), id).is_err(),
                 "`{id}` is not a build id"
             );
         }
@@ -223,8 +240,7 @@ mod tests {
     fn an_alias_is_named_build() {
         let root = tempfile::tempdir().unwrap();
 
-        let error = BuildDir::enter(&root.path().join("target"), "lint", consts::GARBAGE_WINDOW)
-            .unwrap_err();
+        let error = enter(&root.path().join("target"), "lint").unwrap_err();
 
         assert!(format!("{error:#}").contains("build"), "{error:#}");
     }
