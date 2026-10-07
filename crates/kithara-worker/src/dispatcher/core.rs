@@ -3,7 +3,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use kithara_platform::{
     CancelToken,
     sync::mpsc::{self, TryRecvError},
-    thread::yield_runnable,
+    thread::{self, ThreadClass, yield_runnable},
     time::{Duration, Instant},
 };
 use kithara_test_macros as kithara;
@@ -19,6 +19,7 @@ pub(super) fn run_loop(
     budgets: &DispatcherConfig,
     mut observer: Box<dyn Observer>,
 ) {
+    claim_thread_class(budgets.thread_class, observer.as_mut());
     let mut slots = Vec::new();
     let mut needs_reorder = false;
     let mut progress_streak = 0;
@@ -37,6 +38,22 @@ pub(super) fn run_loop(
         let report = run_pass(&mut slots, &mut needs_reorder, budgets, observer.as_mut());
         observer.on_event(Event::PassEnd);
         park_after_outcome(wake, budgets, report, &mut progress_streak);
+    }
+}
+
+/// Ask the OS for the dispatcher's thread class before the first pass, so no
+/// task ever runs on a thread scheduled below what its work needs.
+fn claim_thread_class(class: ThreadClass, observer: &mut dyn Observer) {
+    let refused = thread::set_current_class(class)
+        .err()
+        .map(|error| error.kind());
+    kithara::probe_event!(
+        thread_class,
+        audio_feed = u64::from(class == ThreadClass::AudioFeed),
+        granted = u64::from(refused.is_none())
+    );
+    if let Some(error) = refused {
+        observer.on_event(Event::ThreadClassRefused { class, error });
     }
 }
 

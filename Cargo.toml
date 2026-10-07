@@ -449,6 +449,8 @@ js-sys = "0.3"
 # through it). Pinned to the version peniko already resolves so the graph keeps
 # one kurbo.
 kurbo = "0.12"
+# Thread scheduling calls kithara-platform makes on Linux, Android and Apple.
+libc = "0.2"
 libfuzzer-sys = "0.4"
 loom = { version = "0.7.2", features = ["checkpoint"] }
 lru = "0.18"
@@ -562,6 +564,8 @@ wasm_safe_thread = "0.1.1"
 web-sys = { version = "0.3", features = ["AudioData", "AudioDataCopyToOptions", "AudioDecoder", "AudioDecoderConfig", "AudioDecoderInit", "AudioDecoderSupport", "AudioSampleFormat", "Blob", "BroadcastChannel", "console", "DedicatedWorkerGlobalScope", "Document", "Element", "EncodedAudioChunk", "EncodedAudioChunkInit", "EncodedAudioChunkType", "Event", "EventTarget", "File", "FileList", "FileReader", "HtmlElement", "HtmlInputElement", "MessageChannel", "MessageEvent", "MessagePort", "Window"] }
 web-time = "1.1"
 window_clipboard = "0.5.1"
+# The Windows thread scheduling calls kithara-platform makes (MMCSS).
+windows-sys = "0.61"
 # Dev-only: the gallery example drives the Masonry host in a real window. iced
 # already builds this exact version, so it costs no extra compilation.
 winit = "0.30"
