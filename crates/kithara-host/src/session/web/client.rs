@@ -13,7 +13,7 @@ use crate::{
     session::{
         HostProtocol,
         dispatch::run_host_cmd,
-        protocol::{HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply},
+        protocol::{HostCmd, HostDispatchError, HostDispatcher, answer},
         state::{HostRoot, RootView, SessionState},
     },
 };
@@ -23,53 +23,11 @@ pub(crate) type WebSessionState<S> =
 
 enum SessionHost<S> {
     Local { state: WebSessionState<S> },
-    Remote { tx: mpsc::Sender<HostCmdMsg<S>> },
+    Remote { tx: mpsc::Sender<HostCmd<S>> },
 }
 
 pub(crate) struct SessionClient<S> {
     host: SessionHost<S>,
-}
-
-impl<S> SessionClient<S>
-where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
-    fn call(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
-        match &self.host {
-            SessionHost::Local { state } => {
-                if matches!(&cmd, HostCmd::Shutdown) {
-                    drop(state.lock().take());
-                    WASM_SESSION_ACTIVE.with(|active| active.set(false));
-                    reset_bridge_state();
-                    return Ok(HostReply::Ok);
-                }
-                let mut state = state.lock();
-                match state.as_mut() {
-                    Some(state) => Ok(run_host_cmd(state, cmd)),
-                    None => Err(HostDispatchError::before_send(
-                        PlayError::Internal("local session state missing".into()),
-                        cmd,
-                    )),
-                }
-            }
-            SessionHost::Remote { tx } => {
-                let (reply_tx, reply_rx) = mpsc::channel();
-                if let Err(error) = tx.send(HostCmdMsg { cmd, reply_tx }) {
-                    return Err(HostDispatchError::before_send(
-                        PlayError::SessionGone {
-                            reason: "session host stopped accepting commands",
-                        },
-                        error.0.cmd,
-                    ));
-                }
-                reply_rx.recv().map_err(|_| {
-                    HostDispatchError::after_send(PlayError::SessionGone {
-                        reason: "session host dropped the reply channel",
-                    })
-                })
-            }
-        }
-    }
 }
 
 impl<S> HostDispatcher<S> for SessionClient<S>
@@ -80,8 +38,33 @@ where
         ConsumerWakeMode::RealtimeDeferred
     }
 
-    fn exec_host(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
-        self.call(cmd)
+    /// A local session runs the command inline, so its answer is there by the
+    /// time this returns; a remote one sends it to the session's thread.
+    fn dispatch(&self, cmd: HostCmd<S>) -> Result<(), HostDispatchError> {
+        match &self.host {
+            SessionHost::Local { state } => {
+                if let HostCmd::Shutdown(reply) = cmd {
+                    drop(state.lock().take());
+                    WASM_SESSION_ACTIVE.with(|active| active.set(false));
+                    reset_bridge_state();
+                    answer(&reply, ());
+                    return Ok(());
+                }
+                let mut state = state.lock();
+                let state = state.as_mut().ok_or_else(|| {
+                    HostDispatchError::NotTaken(PlayError::Internal(
+                        "local session state missing".into(),
+                    ))
+                })?;
+                run_host_cmd(state, cmd);
+                Ok(())
+            }
+            SessionHost::Remote { tx } => tx.send(cmd).map_err(|_| {
+                HostDispatchError::NotTaken(PlayError::SessionGone {
+                    reason: "session host stopped accepting commands",
+                })
+            }),
+        }
     }
 }
 
@@ -126,13 +109,13 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
 }
 
 pub(crate) fn remote<S: HasPool<f32> + Send + Sync + 'static>(
-    tx: mpsc::Sender<HostCmdMsg<S>>,
+    tx: mpsc::Sender<HostCmd<S>>,
 ) -> Arc<dyn HostDispatcher<S>> {
     Arc::new(SessionClient {
         host: SessionHost::Remote { tx },
     })
 }
 
-pub(crate) fn worker_channel<S>() -> (mpsc::Sender<HostCmdMsg<S>>, mpsc::Receiver<HostCmdMsg<S>>) {
+pub(crate) fn worker_channel<S>() -> (mpsc::Sender<HostCmd<S>>, mpsc::Receiver<HostCmd<S>>) {
     mpsc::channel()
 }

@@ -340,9 +340,9 @@ mod tests {
         consts,
         host::{HostSettingsChange, HostSettingsExec},
         session::{
-            dispatch::{invalidate_audio_route, run_host_cmd, tick_session},
-            protocol::{DeckRegistration, HostCmd, HostReply},
-            tests::graph::{committed_transport, state as test_state},
+            dispatch::{invalidate_audio_route, tick_session},
+            protocol::{DeckRegistration, HostCmd},
+            tests::graph::{ask, committed_transport, state as test_state},
         },
     };
 
@@ -462,19 +462,20 @@ mod tests {
             kithara_play::DeckMixerConfig::default(),
         );
         registration.response_budget_frames = NonZeroUsize::new(448);
-        match run_host_cmd(state, HostCmd::Attach { registration }) {
-            HostReply::Attached(_) => grid_id,
-            HostReply::Err(err) => panic!("the deck failed to start: {err}"),
-            HostReply::Ok => panic!("attach returned an unexpected reply"),
+        match ask(state, |reply| HostCmd::Attach {
+            registration,
+            reply,
+        }) {
+            Ok(_) => grid_id,
+            Err(err) => panic!("the deck failed to start: {err}"),
         }
     }
 
     /// Stops the deck `grid_id` and removes it from the session.
     fn remove(state: &mut TestState, grid_id: BeatGridId) {
-        match run_host_cmd(state, HostCmd::Detach { grid_id }) {
-            HostReply::Ok => {}
-            HostReply::Err(err) => panic!("the deck failed to leave: {err}"),
-            HostReply::Attached(_) => panic!("detach returned an unexpected reply"),
+        match ask(state, |reply| HostCmd::Detach { grid_id, reply }) {
+            Ok(()) => {}
+            Err(err) => panic!("the deck failed to leave: {err}"),
         }
     }
 

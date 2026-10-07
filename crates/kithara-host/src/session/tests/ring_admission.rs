@@ -27,10 +27,7 @@ use super::ring::{
     CountingNode, CountingProbe, DeterministicToneNode, ManualRingConfig, ManualRingSession,
     RingRenderError, RingSessionError, fixtures::install_stereo_source,
 };
-use crate::{
-    consts,
-    session::protocol::{HostCmd, HostReply},
-};
+use crate::{consts, session::protocol::HostCmd};
 
 fn session_rate() -> NonZeroU32 {
     NonZeroU32::new(consts::RING_ADMISSION_SAMPLE_RATE).expect("test sample rate is non-zero")
@@ -62,24 +59,24 @@ fn start_deck(session: &ManualRingSession) -> BeatGridId {
         kithara_play::DeckMixerConfig::default(),
     );
     registration.response_budget_frames = NonZeroUsize::new(448);
-    match session
-        .exec_host(HostCmd::Attach { registration })
+    if let Err(error) = session
+        .ask(|reply| HostCmd::Attach {
+            registration,
+            reply,
+        })
         .expect("attach deck command")
     {
-        HostReply::Attached(_) => grid_id,
-        HostReply::Err(error) => panic!("the session failed to start the deck: {error}"),
-        HostReply::Ok => panic!("unexpected attach reply"),
+        panic!("the session failed to start the deck: {error}");
     }
+    grid_id
 }
 
 fn remove_deck(session: &ManualRingSession, grid_id: BeatGridId) {
-    match session
-        .exec_host(HostCmd::Detach { grid_id })
+    if let Err(error) = session
+        .ask(|reply| HostCmd::Detach { grid_id, reply })
         .expect("detach deck command")
     {
-        HostReply::Ok => {}
-        HostReply::Err(error) => panic!("the session failed to remove the deck: {error}"),
-        HostReply::Attached(_) => panic!("unexpected detach reply"),
+        panic!("the session failed to remove the deck: {error}");
     }
 }
 
@@ -96,12 +93,14 @@ fn seated_player(session: &Arc<ManualRingSession>) -> PlayerImpl<TestPools> {
         .attach_session(session.binding())
         .expect("the player binds the session");
     match session
-        .exec_host(HostCmd::Attach { registration })
+        .ask(|reply| HostCmd::Attach {
+            registration,
+            reply,
+        })
         .expect("attach player command")
     {
-        HostReply::Attached(slot) => player.seat(*slot),
-        HostReply::Err(error) => panic!("the session refused the player: {error}"),
-        HostReply::Ok => panic!("unexpected attach reply"),
+        Ok(slot) => player.seat(slot),
+        Err(error) => panic!("the session refused the player: {error}"),
     }
     player
 }

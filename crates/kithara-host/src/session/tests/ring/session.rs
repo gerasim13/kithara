@@ -23,7 +23,7 @@ use super::{
     RingLayout, RingReader, RingRenderError,
 };
 use crate::session::{
-    protocol::{HostCmd, HostReply},
+    protocol::{HostCmd, Reply},
     state::RootView,
 };
 
@@ -81,8 +81,6 @@ pub(crate) enum RingSessionError {
     Update(String),
     #[error("ring session context is not started")]
     NotStarted,
-    #[error("ring session protocol violation: {0}")]
-    Protocol(&'static str),
     #[error("ring session clock became negative: {0}")]
     NegativeClock(i64),
     #[error("ring session worker stopped")]
@@ -97,10 +95,7 @@ enum RingMsg {
     Tick {
         reply_tx: mpsc::Sender<Result<(), SessionError>>,
     },
-    Host {
-        cmd: HostCmd<TestPools>,
-        reply_tx: mpsc::Sender<HostReply>,
-    },
+    Host(HostCmd<TestPools>),
     Credit {
         blocks: usize,
         reply_tx: mpsc::Sender<CreditReply>,
@@ -207,18 +202,22 @@ impl ManualRingSession {
         reply_rx.recv().map_or_else(|_| self.worker_failure(), Ok)
     }
 
-    /// Synchronous Host command-reply bridge; call from a blocking control thread.
-    pub(crate) fn exec_host(&self, cmd: HostCmd<TestPools>) -> Result<HostReply, RingSessionError> {
+    /// Runs the command `command` builds around its reply and waits for the
+    /// answer; call from a blocking control thread.
+    pub(crate) fn ask<T>(
+        &self,
+        command: impl FnOnce(Reply<T>) -> HostCmd<TestPools>,
+    ) -> Result<T, RingSessionError> {
         self.ensure_available()?;
-        let (reply_tx, reply_rx) = mpsc::channel();
+        let (reply, answer) = mpsc::channel();
         let Some(cmd_tx) = self.cmd_tx.lock().clone() else {
             return self.worker_failure();
         };
-        let sent = cmd_tx.send(RingMsg::Host { cmd, reply_tx });
+        let sent = cmd_tx.send(RingMsg::Host(command(reply)));
         if sent.is_err() {
             return self.worker_failure();
         }
-        reply_rx.recv().map_or_else(|_| self.worker_failure(), Ok)
+        answer.recv().map_or_else(|_| self.worker_failure(), Ok)
     }
 
     /// What the transport last committed; `None` while a route restart holds
@@ -409,9 +408,7 @@ fn ring_session_thread(
             RingMsg::Tick { reply_tx } => {
                 let _ = reply_tx.send(state.tick());
             }
-            RingMsg::Host { cmd, reply_tx } => {
-                let _ = reply_tx.send(state.exec_host(cmd));
-            }
+            RingMsg::Host(cmd) => state.run(cmd),
             RingMsg::Credit { blocks, reply_tx } => {
                 let _ = reply_tx.send(credit_blocks(&mut state, blocks));
             }
@@ -434,11 +431,12 @@ fn bootstrap(
         kithara_play::DeckMixerConfig::default(),
     );
     registration.response_budget_frames = NonZeroUsize::new(448);
-    match state.exec_host(HostCmd::Attach { registration }) {
-        HostReply::Attached(_) => {}
-        HostReply::Err(error) => return Err(RingSessionError::Setup(error.to_string())),
-        HostReply::Ok => return Err(RingSessionError::Protocol("attach anchor deck reply")),
-    }
+    state
+        .ask(|reply| HostCmd::Attach {
+            registration,
+            reply,
+        })
+        .map_err(|error| RingSessionError::Setup(error.to_string()))?;
     let ctx = state.ctx_mut().ok_or(RingSessionError::NotStarted)?;
     setup(ctx)
 }

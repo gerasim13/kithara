@@ -19,7 +19,7 @@ use crate::{
     api::Tap,
     rt::SessionOutput,
     session::{
-        HostCmd, HostDispatcher, HostReply, HostRoot, RootView, SessionError, SessionSampleRate,
+        HostCmd, HostDispatcher, HostRoot, Reply, RootView, SessionError, SessionSampleRate, ask,
     },
 };
 
@@ -127,14 +127,10 @@ impl<S> Host<S> {
         }
     }
 
-    fn exec_host_ok(&self, cmd: HostCmd<S>, what: &'static str) -> Result<(), PlayError> {
-        match self.dispatcher.exec_host(cmd).map_err(PlayError::from)? {
-            HostReply::Ok => Ok(()),
-            HostReply::Err(error) => Err(error),
-            HostReply::Attached(_) => Err(PlayError::Internal(format!(
-                "unexpected host reply for {what}"
-            ))),
-        }
+    /// Runs the command `command` builds around its reply on the session and
+    /// waits for the answer.
+    fn ask<T>(&self, command: impl FnOnce(Reply<T>) -> HostCmd<S>) -> Result<T, PlayError> {
+        ask(&*self.dispatcher, command).map_err(PlayError::from)
     }
 
     /// Attaches one output group to `tap`.
@@ -143,7 +139,11 @@ impl<S> Host<S> {
     ///
     /// Returns an error when `tap` already has a consumer or graph dispatch fails.
     pub fn attach_outputs(&self, tap: Tap, outputs: OutputGroup) -> Result<(), PlayError> {
-        self.exec_host_ok(HostCmd::AttachOutputs { tap, outputs }, "output attach")
+        self.ask(|reply| HostCmd::AttachOutputs {
+            tap,
+            outputs,
+            reply,
+        })?
     }
 
     /// Removes the output group attached to `tap`, if any.
@@ -152,7 +152,7 @@ impl<S> Host<S> {
     ///
     /// Returns an error when graph dispatch fails.
     pub fn detach_outputs(&self, tap: Tap) -> Result<(), PlayError> {
-        self.exec_host_ok(HostCmd::DetachOutputs { tap }, "output detach")
+        self.ask(|reply| HostCmd::DetachOutputs { tap, reply })
     }
 
     /// Restarts the output on the platform's new route, keeping Host-owned
@@ -164,12 +164,10 @@ impl<S> Host<S> {
     where
         R: Into<String>,
     {
-        self.exec_host_ok(
-            HostCmd::InvalidateAudioRoute {
-                reason: reason.into(),
-            },
-            "route invalidation",
-        )
+        self.ask(|reply| HostCmd::InvalidateAudioRoute {
+            reason: reason.into(),
+            reply,
+        })?
     }
 
     pub(super) fn owned<P>(&self, id: BeatGridId, control: P::Control) -> HostOwned<P>
@@ -285,7 +283,7 @@ impl<S> Configure<HostSettingsChange> for Host<S> {
     type Output = ();
 
     fn configure(&self, change: HostSettingsChange, at: Self::At) -> Result<(), PlayError> {
-        self.exec_host_ok(HostCmd::Configure { change, at }, "host settings")
+        self.ask(|reply| HostCmd::Configure { change, at, reply })?
     }
 
     fn settings(&self) -> HostSettings {
@@ -298,9 +296,9 @@ impl<S> Drop for Host<S> {
         #[cfg(target_arch = "wasm32")]
         self.session.platform().close(self.id);
         if self.owns_session
-            && let Err(error) = self.dispatcher.exec_host(HostCmd::Shutdown)
+            && let Err(error) = self.ask(HostCmd::Shutdown)
         {
-            tracing::warn!(error = %PlayError::from(error), "host session shutdown failed");
+            tracing::warn!(%error, "host session shutdown failed");
         }
     }
 }

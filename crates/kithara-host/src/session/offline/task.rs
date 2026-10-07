@@ -17,7 +17,7 @@ use super::super::decks::{DeckMsg, Decks};
 use super::{
     super::{
         dispatch::run_host_cmd,
-        protocol::{HostCmd, HostCmdMsg, HostReply},
+        protocol::{HostCmd, answer},
         queue::{HostProtocol, settle_receipts},
         state::{HostRoot, RootView, SessionState, ensure_ctx},
         transport,
@@ -32,7 +32,7 @@ pub(crate) mod consts {
 }
 
 pub(super) enum OfflineMsg<S> {
-    Host(HostCmdMsg<S>),
+    Host(HostCmd<S>),
     #[cfg(not(target_arch = "wasm32"))]
     Deck(DeckMsg),
     Position {
@@ -102,27 +102,19 @@ where
         Ok(output)
     }
 
-    fn tick_host(&mut self, message: HostCmdMsg<S>) -> TickResult {
-        let HostCmdMsg { cmd, reply_tx } = message;
-        if matches!(&cmd, HostCmd::Shutdown) {
+    /// Runs one Host command. The session state goes only with the channel on
+    /// shutdown or with the task on cancel, so a command never finds it gone.
+    fn tick_host(&mut self, cmd: HostCmd<S>) -> TickResult {
+        if let HostCmd::Shutdown(reply) = cmd {
             drop(self.cmd_rx.take());
             self.stop();
-            if reply_tx.send(HostReply::Ok).is_err() {
-                warn!("offline Host shutdown reply receiver dropped");
-            }
+            answer(&reply, ());
             return TickResult::Done;
         }
-        let reply = self.state.as_mut().map_or_else(
-            || {
-                HostReply::Err(PlayError::SessionGone {
-                    reason: "offline session state is unavailable",
-                })
-            },
-            |state| run_host_cmd(state, cmd),
-        );
-        if reply_tx.send(reply).is_err() {
-            warn!("offline Host command reply receiver dropped");
-        }
+        let Some(state) = self.state.as_mut() else {
+            return TickResult::Done;
+        };
+        run_host_cmd(state, cmd);
         TickResult::Progress
     }
 
@@ -333,8 +325,8 @@ mod tests {
     use crate::{
         consts::{self, SESSION_PUMP_INTERVAL},
         session::{
-            HostDispatcher,
             decks::SessionDecks,
+            protocol::ask,
             tests::{
                 deck_probe::{Seen, next, probe, so_far, ticks},
                 graph::empty_root,
@@ -400,10 +392,7 @@ mod tests {
 
     impl Drop for DeckSession {
         fn drop(&mut self) {
-            assert!(matches!(
-                self.client.exec_host(HostCmd::Shutdown),
-                Ok(HostReply::Ok)
-            ));
+            assert!(ask(&*self.client, HostCmd::Shutdown).is_ok());
         }
     }
 

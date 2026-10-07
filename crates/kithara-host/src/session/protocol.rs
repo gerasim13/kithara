@@ -12,6 +12,7 @@ pub(crate) use kithara_play::{
 };
 use kithara_signal::SessionFrame;
 use kithara_warp::BeatGridId;
+use tracing::warn;
 
 use crate::{api::Tap, host::HostSettingsChange};
 
@@ -21,74 +22,62 @@ use crate::{api::Tap, host::HostSettingsChange};
 pub(crate) type StartStreamFn<T> =
     Box<dyn FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static>;
 
+/// Where the session sends a command's answer; the caller waits on the other
+/// end.
+pub(crate) type Reply<T> = mpsc::Sender<T>;
+
+/// What the Host asks of its session. Each command carries the reply its
+/// answer goes to; the session's owner runs commands one at a time, in the
+/// order they were dispatched.
 pub(crate) enum HostCmd<S> {
+    /// Takes a deck and starts it, answering the slot it plays through.
     Attach {
         registration: DeckRegistration<S>,
+        reply: Reply<Result<AllocatedSlot, PlayError>>,
     },
     Detach {
         grid_id: BeatGridId,
+        reply: Reply<Result<(), PlayError>>,
     },
     Configure {
         change: HostSettingsChange,
         at: When<SessionFrame>,
+        reply: Reply<Result<(), PlayError>>,
     },
     AttachOutputs {
         tap: Tap,
         outputs: OutputGroup,
+        reply: Reply<Result<(), PlayError>>,
     },
     DetachOutputs {
         tap: Tap,
+        reply: Reply<()>,
     },
     /// The platform moved the output to another route: the stream restarts
     /// and every deck hears the change.
     InvalidateAudioRoute {
         reason: String,
+        reply: Reply<Result<(), PlayError>>,
     },
-    Shutdown,
+    Shutdown(Reply<()>),
 }
 
-pub(crate) enum HostReply {
-    /// The session took the deck and built the slot it plays through.
-    Attached(Box<AllocatedSlot>),
-    Ok,
-    Err(PlayError),
+/// Why a Host command came back without its answer.
+pub(crate) enum HostDispatchError {
+    /// The session stopped taking commands before this one reached it.
+    NotTaken(PlayError),
+    /// The session took the command and dropped it unanswered.
+    Unanswered,
 }
 
-pub(crate) struct HostCmdMsg<S> {
-    pub(crate) cmd: HostCmd<S>,
-    pub(crate) reply_tx: mpsc::Sender<HostReply>,
-}
-
-pub(crate) struct HostDispatchError<S> {
-    command: Option<Box<HostCmd<S>>>,
-    error: PlayError,
-}
-
-impl<S> HostDispatchError<S> {
-    pub(crate) const fn after_send(error: PlayError) -> Self {
-        Self {
-            error,
-            command: None,
+impl From<HostDispatchError> for PlayError {
+    fn from(error: HostDispatchError) -> Self {
+        match error {
+            HostDispatchError::NotTaken(error) => error,
+            HostDispatchError::Unanswered => Self::SessionGone {
+                reason: "the session dropped a command unanswered",
+            },
         }
-    }
-
-    pub(crate) fn before_send(error: PlayError, command: HostCmd<S>) -> Self {
-        Self {
-            error,
-            command: Some(Box::new(command)),
-        }
-    }
-}
-
-impl<S> From<HostDispatchError<S>> for PlayError {
-    fn from(error: HostDispatchError<S>) -> Self {
-        error.error
-    }
-}
-
-impl<S> From<HostDispatchError<S>> for (PlayError, Option<Box<HostCmd<S>>>) {
-    fn from(error: HostDispatchError<S>) -> Self {
-        (error.error, error.command)
     }
 }
 
@@ -96,19 +85,16 @@ pub(crate) trait HostDispatcher<S>: MaybeSend + MaybeSync {
     /// Adds one deck to the session on its owner thread and starts it there,
     /// answering the slot the deck plays through.
     fn attach(&self, registration: DeckRegistration<S>) -> Result<AllocatedSlot, PlayError> {
-        match change_members(self, HostCmd::Attach { registration })? {
-            HostReply::Attached(slot) => Ok(*slot),
-            _ => owner_thread_fail_fast("unexpected attach reply"),
-        }
+        change_members(self, |reply| HostCmd::Attach {
+            registration,
+            reply,
+        })
     }
 
     /// Stops the deck `grid_id` and removes it from the session on its owner
     /// thread.
     fn detach(&self, grid_id: BeatGridId) -> Result<(), PlayError> {
-        match change_members(self, HostCmd::Detach { grid_id })? {
-            HostReply::Ok => Ok(()),
-            _ => owner_thread_fail_fast("unexpected detach reply"),
-        }
+        change_members(self, |reply| HostCmd::Detach { grid_id, reply })
     }
 
     /// How the audio consumers of the decks this session hosts may wake
@@ -116,25 +102,52 @@ pub(crate) trait HostDispatcher<S>: MaybeSend + MaybeSync {
     /// backends included.
     fn consumer_wake_mode(&self) -> ConsumerWakeMode;
 
-    fn exec_host(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>>;
+    /// Hands `cmd` to the session's owner, which answers it through the reply
+    /// the command carries.
+    ///
+    /// # Errors
+    /// [`HostDispatchError::NotTaken`] when the session stopped taking
+    /// commands.
+    fn dispatch(&self, cmd: HostCmd<S>) -> Result<(), HostDispatchError>;
+}
+
+/// Dispatches the command `command` builds around its reply and waits for the
+/// answer.
+pub(crate) fn ask<S, T, D>(
+    dispatcher: &D,
+    command: impl FnOnce(Reply<T>) -> HostCmd<S>,
+) -> Result<T, HostDispatchError>
+where
+    D: HostDispatcher<S> + ?Sized,
+{
+    let (reply, answer) = mpsc::channel();
+    dispatcher.dispatch(command(reply))?;
+    answer.recv().map_err(|_| HostDispatchError::Unanswered)
+}
+
+/// Sends `value` to the caller waiting on `reply`; a caller that stopped
+/// waiting only loses the answer.
+pub(crate) fn answer<T>(reply: &Reply<T>, value: T) {
+    if reply.send(value).is_err() {
+        warn!("[KITHARA-ROUTE] a Host command's caller stopped waiting for its answer");
+    }
 }
 
 /// Runs one membership change on the owner thread. A change that never
 /// reached it fails with the reason; one the owner took and never answered
 /// leaves the deck's ownership unknown, so the process stops.
-fn change_members<S, D>(dispatcher: &D, cmd: HostCmd<S>) -> Result<HostReply, PlayError>
+fn change_members<S, T, D>(
+    dispatcher: &D,
+    command: impl FnOnce(Reply<Result<T, PlayError>>) -> HostCmd<S>,
+) -> Result<T, PlayError>
 where
     D: HostDispatcher<S> + ?Sized,
 {
-    match dispatcher.exec_host(cmd) {
-        Ok(HostReply::Err(error)) => Err(error),
-        Ok(reply) => Ok(reply),
-        Err(error) => {
-            let (reason, command) = error.into();
-            if command.is_some() {
-                return Err(reason);
-            }
-            owner_thread_fail_fast(&reason)
+    match ask(dispatcher, command) {
+        Ok(answer) => answer,
+        Err(HostDispatchError::NotTaken(reason)) => Err(reason),
+        Err(error @ HostDispatchError::Unanswered) => {
+            owner_thread_fail_fast(PlayError::from(error))
         }
     }
 }

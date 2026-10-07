@@ -8,11 +8,7 @@ use kithara_platform::sync::{Arc, mpsc};
 use super::client::WebSessionState;
 use crate::{
     bridge::PlaybackShared,
-    session::{
-        dispatch::drain_host_channel,
-        protocol::{HostCmdMsg, HostReply},
-        state::ensure_ctx,
-    },
+    session::{dispatch::drain_host_channel, protocol::HostCmd, state::ensure_ctx},
 };
 
 thread_local! {
@@ -32,10 +28,8 @@ pub(super) fn reset_bridge_state() {
 /// The one tick point that feeds the web stream's clock timestamps and notices a terminated
 /// worklet, since Firewheel no longer owns the backend and nothing else polls the stream on the
 /// session's behalf.
-pub(crate) fn tick_and_poll_remote<S>(
-    state: &WebSessionState<S>,
-    rx: &mpsc::Receiver<HostCmdMsg<S>>,
-) where
+pub(crate) fn tick_and_poll_remote<S>(state: &WebSessionState<S>, rx: &mpsc::Receiver<HostCmd<S>>)
+where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     let mut state = state.lock();
@@ -49,12 +43,10 @@ pub(crate) fn tick_and_poll_remote<S>(
         state.stream = None;
     }
 
-    drain_host_channel(state, rx, |reply| {
-        if let HostReply::Attached(started) = reply {
-            BRIDGE_PLAYBACK.with(|playback| {
-                *playback.borrow_mut() = Some(Arc::clone(&started.control.playback));
-            });
-        }
+    drain_host_channel(state, rx, |started| {
+        BRIDGE_PLAYBACK.with(|playback| {
+            *playback.borrow_mut() = Some(Arc::clone(&started.control.playback));
+        });
     });
 }
 

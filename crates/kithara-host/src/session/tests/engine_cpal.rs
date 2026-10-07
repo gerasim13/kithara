@@ -9,7 +9,7 @@ use kithara_test_utils::{
 use kithara_warp::BeatGridId;
 
 use super::graph::GraphSession;
-use crate::session::protocol::{HostCmd, HostReply};
+use crate::session::protocol::HostCmd;
 
 fn start_stream(ctx: &mut FirewheelContext, sample_rate: u32) -> Result<CpalStream, String> {
     let config = firewheel::cpal::CpalConfig {
@@ -35,19 +35,24 @@ fn a_deck_runs_the_cpal_stream_from_attach_to_detach() {
         DeckMixerConfig::default(),
     );
 
-    assert!(matches!(
-        graph.exec_host(HostCmd::Attach { registration }),
-        HostReply::Attached(_)
-    ));
+    assert!(
+        graph
+            .ask(|reply| HostCmd::Attach {
+                registration,
+                reply,
+            })
+            .is_ok()
+    );
     assert!(
         graph.ctx_mut().is_some(),
         "an attached deck runs the stream"
     );
 
-    assert!(matches!(
-        graph.exec_host(HostCmd::Detach { grid_id }),
-        HostReply::Ok
-    ));
+    assert!(
+        graph
+            .ask(|reply| HostCmd::Detach { grid_id, reply })
+            .is_ok()
+    );
     assert!(
         graph.ctx_mut().is_none(),
         "the last deck the session hands back takes the stream with it"

@@ -7,10 +7,7 @@ use kithara_worker::TaskControl;
 use super::{OfflineSessionError, task::OfflineMsg};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::session::decks::{DeckInbox, DeckMsg};
-use crate::session::{
-    HostCmd, HostDispatcher, HostReply,
-    protocol::{HostCmdMsg, HostDispatchError},
-};
+use crate::session::{HostCmd, HostDispatcher, protocol::HostDispatchError};
 
 pub(crate) struct OfflineSessionClient<S> {
     cmd_tx: Mutex<mpsc::Sender<OfflineMsg<S>>>,
@@ -23,29 +20,6 @@ impl<S> OfflineSessionClient<S> {
             control,
             cmd_tx: Mutex::new(cmd_tx),
         }
-    }
-
-    fn call(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
-        let (reply_tx, reply_rx) = mpsc::channel();
-        let message = OfflineMsg::Host(HostCmdMsg { cmd, reply_tx });
-        if let Err(message) = self.send(message) {
-            let OfflineMsg::Host(message) = *message else {
-                return Err(HostDispatchError::after_send(PlayError::Internal(
-                    "offline Host command changed protocol variant before send".into(),
-                )));
-            };
-            return Err(HostDispatchError::before_send(
-                PlayError::SessionGone {
-                    reason: "offline session stopped accepting commands",
-                },
-                message.cmd,
-            ));
-        }
-        reply_rx.recv().map_err(|_| {
-            HostDispatchError::after_send(PlayError::SessionGone {
-                reason: "offline session dropped the reply channel",
-            })
-        })
     }
 
     pub(crate) fn position(&self) -> Result<u64, OfflineSessionError> {
@@ -91,8 +65,12 @@ impl<S: Send + Sync + 'static> HostDispatcher<S> for OfflineSessionClient<S> {
         ConsumerWakeMode::ImmediateOffRt
     }
 
-    fn exec_host(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
-        self.call(cmd)
+    fn dispatch(&self, cmd: HostCmd<S>) -> Result<(), HostDispatchError> {
+        self.send(OfflineMsg::Host(cmd)).map_err(|_| {
+            HostDispatchError::NotTaken(PlayError::SessionGone {
+                reason: "offline session stopped accepting commands",
+            })
+        })
     }
 }
 

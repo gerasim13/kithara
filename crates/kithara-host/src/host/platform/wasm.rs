@@ -290,7 +290,10 @@ mod tests {
     use crate::{
         HostSettings, consts,
         host::owner::SessionRoot,
-        session::{HostCmd, HostDispatcher, HostReply, HostRoot, protocol::HostDispatchError},
+        session::{
+            HostCmd, HostDispatcher, HostRoot,
+            protocol::{HostDispatchError, answer},
+        },
     };
 
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -359,29 +362,21 @@ mod tests {
             ConsumerWakeMode::RealtimeDeferred
         }
 
-        fn exec_host(
-            &self,
-            cmd: HostCmd<TestPools>,
-        ) -> Result<HostReply, HostDispatchError<TestPools>> {
-            let HostCmd::Detach { grid_id } = cmd else {
+        fn dispatch(&self, cmd: HostCmd<TestPools>) -> Result<(), HostDispatchError> {
+            let HostCmd::Detach { grid_id, reply } = cmd else {
                 panic!("unexpected fixture Host command")
             };
-            match self.detach {
-                Outcome::SessionGone => Err(HostDispatchError::before_send(
-                    PlayError::SessionGone {
+            let detached = match self.detach {
+                Outcome::SessionGone => {
+                    return Err(HostDispatchError::NotTaken(PlayError::SessionGone {
                         reason: "fixture detach",
-                    },
-                    HostCmd::Detach { grid_id },
-                )),
-                Outcome::OtherError => Ok(HostReply::Err(PlayError::Internal(
-                    "fixture detach failed".into(),
-                ))),
-                Outcome::Ok => Ok(self
-                    .root
-                    .borrow_mut()
-                    .detach(grid_id)
-                    .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok)),
-            }
+                    }));
+                }
+                Outcome::OtherError => Err(PlayError::Internal("fixture detach failed".into())),
+                Outcome::Ok => self.root.borrow_mut().detach(grid_id).map_err(Into::into),
+            };
+            answer(&reply, detached);
+            Ok(())
         }
     }
 

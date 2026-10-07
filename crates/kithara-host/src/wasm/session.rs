@@ -7,12 +7,12 @@ use kithara_warp::BeatGridId;
 
 use crate::{
     Host, PlayError,
-    session::{self as host_session, RootView, protocol::HostCmdMsg, web::WebSessionState},
+    session::{self as host_session, RootView, protocol::HostCmd, web::WebSessionState},
 };
 
 fn assert_message_send<S: Send + Sync>() {
     const fn assert_send<T: Send>() {}
-    assert_send::<HostCmdMsg<S>>();
+    assert_send::<HostCmd<S>>();
 }
 
 /// Worker-side endpoint for the canonical Host owned by the main thread.
@@ -20,7 +20,7 @@ fn assert_message_send<S: Send + Sync>() {
 pub struct HostSender<S> {
     id: BeatGridId,
     root_view: RootView,
-    tx: mpsc::Sender<HostCmdMsg<S>>,
+    tx: mpsc::Sender<HostCmd<S>>,
 }
 
 /// Main-thread receiver for one canonical Host command route.
@@ -30,11 +30,11 @@ pub struct HostReceiver<S> {
 }
 
 pub(crate) struct HostRoute<S> {
-    receiver: Mutex<Option<mpsc::Receiver<HostCmdMsg<S>>>>,
+    receiver: Mutex<Option<mpsc::Receiver<HostCmd<S>>>>,
 }
 
 impl<S> HostRoute<S> {
-    fn new(receiver: mpsc::Receiver<HostCmdMsg<S>>) -> Self {
+    fn new(receiver: mpsc::Receiver<HostCmd<S>>) -> Self {
         Self {
             receiver: Mutex::new(Some(receiver)),
         }

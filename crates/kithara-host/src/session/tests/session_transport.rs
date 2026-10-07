@@ -14,7 +14,7 @@ use super::ring::{ManualRingConfig, ManualRingSession};
 use crate::{
     consts,
     host::HostSettingsChange,
-    session::{HostCmd, HostReply, TransportEvent},
+    session::{HostCmd, TransportEvent},
 };
 
 fn session(block_frames: u32, capacity_blocks: usize) -> ManualRingSession {
@@ -33,14 +33,16 @@ fn register_transport_events(session: &ManualRingSession) -> EventReceiver<Trans
         pools(),
         kithara_play::DeckMixerConfig::default(),
     );
-    match session
-        .exec_host(HostCmd::Attach { registration })
+    if let Err(error) = session
+        .ask(|reply| HostCmd::Attach {
+            registration,
+            reply,
+        })
         .expect("invariant: the deck reaches the session")
     {
-        HostReply::Attached(_) => events,
-        HostReply::Err(error) => panic!("the session refused the deck: {error}"),
-        HostReply::Ok => panic!("unexpected attach reply"),
+        panic!("the session refused the deck: {error}");
     }
+    events
 }
 
 fn drain_transport_events(events: &mut EventReceiver<TransportEvent>) -> Vec<TransportEvent> {
@@ -57,16 +59,15 @@ fn drain_transport_events(events: &mut EventReceiver<TransportEvent>) -> Vec<Tra
 
 fn set_tempo_at(session: &ManualRingSession, beats_per_minute: f64, at: When<SessionFrame>) {
     let tempo = Tempo::new(beats_per_minute).expect("invariant: test tempo is valid");
-    match session
-        .exec_host(HostCmd::Configure {
+    if let Err(error) = session
+        .ask(|reply| HostCmd::Configure {
             at,
             change: HostSettingsChange::Tempo(tempo),
+            reply,
         })
         .expect("invariant: tempo command reaches the session")
     {
-        HostReply::Ok => {}
-        HostReply::Err(error) => panic!("tempo command failed: {error}"),
-        HostReply::Attached(_) => panic!("unexpected tempo command reply"),
+        panic!("tempo command failed: {error}");
     }
 }
 

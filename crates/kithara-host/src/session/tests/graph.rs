@@ -4,13 +4,14 @@ use firewheel::FirewheelContext;
 use kithara_bufpool::HasPool;
 use kithara_command::Live;
 use kithara_effects::LimiterConfig;
+use kithara_platform::sync::mpsc;
 use kithara_play::SessionTransportSnapshot;
 use kithara_test_utils::bufpool::TestPools;
 use kithara_warp::BeatGridId;
 
 use super::super::{
     dispatch::{run_host_cmd, tick_session},
-    protocol::{HostCmd, HostReply, SessionError},
+    protocol::{HostCmd, Reply, SessionError},
     state::{HostRoot, RootView, SessionState},
     transport::observe_commits,
 };
@@ -50,9 +51,15 @@ where
         tick_session(&mut self.state)
     }
 
-    #[must_use]
-    pub(crate) fn exec_host(&mut self, cmd: HostCmd<S>) -> HostReply {
-        run_host_cmd(&mut self.state, cmd)
+    /// Runs `cmd`, which the session answers through the reply it carries.
+    pub(crate) fn run(&mut self, cmd: HostCmd<S>) {
+        run_host_cmd(&mut self.state, cmd);
+    }
+
+    /// Runs the command `command` builds around its reply and takes the
+    /// answer; see [`ask`].
+    pub(crate) fn ask<A>(&mut self, command: impl FnOnce(Reply<A>) -> HostCmd<S>) -> A {
+        ask(&mut self.state, command)
     }
 
     pub(crate) fn stream_mut(&mut self) -> Option<&mut T> {
@@ -120,6 +127,22 @@ pub(crate) fn empty_root(sample_rate: NonZeroU32) -> (HostRoot, RootView) {
         HostSettings::builder().sample_rate(sample_rate).build(),
     );
     (root, root_view)
+}
+
+/// Runs the command `command` builds around its reply on `state` and takes the
+/// answer, which the session gives before the command returns.
+pub(crate) fn ask<T, S, A>(
+    state: &mut SessionState<T, S>,
+    command: impl FnOnce(Reply<A>) -> HostCmd<S>,
+) -> A
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    let (reply, answer) = mpsc::channel();
+    run_host_cmd(state, command(reply));
+    answer
+        .try_recv()
+        .expect("the session answers every command it runs")
 }
 
 /// Brings the Host grid up to what the render graph committed, then reads

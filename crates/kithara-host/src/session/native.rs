@@ -17,7 +17,7 @@ use tracing::{debug, warn};
 use super::{
     decks::{DeckInbox, DeckMsg, Decks},
     dispatch::{run_host_cmd, tick_session},
-    protocol::{HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply},
+    protocol::{HostCmd, HostDispatchError, HostDispatcher, Reply, answer},
     queue::HostProtocol,
     state::{HostRoot, RootView, SessionState},
 };
@@ -26,7 +26,7 @@ use crate::{HostSettings, consts, error::PlayError, rt::SessionOutput};
 /// What the native session thread takes: the Host's commands and the
 /// messages for the decks it holds.
 enum EngineMsg<S> {
-    Host(HostCmdMsg<S>),
+    Host(HostCmd<S>),
     Deck(DeckMsg),
 }
 
@@ -34,34 +34,17 @@ pub(crate) struct SessionClient<S> {
     cmd_tx: Mutex<mpsc::Sender<EngineMsg<S>>>,
 }
 
-impl<S> SessionClient<S> {
-    fn call(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
-        let (reply_tx, reply_rx) = mpsc::channel();
-        let message = EngineMsg::Host(HostCmdMsg { cmd, reply_tx });
-        if let Err(mpsc::SendError(EngineMsg::Host(message))) = self.cmd_tx.lock().send(message) {
-            return Err(HostDispatchError::before_send(
-                PlayError::SessionGone {
-                    reason: "session thread stopped accepting commands",
-                },
-                message.cmd,
-            ));
-        }
-        let reply = reply_rx.recv().map_err(|_| {
-            HostDispatchError::after_send(PlayError::SessionGone {
-                reason: "session thread dropped the reply channel",
-            })
-        })?;
-        Ok(reply)
-    }
-}
-
 impl<S: Send + Sync + 'static> HostDispatcher<S> for SessionClient<S> {
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::RealtimeDeferred
     }
 
-    fn exec_host(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
-        self.call(cmd)
+    fn dispatch(&self, cmd: HostCmd<S>) -> Result<(), HostDispatchError> {
+        self.cmd_tx.lock().send(EngineMsg::Host(cmd)).map_err(|_| {
+            HostDispatchError::NotTaken(PlayError::SessionGone {
+                reason: "session thread stopped accepting commands",
+            })
+        })
     }
 }
 
@@ -90,13 +73,11 @@ fn complete_shutdown<T, S>(
     cmd_rx: mpsc::Receiver<EngineMsg<S>>,
     state: SessionState<T, S>,
     decks: Decks,
-    reply_tx: &mpsc::Sender<HostReply>,
+    reply: &Reply<()>,
 ) {
     drop(cmd_rx);
     stop(state, decks);
-    if reply_tx.send(HostReply::Ok).is_err() {
-        warn!("[KITHARA-ROUTE] native shutdown reply receiver dropped");
-    }
+    answer(reply, ());
 }
 
 /// Waits for the next message: until `deadline` while `active`, so the caller
@@ -172,17 +153,12 @@ fn engine_thread<T, S>(
             break;
         };
         match message {
-            Some(EngineMsg::Host(HostCmdMsg { cmd, reply_tx })) => {
-                if matches!(&cmd, HostCmd::Shutdown) {
-                    complete_shutdown(cmd_rx, state, decks, &reply_tx);
-                    debug!("[KITHARA-ROUTE] native session worker stopped");
-                    return;
-                }
-                let reply = run_host_cmd(&mut state, cmd);
-                if reply_tx.send(reply).is_err() {
-                    warn!("[KITHARA-ROUTE] native session reply receiver dropped");
-                }
+            Some(EngineMsg::Host(HostCmd::Shutdown(reply))) => {
+                complete_shutdown(cmd_rx, state, decks, &reply);
+                debug!("[KITHARA-ROUTE] native session worker stopped");
+                return;
             }
+            Some(EngineMsg::Host(cmd)) => run_host_cmd(&mut state, cmd),
             Some(EngineMsg::Deck(message)) => decks.run(message),
             None => {}
         }
@@ -289,6 +265,7 @@ mod tests {
         HostSettingsChange, MetronomeConfigChange,
         session::{
             decks::SessionDecks,
+            protocol::ask,
             tests::{
                 deck_probe::{Seen, next, probe, so_far, ticks},
                 graph::empty_root,
@@ -316,10 +293,7 @@ mod tests {
     }
 
     fn shut_down(client: &SessionClient<TestPools>) {
-        assert!(matches!(
-            client.exec_host(HostCmd::Shutdown),
-            Ok(HostReply::Ok)
-        ));
+        assert!(ask(client, HostCmd::Shutdown).is_ok());
     }
 
     /// Commands posted before the deck was held woke no one, so the session
@@ -510,11 +484,12 @@ mod tests {
             .expect("the transport's own tempo reaches the read-only Host view without a command");
 
         assert!(matches!(
-            client.exec_host(HostCmd::Configure {
+            ask(&*client, |reply| HostCmd::Configure {
                 change: HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(true)),
                 at: When::Next,
+                reply,
             }),
-            Ok(HostReply::Ok)
+            Ok(Ok(()))
         ));
         let mut on_blocks = 0;
         runtime
@@ -540,11 +515,12 @@ mod tests {
             });
 
         assert!(matches!(
-            client.exec_host(HostCmd::Configure {
+            ask(&*client, |reply| HostCmd::Configure {
                 change: HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(false)),
                 at: When::Next,
+                reply,
             }),
-            Ok(HostReply::Ok)
+            Ok(Ok(()))
         ));
         runtime
             .block_on(wait_until(
@@ -565,9 +541,6 @@ mod tests {
                 },
             ))
             .expect("the muted capture spans more than one beat");
-        assert!(matches!(
-            client.exec_host(HostCmd::Shutdown),
-            Ok(HostReply::Ok)
-        ));
+        assert!(ask(&*client, HostCmd::Shutdown).is_ok());
     }
 }
