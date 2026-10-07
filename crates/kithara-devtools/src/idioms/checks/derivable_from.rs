@@ -6,12 +6,6 @@ use crate::common::{fix::FixOutcome, violation::Violation};
 pub(crate) struct DerivableFrom;
 
 impl Check for DerivableFrom {
-    /// This check reads one file to judge it, so the driver keeps its
-    /// verdict per file. See `Check::caches_by_file`.
-    fn caches_by_file(&self) -> bool {
-        true
-    }
-
     fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
         derivable_support::fix(
             ctx,

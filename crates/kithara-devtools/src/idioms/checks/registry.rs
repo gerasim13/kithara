@@ -48,20 +48,19 @@ impl CheckPolicy {
 pub(crate) trait Check: Sync {
     /// Whether this check's findings about a file depend on that file alone.
     ///
-    /// A check declares this; it is never inferred, and the default is `false`
-    /// because a wrong declaration fails silently. Declaring it lets the
-    /// driver run the check over one file at a time and keep each verdict
-    /// beside the digest of the bytes it judged, so an unchanged file is not
-    /// read, parsed or analysed again. The check itself runs as it always
-    /// does, over a scan that holds the one file.
+    /// Most checks read one file to judge it, so the driver runs a check over
+    /// one file at a time and keeps each verdict beside the digest of the
+    /// bytes it judged: an unchanged file is not read, parsed or analysed
+    /// again. The check itself runs as it always does, over a scan that holds
+    /// the one file.
     ///
-    /// A check that correlates files must not declare it: whatever it reads
+    /// A check that correlates files answers `false`: whatever it reads
     /// beyond the file - another file, the crate graph, a tool - is in no key,
     /// so a change there would leave a kept verdict standing. The tests below
-    /// run every declaring check over a directory and again over each of its
-    /// files alone, and the two must agree.
+    /// run every check that keeps this answer over a directory and again over
+    /// each of its files alone, and the two must agree.
     fn caches_by_file(&self) -> bool {
-        false
+        true
     }
     fn fix(&self, _ctx: &Context<'_>) -> Result<FixOutcome> {
         Ok(FixOutcome::default())
@@ -173,10 +172,6 @@ mod per_file_declaration_tests {
     struct Neighbourly;
 
     impl Check for Neighbourly {
-        fn caches_by_file(&self) -> bool {
-            true
-        }
-
         fn id(&self) -> &'static str {
             "neighbourly"
         }

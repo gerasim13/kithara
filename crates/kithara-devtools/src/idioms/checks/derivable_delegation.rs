@@ -35,12 +35,6 @@ pub(crate) mod consts {
 pub(crate) struct DerivableDelegation;
 
 impl Check for DerivableDelegation {
-    /// This check reads one file to judge it, so the driver keeps its
-    /// verdict per file. See `Check::caches_by_file`.
-    fn caches_by_file(&self) -> bool {
-        true
-    }
-
     fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
         let cfg = &ctx.config.thresholds.derivable_delegation;
         if !cfg.enabled {
