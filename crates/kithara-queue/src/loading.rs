@@ -7,7 +7,8 @@ use crate::error::QueueError;
 
 /// What a task beside a track's load reports to the queue that owns the
 /// track.
-pub(crate) enum LoadReport {
+#[doc(hidden)]
+pub enum LoadReport {
     /// The downloader found the load's transfer slow. `watch` ends with the
     /// load, so a report from a load that ended since is past news.
     Slow { id: TrackId, watch: CancelToken },

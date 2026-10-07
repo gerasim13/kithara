@@ -1,79 +1,44 @@
 use kithara_bufpool::HasPool;
-use kithara_command::Refused;
+use kithara_command::{Refused, When};
 use kithara_events::TrackId;
 use kithara_play::{
-    CrossfadeSettings, EqBandConfig, InterruptionKind, PlayError, player::PlayerCommand,
+    CrossfadeSettings, EqBandConfig, InterruptionKind, PlayError, Position, TrackSettingsChange,
 };
 
-use super::{QueueControl, Transition, command::QueueCommand};
+use super::{QueueCommand, QueueControl, Transition};
 use crate::{
-    error::QueueError,
-    navigation::{ActionAtItemEnd, PlaybackOrder, RepeatMode},
-    track::TrackSource,
+    ActionAtItemEnd, PlaybackOrder, QueueError, QueueSettingsChange, RepeatMode, TrackSource,
 };
 
 impl<S> QueueControl<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// Append a track. Loading starts immediately in the background.
-    /// The id is allocated from the global counter via
-    /// [`TrackId::allocate`]; use [`Self::append_with_id`] when the
-    /// caller owns the id (FFI item pre-allocation).
-    ///
+    /// Appends an item; only a transition target or automatic preload is opened.
     /// # Errors
-    ///
-    /// Returns [`QueueError::Play`] after the resident player is closed.
+    /// Returns the queue's refusal or a closed mailbox.
     pub fn append<T: Into<TrackSource<S>>>(&self, source: T) -> Result<TrackId, QueueError> {
         self.append_with_id(TrackId::allocate(), source)
     }
 
-    /// Append a track with a caller-supplied id. The id MUST come from
-    /// [`TrackId::allocate`] so it stays inside the process-wide
-    /// monotonic address space. Used by the FFI layer where the item
-    /// reserves its id at construction and surfaces it as `audioId`
-    /// before insert.
-    ///
+    /// Appends an item using an identity allocated by the caller.
     /// # Errors
-    ///
-    /// Returns [`QueueError::Play`] after the resident player is closed.
+    /// Returns the queue's refusal or a closed mailbox.
     pub fn append_with_id<T: Into<TrackSource<S>>>(
         &self,
         id: TrackId,
         source: T,
     ) -> Result<TrackId, QueueError> {
-        let source = source.into();
-        self.call(QueueCommand::Append { id, source })?;
+        self.call(QueueCommand::Append {
+            id,
+            source: source.into(),
+        })?;
         Ok(id)
     }
 
-    /// Remove all tracks from the queue. Dropping the records aborts
-    /// their in-flight loads.
-    ///
+    /// Inserts an item after an identity, or at the head.
     /// # Errors
-    ///
-    /// Returns [`QueueError::Play`] after the resident player is closed, and
-    /// the deck's refusal to clear; the queue keeps its tracks then.
-    pub fn clear(&self) -> Result<(), QueueError> {
-        self.call(QueueCommand::Clear)
-    }
-
-    /// Close the resident player, then irreversibly cancel queue-owned work.
-    ///
-    /// # Errors
-    ///
-    /// Returns the player detach failure without cancelling the queue token,
-    /// so the owner can retry.
-    pub fn close(&self) -> Result<(), QueueError> {
-        self.call(QueueCommand::Close)
-    }
-
-    /// Insert a track after the given id, or at the head when `after` is
-    /// `None`. Loading starts immediately.
-    ///
-    /// # Errors
-    /// Returns [`QueueError::UnknownTrackId`] if `after` does not match any
-    /// track.
+    /// Returns an unknown identity, the queue's refusal or a closed mailbox.
     pub fn insert<T: Into<TrackSource<S>>>(
         &self,
         source: T,
@@ -82,237 +47,191 @@ where
         self.insert_with_id(TrackId::allocate(), source, after)
     }
 
-    /// Insert a track with a caller-supplied id. See
-    /// [`Self::append_with_id`] for why the id MUST come from
-    /// [`TrackId::allocate`].
-    ///
+    /// Inserts an item using an identity allocated by the caller.
     /// # Errors
-    /// Returns [`QueueError::UnknownTrackId`] if `after` does not match
-    /// any track.
+    /// Returns an unknown identity, the queue's refusal or a closed mailbox.
     pub fn insert_with_id<T: Into<TrackSource<S>>>(
         &self,
         id: TrackId,
         source: T,
         after: Option<TrackId>,
     ) -> Result<TrackId, QueueError> {
-        let source = source.into();
-        self.call(QueueCommand::Insert { id, source, after })?;
+        self.call(QueueCommand::Insert {
+            id,
+            source: source.into(),
+            after,
+        })?;
         Ok(id)
     }
 
-    /// Advance to the next track per navigation rules; the queue stays where
-    /// it is when it has ended (and
-    /// [`RepeatMode::Off`](crate::navigation::RepeatMode::Off) is active).
-    ///
-    /// # Errors
-    ///
-    /// Returns a queue or player error when the successor cannot be selected.
-    pub fn next(&self, transition: Transition) -> Result<(), QueueError> {
-        self.call(QueueCommand::Next(transition))
-    }
-
-    /// The platform interrupted, or released, the audio output.
-    ///
-    /// Recording the fact is all this does: an interruption leaves the native
-    /// output unscheduled, and restoring it is the route-invalidation path.
-    pub fn notify_interruption(&self, kind: InterruptionKind) {
-        let _ = self.call_player(PlayerCommand::NotifyInterruption(kind));
-    }
-
-    /// Pause playback and freeze the queue-visible head position.
-    pub fn pause(&self) {
-        let _ = self.call(QueueCommand::Pause);
-    }
-
-    /// Starts what the deck holds, handing it the loaded track it lacks or
-    /// retaining the selection until loading finishes.
     pub fn play(&self) {
-        let _ = self.call(QueueCommand::Play);
+        let _ = self.call(QueueCommand::Play { at: When::Next });
+    }
+    pub fn pause(&self) {
+        let _ = self.call(QueueCommand::Pause { at: When::Next });
     }
 
-    /// Go back to the previous track; the queue stays where it is at index 0.
-    ///
+    /// Seeks the sounding track in media seconds.
     /// # Errors
-    ///
-    /// Returns a queue or player error when the predecessor cannot be selected.
-    pub fn previous(&self, transition: Transition) -> Result<(), QueueError> {
-        self.call(QueueCommand::Previous(transition))
-    }
-
-    /// Remove a track from the queue by id.
-    ///
-    /// If the removed track is currently playing:
-    /// - with tracks remaining → switches to the next (or previous if
-    ///   we were at the tail) with an immediate cut.
-    /// - with no tracks remaining → pauses the player.
-    ///
-    /// # Errors
-    /// Returns [`QueueError::UnknownTrackId`] if `id` is not in the queue.
-    pub fn remove(&self, id: TrackId) -> Result<(), QueueError> {
-        self.call(QueueCommand::Remove(id))
-    }
-
-    /// Reset all EQ bands to 0 dB.
-    ///
-    /// # Errors
-    /// Returns [`QueueError::Play`] with the underlying player's refusal.
-    pub fn reset_eq(&self) -> Result<(), QueueError> {
-        self.call_player(PlayerCommand::ResetEq)
-    }
-
-    /// Seek within the currently-playing track.
-    ///
-    /// Seek-hang detection is not handled here: the audio pipeline's
-    /// own `#[hang_watchdog]` instrumentation (e.g. `Audio::read`,
-    /// `Stream::read`, `decode_next_chunk`) already panics with a
-    /// stacktrace and context dump when no progress is observed. Adding
-    /// a second Queue-level watchdog would just duplicate those panics.
-    ///
-    /// The landed position is reconciled by the worker after it applies the
-    /// seek; a target beyond the known track duration is accepted and lands
-    /// at the end.
-    ///
-    /// # Errors
-    /// Returns [`QueueError::Play`] if the player reports a seek failure.
+    /// Returns an invalid position, the track's refusal or a closed mailbox.
     pub fn seek(&self, seconds: f64) -> Result<(), QueueError> {
-        self.call(QueueCommand::Seek(seconds))
+        let to = Position::try_from_secs_f64(seconds).map_err(|_| PlayError::InvalidParameter {
+            name: "position".into(),
+            value: seconds as f32,
+        })?;
+        self.call(QueueCommand::Seek { to })
     }
 
-    /// Select a track by id, applying the given [`Transition`]. If the
-    /// track is still loading or pending, both the id and the
-    /// transition are stashed and applied when loading finishes.
-    ///
+    /// Selects an identity; the published current item changes on its receipt.
     /// # Errors
-    /// Returns [`QueueError::UnknownTrackId`] if `id` is not in the queue,
-    /// [`QueueError::NotReady`] if the track is in a terminal failed state,
-    /// or [`QueueError::Play`] if the deck refuses the selection.
+    /// Returns an unknown identity, the track's refusal or a closed mailbox.
     pub fn select(&self, id: TrackId, transition: Transition) -> Result<(), QueueError> {
         self.call(QueueCommand::Select { id, transition })
     }
 
-    pub fn set_action_at_item_end(&self, action: ActionAtItemEnd) {
-        let _ = self.call(QueueCommand::SetActionAtItemEnd(action));
-    }
-
-    /// Update the profile captured by future transitions. A successor armed
-    /// for the other kind of link comes off the deck, to be armed again for
-    /// this one.
-    ///
+    /// Moves after the last requested target.
     /// # Errors
-    /// Returns an error when any profile value is invalid.
-    pub fn set_crossfade_settings(&self, settings: CrossfadeSettings) -> Result<(), QueueError> {
-        self.call(QueueCommand::SetCrossfadeSettings(settings))
+    /// Returns the track's refusal or a closed mailbox.
+    pub fn next(&self, transition: Transition) -> Result<(), QueueError> {
+        self.call(QueueCommand::Next(transition))
     }
 
-    /// Set the default playback rate.
-    ///
+    /// Selects the previous identity in navigation history.
     /// # Errors
-    /// Returns [`QueueError::Play`] with the underlying player's refusal:
-    /// [`PlayError::InvalidParameter`] for a rate that is not a finite number,
-    /// or the deck's refusal of the new rate.
-    pub fn set_default_rate(&self, rate: f32) -> Result<(), QueueError> {
-        self.call_player(PlayerCommand::SetDefaultRate(rate))
+    /// Returns the track's refusal or a closed mailbox.
+    pub fn previous(&self, transition: Transition) -> Result<(), QueueError> {
+        self.call(QueueCommand::Previous(transition))
     }
 
-    /// Set gain for an EQ band.
-    ///
+    /// Removes an item.
     /// # Errors
-    /// Returns [`QueueError::Play`] with the underlying player's refusal.
-    pub fn set_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), QueueError> {
-        self.call_player(PlayerCommand::SetEqGain { band, gain_db })
+    /// Returns an unknown identity, a release refusal or a closed mailbox.
+    pub fn remove(&self, id: TrackId) -> Result<(), QueueError> {
+        self.call(QueueCommand::Remove(id))
     }
 
-    /// Replace the live player's EQ band layout.
-    ///
+    /// Removes all items and releases every active track.
     /// # Errors
-    /// Returns [`QueueError::Play`] with the underlying player's refusal.
-    pub fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), QueueError> {
-        self.call_player(PlayerCommand::SetEqLayout(layout))
+    /// Returns a release refusal or a closed mailbox.
+    pub fn clear(&self) -> Result<(), QueueError> {
+        self.call(QueueCommand::RemoveAll)
     }
 
-    /// Set the deck's mix level, a linear amplitude in `0.0..=1.0` over its volume.
-    ///
+    /// Replaces the queue's items.
     /// # Errors
-    /// Returns [`QueueError::Play`] with the underlying player's refusal: [`PlayError::MixLevel`] for a level
-    /// outside `0.0..=1.0`, or the deck's refusal of the change.
-    pub fn set_level(&self, level: f32) -> Result<(), QueueError> {
-        self.call_player(PlayerCommand::SetLevel(level))
-    }
-
-    /// Set the mute flag.
-    ///
-    /// # Errors
-    /// Returns [`QueueError::Play`] with the underlying player's refusal.
-    pub fn set_muted(&self, muted: bool) -> Result<(), QueueError> {
-        self.call_player(PlayerCommand::SetMuted(muted))
-    }
-
-    pub fn set_playback_order(&self, order: PlaybackOrder) {
-        let _ = self.call(QueueCommand::SetPlaybackOrder(order));
-    }
-
-    /// Set the live playback rate (mirrors into the tempo-mode sibling
-    /// so a running key-locked stretch tracks the move).
-    ///
-    /// # Errors
-    /// Returns [`QueueError::Play`] with the underlying player's refusal:
-    /// [`PlayError::InvalidParameter`] for a rate that is not a finite number,
-    /// or the lanes' or the deck's refusal of the new rate.
-    pub fn set_rate(&self, rate: f32) -> Result<(), QueueError> {
-        self.call_player(PlayerCommand::SetRate(rate))
-    }
-
-    /// Set repeat mode.
-    pub fn set_repeat(&self, mode: RepeatMode) {
-        let _ = self.call(QueueCommand::SetRepeat(mode));
-    }
-
-    /// Replace the entire queue with the given sources.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`QueueError::Play`] after the resident player is closed, and
-    /// the deck's refusal to clear; the queue keeps its tracks then.
+    /// Returns a release refusal or a closed mailbox.
     pub fn set_tracks<I, T>(&self, sources: I) -> Result<(), QueueError>
     where
         I: IntoIterator<Item = T>,
         T: Into<TrackSource<S>>,
     {
-        let sources = sources.into_iter().map(Into::into).collect();
-        self.call(QueueCommand::SetTracks(sources))
+        self.call(QueueCommand::SetTracks(
+            sources.into_iter().map(Into::into).collect(),
+        ))
     }
 
-    /// Set the volume (0.0..=1.0).
-    ///
+    /// Requests an owner pass.
     /// # Errors
-    /// Returns [`QueueError::Play`] with the underlying player's refusal.
-    pub fn set_volume(&self, volume: f32) -> Result<(), QueueError> {
-        self.call_player(PlayerCommand::SetVolume(volume))
-    }
-
-    /// Periodic tick: drives `PlayerImpl::tick` and drains queued engine
-    /// events: the cursor follows `CurrentItemChanged` to an item the
-    /// deck led on to, which is forwarded as
-    /// [`QueueEvent::CurrentTrackChanged`](crate::event::QueueEvent::CurrentTrackChanged),
-    /// and `ItemDidPlayToEnd` (filtered) acts where the deck led nowhere.
-    ///
-    /// # Errors
-    /// Returns [`QueueError::Play`] with `PlayerImpl::tick`'s failure.
+    /// Returns the queue's refusal or a closed mailbox.
     pub fn tick(&self) -> Result<(), QueueError> {
         self.call(QueueCommand::Tick)
     }
 
-    /// Posts `command` and waits for the queue's answer; a queue that was
-    /// dropped answers nothing, which reads as closed.
+    /// Releases the tracks and cancels queue-owned work.
+    /// # Errors
+    /// Returns a release refusal or a closed mailbox.
+    pub fn close(&self) -> Result<(), QueueError> {
+        self.call(QueueCommand::Close)
+    }
+
+    /// Changes the track speed across every active track.
+    /// # Errors
+    /// Returns the broadcast's refusal or a closed mailbox.
+    pub fn set_rate(&self, rate: f32) -> Result<(), QueueError> {
+        self.call(QueueCommand::ConfigureTrack(
+            TrackSettingsChange::Speed(rate),
+            When::Next,
+        ))
+    }
+
+    /// Changes the speed inherited by subsequent tracks.
+    /// # Errors
+    /// Returns the broadcast's refusal or a closed mailbox.
+    pub fn set_default_rate(&self, rate: f32) -> Result<(), QueueError> {
+        self.set_rate(rate)
+    }
+
+    /// Changes the next transition's crossfade profile.
+    /// # Errors
+    /// Returns an invalid profile or a closed mailbox.
+    pub fn set_crossfade_settings(&self, settings: CrossfadeSettings) -> Result<(), QueueError> {
+        self.call(QueueCommand::ConfigureQueue(
+            QueueSettingsChange::Crossfade(settings),
+            When::Next,
+        ))
+    }
+
+    pub fn set_repeat(&self, mode: RepeatMode) {
+        let _ = self.call(QueueCommand::SetRepeat(mode));
+    }
+    pub fn set_playback_order(&self, order: PlaybackOrder) {
+        let _ = self.call(QueueCommand::SetPlaybackOrder(order));
+    }
+    pub fn set_action_at_item_end(&self, action: ActionAtItemEnd) {
+        let _ = self.call(QueueCommand::SetActionAtItemEnd(action));
+    }
+
+    /// Forwards volume to the host owner.
+    /// # Errors
+    /// Returns the host's refusal or a closed mailbox.
+    pub fn set_volume(&self, volume: f32) -> Result<(), QueueError> {
+        self.call(QueueCommand::SetVolume(volume))
+    }
+
+    /// Forwards mix level to the host owner.
+    /// # Errors
+    /// Returns the host's refusal or a closed mailbox.
+    pub fn set_level(&self, level: f32) -> Result<(), QueueError> {
+        self.call(QueueCommand::SetLevel(level))
+    }
+
+    /// Forwards mute to the host owner.
+    /// # Errors
+    /// Returns the host's refusal or a closed mailbox.
+    pub fn set_muted(&self, muted: bool) -> Result<(), QueueError> {
+        self.call(QueueCommand::SetMuted(muted))
+    }
+
+    /// Forwards an EQ gain to the host owner.
+    /// # Errors
+    /// Returns the host's refusal or a closed mailbox.
+    pub fn set_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), QueueError> {
+        self.call(QueueCommand::SetEqGain { band, gain_db })
+    }
+
+    /// Forwards an EQ layout to the host owner.
+    /// # Errors
+    /// Returns the host's refusal or a closed mailbox.
+    pub fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), QueueError> {
+        self.call(QueueCommand::SetEqLayout(layout))
+    }
+
+    /// Requests flat host EQ gains.
+    /// # Errors
+    /// Returns the host's refusal or a closed mailbox.
+    pub fn reset_eq(&self) -> Result<(), QueueError> {
+        self.call(QueueCommand::ResetEq)
+    }
+
+    pub fn notify_interruption(&self, kind: InterruptionKind) {
+        let _ = self.call(QueueCommand::NotifyInterruption(kind));
+    }
+
     fn call(&self, command: QueueCommand<S>) -> Result<(), QueueError> {
         let ticket = self.postbox.post(command).map_err(|_| PlayError::Closed)?;
         ticket.wait().map_err(|refused| match refused {
             Refused::Owner(error) => error,
             Refused::Unanswered => PlayError::Closed.into(),
         })
-    }
-
-    fn call_player(&self, command: PlayerCommand) -> Result<(), QueueError> {
-        self.call(QueueCommand::Player(Box::new(command)))
     }
 }

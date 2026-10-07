@@ -3,7 +3,9 @@ use kithara_bufpool::HasPool;
 use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_platform::{CancelToken, time::Duration, tokio::runtime::Handle as RuntimeHandle};
-use kithara_play::{CrossfadeSettings, DeckMixerConfig, ResourcePrep, TrackSettings};
+use kithara_play::{
+    CrossfadeSettings, DeckMixerConfig, PlayerFactory, ResourcePrep, TrackFactory, TrackSettings,
+};
 
 use crate::{ActionAtItemEnd, PlaybackOrder, consts};
 
@@ -28,12 +30,22 @@ pub struct QueueSettings {
 /// store. A caller-supplied [`ResourceConfig`](kithara_play::ResourceConfig)
 /// retains its own store.
 #[derive(Patch, Config)]
-#[config(debug, builder(state_mod(vis = "pub")), fields(value))]
+#[config(debug, builder(start_fn(name = with_factory), state_mod(vis = "pub")), fields(value))]
 #[non_exhaustive]
-pub struct QueueConfig<S>
+pub struct QueueConfig<S, F = PlayerFactory>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    F: TrackFactory<S>,
 {
+    /// Builds every track this queue plays.
+    #[config(
+        skip = "injected track factory",
+        builder(start_fn),
+        patch(skip),
+        debug(skip)
+    )]
+    pub factory: F,
+
     /// The deck's mixer: its owner builds it from this when it registers the
     /// queue; the queue reads its slot count and fade lengths here.
     #[config(builder(default), patch(skip), debug(skip))]
@@ -96,6 +108,17 @@ where
     /// to the queue.
     #[config(sdk, builder(default))]
     pub action_at_item_end: ActionAtItemEnd,
+}
+
+impl<S> QueueConfig<S, PlayerFactory>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    /// Starts a queue configuration with the bare-track factory.
+    #[must_use]
+    pub fn builder() -> QueueConfigBuilder<S, PlayerFactory> {
+        Self::with_factory(PlayerFactory)
+    }
 }
 
 #[cfg(test)]

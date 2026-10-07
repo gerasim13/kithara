@@ -1,26 +1,52 @@
 use kithara_bufpool::HasPool;
+use kithara_command::Seq;
 use kithara_events::TrackId;
-use kithara_play::{Bound, ResourceSrc};
+pub use kithara_play::player::PlaybackView;
+use kithara_play::{Bound, CrossfadeSettings, ResourceSrc};
 
 use crate::{event::AdvanceReason, track::TrackSource};
 
-/// A transition by press and an automatic one alike: the item it goes to and
-/// the side of the frame the item enters on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Transition {
-    pub to: TrackId,
-    pub bound: Bound,
+/// The profile a caller requests for a track switch.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum Transition {
+    /// No crossfade; immediate cut.
+    None,
+    /// Use the queue's configured crossfade.
+    Crossfade,
+    /// Use an explicit crossfade profile.
+    CrossfadeWith { settings: CrossfadeSettings },
+}
+
+impl Transition {
+    /// Resolves the requested profile against the queue's default.
+    #[must_use]
+    pub const fn settings(self, default: CrossfadeSettings) -> CrossfadeSettings {
+        match self {
+            Self::None => CrossfadeSettings {
+                duration: 0.0,
+                ..default
+            },
+            Self::Crossfade => default,
+            Self::CrossfadeWith { settings } => settings,
+        }
+    }
 }
 
 /// The transition the queue carries out, and why.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Target {
+    pub(super) to: TrackId,
+    pub(super) bound: Bound,
+    pub(super) settings: CrossfadeSettings,
     pub(super) transition: Transition,
     pub(super) reason: AdvanceReason,
     /// Scheduled ahead of the current track's end rather than pressed: the
     /// navigation cursor moves once it applies, and it gives way when nothing
     /// sounds by the time it enters.
     pub(super) auto: bool,
+    /// The withdrawn transition whose stale receipt permits recomputation.
+    pub(super) stale: Option<Seq>,
 }
 
 /// Cached monotonic playback position; "no value yet" is the explicit

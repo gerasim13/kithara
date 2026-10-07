@@ -3,6 +3,7 @@
 use kithara_command::Seq;
 use kithara_events::TrackId;
 use kithara_play::{DeckSnapshot, Slot};
+use kithara_signal::SessionFrame;
 
 /// What an active track is to the queue.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,23 +34,30 @@ pub(super) struct Active<T> {
 /// The active tracks, never more than the mixer has slots; the queue assigns
 /// each its slot.
 pub(super) struct Slots<T> {
-    capacity: u16,
+    capacity: usize,
     active: Vec<Active<T>>,
+    fades: Vec<Option<SessionFrame>>,
 }
 
 impl<T> Slots<T> {
-    pub(super) fn new(capacity: u16) -> Self {
+    pub(super) fn new(capacity: usize) -> Self {
         Self {
             capacity,
-            active: Vec::with_capacity(usize::from(capacity)),
+            active: Vec::with_capacity(capacity),
+            fades: vec![None; capacity],
         }
     }
 
     /// The lowest slot no active track holds.
     pub(super) fn free_slot(&self) -> Option<Slot> {
         (0..self.capacity)
+            .find(|index| {
+                self.active
+                    .iter()
+                    .all(|active| usize::from(active.slot.get()) != *index)
+            })
+            .and_then(|index| u16::try_from(index).ok())
             .map(Slot::new)
-            .find(|slot| self.active.iter().all(|active| active.slot != *slot))
     }
 
     /// The track to evict for a new one: the quietest by the mixer's last
@@ -63,7 +71,14 @@ impl<T> Slots<T> {
             .iter()
             .enumerate()
             .filter(|(_, active)| evictable(active))
-            .min_by(|(_, a), (_, b)| gain(deck, a.slot).total_cmp(&gain(deck, b.slot)))
+            .min_by(|(_, first), (_, second)| {
+                match (self.fade_end(first.slot), self.fade_end(second.slot)) {
+                    (Some(first), Some(second)) => first.cmp(&second),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => gain(deck, first.slot).total_cmp(&gain(deck, second.slot)),
+                }
+            })
             .map(|(index, _)| index)
     }
 
@@ -72,7 +87,21 @@ impl<T> Slots<T> {
     }
 
     pub(super) fn remove(&mut self, index: usize) -> Active<T> {
-        self.active.remove(index)
+        let active = self.active.remove(index);
+        self.fades[usize::from(active.slot.get())] = None;
+        active
+    }
+
+    pub(super) fn fade_out(&mut self, slot: Slot, end: SessionFrame) {
+        self.fades[usize::from(slot.get())] = Some(end);
+    }
+
+    pub(super) fn clear_fade(&mut self, slot: Slot) {
+        self.fades[usize::from(slot.get())] = None;
+    }
+
+    fn fade_end(&self, slot: Slot) -> Option<SessionFrame> {
+        self.fades.get(usize::from(slot.get())).copied().flatten()
     }
 
     pub(super) fn position(&self, find: impl Fn(&Active<T>) -> bool) -> Option<usize> {

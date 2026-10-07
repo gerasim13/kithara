@@ -1,35 +1,41 @@
 use arc_swap::ArcSwap;
 use kithara_audio::AudioObserver;
 use kithara_bufpool::HasPool;
-use kithara_events::TrackId;
+use kithara_events::{EventReceiver, EventSet, TrackId};
 use kithara_platform::sync::Arc;
-
-use super::types::CachedPosition;
-use crate::{
-    navigation::{NavigationState, PlaybackOrder, RepeatMode},
-    track::{TrackEntry, TrackRow, TrackSource, Tracks},
+use kithara_play::{
+    EngineLoadSnapshot, Player, PlayerStatus, SlotSnapshot, TrackFactory, TrackSettings,
+    TrackSnapshot, TrackStatus as PlayingStatus,
 };
 
-/// What the queue last published: its rows, the navigation cursor and modes,
-/// and the cached position.
-struct QueueSnapshot<S>
+use super::{PlaybackView, Queue, QueueControl};
+use crate::{
+    ActionAtItemEnd, NavigationState, PlaybackOrder, QueueSettings, RepeatMode, TrackEntry,
+    TrackSource, TrackStatus,
+    track::{TrackRecord, TrackRow, Tracks},
+};
+
+/// The queue's published rows, sounding track and navigation settings.
+#[derive_where::derive_where(Clone)]
+pub struct QueueSnapshot<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    tracks: Arc<[TrackRow<S>]>,
-    /// The [`Tracks::revision`] `tracks` was built at.
+    pub current: Option<TrackId>,
+    pub track: Option<TrackSnapshot>,
+    pub settings: QueueSettings,
+    rows: Arc<[TrackRow<S>]>,
     revision: u64,
-    current: Option<TrackId>,
-    playback_order: PlaybackOrder,
-    repeat_mode: RepeatMode,
-    position: CachedPosition,
+    order: PlaybackOrder,
+    repeat: RepeatMode,
+    action: ActionAtItemEnd,
+    initial: TrackSettings,
+    slot: Option<SlotSnapshot>,
+    sample_rate: u32,
 }
 
-/// The queue's state as its handles read it. Only the queue publishes it,
-/// before it answers a command and after it drains or ticks, so a handle
-/// that waited for an answer reads its own write. The queue's events follow
-/// the view that shows them, so a handle that heard a change reads it.
-#[derive_where::derive_where(Clone; S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static)]
+/// Handles only read this snapshot; the queue is its sole publisher.
+#[derive_where::derive_where(Clone)]
 pub(crate) struct QueueView<S>(Arc<ArcSwap<QueueSnapshot<S>>>)
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static;
@@ -38,125 +44,330 @@ impl<S> QueueView<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// A view of `tracks` and `navigation` before the queue knows a position.
-    pub(crate) fn new(tracks: &Tracks<S>, navigation: &NavigationState) -> Self {
-        Self(Arc::new(ArcSwap::from_pointee(snapshot(
-            tracks.rows(),
-            tracks,
-            navigation,
-            CachedPosition::Unknown,
-        ))))
-    }
-
-    /// Store what the queue holds now. Rows are rebuilt only when the tracks
-    /// moved past the revision the published ones were built at.
-    pub(super) fn publish(
-        &self,
+    pub(crate) fn new(
         tracks: &Tracks<S>,
         navigation: &NavigationState,
-        position: CachedPosition,
-    ) {
-        let published = self.0.load();
-        let rows = if published.revision == tracks.revision() {
-            Arc::clone(&published.tracks)
-        } else {
-            tracks.rows()
-        };
-        drop(published);
-        self.0
-            .store(Arc::new(snapshot(rows, tracks, navigation, position)));
+        settings: QueueSettings,
+        initial: TrackSettings,
+        action: ActionAtItemEnd,
+    ) -> Self {
+        Self(Arc::new(ArcSwap::from_pointee(QueueSnapshot {
+            current: None,
+            track: None,
+            settings,
+            rows: tracks.rows(),
+            revision: tracks.revision(),
+            order: navigation.playback_order(),
+            repeat: navigation.repeat_mode(),
+            action,
+            initial,
+            slot: None,
+            sample_rate: 0,
+        })))
     }
 
-    /// Attach decoded-audio observation to `id`'s decoder; see
-    /// [`Tracks::attach_observer`].
+    pub(super) fn read(&self) -> Arc<QueueSnapshot<S>> {
+        self.0.load_full()
+    }
+
+    pub(super) fn publish(&self, snapshot: QueueSnapshot<S>) {
+        self.0.store(Arc::new(snapshot));
+    }
+
     pub(super) fn attach_observer(&self, id: TrackId, observer: Box<dyn AudioObserver>) {
-        let slot = self
-            .0
-            .load()
-            .tracks
+        if let Some(row) = self.0.load().rows.iter().find(|row| row.entry.id == id) {
+            row.observer.attach(observer);
+        }
+    }
+}
+
+impl<S, F> Queue<S, F>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    F: TrackFactory<S>,
+{
+    pub(super) fn queue_snapshot(&self) -> QueueSnapshot<S> {
+        let track = self
+            .current_track()
+            .map(|track| track.snapshot().as_ref().clone());
+        let slot = track
+            .as_ref()
+            .and_then(|track| self.deck.slots.get(usize::from(track.slot.get())).copied());
+        let published = self.view.read();
+        let rows = if published.revision == self.tracks.revision() {
+            Arc::clone(&published.rows)
+        } else {
+            self.tracks.rows()
+        };
+        QueueSnapshot {
+            current: self.current,
+            track,
+            settings: *self.settings.config(),
+            rows,
+            revision: self.tracks.revision(),
+            order: self.navigation.playback_order(),
+            repeat: self.navigation.repeat_mode(),
+            action: self.config.action_at_item_end,
+            initial: self.config.track,
+            slot,
+            sample_rate: self.deck.sample_rate,
+        }
+    }
+
+    #[must_use]
+    pub fn current(&self) -> Option<TrackEntry> {
+        self.track(self.current?)
+    }
+
+    #[must_use]
+    pub fn current_index(&self) -> Option<usize> {
+        let id = self.current?;
+        self.tracks
+            .records()
             .iter()
-            .find(|row| row.entry.id == id)
-            .map(|row| row.observer.clone());
-        if let Some(slot) = slot {
-            slot.attach(observer);
-        }
+            .position(|record| record.id == id)
     }
 
-    pub(super) fn current(&self) -> Option<TrackEntry> {
-        let id = self.0.load().current?;
-        self.track(id)
-    }
-
-    pub(super) fn index_of(&self, id: TrackId) -> Option<usize> {
-        self.0
-            .load()
-            .tracks
+    #[must_use]
+    pub fn track(&self, id: TrackId) -> Option<TrackEntry> {
+        self.tracks
+            .records()
             .iter()
-            .position(|row| row.entry.id == id)
+            .find(|record| record.id == id)
+            .map(TrackRecord::entry)
     }
 
-    delegate::delegate! {
-        to self.0.load().tracks {
-            pub(super) fn is_empty(&self) -> bool;
-            pub(super) fn len(&self) -> usize;
-        }
-        to self.0 {
-            #[expr($.playback_order)]
-            #[call(load)]
-            pub(crate) fn playback_order(&self) -> PlaybackOrder;
-            #[expr($.repeat_mode)]
-            #[call(load)]
-            pub(super) fn repeat_mode(&self) -> RepeatMode;
-        }
+    #[must_use]
+    pub fn tracks(&self) -> Vec<TrackEntry> {
+        self.tracks
+            .records()
+            .iter()
+            .map(TrackRecord::entry)
+            .collect()
     }
 
-    pub(super) fn position_seconds(&self) -> Option<f64> {
-        self.0.load().position.into()
+    #[must_use]
+    pub fn subscribe<E: EventSet>(&self) -> EventReceiver<E> {
+        self.bus.subscribe()
     }
+}
 
-    pub(super) fn track(&self, id: TrackId) -> Option<TrackEntry> {
-        self.0
-            .load()
-            .tracks
+impl<S> QueueControl<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    #[must_use]
+    pub fn current(&self) -> Option<TrackEntry> {
+        let snapshot = self.view.read();
+        let id = snapshot.current?;
+        snapshot
+            .rows
             .iter()
             .find(|row| row.entry.id == id)
             .map(|row| row.entry.clone())
     }
 
-    pub(super) fn track_source(&self, id: TrackId) -> Option<TrackSource<S>> {
-        self.0
-            .load()
-            .tracks
+    #[must_use]
+    pub fn current_index(&self) -> Option<usize> {
+        let snapshot = self.view.read();
+        let id = snapshot.current?;
+        snapshot.rows.iter().position(|row| row.entry.id == id)
+    }
+
+    #[must_use]
+    pub fn track(&self, id: TrackId) -> Option<TrackEntry> {
+        self.view
+            .read()
+            .rows
+            .iter()
+            .find(|row| row.entry.id == id)
+            .map(|row| row.entry.clone())
+    }
+
+    #[must_use]
+    pub fn tracks(&self) -> Vec<TrackEntry> {
+        self.view
+            .read()
+            .rows
+            .iter()
+            .map(|row| row.entry.clone())
+            .collect()
+    }
+
+    #[must_use]
+    pub fn track_source(&self, id: TrackId) -> Option<TrackSource<S>> {
+        self.view
+            .read()
+            .rows
             .iter()
             .find(|row| row.entry.id == id)
             .map(|row| row.source.clone())
     }
 
-    pub(super) fn tracks(&self) -> Vec<TrackEntry> {
-        self.0
-            .load()
-            .tracks
-            .iter()
-            .map(|row| row.entry.clone())
-            .collect()
+    pub fn attach_observer<O: AudioObserver>(&self, id: TrackId, observer: O) {
+        self.view.attach_observer(id, Box::new(observer));
     }
-}
 
-fn snapshot<S>(
-    rows: Arc<[TrackRow<S>]>,
-    tracks: &Tracks<S>,
-    navigation: &NavigationState,
-    position: CachedPosition,
-) -> QueueSnapshot<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    QueueSnapshot {
-        position,
-        tracks: rows,
-        revision: tracks.revision(),
-        current: navigation.current(),
-        playback_order: navigation.playback_order(),
-        repeat_mode: navigation.repeat_mode(),
+    #[must_use]
+    pub fn subscribe<E: EventSet>(&self) -> EventReceiver<E> {
+        self.bus.subscribe()
+    }
+
+    #[must_use]
+    pub fn bus(&self) -> &kithara_events::EventBus {
+        &self.bus
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.view.read().rows.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.view.read().rows.is_empty()
+    }
+
+    #[must_use]
+    pub fn playback_order(&self) -> PlaybackOrder {
+        self.view.read().order
+    }
+
+    #[must_use]
+    pub fn repeat_mode(&self) -> RepeatMode {
+        self.view.read().repeat
+    }
+
+    #[must_use]
+    pub fn action_at_item_end(&self) -> ActionAtItemEnd {
+        self.view.read().action
+    }
+
+    #[must_use]
+    pub fn crossfade_settings(&self) -> kithara_play::CrossfadeSettings {
+        self.view.read().settings.crossfade()
+    }
+
+    #[must_use]
+    pub fn sample_rate(&self) -> u32 {
+        self.view.read().sample_rate
+    }
+
+    #[must_use]
+    pub fn is_playing(&self) -> bool {
+        self.view
+            .read()
+            .track
+            .as_ref()
+            .is_some_and(|track| matches!(track.status, PlayingStatus::Playing { .. }))
+    }
+
+    #[must_use]
+    pub fn rate(&self) -> f32 {
+        let snapshot = self.view.read();
+        snapshot
+            .track
+            .as_ref()
+            .filter(|track| matches!(track.status, PlayingStatus::Playing { .. }))
+            .map_or(0.0, |track| {
+                snapshot.slot.map_or(track.speed, |slot| slot.rate)
+            })
+    }
+
+    #[must_use]
+    pub fn default_rate(&self) -> f32 {
+        let snapshot = self.view.read();
+        snapshot
+            .track
+            .as_ref()
+            .map_or(snapshot.initial.speed(), |track| track.speed)
+    }
+
+    #[must_use]
+    pub fn position_seconds(&self) -> Option<f64> {
+        let snapshot = self.view.read();
+        snapshot.track.as_ref()?;
+        todo!(
+            "Publish the canonical playback position with the track receipt and slot snapshot revisions: an acknowledged seek must override an older mixer position, and later slot snapshots advance it"
+        )
+    }
+
+    #[must_use]
+    pub fn duration_seconds(&self) -> Option<f64> {
+        let snapshot = self.view.read();
+        snapshot
+            .track
+            .as_ref()
+            .and_then(|track| track.duration.map(|duration| duration.as_secs_f64()))
+    }
+
+    #[must_use]
+    pub fn status(&self) -> PlayerStatus {
+        let snapshot = self.view.read();
+        if snapshot.current.is_some_and(|id| {
+            snapshot
+                .rows
+                .iter()
+                .any(|row| row.entry.id == id && matches!(row.entry.status, TrackStatus::Failed(_)))
+        }) {
+            PlayerStatus::Failed
+        } else if snapshot.track.as_ref().is_some_and(|track| {
+            !matches!(
+                track.status,
+                PlayingStatus::Idle | PlayingStatus::Loading | PlayingStatus::Released
+            )
+        }) {
+            PlayerStatus::ReadyToPlay
+        } else {
+            PlayerStatus::Unknown
+        }
+    }
+
+    #[must_use]
+    pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        self.view
+            .read()
+            .track
+            .as_ref()
+            .and_then(|track| track.abr.clone())
+    }
+
+    #[must_use]
+    pub fn current_variant(&self) -> Option<kithara_abr::VariantInfo> {
+        self.current_abr_handle()?.current_variant()
+    }
+
+    #[must_use]
+    pub fn playback_view(&self) -> PlaybackView {
+        todo!(
+            "Restore the canonical play PlaybackView construction from the published queue/slot snapshot; no resident player"
+        )
+    }
+
+    #[must_use]
+    pub fn engine_load(&self) -> EngineLoadSnapshot {
+        todo!(
+            "Publish the Host-owned worker load meter through the queue snapshot; DeckSnapshot only carries RT counters"
+        )
+    }
+
+    #[must_use]
+    pub fn volume(&self) -> f32 {
+        todo!("Read Host-owned deck mix volume from the published snapshot")
+    }
+
+    #[must_use]
+    pub fn is_muted(&self) -> bool {
+        todo!("Read Host-owned deck mute from the published snapshot")
+    }
+
+    #[must_use]
+    pub fn eq_band_count(&self) -> usize {
+        todo!("Read Host-owned EQ layout from the published snapshot")
+    }
+
+    #[must_use]
+    pub fn eq_gain(&self, band: usize) -> Option<f32> {
+        todo!("Read Host-owned EQ band {band} from the published snapshot")
     }
 }

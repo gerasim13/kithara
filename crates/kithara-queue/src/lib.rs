@@ -11,12 +11,14 @@ mod queue;
 pub(crate) use kithara_test_utils::bufpool as test_pools;
 mod track;
 
-pub use config::{QueueConfig, QueueConfigPatch};
+pub use config::{QueueConfig, QueueConfigPatch, QueueSettings, QueueSettingsChange};
 pub use error::QueueError;
 pub use event::{AdvanceReason, ItemEvent, QueueEvent, QueueRepeatMode, TrackStatus};
 pub use kithara_events::TrackId;
 pub use kithara_play::{CrossfadeCurve, CrossfadeSettings, SelectionPlayback};
+#[doc(hidden)]
+pub use loading::LoadReport;
 pub use navigation::{ActionAtItemEnd, NavigationState, PlaybackOrder, RepeatMode};
-pub use queue::{PlaybackView, Queue, QueueControl, Transition};
+pub use queue::{PlaybackView, Queue, QueueCommand, QueueControl, QueueSnapshot, Transition};
 pub use track::{TrackEntry, TrackSource};
 mod consts;

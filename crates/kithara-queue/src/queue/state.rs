@@ -1,238 +1,190 @@
-use core::ops::Deref;
-
-use kithara_assets::{AssetStore, StorageBackend};
 use kithara_bufpool::HasPool;
-use kithara_command::mailbox;
-use kithara_events::{EventBus, EventReceiver, TrackId};
-use kithara_platform::{
-    CancelScope, CancelToken, sync::Arc, tokio::runtime::Handle as RuntimeHandle,
-};
-use kithara_play::{PlayError, PlayerImpl, player::PlayerView};
-use smallvec::SmallVec;
+use kithara_command::{Answer, Live, Seq, mailbox};
+use kithara_events::{EventBus, TrackId};
+use kithara_platform::{CancelScope, CancelToken, tokio::runtime::Handle as RuntimeHandle};
+use kithara_play::{DeckPass, DeckSnapshot, PlayError, Player, PlayerFactory, TrackFactory};
+use kithara_signal::{FrameCount, SessionFrame};
 
 use super::{
     command::{QueueMailbox, QueuePostbox},
-    engine_events::PlayerBusEvent,
-    types::{CachedPosition, SelectPhase},
+    slots::{Role, Slots},
+    types::Target,
     view::QueueView,
 };
 use crate::{
-    config::QueueConfig, event::QueueEvent, loader::Loader, navigation::NavigationState,
-    track::Tracks,
+    QueueConfig, QueueError, QueueEvent, QueueSettings, loader::Loader,
+    navigation::NavigationState, track::Tracks,
 };
 
-/// What a queue and every [`QueueControl`] of it read: the retained config,
-/// the player's published state, and the view the queue publishes of its own.
-/// Only the queue writes them, on the executor that holds it.
-#[doc(hidden)]
-pub struct QueueRuntime<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    pub(super) player: PlayerView,
-    pub(super) view: QueueView<S>,
-    /// Cancelled once the queue closes.
-    pub(super) shutdown: CancelToken,
-    pub(super) bus: EventBus,
-    pub(super) config: Arc<QueueConfig<S>>,
-}
-
-/// Cloneable queue command capability without beat-grid identity or topology.
-///
-/// Every command is posted to the queue and waits for its answer, which the
-/// executor holding the queue gives once it drains it; a command posted
-/// before any executor holds the queue waits for one. Once the queue is
-/// dropped a command fails with [`PlayError::Closed`].
-#[derive_where::derive_where(Clone; S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static)]
+/// Cloneable command capability and the queue's published state.
+#[derive_where::derive_where(Clone)]
 pub struct QueueControl<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     pub(super) postbox: QueuePostbox<S>,
-    pub(super) runtime: Arc<QueueRuntime<S>>,
+    pub(super) view: QueueView<S>,
+    pub(super) bus: EventBus,
 }
 
-/// AVQueuePlayer-analogue orchestration facade.
-///
-/// Owns the resident player and the queue's state, and runs the commands its
-/// [`QueueControl`]s post where an executor holds it. Publishes
-/// [`QueueEvent`] on the shared [`EventBus`]
-/// alongside player / audio / hls / file events so `subscribe` returns a
-/// single unified stream.
-pub struct Queue<S>
+/// A deck whose track list, navigation and active tracks have one owner.
+pub struct Queue<S, F = PlayerFactory>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    F: TrackFactory<S>,
 {
-    pub(super) resident: PlayerImpl<S>,
-    pub(super) runtime: Arc<QueueRuntime<S>>,
-    pub(super) loader: Loader<S>,
-    pub(super) navigation: NavigationState,
-    /// The track list: status, source, and live load attempt per track.
-    /// Every status transition goes through
-    /// [`Tracks::set_status`](crate::track::Tracks::set_status) so the view
-    /// and the event stream stay in sync.
+    pub(super) config: QueueConfig<S, F>,
     pub(super) tracks: Tracks<S>,
-    /// Playback position updated on every `tick`. Filters transient 0.0
-    /// blips the engine reports on pause/resume, so readers see stable
-    /// values; [`CachedPosition::Unknown`] before the first stable sample.
-    pub(super) position: CachedPosition,
-    /// The queue's own changes since it last published, in order, behind
-    /// the tracks' changes recorded before them.
-    pub(super) events: Vec<QueueEvent>,
+    pub(super) navigation: NavigationState,
+    pub(super) current: Option<TrackId>,
+    pub(super) target: Option<Target>,
+    pub(super) active: Slots<F::Track>,
+    pub(super) settings: Live<QueueSettings, ()>,
     pub(super) postbox: QueuePostbox<S>,
     pub(super) mailbox: QueueMailbox<S>,
-    pub(super) pending_select: SelectPhase,
-    /// Track whose load completion starts playback: the first one appended
-    /// while nothing is selected, when [`QueueConfig::should_autoplay`] is on.
-    pub(super) autoplay_target: Option<TrackId>,
-    /// Subscription to the shared bus; drained in `tick()` to convert
-    /// engine events into queue-level side-effects (auto-advance / current
-    /// track change forwarding).
-    pub(super) player_rx: EventReceiver<PlayerBusEvent>,
+    pub(super) view: QueueView<S>,
+    pub(super) bus: EventBus,
+    pub(super) loader: Option<Loader<S>>,
+    pub(super) shutdown: CancelToken,
+    pub(super) events: Vec<QueueEvent>,
+    pub(super) answers: Vec<(Seq, Answer<QueueError>)>,
+    pub(super) clock: Option<(SessionFrame, FrameCount)>,
+    pub(super) deck: DeckSnapshot,
 }
 
-impl<S> Deref for QueueControl<S>
+impl<S, F> Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    F: TrackFactory<S>,
 {
-    type Target = QueueRuntime<S>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.runtime
-    }
-}
-
-impl<S> Deref for Queue<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    type Target = QueueRuntime<S>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.runtime
-    }
-}
-
-impl<S> Queue<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    /// Build a queue from a [`QueueConfig`].
-    ///
-    /// The queue takes ownership of the supplied [`PlayerImpl`]; all access to
-    /// the decorated player then goes through this facade.
+    /// Builds the owner; its host checks registration before driving it.
     #[must_use]
-    pub fn new(mut config: QueueConfig<S>) -> Self {
-        let player = config
-            .player
-            .take()
-            .unwrap_or_else(|| unreachable!("QueueConfig builder requires a player"));
-        let runtime = config.runtime.take();
-        let store = config.store.take();
-        let config_cancel = config.cancel.take();
-        let max_concurrent_loads = config.max_concurrent_loads;
-        let max_history_size = config.max_history_size;
-        let playback_order = config.playback_order;
-        let crossfade_settings = config.crossfade_settings();
-        let cancel = CancelScope::new(config_cancel).token();
-        let store = store.unwrap_or_else(|| {
-            AssetStore::builder(player.pools().clone())
-                .backend(StorageBackend::default())
-                .cancel(cancel.child())
-                .build()
-        });
-        player.set_crossfade_duration(crossfade_settings.duration);
-        let bus = player.bus().clone();
-        let player_view = player.view().clone();
-        let tracks = Tracks::default();
-        let mut navigation = NavigationState::new(max_history_size);
-        navigation.set_playback_order(playback_order, &[]);
-        let view = QueueView::new(&tracks, &navigation);
+    pub fn new(mut config: QueueConfig<S, F>) -> Self {
+        let shutdown = CancelScope::new(config.cancel.clone()).token();
+        if let Some(prep) = &mut config.prep {
+            prep.cancel = Some(shutdown.clone());
+        }
+        let bus = config
+            .prep
+            .as_ref()
+            .map_or_else(EventBus::default, |prep| prep.bus.clone());
         let (postbox, mailbox) = mailbox();
-        let loader = Loader::new(
-            player_view.clone(),
-            player.worker().clone(),
-            runtime.or_else(|| RuntimeHandle::try_current().ok()),
-            store,
-            max_concurrent_loads,
-            postbox.clone(),
+        let loader = match (&config.prep, &config.store) {
+            (Some(prep), Some(store)) => Some(Loader::new(
+                prep.clone(),
+                store.clone(),
+                config
+                    .runtime
+                    .clone()
+                    .or_else(|| RuntimeHandle::try_current().ok()),
+                postbox.clone(),
+            )),
+            _ => None,
+        };
+        let mut navigation = NavigationState::new(config.max_history_size);
+        navigation.set_playback_order(config.playback_order, &[]);
+        let tracks = Tracks::default();
+        let view = QueueView::new(
+            &tracks,
+            &navigation,
+            config.settings,
+            config.track,
+            config.action_at_item_end,
         );
-        let player_rx = player.subscribe();
-        config.view = Some(view.clone());
+        let settings = match Live::new(config.settings) {
+            Ok(settings) => settings,
+            Err(never) => match never {},
+        };
         Self {
-            resident: player,
-            runtime: Arc::new(QueueRuntime {
-                player: player_view,
-                view,
-                bus,
-                config: Arc::new(config),
-                shutdown: cancel,
-            }),
-            loader,
-            navigation,
+            active: Slots::new(config.mixer.slots().get()),
+            config,
             tracks,
-            position: CachedPosition::Unknown,
-            events: Vec::new(),
+            navigation,
+            current: None,
+            target: None,
+            settings,
             postbox,
             mailbox,
-            pending_select: SelectPhase::Idle,
-            autoplay_target: None,
-            player_rx,
+            view,
+            bus,
+            loader,
+            shutdown,
+            events: Vec::new(),
+            answers: Vec::new(),
+            clock: None,
+            deck: DeckSnapshot::default(),
         }
     }
 
-    pub(in crate::queue) fn command(&mut self, operation: impl FnOnce(&mut Self)) {
-        if !self.is_closed() {
-            operation(self);
-            self.publish();
+    /// The handle reaches this owner's mailbox, never a track implementation.
+    #[must_use]
+    pub fn control(&self) -> QueueControl<S> {
+        QueueControl {
+            postbox: self.postbox.clone(),
+            view: self.view.clone(),
+            bus: self.bus.clone(),
         }
     }
 
-    pub(in crate::queue) fn with_open<T>(
-        &mut self,
-        operation: impl FnOnce(&mut Self) -> T,
-    ) -> Result<T, PlayError> {
-        self.ensure_open()?;
-        let value = operation(self);
-        self.publish();
-        Ok(value)
+    /// Every active track, including preloaded and outgoing tracks.
+    pub fn tracks_mut(&mut self) -> impl Iterator<Item = &mut F::Track> {
+        self.active.iter_mut().map(|active| &mut active.track)
     }
 
-    pub(in crate::queue) fn with_open_result<T, E>(
-        &mut self,
-        operation: impl FnOnce(&mut Self) -> Result<T, E>,
-    ) -> Result<T, E>
-    where
-        E: From<PlayError>,
-    {
-        self.ensure_open().map_err(E::from)?;
-        let result = operation(self);
-        self.publish();
-        result
+    /// The factory a track decorator configures for subsequent loads.
+    pub fn factory_mut(&mut self) -> &mut F {
+        &mut self.config.factory
     }
 
-    /// Record a change of the queue's own for the next publish to announce,
-    /// after the tracks' changes recorded before it.
-    pub(in crate::queue) fn announce(&mut self, event: QueueEvent) {
+    /// The sounding track, chosen only when its transition applies.
+    #[must_use]
+    pub fn current_track(&self) -> Option<&F::Track> {
+        self.active
+            .iter()
+            .find(|active| active.role == Role::Current)
+            .map(|active| &active.track)
+    }
+
+    pub(super) fn active_current_index(&self) -> Option<usize> {
+        self.active.position(|active| active.role == Role::Current)
+    }
+
+    pub(super) fn accept_pass(&mut self, pass: DeckPass<'_>) {
+        self.clock = Some((pass.now, pass.delivery));
+        self.deck.clone_from(pass.deck);
+    }
+
+    pub(super) fn earliest(&self) -> Result<SessionFrame, PlayError> {
+        self.clock
+            .map(|(now, delivery)| now + delivery)
+            .ok_or(PlayError::Untimed)
+    }
+
+    pub(super) fn ensure_open(&self) -> Result<(), PlayError> {
+        if self.shutdown.is_cancelled() {
+            Err(PlayError::Closed)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Records the tracks' earlier changes before the owner's next event.
+    pub(super) fn announce(&mut self, event: QueueEvent) {
         self.events.extend(self.tracks.drain_events());
         self.events.push(event);
     }
 
-    /// Publish what the queue holds now for its handles to read, then
-    /// announce the changes that led to it: a subscriber that hears a change
-    /// reads it.
-    pub(in crate::queue) fn publish(&mut self) {
+    /// Publishes before announcing, so an event's reader sees its state.
+    pub(super) fn publish(&mut self) {
         self.events.extend(self.tracks.drain_events());
-        self.runtime
-            .view
-            .publish(&self.tracks, &self.navigation, self.position);
+        let snapshot = self.snapshot();
+        self.view.publish(snapshot);
         for event in self.events.drain(..) {
-            self.runtime.bus.publish(event);
+            self.bus.publish(event);
         }
     }
 
-    /// Ids of the queued tracks, in queue order.
-    pub(in crate::queue) fn track_ids(&self) -> SmallVec<[TrackId; 16]> {
+    pub(super) fn track_ids(&self) -> Vec<TrackId> {
         self.tracks
             .records()
             .iter()
@@ -241,31 +193,14 @@ where
     }
 }
 
-impl<S> QueueRuntime<S>
+impl<S, F> Drop for Queue<S, F>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    pub(in crate::queue) fn ensure_open(&self) -> Result<(), PlayError> {
-        if self.is_closed() {
-            Err(PlayError::Closed)
-        } else {
-            Ok(())
-        }
-    }
-
-    #[must_use]
-    pub fn is_closed(&self) -> bool {
-        self.shutdown.is_cancelled() || self.player.is_closed()
-    }
-}
-
-impl<S> Drop for Queue<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    F: TrackFactory<S>,
 {
     fn drop(&mut self) {
         self.shutdown.cancel();
-        self.loader.close(&mut self.tracks);
+        self.tracks.cancel_loads();
     }
 }
 
