@@ -32,9 +32,10 @@ where
             .map(|parent| parent.child());
         let next = self.player.core.tracks.lock().next();
         let warp = next.warp(&self.player.core.config.warp);
-        let host_sample_rate = NonZeroU32::new(self.player.core.engine.master_sample_rate())
+        let output = self.player.core.engine.session_output();
+        let host_sample_rate = NonZeroU32::new(self.player.core.engine.output_rate(output))
             .or_else(|| NonZeroU32::new(self.player.core.engine.configured_sample_rate()));
-        let stream_shape = self.player.core.engine.stream_shape();
+        let stream_shape = output.and_then(|output| output.stream_shape);
         let mut audio = config.audio;
         if let (Some(quantum), Some(shape)) = (warp.render_quantum_frames(), stream_shape) {
             let (preload, ring) =

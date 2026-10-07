@@ -61,7 +61,7 @@ pub fn session_at(sample_rate: NonZeroU32) -> SessionBinding {
 
 fn binding(shape: Option<StreamShape>, sample_rate: NonZeroU32) -> SessionBinding {
     let output = SessionOutputView::new(sample_rate);
-    output.publish(output.sample_rate(), shape);
+    output.publish(output.get().sample_rate, shape);
     SessionBinding::new(output, ConsumerWakeMode::RealtimeDeferred, sample_rate)
 }
 

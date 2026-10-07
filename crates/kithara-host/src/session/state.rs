@@ -299,6 +299,8 @@ impl RootView {
             pub(crate) fn settings(&self) -> HostSettings;
         }
         to self.output {
+            #[call(get)]
+            #[expr($.sample_rate)]
             pub(crate) fn sample_rate(&self) -> SessionSampleRate;
         }
     }

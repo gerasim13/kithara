@@ -135,9 +135,15 @@ mod binding {
 
     use super::wire::SessionSampleRate;
 
-    struct OutputSnapshot {
-        sample_rate: SessionSampleRate,
-        stream_shape: Option<StreamShape>,
+    /// One publish of a session's output: the rate and the shape a deck
+    /// reads together.
+    #[derive(Clone, Copy)]
+    pub struct OutputSnapshot {
+        /// The rate the running backend settled on, beside the one the
+        /// settings ask for.
+        pub sample_rate: SessionSampleRate,
+        /// The measured stream once one runs, the requested block before.
+        pub stream_shape: Option<StreamShape>,
     }
 
     /// Where a session publishes its output for the decks it holds to read.
@@ -164,22 +170,11 @@ mod binding {
             }));
         }
 
-        delegate::delegate! {
-            to self.0 {
-                /// The output rate the session last published: the rate the
-                /// running backend settled on, beside the one the settings ask
-                /// for.
-                #[must_use]
-                #[call(load)]
-                #[expr($.sample_rate)]
-                pub fn sample_rate(&self) -> SessionSampleRate;
-                /// The output shape the session last published: the measured
-                /// stream once one runs, the requested block before.
-                #[must_use]
-                #[call(load)]
-                #[expr($.stream_shape)]
-                pub fn stream_shape(&self) -> Option<StreamShape>;
-            }
+        /// The output the session last published, rate and shape from the
+        /// same publish.
+        #[must_use]
+        pub fn get(&self) -> OutputSnapshot {
+            **self.0.load()
         }
     }
 
@@ -223,14 +218,14 @@ mod binding {
 
         delegate::delegate! {
             to self.output {
-                pub(crate) fn sample_rate(&self) -> SessionSampleRate;
-                pub(crate) fn stream_shape(&self) -> Option<StreamShape>;
+                #[call(get)]
+                pub(crate) fn output(&self) -> OutputSnapshot;
             }
         }
     }
 }
 
-pub use binding::{SessionBinding, SessionOutputView};
+pub use binding::{OutputSnapshot, SessionBinding, SessionOutputView};
 pub use wire::{AllocatedSlot, DeckRegistration, PlayerId, SessionError, SessionSampleRate};
 
 #[cfg(test)]
@@ -254,11 +249,11 @@ mod tests {
             ConsumerWakeMode::RealtimeDeferred,
             sample_rate(),
         );
-        assert_eq!(binding.sample_rate().measured, None);
+        assert_eq!(binding.output().sample_rate.measured, None);
 
         output.publish(SessionSampleRate::new(Some(44_100), 48_000), None);
 
-        assert_eq!(binding.sample_rate().measured, Some(44_100));
-        assert_eq!(binding.sample_rate().output(), 44_100);
+        assert_eq!(binding.output().sample_rate.measured, Some(44_100));
+        assert_eq!(binding.output().sample_rate.output(), 44_100);
     }
 }

@@ -12,9 +12,8 @@ use kithara_platform::{
     sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
-use kithara_render::{
-    bridge::{DeckEqChange, DeckPart, DeckTrash, PlaybackShared, PlayerNotification, SlotControl},
-    rt::StreamShape,
+use kithara_render::bridge::{
+    DeckEqChange, DeckPart, DeckTrash, PlaybackShared, PlayerNotification, SlotControl,
 };
 use kithara_warp::RenderSnapshot;
 use ringbuf::traits::Consumer;
@@ -24,7 +23,7 @@ use super::{config::EngineConfig, slots::DeckSlot};
 use crate::{
     api::{EngineEvent, SlotId},
     error::PlayError,
-    session::{AllocatedSlot, DeckRegistration, SessionBinding},
+    session::{AllocatedSlot, DeckRegistration, OutputSnapshot, SessionBinding},
 };
 
 type SlotHandle = SlotControl;
@@ -160,13 +159,22 @@ impl<S> EngineImpl<S> {
     /// `make_sincs` runs while the resource is prepared (off the worker thread)
     /// instead of lazily on the first `step_track()` call.
     pub fn master_sample_rate(&self) -> u32 {
-        if self.slot().is_none() {
-            return self.config.sample_rate.get();
+        self.output_rate(self.session_output())
+    }
+
+    /// The rate `output` gives this deck: the configured one until a Host
+    /// takes the deck.
+    pub(crate) fn output_rate(&self, output: Option<OutputSnapshot>) -> u32 {
+        match output {
+            Some(output) if self.slot().is_some() => output.sample_rate.output(),
+            _ => self.config.sample_rate.get(),
         }
-        self.session.get().map_or_else(
-            || self.config.sample_rate.get(),
-            |session| session.sample_rate().output(),
-        )
+    }
+
+    /// The output the session this deck joined last published, rate and
+    /// shape from the same publish.
+    pub(crate) fn session_output(&self) -> Option<OutputSnapshot> {
+        self.session.get().map(SessionBinding::output)
     }
 
     pub(crate) const fn pools(&self) -> &PoolRegion<S> {
@@ -278,10 +286,6 @@ impl<S> EngineImpl<S> {
         *layout = bands;
         drop(layout);
         Ok(())
-    }
-
-    pub(crate) fn stream_shape(&self) -> Option<StreamShape> {
-        self.session.get().and_then(SessionBinding::stream_shape)
     }
 
     pub fn subscribe<E: EventSet>(&self) -> EventReceiver<E> {
