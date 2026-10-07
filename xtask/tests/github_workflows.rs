@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
@@ -71,7 +72,7 @@ import sys
 results = json.loads(os.environ["RESULTS"])
 required_lanes = set(os.environ["REQUIRED_LANES"].split())
 optional_required = bool(required_lanes)
-ui_required = "all" in required_lanes or "deep-ui" in required_lanes
+ui_required = "all" in required_lanes or "deep-ui" in required_lanes or os.environ["TOUCHED_UI_REQUIRED"] == "true"
 android_required = "all" in required_lanes or "android-test" in required_lanes
 incomplete = {
     name: job["result"]
@@ -417,15 +418,23 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
         Some("${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}")
     );
 
+    let (selection_name, _) = ui_selection(jobs);
     for name in workflow_job_names(jobs) {
         if matches!(name.as_str(), "authorize" | "gate" | "required") {
             continue;
         }
         let job = workflow_job(jobs, &name);
         assert_no_key(&Value::Mapping(job.clone()), "continue-on-error");
+        let expected_needs = if name == selection_name {
+            job_needs(gate)
+        } else if name == "ui" {
+            BTreeSet::from(["gate".to_owned(), selection_name.to_owned()])
+        } else {
+            BTreeSet::from(["gate".to_owned()])
+        };
         assert_eq!(
             job_needs(job),
-            BTreeSet::from(["gate".to_owned()]),
+            expected_needs,
             "workflow job `{name}` bypasses the self-hosted gate"
         );
         let condition = job.get("if").and_then(Value::as_str).unwrap_or_default();
@@ -2020,6 +2029,138 @@ fn a_request_for_one_lane_starts_nothing_beside_it() {
         ui.contains("contains(inputs.only, 'deep-ui')"),
         "the UI job answers to its lane's name: {ui}"
     );
+}
+
+fn ui_selection(jobs: &Mapping) -> (&str, &Mapping) {
+    jobs.iter()
+        .find_map(|(name, job)| {
+            let job = job.as_mapping()?;
+            job.get("outputs")?
+                .as_mapping()?
+                .contains_key("ui_required")
+                .then(|| (name.as_str().expect("job name is a string"), job))
+        })
+        .expect("CI publishes automatic UI ownership selection")
+}
+
+#[test]
+fn ui_ownership_selection_uses_the_fleet_checkout_and_build_environment() {
+    let ci = github_workflow("ci.yml");
+    let (_, selection) = ui_selection(workflow_jobs(&ci));
+    let run = github_workflow("run.yml");
+    let reference = workflow_job(workflow_jobs(&run), "select");
+    assert_eq!(
+        mapping_field(selection, "runs-on"),
+        mapping_field(reference, "runs-on")
+    );
+    assert_eq!(first_step(selection), first_step(reference));
+    assert_no_key(&Value::Mapping(selection.clone()), "fetch-depth");
+    for variable in [
+        "CARGO_TARGET_DIR",
+        "CARGO_HOME",
+        "KITHARA_CI_TARGET_ROOT",
+        "KITHARA_CI_CACHE_ROOT",
+        "KITHARA_XTASK_TARGET",
+    ] {
+        assert_no_key(&ci, variable);
+    }
+    let step = named_step(selection, "Select UI ownership");
+    let step_id = mapping_field(step, "id")
+        .as_str()
+        .expect("selection step has an id");
+    let outputs = mapping_field(selection, "outputs")
+        .as_mapping()
+        .expect("selection has outputs");
+    assert_eq!(
+        mapping_field(outputs, "ui_required").as_str(),
+        Some(format!("${{{{ steps.{step_id}.outputs.ui_required }}}}").as_str())
+    );
+    assert_eq!(
+        mapping_field(step, "run")
+            .as_str()
+            .expect("selection has a script")
+            .trim(),
+        "ui_required=$(just ci touched --lane ui)\necho \"ui_required=$ui_required\" >> \"$GITHUB_OUTPUT\""
+    );
+}
+
+#[test]
+fn ui_scheduling_consults_owned_path_selection() {
+    let ci = github_workflow("ci.yml");
+    let jobs = workflow_jobs(&ci);
+    let (selection_name, _) = ui_selection(jobs);
+    let ui = workflow_job(jobs, "ui");
+    let condition = mapping_field(ui, "if")
+        .as_str()
+        .expect("UI scheduling is conditional");
+    assert!(condition.contains("vars.KITHARA_GPU_RUNNER_LABELS != ''"));
+    assert!(condition.contains(&format!(
+        "needs.{selection_name}.outputs.ui_required == 'true'"
+    )));
+    assert!(job_needs(ui).contains(selection_name));
+}
+
+#[test]
+fn required_aggregation_requires_an_automatically_selected_ui_verdict() {
+    let ci = github_workflow("ci.yml");
+    let jobs = workflow_jobs(&ci);
+    let (selection_name, _) = ui_selection(jobs);
+    let required = workflow_job(jobs, "required");
+    assert!(job_needs(required).contains(selection_name));
+    let step = first_step(required);
+    let env = mapping_field(step, "env")
+        .as_mapping()
+        .expect("aggregate has an environment");
+    assert_eq!(
+        mapping_field(env, "TOUCHED_UI_REQUIRED").as_str(),
+        Some(format!("${{{{ vars.KITHARA_GPU_RUNNER_LABELS != '' && needs.{selection_name}.outputs.ui_required == 'true' }}}}").as_str())
+    );
+    let verdict = mapping_field(step, "run")
+        .as_str()
+        .expect("aggregate has a verdict script");
+    for (selected, lanes, result, accepted) in [
+        ("true", "", "skipped", false),
+        ("true", "", "failure", false),
+        ("true", "", "cancelled", false),
+        ("true", "", "success", true),
+        ("false", "", "skipped", true),
+        ("false", "", "failure", false),
+        ("false", "all", "skipped", false),
+        ("false", "deep-ui", "skipped", false),
+        ("false", "deep-ui", "success", true),
+    ] {
+        let results = serde_json::json!({"ui": {"result": result}});
+        let output = Command::new("bash")
+            .args(["-c", verdict])
+            .env("RESULTS", results.to_string())
+            .env("REQUIRED_LANES", lanes)
+            .env("TOUCHED_UI_REQUIRED", selected)
+            .output()
+            .expect("the real aggregate script executes");
+        assert_eq!(
+            output.status.success(),
+            accepted,
+            "selected={selected}, lanes={lanes}, result={result}"
+        );
+    }
+}
+
+#[test]
+fn lane_jobs_do_not_wait_for_ui_ownership_selection() {
+    let ci = github_workflow("ci.yml");
+    let jobs = workflow_jobs(&ci);
+    let (selection_name, selection) = ui_selection(jobs);
+    assert_eq!(job_needs(selection), job_needs(workflow_job(jobs, "gate")));
+    for (name, job) in jobs {
+        let job = job.as_mapping().expect("job is a mapping");
+        if job.get("uses").and_then(Value::as_str) == Some("./.github/workflows/run.yml") {
+            assert!(
+                !job_needs(job).contains(selection_name),
+                "{name:?} waits for UI selection"
+            );
+        }
+    }
+    assert!(!job_needs(workflow_job(jobs, "gate")).contains(selection_name));
 }
 
 // A lane declared in the catalog and a workflow spelling out the same command
