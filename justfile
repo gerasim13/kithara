@@ -39,12 +39,15 @@ export SCCACHE_CACHE_SIZE := if sccache == "" { "" } else { "200G" }
 # clock of every invocation including the nested ones a test drives. A keg the
 # machine does not have leaves this empty and its own search path stands alone.
 # `xtask` cannot own this: it is itself a cargo build that would need the answer
-# before it could run.
+# before it could run. A recipe that runs `just` again evaluates this again, and
+# a build script that reads the variable reruns when it changes, so a path that
+# already carries the keg is passed on as it stands.
 export PKG_CONFIG_PATH := ```
     formula=$(grep -om1 'ffmpeg@[0-9][0-9]*' .config/ci-pins.toml 2>/dev/null || true)
     brew=$(command -v brew || true)
     keg="${brew%/bin/brew}/opt/$formula/lib/pkgconfig"
     [ -n "$brew" ] && [ -n "$formula" ] && [ -d "$keg" ] || keg=
+    case ":${PKG_CONFIG_PATH:-}:" in *":$keg:"*) keg= ;; esac
     printf '%s' "$keg:${PKG_CONFIG_PATH:-}" | sed 's/^://; s/:$//'
 ```
 

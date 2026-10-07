@@ -62,6 +62,72 @@ fn every_build_script_tells_cargo_what_it_reads_before_it_can_return() {
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
 
+/// Every recipe gets the pinned `ffmpeg` keg on `PKG_CONFIG_PATH` from the root
+/// `justfile`, and a recipe that runs `just` again evaluates that export again.
+/// A build script that reads the variable reruns when its value changes, and
+/// everything built on it is rebuilt, so the value must not depend on how
+/// deeply the recipe that started Cargo was nested.
+#[cfg(unix)]
+#[test]
+fn a_nested_just_hands_build_scripts_the_same_pkg_config_path() {
+    use std::{env, os::unix::fs::PermissionsExt, process::Command};
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask has a workspace root");
+    let pins =
+        fs::read_to_string(root.join(".config/ci-pins.toml")).expect("the pins are readable");
+    let start = pins
+        .find("ffmpeg@")
+        .expect("the pins name an FFmpeg formula");
+    let formula: String = pins[start..]
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '@')
+        .collect();
+    let machine = tempfile::tempdir().expect("a temporary machine prefix");
+    let brew = machine.path().join("bin/brew");
+    fs::create_dir_all(machine.path().join("bin")).expect("a bin directory");
+    fs::write(&brew, "#!/bin/sh\n").expect("a package manager stand-in");
+    fs::set_permissions(&brew, fs::Permissions::from_mode(0o755)).expect("an executable stand-in");
+    fs::create_dir_all(
+        machine
+            .path()
+            .join("opt")
+            .join(&formula)
+            .join("lib/pkgconfig"),
+    )
+    .expect("the keg the pins name");
+    let path = format!(
+        "{}:{}",
+        machine.path().join("bin").display(),
+        env::var("PATH").unwrap_or_default()
+    );
+    let evaluate = |inherited: &str| {
+        let output = Command::new("just")
+            .arg("--justfile")
+            .arg(root.join("justfile"))
+            .arg("--working-directory")
+            .arg(root)
+            .args(["--evaluate", "PKG_CONFIG_PATH"])
+            .env("PATH", &path)
+            .env("PKG_CONFIG_PATH", inherited)
+            .output()
+            .expect("just runs");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("the value is UTF-8")
+    };
+
+    let own = "/elsewhere/lib/pkgconfig";
+    let outer = evaluate(own);
+    assert!(outer.contains(&formula), "the keg is on the path: {outer}");
+    assert!(outer.ends_with(own), "the caller's own path stays: {outer}");
+    assert_eq!(evaluate(&outer), outer, "a nested just changed the value");
+}
+
 /// What is wrong with a `main` that can return, or ends, before it names a
 /// path or a variable to cargo.
 fn main_problem(stmts: &[Stmt]) -> Option<&'static str> {
