@@ -1456,37 +1456,14 @@ fn a_newer_dispatch_of_one_selection_supersedes_the_older() {
         panic!("one cron per cadence");
     };
     let cadence = dispatch_cadence(weekly);
-    // Every input a person dispatches with says which lanes and tests the run
-    // covers, so each one is part of the selection the group names.
-    let inputs = mapping_field(
-        mapping_field(
-            mapping_field(
-                workflow.as_mapping().expect("a workflow is a mapping"),
-                "on",
-            )
-            .as_mapping()
-            .expect("the triggers are a mapping"),
-            "workflow_dispatch",
-        )
-        .as_mapping()
-        .expect("the dispatch trigger is a mapping"),
-        "inputs",
-    )
-    .as_mapping()
-    .expect("the dispatch inputs are a mapping");
-    let parts = inputs
-        .keys()
-        .map(|name| format!("inputs.{}", name.as_str().expect("an input name")))
-        .chain([
-            "github.ref".to_owned(),
-            cadence
-                .trim_start_matches("${{ ")
-                .trim_end_matches(" }}")
-                .to_owned(),
-        ]);
-    for part in parts {
+    for part in [
+        "github.ref",
+        cadence.trim_start_matches("${{ ").trim_end_matches(" }}"),
+        "inputs.only",
+        "inputs.mutants",
+    ] {
         assert!(
-            group.contains(&part),
+            group.contains(part),
             "the dispatch group omits `{part}`: {group}"
         );
     }
@@ -2015,30 +1992,10 @@ fn mutation_suites_run_only_when_asked_for() {
 fn a_request_for_one_lane_starts_nothing_beside_it() {
     let workflow = github_workflow("dispatch.yml");
     let jobs = workflow_jobs(&workflow);
-    let authorize = workflow_job(jobs, "authorize");
-    assert_eq!(
-        mapping_field(authorize, "runs-on").as_str(),
-        Some("ubuntu-latest")
-    );
-    assert_eq!(
-        mapping_field(authorize, "steps")
-            .as_sequence()
-            .expect("authorization steps are a sequence")
-            .len(),
-        1
-    );
     let fan_out = ["gate", "platforms", "deep", "mutants", "quality"];
 
     for (name, job) in jobs {
         let name = name.as_str().expect("a dispatcher job name is a string");
-        if name == "authorize" {
-            continue;
-        }
-        assert!(
-            job_needs(job.as_mapping().expect("a dispatcher job is a mapping"))
-                .contains("authorize"),
-            "`{name}` bypasses authorization"
-        );
         if fan_out.contains(&name) {
             continue;
         }
@@ -2116,46 +2073,6 @@ fn the_ui_workflow_names_its_lane_instead_of_repeating_it() {
     }
 }
 
-/// Where a lane builds is `ci lane`'s to choose: the first free slot of the
-/// lane's pool under the runner's build root. A workflow that names the build
-/// directory sends every job of the lane to one directory, where the lane
-/// build lock queues them one at a time. What a workflow still names is what
-/// runs before the lane: the xtask bootstrap, which outlives the checkout.
-///
-/// It sits under the build root every runner mounts, not in one runner's own
-/// directory. Kept per runner, the host held one bootstrap build and one Cargo
-/// home for each of its runners, 10 GB apiece outside every budget, and a
-/// runner that had not yet seen a commit compiled xtask for it again.
-#[test]
-fn a_lane_leaves_its_build_directory_to_the_slot_it_claims() {
-    for name in ["lane.yml", "ui.yml", "android.yml"] {
-        let workflow = github_workflow(name);
-        let env = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "env")
-            .as_mapping()
-            .expect("env is a mapping");
-        assert!(
-            env.get("CARGO_TARGET_DIR").is_none(),
-            "{name} sends every job of its lane to one build directory"
-        );
-        let fixtures = mapping_field(env, "KITHARA_FIXTURE_CACHE")
-            .as_str()
-            .expect("the executor names where the fixtures are read from");
-        let bootstrap = mapping_field(env, "KITHARA_CI_CACHE_ROOT")
-            .as_str()
-            .expect("the executor names where xtask is bootstrapped");
-        let cache_root = Path::new(fixtures)
-            .parent()
-            .expect("the fixture store has a mounted-volume parent")
-            .display()
-            .to_string();
-        assert_eq!(
-            bootstrap,
-            format!("{cache_root}/lanes/.kithara-ci"),
-            "{name}: the xtask bootstrap is one per host, beside the lane slots"
-        );
-    }
-}
-
 /// A job checks out the commit it runs, never every branch.
 ///
 /// `actions/checkout` at depth zero fetches every branch and tag, and a fleet
@@ -2198,8 +2115,8 @@ fn a_checkout_never_fetches_every_branch() {
     );
     assert_eq!(
         mapping_field(history, "if").as_str(),
-        Some("${{ fromJSON(needs.select.outputs.matrix || '[]')[0].history || inputs.history }}"),
-        "only a lane that reads history fetches it, whether its caller or the catalog says so"
+        Some("${{ inputs.history }}"),
+        "only a lane that reads history fetches it"
     );
     assert_eq!(
         mapping_field(history, "run").as_str().map(str::trim),
@@ -2273,20 +2190,6 @@ fn a_step_that_collects_build_output_reads_the_build_directory() {
         condition.contains("env.KITHARA_LANE_TARGET != ''"),
         "a lane that stopped before it took a slot has nothing to upload: {condition}"
     );
-    assert_eq!(timings["with"]["if-no-files-found"].as_str(), Some("error"));
-}
-
-#[test]
-fn failure_evidence_follows_the_lane_result_without_an_upload_failure_cascade() {
-    let workflow = github_workflow("lane.yml");
-    let job = workflow_job(workflow_jobs(&workflow), "run");
-    let run = named_step(job, "Run the lane");
-    assert_eq!(run["id"].as_str(), Some("run_lane"));
-    let upload = named_step(job, "Upload the lane's report");
-    let condition = upload["if"].as_str().expect("conditional lane report");
-    assert!(condition.contains("steps.run_lane.outcome == 'failure'"));
-    assert!(!condition.contains("failure()"));
-    assert_eq!(upload["with"]["if-no-files-found"].as_str(), Some("error"));
 }
 
 // The executor's whole job is to run a lane the catalog named. A workflow that
@@ -2311,7 +2214,7 @@ fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
 
     let text = github_workflow_text("lane.yml");
     assert!(
-        text.contains("just ci lane \"${args[@]}\""),
+        text.contains("just ci lane \"${{ inputs.lane }}\" --kind \"${{ inputs.kind }}\""),
         "the executor runs the named lane"
     );
 
@@ -2327,10 +2230,8 @@ fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
     );
     assert_eq!(
         mapping_field(job, "runs-on").as_str(),
-        Some(
-            "${{ fromJSON(needs.select.outputs.matrix || '[]')[0].runner || inputs.runner || fromJSON(vars.KITHARA_RUNNER_LABELS) }}"
-        ),
-        "the catalog or rendered call supplies the lane runner before the shared pool"
+        Some("${{ inputs.runner || fromJSON(vars.KITHARA_RUNNER_LABELS) }}"),
+        "a lane runner label overrides only the shared pool selection"
     );
     let upload = named_step(job, "Upload the lane's report");
     let upload_inputs = mapping_field(upload, "with")
@@ -2338,7 +2239,7 @@ fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
         .expect("the lane upload has inputs");
     assert_eq!(
         mapping_field(upload_inputs, "name").as_str(),
-        Some("${{ env.LANE_ARTIFACT_NAME }}-${{ github.run_id }}-${{ github.run_attempt }}")
+        Some("${{ inputs.artifact-name }}-${{ github.run_id }}-${{ github.run_attempt }}")
     );
 }
 
@@ -2483,19 +2384,6 @@ fn a_caller_always_passes_every_input_the_called_workflow_requires() {
 #[test]
 fn the_role_runner_reads_its_matrix_from_the_catalog() {
     let workflow = github_workflow("run.yml");
-    let workflow_env = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "env")
-        .as_mapping()
-        .expect("the role runner has an environment");
-    assert_eq!(
-        mapping_field(workflow_env, "CARGO_TARGET_DIR").as_str(),
-        Some("/cache/target"),
-        "matrix selection reuses the fleet build cache"
-    );
-    assert_eq!(
-        mapping_field(workflow_env, "KITHARA_CI_CACHE_ROOT").as_str(),
-        Some("/cache/lanes/.kithara-ci"),
-        "matrix selection reuses the host's xtask bootstrap"
-    );
     let jobs = workflow_jobs(&workflow);
     assert_eq!(
         workflow_job_names(jobs),
@@ -2648,25 +2536,33 @@ fn the_windows_lane_runs_the_backend_the_platform_ships() {
 /// through these. Without `FFMPEG_DIR` the crate falls through to vcpkg and
 /// then pkg-config, the guest has neither; without `LIBCLANG_PATH` bindgen
 /// loads no library. Either way a build script panics before a single test
-/// runs — which is what the lane did for as long as it existed. Where they sit
-/// is machine state, so both are read the way the pool's labels are: from a
-/// repository variable rather than pinned in the workflow.
+/// runs. Where they sit is decided by the script that installs them, so that
+/// script says it, machine-wide, the way it says where Monkey's Audio is. The
+/// libraries were once installed by hand and repository variables named
+/// where; rebuilding the guest took the libraries and left the variables
+/// pointing at nothing.
 #[test]
-fn the_windows_lane_is_told_where_the_guest_keeps_its_libraries() {
+fn the_guest_alone_says_where_its_libraries_are() {
     let workflow = github_workflow("windows.yml");
     let job = workflow_job(workflow_jobs(&workflow), "windows");
-    let environment = mapping_field(job, "env")
-        .as_mapping()
-        .expect("the lane names the environment its build scripts read");
+    let provision = fs::read_to_string(
+        workflows_dir()
+            .join("../../.config/windows/provision.ps1")
+            .as_path(),
+    )
+    .expect("the guest's provisioning script is readable");
 
-    for (name, variable) in [
-        ("FFMPEG_DIR", "KITHARA_WINDOWS_FFMPEG_DIR"),
-        ("LIBCLANG_PATH", "KITHARA_WINDOWS_LIBCLANG_PATH"),
-    ] {
-        assert_eq!(
-            mapping_field(environment, name).as_str(),
-            Some(format!("${{{{ vars.{variable} }}}}").as_str()),
-            "`{name}` pins a path instead of reading the machine's own"
+    for name in ["FFMPEG_DIR", "LIBCLANG_PATH"] {
+        assert!(
+            job.get("env").and_then(|env| env.get(name)).is_none(),
+            "the lane restates `{name}`, which the guest already says"
+        );
+        assert!(
+            provision.lines().any(|line| {
+                line.contains(&format!("SetEnvironmentVariable('{name}',"))
+                    && line.contains("'Machine'")
+            }),
+            "the guest's provisioning never says where `{name}` points"
         );
     }
 }

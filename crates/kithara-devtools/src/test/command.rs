@@ -44,20 +44,6 @@ pub(crate) fn run(args: &TestArgs) -> Result<()> {
     run_lane(test, root, lane_name, &request)
 }
 
-/// Whether a test request selects a configured run before claiming build resources.
-/// # Errors
-/// Returns an error for invalid test configuration, arguments or Git history.
-pub fn is_selected(root: &Path, project: &ProjectConfig, args: &[String]) -> Result<bool> {
-    let request = TestRequest::parse(args)?;
-    let test = &project.test;
-    validate_config(test)?;
-    if request.touched {
-        return Ok(!touched::lanes(test, root, &request.lanes)?.is_empty());
-    }
-    select_lane(test, &request)?;
-    Ok(true)
-}
-
 /// Run every lane the branch touched.
 fn run_touched(test: &TestCommandConfig, root: &Path, request: &TestRequest) -> Result<()> {
     let selected = touched::lanes(test, root, &request.lanes)?;

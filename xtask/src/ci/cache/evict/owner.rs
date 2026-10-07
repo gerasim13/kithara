@@ -21,13 +21,10 @@ use super::{
 };
 use crate::{ci::host::mac::read_secret, consts};
 
-/// Keeps each scope's compiler cache under the quota the setup gave its
-/// bucket by evicting the entries used longest ago, as the store's audit log
-/// reports their use.
-///
-/// The quota is read from the environment the setup applied, not asked of
-/// the store: after a start the store answers no quota question until it has
-/// counted the bucket, a minute or more.
+/// Keeps each scope's compiler cache under the quota the host's environment
+/// names for it by evicting the entries used longest ago, as the store's audit
+/// log reports their use. The store's buckets carry no quota of their own, so
+/// this is the only bound on them.
 pub(in crate::ci::cache) fn run() -> Result<Infallible> {
     let shared = required("CACHE_BUCKET_QUOTA")?;
     let buckets = required("CACHE_SCOPES")?
@@ -56,41 +53,12 @@ pub(in crate::ci::cache) fn run() -> Result<Infallible> {
     Owner::start(store, buckets, deliveries)?.serve()
 }
 
-/// What the evictor knows of whether the audit log is arriving, which a
-/// recount waits on: a bucket that is quiet because the log stopped is not
-/// quiet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Liveness {
-    Unknown,
-    /// The marker was asked for at this moment and its echo has not arrived.
-    Probed(Instant),
-    /// The marker's echo arrived, and no request has since.
-    Echoed,
-    /// The echo never arrived, or the recount failed; nothing is recounted
-    /// until the next pass.
-    Silent,
-}
-
 struct Scope {
     bucket: String,
     /// The second each entry was last read, as far as the log has said.
     reads: HashMap<Entry, u64>,
     quota: u64,
-    /// Bytes deleted since the store last recounted the bucket, or none when
-    /// the evictor does not know.
-    unreconciled: Option<u64>,
-    active_at: Instant,
-    liveness: Liveness,
     next_pass: Instant,
-}
-
-impl Scope {
-    /// A client request: the quiet minute starts over, and an echo that came
-    /// before it proves nothing about the minute after.
-    fn busy(&mut self) {
-        self.active_at = Instant::now();
-        self.liveness = Liveness::Unknown;
-    }
 }
 
 struct Owner {
@@ -115,13 +83,6 @@ impl Owner {
 
     /// Deliveries the receiver holds for the owner while a listing runs.
     const CHANNEL: usize = 65_536;
-
-    /// How long a bucket has to go without a client request before the store
-    /// is made to recount it. The recount holds the bucket's quota lock while
-    /// it walks every object, and a write that waits on that lock longer than
-    /// five seconds fails; a lane whose startup probe fails that way runs its
-    /// whole compiler cache read-only.
-    const QUIET: Duration = Duration::from_secs(60);
 
     /// Reads each scope's record back. A record that does not read back
     /// whole is set aside, which only ages its entries; a store that cannot
@@ -153,9 +114,6 @@ impl Owner {
                 bucket,
                 reads,
                 quota,
-                unreconciled: None,
-                active_at: now,
-                liveness: Liveness::Unknown,
                 next_pass: now,
             });
         }
@@ -185,17 +143,9 @@ impl Owner {
         let scope = &mut self.scopes[index];
         if scope.next_pass <= now {
             scope.next_pass = now + Self::PASS_INTERVAL;
-            if scope.liveness == Liveness::Silent {
-                scope.liveness = Liveness::Unknown;
-            }
             if let Err(error) = self.pass(index) {
                 warn!(bucket = %self.scopes[index].bucket, error = format!("{error:#}"), "eviction pass failed");
             }
-        }
-        if let Err(error) = self.tend(index) {
-            let scope = &mut self.scopes[index];
-            scope.liveness = Liveness::Silent;
-            warn!(bucket = %scope.bucket, error = format!("{error:#}"), "recount failed; no recount before the next pass");
         }
     }
 
@@ -207,25 +157,12 @@ impl Owner {
 
     fn absorb(&mut self, delivery: Delivery) {
         self.dropped = self.dropped.saturating_add(delivery.dropped);
-        for event in delivery.events {
-            match event {
-                Event::Use { scope, entry, at_s } => {
-                    let scope = &mut self.scopes[scope];
-                    scope
-                        .reads
-                        .entry(entry)
-                        .and_modify(|read| *read = (*read).max(at_s))
-                        .or_insert(at_s);
-                    scope.busy();
-                }
-                Event::Echo { scope } => {
-                    let scope = &mut self.scopes[scope];
-                    if matches!(scope.liveness, Liveness::Probed(_)) {
-                        scope.liveness = Liveness::Echoed;
-                    }
-                }
-                Event::Activity { scope } => self.scopes[scope].busy(),
-            }
+        for Event { scope, entry, at_s } in delivery.events {
+            self.scopes[scope]
+                .reads
+                .entry(entry)
+                .and_modify(|read| *read = (*read).max(at_s))
+                .or_insert(at_s);
         }
     }
 
@@ -261,7 +198,6 @@ impl Owner {
             horizon_s = evicted.last().map(|victim| victim.used_s),
             reads = scope.reads.len(),
             dropped_events = self.dropped,
-            unreconciled = scope.unreconciled,
             "eviction pass"
         );
         self.dropped = 0;
@@ -301,7 +237,7 @@ impl Owner {
         let mut evicted = Vec::new();
         for chunk in chosen.chunks(Self::CHUNK) {
             self.drain();
-            let scope = &mut self.scopes[index];
+            let scope = &self.scopes[index];
             let unused = plan::still_unused(chunk, &scope.reads);
             if unused.is_empty() {
                 continue;
@@ -310,58 +246,10 @@ impl Owner {
                 .iter()
                 .map(|victim| victim.entry.object())
                 .collect::<Vec<_>>();
-            if let Err(error) = self.store.remove(&scope.bucket, &objects) {
-                // Some of the chunk may be gone, and how much is unknown.
-                scope.unreconciled = None;
-                return Err(error);
-            }
-            let bytes = unused
-                .iter()
-                .map(|victim| victim.size)
-                .fold(0, u64::saturating_add);
-            scope.unreconciled = scope
-                .unreconciled
-                .map(|unreconciled| unreconciled.saturating_add(bytes));
+            self.store.remove(&scope.bucket, &objects)?;
             evicted.extend(unused);
         }
         Ok(evicted)
-    }
-
-    /// Moves a bucket that wants a recount towards one: a quiet bucket is
-    /// probed, and recounted once the probe's echo shows the log is arriving.
-    /// It decides on every request the log has handed over, not only on the
-    /// one that woke the owner.
-    fn tend(&mut self, index: usize) -> Result<()> {
-        self.drain();
-        let scope = &mut self.scopes[index];
-        if !plan::recount_wanted(scope.unreconciled, scope.quota)
-            || scope.active_at.elapsed() < Self::QUIET
-        {
-            return Ok(());
-        }
-        match scope.liveness {
-            Liveness::Unknown => {
-                self.store.probe(&scope.bucket, consts::EVICT_MARKER)?;
-                scope.liveness = Liveness::Probed(Instant::now());
-            }
-            Liveness::Probed(at) if at.elapsed() > Self::QUIET => {
-                warn!(bucket = %scope.bucket, "the audit log did not echo the probe; no recount before the next pass");
-                scope.liveness = Liveness::Silent;
-            }
-            Liveness::Probed(_) | Liveness::Silent => {}
-            Liveness::Echoed => {
-                let started = Instant::now();
-                // The store recounts on the write after one that shrank an
-                // object.
-                for body in [&b".."[..], b".", b"."] {
-                    self.store.put(&scope.bucket, consts::EVICT_MARKER, body)?;
-                }
-                scope.unreconciled = Some(0);
-                scope.liveness = Liveness::Unknown;
-                info!(bucket = %scope.bucket, recount_ms = started.elapsed().as_millis(), "the store recounted the bucket");
-            }
-        }
-        Ok(())
     }
 }
 
@@ -417,8 +305,8 @@ mod tests {
         )
     }
 
-    /// Speaks `rc` for one review bucket: logs every call, keeps the record
-    /// it is given, and logs how many bytes each marker write carried.
+    /// Speaks `rc` for one review bucket: logs every call and keeps the
+    /// record it is given.
     fn rc(directory: &Path, cases: &str) -> PathBuf {
         let program = directory.join("rc");
         let log = directory.join("log");
@@ -431,8 +319,6 @@ case "$*" in
 "alias set -- ci {store} user password") ;;
 "object show ci/ci-cache-recency/kithara-review") echo "Not found" >&2; exit 5 ;;
 "pipe ci/ci-cache-recency/kithara-review") cat > '{record}' ;;
-"pipe ci/kithara-review/.evict/recount") wc -c | tr -d ' ' >> '{log}' ;;
-"object stat ci/kithara-review/.evict/recount") echo "Not found" >&2; exit 5 ;;
 {cases}
 *) echo "unexpected: $*" >&2; exit 2 ;;
 esac
@@ -478,7 +364,7 @@ esac
         let (mut owner, sender) = owner(&program);
         deliver(
             &sender,
-            vec![Event::Use {
+            vec![Event {
                 scope: 0,
                 entry: entry('a', '1'),
                 at_s: 400,
@@ -503,28 +389,6 @@ esac
         assert_eq!(record, HashMap::from([(entry('a', '1'), 400)]));
     }
 
-    /// After a start the store refuses every quota question until it has
-    /// counted the bucket, a minute or more; a pass that waited on that answer
-    /// left a full bucket full until the next pass, half an hour later.
-    #[test]
-    fn the_first_pass_evicts_before_the_store_has_counted_the_bucket() {
-        let directory = tempfile::tempdir().unwrap();
-        let uncounted = r#""--json bucket quota info ci/kithara-review") echo 'HTTP 503: authoritative bucket usage is not available yet' >&2; exit 1 ;;"#;
-        let program = rc(
-            directory.path(),
-            &format!("{uncounted}\n{}", bucket(&b1_listing())),
-        );
-        let (mut owner, _sender) = owner(&program);
-
-        owner.pass(0).unwrap();
-
-        let calls = calls(directory.path());
-        assert!(
-            calls.iter().any(|call| call.starts_with("object remove")),
-            "{calls:?}"
-        );
-    }
-
     #[test]
     fn a_pass_whose_listing_fails_evicts_nothing() {
         let directory = tempfile::tempdir().unwrap();
@@ -543,129 +407,6 @@ esac
                 .any(|call| call.starts_with("object remove") || call.starts_with("pipe")),
             "{calls:?}"
         );
-    }
-
-    /// The store recounts a bucket only on a write that shrinks the marker
-    /// and then on the next write to it, so the marker is written three
-    /// times, smaller each time but the last.
-    #[test]
-    fn a_quiet_bucket_is_probed_and_recounted_once_the_log_echoes() {
-        let directory = tempfile::tempdir().unwrap();
-        let program = rc(directory.path(), "");
-        let (mut owner, sender) = owner(&program);
-        owner.scopes[0].active_at = Instant::now().checked_sub(Owner::QUIET).unwrap();
-
-        owner.tend(0).unwrap();
-        deliver(&sender, vec![Event::Echo { scope: 0 }]);
-        owner.drain();
-        owner.tend(0).unwrap();
-
-        let calls = calls(directory.path());
-        let marker = calls
-            .iter()
-            .skip_while(|call| !call.starts_with("object stat"))
-            .cloned()
-            .collect::<Vec<_>>();
-        assert_eq!(
-            marker,
-            [
-                "object stat ci/kithara-review/.evict/recount",
-                "pipe ci/kithara-review/.evict/recount",
-                "2",
-                "pipe ci/kithara-review/.evict/recount",
-                "1",
-                "pipe ci/kithara-review/.evict/recount",
-                "1",
-            ]
-        );
-        assert_eq!(owner.scopes[0].unreconciled, Some(0));
-        assert_eq!(owner.scopes[0].liveness, Liveness::Unknown);
-    }
-
-    /// A request that arrives after the probe was made restarts the quiet
-    /// minute, and the echo behind it proves nothing about the minute after.
-    #[test]
-    fn a_request_after_the_probe_holds_the_recount() {
-        let directory = tempfile::tempdir().unwrap();
-        let program = rc(directory.path(), "");
-        let (mut owner, sender) = owner(&program);
-        owner.scopes[0].active_at = Instant::now().checked_sub(Owner::QUIET).unwrap();
-
-        owner.tend(0).unwrap();
-        deliver(
-            &sender,
-            vec![Event::Activity { scope: 0 }, Event::Echo { scope: 0 }],
-        );
-        owner.drain();
-        owner.tend(0).unwrap();
-
-        let calls = calls(directory.path());
-        assert!(
-            !calls.iter().any(|call| call.starts_with("pipe")),
-            "{calls:?}"
-        );
-        assert_eq!(owner.scopes[0].liveness, Liveness::Unknown);
-        assert_eq!(owner.scopes[0].unreconciled, None);
-    }
-
-    /// The log arrives a request at a time, so the echo can be taken while
-    /// the request behind it still waits in the channel.
-    #[test]
-    fn a_request_queued_behind_the_echo_holds_the_recount() {
-        let directory = tempfile::tempdir().unwrap();
-        let program = rc(directory.path(), "");
-        let (mut owner, sender) = owner(&program);
-        owner.scopes[0].active_at = Instant::now().checked_sub(Owner::QUIET).unwrap();
-
-        owner.tend(0).unwrap();
-        deliver(&sender, vec![Event::Echo { scope: 0 }]);
-        owner.drain();
-        deliver(&sender, vec![Event::Activity { scope: 0 }]);
-        owner.tend(0).unwrap();
-
-        let calls = calls(directory.path());
-        assert!(
-            !calls.iter().any(|call| call.starts_with("pipe")),
-            "{calls:?}"
-        );
-        assert_eq!(owner.scopes[0].liveness, Liveness::Unknown);
-    }
-
-    /// A store that refuses the probe would refuse it every second; the
-    /// next pass tries again, and the log carries one warning in between.
-    #[test]
-    fn a_recount_that_fails_waits_for_the_next_pass() {
-        let directory = tempfile::tempdir().unwrap();
-        let program = directory.path().join("rc");
-        install_script(
-            &program,
-            &format!(
-                r#"#!/bin/sh
-echo "$*" >> '{log}'
-case "$*" in
-"alias set -- ci {store} user password") ;;
-"object show ci/ci-cache-recency/kithara-review") exit 5 ;;
-"object stat ci/kithara-review/.evict/recount") echo "Access denied" >&2; exit 4 ;;
-*) echo "unexpected: $*" >&2; exit 2 ;;
-esac
-"#,
-                log = directory.path().join("log").display(),
-                store = consts::CACHE_STORE_URL,
-            ),
-        );
-        let (mut owner, _sender) = owner(&program);
-        owner.scopes[0].active_at = Instant::now().checked_sub(Owner::QUIET).unwrap();
-        owner.scopes[0].next_pass = Instant::now() + Owner::PASS_INTERVAL;
-
-        owner.tick(0);
-        owner.tick(0);
-
-        let probes = calls(directory.path())
-            .into_iter()
-            .filter(|call| call.starts_with("object stat"))
-            .count();
-        assert_eq!(probes, 1);
-        assert_eq!(owner.scopes[0].liveness, Liveness::Silent);
     }
 
     /// Every delivery names its bucket's first scope, so a scope listed twice

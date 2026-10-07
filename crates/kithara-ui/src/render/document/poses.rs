@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use super::{
-    Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover, SplitMount, StageMount,
-    render,
+    Ctx, Group, GroupMount, Host, Measured, Modal, Module, PlacedMount, Popover, SplitMount,
+    StageMount, render,
 };
 use crate::{
     compile::CompiledNode,
@@ -60,6 +60,13 @@ impl Host for &mut Poses {
     fn hosted(&mut self, _node: &ExpandedNode, _child: Self::Output) {}
 
     fn measured(&mut self, _plan: Measured, _branches: Vec<Self::Output>) {}
+
+    /// Poses the content of an open modal alone, as [`Self::popover`] does.
+    fn modal(&mut self, modal: Modal<'_>, content: &mut dyn FnMut(&mut Self) -> Self::Output) {
+        if modal.is_open() {
+            content(self);
+        }
+    }
 
     fn module(&mut self, _module: Module<'_>, _content: Option<Self::Output>) {}
 

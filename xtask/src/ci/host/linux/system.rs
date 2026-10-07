@@ -31,19 +31,8 @@ pub(super) fn bootstrap(process: &Process, host: &LinuxHost) -> Result<()> {
         )?;
     }
 
-    let mut volumes: Vec<String> = host
-        .runners
-        .iter()
-        .flat_map(|runner| {
-            super::container::Container::mounts(host, runner)
-                .into_iter()
-                .map(|(name, _)| name)
-        })
-        .collect();
-    volumes.sort();
-    volumes.dedup();
     let pins = CiPins::load(std::path::Path::new(consts::PINS_PATH))?;
-    for volume in &volumes {
+    for (volume, image) in &job_mounts(host, &pins)? {
         if std::path::Path::new(volume).is_absolute() {
             std::fs::create_dir_all(volume)
                 .with_context(|| format!("creating runner cache directory {volume}"))?;
@@ -54,7 +43,7 @@ pub(super) fn bootstrap(process: &Process, host: &LinuxHost) -> Result<()> {
                 "create a runner cache volume",
             )?;
         }
-        give_to_the_job(process, volume, &pins)?;
+        give_to_the_job(process, volume, image)?;
     }
     info!(network = host.network, "runner machine prepared");
     Ok(())
@@ -114,6 +103,23 @@ pub(super) fn install_tools(process: &Process) -> Result<()> {
     Ok(())
 }
 
+/// Every cache mount the runners use, each named once with the image of a
+/// runner that mounts it: the machine holds that image under the tag its unit
+/// names, while a pin is only what the next image build tags.
+fn job_mounts(host: &LinuxHost, pins: &CiPins) -> Result<Vec<(String, String)>> {
+    let mut mounts: Vec<(String, String)> = Vec::new();
+    for runner in &host.runners {
+        let image = super::container::image(runner, pins)?;
+        for (volume, _) in super::container::Container::mounts(host, runner) {
+            if !mounts.iter().any(|(named, _)| *named == volume) {
+                mounts.push((volume, image.clone()));
+            }
+        }
+    }
+    mounts.sort();
+    Ok(mounts)
+}
+
 fn require_linux() -> Result<()> {
     if !cfg!(target_os = "linux") {
         bail!("this command provisions a Linux CI machine and must run on one");
@@ -130,7 +136,7 @@ fn require_linux() -> Result<()> {
 /// is a volume nobody gave away. Both existing volumes worked by accident of
 /// their paths existing in the image; this makes it true on purpose, for every
 /// cache mount, on every machine that bootstraps.
-fn give_to_the_job(process: &Process, volume: &str, pins: &CiPins) -> Result<()> {
+fn give_to_the_job(process: &Process, volume: &str, image: &str) -> Result<()> {
     let mount_type = super::container::Container::mount_type(volume);
     let mount = format!("type={mount_type},source={volume},target=/volume");
     let owner = format!("chown {user}:{user} /volume", user = consts::JOB_USER);
@@ -147,10 +153,41 @@ fn give_to_the_job(process: &Process, volume: &str, pins: &CiPins) -> Result<()>
             &mount,
             "--entrypoint",
             "sh",
-            &pins.linux_runner_image,
+            image,
             "-c",
             &owner,
         ],
         "give a cache volume to the job user",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ci::{
+        config::fixture,
+        host::linux::{container, profile::tests::host_fixture},
+    };
+
+    /// A machine holds the images its units start from, under the tag the
+    /// units name; a pin is what the next image build tags. Handing a mount
+    /// over through the pin fails on a machine that serves every job.
+    #[test]
+    fn every_cache_mount_is_handed_over_through_an_image_a_unit_starts_from() {
+        let host = host_fixture();
+        let pins = &fixture().pins;
+        let started: Vec<String> = host
+            .runners
+            .iter()
+            .map(|runner| container::image(runner, pins).expect("the pins carry tags"))
+            .collect();
+        let mounts = job_mounts(&host, pins).expect("the pins carry tags");
+        assert!(!mounts.is_empty(), "the runners mount caches");
+        for (volume, image) in &mounts {
+            assert!(
+                started.contains(image),
+                "{volume} goes through {image}, which no unit starts from: {started:?}"
+            );
+        }
+    }
 }

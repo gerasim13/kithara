@@ -1,6 +1,6 @@
-use std::{fs, io, path::PathBuf};
+use std::{collections::BTreeSet, path::PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use tracing::info;
 
 use super::{container::Container, profile::LinuxHost};
@@ -13,12 +13,11 @@ use crate::{
 ///
 /// The machine is shared: other stacks keep images and volumes here, so a
 /// blanket `docker system prune` would take theirs. A live cache stays and is
-/// held to a budget instead: the per-runner target directories under the
-/// configured cache root are trimmed here, `kithara-ci-sccache` and
-/// `kithara-ci-fixtures` are what this exists to protect, and Cargo home is
-/// never touched. A volume of this
-/// project's that no container is attached to any more is not a cache but a
-/// leftover, and it is reclaimed.
+/// held to a budget instead: the per-runner build roots under the configured
+/// cache root are trimmed here, `kithara-ci-fixtures` is what this exists to
+/// protect, and Cargo home is never touched. A volume of this project's that
+/// no container is attached to any more is not a cache but a leftover, and it
+/// is reclaimed.
 ///
 /// What to keep is named by the caller rather than read from the pins, because
 /// this runs from a timer and the pins move with the repository. Read there,
@@ -102,9 +101,8 @@ fn superseded<'a>(listed: &'a str, keep: &[String]) -> Vec<&'a str> {
 
 /// This project's volumes that no container is attached to any more.
 ///
-/// The live per-runner caches (`kithara-ci-target-<owner>-<n>`,
-/// `kithara-ci-sccache`, `kithara-ci-fixtures`) all carry a link and are never
-/// listed here — Docker's own `dangling` filter is the authority on that, not a
+/// A live cache (`kithara-ci-fixtures`) carries a link and is never listed
+/// here — Docker's own `dangling` filter is the authority on that, not a
 /// name pattern. What this catches is a generation the fleet has moved off:
 /// the single shared `kithara-ci-target` left behind when the runners went to
 /// one volume each held 231 GB on a 1.8 TB disk that was 99% full, and nothing
@@ -120,43 +118,36 @@ fn orphaned_volumes(listed: &str) -> Vec<&str> {
 }
 
 /// Where the live build caches sit on disk, so their contents can be held to a
-/// budget: the root every runner claims a lane directory under, the xtask
-/// bootstrap of each trust every runner shares, and the per-runner directory a
-/// job that claims no lane still builds in.
+/// budget: each runner's build root, which holds its xtask bootstrap and the
+/// builds its jobs name, each trust's lane slots, and the lane directories and
+/// xtask bootstraps `production/main` keeps until this layout replaces its
+/// own. One budget over both is what keeps two layouts on one disk inside one
+/// ceiling.
 fn target_dirs(host: &LinuxHost) -> Result<Vec<PathBuf>> {
-    let mut dirs = vec![Container::lane_root(host)];
-    let bootstrap = Container::bootstrap_root(host);
-    match fs::read_dir(&bootstrap) {
-        Ok(entries) => {
-            for entry in entries {
-                let entry = entry.with_context(|| {
-                    format!(
-                        "reading an entry in xtask bootstrap {}",
-                        bootstrap.display()
-                    )
-                })?;
-                if entry.file_type()?.is_dir() {
-                    dirs.push(entry.path());
-                }
-            }
-        }
-        // No job has bootstrapped xtask on this host yet.
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("reading xtask bootstrap {}", bootstrap.display()));
-        }
-    }
-    dirs.extend(
-        host.runners
-            .iter()
-            .map(|runner| Container::target_dir(host, runner)),
-    );
+    let lanes = host.cache_root.join(consts::PREVIOUS_LANES);
+    let mut dirs: Vec<PathBuf> = host
+        .runners
+        .iter()
+        .flat_map(|runner| {
+            [
+                Container::build_root(host, runner),
+                Container::build_slots(host, runner),
+            ]
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    dirs.extend(build_cache::previous_build_roots(
+        &lanes.join(consts::PREVIOUS_CACHE_ROOT),
+    )?);
+    dirs.push(lanes);
     Ok(dirs)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::Path};
+
     use super::*;
 
     fn keep(images: &[&str]) -> Vec<String> {
@@ -189,33 +180,46 @@ mod tests {
         );
     }
 
-    /// Every runner of the host bootstraps xtask in one build per trust, and
-    /// that build answers to the budget like the lane slots beside it.
+    /// The budget is held over every directory a job of either layout builds
+    /// in, and nothing else: every directory a runner binds in, except Cargo's
+    /// home and the checkouts, and each xtask bootstrap the previous layout
+    /// keeps under its cache root.
     #[test]
-    fn the_xtask_bootstrap_every_runner_shares_answers_to_the_budget() {
-        let root = tempfile::tempdir().unwrap();
+    fn the_budget_covers_every_directory_a_job_builds_in() {
+        use std::collections::BTreeSet;
+
+        use super::super::container::tests::told;
+        use crate::ci::previous_layout::previous_layout;
+
         let mut host = crate::ci::host::linux::profile::tests::host_fixture();
-        host.cache_root = root.path().to_path_buf();
-        let review = Container::bootstrap_root(&host).join("review");
-        fs::create_dir_all(&review).unwrap();
+        let cache = tempfile::tempdir().expect("a cache root");
+        host.cache_root = cache.path().to_path_buf();
+        let layout = previous_layout().linux;
+        let mut expected = BTreeSet::new();
+        for runner in &host.runners {
+            let home = told(runner, "CARGO_HOME");
+            let checkouts = told(runner, "SCCACHE_BASEDIRS");
+            for (source, at) in Container::mounts(&host, runner) {
+                let source = PathBuf::from(source);
+                let at = Path::new(at);
+                if source.is_absolute() && at != home && !checkouts.starts_with(at) {
+                    expected.insert(source.clone());
+                }
+                if let Ok(below) = layout.named.cache_root.strip_prefix(at) {
+                    for trust in ["review", "trusted"] {
+                        let bootstrap = source.join(below).join("bootstrap").join(trust);
+                        fs::create_dir_all(&bootstrap).expect("a bootstrap directory");
+                        expected.insert(bootstrap);
+                    }
+                }
+            }
+        }
 
-        assert!(
-            target_dirs(&host).unwrap().contains(&review),
-            "the shared xtask bootstrap escapes the budget"
-        );
-    }
-
-    #[test]
-    fn build_cache_budget_uses_the_profile_storage_root() {
-        let host = crate::ci::host::linux::profile::tests::host_fixture();
-        let expected: Vec<_> = std::iter::once(host.cache_root.join("lanes"))
-            .chain(
-                host.runners
-                    .iter()
-                    .map(|runner| host.cache_root.join("target").join(&runner.name)),
-            )
+        let budgeted: BTreeSet<PathBuf> = target_dirs(&host)
+            .expect("the budget's directories are listed")
+            .into_iter()
             .collect();
-        assert_eq!(target_dirs(&host).unwrap(), expected);
+        assert_eq!(budgeted, expected);
     }
 
     #[test]

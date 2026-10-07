@@ -1,16 +1,18 @@
 use std::{
     env,
-    fs::{self, OpenOptions},
+    fs::{self, File, OpenOptions},
     io,
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     process::{self, Command, ExitStatus},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 mod consts {
     use super::Duration;
 
+    pub(super) const LEASE_FILE: &str = ".kithara-job-lease";
     pub(super) const HEARTBEAT_FILE: &str = ".kithara-job-heartbeat";
     // Refresh far faster than the five-minute host cleanup interval. Polling the
     // child at 100 ms keeps the wrapper's exit latency below a measurable CI phase.
@@ -81,6 +83,40 @@ fn hold_shared(file: &fs::File, lease: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Holds the build directory's lease, marked used now: the date an eviction
+/// orders directories by.
+///
+/// An eviction moves a directory away before it lets go of the lease, so a
+/// lock this job then gets can guard a file that no longer sits at the path.
+/// That lock holds nothing, and the lease of whatever stands there now is
+/// taken instead.
+fn take(directory: &Path, lease: &Path) -> io::Result<File> {
+    loop {
+        fs::create_dir_all(directory)?;
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(lease)?;
+        hold_shared(&file, lease)?;
+        if still_at(&file, lease)? {
+            file.set_modified(SystemTime::now())?;
+            return Ok(file);
+        }
+    }
+}
+
+/// Whether the open `file` is still the one at `path`.
+fn still_at(file: &File, path: &Path) -> io::Result<bool> {
+    let held = file.metadata()?;
+    match fs::metadata(path) {
+        Ok(current) => Ok(current.dev() == held.dev() && current.ino() == held.ino()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 fn main() {
     match run() {
         Ok(status) => process::exit(status.code().unwrap_or(1)),
@@ -93,20 +129,15 @@ fn main() {
 
 fn run() -> io::Result<ExitStatus> {
     let mut args = env::args_os().skip(1);
-    let lease = PathBuf::from(
+    let directory = PathBuf::from(
         args.next()
-            .ok_or_else(|| io::Error::other("missing lease path"))?,
+            .ok_or_else(|| io::Error::other("missing build directory"))?,
     );
     let command = args
         .next()
         .ok_or_else(|| io::Error::other("missing command"))?;
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&lease)?;
-    hold_shared(&file, &lease)?;
+    let lease = directory.join(consts::LEASE_FILE);
+    let _file = take(&directory, &lease)?;
     let heartbeat = Heartbeat::start(&lease)?;
     let _ = env::current_exe().and_then(fs::remove_file);
     let mut child = Command::new(command).args(args).spawn()?;

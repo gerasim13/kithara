@@ -134,7 +134,7 @@ impl BoxVisitor<'_> {
                          store inline unless the variant is genuinely large or this is \
                          `Box<dyn Trait>` after coercion",
                 )
-                .with_explanation(consts::EXPLANATION),
+                .with_explanation(consts::EXPLANATION.into()),
             );
         }
     }

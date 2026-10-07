@@ -87,6 +87,8 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
              mem_limit: {memory}\n    \
              cgroup_parent: {cgroup_parent}\n    \
              pids_limit: {pids}\n    \
+             ulimits:\n      \
+             nice: {nice}\n    \
              security_opt: [\"no-new-privileges\"]\n    \
              env_file: [\"{env_file}\"]",
             name = runner.name,
@@ -96,6 +98,7 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
             memory = unit.memory,
             cgroup_parent = unit.cgroup_parent,
             pids = Container::PIDS_LIMIT,
+            nice = Container::NICE_LIMIT,
             env_file = unit.env_file,
         )?;
         writeln!(yaml, "    environment:")?;
@@ -167,9 +170,11 @@ mod tests {
                 );
             }
         }
-        assert!(yaml.contains("kithara-ci-sccache:/cache/sccache"), "{yaml}");
         assert!(
-            yaml.contains("/var/lib/kithara-ci/lanes:/cache/lanes"),
+            yaml.contains(&format!(
+                "/var/lib/kithara-ci/cargo/review:{}",
+                consts::CARGO_HOME_MOUNT
+            )),
             "{yaml}"
         );
         assert!(
@@ -187,6 +192,23 @@ mod tests {
         assert_eq!(
             yaml.matches(&format!("cgroup_parent: {}\n", consts::SERVICE_SLICE))
                 .count(),
+            host.runners.len(),
+            "{yaml}"
+        );
+    }
+
+    /// A Compose-started job may raise its audio threads' priority exactly as
+    /// one systemd starts may.
+    #[test]
+    fn every_service_lets_its_jobs_raise_a_thread_priority() {
+        let host = host_fixture();
+        let yaml = project(&host, &fixture().pins, 32).expect("the project must render");
+        assert_eq!(
+            yaml.matches(&format!(
+                "ulimits:\n      nice: {}\n",
+                Container::NICE_LIMIT
+            ))
+            .count(),
             host.runners.len(),
             "{yaml}"
         );

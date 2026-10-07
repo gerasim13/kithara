@@ -99,7 +99,8 @@ impl<'ast> Visit<'ast> for TypeVisitor<'_> {
                     hint = coll.1,
                 );
                 self.out.push(
-                    Violation::warn(consts::ID, key, msg).with_explanation(consts::EXPLANATION),
+                    Violation::warn(consts::ID, key, msg)
+                        .with_explanation(consts::EXPLANATION.into()),
                 );
             }
         }

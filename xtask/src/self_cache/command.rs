@@ -192,7 +192,7 @@ fn active_is_runnable(root: &Path) -> bool {
 }
 
 fn rebuild(root: &Path, config: &XtaskCacheConfig) -> Result<()> {
-    let _build = lease::build(&layout::target_dir(root))?;
+    let _build = lease::build(root, &layout::target_dir(root), &|name| env::var_os(name))?;
     let expected = CacheManifest::discover(root, config)?;
     let artifact = build(root, expected.is_release())?;
     let actual = CacheManifest::discover(root, config)?;
