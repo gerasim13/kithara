@@ -2376,7 +2376,7 @@
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-play-scheduler --profile ci
+  just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -2399,7 +2399,7 @@
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-play-scheduler --profile ci
+  just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -2422,7 +2422,7 @@
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-play-scheduler --profile ci
+  just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -2445,7 +2445,7 @@
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-play-scheduler --profile ci
+  just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -2468,7 +2468,7 @@
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-play-scheduler --profile ci
+  just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -2491,7 +2491,7 @@
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-play-scheduler --profile ci
+  just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -2514,7 +2514,7 @@
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-play-scheduler --profile ci
+  just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
@@ -2537,7 +2537,7 @@
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29
-  just test run --lane=usdt-play-scheduler --profile ci
+  just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
     CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RUSTUP_TOOLCHAIN=nightly-2026-07-29

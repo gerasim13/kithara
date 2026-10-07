@@ -10,7 +10,6 @@ use kithara_decode::{DecodeError, DecodeResult};
 use kithara_effects::EffectDrain;
 use kithara_events::EventBus;
 use kithara_platform::{CancelGroup, CancelToken, sync::Arc};
-use kithara_render::{LaneProtocol, ServiceClass, WarpSource};
 use kithara_stream::{Stream, StreamType};
 use kithara_warp::Warp;
 use kithara_worker::{
@@ -21,6 +20,7 @@ use super::{
     DecoderNode, PlayWorkerConfig, RegisteredAudio, TrackConfig, TrackLease,
     scheduler::{PlaybackObserver, Wake},
 };
+use crate::{LaneProtocol, ServiceClass, WarpSource};
 
 static WORKER_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -116,7 +116,8 @@ impl<S> PlayWorker<S> {
         &self.0.pools
     }
 
-    pub(crate) fn wake(&self) {
+    /// Wakes the worker's scheduler so it runs a pass now.
+    pub fn wake(&self) {
         self.0.dispatcher.wake_handle().wake();
     }
 }

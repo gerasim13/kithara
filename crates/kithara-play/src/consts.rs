@@ -1,8 +1,5 @@
-use std::num::{NonZeroU32, NonZeroUsize};
-
 #[cfg(test)]
 use kithara_events::TrackId;
-use kithara_platform::time::Duration;
 
 #[cfg(test)]
 use crate::api::SlotId;
@@ -29,35 +26,6 @@ pub(crate) const DECK_SLOT: SlotId = SlotId::new(0);
 #[cfg(test)]
 pub(crate) const SAMPLE_RATE: u32 = 44_100;
 
-pub(crate) const ACTIVE_WAIT_TIMEOUT: Duration = Duration::from_millis(1);
-pub(crate) const BACKPRESSURE_POLL_INTERVAL: Duration = Duration::from_micros(250);
-
-pub(crate) const CAPACITY: NonZeroUsize = match NonZeroUsize::new(16) {
-    Some(value) => value,
-    None => unreachable!(),
-};
-
-pub(crate) const FAIRNESS_YIELD_INTERVAL: NonZeroU32 = match NonZeroU32::new(16) {
-    Some(value) => value,
-    None => unreachable!(),
-};
-
-/// A lane executes only while it renders, so a paused or backpressured deck
-/// keeps every speed change sent to it in flight.
-pub(crate) const LANE_CAPACITY: NonZeroUsize = match NonZeroUsize::new(128) {
-    Some(value) => value,
-    None => unreachable!(),
-};
-
-pub(crate) const TASK_BURST: NonZeroU32 = match NonZeroU32::new(32) {
-    Some(value) => value,
-    None => unreachable!(),
-};
-
-/// EWMA weight for per-chunk samples (≈ last ~10 chunks dominate).
-pub(crate) const LOAD_ALPHA: f32 = 0.2;
-
-pub(crate) const MS_PER_SEC: f64 = 1000.0;
 pub(crate) const DEFAULT_EQ_BAND_COUNT: usize = 10;
 
 #[cfg(test)]

@@ -13,7 +13,6 @@ pub mod player;
 pub mod policy;
 pub mod resource;
 pub mod session;
-pub mod worker;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
@@ -37,7 +36,9 @@ pub use kithara_audio::SeekOutcome;
 pub use kithara_effects::eq::EqBandConfig;
 pub use kithara_net::Headers;
 pub use kithara_render::{
-    CrossfadeCurve, CrossfadeSettings, InvalidCrossfade, ServiceClass,
+    CrossfadeCurve, CrossfadeSettings, EngineLoad, EngineLoadSnapshot, InvalidCrossfade,
+    LoadRefusal, PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch, RegisteredAudio,
+    ServiceClass, TrackConfig,
     bridge::{
         MixTapWriter, NodeInputs, PlaybackFault, PlaybackShared, PlaybackSnapshot,
         PlayerNotification, RtMetricsSnapshot, SlotControl, TrackPlaybackStopReason, TrackState,
@@ -57,9 +58,5 @@ pub use resource::{
 pub use session::{
     AllocatedSlot, DeckRegistration, OutputSnapshot, PlayerId, SessionBinding, SessionError,
     SessionOutputView, SessionSampleRate,
-};
-pub use worker::{
-    EngineLoad, EngineLoadSnapshot, LoadRefusal, PlayWorker, PlayWorkerConfig,
-    PlayWorkerConfigPatch, RegisteredAudio, TrackConfig,
 };
 mod consts;

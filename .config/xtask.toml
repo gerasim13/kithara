@@ -656,9 +656,6 @@ default_backend = "none"
 owns = ["crates/kithara-render/"]
 cargo.packages = ["kithara-render"]
 cargo.profile = "test-release"
-# kithara-render steps its stage synchronously, so no test waits on a clock the
-# virtual one could drive, and its only package declares neither toggle.
-undeclared_toggles = ["flash", "no-block"]
 
 # Each domain facade stays in `tests/`, but a branch selects it with the crate
 # that owns the production contract. The full workspace lane remains the
@@ -1014,14 +1011,14 @@ default_features = ["kithara-warp-tests/usdt"]
 default_flash = false
 owns = ["tests/crates/warp/tests/rate_response.rs"]
 
-[test.lanes.usdt-play-scheduler]
-cargo.packages = ["kithara-play"]
+[test.lanes.usdt-render-scheduler]
+cargo.packages = ["kithara-render"]
 cargo.profile = "test-release"
 cargo.lib = true
 runner.nextest.filter = "test(/worker::node::scheduler_tests::probed::/)"
-default_features = ["kithara-play/usdt"]
+default_features = ["kithara-render/usdt"]
 default_flash = false
-owns = ["crates/kithara-play/src/worker/node.rs"]
+owns = ["crates/kithara-render/src/worker/node.rs"]
 
 [test.lanes.usdt-hls]
 cargo.packages = ["kithara-hls-tests"]
@@ -2256,10 +2253,10 @@ steps = [
   { args = [
     "test",
     "run",
-    "--lane=usdt-play-scheduler",
+    "--lane=usdt-render-scheduler",
     "--profile",
     "ci",
-  ], label = "USDT playback scheduler contracts", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT render scheduler contracts", env = { CARGO_BUILD_JOBS = "2" } },
   { args = [
     "test",
     "run",

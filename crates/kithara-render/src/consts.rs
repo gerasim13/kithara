@@ -1,6 +1,7 @@
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_dsp::param::{DEFAULT_SETTLE_RATIO, SmootherConfig};
+use kithara_platform::time::Duration;
 
 /// Tracks a deck holds at once.
 pub(crate) const DEFAULT_DECK_SLOTS: NonZeroUsize = match NonZeroUsize::new(4) {
@@ -17,3 +18,33 @@ pub(crate) const DEFAULT_DECLICK: SmootherConfig = SmootherConfig {
 /// Frames in one source chunk of a test lane.
 #[cfg(test)]
 pub(crate) const LANE_CHUNK_FRAMES: u32 = 4096;
+
+pub(crate) const ACTIVE_WAIT_TIMEOUT: Duration = Duration::from_millis(1);
+pub(crate) const BACKPRESSURE_POLL_INTERVAL: Duration = Duration::from_micros(250);
+
+pub(crate) const CAPACITY: NonZeroUsize = match NonZeroUsize::new(16) {
+    Some(value) => value,
+    None => unreachable!(),
+};
+
+pub(crate) const FAIRNESS_YIELD_INTERVAL: NonZeroU32 = match NonZeroU32::new(16) {
+    Some(value) => value,
+    None => unreachable!(),
+};
+
+/// A lane executes only while it renders, so a paused or backpressured deck
+/// keeps every speed change sent to it in flight.
+pub(crate) const LANE_CAPACITY: NonZeroUsize = match NonZeroUsize::new(128) {
+    Some(value) => value,
+    None => unreachable!(),
+};
+
+pub(crate) const TASK_BURST: NonZeroU32 = match NonZeroU32::new(32) {
+    Some(value) => value,
+    None => unreachable!(),
+};
+
+/// EWMA weight for per-chunk samples (≈ last ~10 chunks dominate).
+pub(crate) const LOAD_ALPHA: f32 = 0.2;
+
+pub(crate) const MS_PER_SEC: f64 = 1000.0;

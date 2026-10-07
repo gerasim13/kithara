@@ -82,6 +82,7 @@ perf = [
     "hotpath/hotpath",
     "kithara-audio/perf",
     "kithara-decode/perf",
+    "kithara-render/perf",
     "kithara-warp/perf",
     "kithara-worker/perf",
 ]

@@ -16,12 +16,12 @@ use super::{
     track::Behind,
 };
 use crate::{
+    EngineLoad,
     api::{PlayerEvent, PlayerStatus, TrackId},
     engine::EngineImpl,
     error::PlayError,
     resource::Resource,
     session::SessionBinding,
-    worker::EngineLoad,
 };
 
 /// An item handed to the processor, with the presentation it publishes once

@@ -15,6 +15,7 @@ use super::{
     lifecycle::PlayerLifecycle,
 };
 use crate::{
+    EngineLoad,
     engine::{EngineConfig, EngineImpl},
     error::PlayError,
     player::{
@@ -22,7 +23,6 @@ use crate::{
         config::TrackSettings,
         state::{CurrentItem, PlayerPhase, Tracks},
     },
-    worker::EngineLoad,
 };
 
 /// Concrete Player implementation: one deck and the tracks it holds.

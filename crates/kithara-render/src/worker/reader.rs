@@ -8,12 +8,12 @@ use kithara_command::Sender;
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{maybe_send::MaybeSend, sync::Arc, time::Duration};
-use kithara_render::{LaneProtocol, TrackPriority};
 use kithara_signal::AudioSpec;
 use kithara_warp::{RenderPublisher, Warp};
 use kithara_worker::TaskHandle;
 
 use super::PlayWorker;
+use crate::{LaneProtocol, TrackPriority};
 
 pub(crate) struct TrackLease<S> {
     _worker: PlayWorker<S>,
@@ -56,15 +56,19 @@ impl<T, S> RegisteredAudio<T, S> {
         }
     }
 
-    pub(crate) fn priority(&self) -> TrackPriority {
+    /// The service class the worker gives this track's producer.
+    #[must_use]
+    pub fn priority(&self) -> TrackPriority {
         self._lease.priority()
     }
 
-    pub(crate) fn take_lane(&mut self) -> Option<Sender<LaneProtocol>> {
+    /// The player end of the track's render lane, once.
+    pub fn take_lane(&mut self) -> Option<Sender<LaneProtocol>> {
         self.lane.take()
     }
 
-    pub(crate) fn take_publisher(&mut self) -> Option<RenderPublisher> {
+    /// The publisher of the track's Warp render snapshots, once.
+    pub fn take_publisher(&mut self) -> Option<RenderPublisher> {
         self.warp.take_publisher()
     }
 }
