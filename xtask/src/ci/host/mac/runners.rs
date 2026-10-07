@@ -64,7 +64,7 @@ impl<'a> RunnerManager<'a> {
         if expected_linux != actual_linux {
             bail!("Linux CI image digest changed: expected {expected_linux}, found {actual_linux}");
         }
-        let tokens = Tokens::load(&config_root)?;
+        let tokens = Tokens::load(&config_root, self.config.host.job_concurrency)?;
         for path in [
             &config_root,
             &runner_root,
@@ -268,6 +268,11 @@ impl<'a> RunnerManager<'a> {
     /// machine's twenty-four gigabytes, its build tree started empty after every
     /// recycle, and sccache died inside it often enough that jobs compiled
     /// locally — a suite that runs in three minutes took an hour to reach.
+    /// It is registered once per admitted job, and each registration takes one
+    /// job at a time, so it checks every job out at the same path: a lane bound
+    /// to one finds the build root beside that checkout as it left it, where a
+    /// registration taking two jobs put the second at another path and a lane
+    /// landed on whichever was free.
     ///
     /// Every runner names one Cargo home and keeps it whatever the job's trust:
     /// what it holds is fetched by checksum, and a home per trust gave the
@@ -315,16 +320,25 @@ impl<'a> RunnerManager<'a> {
             .flatten()
             .map(|(name, value)| format!(", \"{name}={value}\""))
             .collect::<String>();
+        let macos = tokens
+            .macos
+            .iter()
+            .zip(1..)
+            .map(|(token, number)| {
+                format!(
+                    "[[runners]]\n  name = \"kithara-mac-mini-macos-{number}\"\n  url = \"{url}\"\n  token = \"{token}\"\n  limit = 1\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-macos-{number}-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n"
+                )
+            })
+            .collect::<String>();
         Ok(format!(
             "concurrent = {concurrency}\ncheck_interval = 3\nshutdown_timeout = 30\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={cache}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"RUSTUP_HOME=/usr/local/rustup\", \"{cargo_build_jobs}\"{docker_sccache_s3}]\n\
              [runners.docker]\n    host = \"{}\"\n    image = \"{image}\"\n    pull_policy = \"never\"\n    allowed_pull_policies = [\"never\"]\n    allowed_images = [\"{image}\"]\n    cpus = \"5\"\n    memory = \"6500m\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/mac-host.toml:{lane_config}:ro\", \"{container_builds}:{builds}/workspaces/gitlab:rw\"]\n\n\
-             [[runners]]\n  name = \"kithara-mac-mini-macos\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-macos-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
+             {macos}\
              [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-android-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"SCCACHE_SERVER_UDS=/tmp/kithara-mac-mini-release-sccache.sock\", \"{cargo_build_jobs}\"{sccache_s3}]\n",
             tokens.linux,
             docker_host(home, &self.config.host.colima_profile),
-            tokens.macos,
             tokens.android,
             tokens.release,
         ))
@@ -517,16 +531,20 @@ fn docker_client_environment(
 }
 
 pub(super) struct Tokens {
-    pub(super) macos: String,
+    pub(super) macos: Vec<String>,
     linux: String,
     android: String,
     release: String,
 }
 
 impl Tokens {
-    pub(super) fn load(root: &Path) -> Result<Self> {
+    /// Reads the platform tokens and one for each of `registrations` macOS
+    /// runners, numbered from one.
+    pub(super) fn load(root: &Path, registrations: usize) -> Result<Self> {
         Ok(Self {
-            macos: read_token(root, "macos")?,
+            macos: (1..=registrations)
+                .map(|number| read_token(root, &format!("macos-{number}")))
+                .collect::<Result<_>>()?,
             linux: read_token(root, "linux")?,
             android: read_token(root, "android")?,
             release: read_token(root, "release")?,
@@ -647,12 +665,25 @@ pub(super) fn require_macos() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, BTreeSet},
         ffi::{OsStr, OsString},
     };
 
     use super::*;
     use crate::{ci::config::fixture, testing::install_double};
+
+    /// A token for every registration the host renders: one per macOS job it
+    /// admits, and one for each other platform.
+    fn tokens(config: &CiConfig) -> Tokens {
+        Tokens {
+            macos: (1..=config.host.job_concurrency)
+                .map(|number| format!("glrt-macos-{number}"))
+                .collect(),
+            linux: "glrt-linux".into(),
+            android: "glrt-android".into(),
+            release: "glrt-release".into(),
+        }
+    }
 
     /// The budget has to leave the host a core. It is derived rather than
     /// written down because the two numbers drifted apart the one time they
@@ -906,30 +937,105 @@ mod tests {
             .host_root
             .join("home")
             .join(&config.host.ci_user);
-        let tokens = Tokens {
-            macos: "glrt-macos".into(),
-            linux: "glrt-linux".into(),
-            android: "glrt-android".into(),
-            release: "glrt-release".into(),
-        };
+        let tokens = tokens(&config);
 
         let rendered: toml::Value =
             toml::from_str(&manager.runner_config(&home, &tokens).unwrap()).unwrap();
         let runners = rendered["runners"].as_array().unwrap();
-        for token in ["glrt-macos", "glrt-linux", "glrt-android", "glrt-release"] {
-            assert!(
-                runners
+        let runner = |token: &str| {
+            runners
+                .iter()
+                .find(|runner| runner["token"].as_str() == Some(token))
+                .unwrap_or_else(|| panic!("{token} has no runner, so its jobs will never be taken"))
+        };
+        for token in [&tokens.linux, &tokens.android, &tokens.release] {
+            runner(token);
+        }
+        for token in &tokens.macos {
+            assert_eq!(runner(token)["executor"].as_str(), Some("shell"));
+        }
+    }
+
+    /// The host takes one macOS job at a time per registration, and registers
+    /// as many as it admits jobs. A registration holding one job checks it out
+    /// at the same path every time, so a lane bound to it finds the build root
+    /// beside that checkout as it left it; a registration holding two puts the
+    /// second at another path, and a lane lands on whichever is free.
+    #[test]
+    fn the_macos_host_registers_one_single_job_runner_per_admitted_job() {
+        let config = fixture();
+        let process = Process::new(Path::new("/"), BTreeMap::new());
+        let manager = RunnerManager::new(&config, &process);
+        let tokens = tokens(&config);
+        let rendered: toml::Value = toml::from_str(
+            &manager
+                .runner_config(&manager.ci_home(), &tokens)
+                .expect("render runner config"),
+        )
+        .expect("runner config is TOML");
+
+        let macos: Vec<&toml::Value> = rendered["runners"]
+            .as_array()
+            .expect("runners")
+            .iter()
+            .filter(|runner| {
+                tokens
+                    .macos
                     .iter()
-                    .any(|runner| runner["token"].as_str() == Some(token)),
-                "{token} has no runner, so its jobs will never be taken"
+                    .any(|token| runner["token"].as_str() == Some(token))
+            })
+            .collect();
+        assert_eq!(
+            macos.len(),
+            config.host.job_concurrency,
+            "one macOS registration per admitted job"
+        );
+        for runner in &macos {
+            assert_eq!(
+                runner.get("limit").and_then(toml::Value::as_integer),
+                Some(1),
+                "{} takes more than one job at a time",
+                runner["name"]
             );
         }
-
-        let macos = runners
+        let names: BTreeSet<&str> = macos
             .iter()
-            .find(|runner| runner["token"].as_str() == Some("glrt-macos"))
-            .unwrap();
-        assert_eq!(macos["executor"].as_str(), Some("shell"));
+            .filter_map(|runner| runner["name"].as_str())
+            .collect();
+        assert_eq!(
+            names.len(),
+            macos.len(),
+            "two macOS registrations share a name"
+        );
+    }
+
+    /// A lane bound to a registration with no token waits `pending` for a
+    /// runner that never comes, so a missing one stops the configuration.
+    #[test]
+    fn every_macos_registration_reads_a_token_of_its_own() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let write = |name: &str| {
+            write_secure(
+                &directory.path().join(format!("runner-{name}.token")),
+                &format!("glrt-{name}"),
+            )
+            .expect("write a runner token");
+        };
+        for name in ["linux", "android", "release", "macos-1"] {
+            write(name);
+        }
+
+        let error = Tokens::load(directory.path(), 2)
+            .err()
+            .expect("the second registration has no token");
+        assert!(
+            format!("{error:#}").contains("runner-macos-2.token"),
+            "{error:#}"
+        );
+
+        write("macos-2");
+        let tokens = Tokens::load(directory.path(), 2).expect("every registration has a token");
+        assert_eq!(tokens.macos, ["glrt-macos-1", "glrt-macos-2"]);
     }
 
     #[test]
@@ -946,12 +1052,7 @@ mod tests {
             .host_root
             .join("home")
             .join(&config.host.ci_user);
-        let tokens = Tokens {
-            macos: "glrt-macos".into(),
-            linux: "glrt-linux".into(),
-            android: "glrt-android".into(),
-            release: "glrt-release".into(),
-        };
+        let tokens = tokens(&config);
 
         let rendered: toml::Value =
             toml::from_str(&manager.runner_config(&home, &tokens).unwrap()).unwrap();
@@ -960,7 +1061,11 @@ mod tests {
             Some(config.host.job_concurrency as i64)
         );
         let runners = rendered["runners"].as_array().unwrap();
-        assert_eq!(runners.len(), 4, "one registration per runner token");
+        assert_eq!(
+            runners.len(),
+            3 + config.host.job_concurrency,
+            "one registration per runner token"
+        );
         assert_eq!(
             runners
                 .iter()
@@ -974,7 +1079,7 @@ mod tests {
                 .iter()
                 .filter(|runner| runner["executor"].as_str() == Some("shell"))
                 .count(),
-            3,
+            2 + config.host.job_concurrency,
             "the host registrations share the global job limit"
         );
         let shell_cache_roots: Vec<&str> = runners
@@ -984,7 +1089,7 @@ mod tests {
             .filter_map(toml::Value::as_str)
             .filter(|entry| entry.starts_with("KITHARA_CI_CACHE_ROOT="))
             .collect();
-        assert_eq!(shell_cache_roots.len(), 3);
+        assert_eq!(shell_cache_roots.len(), 2 + config.host.job_concurrency);
         assert!(
             shell_cache_roots
                 .windows(2)
@@ -1041,12 +1146,7 @@ mod tests {
         config.host.sccache_s3_env_file = Some(env_file);
         let process = Process::new(Path::new("/"), BTreeMap::new());
         let manager = RunnerManager::new(&config, &process);
-        let tokens = Tokens {
-            macos: "glrt-macos".into(),
-            linux: "glrt-linux".into(),
-            android: "glrt-android".into(),
-            release: "glrt-release".into(),
-        };
+        let tokens = tokens(&config);
         let rendered: toml::Value = toml::from_str(
             &manager
                 .runner_config(&manager.ci_home(), &tokens)
@@ -1097,12 +1197,7 @@ mod tests {
         let config = fixture();
         let process = Process::new(Path::new("/"), BTreeMap::new());
         let manager = RunnerManager::new(&config, &process);
-        let tokens = Tokens {
-            macos: "glrt-macos".into(),
-            linux: "glrt-linux".into(),
-            android: "glrt-android".into(),
-            release: "glrt-release".into(),
-        };
+        let tokens = tokens(&config);
         let rendered: toml::Value = toml::from_str(
             &manager
                 .runner_config(&manager.ci_home(), &tokens)
@@ -1149,7 +1244,11 @@ mod tests {
             );
         }
         let homes: Vec<&&str> = shell_homes.values().collect();
-        assert_eq!(homes.len(), 3, "every host runner names its home");
+        assert_eq!(
+            homes.len(),
+            2 + config.host.job_concurrency,
+            "every host runner names its home"
+        );
         assert_eq!(
             shell_sockets.len(),
             homes.len(),
@@ -1175,12 +1274,7 @@ mod tests {
         let config = fixture();
         let process = Process::new(Path::new("/"), BTreeMap::new());
         let manager = RunnerManager::new(&config, &process);
-        let tokens = Tokens {
-            macos: "glrt-macos".into(),
-            linux: "glrt-linux".into(),
-            android: "glrt-android".into(),
-            release: "glrt-release".into(),
-        };
+        let tokens = tokens(&config);
         let rendered: toml::Value = toml::from_str(
             &manager
                 .runner_config(&manager.ci_home(), &tokens)
@@ -1253,12 +1347,7 @@ mod tests {
             .host_root
             .join("home")
             .join(&config.host.ci_user);
-        let tokens = Tokens {
-            macos: "glrt-macos".into(),
-            linux: "glrt-linux".into(),
-            android: "glrt-android".into(),
-            release: "glrt-release".into(),
-        };
+        let tokens = tokens(&config);
         let rendered: toml::Value = toml::from_str(&manager.runner_config(&home, &tokens).unwrap())
             .expect("runner config is TOML");
         // The pipeline builds `SCCACHE_DIR` out of this, so a runner that
@@ -1330,12 +1419,7 @@ mod tests {
             .host_root
             .join("home")
             .join(&config.host.ci_user);
-        let tokens = Tokens {
-            macos: "glrt-macos".into(),
-            linux: "glrt-linux".into(),
-            android: "glrt-android".into(),
-            release: "glrt-release".into(),
-        };
+        let tokens = tokens(&config);
 
         let args = manager.colima_args("colima");
         let named = args
@@ -1376,12 +1460,7 @@ mod tests {
             .host_root
             .join("home")
             .join(&config.host.ci_user);
-        let tokens = Tokens {
-            macos: "glrt-macos".into(),
-            linux: "glrt-linux".into(),
-            android: "glrt-android".into(),
-            release: "glrt-release".into(),
-        };
+        let tokens = tokens(&config);
 
         let runner = manager.runner_config(&home, &tokens).unwrap();
         for rendered in [&runner] {
