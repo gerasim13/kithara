@@ -45,7 +45,9 @@ pub(crate) use hosted::{HostedControlPlan, Resolving};
 pub(crate) use icons::Mark;
 #[cfg(feature = "iced")]
 pub use immediate::LayoutPreview;
-pub(crate) use layer::{HostLayer, LayerHit, WindowLayerProgram, place_popover};
+pub(crate) use layer::{
+    HostLayer, LayerHit, ModalChrome, WindowLayerProgram, place_popover, tick_marks,
+};
 pub use model::{
     Badge, PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, StereoLevels, TableCell,
     TableRow, TableValue, TreeRow, WaveBucket, WaveformView,
@@ -60,8 +62,8 @@ pub(crate) use window::{DragGhost, TitleBar, WindowControls, WindowSurface};
 pub(crate) use {
     controls::{ChromeLeaf, Marked, Marks, Probe, chrome_leaf, header_chevron, tree_rows},
     immediate::{
-        Anchored, Custom, MiniWave, ModuleChrome, Placement, Text, Tree, Viewport, WheelSurface,
-        corner_radius, drop_outline, frame_overlay,
+        Anchored, Custom, MiniWave, Modal, ModuleChrome, Placement, Text, Tree, Viewport,
+        WheelSurface, corner_radius, drop_outline, frame_overlay,
     },
     layer::{draw_host_layer, window_layer, window_layers},
     picker::{hosted_picker_overlay, scope_picker, sync_picker},

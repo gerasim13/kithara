@@ -27,6 +27,7 @@ fn find_control(node: &ExpandedNode) -> Option<&ControlSpec> {
         ExpandedNode::Popover {
             anchor, content, ..
         } => find_control(anchor).or_else(|| find_control(content)),
+        ExpandedNode::Modal { content, .. } => find_control(content),
         _ => None,
     }
 }

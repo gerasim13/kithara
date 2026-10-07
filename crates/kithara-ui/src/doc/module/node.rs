@@ -171,6 +171,15 @@ pub enum ControlNode {
         anchor: Box<Self>,
         content: Box<Self>,
     },
+    /// Covers the whole window with a scrim and centres `content` above it
+    /// while `open` reads true, taking all input. Escape and a press on the
+    /// scrim write `close`. It takes no room in flow.
+    Modal {
+        id: NodeId,
+        open: BindingRef,
+        close: BindingRef,
+        content: Box<Self>,
+    },
     /// Makes its child a click target that publishes on this node's path.
     Pressable {
         id: NodeId,
@@ -868,6 +877,7 @@ impl ControlNode {
             } => (Some(measure), None),
             Self::Optional { hidden, .. } => (Some(hidden), None),
             Self::Popover { open, .. } => (Some(open), None),
+            Self::Modal { open, close, .. } => (Some(open), Some(close)),
             Self::Pressable { press, .. } => (None, Some(press)),
             Self::Adaptive { .. }
             | Self::Include { .. }
@@ -931,6 +941,7 @@ impl ControlNode {
             | Self::Optional { .. }
             | Self::Placed { .. }
             | Self::Popover { .. }
+            | Self::Modal { .. }
             | Self::Pressable { .. }
             | Self::Reveal { .. } => None,
             Self::Adaptive { size, .. }

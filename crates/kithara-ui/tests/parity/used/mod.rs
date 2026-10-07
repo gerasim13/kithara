@@ -11,6 +11,7 @@ mod bars;
 mod blocks;
 mod extension;
 mod hand;
+mod modal;
 mod press;
 mod run;
 mod stepper;

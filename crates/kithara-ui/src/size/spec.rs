@@ -194,7 +194,7 @@ pub(crate) fn has_blocks(node: &ExpandedNode) -> bool {
         | ExpandedNode::Pressable { child, .. }
         | ExpandedNode::Reveal { child, .. }
         | ExpandedNode::Scroll { child, .. } => has_blocks(child),
-        ExpandedNode::Control { .. } => false,
+        ExpandedNode::Modal { .. } | ExpandedNode::Control { .. } => false,
     }
 }
 
@@ -206,13 +206,20 @@ pub(crate) fn is_hidden<N: BlockNode>(node: &N, snapshot: &dyn Snapshot) -> bool
     node.block().is_some_and(|block| snapshot.hidden(block))
 }
 
-pub(crate) fn visible<'a, N: BlockNode>(
-    children: &'a [N],
+/// Whether a child of a flow stands above it rather than in it, taking no room
+/// and no gap there: a modal covers the whole window wherever it is written.
+pub(crate) const fn floats(node: &ExpandedNode) -> bool {
+    matches!(node, ExpandedNode::Modal { .. })
+}
+
+/// The children that take room in a flow: shown, and not floating above it.
+fn in_flow<'a>(
+    children: &'a [ExpandedNode],
     snapshot: &'a dyn Snapshot,
-) -> impl Iterator<Item = &'a N> {
+) -> impl Iterator<Item = &'a ExpandedNode> {
     children
         .iter()
-        .filter(move |child| !is_hidden(*child, snapshot))
+        .filter(move |child| !is_hidden(*child, snapshot) && !floats(child))
 }
 
 pub(crate) fn branch<'a>(
@@ -285,6 +292,7 @@ pub(crate) fn effective_size(
             return effective_size(child, skin, snapshot);
         }
         ExpandedNode::Popover { anchor, .. } => return effective_size(anchor, skin, snapshot),
+        ExpandedNode::Modal { .. } => Some(consts::NOTHING),
         ExpandedNode::Row { size, .. }
         | ExpandedNode::Column { size, .. }
         | ExpandedNode::Scroll { size, .. }
@@ -324,6 +332,7 @@ pub(crate) fn compute_size(
         | ExpandedNode::Popover { .. }
         | ExpandedNode::Pressable { .. }
         | ExpandedNode::Reveal { .. } => None,
+        ExpandedNode::Modal { .. } => Some(consts::NOTHING),
         ExpandedNode::Adaptive { size, .. }
         | ExpandedNode::Scroll { size, .. }
         | ExpandedNode::Row { size, .. }
@@ -350,6 +359,7 @@ pub(crate) fn compute_size(
         | ExpandedNode::Reveal { child, .. }
         | ExpandedNode::Scroll { child, .. } => compute_size(child, skin, snapshot),
         ExpandedNode::Popover { anchor, .. } => compute_size(anchor, skin, snapshot),
+        ExpandedNode::Modal { .. } => consts::NOTHING,
         ExpandedNode::Row {
             children,
             gap,
@@ -358,7 +368,7 @@ pub(crate) fn compute_size(
             pad_y,
             ..
         } => {
-            let laid_out: Vec<_> = visible(children, snapshot).collect();
+            let laid_out: Vec<_> = in_flow(children, snapshot).collect();
             inset(
                 combine_horizontal(
                     laid_out
@@ -378,7 +388,7 @@ pub(crate) fn compute_size(
             pad_y,
             ..
         } => {
-            let laid_out: Vec<_> = visible(children, snapshot).collect();
+            let laid_out: Vec<_> = in_flow(children, snapshot).collect();
             inset(
                 combine_vertical(
                     laid_out
@@ -390,11 +400,11 @@ pub(crate) fn compute_size(
                 Pad::new(*pad, *pad_x, *pad_y, skin.layout.grid_pad),
             )
         }
-        ExpandedNode::Stage { children, .. } => visible(children, snapshot)
+        ExpandedNode::Stage { children, .. } => in_flow(children, snapshot)
             .next()
             .map_or(SizeSpec::FILL, |first| compute_size(first, skin, snapshot)),
         ExpandedNode::Slot { children, .. } => {
-            let laid_out: Vec<_> = visible(children, snapshot).collect();
+            let laid_out: Vec<_> = in_flow(children, snapshot).collect();
             if laid_out.is_empty() {
                 SizeSpec::FILL
             } else {
@@ -422,6 +432,7 @@ pub(crate) fn min_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
         | ExpandedNode::Pressable { child, .. }
         | ExpandedNode::Reveal { child, .. } => min_size(child, skin),
         ExpandedNode::Popover { anchor, .. } => min_size(anchor, skin),
+        ExpandedNode::Modal { .. } => consts::NOTHING,
         ExpandedNode::Adaptive { size, base, .. } => at_least(*size, min_size(base, skin)),
         ExpandedNode::Stage { size, children, .. } => at_least(
             *size,
@@ -535,6 +546,7 @@ impl Cells {
         };
         let cells = children
             .iter()
+            .filter(|child| !floats(child))
             .map(|child| {
                 let (from, until) = match child {
                     ExpandedNode::Reveal { from, until, .. } => (*from, *until),

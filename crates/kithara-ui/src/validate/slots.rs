@@ -59,6 +59,7 @@ impl<'a> WriteSlot<'a> {
 pub(crate) const fn primary(control: &ControlNode) -> Option<(Gesture, ValueKind)> {
     Some(match control {
         ControlNode::Pressable { .. }
+        | ControlNode::Modal { .. }
         | ControlNode::Button { .. }
         | ControlNode::NavItem { .. }
         | ControlNode::TabLarge { .. }
