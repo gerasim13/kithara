@@ -30,7 +30,6 @@ pub use api::{
 };
 pub use engine::{EngineConfig, EngineImpl};
 pub use error::PlayError;
-use humantime_serde as _;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;
 pub use kithara_effects::eq::EqBandConfig;

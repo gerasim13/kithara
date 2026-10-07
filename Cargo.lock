@@ -5080,7 +5080,6 @@ dependencies = [
  "num-traits",
  "serde",
  "thiserror 2.0.18",
- "tracing",
  "unimock",
 ]
 
@@ -5673,7 +5672,6 @@ dependencies = [
  "futures",
  "hex",
  "hotpath",
- "humantime-serde",
  "kithara-abr",
  "kithara-assets",
  "kithara-audio",
@@ -5701,7 +5699,6 @@ dependencies = [
  "kithara-test-utils",
  "kithara-warp",
  "kithara-waveform",
- "kithara-worker",
  "kithara-workspace-hack",
  "num-traits",
  "ringbuf",
@@ -5817,7 +5814,6 @@ dependencies = [
 name = "kithara-render"
 version = "0.0.1-alpha5"
 dependencies = [
- "arc-swap",
  "bon",
  "delegate",
  "derive-where",

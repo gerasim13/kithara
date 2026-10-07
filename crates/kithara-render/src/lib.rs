@@ -17,6 +17,7 @@ mod source;
 mod worker;
 pub use crossfade::{CrossfadeCurve, CrossfadeSettings, InvalidCrossfade};
 pub use dispatcher::{DispatcherProtocol, Open, dispatch};
+use humantime_serde as _;
 #[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
 pub use lane::{LaneCommand, LaneFrame, LaneProtocol};
