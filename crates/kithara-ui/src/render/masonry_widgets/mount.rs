@@ -341,8 +341,8 @@ fn stage(
     let inner = normalized(limits.width(declared.width).height(declared.height).loose());
     let intrinsic = children
         .iter_mut()
-        .zip(stage.shown())
-        .find_map(|(child, shown)| shown.then_some(child))
+        .zip(stage.in_flow())
+        .find_map(|(child, on)| on.then_some(child))
         .map_or(Size::ZERO, |first| {
             Node::set_child_limits(ctx, first, inner);
             let size = ctx.run_layout(first, &box_constraints(inner));

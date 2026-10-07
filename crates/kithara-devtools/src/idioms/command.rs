@@ -22,6 +22,7 @@ use crate::common::{
     report,
     scan::Scan,
     scope::Scope,
+    verdict_cache::VerdictCache,
     violation::{Report, Violation},
 };
 
@@ -101,7 +102,14 @@ pub(crate) fn run(args: &IdiomsArgs) -> Result<()> {
         .collect();
     let ran: Vec<&'static str> = selected.iter().map(|check| check.id()).collect();
 
-    let outcomes = run_checks(&selected, &ctx, &scope, &project, &workspace_root)?;
+    let cache = VerdictCache::open(
+        metadata.target_directory.as_std_path(),
+        "idioms",
+        &std::env::current_exe().context("locate the running linter")?,
+        &workspace_root,
+        &format!("{config:?}"),
+    )?;
+    let outcomes = run_checks(&selected, &ctx, &scope, &project, &cache)?;
 
     if args.timings {
         let rows: Vec<_> = ran
@@ -176,7 +184,7 @@ fn apply_common_exclusions(
 }
 
 /// Runs each selected check, returning its wall time and its violations in
-/// registry order.
+/// registry order, each check's ordered by key.
 ///
 /// A parsed `syn::File` holds `proc_macro2` spans and is neither `Send` nor
 /// `Sync`, so a tree can be neither shared between checks nor moved across a
@@ -191,7 +199,7 @@ fn run_checks(
     ctx: &Context<'_>,
     scope: &Scope,
     project: &ProjectConfig,
-    workspace_root: &Path,
+    cache: &VerdictCache,
 ) -> Result<Vec<(Duration, Vec<Violation>)>> {
     selected
         .par_iter()
@@ -203,17 +211,35 @@ fn run_checks(
             };
             let started = Instant::now();
             let mut check_report = Report::default();
-            check_report.extend(check.run(&check_ctx)?);
+            check_report.extend(run_one_check(*check, &check_ctx, cache)?);
             apply_common_exclusions(
                 &mut check_report,
                 check.policy(),
                 &project.lint_exclude.runtime_paths(),
                 &project.lint_exclude.modules,
-                workspace_root,
+                ctx.workspace_root,
             );
+            check_report.violations.sort_by(|a, b| a.key.cmp(&b.key));
             Ok((started.elapsed(), check_report.violations))
         })
         .collect()
+}
+
+/// Runs `check` over its scope: file by file through the verdict cache when
+/// it declares that its findings about a file depend on that file alone,
+/// and over the whole scope at once when it correlates files.
+fn run_one_check(
+    check: &dyn Check,
+    ctx: &Context<'_>,
+    cache: &VerdictCache,
+) -> Result<Vec<Violation>> {
+    if !check.caches_by_file() {
+        return check.run(ctx);
+    }
+    let files = ctx.scan.rs_files(ctx.scope)?;
+    cache.verdicts(check.id(), ctx.scan, &files, |scan| {
+        check.run(&Context { scan, ..*ctx })
+    })
 }
 
 fn run_fix(
@@ -347,6 +373,234 @@ mod tests {
             dir.path(),
         );
         assert_eq!(derivable.violations.len(), 1);
+    }
+
+    /// Reports each file of its scope by its path, in key order, as a check
+    /// that sorts its findings does.
+    struct EveryFile;
+
+    impl Check for EveryFile {
+        fn id(&self) -> &'static str {
+            "every_file"
+        }
+
+        fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
+            let mut found: Vec<Violation> = ctx
+                .scan
+                .rs_files(ctx.scope)?
+                .iter()
+                .map(|path| {
+                    let key = crate::common::walker::relative_to(ctx.workspace_root, path)
+                        .to_string_lossy()
+                        .into_owned();
+                    Violation::warn(self.id(), key, "seen")
+                })
+                .collect();
+            found.sort_by(|a, b| a.key.cmp(&b.key));
+            Ok(found)
+        }
+    }
+
+    /// A module file sorts before its directory's files by key and after
+    /// them by path, so a check judged file by file meets its files in
+    /// another order than the one it reports in over the whole scope.
+    #[test]
+    fn a_check_judged_file_by_file_reports_as_it_does_over_the_whole_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("crates").join("one").join("src");
+        fs::create_dir_all(src.join("a")).unwrap();
+        fs::write(src.join("a.rs"), "").unwrap();
+        fs::write(src.join("a").join("b.rs"), "").unwrap();
+        let metadata = MetadataCommand::new().exec().unwrap();
+        let config = IdiomsConfig::default();
+        let scope = Scope::default();
+        let scan = Scan::new(dir.path());
+        let ctx = Context {
+            config: &config,
+            metadata: &metadata,
+            workspace_root: dir.path(),
+            scan: &scan,
+            scope: &scope,
+        };
+        let cache = VerdictCache::open(
+            &dir.path().join("target"),
+            "idioms",
+            &std::env::current_exe().unwrap(),
+            dir.path(),
+            "",
+        )
+        .unwrap();
+        let whole: Vec<String> = EveryFile
+            .run(&ctx)
+            .unwrap()
+            .into_iter()
+            .map(|violation| violation.key)
+            .collect();
+
+        for run in ["cold", "warm"] {
+            let keys: Vec<String> = run_checks(
+                &[&EveryFile],
+                &ctx,
+                &scope,
+                &ProjectConfig::default(),
+                &cache,
+            )
+            .unwrap()
+            .into_iter()
+            .flat_map(|(_, violations)| violations)
+            .map(|violation| violation.key)
+            .collect();
+            assert_eq!(keys, whole, "{run}");
+        }
+    }
+
+    /// Findings as sorted key and message pairs.
+    type Findings = Vec<(String, String)>;
+
+    /// What the driver reports for `check` over the tree at `root`, and what
+    /// the check finds over its whole scope there.
+    fn driver_and_whole(
+        check: &dyn Check,
+        root: &Path,
+        cache: &VerdictCache,
+    ) -> (Findings, Findings) {
+        let metadata = MetadataCommand::new().exec().unwrap();
+        let config = IdiomsConfig::default();
+        let scope = Scope::default();
+        let scan = Scan::new(root);
+        let ctx = Context {
+            config: &config,
+            metadata: &metadata,
+            workspace_root: root,
+            scan: &scan,
+            scope: &scope,
+        };
+        let findings = |violations: Vec<Violation>| {
+            let mut pairs: Findings = violations
+                .into_iter()
+                .map(|violation| (violation.key, violation.message))
+                .collect();
+            pairs.sort();
+            pairs
+        };
+        let driver = findings(
+            run_checks(&[check], &ctx, &scope, &ProjectConfig::default(), cache)
+                .unwrap()
+                .into_iter()
+                .flat_map(|(_, violations)| violations)
+                .collect(),
+        );
+        let effective = check.policy().scope(&scope);
+        let whole = findings(
+            check
+                .run(&Context {
+                    scope: &effective,
+                    ..ctx
+                })
+                .unwrap(),
+        );
+        (driver, whole)
+    }
+
+    /// The driver judges `files`, then `neighbour` is written beside them,
+    /// and the driver must report what the check then finds over its whole
+    /// scope. The neighbour changes those findings, or agreeing would prove
+    /// nothing; a verdict kept per file for an unchanged file would miss it.
+    fn the_driver_follows_a_neighbour(
+        check: &dyn Check,
+        files: &[(&str, &str)],
+        neighbour: (&str, &str),
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |(rel, source): (&str, &str)| {
+            let path = dir.path().join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, source).unwrap();
+        };
+        files.iter().copied().for_each(write);
+        let cache = VerdictCache::open(
+            &dir.path().join("target"),
+            "idioms",
+            &std::env::current_exe().unwrap(),
+            dir.path(),
+            "",
+        )
+        .unwrap();
+        let (_, before) = driver_and_whole(check, dir.path(), &cache);
+
+        write(neighbour);
+        let (driver, after) = driver_and_whole(check, dir.path(), &cache);
+
+        assert_ne!(before, after, "the neighbour changes nothing");
+        assert_eq!(driver, after, "{}", check.id());
+    }
+
+    /// An event is forwarded by an `EventSet` in another crate, so whether
+    /// it is reported depends on a file other than the one declaring it.
+    #[test]
+    fn an_event_is_judged_with_the_sets_that_forward_it() {
+        use checks::derivable_event::{DerivableEvent, consts};
+
+        let forwarding = format!("{}/lib.rs", consts::FORWARDING_SOURCES);
+        the_driver_follows_a_neighbour(
+            &DerivableEvent,
+            &[(
+                "crates/one/src/lib.rs",
+                "#[derive(Debug, Event)] pub struct Played;\n",
+            )],
+            (
+                &forwarding,
+                "#[derive(EventSet)] pub enum All { Played(Played) }\n",
+            ),
+        );
+    }
+
+    /// A getter is redundant when a public field of the same type name,
+    /// declared in any file, already exposes it.
+    #[test]
+    fn a_getter_is_judged_with_the_fields_that_already_expose_it() {
+        use checks::derivable_getter::DerivableGetter;
+
+        the_driver_follows_a_neighbour(
+            &DerivableGetter,
+            &[(
+                "crates/one/src/a.rs",
+                "pub struct User {\n    name: String,\n}\nimpl User { pub fn name(&self) -> &str { &self.name } }\n",
+            )],
+            (
+                "crates/one/src/b.rs",
+                "pub struct User {\n    pub name: String,\n}\n",
+            ),
+        );
+    }
+
+    /// A wrapper's economy counts the calls and the namesakes across its
+    /// crate, so a second function of its name elsewhere makes it unknown.
+    #[test]
+    fn a_wrapper_is_judged_with_the_rest_of_its_crate() {
+        use checks::thin_wrapper_economy::ThinWrapperEconomy;
+
+        let calls = (0..7)
+            .map(|index| {
+                format!(
+                    "    fn call_{index}() -> Result<(), DecodeError> {{\n        Err(channel_disconnected(\"output\"))\n    }}\n"
+                )
+            })
+            .collect::<String>();
+        let wrapper = "fn channel_disconnected(channel: &'static str) -> DecodeError {\n    DecodeError::backend(WebCodecsError::ChannelDisconnected { channel })\n}\n";
+        the_driver_follows_a_neighbour(
+            &ThinWrapperEconomy,
+            &[
+                // rustfmt measures what the wrapper saves under the
+                // workspace's own configuration.
+                ("rustfmt.toml", ""),
+                (
+                    "crates/one/src/a.rs",
+                    &format!("{wrapper}\nstruct Codec;\n\nimpl Codec {{\n{calls}}}\n"),
+                ),
+            ],
+            ("crates/one/src/b.rs", wrapper),
+        );
     }
 
     #[test]

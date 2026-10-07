@@ -78,31 +78,40 @@ impl From<solve::Size<solve::Length>> for Natural {
     }
 }
 
+/// One child of a stage: the block hiding it, whether it floats above the
+/// stage, and its box.
+type StageChild = (Option<Rc<BlockState>>, bool, Natural);
+
 pub(crate) struct StageSize {
     size: Option<SizeSpec>,
-    children: Vec<(Option<Rc<BlockState>>, Natural)>,
+    children: Vec<StageChild>,
 }
 
 impl StageSize {
-    pub(crate) const fn new(
-        size: Option<SizeSpec>,
-        children: Vec<(Option<Rc<BlockState>>, Natural)>,
-    ) -> Self {
+    pub(crate) const fn new(size: Option<SizeSpec>, children: Vec<StageChild>) -> Self {
         Self { size, children }
     }
 
     pub(crate) fn shown(&self) -> impl Iterator<Item = bool> + '_ {
         self.children
             .iter()
-            .map(|(block, _)| !block.as_ref().is_some_and(|block| block.is_hidden()))
+            .map(|(block, _, _)| !block.as_ref().is_some_and(|block| block.is_hidden()))
+    }
+
+    /// Whether each child is shown and takes room in the stage.
+    pub(crate) fn in_flow(&self) -> impl Iterator<Item = bool> + '_ {
+        self.children
+            .iter()
+            .zip(self.shown())
+            .map(|((_, floats, _), shown)| shown && !floats)
     }
 
     pub(crate) fn now(&self) -> solve::Size<solve::Length> {
         let first = self
             .children
             .iter()
-            .zip(self.shown())
-            .find_map(|((_, natural), shown)| shown.then(|| natural.now()));
+            .zip(self.in_flow())
+            .find_map(|((_, _, natural), on)| on.then(|| natural.now()));
         self.size
             .map(declared)
             .or(first)
@@ -482,11 +491,11 @@ impl<Action> MasonryNode<Action> {
 
     pub(in crate::render) fn stage(
         size: Option<SizeSpec>,
-        children: Vec<(Option<Rc<BlockState>>, Self)>,
+        children: Vec<(Option<Rc<BlockState>>, bool, Self)>,
     ) -> Self {
         let (sized, nodes) = children
             .into_iter()
-            .map(|(block, node)| ((block, node.natural.clone()), node))
+            .map(|(block, floats, node)| ((block, floats, node.natural.clone()), node))
             .unzip();
         let size = Rc::new(StageSize::new(size, sized));
         Self::document(

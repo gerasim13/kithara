@@ -379,6 +379,7 @@ mod tests {
             ("gallery/menu/item", "activation"),
             ("gallery/micro/item", "activation"),
             ("gallery/mixer/item", "activation"),
+            ("gallery/modal/item", "activation"),
             ("gallery/modules/item", "activation"),
             ("gallery/motion/item", "activation"),
             ("gallery/objects/item", "activation"),
@@ -502,6 +503,7 @@ mod tests {
                     walk(anchor, visit);
                     walk(content, visit);
                 }
+                ExpandedNode::Modal { content, .. } => walk(content, visit),
                 ExpandedNode::Adaptive { base, steps, .. } => {
                     walk(base, visit);
                     for (_, branch) in steps {
@@ -559,6 +561,7 @@ mod tests {
                     walk(anchor, ui, visit);
                     walk(content, ui, visit);
                 }
+                ExpandedNode::Modal { content, .. } => walk(content, ui, visit),
                 ExpandedNode::Adaptive { base, steps, .. } => {
                     walk(base, ui, visit);
                     for (_, branch) in steps {

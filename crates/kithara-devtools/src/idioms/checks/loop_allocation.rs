@@ -102,8 +102,9 @@ impl LoopVisitor<'_> {
             return;
         }
         let key = format!("{}:{}:{}", self.rel, span_line, span_col);
-        self.out
-            .push(Violation::warn(consts::ID, key, msg).with_explanation(consts::EXPLANATION));
+        self.out.push(
+            Violation::warn(consts::ID, key, msg).with_explanation(consts::EXPLANATION.into()),
+        );
     }
 }
 

@@ -515,6 +515,42 @@ impl PopSkin {
     }
 }
 
+/// A modal: the scrim over the whole window and the chrome of the surface
+/// centred on it. Its corner ticks are the module chrome's.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, kithara_derive::SkinWalk)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct ModalSkin {
+    pub background: ColorRole,
+    pub scrim: ColorRole,
+    pub frame: FrameSkin,
+    pub shadow: ShadowSkin,
+    pub scrim_alpha: f32,
+}
+
+/// What a skin may restate of [`ModalSkin`].
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+#[non_exhaustive]
+pub struct ModalPatch {
+    pub background: Option<ColorRole>,
+    pub frame: Option<FrameSkin>,
+    pub scrim: Option<ColorRole>,
+    pub scrim_alpha: Option<f32>,
+    pub shadow: Option<ShadowSkin>,
+}
+
+impl ModalSkin {
+    /// Takes every field the patch restates, keeping the rest.
+    pub(crate) fn patch(&mut self, patch: ModalPatch) {
+        super::patch::patch_field(&mut self.background, patch.background);
+        super::patch::patch_field(&mut self.scrim, patch.scrim);
+        super::patch::patch_field(&mut self.frame, patch.frame);
+        super::patch::patch_field(&mut self.shadow, patch.shadow);
+        super::patch::patch_field(&mut self.scrim_alpha, patch.scrim_alpha);
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, kithara_derive::SkinWalk)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]

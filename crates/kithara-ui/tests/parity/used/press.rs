@@ -124,7 +124,7 @@ fn documents() -> MemResolver {
     resolver
 }
 
-fn trigger(key: &str) -> UiEvent {
+pub(super) fn trigger(key: &str) -> UiEvent {
     UiEvent::Write {
         key: key.to_owned(),
         value: WriteValue::Trigger,

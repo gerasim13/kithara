@@ -45,6 +45,9 @@ web-time = { workspace = true }
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
+[target.'cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))'.dependencies]
+libc = { workspace = true }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 cpu-time = { workspace = true, optional = true }
 parking_lot = { workspace = true }
@@ -59,6 +62,9 @@ wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 wasm_safe_thread = { workspace = true }
 web-sys = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_Threading"] }
 
 [dev-dependencies]
 kithara-platform = { path = ".", default-features = false }

@@ -23,18 +23,52 @@ use crate::{
     solve::{Limits, Size},
 };
 
-#[derive(Default)]
+/// What a surface is, which decides the room it takes from what is under it.
+pub(crate) enum SurfaceKind {
+    /// Hangs on its anchor and takes only its own surface. It opens at the
+    /// press that opened it, so it keeps the press it last saw and the one it
+    /// opened at.
+    Popover {
+        pointer: Cell<Option<Point>>,
+        press: Cell<Option<Point>>,
+    },
+    /// Takes the whole window and the keyboard.
+    Modal,
+}
+
+impl SurfaceKind {
+    pub(crate) const fn popover() -> Self {
+        Self::Popover {
+            pointer: Cell::new(None),
+            press: Cell::new(None),
+        }
+    }
+}
+
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in)]
 pub(crate) struct PopoverState {
+    #[field(get, vis = "pub(crate)")]
+    kind: SurfaceKind,
     anchor: Cell<Option<MasonryRect>>,
     open: Cell<bool>,
-    pointer: Cell<Option<Point>>,
-    press: Cell<Option<Point>>,
     surface: Cell<MasonryRect>,
 }
 
 impl PopoverState {
+    pub(crate) const fn new(kind: SurfaceKind) -> Self {
+        Self {
+            kind,
+            anchor: Cell::new(None),
+            open: Cell::new(false),
+            surface: Cell::new(MasonryRect::ZERO),
+        }
+    }
+
     pub(crate) fn bank(&self, point: Point) {
-        self.press.set(Some(point));
+        if let SurfaceKind::Popover { press, .. } = &self.kind {
+            press.set(Some(point));
+        }
     }
 
     pub(crate) fn is_open(&self) -> bool {
@@ -43,8 +77,19 @@ impl PopoverState {
 
     pub(crate) fn latch(&self, open: bool) {
         let was_open = self.open.replace(open);
-        if open && !was_open {
-            self.pointer.set(self.press.take());
+        if open
+            && !was_open
+            && let SurfaceKind::Popover { pointer, press } = &self.kind
+        {
+            pointer.set(press.take());
+        }
+    }
+
+    /// The press the surface opened at.
+    fn pointer(&self) -> Option<Point> {
+        match &self.kind {
+            SurfaceKind::Popover { pointer, .. } => pointer.get(),
+            SurfaceKind::Modal => None,
         }
     }
 
@@ -67,8 +112,13 @@ impl PopoverState {
         self.open.get().then(|| self.anchor.get()).flatten()
     }
 
-    pub(crate) fn surface(&self) -> MasonryRect {
-        self.surface.get()
+    delegate::delegate! {
+        to self.surface {
+            #[call(get)]
+            pub(crate) fn surface(&self) -> MasonryRect;
+            #[call(set)]
+            pub(crate) fn stand(&self, surface: MasonryRect);
+        }
     }
 }
 
@@ -139,21 +189,20 @@ impl Widget for PopoverLayer {
 
     fn compose(&mut self, ctx: &mut ComposeCtx<'_>) {
         let Some(anchor) = self.state.standing() else {
-            self.state.surface.set(MasonryRect::ZERO);
+            self.state.stand(MasonryRect::ZERO);
             return;
         };
         let position = place(
             anchor,
             (self.at == PopoverAt::Pointer)
-                .then(|| self.state.pointer.get())
+                .then(|| self.state.pointer())
                 .flatten(),
             self.surface_size,
             ctx.size(),
             self.align,
         );
-        self.state
-            .surface
-            .set(MasonryRect::from_origin_size(position, self.surface_size));
+        let surface = MasonryRect::from_origin_size(position, self.surface_size);
+        self.state.stand(surface);
         ctx.set_animated_child_scroll_translation(
             &mut self.child,
             Vec2::new(position.x, position.y),
@@ -190,23 +239,7 @@ impl Widget for PopoverLayer {
             (viewport.width - frame * 2.0).max(0.0).as_(),
             (viewport.height - frame * 2.0 - cap).max(0.0).as_(),
         );
-        let limits = Limits::new(Size::ZERO, inner_max);
-        Node::set_child_limits(ctx, &mut self.child, limits);
-        let measured = ctx.run_layout(&mut self.child, &box_constraints(limits));
-        let content = limits.resolve(
-            self.declared.width,
-            self.declared.height,
-            Size::new(measured.width.as_(), measured.height.as_()),
-        );
-        let exact = Limits::new(content, content);
-        Node::set_child_limits(ctx, &mut self.child, exact);
-        ctx.run_layout(
-            &mut self.child,
-            &BoxConstraints::tight(MasonrySize::new(
-                f64::from(content.width),
-                f64::from(content.height),
-            )),
-        );
+        let content = fit_content(ctx, &mut self.child, self.declared, inner_max);
         ctx.place_child(&mut self.child, Point::new(frame, frame + cap));
         self.surface_size = MasonrySize::new(
             f64::from(content.width) + frame * 2.0,
@@ -259,6 +292,33 @@ impl Widget for PopoverLayer {
     fn register_children(&mut self, ctx: &mut RegisterCtx<'_>) {
         ctx.register_child(&mut self.child);
     }
+}
+
+/// Lays a surface's content out within `room`: measured first, then held at
+/// the size its declared lengths resolve to, which it returns.
+pub(crate) fn fit_content(
+    ctx: &mut LayoutCtx<'_>,
+    child: &mut WidgetPod<Node>,
+    declared: Size<solve::Length>,
+    room: Size,
+) -> Size {
+    let limits = Limits::new(Size::ZERO, room);
+    Node::set_child_limits(ctx, child, limits);
+    let measured = ctx.run_layout(child, &box_constraints(limits));
+    let content = limits.resolve(
+        declared.width,
+        declared.height,
+        Size::new(measured.width.as_(), measured.height.as_()),
+    );
+    Node::set_child_limits(ctx, child, Limits::new(content, content));
+    ctx.run_layout(
+        child,
+        &BoxConstraints::tight(MasonrySize::new(
+            f64::from(content.width),
+            f64::from(content.height),
+        )),
+    );
+    content
 }
 
 fn place(
@@ -319,14 +379,14 @@ mod tests {
 
     #[kithara::test]
     fn every_open_latches_its_own_press_after_a_close() {
-        let state = PopoverState::default();
+        let state = PopoverState::new(SurfaceKind::popover());
         let first = Point::new(12.0, 18.0);
         let second = Point::new(44.0, 52.0);
 
         state.bank(first);
         state.latch(true);
         assert!(state.is_open());
-        assert_eq!(state.pointer.get(), Some(first));
+        assert_eq!(state.pointer(), Some(first));
 
         state.latch(false);
         assert!(!state.is_open());
@@ -334,6 +394,6 @@ mod tests {
         state.bank(second);
         state.latch(true);
         assert!(state.is_open());
-        assert_eq!(state.pointer.get(), Some(second));
+        assert_eq!(state.pointer(), Some(second));
     }
 }

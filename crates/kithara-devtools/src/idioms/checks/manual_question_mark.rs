@@ -86,7 +86,7 @@ impl<'ast> Visit<'ast> for MatchVisitor<'_> {
                 let key = format!("{}:{}:{}", self.rel, s.line, s.column);
                 self.out.push(
                     Violation::warn(consts::ID, key, pattern.message())
-                        .with_explanation(consts::EXPLANATION),
+                        .with_explanation(consts::EXPLANATION.into()),
                 );
             }
         }
