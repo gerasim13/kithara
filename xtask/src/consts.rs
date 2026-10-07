@@ -523,6 +523,13 @@ pub(crate) const MTIME_ON_USE_ENV: &str = "CARGO_UNSTABLE_MTIME_ON_USE";
 /// Hex digits in the hash Cargo names a build unit's files with.
 pub(crate) const UNIT_HASH_LEN: usize = 16;
 
+/// The link in a build root every build of the root's runner goes through,
+/// pointed at the build directory of the job that runs.
+pub(crate) const BUILD_ALIAS: &str = "build";
+
+/// The directory in a build root that xtask itself is built in.
+pub(crate) const XTASK_BUILD: &str = "xtask";
+
 /// The gap between lane artifacts of neighbouring mtimes once a claim moves
 /// them past its instant: every filesystem a lane slot lives on keeps it, and
 /// the ladder of a whole slot ends before the claim that writes it does.
@@ -901,3 +908,8 @@ pub(crate) const SERVICE_CLEANUP_TIMER: &str = "kithara-ci-cleanup.timer";
 pub(crate) const SERVICE_RENEWAL_UNIT: &str = "kithara-ci-windows-renewal.service";
 
 pub(crate) const SERVICE_RENEWAL_TIMER: &str = "kithara-ci-windows-renewal.timer";
+
+/// How far back from a unit's newest build the build-directory tests keep its
+/// other builds.
+#[cfg(test)]
+pub(crate) const GARBAGE_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);

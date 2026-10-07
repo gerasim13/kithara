@@ -4,7 +4,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use kithara_devtools::lock::FileLock;
 
 use super::{layout, pool::SlotPool, prune, sources, tracked, units};
@@ -64,17 +64,6 @@ impl LaneBuild {
             Claim::Checksum(claimed) => claimed.settle(),
         }
     }
-
-    /// Makes the slot what the next claim of this commit would make it once
-    /// the job settled, for a check of what that claim leaves cargo to build.
-    pub(crate) fn replay(&self) -> Result<()> {
-        match &self.claim {
-            Claim::Checksum(claimed) => claimed.replay(SystemTime::now()),
-            Claim::Mtime(_) => {
-                bail!("an mtime lane's claim stamps the checkout, so it cannot be replayed")
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -118,24 +107,5 @@ mod tests {
             fresh.exists(),
             "the claim removed a unit the lane still uses"
         );
-    }
-
-    /// An mtime claim stamps the checkout, which a replay would stamp again
-    /// for nothing, so only a checksum claim replays.
-    #[test]
-    fn an_mtime_claim_cannot_be_replayed() {
-        let checkout = git_checkout(&[("lib.rs", "one")]);
-        let lanes = tempfile::tempdir().unwrap();
-        let pool = SlotPool::fleet(
-            lanes.path(),
-            CacheTrust::Review,
-            "test",
-            LaneFreshness::Mtime,
-        );
-        let claim = LaneBuild::claim(checkout.path(), &pool, consts::DAY).unwrap();
-
-        let error = claim.replay().unwrap_err();
-
-        assert!(error.to_string().contains("mtime"), "{error}");
     }
 }

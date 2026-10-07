@@ -13,8 +13,8 @@ use tracing::warn;
 
 use crate::{
     ci::{
-        cache::snapshot, config::CiPins, environment::CacheTrust, lane_build::LaneBuild,
-        process::Process, run::PipelineKind,
+        cache::snapshot, config::CiPins, environment::CacheTrust, process::Process,
+        run::PipelineKind,
     },
     config::{CiLaneConfig, CiLanePin, CiLaneStep, LaneFreshness},
     consts,
@@ -23,8 +23,7 @@ use crate::{
 /// Run a lane the way `.config/xtask.toml` declares it: the pipeline kinds it
 /// declines, the platform it refuses to run anywhere but on, the tools it needs,
 /// the versions those tools have to report, then its commands in order. A step
-/// that checks its rebuild is repeated building only, after `claim` replays
-/// the claim the next job of this commit would make.
+/// that checks its rebuild is repeated building only.
 ///
 /// A lane whose whole content is this needs no Rust of its own; the ones that
 /// keep a function are the ones that do something a parameter cannot say.
@@ -34,20 +33,10 @@ pub(crate) fn run(
     pins: &CiPins,
     tools: &ToolsConfig,
     kind: PipelineKind,
-    claim: Option<&LaneBuild>,
 ) -> Result<()> {
     let kind = kind_name(kind);
     if let Some(reason) = lane.kinds_refused.get(&kind) {
         bail!("{reason}");
-    }
-    if let Some(step) = lane.steps.iter().find(|step| step.rebuild_check)
-        && claim.is_none()
-        && !process.is_recording()
-    {
-        bail!(
-            "{} checks its rebuild by replaying its lane slot's next claim, which only `ci lane` on the fleet hands it",
-            step.label
-        );
     }
     if !lane.os.is_empty() {
         process.require_os(&lane.os, &lane.label)?;
@@ -95,7 +84,7 @@ pub(crate) fn run(
             &step.label,
         )?;
         if step.rebuild_check {
-            rebuild_check(process, claim, &program, &args, &vars, &step.label)?;
+            rebuild_check(process, &program, &args, &vars, &step.label)?;
         }
     }
     if !process.is_recording() && lane.publishes_sources {
@@ -121,21 +110,17 @@ pub(crate) fn run(
     Ok(())
 }
 
-/// Asks cargo what the next job of this commit would build: replays the claim
-/// that job would make, then repeats the step building only, with cargo saying
-/// why it builds each unit. The timings report is left out: a build that
-/// compiles nothing would still replace the suite's own.
+/// Asks cargo what the next job of this commit would build: repeats the step
+/// building only, in the same build directory, with cargo saying why it builds
+/// each unit. The timings report is left out: a build that compiles nothing
+/// would still replace the suite's own.
 fn rebuild_check(
     process: &Process,
-    claim: Option<&LaneBuild>,
     program: &OsStr,
     args: &[String],
     vars: &BTreeMap<String, String>,
     label: &str,
 ) -> Result<()> {
-    if let Some(claim) = claim {
-        claim.replay()?;
-    }
     let repeat = args
         .iter()
         .map(String::as_str)
@@ -427,7 +412,6 @@ mod tests {
             &fixture().pins,
             &ToolsConfig::default(),
             PipelineKind::Branch,
-            None,
         )
         .unwrap();
         process.recorded().unwrap().steps().to_vec()
@@ -490,27 +474,6 @@ mod tests {
             ]
         );
         assert_eq!(check.env, suite.env);
-    }
-
-    /// Only `ci lane` on the fleet hands the check the claim it replays; any
-    /// other run refuses before its suite spends a build.
-    #[test]
-    fn a_rebuild_check_without_a_slot_refuses_before_the_suite_runs() {
-        let mut lane = checksum_lane(LaneFreshness::Checksum);
-        lane.steps[0].rebuild_check = true;
-        let process = Process::new(Path::new("/checkout"), BTreeMap::new());
-
-        let error = run(
-            &process,
-            &lane,
-            &fixture().pins,
-            &ToolsConfig::default(),
-            PipelineKind::Branch,
-            None,
-        )
-        .expect_err("no slot to replay");
-
-        assert!(error.to_string().contains("ci lane"), "{error}");
     }
 
     #[test]

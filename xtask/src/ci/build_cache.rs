@@ -613,11 +613,15 @@ fn heartbeat_is_fresh(path: &Path, metadata: &fs::Metadata) -> bool {
 /// a directory of its own claims that one where it names it, so both claims are
 /// the one protocol [`lease`] owns and [`lease_is_held`] asks about.
 pub(crate) fn hold_target_lease() -> Result<Option<lease::Lease>> {
-    env::var_os("CARGO_TARGET_DIR")
-        .map(|target| {
-            let target = PathBuf::from(target);
-            lease::hold(&target).with_context(|| format!("lease {}", target.display()))
-        })
+    lease_target(env::var_os("CARGO_TARGET_DIR").map(PathBuf::from))
+}
+
+/// A build alias is skipped: it is a link `ci lane` points at the lane's own
+/// directory, and leases that directory itself once it knows the lane.
+fn lease_target(target: Option<PathBuf>) -> Result<Option<lease::Lease>> {
+    target
+        .filter(|target| target.file_name() != Some(OsStr::new(consts::BUILD_ALIAS)))
+        .map(|target| lease::hold(&target).with_context(|| format!("lease {}", target.display())))
         .transpose()
 }
 
@@ -1391,6 +1395,24 @@ mod tests {
             "the live cache is charged against the ceiling, so the idle one is evicted"
         );
         drop((job, lane));
+    }
+
+    /// A build alias is a link `ci lane` points at the lane's own directory
+    /// once it knows the lane. Leased through before that, it claimed the last
+    /// lane's directory for this job, or became a directory where the link
+    /// belongs.
+    #[test]
+    fn a_build_alias_is_not_leased_through() {
+        let root = tempfile::tempdir().unwrap();
+        let alias = root.path().join(consts::BUILD_ALIAS);
+
+        let lease = lease_target(Some(alias.clone())).unwrap();
+
+        assert!(lease.is_none());
+        assert!(
+            fs::symlink_metadata(&alias).is_err(),
+            "nothing stands where the alias goes"
+        );
     }
 
     /// A sweep runs over a cache a job is building in, so a name the listing

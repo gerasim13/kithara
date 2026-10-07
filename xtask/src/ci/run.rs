@@ -579,7 +579,7 @@ fn command_lane(
             let declared = lanes.get(name).with_context(|| {
                 format!("ext.ci.lanes.{name} is not declared in .config/xtask.toml")
             })?;
-            super::lane::declared::run(process, declared, &ci_config.pins, tools, kind, None)
+            super::lane::declared::run(process, declared, &ci_config.pins, tools, kind)
         }
     }
 }

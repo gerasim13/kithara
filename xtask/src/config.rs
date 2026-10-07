@@ -170,9 +170,9 @@ pub(crate) struct CiLaneStep {
     /// and the default branch ask the same question of a gate; a quarantine
     /// run deliberately asks a narrower one.
     pub(crate) args_by_kind: BTreeMap<String, Vec<String>>,
-    /// Repeats the step building only, after the claim the next job of this
-    /// commit would make, and fails the lane on any unit cargo would build
-    /// again. Only a checksum lane's `just test run` step can ask.
+    /// Repeats the step building only and fails the lane on any unit cargo
+    /// would build again: the next job of this commit, in the same build
+    /// directory, would build it too. Only a `just test run` step can ask.
     pub(crate) rebuild_check: bool,
 }
 
@@ -400,10 +400,8 @@ fn validate_step(name: &str, lane: &CiLaneConfig, step: &CiLaneStep) -> Result<(
             .all(
                 |args| matches!(args.as_slice(), [test, run, ..] if test == "test" && run == "run"),
             );
-        if lane.freshness != LaneFreshness::Checksum || program != "just" || !runs_the_suite {
-            bail!(
-                "ext.ci.lanes.{name}: a rebuild_check repeats a `just test run` step of a checksum lane"
-            );
+        if program != "just" || !runs_the_suite {
+            bail!("ext.ci.lanes.{name}: a rebuild_check repeats a `just test run` step");
         }
     }
     Ok(())
@@ -987,11 +985,10 @@ timeout_minutes = 30
         validate("mtime").expect("an mtime lane may pin its own toolchain");
     }
 
-    /// A rebuild check repeats a `just test run` step of a checksum lane
-    /// building only; any other step has no cargo status lines to read, and an
-    /// mtime lane's claim cannot be replayed.
+    /// A rebuild check repeats a `just test run` step building only; any other
+    /// step has no cargo status lines to read.
     #[test]
-    fn a_rebuild_check_repeats_a_checksum_lanes_suite_alone() {
+    fn a_rebuild_check_repeats_a_suite_alone() {
         let validate = |freshness: &str, step: &str| {
             KitharaExt::from_ctx(&lane_config(freshness, step))
                 .expect("parse kithara extension")
@@ -999,16 +996,14 @@ timeout_minutes = 30
                 .validate()
         };
 
-        validate(
-            "checksum",
-            r#"{ args = ["test", "run", "--timings"], label = "suite", rebuild_check = true }"#,
-        )
-        .expect("a checksum lane's suite checks its rebuild");
+        for freshness in ["mtime", "checksum"] {
+            validate(
+                freshness,
+                r#"{ args = ["test", "run", "--timings"], label = "suite", rebuild_check = true }"#,
+            )
+            .expect("a suite checks its rebuild");
+        }
         for (freshness, step) in [
-            (
-                "mtime",
-                r#"{ args = ["test", "run"], label = "suite", rebuild_check = true }"#,
-            ),
             (
                 "checksum",
                 r#"{ args = ["lint"], label = "lint", rebuild_check = true }"#,
