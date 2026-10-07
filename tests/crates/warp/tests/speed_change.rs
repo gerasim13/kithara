@@ -171,6 +171,7 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
         BLOCK_FRAMES.to_f64().expect("block fits f64") / f64::from(SAMPLE_RATE),
     );
     let mut warmed = None;
+    let mut sched = crate::sched_diag::SchedLog::new();
     for block in 0..TOTAL_BLOCKS {
         if let Some((_, speed)) = CHANGES.iter().find(|(at, _)| *at == block) {
             let speed = *speed;
@@ -189,8 +190,13 @@ async fn play(temp_dir: &TestTempDir, backend: StretchKind, keylock: bool) -> Ta
         if let Some(recording) = recording.as_mut() {
             recording.push(&output);
         }
+        sched.block(block, started.elapsed(), harness.metrics().underruns());
         time::sleep(period.saturating_sub(started.elapsed())).await;
     }
+    sched.finish(
+        &format!("speed-{backend:?}-keylock{keylock}"),
+        warmed.is_some_and(|warmed| harness.metrics().underruns() > warmed),
+    );
     let opened = trace.events_of("source_opened").len();
     drop(trace);
     let underruns = harness

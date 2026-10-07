@@ -465,12 +465,21 @@ async fn render_passthrough(
     );
 
     let metrics_before_warmup = target.metrics();
-    for _ in 0..WARMUP_BLOCKS {
+    let mut sched = crate::sched_diag::SchedLog::new();
+    let sched_label = format!(
+        "direct-{}-load{with_load}",
+        stretch.map_or_else(
+            || "none".to_owned(),
+            |(kind, speed)| format!("{kind:?}-{speed}")
+        )
+    );
+    for block in 0..WARMUP_BLOCKS {
         let started = Instant::now();
         if let Some(player) = load.as_mut() {
             let _ = player.render(BLOCK_FRAMES).await;
         }
         let _ = target.render(BLOCK_FRAMES).await;
+        sched.block(block, started.elapsed(), target.metrics().underruns());
         time::sleep(block_period.saturating_sub(started.elapsed())).await;
     }
     let metrics_before_capture = target.metrics();
@@ -482,16 +491,25 @@ async fn render_passthrough(
         .saturating_sub(metrics_before_warmup.underruns());
     let mut pcm = Vec::with_capacity(CAPTURE_BLOCKS * BLOCK_FRAMES * usize::from(CHANNELS));
     load_probe.start_capture();
-    for _ in 0..CAPTURE_BLOCKS {
+    for block in 0..CAPTURE_BLOCKS {
         let started = Instant::now();
         if let Some(player) = load.as_mut() {
             let _ = player.render(BLOCK_FRAMES).await;
         }
         pcm.extend(target.render(BLOCK_FRAMES).await);
+        sched.block(
+            WARMUP_BLOCKS + block,
+            started.elapsed(),
+            target.metrics().underruns(),
+        );
         time::sleep(block_period.saturating_sub(started.elapsed())).await;
     }
     let load_observed_during_capture = load_probe.finish_capture();
     let metrics_after_capture = target.metrics();
+    sched.finish(
+        &sched_label,
+        metrics_after_capture.underruns() > metrics_before_capture.underruns(),
+    );
 
     let capture = RealtimeCapture {
         pcm,
@@ -577,26 +595,44 @@ async fn render_queue_passthrough(stretch: Option<(StretchKind, f32)>) -> Vec<f3
         f64::from(u32::try_from(BLOCK_FRAMES).expect("block size fits u32"))
             / f64::from(SAMPLE_RATE),
     );
-    for _ in 0..WARMUP_BLOCKS {
+    let mut sched = crate::sched_diag::SchedLog::new();
+    for block in 0..WARMUP_BLOCKS {
         let started = Instant::now();
         harness
             .run(&queue, kithara::queue::QueueControl::tick)
             .await
             .expect("tick queue during warmup");
         let _ = harness.render(BLOCK_FRAMES).await;
+        sched.block(block, started.elapsed(), harness.metrics().underruns());
         time::sleep(block_period.saturating_sub(started.elapsed())).await;
     }
 
+    let underruns_before = harness.metrics().underruns();
     let mut pcm = Vec::with_capacity(CAPTURE_BLOCKS * BLOCK_FRAMES * usize::from(CHANNELS));
-    for _ in 0..CAPTURE_BLOCKS {
+    for block in 0..CAPTURE_BLOCKS {
         let started = Instant::now();
         harness
             .run(&queue, kithara::queue::QueueControl::tick)
             .await
             .expect("tick queue during capture");
         pcm.extend(harness.render(BLOCK_FRAMES).await);
+        sched.block(
+            WARMUP_BLOCKS + block,
+            started.elapsed(),
+            harness.metrics().underruns(),
+        );
         time::sleep(block_period.saturating_sub(started.elapsed())).await;
     }
+    sched.finish(
+        &format!(
+            "queue-{}",
+            stretch.map_or_else(
+                || "none".to_owned(),
+                |(kind, speed)| format!("{kind:?}-{speed}")
+            )
+        ),
+        harness.metrics().underruns() > underruns_before,
+    );
     drop(queue);
     harness.close().await;
     pcm
