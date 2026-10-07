@@ -93,12 +93,7 @@ fn take(file: File, path: &Path, deadline: Instant) -> io::Result<Option<Lease>>
     let probe = file.try_clone()?;
     let subject = format!("the build directory lease {}", path.display());
     let lock = FileLock::shared_until(file, &subject, deadline)?;
-    let current = match Handle::from_path(path) {
-        Ok(current) => current,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    if Handle::from_file(probe.try_clone()?)? != current {
+    if !still_at(&probe, path)? {
         return Ok(None);
     }
     probe.set_modified(SystemTime::now())?;
@@ -114,19 +109,39 @@ fn take(file: File, path: &Path, deadline: Instant) -> io::Result<Option<Lease>>
 }
 
 /// Takes `directory`'s lease exclusively, so no job can claim it, unless a job
-/// holds it now.
+/// holds it now or another eviction moved it away meanwhile.
 ///
 /// # Errors
 ///
 /// When the lease file cannot be opened or locked for a reason other than a
 /// holder.
 pub fn evict(directory: &Path) -> io::Result<Option<Eviction>> {
-    let file = open(&directory.join(FILE))?;
-    match FileLock::try_exclusive(file) {
-        Ok(lock) => Ok(Some(Eviction { _lock: lock })),
-        Err(fs4::TryLockError::WouldBlock) => Ok(None),
-        Err(fs4::TryLockError::Error(error)) => Err(error),
-    }
+    let path = directory.join(FILE);
+    fence(open(&path)?, &path)
+}
+
+/// Takes the exclusive lock on the open lease `file` at `path`, or nothing
+/// when a job holds it or the lease no longer sits at `path`: another eviction
+/// moved the directory away while this one opened it, and the lock would
+/// guard the moved directory, not whatever stands at `path` now.
+fn fence(file: File, path: &Path) -> io::Result<Option<Eviction>> {
+    let probe = file.try_clone()?;
+    let lock = match FileLock::try_exclusive(file) {
+        Ok(lock) => lock,
+        Err(fs4::TryLockError::WouldBlock) => return Ok(None),
+        Err(fs4::TryLockError::Error(error)) => return Err(error),
+    };
+    Ok(still_at(&probe, path)?.then_some(Eviction { _lock: lock }))
+}
+
+/// Whether the open lease `file` is still the one at `path`.
+fn still_at(file: &File, path: &Path) -> io::Result<bool> {
+    let current = match Handle::from_path(path) {
+        Ok(current) => current,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    Ok(Handle::from_file(file.try_clone()?)? == current)
 }
 
 fn open(path: &Path) -> io::Result<File> {
@@ -185,7 +200,7 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use super::{FILE, HEARTBEAT, evict, hold, hold_within, open, take};
+    use super::{FILE, HEARTBEAT, evict, fence, hold, hold_within, open, take};
 
     #[test]
     fn a_lease_names_a_directory_that_did_not_exist_yet() {
@@ -295,5 +310,24 @@ mod tests {
         let taken = take(waiting, &path, Instant::now()).unwrap();
 
         assert!(taken.is_none(), "a lock on the moved lease guards nothing");
+    }
+
+    /// Two evictions race for one directory: the one that loses opens the
+    /// lease, the winner moves the directory aside, and a job builds in a new
+    /// one at the old path. The loser's lock guards the moved directory, and
+    /// taking it for the new one would move a live build away.
+    #[test]
+    fn an_eviction_lock_on_a_lease_moved_away_is_no_eviction() {
+        let temp = TempDir::new().unwrap();
+        let build = temp.path().join("lane");
+        fs::create_dir_all(&build).unwrap();
+        let path = build.join(FILE);
+        let losing = open(&path).unwrap();
+        fs::rename(&build, temp.path().join(".evicting-lane")).unwrap();
+        fs::create_dir_all(&build).unwrap();
+
+        let fenced = fence(losing, &path).unwrap();
+
+        assert!(fenced.is_none(), "a lock on the moved lease fences nothing");
     }
 }

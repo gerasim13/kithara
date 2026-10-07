@@ -1476,12 +1476,13 @@ mod tests {
         let checkout = root
             .path()
             .join("workspaces/gitlab/runner-a/0/disrupt/kithara");
-        let target = checkout.join("target/debug");
+        let build = checkout.join("target/lint");
+        let target = build.join("debug");
         fs::create_dir_all(&target).unwrap();
         fs::write(checkout.join("Cargo.toml"), "[package]\n").unwrap();
         fs::write(target.join("artifact"), vec![0_u8; 400_000]).unwrap();
 
-        let held = lease::hold(&checkout.join("target")).expect("the running job claims its build");
+        let held = lease::hold(&build).expect("the running job claims its build");
 
         reclaim(root.path());
 

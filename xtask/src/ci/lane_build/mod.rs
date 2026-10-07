@@ -32,5 +32,4 @@ mod tracked;
 mod units;
 
 pub(crate) use claim::LaneBuild;
-pub(crate) use pool::{SlotPool, lock_of};
-pub(crate) use prune::{UnitUse, remove_units, unit_paths, unit_uses};
+pub(crate) use pool::SlotPool;

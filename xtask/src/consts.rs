@@ -178,8 +178,6 @@ pub(crate) const RETIRED_HEAD: &str = "6cd1433327cd8f9e0a1b2c3d4e5f60718293a4b5"
 
 pub(crate) const TARGET_SLOT_CACHE_NAMESPACE: &str = "target-slots";
 
-pub(crate) const TARGET_HEARTBEAT_FILE: &str = ".kithara-job-heartbeat";
-
 // Two cleanup intervals tolerate a paused VM while bounding a killed job's
 // stale claim. A live helper refreshes this every 30 seconds.
 pub(crate) const HEARTBEAT_MAX_AGE: Duration = Duration::from_secs(10 * 60);
@@ -529,6 +527,10 @@ pub(crate) const BUILD_ALIAS: &str = "build";
 
 /// The directory in a build root that xtask itself is built in.
 pub(crate) const XTASK_BUILD: &str = "xtask";
+
+/// What an eviction renames a build directory to before it removes it, ahead
+/// of the directory's own name.
+pub(crate) const EVICTING_PREFIX: &str = ".evicting-";
 
 /// The gap between lane artifacts of neighbouring mtimes once a claim moves
 /// them past its instant: every filesystem a lane slot lives on keeps it, and
