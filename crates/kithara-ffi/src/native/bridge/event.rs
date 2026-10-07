@@ -971,7 +971,7 @@ mod tests {
         let setup = queue.clone();
         let id = spawn_blocking(move || {
             setup.set_repeat(kithara::queue::RepeatMode::One);
-            setup.set_rate(1.0);
+            setup.set_rate(1.0).expect("a finite rate is accepted");
             setup.append(track.to_string_lossy().into_owned())
         })
         .await

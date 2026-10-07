@@ -92,7 +92,10 @@ async fn blocks_until_end(drain_tone: &'static [u8], temp_dir: &TestTempDir, rat
                 .expect("select the item");
         })
         .await;
-    harness.player().set_default_rate(rate);
+    harness
+        .player()
+        .set_default_rate(rate)
+        .expect("a finite rate is accepted");
 
     let mut blocks = 0usize;
     let mut ended_at = None;
@@ -148,7 +151,10 @@ async fn media_time_advances_with_the_playing_rate(tone_mp3: &'static [u8], temp
         "precondition: media time must advance at rate 1.0, got {baseline}s"
     );
 
-    harness.player().set_default_rate(FAST_RATE);
+    harness
+        .player()
+        .set_default_rate(FAST_RATE)
+        .expect("a finite rate is accepted");
     render_blocks(&harness, SETTLE_BLOCKS).await;
     let accelerated = media_advance(&harness, MEASURE_BLOCKS).await;
 

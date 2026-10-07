@@ -44,7 +44,10 @@ async fn the_observation_window_carries_no_silent_block() {
 async fn deck_volume_step_is_ramped() {
     let (harness, _) = sine_queue(SmoothingCase { eq_layout: None }).await;
     let before = observe(&harness, consts::OBSERVE_BLOCKS).await;
-    harness.run(|deck| deck.set_volume(0.0)).await;
+    harness
+        .run(|deck| deck.set_volume(0.0))
+        .await
+        .expect("the deck takes the volume");
     let (after, silent) = observe_until(&harness, |block| peak(block) == 0.0).await;
     assert!(
         silent,

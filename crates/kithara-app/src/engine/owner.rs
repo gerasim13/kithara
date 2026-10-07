@@ -25,7 +25,7 @@ use crate::{
     broadcast::Broadcaster,
     catalog,
     config::AppConfig,
-    deck::{Deck, DeckId, DeckSet, EqMode},
+    deck::{Deck, DeckId, DeckSet, EqMode, TempoPercent},
     state::StateController,
 };
 
@@ -338,10 +338,7 @@ impl EngineDeck {
                     error!(?track, error = %e, "remove failed");
                 }
             }
-            DeckCmd::SetTempo(tempo) => {
-                self.settings.tempo = tempo;
-                queue.set_rate(tempo.speed());
-            }
+            DeckCmd::SetTempo(tempo) => self.set_tempo(tempo),
             DeckCmd::SetQuality(variant) => self.set_quality(variant),
         }
     }
@@ -368,6 +365,14 @@ impl EngineDeck {
         *slot = gain;
         if let Err(e) = self.controller.queue().set_eq_gain(band, f32::from(gain)) {
             debug!(band, db = f32::from(gain), error = ?e, "set EQ gain deferred");
+        }
+    }
+
+    /// Keeps `tempo` only once the deck took its speed.
+    fn set_tempo(&mut self, tempo: TempoPercent) {
+        match self.controller.queue().set_rate(tempo.speed()) {
+            Ok(()) => self.settings.tempo = tempo,
+            Err(e) => error!(speed = tempo.speed(), error = %e, "tempo refused"),
         }
     }
 

@@ -127,7 +127,8 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     .expect("create playback host");
     owner
         .call(|(queue, _)| queue.set_volume(kithara_integration_tests::e2e::volume()))
-        .await;
+        .await
+        .expect("the player takes the volume");
     let queue = owner.call(|(queue, _)| queue.control().clone()).await;
 
     let queue_for_tick = queue.clone();

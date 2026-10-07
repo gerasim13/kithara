@@ -24,6 +24,10 @@ impl<S> PlayerConfig<S> {
         to self.default_rate {
             #[call(load)]
             pub(crate) fn default_rate(&self) -> f32;
+            /// Keeps `rate`, a speed the track settings already accepted, for
+            /// the next `play()` and `select()`.
+            #[call(store)]
+            pub(crate) fn set_default_rate(&self, rate: f32);
         }
         to self.level {
             #[call(load)]
@@ -41,12 +45,6 @@ impl<S> PlayerConfig<S> {
 
     pub(crate) fn set_crossfade_duration(&self, seconds: f32) {
         self.crossfade_duration.store(seconds.max(0.0));
-    }
-
-    pub(crate) fn set_default_rate(&self, rate: f32) -> f32 {
-        let clamped = rate.max(Self::MIN_PLAYBACK_RATE);
-        self.default_rate.store(clamped);
-        clamped
     }
 
     /// Sends the deck its mix level and keeps it; an idle player keeps it for its next slot.

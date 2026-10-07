@@ -144,7 +144,10 @@ async fn offline_harness_glide_varispeed(drain_tone: &'static [u8], temp_dir: Te
                 .expect("select the item");
         })
         .await;
-    harness.player().set_default_rate(GLIDE_RATE);
+    harness
+        .player()
+        .set_default_rate(GLIDE_RATE)
+        .expect("a finite rate is accepted");
 
     let audible = audible_frames_until_end(&harness).await;
 

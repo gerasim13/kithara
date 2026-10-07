@@ -4,9 +4,10 @@ use kithara::{
     self,
     events::{EventReceiver, TrackId},
     platform::sync::Arc,
+    play::PlayError,
     queue::{
-        ActionAtItemEnd, AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, RepeatMode,
-        TrackStatus, Transition,
+        ActionAtItemEnd, AdvanceReason, Queue, QueueConfig, QueueControl, QueueError, QueueEvent,
+        RepeatMode, TrackStatus, Transition,
     },
 };
 use kithara_integration_tests::{
@@ -553,13 +554,16 @@ async fn a_successor_the_deck_had_no_room_for_reloads_and_meets_its_predecessor(
             "B's resource went with the attach the deck refused, so B must reload \
              before A ends"
         );
-        harness
-            .run(&queue, |q| {
-                for _ in 0..FLOOD {
-                    q.set_volume(1.0);
-                }
-            })
+        let refused = harness
+            .run(&queue, |q| (0..FLOOD).find_map(|_| q.set_volume(1.0).err()))
             .await;
+        assert!(
+            matches!(
+                refused,
+                Some(QueueError::Play(PlayError::SlotChannelFull { .. }))
+            ),
+            "the flood fills the deck's ring, so it refuses a volume, not {refused:?}"
+        );
         pcm.extend(harness.render(BLOCK_FRAMES).await);
     }
 
@@ -981,7 +985,10 @@ async fn a_crossfade_at_double_speed_starts_its_duration_before_the_outgoing_end
     let id_a = append_loaded(&harness, &queue, &a).await;
     let b = assets::constant_wav_loud_1_5s();
     let _ = append_loaded(&harness, &queue, &b).await;
-    harness.run(&queue, |q| q.set_default_rate(SPEED)).await;
+    harness
+        .run(&queue, |q| q.set_default_rate(SPEED))
+        .await
+        .expect("a finite rate is accepted");
     harness
         .run(&queue, move |q| q.select(id_a, Transition::None))
         .await
@@ -1106,7 +1113,8 @@ async fn a_consumed_successor_reloads_its_lead_in_session_time_before_the_end() 
     let id_b = append_loaded(&harness, &queue, &b).await;
     harness
         .run(&queue, move |q| q.set_default_rate(SPEED))
-        .await;
+        .await
+        .expect("a finite rate is accepted");
 
     harness
         .run(&queue, move |q| q.select(id_b, Transition::None))

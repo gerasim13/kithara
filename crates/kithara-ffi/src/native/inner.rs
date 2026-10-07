@@ -255,7 +255,7 @@ impl NativeInner {
             items: Arc::new(Mutex::default()),
         };
         inner.setup_network(auth_token);
-        inner.set_playing_rate(playing_rate);
+        inner.set_playing_rate(playing_rate)?;
         Ok(inner)
     }
 
@@ -613,10 +613,13 @@ impl NativeInner {
             pub(crate) fn repeat_mode(&self) -> FfiRepeatMode;
             #[expr($.map_err(FfiError::from))]
             pub(crate) fn reset_eq(&self) -> Result<(), FfiError>;
-            pub(crate) fn set_muted(&self, muted: bool);
+            #[expr($.map_err(FfiError::from))]
+            pub(crate) fn set_muted(&self, muted: bool) -> Result<(), FfiError>;
             #[call(set_default_rate)]
-            pub(crate) fn set_playing_rate(&self, rate: f32);
-            pub(crate) fn set_volume(&self, volume: f32);
+            #[expr($.map_err(FfiError::from))]
+            pub(crate) fn set_playing_rate(&self, rate: f32) -> Result<(), FfiError>;
+            #[expr($.map_err(FfiError::from))]
+            pub(crate) fn set_volume(&self, volume: f32) -> Result<(), FfiError>;
             pub(crate) fn volume(&self) -> f32;
         }
     }

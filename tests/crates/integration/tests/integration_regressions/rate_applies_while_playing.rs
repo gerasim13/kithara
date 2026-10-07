@@ -45,7 +45,10 @@ async fn fixed_rate_reader_keeps_source_and_player_clock_at_unity(constant_half:
     assert_eq!(paused_rates, [0.0]);
     assert_eq!(oracle.player().rate(), 0.0);
 
-    oracle.player().set_default_rate(FAST_RATE);
+    oracle
+        .player()
+        .set_default_rate(FAST_RATE)
+        .expect("a finite rate is accepted");
     assert_eq!(oracle.player().default_rate(), FAST_RATE);
     oracle.player().play();
     assert_eq!(
@@ -124,7 +127,10 @@ async fn loaded_harness(constant_half: &'static [u8]) -> OfflinePlayer {
 
 async fn blocks_until_silence(constant_half: &'static [u8], rate: f32) -> usize {
     let harness = loaded_harness(constant_half).await;
-    harness.player().set_default_rate(rate);
+    harness
+        .player()
+        .set_default_rate(rate)
+        .expect("a finite rate is accepted");
 
     let mut blocks = 0usize;
     for _ in 0..MEASURE_BLOCKS {
@@ -142,7 +148,10 @@ async fn blocks_until_silence(constant_half: &'static [u8], rate: f32) -> usize 
 async fn media_advance(constant_half: &'static [u8], rate: f32) -> f64 {
     let harness = loaded_harness(constant_half).await;
     let start = harness.player().position_seconds().unwrap_or(0.0);
-    harness.player().set_default_rate(rate);
+    harness
+        .player()
+        .set_default_rate(rate)
+        .expect("a finite rate is accepted");
     for _ in 0..CLOCK_BLOCKS {
         let _ = harness.render(BLOCK_FRAMES).await;
         let _ = harness.tick_and_drain().await;

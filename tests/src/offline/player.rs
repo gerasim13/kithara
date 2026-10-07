@@ -12,8 +12,8 @@ use kithara::{
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{
-        CrossfadeSettings, DEFAULT_CROSSFADE_DURATION, PlayWorker, PlayWorkerConfig, PlayerConfig,
-        PlayerEvent, PlayerImpl, Resource, RtMetricsSnapshot, SelectionPlayback,
+        CrossfadeSettings, DEFAULT_CROSSFADE_DURATION, PlayError, PlayWorker, PlayWorkerConfig,
+        PlayerConfig, PlayerEvent, PlayerImpl, Resource, RtMetricsSnapshot, SelectionPlayback,
         player::{PlayerControl, PlayerControlSource},
     },
     queue::{Queue, QueueConfig, QueueControl},
@@ -172,7 +172,10 @@ impl OfflinePlayer {
             #[call(set_crossfade_duration)]
             pub fn set_fade_duration(&self, seconds: f32);
             /// Set the player volume used by subsequent offline renders.
-            pub fn set_volume(&self, volume: f32);
+            ///
+            /// # Errors
+            /// Returns the player's refusal of the change.
+            pub fn set_volume(&self, volume: f32) -> Result<(), PlayError>;
         }
     }
 

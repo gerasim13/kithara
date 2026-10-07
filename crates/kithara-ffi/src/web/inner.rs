@@ -377,10 +377,11 @@ impl WasmInner {
         self.try_send(WorkerCmd::SetEqGain { band, gain_db })
     }
 
-    pub(crate) fn set_muted(&self, muted: bool) {
-        *self.muted.lock() = muted;
+    pub(crate) fn set_muted(&self, muted: bool) -> Result<(), FfiError> {
         let volume = if muted { 0.0 } else { self.volume.load() };
-        self.send(WorkerCmd::SetVolume(volume));
+        self.try_send(WorkerCmd::SetVolume(volume))?;
+        *self.muted.lock() = muted;
+        Ok(())
     }
 
     pub(crate) fn set_playback_order(&self, order: FfiPlaybackOrder) -> Result<(), FfiError> {
@@ -411,11 +412,12 @@ impl WasmInner {
         Ok(())
     }
 
-    pub(crate) fn set_volume(&self, volume: f32) {
-        self.volume.store(volume);
+    pub(crate) fn set_volume(&self, volume: f32) -> Result<(), FfiError> {
         if !*self.muted.lock() {
-            self.send(WorkerCmd::SetVolume(volume));
+            self.try_send(WorkerCmd::SetVolume(volume))?;
         }
+        self.volume.store(volume);
+        Ok(())
     }
 
     pub(crate) fn setup_hls_aes(&self, processor: Arc<dyn FfiKeyProcessor>) {

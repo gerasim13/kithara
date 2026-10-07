@@ -206,8 +206,13 @@ where
     }
 
     /// Set the default playback rate.
-    pub fn set_default_rate(&self, rate: f32) {
-        let _ = self.call_player(PlayerCall::SetDefaultRate(rate));
+    ///
+    /// # Errors
+    /// Returns [`QueueError::Play`] with the underlying player's refusal:
+    /// [`PlayError::InvalidParameter`] for a rate that is not a finite number,
+    /// or the deck's refusal of the new rate.
+    pub fn set_default_rate(&self, rate: f32) -> Result<(), QueueError> {
+        self.call_player(PlayerCall::SetDefaultRate(rate))
     }
 
     /// Set gain for an EQ band.
@@ -236,8 +241,11 @@ where
     }
 
     /// Set the mute flag.
-    pub fn set_muted(&self, muted: bool) {
-        let _ = self.call_player(PlayerCall::SetMuted(muted));
+    ///
+    /// # Errors
+    /// Returns [`QueueError::Play`] with the underlying player's refusal.
+    pub fn set_muted(&self, muted: bool) -> Result<(), QueueError> {
+        self.call_player(PlayerCall::SetMuted(muted))
     }
 
     pub fn set_playback_order(&self, order: PlaybackOrder) {
@@ -246,8 +254,13 @@ where
 
     /// Set the live playback rate (mirrors into the tempo-mode sibling
     /// so a running key-locked stretch tracks the move).
-    pub fn set_rate(&self, rate: f32) {
-        let _ = self.call_player(PlayerCall::SetRate(rate));
+    ///
+    /// # Errors
+    /// Returns [`QueueError::Play`] with the underlying player's refusal:
+    /// [`PlayError::InvalidParameter`] for a rate that is not a finite number,
+    /// or the lanes' or the deck's refusal of the new rate.
+    pub fn set_rate(&self, rate: f32) -> Result<(), QueueError> {
+        self.call_player(PlayerCall::SetRate(rate))
     }
 
     /// Set repeat mode.
@@ -271,8 +284,11 @@ where
     }
 
     /// Set the volume (0.0..=1.0).
-    pub fn set_volume(&self, volume: f32) {
-        let _ = self.call_player(PlayerCall::SetVolume(volume));
+    ///
+    /// # Errors
+    /// Returns [`QueueError::Play`] with the underlying player's refusal.
+    pub fn set_volume(&self, volume: f32) -> Result<(), QueueError> {
+        self.call_player(PlayerCall::SetVolume(volume))
     }
 
     /// Periodic tick: drives `PlayerImpl::tick` and drains queued engine

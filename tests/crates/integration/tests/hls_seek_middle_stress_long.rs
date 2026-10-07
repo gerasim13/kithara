@@ -125,7 +125,8 @@ async fn churn_rates(queue: QueueControl<TestPools>, seed: u64, stop: CancelToke
         let control = queue.clone();
         task::spawn_blocking(move || control.set_rate(rate))
             .await
-            .expect("rate change");
+            .expect("rate change")
+            .expect("a finite rate is accepted");
         changes += 1;
         sleep(consts::RATE_CHANGE_INTERVAL).await;
     }

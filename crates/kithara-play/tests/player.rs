@@ -68,9 +68,11 @@ fn player_pause_without_active_slot_keeps_rate_zero() {
 #[kithara::test]
 fn player_volume_clamps() {
     let player = player();
-    player.set_volume(2.0);
+    player.set_volume(2.0).expect("the player takes the volume");
     assert!((player.volume() - 1.0).abs() < f32::EPSILON);
-    player.set_volume(-1.0);
+    player
+        .set_volume(-1.0)
+        .expect("the player takes the volume");
     assert!((player.volume() - 0.0).abs() < f32::EPSILON);
 }
 
@@ -78,7 +80,7 @@ fn player_volume_clamps() {
 fn player_muted() {
     let player = player();
     assert!(!player.is_muted());
-    player.set_muted(true);
+    player.set_muted(true).expect("the player takes the mute");
     assert!(player.is_muted());
 }
 
@@ -94,7 +96,7 @@ fn player_crossfade_duration() {
 fn player_events_subscribe() {
     let player = player();
     let mut rx = player.subscribe::<PlayerEvent>();
-    player.set_volume(0.5);
+    player.set_volume(0.5).expect("the player takes the volume");
     let event = rx.try_recv();
     assert!(event.is_ok());
 }
@@ -111,9 +113,9 @@ fn player_config_sets_capacity_for_a_new_event_bus() {
     );
     let mut rx = player.subscribe::<PlayerEvent>();
 
-    player.set_volume(0.1);
-    player.set_volume(0.2);
-    player.set_volume(0.3);
+    player.set_volume(0.1).expect("the player takes the volume");
+    player.set_volume(0.2).expect("the player takes the volume");
+    player.set_volume(0.3).expect("the player takes the volume");
 
     assert!(matches!(rx.try_recv(), Err(TryRecvError::Lagged(1))));
 }
@@ -134,8 +136,8 @@ fn injected_event_bus_keeps_its_identity_and_capacity() {
     let mut rx = player.subscribe::<PlayerEvent>();
 
     assert_eq!(player.control().bus().id(), bus_id);
-    player.set_volume(0.1);
-    player.set_volume(0.2);
+    player.set_volume(0.1).expect("the player takes the volume");
+    player.set_volume(0.2).expect("the player takes the volume");
     assert!(matches!(rx.try_recv(), Err(TryRecvError::Lagged(1))));
 }
 
@@ -210,9 +212,9 @@ async fn synchronous_player_events_remain_in_order() {
     let player = player();
     let mut rx = player.subscribe::<PlayerEvent>();
 
-    player.set_volume(0.5);
-    player.set_muted(true);
-    player.set_rate(2.0);
+    player.set_volume(0.5).expect("the player takes the volume");
+    player.set_muted(true).expect("the player takes the mute");
+    player.set_rate(2.0).expect("a finite rate is accepted");
 
     let e1 = rx.try_recv();
     let e2 = rx.try_recv();
@@ -257,7 +259,7 @@ fn position_seconds_idle_is_none() {
 fn set_rate_without_rt_does_not_emit_rate_changed() {
     let player = player();
     let mut rx = player.subscribe::<PlayerEvent>();
-    player.set_rate(2.0);
+    player.set_rate(2.0).expect("a finite rate is accepted");
     assert!(rx.try_recv().is_err());
 }
 

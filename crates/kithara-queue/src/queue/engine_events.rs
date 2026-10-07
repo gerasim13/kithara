@@ -228,7 +228,10 @@ mod tests {
             .expect("open queue accepts second repeated source");
         let ids = [first, second];
         queue.navigation.select(second, &ids);
-        queue.player.set_rate(1.0);
+        queue
+            .player
+            .set_rate(1.0)
+            .expect("a finite rate is accepted");
         (first, second)
     }
 

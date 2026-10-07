@@ -1,16 +1,17 @@
 use kithara_bufpool::HasPool;
+use kithara_config::LiveConfig as _;
 use kithara_effects::{GainDb, eq::EqBandConfig};
 use kithara_platform::sync::atomic::Ordering;
 use kithara_render::bridge::{DeckMixSettingsChange, DeckPart};
 use kithara_signal::FaderValue;
 use kithara_test_macros as kithara;
 use kithara_warp::MIN_SPEED;
-use tracing::warn;
 
 use super::super::core::PlayerRuntime;
 use crate::{
     api::{InterruptionKind, SessionEvent, SlotId},
     error::PlayError,
+    player::config::{TrackSettings, TrackSettingsChange},
 };
 
 impl<S> PlayerRuntime<S> {
@@ -77,9 +78,15 @@ impl<S> PlayerRuntime<S> {
     ///
     /// While paused the live rate is 0.0 and must stay there — a rate change is
     /// not a resume. The new value takes effect on the next `play()`.
-    pub fn set_default_rate(&self, rate: f32) {
-        let target = self.core.config.set_default_rate(rate);
-        self.set_rate(target);
+    ///
+    /// # Errors
+    /// Returns [`Self::set_rate`]'s refusals; the default rate stays as it was
+    /// then.
+    pub fn set_default_rate(&self, rate: f32) -> Result<(), PlayError> {
+        let speed = requested_speed(rate);
+        self.set_rate(speed)?;
+        self.core.config.set_default_rate(speed);
+        Ok(())
     }
 
     /// Set EQ gain for a band in dB; an idle player keeps it for its next slot.
@@ -119,30 +126,38 @@ impl<S> PlayerRuntime<S> {
     }
 
     /// Set muted state.
-    pub fn set_muted(&self, muted: bool) {
-        if let Err(error) = self.core.config.set_muted(
+    ///
+    /// # Errors
+    /// Returns the deck's refusal of the change; the state stays as it was then.
+    pub fn set_muted(&self, muted: bool) -> Result<(), PlayError> {
+        self.core.config.set_muted(
             muted,
             |part| self.send_to_slot(part),
             self.core.engine.bus(),
-        ) {
-            warn!(?error, muted, "mute update rejected");
-        }
+        )
     }
 
-    /// Set the requested rate target, clamped to [`MIN_SPEED`].
-    pub fn set_rate(&self, rate: f32) {
-        let target = rate.max(MIN_SPEED);
+    /// Set the requested rate target; a finite rate under [`MIN_SPEED`] asks
+    /// for the slowest speed.
+    ///
+    /// # Errors
+    /// Returns [`PlayError::InvalidParameter`] for a rate that is not a finite
+    /// number and the deck's refusal of the new rate; the target stays as it
+    /// was then.
+    pub fn set_rate(&self, rate: f32) -> Result<(), PlayError> {
+        let target = requested_speed(rate);
+        let change = TrackSettings::check(TrackSettingsChange::Speed(target))?;
+        // The deck takes the rate before anything moves, so a deck with no
+        // room for it leaves the target as it was; without a slot the target
+        // waits for the next track.
+        match self.send_to_slot(DeckPart::SetRate(target)) {
+            Ok(()) | Err(PlayError::NoActiveSlot) => {}
+            Err(error) => return Err(error),
+        }
         let snapshot = self
             .slot()
             .and_then(|slot| self.core.engine.slot_render_snapshot(slot));
-        let change = self.core.tracks.lock().set_next_speed(target);
-        let change = match change {
-            Ok(change) => change,
-            Err(error) => {
-                warn!(%error, rate, "rate refused");
-                return;
-            }
-        };
+        self.core.tracks.lock().set_next_speed(target)?;
         let configured = self.with_tracks(|tracks, out| {
             tracks.configure(change, out, |seq| {
                 if let Some(snapshot) = &snapshot {
@@ -161,26 +176,34 @@ impl<S> PlayerRuntime<S> {
                 }
             })
         });
-        match configured {
-            Ok(()) | Err(PlayError::NoActiveSlot) => {}
-            Err(error) => warn!(%error, rate = target, "rate not sent to the lanes"),
-        }
-        match self.send_to_slot(DeckPart::SetRate(target)) {
-            Ok(()) | Err(PlayError::NoActiveSlot) => {}
-            Err(error) => warn!(?error, rate = target, "rate not sent to the processor"),
-        }
         self.core.config.worker.wake();
+        match configured {
+            Ok(()) | Err(PlayError::NoActiveSlot) => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     /// Set volume, clamped to `0.0..=1.0`.
-    pub fn set_volume(&self, volume: f32) {
-        if let Err(error) = self.core.config.set_volume(
+    ///
+    /// # Errors
+    /// Returns the deck's refusal of the change; the volume stays as it was then.
+    pub fn set_volume(&self, volume: f32) -> Result<(), PlayError> {
+        self.core.config.set_volume(
             volume,
             |part| self.send_to_slot(part),
             self.core.engine.bus(),
-        ) {
-            warn!(?error, volume, "volume update rejected");
-        }
+        )
+    }
+}
+
+/// The speed a requested rate asks for: a finite rate slower than the
+/// slowest the renderer plays asks for that; a rate that is not a finite
+/// number is left for the speed check to refuse.
+fn requested_speed(rate: f32) -> f32 {
+    if rate.is_finite() {
+        rate.max(MIN_SPEED)
+    } else {
+        rate
     }
 }
 

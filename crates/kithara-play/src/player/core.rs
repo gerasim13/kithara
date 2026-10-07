@@ -339,9 +339,11 @@ mod tests {
         assert_eq!(player.crossfade_duration(), 3.0);
         assert_eq!(player.core.config.values().crossfade_duration, 3.0);
 
-        player.set_default_rate(0.75);
-        player.set_volume(0.4);
-        player.set_muted(true);
+        player
+            .set_default_rate(0.75)
+            .expect("a finite rate is accepted");
+        player.set_volume(0.4).expect("the player takes the volume");
+        player.set_muted(true).expect("the player takes the mute");
         let values = player.core.config.values();
         assert_eq!(values.default_rate, 0.75);
         assert_eq!(values.volume, 0.4);
@@ -567,7 +569,9 @@ mod tests {
     fn player_default_rate_getter_setter() {
         let player = player();
         assert!((player.default_rate() - 1.0).abs() < f32::EPSILON);
-        player.set_default_rate(0.75);
+        player
+            .set_default_rate(0.75)
+            .expect("a finite rate is accepted");
         assert!((player.default_rate() - 0.75).abs() < f32::EPSILON);
         assert!((player.core.tracks.lock().next().speed() - 0.75).abs() < f32::EPSILON);
         assert_eq!(player.rate(), 0.0);
@@ -576,7 +580,7 @@ mod tests {
     #[kithara::test]
     fn set_rate_without_active_slot_updates_only_the_requested_target() {
         let player = player();
-        player.set_rate(2.0);
+        player.set_rate(2.0).expect("a finite rate is accepted");
         assert!((player.rate() - 0.0).abs() < f32::EPSILON);
         assert!((player.core.tracks.lock().next().speed() - 2.0).abs() < f32::EPSILON);
     }
@@ -584,11 +588,50 @@ mod tests {
     #[kithara::test]
     #[case(0.0)]
     #[case(-1.0)]
-    #[case(f32::NAN)]
     fn a_rate_under_the_floor_requests_the_slowest_speed(#[case] rate: f32) {
         let player = player();
-        player.set_rate(rate);
+        player.set_rate(rate).expect("a finite rate is accepted");
         assert!((player.core.tracks.lock().next().speed() - MIN_SPEED).abs() < f32::EPSILON);
+    }
+
+    #[kithara::test]
+    #[case(f32::NAN)]
+    #[case(f32::INFINITY)]
+    fn a_rate_that_is_not_a_finite_number_is_refused(#[case] rate: f32) {
+        let player = player();
+        assert!(matches!(
+            player.set_rate(rate),
+            Err(PlayError::InvalidParameter { .. })
+        ));
+        assert!(matches!(
+            player.set_default_rate(rate),
+            Err(PlayError::InvalidParameter { .. })
+        ));
+        assert!((player.default_rate() - 1.0).abs() < f32::EPSILON);
+        assert!((player.core.tracks.lock().next().speed() - 1.0).abs() < f32::EPSILON);
+    }
+
+    /// A rate the deck has no room for is refused whole: neither the target
+    /// nor the default moves, so the caller sends it again once the deck
+    /// has room.
+    #[kithara::test]
+    fn a_rate_the_deck_has_no_room_for_changes_nothing() {
+        let (player, _audio_thread) = seated();
+        player.play();
+        while player.send_to_slot(DeckPart::StopAll).is_ok() {}
+
+        let refused = player.set_rate(2.0);
+        assert!(
+            matches!(refused, Err(PlayError::SlotChannelFull { .. })),
+            "a full deck refuses the rate, not {refused:?}"
+        );
+        let refused = player.set_default_rate(2.0);
+        assert!(
+            matches!(refused, Err(PlayError::SlotChannelFull { .. })),
+            "a full deck refuses the default rate, not {refused:?}"
+        );
+        assert!((player.default_rate() - 1.0).abs() < f32::EPSILON);
+        assert!((player.core.tracks.lock().next().speed() - 1.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]

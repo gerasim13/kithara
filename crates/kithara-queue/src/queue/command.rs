@@ -142,25 +142,13 @@ where
                 Ok(())
             }
             PlayerCall::ResetEq => player.reset_eq(),
-            PlayerCall::SetDefaultRate(rate) => {
-                player.set_default_rate(rate);
-                Ok(())
-            }
+            PlayerCall::SetDefaultRate(rate) => player.set_default_rate(rate),
             PlayerCall::SetEqGain { band, gain_db } => player.set_eq_gain(band, gain_db),
             PlayerCall::SetEqLayout(layout) => player.set_eq_layout(layout),
             PlayerCall::SetLevel(level) => player.set_level(level),
-            PlayerCall::SetMuted(muted) => {
-                player.set_muted(muted);
-                Ok(())
-            }
-            PlayerCall::SetRate(rate) => {
-                player.set_rate(rate);
-                Ok(())
-            }
-            PlayerCall::SetVolume(volume) => {
-                player.set_volume(volume);
-                Ok(())
-            }
+            PlayerCall::SetMuted(muted) => player.set_muted(muted),
+            PlayerCall::SetRate(rate) => player.set_rate(rate),
+            PlayerCall::SetVolume(volume) => player.set_volume(volume),
         }
     }
 }

@@ -1,6 +1,6 @@
 use kithara::platform::sync::mpsc;
 
-use crate::{config::FfiPlayerConfig, player::AudioPlayer};
+use crate::{config::FfiPlayerConfig, player::AudioPlayer, types::FfiError};
 
 #[kithara::test]
 fn create_player() {
@@ -11,8 +11,25 @@ fn create_player() {
 fn playing_rate_roundtrip() {
     let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
     assert!((player.playing_rate() - 1.0).abs() < f32::EPSILON);
-    player.set_playing_rate(0.5);
+    player
+        .set_playing_rate(0.5)
+        .expect("a finite rate is accepted");
     assert!((player.playing_rate() - 0.5).abs() < f32::EPSILON);
+}
+
+#[kithara::test]
+fn a_non_numeric_playing_rate_is_refused() {
+    let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
+    let refused = player.set_playing_rate(f32::NAN);
+    assert!(
+        matches!(refused, Err(FfiError::InvalidArgument { .. })),
+        "a non-numeric rate is an invalid argument, not {refused:?}"
+    );
+    assert!(
+        (player.playing_rate() - 1.0).abs() < f32::EPSILON,
+        "a refused rate leaves the playing rate as it was, not {}",
+        player.playing_rate()
+    );
 }
 
 #[kithara::test]
@@ -32,7 +49,7 @@ fn remove_all_items_on_empty_queue() {
 fn volume_roundtrip() {
     let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
     assert!((player.volume() - 1.0).abs() < f32::EPSILON);
-    player.set_volume(0.5);
+    player.set_volume(0.5).expect("the player takes the volume");
     assert!((player.volume() - 0.5).abs() < f32::EPSILON);
 }
 
@@ -40,7 +57,7 @@ fn volume_roundtrip() {
 fn muted_roundtrip() {
     let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
     assert!(!player.is_muted());
-    player.set_muted(true);
+    player.set_muted(true).expect("the player takes the mute");
     assert!(player.is_muted());
 }
 
@@ -69,7 +86,7 @@ fn idle_player_eq_can_be_configured_and_reset() {
     assert_eq!(player.eq_gain(0), 0.0);
     assert!(matches!(
         player.set_eq_gain(99, 3.0),
-        Err(crate::types::FfiError::InvalidArgument { .. })
+        Err(FfiError::InvalidArgument { .. })
     ));
 }
 

@@ -160,8 +160,12 @@ fn dispatch_cmd(
         WorkerCmd::Seek(ms) => {
             let _ = queue.seek(ms.max(0.0) / MS_PER_SECOND);
         }
-        WorkerCmd::SetVolume(vol) => queue.set_volume(vol),
-        WorkerCmd::SetPlayingRate(rate) => queue.set_default_rate(rate),
+        WorkerCmd::SetVolume(vol) => {
+            let _ = queue.set_volume(vol);
+        }
+        WorkerCmd::SetPlayingRate(rate) => {
+            let _ = queue.set_default_rate(rate);
+        }
         WorkerCmd::SetCrossfade(settings) => {
             let _ = queue.set_crossfade_settings(settings);
         }

@@ -165,9 +165,14 @@ where
         self.command(|runtime| runtime.set_crossfade_duration(seconds));
     }
 
-    /// Update the default playback rate unless the owning player is closed.
-    pub fn set_default_rate(&self, rate: f32) {
-        self.command(|runtime| runtime.set_default_rate(rate));
+    /// Update the default playback rate.
+    ///
+    /// # Errors
+    /// Returns a closed-owner error, [`PlayError::InvalidParameter`] for a rate
+    /// that is not a finite number, or the deck's refusal of the new rate.
+    pub fn set_default_rate(&self, rate: f32) -> Result<(), PlayError> {
+        self.runtime
+            .with_open_result(|runtime| runtime.set_default_rate(rate))
     }
 
     /// Update one EQ band.
@@ -192,19 +197,32 @@ where
             .with_open_result(|runtime| runtime.set_level(level))
     }
 
-    /// Update mute state unless the owning player is closed.
-    pub fn set_muted(&self, muted: bool) {
-        self.command(|runtime| runtime.set_muted(muted));
+    /// Update mute state.
+    ///
+    /// # Errors
+    /// Returns a closed-owner error or the deck's refusal of the change.
+    pub fn set_muted(&self, muted: bool) -> Result<(), PlayError> {
+        self.runtime
+            .with_open_result(|runtime| runtime.set_muted(muted))
     }
 
-    /// Update live playback rate unless the owning player is closed.
-    pub fn set_rate(&self, rate: f32) {
-        self.command(|runtime| runtime.set_rate(rate));
+    /// Update the live playback rate.
+    ///
+    /// # Errors
+    /// Returns a closed-owner error, [`PlayError::InvalidParameter`] for a rate
+    /// that is not a finite number, or the deck's refusal of the new rate.
+    pub fn set_rate(&self, rate: f32) -> Result<(), PlayError> {
+        self.runtime
+            .with_open_result(|runtime| runtime.set_rate(rate))
     }
 
-    /// Update output volume unless the owning player is closed.
-    pub fn set_volume(&self, volume: f32) {
-        self.command(|runtime| runtime.set_volume(volume));
+    /// Update output volume.
+    ///
+    /// # Errors
+    /// Returns a closed-owner error or the deck's refusal of the change.
+    pub fn set_volume(&self, volume: f32) -> Result<(), PlayError> {
+        self.runtime
+            .with_open_result(|runtime| runtime.set_volume(volume))
     }
 
     delegate! {
