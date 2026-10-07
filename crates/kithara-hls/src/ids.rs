@@ -4,7 +4,7 @@ use kithara_platform::time::Duration;
 
 pub type VariantIndex = usize;
 
-/// Sum `durations[..endpoint]` when `endpoint` is a valid slice endpoint
+/// Sums `durations[..endpoint]` when `endpoint` is a valid slice endpoint
 /// (`endpoint <= durations.len()`), else `None`.
 ///
 /// `endpoint` is the *exclusive end* of a prefix, not a segment index:
