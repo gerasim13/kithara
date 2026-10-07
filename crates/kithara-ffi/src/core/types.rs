@@ -8,7 +8,8 @@ use kithara::{
         RouteChangeReason, SessionDuckingMode, StretchBackendKind, TimeControlStatus, TimeRange,
     },
     queue::{
-        ActionAtItemEnd, AdvanceReason, PlaybackOrder, QueueRepeatMode, RepeatMode, Transition,
+        ActionAtItemEnd, AdvanceReason, PlaybackOrder, QueueError, QueueRepeatMode, RepeatMode,
+        Transition,
     },
     stream::{AudioCodec, ContainerFormat},
 };
@@ -57,6 +58,18 @@ impl From<PlayError> for FfiError {
             | PlayError::InvalidParameter { .. }) => Self::InvalidArgument {
                 reason: err.to_string(),
             },
+            err => Self::Internal {
+                description: err.to_string(),
+            },
+        }
+    }
+}
+
+impl From<QueueError> for FfiError {
+    fn from(err: QueueError) -> Self {
+        match err {
+            QueueError::Play(err) => err.into(),
+            QueueError::NotReady(_) => Self::NotReady,
             err => Self::Internal {
                 description: err.to_string(),
             },

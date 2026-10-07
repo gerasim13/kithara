@@ -1,9 +1,7 @@
 use kithara_bufpool::HasPool;
+use kithara_command::{Mailbox, Post, Postbox};
 use kithara_events::TrackId;
-use kithara_platform::sync::mpsc::Sender;
-use kithara_play::{
-    CrossfadeSettings, EqBandConfig, InterruptionKind, PlayError, SeekOutcome, player::Player,
-};
+use kithara_play::{CrossfadeSettings, EqBandConfig, InterruptionKind, PlayError, player::Player};
 
 use super::{Queue, Transition};
 use crate::{
@@ -13,12 +11,17 @@ use crate::{
     track::TrackSource,
 };
 
-/// Where the queue sends a command's answer; the caller waits on the other end.
-pub(super) type Reply<T> = Sender<T>;
+/// Where a [`QueueControl`](super::QueueControl) and the tasks beside track
+/// loads post to the queue; each post is answered applied or refused with
+/// the queue's error.
+pub(crate) type QueuePostbox<S> = Postbox<QueueCommand<S>, QueueError>;
+
+/// What the queue drains its posts from.
+pub(crate) type QueueMailbox<S> = Mailbox<QueueCommand<S>, QueueError>;
 
 /// What a [`QueueControl`](super::QueueControl) or a task beside a track's
-/// load asks the queue to do. The executor that holds the queue runs commands one at a
-/// time, in the order they were posted.
+/// load asks the queue to do. The executor that holds the queue runs commands
+/// one at a time, in the order they were posted, and answers each one.
 pub(crate) enum QueueCommand<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
@@ -26,65 +29,32 @@ where
     Append {
         id: TrackId,
         source: TrackSource<S>,
-        reply: Reply<Result<TrackId, QueueError>>,
     },
     Insert {
         id: TrackId,
         source: TrackSource<S>,
         after: Option<TrackId>,
-        reply: Reply<Result<TrackId, QueueError>>,
     },
-    Remove {
-        id: TrackId,
-        reply: Reply<Result<(), QueueError>>,
-    },
-    Clear(Reply<Result<(), QueueError>>),
-    SetTracks {
-        sources: Vec<TrackSource<S>>,
-        reply: Reply<Result<(), QueueError>>,
-    },
+    Remove(TrackId),
+    Clear,
+    SetTracks(Vec<TrackSource<S>>),
     Select {
         id: TrackId,
         transition: Transition,
-        reply: Reply<Result<(), QueueError>>,
     },
-    Next {
-        transition: Transition,
-        reply: Reply<Result<Option<TrackId>, QueueError>>,
-    },
-    Previous {
-        transition: Transition,
-        reply: Reply<Result<Option<TrackId>, QueueError>>,
-    },
-    Play(Reply<()>),
-    Pause(Reply<()>),
-    Seek {
-        seconds: f64,
-        reply: Reply<Result<SeekOutcome, QueueError>>,
-    },
-    Tick(Reply<Result<(), QueueError>>),
-    SetActionAtItemEnd {
-        action: ActionAtItemEnd,
-        reply: Reply<()>,
-    },
-    SetPlaybackOrder {
-        order: PlaybackOrder,
-        reply: Reply<()>,
-    },
-    SetRepeat {
-        mode: RepeatMode,
-        reply: Reply<()>,
-    },
-    SetCrossfadeSettings {
-        settings: CrossfadeSettings,
-        reply: Reply<Result<(), PlayError>>,
-    },
+    Next(Transition),
+    Previous(Transition),
+    Play,
+    Pause,
+    Seek(f64),
+    Tick,
+    SetActionAtItemEnd(ActionAtItemEnd),
+    SetPlaybackOrder(PlaybackOrder),
+    SetRepeat(RepeatMode),
+    SetCrossfadeSettings(CrossfadeSettings),
     /// A setting or notice the queue hands its player unchanged.
-    Player {
-        call: PlayerCall,
-        reply: Reply<Result<(), PlayError>>,
-    },
-    Close(Reply<Result<(), PlayError>>),
+    Player(PlayerCall),
+    Close,
     /// A task beside a track's load reports what it found.
     Load(LoadReport),
 }
@@ -107,68 +77,59 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     /// Settles the loads the dispatcher answered and runs every command
-    /// posted since the last drain, then publishes what they changed.
+    /// posted since the last drain, answering each, then publishes what they
+    /// changed.
     pub(super) fn drain_commands(&mut self) {
         self.settle_loads();
-        for command in self.mailbox.drain() {
-            self.run(command);
+        for Post { command, answer } in self.mailbox.drain() {
+            answer.answer(self.run(command));
         }
         self.publish();
     }
 
-    fn run(&mut self, command: QueueCommand<S>) {
+    fn run(&mut self, command: QueueCommand<S>) -> Result<(), QueueError> {
         match command {
-            QueueCommand::Append { id, source, reply } => {
-                answer(&reply, self.append_with_id(id, source));
+            QueueCommand::Append { id, source } => self.append_with_id(id, source).map(drop),
+            QueueCommand::Insert { id, source, after } => {
+                self.insert_with_id(id, source, after).map(drop)
             }
-            QueueCommand::Insert {
-                id,
-                source,
-                after,
-                reply,
-            } => answer(&reply, self.insert_with_id(id, source, after)),
-            QueueCommand::Remove { id, reply } => answer(&reply, self.remove(id)),
-            QueueCommand::Clear(reply) => answer(&reply, self.clear()),
-            QueueCommand::SetTracks { sources, reply } => {
-                answer(&reply, self.set_tracks(sources));
-            }
-            QueueCommand::Select {
-                id,
-                transition,
-                reply,
-            } => answer(&reply, self.select(id, transition)),
-            QueueCommand::Next { transition, reply } => answer(&reply, self.next(transition)),
-            QueueCommand::Previous { transition, reply } => {
-                answer(&reply, self.previous(transition));
-            }
-            QueueCommand::Play(reply) => {
+            QueueCommand::Remove(id) => self.remove(id),
+            QueueCommand::Clear => self.clear(),
+            QueueCommand::SetTracks(sources) => self.set_tracks(sources),
+            QueueCommand::Select { id, transition } => self.select(id, transition),
+            QueueCommand::Next(transition) => self.next(transition).map(drop),
+            QueueCommand::Previous(transition) => self.previous(transition).map(drop),
+            QueueCommand::Play => {
                 self.play();
-                answer(&reply, ());
+                Ok(())
             }
-            QueueCommand::Pause(reply) => {
+            QueueCommand::Pause => {
                 self.pause();
-                answer(&reply, ());
+                Ok(())
             }
-            QueueCommand::Seek { seconds, reply } => answer(&reply, self.seek(seconds)),
-            QueueCommand::Tick(reply) => answer(&reply, self.tick()),
-            QueueCommand::SetActionAtItemEnd { action, reply } => {
+            QueueCommand::Seek(seconds) => self.seek(seconds).map(drop),
+            QueueCommand::Tick => self.tick(),
+            QueueCommand::SetActionAtItemEnd(action) => {
                 self.set_action_at_item_end(action);
-                answer(&reply, ());
+                Ok(())
             }
-            QueueCommand::SetPlaybackOrder { order, reply } => {
+            QueueCommand::SetPlaybackOrder(order) => {
                 self.set_playback_order(order);
-                answer(&reply, ());
+                Ok(())
             }
-            QueueCommand::SetRepeat { mode, reply } => {
+            QueueCommand::SetRepeat(mode) => {
                 self.set_repeat(mode);
-                answer(&reply, ());
+                Ok(())
             }
-            QueueCommand::SetCrossfadeSettings { settings, reply } => {
-                answer(&reply, self.set_crossfade_settings(settings));
+            QueueCommand::SetCrossfadeSettings(settings) => {
+                Ok(self.set_crossfade_settings(settings)?)
             }
-            QueueCommand::Player { call, reply } => answer(&reply, self.call_player(call)),
-            QueueCommand::Close(reply) => answer(&reply, Player::close(self)),
-            QueueCommand::Load(report) => self.tracks.apply_report(report),
+            QueueCommand::Player(call) => Ok(self.call_player(call)?),
+            QueueCommand::Close => Ok(Player::close(self)?),
+            QueueCommand::Load(report) => {
+                self.tracks.apply_report(report);
+                Ok(())
+            }
         }
     }
 
@@ -202,10 +163,4 @@ where
             }
         }
     }
-}
-
-/// Sends `value` to the caller waiting on `reply`. A caller that stopped
-/// waiting dropped its end, and the answer goes with it.
-fn answer<T>(reply: &Reply<T>, value: T) {
-    let _ = reply.send(value);
 }

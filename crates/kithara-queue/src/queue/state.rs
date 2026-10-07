@@ -2,7 +2,7 @@ use core::ops::Deref;
 
 use kithara_assets::{AssetStore, StorageBackend};
 use kithara_bufpool::HasPool;
-use kithara_command::{Mailbox, Postbox, mailbox};
+use kithara_command::mailbox;
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::{
     CancelScope, CancelToken, sync::Arc, tokio::runtime::Handle as RuntimeHandle,
@@ -14,7 +14,7 @@ use kithara_play::{
 use smallvec::SmallVec;
 
 use super::{
-    command::QueueCommand,
+    command::{QueueMailbox, QueuePostbox},
     engine_events::PlayerBusEvent,
     types::{CachedPosition, SelectPhase},
     view::QueueView,
@@ -51,7 +51,7 @@ pub struct QueueControl<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    pub(super) postbox: Postbox<QueueCommand<S>>,
+    pub(super) postbox: QueuePostbox<S>,
     pub(super) runtime: Arc<QueueRuntime<S>>,
 }
 
@@ -82,8 +82,8 @@ where
     /// The queue's own changes since it last published, in order, behind
     /// the tracks' changes recorded before them.
     pub(super) events: Vec<QueueEvent>,
-    pub(super) postbox: Postbox<QueueCommand<S>>,
-    pub(super) mailbox: Mailbox<QueueCommand<S>>,
+    pub(super) postbox: QueuePostbox<S>,
+    pub(super) mailbox: QueueMailbox<S>,
     pub(super) pending_select: SelectPhase,
     /// Track whose load completion starts playback: the first one appended
     /// while nothing is selected, when [`QueueConfig::should_autoplay`] is on.

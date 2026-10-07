@@ -14,6 +14,9 @@
 //! thread. Every [`Postbox`] clone queues into it and wakes the executor that
 //! holds the owner; the owner drains the commands in the order they were
 //! posted, and a post made before an executor holds the owner waits for one.
+//! Each post is numbered as it is queued and answered through its [`Ticket`]:
+//! applied, refused by the owner, or [`Refused::Unanswered`] when the owner
+//! dropped it.
 
 mod channel;
 mod config;
@@ -27,6 +30,6 @@ mod wakes;
 pub use channel::{Due, Inbox, SendError, Sender, Step, channel};
 pub use config::ChannelConfig;
 pub use live::{Live, LiveError, SettledChange};
-pub use mailbox::{Mailbox, PostError, Postbox, mailbox};
+pub use mailbox::{Answer, Mailbox, Post, PostError, Postbox, Refused, Ticket, mailbox};
 pub use protocol::{Batch, Protocol, Seq, Target, When};
 pub use receipt::{Outcome, Receipt, Rejection};

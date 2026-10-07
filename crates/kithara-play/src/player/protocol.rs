@@ -49,9 +49,6 @@ pub trait PlayerControlSource: Player {
         binding: SessionBinding,
     ) -> Result<DeckRegistration<Self::Schema>, PlayError>;
 
-    /// Closes the resident player through a previously issued capability.
-    fn close_control(control: &Self::Control) -> Result<(), PlayError>;
-
     /// Creates a command capability for this player.
     fn control(&self) -> Self::Control;
 
@@ -94,10 +91,6 @@ where
     ) -> Result<DeckRegistration<S>, PlayError> {
         self.runtime.attach_session(binding)?;
         Ok(self.runtime.core.engine.registration())
-    }
-
-    fn close_control(control: &Self::Control) -> Result<(), PlayError> {
-        control.close()
     }
 
     fn control(&self) -> Self::Control {

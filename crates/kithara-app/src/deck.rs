@@ -5,7 +5,7 @@ use kithara::{
     host::{HostOwned, HostSettingsControl},
     platform::CancelToken,
     play::{PlayError, PlayerConfig, PlayerImpl},
-    queue::QueueConfig,
+    queue::{QueueConfig, QueueError},
 };
 
 use crate::{
@@ -177,7 +177,7 @@ impl DeckSet {
     ///
     /// # Errors
     /// See [`DeckSet::commit`]. A rejected apply leaves the set unchanged.
-    pub fn add(&mut self, deck: Deck) -> Result<(), PlayError> {
+    pub fn add(&mut self, deck: Deck) -> Result<(), QueueError> {
         self.next_id = self.next_id.max(deck.id.0 + 1);
         self.decks.push(deck);
         let next = self.mix.resized(self.decks.len());
@@ -206,8 +206,8 @@ impl DeckSet {
     /// Send each deck its level from `next`, storing `next` only when every deck takes it.
     ///
     /// # Errors
-    /// Returns [`PlayError`] when the mix is invalid or a deck refuses its level.
-    pub fn commit(&mut self, next: MixState) -> Result<(), PlayError> {
+    /// Returns [`QueueError`] when the mix is invalid or a deck refuses its level.
+    pub fn commit(&mut self, next: MixState) -> Result<(), QueueError> {
         let levels = next.levels()?;
         for (deck, &level) in self.decks.iter().zip(&levels) {
             deck.queue.set_level(level)?;
@@ -239,7 +239,7 @@ impl DeckSet {
     ///
     /// # Errors
     /// See [`DeckSet::commit`]. A rejected apply leaves the set unchanged.
-    pub fn remove(&mut self, id: DeckId) -> Result<(), PlayError> {
+    pub fn remove(&mut self, id: DeckId) -> Result<(), QueueError> {
         let Some(index) = self.position(id) else {
             return Ok(());
         };
@@ -255,7 +255,7 @@ impl DeckSet {
         if let Err(error) = self.host.remove(&deck.queue) {
             self.decks.insert(index, deck);
             self.commit(previous)?;
-            return Err(error);
+            return Err(error.into());
         }
         Ok(())
     }
@@ -264,7 +264,7 @@ impl DeckSet {
     ///
     /// # Errors
     /// See [`DeckSet::commit`].
-    pub fn set_crossfader(&mut self, position: f32) -> Result<(), PlayError> {
+    pub fn set_crossfader(&mut self, position: f32) -> Result<(), QueueError> {
         let mut next = self.mix.clone();
         next.position = position;
         self.commit(next)
@@ -274,7 +274,7 @@ impl DeckSet {
     ///
     /// # Errors
     /// See [`DeckSet::commit`].
-    pub fn set_trim(&mut self, id: DeckId, trim: f32) -> Result<(), PlayError> {
+    pub fn set_trim(&mut self, id: DeckId, trim: f32) -> Result<(), QueueError> {
         let mut next = self.mix.clone();
         if let Some(strip) = self.position(id).and_then(|at| next.strips.get_mut(at)) {
             strip.trim = trim;
@@ -429,7 +429,10 @@ mod tests {
         let before = set.mix().clone();
 
         let err = set.set_crossfader(1.5).expect_err("invalid position");
-        assert!(matches!(err, PlayError::MixPosition { .. }));
+        assert!(matches!(
+            err,
+            QueueError::Play(PlayError::MixPosition { .. })
+        ));
         assert_eq!(set.mix(), &before);
     }
 

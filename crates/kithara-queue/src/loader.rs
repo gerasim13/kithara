@@ -2,9 +2,7 @@ use std::{error::Error as StdError, io::Error, num::NonZeroUsize, task::Waker};
 
 use kithara_assets::AssetStore;
 use kithara_bufpool::HasPool;
-use kithara_command::{
-    Batch, ChannelConfig, Outcome, Postbox, Rejection, Sender, Seq, When, channel,
-};
+use kithara_command::{Batch, ChannelConfig, Outcome, Rejection, Sender, Seq, When, channel};
 use kithara_download::DownloaderEvent;
 use kithara_events::{Envelope, EventReceiver, RecvError, ScopeLabel, TrackId};
 use kithara_net::NetError;
@@ -25,7 +23,7 @@ use crate::{
     error::QueueError,
     event::TrackStatus,
     loading::{LoadClass, LoadReport, OpenFailure, TrackLoad},
-    queue::QueueCommand,
+    queue::{QueueCommand, QueuePostbox},
     track::{TrackSource, Tracks},
 };
 
@@ -47,7 +45,7 @@ where
     /// Background prefetch lane (`max_concurrent_loads` slots).
     prefetch: Lane,
     /// Where a task beside a load reports to the queue.
-    postbox: Postbox<QueueCommand<S>>,
+    postbox: QueuePostbox<S>,
     store: AssetStore<S>,
     player: PlayerControl<S>,
 }
@@ -98,7 +96,7 @@ where
         runtime: Option<RuntimeHandle>,
         store: AssetStore<S>,
         max_concurrent_loads: NonZeroUsize,
-        postbox: Postbox<QueueCommand<S>>,
+        postbox: QueuePostbox<S>,
     ) -> Self {
         let dispatcher = runtime.map(|runtime| {
             let (sender, inbox) = channel(
@@ -339,7 +337,7 @@ async fn report_cancel<S>(
     id: TrackId,
     token: CancelToken,
     watch: CancelToken,
-    postbox: Postbox<QueueCommand<S>>,
+    postbox: QueuePostbox<S>,
 ) where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
@@ -351,7 +349,7 @@ async fn report_cancel<S>(
 
 /// Post `report` to the queue. A queue that is gone has no track left to
 /// report on.
-fn report<S>(postbox: &Postbox<QueueCommand<S>>, report: LoadReport)
+fn report<S>(postbox: &QueuePostbox<S>, report: LoadReport)
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
@@ -394,7 +392,7 @@ async fn slow_transfer<S>(
     id: TrackId,
     watch: CancelToken,
     mut events: EventReceiver<DownloaderEvent>,
-    postbox: Postbox<QueueCommand<S>>,
+    postbox: QueuePostbox<S>,
 ) where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
@@ -860,10 +858,10 @@ mod tests {
     /// The reports the tasks beside a load posted since the last drain, in
     /// post order.
     fn posted(
-        mailbox: &mut Mailbox<QueueCommand<TestPools>>,
+        mailbox: &mut Mailbox<QueueCommand<TestPools>, QueueError>,
     ) -> impl Iterator<Item = LoadReport> + use<> {
-        mailbox.drain().map(|command| {
-            let QueueCommand::Load(report) = command else {
+        mailbox.drain().map(|post| {
+            let QueueCommand::Load(report) = post.command else {
                 panic!("a load's tasks post only their reports");
             };
             report
@@ -887,7 +885,7 @@ mod tests {
         loader: Loader<TestPools>,
         tracks: Tracks<TestPools>,
         bus: EventBus,
-        mailbox: Mailbox<QueueCommand<TestPools>>,
+        mailbox: Mailbox<QueueCommand<TestPools>, QueueError>,
         woke: UnboundedReceiver<()>,
         _player: PlayerImpl<TestPools>,
     }

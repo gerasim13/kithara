@@ -27,7 +27,7 @@ mod state;
 mod types;
 mod view;
 
-pub(crate) use command::QueueCommand;
+pub(crate) use command::{QueueCommand, QueuePostbox};
 use state::QueueRuntime;
 #[cfg(test)]
 pub(crate) use state::tests::test_session;

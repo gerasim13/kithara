@@ -10,7 +10,7 @@ use kithara::{
         time::{Duration, timeout},
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
-    play::{ResourceConfig, ResourceSrc, SeekOutcome},
+    play::{ResourceConfig, ResourceSrc},
     queue::{QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
 };
 use url::Url;
@@ -303,29 +303,9 @@ impl SimHarness {
         let pre_track = self.current_track_id();
         let pre_pos = self.position();
 
-        let outcome = self
-            .run(move |queue| queue.seek(target))
+        self.run(move |queue| queue.seek(target))
             .await
             .unwrap_or_else(|e| panic!("[{action_label}] queue.seek returned Err: {e}"));
-
-        match outcome {
-            SeekOutcome::Landed { .. } => {}
-            SeekOutcome::PastEof {
-                duration: seek_duration,
-                ..
-            } => {
-                // PastEof is only acceptable for SeekNearEnd very close
-                // to 1.0; everything else means we computed `target` wrong.
-                assert!(
-                    near_end && ratio >= 0.95,
-                    "[{action_label}] unexpected PastEof (target={target:.3}s, \
-                     queue dur={duration:.3}s, seek dur={seek_duration:?}, \
-                     track {pre_track:?} -> {:?})",
-                    self.current_track_id()
-                );
-                return;
-            }
-        }
 
         // Settle on the seek by driving the product renderer forward: each
         // turn renders a batch and ticks the queue, so the playhead the queue

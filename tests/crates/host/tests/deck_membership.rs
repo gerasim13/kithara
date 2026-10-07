@@ -7,7 +7,7 @@ use std::{
 
 use delegate::delegate;
 use kithara::{
-    host::{HostConfig, HostSettings},
+    host::{HostConfig, HostOwned, HostSettings},
     platform::{
         sync::{Arc, Mutex},
         thread,
@@ -164,14 +164,16 @@ async fn a_route_change_reaches_every_deck_the_host_holds() {
     host.close().await;
 }
 
-/// A drain or a tick of a deck, with the thread it ran on.
+/// A close, a drain or a tick of a deck, with the thread it ran on.
 #[derive(Clone, Debug, PartialEq)]
 enum Call {
+    Close(Option<String>),
     Drain(Option<String>),
     Tick(Option<String>),
 }
 
-/// A player that notes each drain and tick of the player it wraps, in order.
+/// A player that notes each close, drain and tick of the player it wraps, in
+/// order.
 struct ThreadProbe<P> {
     inner: P,
     seen: Arc<Mutex<Vec<Call>>>,
@@ -186,6 +188,11 @@ impl<P> ThreadProbe<P> {
 }
 
 impl<P: Player> Player for ThreadProbe<P> {
+    fn close(&mut self) -> Result<(), PlayError> {
+        self.note(Call::Close);
+        self.inner.close()
+    }
+
     fn drain(&mut self) {
         self.note(Call::Drain);
         self.inner.drain();
@@ -198,7 +205,6 @@ impl<P: Player> Player for ThreadProbe<P> {
 
     delegate! {
         to self.inner {
-            fn close(&mut self) -> Result<(), PlayError>;
             fn hold(&mut self, waker: Waker);
             fn release(&mut self);
         }
@@ -208,10 +214,6 @@ impl<P: Player> Player for ThreadProbe<P> {
 impl<P: PlayerControlSource> PlayerControlSource for ThreadProbe<P> {
     type Control = P::Control;
     type Schema = P::Schema;
-
-    fn close_control(control: &Self::Control) -> Result<(), PlayError> {
-        P::close_control(control)
-    }
 
     delegate! {
         to self.inner {
@@ -225,12 +227,17 @@ impl<P: PlayerControlSource> PlayerControlSource for ThreadProbe<P> {
     }
 }
 
-/// The Host's session thread holds its decks: it runs a deck's commands as it
-/// takes the deck and ticks the deck once ahead of each block it renders.
-#[kithara::test(tokio)]
-async fn the_session_thread_drains_and_ticks_the_decks_it_holds() {
-    const SESSION: &str = "deck-session";
-    const BLOCKS: usize = 3;
+/// The name of the session thread a probed Host runs.
+const SESSION: &str = "deck-session";
+
+/// An offline Host whose session thread is named [`SESSION`], holding a probe
+/// that notes into `seen` each call its session makes on a bare player.
+async fn probed_host(
+    seen: &Arc<Mutex<Vec<Call>>>,
+) -> (
+    OfflineHostHarness<TestPools>,
+    HostOwned<ThreadProbe<PlayerImpl<TestPools>>>,
+) {
     let region = pools();
     let config = HostConfig::offline(region.clone())
         .settings(HostSettings::builder().sample_rate(sample_rate()).build())
@@ -243,18 +250,28 @@ async fn the_session_thread_drains_and_ticks_the_decks_it_holds() {
         )
         .build();
     let host = OfflineHostHarness::new(config).await.expect("offline host");
+    let deck = host
+        .insert(ThreadProbe {
+            inner: PlayerImpl::new(
+                PlayerConfig::builder()
+                    .sample_rate(sample_rate())
+                    .worker(PlayWorker::new(PlayWorkerConfig::builder(region).build()))
+                    .build(),
+            ),
+            seen: Arc::clone(seen),
+        })
+        .await
+        .expect("the Host takes the deck");
+    (host, deck)
+}
+
+/// The Host's session thread holds its decks: it runs a deck's commands as it
+/// takes the deck and ticks the deck once ahead of each block it renders.
+#[kithara::test(tokio)]
+async fn the_session_thread_drains_and_ticks_the_decks_it_holds() {
+    const BLOCKS: usize = 3;
     let seen = Arc::default();
-    host.insert(ThreadProbe {
-        inner: PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(sample_rate())
-                .worker(PlayWorker::new(PlayWorkerConfig::builder(region).build()))
-                .build(),
-        ),
-        seen: Arc::clone(&seen),
-    })
-    .await
-    .expect("the Host takes the deck");
+    let (host, _deck) = probed_host(&seen).await;
     host.render(consts::BLOCK_FRAMES * BLOCKS).await;
 
     let session = || Some(SESSION.to_owned());
@@ -264,6 +281,31 @@ async fn the_session_thread_drains_and_ticks_the_decks_it_holds() {
         *seen.lock(),
         expected,
         "a drain as the session thread takes the deck, then one tick ahead of each block"
+    );
+    host.close().await;
+}
+
+/// A deck the Host hands back is closed where it is held: on the session
+/// thread, which runs every other command to it.
+#[kithara::test(tokio)]
+async fn removing_a_deck_closes_it_on_the_session_thread() {
+    let seen = Arc::default();
+    let (host, deck) = probed_host(&seen).await;
+
+    host.with(move |host| host.remove(&deck))
+        .await
+        .expect("the Host hands the deck back");
+
+    let closes: Vec<_> = seen
+        .lock()
+        .iter()
+        .filter(|call| matches!(call, Call::Close(_)))
+        .cloned()
+        .collect();
+    assert_eq!(
+        closes,
+        vec![Call::Close(Some(SESSION.to_owned()))],
+        "the session thread closes the deck, once"
     );
     host.close().await;
 }

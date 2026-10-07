@@ -108,8 +108,8 @@ where
         Ok(self.owned::<P>(grid_id, control))
     }
 
-    /// Closes the lower runtime on the caller thread, stops its deck and
-    /// detaches it from the session, then takes the deck back and drops it.
+    /// Closes the deck on the session thread that holds it, detaches it from
+    /// the session, then takes the deck back and drops it.
     /// The last deck the Host hands back releases the output.
     ///
     /// # Errors
@@ -119,8 +119,9 @@ where
         P: PlayerControlSource<Schema = S>,
     {
         self.validate_removal(player)?;
-        P::close_control(player.control())?;
+        let decks = &self.session.platform().decks;
+        decks.close(player.id())?;
         self.dispatcher.detach(player.id())?;
-        self.session.platform().decks.release(player.id()).map(drop)
+        decks.release(player.id()).map(drop)
     }
 }

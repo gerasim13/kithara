@@ -51,10 +51,6 @@ where
     type Control = QueueControl<S>;
     type Schema = S;
 
-    fn close_control(control: &Self::Control) -> Result<(), PlayError> {
-        control.close()
-    }
-
     fn control(&self) -> Self::Control {
         QueueControl {
             postbox: self.postbox.clone(),

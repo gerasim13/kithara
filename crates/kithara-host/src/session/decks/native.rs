@@ -17,6 +17,11 @@ impl Decks {
     pub(crate) fn run(&mut self, message: DeckMsg) {
         match message {
             DeckMsg::Hold(id, deck) => self.hold(id, deck),
+            DeckMsg::Close(id, reply_tx) => {
+                if reply_tx.send(self.close(id)).is_err() {
+                    warn!(?id, "host deck close receiver dropped");
+                }
+            }
             DeckMsg::Release(id, reply_tx) => {
                 if reply_tx.send(self.release(id)).is_err() {
                     warn!(?id, "host deck release receiver dropped");
@@ -32,6 +37,7 @@ impl Decks {
 /// What a Host asks of the session thread that holds its decks.
 pub(crate) enum DeckMsg {
     Hold(BeatGridId, Deck),
+    Close(BeatGridId, mpsc::Sender<Result<(), PlayError>>),
     Release(BeatGridId, mpsc::Sender<Result<Deck, PlayError>>),
     /// The deck has commands posted: run them now, between ticks.
     Drain(BeatGridId),
@@ -68,12 +74,27 @@ impl SessionDecks {
         self.0.post(DeckMsg::Hold(id, deck))
     }
 
+    /// Closes the deck `id` on the session thread that holds it; a failed
+    /// close leaves it held.
+    pub(crate) fn close(&self, id: BeatGridId) -> Result<(), PlayError> {
+        self.ask(|reply_tx| DeckMsg::Close(id, reply_tx))
+    }
+
     /// Takes the deck `id` back from the session thread, released.
     pub(crate) fn release(&self, id: BeatGridId) -> Result<Deck, PlayError> {
+        self.ask(|reply_tx| DeckMsg::Release(id, reply_tx))
+    }
+
+    /// Posts the message `message` builds around its reply and waits for the
+    /// session thread's answer.
+    fn ask<T>(
+        &self,
+        message: impl FnOnce(mpsc::Sender<Result<T, PlayError>>) -> DeckMsg,
+    ) -> Result<T, PlayError> {
         let (reply_tx, reply_rx) = mpsc::channel();
-        self.0.post(DeckMsg::Release(id, reply_tx))?;
+        self.0.post(message(reply_tx))?;
         reply_rx.recv().map_err(|_| PlayError::SessionGone {
-            reason: "session thread stopped before handing a deck back",
+            reason: "session thread stopped before answering for a deck",
         })?
     }
 

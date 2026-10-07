@@ -27,6 +27,17 @@ impl Decks {
         }
     }
 
+    /// Closes the deck `id` where it is held, so a failed close leaves it
+    /// held.
+    pub(crate) fn close(&mut self, id: BeatGridId) -> Result<(), PlayError> {
+        self.0
+            .iter_mut()
+            .find(|(held, _)| *held == id)
+            .ok_or(SessionError::DeckNotFound(id))?
+            .1
+            .close()
+    }
+
     /// Lets go of the deck `id` and hands it back released.
     pub(crate) fn release(&mut self, id: BeatGridId) -> Result<Deck, PlayError> {
         let index = self
