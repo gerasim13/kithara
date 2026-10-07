@@ -99,9 +99,9 @@ impl Container<'_> {
         host.cache_root.join("lanes")
     }
 
-    /// Where every runner bootstraps xtask: one build per trust, under the CI
-    /// cache root the workflows name (`KITHARA_CI_CACHE_ROOT`) beside the lane
-    /// slots, so a commit's xtask is compiled once for the whole host.
+    /// The bootstrap budget namespace shared by every runner. Builds inside
+    /// each trust scope belong to stable profile slots, so a new registration
+    /// reuses its slot without replacing another runner's executable.
     pub(super) fn bootstrap_root(host: &LinuxHost) -> PathBuf {
         Self::lane_root(host).join(".kithara-ci").join("bootstrap")
     }
@@ -139,6 +139,9 @@ impl Container<'_> {
             "SCCACHE_IDLE_TIMEOUT={SCCACHE_IDLE_TIMEOUT}",
             SCCACHE_IDLE_TIMEOUT = consts::SCCACHE_IDLE_TIMEOUT
         ));
+        // The profile name identifies a bounded runner slot before xtask is
+        // built; a just-in-time registration adds an ephemeral process ID.
+        environment.push(format!("CI_CONCURRENT_ID={}", runner.name));
         // The S3 backend is shared, but each runner needs its own daemon
         // endpoint. An explicit socket lets the lane start that daemon before
         // Cargo's parallel compilers can race to start it.

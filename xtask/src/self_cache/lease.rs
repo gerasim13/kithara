@@ -142,9 +142,9 @@ pub(super) fn refresh(root: &Path) -> Result<RefreshLock> {
     Ok(RefreshLock { _lock: lock })
 }
 
-/// The lock lives in the build directory, not the checkout: every runner of a
-/// CI host builds in one directory, and Cargo's own lock ends with the build,
-/// before the binary is copied out of it.
+/// Concurrent self-cache builds can share a target, so the lock lives in the
+/// build directory rather than the checkout. Cargo's own lock ends with the
+/// build, before the binary is copied out of it.
 pub(super) fn build(target: &Path) -> Result<BuildLock> {
     fs::create_dir_all(target)
         .with_context(|| format!("create xtask build directory {}", target.display()))?;
