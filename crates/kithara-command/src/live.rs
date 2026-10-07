@@ -83,6 +83,19 @@ impl<C: LiveConfig, P: Protocol> Live<C, P> {
         self.in_flight.iter().copied()
     }
 
+    /// The configuration once every change in flight applies: the confirmed
+    /// one with them applied in the order the executor runs them.
+    #[must_use]
+    pub fn projected(&self) -> C {
+        let mut pending: Vec<_> = self.pending().collect();
+        pending.sort_by_key(|&(seq, when, _)| (when, seq));
+        let mut projected = self.config;
+        for (_, _, change) in pending {
+            projected.apply_change(change);
+        }
+        projected
+    }
+
     /// Checks `change` and sends it to apply at `when`: one batch with an
     /// empty basis and the single command `wrap` makes of it. A copy waits
     /// for the batch's receipt.
@@ -493,5 +506,55 @@ mod tests {
         assert!(matches!(refused, Err(LiveError::Invalid(Loud(11)))));
         assert!(executor.render(&mut inbox, 0).is_empty());
         assert_eq!(live.pending().count(), 0);
+    }
+
+    #[kithara::test]
+    fn projected_equals_the_config_with_nothing_in_flight() {
+        let mut live = mix();
+        live.apply(MixChange::Level(4)).expect("level in bounds");
+        assert_eq!(live.projected(), *live.config());
+    }
+
+    #[kithara::test]
+    fn projected_shows_pending_changes_in_execution_order_before_their_receipts() {
+        let (mut sender, _inbox) = pair(4);
+        let mut live = mix();
+        let confirmed = *live.config();
+        for (when, change) in [
+            (When::At(Frame(100)), MixChange::Level(1)),
+            (When::Next, MixChange::Level(5)),
+            (When::At(Frame(50)), MixChange::Muted(true)),
+        ] {
+            live.send(&mut sender, when, change, Part::Mix)
+                .expect("the channel has room");
+        }
+        assert_eq!(
+            live.projected(),
+            Mix {
+                muted: true,
+                level: 1,
+            }
+        );
+        assert_eq!(live.config(), &confirmed);
+        assert_eq!(live.pending().count(), 3);
+    }
+
+    #[kithara::test]
+    fn projected_drops_a_change_after_its_rejected_receipt_settles() {
+        let (mut sender, mut inbox) = pair(4);
+        let mut live = mix();
+        let confirmed = *live.config();
+        live.send(&mut sender, When::Next, MixChange::Level(5), Part::Mix)
+            .expect("the channel has room");
+        assert_eq!(live.projected().level(), 5);
+        refuse(&mut inbox, 0);
+        let receipt = sender.receipts().next().expect("the batch was answered");
+        assert_eq!(
+            receipt.outcome(),
+            &Outcome::Rejected(Rejection::Refused(()))
+        );
+        assert!(live.settle(&receipt).is_some());
+        assert_eq!(live.projected(), confirmed);
+        assert_eq!(live.config(), &confirmed);
     }
 }

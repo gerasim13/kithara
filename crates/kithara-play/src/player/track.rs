@@ -593,7 +593,7 @@ impl<S> Player<S> for PlayerImpl<S> {
 
 impl<S> Track<S> for PlayerImpl<S> {
     fn projected(&self) -> TrackSettings {
-        todo!("Live::projected() must include applied settings and changes still in flight")
+        self.settings.projected()
     }
 }
 
