@@ -304,6 +304,11 @@ pub(crate) const FILE: &str = "/etc/kithara-ci/docker-compose.yml";
 /// Where a Linux runner mounts its own build root.
 pub(crate) const BUILD_ROOT_MOUNT: &str = "/cache/target";
 
+/// The host directory, under the cache root, holding one directory of lane
+/// build slots per trust, and where a Linux runner mounts its trust's.
+pub(crate) const BUILD_SLOTS_DIR: &str = "builds";
+pub(crate) const BUILD_SLOTS_MOUNT: &str = "/cache/builds";
+
 /// Where a Linux runner mounts the Cargo home of its trust: the image's own
 /// `CARGO_HOME`, so a job that names no home and one that is told it key their
 /// compilations alike.

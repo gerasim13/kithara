@@ -44,7 +44,9 @@ impl Container<'_> {
     ///
     /// The build root is the runner's own: one job runs per container, and the
     /// lane runner re-points the alias inside it at the lane's build, which
-    /// two jobs sharing one root would race. Cargo's home is shared by the
+    /// two jobs sharing one root would race. The lanes' builds are not: every
+    /// runner of a trust takes its lane's slots in one directory, so a lane
+    /// built on one runner is warm for the next that runs it. Cargo's home is shared by the
     /// runners of one trust, so a crate is downloaded once per trust, while a
     /// review job never writes what a trusted job reads. It is mounted whole
     /// rather than as its registry and its git checkouts separately: cargo
@@ -74,6 +76,12 @@ impl Container<'_> {
                     .into_owned(),
                 consts::BUILD_ROOT_MOUNT,
             ),
+            (
+                Self::build_slots(host, runner)
+                    .to_string_lossy()
+                    .into_owned(),
+                consts::BUILD_SLOTS_MOUNT,
+            ),
             ("kithara-ci-fixtures".to_owned(), "/cache/fixtures"),
             // Every runner shares the one directory `production/main` claims
             // lane directories in, as main mounts it.
@@ -91,6 +99,13 @@ impl Container<'_> {
     /// at the current one, and the xtask bootstrap.
     pub(super) fn build_root(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
         host.cache_root.join("target").join(&runner.name)
+    }
+
+    /// Where the runners of one trust take their lanes' build slots.
+    pub(super) fn build_slots(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
+        host.cache_root
+            .join(consts::BUILD_SLOTS_DIR)
+            .join(runner.cache_trust.as_str())
     }
 
     fn cargo_home(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
@@ -112,7 +127,7 @@ impl Container<'_> {
     /// Cargo is told the build root, the same path in every container; a lane
     /// builds behind the alias in it, so every lane's compilations are keyed
     /// alike fleet-wide and the compiler cache serves one runner's entries to
-    /// another. The store itself is the one the runner's credentials name;
+    /// another. The lane is told where its trust's slots are. The store itself is the one the runner's credentials name;
     /// nothing of it is kept on this disk. `production/main` is told where it
     /// claims lane directories too, until this layout replaces its own.
     ///
@@ -128,6 +143,7 @@ impl Container<'_> {
         environment.extend([
             format!("CARGO_HOME={}", consts::CARGO_HOME_MOUNT),
             format!("CARGO_TARGET_DIR={}", root.display()),
+            format!("{}={}", consts::BUILD_SLOTS_ENV, consts::BUILD_SLOTS_MOUNT),
             format!("KITHARA_CI_TARGET_ROOT={}", consts::PREVIOUS_LANES_MOUNT),
             format!(
                 "KITHARA_XTASK_TARGET={}",
@@ -293,6 +309,30 @@ pub(crate) mod tests {
             for second in &host.runners {
                 assert_eq!(
                     home(first) == home(second),
+                    first.cache_trust == second.cache_trust,
+                    "{} and {}",
+                    first.name,
+                    second.name
+                );
+            }
+        }
+    }
+
+    /// A lane's build is reused by whichever runner of its trust runs the lane
+    /// next, so runners keep their lanes' slots where every runner of a trust
+    /// sees them, and a review job never builds in a slot a trusted job reads.
+    #[test]
+    fn runners_share_lane_slots_exactly_when_they_share_a_trust() {
+        let mut host = host_fixture();
+        host.runners[0].cache_trust = CacheTrust::Trusted;
+        let slots = |runner: &LinuxRunner| {
+            mounted_at(&host, runner, &told(runner, consts::BUILD_SLOTS_ENV))
+        };
+
+        for first in &host.runners {
+            for second in &host.runners {
+                assert_eq!(
+                    slots(first) == slots(second),
                     first.cache_trust == second.cache_trust,
                     "{} and {}",
                     first.name,

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::BTreeSet, path::PathBuf};
 
 use anyhow::{Result, bail};
 use tracing::info;
@@ -118,16 +118,24 @@ fn orphaned_volumes(listed: &str) -> Vec<&str> {
 }
 
 /// Where the live build caches sit on disk, so their contents can be held to a
-/// budget: each runner's build root, which holds its lanes and its xtask
-/// bootstrap alike, and the lane directories and xtask bootstraps
-/// `production/main` keeps until this layout replaces its own. One budget over
-/// both is what keeps two layouts on one disk inside one ceiling.
+/// budget: each runner's build root, which holds its xtask bootstrap and the
+/// builds its jobs name, each trust's lane slots, and the lane directories and
+/// xtask bootstraps `production/main` keeps until this layout replaces its
+/// own. One budget over both is what keeps two layouts on one disk inside one
+/// ceiling.
 fn target_dirs(host: &LinuxHost) -> Result<Vec<PathBuf>> {
     let lanes = host.cache_root.join(consts::PREVIOUS_LANES);
     let mut dirs: Vec<PathBuf> = host
         .runners
         .iter()
-        .map(|runner| Container::build_root(host, runner))
+        .flat_map(|runner| {
+            [
+                Container::build_root(host, runner),
+                Container::build_slots(host, runner),
+            ]
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect();
     dirs.extend(build_cache::previous_build_roots(
         &lanes.join(consts::PREVIOUS_CACHE_ROOT),
