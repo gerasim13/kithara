@@ -9,6 +9,7 @@ use kithara::{
     play::{
         CrossfadeSettings, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
         Resource, ResourceConfig, ResourceSrc, SelectTransition, SelectionPlayback,
+        player::PlayerControl,
     },
     signal::TransportRevision,
     warp::{StretchKind, WarpConfig},
@@ -512,7 +513,7 @@ async fn capture_pass(
     let mut pcm = Vec::with_capacity(requested_frames * usize::from(CHANNELS));
     let mut zero_blocks = Vec::new();
     for block_index in 0..capture_blocks {
-        let block = render_paced(host, decks, case.host_rate).await;
+        let block = render_paced(host, case.host_rate).await;
         inspect_block(
             case.label,
             label,
@@ -524,9 +525,7 @@ async fn capture_pass(
         pcm.extend_from_slice(&block);
         runtime::drain_all_events(decks, label, EventPolicy::AudiblePlayback, failures);
     }
-    for deck in &*decks {
-        deck.player.tick();
-    }
+    command_decks(host, &*decks, PlayerControl::tick).await;
     runtime::drain_all_events(
         decks,
         &format!("{label} final drain"),
@@ -590,7 +589,7 @@ async fn reset_for_capture(
     }
 
     if !pause_muted(case, host, decks, label, failures).await
-        || !request_capture_seeks(case, decks, label, failures)
+        || !request_capture_seeks(case, host, decks, label, failures).await
     {
         return false;
     }
@@ -609,9 +608,7 @@ async fn pause_muted(
     label: &str,
     failures: &mut Vec<String>,
 ) -> bool {
-    for deck in &*decks {
-        deck.player.pause();
-    }
+    command_decks(host, &*decks, PlayerControl::pause).await;
     settle_controls(
         case,
         host,
@@ -642,8 +639,9 @@ async fn pause_muted(
 
 /// Seek every deck to its capture start; every request lands before EOF and
 /// reports its epoch.
-fn request_capture_seeks(
+async fn request_capture_seeks(
     case: &Case,
+    host: &OfflineHostHarness<TestPools>,
     decks: &mut [Deck],
     label: &str,
     failures: &mut Vec<String>,
@@ -654,9 +652,21 @@ fn request_capture_seeks(
         deck.muted_seek_underrun_epoch = None;
         deck.seek_terminal = false;
     }
+    let targets: Vec<_> = decks
+        .iter()
+        .map(|deck| (deck.player.control().clone(), deck.capture_target_secs))
+        .collect();
+    let seeks = host
+        .run(move || {
+            targets
+                .iter()
+                .map(|(player, seconds)| player.seek_seconds(*seconds))
+                .collect::<Vec<_>>()
+        })
+        .await;
     let mut requested = true;
-    for (deck_index, deck) in decks.iter().enumerate() {
-        match deck.player.seek_seconds(deck.capture_target_secs) {
+    for (deck_index, (deck, seek)) in decks.iter().zip(seeks).enumerate() {
+        match seek {
             Ok(()) => {
                 if let Some(duration) = deck
                     .player
@@ -711,11 +721,11 @@ async fn render_until_seeked(
     label: &str,
     failures: &mut Vec<String>,
 ) -> Option<u32> {
-    play_decks(host, decks).await;
+    command_decks(host, &*decks, PlayerControl::play).await;
     let mut completed = false;
     let mut seek_blocks = 0_u32;
     for _ in 0..oracle::blocks_for_secs(case.host_rate, MAX_SEEK_SECS) {
-        let block = render_paced(host, decks, case.host_rate).await;
+        let block = render_paced(host, case.host_rate).await;
         seek_blocks += 1;
         if block.len() != BLOCK_FRAMES * usize::from(CHANNELS) {
             failures.push(format!(
@@ -730,14 +740,12 @@ async fn render_until_seeked(
             EventPolicy::MutedSeekSetup,
             failures,
         );
-        for deck in &*decks {
-            if deck.seek_complete_epoch == deck.seek_request_epoch
+        let landed = decks.iter().filter(|deck| {
+            deck.seek_complete_epoch == deck.seek_request_epoch
                 && deck.muted_seek_underrun_epoch.is_none()
                 && deck.player.is_playing()
-            {
-                deck.player.pause();
-            }
-        }
+        });
+        command_decks(host, landed, PlayerControl::pause).await;
         if decks.iter().any(|deck| deck.seek_terminal) {
             break;
         }
@@ -749,9 +757,7 @@ async fn render_until_seeked(
             break;
         }
     }
-    for deck in &*decks {
-        deck.player.pause();
-    }
+    command_decks(host, &*decks, PlayerControl::pause).await;
     if !completed {
         failures.push(format!(
             "{} {label}: not every deck committed seek output within {MAX_SEEK_SECS}s; completions={:?}",
@@ -845,7 +851,7 @@ async fn restore_capture_levels(
         ));
         return false;
     }
-    play_decks(host, decks).await;
+    command_decks(host, &*decks, PlayerControl::play).await;
     settle_controls(
         case,
         host,
@@ -867,7 +873,7 @@ async fn settle_controls(
     failures: &mut Vec<String>,
 ) {
     for block_index in 0..CONTROL_SETTLE_BLOCKS {
-        let block = render_paced(host, decks, case.host_rate).await;
+        let block = render_paced(host, case.host_rate).await;
         if block.len() != BLOCK_FRAMES * usize::from(CHANNELS) {
             failures.push(format!(
                 "{} {phase} block {block_index}: produced {} samples",
@@ -999,17 +1005,18 @@ async fn set_levels(
     .await
 }
 
-async fn play_decks(host: &OfflineHostHarness<TestPools>, decks: &[Deck]) {
+/// Run `command` on each of `decks` from the host owner thread, the way
+/// product callers issue it.
+async fn command_decks<'a>(
+    host: &OfflineHostHarness<TestPools>,
+    decks: impl IntoIterator<Item = &'a Deck>,
+    command: fn(&PlayerControl),
+) {
     let players: Vec<_> = decks
-        .iter()
+        .into_iter()
         .map(|deck| deck.player.control().clone())
         .collect();
-    host.run(move || {
-        for player in &players {
-            player.play();
-        }
-    })
-    .await;
+    host.run(move || players.iter().for_each(command)).await;
 }
 
 async fn prepare_deck(
@@ -1158,14 +1165,7 @@ async fn open_resource(
 /// drain the rings at host speed against producers advancing at virtual speed,
 /// making every captured window a property of the machine.
 #[kithara::flash(true)]
-async fn render_paced(
-    host: &OfflineHostHarness<TestPools>,
-    decks: &[Deck],
-    sample_rate: u32,
-) -> Vec<f32> {
-    for deck in decks {
-        deck.player.tick();
-    }
+async fn render_paced(host: &OfflineHostHarness<TestPools>, sample_rate: u32) -> Vec<f32> {
     let block = host.render(BLOCK_FRAMES).await;
     time::sleep(Duration::from_secs_f64(
         f64::from(u32::try_from(BLOCK_FRAMES).expect("block frames fit u32"))

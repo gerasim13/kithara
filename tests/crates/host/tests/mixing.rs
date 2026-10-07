@@ -165,12 +165,10 @@ impl MixHarness {
             .await
     }
 
-    // Paced at the block's real audio duration, or the render outruns the decode
-    // worker and samples underruns instead of the steady state.
+    // The Host ticks its decks ahead of the block. Paced at the block's real
+    // audio duration, or the render outruns the decode worker and samples
+    // underruns instead of the steady state.
     async fn render_block(&self) -> Vec<f32> {
-        for player in &self.players {
-            player.tick();
-        }
         let block = self.host.render(BLOCK_FRAMES).await;
         let block_frames: f64 = BLOCK_FRAMES.as_();
         let budget = Duration::from_secs_f64(block_frames / f64::from(SAMPLE_RATE));
