@@ -252,7 +252,7 @@ mod tests {
     use kithara_command::When;
     use kithara_effects::LimiterConfig;
     use kithara_events::EventBus;
-    use kithara_platform::{thread::sleep, time::Duration};
+    use kithara_platform::time::Duration;
     use kithara_play::{DeckMixerConfig, DeckRegistration};
     use kithara_test_utils::{
         bufpool::{TestPools, pools},
@@ -326,15 +326,16 @@ mod tests {
                 ticked += 1;
             }
         }
+        // The session hands the deck back by value: nothing it does later
+        // reaches it, so the record ends with the hand-back.
         let released = decks.release(id).expect("the session hands the deck back");
-        drop(so_far(&seen));
-        sleep(consts::SESSION_PUMP_INTERVAL * 3);
 
-        assert_eq!(
-            ticks(&so_far(&seen)),
-            0,
-            "a released deck is no longer ticked"
-        );
+        let seen = so_far(&seen);
+        let at = seen
+            .iter()
+            .position(|seen| matches!(seen, Seen::Released))
+            .expect("the deck comes back released");
+        assert_eq!(ticks(&seen[at..]), 0, "a released deck is no longer ticked");
         drop(released);
         shut_down(&client);
     }

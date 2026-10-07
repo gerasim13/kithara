@@ -164,29 +164,35 @@ async fn a_route_change_reaches_every_deck_the_host_holds() {
     host.close().await;
 }
 
-/// A player that notes the thread each drain and tick of the player it wraps
-/// runs on.
+/// A drain or a tick of a deck, with the thread it ran on.
+#[derive(Clone, Debug, PartialEq)]
+enum Call {
+    Drain(Option<String>),
+    Tick(Option<String>),
+}
+
+/// A player that notes each drain and tick of the player it wraps, in order.
 struct ThreadProbe<P> {
     inner: P,
-    seen: Arc<Mutex<Vec<Option<String>>>>,
+    seen: Arc<Mutex<Vec<Call>>>,
 }
 
 impl<P> ThreadProbe<P> {
-    fn note(&self) {
+    fn note(&self, call: fn(Option<String>) -> Call) {
         self.seen
             .lock()
-            .push(thread::current().name().map(str::to_owned));
+            .push(call(thread::current().name().map(str::to_owned)));
     }
 }
 
 impl<P: Player> Player for ThreadProbe<P> {
     fn drain(&mut self) {
-        self.note();
+        self.note(Call::Drain);
         self.inner.drain();
     }
 
     fn tick(&mut self) -> Result<(), PlayError> {
-        self.note();
+        self.note(Call::Tick);
         self.inner.tick()
     }
 
@@ -220,10 +226,11 @@ impl<P: PlayerControlSource> PlayerControlSource for ThreadProbe<P> {
 }
 
 /// The Host's session thread holds its decks: it runs a deck's commands as it
-/// takes the deck and ticks the deck ahead of each block it renders.
+/// takes the deck and ticks the deck once ahead of each block it renders.
 #[kithara::test(tokio)]
 async fn the_session_thread_drains_and_ticks_the_decks_it_holds() {
     const SESSION: &str = "deck-session";
+    const BLOCKS: usize = 3;
     let region = pools();
     let config = HostConfig::offline(region.clone())
         .settings(HostSettings::builder().sample_rate(sample_rate()).build())
@@ -248,16 +255,15 @@ async fn the_session_thread_drains_and_ticks_the_decks_it_holds() {
     })
     .await
     .expect("the Host takes the deck");
-    host.render(consts::BLOCK_FRAMES).await;
+    host.render(consts::BLOCK_FRAMES * BLOCKS).await;
 
-    let seen = seen.lock().clone();
-    assert!(
-        seen.len() >= 2,
-        "a drain as the Host takes the deck, a tick ahead of the block: {seen:?}"
-    );
-    assert!(
-        seen.iter().all(|name| name.as_deref() == Some(SESSION)),
-        "every deck call runs on the session thread: {seen:?}"
+    let session = || Some(SESSION.to_owned());
+    let mut expected = vec![Call::Drain(session())];
+    expected.extend(vec![Call::Tick(session()); BLOCKS]);
+    assert_eq!(
+        *seen.lock(),
+        expected,
+        "a drain as the session thread takes the deck, then one tick ahead of each block"
     );
     host.close().await;
 }
