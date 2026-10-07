@@ -453,7 +453,7 @@ impl AudioNodeProcessor for DeckMixer {
         self.deck
             .playback
             .process_count
-            .fetch_add(1, Ordering::Relaxed);
+            .fetch_add(1, Ordering::Release);
 
         let context = match self.render_context(&extra.store, info) {
             Ok(context) => context,

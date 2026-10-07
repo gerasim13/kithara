@@ -80,7 +80,8 @@ pub struct PlaybackShared {
     pub(crate) position: RelaxedAtomicF64,
     /// Current output sample rate.
     pub sample_rate: RelaxedAtomicU32,
-    /// Number of audio-thread process calls.
+    /// Number of audio-thread process calls, counted as each call starts. A reader that loads it
+    /// with `Acquire` sees at least what every call before the counted one published.
     pub process_count: AtomicU64,
     /// Current seek epoch used to invalidate stale seek requests.
     pub seek_epoch: AtomicU64,

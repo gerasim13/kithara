@@ -48,12 +48,15 @@ impl<S> PlayerRuntime<S> {
     pub fn playback_snapshot(&self) -> Option<PlaybackSnapshot> {
         let slot_id = self.slot()?;
         let shared = self.core.engine.slot_playback(slot_id)?;
+        // The count comes first: the values read after it are at least what the
+        // blocks before the counted one published.
+        let calls = shared.process_count.load(Ordering::Acquire);
         let snapshot = shared.snapshot();
         let stalled = self
             .core
             .engine
             .suspended_at()
-            .is_some_and(|tick| shared.process_count.load(Ordering::Relaxed) == tick);
+            .is_some_and(|tick| (tick..=tick.saturating_add(1)).contains(&calls));
         Some(if stalled {
             snapshot.silenced()
         } else {

@@ -53,11 +53,22 @@ async fn a_suspended_output_reports_silence_until_the_rt_processor_runs_again(
         "an interruption that has ended does not by itself drive the output"
     );
 
+    // The first block past the interruption counts itself as it starts and
+    // publishes as it ends. A reader cannot tell it from a block still
+    // rendering, which would hand back what the output published before the
+    // interruption: a pause sent before it would read as resumed playback.
+    let _ = harness.render(BLOCK_FRAMES).await;
+    assert_eq!(
+        harness.player().rate(),
+        0.0,
+        "the first block past the interruption may still be publishing when a reader looks"
+    );
+
     let _ = harness.render(BLOCK_FRAMES).await;
     assert_eq!(
         harness.player().rate(),
         1.0,
-        "one audio block past the interruption the processor speaks for itself"
+        "once the next block starts the first one has published, and the processor speaks for itself"
     );
 
     harness.close().await;

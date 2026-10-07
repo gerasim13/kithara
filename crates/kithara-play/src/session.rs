@@ -351,9 +351,11 @@ mod handle {
         /// value it publishes stays at whatever it last wrote. The tick is how
         /// a reader tells the two apart: while the audio thread still stands
         /// where it stood, its publications describe an output that is gone.
-        /// One tick past it the processor has drained its commands and
-        /// republished, so the output speaks for itself again and nothing
-        /// needs to release it.
+        /// One tick past it the processor has drained the commands sent before
+        /// the suspension, but it counts a call as the call starts and
+        /// publishes as it ends, so a reader may look in between. Two ticks
+        /// past it that call has published, so the output speaks for itself
+        /// again and nothing needs to release it.
         #[must_use]
         pub fn suspended_at(&self) -> Option<u64> {
             match self.0.suspended_at.load(Ordering::Acquire) {
