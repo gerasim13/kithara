@@ -1469,7 +1469,6 @@ artifact = { name = "wasm-slim-report", path = "target/wasm-slim-result.json" }
 [ext.ci.lanes.deep-rtsan]
 cache_group = "macos"
 label = "deep Apple"
-freshness = "checksum"
 os = "macos"
 tools = ["cargo", "just"]
 program = "just"
@@ -1498,7 +1497,6 @@ timeout_minutes = 120
 [ext.ci.lanes.deep-rtsan-fast]
 cache_group = "linux"
 label = "Linux"
-freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just"]
 program = "just"
@@ -1517,7 +1515,6 @@ timeout_minutes = 120
 [ext.ci.lanes.deep-rtsan-file]
 cache_group = "linux"
 label = "Linux"
-freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just"]
 program = "just"
@@ -1536,7 +1533,6 @@ timeout_minutes = 120
 [ext.ci.lanes.deep-rtsan-hls]
 cache_group = "linux"
 label = "Linux"
-freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just"]
 program = "just"
@@ -1853,7 +1849,6 @@ cache_group = "linux"
 github_runner = "kithara-test-simulated"
 github_runner_main = "kithara-trusted-snapshot"
 label = "Linux"
-freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -1891,7 +1886,6 @@ timeout_minutes = 120
 [ext.ci.lanes.linux-doc]
 cache_group = "linux"
 label = "Linux"
-freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -1910,7 +1904,6 @@ timeout_minutes = 180
 [ext.ci.lanes.linux-loom]
 cache_group = "linux"
 label = "Linux"
-freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -1935,7 +1928,6 @@ timeout_minutes = 180
 [ext.ci.lanes.linux-tooling]
 cache_group = "linux"
 label = "Linux"
-freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -1954,7 +1946,6 @@ timeout_minutes = 180
 [ext.ci.lanes.linux-harness]
 cache_group = "linux"
 label = "Linux"
-freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -1973,7 +1964,6 @@ timeout_minutes = 180
 [ext.ci.lanes.linux-fixtures]
 cache_group = "linux"
 label = "Linux"
-freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -1998,7 +1988,6 @@ timeout_minutes = 180
 [ext.ci.lanes.linux-broadcast]
 cache_group = "linux"
 label = "Linux"
-freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -2022,7 +2011,6 @@ timeout_minutes = 180
 [ext.ci.lanes.linux-net-host]
 cache_group = "linux"
 label = "Linux"
-freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -2040,7 +2028,6 @@ timeout_minutes = 60
 [ext.ci.lanes.linux-integration-regressions]
 cache_group = "linux"
 label = "Linux"
-freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -2062,7 +2049,6 @@ timeout_minutes = 180
 [ext.ci.lanes.linux-selenium-firefox]
 cache_group = "linux"
 label = "Linux"
-freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -2176,7 +2162,6 @@ timeout_minutes = 60
 cache_group = "linux"
 github_runner = "kithara-test-real"
 label = "Linux"
-freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -2215,7 +2200,6 @@ timeout_minutes = 120
 [ext.ci.lanes.linux-support]
 cache_group = "linux"
 label = "Linux"
-freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -2238,7 +2222,6 @@ timeout_minutes = 180
 [ext.ci.lanes.linux-usdt]
 cache_group = "linux"
 label = "Linux"
-freshness = "checksum"
 os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
@@ -2644,7 +2627,6 @@ timeout_minutes = 60
 [ext.ci.lanes.apple-test]
 cache_group = "macos"
 label = "Apple"
-freshness = "checksum"
 os = "macos"
 tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
 pinned = [
@@ -2681,7 +2663,6 @@ timeout_minutes = 60
 [ext.ci.lanes.apple-test-flash-off]
 cache_group = "macos"
 label = "Apple"
-freshness = "checksum"
 os = "macos"
 tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
 pinned = [

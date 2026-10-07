@@ -3,6 +3,10 @@ use std::{collections::BTreeSet, fs, path::Path};
 use serde_yaml_ng::{Mapping, Value};
 
 const MERGE_REQUEST_KIND: &str = "merge-request";
+/// How a job on a host that carries `just` runs a lane.
+const JUST_LANE: &str = "just ci run ";
+/// How the Windows guest, which carries no `just`, runs one.
+const CARGO_LANE: &str = "cargo run --locked -p xtask -- ci run ";
 const VERDICT_REPORT_DIR: &str = ".ci-artifacts/junit/";
 
 struct GitlabConfig {
@@ -42,7 +46,7 @@ impl GitlabConfig {
     /// both spellings name the same lane, and the lane name is the first
     /// word after the subcommand.
     fn lane_jobs(&self) -> Vec<(String, String)> {
-        const INVOCATIONS: [&str; 2] = ["just ci run ", "cargo run --locked -p xtask -- ci run "];
+        const INVOCATIONS: [&str; 2] = [JUST_LANE, CARGO_LANE];
 
         let mut jobs = Vec::new();
         for document in &self.documents {
@@ -172,6 +176,36 @@ impl GitlabConfig {
 
         stack.pop();
         owner
+    }
+
+    /// A job's variables as the runner hands them to it: the pipeline's, then
+    /// each parent's over them, then the job's own. GitLab merges `variables`
+    /// key by key across `extends`, where every other key is replaced whole.
+    fn variables(&self, name: &str) -> Mapping {
+        let mut merged = self.definition("variables").clone();
+        self.merge_variables(name, &mut merged, &mut Vec::new());
+        merged
+    }
+
+    fn merge_variables(&self, name: &str, merged: &mut Mapping, stack: &mut Vec<String>) {
+        assert!(
+            !stack.iter().any(|parent| parent == name),
+            "GitLab inheritance cycle through `{name}`"
+        );
+        stack.push(name.to_owned());
+        for parent in self.extends(name) {
+            self.merge_variables(parent, merged, stack);
+        }
+        if let Some(own) = self
+            .definition(name)
+            .get("variables")
+            .and_then(Value::as_mapping)
+        {
+            for (key, value) in own {
+                merged.insert(key.clone(), value.clone());
+            }
+        }
+        stack.pop();
     }
 
     fn effective_value(&self, name: &str, key: &str) -> Option<Value> {
@@ -617,6 +651,109 @@ fn judged_jobs_stage_only_checkout_cleaned_verdict_evidence() {
         .and_then(Value::as_str)
         .expect("child pipeline defines checkout cleanup");
     assert!(!clean.contains(".ci-artifacts"));
+}
+
+/// A lane on a host that carries `just` builds in a build root of its own
+/// checkout's, beside the checkout rather than in it: the runner cleans the
+/// checkout before every job. Cargo is told the root, and the lane runner
+/// builds behind the alias inside it. The bootstrap build sits in the same
+/// root, and the compiler-cache server is the checkout's, so two jobs on one
+/// runner never share one, nor retire the one the other compiles through.
+#[test]
+fn every_lane_run_through_just_builds_in_a_root_beside_its_own_checkout() {
+    const CHECKOUT: &str = "${CI_PROJECT_DIR}";
+    let config = GitlabConfig::load(workspace_root());
+    let jobs: BTreeSet<String> = config
+        .lane_jobs()
+        .into_iter()
+        .map(|(job, _)| job)
+        .filter(|job| {
+            config
+                .definition(job)
+                .get("script")
+                .and_then(Value::as_sequence)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .any(|line| line.trim().starts_with(JUST_LANE))
+        })
+        .collect();
+    assert!(!jobs.is_empty(), "no job runs a lane through `just`");
+
+    for job in jobs {
+        let variables = config.variables(&job);
+        let value = |key: &str| {
+            variables
+                .get(key)
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("`{job}` names no {key}"))
+                .to_owned()
+        };
+        let root = value("CARGO_TARGET_DIR");
+        let bootstrap = value("KITHARA_XTASK_TARGET");
+        assert_eq!(
+            Path::new(&bootstrap).parent(),
+            Some(Path::new(&root)),
+            "`{job}` bootstraps outside the root it builds in"
+        );
+        let sibling = root.strip_prefix(&format!("{CHECKOUT}/../"));
+        assert!(
+            sibling.is_some_and(|name| !name.is_empty() && name != ".." && !name.contains('/')),
+            "`{job}` builds in {root}, not beside its checkout"
+        );
+        let socket = value("SCCACHE_SERVER_UDS");
+        for identity in ["${CI_RUNNER_SHORT_TOKEN}", "${CI_CONCURRENT_PROJECT_ID}"] {
+            assert!(
+                socket.contains(identity),
+                "`{job}` compiles through {socket}, which is not its checkout's own"
+            );
+        }
+    }
+}
+
+/// The macOS host takes one job at a time per registration, so a job bound to
+/// one is checked out at the same path every time and finds the build root
+/// beside that checkout as its lane left it. A job any registration may take
+/// lands at whichever path is free, and its lane builds cold in the other
+/// root. A registration carries the host's tag with its number.
+#[test]
+fn every_job_on_the_macos_host_is_bound_to_one_of_its_registrations() {
+    const HOST: &str = "kithara-macos";
+    let config = GitlabConfig::load(workspace_root());
+    let mut bound = 0;
+    for document in &config.documents {
+        for (name, job) in mapping(document, "a GitLab pipeline file") {
+            let (Some(name), Some(job)) = (name.as_str(), job.as_mapping()) else {
+                continue;
+            };
+            if !job.contains_key("script") {
+                continue;
+            }
+            let tags: Vec<String> = config
+                .effective_value(name, "tags")
+                .and_then(|tags| tags.as_sequence().cloned())
+                .into_iter()
+                .flatten()
+                .filter_map(|tag| tag.as_str().map(str::to_owned))
+                .collect();
+            if !tags.iter().any(|tag| tag.starts_with(HOST)) {
+                continue;
+            }
+            let registration = match tags.as_slice() {
+                [tag] => tag
+                    .strip_prefix(HOST)
+                    .and_then(|number| number.strip_prefix('-'))
+                    .and_then(|number| number.parse::<usize>().ok()),
+                _ => None,
+            };
+            assert!(
+                registration.is_some_and(|number| number >= 1),
+                "`{name}` may take any macOS registration: {tags:?}"
+            );
+            bound += 1;
+        }
+    }
+    assert!(bound > 0, "no job runs on the macOS host");
 }
 
 #[test]

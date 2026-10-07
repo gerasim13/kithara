@@ -386,6 +386,7 @@ fn unit(
          --memory {memory} \
          --cgroup-parent {cgroup_parent} \
          --pids-limit {pids} \
+         --ulimit nice={nice}:{nice} \
          --security-opt no-new-privileges \
          --env-file {env_file}",
         name = job.name,
@@ -394,6 +395,7 @@ fn unit(
         memory = job.memory,
         cgroup_parent = job.cgroup_parent,
         pids = Container::PIDS_LIMIT,
+        nice = Container::NICE_LIMIT,
         env_file = job.env_file,
     )?;
     for entry in Container::environment(runner) {
@@ -607,10 +609,6 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("--env SCCACHE_DIR=/cache/sccache/kithara-ci-octocat"),
-            "{text}"
-        );
-        assert!(
             text.contains("--env SCCACHE_SERVER_UDS=/tmp/kithara-ci-octocat.sock"),
             "{text}"
         );
@@ -710,15 +708,11 @@ mod tests {
         assert!(text.contains("RuntimeDirectoryPreserve=yes"), "{text}");
     }
 
-    /// A build directory holds artefacts valid only for the configuration that
-    /// made them, and a lane asks for the same configuration every run. So the
-    /// lane root is one for the whole fleet and the lane claims its directory
-    /// underneath: a lane that lands on another runner still finds its own warm
-    /// build instead of compiling the workspace again. A job that claims no
-    /// lane keeps the runner's own directory, because sharing one cargo
-    /// directory between runners shares its lock as well.
+    /// A runner keeps its build root and its workspace to itself: a lane's
+    /// directory lives behind an alias the job re-points, and the checkout is
+    /// the one the alias's builds were keyed against.
     #[test]
-    fn every_runner_mounts_the_same_build_root() {
+    fn every_runner_keeps_its_own_build_root_and_workspace() {
         let host = host_fixture();
         let first = Container::mounts(&host, host.runner("kithara-ci-octocat").expect("runner"));
         let second = Container::mounts(&host, host.runner("kithara-ci-hubot").expect("runner"));
@@ -731,47 +725,17 @@ mod tests {
                 .0
                 .clone()
         };
+        for at in [consts::BUILD_ROOT_MOUNT, "/runner/_work"] {
+            assert_ne!(mount(&first, at), mount(&second, at), "{at}");
+        }
         assert_eq!(
-            mount(&first, "/cache/lanes"),
-            mount(&second, "/cache/lanes"),
-            "a lane must find its build wherever it lands"
-        );
-        assert_eq!(mount(&first, "/cache/lanes"), "/var/lib/kithara-ci/lanes");
-        assert_ne!(
-            mount(&first, "/cache/target"),
-            mount(&second, "/cache/target"),
-            "a job that claims no lane must not meet another runner's cargo lock"
-        );
-        assert_eq!(
-            mount(&first, "/cache/target"),
+            mount(&first, consts::BUILD_ROOT_MOUNT),
             "/var/lib/kithara-ci/target/kithara-ci-octocat"
         );
-
-        let workspace = |mounts: &[(String, &str)]| {
-            mounts
-                .iter()
-                .find(|(_, at)| *at == "/runner/_work")
-                .expect("a persistent workspace")
-                .0
-                .clone()
-        };
-        assert_ne!(workspace(&first), workspace(&second));
         assert_eq!(
-            workspace(&first),
+            mount(&first, "/runner/_work"),
             "/var/lib/kithara-ci/workspaces/kithara-ci-octocat"
         );
-
-        for shared in ["/home/runner/.cargo", "/cache/sccache"] {
-            let name = |mounts: &[(String, &str)]| {
-                mounts
-                    .iter()
-                    .find(|(_, at)| *at == shared)
-                    .expect(shared)
-                    .0
-                    .clone()
-            };
-            assert_eq!(name(&first), name(&second), "{shared} must be shared");
-        }
     }
 
     /// More runners than cores is the point of the exercise: an idle listener
@@ -856,6 +820,9 @@ mod tests {
         assert!(android.contains(&emulator), "{emulator}: {android}");
         for unit in [&plain, &gpu, &android] {
             assert!(unit.contains("--security-opt no-new-privileges"), "{unit}");
+            // The player's audio feed thread asks for nice -16; a job that
+            // may not lower a nice value keeps it at the compile jobs' level.
+            assert!(unit.contains("--ulimit nice=40:40"), "{unit}");
             assert!(!unit.contains("docker.sock"), "{unit}");
         }
     }

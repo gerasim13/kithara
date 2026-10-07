@@ -427,43 +427,31 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / platforms
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / merge-request
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / quarantine
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / main
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / nightly
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test / weekly
   refused: weekly pipelines do not run the Apple suite
 # apple-test / release
@@ -471,64 +459,46 @@
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=on --no-block=on --profile ci
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / branch
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / platforms
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / merge-request
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / quarantine
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / main
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / nightly
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / weekly
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-test-flash-off / release
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   just test run --flash=off --profile ci
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # apple-xcframework / branch
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen
@@ -837,290 +807,178 @@
   <require os> macos
   <require tools> cargo just
   just test rtsan
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-async
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-file
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-hls
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan / platforms
   <require os> macos
   <require tools> cargo just
   just test rtsan
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-async
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-file
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-hls
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan / merge-request
   <require os> macos
   <require tools> cargo just
   just test rtsan
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-async
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-file
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-hls
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan / quarantine
   <require os> macos
   <require tools> cargo just
   just test rtsan
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-async
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-file
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-hls
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan / main
   <require os> macos
   <require tools> cargo just
   just test rtsan
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-async
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-file
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-hls
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan / nightly
   <require os> macos
   <require tools> cargo just
   just test rtsan
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-async
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-file
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-hls
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan / weekly
   <require os> macos
   <require tools> cargo just
   just test rtsan
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-async
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-file
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-hls
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan / release
   <require os> macos
   <require tools> cargo just
   just test rtsan
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-async
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-file
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test rtsan-hls
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-fast / branch
   <require os> linux
   <require tools> cargo just
   just test rtsan
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-fast / platforms
   <require os> linux
   <require tools> cargo just
   just test rtsan
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-fast / merge-request
   <require os> linux
   <require tools> cargo just
   just test rtsan
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-fast / quarantine
   <require os> linux
   <require tools> cargo just
   just test rtsan
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-fast / main
   <require os> linux
   <require tools> cargo just
   just test rtsan
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-fast / nightly
   <require os> linux
   <require tools> cargo just
   just test rtsan
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-fast / weekly
   <require os> linux
   <require tools> cargo just
   just test rtsan
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-fast / release
   <require os> linux
   <require tools> cargo just
   just test rtsan
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-file / branch
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-file / platforms
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-file / merge-request
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-file / quarantine
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-file / main
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-file / nightly
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-file / weekly
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-file / release
   <require os> linux
   <require tools> cargo just
   just test rtsan-file
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-hls / branch
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-hls / platforms
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-hls / merge-request
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-hls / quarantine
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-hls / main
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-hls / nightly
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-hls / weekly
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-rtsan-hls / release
   <require os> linux
   <require tools> cargo just
   just test rtsan-hls
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_RTSAN_BACKEND=standalone
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # deep-ui / branch
   <require os> linux
   <require tools> cargo just
@@ -1350,57 +1208,41 @@
   <require tools> cargo just sccache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-broadcast / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-broadcast / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-broadcast / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-broadcast / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-broadcast / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-broadcast / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-broadcast / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-check / branch
   <require os> linux
   <require tools> cargo just sccache
@@ -1486,273 +1328,193 @@
   <require tools> cargo just sccache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-doc / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-doc / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-doc / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-doc / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-doc / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-doc / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-doc / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / branch
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-fixtures / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-harness / branch
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-harness / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-harness / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-harness / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-harness / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-harness / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-harness / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-harness / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-integration-regressions / branch
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-integration-regressions / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-integration-regressions / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-integration-regressions / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-integration-regressions / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-integration-regressions / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-integration-regressions / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-integration-regressions / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-lint / branch
   <require os> linux
   <require tools> cargo just
@@ -1790,57 +1552,41 @@
   <require tools> cargo just sccache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-loom / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-loom / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-loom / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-loom / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-loom / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-loom / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-loom / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-msrv / branch
   <require os> linux
   <require tools> cargo just
@@ -1886,57 +1632,41 @@
   <require tools> cargo just sccache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-net-host / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-net-host / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-net-host / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-net-host / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-net-host / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-net-host / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-net-host / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-perf-memory / branch
   <require os> linux
   <require tools> cargo just
@@ -2006,553 +1736,377 @@
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-selenium-firefox / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-selenium-firefox / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-selenium-firefox / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-selenium-firefox / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-selenium-firefox / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-selenium-firefox / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-selenium-firefox / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / branch
   <require os> linux
   <require tools> cargo just sccache
   just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-support / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --touched --lane=tooling --lane=harness --lane=fixtures --lane=net-host --lane=broadcast
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     RTEN_NUM_THREADS=1
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / branch
   <require os> linux
   <require tools> cargo just sccache
   just test run --touched --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --touched --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-real-clock / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --flash=off --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --flash=off --profile ci --no-run --cargo-verbose --color never
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / branch
   <require os> linux
   <require tools> cargo just sccache
   just test run --touched --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-test-simulated-clock / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --no-block=on --profile ci --timings
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
     KITHARA_HANG_PREKILL_SECS=110
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-tooling / branch
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-tooling / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-tooling / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-tooling / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-tooling / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-tooling / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-tooling / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-tooling / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=tooling
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / branch
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-usdt / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
-    CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
-    RUSTUP_TOOLCHAIN=nightly-2026-07-29
 # linux-wasm / branch
   <require os> linux
   <require tools> cargo just sccache

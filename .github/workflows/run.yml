@@ -44,10 +44,6 @@ on:
 # Not inherited from the caller: a called workflow gets its own environment.
 env:
   CARGO_TERM_COLOR: always
-  # Matrix selection compiles xtask, so keep that build across ephemeral jobs,
-  # in the one bootstrap every runner of the host shares.
-  CARGO_TARGET_DIR: /cache/target
-  KITHARA_CI_CACHE_ROOT: /cache/lanes/.kithara-ci
   RUST_BACKTRACE: 1
 
 jobs:

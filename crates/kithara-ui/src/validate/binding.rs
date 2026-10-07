@@ -30,6 +30,7 @@ pub(crate) const fn read_kind(control: &ControlNode) -> Option<ValueKind> {
         | ControlNode::ContextBar { .. } => Some(ValueKind::Text),
         ControlNode::Optional { .. } => Some(consts::BLOCK_HIDDEN),
         ControlNode::Popover { .. }
+        | ControlNode::Modal { .. }
         | ControlNode::Button { .. }
         | ControlNode::NavItem { .. }
         | ControlNode::TabLarge { .. }

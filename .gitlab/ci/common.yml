@@ -1,12 +1,41 @@
+# A runner that keeps its checkouts builds beside each one, in a root of its
+# own: every lane takes a directory there and Cargo is told the alias in front
+# of it, so a compilation is keyed on one path whichever lane ran last and
+# whichever runner slot holds the checkout. The runner cannot name a path per
+# checkout, so these name it from the checkout GitLab gives the job, and give
+# its compiler-cache server a socket no other checkout's job shares. The root
+# is hidden: the host serves production/main's pipelines too until this layout
+# merges, and main's room gate walks every builds directory that is not.
+.builds-beside-checkout:
+  variables:
+    CARGO_TARGET_DIR: ${CI_PROJECT_DIR}/../.${CI_PROJECT_NAME}.target
+    KITHARA_XTASK_TARGET: ${CI_PROJECT_DIR}/../.${CI_PROJECT_NAME}.target/xtask
+    SCCACHE_SERVER_UDS: /tmp/kithara-sccache-${CI_RUNNER_SHORT_TOKEN}-${CI_CONCURRENT_PROJECT_ID}.sock
+
+# The macOS host takes one job at a time per registration, and every job is
+# bound to one by its number, so it is checked out at the same path each time
+# and finds the build root beside that checkout as its lane left it. The first
+# builds for the Mac itself; the second for Apple's devices and simulators,
+# which wait on the first one's lint, and the Linux image meanwhile. Both carry
+# the bare `kithara-macos` too, which production/main's jobs name until this
+# layout merges.
 .macos-job:
+  extends: .builds-beside-checkout
   tags:
-    - kithara-macos
+    - kithara-macos-1
+
+.apple-device-job:
+  extends: .builds-beside-checkout
+  tags:
+    - kithara-macos-2
 
 .linux-job:
+  extends: .builds-beside-checkout
   tags:
     - kithara-linux
 
 .android-job:
+  extends: .builds-beside-checkout
   tags:
     - kithara-android
 
@@ -18,6 +47,7 @@
     - kithara-windows
 
 .release-job:
+  extends: .builds-beside-checkout
   tags:
     - kithara-release
 

@@ -134,6 +134,7 @@ pub(crate) fn leaves(ui: &CompiledUi) -> Natives {
                 walk(anchor, found);
                 walk(content, found);
             }
+            ExpandedNode::Modal { content, .. } => walk(content, found),
             ExpandedNode::Control { spec, .. } => match spec.kind() {
                 "Vis" => found.vis += 1,
                 "Shader" => found.shaders += 1,

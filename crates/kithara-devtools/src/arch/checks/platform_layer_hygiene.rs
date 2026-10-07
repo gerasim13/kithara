@@ -80,7 +80,7 @@ second ownership type.";
                             "raw `std::sync::Arc` outside the platform backend; import \
                              `kithara_platform::sync::Arc`",
                         )
-                        .with_explanation(ARC_EXPLANATION),
+                        .with_explanation(ARC_EXPLANATION.into()),
                     );
                 }
             }
@@ -98,7 +98,7 @@ second ownership type.";
                              route through the platform's own sync/time abstraction"
                         ),
                     )
-                    .with_explanation(consts::EXPLANATION),
+                    .with_explanation(consts::EXPLANATION.into()),
                 );
             }
         }

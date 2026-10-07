@@ -1,8 +1,0 @@
-#!/bin/sh
-# Cargo runs the compiler through this, and cc-rs a build script's C compiles
-# too: it takes a Rust wrapper for C only under a compiler cache's name.
-# sccache keys a compilation on every CARGO_* variable it sees, and the build
-# directory is not an input to rustc: left in, it would give every lane slot
-# and job directory entries of its own.
-unset CARGO_TARGET_DIR
-exec sccache "$@"

@@ -8,7 +8,7 @@ use std::{
     process::{Child, Command, Output, Stdio},
     sync::{Arc, Barrier, mpsc},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::{Context, Result, anyhow};
@@ -55,13 +55,6 @@ impl Fixture {
             .parent()
             .context("resolve repository root")?;
         fs::copy(repository.join("justfile"), &justfile)?;
-        // The justfile runs the compiler through this wrapper whenever sccache
-        // is on `PATH`, and `cargo metadata` asks the compiler for its version.
-        fs::create_dir_all(root.join(".config/sccache"))?;
-        fs::copy(
-            repository.join(".config/sccache/sccache"),
-            root.join(".config/sccache/sccache"),
-        )?;
         fs::copy(
             repository.join("xtask/bootstrap_lease.rs"),
             root.join("xtask/bootstrap_lease.rs"),
@@ -250,7 +243,7 @@ exit 98
             .arg("--working-directory")
             .arg(root)
             .args(args)
-            .env_remove("KITHARA_CI_CACHE_ROOT")
+            .env_remove("KITHARA_XTASK_TARGET")
             .env("CARGO_TARGET_DIR", &self.target)
             .env("CARGO", env!("CARGO"))
             .env("PATH", self.fake_path()?)
@@ -450,22 +443,31 @@ fn warm_public_just_runner_and_hook_are_cargo_and_git_free() -> Result<()> {
     Ok(())
 }
 
+/// On CI the executor names where xtask builds, and a job holds that
+/// directory for as long as xtask runs: it sits in the runner's build root,
+/// where an eviction would take it from under the build. Taking it marks it
+/// used now, the date an eviction orders by. The lane's build directory is
+/// not the wrapper's business: Cargo is told an alias there, and a lease taken
+/// through it would make a directory where the alias belongs.
 #[test]
-fn ci_public_just_runner_holds_the_build_target_before_xtask() -> Result<()> {
+fn ci_public_just_runner_holds_the_xtask_build_before_xtask() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.install_fake_transport()?;
-    let cache = fixture._temp.path().join("cache");
+    let builds = fixture._temp.path().join("builds");
+    let xtask = builds.join("xtask");
+    let alias = builds.join("build");
+    let lease_path = xtask.join(".kithara-job-lease");
+    fs::create_dir_all(&xtask)?;
+    let long_ago = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+    fs::File::create(&lease_path)?.set_modified(long_ago)?;
     let ready = fixture._temp.path().join("ready");
     let release = fixture._temp.path().join("release");
-    let target = fixture._temp.path().join("private-target");
     let mut command = fixture.just_command(&fixture.root, &["_xtask", "lease-check"])?;
     command
         .env("CI", "true")
-        .env("CI_CONCURRENT_ID", "0")
         .env("CI_JOB_ID", "lease-test")
-        .env("KITHARA_CACHE_TRUST", "review")
-        .env("KITHARA_CI_CACHE_ROOT", &cache)
-        .env("CARGO_TARGET_DIR", &target)
+        .env("KITHARA_XTASK_TARGET", &xtask)
+        .env("CARGO_TARGET_DIR", &alias)
         .env("SELF_CACHE_READY", &ready)
         .env("SELF_CACHE_RELEASE", &release)
         .stdin(Stdio::null())
@@ -476,11 +478,19 @@ fn ci_public_just_runner_holds_the_build_target_before_xtask() -> Result<()> {
     let lease = fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(target.join(".kithara-job-lease"))?;
-    let heartbeat = target.join(".kithara-job-heartbeat");
+        .open(&lease_path)?;
+    let heartbeat = xtask.join(".kithara-job-heartbeat");
 
     assert!(FileLock::try_exclusive(lease).is_err());
     assert!(heartbeat.is_file());
+    assert!(
+        fs::metadata(&lease_path)?.modified()? > long_ago,
+        "taking the lease marks the xtask build used"
+    );
+    assert!(
+        !alias.exists(),
+        "the wrapper made a directory where the alias belongs"
+    );
 
     fs::write(release, [])?;
     assert_success(&child.wait_with_output()?);
@@ -488,35 +498,25 @@ fn ci_public_just_runner_holds_the_build_target_before_xtask() -> Result<()> {
     Ok(())
 }
 
-/// The host's cache cleanup holds a job's build target lease exclusively
-/// while it decides whether to evict. A job arriving then says so instead of
-/// sitting silent, and starts its command only once it holds the lease.
+/// The host's cache cleanup holds a build's lease exclusively while it
+/// decides whether to evict. A job arriving then says so instead of sitting
+/// silent, and starts its command only once it holds the lease.
 #[test]
 fn ci_public_just_runner_announces_a_wait_for_the_build_target_lease() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.install_fake_transport()?;
-    let cache = fixture._temp.path().join("cache");
     let ready = fixture._temp.path().join("ready");
     let release = fixture._temp.path().join("release");
-    let target = fixture._temp.path().join("private-target");
-    fs::create_dir_all(&target)?;
-    let lease = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(target.join(".kithara-job-lease"))?;
-    let cleanup = FileLock::try_exclusive(lease)
+    let xtask = fixture._temp.path().join("builds/xtask");
+    fs::create_dir_all(&xtask)?;
+    let cleanup = FileLock::try_exclusive(fs::File::create(xtask.join(".kithara-job-lease"))?)
         .ok()
         .context("the build target lease is free before the job starts")?;
     let mut command = fixture.just_command(&fixture.root, &["_xtask", "lease-check"])?;
     command
         .env("CI", "true")
-        .env("CI_CONCURRENT_ID", "0")
         .env("CI_JOB_ID", "lease-test")
-        .env("KITHARA_CACHE_TRUST", "review")
-        .env("KITHARA_CI_CACHE_ROOT", &cache)
-        .env("CARGO_TARGET_DIR", &target)
+        .env("KITHARA_XTASK_TARGET", &xtask)
         .env("SELF_CACHE_READY", &ready)
         .env("SELF_CACHE_RELEASE", &release)
         .stdin(Stdio::null())
@@ -540,82 +540,65 @@ fn ci_public_just_runner_announces_a_wait_for_the_build_target_lease() -> Result
     Ok(())
 }
 
-/// Every platform leases the target the bootstrap builds in, and none opens a
-/// target slot of its own for it: a slot named after the job is never handed to
-/// another, so each job left one behind for the cleaner to find.
-#[cfg(unix)]
+/// An eviction moves a build away before it lets go of the lease, so the lock
+/// a waiting job then gets guards a directory that is gone. The job holds the
+/// directory standing at the path instead.
 #[test]
-fn ci_public_just_runner_leases_the_bootstrap_before_environment_setup() -> Result<()> {
+fn ci_public_just_runner_holds_the_xtask_build_an_eviction_moved_away() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.install_fake_transport()?;
-    let cache = fixture._temp.path().join("cache");
-    let missing = fixture._temp.path().join("missing-target");
-    fs::remove_dir_all(fixture.root.join("target"))?;
-    std::os::unix::fs::symlink(&missing, fixture.root.join("target"))?;
     let ready = fixture._temp.path().join("ready");
     let release = fixture._temp.path().join("release");
+    let builds = fixture._temp.path().join("builds");
+    let xtask = builds.join("xtask");
+    fs::create_dir_all(&xtask)?;
+    let eviction = FileLock::try_exclusive(fs::File::create(xtask.join(".kithara-job-lease"))?)
+        .ok()
+        .context("the build target lease is free before the job starts")?;
     let mut command = fixture.just_command(&fixture.root, &["_xtask", "lease-check"])?;
     command
         .env("CI", "true")
-        .env("CI_CONCURRENT_ID", "0")
         .env("CI_JOB_ID", "lease-test")
-        .env("KITHARA_CACHE_TRUST", "review")
-        .env("KITHARA_CI_CACHE_ROOT", &cache)
-        .env_remove("CARGO_TARGET_DIR")
+        .env("KITHARA_XTASK_TARGET", &xtask)
         .env("SELF_CACHE_READY", &ready)
         .env("SELF_CACHE_RELEASE", &release)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command.spawn()?;
+    let lines = stream_lines(&mut child)?;
+    lines_until(&lines, "waiting for the CI build target lease")?;
+
+    fs::rename(&xtask, builds.join(".evicting-xtask"))?;
+    drop(eviction);
     wait_for_file(&ready, &mut child)?;
-    let system = String::from_utf8(Command::new("uname").arg("-s").output()?.stdout)?;
-    let arch = String::from_utf8(Command::new("uname").arg("-m").output()?.stdout)?;
-    let target = cache.join(format!(
-        "bootstrap/review/target-{}-{}-0",
-        system.trim(),
-        arch.trim()
-    ));
     let lease = fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(target.join(".kithara-job-lease"))?;
+        .open(xtask.join(".kithara-job-lease"))?;
 
-    assert!(FileLock::try_exclusive(lease).is_err());
     assert!(
-        !cache.join("target-slots").exists(),
-        "the bootstrap opened a target slot of its own"
+        FileLock::try_exclusive(lease).is_err(),
+        "the job holds the directory standing at the path"
     );
-    fs::write(release, [])?;
-    assert_success(&child.wait_with_output()?);
+    fs::write(&release, [])?;
+    assert!(child.wait()?.success());
     Ok(())
 }
 
 #[test]
-fn ci_bootstrap_ignores_the_ephemeral_runner_name() -> Result<()> {
+fn ci_bootstrap_builds_where_the_executor_names() -> Result<()> {
     let fixture = Fixture::new()?;
-    let cache = fixture._temp.path().join("cache");
-    let system = String::from_utf8(Command::new("uname").arg("-s").output()?.stdout)?;
-    let arch = String::from_utf8(Command::new("uname").arg("-m").output()?.stdout)?;
+    let xtask = fixture._temp.path().join("builds/xtask");
     let output = fixture
         .just_command(&fixture.root, &["_xtask-bootstrap", "--force"])?
-        .env_remove("CI_CONCURRENT_ID")
-        .env("RUNNER_NAME", "ephemeral-registration-4033417")
-        .env("KITHARA_CACHE_TRUST", "review")
-        .env("KITHARA_CI_CACHE_ROOT", &cache)
+        .env("KITHARA_XTASK_TARGET", &xtask)
         .output()?;
 
     assert_eq!(output.status.code(), Some(97));
-    assert!(fs::read_to_string(&fixture.cargo_log)?.contains(&format!(
-            "target={}\n",
-            cache
-                .join(format!(
-                    "bootstrap/review/target-{}-{}-local",
-                    system.trim(),
-                    arch.trim()
-                ))
-                .display()
-        )));
+    assert!(
+        fs::read_to_string(&fixture.cargo_log)?.contains(&format!("target={}\n", xtask.display()))
+    );
     Ok(())
 }
 
@@ -1033,10 +1016,9 @@ fn an_unnamed_cargo_target_directory_builds_inside_the_checkout() -> Result<()> 
     Ok(())
 }
 
-/// A CI job may find the checkout's `target` still linked to the lane slot
-/// the previous job built in, so a stale self-cache refreshed into `target`
-/// would leave xtask's units in a lane directory no claim recorded. The
-/// refresh builds where the bootstrap does.
+/// A CI job finds the checkout's `target` linked to the build the last lane
+/// made, so a stale self-cache refreshed into `target` would leave xtask's
+/// units in a lane's directory. The refresh builds where the bootstrap does.
 #[test]
 fn a_stale_ci_self_cache_refreshes_where_the_bootstrap_builds() -> Result<()> {
     let fixture = Fixture::new()?;
@@ -1045,16 +1027,12 @@ fn a_stale_ci_self_cache_refreshes_where_the_bootstrap_builds() -> Result<()> {
         fixture.root.join("xtask/src/main.rs"),
         "fn main() { changed(); }\n",
     )?;
-    let cache = fixture._temp.path().join("cache");
-    let system = String::from_utf8(Command::new("uname").arg("-s").output()?.stdout)?;
-    let arch = String::from_utf8(Command::new("uname").arg("-m").output()?.stdout)?;
+    let xtask = fixture._temp.path().join("builds/xtask");
 
     let output = fixture
         .just_command(&fixture.root, &["_xtask-ready"])?
         .env_remove("CARGO_TARGET_DIR")
-        .env_remove("CI_CONCURRENT_ID")
-        .env("KITHARA_CACHE_TRUST", "review")
-        .env("KITHARA_CI_CACHE_ROOT", &cache)
+        .env("KITHARA_XTASK_TARGET", &xtask)
         .env("XTASK_SELF_CACHE_CARGO", fixture.fake_bin.join("cargo"))
         .output()?;
 
@@ -1064,14 +1042,7 @@ fn a_stale_ci_self_cache_refreshes_where_the_bootstrap_builds() -> Result<()> {
     );
     assert_eq!(
         fs::read_to_string(&fixture.cargo_log)?,
-        cargo_build_log(
-            &fs::canonicalize(&fixture.root)?,
-            &cache.join(format!(
-                "bootstrap/review/target-{}-{}-local",
-                system.trim(),
-                arch.trim()
-            )),
-        )
+        cargo_build_log(&fs::canonicalize(&fixture.root)?, &xtask)
     );
     Ok(())
 }

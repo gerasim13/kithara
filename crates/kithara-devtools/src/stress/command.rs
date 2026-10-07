@@ -811,7 +811,8 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, unit: &Unit<'_>, raw: &Path) -> Result<()
     let runner = unit.runner.clone();
     let commanded = unit.lane.is_none();
     let build = build_root(&subject_root, config);
-    let _build_lease = lease::hold(&build);
+    let _build_lease = lease::hold(&build)
+        .with_context(|| format!("lease the stress build {}", build.display()))?;
     let spec = match &runner {
         StressRunner::Lane(lane) => Some(StressRunSpec {
             count,

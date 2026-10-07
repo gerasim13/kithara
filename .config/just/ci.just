@@ -54,7 +54,7 @@ gate *ARGS:
     echo "=== gate: flash ON + no-block ON ==="
     just test run --flash=on --no-block=on "$@"
     echo "=== gate: flash OFF ==="
-    CARGO_TARGET_DIR=target-flash-off just test run --flash=off "$@"
+    CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}/flash-off" just test run --flash=off "$@"
 
 # Comprehensive workspace health report.
 health:

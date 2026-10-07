@@ -411,6 +411,7 @@ fdk-aac-sys = "0.5.0"
 fearless_simd = "1.0"
 ffmpeg-next = "8.1.0"
 fieldwork = "0.5"
+filetime = "0.2.29"
 firewheel = { version = "0.14.0", default-features = false, features = ["scheduled_events", "std", "tracing"] }
 firewheel-core = { version = "0.14.0", default-features = false, features = ["std", "serde"] }
 firewheel-web-audio = { version = "0.6.0", default-features = false }
@@ -499,6 +500,7 @@ rtsan-standalone = "0.3.0"
 rubato = "5.0"
 rustdoc-types = "0.60.0"
 rustfft = "6.4"
+same-file = "1.0.6"
 send_wrapper = "0.6"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

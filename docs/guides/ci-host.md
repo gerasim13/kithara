@@ -347,12 +347,12 @@ soft floor, evicting past the cap. What its sweeps cannot show:
 - A cache namespace that stops being written to goes invisible rather than
   stale, leaving a retired tool's store behind; `cache_namespaces` lists the
   live ones and cleanup takes the rest whole. A namespace with an owner belongs
-  there even when it is quiet: `target-slots` holds every GitLab job's
-  `CARGO_TARGET_DIR` and the build-cache budget evicts it one slot at a time.
+  there even when it is quiet: `cargo` holds the Linux guest's Cargo home,
+  which a job fetches into only when its lockfile changes.
   An installed profile carries the list verbatim, so adding a name reaches a
   running host only by editing its `/etc/kithara-ci/mac-host.toml` as well.
-- Build-cache bytes for a lane's claimed checkout still count against the
-  ceiling.
+- Build-cache bytes for a lane's leased build directory still count against
+  the ceiling.
 - A macOS job VM clone outlives the runner that cloned it, and age alone cannot
   prune its bundle without taking the base bundle, which only
   `tart create --from-ipsw` and a person can rebuild. It goes once tart reports
