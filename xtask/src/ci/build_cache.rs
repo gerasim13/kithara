@@ -13,7 +13,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use fs4::TryLockError;
 use kithara_devtools::{lease, lock::FileLock};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::consts;
 
@@ -65,7 +65,8 @@ fn select_evictions(mut entries: Vec<CacheEntry>, budget_bytes: u64) -> Vec<Cach
 /// is charged against the ceiling rather than excused from it.
 pub(crate) fn enforce_budget(target_dirs: &[PathBuf], budget_bytes: u64) -> Result<()> {
     let (candidates, held_bytes) = collect(target_dirs)?;
-    evict_to_budget(candidates, held_bytes, budget_bytes)
+    evict_to_budget(candidates, held_bytes, budget_bytes);
+    Ok(())
 }
 
 /// Evict until at least `bytes_needed` is gone, whatever the ceiling says.
@@ -80,7 +81,8 @@ pub(crate) fn enforce_budget(target_dirs: &[PathBuf], budget_bytes: u64) -> Resu
 pub(crate) fn reclaim_at_least(target_dirs: &[PathBuf], bytes_needed: u64) -> Result<()> {
     let (candidates, held_bytes) = collect(target_dirs)?;
     let keep = total_bytes(&candidates).saturating_sub(bytes_needed);
-    evict_to_budget(candidates, held_bytes, keep.saturating_add(held_bytes))
+    evict_to_budget(candidates, held_bytes, keep.saturating_add(held_bytes));
+    Ok(())
 }
 
 fn collect(target_dirs: &[PathBuf]) -> Result<(Vec<CacheEntry>, u64)> {
@@ -111,17 +113,27 @@ fn total_bytes(entries: &[CacheEntry]) -> u64 {
         .fold(0_u64, u64::saturating_add)
 }
 
-fn evict_to_budget(candidates: Vec<CacheEntry>, held_bytes: u64, budget_bytes: u64) -> Result<()> {
+/// Evicts the oldest candidates until what is left fits `budget_bytes`.
+///
+/// A directory that cannot be removed is that directory's problem: it is
+/// reported and the others still go. Stopping on it left the host's budget
+/// unenforced and refused every job its room for as long as it stood.
+fn evict_to_budget(candidates: Vec<CacheEntry>, held_bytes: u64, budget_bytes: u64) {
     let bytes_before = total_bytes(&candidates).saturating_add(held_bytes);
     let mut bytes_freed = 0_u64;
     for entry in select_evictions(candidates, budget_bytes.saturating_sub(held_bytes)) {
-        bytes_freed = bytes_freed.saturating_add(evict(&entry)?);
+        match evict(&entry) {
+            Ok(bytes) => bytes_freed = bytes_freed.saturating_add(bytes),
+            Err(error) => warn!(
+                path = %entry.path.display(),
+                "{error:#}; the build directory waits for a later pass"
+            ),
+        }
     }
     info!(
         bytes_before,
         bytes_freed, held_bytes, budget_bytes, "build cache budget enforced"
     );
-    Ok(())
 }
 
 /// Removes one entry and returns the bytes it held, or nothing when a job took
@@ -287,7 +299,11 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
             continue;
         }
         if is_leftover(&path) {
-            remove_leftover(&path)?;
+            // A leftover that cannot be removed is its own problem, as an
+            // entry that cannot be evicted is.
+            if let Err(error) = remove_leftover(&path) {
+                warn!(path = %path.display(), "{error:#}; it waits for a later pass");
+            }
             continue;
         }
         if is_hidden(&path) {
@@ -820,6 +836,41 @@ mod tests {
         enforce_budget(&[root.path().to_path_buf()], u64::MAX).unwrap();
 
         assert!(!left.exists());
+    }
+
+    /// A directory a pass cannot remove - a build left part of it read-only,
+    /// say - is that directory's problem. The pass still evicts the others,
+    /// and so does every later pass that meets it again as a leftover: one
+    /// stuck directory must not leave the host's budget unenforced or refuse
+    /// every job its room.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_that_cannot_be_removed_holds_back_no_other() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let roots = [root.path().to_path_buf()];
+        let stuck = build_dir(root.path(), "stuck", 1);
+        let sealed = stuck.join("debug").join("sealed");
+        fs::create_dir_all(&sealed).unwrap();
+        fs::write(sealed.join("artifact"), b"kept").unwrap();
+        fs::set_permissions(&sealed, fs::Permissions::from_mode(0o555)).unwrap();
+        // Leased, so it goes after the stuck one, which no job ever leased.
+        let lint = build_dir(root.path(), "lint", 1);
+        drop(lease::hold(&lint).unwrap());
+
+        enforce_budget(&roots, 0).unwrap();
+        let usdt = build_dir(root.path(), "usdt", 1);
+        enforce_budget(&roots, 0).unwrap();
+
+        assert!(!lint.exists(), "{} outlived the pass", lint.display());
+        assert!(!usdt.exists(), "{} outlived the pass", usdt.display());
+        for left in fs::read_dir(root.path()).unwrap() {
+            let sealed = left.unwrap().path().join("debug").join("sealed");
+            if sealed.exists() {
+                fs::set_permissions(&sealed, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
     }
 
     /// The eviction that moved this entry aside is still removing it.
