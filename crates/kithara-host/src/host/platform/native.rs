@@ -89,17 +89,17 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     /// Attaches and transfers one fully configured player or decorator into
-    /// this Host, then prepares its graph and initial slot before returning.
-    /// Audio-device setup may block; musical playback remains stopped.
+    /// this Host, which starts its deck before returning: the output runs
+    /// from now until the Host hands its last deck back. Audio-device setup
+    /// may block; musical playback remains stopped.
     ///
     /// # Errors
-    /// Returns an error when binding, attachment, or graph preparation fails.
+    /// Returns an error when binding, attachment, or starting the deck fails.
     pub fn insert<P>(&mut self, mut player: P) -> Result<HostOwned<P>, PlayError>
     where
         P: PlayerControlSource<Schema = S>,
     {
         let (grid_id, control) = self.bind_player(&mut player)?;
-        self.dispatcher.attach(grid_id)?;
         if let Err(error) = self
             .session
             .platform_mut()
@@ -109,17 +109,12 @@ where
             self.dispatcher.detach(grid_id)?;
             return Err(error);
         }
-        let owned = self.owned::<P>(grid_id, control);
-        if let Err(error) = P::prepare_control(owned.control()) {
-            self.remove(&owned)?;
-            return Err(error);
-        }
-        Ok(owned)
+        Ok(self.owned::<P>(grid_id, control))
     }
 
-    /// Closes the lower runtime on the caller thread, detaches its deck once
-    /// graph unregistration has completed, then takes the deck back and drops
-    /// it.
+    /// Closes the lower runtime on the caller thread, stops its deck and
+    /// detaches it from the session, then takes the deck back and drops it.
+    /// The last deck the Host hands back releases the output.
     ///
     /// # Errors
     /// Returns an error when close or canonical detachment fails.

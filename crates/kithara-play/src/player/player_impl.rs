@@ -8,7 +8,7 @@ use kithara_platform::{
     CancelScope,
     sync::{Arc, ExclusiveGate, Mutex},
 };
-use kithara_warp::{BeatGridId, WarpConfigPatch};
+use kithara_warp::WarpConfigPatch;
 
 use super::{
     core::{PlayerCore, PlayerRuntime},
@@ -30,8 +30,6 @@ use crate::{
 #[config_owner(PlayerConfig<S>, runtime.core.config)]
 pub struct PlayerImpl<S> {
     pub(crate) runtime: Arc<PlayerRuntime<S>>,
-    /// Identity the player's deck registers under in its session.
-    pub(super) grid_id: BeatGridId,
 }
 
 impl<S> Deref for PlayerImpl<S> {
@@ -95,7 +93,6 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
             .keylock(config.warp.keylock())
             .backend(config.warp.backend());
         let tracks = Mutex::new(Tracks::new(settings.build()));
-        let grid_id = config.grid_id;
         let core = PlayerCore {
             engine,
             config,
@@ -106,7 +103,6 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
             tracks,
         };
         Self {
-            grid_id,
             runtime: Arc::new(PlayerRuntime {
                 core,
                 lifecycle: PlayerLifecycle::open(),

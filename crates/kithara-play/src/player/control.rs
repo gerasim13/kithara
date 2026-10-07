@@ -89,15 +89,6 @@ where
         self.command(PlayerRuntime::play);
     }
 
-    /// Register deck controls without starting the output stream.
-    ///
-    /// # Errors
-    /// Returns a registration or response geometry error.
-    pub fn prepare(&self) -> Result<(), PlayError> {
-        self.runtime
-            .with_open_result(|runtime| runtime.core.engine.prepare())
-    }
-
     /// Prepare one resource for this player's runtime.
     pub fn prepare_config<B>(
         &self,
@@ -225,8 +216,7 @@ where
             ///
             /// # Errors
             ///
-            /// Returns the session detach failure and reopens the command gate so the
-            /// owner can retry without losing lifecycle ownership.
+            /// Returns [`PlayError::Closed`] while another close is under way.
             pub fn close(&self) -> Result<(), PlayError>;
             /// Configured crossfade duration in seconds.
             #[must_use]

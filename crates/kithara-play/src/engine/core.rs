@@ -7,7 +7,6 @@ use kithara_effects::{
 use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{
     CancelToken,
-    atomic::{Acquire, AtomicValue, Release},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -23,7 +22,7 @@ use super::{config::EngineConfig, slots::DeckSlot};
 use crate::{
     api::{EngineEvent, SlotId},
     error::PlayError,
-    session::{PlayerId, SessionBinding, SessionHandle, SessionSampleRate},
+    session::{AllocatedSlot, DeckRegistration, SessionBinding, SessionHandle, SessionSampleRate},
 };
 
 type SlotHandle = SlotControl;
@@ -31,14 +30,11 @@ type SlotHandle = SlotControl;
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct EngineImpl<S> {
-    running: AtomicValue<bool, Acquire, Release>,
-    pub(super) config: EngineConfig<S>,
+    config: EngineConfig<S>,
     #[field(get, vis = "pub(crate)")]
-    pub(super) bus: EventBus,
-    pub(super) registration: Mutex<Option<PlayerId>>,
+    bus: EventBus,
     slot: Mutex<DeckSlot>,
-    start_lock: Mutex<()>,
-    pub(super) session: SessionHandle<S>,
+    session: SessionHandle<S>,
 }
 
 impl<S> EngineImpl<S> {
@@ -53,9 +49,6 @@ impl<S> EngineImpl<S> {
             config,
             bus,
             session,
-            registration: Mutex::default(),
-            running: AtomicValue::<bool, Acquire, Release>::new(false),
-            start_lock: Mutex::new(()),
             slot: Mutex::default(),
         }
     }
@@ -81,29 +74,6 @@ impl<S> EngineImpl<S> {
 
     pub(crate) fn cancel_token(&self) -> Option<CancelToken> {
         self.config.cancel.clone()
-    }
-
-    /// Explicitly detach this player from its session.
-    ///
-    /// A failed detach retains the registered identity so the owning Host can
-    /// retry or report the still-live member instead of losing lifecycle
-    /// ownership. Repeated successful calls are no-ops.
-    pub fn close(&self) -> Result<(), PlayError> {
-        let _start = self.start_lock.lock();
-        let Some(player_id) = self.registered_id() else {
-            return Ok(());
-        };
-
-        if self.running.load() {
-            self.session.stop_player(player_id)?;
-            self.slot.lock().clear();
-            self.running.store(false);
-            self.emit(EngineEvent::Stopped);
-        }
-
-        self.session.unregister_player(player_id)?;
-        *self.registration.lock() = None;
-        Ok(())
     }
 
     pub(crate) const fn configured_sample_rate(&self) -> u32 {
@@ -169,18 +139,14 @@ impl<S> EngineImpl<S> {
         Ok(DeckPart::Eq(DeckEqChange::Layout(Box::new(layout))))
     }
 
-    pub fn is_running(&self) -> bool {
-        self.running.load()
-    }
-
     /// Effective sample rate of the audio host (from Firewheel / `CoreAudio`).
     ///
-    /// Returns the config default if the engine is not running yet.
+    /// Returns the config default until a Host takes the deck.
     /// Used to pre-initialise the resampler in `ResourceConfig` so that
     /// `make_sincs` runs while the resource is prepared (off the worker thread)
     /// instead of lazily on the first `step_track()` call.
     pub fn master_sample_rate(&self) -> u32 {
-        if !self.running.load() {
+        if self.slot().is_none() {
             return self.config.sample_rate.get();
         }
         self.session
@@ -190,6 +156,30 @@ impl<S> EngineImpl<S> {
 
     pub(crate) const fn pools(&self) -> &PoolRegion<S> {
         &self.config.pools
+    }
+
+    /// What the deck joins its session with.
+    pub(crate) fn registration(&self) -> DeckRegistration<S> {
+        DeckRegistration {
+            grid_id: self.config.grid_id,
+            bus: self.bus.clone(),
+            mixer: self.config.mixer,
+            pools: self.pools().clone(),
+            render_quantum_frames: self.config.render_quantum_frames,
+            response_budget_frames: self.config.response_budget_frames,
+        }
+    }
+
+    /// The Host built the deck's slot: the deck plays through it from now on.
+    pub(crate) fn seat(&self, started: AllocatedSlot) {
+        self.slot.lock().set(started.slot, started.control);
+        info!(
+            sample_rate = self.config.sample_rate.get(),
+            channels = self.config.channels,
+            slot = ?started.slot,
+            "engine started"
+        );
+        self.emit(EngineEvent::Started);
     }
 
     pub(crate) fn pop_slot_notification(&self, slot: SlotId) -> Option<PlayerNotification> {
@@ -275,49 +265,6 @@ impl<S> EngineImpl<S> {
         Ok(())
     }
 
-    pub fn start(&self) -> Result<(), PlayError> {
-        let _start = self.start_lock.lock();
-        if self.running.load() {
-            return Err(PlayError::EngineAlreadyRunning);
-        }
-
-        let player_id = self.ensure_player_id()?;
-        let started = self.session.start_player(
-            player_id,
-            self.config.render_quantum_frames,
-            self.config.response_budget_frames,
-        )?;
-        self.slot.lock().set(started.slot, started.control);
-
-        self.running.store(true);
-
-        info!(
-            sample_rate = self.config.sample_rate.get(),
-            channels = self.config.channels,
-            slot = ?started.slot,
-            player_id,
-            "engine started"
-        );
-        self.emit(EngineEvent::Started);
-        Ok(())
-    }
-
-    pub fn stop(&self) -> Result<(), PlayError> {
-        if !self.running.load() {
-            return Err(PlayError::EngineNotRunning);
-        }
-
-        let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
-        self.session.stop_player(player_id)?;
-
-        self.slot.lock().clear();
-
-        self.running.store(false);
-        info!(player_id, "engine stopped");
-        self.emit(EngineEvent::Stopped);
-        Ok(())
-    }
-
     pub(crate) fn stream_shape(&self) -> Option<StreamShape> {
         self.session.stream_shape()
     }
@@ -337,7 +284,14 @@ impl<S> EngineImpl<S> {
         self.session.suspended_at()
     }
 
-    /// The deck's slot, while the engine runs.
+    /// The player closed: the deck its Host built plays nothing more.
+    pub(crate) fn close(&self) {
+        if self.slot().is_some() {
+            self.emit(EngineEvent::Stopped);
+        }
+    }
+
+    /// The deck's slot, once its Host has built it.
     pub fn slot(&self) -> Option<SlotId> {
         self.slot.lock().id()
     }
@@ -346,7 +300,7 @@ impl<S> EngineImpl<S> {
         self.session.tick()
     }
 
-    pub(super) fn validate_session_sample_rate(&self, session: u32) -> Result<(), PlayError> {
+    fn validate_session_sample_rate(&self, session: u32) -> Result<(), PlayError> {
         let player = self.configured_sample_rate();
         if player == session {
             Ok(())

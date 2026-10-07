@@ -7,7 +7,7 @@ use kithara_warp::MapAxis;
 use tracing::{debug, warn};
 
 use super::{
-    protocol::{AllocatedSlot, PlayerId, Reply, SessionError},
+    protocol::{AllocatedSlot, PlayerId, SessionError},
     queue::settle_receipts,
     state::{Deck, GraphRegistry, SessionState, TapSlot, Taps, add_graph_node, ensure_ctx},
 };
@@ -147,7 +147,7 @@ pub(super) mod lifecycle {
         player_id: PlayerId,
         render_quantum_frames: Option<NonZeroUsize>,
         response_budget_frames: Option<NonZeroUsize>,
-    ) -> Result<Reply, SessionError>
+    ) -> Result<AllocatedSlot, SessionError>
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
@@ -185,9 +185,7 @@ pub(super) mod lifecycle {
             ?player_node_id,
             "[KITHARA-ROUTE] player graph started"
         );
-        Ok(Reply::PlayerStarted(Box::new(AllocatedSlot::new(
-            control, slot_id,
-        ))))
+        Ok(AllocatedSlot::new(control, slot_id))
     }
 
     fn validate_response_geometry<T, S>(
@@ -239,9 +237,9 @@ pub(super) mod lifecycle {
         debug!("[KITHARA-ROUTE] player stopped");
         Ok(())
     }
-    /// Release the output device once no player is left to feed it. A media
-    /// app that has stopped playing must not keep the platform's output
-    /// engaged; the next `start_player` builds a fresh context.
+    /// Release the output device once no deck is left to feed it: the Host
+    /// keeps the output engaged only while it holds a deck, and the next
+    /// `start_player` builds a fresh context.
     ///
     /// A session that set [`SessionState::retains_output`] is the exception:
     /// its device cannot be rebuilt, so this call does nothing.
@@ -332,8 +330,8 @@ mod tests {
         kithara,
     };
     use kithara_warp::{
-        Beat, BeatGridQuery, BeatGridRevision, BeatGridState, BeatGridUnavailable, MapAxis,
-        MapPoint, MapPosition, SessionAxis,
+        Beat, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridState, BeatGridUnavailable,
+        MapAxis, MapPoint, MapPosition, SessionAxis,
     };
 
     use super::*;
@@ -342,9 +340,9 @@ mod tests {
         consts,
         host::{HostSettingsChange, HostSettingsExec},
         session::{
-            dispatch::{invalidate_audio_route, run_cmd},
-            protocol::Cmd,
-            tests::graph::{attach_player, committed_transport, state as test_state},
+            dispatch::{invalidate_audio_route, run_cmd, run_host_cmd},
+            protocol::{Cmd, DeckRegistration, HostCmd, HostReply, Reply},
+            tests::graph::{committed_transport, state as test_state},
         },
     };
 
@@ -454,59 +452,37 @@ mod tests {
             .map_or(-1, |fw_ctx| fw_ctx.audio_clock().samples.0)
     }
 
-    fn register(state: &mut TestState) -> PlayerId {
-        let grid_id = attach_player(state);
-        match run_cmd(
-            state,
-            Cmd::RegisterPlayer {
-                grid_id,
-                bus: EventBus::default(),
-                mixer: kithara_play::DeckMixerConfig::default(),
-                pools: pools(),
-            },
-        ) {
-            Reply::PlayerRegistered(player_id) => player_id,
-            Reply::Err(err) => panic!("player registration failed: {err}"),
-            _ => panic!("player registration returned unexpected reply"),
+    /// Attaches a deck, which the session registers and starts.
+    fn insert(state: &mut TestState) -> BeatGridId {
+        let grid_id = BeatGridId::allocate().expect("fixture grid id");
+        let mut registration = DeckRegistration::new(
+            grid_id,
+            EventBus::default(),
+            pools(),
+            kithara_play::DeckMixerConfig::default(),
+        );
+        registration.response_budget_frames = NonZeroUsize::new(448);
+        match run_host_cmd(state, HostCmd::Attach { registration }) {
+            HostReply::Attached(_) => grid_id,
+            HostReply::Err(err) => panic!("the deck failed to start: {err}"),
+            _ => panic!("attach returned an unexpected reply"),
         }
     }
 
-    fn start(state: &mut TestState, player_id: PlayerId) {
-        match run_cmd(
-            state,
-            Cmd::StartPlayer {
-                player_id,
-                render_quantum_frames: None,
-                response_budget_frames: NonZeroUsize::new(448),
-            },
-        ) {
-            Reply::PlayerStarted(..) => {}
-            Reply::Err(err) => panic!("player {player_id} failed to start: {err}"),
-            _ => panic!("player start returned unexpected reply"),
+    /// Stops the deck `grid_id` and removes it from the session.
+    fn remove(state: &mut TestState, grid_id: BeatGridId) {
+        match run_host_cmd(state, HostCmd::Detach { grid_id }) {
+            HostReply::Ok => {}
+            HostReply::Err(err) => panic!("the deck failed to leave: {err}"),
+            _ => panic!("detach returned an unexpected reply"),
         }
     }
 
-    fn unregister(state: &mut TestState, player_id: PlayerId) {
-        match run_cmd(state, Cmd::UnregisterPlayer { player_id }) {
-            Reply::Ok => {}
-            Reply::Err(err) => panic!("player {player_id} failed to unregister: {err}"),
-            _ => panic!("player unregister returned unexpected reply"),
-        }
-    }
-
-    fn stop(state: &mut TestState, player_id: PlayerId) {
-        match run_cmd(state, Cmd::StopPlayer { player_id }) {
-            Reply::Ok => {}
-            Reply::Err(err) => panic!("player {player_id} failed to stop: {err}"),
-            _ => panic!("player stop returned unexpected reply"),
-        }
-    }
-
-    fn slot_node(state: &TestState, player_id: PlayerId) -> NodeID {
+    fn slot_node(state: &TestState, grid_id: BeatGridId) -> NodeID {
         state
             .graph
             .decks()
-            .find(|deck| deck.player_id == player_id)
+            .find(|deck| deck.grid_id == grid_id)
             .and_then(|deck| deck.slot_node)
             .expect("a started deck has its slot node")
     }
@@ -520,8 +496,7 @@ mod tests {
     fn a_session_tick_publishes_the_session_grid_the_graph_committed() {
         device(|dev| *dev = AudioDevice::default());
         let mut state = test_state(start_test_stream);
-        let player = register(&mut state);
-        start(&mut state, player);
+        insert(&mut state);
         assert!(deliver_one_block(), "the transport must render a block");
 
         assert!(matches!(run_cmd(&mut state, Cmd::Tick), Reply::Ok));
@@ -541,21 +516,16 @@ mod tests {
         );
     }
 
-    /// Stopping is the verb a host reaches for when playback ends, and it must
-    /// release the output on its own - the existing coverage reaches this only
-    /// through unregister, which a host that stops without dropping its player
-    /// never performs. Naming the two separately is what tells a caller that
-    /// kept its player whether the device is free, which is the difference
-    /// between an audio session that can be deactivated and one that reports
-    /// itself busy.
+    /// The Host keeps the output engaged only while it holds a deck: handing
+    /// back the last one releases the device, so the platform's audio session
+    /// can be deactivated.
     #[kithara::test]
-    fn stopping_the_last_player_releases_the_output() {
+    fn removing_the_last_deck_releases_the_output() {
         device(|dev| *dev = AudioDevice::default());
         let mut state = test_state(start_test_stream);
-        let player_id = register(&mut state);
-        start(&mut state, player_id);
+        let deck = insert(&mut state);
 
-        stop(&mut state, player_id);
+        remove(&mut state, deck);
 
         assert!(state.ctx.is_none());
     }
@@ -567,14 +537,13 @@ mod tests {
     /// target it happens to be compiled for — a mock backend on the same
     /// target still releases its device above.
     #[kithara::test]
-    fn a_session_that_retains_its_output_keeps_it_when_the_last_player_stops() {
+    fn a_session_that_retains_its_output_keeps_it_when_the_last_deck_leaves() {
         device(|dev| *dev = AudioDevice::default());
         let mut state = test_state(start_test_stream);
         state.retains_output = true;
-        let player_id = register(&mut state);
-        start(&mut state, player_id);
+        let deck = insert(&mut state);
 
-        stop(&mut state, player_id);
+        remove(&mut state, deck);
 
         assert!(
             state.ctx.is_some(),
@@ -582,19 +551,17 @@ mod tests {
         );
     }
 
-    /// A stopped deck takes its slot node out of the graph the other decks
+    /// A removed deck takes its slot node out of the graph the other decks
     /// keep rendering.
     #[kithara::test]
-    fn a_stopped_deck_takes_its_slot_node_out_of_the_graph() {
+    fn a_removed_deck_takes_its_slot_node_out_of_the_graph() {
         device(|dev| *dev = AudioDevice::default());
         let mut state = test_state(start_test_stream);
-        let leaving = register(&mut state);
-        let staying = register(&mut state);
-        start(&mut state, leaving);
-        start(&mut state, staying);
+        let leaving = insert(&mut state);
+        let staying = insert(&mut state);
         let (left, kept) = (slot_node(&state, leaving), slot_node(&state, staying));
 
-        stop(&mut state, leaving);
+        remove(&mut state, leaving);
 
         let ctx = state
             .ctx
@@ -602,7 +569,7 @@ mod tests {
             .expect("the deck still playing keeps the output");
         assert!(
             !ctx.contains_node(left),
-            "a stopped deck's slot node leaves the graph"
+            "a removed deck's slot node leaves the graph"
         );
         assert!(
             ctx.contains_node(kept),
@@ -615,22 +582,20 @@ mod tests {
         device(|dev| *dev = AudioDevice::default());
         let mut state = test_state(start_test_stream);
 
-        let first = register(&mut state);
-        start(&mut state, first);
+        let first = insert(&mut state);
         assert!(
             deliver_one_block(),
             "the first player's stream must own the output device"
         );
 
-        unregister(&mut state, first);
+        remove(&mut state, first);
 
         assert!(
             state.ctx.is_none(),
             "the session must release the output device once no player feeds it"
         );
 
-        let second = register(&mut state);
-        start(&mut state, second);
+        insert(&mut state);
 
         let before = processed_frames(&state);
         assert!(
@@ -650,7 +615,6 @@ mod tests {
             dev.defer_processor_drop = true;
         });
         let mut state = test_state(start_test_stream);
-        let first_player = register(&mut state);
         let initial = state.root.grid().clone();
         assert_eq!(initial.revision(), BeatGridRevision::first());
         assert_eq!(
@@ -668,12 +632,12 @@ mod tests {
         assert_eq!(
             state
                 .reserved_session_grid
-                .expect("registration seeds session-grid generation")
+                .expect("the session seeds its session-grid generation")
                 .stamp()
                 .expect("the initial session-grid revision is committed"),
             initial.stamp()
         );
-        start(&mut state, first_player);
+        let first_player = insert(&mut state);
         let before = render_and_read_session_grid(&mut state);
         let first_live = state.root.grid().clone();
         assert_eq!(first_live, before.session_grid());
@@ -702,7 +666,7 @@ mod tests {
         );
         assert!(state.stream_needs_restart);
 
-        unregister(&mut state, first_player);
+        remove(&mut state, first_player);
         let unavailable = state.root.grid().clone();
         assert_eq!(
             unavailable.revision(),
@@ -744,8 +708,7 @@ mod tests {
             );
         });
 
-        let second_player = register(&mut state);
-        start(&mut state, second_player);
+        insert(&mut state);
         let after = render_and_read_session_grid(&mut state);
         let second_live = state.root.grid().clone();
         assert_eq!(second_live, after.session_grid());
@@ -784,8 +747,7 @@ mod tests {
             dev.defer_processor_drop = true;
         });
         let mut state = test_state(start_test_stream);
-        let player = register(&mut state);
-        start(&mut state, player);
+        let player = insert(&mut state);
         let live = render_and_read_session_grid(&mut state);
 
         invalidate_audio_route(&mut state, "test route restart").expect("the route restarts");
@@ -888,7 +850,7 @@ mod tests {
             BeatGridQuery::Stale { .. }
         ));
 
-        unregister(&mut state, player);
+        remove(&mut state, player);
 
         let unavailable = state.root.grid().clone();
         assert!(unavailable.revision() > reserved.revision());

@@ -4,18 +4,14 @@ use kithara_warp::RenderSnapshot;
 
 use crate::api::SlotId;
 
-/// The control half of the deck's slot while the engine runs, under the id the session built
-/// it with.
+/// The control half of the deck's slot once its Host has built it, under the id the session
+/// built it with.
 #[derive(Default)]
 pub(super) struct DeckSlot {
     slot: Option<(SlotId, SlotControl)>,
 }
 
 impl DeckSlot {
-    pub(super) fn clear(&mut self) {
-        self.slot = None;
-    }
-
     pub(super) fn get(&self, slot: SlotId) -> Option<&SlotControl> {
         self.slot
             .as_ref()

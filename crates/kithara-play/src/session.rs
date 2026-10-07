@@ -44,42 +44,53 @@ mod wire {
         DeckNotFound(BeatGridId),
         #[error("deck {0:?} is already in this session")]
         DeckAttached(BeatGridId),
-        #[error("deck {0:?} still has its graph registration")]
-        DeckRegistered(BeatGridId),
         #[error(transparent)]
         BeatGridIdAllocation(#[from] BeatGridIdAllocationError),
         #[error("stream stopped: {reason}; restart failed: {source}")]
         RestartFailed { reason: String, r#source: String },
     }
 
-    pub enum Cmd<S> {
-        RegisterPlayer {
-            grid_id: BeatGridId,
-            bus: EventBus,
-            mixer: DeckMixerConfig,
-            pools: PoolRegion<S>,
-        },
-        UnregisterPlayer {
-            player_id: PlayerId,
-        },
-        StartPlayer {
-            player_id: PlayerId,
-            render_quantum_frames: Option<NonZeroUsize>,
-            response_budget_frames: Option<NonZeroUsize>,
-        },
-        StopPlayer {
-            player_id: PlayerId,
-        },
+    #[derive(Clone, Copy)]
+    pub enum Cmd {
         Tick,
     }
 
     #[non_exhaustive]
     pub enum Reply {
         Ok,
-        PlayerRegistered(PlayerId),
-        /// The deck's slot, built when it started.
-        PlayerStarted(Box<AllocatedSlot>),
         Err(SessionError),
+    }
+
+    /// What a deck joins its session with. The Host registers the deck from it
+    /// and builds the deck's slot, answering it as [`AllocatedSlot`].
+    #[non_exhaustive]
+    pub struct DeckRegistration<S> {
+        pub grid_id: BeatGridId,
+        pub bus: EventBus,
+        pub mixer: DeckMixerConfig,
+        pub pools: PoolRegion<S>,
+        pub render_quantum_frames: Option<NonZeroUsize>,
+        pub response_budget_frames: Option<NonZeroUsize>,
+    }
+
+    impl<S> DeckRegistration<S> {
+        /// A deck that asks the session for no playback-buffer geometry.
+        #[must_use]
+        pub const fn new(
+            grid_id: BeatGridId,
+            bus: EventBus,
+            pools: PoolRegion<S>,
+            mixer: DeckMixerConfig,
+        ) -> Self {
+            Self {
+                grid_id,
+                bus,
+                mixer,
+                pools,
+                render_quantum_frames: None,
+                response_budget_frames: None,
+            }
+        }
     }
 
     /// What the session knows about its output rate.
@@ -127,21 +138,18 @@ mod wire {
 
 mod handle {
     use std::{
-        num::{NonZeroU32, NonZeroUsize},
+        num::NonZeroU32,
         sync::atomic::{AtomicU64, Ordering},
     };
 
     use kithara_audio::ConsumerWakeMode;
-    use kithara_bufpool::PoolRegion;
-    use kithara_events::EventBus;
     use kithara_platform::{
         maybe_send::{MaybeSend, MaybeSync},
         sync::{Arc, Mutex},
     };
-    use kithara_render::rt::{DeckMixerConfig, StreamShape};
-    use kithara_warp::BeatGridId;
+    use kithara_render::rt::StreamShape;
 
-    use super::wire::{AllocatedSlot, Cmd, PlayerId, Reply, SessionSampleRate};
+    use super::wire::{Cmd, Reply, SessionSampleRate};
     use crate::error::PlayError;
 
     /// Handle used by resident players to reach their session owner.
@@ -155,9 +163,9 @@ mod handle {
         /// included.
         fn consumer_wake_mode(&self) -> ConsumerWakeMode;
 
-        fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError>;
+        fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
 
-        fn exec_ok(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
+        fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
             match self.exec(cmd)? {
                 Reply::Err(err) => Err(err.into()),
                 reply => Ok(reply),
@@ -256,11 +264,11 @@ mod handle {
                 .ok_or(PlayError::SessionUnbound)
         }
 
-        pub fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
+        pub fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
             self.dispatcher()?.exec(cmd)
         }
 
-        pub fn exec_ok(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
+        pub fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
             match self.exec(cmd)? {
                 Reply::Err(err) => Err(err.into()),
                 reply => Ok(reply),
@@ -273,58 +281,6 @@ mod handle {
                 binding: Mutex::default(),
                 suspended_at: AtomicU64::new(0),
             }))
-        }
-
-        pub fn register_player(
-            &self,
-            grid_id: BeatGridId,
-            bus: EventBus,
-            pools: PoolRegion<S>,
-            mixer: DeckMixerConfig,
-        ) -> Result<PlayerId, PlayError> {
-            match self.exec_ok(Cmd::RegisterPlayer {
-                grid_id,
-                bus,
-                mixer,
-                pools,
-            })? {
-                Reply::PlayerRegistered(id) => Ok(id),
-                _ => Err(PlayError::Internal(
-                    "unexpected reply for session player registration".into(),
-                )),
-            }
-        }
-
-        pub(crate) fn requested_sample_rate(&self) -> Result<NonZeroU32, PlayError> {
-            self.0
-                .binding
-                .lock()
-                .as_ref()
-                .map(SessionBinding::requested_sample_rate)
-                .ok_or(PlayError::SessionUnbound)
-        }
-
-        /// Starts the player's deck and hands back the slot the session built for it.
-        pub fn start_player(
-            &self,
-            player_id: PlayerId,
-            render_quantum_frames: Option<NonZeroUsize>,
-            response_budget_frames: Option<NonZeroUsize>,
-        ) -> Result<AllocatedSlot, PlayError> {
-            match self.exec_ok(Cmd::StartPlayer {
-                player_id,
-                render_quantum_frames,
-                response_budget_frames,
-            })? {
-                Reply::PlayerStarted(started) => Ok(*started),
-                _ => Err(PlayError::Internal(
-                    "unexpected reply for session player start".into(),
-                )),
-            }
-        }
-
-        pub fn stop_player(&self, player_id: PlayerId) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::StopPlayer { player_id }).map(|_| ())
         }
 
         pub(crate) fn stream_shape(&self) -> Option<StreamShape> {
@@ -368,11 +324,6 @@ mod handle {
             self.exec_ok(Cmd::Tick).map(|_| ())
         }
 
-        pub fn unregister_player(&self, player_id: PlayerId) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::UnregisterPlayer { player_id })
-                .map(|_| ())
-        }
-
         delegate::delegate! {
             to self.dispatcher()? {
                 #[expr(Ok($))]
@@ -383,40 +334,23 @@ mod handle {
 }
 
 pub use handle::{SessionBinding, SessionDispatcher, SessionHandle};
-pub use wire::{AllocatedSlot, Cmd, PlayerId, Reply, SessionError, SessionSampleRate};
+pub use wire::{
+    AllocatedSlot, Cmd, DeckRegistration, PlayerId, Reply, SessionError, SessionSampleRate,
+};
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        num::{NonZeroU32, NonZeroUsize},
-        sync::atomic::{AtomicU32, Ordering},
-    };
+    use std::num::NonZeroU32;
 
     use kithara_audio::ConsumerWakeMode;
-    use kithara_events::EventBus;
     use kithara_platform::sync::Arc;
-    use kithara_render::{
-        bridge::slot_channels,
-        rt::{DeckMixerConfig, StreamShape},
-    };
+    use kithara_render::rt::StreamShape;
     use kithara_test_utils::kithara;
-    use kithara_warp::BeatGridId;
 
-    use super::{
-        AllocatedSlot, Cmd, Reply, SessionBinding, SessionDispatcher, SessionHandle,
-        SessionSampleRate,
-    };
-    use crate::{
-        PlayError, SlotId,
-        test_pools::{TestPools, pools},
-    };
+    use super::{Cmd, Reply, SessionBinding, SessionDispatcher, SessionHandle, SessionSampleRate};
+    use crate::{PlayError, test_pools::TestPools};
 
     struct DefaultSession;
-
-    #[derive(Default)]
-    struct RateCapture {
-        queries: AtomicU32,
-    }
 
     fn sample_rate() -> NonZeroU32 {
         NonZeroU32::new(48_000).expect("fixture sample rate is non-zero")
@@ -427,37 +361,11 @@ mod tests {
             ConsumerWakeMode::RealtimeDeferred
         }
 
-        fn exec(&self, _cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
+        fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
             Ok(Reply::Ok)
         }
 
         fn sample_rate(&self) -> SessionSampleRate {
-            SessionSampleRate::new(None, sample_rate().get())
-        }
-
-        fn stream_shape(&self) -> Option<StreamShape> {
-            None
-        }
-    }
-
-    impl SessionDispatcher<TestPools> for RateCapture {
-        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            ConsumerWakeMode::RealtimeDeferred
-        }
-
-        fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
-            match cmd {
-                Cmd::RegisterPlayer { .. } => Ok(Reply::PlayerRegistered(1)),
-                Cmd::StartPlayer { .. } => Ok(Reply::PlayerStarted(Box::new(AllocatedSlot::new(
-                    slot_channels().1,
-                    SlotId::new(1),
-                )))),
-                _ => Ok(Reply::Ok),
-            }
-        }
-
-        fn sample_rate(&self) -> SessionSampleRate {
-            self.queries.fetch_add(1, Ordering::Relaxed);
             SessionSampleRate::new(None, sample_rate().get())
         }
 
@@ -501,31 +409,5 @@ mod tests {
             handle.bind(SessionBinding::new(Arc::new(DefaultSession), sample_rate())),
             Err(PlayError::SessionAlreadyBound)
         ));
-    }
-
-    #[kithara::test]
-    fn the_requested_rate_never_reaches_the_session() {
-        let capture = Arc::new(RateCapture::default());
-        let dispatcher: Arc<dyn SessionDispatcher<TestPools>> = capture.clone();
-        let handle = SessionHandle::new(SessionBinding::new(dispatcher, sample_rate()));
-
-        assert_eq!(
-            handle.requested_sample_rate().expect("requested rate"),
-            sample_rate()
-        );
-
-        let player_id = handle
-            .register_player(
-                BeatGridId::allocate().expect("player id"),
-                EventBus::default(),
-                pools(),
-                DeckMixerConfig::default(),
-            )
-            .expect("register player");
-        handle
-            .start_player(player_id, None, NonZeroUsize::new(448))
-            .expect("start player");
-
-        assert_eq!(capture.queries.load(Ordering::Relaxed), 0);
     }
 }

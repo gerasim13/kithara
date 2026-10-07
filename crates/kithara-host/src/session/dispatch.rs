@@ -13,7 +13,10 @@ use tracing::{debug, trace, warn};
 use super::protocol::HostCmdMsg;
 use super::{
     graph::{lifecycle, player_index, tap},
-    protocol::{Cmd, HostCmd, HostReply, PlayerId, Reply, SessionError, SessionSampleRate},
+    protocol::{
+        AllocatedSlot, Cmd, DeckRegistration, HostCmd, HostReply, PlayerId, Reply, SessionError,
+        SessionSampleRate,
+    },
     queue::settle_receipts,
     state::{SessionState, register_player},
     transport,
@@ -31,8 +34,10 @@ where
     settle_receipts(state);
     match cmd {
         HostCmd::Play(cmd) => HostReply::Play(run_cmd(state, cmd)),
-        HostCmd::Attach { grid_id } => attach_deck(state, grid_id)
-            .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
+        HostCmd::Attach { registration } => attach_deck(state, registration).map_or_else(
+            |error| HostReply::Err(error.into()),
+            |slot| HostReply::Attached(Box::new(slot)),
+        ),
         HostCmd::Detach { grid_id } => detach_deck(state, grid_id)
             .map_or_else(|error| HostReply::Err(error.into()), |()| HostReply::Ok),
         HostCmd::Configure { change, at } => state
@@ -53,66 +58,83 @@ where
     }
 }
 
-/// Adds one deck to the session; an identity the session or its graph
-/// already holds is refused.
+/// Adds one deck to the session, registers it and starts it, answering the
+/// slot it plays through. An identity the session or its graph already holds
+/// is refused; a deck that fails to register or start leaves the session as
+/// it found it.
 fn attach_deck<T, S>(
     state: &mut SessionState<T, S>,
-    grid_id: BeatGridId,
-) -> Result<(), SessionError> {
+    registration: DeckRegistration<S>,
+) -> Result<AllocatedSlot, SessionError>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    let DeckRegistration {
+        grid_id,
+        bus,
+        mixer,
+        pools,
+        render_quantum_frames,
+        response_budget_frames,
+        ..
+    } = registration;
     if state.graph.index_by_grid(grid_id).is_some() {
         return Err(SessionError::DeckAttached(grid_id));
     }
     state.root.attach(grid_id)?;
+    let started = match register_player(state, grid_id, bus, pools, mixer) {
+        Ok(player_id) => {
+            let started = lifecycle::start_player(
+                state,
+                player_id,
+                render_quantum_frames,
+                response_budget_frames,
+            );
+            if started.is_err()
+                && let Err(error) = unregister_player(state, player_id)
+            {
+                warn!(
+                    player_id,
+                    ?error,
+                    "a deck that failed to start stays registered"
+                );
+            }
+            started
+        }
+        Err(error) => Err(error),
+    };
+    if started.is_err()
+        && let Err(error) = state.root.detach(grid_id)
+    {
+        warn!(
+            ?grid_id,
+            ?error,
+            "a deck that failed to start stays attached"
+        );
+    }
     state.publish_root();
-    Ok(())
+    started
 }
 
-/// Removes one deck from the session once its graph registration is gone.
+/// Stops the deck `grid_id` and removes it from the session.
 fn detach_deck<T, S>(
     state: &mut SessionState<T, S>,
     grid_id: BeatGridId,
 ) -> Result<(), SessionError> {
-    if state.graph.index_by_grid(grid_id).is_some() {
-        return Err(SessionError::DeckRegistered(grid_id));
-    }
+    let player_id = state
+        .graph
+        .index_by_grid(grid_id)
+        .and_then(|idx| state.graph.deck(idx))
+        .map(|deck| deck.player_id)
+        .ok_or(SessionError::DeckNotFound(grid_id))?;
+    unregister_player(state, player_id)?;
     state.root.detach(grid_id)?;
     state.publish_root();
     Ok(())
 }
 
-pub(crate) fn run_cmd<T, S>(state: &mut SessionState<T, S>, cmd: Cmd<S>) -> Reply
-where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
+pub(crate) fn run_cmd<T, S>(state: &mut SessionState<T, S>, cmd: Cmd) -> Reply {
     match cmd {
-        Cmd::RegisterPlayer {
-            grid_id,
-            bus,
-            mixer,
-            pools,
-        } => match register_player(state, grid_id, bus, pools, mixer) {
-            Ok(player_id) => Reply::PlayerRegistered(player_id),
-            Err(error) => Reply::Err(error),
-        },
-        Cmd::UnregisterPlayer { player_id } => match unregister_player(state, player_id) {
-            Ok(()) => Reply::Ok,
-            Err(err) => Reply::Err(err),
-        },
-        Cmd::StartPlayer {
-            player_id,
-            render_quantum_frames,
-            response_budget_frames,
-        } => lifecycle::start_player(
-            state,
-            player_id,
-            render_quantum_frames,
-            response_budget_frames,
-        )
-        .unwrap_or_else(Reply::Err),
-        Cmd::StopPlayer { player_id } => match lifecycle::stop_player(state, player_id) {
-            Ok(()) => Reply::Ok,
-            Err(err) => Reply::Err(err),
-        },
         Cmd::Tick => tick_session(state),
     }
 }
@@ -384,7 +406,7 @@ mod tests {
             protocol::{Cmd, Reply, SessionError},
             state::{Deck, SessionState, TapSlot, add_graph_node},
             tests::{
-                graph::{attach_player, state as test_state},
+                graph::state as test_state,
                 ring::{MasterRing, RingBackend, RingBackendConfig, RingLayout},
             },
         },
@@ -533,22 +555,38 @@ mod tests {
         })
     }
 
-    fn register_command(grid_id: BeatGridId) -> Cmd<TestPools> {
-        Cmd::RegisterPlayer {
+    fn registration(grid_id: BeatGridId) -> DeckRegistration<TestPools> {
+        let mut registration = DeckRegistration::new(
             grid_id,
-            bus: EventBus::default(),
-            mixer: DeckMixerConfig::default(),
-            pools: pools(),
+            EventBus::default(),
+            pools(),
+            DeckMixerConfig::default(),
+        );
+        registration.response_budget_frames = NonZeroUsize::new(448);
+        registration
+    }
+
+    /// Attaches a deck, which the session registers and starts.
+    fn insert(state: &mut TestState) -> BeatGridId {
+        let grid_id = BeatGridId::allocate().expect("fixture player grid id");
+        match run_host_cmd(
+            state,
+            HostCmd::Attach {
+                registration: registration(grid_id),
+            },
+        ) {
+            HostReply::Attached(_) => grid_id,
+            HostReply::Err(err) => panic!("the deck failed to start: {err}"),
+            _ => panic!("attach returned an unexpected reply"),
         }
     }
 
-    fn register_player(state: &mut TestState) -> u64 {
-        let grid_id = attach_player(state);
-        match run_cmd(state, register_command(grid_id)) {
-            Reply::PlayerRegistered(player_id) => player_id,
-            Reply::Err(err) => panic!("player registration failed: {err}"),
-            _ => panic!("player registration returned unexpected reply"),
-        }
+    /// Stops the deck `grid_id` and removes it from the session.
+    fn remove(state: &mut TestState, grid_id: BeatGridId) {
+        assert!(matches!(
+            run_host_cmd(state, HostCmd::Detach { grid_id }),
+            HostReply::Ok
+        ));
     }
 
     /// Asks the session for `rate` from the next block on.
@@ -577,14 +615,6 @@ mod tests {
             ),
             HostReply::Ok
         ));
-    }
-
-    fn start_command(player_id: u64) -> Cmd<TestPools> {
-        Cmd::StartPlayer {
-            player_id,
-            render_quantum_frames: None,
-            response_budget_frames: NonZeroUsize::new(448),
-        }
     }
 
     fn deck(state: &TestState, index: usize) -> &Deck<TestPools> {
@@ -617,11 +647,11 @@ mod tests {
         assert!(boundary_axis.epoch() > before_axis.epoch());
     }
 
-    fn deck_by_player_id(state: &TestState, player_id: u64) -> &Deck<TestPools> {
+    fn deck_by_grid(state: &TestState, grid_id: BeatGridId) -> &Deck<TestPools> {
         let index = state
             .graph
-            .index_by_player(player_id)
-            .expect("the player has a registered deck");
+            .index_by_grid(grid_id)
+            .expect("the deck is registered");
         state
             .graph
             .deck(index)
@@ -629,116 +659,51 @@ mod tests {
     }
 
     #[kithara::test]
-    fn registration_projects_an_attached_deck_and_unregistration_keeps_it() {
+    fn an_attached_deck_runs_until_it_is_detached() {
         route_loss(RouteLossProbe::reset);
         let mut state = test_state(start_route_loss_stream);
         let host_id = state.root.id();
 
-        let player_id = register_player(&mut state);
-        let grid_id = deck_by_player_id(&state, player_id).grid_id;
+        let grid_id = insert(&mut state);
         assert!(state.root.holds(grid_id));
         assert!(state.root_view.holds(grid_id));
+        assert!(deck_by_grid(&state, grid_id).started());
 
-        assert!(matches!(
-            run_cmd(&mut state, start_command(player_id),),
-            Reply::PlayerStarted(..)
-        ));
-        assert!(deck_by_player_id(&state, player_id).started());
-        assert!(matches!(
-            run_cmd(&mut state, Cmd::UnregisterPlayer { player_id }),
-            Reply::Ok
-        ));
+        remove(&mut state, grid_id);
 
         assert_eq!(state.root.id(), host_id);
-        assert!(
-            state.root.holds(grid_id),
-            "the deck outlives its graph registration"
-        );
-        assert_eq!(deck_count(&state), 0);
-    }
-
-    #[kithara::test]
-    fn registration_rejects_a_player_before_its_deck_is_attached() {
-        let mut state = test_state(start_route_loss_stream);
-        let grid_id = BeatGridId::allocate().expect("fixture player grid id");
-
-        let reply = run_cmd(&mut state, register_command(grid_id));
-
-        assert!(matches!(
-            reply,
-            Reply::Err(SessionError::DeckNotFound(refused)) if refused == grid_id
-        ));
-        assert!(state.root_view.is_empty());
-        assert_eq!(deck_count(&state), 0);
-    }
-
-    #[kithara::test]
-    fn duplicate_graph_projection_is_rejected() {
-        let mut state = test_state(start_route_loss_stream);
-        let grid_id = attach_player(&mut state);
-        let command = || register_command(grid_id);
-
-        assert!(matches!(
-            run_cmd(&mut state, command()),
-            Reply::PlayerRegistered(_)
-        ));
-        let next_player_id = state.next_player_id;
-        assert!(matches!(
-            run_cmd(&mut state, command()),
-            Reply::Err(SessionError::Graph(_))
-        ));
-
-        assert_eq!(state.next_player_id, next_player_id);
-        assert!(state.root.holds(grid_id));
-        assert_eq!(deck_count(&state), 1);
-    }
-
-    #[kithara::test]
-    fn detach_is_rejected_while_the_graph_projection_is_live() {
-        let mut state = test_state(start_route_loss_stream);
-        let grid_id = attach_player(&mut state);
-        let Reply::PlayerRegistered(player_id) = run_cmd(&mut state, register_command(grid_id))
-        else {
-            panic!("fixture player is registered")
-        };
-
-        assert!(matches!(
-            run_host_cmd(&mut state, HostCmd::Detach { grid_id }),
-            HostReply::Err(PlayError::Session(SessionError::DeckRegistered(refused)))
-                if refused == grid_id
-        ));
-        assert!(state.root.holds(grid_id));
-        assert_eq!(deck_count(&state), 1);
-
-        assert!(matches!(
-            run_cmd(&mut state, Cmd::UnregisterPlayer { player_id }),
-            Reply::Ok
-        ));
-        assert!(matches!(
-            run_host_cmd(&mut state, HostCmd::Detach { grid_id }),
-            HostReply::Ok
-        ));
         assert!(!state.root.holds(grid_id));
+        assert!(!state.root_view.holds(grid_id));
         assert_eq!(deck_count(&state), 0);
     }
 
     #[kithara::test]
     fn attach_refuses_an_identity_the_session_already_holds() {
+        route_loss(RouteLossProbe::reset);
         let mut state = test_state(start_route_loss_stream);
-        let grid_id = attach_player(&mut state);
+        let grid_id = insert(&mut state);
+        let next_player_id = state.next_player_id;
 
         assert!(matches!(
-            run_host_cmd(&mut state, HostCmd::Attach { grid_id }),
+            run_host_cmd(
+                &mut state,
+                HostCmd::Attach {
+                    registration: registration(grid_id),
+                },
+            ),
             HostReply::Err(PlayError::Session(SessionError::DeckAttached(refused)))
                 if refused == grid_id
         ));
+        assert_eq!(state.next_player_id, next_player_id);
         assert!(state.root_view.holds(grid_id));
+        assert_eq!(deck_count(&state), 1);
     }
 
     #[kithara::test]
     fn detach_refuses_a_deck_the_session_does_not_hold() {
+        route_loss(RouteLossProbe::reset);
         let mut state = test_state(start_route_loss_stream);
-        let held = attach_player(&mut state);
+        let held = insert(&mut state);
         let grid_id = BeatGridId::allocate().expect("fixture foreign grid id");
 
         assert!(matches!(
@@ -751,33 +716,40 @@ mod tests {
 
     #[kithara::test]
     fn root_view_publishes_the_decks_the_session_holds() {
+        route_loss(RouteLossProbe::reset);
         let mut state = test_state(start_route_loss_stream);
         assert!(state.root_view.is_empty());
-        let grid_id = attach_player(&mut state);
+        let grid_id = insert(&mut state);
 
         assert!(state.root_view.holds(grid_id));
         assert!(!state.root_view.is_empty());
 
-        assert!(matches!(
-            run_host_cmd(&mut state, HostCmd::Detach { grid_id }),
-            HostReply::Ok
-        ));
+        remove(&mut state, grid_id);
         assert!(!state.root_view.holds(grid_id));
         assert!(state.root_view.is_empty());
     }
 
     #[kithara::test]
-    fn exhausted_player_identity_preserves_the_attached_deck() {
+    fn exhausted_player_identity_refuses_the_deck_whole() {
         let mut state = test_state(start_route_loss_stream);
-        let grid_id = attach_player(&mut state);
+        let grid_id = BeatGridId::allocate().expect("fixture player grid id");
         state.next_player_id = u64::MAX;
 
-        let reply = run_cmd(&mut state, register_command(grid_id));
+        let reply = run_host_cmd(
+            &mut state,
+            HostCmd::Attach {
+                registration: registration(grid_id),
+            },
+        );
 
-        assert!(matches!(reply, Reply::Err(SessionError::PlayerIdExhausted)));
+        assert!(matches!(
+            reply,
+            HostReply::Err(PlayError::Session(SessionError::PlayerIdExhausted))
+        ));
         assert_eq!(state.next_player_id, u64::MAX);
         assert_eq!(deck_count(&state), 0);
-        assert!(state.root.holds(grid_id));
+        assert!(!state.root.holds(grid_id));
+        assert!(!state.root_view.holds(grid_id));
         assert!(state.reserved_session_grid.is_some());
     }
 
@@ -797,15 +769,6 @@ mod tests {
             "until a stream exists the resampler is built for the requested rate"
         );
 
-        let player_id = register_player(&mut state);
-        assert!(matches!(
-            state.root_view.sample_rate(),
-            SessionSampleRate {
-                measured: None,
-                requested: TestState::DEFAULT_SAMPLE_RATE,
-                ..
-            }
-        ));
         configure_sample_rate(&mut state, 48_000);
         assert!(matches!(
             state.root_view.sample_rate(),
@@ -815,7 +778,7 @@ mod tests {
                 ..
             }
         ));
-        start_player_cmd(&mut state, player_id);
+        insert(&mut state);
         assert!(matches!(
             state.root_view.sample_rate(),
             SessionSampleRate {
@@ -833,8 +796,7 @@ mod tests {
         let mut state = test_state(start_route_loss_stream);
         let rate = NonZeroU32::new(48_000).expect("48000 is not zero");
         configure_sample_rate(&mut state, rate.get());
-        let player_id = register_player(&mut state);
-        start_player_cmd(&mut state, player_id);
+        insert(&mut state);
 
         let started = state
             .ctx
@@ -864,11 +826,7 @@ mod tests {
         assert_eq!(requested.max_block_frames.get(), 128);
         assert_eq!(requested.sample_rate.get(), TestState::DEFAULT_SAMPLE_RATE);
 
-        let player_id = register_player(&mut state);
-        assert!(matches!(
-            run_cmd(&mut state, start_command(player_id),),
-            Reply::PlayerStarted(..)
-        ));
+        let player_id = insert(&mut state);
         let measured = state
             .root_view
             .stream_shape()
@@ -885,10 +843,7 @@ mod tests {
                 .get(),
             48_000
         );
-        assert!(matches!(
-            run_cmd(&mut state, Cmd::StopPlayer { player_id }),
-            Reply::Ok
-        ));
+        remove(&mut state, player_id);
         let stopped = state
             .root_view
             .stream_shape()
@@ -898,30 +853,33 @@ mod tests {
     }
 
     #[kithara::test]
-    fn measured_output_block_rejects_player_before_graph_start() {
+    fn a_deck_whose_buffers_outgrow_the_measured_block_is_refused_whole() {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
         state.requested_max_block_frames = NonZeroU32::new(128);
-        let player_id = register_player(&mut state);
-        let command = Cmd::StartPlayer {
-            player_id,
-            render_quantum_frames: NonZeroUsize::new(64),
-            response_budget_frames: NonZeroUsize::new(441),
-        };
+        let grid_id = BeatGridId::allocate().expect("fixture player grid id");
+        let mut registration = registration(grid_id);
+        registration.render_quantum_frames = NonZeroUsize::new(64);
+        registration.response_budget_frames = NonZeroUsize::new(441);
 
         assert!(matches!(
-            run_cmd(&mut state, command),
-            Reply::Err(SessionError::BufferGeometry(
+            run_host_cmd(&mut state, HostCmd::Attach { registration }),
+            HostReply::Err(PlayError::Session(SessionError::BufferGeometry(
                 BufferGeometryError::BudgetExceeded {
                     max_block_frames: 512,
                     render_quantum_frames: 64,
                     required_frames: 639,
                     budget_frames: 441,
                 }
-            ))
+            )))
         ));
-        assert!(!deck_by_player_id(&state, player_id).started());
+        assert_eq!(deck_count(&state), 0);
+        assert!(!state.root.holds(grid_id));
+        assert!(
+            state.ctx.is_none(),
+            "a refused deck leaves no output running"
+        );
     }
 
     #[kithara::test]
@@ -929,12 +887,7 @@ mod tests {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
-        let player_id = register_player(&mut state);
-
-        assert!(matches!(
-            run_cmd(&mut state, start_command(player_id),),
-            Reply::PlayerStarted(..)
-        ));
+        insert(&mut state);
         assert!(matches!(
             state.root_view.sample_rate(),
             SessionSampleRate {
@@ -992,12 +945,7 @@ mod tests {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
-        let player_id = register_player(&mut state);
-
-        assert!(matches!(
-            run_cmd(&mut state, start_command(player_id),),
-            Reply::PlayerStarted(..)
-        ));
+        insert(&mut state);
         assert!(state.ctx.is_some());
         assert!(deck(&state, 0).started());
         assert_eq!(
@@ -1046,12 +994,7 @@ mod tests {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
-        let player_id = register_player(&mut state);
-
-        assert!(matches!(
-            run_cmd(&mut state, start_command(player_id)),
-            Reply::PlayerStarted(..)
-        ));
+        insert(&mut state);
         assert_eq!(
             route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
             1
@@ -1125,12 +1068,7 @@ mod tests {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
-        let player_id = register_player(&mut state);
-
-        assert!(matches!(
-            run_cmd(&mut state, start_command(player_id),),
-            Reply::PlayerStarted(..)
-        ));
+        insert(&mut state);
         assert_eq!(
             route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
             1
@@ -1171,13 +1109,6 @@ mod tests {
         assert!(deck(&state, 0).started());
     }
 
-    fn start_player_cmd(state: &mut TestState, player_id: u64) {
-        assert!(matches!(
-            run_cmd(&mut *state, start_command(player_id),),
-            Reply::PlayerStarted(..)
-        ));
-    }
-
     fn mix_tap_writer(drops: &Arc<AtomicU64>) -> MixTapWriter {
         const TAP_CAPACITY: usize = 1_024;
 
@@ -1190,8 +1121,7 @@ mod tests {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
-        let id = register_player(&mut state);
-        start_player_cmd(&mut state, id);
+        let id = insert(&mut state);
 
         let drops = Arc::new(AtomicU64::new(0));
         let mut outputs = OutputGroup::new();
@@ -1244,10 +1174,7 @@ mod tests {
             "the output tap takes its own group beside the master tap"
         );
 
-        assert!(matches!(
-            run_cmd(&mut state, Cmd::StopPlayer { player_id: id }),
-            Reply::Ok
-        ));
+        remove(&mut state, id);
         assert!(state.session_limiter_node_id.is_none());
         assert!(
             state.taps.slot(Tap::Master).is_none() && state.taps.slot(Tap::Output).is_none(),
@@ -1260,8 +1187,7 @@ mod tests {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
-        let id = register_player(&mut state);
-        start_player_cmd(&mut state, id);
+        let id = insert(&mut state);
         assert!(matches!(
             run_host_cmd(
                 &mut state,
@@ -1277,16 +1203,13 @@ mod tests {
             "the change waits for a block that never renders"
         );
 
-        assert!(matches!(
-            run_cmd(&mut state, Cmd::StopPlayer { player_id: id }),
-            Reply::Ok
-        ));
+        remove(&mut state, id);
         assert!(
             state.settings.config().metronome().enabled(),
             "the teardown folds the change in flight into the settings"
         );
 
-        start_player_cmd(&mut state, id);
+        insert(&mut state);
         let block = state
             .stream
             .as_mut()
@@ -1334,8 +1257,7 @@ mod tests {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
-        let id = register_player(&mut state);
-        start_player_cmd(&mut state, id);
+        insert(&mut state);
         configure_sample_rate(&mut state, 48_000);
         let enable = HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(true));
         assert!(matches!(configure_next(&mut state, enable), HostReply::Ok));
@@ -1372,8 +1294,7 @@ mod tests {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
-        let id = register_player(&mut state);
-        start_player_cmd(&mut state, id);
+        insert(&mut state);
         let mut clock = 0;
         let mut applied = state.settings.config().metronome().level();
         for step in 0..2 * host_queue_capacity() {
@@ -1397,8 +1318,7 @@ mod tests {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
-        let id = register_player(&mut state);
-        start_player_cmd(&mut state, id);
+        insert(&mut state);
         let capacity = host_queue_capacity();
         for step in 0..capacity {
             assert!(
@@ -1447,8 +1367,7 @@ mod tests {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
-        let id = register_player(&mut state);
-        start_player_cmd(&mut state, id);
+        insert(&mut state);
         let session_output = state
             .session_output_node_id
             .expect("the session output runs");
@@ -1496,25 +1415,20 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_player_attached_after_an_idle_teardown_stops_through_the_next_one() {
+    fn a_deck_attached_after_an_idle_teardown_leaves_through_the_next_one() {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
-        let first = register_player(&mut state);
-        start_player_cmd(&mut state, first);
-        assert!(matches!(
-            run_cmd(&mut state, Cmd::StopPlayer { player_id: first }),
-            Reply::Ok
-        ));
+        let first = insert(&mut state);
+        remove(&mut state, first);
 
-        let second = register_player(&mut state);
-        start_player_cmd(&mut state, second);
-        match run_cmd(&mut state, Cmd::StopPlayer { player_id: second }) {
-            Reply::Ok => {}
-            Reply::Err(error) => {
-                panic!("a player that joined after a route boundary must follow the next: {error}")
+        let second = insert(&mut state);
+        match run_host_cmd(&mut state, HostCmd::Detach { grid_id: second }) {
+            HostReply::Ok => {}
+            HostReply::Err(error) => {
+                panic!("a deck that joined after a route boundary must follow the next: {error}")
             }
-            _ => panic!("stop returned an unexpected reply"),
+            _ => panic!("detach returned an unexpected reply"),
         }
     }
 
@@ -1523,21 +1437,17 @@ mod tests {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
-        let id = register_player(&mut state);
-        start_player_cmd(&mut state, id);
+        let id = insert(&mut state);
         assert!(
             state.session_limiter_node_id.is_some(),
             "limiter node exists after start"
         );
 
-        assert!(matches!(
-            run_cmd(&mut state, Cmd::StopPlayer { player_id: id }),
-            Reply::Ok
-        ));
+        remove(&mut state, id);
         assert!(state.session_limiter_node_id.is_none());
         assert!(state.session_output_node_id.is_none());
 
-        start_player_cmd(&mut state, id);
+        insert(&mut state);
         assert!(
             state.session_limiter_node_id.is_some(),
             "route recreate rebuilds the limiter node"

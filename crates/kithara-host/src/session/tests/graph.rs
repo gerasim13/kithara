@@ -5,7 +5,6 @@ use kithara_bufpool::HasPool;
 use kithara_command::Live;
 use kithara_effects::LimiterConfig;
 use kithara_play::SessionTransportSnapshot;
-#[cfg(test)]
 use kithara_test_utils::bufpool::TestPools;
 use kithara_warp::BeatGridId;
 
@@ -47,12 +46,7 @@ where
     }
 
     #[must_use]
-    pub(crate) fn exec(&mut self, cmd: Cmd<S>) -> Reply {
-        if let Cmd::RegisterPlayer { grid_id, .. } = &cmd
-            && !self.state.root.holds(*grid_id)
-        {
-            attach_player_with_id(&mut self.state, *grid_id);
-        }
+    pub(crate) fn exec(&mut self, cmd: Cmd) -> Reply {
         run_cmd(&mut self.state, cmd)
     }
 
@@ -116,25 +110,16 @@ where
     )
 }
 
+/// A Host root holding no deck yet, with its view.
 #[cfg(test)]
-pub(crate) fn attach_player<T>(state: &mut SessionState<T, TestPools>) -> BeatGridId {
-    let grid_id = BeatGridId::allocate().expect("fixture player grid id");
-    attach_player_with_id(state, grid_id);
-    grid_id
-}
-
-#[cfg(test)]
-pub(crate) fn root_with_player(sample_rate: NonZeroU32) -> (HostRoot, RootView, BeatGridId) {
+pub(crate) fn empty_root(sample_rate: NonZeroU32) -> (HostRoot, RootView) {
     let host_grid_id = BeatGridId::allocate().expect("fixture host grid id");
-    let mut root = HostRoot::new(host_grid_id, sample_rate);
-    let player_grid_id = BeatGridId::allocate().expect("fixture player grid id");
-    root.attach(player_grid_id)
-        .expect("fixture player attachment");
+    let root = HostRoot::new(host_grid_id, sample_rate);
     let root_view = RootView::new(
         &root,
         HostSettings::builder().sample_rate(sample_rate).build(),
     );
-    (root, root_view, player_grid_id)
+    (root, root_view)
 }
 
 /// Brings the Host grid up to what the render graph committed, then reads
@@ -147,12 +132,4 @@ pub(crate) fn committed_transport<T, S>(
         return None;
     }
     state.transport_control.as_mut()?.observation().snapshot()
-}
-
-fn attach_player_with_id<T, S>(state: &mut SessionState<T, S>, grid_id: BeatGridId) {
-    state
-        .root
-        .attach(grid_id)
-        .expect("fixture player attachment");
-    state.publish_root();
 }

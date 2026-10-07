@@ -206,38 +206,34 @@ mod tests {
     /// The deck's slot is built with the deck: a player takes it without asking the session.
     #[kithara::test]
     fn a_player_takes_its_deck_slot_without_asking_the_session() {
-        let (session, audio_thread) = mock::session_with_mock();
-        let player = PlayerImpl::new(
+        let mut player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(mock::SAMPLE_RATE)
                 .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-                .session(session)
                 .build(),
         );
-        player
-            .ensure_engine_started()
-            .expect("engine start must succeed");
+        let audio_thread = mock::insert(&mut player);
 
         player.ensure_slot().expect("the deck's slot is handed out");
 
-        assert_eq!(audio_thread.asked(), ["register", "start"]);
+        assert!(
+            audio_thread.asked().is_empty(),
+            "{:?}",
+            audio_thread.asked()
+        );
     }
 
     /// An EQ gain is the deck's: a slot is handed the layout when it is taken, and a band cut
     /// goes to that slot's ring.
     #[kithara::test]
     fn an_eq_cut_rides_the_deck_not_the_session() {
-        let (session, audio_thread) = mock::session_with_mock();
-        let player = PlayerImpl::new(
+        let mut player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(mock::SAMPLE_RATE)
                 .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-                .session(session)
                 .build(),
         );
-        player
-            .ensure_engine_started()
-            .expect("engine start must succeed");
+        let audio_thread = mock::insert(&mut player);
         player.ensure_slot().expect("slot allocation must succeed");
 
         player.set_eq_gain(1, -12.0).expect("band 1 exists");

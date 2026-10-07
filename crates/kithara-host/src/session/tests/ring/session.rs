@@ -12,7 +12,7 @@ use kithara_platform::{
     thread::{JoinHandle, spawn_named},
 };
 use kithara_play::{
-    Cmd, PlayError, Reply, SessionDispatcher, SessionError, SessionSampleRate,
+    Cmd, DeckRegistration, PlayError, Reply, SessionDispatcher, SessionError, SessionSampleRate,
     SessionTransportSnapshot, StreamShape,
 };
 use kithara_test_utils::{
@@ -98,7 +98,7 @@ pub(crate) enum RingSessionError {
 
 enum RingMsg {
     Cmd {
-        cmd: Cmd<TestPools>,
+        cmd: Cmd,
         reply_tx: mpsc::Sender<Reply>,
     },
     Host {
@@ -197,7 +197,7 @@ impl ManualRingSession {
     }
 
     /// Synchronous command-reply bridge; call from a blocking control thread.
-    pub(crate) fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, RingSessionError> {
+    pub(crate) fn exec(&self, cmd: Cmd) -> Result<Reply, RingSessionError> {
         self.ensure_available()?;
         let (reply_tx, reply_rx) = mpsc::channel();
         let Some(cmd_tx) = self.cmd_tx.lock().clone() else {
@@ -367,7 +367,7 @@ impl SessionDispatcher<TestPools> for ManualRingSession {
         ConsumerWakeMode::RealtimeDeferred
     }
 
-    fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
+    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
         Self::exec(self, cmd).map_err(|error| PlayError::Internal(error.to_string()))
     }
 
@@ -442,24 +442,17 @@ fn bootstrap(
     state: &mut GraphSession<RingBackend, TestPools>,
     setup: RingSetup,
 ) -> Result<(), RingSessionError> {
-    let player_id = match state.exec(Cmd::RegisterPlayer {
-        grid_id: BeatGridId::allocate().map_err(RingSessionError::GridId)?,
-        bus: EventBus::default(),
-        mixer: kithara_play::DeckMixerConfig::default(),
-        pools: pools(),
-    }) {
-        Reply::PlayerRegistered(player_id) => player_id,
-        Reply::Err(error) => return Err(error.into()),
-        _ => return Err(RingSessionError::Protocol("register anchor player reply")),
-    };
-    match state.exec(Cmd::StartPlayer {
-        player_id,
-        render_quantum_frames: None,
-        response_budget_frames: NonZeroUsize::new(448),
-    }) {
-        Reply::PlayerStarted(..) => {}
-        Reply::Err(error) => return Err(error.into()),
-        _ => return Err(RingSessionError::Protocol("start anchor player reply")),
+    let mut registration = DeckRegistration::new(
+        BeatGridId::allocate()?,
+        EventBus::default(),
+        pools(),
+        kithara_play::DeckMixerConfig::default(),
+    );
+    registration.response_budget_frames = NonZeroUsize::new(448);
+    match state.exec_host(HostCmd::Attach { registration }) {
+        HostReply::Attached(_) => {}
+        HostReply::Err(error) => return Err(RingSessionError::Setup(error.to_string())),
+        _ => return Err(RingSessionError::Protocol("attach anchor deck reply")),
     }
     let ctx = state.ctx_mut().ok_or(RingSessionError::NotStarted)?;
     setup(ctx)

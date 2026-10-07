@@ -74,8 +74,9 @@ to the single `decoder` field.
 
 ## Integration
 
-- **Lifecycle:** start the engine, which builds the deck's slot, attach a
-  player item, play, then stop the engine, which drops the slot.
+- **Lifecycle:** a Host seats the deck on the slot it builds as it takes the
+  deck; attach a player item and play; the Host drops the slot as it hands the
+  deck back.
 - **Configuration:** `PlayerConfig`, `EngineConfig`, and `ResourceConfig` expose
   builders while their fields remain crate-private.
 - **Tempo and key-lock:** `PlayerConfig::builder().warp(...)` supplies the

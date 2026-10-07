@@ -10,7 +10,7 @@ use crate::{
     bridge::PlaybackShared,
     session::{
         dispatch::drain_host_channel,
-        protocol::{HostCmdMsg, HostReply, Reply},
+        protocol::{HostCmdMsg, HostReply},
         state::ensure_ctx,
     },
 };
@@ -50,7 +50,7 @@ pub(crate) fn tick_and_poll_remote<S>(
     }
 
     drain_host_channel(state, rx, |reply| {
-        if let HostReply::Play(Reply::PlayerStarted(started)) = reply {
+        if let HostReply::Attached(started) = reply {
             BRIDGE_PLAYBACK.with(|playback| {
                 *playback.borrow_mut() = Some(Arc::clone(&started.control.playback));
             });

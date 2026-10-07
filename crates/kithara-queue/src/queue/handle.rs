@@ -287,10 +287,6 @@ where
         self.call(QueueCommand::Tick)?
     }
 
-    pub(super) fn prepare(&self) -> Result<(), PlayError> {
-        self.call(QueueCommand::Prepare)?
-    }
-
     /// Posts the command `command` builds around its reply and waits for the
     /// answer; a queue that was dropped answers nothing.
     fn call<T>(&self, command: impl FnOnce(Reply<T>) -> QueueCommand<S>) -> Result<T, PlayError> {

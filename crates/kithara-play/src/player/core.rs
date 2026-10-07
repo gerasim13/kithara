@@ -7,7 +7,7 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_render::{bridge::DeckPart, rt::track::PlayerResource};
-use tracing::{debug, warn};
+use tracing::debug;
 
 use super::{
     PlayerConfig,
@@ -94,11 +94,8 @@ impl<S> PlayerRuntime<S> {
             CloseAdmission::AlreadyClosed => return Ok(()),
             CloseAdmission::Begin => {}
         }
-        if let Err(error) = self.core.engine.close() {
-            self.reopen_controls();
-            return Err(error);
-        }
         self.finish_close();
+        self.core.engine.close();
         Ok(())
     }
 
@@ -172,7 +169,7 @@ impl<S> PlayerRuntime<S> {
         self.core.engine.cancel();
     }
 
-    /// Drop every track the deck holds and stop the engine.
+    /// Drop every track the deck holds.
     ///
     /// Also clears any held start position, since the item it targeted no
     /// longer exists once the deck is empty.
@@ -185,13 +182,6 @@ impl<S> PlayerRuntime<S> {
         self.set_status(PlayerStatus::Unknown);
         *self.core.start_position.lock() = None;
         let _ = self.send_to_slot(DeckPart::Clear);
-
-        if self.core.engine.is_running()
-            && let Err(error) = self.core.engine.stop()
-        {
-            warn!(?error, "failed to stop player engine");
-        }
-
         self.enter_stopped();
         self.core
             .engine
@@ -239,8 +229,6 @@ impl<S> PlayerRuntime<S> {
         to self.lifecycle {
             fn begin_close(&self) -> Result<CloseAdmission, PlayError>;
             fn finish_close(&self);
-            #[call(reopen)]
-            fn reopen_controls(&self);
             pub(crate) fn is_closed(&self) -> bool;
         }
         to self.core.config.worker {
@@ -250,6 +238,7 @@ impl<S> PlayerRuntime<S> {
         }
     }
 }
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
@@ -270,7 +259,7 @@ mod tests {
     use super::{super::PlayerImpl, *};
     use crate::{
         PlayWorker, PlayWorkerConfig, mock,
-        player::{PlayerConfig, PlayerConfigPatch},
+        player::{PlayerConfig, PlayerConfigPatch, PlayerControlSource},
         resource::{ResourceConfig, ResourceSrc},
         test_pools::{TestPools, pools},
     };
@@ -295,6 +284,18 @@ mod tests {
                 .session(mock::session())
                 .build(),
         )
+    }
+
+    /// A player its Host has seated on a deck slot.
+    fn seated() -> PlayerImpl<TestPools> {
+        let mut player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(mock::SAMPLE_RATE)
+                .worker(worker())
+                .build(),
+        );
+        mock::insert(&mut player);
+        player
     }
 
     #[kithara::test(native)]
@@ -443,8 +444,6 @@ mod tests {
             .expect("BUG: lifecycle probe thread panicked");
         assert!(matches!(result, Err(PlayError::Closed)));
 
-        lifecycle.reopen();
-        assert!(matches!(lifecycle.begin_close(), Ok(CloseAdmission::Begin)));
         lifecycle.finish_close();
         assert!(matches!(
             lifecycle.begin_close(),
@@ -573,18 +572,13 @@ mod tests {
     }
 
     #[kithara::test]
-    fn remove_all_items_releases_output_state_and_allows_fresh_playback() {
-        let player = player();
+    fn remove_all_items_releases_the_slot_and_allows_fresh_playback() {
+        let player = seated();
         player.play();
-        assert!(player.engine().is_running(), "setup must start the engine");
-        assert!(player.slot().is_some(), "setup must allocate a slot");
+        assert!(player.slot().is_some(), "setup must take the deck's slot");
 
         player.remove_all_items();
 
-        assert!(
-            !player.engine().is_running(),
-            "remove_all_items must stop the engine"
-        );
         assert!(
             player.slot().is_none(),
             "remove_all_items must release slot ownership"
@@ -594,11 +588,7 @@ mod tests {
 
         player.play();
 
-        assert!(
-            player.engine().is_running(),
-            "play must restart the stopped engine"
-        );
-        assert!(player.slot().is_some(), "play must allocate a fresh slot");
+        assert!(player.slot().is_some(), "play must take the slot again");
         player.remove_all_items();
     }
 
@@ -618,19 +608,18 @@ mod tests {
     }
 
     #[kithara::test]
-    fn prebound_session_rejects_a_player_built_for_another_sample_rate() {
-        let player = PlayerImpl::new(
+    fn a_session_at_another_rate_refuses_the_player() {
+        let mut player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(mock::SAMPLE_RATE)
                 .worker(worker())
-                .session(mock::session_at(
-                    NonZeroU32::new(48_000).expect("48000 is not zero"),
-                ))
                 .build(),
         );
 
         assert!(matches!(
-            player.core.engine.start(),
+            player.attach_session(mock::session_at(
+                NonZeroU32::new(48_000).expect("48000 is not zero"),
+            )),
             Err(PlayError::SessionSampleRateMismatch {
                 player: 44_100,
                 session: 48_000,

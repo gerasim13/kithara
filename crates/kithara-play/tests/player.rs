@@ -53,7 +53,7 @@ fn player_basic_behaviors(#[case] scenario: PlayerBasicScenario) {
             assert_eq!(player.current_item(), None);
         }
         PlayerBasicScenario::EngineAccessor => {
-            assert!(!player.engine().is_running());
+            assert!(player.engine().slot().is_none());
         }
     }
 }
@@ -287,7 +287,7 @@ fn a_player_binds_only_the_first_session_and_registers_its_deck_there() {
 
     let deck = PlayerControlSource::attach_session(&mut player, mock::session())
         .expect("the first session binds the player");
-    assert_eq!(deck, grid_id);
+    assert_eq!(deck.grid_id, grid_id);
     assert!(
         matches!(
             PlayerControlSource::attach_session(&mut player, mock::session()),
@@ -345,7 +345,7 @@ fn selecting_an_item_the_deck_lacks_without_a_resource_is_refused() {
 }
 
 #[kithara::test]
-fn select_rejects_invalid_crossfade_before_engine_side_effects() {
+fn select_rejects_an_invalid_crossfade() {
     let player = player();
     let err = player
         .select_with_crossfade(
@@ -365,7 +365,6 @@ fn select_rejects_invalid_crossfade_before_engine_side_effects() {
         PlayError::InvalidParameter { ref name, value }
             if name == "crossfade.duration" && value == -1.0
     ));
-    assert!(!player.engine().is_running());
 }
 
 /// A player with nothing loaded still owns the position it is handed;

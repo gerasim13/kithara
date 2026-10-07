@@ -310,8 +310,11 @@ pub(crate) mod tests {
             .build()
     }
 
+    /// A queue the mock session holds, seated the way a Host's insert seats it.
     pub(in crate::queue) fn make_queue() -> Queue<TestPools> {
-        Queue::new(queue_config())
+        let mut queue = Queue::new(queue_config());
+        kithara_play::mock::insert(&mut queue);
+        queue
     }
 
     pub(crate) fn test_session() -> SessionBinding<TestPools> {
@@ -332,7 +335,6 @@ pub(crate) mod tests {
             PlayerConfig::builder()
                 .sample_rate(consts::TEST_SAMPLE_RATE)
                 .worker(worker)
-                .session(test_session())
                 .build(),
         )
     }
@@ -380,7 +382,7 @@ pub(crate) mod tests {
         let deck = queue
             .attach_session(test_session())
             .expect("the queue binds its session");
-        assert_eq!(deck, grid_id);
+        assert_eq!(deck.grid_id, grid_id);
     }
 
     /// A holder's waker that reports each wake.

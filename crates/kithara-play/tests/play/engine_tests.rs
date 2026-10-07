@@ -18,7 +18,7 @@ use crate::support::SAMPLE_RATE;
 struct FixtureSession;
 
 impl SessionDispatcher<TestPools> for FixtureSession {
-    fn exec(&self, _cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
+    fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
         Ok(Reply::Ok)
     }
 
@@ -52,12 +52,6 @@ fn make_engine() -> EngineImpl<TestPools> {
     )
 }
 
-#[derive(Clone, Copy)]
-enum EngineInitialScenario {
-    NoSlot,
-    NotRunning,
-}
-
 #[kithara::test]
 fn engine_config_defaults() {
     let engine = make_engine();
@@ -68,7 +62,6 @@ fn engine_config_defaults() {
 fn engine_config_builder() {
     let config = EngineConfig::builder()
         .grid_id(BeatGridId::allocate().expect("fixture grid id"))
-        .session(SessionBinding::new(Arc::new(FixtureSession), SAMPLE_RATE))
         .sample_rate(NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"))
         .channels(1)
         .eq_layout(kithara_effects::eq::generate_log_spaced_bands(5))
@@ -76,19 +69,12 @@ fn engine_config_builder() {
         .response_budget_frames(response_budget())
         .build();
     let engine = EngineImpl::new(config, EventBus::default());
-    assert!(!engine.is_running());
     assert_eq!(engine.master_sample_rate(), 48000);
 }
 
 #[kithara::test]
-#[case(EngineInitialScenario::NotRunning)]
-#[case(EngineInitialScenario::NoSlot)]
-fn engine_initial_state(#[case] scenario: EngineInitialScenario) {
-    let engine = make_engine();
-    match scenario {
-        EngineInitialScenario::NotRunning => assert!(!engine.is_running()),
-        EngineInitialScenario::NoSlot => assert!(engine.slot().is_none()),
-    }
+fn an_engine_holds_no_slot_until_its_host_seats_it() {
+    assert!(make_engine().slot().is_none());
 }
 
 #[kithara::test]
@@ -98,16 +84,9 @@ fn engine_subscribe_works() {
 }
 
 #[kithara::test]
-fn engine_stop_while_not_running_returns_error() {
-    let engine = make_engine();
-    assert!(matches!(engine.stop(), Err(PlayError::EngineNotRunning)));
-}
-
-#[kithara::test]
-fn engine_master_sample_rate_returns_config_when_stopped() {
+fn engine_master_sample_rate_returns_config_until_a_host_takes_it() {
     let config = EngineConfig::builder()
         .grid_id(BeatGridId::allocate().expect("fixture grid id"))
-        .session(SessionBinding::new(Arc::new(FixtureSession), SAMPLE_RATE))
         .sample_rate(NonZeroU32::new(48_000).expect("fixture sample rate is non-zero"))
         .pools(pools())
         .response_budget_frames(response_budget())

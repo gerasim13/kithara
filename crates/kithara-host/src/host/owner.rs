@@ -105,8 +105,9 @@ pub(super) struct SessionRoot {
 }
 
 impl<S> Host<S> {
-    /// Binds `player` to this Host's session, answering the identity its deck
-    /// registered under and its control.
+    /// Binds `player` to this Host's session and starts its deck there,
+    /// seating the player on the slot the session built. Answers the identity
+    /// its deck registered under and its control.
     pub(super) fn bind_player<P>(
         &self,
         player: &mut P,
@@ -115,10 +116,13 @@ impl<S> Host<S> {
         P: PlayerControlSource<Schema = S>,
     {
         let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
-        let grid_id = player.attach_session(SessionBinding::new(
+        let registration = player.attach_session(SessionBinding::new(
             dispatcher,
             self.settings().sample_rate(),
         ))?;
+        let grid_id = registration.grid_id;
+        let slot = self.dispatcher.attach(registration)?;
+        player.seat(slot);
         Ok((grid_id, player.control()))
     }
 
@@ -139,7 +143,7 @@ impl<S> Host<S> {
         match self.dispatcher.exec_host(cmd).map_err(PlayError::from)? {
             HostReply::Ok => Ok(()),
             HostReply::Err(error) => Err(error),
-            HostReply::Play(_) => Err(PlayError::Internal(format!(
+            HostReply::Play(_) | HostReply::Attached(_) => Err(PlayError::Internal(format!(
                 "unexpected host reply for {what}"
             ))),
         }

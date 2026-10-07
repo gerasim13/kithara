@@ -367,16 +367,13 @@ mod tests {
 
     #[kithara::test]
     fn commit_next_publishes_snapshot_before_current_item_changed() {
-        let player = PlayerImpl::new(
+        let mut player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(mock::SAMPLE_RATE)
                 .worker(worker())
-                .session(mock::session())
                 .build(),
         );
-        player
-            .ensure_engine_started()
-            .expect("engine start must succeed");
+        mock::insert(&mut player);
         player.ensure_slot().expect("slot allocation must succeed");
         let mut rx = player.subscribe();
 
@@ -416,16 +413,13 @@ mod tests {
     /// thread takes it on.
     #[kithara::test]
     fn committed_item_outlives_a_block_the_outgoing_item_was_rendering() {
-        let player = PlayerImpl::new(
+        let mut player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(mock::SAMPLE_RATE)
                 .worker(worker())
-                .session(mock::session())
                 .build(),
         );
-        player
-            .ensure_engine_started()
-            .expect("engine start must succeed");
+        mock::insert(&mut player);
         player.ensure_slot().expect("slot allocation must succeed");
         let next = TrackId::allocate();
         if let Some(pending_slot) = player.phase.lock().pending_mut() {
@@ -454,14 +448,13 @@ mod tests {
     /// plays instead of waiting on a handover that will not happen.
     #[kithara::test]
     fn a_rejected_fade_in_leaves_the_playhead_on_the_playing_item() {
-        let (session, audio_thread) = mock::session_with_mock();
-        let player = PlayerImpl::new(
+        let mut player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(mock::SAMPLE_RATE)
                 .worker(worker())
-                .session(session)
                 .build(),
         );
+        let audio_thread = mock::insert(&mut player);
         let [first, second] = [TrackId::allocate(), TrackId::allocate()];
         player
             .select(first, Some(resource("first")), SelectionPlayback::Play)
@@ -513,14 +506,13 @@ mod tests {
     /// command sent so far taken.
     fn deck_with_armed_successor() -> (PlayerImpl<TestPools>, Arc<mock::SessionMock>, [TrackId; 3])
     {
-        let (session, audio_thread) = mock::session_with_mock();
-        let player = PlayerImpl::new(
+        let mut player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(mock::SAMPLE_RATE)
                 .worker(worker())
-                .session(session)
                 .build(),
         );
+        let audio_thread = mock::insert(&mut player);
         let ids = [
             TrackId::allocate(),
             TrackId::allocate(),

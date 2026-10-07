@@ -10,6 +10,7 @@ use kithara_render::bridge::{NodeInputs, slot_channels};
 pub use crate::api::equalizer::EqualizerMock;
 use crate::{
     PlayError, SlotId, StreamShape,
+    player::PlayerControlSource,
     session::{AllocatedSlot, Cmd, Reply, SessionBinding, SessionDispatcher, SessionSampleRate},
 };
 
@@ -19,10 +20,9 @@ pub const SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
     None => unreachable!(),
 };
 
-/// A session that registers and starts players, building each deck's slot without a graph.
+/// A session that builds each deck's slot without a graph, as a Host's insert would.
 pub struct SessionMock {
     asked: Mutex<Vec<&'static str>>,
-    next_player: AtomicU64,
     next_slot: AtomicU64,
     nodes: Mutex<Vec<NodeInputs>>,
     sample_rate: NonZeroU32,
@@ -34,21 +34,9 @@ impl<S> SessionDispatcher<S> for SessionMock {
         ConsumerWakeMode::RealtimeDeferred
     }
 
-    fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
-        self.asked.lock().push(asked(&cmd));
-        let reply = match cmd {
-            Cmd::RegisterPlayer { .. } => {
-                Reply::PlayerRegistered(self.next_player.fetch_add(1, Ordering::Relaxed))
-            }
-            Cmd::StartPlayer { .. } => {
-                let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
-                let (inputs, control) = slot_channels();
-                self.nodes.lock().push(inputs);
-                Reply::PlayerStarted(Box::new(AllocatedSlot::new(control, slot)))
-            }
-            _ => Reply::Ok,
-        };
-        Ok(reply)
+    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+        self.asked.lock().push(asked(cmd));
+        Ok(Reply::Ok)
     }
 
     fn sample_rate(&self) -> SessionSampleRate {
@@ -58,6 +46,21 @@ impl<S> SessionDispatcher<S> for SessionMock {
     fn stream_shape(&self) -> Option<StreamShape> {
         self.shape
     }
+}
+
+/// Binds `player` to a fresh `SessionMock` and seats it on a deck slot that
+/// mock built, as a Host's insert does.
+///
+/// # Panics
+/// Panics when `player` is already bound to a session.
+pub fn insert<P: PlayerControlSource>(player: &mut P) -> Arc<SessionMock> {
+    let mock = Arc::new(SessionMock::new(None, SAMPLE_RATE));
+    let dispatcher: Arc<dyn SessionDispatcher<P::Schema>> = Arc::clone(&mock) as _;
+    player
+        .attach_session(SessionBinding::new(dispatcher, SAMPLE_RATE))
+        .expect("a fresh player binds to the mock session");
+    mock.seat(player);
+    mock
 }
 
 /// A binding to a fresh `SessionMock` with no stream shape.
@@ -78,22 +81,9 @@ pub fn session_at<S>(sample_rate: NonZeroU32) -> SessionBinding<S> {
     binding(None, sample_rate)
 }
 
-/// A binding to a fresh `SessionMock`, together with that mock standing in
-/// for the audio threads of the slots it builds.
-#[cfg(test)]
-pub(crate) fn session_with_mock<S>() -> (SessionBinding<S>, Arc<SessionMock>) {
-    let mock = Arc::new(SessionMock::new(None, SAMPLE_RATE));
-    let dispatcher: Arc<dyn SessionDispatcher<S>> = Arc::clone(&mock) as _;
-    (SessionBinding::new(dispatcher, SAMPLE_RATE), mock)
-}
-
 /// What the session was asked, by command.
-const fn asked<S>(cmd: &Cmd<S>) -> &'static str {
+const fn asked(cmd: Cmd) -> &'static str {
     match cmd {
-        Cmd::RegisterPlayer { .. } => "register",
-        Cmd::UnregisterPlayer { .. } => "unregister",
-        Cmd::StartPlayer { .. } => "start",
-        Cmd::StopPlayer { .. } => "stop",
         Cmd::Tick => "tick",
     }
 }
@@ -108,10 +98,17 @@ impl SessionMock {
             asked: Mutex::default(),
             shape,
             sample_rate,
-            next_player: AtomicU64::new(1),
             next_slot: AtomicU64::new(0),
             nodes: Mutex::default(),
         }
+    }
+
+    /// Builds a deck slot and seats `player` on it, as a Host's insert does.
+    pub fn seat<P: PlayerControlSource>(&self, player: &mut P) {
+        let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
+        let (inputs, control) = slot_channels();
+        self.nodes.lock().push(inputs);
+        player.seat(AllocatedSlot::new(control, slot));
     }
 
     /// Every command the session was asked, in order.

@@ -49,9 +49,4 @@ impl PlayerLifecycle {
             state: AtomicU8::new(PlayerLifecycleState::Open as u8),
         }
     }
-
-    pub(super) fn reopen(&self) {
-        self.state
-            .store(PlayerLifecycleState::Open as u8, Ordering::Release);
-    }
 }

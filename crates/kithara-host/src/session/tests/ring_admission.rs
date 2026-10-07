@@ -14,8 +14,8 @@ use kithara_events::EventBus;
 use kithara_platform::no_block::force_panic_mode;
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerId, PlayerImpl, Reply, SessionBinding,
-    SessionDispatcher,
+    DeckRegistration, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionBinding,
+    SessionDispatcher, player::PlayerControlSource,
 };
 use kithara_test_utils::{
     bufpool::{TestPools, pools},
@@ -27,7 +27,10 @@ use super::ring::{
     CountingNode, CountingProbe, DeterministicToneNode, ManualRingConfig, ManualRingSession,
     RingRenderError, RingSessionError, fixtures::install_stereo_source,
 };
-use crate::consts;
+use crate::{
+    consts,
+    session::protocol::{HostCmd, HostReply},
+};
 
 fn session_rate() -> NonZeroU32 {
     NonZeroU32::new(consts::RING_ADMISSION_SAMPLE_RATE).expect("test sample rate is non-zero")
@@ -50,64 +53,58 @@ fn tone_session(capacity_blocks: usize) -> ManualRingSession {
     .expect("start manual tone session")
 }
 
-fn expect_ok(reply: Reply) {
-    match reply {
-        Reply::Ok => {}
-        Reply::Err(error) => panic!("session command failed: {error}"),
-        _ => panic!("unexpected session command reply"),
+fn start_deck(session: &ManualRingSession) -> BeatGridId {
+    let grid_id = BeatGridId::allocate().expect("fixture grid id");
+    let mut registration = DeckRegistration::new(
+        grid_id,
+        EventBus::default(),
+        pools(),
+        kithara_play::DeckMixerConfig::default(),
+    );
+    registration.response_budget_frames = NonZeroUsize::new(448);
+    match session
+        .exec_host(HostCmd::Attach { registration })
+        .expect("attach deck command")
+    {
+        HostReply::Attached(_) => grid_id,
+        HostReply::Err(error) => panic!("the session failed to start the deck: {error}"),
+        _ => panic!("unexpected attach reply"),
     }
 }
 
-fn register_started_player(session: &ManualRingSession) -> PlayerId {
-    let player_id = match session
-        .exec(Cmd::RegisterPlayer {
-            grid_id: BeatGridId::allocate().expect("fixture grid id"),
-            bus: EventBus::default(),
-            mixer: kithara_play::DeckMixerConfig::default(),
-            pools: pools(),
-        })
-        .expect("register player command")
+fn remove_deck(session: &ManualRingSession, grid_id: BeatGridId) {
+    match session
+        .exec_host(HostCmd::Detach { grid_id })
+        .expect("detach deck command")
     {
-        Reply::PlayerRegistered(player_id) => player_id,
-        Reply::Err(error) => panic!("register player failed: {error}"),
-        _ => panic!("unexpected register player reply"),
-    };
-    assert!(matches!(
-        session
-            .exec(Cmd::StartPlayer {
-                player_id,
-                render_quantum_frames: None,
-                response_budget_frames: NonZeroUsize::new(448),
-            })
-            .expect("start player command"),
-        Reply::PlayerStarted(..)
-    ));
-    player_id
+        HostReply::Ok => {}
+        HostReply::Err(error) => panic!("the session failed to remove the deck: {error}"),
+        _ => panic!("unexpected detach reply"),
+    }
 }
 
-fn remove_player(session: &ManualRingSession, player_id: PlayerId) {
-    expect_ok(
-        session
-            .exec(Cmd::StopPlayer { player_id })
-            .expect("stop unrelated player command"),
-    );
-    expect_ok(
-        session
-            .exec(Cmd::UnregisterPlayer { player_id })
-            .expect("unregister unrelated player command"),
-    );
-}
-
-fn empty_player(session: &Arc<ManualRingSession>) -> PlayerImpl<TestPools> {
+/// An empty player the session holds, seated the way the Host seats a deck.
+fn seated_player(session: &Arc<ManualRingSession>) -> PlayerImpl<TestPools> {
     let dispatcher: Arc<dyn SessionDispatcher<TestPools>> = session.clone();
-    PlayerImpl::new(
+    let mut player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .crossfade_duration(0.0)
             .sample_rate(session_rate())
-            .session(SessionBinding::new(dispatcher, session_rate()))
             .build(),
-    )
+    );
+    let registration = player
+        .attach_session(SessionBinding::new(dispatcher, session_rate()))
+        .expect("the player binds the session");
+    match session
+        .exec_host(HostCmd::Attach { registration })
+        .expect("attach player command")
+    {
+        HostReply::Attached(slot) => player.seat(*slot),
+        HostReply::Err(error) => panic!("the session refused the player: {error}"),
+        _ => panic!("unexpected attach reply"),
+    }
+    player
 }
 
 #[kithara::test]
@@ -163,9 +160,9 @@ fn constructor_sees_session_rate_and_new_stream_never_fires() {
     .expect("start counting session");
 
     session.credit(1).expect("construct counting node");
-    let unrelated = register_started_player(&session);
+    let unrelated = start_deck(&session);
     session.credit(1).expect("render after graph addition");
-    remove_player(&session, unrelated);
+    remove_deck(&session, unrelated);
     session.credit(1).expect("render after graph removal");
 
     assert_eq!(probe.construction_count(), 1);
@@ -176,9 +173,9 @@ fn constructor_sees_session_rate_and_new_stream_never_fires() {
 #[kithara::test]
 fn backend_starts_exactly_once() {
     let session = ManualRingSession::start(config(3)).expect("start manual ring session");
-    let unrelated = register_started_player(&session);
+    let unrelated = start_deck(&session);
     session.credit(2).expect("render across graph edit");
-    remove_player(&session, unrelated);
+    remove_deck(&session, unrelated);
     session.credit(1).expect("render after graph removal");
 
     assert_eq!(session.start_count().expect("backend start ledger"), 1);
@@ -189,10 +186,7 @@ fn clock_is_monotone_across_pause_and_graph_edits() {
     let session = Arc::new(
         ManualRingSession::start(config(6)).expect("start manual ring session for player"),
     );
-    let player = empty_player(&session);
-    player
-        .ensure_engine_started()
-        .expect("start deterministic player engine");
+    let player = seated_player(&session);
     player
         .ensure_slot()
         .expect("allocate deterministic player slot");
@@ -220,7 +214,7 @@ fn clock_is_monotone_across_pause_and_graph_edits() {
         initial + 3 * u64::from(consts::RING_ADMISSION_BLOCK_FRAMES)
     );
 
-    let unrelated = register_started_player(&session);
+    let unrelated = start_deck(&session);
     assert_eq!(
         session.clock_samples().expect("clock after add"),
         before_edit
@@ -233,7 +227,7 @@ fn clock_is_monotone_across_pause_and_graph_edits() {
         after_add,
         before_edit + u64::from(consts::RING_ADMISSION_BLOCK_FRAMES)
     );
-    remove_player(&session, unrelated);
+    remove_deck(&session, unrelated);
     assert_eq!(
         session.clock_samples().expect("clock after remove"),
         after_add

@@ -56,11 +56,11 @@ impl<S: Send + Sync + 'static> SessionDispatcher<S> for SessionClient<S> {
         ConsumerWakeMode::RealtimeDeferred
     }
 
-    fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
+    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
         match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
             HostReply::Play(reply) => Ok(reply),
             HostReply::Err(error) => Err(error),
-            HostReply::Ok => Err(PlayError::Internal(
+            HostReply::Ok | HostReply::Attached(_) => Err(PlayError::Internal(
                 "unexpected host reply for player session command".into(),
             )),
         }
@@ -253,18 +253,18 @@ mod tests {
     use kithara_effects::LimiterConfig;
     use kithara_events::EventBus;
     use kithara_platform::time::Duration;
-    use kithara_play::DeckMixerConfig;
+    use kithara_play::{DeckMixerConfig, DeckRegistration};
     use kithara_test_utils::{
         bufpool::{TestPools, pools},
         kithara, wait_until,
     };
-    use kithara_warp::BeatGridState;
+    use kithara_warp::{BeatGridId, BeatGridState};
 
     use super::*;
     use crate::{
         HostSettingsChange, MetronomeConfigChange,
         session::tests::{
-            graph::root_with_player,
+            graph::empty_root,
             ring::{MasterRing, RingBackend, RingBackendConfig, RingLayout},
         },
     };
@@ -289,7 +289,7 @@ mod tests {
             .build()
             .expect("test wait runtime");
         let sample_rate = NonZeroU32::new(48_000).expect("test sample rate");
-        let (root, root_view, player_grid_id) = root_with_player(sample_rate);
+        let (root, root_view) = empty_root(sample_rate);
         let (writer, mut reader) = MasterRing::open(512, 4);
         let mut writer = Some(writer);
         let (stream_tx, stream_rx) = mpsc::channel();
@@ -319,25 +319,14 @@ mod tests {
             },
         );
 
-        let player_id = match client.exec(Cmd::RegisterPlayer {
-            grid_id: player_grid_id,
-            bus: EventBus::default(),
-            mixer: DeckMixerConfig::default(),
-            pools: pools(),
-        }) {
-            Ok(Reply::PlayerRegistered(player_id)) => player_id,
-            Ok(Reply::Err(error)) => panic!("register fixture player: {error}"),
-            Err(error) => panic!("register fixture player: {error}"),
-            _ => panic!("unexpected register fixture player reply"),
-        };
-        assert!(matches!(
-            client.exec(Cmd::StartPlayer {
-                player_id,
-                render_quantum_frames: None,
-                response_budget_frames: None,
-            }),
-            Ok(Reply::PlayerStarted(..))
-        ));
+        client
+            .attach(DeckRegistration::new(
+                BeatGridId::allocate().expect("fixture player grid id"),
+                EventBus::default(),
+                pools(),
+                DeckMixerConfig::default(),
+            ))
+            .expect("the session starts the fixture deck");
         let stream = stream_rx.recv().expect("active graph backend");
         stream.lock().arm();
         stream.lock().render_block(0).expect("initial render");

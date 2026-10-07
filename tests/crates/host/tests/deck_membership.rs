@@ -74,16 +74,44 @@ async fn failed_deck_preparation_releases_host_membership() {
         .await
         .expect("host can prepare the next deck");
     host.with(move |host| {
-        assert!(
-            host.output_sample_rate().measured.is_none(),
-            "inserting an idle deck must not start the output stream"
-        );
         deck.set_eq_gain(0, -6.0).expect("configure idle EQ");
         assert_eq!(deck.eq_gain(0), Some(-6.0));
         deck.play();
         assert!(host.output_sample_rate().measured.is_some());
         assert_eq!(deck.eq_gain(0), Some(-6.0));
         deck.pause();
+    })
+    .await;
+    host.close().await;
+}
+
+/// The Host starts a deck as it takes it and stops it as it hands it back, so
+/// the deck's output runs for its whole membership with nothing played.
+#[kithara::test(tokio)]
+async fn a_deck_runs_from_its_insert_to_its_remove() {
+    let region = pools();
+    let host = offline_host(&region).await;
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
+    let deck = host
+        .insert(PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(sample_rate())
+                .worker(worker)
+                .build(),
+        ))
+        .await
+        .expect("the Host takes the deck");
+    host.with(move |host| {
+        assert!(
+            host.output_sample_rate().measured.is_some(),
+            "the Host starts a deck as it takes it"
+        );
+        host.remove(&deck).expect("the Host hands the deck back");
+        assert!(host.is_empty());
+        assert!(
+            host.output_sample_rate().measured.is_none(),
+            "the last deck the Host hands back takes the output with it"
+        );
     })
     .await;
     host.close().await;

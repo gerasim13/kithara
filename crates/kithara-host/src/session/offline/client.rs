@@ -96,11 +96,11 @@ impl<S: Send + Sync + 'static> SessionDispatcher<S> for OfflineSessionClient<S> 
         ConsumerWakeMode::ImmediateOffRt
     }
 
-    fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
+    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
         match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
             HostReply::Play(reply) => Ok(reply),
             HostReply::Err(error) => Err(error),
-            HostReply::Ok => Err(PlayError::Internal(
+            HostReply::Ok | HostReply::Attached(_) => Err(PlayError::Internal(
                 "unexpected offline Host reply for player command".into(),
             )),
         }

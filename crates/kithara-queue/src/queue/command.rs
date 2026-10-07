@@ -84,7 +84,6 @@ where
         call: PlayerCall,
         reply: Reply<Result<(), PlayError>>,
     },
-    Prepare(Reply<Result<(), PlayError>>),
     Close(Reply<Result<(), PlayError>>),
     /// A track's load attempt reports a transition.
     Attempt(AttemptReport),
@@ -171,7 +170,6 @@ where
                 answer(&reply, self.set_crossfade_settings(settings));
             }
             QueueCommand::Player { call, reply } => answer(&reply, self.call_player(call)),
-            QueueCommand::Prepare(reply) => answer(&reply, self.prepare()),
             QueueCommand::Close(reply) => answer(&reply, Player::close(self)),
             QueueCommand::Attempt(report) => self.apply_report(report),
         }

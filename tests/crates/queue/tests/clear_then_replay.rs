@@ -22,11 +22,11 @@ use crate::bufpool_ext::pools;
 
 /// Emptying the queue while it plays must not cost the next track its output.
 ///
-/// `clear` stops the engine and disarms every selection, so what comes after it
-/// starts from the same state a fresh player would — except that the output is
-/// already built. A player that only arms its output on the first start plays
-/// the replacement silently: the track loads, its duration lands, and the
-/// playhead never leaves zero.
+/// `clear` disarms every selection while the Host keeps the deck and its
+/// output, so what comes after it starts from the same state a fresh player
+/// would. A player that only arms its output on its first track plays the
+/// replacement silently: the track loads, its duration lands, and the playhead
+/// never leaves zero.
 #[kithara::test(tokio, timeout(Duration::from_secs(180)))]
 async fn a_cleared_queue_plays_the_track_appended_after_it(
     #[future(awt)] served_mp3: (TestServerHelper, Url),

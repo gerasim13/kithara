@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use kithara_command::When;
 use kithara_events::{EventBus, EventReceiver};
 use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
-use kithara_play::{Cmd, Reply, SessionTransportSnapshot, Tempo};
+use kithara_play::{Cmd, DeckRegistration, Reply, SessionTransportSnapshot, Tempo};
 use kithara_signal::SessionFrame;
 use kithara_test_utils::{bufpool::pools, kithara};
 use kithara_warp::BeatGridId;
@@ -35,18 +35,19 @@ fn expect_ok(reply: Reply) {
 fn register_transport_events(session: &ManualRingSession) -> EventReceiver<TransportEvent> {
     let bus = EventBus::default();
     let events = bus.subscribe();
+    let registration = DeckRegistration::new(
+        BeatGridId::allocate().expect("fixture grid id"),
+        bus,
+        pools(),
+        kithara_play::DeckMixerConfig::default(),
+    );
     match session
-        .exec(Cmd::RegisterPlayer {
-            bus,
-            grid_id: BeatGridId::allocate().expect("fixture grid id"),
-            mixer: kithara_play::DeckMixerConfig::default(),
-            pools: pools(),
-        })
-        .expect("invariant: player registration reaches the session")
+        .exec_host(HostCmd::Attach { registration })
+        .expect("invariant: the deck reaches the session")
     {
-        Reply::PlayerRegistered(_) => events,
-        Reply::Err(error) => panic!("player registration failed: {error}"),
-        _ => panic!("unexpected player registration reply"),
+        HostReply::Attached(_) => events,
+        HostReply::Err(error) => panic!("the session refused the deck: {error}"),
+        _ => panic!("unexpected attach reply"),
     }
 }
 
@@ -73,7 +74,7 @@ fn set_tempo_at(session: &ManualRingSession, beats_per_minute: f64, at: When<Ses
     {
         HostReply::Ok => {}
         HostReply::Err(error) => panic!("tempo command failed: {error}"),
-        HostReply::Play(_) => panic!("unexpected tempo command reply"),
+        _ => panic!("unexpected tempo command reply"),
     }
 }
 

@@ -55,8 +55,8 @@ pub use resource::{
     PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType,
 };
 pub use session::{
-    AllocatedSlot, Cmd, PlayerId, Reply, SessionBinding, SessionDispatcher, SessionError,
-    SessionHandle, SessionSampleRate,
+    AllocatedSlot, Cmd, DeckRegistration, PlayerId, Reply, SessionBinding, SessionDispatcher,
+    SessionError, SessionHandle, SessionSampleRate,
 };
 pub use worker::{
     EngineLoad, EngineLoadSnapshot, LoadRefusal, PlayWorker, PlayWorkerConfig,

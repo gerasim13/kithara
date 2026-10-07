@@ -3,21 +3,11 @@ use std::task::Waker;
 use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    BeatGridId, PlayError, SessionBinding,
+    AllocatedSlot, DeckRegistration, PlayError, SessionBinding,
     player::{Player, PlayerControlSource},
 };
 
 use super::{Queue, QueueControl};
-
-impl<S> Queue<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    pub(super) fn prepare(&self) -> Result<(), PlayError> {
-        self.ensure_open()?;
-        self.player.prepare()
-    }
-}
 
 impl<S> Player for Queue<S>
 where
@@ -63,16 +53,13 @@ where
         }
     }
 
-    fn prepare_control(control: &Self::Control) -> Result<(), PlayError> {
-        control.prepare()
-    }
-
     delegate::delegate! {
         to self.resident {
             fn attach_session(
                 &mut self,
                 binding: SessionBinding<S>,
-            ) -> Result<BeatGridId, PlayError>;
+            ) -> Result<DeckRegistration<S>, PlayError>;
+            fn seat(&mut self, slot: AllocatedSlot);
         }
     }
 }

@@ -85,7 +85,7 @@ where
         ConsumerWakeMode::RealtimeDeferred
     }
 
-    fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
+    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
         match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
             HostReply::Play(reply) => Ok(reply),
             HostReply::Err(error) => Err(error),

@@ -194,7 +194,7 @@ mod tests {
             ConsumerWakeMode::RealtimeDeferred
         }
 
-        fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
+        fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
             if matches!(cmd, Cmd::Tick) {
                 self.0.fetch_add(1, Ordering::Relaxed);
             }
@@ -224,7 +224,8 @@ mod tests {
                 Arc::new(TickCounter(Arc::clone(ticks))),
                 consts::DEFAULT_SAMPLE_RATE,
             ))
-            .expect("the deck binds its session");
+            .expect("the deck binds its session")
+            .grid_id;
         let control = player.control();
         (id, Box::new(player), control)
     }

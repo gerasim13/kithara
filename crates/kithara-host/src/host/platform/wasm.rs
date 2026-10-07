@@ -189,27 +189,22 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     /// Attaches and transfers one fully configured player or decorator into
-    /// this Host, then prepares its graph and initial slot before returning.
-    /// Audio-device setup may block; musical playback remains stopped.
+    /// this Host, which starts its deck before returning: the output runs
+    /// from now until the Host hands its last deck back. Musical playback
+    /// remains stopped.
     ///
     /// # Errors
-    /// Returns an error when binding, attachment, or graph preparation fails.
+    /// Returns an error when binding, attachment, or starting the deck fails.
     pub fn insert<P>(&mut self, mut player: P) -> Result<HostOwned<P>, PlayError>
     where
         P: PlayerControlSource<Schema = S>,
     {
         let decks = Rc::clone(self.session.platform().worker_decks()?);
         let (grid_id, control) = self.bind_player(&mut player)?;
-        self.dispatcher.attach(grid_id)?;
         let mut deck: Deck = Box::new(player);
         deck.hold(WorkerWake::waker(&decks, grid_id));
         decks.borrow_mut().hold(grid_id, deck);
-        let owned = self.owned::<P>(grid_id, control);
-        if let Err(error) = P::prepare_control(owned.control()) {
-            self.remove(&owned)?;
-            return Err(error);
-        }
-        Ok(owned)
+        Ok(self.owned::<P>(grid_id, control))
     }
 
     pub(crate) fn register_remote_route(&self, route: Arc<HostRoute<S>>) {
@@ -236,8 +231,8 @@ where
         (self.id, self.root_view.clone())
     }
 
-    /// Closes the deck where the Host holds it, detaches it after graph
-    /// unregistration has completed, then drops it.
+    /// Closes the deck where the Host holds it, stops it and detaches it
+    /// from the session, then drops it.
     ///
     /// # Errors
     /// Returns an error when close or canonical detachment fails.
@@ -293,7 +288,7 @@ mod tests {
             ConsumerWakeMode::RealtimeDeferred
         }
 
-        fn exec(&self, _cmd: Cmd<S>) -> Result<Reply, PlayError> {
+        fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
             Ok(Reply::Ok)
         }
 
@@ -372,7 +367,7 @@ mod tests {
         delegate! {
             to &self.session {
                 #[through(SessionDispatcher::<TestPools>)]
-                fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError>;
+                fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
                 #[through(SessionDispatcher::<TestPools>)]
                 fn consumer_wake_mode(&self) -> ConsumerWakeMode;
                 #[through(SessionDispatcher::<TestPools>)]

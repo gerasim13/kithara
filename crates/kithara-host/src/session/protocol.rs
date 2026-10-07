@@ -4,7 +4,8 @@ use kithara_output::OutputGroup;
 use kithara_platform::sync::mpsc;
 use kithara_play::PlayError;
 pub(crate) use kithara_play::{
-    AllocatedSlot, Cmd, PlayerId, Reply, SessionDispatcher, SessionError, SessionSampleRate,
+    AllocatedSlot, Cmd, DeckRegistration, PlayerId, Reply, SessionDispatcher, SessionError,
+    SessionSampleRate,
 };
 use kithara_signal::SessionFrame;
 use kithara_warp::BeatGridId;
@@ -18,9 +19,9 @@ pub(crate) type StartStreamFn<T> =
     Box<dyn FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static>;
 
 pub(crate) enum HostCmd<S> {
-    Play(Cmd<S>),
+    Play(Cmd),
     Attach {
-        grid_id: BeatGridId,
+        registration: DeckRegistration<S>,
     },
     Detach {
         grid_id: BeatGridId,
@@ -46,6 +47,8 @@ pub(crate) enum HostCmd<S> {
 
 pub(crate) enum HostReply {
     Play(Reply),
+    /// The session took the deck and built the slot it plays through.
+    Attached(Box<AllocatedSlot>),
     Ok,
     Err(PlayError),
 }
@@ -89,14 +92,22 @@ impl<S> From<HostDispatchError<S>> for (PlayError, Option<Box<HostCmd<S>>>) {
 }
 
 pub(crate) trait HostDispatcher<S>: SessionDispatcher<S> {
-    /// Adds one deck to the session on its owner thread.
-    fn attach(&self, grid_id: BeatGridId) -> Result<(), PlayError> {
-        change_members(self, HostCmd::Attach { grid_id })
+    /// Adds one deck to the session on its owner thread and starts it there,
+    /// answering the slot the deck plays through.
+    fn attach(&self, registration: DeckRegistration<S>) -> Result<AllocatedSlot, PlayError> {
+        match change_members(self, HostCmd::Attach { registration })? {
+            HostReply::Attached(slot) => Ok(*slot),
+            _ => owner_thread_fail_fast("unexpected attach reply"),
+        }
     }
 
-    /// Removes the deck `grid_id` from the session on its owner thread.
+    /// Stops the deck `grid_id` and removes it from the session on its owner
+    /// thread.
     fn detach(&self, grid_id: BeatGridId) -> Result<(), PlayError> {
-        change_members(self, HostCmd::Detach { grid_id })
+        match change_members(self, HostCmd::Detach { grid_id })? {
+            HostReply::Ok => Ok(()),
+            _ => owner_thread_fail_fast("unexpected detach reply"),
+        }
     }
 
     fn exec_host(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>>;
@@ -105,13 +116,13 @@ pub(crate) trait HostDispatcher<S>: SessionDispatcher<S> {
 /// Runs one membership change on the owner thread. A change that never
 /// reached it fails with the reason; one the owner took and never answered
 /// leaves the deck's ownership unknown, so the process stops.
-fn change_members<S, D>(dispatcher: &D, cmd: HostCmd<S>) -> Result<(), PlayError>
+fn change_members<S, D>(dispatcher: &D, cmd: HostCmd<S>) -> Result<HostReply, PlayError>
 where
     D: HostDispatcher<S> + ?Sized,
 {
     match dispatcher.exec_host(cmd) {
-        Ok(HostReply::Ok) => Ok(()),
         Ok(HostReply::Err(error)) => Err(error),
+        Ok(reply) => Ok(reply),
         Err(error) => {
             let (reason, command) = error.into();
             if command.is_some() {
@@ -119,7 +130,6 @@ where
             }
             owner_thread_fail_fast(&reason)
         }
-        Ok(HostReply::Play(_)) => owner_thread_fail_fast("unexpected membership reply"),
     }
 }
 

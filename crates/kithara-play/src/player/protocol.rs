@@ -2,10 +2,9 @@ use std::task::Waker;
 
 use kithara_bufpool::HasPool;
 use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
-use kithara_warp::BeatGridId;
 
 use super::{PlayerImpl, PlayerRuntime};
-use crate::{PlayError, SessionBinding};
+use crate::{AllocatedSlot, DeckRegistration, PlayError, SessionBinding};
 
 /// What an executor that holds a player or decorator calls on it.
 ///
@@ -44,11 +43,11 @@ pub trait PlayerControlSource: Player {
     type Schema;
 
     /// Attaches the resident Player to its canonical session exactly once and
-    /// returns the identity its deck registers under there.
+    /// returns what its deck registers with there.
     fn attach_session(
         &mut self,
         binding: SessionBinding<Self::Schema>,
-    ) -> Result<BeatGridId, PlayError>;
+    ) -> Result<DeckRegistration<Self::Schema>, PlayError>;
 
     /// Closes the resident player through a previously issued capability.
     fn close_control(control: &Self::Control) -> Result<(), PlayError>;
@@ -56,8 +55,8 @@ pub trait PlayerControlSource: Player {
     /// Creates a command capability for this player.
     fn control(&self) -> Self::Control;
 
-    /// Prepare the attached graph and slot before exposing musical controls.
-    fn prepare_control(control: &Self::Control) -> Result<(), PlayError>;
+    /// Takes the slot the session built for the deck it registered.
+    fn seat(&mut self, slot: AllocatedSlot);
 }
 
 /// A bare player runs its control's commands on the caller, behind its own
@@ -88,9 +87,12 @@ where
     type Control = crate::player::PlayerControl<S>;
     type Schema = S;
 
-    fn attach_session(&mut self, binding: SessionBinding<S>) -> Result<BeatGridId, PlayError> {
+    fn attach_session(
+        &mut self,
+        binding: SessionBinding<S>,
+    ) -> Result<DeckRegistration<S>, PlayError> {
         self.runtime.attach_session(binding)?;
-        Ok(self.grid_id)
+        Ok(self.runtime.core.engine.registration())
     }
 
     fn close_control(control: &Self::Control) -> Result<(), PlayError> {
@@ -101,7 +103,7 @@ where
         self.make_control()
     }
 
-    fn prepare_control(control: &Self::Control) -> Result<(), PlayError> {
-        control.prepare()
+    fn seat(&mut self, slot: AllocatedSlot) {
+        self.runtime.core.engine.seat(slot);
     }
 }

@@ -260,16 +260,13 @@ mod tests {
     /// A started player holding one slot — the slot the phase calls current.
     fn player_with_slot() -> (PlayerImpl<TestPools>, SlotId) {
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
-        let player = PlayerImpl::new(
+        let mut player = PlayerImpl::new(
             PlayerConfig::builder()
                 .sample_rate(mock::SAMPLE_RATE)
                 .worker(worker)
-                .session(mock::session())
                 .build(),
         );
-        player
-            .ensure_engine_started()
-            .expect("engine start must succeed");
+        mock::insert(&mut player);
         let slot = player.ensure_slot().expect("slot allocation must succeed");
         (player, slot)
     }

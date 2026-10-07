@@ -7,21 +7,16 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use kithara_audio::{
     ConsumerWakeMode,
     mock::{MockReader, TestPcmReader},
 };
 use kithara_events::{EventBus, EventReceiver, TrackId};
-use kithara_platform::sync::{Arc, Mutex};
+use kithara_platform::sync::Arc;
 use kithara_play::{
-    AllocatedSlot, Cmd, CrossfadeSettings, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig,
-    PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus, Reply, Resource, SeekOutcome,
-    SelectionPlayback, SessionBinding, SessionDispatcher, SessionSampleRate, SlotId, StreamShape,
-    SuccessorLink,
+    CrossfadeSettings, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent,
+    PlayerImpl, PlayerStatus, Resource, SeekOutcome, SelectionPlayback, SuccessorLink, mock,
 };
-use kithara_render::bridge::slot_channels;
 use kithara_test_fixtures::integration_fixtures::constant_half;
 use kithara_test_utils::{
     bufpool::{TestPools, pools},
@@ -43,73 +38,23 @@ fn make_tagged_resource(
     )
 }
 
-struct FixtureSession {
-    next_player: AtomicU64,
-    next_slot: AtomicU64,
-    nodes: Mutex<Vec<NodeInputs>>,
+/// A player its Host has seated on a deck slot.
+fn make_fixture_player(crossfade_duration: f32) -> PlayerImpl<TestPools> {
+    let mut player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .bus(EventBus::default())
+            .crossfade_duration(crossfade_duration)
+            .sample_rate(SAMPLE_RATE)
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+            .build(),
+    );
+    mock::insert(&mut player);
+    player
 }
 
-impl FixtureSession {
-    fn new() -> Self {
-        Self {
-            next_player: AtomicU64::new(1),
-            next_slot: AtomicU64::new(0),
-            nodes: Mutex::default(),
-        }
-    }
-}
-
-impl SessionDispatcher<TestPools> for FixtureSession {
-    fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
-        let reply = match cmd {
-            Cmd::RegisterPlayer { .. } => {
-                Reply::PlayerRegistered(self.next_player.fetch_add(1, Ordering::Relaxed))
-            }
-            Cmd::StartPlayer { .. } => {
-                let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
-                let (inputs, control) = slot_channels();
-                self.nodes.lock().push(inputs);
-                Reply::PlayerStarted(Box::new(AllocatedSlot::new(control, slot)))
-            }
-            _ => Reply::Ok,
-        };
-        Ok(reply)
-    }
-
-    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::RealtimeDeferred
-    }
-
-    fn sample_rate(&self) -> SessionSampleRate {
-        SessionSampleRate::new(None, SAMPLE_RATE.get())
-    }
-
-    fn stream_shape(&self) -> Option<StreamShape> {
-        None
-    }
-}
-
-fn make_fixture_player(crossfade_duration: f32) -> (PlayerImpl<TestPools>, Arc<FixtureSession>) {
-    let bus = EventBus::default();
-    let session = Arc::new(FixtureSession::new());
-    let player_config = PlayerConfig::builder()
-        .bus(bus)
-        .crossfade_duration(crossfade_duration)
-        .sample_rate(SAMPLE_RATE)
-        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-        .session(SessionBinding::new(
-            Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>,
-            SAMPLE_RATE,
-        ))
-        .build();
-    let player = PlayerImpl::new(player_config);
-    (player, session)
-}
-
-/// A player whose engine and slot are up, holding nothing yet.
+/// A seated player whose slot is up, holding nothing yet.
 fn prepared_player(crossfade_duration: f32) -> PlayerImpl<TestPools> {
-    let (player, _session) = make_fixture_player(crossfade_duration);
-    player.ensure_engine_started().unwrap();
+    let player = make_fixture_player(crossfade_duration);
     player.ensure_slot().unwrap();
     player
 }
@@ -312,8 +257,7 @@ fn arm_next_arms_the_item(constant_half: &'static [u8]) {
 
 #[kithara::test]
 fn seek_seconds_updates_position_optimistically() {
-    let (player, _session) = make_fixture_player(0.0);
-    player.ensure_engine_started().unwrap();
+    let player = make_fixture_player(0.0);
     player.ensure_slot().unwrap();
 
     let outcome = player.seek_seconds(54.689_879_542).expect("seek must land");

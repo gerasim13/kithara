@@ -50,17 +50,6 @@ where
         }
     }
 
-    /// Ensure the audio engine is started.
-    pub fn ensure_engine_started(&self) -> Result<(), PlayError> {
-        if self.core.engine.is_running() {
-            return Ok(());
-        }
-        match self.core.engine.start() {
-            Ok(()) | Err(PlayError::EngineAlreadyRunning) => Ok(()),
-            Err(e) => Err(e),
-        }
-    }
-
     /// Hand `resource` to the deck as `item` and make it the leading track
     /// with `crossfade`, starting where a seek held before it existed.
     fn load_current(
@@ -92,10 +81,6 @@ where
     pub fn play(&self) {
         let rate = self.core.tracks.lock().next().speed();
 
-        if let Err(e) = self.ensure_engine_started() {
-            warn!(?e, "failed to start engine");
-            return;
-        }
         if let Err(e) = self.ensure_slot() {
             warn!(?e, "failed to allocate slot");
             return;
@@ -209,8 +194,9 @@ where
     ///
     /// # Errors
     /// [`PlayError::ItemConsumed`] when no resource came and the deck holds no
-    /// `item`, or the failure to start the engine or load the resource. On
-    /// any error the resource is spent: the item must be loaded again.
+    /// `item`, [`PlayError::EngineNotRunning`] before a Host seats the deck, or
+    /// the failure to load the resource. On any error the resource is spent:
+    /// the item must be loaded again.
     pub fn select_with_crossfade(
         &self,
         item: TrackId,
@@ -227,7 +213,6 @@ where
             return Err(PlayError::ItemConsumed { item });
         }
 
-        self.ensure_engine_started()?;
         self.ensure_slot()?;
 
         let rate = self.core.tracks.lock().next().speed();
