@@ -227,12 +227,12 @@ working.
 
 The server needs RustFS 1.0.1 or later. 1.0.0 answers a bucket quota request
 with 503 for about ten seconds after it reports ready (rustfs/rustfs#8014), so
-a setup started on a fresh stack fails at its first quota.
+a setup started on a fresh stack fails at its first quota request.
 
 The stack is one container. Its image carries RustFS, `rc` and `xtask`, and
 runs `xtask ci cache serve`: it writes the administrator's credentials if
 there are none, starts RustFS as its child, waits for it to answer ready,
-creates each scope's bucket, quota, lifecycle and client key, and then runs the
+creates each scope's bucket, lifecycle and client key, and then runs the
 evictor beside the store. They start and stop together: a stop signal is
 passed to RustFS and waited on, and when either RustFS or the evictor ends,
 the container ends and Docker restarts it. Every start applies the setup
@@ -268,11 +268,14 @@ what a `ListBucket` denial always looks like - so it read as a broken client
 rather than a policy that had never been updated.
 
 Quotas are per scope, written in the host's environment file as a whole number
-of KiB, MiB, GiB or TiB, and handed to the store as bytes each time the stack
-starts. The evictor keeps each bucket under the same number from the same
-file, so a quota changes in the file and takes effect at the next start. One
-set by hand with `rc bucket quota set` parts the store's backstop from the
-evictor's budget until that start puts it back.
+of KiB, MiB, GiB or TiB. The evictor reads them when the stack starts and keeps
+each bucket under its own, so a quota changes in the file and takes effect at
+the next start. The store itself carries none: every start clears any quota a
+bucket has. With a quota, RustFS 1.0.1 passes every write to the bucket through
+one lock and refuses a write that has waited five seconds for it with 503.
+Under the fleet's load that was about ten thousand refused writes a day on the
+Linux store, measured on 2026-10-06; each cost the writer a retry. A quota set
+by hand with `rc bucket quota set` brings that back until the next start.
 
 The two drift, and the drift is the danger: the live buckets had been raised by
 hand to 200 GiB trusted and 800 GiB review while the environment the stack was
@@ -307,21 +310,14 @@ reads to the `ci-cache-recency` bucket, one object per scope, so a restart of
 the evictor loses only the reads since; a record that does not read back is
 set aside. Either only makes entries look older than they are.
 
-RustFS charges a removal to the quota only when it recounts the bucket. The
-evictor asks for one once a twentieth of the quota has left, after it starts,
-and after a removal that failed, and only once the bucket has been idle a
-minute: it requests its own marker, waits for that request to come back
-through the audit log so nothing is queued ahead of it, and rewrites the
-marker. A recount that fails, or whose request never comes back, waits for the
-next pass. The recount holds the bucket's quota lock; on a large bucket it can
-outlast the five seconds a job's first write waits, and that job runs with the
-cache read-only. The idle minute makes that unlikely, not impossible.
-
-The quota stays as the backstop. While the evictor is down nothing is removed,
-and what the store could not deliver waits in its memory up to the queue limit;
-a restart of the store loses it. A lost read only makes an entry look older
-than it is. `docker logs kithara-ci-cache` prints one line per pass and one
-per recount, among the store's own lines.
+Nothing else bounds a bucket. Between passes it can run past its quota by
+what the fleet writes in half an hour, and a pass that fails leaves it there
+until the next one; the disk is the last limit. The evictor and the store stop
+together, so a store that serves is a store being evicted. What the store
+could not deliver to the evictor waits in its memory up to the queue limit; a
+restart of the store loses it. A lost read only makes an entry look older than
+it is. `docker logs kithara-ci-cache` prints one line per pass among the
+store's own lines.
 
 ## Storage policy
 

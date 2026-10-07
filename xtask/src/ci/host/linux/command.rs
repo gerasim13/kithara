@@ -71,10 +71,14 @@ enum LinuxCommand {
         #[arg(long = "keep")]
         keep: Vec<String>,
     },
-    /// Install the Windows guest that serves the Windows lane.
+    /// Install the Windows guest that serves the Windows lane, replacing any
+    /// guest already there, and wait until it is a registered runner.
     InstallWindows,
-    /// Register the installed Windows guest as a runner and wait for it.
+    /// Register the installed Windows guest as a runner again and wait for it.
     EnrolWindows,
+    /// Build the Windows guest again when its licence is about to run out and
+    /// it runs no job. A daily timer runs this.
+    RenewWindows,
     /// Report what the machine is currently serving.
     Health,
 }
@@ -155,7 +159,7 @@ pub(crate) fn run(args: &LinuxArgs) -> Result<()> {
             let executable = executable
                 .to_str()
                 .context("this executable's path is not UTF-8")?;
-            services::install(&process, &host, &pins, executable)
+            services::install(&process, &host, &pins, executable, &root)
         }
         LinuxCommand::Compose { out, mint } => {
             let pins = CiPins::load(&args.pins)?;
@@ -173,7 +177,14 @@ pub(crate) fn run(args: &LinuxArgs) -> Result<()> {
             windows::install(&process, &host, &pins, &root)
         }
         LinuxCommand::EnrolWindows => windows::enrol(&process, &host),
-        LinuxCommand::Health => services::health(&process, &host),
+        LinuxCommand::RenewWindows => {
+            let pins = CiPins::load(&args.pins)?;
+            windows::renew(&process, &host, &pins, &root)
+        }
+        LinuxCommand::Health => {
+            services::health(&process, &host)?;
+            windows::health(&process, &host)
+        }
     }
 }
 
@@ -234,6 +245,7 @@ mod tests {
             ["install-services"].as_slice(),
             ["install-windows"].as_slice(),
             ["enrol-windows"].as_slice(),
+            ["renew-windows"].as_slice(),
             ["health"].as_slice(),
         ] {
             assert!(parse(command).is_ok(), "{command:?} must parse");

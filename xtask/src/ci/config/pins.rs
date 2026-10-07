@@ -41,6 +41,11 @@ pub(crate) struct CiPins {
     pub(crate) cmake_version: String,
     pub(crate) cmake_windows_amd64_sha256: String,
     pub(crate) expected_xcode_version: String,
+    pub(crate) ffmpeg_windows_sha256: String,
+    /// A monthly build from `BtbN/FFmpeg-Builds`, named in full: the tag
+    /// carries the build time and the file name the commit it was cut from.
+    /// Its major version has to be the one `ffmpeg-next` binds to.
+    pub(crate) ffmpeg_windows_url: String,
     pub(crate) geckodriver_linux_amd64_sha256: String,
     pub(crate) geckodriver_linux_arm64_sha256: String,
     pub(crate) geckodriver_version: String,
@@ -60,6 +65,9 @@ pub(crate) struct CiPins {
     pub(crate) linux_android_runner_image: String,
     pub(crate) linux_image: String,
     pub(crate) linux_runner_image: String,
+    /// The LLVM whose `libclang` the Windows guest generates bindings with.
+    pub(crate) llvm_version: String,
+    pub(crate) llvm_windows_amd64_sha256: String,
     /// lockbud is a rustc driver rather than a crates.io package, so it is
     /// pinned by commit and by the nightly it links `rustc_driver` against.
     /// That nightly also has to compile the workspace it reads.
@@ -126,6 +134,7 @@ impl CiPins {
                 "expected_xcode_version",
                 self.expected_xcode_version.as_str(),
             ),
+            ("ffmpeg_windows_url", self.ffmpeg_windows_url.as_str()),
             ("geckodriver_version", self.geckodriver_version.as_str()),
             ("gitlab_runner_version", self.gitlab_runner_version.as_str()),
             ("gitleaks_version", self.gitleaks_version.as_str()),
@@ -140,6 +149,7 @@ impl CiPins {
             ),
             ("linux_image", self.linux_image.as_str()),
             ("linux_runner_image", self.linux_runner_image.as_str()),
+            ("llvm_version", self.llvm_version.as_str()),
             ("lockbud_rev", self.lockbud_rev.as_str()),
             ("lockbud_toolchain", self.lockbud_toolchain.as_str()),
             ("macos_guest_build", self.macos_guest_build.as_str()),
@@ -214,6 +224,7 @@ impl CiPins {
                 "cmake_windows_amd64_sha256",
                 self.cmake_windows_amd64_sha256.as_str(),
             ),
+            ("ffmpeg_windows_sha256", self.ffmpeg_windows_sha256.as_str()),
             (
                 "geckodriver_linux_amd64_sha256",
                 self.geckodriver_linux_amd64_sha256.as_str(),
@@ -236,6 +247,10 @@ impl CiPins {
                 self.gitleaks_linux_arm64_sha256.as_str(),
             ),
             ("linux_base_digest", self.linux_base_digest.as_str()),
+            (
+                "llvm_windows_amd64_sha256",
+                self.llvm_windows_amd64_sha256.as_str(),
+            ),
             (
                 "rtsan_linux_amd64_sha256",
                 self.rtsan_linux_amd64_sha256.as_str(),
@@ -378,6 +393,27 @@ mod tests {
             declared.split('.').next().unwrap(),
             line,
             "ffmpeg-next {declared} binds to headers ffmpeg@{line} does not carry"
+        );
+    }
+
+    /// The Windows guest has no package manager to ask, so its `FFmpeg` is a
+    /// pinned build, and the line it carries is the fact above stated a third
+    /// time. It is compared with the versioned formula, which the test above
+    /// holds to the crate. The build is a shared one because the crate links
+    /// `FFmpeg` as DLLs there.
+    #[test]
+    fn the_windows_ffmpeg_build_carries_the_line_the_formula_pins() {
+        let pins = CiPins::load(&workspace_root().join(consts::PINS_PATH)).unwrap();
+        let line = pins
+            .brew_formulae
+            .iter()
+            .find_map(|formula| formula.strip_prefix("ffmpeg@"))
+            .expect("the pins install a versioned ffmpeg formula");
+
+        let build = pins.ffmpeg_windows_url.rsplit('/').next().unwrap();
+        assert!(
+            build.contains(&format!("-shared-{line}.")),
+            "{build} is not a shared build of the {line}.x line"
         );
     }
 

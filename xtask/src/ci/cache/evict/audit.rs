@@ -10,20 +10,13 @@ use tracing::debug;
 use super::entry::Entry;
 use crate::consts;
 
-/// What one audited request says about a scope's bucket, which `scope`
-/// names by its place in the evictor's list.
+/// A client read or wrote an entry of a scope's bucket, which `scope` names
+/// by its place in the evictor's list, at this second of the store's clock.
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum Event {
-    /// A client read or wrote an entry, at this second of the store's clock.
-    Use {
-        scope: usize,
-        entry: Entry,
-        at_s: u64,
-    },
-    /// The evictor's own marker was asked for, so the log is arriving.
-    Echo { scope: usize },
-    /// Any other request: a miss, a snapshot, a delete.
-    Activity { scope: usize },
+pub(super) struct Event {
+    pub(super) scope: usize,
+    pub(super) entry: Entry,
+    pub(super) at_s: u64,
 }
 
 /// The events of one request, and how many events the receiver could not
@@ -56,8 +49,9 @@ struct Api {
     status_code: Option<i32>,
 }
 
-/// The events a delivery carries about the buckets in `managed`. A body that
-/// is not an audit log carries none.
+/// The uses a delivery reports of entries in the buckets in `managed`. Any
+/// other request - a miss, a snapshot, a delete - is no use, and a body that
+/// is not an audit log reports none.
 pub(super) fn events(body: &[u8], managed: &[String]) -> Vec<Event> {
     let Ok(log) = serde_json::from_slice::<TargetLog>(body) else {
         return Vec::new();
@@ -69,21 +63,19 @@ pub(super) fn events(body: &[u8], managed: &[String]) -> Vec<Event> {
             let scope = managed
                 .iter()
                 .position(|bucket| api.bucket.as_ref() == Some(bucket))?;
-            let object = api.object.as_deref();
             let used = matches!(api.name.as_deref(), Some("s3:GetObject" | "s3:PutObject"))
                 && api
                     .status_code
                     .is_some_and(|code| (200..300).contains(&code));
-            Some(if object == Some(consts::EVICT_MARKER) {
-                Event::Echo { scope }
-            } else if let Some(entry) = object.filter(|_| used).and_then(Entry::parse) {
-                Event::Use {
-                    scope,
-                    entry,
-                    at_s: record.time / 1000,
-                }
-            } else {
-                Event::Activity { scope }
+            let entry = api
+                .object
+                .as_deref()
+                .filter(|_| used)
+                .and_then(Entry::parse)?;
+            Some(Event {
+                scope,
+                entry,
+                at_s: record.time / 1000,
             })
         })
         .collect()
@@ -165,7 +157,7 @@ mod tests {
 
             assert_eq!(
                 events(body.as_bytes(), &managed()),
-                [Event::Use {
+                [Event {
                     scope: 1,
                     entry,
                     at_s: 1_759_658_400,
@@ -176,9 +168,9 @@ mod tests {
     }
 
     /// A miss is the request a compile makes before it writes the entry, so
-    /// it says a client is busy and nothing about the entry's last use.
+    /// it says nothing about the entry's last use.
     #[test]
-    fn a_miss_or_a_snapshot_is_activity_not_a_use() {
+    fn a_miss_a_snapshot_or_a_delete_is_no_use() {
         for body in [
             delivery("s3:GetObject", "kithara-trusted", &entry_object(), 404),
             delivery(
@@ -189,22 +181,8 @@ mod tests {
             ),
             delivery("s3:DeleteObject", "kithara-trusted", &entry_object(), 204),
         ] {
-            assert_eq!(
-                events(body.as_bytes(), &managed()),
-                [Event::Activity { scope: 0 }],
-                "{body}"
-            );
+            assert!(events(body.as_bytes(), &managed()).is_empty(), "{body}");
         }
-    }
-
-    #[test]
-    fn a_request_for_the_marker_echoes() {
-        let body = delivery("s3:HeadObject", "kithara-review", consts::EVICT_MARKER, 404);
-
-        assert_eq!(
-            events(body.as_bytes(), &managed()),
-            [Event::Echo { scope: 1 }]
-        );
     }
 
     /// The store reports every bucket it serves, the evictor's own record
