@@ -12,7 +12,8 @@
 //! whatever ran in the checkout between them. Those mtimes are older than the
 //! ones git wrote, so every build directory of a CI checkout claims before it
 //! builds: one that did not would judge a file by a time another directory's
-//! record gave it.
+//! record gave it. A settled claim gives them back, so the checkout reads as
+//! git wrote it to whatever builds there after the job.
 //!
 //! The record speaks for the directory while its builds read what the claim
 //! stamped. A job that never settled its claim may have built from content it
@@ -52,6 +53,8 @@ pub(crate) struct Claim {
     checkout: PathBuf,
     record: PathBuf,
     stamped: BTreeMap<String, Stamped>,
+    /// Each stamped file's mtime before the claim, given back when it settles.
+    before: BTreeMap<String, SystemTime>,
 }
 
 /// Stamps `checkout` for a build in `dir` and records what it stamped, held
@@ -67,6 +70,7 @@ pub(crate) fn claim(checkout: &Path, dir: &Path) -> Result<Claim> {
     let recorded = trusted(dir, &record)?;
     let now = SystemTime::now();
     let mut stamped = BTreeMap::new();
+    let mut before = BTreeMap::new();
     let mut kept = 0_usize;
     for (path, blob) in list(checkout)? {
         let at = match recorded.get(&path) {
@@ -76,7 +80,8 @@ pub(crate) fn claim(checkout: &Path, dir: &Path) -> Result<Claim> {
             }
             _ => now,
         };
-        let mtime = stamp(&checkout.join(&path), at)?;
+        let (was, mtime) = stamp(&checkout.join(&path), at)?;
+        before.insert(path.clone(), was);
         stamped.insert(path, Stamped { blob, mtime });
     }
     write(&record, &stamped, true)?;
@@ -89,6 +94,7 @@ pub(crate) fn claim(checkout: &Path, dir: &Path) -> Result<Claim> {
         checkout: checkout.to_path_buf(),
         record,
         stamped,
+        before,
     })
 }
 
@@ -117,6 +123,11 @@ impl Drop for Claim {
     /// Settles the claim. A file whose mtime moved was written during the
     /// job, so what was built from it read content no claim stamped, and the
     /// record lets it go.
+    ///
+    /// Every other file gets back the mtime it had before the claim. A build
+    /// that claims nothing judges the checkout by when git wrote each file,
+    /// and a stamp older than that write would call a build of other content
+    /// fresh.
     fn drop(&mut self) {
         let checkout = &self.checkout;
         self.stamped.retain(|path, entry| {
@@ -126,6 +137,14 @@ impl Drop for Claim {
         });
         if let Err(error) = write(&self.record, &self.stamped, false) {
             warn!("{error:#}; the next claim of this build directory stamps every file");
+        }
+        for path in self.stamped.keys() {
+            let Some(&was) = self.before.get(path) else {
+                continue;
+            };
+            if let Err(error) = stamp(&checkout.join(path), was) {
+                warn!("{error:#}; a build that claims nothing may trust its stamp");
+            }
         }
     }
 }
@@ -163,23 +182,24 @@ fn trusted(dir: &Path, record: &Path) -> Result<BTreeMap<String, Stamped>> {
 }
 
 /// Gives `file` the mtime `at` unless it reads so already, and returns the
-/// mtime the file system kept, which may be coarser.
-fn stamp(file: &Path, at: SystemTime) -> Result<SystemTime> {
+/// mtime it had and the one the file system kept, which may be coarser.
+fn stamp(file: &Path, at: SystemTime) -> Result<(SystemTime, SystemTime)> {
     let mtime = fs::metadata(file)
         .and_then(|metadata| metadata.modified())
         .with_context(|| format!("reading {}", file.display()))?;
     if mtime == at {
-        return Ok(at);
+        return Ok((mtime, at));
     }
     let handle = File::options()
         .write(true)
         .open(file)
         .with_context(|| format!("opening {}", file.display()))?;
-    handle
+    let kept = handle
         .set_modified(at)
         .and_then(|()| handle.metadata())
         .and_then(|metadata| metadata.modified())
-        .with_context(|| format!("stamping {}", file.display()))
+        .with_context(|| format!("stamping {}", file.display()))?;
+    Ok((mtime, kept))
 }
 
 /// The record's header, `held` or `settled`, then one
@@ -418,8 +438,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let kept = checkout.path().join("kept.rs");
         let changed = checkout.path().join("changed.rs");
-        drop(claim(checkout.path(), dir.path()).unwrap());
+        let first = claim(checkout.path(), dir.path()).unwrap();
         let built_from = mtime(&kept);
+        drop(first);
         let rewritten = built_from + consts::DAY;
         fs::write(&changed, "after").unwrap();
         set_mtime(&kept, rewritten);
@@ -433,6 +454,36 @@ mod tests {
             (claimed..rewritten).contains(&mtime(&changed)),
             "other content is stamped when it is claimed"
         );
+    }
+
+    /// A settled claim gives each file the job left as it stamped it the
+    /// mtime it had before. A build that claims nothing, `production/main`'s
+    /// among them on a host that serves both, judges the checkout by when git
+    /// wrote each file, and a stamp older than that write calls a build of
+    /// other content fresh. A file the job wrote keeps the mtime it wrote.
+    #[test]
+    fn a_settled_claim_gives_the_checkout_its_mtimes_back() {
+        let checkout = git_checkout(&[("kept.rs", "same"), ("written.rs", "before")]);
+        let dir = tempfile::tempdir().unwrap();
+        let kept = checkout.path().join("kept.rs");
+        let written = checkout.path().join("written.rs");
+        drop(claim(checkout.path(), dir.path()).unwrap());
+        let git_wrote = mtime(&kept) + consts::DAY;
+        set_mtime(&kept, git_wrote);
+        set_mtime(&written, git_wrote);
+        let job = claim(checkout.path(), dir.path()).unwrap();
+        assert_ne!(
+            mtime(&kept),
+            git_wrote,
+            "the claim gives built content its stamp"
+        );
+        fs::write(&written, "after").unwrap();
+        let job_wrote = mtime(&written);
+
+        drop(job);
+
+        assert_eq!(mtime(&kept), git_wrote);
+        assert_eq!(mtime(&written), job_wrote);
     }
 
     /// The job wrote a file and put its content back: what it built in
