@@ -17,6 +17,7 @@ use kithara_warp::SpeedCurve;
 use tracing::warn;
 
 use super::{
+    factory::Track,
     outbox::{Bound, Outbox, Player, Settled, TrackReceipt, rejection},
     settings::{PlayerConfig, TrackSettings, TrackSettingsChange, TrackSettingsExec},
 };
@@ -40,6 +41,8 @@ pub enum TrackCommand<S> {
     Pause { at: When<SessionFrame> },
     /// Move the slot's track to `to` on the next block.
     Seek { to: Position },
+    /// Jump within the loaded segment to `to` on `at` (phase jump from SYNC), with the mixer's declick.
+    Jump { to: Position, at: SessionFrame },
     /// Change one setting; a moment the track has no lane frame for is
     /// refused as untimed.
     Configure(TrackSettingsChange, When<SessionFrame>),
@@ -98,6 +101,12 @@ pub struct TrackSnapshot {
     pub abr: Option<AbrHandle>,
     /// The tags its decoder read.
     pub metadata: TrackMetadata,
+}
+
+impl AsRef<TrackSnapshot> for TrackSnapshot {
+    fn as_ref(&self) -> &TrackSnapshot {
+        self
+    }
 }
 
 /// The open in flight and what the track does once it opened.
@@ -512,6 +521,19 @@ impl<S> Player<S> for PlayerImpl<S> {
                 self.seek_epoch += 1;
                 Ok(sent)
             }
+            TrackCommand::Jump { to, at } => {
+                let sent = self.deck(
+                    When::At(at),
+                    vec![DeckPart::Seek {
+                        slot,
+                        seconds: to.as_secs_f64(),
+                        seek_epoch: self.seek_epoch + 1,
+                    }],
+                    out,
+                )?;
+                self.seek_epoch += 1;
+                Ok(sent)
+            }
             TrackCommand::Configure(change, at) => self.configure(change, at),
             TrackCommand::SetSpeed { speed, at } => self.set_speed(speed, at),
             TrackCommand::Fade { at, settings, dir } => self.fade(at, settings, dir, out),
@@ -566,6 +588,12 @@ impl<S> Player<S> for PlayerImpl<S> {
             abr: self.abr.clone(),
             metadata: self.metadata.clone(),
         }
+    }
+}
+
+impl<S> Track<S> for PlayerImpl<S> {
+    fn projected(&self) -> TrackSettings {
+        todo!("Live::projected() must include applied settings and changes still in flight")
     }
 }
 
