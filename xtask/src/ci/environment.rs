@@ -823,6 +823,9 @@ mod tests {
             .env("CI_JOB_URL", "https://gitlab.example/-/jobs/29")
             .env("HOME", directory.path().join("home"))
             .env_remove("CARGO_HOME")
+            // A GitLab executor names no slots directory; a Linux runner the
+            // suite itself runs on does.
+            .env_remove(consts::BUILD_SLOTS_ENV)
             .env_remove("SCCACHE_SERVER_UDS")
             .env_remove("GIT_DIR")
             .env_remove("GIT_INDEX_FILE")

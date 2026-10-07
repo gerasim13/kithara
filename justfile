@@ -47,7 +47,8 @@ export PKG_CONFIG_PATH := ```
     brew=$(command -v brew || true)
     keg="${brew%/bin/brew}/opt/$formula/lib/pkgconfig"
     [ -n "$brew" ] && [ -n "$formula" ] && [ -d "$keg" ] || keg=
-    case ":${PKG_CONFIG_PATH:-}:" in *":$keg:"*) keg= ;; esac
+    path=":${PKG_CONFIG_PATH:-}:"
+    [ "${path#*":$keg:"}" = "$path" ] || keg=
     printf '%s' "$keg:${PKG_CONFIG_PATH:-}" | sed 's/^://; s/:$//'
 ```
 
