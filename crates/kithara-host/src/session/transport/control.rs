@@ -175,8 +175,8 @@ fn publish_committed<T, S>(state: &mut SessionState<T, S>, observation: &Transpo
     }
 }
 
-pub(crate) fn publish_transport_event<T, S>(state: &SessionState<T, S>, event: &TransportEvent) {
-    for deck in state.graph.decks() {
-        deck.bus.publish(event.clone());
-    }
+pub(crate) fn publish_transport_event<T, S>(_state: &SessionState<T, S>, _event: &TransportEvent) {
+    todo!(
+        "Publish transport events through the canonical owner snapshot or deck control endpoints; HostedDeck has no event-publication seam, and the separate graph deck registry is gone (spec §4.1, §5.3)"
+    )
 }

@@ -7,6 +7,7 @@ pub mod api;
 pub mod bridge;
 mod error;
 mod host;
+pub mod owner;
 mod rt;
 mod session;
 
@@ -17,8 +18,11 @@ pub use api::{CrossfaderBus, Tap, crossfader_gain};
 pub use error::PlayError;
 pub use host::{
     Host, HostConfig, HostOwned, HostSettings, HostSettingsChange, HostSettingsControl,
+    HostSettingsExec,
 };
 pub use kithara_play::SessionSampleRate;
 pub use rt::{MetronomeConfig, MetronomeConfigChange, MetronomeConfigControl};
 pub use session::TransportEvent;
 mod consts;
+
+pub use owner::{DeckControl, DeckId, EqPart, HostCommand, HostCore, HostOwner, HostSettled};

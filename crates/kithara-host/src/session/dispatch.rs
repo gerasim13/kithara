@@ -1,144 +1,68 @@
-use std::num::NonZeroU32;
-
 use firewheel::{FirewheelContext, error::UpdateError};
-use kithara_bufpool::HasPool;
-#[cfg(any(target_arch = "wasm32", test))]
-use kithara_command::Post;
+use kithara_command::{Answer, Post, Seq};
 use kithara_config::ConfigOwner;
-#[cfg(any(target_arch = "wasm32", test))]
-use kithara_platform::sync::Arc;
-use kithara_play::{PlayError, RouteChangeReason, RouteDescription, SessionEvent, StreamShape};
-use kithara_warp::BeatGridId;
+use kithara_play::{PlayError, StreamShape};
+use std::num::NonZeroU32;
 use tracing::{debug, trace, warn};
 
-#[cfg(any(target_arch = "wasm32", test))]
-use super::protocol::HostMailbox;
 use super::{
-    graph::{lifecycle, player_index, tap},
-    protocol::{DeckRegistration, HostCmd, PlayerId, SessionError, SessionSampleRate},
+    protocol::{HostMailbox, SessionError, SessionSampleRate},
     queue::settle_receipts,
-    state::{SessionState, register_player},
-    transport,
-    transport::RouteRestartStatus,
+    state::SessionState,
+    transport::{self, RouteRestartStatus},
 };
-#[cfg(any(target_arch = "wasm32", test))]
-use crate::bridge::PlaybackShared;
-use crate::{bridge::NodeInputs, host::HostSettingsExec};
+use crate::{HostOwner, HostSettled};
 
-/// Runs one Host command after settling the transport's receipts, so the
-/// queue's credits come back and the settings catch up even while no tick
-/// runs, and answers whether it applied.
-pub(crate) fn run_host_cmd<T, S>(
-    state: &mut SessionState<T, S>,
-    cmd: HostCmd<S>,
-) -> Result<(), PlayError>
-where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
-    settle_receipts(state);
-    match cmd {
-        HostCmd::Attach {
-            registration,
-            inputs,
-        } => attach_deck(state, *registration, inputs).map_err(Into::into),
-        HostCmd::Detach { grid_id } => detach_deck(state, grid_id).map_err(Into::into),
-        HostCmd::Configure { change, at } => state.exec(change, at, &mut ()),
-        HostCmd::AttachOutputs {
-            tap: target,
-            outputs,
-        } => tap::attach(state, target, outputs).map_err(Into::into),
-        HostCmd::DetachOutputs { tap: target } => {
-            tap::detach(state, target);
-            Ok(())
-        }
-        HostCmd::InvalidateAudioRoute { reason } => {
-            change_route(state, &reason).map_err(Into::into)
-        }
-        HostCmd::Shutdown => Ok(()),
-    }
+pub(crate) fn run_host_cmd<S, O: HostOwner<S>>(
+    owner: &mut O,
+    command: O::Command,
+) -> Result<Option<Seq>, PlayError> {
+    owner.apply(command)
 }
 
-/// Adds one deck to the session, registers it and starts it on `inputs`, the
-/// render half of its slot. An identity the session or its graph already
-/// holds is refused; a deck that fails to register or start leaves the
-/// session as it found it.
-fn attach_deck<T, S>(
-    state: &mut SessionState<T, S>,
-    registration: DeckRegistration<S>,
-    inputs: NodeInputs,
-) -> Result<(), SessionError>
-where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
-    let DeckRegistration {
-        grid_id,
-        bus,
-        mixer,
-        pools,
-        render_quantum_frames,
-        response_budget_frames,
-        ..
-    } = registration;
-    if state.graph.index_by_grid(grid_id).is_some() {
-        return Err(SessionError::DeckAttached(grid_id));
+/// Pending ticket answers belong to the owner, not to a second deck dispatcher.
+pub(crate) struct OwnerPosts {
+    pending: Vec<(Seq, Answer<PlayError>)>,
+}
+
+impl OwnerPosts {
+    pub(crate) fn new() -> Self {
+        Self {
+            pending: Vec::new(),
+        }
     }
-    state.root.attach(grid_id)?;
-    let started = match register_player(state, grid_id, bus, pools, mixer) {
-        Ok(player_id) => {
-            let started = lifecycle::start_player(
-                state,
-                player_id,
-                inputs,
-                render_quantum_frames,
-                response_budget_frames,
-            );
-            if started.is_err()
-                && let Err(error) = unregister_player(state, player_id)
-            {
-                warn!(
-                    player_id,
-                    ?error,
-                    "a deck that failed to start stays registered"
-                );
+    pub(crate) fn drain<S, O: HostOwner<S>>(
+        &mut self,
+        owner: &mut O,
+        mailbox: &mut HostMailbox<O::Command>,
+    ) {
+        for Post { command, answer } in Self::take_posts(mailbox) {
+            match run_host_cmd(owner, command) {
+                Ok(Some(seq)) => self.pending.push((seq, answer)),
+                outcome => answer.answer(outcome.map(|_| ())),
             }
-            started
         }
-        Err(error) => Err(error),
-    };
-    if started.is_err()
-        && let Err(error) = state.root.detach(grid_id)
-    {
-        warn!(
-            ?grid_id,
-            ?error,
-            "a deck that failed to start stays attached"
-        );
     }
-    state.publish_root();
-    started
-}
 
-/// Stops the deck `grid_id` and removes it from the session.
-fn detach_deck<T, S>(
-    state: &mut SessionState<T, S>,
-    grid_id: BeatGridId,
-) -> Result<(), SessionError> {
-    let player_id = state
-        .graph
-        .index_by_grid(grid_id)
-        .and_then(|idx| state.graph.deck(idx))
-        .map(|deck| deck.player_id)
-        .ok_or(SessionError::DeckNotFound(grid_id))?;
-    unregister_player(state, player_id)?;
-    state.root.detach(grid_id)?;
-    state.publish_root();
-    Ok(())
-}
+    fn take_posts<C>(_mailbox: &mut HostMailbox<C>) -> Vec<Post<C, PlayError>> {
+        todo!(
+            "Drain handle posts in order, coalesce only consecutive Configure(Tempo, Next) through decorator commands, and answer replaced posts with Superseded; HostOwner::Command has no classification seam yet (spec §5.3)"
+        )
+    }
 
-/// The shape of the stream the session is actually running on, if it is
-/// running on one. Firewheel keeps a deactivated context's stream description
-/// until the processor comes back, so a session awaiting a restart would
-/// otherwise keep reporting the route it has already disowned as measured.
+    pub(crate) fn pass<S, O: HostOwner<S>>(&mut self, owner: &mut O) {
+        let settled = owner.pass();
+        if !self.pending.is_empty() {
+            self.settle(settled);
+        }
+    }
+
+    fn settle(&mut self, _settled: Vec<HostSettled>) {
+        todo!(
+            "Correlate each handle post with its executor ring and final receipt, including Mix/Eq and refused Next resends; Post exposes no handle Seq and HostSettled exposes only Settings, so a bare executor Seq is ambiguous; publish the contiguous applied fence before answering (spec §4.1, §4.2, §5.3)"
+        )
+    }
+}
 fn measured_stream_shape<T, S>(state: &SessionState<T, S>) -> Option<StreamShape> {
     if state.stream_needs_restart {
         return None;
@@ -193,61 +117,6 @@ pub(super) fn tick_session<T, S>(state: &mut SessionState<T, S>) -> Result<(), S
     Ok(())
 }
 
-/// Runs every Host command posted to `mailbox` and answers each, showing
-/// `on_attach` the playback of each deck that starts, then ticks the session.
-#[cfg(any(target_arch = "wasm32", test))]
-pub(super) fn drain_host_posts<T, S>(
-    state: &mut SessionState<T, S>,
-    mailbox: &mut HostMailbox<S>,
-    mut on_attach: impl FnMut(&Arc<PlaybackShared>),
-) where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
-    for Post { command, answer } in mailbox.drain() {
-        let playback = match &command {
-            HostCmd::Attach { inputs, .. } => Some(Arc::clone(inputs.playback())),
-            _ => None,
-        };
-        let outcome = run_host_cmd(state, command);
-        if let (Ok(()), Some(playback)) = (&outcome, &playback) {
-            on_attach(playback);
-        }
-        answer.answer(outcome);
-    }
-
-    if let Err(err) = tick_session(state) {
-        warn!(?err, "session tick in host drain failed");
-    }
-}
-
-fn unregister_player<T, S>(
-    state: &mut SessionState<T, S>,
-    player_id: PlayerId,
-) -> Result<(), SessionError> {
-    debug!(player_id, "[KITHARA-ROUTE] unregistering player");
-    let idx = player_index(state, player_id)?;
-    let started = state
-        .graph
-        .deck(idx)
-        .ok_or_else(|| SessionError::Graph("registered deck is missing".to_owned()))?
-        .started();
-    if started {
-        lifecycle::stop_player(state, player_id)?;
-    } else if state.ctx.is_some() {
-        lifecycle::shutdown_if_idle(state)?;
-    }
-    state
-        .graph
-        .remove(idx)
-        .ok_or_else(|| SessionError::Graph("registered deck is missing".to_owned()))?;
-    debug!(
-        player_id,
-        players = state.graph.len(),
-        "[KITHARA-ROUTE] player unregistered"
-    );
-    Ok(())
-}
-
 fn update_failed(err: &UpdateError) -> SessionError {
     warn!(?err, "[KITHARA-ROUTE] firewheel update failed");
     SessionError::Graph(format!("{err:?}"))
@@ -273,20 +142,6 @@ fn restart_dead_stream<T, S>(state: &mut SessionState<T, S>) -> Result<(), Sessi
         reason: "audio stream stopped".to_owned(),
         r#source: restart_err.to_string(),
     })
-}
-
-/// Restarts the output on the platform's new route and tells every deck's
-/// listeners the route changed.
-fn change_route<T, S>(state: &mut SessionState<T, S>, reason: &str) -> Result<(), SessionError> {
-    invalidate_audio_route(state, reason)?;
-    let event = SessionEvent::RouteChanged {
-        reason: RouteChangeReason::Unknown,
-        previous_route: RouteDescription::default(),
-    };
-    for deck in state.graph.decks() {
-        deck.bus.publish(event.clone());
-    }
-    Ok(())
 }
 
 pub(super) fn invalidate_audio_route<T, S>(

@@ -1,125 +1,67 @@
-use std::{cell::RefCell, num::NonZeroU32, sync::atomic::Ordering};
-
-use firewheel::FirewheelContext;
-use firewheel_web_audio::WebAudioBackend;
-use kithara_bufpool::HasPool;
-use kithara_platform::sync::Arc;
-
 use super::client::WebSessionState;
 use crate::{
-    bridge::PlaybackShared,
-    session::{dispatch::drain_host_posts, protocol::HostMailbox, state::ensure_ctx},
+    HostOwner,
+    session::{dispatch::OwnerPosts, protocol::HostMailbox},
 };
-
-thread_local! {
-    static BRIDGE_PLAYBACK: RefCell<Option<Arc<PlaybackShared>>> = const { RefCell::new(None) };
-}
+use firewheel::FirewheelContext;
+use firewheel_web_audio::WebAudioBackend;
+use std::num::NonZeroU32;
 
 pub(super) fn init_bridge_state() {
-    reset_bridge_state();
+    todo!(
+        "Publish browser playback and diagnostics from the new deck snapshots, not PlaybackShared (spec §5.7)"
+    )
 }
-
 pub(super) fn reset_bridge_state() {
-    BRIDGE_PLAYBACK.with(|playback| {
-        playback.borrow_mut().take();
-    });
+    todo!("Retire the browser owner snapshot on shutdown (spec §4.1)")
 }
 
-/// The one tick point that feeds the web stream's clock timestamps and notices a terminated
-/// worklet, since Firewheel no longer owns the backend and nothing else polls the stream on the
-/// session's behalf.
-pub(crate) fn tick_and_poll_remote<S>(state: &WebSessionState<S>, mailbox: &mut HostMailbox<S>)
-where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
+pub(crate) fn tick_and_poll_remote<S, O: HostOwner<S>>(
+    state: &WebSessionState<O>,
+    mailbox: &mut HostMailbox<O::Command>,
+    posts: &mut OwnerPosts,
+) {
     let mut state = state.lock();
-    let Some(state) = state.as_mut() else {
-        return;
-    };
-
-    if let Some(stream) = state.stream.as_mut()
-        && stream.poll().is_err()
-    {
-        state.stream = None;
+    if let Some(owner) = state.as_mut() {
+        posts.drain(owner, mailbox);
+        posts.pass(owner);
     }
-
-    drain_host_posts(state, mailbox, |started| {
-        BRIDGE_PLAYBACK.with(|playback| {
-            *playback.borrow_mut() = Some(Arc::clone(started));
-        });
-    });
 }
 
 pub(crate) fn bridge_position_secs() -> f64 {
-    BRIDGE_PLAYBACK.with(|cell| {
-        cell.borrow()
-            .as_ref()
-            .map_or(0.0, |s| s.snapshot().position())
-    })
+    todo!("Read media position from the canonical deck snapshot (spec §5.7)")
 }
-
 pub(crate) fn bridge_duration_secs() -> f64 {
-    BRIDGE_PLAYBACK.with(|cell| {
-        cell.borrow()
-            .as_ref()
-            .map_or(0.0, |s| s.snapshot().duration())
-    })
+    todo!("Read duration from the canonical deck snapshot (spec §5.7)")
 }
-
-/// Number of audio-thread process calls the slot has served.
-///
-/// Monotonic, so a reader samples twice and looks at the delta. In a browser
-/// the render callback runs inside an `AudioWorkletProcessor` the page cannot
-/// see: when the browser stops calling it — Firefox terminates a `process`
-/// that overruns its watchdog — the session still reports itself as playing
-/// and the position simply stops. A delta of zero separates that from a
-/// callback that runs and finds nothing to play.
 pub(crate) fn bridge_process_calls() -> u64 {
-    BRIDGE_PLAYBACK.with(|cell| {
-        cell.borrow()
-            .as_ref()
-            .map_or(0, |s| s.process_count.load(Ordering::Relaxed))
-    })
+    todo!("Read mixer process counts from the canonical deck snapshot (spec §5.7)")
 }
-
-/// Number of underruns the audio thread has recorded. Read alongside
-/// [`bridge_process_calls`]: a callback that runs while this climbs is
-/// starving, not stopped.
 pub(crate) fn bridge_underruns() -> u64 {
-    BRIDGE_PLAYBACK.with(|cell| {
-        cell.borrow()
-            .as_ref()
-            .map_or(0, |s| s.metrics().snapshot().underruns())
-    })
+    todo!("Read mixer underruns from the canonical deck snapshot (spec §5.7)")
 }
-
 pub(crate) fn bridge_is_playing() -> bool {
-    BRIDGE_PLAYBACK.with(|cell| {
-        cell.borrow()
-            .as_ref()
-            .is_some_and(|s| s.playing.load(Ordering::Relaxed))
-    })
+    todo!("Read playback state from the canonical deck snapshot (spec §5.7)")
 }
 
-pub(crate) fn warm_up_audio<S>(
-    state: &WebSessionState<S>,
+pub(crate) fn warm_up_audio<S, O: HostOwner<S>>(
+    _state: &WebSessionState<O>,
 ) -> Result<(), crate::session::SessionError> {
-    let mut state = state.lock();
-    let Some(state) = state.as_mut() else {
-        return Err(crate::session::SessionError::Graph(
-            "local web session state is unavailable".to_owned(),
-        ));
-    };
-    ensure_ctx(state)
+    todo!(
+        "Warm the browser backend through its canonical owner without lending concrete SessionState to the facade (spec §4.2)"
+    )
 }
 
 pub(super) fn start_stream_web_audio(
     ctx: &mut FirewheelContext,
     sample_rate: u32,
 ) -> Result<WebAudioBackend, String> {
-    let config = firewheel_web_audio::WebAudioConfig {
-        sample_rate: NonZeroU32::new(sample_rate),
-        request_input: false,
-    };
-    WebAudioBackend::new(ctx, config).map_err(|err| err.to_string())
+    WebAudioBackend::new(
+        ctx,
+        firewheel_web_audio::WebAudioConfig {
+            sample_rate: NonZeroU32::new(sample_rate),
+            request_input: false,
+        },
+    )
+    .map_err(|error| error.to_string())
 }

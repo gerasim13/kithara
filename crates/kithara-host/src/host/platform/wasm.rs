@@ -1,273 +1,69 @@
-use std::{
-    cell::RefCell,
-    mem,
-    num::NonZeroU32,
-    rc::{Rc, Weak},
-    task::{Wake, Waker},
-};
-
-use kithara_bufpool::HasPool;
-use kithara_command::Live;
-use kithara_platform::{
-    sync::{Arc, Mutex},
-    time,
-    tokio::task,
-};
-use kithara_play::{PlayError, player::PlayerControlSource};
-use kithara_warp::BeatGridId;
-use send_wrapper::SendWrapper;
-
-use super::super::{Host, HostOwned, owner::SessionRuntime};
 #[cfg(feature = "offline")]
-use super::super::{
+use crate::host::{
     HostConfig,
     offline::{OfflineRuntime, StartedOffline},
 };
 use crate::{
-    HostSettings, consts,
+    HostCore, HostOwner, HostSettings, PlayError,
     rt::SessionOutput,
-    session::{
-        HostDispatcher, HostProtocol, HostRoot, RootView,
-        decks::{Deck, Decks},
-        web::WebSessionState,
-    },
-    wasm::HostRoute,
+    session::{HostDispatcher, HostProtocol, HostRoot, RootView, web::WebSessionState},
 };
-/// The decks a Worker Host holds. The Worker is one thread: the Host borrows
-/// them between its calls, its clock between two sleeps.
-type WorkerDecks = Rc<RefCell<Decks>>;
-type StartedPlatform<S> = (Arc<dyn HostDispatcher<S>>, Platform<S>);
+use kithara_bufpool::HasPool;
+use kithara_command::Live;
+use kithara_platform::{maybe_send::MaybeSend, sync::Arc};
+use std::{marker::PhantomData, num::NonZeroU32};
 
-pub(in crate::host) struct Platform<S> {
-    remote_routes: Mutex<Vec<Arc<HostRoute<S>>>>,
-    remote_decks: Option<WorkerDecks>,
-    web_state: Option<WebSessionState<S>>,
+pub(in crate::host) struct Platform<S, O: HostOwner<S>> {
+    pub(in crate::host) web_state: Option<WebSessionState<O>>,
+    marker: PhantomData<fn() -> S>,
 }
 
-impl<S> Platform<S> {
-    pub(in crate::host) fn close(&self, host_id: BeatGridId) {
-        for route in mem::take(&mut *self.remote_routes.lock()) {
-            route.close();
-        }
-        if let Some(decks) = &self.remote_decks {
-            let mut decks = mem::take(&mut *decks.borrow_mut());
-            decks.release_all();
-            let mut deck_count = 0_usize;
-            for deck in decks {
-                deck_count += 1;
-                mem::forget(deck);
-            }
-            if deck_count > 0 {
-                tracing::error!(
-                    ?host_id,
-                    deck_count,
-                    "remote wasm Host dropped before its players detached; retaining decks"
-                );
-            }
-        }
-    }
+type StartedPlatform<S, O> = (
+    Arc<dyn HostDispatcher<<O as HostOwner<S>>::Command>>,
+    Platform<S, O>,
+);
 
-    fn close_deck(&self, id: BeatGridId) -> Result<(), PlayError> {
-        self.worker_decks()?.borrow_mut().close(id)
+impl<S, O: HostOwner<S>> Platform<S, O> {
+    pub(in crate::host) fn realtime(
+        root: HostRoot,
+        view: RootView,
+        _block: Option<NonZeroU32>,
+        output: SessionOutput,
+        settings: Live<HostSettings, HostProtocol>,
+        layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
+    ) -> Result<StartedPlatform<S, O>, PlayError>
+    where
+        S: HasPool<f32> + Send + Sync + 'static,
+    {
+        let (dispatcher, state) =
+            crate::session::web::spawn::<S, O>(root, view, output, settings, layer)?;
+        Ok((
+            dispatcher,
+            Self {
+                web_state: Some(state),
+                marker: PhantomData,
+            },
+        ))
     }
-
-    /// Starts an offline session; the Worker that starts it holds its decks.
     #[cfg(feature = "offline")]
     pub(in crate::host) fn offline(
         config: HostConfig<S>,
         root: HostRoot,
         view: RootView,
-    ) -> Result<StartedOffline<S>, PlayError>
+        layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
+    ) -> Result<StartedOffline<S, O>, PlayError>
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
-        if kithara_platform::thread::is_main_thread() {
-            return Err(PlayError::SessionCategoryUnsupported {
-                reason: "offline Host must run in a Web Worker".to_owned(),
-            });
-        }
-        let (dispatcher, runtime) = OfflineRuntime::new(config, root, view)?;
-        Ok((dispatcher, Self::remote(WorkerDecks::default()), runtime))
-    }
-
-    /// Ticks the decks of an offline session ahead of one rendered block.
-    #[cfg(feature = "offline")]
-    pub(in crate::host) fn tick_block(&self) {
-        if let Some(decks) = &self.remote_decks {
-            decks.borrow_mut().tick();
-        }
-    }
-
-    pub(in crate::host) fn owner(web_state: WebSessionState<S>) -> Self {
-        Self {
-            web_state: Some(web_state),
-            remote_routes: Mutex::default(),
-            remote_decks: None,
-        }
-    }
-
-    pub(in crate::host) fn realtime(
-        root: HostRoot,
-        view: RootView,
-        _output_block_frames: Option<NonZeroU32>,
-        output: SessionOutput,
-        settings: Live<HostSettings, HostProtocol>,
-    ) -> Result<StartedPlatform<S>, PlayError>
-    where
-        S: HasPool<f32> + Send + Sync + 'static,
-    {
-        let (dispatcher, web_state) =
-            crate::session::web::spawn::<S>(root, view, output, settings)?;
-        Ok((dispatcher, Self::owner(web_state)))
-    }
-
-    fn release_deck(&self, id: BeatGridId) -> Result<(), PlayError> {
-        self.worker_decks()?.borrow_mut().release(id).map(drop)
-    }
-
-    fn release_on_session_gone<T>(
-        &self,
-        id: BeatGridId,
-        result: Result<T, PlayError>,
-    ) -> Result<T, PlayError> {
-        match result {
-            Err(error @ PlayError::SessionGone { .. }) => {
-                self.release_deck(id)?;
-                Err(error)
-            }
-            result => result,
-        }
-    }
-
-    fn remote(decks: WorkerDecks) -> Self {
-        Self {
-            web_state: None,
-            remote_routes: Mutex::default(),
-            remote_decks: Some(decks),
-        }
-    }
-
-    fn worker_decks(&self) -> Result<&WorkerDecks, PlayError> {
-        self.remote_decks.as_ref().ok_or_else(|| {
-            PlayError::Internal("wasm players must be inserted from their owning Worker".into())
-        })
-    }
-}
-
-/// Ticks a realtime Worker Host's decks once per session pump interval, on
-/// the Worker that holds them, until the Host lets them go.
-fn spawn_clock(decks: Weak<RefCell<Decks>>) {
-    task::spawn(async move {
-        loop {
-            time::sleep(consts::SESSION_PUMP_INTERVAL).await;
-            let Some(decks) = decks.upgrade() else {
-                break;
-            };
-            decks.borrow_mut().tick();
-        }
-    });
-}
-
-/// Drains one deck on the Worker that holds it, inside the wake: a caller on
-/// that Worker blocks on its answer, so nothing else would run the deck
-/// before the caller reads it.
-struct WorkerWake {
-    id: BeatGridId,
-    decks: SendWrapper<Weak<RefCell<Decks>>>,
-}
-
-impl WorkerWake {
-    fn waker(decks: &WorkerDecks, id: BeatGridId) -> Waker {
-        Waker::from(Arc::new(Self {
-            id,
-            decks: SendWrapper::new(Rc::downgrade(decks)),
-        }))
-    }
-}
-
-impl Wake for WorkerWake {
-    fn wake(self: Arc<Self>) {
-        self.wake_by_ref();
-    }
-
-    /// Decks the Host already let go of released this one, so a wake that
-    /// finds them gone had nothing left to run.
-    fn wake_by_ref(self: &Arc<Self>) {
-        if let Some(decks) = self.decks.upgrade() {
-            decks.borrow_mut().drain(self.id);
-        }
-    }
-}
-
-impl<S> Host<S>
-where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
-    /// Attaches and transfers one fully configured player or decorator into
-    /// this Host, which starts its deck before returning: the output runs
-    /// from now until the Host hands its last deck back. Musical playback
-    /// remains stopped.
-    ///
-    /// # Errors
-    /// Returns an error when binding, attachment, or starting the deck fails.
-    pub fn insert<P>(&mut self, mut player: P) -> Result<HostOwned<P>, PlayError>
-    where
-        P: PlayerControlSource<Schema = S>,
-    {
-        let decks = Rc::clone(self.session.platform().worker_decks()?);
-        let (grid_id, control) = self.bind_player(&mut player)?;
-        let mut deck: Deck = Box::new(player);
-        deck.hold(WorkerWake::waker(&decks, grid_id));
-        decks.borrow_mut().hold(grid_id, deck);
-        Ok(self.owned::<P>(grid_id, control))
-    }
-
-    pub(crate) fn register_remote_route(&self, route: Arc<HostRoute<S>>) {
-        self.session.platform().remote_routes.lock().push(route);
-    }
-
-    pub(crate) fn remote(
-        id: BeatGridId,
-        root_view: RootView,
-        dispatcher: Arc<dyn HostDispatcher<S>>,
-    ) -> Self {
-        let decks = WorkerDecks::default();
-        spawn_clock(Rc::downgrade(&decks));
-        Self {
-            id,
-            root_view,
+        let (dispatcher, runtime) = OfflineRuntime::new(config, root, view, layer)?;
+        Ok((
             dispatcher,
-            owns_session: false,
-            session: SessionRuntime::realtime(Platform::remote(decks)),
-        }
-    }
-
-    pub(crate) fn remote_identity(&self) -> (BeatGridId, RootView) {
-        (self.id, self.root_view.clone())
-    }
-
-    /// Closes the deck where the Host holds it, stops it and detaches it
-    /// from the session, then drops it.
-    ///
-    /// # Errors
-    /// Returns an error when close or canonical detachment fails.
-    pub fn remove<P>(&mut self, player: &HostOwned<P>) -> Result<(), PlayError>
-    where
-        P: PlayerControlSource<Schema = S>,
-    {
-        self.validate_removal(player)?;
-        self.remove_deck(player.id())
-    }
-
-    fn remove_deck(&self, id: BeatGridId) -> Result<(), PlayError> {
-        let platform = self.session.platform();
-        platform.release_on_session_gone(id, platform.close_deck(id))?;
-        platform.release_on_session_gone(id, self.dispatcher.detach(id))?;
-        platform.release_deck(id)
-    }
-
-    pub(crate) fn web_state(&self) -> Option<&WebSessionState<S>> {
-        self.session.platform().web_state.as_ref()
+            Self {
+                web_state: None,
+                marker: PhantomData,
+            },
+            runtime,
+        ))
     }
 }
 

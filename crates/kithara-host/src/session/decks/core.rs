@@ -1,69 +1,56 @@
-use kithara_play::{PlayError, player::Player};
-use kithara_warp::BeatGridId;
-use tracing::warn;
+use kithara_command::{Live, Sender};
+use kithara_play::{HostedDeck, PlayError};
+use kithara_render::bridge::{
+    DeckEvents, DeckMixSettings, DeckProtocol, DeckSnapshot, MixerInputs, mixer_channels,
+};
+use triple_buffer::Output;
 
-use crate::session::SessionError;
+use crate::{DeckId, session::SessionError};
 
-/// A deck as a Host holds it: the player or decorator it was handed.
-pub(crate) type Deck = Box<dyn Player>;
+/// The sole owner record for a held deck and its mixer endpoints.
+pub(crate) struct Deck<S, D: ?Sized> {
+    pub(crate) deck: Box<D>,
+    pub(crate) ring: Sender<DeckProtocol>,
+    pub(crate) receipts: DeckEvents,
+    pub(crate) mix: Live<DeckMixSettings, DeckProtocol>,
+    pub(crate) snapshot: Output<DeckSnapshot>,
+    marker: std::marker::PhantomData<fn() -> S>,
+}
 
-/// The decks a Host holds, each ticked once per pass.
-#[derive(Default)]
-pub(crate) struct Decks(pub(super) Vec<(BeatGridId, Deck)>);
-
-impl Decks {
-    /// Holds `deck` and runs the commands posted to it before it was held,
-    /// which woke no one.
-    pub(crate) fn hold(&mut self, id: BeatGridId, mut deck: Deck) {
-        deck.drain();
-        self.0.push((id, deck));
+impl<S, D: ?Sized + HostedDeck<S>> Deck<S, D> {
+    pub(crate) fn new(deck: Box<D>) -> Result<(Self, MixerInputs), PlayError> {
+        let config = deck.mixer_config();
+        let mix =
+            Live::new(config.mix()).map_err(|error| PlayError::Internal(error.to_string()))?;
+        let (ends, inputs) = mixer_channels(config);
+        Ok((
+            Self {
+                deck,
+                ring: ends.ring,
+                receipts: ends.events,
+                snapshot: ends.snapshot,
+                mix,
+                marker: std::marker::PhantomData,
+            },
+            inputs,
+        ))
     }
+}
 
-    /// Runs the commands posted to the deck `id`. A deck let go before its
-    /// wake arrived dropped those commands as it was released.
-    pub(crate) fn drain(&mut self, id: BeatGridId) {
-        if let Some((_, deck)) = self.0.iter_mut().find(|(held, _)| *held == id) {
-            deck.drain();
-        }
+/// Decks held only on the owner's session thread.
+pub(crate) struct Decks<S, D: ?Sized>(pub(crate) Vec<(DeckId, Deck<S, D>)>);
+
+impl<S, D: ?Sized> Default for Decks<S, D> {
+    fn default() -> Self {
+        Self(Vec::new())
     }
+}
 
-    /// Closes the deck `id` where it is held, so a failed close leaves it
-    /// held.
-    pub(crate) fn close(&mut self, id: BeatGridId) -> Result<(), PlayError> {
+impl<S, D: ?Sized> Decks<S, D> {
+    pub(crate) fn index(&self, id: DeckId) -> Result<usize, PlayError> {
         self.0
-            .iter_mut()
-            .find(|(held, _)| *held == id)
-            .ok_or(SessionError::DeckNotFound(id))?
-            .1
-            .close()
-    }
-
-    /// Lets go of the deck `id` and hands it back released.
-    pub(crate) fn release(&mut self, id: BeatGridId) -> Result<Deck, PlayError> {
-        let index = self
-            .0
             .iter()
             .position(|(held, _)| *held == id)
-            .ok_or(SessionError::DeckNotFound(id))?;
-        let (_, mut deck) = self.0.remove(index);
-        deck.release();
-        Ok(deck)
-    }
-
-    /// Releases every deck while keeping it here, so none takes a command
-    /// after its holder stopped.
-    pub(crate) fn release_all(&mut self) {
-        for (_, deck) in &mut self.0 {
-            deck.release();
-        }
-    }
-
-    /// Ticks every deck once; a deck whose tick fails stays held.
-    pub(crate) fn tick(&mut self) {
-        for (id, deck) in &mut self.0 {
-            if let Err(error) = deck.tick() {
-                warn!(?id, %error, "host deck tick failed");
-            }
-        }
+            .ok_or_else(|| SessionError::DeckNotFound(id).into())
     }
 }

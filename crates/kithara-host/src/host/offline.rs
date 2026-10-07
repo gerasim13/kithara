@@ -1,19 +1,19 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
+use crate::{HostCore, HostOwner};
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_command::Live;
 use kithara_effects::LimiterConfig;
 use kithara_output::{
     OfflineRenderError, OfflineRenderReport, OfflineRenderRequest, OfflineRenderer, RenderSink,
 };
+use kithara_platform::maybe_send::MaybeSend;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_play::PlayError;
 use kithara_signal::AudioSpec;
 use kithara_worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig};
 
 use super::{Host, HostConfig, platform::Platform};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::session::decks::DeckInbox;
 use crate::{
     HostSettings,
     rt::SessionOutput,
@@ -85,19 +85,26 @@ impl<S> HostConfig<S> {
     }
 }
 
-pub(super) struct OfflineRuntime<S> {
-    client: Arc<OfflineSessionClient<S>>,
+pub(super) struct OfflineRuntime<S, O: HostOwner<S>> {
+    client: Arc<OfflineSessionClient<O::Command>>,
     _dispatcher: kithara_worker::Dispatcher,
     max_block_frames: NonZeroU32,
     _task: kithara_worker::TaskHandle,
     _worker: Worker,
 }
 
-type StartedOfflineRuntime<S> = (Arc<dyn HostDispatcher<S>>, OfflineRuntime<S>);
+type StartedOfflineRuntime<S, O> = (
+    Arc<dyn HostDispatcher<<O as HostOwner<S>>::Command>>,
+    OfflineRuntime<S, O>,
+);
 /// An offline session started beside the platform that holds its decks.
-pub(super) type StartedOffline<S> = (Arc<dyn HostDispatcher<S>>, Platform<S>, OfflineRuntime<S>);
+pub(super) type StartedOffline<S, O> = (
+    Arc<dyn HostDispatcher<<O as HostOwner<S>>::Command>>,
+    Platform<S, O>,
+    OfflineRuntime<S, O>,
+);
 
-impl<S> OfflineRuntime<S>
+impl<S, O: HostOwner<S>> OfflineRuntime<S, O>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
@@ -105,7 +112,8 @@ where
         config: HostConfig<S>,
         root: HostRoot,
         root_view: RootView,
-    ) -> Result<StartedOfflineRuntime<S>, PlayError> {
+        layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
+    ) -> Result<StartedOfflineRuntime<S, O>, PlayError> {
         let HostConfig::Offline {
             pools,
             max_block_frames,
@@ -136,8 +144,9 @@ where
                 .max_block_frames(max_block_frames)
                 .pools(pools)
                 .build(),
+            layer,
         )?;
-        let host_dispatcher: Arc<dyn HostDispatcher<S>> = client.clone();
+        let host_dispatcher: Arc<dyn HostDispatcher<O::Command>> = client.clone();
         Ok((
             host_dispatcher,
             Self {
@@ -152,11 +161,6 @@ where
 
     delegate::delegate! {
         to self.client {
-            /// The session task that holds the Host's decks.
-            #[cfg(not(target_arch = "wasm32"))]
-            #[call(clone)]
-            #[expr($ as Arc<dyn DeckInbox>)]
-            pub(super) fn deck_inbox(&self) -> Arc<dyn DeckInbox>;
             #[expr($.map_err(OfflineRenderError::backend))]
             fn position(&self) -> Result<u64, OfflineRenderError>;
         }
@@ -166,7 +170,6 @@ where
     /// each block.
     fn render(
         &mut self,
-        decks: &Platform<S>,
         request: &OfflineRenderRequest,
         spec: AudioSpec,
         cancel: &CancelToken,
@@ -194,7 +197,6 @@ where
             let remaining = request.frames().start - position;
             let frames = remaining.min(u64::from(self.max_block_frames.get()));
             let frames = u32::try_from(frames).map_err(OfflineRenderError::backend)?;
-            decks.tick_block();
             let _ = self.render_at(position, frames)?;
             position = position
                 .checked_add(u64::from(frames))
@@ -209,7 +211,6 @@ where
             let remaining = request.frames().end - position;
             let frames = remaining.min(u64::from(self.max_block_frames.get()));
             let frames = u32::try_from(frames).map_err(OfflineRenderError::backend)?;
-            decks.tick_block();
             let block = self.render_at(position, frames)?;
             if cancel.is_cancelled() {
                 return Err(OfflineRenderError::Cancelled { rendered_frames });
@@ -249,7 +250,7 @@ where
     }
 }
 
-impl<S> OfflineRenderer for Host<S>
+impl<S, O: HostOwner<S>> OfflineRenderer for Host<S, O>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
@@ -266,11 +267,11 @@ where
             ))
         })?;
         let spec = AudioSpec::new(consts::CHANNELS, rate);
-        let (platform, runtime) = self
+        let (_platform, runtime) = self
             .session
             .offline_mut()
             .ok_or(OfflineRenderError::SessionModeUnavailable)?;
-        runtime.render(platform, request, spec, cancel, sink)
+        runtime.render(request, spec, cancel, sink)
     }
 }
 

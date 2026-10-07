@@ -3,7 +3,7 @@
 
 use std::{convert::Infallible, mem, num::NonZeroU32};
 
-use kithara_command::{LiveError, Outcome, Protocol, Receipt, Rejection, SendError, When};
+use kithara_command::{LiveError, Outcome, Protocol, Receipt, Rejection, SendError, Seq, When};
 use kithara_config::ConfigOwner;
 use kithara_play::PlayError;
 use kithara_signal::SessionFrame;
@@ -45,7 +45,7 @@ impl Protocol for HostProtocol {
 
 impl<T, S> HostSettingsExec<()> for SessionState<T, S> {
     type At = When<SessionFrame>;
-    type Output = Result<(), PlayError>;
+    type Output = Result<Option<Seq>, PlayError>;
 
     /// The owner restarts the output route at the new rate; the render graph
     /// never sees it, so no frame can carry a rate change. A restart that
@@ -57,9 +57,11 @@ impl<T, S> HostSettingsExec<()> for SessionState<T, S> {
         self.settings.apply(HostSettingsChange::SampleRate(value))?;
         self.publish_root();
         if self.stream_needs_restart {
-            return Ok(());
+            return Ok(None);
         }
-        invalidate_audio_route(self, "sample rate change").map_err(PlayError::from)
+        invalidate_audio_route(self, "sample rate change")
+            .map(|()| None)
+            .map_err(PlayError::from)
     }
 
     /// The transport re-anchors the session beats on the frame the tempo
@@ -85,11 +87,11 @@ impl<T, S> HostSettingsExec<()> for SessionState<T, S> {
         let Some(queue) = self.transport_queue.as_mut() else {
             self.settings.apply(change)?;
             self.publish_root();
-            return Ok(());
+            return Ok(None);
         };
         self.settings
             .send(queue, at, change, HostPart::Settings)
-            .map(drop)
+            .map(Some)
             .map_err(|error| match error {
                 LiveError::Invalid(error) => error,
                 LiveError::Send(SendError::Full(_)) => SessionError::HostQueueFull.into(),
@@ -130,6 +132,20 @@ pub(crate) fn settle_receipts<T, S>(state: &mut SessionState<T, S>) {
         let Some(settled) = state.settings.settle(&receipt) else {
             continue;
         };
+        let outcome = match receipt.outcome() {
+            Outcome::Applied { at, .. } => Ok(*at),
+            Outcome::Rejected(Rejection::Late) => Err(Rejection::Late),
+            Outcome::Rejected(Rejection::Stale) => Err(Rejection::Stale),
+            Outcome::Rejected(Rejection::Unanswered) => Err(Rejection::Unanswered),
+            Outcome::Rejected(Rejection::Refused(reason)) => {
+                Err(Rejection::Refused(PlayError::Internal(reason.to_string())))
+            }
+        };
+        state.settled.push(crate::HostSettled::Settings {
+            seq: receipt.seq(),
+            change: settled.change,
+            outcome,
+        });
         match receipt.outcome() {
             Outcome::Applied { data, .. } => {
                 applied = true;

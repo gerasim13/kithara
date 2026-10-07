@@ -1,47 +1,37 @@
-use std::num::NonZeroUsize;
-
 use firewheel::{FirewheelContext, node::NodeID};
-use kithara_bufpool::HasPool;
 use kithara_output::OutputGroup;
-use kithara_warp::MapAxis;
+use kithara_render::bridge::MixerInputs;
 use tracing::{debug, warn};
 
 use super::{
-    protocol::{PlayerId, SessionError},
-    queue::settle_receipts,
-    state::{Deck, GraphRegistry, SessionState, TapSlot, Taps, add_graph_node, ensure_ctx},
+    SessionError,
+    state::{SessionState, TapSlot, add_graph_node},
 };
-use crate::{
-    bridge::NodeInputs,
-    rt::{PlayerNode, TapNode},
-};
-pub(super) fn player_index<T, S>(
-    state: &SessionState<T, S>,
-    player_id: PlayerId,
-) -> Result<usize, SessionError> {
-    state
-        .graph
-        .index_by_player(player_id)
-        .ok_or(SessionError::PlayerNotFound(player_id))
-}
-fn graph_state(message: &'static str) -> SessionError {
-    SessionError::Graph(message.into())
+use crate::{DeckId, rt::TapNode};
+
+pub(crate) fn install_deck<T, S>(
+    _state: &mut SessionState<T, S>,
+    _id: DeckId,
+    _inputs: MixerInputs,
+) -> Result<(), SessionError> {
+    todo!(
+        "Install the deck's PlayerNode from MixerInputs and owner pools, then connect its output to the master; HostedDeck supplies no pool handle yet (spec §4.2, §5.7)"
+    )
 }
 
-fn deck_at<T, S>(state: &SessionState<T, S>, index: usize) -> Result<&Deck<S>, SessionError> {
-    state
-        .graph
-        .deck(index)
-        .ok_or_else(|| graph_state("player index out of range"))
+pub(crate) fn remove_deck<T, S>(
+    _state: &mut SessionState<T, S>,
+    _id: DeckId,
+) -> Result<(), SessionError> {
+    todo!(
+        "Withdraw the deck mixer after its close receipt, reclaiming PCM on the owner thread (spec §5.7)"
+    )
 }
 
-fn deck_at_mut<S>(
-    graph: &mut GraphRegistry<S>,
-    index: usize,
-) -> Result<&mut Deck<S>, SessionError> {
-    graph
-        .deck_mut(index)
-        .ok_or_else(|| graph_state("player index out of range"))
+pub(crate) fn idle<T, S>(_state: &mut SessionState<T, S>) -> Result<(), SessionError> {
+    todo!(
+        "After abandoning host and deck Live values, release an idle native context or retain a browser device, then rebuild on the next registration (spec §5.7)"
+    )
 }
 fn connect_stereo(
     fw_ctx: &mut FirewheelContext,
@@ -134,176 +124,6 @@ pub(super) mod tap {
         }
         *state.taps.slot(tap) = Some(TapSlot::Installed(tap_id));
         debug!(?tap, ?tap_id, "[KITHARA-ROUTE] session tap installed");
-        Ok(())
-    }
-}
-
-pub(super) mod lifecycle {
-    use super::*;
-
-    pub(in crate::session) fn start_player<T, S>(
-        state: &mut SessionState<T, S>,
-        player_id: PlayerId,
-        inputs: NodeInputs,
-        render_quantum_frames: Option<NonZeroUsize>,
-        response_budget_frames: Option<NonZeroUsize>,
-    ) -> Result<(), SessionError>
-    where
-        S: HasPool<f32> + Send + Sync + 'static,
-    {
-        debug!(player_id, "[KITHARA-ROUTE] starting player");
-        ensure_ctx(state)?;
-        validate_response_geometry(state, render_quantum_frames, response_budget_frames)?;
-        let idx = player_index(state, player_id)?;
-        if deck_at(state, idx)?.started() {
-            return Err(SessionError::AlreadyStarted(player_id));
-        }
-        let Some(session_output_id) = state.session_output_node_id else {
-            return Err(graph_state("session output node is not initialised"));
-        };
-        let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-        let player = deck_at_mut(&mut state.graph, idx)?;
-        let player_node =
-            PlayerNode::new(inputs, player.pools.clone(), player.mixer).with_session_context();
-        let player_node_id = add_graph_node(fw_ctx, player_node)?;
-        let player_to_output = "connect player->session_output";
-        connect_stereo(fw_ctx, player_node_id, session_output_id, player_to_output)?;
-        if let Err(err) = fw_ctx.update() {
-            warn!(player_id, "graph update after player start failed: {err:?}");
-        }
-        player.slot_node = Some(player_node_id);
-        debug!(
-            player_id,
-            ?player_node_id,
-            "[KITHARA-ROUTE] player graph started"
-        );
-        Ok(())
-    }
-
-    fn validate_response_geometry<T, S>(
-        state: &SessionState<T, S>,
-        render_quantum_frames: Option<NonZeroUsize>,
-        response_budget_frames: Option<NonZeroUsize>,
-    ) -> Result<(), SessionError> {
-        let Some(render_quantum_frames) = render_quantum_frames else {
-            return Ok(());
-        };
-        let info = state
-            .ctx
-            .as_ref()
-            .and_then(FirewheelContext::stream_info)
-            .ok_or(SessionError::NoContext)?;
-        kithara_play::StreamShape::new(info.max_block_frames, info.sample_rate)
-            .playback_buffers(render_quantum_frames, response_budget_frames)?;
-        Ok(())
-    }
-    pub(in crate::session) fn stop_player<T, S>(
-        state: &mut SessionState<T, S>,
-        player_id: PlayerId,
-    ) -> Result<(), SessionError> {
-        debug!(player_id, "[KITHARA-ROUTE] stopping player");
-        let idx = player_index(state, player_id)?;
-        stop_player_idx(state, idx)
-    }
-    fn stop_player_idx<T, S>(
-        state: &mut SessionState<T, S>,
-        idx: usize,
-    ) -> Result<(), SessionError> {
-        {
-            let (ctx, graph) = (&mut state.ctx, &mut state.graph);
-            let player = deck_at_mut(graph, idx)?;
-            let player_id = player.player_id;
-            let Some(slot_node) = player.slot_node.take() else {
-                return Err(SessionError::NotRunning(player_id));
-            };
-            if let Some(fw_ctx) = ctx {
-                if let Err(err) = fw_ctx.remove_node(slot_node) {
-                    warn!(player_id, ?err, "failed to remove the deck's slot node");
-                }
-                if let Err(err) = fw_ctx.update() {
-                    warn!(player_id, "graph update after player stop failed: {err:?}");
-                }
-            }
-        }
-        shutdown_if_idle(state)?;
-        debug!("[KITHARA-ROUTE] player stopped");
-        Ok(())
-    }
-    /// Release the output device once no deck is left to feed it: the Host
-    /// keeps the output engaged only while it holds a deck, and the next
-    /// `start_player` builds a fresh context.
-    ///
-    /// A session that set [`SessionState::retains_output`] is the exception:
-    /// its device cannot be rebuilt, so this call does nothing.
-    ///
-    /// Reserves a successor before stopping, since backends may defer processor
-    /// drop after `stop_stream` and teardown must not depend on the RT
-    /// `stream_stopped` callback reaching this handle.
-    pub(in crate::session) fn shutdown_if_idle<T, S>(
-        state: &mut SessionState<T, S>,
-    ) -> Result<(), SessionError> {
-        if state.retains_output {
-            return Ok(());
-        }
-        let idle = state.graph.decks().all(|deck| !deck.started());
-        if idle {
-            debug!("[KITHARA-ROUTE] shutting down idle session stream");
-            if state.ctx.is_none() {
-                return Err(SessionError::NoContext);
-            }
-            let observed_session_grid = state
-                .transport_observation
-                .as_mut()
-                .ok_or_else(|| {
-                    graph_state("session transport observation is missing during idle shutdown")
-                })?
-                .read()
-                .session_grid();
-            let mut session_grid_generation = match state.reserved_session_grid {
-                Some(reserved) => reserved
-                    .promote(observed_session_grid)
-                    .map_err(|error| graph_state(error.message()))?,
-                None => observed_session_grid,
-            };
-            session_grid_generation
-                .advance_restart()
-                .map_err(|error| graph_state(error.message()))?;
-            let session_stamp = session_grid_generation
-                .stamp()
-                .map_err(|error| graph_state(error.message()))?;
-            let MapAxis::Session(axis) = state.root.grid().axis() else {
-                return Err(graph_state(
-                    "session host published a non-session grid during idle shutdown",
-                ));
-            };
-            let sample_rate = axis.sample_rate();
-            state.root.publish_unavailable(
-                session_stamp,
-                sample_rate,
-                session_grid_generation.epoch(),
-            );
-            state.publish_root();
-            state.reserved_session_grid = Some(session_grid_generation);
-            // The settings changes the transport has not answered fold into
-            // the settings before it goes, so the next stream renders them;
-            // its inbox answers them unanswered as it drops.
-            settle_receipts(state);
-            state.settings.abandon();
-            state
-                .ctx
-                .as_mut()
-                .ok_or(SessionError::NoContext)?
-                .request_deactivate();
-            state.stream = None;
-            state.ctx = None;
-            state.publish_root();
-            state.transport_queue = None;
-            state.transport_observation = None;
-            state.taps = Taps::default();
-            state.session_output_node_id = None;
-            state.session_limiter_node_id = None;
-            state.session_metronome_node_id = None;
-        }
         Ok(())
     }
 }

@@ -1,13 +1,16 @@
-use std::num::NonZeroU32;
+use std::{
+    num::NonZeroU32,
+    task::{Wake, Waker},
+};
 
 use firewheel::{
     FirewheelContext,
     cpal::{CpalConfig, CpalStream},
 };
-use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::HasPool;
-use kithara_command::{Answer, Live, Post, Ticket, mailbox};
+use kithara_command::{Live, Ticket, mailbox};
 use kithara_platform::{
+    maybe_send::MaybeSend,
     sync::{Arc, Mutex, mpsc},
     thread::spawn_named,
     time::Instant,
@@ -15,81 +18,56 @@ use kithara_platform::{
 use tracing::{debug, warn};
 
 use super::{
-    decks::{DeckInbox, DeckMsg, Decks},
-    dispatch::{run_host_cmd, tick_session},
-    protocol::{HostCmd, HostDispatchError, HostDispatcher, HostMailbox, HostPostbox, not_taken},
+    decks::{DeckInbox, DeckMsg},
+    dispatch::OwnerPosts,
+    protocol::{HostDispatchError, HostDispatcher, HostMailbox, HostPostbox, not_taken},
     queue::HostProtocol,
-    state::{HostRoot, RootView, SessionState},
+    state::{HostRoot, RootView, SessionState, SessionStream},
 };
-use crate::{HostSettings, consts, error::PlayError, rt::SessionOutput};
+use crate::{HostCore, HostOwner, HostSettings, PlayError, consts, rt::SessionOutput};
 
-/// What the native session thread takes: word of the Host's posts and the
-/// messages for the decks it holds.
-enum EngineMsg {
-    /// The Host posted commands: run them now, between ticks.
+pub(crate) enum EngineMsg {
     Posted,
     Deck(DeckMsg),
+    Shutdown,
 }
 
-pub(crate) struct SessionClient<S> {
-    postbox: HostPostbox<S>,
+pub(crate) struct SessionClient<C> {
+    postbox: HostPostbox<C>,
     cmd_tx: Mutex<mpsc::Sender<EngineMsg>>,
 }
 
-impl<S: Send + Sync + 'static> HostDispatcher<S> for SessionClient<S> {
-    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::RealtimeDeferred
-    }
-
-    /// Posts `cmd`, then tells the session thread, so the post keeps its
-    /// order with the deck messages sent around it.
-    fn dispatch(&self, cmd: HostCmd<S>) -> Result<Ticket<PlayError>, HostDispatchError> {
-        let ticket = self.postbox.post(cmd).map_err(not_taken)?;
-        self.cmd_tx.lock().send(EngineMsg::Posted).map_err(|_| {
-            HostDispatchError::NotTaken(PlayError::SessionGone {
-                reason: "session thread stopped accepting commands",
-            })
-        })?;
+impl<C: Send + 'static> HostDispatcher<C> for SessionClient<C> {
+    fn dispatch(&self, command: C) -> Result<Ticket<PlayError>, HostDispatchError> {
+        let ticket = self.postbox.post(command).map_err(not_taken)?;
         Ok(ticket)
+    }
+    fn shutdown(&self) {
+        drop(self.cmd_tx.lock().send(EngineMsg::Shutdown));
     }
 }
 
-impl<S: Send + Sync + 'static> DeckInbox for SessionClient<S> {
+impl<C: Send + 'static> DeckInbox for SessionClient<C> {
     fn post(&self, message: DeckMsg) -> Result<(), PlayError> {
         self.cmd_tx
             .lock()
             .send(EngineMsg::Deck(message))
             .map_err(|_| PlayError::SessionGone {
-                reason: "session thread stopped taking decks",
+                reason: "session thread stopped accepting deck wakes",
             })
     }
 }
 
-/// Stops the stream with the session state, then drops the decks it
-/// rendered, each released first: only the session thread lets go of them.
-fn stop<T, S>(state: SessionState<T, S>, mut decks: Decks) {
-    decks.release_all();
-    drop(state);
-    drop(decks);
+struct SessionWake(Mutex<mpsc::Sender<EngineMsg>>);
+impl Wake for SessionWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+    fn wake_by_ref(self: &Arc<Self>) {
+        drop(self.0.lock().send(EngineMsg::Posted));
+    }
 }
 
-/// Disconnects queued callers, leaving the posts after the shutdown
-/// unanswered, and stops the session with its decks before it answers.
-fn complete_shutdown<T, S>(
-    cmd_rx: mpsc::Receiver<EngineMsg>,
-    mailbox: HostMailbox<S>,
-    state: SessionState<T, S>,
-    decks: Decks,
-    answer: Answer<PlayError>,
-) {
-    drop(cmd_rx);
-    drop(mailbox);
-    stop(state, decks);
-    answer.answer(Ok(()));
-}
-
-/// Waits for the next message: until `deadline` while `active`, so the caller
-/// can pump on its interval, and with no deadline otherwise.
 pub(crate) fn receive_message<M>(
     cmd_rx: &mpsc::Receiver<M>,
     active: bool,
@@ -109,94 +87,71 @@ pub(crate) fn receive_message<M>(
     }
 }
 
-/// Whether the session pumps on its interval: while it runs a graph or holds
-/// a deck.
-fn pumping<T, S>(state: &SessionState<T, S>, decks: &Decks) -> bool {
-    state.ctx.is_some() || !decks.is_empty()
-}
-
-/// One pump once it is due: the decks tick first, so the changes they post
-/// reach the graph in the same pump.
-fn service_due_tick<T, S>(
-    state: &mut SessionState<T, S>,
-    decks: &mut Decks,
-    deadline: &mut Instant,
-) {
-    if pumping(state, decks) && Instant::now() >= *deadline {
-        decks.tick();
-        if state.ctx.is_some()
-            && let Err(error) = tick_session(state)
-        {
-            warn!(?error, "native session tick failed");
-        }
-        *deadline = Instant::now() + consts::SESSION_PUMP_INTERVAL;
-    }
-}
-
-fn engine_thread<T, S>(
+fn engine_thread<S, O: HostOwner<S>>(
     cmd_rx: mpsc::Receiver<EngineMsg>,
-    mut mailbox: HostMailbox<S>,
-    mut state: SessionState<T, S>,
-) where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
-    let mut decks = Decks::default();
-    debug!("[KITHARA-ROUTE] native session worker started");
+    mut mailbox: HostMailbox<O::Command>,
+    mut owner: O,
+) {
+    let mut posts = OwnerPosts::new();
     let mut deadline = Instant::now() + consts::SESSION_PUMP_INTERVAL;
     loop {
-        let Ok(message) = receive_message(&cmd_rx, pumping(&state, &decks), deadline) else {
+        let Ok(message) = receive_message(&cmd_rx, owner.clock().is_some(), deadline) else {
             break;
         };
         match message {
             Some(EngineMsg::Posted) => {
-                for Post { command, answer } in mailbox.drain() {
-                    if matches!(command, HostCmd::Shutdown) {
-                        complete_shutdown(cmd_rx, mailbox, state, decks, answer);
-                        debug!("[KITHARA-ROUTE] native session worker stopped");
-                        return;
-                    }
-                    answer.answer(run_host_cmd(&mut state, command));
-                }
+                posts.drain(&mut owner, &mut mailbox);
+                posts.pass(&mut owner);
             }
-            Some(EngineMsg::Deck(message)) => decks.run(message),
+            Some(EngineMsg::Deck(message)) => message.run(&mut owner),
+            Some(EngineMsg::Shutdown) => break,
             None => {}
         }
-        service_due_tick(&mut state, &mut decks, &mut deadline);
+        if Instant::now() >= deadline {
+            posts.pass(&mut owner);
+            deadline = Instant::now() + consts::SESSION_PUMP_INTERVAL;
+        }
     }
-    stop(state, decks);
-    debug!("[KITHARA-ROUTE] native session worker stopped");
 }
 
-fn spawn_session_client<T, S>(
-    thread_name: &'static str,
+pub(crate) fn spawn<S, O>(
     root: HostRoot,
-    root_view: RootView,
-    requested_max_block_frames: Option<NonZeroU32>,
+    view: RootView,
+    output_block_frames: Option<NonZeroU32>,
     output: SessionOutput,
     settings: Live<HostSettings, HostProtocol>,
-    start_stream_fn: impl FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
-) -> Arc<SessionClient<S>>
+    layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
+) -> Arc<SessionClient<O::Command>>
 where
     S: HasPool<f32> + Send + Sync + 'static,
+    O: HostOwner<S>,
 {
-    let (cmd_tx, cmd_rx) = mpsc::channel::<EngineMsg>();
-    let (postbox, mailbox) = mailbox();
-    spawn_named(thread_name, move || {
-        let state = SessionState::<T, S>::new(
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (postbox, mut mailbox) = mailbox();
+    mailbox.hold(Waker::from(Arc::new(SessionWake(Mutex::new(
+        cmd_tx.clone(),
+    )))));
+    let client = Arc::new(SessionClient {
+        postbox,
+        cmd_tx: Mutex::new(cmd_tx),
+    });
+    let inbox: Arc<dyn DeckInbox> = client.clone();
+    spawn_named(consts::DECK_SESSION, move || {
+        let start = move |ctx: &mut FirewheelContext, rate| {
+            start_stream_cpal(ctx, rate, output_block_frames).map(SessionStream::Realtime)
+        };
+        let state = SessionState::new(
             root,
-            root_view,
-            requested_max_block_frames,
+            view,
+            output_block_frames,
             None,
             output,
             settings,
-            start_stream_fn,
+            start,
         );
-        engine_thread(cmd_rx, mailbox, state);
+        engine_thread(cmd_rx, mailbox, layer(HostCore::new(state, inbox)));
     });
-    Arc::new(SessionClient {
-        postbox,
-        cmd_tx: Mutex::new(cmd_tx),
-    })
+    client
 }
 
 fn start_stream_cpal(
@@ -204,22 +159,9 @@ fn start_stream_cpal(
     sample_rate: u32,
     output_block_frames: Option<NonZeroU32>,
 ) -> Result<CpalStream, String> {
-    debug!(sample_rate, "[KITHARA-ROUTE] starting cpal stream");
-    let config = cpal_config(sample_rate, output_block_frames);
-    match CpalStream::new(ctx, config) {
-        Ok(stream) => {
-            debug!(sample_rate, "[KITHARA-ROUTE] cpal stream started");
-            Ok(stream)
-        }
-        Err(err) => {
-            warn!(
-                sample_rate,
-                ?err,
-                "[KITHARA-ROUTE] cpal stream start failed"
-            );
-            Err(err.to_string())
-        }
-    }
+    debug!(sample_rate, "starting cpal stream");
+    CpalStream::new(ctx, cpal_config(sample_rate, output_block_frames))
+        .map_err(|error| error.to_string())
 }
 
 fn cpal_config(sample_rate: u32, output_block_frames: Option<NonZeroU32>) -> CpalConfig {
@@ -229,24 +171,6 @@ fn cpal_config(sample_rate: u32, output_block_frames: Option<NonZeroU32>) -> Cpa
         config.output.desired_block_frames = Some(frames.get());
     }
     config
-}
-
-pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
-    root: HostRoot,
-    root_view: RootView,
-    output_block_frames: Option<NonZeroU32>,
-    output: SessionOutput,
-    settings: Live<HostSettings, HostProtocol>,
-) -> Arc<SessionClient<S>> {
-    spawn_session_client::<CpalStream, S>(
-        "kithara-engine",
-        root,
-        root_view,
-        output_block_frames,
-        output,
-        settings,
-        move |ctx, sample_rate| start_stream_cpal(ctx, sample_rate, output_block_frames),
-    )
 }
 
 #[cfg(test)]

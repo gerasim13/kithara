@@ -1,11 +1,11 @@
 use std::{marker::PhantomData, ops::Deref};
 
 use kithara_bufpool::HasPool;
-use kithara_command::{Live, When};
+use kithara_command::{Live, Seq, When};
 use kithara_config::{ConfigOwner, Configure};
 use kithara_output::OutputGroup;
-use kithara_platform::sync::Arc;
-use kithara_play::{PlayError, player::PlayerControlSource};
+use kithara_platform::{maybe_send::MaybeSend, sync::Arc};
+use kithara_play::{HostedDeck, PlayError};
 use kithara_signal::SessionFrame;
 use kithara_warp::{BeatGrid, BeatGridId};
 
@@ -16,74 +16,64 @@ use super::{
     platform::{Platform, PlatformResult},
 };
 use crate::{
+    DeckControl, DeckId, HostCommand, HostCore, HostOwner,
     api::Tap,
-    rt::SessionOutput,
-    session::{HostCmd, HostDispatcher, HostRoot, RootView, SessionError, SessionSampleRate, ask},
+    session::{HostDispatcher, HostRoot, RootView, SessionError, SessionSampleRate, ask},
 };
 
-/// Typed command proxy for one player value exclusively resident in a Host.
+/// The control endpoint of a deck held exclusively by a Host owner.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub struct HostOwned<P: PlayerControlSource> {
+pub struct HostOwned<D: DeckControl> {
     host_id: BeatGridId,
     #[field(get, copy)]
-    id: BeatGridId,
+    id: DeckId,
     #[field(get)]
-    control: P::Control,
-    marker: PhantomData<fn() -> P>,
+    control: D::Control,
+    marker: PhantomData<fn() -> D>,
 }
 
-impl<P: PlayerControlSource> Deref for HostOwned<P> {
-    type Target = P::Control;
-
+impl<D: DeckControl> Deref for HostOwned<D> {
+    type Target = D::Control;
     fn deref(&self) -> &Self::Target {
         &self.control
     }
 }
 
-/// Exclusive owner and dispatcher for one multi-player output session.
-pub struct Host<S> {
-    pub(super) dispatcher: Arc<dyn HostDispatcher<S>>,
+/// A handle whose session drives one canonical owner, optionally decorated.
+pub struct Host<S, O: HostOwner<S> = HostCore<S>> {
+    pub(super) dispatcher: Arc<dyn HostDispatcher<O::Command>>,
     pub(super) id: BeatGridId,
     pub(super) root_view: RootView,
-    pub(super) session: SessionRuntime<S>,
+    pub(super) session: SessionRuntime<S, O>,
     pub(super) owns_session: bool,
 }
 
-pub(super) enum SessionRuntime<S> {
-    Realtime(Platform<S>),
+pub(super) enum SessionRuntime<S, O: HostOwner<S>> {
+    Realtime(Platform<S, O>),
     #[cfg(feature = "offline")]
     Offline {
-        platform: Platform<S>,
-        runtime: OfflineRuntime<S>,
+        platform: Platform<S, O>,
+        runtime: OfflineRuntime<S, O>,
     },
 }
 
-impl<S> SessionRuntime<S> {
+impl<S, O: HostOwner<S>> SessionRuntime<S, O> {
     #[cfg(feature = "offline")]
-    const fn offline(platform: Platform<S>, runtime: OfflineRuntime<S>) -> Self {
-        Self::Offline { platform, runtime }
-    }
-
-    /// The offline runtime beside the platform holding its decks.
-    #[cfg(feature = "offline")]
-    pub(super) const fn offline_mut(&mut self) -> Option<(&Platform<S>, &mut OfflineRuntime<S>)> {
+    pub(super) const fn offline_mut(
+        &mut self,
+    ) -> Option<(&Platform<S, O>, &mut OfflineRuntime<S, O>)> {
         match self {
             Self::Offline { platform, runtime } => Some((platform, runtime)),
             Self::Realtime(_) => None,
         }
     }
-
-    pub(super) const fn platform(&self) -> &Platform<S> {
+    pub(super) const fn platform(&self) -> &Platform<S, O> {
         match self {
             Self::Realtime(platform) => platform,
             #[cfg(feature = "offline")]
             Self::Offline { platform, .. } => platform,
         }
-    }
-
-    pub(super) const fn realtime(platform: Platform<S>) -> Self {
-        Self::Realtime(platform)
     }
 }
 
@@ -93,92 +83,74 @@ pub(super) struct SessionRoot {
     pub(super) view: RootView,
 }
 
-impl<S> Host<S> {
-    /// Binds `player` to this Host's session and starts its deck there,
-    /// seating the player on the slot the session built. Answers the identity
-    /// its deck registered under and its control.
-    pub(super) fn bind_player<P>(
-        &self,
-        player: &mut P,
-    ) -> Result<(BeatGridId, P::Control), PlayError>
-    where
-        P: PlayerControlSource<Schema = S>,
-    {
-        let registration =
-            player.attach_session(self.root_view.binding(self.dispatcher.consumer_wake_mode()))?;
-        let grid_id = registration.grid_id;
-        let slot = self.dispatcher.attach(registration)?;
-        player.seat(slot);
-        Ok((grid_id, player.control()))
-    }
-
+impl<S, O: HostOwner<S>> Host<S, O> {
     delegate::delegate! {
         to self.root_view {
             /// Whether the session holds no deck.
             #[must_use]
             pub fn is_empty(&self) -> bool;
-            /// The rate the output runs at as measured, beside the rate the
-            /// settings ask for, as the session last published them.
+            /// The measured output rate and the settings' requested rate.
             #[must_use]
             #[call(sample_rate)]
             pub fn output_sample_rate(&self) -> SessionSampleRate;
         }
     }
 
-    /// Posts `command` to the session and waits for its answer.
-    fn ask(&self, command: HostCmd<S>) -> Result<(), PlayError> {
-        ask(&*self.dispatcher, command).map_err(PlayError::from)
+    /// Posts an owner command and returns the receipt number without waiting.
+    pub fn send(&self, command: O::Command) -> Result<Seq, PlayError> {
+        self.dispatcher
+            .dispatch(command)
+            .map(|ticket| ticket.seq())
+            .map_err(Into::into)
     }
 
-    /// Attaches one output group to `tap`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when `tap` already has a consumer or graph dispatch fails.
-    pub fn attach_outputs(&self, tap: Tap, outputs: OutputGroup) -> Result<(), PlayError> {
-        self.ask(HostCmd::AttachOutputs { tap, outputs })
-    }
-
-    /// Removes the output group attached to `tap`, if any.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when graph dispatch fails.
-    pub fn detach_outputs(&self, tap: Tap) -> Result<(), PlayError> {
-        self.ask(HostCmd::DetachOutputs { tap })
-    }
-
-    /// Restarts the output on the platform's new route, keeping Host-owned
-    /// graph state, and tells every deck's listeners the route changed.
-    ///
-    /// # Errors
-    /// Returns an error when the session cannot restart its output route.
-    pub fn invalidate_audio_route<R>(&self, reason: R) -> Result<(), PlayError>
-    where
-        R: Into<String>,
-    {
-        self.ask(HostCmd::InvalidateAudioRoute {
-            reason: reason.into(),
-        })
-    }
-
-    pub(super) fn owned<P>(&self, id: BeatGridId, control: P::Control) -> HostOwned<P>
-    where
-        P: PlayerControlSource,
-    {
-        HostOwned {
-            id,
-            control,
-            host_id: self.id,
-            marker: PhantomData,
+    /// Allocates a fresh identity for a deck registered through this handle.
+    #[must_use]
+    pub fn deck_id(&self) -> DeckId {
+        match DeckId::allocate() {
+            Ok(id) => id,
+            Err(error) => panic!("deck identity space exhausted: {error}"),
         }
     }
 
-    fn owner(
+    fn ask(&self, command: HostCommand<S, O::Deck>) -> Result<(), PlayError> {
+        ask(&*self.dispatcher, command.into()).map_err(Into::into)
+    }
+
+    /// Attaches one output group to a session tap.
+    pub fn attach_outputs(&self, tap: Tap, outputs: OutputGroup) -> Result<(), PlayError> {
+        let _ = (tap, outputs);
+        todo!(
+            "Attach outputs on the same canonical owner route; HostCommand has no tap operation yet (spec §4.2)"
+        )
+    }
+
+    /// Detaches the output group of a session tap.
+    pub fn detach_outputs(&self, tap: Tap) -> Result<(), PlayError> {
+        let _ = tap;
+        todo!(
+            "Detach outputs on the canonical owner route without a parallel session dispatcher (spec §4.2)"
+        )
+    }
+
+    /// Restarts the owner's route while retaining its held decks.
+    pub fn invalidate_audio_route<R: Into<String>>(&self, reason: R) -> Result<(), PlayError> {
+        tracing::debug!(reason = %reason.into(), "host route restart requested");
+        self.ask(HostCommand::Restart)
+    }
+
+    pub(super) fn session_root(settings: HostSettings) -> Result<SessionRoot, PlayError> {
+        let id = BeatGridId::allocate().map_err(SessionError::from)?;
+        let root = HostRoot::new(id, settings.sample_rate());
+        let view = RootView::new(&root, settings);
+        Ok(SessionRoot { id, root, view })
+    }
+
+    pub(super) fn owner(
         id: BeatGridId,
         root_view: RootView,
-        dispatcher: Arc<dyn HostDispatcher<S>>,
-        session: SessionRuntime<S>,
+        dispatcher: Arc<dyn HostDispatcher<O::Command>>,
+        session: SessionRuntime<S, O>,
     ) -> Self {
         Self {
             id,
@@ -189,43 +161,34 @@ impl<S> Host<S> {
         }
     }
 
-    pub(super) fn session_root(settings: HostSettings) -> Result<SessionRoot, PlayError> {
-        let grid_id = BeatGridId::allocate().map_err(SessionError::from)?;
-        let root = HostRoot::new(grid_id, settings.sample_rate());
-        let view = RootView::new(&root, settings);
-        Ok(SessionRoot {
-            root,
-            view,
-            id: grid_id,
-        })
-    }
-
-    pub(super) fn validate_removal<P>(&self, player: &HostOwned<P>) -> Result<(), PlayError>
-    where
-        P: PlayerControlSource<Schema = S>,
-        S: Send + Sync + 'static,
-    {
-        if player.host_id != self.id {
+    fn validate_removal<D: DeckControl>(&self, deck: &HostOwned<D>) -> Result<(), PlayError> {
+        if deck.host_id != self.id {
             return Err(PlayError::ForeignSession);
         }
-        if self.root_view.holds(player.id()) {
-            return Ok(());
+        if !self.root_view.holds(deck.id()) {
+            return Err(SessionError::DeckNotFound(deck.id()).into());
         }
-        Err(SessionError::DeckNotFound(player.id()).into())
+        Ok(())
+    }
+
+    /// Closes and releases a deck on the canonical owner thread.
+    pub fn remove<D: DeckControl>(&mut self, deck: &HostOwned<D>) -> Result<(), PlayError> {
+        self.validate_removal(deck)?;
+        self.ask(HostCommand::Close(deck.id()))?;
+        self.ask(HostCommand::Release(deck.id()))
     }
 }
 
-impl<S> Host<S>
+impl<S, O> Host<S, O>
 where
     S: HasPool<f32> + Send + Sync + 'static,
+    O: HostOwner<S>,
 {
-    /// Creates one Host with its configured realtime or offline session.
-    ///
-    /// # Errors
-    /// Returns [`PlayError::InvalidParameter`] naming the first setting
-    /// out of its bounds, or an error when the session root or selected
-    /// runtime cannot start.
-    pub fn new(config: HostConfig<S>) -> Result<Self, PlayError> {
+    /// Creates a Host whose session drives the decorated base owner.
+    pub fn layered(
+        config: HostConfig<S>,
+        layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
+    ) -> Result<Self, PlayError> {
         match config {
             HostConfig::Realtime {
                 output_block_frames,
@@ -239,67 +202,88 @@ where
                     root.root,
                     root.view.clone(),
                     output_block_frames,
-                    SessionOutput::new(limiter),
+                    crate::rt::SessionOutput::new(limiter),
                     settings,
+                    layer,
                 )
                 .resolve()?;
                 Ok(Self::owner(
                     root.id,
                     root.view,
                     dispatcher,
-                    SessionRuntime::realtime(platform),
+                    SessionRuntime::Realtime(platform),
                 ))
             }
             #[cfg(feature = "offline")]
             config @ HostConfig::Offline { .. } => {
                 let root = Self::session_root(config.settings())?;
                 let (dispatcher, platform, runtime) =
-                    Platform::offline(config, root.root, root.view.clone())?;
+                    Platform::offline(config, root.root, root.view.clone(), layer)?;
                 Ok(Self::owner(
                     root.id,
                     root.view,
                     dispatcher,
-                    SessionRuntime::offline(platform, runtime),
+                    SessionRuntime::Offline { platform, runtime },
                 ))
             }
         }
     }
 }
 
-/// A change goes to the session owner, which hands it to the render graph to
-/// apply on a session frame; the settings show it once the graph confirms it.
-impl<S> Configure<HostSettingsChange> for Host<S> {
+impl<S> Host<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    /// Creates a realtime or offline Host with its base owner.
+    pub fn new(config: HostConfig<S>) -> Result<Self, PlayError> {
+        Self::layered(config, |core| core)
+    }
+
+    /// Transfers a fully constructed deck, retaining only its public control handle.
+    pub fn insert<D>(&mut self, deck: D) -> Result<HostOwned<D>, PlayError>
+    where
+        D: HostedDeck<S> + DeckControl,
+    {
+        let id = deck.id();
+        let control = deck.control();
+        self.ask(HostCommand::Register {
+            id,
+            deck: Box::new(deck),
+        })?;
+        Ok(HostOwned {
+            host_id: self.id,
+            id,
+            control,
+            marker: PhantomData,
+        })
+    }
+}
+
+impl<S, O: HostOwner<S>> Configure<HostSettingsChange> for Host<S, O> {
     type At = When<SessionFrame>;
     type Config = HostSettings;
     type Error = PlayError;
     type Output = ();
-
     fn configure(&self, change: HostSettingsChange, at: Self::At) -> Result<(), PlayError> {
-        self.ask(HostCmd::Configure { change, at })
+        self.ask(HostCommand::Configure(change, at))
     }
-
     fn settings(&self) -> HostSettings {
         self.root_view.settings()
     }
 }
 
-impl<S> Drop for Host<S> {
+impl<S, O: HostOwner<S>> Drop for Host<S, O> {
     fn drop(&mut self) {
-        #[cfg(target_arch = "wasm32")]
-        self.session.platform().close(self.id);
-        if self.owns_session
-            && let Err(error) = self.ask(HostCmd::Shutdown)
-        {
-            tracing::warn!(%error, "host session shutdown failed");
+        if self.owns_session {
+            self.dispatcher.shutdown();
         }
     }
 }
 
-impl<S: Send + Sync + 'static> BeatGrid for Host<S> {
+impl<S: Send + Sync + 'static, O: HostOwner<S>> BeatGrid for Host<S, O> {
     fn id(&self) -> BeatGridId {
         self.id
     }
-
     fn snapshot(&self) -> kithara_warp::BeatGridSnapshot {
         self.root_view.grid()
     }

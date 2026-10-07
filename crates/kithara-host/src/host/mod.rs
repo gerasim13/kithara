@@ -7,5 +7,5 @@ mod settings;
 
 pub use config::HostConfig;
 pub use owner::{Host, HostOwned};
-pub(crate) use settings::HostSettingsExec;
+pub use settings::HostSettingsExec;
 pub use settings::{HostSettings, HostSettingsChange, HostSettingsControl};
