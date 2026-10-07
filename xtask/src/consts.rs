@@ -466,12 +466,6 @@ pub(crate) const REBUILD_CHECK_ARGS: [&str; 4] =
 /// Lines of a captured command's output a failure carries.
 pub(crate) const TRANSCRIPT_TAIL_LINES: usize = 40;
 
-/// Asks the pinned nightly's cargo to judge what rustc read by checksum.
-pub(crate) const CHECKSUM_FRESHNESS_ENV: &str = "CARGO_UNSTABLE_CHECKSUM_FRESHNESS";
-
-/// The toolchain rustup runs a step's cargo with.
-pub(crate) const TOOLCHAIN_ENV: &str = "RUSTUP_TOOLCHAIN";
-
 /// Where Cargo builds when told; unset, it builds in `<workspace>/target`.
 pub(crate) const TARGET_DIR_ENV: &str = "CARGO_TARGET_DIR";
 

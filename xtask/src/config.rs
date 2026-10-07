@@ -62,8 +62,6 @@ pub(crate) struct CiLaneConfig {
     pub(crate) cache_group: String,
     /// How the lane names itself when it refuses a platform.
     pub(crate) label: String,
-    /// How the lane's build directory is judged fresh; see [`LaneFreshness`].
-    pub(crate) freshness: LaneFreshness,
     /// Every operating system the lane runs on. The shared GitHub fan-out
     /// reaches a lane that names Linux alone; one that also names another
     /// machine needs a device the shared pool lacks and runs from a workflow
@@ -174,21 +172,6 @@ pub(crate) struct CiLaneStep {
     /// would build again: the next job of this commit, in the same build
     /// directory, would build it too. Only a `just test run` step can ask.
     pub(crate) rebuild_check: bool,
-}
-
-/// How a lane's build directory is kept honest for the checkout that claims
-/// it. A checksum lane builds with the pinned nightly, whose cargo checksums
-/// what rustc read; an mtime lane leaves the toolchain to its steps.
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum LaneFreshness {
-    /// Stamp every tracked file whose content the directory may hold other
-    /// artifacts of.
-    #[default]
-    Mtime,
-    /// Let cargo checksum rustc's inputs, and decide every build-script run
-    /// at the claim.
-    Checksum,
 }
 
 /// What a lane leaves for a human or a later lane to read.
@@ -354,8 +337,8 @@ impl CiProjectConfig {
         }
         if self.lane_unit_window_hours == 0 {
             bail!(
-                "ext.ci.lane_unit_window_hours must be at least one hour; at zero a lane slot \
-                 would keep only the unit its latest build touched last"
+                "ext.ci.lane_unit_window_hours must be at least one hour; at zero a lane's \
+                 build directory would keep only the unit its latest build touched last"
             );
         }
         Ok(())
@@ -363,8 +346,7 @@ impl CiProjectConfig {
 }
 
 /// A step spells only the substitutions the lane understands, and leaves the
-/// freshness machinery to the lane that declares it and the build directory to
-/// the executor: the compiler cache keys every compilation on each `CARGO_*`
+/// build directory to the executor: the compiler cache keys every compilation on each `CARGO_*`
 /// value, so a step that names its build directory splits every key it builds
 /// by checkout.
 fn validate_step(name: &str, lane: &CiLaneConfig, step: &CiLaneStep) -> Result<()> {
@@ -379,18 +361,6 @@ fn validate_step(name: &str, lane: &CiLaneConfig, step: &CiLaneStep) -> Result<(
         bail!(
             "ext.ci.lanes.{name} sets {TARGET_DIR_ENV} in a step; the executor owns the build directory",
             TARGET_DIR_ENV = consts::TARGET_DIR_ENV
-        );
-    }
-    if step.env.contains_key(consts::CHECKSUM_FRESHNESS_ENV) {
-        bail!(
-            "ext.ci.lanes.{name} sets {CHECKSUM_FRESHNESS_ENV} in a step; declare freshness = \"checksum\" on the lane instead",
-            CHECKSUM_FRESHNESS_ENV = consts::CHECKSUM_FRESHNESS_ENV
-        );
-    }
-    if lane.freshness == LaneFreshness::Checksum && step.env.contains_key(consts::TOOLCHAIN_ENV) {
-        bail!(
-            "ext.ci.lanes.{name} is a checksum lane, which builds with the pinned nightly, so a step may not set {TOOLCHAIN_ENV}",
-            TOOLCHAIN_ENV = consts::TOOLCHAIN_ENV
         );
     }
     if step.rebuild_check {
@@ -878,7 +848,7 @@ mod tests {
     use kithara_devtools::Ctx;
     use tempfile::TempDir;
 
-    use super::{AssetKey, KitharaExt, LaneFreshness, PublishStep, XtaskCacheConfig};
+    use super::{AssetKey, KitharaExt, PublishStep, XtaskCacheConfig};
     use crate::consts;
 
     fn config_root(body: &str) -> (TempDir, PathBuf) {
@@ -896,8 +866,9 @@ mod tests {
         )
     }
 
-    /// A workspace declaring one lane `suite` with the given freshness and step.
-    fn lane_config(freshness: &str, step: &str) -> Ctx {
+    /// A workspace declaring one lane `suite` with the given step, and the
+    /// given further keys in the lane's table.
+    fn lane_config(keys: &str, step: &str) -> Ctx {
         ctx_from_config(&format!(
             r#"
 [ext.ci]
@@ -908,7 +879,7 @@ cache_group = "linux"
 label = "Linux"
 os = "linux"
 program = "just"
-freshness = "{freshness}"
+{keys}
 steps = [{step}]
 role = "gate"
 timeout_minutes = 30
@@ -916,108 +887,40 @@ timeout_minutes = 30
         ))
     }
 
-    /// Stamping is what every lane did before freshness was a choice, so a
-    /// lane that does not choose keeps it.
+    /// A lane's build directory follows one checkout, so the mtimes cargo
+    /// reads are honest and no lane chooses another way to judge them.
     #[test]
-    fn a_lane_is_judged_by_mtime_unless_it_says_otherwise() {
-        let ctx = ctx_from_config(
-            r#"
-[ext.ci]
-pins = "ci-pins.toml"
-
-[ext.ci.lanes.suite]
-cache_group = "linux"
-label = "Linux"
-os = "linux"
-program = "just"
-steps = [{ args = ["lint"], label = "lint" }]
-role = "gate"
-timeout_minutes = 30
-"#,
-        );
-        let ext = KitharaExt::from_ctx(&ctx).expect("parse kithara extension");
-        assert_eq!(ext.ci.lanes["suite"].freshness, LaneFreshness::Mtime);
-
-        let ext = KitharaExt::from_ctx(&lane_config(
-            "checksum",
+    fn a_lane_does_not_choose_how_its_build_is_judged_fresh() {
+        let error = KitharaExt::from_ctx(&lane_config(
+            r#"freshness = "checksum""#,
             r#"{ args = ["test", "run"], label = "suite" }"#,
         ))
-        .expect("parse kithara extension");
-        assert_eq!(ext.ci.lanes["suite"].freshness, LaneFreshness::Checksum);
-        ext.ci.validate().expect("a checksum lane is valid");
-    }
+        .expect_err("freshness is no lane's choice");
 
-    /// The flag alone on a stable toolchain does nothing, and on nightly it
-    /// makes a lane whose claim still stamps by mtime; only the lane can ask.
-    #[test]
-    fn a_step_may_not_ask_for_checksum_freshness_itself() {
-        let ctx = lane_config(
-            "mtime",
-            r#"{ args = ["test", "run"], label = "suite", env = { CARGO_UNSTABLE_CHECKSUM_FRESHNESS = "true" } }"#,
-        );
-
-        let error = KitharaExt::from_ctx(&ctx)
-            .expect("parse kithara extension")
-            .ci
-            .validate()
-            .expect_err("a step cannot choose the lane's freshness");
-        assert!(
-            error.to_string().contains("freshness = \"checksum\""),
-            "{error}"
-        );
-    }
-
-    /// Checksum freshness is honoured only by the pinned nightly, so a step
-    /// of a checksum lane cannot pick another toolchain; an mtime lane can.
-    #[test]
-    fn a_checksum_lane_leaves_the_toolchain_to_the_pin() {
-        let step =
-            r#"{ args = ["test", "run"], label = "suite", env = { RUSTUP_TOOLCHAIN = "1.88" } }"#;
-        let validate = |freshness: &str| {
-            KitharaExt::from_ctx(&lane_config(freshness, step))
-                .expect("parse kithara extension")
-                .ci
-                .validate()
-        };
-
-        let error = validate("checksum").expect_err("a checksum lane builds with the pin");
-        assert!(error.to_string().contains("pinned nightly"), "{error}");
-        validate("mtime").expect("an mtime lane may pin its own toolchain");
+        assert!(format!("{error:#}").contains("freshness"), "{error:#}");
     }
 
     /// A rebuild check repeats a `just test run` step building only; any other
     /// step has no cargo status lines to read.
     #[test]
     fn a_rebuild_check_repeats_a_suite_alone() {
-        let validate = |freshness: &str, step: &str| {
-            KitharaExt::from_ctx(&lane_config(freshness, step))
+        let validate = |step: &str| {
+            KitharaExt::from_ctx(&lane_config("", step))
                 .expect("parse kithara extension")
                 .ci
                 .validate()
         };
 
-        for freshness in ["mtime", "checksum"] {
-            validate(
-                freshness,
-                r#"{ args = ["test", "run", "--timings"], label = "suite", rebuild_check = true }"#,
-            )
-            .expect("a suite checks its rebuild");
-        }
-        for (freshness, step) in [
-            (
-                "checksum",
-                r#"{ args = ["lint"], label = "lint", rebuild_check = true }"#,
-            ),
-            (
-                "checksum",
-                r#"{ args = ["test", "run"], label = "suite", rebuild_check = true, args_by_kind = { quarantine = ["lint"] } }"#,
-            ),
-            (
-                "checksum",
-                r#"{ args = ["test", "run"], label = "suite", rebuild_check = true, program = "cargo" }"#,
-            ),
+        validate(
+            r#"{ args = ["test", "run", "--timings"], label = "suite", rebuild_check = true }"#,
+        )
+        .expect("a suite checks its rebuild");
+        for step in [
+            r#"{ args = ["lint"], label = "lint", rebuild_check = true }"#,
+            r#"{ args = ["test", "run"], label = "suite", rebuild_check = true, args_by_kind = { quarantine = ["lint"] } }"#,
+            r#"{ args = ["test", "run"], label = "suite", rebuild_check = true, program = "cargo" }"#,
         ] {
-            let error = validate(freshness, step).expect_err(step);
+            let error = validate(step).expect_err(step);
             assert!(error.to_string().contains("rebuild_check"), "{error}");
         }
     }

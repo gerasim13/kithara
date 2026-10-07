@@ -228,19 +228,18 @@ mod tests {
         }
     }
 
-    /// A workspace at `root` declaring one lane of the given freshness whose
-    /// only step succeeds.
-    fn trivial_lane(root: &Path, freshness: &str) -> (Ctx, LaneArgs) {
+    /// A workspace at `root` declaring one lane whose only step succeeds.
+    fn trivial_lane(root: &Path) -> (Ctx, LaneArgs) {
         if cfg!(windows) {
-            lane_running(root, "cmd", r#"args = ["/C", "exit", "0"]"#, freshness)
+            lane_running(root, "cmd", r#"args = ["/C", "exit", "0"]"#)
         } else {
-            lane_running(root, "sh", r#"args = ["-c", "exit 0"]"#, freshness)
+            lane_running(root, "sh", r#"args = ["-c", "exit 0"]"#)
         }
     }
 
-    /// A workspace at `root` declaring one lane of the given freshness whose
-    /// only step, labelled `run`, runs `program` as the TOML lines `step` say.
-    fn lane_running(root: &Path, program: &str, step: &str, freshness: &str) -> (Ctx, LaneArgs) {
+    /// A workspace at `root` declaring one lane whose only step, labelled
+    /// `run`, runs `program` as the TOML lines `step` say.
+    fn lane_running(root: &Path, program: &str, step: &str) -> (Ctx, LaneArgs) {
         let root = root.to_path_buf();
         fixture()
             .pins
@@ -258,7 +257,6 @@ pins = "ci-pins.toml"
 
 [ext.ci.lanes.trivial]
 cache_group = "host"
-freshness = "{freshness}"
 label = "fixture"
 os = "{os}"
 program = "{program}"
@@ -290,7 +288,7 @@ label = "run"
     #[test]
     fn a_lane_reaches_its_own_work_with_no_host_profile_resolved() {
         let temp = tempfile::tempdir().expect("create fixture workspace");
-        let (ctx, args) = trivial_lane(temp.path(), "mtime");
+        let (ctx, args) = trivial_lane(temp.path());
 
         let result = run_in(&args, &ctx, &environment(&[]));
 
@@ -315,7 +313,7 @@ label = "run"
             r#"args = ["-c", "printf '%s' \"$CARGO_TARGET_DIR\" > '{}'"]"#,
             seen.display()
         );
-        let (ctx, args) = lane_running(temp.path(), "sh", &record, "mtime");
+        let (ctx, args) = lane_running(temp.path(), "sh", &record);
         let github_env = temp.path().join("github-env");
         fs::write(&github_env, "").expect("create the job's GITHUB_ENV");
         let alias = builds.path().join(consts::BUILD_ALIAS);
@@ -381,7 +379,6 @@ label = "run"
             temp.path(),
             "just",
             "args = [\"test\", \"run\", \"--timings\"]\nrebuild_check = true",
-            "mtime",
         );
         ctx.config.tools = toml::from_str(&format!("[just]\nprogram = \"{}\"\n", just.display()))
             .expect("parse the tools table");
@@ -419,7 +416,7 @@ label = "run"
         .expect("write the cache double");
         fs::set_permissions(&sccache, fs::Permissions::from_mode(0o755))
             .expect("make the cache double runnable");
-        let (mut ctx, args) = trivial_lane(temp.path(), "mtime");
+        let (mut ctx, args) = trivial_lane(temp.path());
         ctx.config.tools =
             toml::from_str(&format!("[sccache]\nprogram = \"{}\"\n", sccache.display()))
                 .expect("parse the tools table");
@@ -446,7 +443,7 @@ label = "run"
     fn a_lane_outside_a_ci_job_enters_no_build_directory() {
         let temp = tempfile::tempdir().expect("create fixture workspace");
         let builds = tempfile::tempdir().expect("create a build root");
-        let (ctx, args) = trivial_lane(temp.path(), "mtime");
+        let (ctx, args) = trivial_lane(temp.path());
         let own = temp.path().join("target/debug/own-build");
         fs::create_dir_all(own.parent().expect("a build file has a directory"))
             .expect("create the developer's build");
@@ -473,7 +470,7 @@ label = "run"
     fn a_lane_that_cannot_tell_the_job_where_it_built_still_runs() {
         let temp = tempfile::tempdir().expect("create fixture workspace");
         let builds = tempfile::tempdir().expect("create the runner's build root");
-        let (ctx, args) = trivial_lane(temp.path(), "mtime");
+        let (ctx, args) = trivial_lane(temp.path());
         let github_env = temp.path().join("missing/github-env");
         let alias = builds.path().join(consts::BUILD_ALIAS);
 

@@ -16,7 +16,7 @@ use crate::{
         cache::snapshot, config::CiPins, environment::CacheTrust, process::Process,
         run::PipelineKind,
     },
-    config::{CiLaneConfig, CiLanePin, CiLaneStep, LaneFreshness},
+    config::{CiLaneConfig, CiLanePin, CiLaneStep},
     consts,
 };
 
@@ -78,7 +78,7 @@ pub(crate) fn run(
             .iter()
             .map(|arg| resolve(arg, process, pins))
             .collect::<Result<Vec<_>>>()?;
-        let vars = step_vars(lane, step, process, pins)?;
+        let vars = step_vars(step, process, pins)?;
         process.run_command(
             process.command(&program).args(&args).envs(&vars),
             &step.label,
@@ -305,28 +305,16 @@ fn resolve(value: &str, process: &Process, pins: &CiPins) -> Result<String> {
     Ok(filled)
 }
 
-/// The step's own variables, and for a checksum lane the two that make cargo
-/// judge the lane's directory by checksum: the flag and the nightly that
-/// honours it.
+/// The step's own variables, resolved against the checkout and the pins.
 fn step_vars(
-    lane: &CiLaneConfig,
     step: &CiLaneStep,
     process: &Process,
     pins: &CiPins,
 ) -> Result<BTreeMap<String, String>> {
-    let mut vars = step
-        .env
+    step.env
         .iter()
         .map(|(key, value)| Ok((key.clone(), resolve(value, process, pins)?)))
-        .collect::<Result<BTreeMap<_, _>>>()?;
-    if lane.freshness == LaneFreshness::Checksum {
-        vars.insert(consts::CHECKSUM_FRESHNESS_ENV.to_owned(), "true".to_owned());
-        vars.insert(
-            consts::TOOLCHAIN_ENV.to_owned(),
-            pins.nightly_toolchain.clone(),
-        );
-    }
-    Ok(vars)
+        .collect()
 }
 
 fn require_pinned_version(
@@ -383,13 +371,12 @@ mod tests {
         process::{Recording, Step},
     };
 
-    /// A lane of the given freshness whose one step runs the suite and leaves
-    /// its hang dumps under the checkout.
-    fn checksum_lane(freshness: LaneFreshness) -> CiLaneConfig {
+    /// A lane whose one step runs the suite and leaves its hang dumps under
+    /// the checkout.
+    fn suite_lane() -> CiLaneConfig {
         CiLaneConfig {
             label: "fixture".to_owned(),
             program: "just".to_owned(),
-            freshness,
             steps: vec![CiLaneStep {
                 args: vec!["test".to_owned(), "run".to_owned()],
                 label: "suite".to_owned(),
@@ -417,34 +404,20 @@ mod tests {
         process.recorded().unwrap().steps().to_vec()
     }
 
-    /// Checksum freshness is honoured only by nightly cargo, so the lane that
-    /// asks for it gets the flag and the pinned nightly together.
+    /// A lane's build follows one checkout, so cargo judges it by mtime on
+    /// whatever toolchain the step names: the step builds with its own
+    /// variables and nothing else.
     #[test]
-    fn a_checksum_lane_builds_with_the_pinned_nightly() {
-        let steps = recorded(&checksum_lane(LaneFreshness::Checksum));
+    fn a_step_builds_with_its_own_variables_alone() {
+        let steps = recorded(&suite_lane());
 
-        let env = &steps[0].env;
         assert_eq!(
-            env.get(consts::CHECKSUM_FRESHNESS_ENV).map(String::as_str),
-            Some("true")
+            steps[0].env,
+            BTreeMap::from([(
+                "KITHARA_HANG_DUMP_DIR".to_owned(),
+                "/checkout/target/hang".to_owned()
+            )])
         );
-        assert_eq!(
-            env.get(consts::TOOLCHAIN_ENV),
-            Some(&fixture().pins.nightly_toolchain)
-        );
-        assert_eq!(
-            env.get("KITHARA_HANG_DUMP_DIR").map(String::as_str),
-            Some("/checkout/target/hang")
-        );
-    }
-
-    #[test]
-    fn an_mtime_lane_leaves_the_toolchain_to_the_step() {
-        let steps = recorded(&checksum_lane(LaneFreshness::Mtime));
-
-        let env = &steps[0].env;
-        assert!(!env.contains_key(consts::CHECKSUM_FRESHNESS_ENV), "{env:?}");
-        assert!(!env.contains_key(consts::TOOLCHAIN_ENV), "{env:?}");
     }
 
     /// The check repeats its step with the same variables, building only, with
@@ -452,7 +425,7 @@ mod tests {
     /// timings report a build that compiles nothing would still rewrite.
     #[test]
     fn a_rebuild_check_repeats_its_step_building_only() {
-        let mut lane = checksum_lane(LaneFreshness::Checksum);
+        let mut lane = suite_lane();
         lane.steps[0].args.push("--timings".to_owned());
         lane.steps[0].rebuild_check = true;
 
