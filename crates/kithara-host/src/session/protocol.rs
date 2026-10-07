@@ -1,10 +1,14 @@
 use firewheel::FirewheelContext;
+use kithara_audio::ConsumerWakeMode;
 use kithara_command::When;
 use kithara_output::OutputGroup;
-use kithara_platform::sync::mpsc;
+use kithara_platform::{
+    maybe_send::{MaybeSend, MaybeSync},
+    sync::mpsc,
+};
 use kithara_play::PlayError;
 pub(crate) use kithara_play::{
-    AllocatedSlot, DeckRegistration, PlayerId, SessionDispatcher, SessionError, SessionSampleRate,
+    AllocatedSlot, DeckRegistration, PlayerId, SessionError, SessionSampleRate,
 };
 use kithara_signal::SessionFrame;
 use kithara_warp::BeatGridId;
@@ -88,7 +92,7 @@ impl<S> From<HostDispatchError<S>> for (PlayError, Option<Box<HostCmd<S>>>) {
     }
 }
 
-pub(crate) trait HostDispatcher<S>: SessionDispatcher<S> {
+pub(crate) trait HostDispatcher<S>: MaybeSend + MaybeSync {
     /// Adds one deck to the session on its owner thread and starts it there,
     /// answering the slot the deck plays through.
     fn attach(&self, registration: DeckRegistration<S>) -> Result<AllocatedSlot, PlayError> {
@@ -106,6 +110,11 @@ pub(crate) trait HostDispatcher<S>: SessionDispatcher<S> {
             _ => owner_thread_fail_fast("unexpected detach reply"),
         }
     }
+
+    /// How the audio consumers of the decks this session hosts may wake
+    /// workers. Every one of them reads from the render callback, offline
+    /// backends included.
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode;
 
     fn exec_host(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>>;
 }

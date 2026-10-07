@@ -211,7 +211,7 @@ impl<P: PlayerControlSource> PlayerControlSource for ThreadProbe<P> {
         to self.inner {
             fn attach_session(
                 &mut self,
-                binding: SessionBinding<Self::Schema>,
+                binding: SessionBinding,
             ) -> Result<DeckRegistration<Self::Schema>, PlayError>;
             fn control(&self) -> Self::Control;
             fn seat(&mut self, slot: AllocatedSlot);

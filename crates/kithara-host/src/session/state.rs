@@ -6,13 +6,16 @@ use firewheel::{
     channel_config::ChannelCount,
     node::{AudioNode, NodeID},
 };
+use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::PoolRegion;
 use kithara_command::Live;
 use kithara_config::ConfigOwner;
 use kithara_events::EventBus;
 use kithara_output::OutputGroup;
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_play::{DeckMixerConfig, SessionSampleRate, StreamShape};
+use kithara_play::{
+    DeckMixerConfig, SessionBinding, SessionOutputView, SessionSampleRate, StreamShape,
+};
 use kithara_signal::SessionEpoch;
 use kithara_warp::{
     BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridStamp, MapAxis, SessionAxis,
@@ -229,22 +232,36 @@ struct RootSnapshot {
     decks: Box<[BeatGridId]>,
     grid: BeatGridSnapshot,
     settings: HostSettings,
-    stream_shape: Option<StreamShape>,
-    sample_rate: SessionSampleRate,
 }
 
+/// What the session last published: its decks, grid and settings, and the
+/// output its decks read.
 #[derive(Clone)]
-pub(crate) struct RootView(Arc<ArcSwap<RootSnapshot>>);
+pub(crate) struct RootView {
+    root: Arc<ArcSwap<RootSnapshot>>,
+    pub(super) output: SessionOutputView,
+}
 
 impl RootView {
     pub(crate) fn new(root: &HostRoot, settings: HostSettings) -> Self {
-        Self(Arc::new(ArcSwap::from_pointee(RootSnapshot {
-            settings,
-            decks: root.decks(),
-            grid: root.grid.clone(),
-            stream_shape: None,
-            sample_rate: SessionSampleRate::new(None, settings.sample_rate().get()),
-        })))
+        Self {
+            root: Arc::new(ArcSwap::from_pointee(RootSnapshot {
+                settings,
+                decks: root.decks(),
+                grid: root.grid.clone(),
+            })),
+            output: SessionOutputView::new(settings.sample_rate()),
+        }
+    }
+
+    /// What a deck joins this session with: the output it publishes, how the
+    /// deck's consumers wake workers, and the rate the settings ask for.
+    pub(crate) fn binding(&self, consumer_wake_mode: ConsumerWakeMode) -> SessionBinding {
+        SessionBinding::new(
+            self.output.clone(),
+            consumer_wake_mode,
+            self.settings().sample_rate(),
+        )
     }
 
     fn publish(
@@ -254,39 +271,35 @@ impl RootView {
         stream_shape: Option<StreamShape>,
         sample_rate: SessionSampleRate,
     ) {
-        self.0.store(Arc::new(RootSnapshot {
+        self.root.store(Arc::new(RootSnapshot {
             settings,
-            stream_shape,
-            sample_rate,
             decks: root.decks(),
             grid: root.grid.clone(),
         }));
+        self.output.publish(sample_rate, stream_shape);
     }
 
     /// Whether the deck `grid_id` is in the session.
     pub(crate) fn holds(&self, grid_id: BeatGridId) -> bool {
-        self.0.load().decks.contains(&grid_id)
+        self.root.load().decks.contains(&grid_id)
     }
 
     /// Whether the session holds no deck.
     pub(crate) fn is_empty(&self) -> bool {
-        self.0.load().decks.is_empty()
+        self.root.load().decks.is_empty()
     }
 
     delegate::delegate! {
-        to self.0 {
+        to self.root {
             #[call(load)]
             #[expr($.grid.clone())]
             pub(crate) fn grid(&self) -> BeatGridSnapshot;
             #[call(load)]
-            #[expr($.sample_rate)]
-            pub(crate) fn sample_rate(&self) -> SessionSampleRate;
-            #[call(load)]
             #[expr($.settings)]
             pub(crate) fn settings(&self) -> HostSettings;
-            #[call(load)]
-            #[expr($.stream_shape)]
-            pub(crate) fn stream_shape(&self) -> Option<StreamShape>;
+        }
+        to self.output {
+            pub(crate) fn sample_rate(&self) -> SessionSampleRate;
         }
     }
 }

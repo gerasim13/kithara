@@ -125,180 +125,112 @@ mod wire {
     }
 }
 
-mod handle {
-    use std::{
-        num::NonZeroU32,
-        sync::atomic::{AtomicU64, Ordering},
-    };
+mod binding {
+    use std::num::NonZeroU32;
 
+    use arc_swap::ArcSwap;
     use kithara_audio::ConsumerWakeMode;
-    use kithara_platform::{
-        maybe_send::{MaybeSend, MaybeSync},
-        sync::{Arc, Mutex},
-    };
+    use kithara_platform::sync::Arc;
     use kithara_render::rt::StreamShape;
 
     use super::wire::SessionSampleRate;
-    use crate::error::PlayError;
 
-    /// Handle used by resident players to reach their session owner.
-    ///
-    /// The handle stays inside the thread that built it: on wasm that is one
-    /// worker, so the bound is [`MaybeSend`], which is `Send` on every
-    /// threaded target and nothing on wasm.
-    pub trait SessionDispatcher<S>: MaybeSend + MaybeSync {
-        /// Describe how audio consumers hosted by this session may wake workers.
-        /// Every one of them reads from the render callback, offline backends
-        /// included.
-        fn consumer_wake_mode(&self) -> ConsumerWakeMode;
-
-        /// The output rate the session last published: the rate the running
-        /// backend settled on, beside the one the settings ask for.
-        fn sample_rate(&self) -> SessionSampleRate;
-
-        /// The output shape the session last published: the measured stream
-        /// once one runs, the requested block before.
-        fn stream_shape(&self) -> Option<StreamShape>;
+    struct OutputSnapshot {
+        sample_rate: SessionSampleRate,
+        stream_shape: Option<StreamShape>,
     }
 
-    /// Opaque one-shot capability used to attach a Player to its session.
+    /// Where a session publishes its output for the decks it holds to read.
+    #[derive(Clone)]
+    pub struct SessionOutputView(Arc<ArcSwap<OutputSnapshot>>);
+
+    impl SessionOutputView {
+        /// A session that has published no output yet: nothing measured, no
+        /// shape, the rate its settings ask for.
+        #[must_use]
+        pub fn new(requested_sample_rate: NonZeroU32) -> Self {
+            Self(Arc::new(ArcSwap::from_pointee(OutputSnapshot {
+                sample_rate: SessionSampleRate::new(None, requested_sample_rate.get()),
+                stream_shape: None,
+            })))
+        }
+
+        /// The session's output changed: every deck it holds reads this from
+        /// now on.
+        pub fn publish(&self, sample_rate: SessionSampleRate, stream_shape: Option<StreamShape>) {
+            self.0.store(Arc::new(OutputSnapshot {
+                sample_rate,
+                stream_shape,
+            }));
+        }
+
+        delegate::delegate! {
+            to self.0 {
+                /// The output rate the session last published: the rate the
+                /// running backend settled on, beside the one the settings ask
+                /// for.
+                #[must_use]
+                #[call(load)]
+                #[expr($.sample_rate)]
+                pub fn sample_rate(&self) -> SessionSampleRate;
+                /// The output shape the session last published: the measured
+                /// stream once one runs, the requested block before.
+                #[must_use]
+                #[call(load)]
+                #[expr($.stream_shape)]
+                pub fn stream_shape(&self) -> Option<StreamShape>;
+            }
+        }
+    }
+
+    /// What a player joins its session with, once.
     ///
-    /// The dispatcher is deliberately inaccessible: decorators may only pass
-    /// this capability down to their resident Player.
-    #[derive_where::derive_where(Clone)]
-    pub struct SessionBinding<S> {
-        dispatcher: Arc<dyn SessionDispatcher<S>>,
+    /// Decorators may only pass it down to their resident Player.
+    #[derive(Clone, fieldwork::Fieldwork)]
+    #[fieldwork(opt_in)]
+    pub struct SessionBinding {
+        output: SessionOutputView,
+        /// How the audio consumers the player hosts may wake workers.
+        #[field(get, copy, vis = "pub(crate)")]
+        consumer_wake_mode: ConsumerWakeMode,
+        /// The rate the owner's settings name when the player joins.
+        #[field(get, copy, vis = "pub(crate)")]
         requested_sample_rate: NonZeroU32,
     }
 
-    impl<S> SessionBinding<S> {
-        /// Wraps the canonical session for one Host insertion.
+    impl SessionBinding {
+        /// A binding to the session that publishes `output`.
         ///
+        /// Every audio consumer the player hosts reads from the session's
+        /// render callback and wakes its workers as `consumer_wake_mode` says.
         /// The rate is the one the owner's settings name when the player
         /// joins; a player built for another rate is refused. The session
         /// starts its output at the rate its settings name then, not at this
         /// copy.
         #[doc(hidden)]
         #[must_use]
-        pub fn new(
-            dispatcher: Arc<dyn SessionDispatcher<S>>,
+        pub const fn new(
+            output: SessionOutputView,
+            consumer_wake_mode: ConsumerWakeMode,
             requested_sample_rate: NonZeroU32,
         ) -> Self {
             Self {
-                dispatcher,
+                output,
+                consumer_wake_mode,
                 requested_sample_rate,
             }
         }
 
-        #[must_use]
-        pub(crate) fn requested_sample_rate(&self) -> NonZeroU32 {
-            self.requested_sample_rate
-        }
-    }
-
-    struct SessionSlot<S> {
-        /// The audio-thread tick the platform suspended this output at, plus
-        /// one; `0` means the output was never taken away.
-        suspended_at: AtomicU64,
-        binding: Mutex<Option<SessionBinding<S>>>,
-    }
-
-    #[derive_where::derive_where(Clone)]
-    pub struct SessionHandle<S>(Arc<SessionSlot<S>>);
-
-    impl<S> SessionHandle<S> {
-        #[must_use]
-        pub fn new(binding: SessionBinding<S>) -> Self {
-            Self(Arc::new(SessionSlot {
-                binding: Mutex::new(Some(binding)),
-                suspended_at: AtomicU64::new(0),
-            }))
-        }
-
-        pub(crate) fn bind(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
-            let mut current = self.0.binding.lock();
-            if current.is_some() {
-                return Err(PlayError::SessionAlreadyBound);
-            }
-            *current = Some(binding);
-            drop(current);
-            Ok(())
-        }
-
-        /// An instance may prepare resources before Host insertion, so the pending policy defaults
-        /// to the RT-safe production path; explicit offline dispatchers override it once bound.
-        #[must_use]
-        pub fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            self.dispatcher()
-                .map_or(ConsumerWakeMode::RealtimeDeferred, |dispatcher| {
-                    dispatcher.consumer_wake_mode()
-                })
-        }
-
-        pub fn dispatcher(&self) -> Result<Arc<dyn SessionDispatcher<S>>, PlayError> {
-            self.0
-                .binding
-                .lock()
-                .as_ref()
-                .map(|binding| Arc::clone(&binding.dispatcher))
-                .ok_or(PlayError::SessionUnbound)
-        }
-
-        #[must_use]
-        pub(crate) fn pending() -> Self {
-            Self(Arc::new(SessionSlot {
-                binding: Mutex::default(),
-                suspended_at: AtomicU64::new(0),
-            }))
-        }
-
-        pub(crate) fn stream_shape(&self) -> Option<StreamShape> {
-            let dispatcher = self
-                .0
-                .binding
-                .lock()
-                .as_ref()
-                .map(|binding| Arc::clone(&binding.dispatcher));
-            dispatcher.and_then(|dispatcher| dispatcher.stream_shape())
-        }
-
-        /// Record that the platform suspended the output at `tick`.
-        pub fn suspend_output(&self, tick: u64) {
-            self.0
-                .suspended_at
-                .store(tick.saturating_add(1), Ordering::Release);
-        }
-
-        /// The audio-thread tick this output was suspended at, if the platform
-        /// has taken it away and has not driven it since.
-        ///
-        /// A suspended output leaves the RT processor unscheduled, so every
-        /// value it publishes stays at whatever it last wrote. The tick is how
-        /// a reader tells the two apart: while the audio thread still stands
-        /// where it stood, its publications describe an output that is gone.
-        /// One tick past it the processor has drained the commands sent before
-        /// the suspension, but it counts a call as the call starts and
-        /// publishes as it ends, so a reader may look in between. Two ticks
-        /// past it that call has published, so the output speaks for itself
-        /// again and nothing needs to release it.
-        #[must_use]
-        pub fn suspended_at(&self) -> Option<u64> {
-            match self.0.suspended_at.load(Ordering::Acquire) {
-                0 => None,
-                tick => Some(tick - 1),
-            }
-        }
-
         delegate::delegate! {
-            to self.dispatcher()? {
-                #[expr(Ok($))]
-                pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError>;
+            to self.output {
+                pub(crate) fn sample_rate(&self) -> SessionSampleRate;
+                pub(crate) fn stream_shape(&self) -> Option<StreamShape>;
             }
         }
     }
 }
 
-pub use handle::{SessionBinding, SessionDispatcher, SessionHandle};
+pub use binding::{SessionBinding, SessionOutputView};
 pub use wire::{AllocatedSlot, DeckRegistration, PlayerId, SessionError, SessionSampleRate};
 
 #[cfg(test)]
@@ -306,67 +238,27 @@ mod tests {
     use std::num::NonZeroU32;
 
     use kithara_audio::ConsumerWakeMode;
-    use kithara_platform::sync::Arc;
-    use kithara_render::rt::StreamShape;
     use kithara_test_utils::kithara;
 
-    use super::{SessionBinding, SessionDispatcher, SessionHandle, SessionSampleRate};
-    use crate::{PlayError, test_pools::TestPools};
-
-    struct DefaultSession;
+    use super::{SessionBinding, SessionOutputView, SessionSampleRate};
 
     fn sample_rate() -> NonZeroU32 {
         NonZeroU32::new(48_000).expect("fixture sample rate is non-zero")
     }
 
-    impl SessionDispatcher<TestPools> for DefaultSession {
-        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            ConsumerWakeMode::RealtimeDeferred
-        }
-
-        fn sample_rate(&self) -> SessionSampleRate {
-            SessionSampleRate::new(None, sample_rate().get())
-        }
-
-        fn stream_shape(&self) -> Option<StreamShape> {
-            None
-        }
-    }
-
     #[kithara::test]
-    fn session_handle_delegates_explicit_consumer_wake_mode() {
-        let handle: SessionHandle<TestPools> =
-            SessionHandle::new(SessionBinding::new(Arc::new(DefaultSession), sample_rate()));
-
-        assert_eq!(
-            handle.consumer_wake_mode(),
-            ConsumerWakeMode::RealtimeDeferred
+    fn a_binding_reads_what_its_session_publishes_after_it_binds() {
+        let output = SessionOutputView::new(sample_rate());
+        let binding = SessionBinding::new(
+            output.clone(),
+            ConsumerWakeMode::RealtimeDeferred,
+            sample_rate(),
         );
-    }
+        assert_eq!(binding.sample_rate().measured, None);
 
-    #[kithara::test]
-    fn pending_session_binds_once() {
-        let handle: SessionHandle<TestPools> = SessionHandle::pending();
-        assert_eq!(
-            handle.consumer_wake_mode(),
-            ConsumerWakeMode::RealtimeDeferred
-        );
-        assert!(matches!(
-            handle.sample_rate(),
-            Err(PlayError::SessionUnbound)
-        ));
+        output.publish(SessionSampleRate::new(Some(44_100), 48_000), None);
 
-        handle
-            .bind(SessionBinding::new(Arc::new(DefaultSession), sample_rate()))
-            .expect("bind canonical session");
-        assert_eq!(
-            handle.consumer_wake_mode(),
-            ConsumerWakeMode::RealtimeDeferred
-        );
-        assert!(handle.sample_rate().is_ok());
-        assert!(matches!(
-            handle.bind(SessionBinding::new(Arc::new(DefaultSession), sample_rate())),
-            Err(PlayError::SessionAlreadyBound)
-        ));
+        assert_eq!(binding.sample_rate().measured, Some(44_100));
+        assert_eq!(binding.sample_rate().output(), 44_100);
     }
 }

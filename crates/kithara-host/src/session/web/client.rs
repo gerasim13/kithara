@@ -4,7 +4,6 @@ use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::HasPool;
 use kithara_command::Live;
 use kithara_platform::sync::{Arc, Mutex, mpsc};
-use kithara_play::{SessionSampleRate, StreamShape};
 
 use super::bridge::{init_bridge_state, reset_bridge_state, start_stream_web_audio};
 use crate::{
@@ -14,9 +13,7 @@ use crate::{
     session::{
         HostProtocol,
         dispatch::run_host_cmd,
-        protocol::{
-            HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply, SessionDispatcher,
-        },
+        protocol::{HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply},
         state::{HostRoot, RootView, SessionState},
     },
 };
@@ -30,7 +27,6 @@ enum SessionHost<S> {
 }
 
 pub(crate) struct SessionClient<S> {
-    root_view: RootView,
     host: SessionHost<S>,
 }
 
@@ -76,7 +72,7 @@ where
     }
 }
 
-impl<S> SessionDispatcher<S> for SessionClient<S>
+impl<S> HostDispatcher<S> for SessionClient<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
@@ -84,18 +80,6 @@ where
         ConsumerWakeMode::RealtimeDeferred
     }
 
-    delegate::delegate! {
-        to self.root_view {
-            fn sample_rate(&self) -> SessionSampleRate;
-            fn stream_shape(&self) -> Option<StreamShape>;
-        }
-    }
-}
-
-impl<S> HostDispatcher<S> for SessionClient<S>
-where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
     fn exec_host(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
         self.call(cmd)
     }
@@ -134,7 +118,6 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     let state = Arc::new(Mutex::new(Some(session)));
     init_bridge_state();
     let client = Arc::new(SessionClient {
-        root_view,
         host: SessionHost::Local {
             state: Arc::clone(&state),
         },
@@ -144,10 +127,8 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
 
 pub(crate) fn remote<S: HasPool<f32> + Send + Sync + 'static>(
     tx: mpsc::Sender<HostCmdMsg<S>>,
-    root_view: RootView,
 ) -> Arc<dyn HostDispatcher<S>> {
     Arc::new(SessionClient {
-        root_view,
         host: SessionHost::Remote { tx },
     })
 }

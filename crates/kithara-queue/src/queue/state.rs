@@ -317,7 +317,7 @@ pub(crate) mod tests {
         queue
     }
 
-    pub(crate) fn test_session() -> SessionBinding<TestPools> {
+    pub(crate) fn test_session() -> SessionBinding {
         kithara_play::mock::session()
     }
 

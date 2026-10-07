@@ -802,12 +802,13 @@ mod tests {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
-        assert_eq!(state.root_view.stream_shape(), None);
+        assert_eq!(state.root_view.output.stream_shape(), None);
 
         state.requested_max_block_frames = NonZeroU32::new(128);
         state.publish_root();
         let requested = state
             .root_view
+            .output
             .stream_shape()
             .expect("the explicit output block is published before stream start");
         assert_eq!(requested.max_block_frames.get(), 128);
@@ -816,6 +817,7 @@ mod tests {
         let player_id = insert(&mut state);
         let measured = state
             .root_view
+            .output
             .stream_shape()
             .expect("the running stream publishes its measured output shape");
         assert_eq!(measured.max_block_frames.get(), 512);
@@ -824,6 +826,7 @@ mod tests {
         assert_eq!(
             state
                 .root_view
+                .output
                 .stream_shape()
                 .expect("published shape")
                 .sample_rate
@@ -833,6 +836,7 @@ mod tests {
         remove(&mut state, player_id);
         let stopped = state
             .root_view
+            .output
             .stream_shape()
             .expect("configured shape after stop");
         assert_eq!(stopped.max_block_frames.get(), 128);

@@ -57,7 +57,7 @@ where
         to self.resident {
             fn attach_session(
                 &mut self,
-                binding: SessionBinding<S>,
+                binding: SessionBinding,
             ) -> Result<DeckRegistration<S>, PlayError>;
             fn seat(&mut self, slot: AllocatedSlot);
         }

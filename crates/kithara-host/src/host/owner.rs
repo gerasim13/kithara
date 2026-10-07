@@ -5,7 +5,7 @@ use kithara_command::{Live, When};
 use kithara_config::{ConfigOwner, Configure};
 use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
-use kithara_play::{PlayError, SessionBinding, SessionDispatcher, player::PlayerControlSource};
+use kithara_play::{PlayError, player::PlayerControlSource};
 use kithara_signal::SessionFrame;
 use kithara_warp::{BeatGrid, BeatGridId};
 
@@ -106,11 +106,8 @@ impl<S> Host<S> {
     where
         P: PlayerControlSource<Schema = S>,
     {
-        let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
-        let registration = player.attach_session(SessionBinding::new(
-            dispatcher,
-            self.settings().sample_rate(),
-        ))?;
+        let registration =
+            player.attach_session(self.root_view.binding(self.dispatcher.consumer_wake_mode()))?;
         let grid_id = registration.grid_id;
         let slot = self.dispatcher.attach(registration)?;
         player.seat(slot);

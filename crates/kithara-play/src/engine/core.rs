@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_effects::{
@@ -7,7 +9,7 @@ use kithara_effects::{
 use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{
     CancelToken,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
 use kithara_render::{
@@ -22,7 +24,7 @@ use super::{config::EngineConfig, slots::DeckSlot};
 use crate::{
     api::{EngineEvent, SlotId},
     error::PlayError,
-    session::{AllocatedSlot, DeckRegistration, SessionBinding, SessionHandle, SessionSampleRate},
+    session::{AllocatedSlot, DeckRegistration, SessionBinding},
 };
 
 type SlotHandle = SlotControl;
@@ -34,7 +36,10 @@ pub struct EngineImpl<S> {
     #[field(get, vis = "pub(crate)")]
     bus: EventBus,
     slot: Mutex<DeckSlot>,
-    session: SessionHandle<S>,
+    session: OnceLock<SessionBinding>,
+    /// The audio-thread tick the platform suspended this output at, plus
+    /// one; `0` means the output was never taken away.
+    suspended_at: AtomicU64,
 }
 
 impl<S> EngineImpl<S> {
@@ -44,18 +49,21 @@ impl<S> EngineImpl<S> {
         let session = config
             .session
             .take()
-            .map_or_else(SessionHandle::pending, SessionHandle::new);
+            .map_or_else(OnceLock::new, OnceLock::from);
         Self {
             config,
             bus,
             session,
             slot: Mutex::default(),
+            suspended_at: AtomicU64::new(0),
         }
     }
 
-    pub(crate) fn attach_session(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
+    pub(crate) fn attach_session(&self, binding: SessionBinding) -> Result<(), PlayError> {
         self.validate_session_sample_rate(binding.requested_sample_rate().get())?;
-        self.session.bind(binding)
+        self.session
+            .set(binding)
+            .map_err(|_| PlayError::SessionAlreadyBound)
     }
 
     pub(crate) fn begin_slot_seek(&self, slot: SlotId, position: Duration) {
@@ -80,8 +88,14 @@ impl<S> EngineImpl<S> {
         self.config.sample_rate.get()
     }
 
+    /// How the audio consumers this deck hosts may wake workers. A player
+    /// may prepare resources before a Host takes it, so until then it takes
+    /// the RT-safe production path.
     pub(crate) fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        self.session.consumer_wake_mode()
+        self.session.get().map_or(
+            ConsumerWakeMode::RealtimeDeferred,
+            SessionBinding::consumer_wake_mode,
+        )
     }
 
     pub(crate) fn drain_slot_trash(&self, slot: SlotId) -> bool {
@@ -149,9 +163,10 @@ impl<S> EngineImpl<S> {
         if self.slot().is_none() {
             return self.config.sample_rate.get();
         }
-        self.session
-            .sample_rate()
-            .map_or_else(|_| self.config.sample_rate.get(), SessionSampleRate::output)
+        self.session.get().map_or_else(
+            || self.config.sample_rate.get(),
+            |session| session.sample_rate().output(),
+        )
     }
 
     pub(crate) const fn pools(&self) -> &PoolRegion<S> {
@@ -266,7 +281,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub(crate) fn stream_shape(&self) -> Option<StreamShape> {
-        self.session.stream_shape()
+        self.session.get().and_then(SessionBinding::stream_shape)
     }
 
     pub fn subscribe<E: EventSet>(&self) -> EventReceiver<E> {
@@ -275,13 +290,26 @@ impl<S> EngineImpl<S> {
 
     /// The platform suspended this session's audio output at `tick`.
     pub fn suspend_output(&self, tick: u64) {
-        self.session.suspend_output(tick);
+        self.suspended_at
+            .store(tick.saturating_add(1), Ordering::Release);
     }
 
     /// The audio-thread tick this session's output was suspended at, while the
     /// platform still holds it.
+    ///
+    /// A suspended output leaves the RT processor unscheduled, so every value
+    /// it publishes stays at whatever it last wrote. The tick is how a reader
+    /// tells the two apart: while the audio thread still stands where it
+    /// stood, its publications describe an output that is gone. One tick past
+    /// it the processor has drained the commands sent before the suspension,
+    /// but it counts a call as the call starts and publishes as it ends, so a
+    /// reader may look in between. Two ticks past it that call has published,
+    /// so the output speaks for itself again and nothing needs to release it.
     pub fn suspended_at(&self) -> Option<u64> {
-        self.session.suspended_at()
+        match self.suspended_at.load(Ordering::Acquire) {
+            0 => None,
+            tick => Some(tick - 1),
+        }
     }
 
     /// The player closed: the deck its Host built plays nothing more.

@@ -84,7 +84,7 @@ pub struct PlayerRuntime<S> {
 }
 
 impl<S> PlayerRuntime<S> {
-    pub(super) fn attach_session(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
+    pub(super) fn attach_session(&self, binding: SessionBinding) -> Result<(), PlayError> {
         self.with_open_result(|runtime| runtime.core.engine.attach_session(binding))
     }
 

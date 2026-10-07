@@ -14,8 +14,8 @@ use kithara_events::EventBus;
 use kithara_platform::no_block::force_panic_mode;
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    DeckRegistration, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionBinding,
-    SessionDispatcher, player::PlayerControlSource,
+    DeckRegistration, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
+    player::PlayerControlSource,
 };
 use kithara_test_utils::{
     bufpool::{TestPools, pools},
@@ -85,7 +85,6 @@ fn remove_deck(session: &ManualRingSession, grid_id: BeatGridId) {
 
 /// An empty player the session holds, seated the way the Host seats a deck.
 fn seated_player(session: &Arc<ManualRingSession>) -> PlayerImpl<TestPools> {
-    let dispatcher: Arc<dyn SessionDispatcher<TestPools>> = session.clone();
     let mut player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
@@ -94,7 +93,7 @@ fn seated_player(session: &Arc<ManualRingSession>) -> PlayerImpl<TestPools> {
             .build(),
     );
     let registration = player
-        .attach_session(SessionBinding::new(dispatcher, session_rate()))
+        .attach_session(session.binding())
         .expect("the player binds the session");
     match session
         .exec_host(HostCmd::Attach { registration })

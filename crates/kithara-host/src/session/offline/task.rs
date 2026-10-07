@@ -219,11 +219,7 @@ where
         PlayError::Internal(format!("offline session task reservation: {error}"))
     })?;
     let control = pending.context().control();
-    let client = Arc::new(OfflineSessionClient::new(
-        cmd_tx,
-        control,
-        root_view.clone(),
-    ));
+    let client = Arc::new(OfflineSessionClient::new(cmd_tx, control));
     let task = pending
         .start_local(move |_| {
             let start_stream = move |ctx: &mut firewheel::FirewheelContext, rate: u32| {

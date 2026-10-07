@@ -133,7 +133,7 @@ pub struct PlayerConfig<S> {
     /// Optional pre-bound session for isolated harnesses. Production players
     /// are constructed unbound and attached exactly once by their Host.
     #[config(skip = "injected session binding", patch(skip), debug(skip))]
-    pub(crate) session: Option<SessionBinding<S>>,
+    pub(crate) session: Option<SessionBinding>,
     /// Explicit shared playback worker. Its pools and cancellation lifetime
     /// are configured once in [`crate::PlayWorkerConfig`].
     #[config(skip = "injected playback worker", patch(skip))]

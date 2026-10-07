@@ -115,6 +115,7 @@ kithara-waveform = { workspace = true, default-features = false }
 kithara-worker = { workspace = true }
 
 # Utilities
+arc-swap = { workspace = true }
 bytes = { workspace = true }
 delegate = { workspace = true }
 derive-where = { workspace = true }

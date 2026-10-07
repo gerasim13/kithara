@@ -31,7 +31,7 @@ pub struct EngineConfig<S> {
     /// Optional pre-bound session for isolated harnesses. Production engines
     /// receive theirs when the owning Player enters a Host.
     #[config(skip = "injected session binding", debug(skip))]
-    pub(crate) session: Option<SessionBinding<S>>,
+    pub(crate) session: Option<SessionBinding>,
     /// Typed pool facade for audio-thread scratch buffers.
     #[config(skip = "injected pooled scratch resource")]
     pub(crate) pools: PoolRegion<S>,

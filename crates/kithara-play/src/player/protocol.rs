@@ -46,7 +46,7 @@ pub trait PlayerControlSource: Player {
     /// returns what its deck registers with there.
     fn attach_session(
         &mut self,
-        binding: SessionBinding<Self::Schema>,
+        binding: SessionBinding,
     ) -> Result<DeckRegistration<Self::Schema>, PlayError>;
 
     /// Closes the resident player through a previously issued capability.
@@ -90,7 +90,7 @@ where
 
     fn attach_session(
         &mut self,
-        binding: SessionBinding<S>,
+        binding: SessionBinding,
     ) -> Result<DeckRegistration<S>, PlayError> {
         self.runtime.attach_session(binding)?;
         Ok(self.runtime.core.engine.registration())

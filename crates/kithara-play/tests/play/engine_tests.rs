@@ -1,11 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use kithara_audio::ConsumerWakeMode;
 use kithara_events::EventBus;
-use kithara_platform::sync::Arc;
-use kithara_play::{
-    EngineConfig, EngineImpl, SessionBinding, SessionDispatcher, SessionSampleRate, StreamShape,
-};
+use kithara_play::{EngineConfig, EngineImpl, mock};
 use kithara_test_utils::{
     bufpool::{TestPools, pools},
     kithara,
@@ -13,22 +9,6 @@ use kithara_test_utils::{
 use kithara_warp::BeatGridId;
 
 use crate::support::SAMPLE_RATE;
-
-struct FixtureSession;
-
-impl SessionDispatcher<TestPools> for FixtureSession {
-    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::RealtimeDeferred
-    }
-
-    fn sample_rate(&self) -> SessionSampleRate {
-        SessionSampleRate::new(None, SAMPLE_RATE.get())
-    }
-
-    fn stream_shape(&self) -> Option<StreamShape> {
-        None
-    }
-}
 
 fn response_budget() -> NonZeroUsize {
     NonZeroUsize::new(448).expect("fixture response budget is non-zero")
@@ -39,7 +19,7 @@ fn make_engine() -> EngineImpl<TestPools> {
         EngineConfig::builder()
             .sample_rate(SAMPLE_RATE)
             .grid_id(BeatGridId::allocate().expect("fixture grid id"))
-            .session(SessionBinding::new(Arc::new(FixtureSession), SAMPLE_RATE))
+            .session(mock::session_at(SAMPLE_RATE))
             .pools(pools())
             .response_budget_frames(response_budget())
             .build(),

@@ -280,12 +280,9 @@ mod tests {
         task::Waker,
     };
 
-    use delegate::delegate;
     use kithara_audio::ConsumerWakeMode;
     use kithara_platform::{sync::Arc, time};
-    use kithara_play::{
-        PlayError, SessionDispatcher, SessionSampleRate, StreamShape, player::Player,
-    };
+    use kithara_play::{PlayError, player::Player};
     use kithara_test_utils::{bufpool::TestPools, kithara};
     use kithara_warp::BeatGridId;
 
@@ -295,22 +292,6 @@ mod tests {
         host::owner::SessionRoot,
         session::{HostCmd, HostDispatcher, HostReply, HostRoot, protocol::HostDispatchError},
     };
-
-    struct FixtureSession;
-
-    impl<S> SessionDispatcher<S> for FixtureSession {
-        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            ConsumerWakeMode::RealtimeDeferred
-        }
-
-        fn sample_rate(&self) -> SessionSampleRate {
-            SessionSampleRate::new(None, consts::DEFAULT_SAMPLE_RATE.get())
-        }
-
-        fn stream_shape(&self) -> Option<StreamShape> {
-            None
-        }
-    }
 
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Outcome {
@@ -369,25 +350,15 @@ mod tests {
     }
 
     struct Dispatcher {
-        session: FixtureSession,
         detach: Outcome,
         root: RefCell<HostRoot>,
     }
 
-    impl SessionDispatcher<TestPools> for Dispatcher {
-        delegate! {
-            to &self.session {
-                #[through(SessionDispatcher::<TestPools>)]
-                fn consumer_wake_mode(&self) -> ConsumerWakeMode;
-                #[through(SessionDispatcher::<TestPools>)]
-                fn sample_rate(&self) -> SessionSampleRate;
-                #[through(SessionDispatcher::<TestPools>)]
-                fn stream_shape(&self) -> Option<StreamShape>;
-            }
-        }
-    }
-
     impl HostDispatcher<TestPools> for Dispatcher {
+        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            ConsumerWakeMode::RealtimeDeferred
+        }
+
         fn exec_host(
             &self,
             cmd: HostCmd<TestPools>,
@@ -436,7 +407,6 @@ mod tests {
 
         let dispatcher: Arc<dyn HostDispatcher<TestPools>> = Arc::new(Dispatcher {
             detach,
-            session: FixtureSession,
             root: RefCell::new(root),
         });
         let drops = Rc::default();

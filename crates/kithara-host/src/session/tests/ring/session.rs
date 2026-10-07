@@ -11,10 +11,7 @@ use kithara_platform::{
     sync::{Mutex, mpsc},
     thread::{JoinHandle, spawn_named},
 };
-use kithara_play::{
-    DeckRegistration, SessionDispatcher, SessionError, SessionSampleRate, SessionTransportSnapshot,
-    StreamShape,
-};
+use kithara_play::{DeckRegistration, SessionBinding, SessionError, SessionTransportSnapshot};
 use kithara_test_utils::{
     bufpool::{TestPools, pools},
     kithara,
@@ -238,6 +235,12 @@ impl ManualRingSession {
         reply_rx.recv().map_or_else(|_| self.worker_failure(), Ok)
     }
 
+    /// What a deck joins this session with. The ring backend drives the
+    /// device callback's processor.
+    pub(crate) fn binding(&self) -> SessionBinding {
+        self.view().binding(ConsumerWakeMode::RealtimeDeferred)
+    }
+
     fn view(&self) -> &RootView {
         self.view
             .get()
@@ -358,20 +361,6 @@ impl ManualRingSession {
         };
         *self.terminal_error.lock() = Some(error.clone());
         Err(error)
-    }
-}
-
-impl SessionDispatcher<TestPools> for ManualRingSession {
-    /// The ring backend drives the device callback's processor.
-    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::RealtimeDeferred
-    }
-
-    delegate::delegate! {
-        to self.view() {
-            fn sample_rate(&self) -> SessionSampleRate;
-            fn stream_shape(&self) -> Option<StreamShape>;
-        }
     }
 }
 

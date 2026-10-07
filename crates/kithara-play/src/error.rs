@@ -94,9 +94,6 @@ pub enum PlayError {
     #[error("player belongs to a different audio session")]
     ForeignSession,
 
-    #[error("player is not attached to an audio session")]
-    SessionUnbound,
-
     #[error("player is already attached to an audio session")]
     SessionAlreadyBound,
 

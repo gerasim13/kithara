@@ -12,15 +12,12 @@ use kithara_platform::{
     thread::spawn_named,
     time::Instant,
 };
-use kithara_play::{SessionSampleRate, StreamShape};
 use tracing::{debug, warn};
 
 use super::{
     decks::{DeckInbox, DeckMsg, Decks},
     dispatch::{run_host_cmd, tick_session},
-    protocol::{
-        HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply, SessionDispatcher,
-    },
+    protocol::{HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply},
     queue::HostProtocol,
     state::{HostRoot, RootView, SessionState},
 };
@@ -35,7 +32,6 @@ enum EngineMsg<S> {
 
 pub(crate) struct SessionClient<S> {
     cmd_tx: Mutex<mpsc::Sender<EngineMsg<S>>>,
-    root_view: RootView,
 }
 
 impl<S> SessionClient<S> {
@@ -59,20 +55,11 @@ impl<S> SessionClient<S> {
     }
 }
 
-impl<S: Send + Sync + 'static> SessionDispatcher<S> for SessionClient<S> {
+impl<S: Send + Sync + 'static> HostDispatcher<S> for SessionClient<S> {
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::RealtimeDeferred
     }
 
-    delegate::delegate! {
-        to self.root_view {
-            fn sample_rate(&self) -> SessionSampleRate;
-            fn stream_shape(&self) -> Option<StreamShape>;
-        }
-    }
-}
-
-impl<S: Send + Sync + 'static> HostDispatcher<S> for SessionClient<S> {
     fn exec_host(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
         self.call(cmd)
     }
@@ -218,7 +205,6 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     let (cmd_tx, cmd_rx) = mpsc::channel::<EngineMsg<S>>();
-    let client_view = root_view.clone();
     spawn_named(thread_name, move || {
         engine_thread::<T, S>(
             cmd_rx,
@@ -231,7 +217,6 @@ where
         );
     });
     Arc::new(SessionClient {
-        root_view: client_view,
         cmd_tx: Mutex::new(cmd_tx),
     })
 }

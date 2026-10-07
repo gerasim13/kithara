@@ -77,7 +77,7 @@ pub fn worker_host_channel<S: HasPool<f32> + Send + Sync + 'static>(
 #[must_use]
 pub fn remote_host<S: HasPool<f32> + Send + Sync + 'static>(sender: HostSender<S>) -> Host<S> {
     assert_not_main_thread("remote_host");
-    let dispatcher = host_session::remote(sender.tx, sender.root_view.clone());
+    let dispatcher = host_session::remote(sender.tx);
     Host::remote(sender.id, sender.root_view, dispatcher)
 }
 
