@@ -57,7 +57,8 @@ would quietly widen `just test run -E 'test(seek)'` into nearly the whole suite.
 The `--flash=*` token is stripped before reaching nextest; every other argument
 passes through. `--flash=off` (aliases `--no-flash` / `--flash=false`) drops
 `--features flash` and runs the suite on the real clock in a separate
-`target-flash-off/` directory, so the two modes never share build artifacts.
+`flash-off/` directory inside the build directory, so the two modes never share
+build artifacts.
 
 ### Two-mode gate
 

@@ -214,12 +214,8 @@ impl<'a> HostStorage<'a> {
         self.rotate_logs()?;
         self.prune_retired_caches(7 * Self::DAY)?;
 
-        let mut target_dirs =
-            build_cache::persistent_target_dirs(&self.build_root.join("workspaces/gitlab"))?;
-        target_dirs.extend(build_cache::cached_target_dirs(
-            &self.host_root.join("cache"),
-        )?);
-        build_cache::enforce_budget(&target_dirs, self.config.host.build_cache_budget_bytes()?)?;
+        let build_roots = build_cache::build_roots(&self.build_root.join("workspaces/gitlab"))?;
+        build_cache::enforce_budget(&build_roots, self.config.host.build_cache_budget_bytes()?)?;
 
         // Cargo targets are the largest reproducible caches and already have a
         // bounded owner. Re-read pressure after enforcing that budget so a
@@ -229,16 +225,11 @@ impl<'a> HostStorage<'a> {
             Pressure::Soft => {
                 self.prune_host_trees("cache/quarantine", 7 * Self::DAY)?;
                 self.prune_host_trees("cache/review", 30 * Self::DAY)?;
-                self.prune_host_trees("cache/bootstrap/quarantine", 7 * Self::DAY)?;
-                self.prune_host_trees("cache/bootstrap/review", 30 * Self::DAY)?;
             }
             Pressure::Aggressive | Pressure::Reject => {
                 self.prune_host_trees("cache/quarantine", Duration::ZERO)?;
                 self.prune_host_trees("cache/review", Duration::ZERO)?;
-                self.prune_host_trees("cache/bootstrap/quarantine", Duration::ZERO)?;
-                self.prune_host_trees("cache/bootstrap/review", Duration::ZERO)?;
                 self.prune_host_trees("cache/trusted", 7 * Self::DAY)?;
-                self.prune_host_trees("cache/bootstrap/trusted", 7 * Self::DAY)?;
                 self.prune_host_trees("vm/tart/cache", 7 * Self::DAY)?;
             }
             Pressure::Normal => {}
@@ -256,14 +247,14 @@ impl<'a> HostStorage<'a> {
         self.trim_linux_guest();
 
         // The warm builds go last. Every step above takes stale state, a
-        // compiler cache or Docker's; an evicted slot costs the next job of its
-        // lane a cold build of the workspace. Spent first, they went on every
+        // compiler cache or Docker's; an evicted build costs the next job of
+        // its lane a cold build of the workspace. Spent first, they went on every
         // `Aggressive` pass while the steps after them would have covered the
         // shortfall alone.
         let (mut final_pressure, mut final_volume) = self.worst_pressure()?;
         if final_pressure >= Pressure::Aggressive {
             build_cache::reclaim_at_least(
-                &target_dirs,
+                &build_roots,
                 self.shortfall_to_the_floor(&final_volume),
             )?;
             (final_pressure, final_volume) = self.worst_pressure()?;
@@ -279,7 +270,6 @@ impl<'a> HostStorage<'a> {
         }
         if final_pressure == Pressure::Reject {
             self.prune_host_trees("cache/trusted", Duration::ZERO)?;
-            self.prune_host_trees("cache/bootstrap/trusted", Duration::ZERO)?;
             self.prune_retired_caches(Duration::ZERO)?;
             (final_pressure, final_volume) = self.worst_pressure()?;
         }
@@ -1223,6 +1213,18 @@ mod tests {
     use crate::testing::install_script;
     use crate::{ci::config::fixture, testing::install_double};
 
+    /// Lane `lint`'s build, holding one artifact, in the root an executor
+    /// names beside a checkout under `build_root`.
+    #[cfg(unix)]
+    fn a_build_beside_a_checkout(build_root: &Path) -> PathBuf {
+        let root = build_root.join("workspaces/gitlab/runner/0/disrupt/kithara.target");
+        let build = root.join("lint");
+        fs::create_dir_all(build.join("debug")).unwrap();
+        fs::write(build.join("debug/artifact.bin"), vec![0_u8; 200]).unwrap();
+        std::os::unix::fs::symlink("lint", root.join(consts::BUILD_ALIAS)).unwrap();
+        build
+    }
+
     fn config(root: &Path) -> CiConfig {
         let mut config = fixture();
         config.host.host_root = root.to_path_buf();
@@ -1469,39 +1471,24 @@ mod tests {
         }
     }
 
+    /// The container's Cargo home sits on the cache share. Taking it whole as
+    /// a retired namespace sends every Linux job back to the registry.
     #[test]
-    fn zero_age_prune_preserves_sccache_slot_control_namespace() {
+    fn zero_age_prune_preserves_the_containers_cargo_home() {
         let directory = tempfile::tempdir().unwrap();
-        let control = directory.path().join("cache/.kithara-ci-sccache-slots");
-        fs::create_dir_all(&control).unwrap();
-        fs::write(control.join("slot-0.lock"), b"").unwrap();
-        let cfg = config(directory.path());
-        let process = Process::new(directory.path(), BTreeMap::new());
-        let storage = HostStorage::for_test(&cfg, &process).unwrap();
-
-        storage.prune_retired_caches(Duration::ZERO).unwrap();
-
-        assert!(control.is_dir());
-        assert!(control.join("slot-0.lock").is_file());
-    }
-
-    /// Every Linux job's `CARGO_TARGET_DIR` lives under this namespace and the
-    /// build-cache budget evicts it one slot at a time. Taking it whole as a
-    /// retired namespace throws away the caches that budget had just sized.
-    #[test]
-    fn zero_age_prune_preserves_the_build_cache_namespace() {
-        let directory = tempfile::tempdir().unwrap();
-        let slot = directory
+        let registry = directory
             .path()
-            .join("cache/target-slots/review-linux-aarch64-slot-0");
-        fs::create_dir_all(&slot).unwrap();
+            .join("cache")
+            .join(consts::CARGO_HOME_DIR)
+            .join("registry");
+        fs::create_dir_all(&registry).unwrap();
         let cfg = config(directory.path());
         let process = Process::new(directory.path(), BTreeMap::new());
         let storage = HostStorage::for_test(&cfg, &process).unwrap();
 
         storage.prune_retired_caches(Duration::ZERO).unwrap();
 
-        assert!(slot.is_dir());
+        assert!(registry.is_dir());
     }
 
     #[test]
@@ -1637,27 +1624,6 @@ mod tests {
     }
 
     #[test]
-    fn persistent_targets_are_discovered_under_the_checkout_root() {
-        let directory = tempfile::tempdir().unwrap();
-        let host_root = directory.path().join("host");
-        let build_root = directory.path().join("builds");
-        let checkout = build_root.join("workspaces/gitlab/project");
-        fs::create_dir_all(checkout.join("target/debug")).unwrap();
-        fs::write(checkout.join("Cargo.toml"), "[workspace]\n").unwrap();
-        fs::create_dir_all(host_root.join("workspaces/gitlab/stale/target/debug")).unwrap();
-        fs::write(
-            host_root.join("workspaces/gitlab/stale/Cargo.toml"),
-            "[workspace]\n",
-        )
-        .unwrap();
-
-        let targets =
-            build_cache::persistent_target_dirs(&build_root.join("workspaces/gitlab")).unwrap();
-
-        assert_eq!(targets, [checkout.join("target")]);
-    }
-
-    #[test]
     fn cleanup_leaves_gitlab_workspaces_to_the_runner() {
         let directory = tempfile::tempdir().unwrap();
         let host_root = directory.path().join("host");
@@ -1748,7 +1714,7 @@ mod tests {
     fn target_budget_relieving_pressure_preserves_the_review_compiler_cache() {
         let directory = tempfile::tempdir().unwrap();
         let review = directory.path().join("cache/review/macos-aarch64");
-        fs::create_dir_all(review.join("sccache-slots/slot-0")).unwrap();
+        fs::create_dir_all(review.join("sccache")).unwrap();
         let mut cfg = config(directory.path());
         cfg.host.brew_root = directory.path().join("brew");
         let process = Process::new(directory.path(), BTreeMap::new());
@@ -1771,14 +1737,14 @@ mod tests {
     ///
     /// A ceiling answers "is any one cache too big"; the volume asks "is there
     /// room", and only the second question has a job waiting on it.
+    #[cfg(unix)]
     #[test]
     fn a_volume_under_the_floor_reclaims_past_the_build_cache_ceiling() {
         let directory = tempfile::tempdir().unwrap();
-        let slot = directory.path().join("cache/target-slots/slot-0");
-        fs::create_dir_all(slot.join("debug")).unwrap();
-        fs::write(slot.join("debug/artifact.bin"), vec![0_u8; 200]).unwrap();
         let mut cfg = config(directory.path());
         cfg.host.brew_root = directory.path().join("brew");
+        cfg.host.build_root = Some(directory.path().join("builds"));
+        let build = a_build_beside_a_checkout(cfg.host.build_root());
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
         storage.set_available_sequence([
@@ -1791,7 +1757,7 @@ mod tests {
         storage.cleanup().unwrap();
 
         assert!(
-            !slot.join("debug").exists(),
+            !build.join("debug").exists(),
             "the pass stopped at the build cache ceiling the caches were already under"
         );
     }
@@ -1803,14 +1769,13 @@ mod tests {
     /// built the workspace cold, while the stale trees, the Docker cache and the
     /// guest's unreturned blocks reached for afterwards would have covered the
     /// shortfall on their own.
+    #[cfg(unix)]
     #[test]
-    fn an_aggressive_pass_the_cheaper_steps_relieve_keeps_every_build_slot() {
+    fn an_aggressive_pass_the_cheaper_steps_relieve_keeps_every_build() {
         let directory = tempfile::tempdir().unwrap();
-        let slot = directory.path().join("cache/target-slots/slot-0");
-        fs::create_dir_all(slot.join("debug")).unwrap();
-        fs::write(slot.join("debug/artifact.bin"), vec![0_u8; 200]).unwrap();
         let mut cfg = config(directory.path());
         cfg.host.brew_root = directory.path().join("brew");
+        let build = a_build_beside_a_checkout(cfg.host.build_root());
         let process = Process::new(directory.path(), BTreeMap::new());
         let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
         storage.set_available_sequence([
@@ -1822,7 +1787,7 @@ mod tests {
         storage.cleanup().unwrap();
 
         assert!(
-            slot.join("debug/artifact.bin").is_file(),
+            build.join("debug/artifact.bin").is_file(),
             "the pass evicted a warm build before the steps that relieved the volume"
         );
     }
@@ -1954,7 +1919,7 @@ mod tests {
     fn review_compiler_cache_is_pruned_when_pressure_stays_aggressive() {
         let directory = tempfile::tempdir().unwrap();
         let review = directory.path().join("cache/review/macos-aarch64");
-        fs::create_dir_all(review.join("sccache-slots/slot-0")).unwrap();
+        fs::create_dir_all(review.join("sccache")).unwrap();
         let mut cfg = config(directory.path());
         cfg.host.brew_root = directory.path().join("brew");
         let process = Process::new(directory.path(), BTreeMap::new());

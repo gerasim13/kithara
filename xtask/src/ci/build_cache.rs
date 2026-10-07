@@ -414,47 +414,35 @@ fn lease_target(target: Option<PathBuf>) -> Result<Option<lease::Lease>> {
         .transpose()
 }
 
-/// Every `target` directory under `root`, so a caller can hand them to
-/// [`enforce_budget`]. Shared with the environment gate: refusing a job is only
-/// honest once these have been reclaimed.
+/// Every build root under `root`, so a caller can hand them to
+/// [`enforce_budget`]: a directory holding the build alias or xtask's own
+/// build, as the one an executor names beside each checkout does. Shared with
+/// the environment gate: refusing a job is only honest once these have been
+/// reclaimed.
 ///
-/// A checkout a job is working in is listed like any other. Protection belongs
-/// one level down, on the build directory the lane itself claims: skipping the
-/// whole checkout took its caches out of the budget's sight before it could
-/// weigh them, so on a host whose only checkout is the live one the ceiling had
-/// nothing at all to act on and never reclaimed the space it exists to hold.
-/// Listed here, the cache a lane is running from is kept by
-/// [`candidate_entries`] and its bytes are charged against the ceiling, which is
-/// what leaves the idle caches beside it payable.
-pub(crate) fn persistent_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
+/// The walk stops at a checkout, whose tree is the job's and holds no build,
+/// and at a root, whose entries are the builds the budget weighs. A root a job
+/// is building in is listed like any other: the lease on the build it entered
+/// keeps that one, and its bytes are charged against the ceiling, which is
+/// what leaves the idle builds beside it payable.
+pub(crate) fn build_roots(root: &Path) -> Result<Vec<PathBuf>> {
     if !root.is_dir() {
         return Ok(Vec::new());
     }
 
     let mut pending = vec![root.to_path_buf()];
-    let mut targets = Vec::new();
+    let mut roots = Vec::new();
     while let Some(directory) = pending.pop() {
         if directory.join("Cargo.toml").is_file() {
-            // `target-stress` belongs here too: it is target-dir sized, the
-            // repo's own tooling creates it, and no other pass owns it. It is
-            // only safe to reclaim because the lane that builds into it holds
-            // the lease `candidate_entries` asks about.
-            for name in ["target", "target-flash-off", "target-stress"] {
-                let path = directory.join(name);
-                let metadata = match fs::symlink_metadata(&path) {
-                    Ok(metadata) => metadata,
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                    Err(error) => {
-                        return Err(error).with_context(|| format!("reading {}", path.display()));
-                    }
-                };
-                if metadata.file_type().is_dir() {
-                    targets.push(path);
-                }
-            }
             continue;
         }
-
+        if [consts::BUILD_ALIAS, consts::XTASK_BUILD]
+            .iter()
+            .any(|name| fs::symlink_metadata(directory.join(name)).is_ok())
+        {
+            roots.push(directory);
+            continue;
+        }
         let entries = fs::read_dir(&directory)
             .with_context(|| format!("reading CI workspace directory {}", directory.display()))?;
         for entry in entries {
@@ -464,7 +452,7 @@ pub(crate) fn persistent_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
                     directory.display()
                 )
             })?;
-            if entry.file_name().to_string_lossy().starts_with('.') {
+            if is_hidden(&entry.path()) {
                 continue;
             }
             let path = entry.path();
@@ -475,37 +463,8 @@ pub(crate) fn persistent_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
             }
         }
     }
-    targets.sort();
-    Ok(targets)
-}
-
-/// Build directories kept in the executor cache rather than in a checkout.
-///
-/// GitLab checkouts are cleaned between jobs. Their targets live below the
-/// mounted cache root, one per runner slot, so the host budget must discover
-/// them without walking Cargo homes and compiler caches beside them.
-pub(crate) fn cached_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
-    let slots = root.join(consts::TARGET_SLOT_CACHE_NAMESPACE);
-    if !slots.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    let mut targets = Vec::new();
-    for entry in
-        fs::read_dir(&slots).with_context(|| format!("reading build cache {}", slots.display()))?
-    {
-        let entry = entry.with_context(|| format!("reading build cache {}", slots.display()))?;
-        if entry.file_type()?.is_dir() {
-            // Target snapshots give each job a private parent. Keep accepting
-            // the pre-snapshot flat slot layout until its old directories age
-            // out, but charge and reclaim the writable Cargo directory.
-            let path = entry.path();
-            let cargo = path.join("cargo");
-            targets.push(if cargo.is_dir() { cargo } else { path });
-        }
-    }
-    targets.sort();
-    Ok(targets)
+    roots.sort();
+    Ok(roots)
 }
 
 #[cfg(test)]
@@ -876,40 +835,26 @@ mod tests {
         drop(removing);
     }
 
-    /// The stress lane builds into a directory of its own, and a build cache no
-    /// budget names is one the host can never get the space back from.
+    /// The roots are what an executor names beside each checkout; the
+    /// checkouts themselves, and the trees inside them, are never read.
+    #[cfg(unix)]
     #[test]
-    fn the_stress_build_directory_is_a_cache_the_budget_owns() {
+    fn the_build_roots_are_the_directories_beside_the_checkouts() {
         let root = tempfile::tempdir().unwrap();
-        let checkout = root.path().join("disrupt/kithara");
-        fs::create_dir_all(&checkout).unwrap();
-        fs::write(checkout.join("Cargo.toml"), b"").unwrap();
-        for name in ["target", "target-flash-off", "target-stress"] {
-            build_dir(&checkout, name, 1);
+        let mut expected = Vec::new();
+        for slot in ["runner-a/0", "runner-b/1"] {
+            let checkout = root.path().join(slot).join("disrupt/kithara");
+            fs::create_dir_all(checkout.join("target/debug")).unwrap();
+            fs::write(checkout.join("Cargo.toml"), b"").unwrap();
+            let build_root = checkout.with_file_name("kithara.target");
+            build_dir(&build_root, "lint", 1);
+            expected.push(build_root);
         }
+        std::os::unix::fs::symlink("lint", expected[0].join(consts::BUILD_ALIAS)).unwrap();
+        build_dir(&expected[1], consts::XTASK_BUILD, 1);
+        fs::create_dir_all(root.path().join("runner-c/0/disrupt/unrelated/debug")).unwrap();
 
-        let targets = persistent_target_dirs(root.path()).unwrap();
-
-        assert_eq!(
-            targets,
-            vec![
-                checkout.join("target"),
-                checkout.join("target-flash-off"),
-                checkout.join("target-stress"),
-            ]
-        );
-    }
-
-    #[test]
-    fn persistent_runner_slots_are_build_caches_the_budget_owns() {
-        let root = tempfile::tempdir().unwrap();
-        let first = root.path().join("target-slots/review-linux-aarch64-slot-0");
-        let second = root.path().join("target-slots/review-linux-aarch64-slot-1");
-        fs::create_dir_all(&first).unwrap();
-        fs::create_dir_all(&second).unwrap();
-        fs::create_dir_all(root.path().join("review/linux-aarch64/cargo/registry")).unwrap();
-
-        assert_eq!(cached_target_dirs(root.path()).unwrap(), [first, second]);
+        assert_eq!(build_roots(root.path()).unwrap(), expected);
     }
 
     /// A build alias is a link `ci lane` points at the lane's own directory

@@ -14,13 +14,14 @@ use kithara_devtools::{
 use tracing::{info, warn};
 
 use super::{
+    build_dir::LaneTarget,
     config::CiConfig,
-    environment::{CiEnvironment, LaneTarget},
+    environment::CiEnvironment,
     process::{Process, Recording},
     verdict,
 };
 use crate::{
-    config::{CiLaneConfig, KitharaExt, LaneFreshness},
+    config::{CiLaneConfig, KitharaExt},
     consts,
 };
 
@@ -419,17 +420,14 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         )?;
     let ci_config = CiConfig::load(&host_config, &ctx.root.join(&ext.ci.pins))?;
     ci_config.pins.validate_tool_pins(&ctx.config.tools)?;
-    let declared = ext.ci.lanes.get(&args.lane);
     let environment = CiEnvironment::prepare(
         ctx,
         &ci_config,
         lane.cache_group(),
-        declared.is_some_and(|declared| declared.target_snapshot.is_some()),
-        Some(LaneTarget {
+        LaneTarget {
             name: &args.lane,
             window: ext.ci.lane_unit_window(),
-            freshness: declared.map_or_else(LaneFreshness::default, |declared| declared.freshness),
-        }),
+        },
     )?;
     info!(
         lane = %args.lane,
@@ -451,7 +449,6 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     // for; the cache on disk is untouched. Shared-host Unix sockets need one
     // explicit start before Cargo's parallel compilers can race to start it.
     if args.dry_run {
-        environment.settle_lane_build(false)?;
         return report_lane(
             &lane,
             args.kind,
@@ -462,7 +459,7 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             &ext.ci.lanes,
         );
     }
-    let outcome = execute_lane(
+    execute_lane(
         &process,
         &ctx.config.tools,
         uses_sccache,
@@ -491,9 +488,7 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
                 &ext.ci.lanes,
             ),
         },
-    );
-    let settled = environment.settle_lane_build(outcome.is_ok());
-    outcome.and(settled)
+    )
 }
 
 /// What the lane would ask of the executor, without asking. Answers "what does

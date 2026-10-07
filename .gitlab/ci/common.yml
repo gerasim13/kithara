@@ -1,12 +1,27 @@
+# A runner that keeps its checkouts builds beside each one, in a root of its
+# own: every lane takes a directory there and Cargo is told the alias in front
+# of it, so a compilation is keyed on one path whichever lane ran last and
+# whichever runner slot holds the checkout. The runner cannot name a path per
+# checkout, so these name it from the checkout GitLab gives the job, and give
+# its compiler-cache server a socket no other checkout's job shares.
+.builds-beside-checkout:
+  variables:
+    CARGO_TARGET_DIR: ${CI_PROJECT_DIR}.target/build
+    KITHARA_XTASK_TARGET: ${CI_PROJECT_DIR}.target/xtask
+    SCCACHE_SERVER_UDS: /tmp/kithara-sccache-${CI_RUNNER_SHORT_TOKEN}-${CI_CONCURRENT_PROJECT_ID}.sock
+
 .macos-job:
+  extends: .builds-beside-checkout
   tags:
     - kithara-macos
 
 .linux-job:
+  extends: .builds-beside-checkout
   tags:
     - kithara-linux
 
 .android-job:
+  extends: .builds-beside-checkout
   tags:
     - kithara-android
 
@@ -18,6 +33,7 @@
     - kithara-windows
 
 .release-job:
+  extends: .builds-beside-checkout
   tags:
     - kithara-release
 

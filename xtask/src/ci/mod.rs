@@ -8,7 +8,6 @@ mod environment;
 mod host;
 mod image;
 mod lane;
-mod lane_build;
 pub(crate) mod process;
 mod release;
 mod run;

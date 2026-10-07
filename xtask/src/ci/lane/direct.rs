@@ -14,9 +14,9 @@ use tracing::warn;
 use super::declared;
 use crate::{
     ci::{
-        build_dir::BuildDir,
+        build_dir::{LaneTarget, Target},
         config::CiPins,
-        environment::{ci_in, expose_build_target, process_var},
+        environment::process_var,
         process::Process,
         run::PipelineKind,
     },
@@ -76,24 +76,6 @@ fn executor_vars(target_dir: Option<&Path>, kind: PipelineKind) -> BTreeMap<OsSt
     vars
 }
 
-/// Where a lane builds. These are two environments, not two attempts: each
-/// has exactly one answer.
-#[derive(Debug)]
-enum Target {
-    /// A CI job: the executor names its build root's alias, and the lane
-    /// builds in a directory of its own behind it.
-    Alias(PathBuf),
-    /// Anywhere else: wherever Cargo was told to build, or the checkout.
-    Named(Option<OsString>),
-}
-
-fn target(var: &dyn Fn(&str) -> Option<OsString>) -> Target {
-    match var("CARGO_TARGET_DIR") {
-        Some(alias) if ci_in(var) => Target::Alias(PathBuf::from(alias)),
-        named => Target::Named(named),
-    }
-}
-
 pub(crate) fn run(args: &LaneArgs, ctx: &Ctx) -> Result<()> {
     run_in(args, ctx, &process_var)
 }
@@ -103,18 +85,18 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
     ext.ci.validate()?;
     let lane = lookup(&ext.ci.lanes, &args.lane)?;
     let pins = CiPins::load(&ctx.root.join(&ext.ci.pins))?;
-    let (cargo_dir, _build) = match target(var) {
-        Target::Alias(alias) => {
-            let build = BuildDir::enter(&alias, &args.lane, ext.ci.lane_unit_window())?;
-            announce(build.path(), var);
-            // Artifact paths name the checkout's `target`; Cargo is told the
-            // alias, the one path every lane's compilations share.
-            expose_build_target(&ctx.root, build.path(), cfg!(windows), true)?;
-            (Some(alias), Some(build))
-        }
-        Target::Named(dir) => (dir.map(PathBuf::from), None),
-    };
-    let process = Process::new(&ctx.root, executor_vars(cargo_dir.as_deref(), args.kind));
+    let target = Target::enter(
+        &ctx.root,
+        LaneTarget {
+            name: &args.lane,
+            window: ext.ci.lane_unit_window(),
+        },
+        var,
+    )?;
+    if let Target::Alias { build, .. } = &target {
+        announce(build.path(), var);
+    }
+    let process = Process::new(&ctx.root, executor_vars(target.cargo_dir(), args.kind));
     crate::ci::run::journalled(&process, &args.lane, || {
         let result = declared::run(&process, lane, &pins, &ctx.config.tools, args.kind);
         if var("RUSTC_WRAPPER").is_some_and(|wrapper| !wrapper.is_empty()) {
@@ -516,27 +498,6 @@ label = "run"
             builds.path().join("trivial").join(lease::FILE).is_file(),
             "the lane must still build in its own directory"
         );
-    }
-
-    #[test]
-    fn only_a_ci_job_reads_cargos_directory_as_an_alias() {
-        match target(&environment(&[("CARGO_TARGET_DIR", "/work/target")])) {
-            Target::Named(Some(dir)) => assert_eq!(dir, OsString::from("/work/target")),
-            other => panic!("outside a CI job a lane builds where Cargo was told, not {other:?}"),
-        }
-        match target(&environment(&[
-            ("CI", "true"),
-            ("CARGO_TARGET_DIR", "/cache/target/build"),
-        ])) {
-            Target::Alias(alias) => assert_eq!(alias, Path::new("/cache/target/build")),
-            other @ Target::Named(_) => {
-                panic!("a CI job builds behind its executor's alias, not {other:?}")
-            }
-        }
-        assert!(matches!(
-            target(&environment(&[("CI", "true")])),
-            Target::Named(None)
-        ));
     }
 
     /// The test above cannot fail loudly enough alone: a resolution bug that

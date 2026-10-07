@@ -74,8 +74,7 @@ pub(crate) struct CiHost {
     /// Runner rendering and per-job cache partitioning share this value.
     /// Raising it buys wall-clock and costs disk: every admitted job carries
     /// its own checkout and `target`, and those are what the volume runs out
-    /// of. The compiler cache follows on its own - the host's budget is divided
-    /// between the slots. Defaulted for the same reason `cores` is.
+    /// of. Defaulted for the same reason `cores` is.
     #[serde(default = "default_job_concurrency")]
     pub(crate) job_concurrency: usize,
     /// Size a host log is rotated at.
@@ -191,7 +190,13 @@ impl CiHost {
                 self.job_concurrency
             );
         }
-        self.sccache_slot_size()?;
+        let whole_gigabytes = self.sccache_size.strip_suffix('G').is_some_and(|digits| {
+            digits.bytes().all(|byte| byte.is_ascii_digit())
+                && digits.bytes().any(|byte| byte != b'0')
+        });
+        if !whole_gigabytes {
+            bail!("CI host profile sccache_size must be a positive whole number followed by G");
+        }
         if self.build_cache_size.trim().is_empty() {
             bail!("CI host profile build_cache_size must not be empty");
         }
@@ -296,32 +301,6 @@ impl CiHost {
 
     pub(crate) fn cleanup_deadline(&self) -> Duration {
         Duration::from_secs(self.cleanup_deadline_seconds)
-    }
-
-    pub(crate) fn sccache_slot_size(&self) -> Result<String> {
-        let Some(digits) = self.sccache_size.strip_suffix('G') else {
-            bail!("CI host profile sccache_size must be a positive whole number followed by G");
-        };
-        if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-            bail!("CI host profile sccache_size must be a positive whole number followed by G");
-        }
-        let gigabytes = digits
-            .parse::<usize>()
-            .context("CI host profile sccache_size must fit in usize gigabytes")?;
-        // Divided down, not required to divide evenly. Demanding a multiple
-        // made the slot count a property of a hand-written file on the host:
-        // raising `job_concurrency` would fail every job on a machine
-        // whose budget no longer divided, until somebody edited a file that
-        // lives nowhere in this repository. A gigabyte lost to rounding is the
-        // cheaper trade.
-        let slot = gigabytes / self.job_concurrency;
-        if slot == 0 {
-            bail!(
-                "CI host profile sccache_size must leave a whole gigabyte to each of {} jobs",
-                self.job_concurrency
-            );
-        }
-        Ok(format!("{slot}G"))
     }
 
     /// The headroom a job insists on before it starts. The host stops handing
@@ -449,21 +428,19 @@ fn default_removable_roots() -> Vec<String> {
 
 /// Cleanup takes whole any cache directory this list does not name, so a
 /// namespace that has an owner belongs here even when nothing writes to it for
-/// a week. `target-slots` holds every GitLab job's persistent
-/// `CARGO_TARGET_DIR` and is owned by the build-cache budget, which evicts per
-/// slot.
+/// a week. The container's Cargo home is one: the runner names it on the cache
+/// share, and its registry would otherwise be fetched again after every quiet
+/// week.
 ///
-/// The two code-owned names are spelled once, in
-/// [`SCCACHE_SLOT_CONTROL_NAMESPACE`](consts::SCCACHE_SLOT_CONTROL_NAMESPACE) and [`TARGET_SLOT_CACHE_NAMESPACE`](consts::TARGET_SLOT_CACHE_NAMESPACE), so a
-/// profile that never overrides this key cannot spell either a second way.
+/// The code-owned name is spelled once, in
+/// [`CARGO_HOME_DIR`](consts::CARGO_HOME_DIR), so a profile that never
+/// overrides this key cannot spell it a second way.
 fn default_cache_namespaces() -> Vec<String> {
     [
-        consts::SCCACHE_SLOT_CONTROL_NAMESPACE,
-        "bootstrap",
+        consts::CARGO_HOME_DIR,
         "gitlab-runner",
         "quarantine",
         "review",
-        consts::TARGET_SLOT_CACHE_NAMESPACE,
         "trusted",
     ]
     .map(String::from)
@@ -535,33 +512,9 @@ mod tests {
     }
 
     #[test]
-    fn sccache_budget_is_split_across_host_jobs() {
+    fn ci_host_rejects_a_zero_sccache_budget() {
         let mut host = super::super::fixture().host;
-        host.sccache_size = "60G".to_owned();
-
-        assert_eq!(
-            host.sccache_slot_size().unwrap(),
-            format!("{}G", 60 / host.job_concurrency)
-        );
-    }
-
-    /// A budget that does not divide evenly is rounded down, not rejected: the
-    /// slot count belongs to this repository, and a host profile written by
-    /// hand must not be able to veto a change to it.
-    #[test]
-    fn an_indivisible_sccache_budget_is_rounded_down() {
-        let mut host = super::super::fixture().host;
-        host.job_concurrency = 3;
-        host.sccache_size = "50G".to_owned();
-
-        assert_eq!(host.sccache_slot_size().unwrap(), "16G");
-        assert!(host.validate().is_ok());
-    }
-
-    #[test]
-    fn ci_host_rejects_a_budget_too_small_to_share() {
-        let mut host = super::super::fixture().host;
-        host.sccache_size = format!("{}G", host.job_concurrency - 1);
+        host.sccache_size = "0G".to_owned();
 
         assert!(host.validate().is_err());
     }
@@ -836,22 +789,18 @@ mod tests {
     }
 
     /// The tracked fixture is the operator's field catalogue
-    /// (`docs/guides/ci-host.md`), so it spells the two code-owned cache
-    /// directories a second time. This is the only place either spelling can
-    /// drift from the constant without a compiler error.
+    /// (`docs/guides/ci-host.md`), so it spells the code-owned cache directory
+    /// a second time. This is the only place that spelling can drift from the
+    /// constant without a compiler error.
     #[test]
     fn the_fixture_names_the_code_owned_directories_the_way_the_code_does() {
         let host = super::super::fixture().host;
 
-        assert_eq!(
-            host.cache_namespaces.first().map(String::as_str),
-            Some(consts::SCCACHE_SLOT_CONTROL_NAMESPACE)
-        );
         assert!(
             host.cache_namespaces
                 .iter()
-                .any(|namespace| namespace == consts::TARGET_SLOT_CACHE_NAMESPACE),
-            "an operator profile that omits the build cache loses it to cleanup"
+                .any(|namespace| namespace == consts::CARGO_HOME_DIR),
+            "an operator profile that omits the container's Cargo home loses it to cleanup"
         );
     }
 
@@ -922,12 +871,10 @@ mod tests {
         assert_eq!(
             host.cache_namespaces,
             [
-                consts::SCCACHE_SLOT_CONTROL_NAMESPACE,
-                "bootstrap",
+                consts::CARGO_HOME_DIR,
                 "gitlab-runner",
                 "quarantine",
                 "review",
-                consts::TARGET_SLOT_CACHE_NAMESPACE,
                 "trusted"
             ]
         );

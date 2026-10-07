@@ -10,5 +10,7 @@
 
 mod entry;
 mod garbage;
+mod target;
 
 pub(crate) use entry::BuildDir;
+pub(crate) use target::{LaneTarget, Target};
