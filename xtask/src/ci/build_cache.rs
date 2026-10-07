@@ -167,9 +167,10 @@ fn evict(entry: &CacheEntry) -> Result<u64> {
     Ok(entry.size_bytes)
 }
 
-/// Where an eviction moves `entry` before removing it: a hidden name in the
-/// same root, which no build takes, unique to this eviction.
-fn aside(entry: &Path) -> Result<PathBuf> {
+/// Where `entry` goes before it is removed: a hidden name in the same root,
+/// which no build takes, unique to this move, and swept by the next pass when
+/// whoever moved it there does not remove it.
+pub(crate) fn aside(entry: &Path) -> Result<PathBuf> {
     let (Some(root), Some(name)) = (entry.parent(), entry.file_name()) else {
         bail!("build directory {} names no root", entry.display());
     };

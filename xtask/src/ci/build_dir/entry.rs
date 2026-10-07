@@ -6,11 +6,11 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use kithara_devtools::lease::{self, Lease};
 use tracing::warn;
 
-use crate::consts;
+use crate::{ci::build_cache, consts};
 
 /// A job's hold on its build directory: leased, with the root's alias naming
 /// it, for as long as this lives.
@@ -30,8 +30,7 @@ impl BuildDir {
     /// # Errors
     ///
     /// When `alias` is not named `build`, `id` is not one plain name the root
-    /// leaves free, a directory stands at the alias, or the lease or the link
-    /// cannot be made. A garbage pass that fails is logged: it only saves
+    /// leaves free, or the lease or the link cannot be made. A garbage pass that fails is logged: it only saves
     /// disk.
     pub(crate) fn enter(alias: &Path, id: &str, window: Duration) -> Result<Self> {
         ensure!(
@@ -82,11 +81,19 @@ fn validate(id: &str) -> Result<()> {
 fn point(alias: &Path, id: &str) -> Result<()> {
     match fs::symlink_metadata(alias) {
         Ok(metadata) if metadata.file_type().is_symlink() => {}
-        Ok(_) => bail!(
-            "{} is not a link but a build someone made there; move it away once, and the alias \
-             names each job's build from then on",
-            alias.display()
-        ),
+        // Cargo made a build here for a job that named the alias as its
+        // directory without entering one. The root's directories are the
+        // build cache's, so it leaves the way an evicted build does.
+        Ok(_) => {
+            let aside = build_cache::aside(alias)?;
+            fs::rename(alias, &aside)
+                .with_context(|| format!("moving the build at {} aside", alias.display()))?;
+            warn!(
+                "{} was a build, not a link; moved aside to {} for the build cache to remove",
+                alias.display(),
+                aside.display()
+            );
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => {
             return Err(error).with_context(|| format!("reading {}", alias.display()));
@@ -121,7 +128,7 @@ mod tests {
     use kithara_devtools::lease;
 
     use super::BuildDir;
-    use crate::consts;
+    use crate::{ci::build_cache, consts};
 
     fn alias(root: &Path) -> std::path::PathBuf {
         root.join("build")
@@ -166,18 +173,32 @@ mod tests {
         assert!(lease::evict(build.path()).unwrap().is_none());
     }
 
-    /// A directory standing where the alias goes is a build someone made
-    /// there; replacing it would delete it.
+    /// A directory standing where the alias goes is a build Cargo made for a
+    /// job that named the alias as its directory without entering a build.
+    /// The root's directories are the build cache's, so it leaves the way an
+    /// evicted build does, and the next lane still enters its own.
     #[test]
-    fn a_directory_at_the_alias_is_refused_and_kept() {
+    fn a_directory_at_the_alias_is_moved_aside_for_the_build_cache_to_remove() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(alias(root.path()).join("debug")).unwrap();
 
-        let error =
-            BuildDir::enter(&alias(root.path()), "lint", consts::GARBAGE_WINDOW).unwrap_err();
+        let build = BuildDir::enter(&alias(root.path()), "lint", consts::GARBAGE_WINDOW).unwrap();
 
-        assert!(format!("{error:#}").contains("not a link"), "{error:#}");
-        assert!(alias(root.path()).join("debug").is_dir());
+        assert_eq!(
+            fs::read_link(alias(root.path())).unwrap(),
+            Path::new("lint")
+        );
+        let moved: Vec<_> = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.join("debug").is_dir())
+            .collect();
+        let [moved] = moved.as_slice() else {
+            panic!("the build at the alias is moved, not copied or lost: {moved:?}");
+        };
+        drop(build);
+        build_cache::enforce_budget(&[root.path().to_path_buf()], u64::MAX).unwrap();
+        assert!(!moved.exists(), "{} is left behind", moved.display());
     }
 
     #[test]
