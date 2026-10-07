@@ -482,10 +482,9 @@ fn try_hold(path: &Path) -> Result<Hold> {
     }
 }
 
-/// The lock `production/main` takes a lane slot by: a file beside the slot,
-/// named after it. A host deployed from this branch serves main too until the
-/// branch merges.
-fn lock_beside(entry: &Path) -> PathBuf {
+/// The lock a job takes a lane slot by: a file beside the slot, named after
+/// it. `production/main` takes its own slots the same way.
+pub(crate) fn lock_beside(entry: &Path) -> PathBuf {
     let mut lock = entry.as_os_str().to_owned();
     lock.push(".lock");
     PathBuf::from(lock)

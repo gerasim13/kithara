@@ -701,14 +701,14 @@ mod tests {
             )
             .unwrap();
             let vars = environment.vars();
-            let build = alias.with_file_name("apple-lint");
+            let build = fs::read_link(&alias).unwrap();
 
             assert_eq!(
                 vars.get(OsStr::new("CARGO_TARGET_DIR")),
                 Some(alias.as_os_str().to_owned()).as_ref(),
                 "Cargo is told the alias, the one path every lane's compilations share"
             );
-            assert_eq!(fs::read_link(&alias).unwrap(), FsPath::new("apple-lint"));
+            assert_eq!(build.parent(), alias.parent());
             assert_eq!(
                 fs::canonicalize(project.join("target")).unwrap(),
                 fs::canonicalize(&build).unwrap(),

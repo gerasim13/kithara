@@ -321,7 +321,6 @@ label = "run"
         let github_env = temp.path().join("github-env");
         fs::write(&github_env, "").expect("create the job's GITHUB_ENV");
         let alias = builds.path().join(consts::BUILD_ALIAS);
-        let own = builds.path().join("trivial");
 
         run_in(
             &args,
@@ -345,7 +344,8 @@ label = "run"
             alias.display().to_string(),
             "Cargo is told the alias every lane shares"
         );
-        assert_eq!(fs::read_link(&alias).unwrap(), Path::new("trivial"));
+        let own = fs::read_link(&alias).unwrap();
+        assert_eq!(own.parent(), Some(builds.path()));
         assert!(
             own.join(lease::FILE).is_file(),
             "the lane leased its own build"
@@ -466,7 +466,7 @@ label = "run"
 
         assert!(own.exists(), "the developer's build must survive the lane");
         assert!(
-            !builds.path().join("trivial").exists(),
+            fs::read_dir(builds.path()).unwrap().next().is_none(),
             "a lane outside a CI job entered a build directory"
         );
     }
@@ -500,8 +500,9 @@ label = "run"
             result.is_ok(),
             "a lane failed for the path only the timings upload reads: {result:?}"
         );
+        let own = fs::read_link(builds.path().join(consts::BUILD_ALIAS)).unwrap();
         assert!(
-            builds.path().join("trivial").join(lease::FILE).is_file(),
+            own.join(lease::FILE).is_file(),
             "the lane must still build in its own directory"
         );
     }

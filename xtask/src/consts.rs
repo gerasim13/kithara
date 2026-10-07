@@ -521,6 +521,11 @@ pub(crate) const CARGO_HOME_DIR: &str = "cargo";
 /// the host's runners never do.
 pub(crate) const CONTAINER_BUILDS: &str = "workspaces/colima";
 
+/// Where a CI job's lanes take their build slots, when not in the root Cargo
+/// is told: runners that share their lanes' builds are told the directory they
+/// share.
+pub(crate) const BUILD_SLOTS_ENV: &str = "KITHARA_CI_BUILD_SLOTS";
+
 /// The link in a build root every build of the root's runner goes through,
 /// pointed at the build directory of the job that runs.
 pub(crate) const BUILD_ALIAS: &str = "build";

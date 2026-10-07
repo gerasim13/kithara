@@ -1,21 +1,27 @@
 use std::{
     ffi::OsStr,
-    fs, io,
+    fs::{self, File},
+    io,
     path::{Component, Path, PathBuf},
     process,
     time::Duration,
 };
 
-use anyhow::{Context, Result, ensure};
-use kithara_devtools::lease::{self, Lease};
-use tracing::warn;
+use anyhow::{Context, Result, bail, ensure};
+use fs4::TryLockError;
+use kithara_devtools::{
+    lease::{self, Lease},
+    lock::FileLock,
+};
+use tracing::{info, warn};
 
 use super::sources::{Claim, claim};
 use crate::{ci::build_cache, consts};
 
-/// A job's hold on its build directory: leased, with the root's alias naming
-/// it and the checkout claimed for it, for as long as this lives. The claim
-/// settles before the lease goes.
+/// A job's hold on its build directory: a slot of its lane, taken, leased,
+/// with the alias naming it and the checkout claimed for it, for as long as
+/// this lives. The claim settles before the lease goes, and the lease before
+/// the slot.
 #[derive(Debug, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get, deref = false)]
 pub(crate) struct BuildDir {
@@ -23,34 +29,38 @@ pub(crate) struct BuildDir {
     path: PathBuf,
     _sources: Claim,
     _lease: Lease,
+    _slot: FileLock,
 }
 
 impl BuildDir {
-    /// Enters build `id` under the root `alias` sits in: leases `<root>/<id>`,
-    /// points the alias at it, removes the units its builds no longer ask
-    /// for, by `window` (see [`super::garbage`]), and claims `checkout` for
-    /// it (see [`super::sources`]).
+    /// Enters a build of `lane` under `slots`: takes the lane's first slot no
+    /// other job holds, leases it, points `alias` at it, removes the units its
+    /// builds no longer ask for, by `window` (see [`super::garbage`]), and
+    /// claims `checkout` for it (see [`super::sources`]).
     ///
     /// # Errors
     ///
-    /// When `alias` is not named `build`, `id` is not one plain name the root
-    /// leaves free, or the lease, the link or the claim cannot be made. A
-    /// garbage pass that fails is logged: it only saves disk.
-    pub(crate) fn enter(checkout: &Path, alias: &Path, id: &str, window: Duration) -> Result<Self> {
+    /// When `alias` is not named `build`, `lane` is not one plain name that is
+    /// not hidden, or the slot, the lease, the link or the claim cannot be
+    /// made. A garbage pass that fails is logged: it only saves disk.
+    pub(crate) fn enter(
+        checkout: &Path,
+        alias: &Path,
+        slots: &Path,
+        lane: &str,
+        window: Duration,
+    ) -> Result<Self> {
         ensure!(
             alias.file_name() == Some(OsStr::new(consts::BUILD_ALIAS)),
             "{} names no build alias: an executor names `<root>/{}` and the lane builds behind it",
             alias.display(),
             consts::BUILD_ALIAS
         );
-        let root = alias
-            .parent()
-            .with_context(|| format!("{} has no build root", alias.display()))?;
-        validate(id)?;
-        let path = root.join(id);
+        validate(lane)?;
+        let (path, slot) = take(slots, lane)?;
         let lease =
             lease::hold(&path).with_context(|| format!("leasing build {}", path.display()))?;
-        point(alias, id)?;
+        point(alias, &path)?;
         if let Err(error) = super::garbage::collect(&path, window) {
             warn!(
                 "{error:#}; build {} keeps every unit it holds",
@@ -62,29 +72,59 @@ impl BuildDir {
             path,
             _sources: sources,
             _lease: lease,
+            _slot: slot,
         })
     }
 }
 
-/// A build id is one plain name, neither hidden - an eviction in progress and
-/// a staged link are - nor one the root keeps for itself.
-fn validate(id: &str) -> Result<()> {
+/// A lane is one plain name, not hidden: an eviction in progress and a staged
+/// link are.
+fn validate(lane: &str) -> Result<()> {
     let plain = matches!(
-        Path::new(id).components().collect::<Vec<_>>().as_slice(),
-        [Component::Normal(name)] if *name == OsStr::new(id)
+        Path::new(lane).components().collect::<Vec<_>>().as_slice(),
+        [Component::Normal(name)] if *name == OsStr::new(lane)
     );
     ensure!(
-        plain && !id.starts_with('.') && id != consts::BUILD_ALIAS && id != consts::XTASK_BUILD,
-        "`{id}` is not a build id: one plain name, not hidden, and neither `{}` nor `{}`",
-        consts::BUILD_ALIAS,
-        consts::XTASK_BUILD
+        plain && !lane.starts_with('.'),
+        "`{lane}` is not a lane: one plain name, not hidden"
     );
     Ok(())
 }
 
-/// Points `alias` at `id` beside it. The new link is staged under a hidden
-/// name and renamed over the old one, so a reader sees one link or the other.
-fn point(alias: &Path, id: &str) -> Result<()> {
+/// The first slot of `lane` under `slots` no job holds, with the lock beside
+/// it held. Slot `n` is `<lane>-<n>`, and its lock is never removed, so no job
+/// locks a file the budget already deleted. When every slot is held, the next
+/// number is a new slot: a job never waits for another's build.
+fn take(slots: &Path, lane: &str) -> Result<(PathBuf, FileLock)> {
+    fs::create_dir_all(slots)
+        .with_context(|| format!("creating lane slots in {}", slots.display()))?;
+    for index in 0..usize::MAX {
+        let slot = slots.join(format!("{lane}-{index}"));
+        let lock = build_cache::lock_beside(&slot);
+        let file = File::options()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock)
+            .with_context(|| format!("opening lane slot lock {}", lock.display()))?;
+        match FileLock::try_exclusive(file) {
+            Ok(held) => {
+                info!("building in lane slot {}", slot.display());
+                return Ok((slot, held));
+            }
+            Err(TryLockError::WouldBlock) => {}
+            Err(TryLockError::Error(error)) => {
+                return Err(error).with_context(|| format!("locking lane slot {}", slot.display()));
+            }
+        }
+    }
+    bail!("every slot of lane {lane} in {} is held", slots.display())
+}
+
+/// Points `alias` at `build`. The new link is staged under a hidden name and
+/// renamed over the old one, so a reader sees one link or the other.
+fn point(alias: &Path, build: &Path) -> Result<()> {
     match fs::symlink_metadata(alias) {
         Ok(metadata) if metadata.file_type().is_symlink() => {}
         // Cargo made a build here for a job that named the alias as its
@@ -113,8 +153,9 @@ fn point(alias: &Path, id: &str) -> Result<()> {
             return Err(error).with_context(|| format!("removing {}", staged.display()));
         }
     }
-    link(Path::new(id), &staged).with_context(|| format!("linking {}", staged.display()))?;
-    fs::rename(&staged, alias).with_context(|| format!("pointing {} at {id}", alias.display()))
+    link(build, &staged).with_context(|| format!("linking {}", staged.display()))?;
+    fs::rename(&staged, alias)
+        .with_context(|| format!("pointing {} at {}", alias.display(), build.display()))
 }
 
 #[cfg(unix)]
@@ -129,7 +170,10 @@ fn link(target: &Path, at: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path};
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+    };
 
     use kithara_devtools::lease;
     use tempfile::TempDir;
@@ -140,15 +184,21 @@ mod tests {
         consts,
     };
 
-    fn alias(root: &Path) -> std::path::PathBuf {
+    fn alias(root: &Path) -> PathBuf {
         root.join("build")
     }
 
-    /// Enters build `id` for a checkout of its own.
-    fn enter(alias: &Path, id: &str) -> anyhow::Result<(BuildDir, TempDir)> {
+    /// Enters `lane`'s build through `alias`, in a slot under `slots`, for a
+    /// checkout of its own.
+    fn enter_in(alias: &Path, slots: &Path, lane: &str) -> anyhow::Result<(BuildDir, TempDir)> {
         let checkout = git_checkout(&[]);
-        BuildDir::enter(checkout.path(), alias, id, consts::GARBAGE_WINDOW)
+        BuildDir::enter(checkout.path(), alias, slots, lane, consts::GARBAGE_WINDOW)
             .map(|build| (build, checkout))
+    }
+
+    /// Enters `lane`'s build in a slot beside `alias`.
+    fn enter(alias: &Path, lane: &str) -> anyhow::Result<(BuildDir, TempDir)> {
+        enter_in(alias, alias.parent().unwrap(), lane)
     }
 
     #[test]
@@ -157,28 +207,43 @@ mod tests {
 
         let (build, _checkout) = enter(&alias(root.path()), "lint").unwrap();
 
-        assert_eq!(build.path(), &root.path().join("lint"));
-        assert_eq!(
-            fs::read_link(alias(root.path())).unwrap(),
-            Path::new("lint")
-        );
-        assert!(root.path().join("lint").join(lease::FILE).is_file());
+        assert_eq!(build.path(), &root.path().join("lint-0"));
+        assert_eq!(fs::read_link(alias(root.path())).unwrap(), *build.path());
+        assert!(build.path().join(lease::FILE).is_file());
     }
 
     #[test]
     fn the_next_build_re_points_the_alias_and_keeps_the_last_one() {
         let root = tempfile::tempdir().unwrap();
-        fs::create_dir_all(root.path().join("lint/debug")).unwrap();
+        fs::create_dir_all(root.path().join("lint-0/debug")).unwrap();
         drop(enter(&alias(root.path()), "lint").unwrap());
 
         let (usdt, _checkout) = enter(&alias(root.path()), "usdt").unwrap();
 
-        assert_eq!(
-            fs::read_link(alias(root.path())).unwrap(),
-            Path::new("usdt")
-        );
-        assert!(root.path().join("lint/debug").is_dir());
-        drop(usdt);
+        assert_eq!(fs::read_link(alias(root.path())).unwrap(), *usdt.path());
+        assert!(root.path().join("lint-0/debug").is_dir());
+    }
+
+    /// Runners that share one directory of lane builds each name theirs through
+    /// an alias of their own. A build one job holds is not another's to build
+    /// in, so the next job of the lane takes the next slot rather than wait,
+    /// and a slot let go is the first the job after takes.
+    #[test]
+    fn a_held_slot_sends_the_next_job_of_the_lane_to_the_next_slot() {
+        let slots = tempfile::tempdir().unwrap();
+        let [first, second, third] = [(); 3].map(|()| tempfile::tempdir().unwrap());
+
+        let (held, _checkout) = enter_in(&alias(first.path()), slots.path(), "lint").unwrap();
+        let (beside, _beside) = enter_in(&alias(second.path()), slots.path(), "lint").unwrap();
+
+        assert_eq!(held.path(), &slots.path().join("lint-0"));
+        assert_eq!(beside.path(), &slots.path().join("lint-1"));
+        assert_eq!(fs::read_link(alias(first.path())).unwrap(), *held.path());
+        assert_eq!(fs::read_link(alias(second.path())).unwrap(), *beside.path());
+
+        drop(held);
+        let (again, _again) = enter_in(&alias(third.path()), slots.path(), "lint").unwrap();
+        assert_eq!(again.path(), &slots.path().join("lint-0"));
     }
 
     #[test]
@@ -201,10 +266,7 @@ mod tests {
 
         let (build, _checkout) = enter(&alias(root.path()), "lint").unwrap();
 
-        assert_eq!(
-            fs::read_link(alias(root.path())).unwrap(),
-            Path::new("lint")
-        );
+        assert_eq!(fs::read_link(alias(root.path())).unwrap(), *build.path());
         let moved: Vec<_> = fs::read_dir(root.path())
             .unwrap()
             .map(|entry| entry.unwrap().path())
@@ -219,19 +281,12 @@ mod tests {
     }
 
     #[test]
-    fn a_build_id_is_one_plain_name_the_root_does_not_reserve() {
+    fn a_lane_is_one_plain_name_that_is_not_hidden() {
         let root = tempfile::tempdir().unwrap();
-        for id in [
-            "",
-            "build",
-            "xtask",
-            ".evicting-lint",
-            "lint/flash-off",
-            "..",
-        ] {
+        for lane in ["", ".evicting-lint", "lint/flash-off", ".."] {
             assert!(
-                enter(&alias(root.path()), id).is_err(),
-                "`{id}` is not a build id"
+                enter(&alias(root.path()), lane).is_err(),
+                "`{lane}` is not a lane"
             );
         }
     }

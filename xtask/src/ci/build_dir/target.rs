@@ -23,7 +23,9 @@ pub(crate) struct LaneTarget<'a> {
 #[derive(Debug)]
 pub(crate) enum Target {
     /// A CI job: the executor names its build root, and the lane builds in a
-    /// directory of its own behind the root's alias, held while this lives.
+    /// slot of its own behind the root's alias, held while this lives. The
+    /// slots are in the root unless the executor says where its runners share
+    /// them.
     Alias { alias: PathBuf, build: BuildDir },
     /// Anywhere else: wherever Cargo was told to build, or the checkout.
     Named(Option<PathBuf>),
@@ -44,8 +46,10 @@ impl Target {
     ) -> Result<Self> {
         match var("CARGO_TARGET_DIR") {
             Some(root) if ci_in(var) => {
-                let alias = Path::new(&root).join(consts::BUILD_ALIAS);
-                let build = BuildDir::enter(checkout, &alias, lane.name, lane.window)?;
+                let root = PathBuf::from(root);
+                let alias = root.join(consts::BUILD_ALIAS);
+                let slots = var(consts::BUILD_SLOTS_ENV).map_or(root, PathBuf::from);
+                let build = BuildDir::enter(checkout, &alias, &slots, lane.name, lane.window)?;
                 // Artifact paths name the checkout's `target`; Cargo is told
                 // the alias, the one path every lane's compilations share.
                 expose_build_target(checkout, build.path())?;
@@ -149,7 +153,10 @@ mod tests {
             Target::Named(Some(dir)) => assert_eq!(dir, builds.path()),
             other => panic!("outside a CI job a lane builds where Cargo was told, not {other:?}"),
         }
-        assert!(!builds.path().join(lane().name).exists());
+        assert!(
+            fs::read_dir(builds.path()).unwrap().next().is_none(),
+            "outside a CI job nothing is made in the root Cargo was told"
+        );
 
         match Target::enter(
             checkout.path(),
@@ -160,7 +167,7 @@ mod tests {
         {
             Target::Alias { alias, build } => {
                 assert_eq!(alias, builds.path().join(consts::BUILD_ALIAS));
-                assert_eq!(build.path(), builds.path().join(lane().name).as_path());
+                assert_eq!(build.path().parent(), Some(builds.path()));
             }
             other @ Target::Named(_) => {
                 panic!("a CI job builds behind its executor's alias, not {other:?}")
@@ -170,6 +177,34 @@ mod tests {
             Target::enter(checkout.path(), lane(), &environment(&[("CI", "true")])).unwrap(),
             Target::Named(None)
         ));
+    }
+
+    /// Runners that share their lanes' builds are told where those are; the
+    /// alias Cargo is told stays in the job's own root.
+    #[cfg(unix)]
+    #[test]
+    fn a_job_told_where_lanes_build_takes_a_slot_there_behind_its_own_alias() {
+        let checkout = git_checkout(&[]);
+        let builds = tempfile::tempdir().unwrap();
+        let slots = tempfile::tempdir().unwrap();
+
+        let target = Target::enter(
+            checkout.path(),
+            lane(),
+            &environment(&[
+                ("CI", "true"),
+                ("CARGO_TARGET_DIR", builds.path().to_str().unwrap()),
+                (consts::BUILD_SLOTS_ENV, slots.path().to_str().unwrap()),
+            ]),
+        )
+        .unwrap();
+
+        let Target::Alias { alias, build } = target else {
+            panic!("a CI job builds behind its executor's alias, not {target:?}");
+        };
+        assert_eq!(alias, builds.path().join(consts::BUILD_ALIAS));
+        assert_eq!(build.path().parent(), Some(slots.path()));
+        assert_eq!(fs::read_link(&alias).unwrap(), *build.path());
     }
 
     #[cfg(unix)]
