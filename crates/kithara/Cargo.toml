@@ -58,6 +58,7 @@ all = [
     "hls",
     "host",
     "net",
+    "link",
     "offline",
     "output",
     "platform",
@@ -102,6 +103,7 @@ output = ["dep:kithara-output"]
 platform = ["dep:kithara-platform"]
 play = ["effects", "dep:kithara-play"]
 queue = ["dep:kithara-queue"]
+link = ["dep:kithara-link"]
 resampler = ["dep:kithara-resampler"]
 signal = ["platform", "dep:kithara-signal", "kithara-platform/signal"]
 storage = ["dep:kithara-storage"]
@@ -418,6 +420,7 @@ kithara-output = { workspace = true, optional = true }
 kithara-platform = { workspace = true, optional = true }
 kithara-play = { workspace = true, optional = true, default-features = false }
 kithara-queue = { workspace = true, optional = true, default-features = false }
+kithara-link = { workspace = true, optional = true, default-features = false }
 kithara-record = { workspace = true, optional = true }
 kithara-resampler = { workspace = true, optional = true, default-features = false }
 kithara-signal = { workspace = true, optional = true }

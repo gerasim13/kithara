@@ -132,6 +132,11 @@ pub mod queue {
     pub use kithara_queue::*;
 }
 
+#[cfg(feature = "link")]
+pub mod link {
+    pub use kithara_link::*;
+}
+
 #[cfg(feature = "download")]
 pub mod download {
     pub use kithara_download::*;
