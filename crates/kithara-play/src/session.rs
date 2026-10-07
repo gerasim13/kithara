@@ -50,17 +50,6 @@ mod wire {
         RestartFailed { reason: String, r#source: String },
     }
 
-    #[derive(Clone, Copy)]
-    pub enum Cmd {
-        Tick,
-    }
-
-    #[non_exhaustive]
-    pub enum Reply {
-        Ok,
-        Err(SessionError),
-    }
-
     /// What a deck joins its session with. The Host registers the deck from it
     /// and builds the deck's slot, answering it as [`AllocatedSlot`].
     #[non_exhaustive]
@@ -149,7 +138,7 @@ mod handle {
     };
     use kithara_render::rt::StreamShape;
 
-    use super::wire::{Cmd, Reply, SessionSampleRate};
+    use super::wire::SessionSampleRate;
     use crate::error::PlayError;
 
     /// Handle used by resident players to reach their session owner.
@@ -162,15 +151,6 @@ mod handle {
         /// Every one of them reads from the render callback, offline backends
         /// included.
         fn consumer_wake_mode(&self) -> ConsumerWakeMode;
-
-        fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
-
-        fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-            match self.exec(cmd)? {
-                Reply::Err(err) => Err(err.into()),
-                reply => Ok(reply),
-            }
-        }
 
         /// The output rate the session last published: the rate the running
         /// backend settled on, beside the one the settings ask for.
@@ -264,17 +244,6 @@ mod handle {
                 .ok_or(PlayError::SessionUnbound)
         }
 
-        pub fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-            self.dispatcher()?.exec(cmd)
-        }
-
-        pub fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-            match self.exec(cmd)? {
-                Reply::Err(err) => Err(err.into()),
-                reply => Ok(reply),
-            }
-        }
-
         #[must_use]
         pub(crate) fn pending() -> Self {
             Self(Arc::new(SessionSlot {
@@ -320,10 +289,6 @@ mod handle {
             }
         }
 
-        pub fn tick(&self) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::Tick).map(|_| ())
-        }
-
         delegate::delegate! {
             to self.dispatcher()? {
                 #[expr(Ok($))]
@@ -334,9 +299,7 @@ mod handle {
 }
 
 pub use handle::{SessionBinding, SessionDispatcher, SessionHandle};
-pub use wire::{
-    AllocatedSlot, Cmd, DeckRegistration, PlayerId, Reply, SessionError, SessionSampleRate,
-};
+pub use wire::{AllocatedSlot, DeckRegistration, PlayerId, SessionError, SessionSampleRate};
 
 #[cfg(test)]
 mod tests {
@@ -347,7 +310,7 @@ mod tests {
     use kithara_render::rt::StreamShape;
     use kithara_test_utils::kithara;
 
-    use super::{Cmd, Reply, SessionBinding, SessionDispatcher, SessionHandle, SessionSampleRate};
+    use super::{SessionBinding, SessionDispatcher, SessionHandle, SessionSampleRate};
     use crate::{PlayError, test_pools::TestPools};
 
     struct DefaultSession;
@@ -359,10 +322,6 @@ mod tests {
     impl SessionDispatcher<TestPools> for DefaultSession {
         fn consumer_wake_mode(&self) -> ConsumerWakeMode {
             ConsumerWakeMode::RealtimeDeferred
-        }
-
-        fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
-            Ok(Reply::Ok)
         }
 
         fn sample_rate(&self) -> SessionSampleRate {
@@ -393,7 +352,7 @@ mod tests {
             ConsumerWakeMode::RealtimeDeferred
         );
         assert!(matches!(
-            handle.exec(Cmd::Tick),
+            handle.sample_rate(),
             Err(PlayError::SessionUnbound)
         ));
 
@@ -404,7 +363,7 @@ mod tests {
             handle.consumer_wake_mode(),
             ConsumerWakeMode::RealtimeDeferred
         );
-        assert!(matches!(handle.exec(Cmd::Tick), Ok(Reply::Ok)));
+        assert!(handle.sample_rate().is_ok());
         assert!(matches!(
             handle.bind(SessionBinding::new(Arc::new(DefaultSession), sample_rate())),
             Err(PlayError::SessionAlreadyBound)

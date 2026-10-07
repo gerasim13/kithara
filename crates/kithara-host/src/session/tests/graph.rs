@@ -9,8 +9,8 @@ use kithara_test_utils::bufpool::TestPools;
 use kithara_warp::BeatGridId;
 
 use super::super::{
-    dispatch::{run_cmd, run_host_cmd},
-    protocol::{Cmd, HostCmd, HostReply, Reply},
+    dispatch::{run_host_cmd, tick_session},
+    protocol::{HostCmd, HostReply, SessionError},
     state::{HostRoot, RootView, SessionState},
     transport::observe_commits,
 };
@@ -45,9 +45,9 @@ where
         self.state.ctx.as_mut()
     }
 
-    #[must_use]
-    pub(crate) fn exec(&mut self, cmd: Cmd) -> Reply {
-        run_cmd(&mut self.state, cmd)
+    /// One pump of the session, as its owner runs on its interval.
+    pub(crate) fn tick(&mut self) -> Result<(), SessionError> {
+        tick_session(&mut self.state)
     }
 
     #[must_use]

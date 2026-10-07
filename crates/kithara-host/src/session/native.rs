@@ -18,8 +18,7 @@ use tracing::{debug, warn};
 use super::{
     dispatch::{run_host_cmd, tick_session},
     protocol::{
-        Cmd, HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply, Reply,
-        SessionDispatcher,
+        HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply, SessionDispatcher,
     },
     queue::HostProtocol,
     state::{HostRoot, RootView, SessionState},
@@ -54,16 +53,6 @@ impl<S> SessionClient<S> {
 impl<S: Send + Sync + 'static> SessionDispatcher<S> for SessionClient<S> {
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::RealtimeDeferred
-    }
-
-    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-        match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
-            HostReply::Play(reply) => Ok(reply),
-            HostReply::Err(error) => Err(error),
-            HostReply::Ok | HostReply::Attached(_) => Err(PlayError::Internal(
-                "unexpected host reply for player session command".into(),
-            )),
-        }
     }
 
     delegate::delegate! {
@@ -117,7 +106,7 @@ pub(crate) fn receive_message<M>(
 
 fn service_due_tick<T, S>(state: &mut SessionState<T, S>, deadline: &mut Instant) {
     if state.ctx.is_some() && Instant::now() >= *deadline {
-        if let Reply::Err(error) = tick_session(state) {
+        if let Err(error) = tick_session(state) {
             warn!(?error, "native session tick failed");
         }
         *deadline = Instant::now() + consts::SESSION_PUMP_INTERVAL;

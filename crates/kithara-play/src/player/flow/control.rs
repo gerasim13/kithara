@@ -182,13 +182,6 @@ impl<S> PlayerRuntime<S> {
             warn!(?error, volume, "volume update rejected");
         }
     }
-
-    delegate::delegate! {
-        to self.core.engine {
-            /// Pump audio backend/runtime state.
-            pub fn tick(&self) -> Result<(), PlayError>;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -202,26 +195,6 @@ mod tests {
         player::{PlayerConfig, PlayerImpl},
         test_pools::pools,
     };
-
-    /// The deck's slot is built with the deck: a player takes it without asking the session.
-    #[kithara::test]
-    fn a_player_takes_its_deck_slot_without_asking_the_session() {
-        let mut player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(mock::SAMPLE_RATE)
-                .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-                .build(),
-        );
-        let audio_thread = mock::insert(&mut player);
-
-        player.ensure_slot().expect("the deck's slot is handed out");
-
-        assert!(
-            audio_thread.asked().is_empty(),
-            "{:?}",
-            audio_thread.asked()
-        );
-    }
 
     /// An EQ gain is the deck's: a slot is handed the layout when it is taken, and a band cut
     /// goes to that slot's ring.

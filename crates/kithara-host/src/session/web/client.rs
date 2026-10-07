@@ -15,8 +15,7 @@ use crate::{
         HostProtocol,
         dispatch::run_host_cmd,
         protocol::{
-            Cmd, HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply, Reply,
-            SessionDispatcher,
+            HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply, SessionDispatcher,
         },
         state::{HostRoot, RootView, SessionState},
     },
@@ -83,16 +82,6 @@ where
 {
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::RealtimeDeferred
-    }
-
-    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-        match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
-            HostReply::Play(reply) => Ok(reply),
-            HostReply::Err(error) => Err(error),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for player session command".into(),
-            )),
-        }
     }
 
     delegate::delegate! {

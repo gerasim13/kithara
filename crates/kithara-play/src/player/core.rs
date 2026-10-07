@@ -371,7 +371,7 @@ mod tests {
             .expect("close succeeds");
         assert!(player.runtime.is_closed());
         assert!(matches!(
-            player.make_control().tick(),
+            player.make_control().reset_eq(),
             Err(PlayError::Closed)
         ));
         assert!(matches!(

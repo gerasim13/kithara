@@ -202,11 +202,6 @@ where
         self.command(|runtime| runtime.set_volume(volume));
     }
 
-    /// Advance player control-plane work.
-    pub fn tick(&self) -> Result<(), PlayError> {
-        self.runtime.with_open_result(PlayerRuntime::tick)
-    }
-
     delegate! {
         to self.runtime {
             /// Whether the owning player has been closed or is closing.

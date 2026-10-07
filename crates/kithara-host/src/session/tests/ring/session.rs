@@ -12,8 +12,8 @@ use kithara_platform::{
     thread::{JoinHandle, spawn_named},
 };
 use kithara_play::{
-    Cmd, DeckRegistration, PlayError, Reply, SessionDispatcher, SessionError, SessionSampleRate,
-    SessionTransportSnapshot, StreamShape,
+    DeckRegistration, SessionDispatcher, SessionError, SessionSampleRate, SessionTransportSnapshot,
+    StreamShape,
 };
 use kithara_test_utils::{
     bufpool::{TestPools, pools},
@@ -97,9 +97,8 @@ pub(crate) enum RingSessionError {
 }
 
 enum RingMsg {
-    Cmd {
-        cmd: Cmd,
-        reply_tx: mpsc::Sender<Reply>,
+    Tick {
+        reply_tx: mpsc::Sender<Result<(), SessionError>>,
     },
     Host {
         cmd: HostCmd<TestPools>,
@@ -196,14 +195,15 @@ impl ManualRingSession {
         Ok(())
     }
 
-    /// Synchronous command-reply bridge; call from a blocking control thread.
-    pub(crate) fn exec(&self, cmd: Cmd) -> Result<Reply, RingSessionError> {
+    /// Pumps the session once, as its owner does on its interval; call from a
+    /// blocking control thread.
+    pub(crate) fn tick(&self) -> Result<Result<(), SessionError>, RingSessionError> {
         self.ensure_available()?;
         let (reply_tx, reply_rx) = mpsc::channel();
         let Some(cmd_tx) = self.cmd_tx.lock().clone() else {
             return self.worker_failure();
         };
-        let sent = cmd_tx.send(RingMsg::Cmd { cmd, reply_tx });
+        let sent = cmd_tx.send(RingMsg::Tick { reply_tx });
         if sent.is_err() {
             return self.worker_failure();
         }
@@ -367,10 +367,6 @@ impl SessionDispatcher<TestPools> for ManualRingSession {
         ConsumerWakeMode::RealtimeDeferred
     }
 
-    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-        Self::exec(self, cmd).map_err(|error| PlayError::Internal(error.to_string()))
-    }
-
     delegate::delegate! {
         to self.view() {
             fn sample_rate(&self) -> SessionSampleRate;
@@ -421,8 +417,8 @@ fn ring_session_thread(
     }
     for message in cmd_rx.iter() {
         match message {
-            RingMsg::Cmd { cmd, reply_tx } => {
-                let _ = reply_tx.send(state.exec(cmd));
+            RingMsg::Tick { reply_tx } => {
+                let _ = reply_tx.send(state.tick());
             }
             RingMsg::Host { cmd, reply_tx } => {
                 let _ = reply_tx.send(state.exec_host(cmd));
@@ -452,7 +448,7 @@ fn bootstrap(
     match state.exec_host(HostCmd::Attach { registration }) {
         HostReply::Attached(_) => {}
         HostReply::Err(error) => return Err(RingSessionError::Setup(error.to_string())),
-        _ => return Err(RingSessionError::Protocol("attach anchor deck reply")),
+        HostReply::Ok => return Err(RingSessionError::Protocol("attach anchor deck reply")),
     }
     let ctx = state.ctx_mut().ok_or(RingSessionError::NotStarted)?;
     setup(ctx)

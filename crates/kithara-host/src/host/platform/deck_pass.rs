@@ -163,72 +163,16 @@ fn hand_back(decks: &mut Decks, id: BeatGridId, reply_tx: &mpsc::Sender<Result<D
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::atomic::{AtomicUsize, Ordering},
-        task::Waker,
-    };
+    use std::task::Waker;
 
-    use kithara_audio::ConsumerWakeMode;
     use kithara_platform::{
-        sync::Arc,
         thread::sleep,
         time::{Duration, Instant},
     };
-    use kithara_play::{
-        Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply, SessionBinding,
-        SessionDispatcher, SessionSampleRate, StreamShape,
-        player::{Player, PlayerControl, PlayerControlSource},
-    };
-    use kithara_test_utils::{
-        bufpool::{TestPools, pools},
-        kithara,
-    };
+    use kithara_play::player::Player;
+    use kithara_test_utils::kithara;
 
     use super::*;
-
-    /// A session that answers every command and counts the ticks it gets.
-    struct TickCounter(Arc<AtomicUsize>);
-
-    impl<S> SessionDispatcher<S> for TickCounter {
-        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            ConsumerWakeMode::RealtimeDeferred
-        }
-
-        fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-            if matches!(cmd, Cmd::Tick) {
-                self.0.fetch_add(1, Ordering::Relaxed);
-            }
-            Ok(Reply::Ok)
-        }
-
-        fn sample_rate(&self) -> SessionSampleRate {
-            SessionSampleRate::new(None, consts::DEFAULT_SAMPLE_RATE.get())
-        }
-
-        fn stream_shape(&self) -> Option<StreamShape> {
-            None
-        }
-    }
-
-    /// A deck on a session that counts its ticks, with a control that tells
-    /// whether the deck has been dropped.
-    fn deck(ticks: &Arc<AtomicUsize>) -> (BeatGridId, Deck, PlayerControl<TestPools>) {
-        let mut player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(consts::DEFAULT_SAMPLE_RATE)
-                .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-                .build(),
-        );
-        let id = player
-            .attach_session(SessionBinding::new(
-                Arc::new(TickCounter(Arc::clone(ticks))),
-                consts::DEFAULT_SAMPLE_RATE,
-            ))
-            .expect("the deck binds its session")
-            .grid_id;
-        let control = player.control();
-        (id, Box::new(player), control)
-    }
 
     /// What the deck thread did to a [`Probe`].
     enum Seen {
@@ -236,6 +180,7 @@ mod tests {
         Drained,
         Released,
         Ticked,
+        Dropped,
     }
 
     /// A deck that reports every call its executor makes.
@@ -244,6 +189,13 @@ mod tests {
     impl Probe {
         fn report(&self, seen: Seen) {
             self.0.send(seen).expect("the test watches its probe");
+        }
+    }
+
+    /// A test may stop watching before its holder drops the deck.
+    impl Drop for Probe {
+        fn drop(&mut self) {
+            drop(self.0.send(Seen::Dropped));
         }
     }
 
@@ -281,23 +233,36 @@ mod tests {
             .expect("the deck thread reaches the probe")
     }
 
+    /// Everything the probe has seen so far, and nothing it sees later.
+    fn so_far(seen: &mpsc::Receiver<Seen>) -> Vec<Seen> {
+        seen.try_iter().collect()
+    }
+
+    fn ticks(seen: &[Seen]) -> usize {
+        seen.iter()
+            .filter(|seen| matches!(seen, Seen::Ticked))
+            .count()
+    }
+
     #[kithara::test]
     fn the_deck_thread_ticks_a_held_deck_until_it_is_released() {
-        let ticks = Arc::new(AtomicUsize::new(0));
-        let (id, held, _) = deck(&ticks);
+        let (id, held, seen) = probe();
         let mut thread = DeckThread::spawn(Pace::Clock);
 
         thread.hold(id, held).expect("the thread takes the deck");
-        while ticks.load(Ordering::Relaxed) < 2 {
-            sleep(consts::SESSION_PUMP_INTERVAL);
+        let mut ticked = 0;
+        while ticked < 2 {
+            if matches!(next(&seen), Seen::Ticked) {
+                ticked += 1;
+            }
         }
         let released = thread.release(id).expect("the thread hands the deck back");
-        let at_release = ticks.load(Ordering::Relaxed);
+        drop(so_far(&seen));
         sleep(consts::SESSION_PUMP_INTERVAL * 3);
 
         assert_eq!(
-            ticks.load(Ordering::Relaxed),
-            at_release,
+            ticks(&so_far(&seen)),
+            0,
             "a released deck is no longer ticked"
         );
         drop(released);
@@ -309,26 +274,27 @@ mod tests {
     /// down.
     #[kithara::test]
     fn closing_the_deck_thread_stops_its_clock_and_keeps_its_decks() {
-        let ticks = Arc::new(AtomicUsize::new(0));
-        let (id, held, control) = deck(&ticks);
+        let (id, held, seen) = probe();
         let mut thread = DeckThread::spawn(Pace::Clock);
 
         thread.hold(id, held).expect("the thread takes the deck");
         let decks = thread.close();
-        let at_close = ticks.load(Ordering::Relaxed);
+        drop(so_far(&seen));
         sleep(consts::SESSION_PUMP_INTERVAL * 3);
 
-        assert_eq!(
-            ticks.load(Ordering::Relaxed),
-            at_close,
-            "a closed thread ticks no deck"
-        );
+        let after_close = so_far(&seen);
+        assert_eq!(ticks(&after_close), 0, "a closed thread ticks no deck");
         assert!(
-            !control.is_closed(),
+            !after_close.iter().any(|seen| matches!(seen, Seen::Dropped)),
             "the deck outlives the thread that held it"
         );
         drop(decks);
-        assert!(control.is_closed(), "the deck drops with its holder");
+        assert!(
+            so_far(&seen)
+                .iter()
+                .any(|seen| matches!(seen, Seen::Dropped)),
+            "the deck drops with its holder"
+        );
     }
 
     /// Commands posted before the deck was held woke no one, so the thread
@@ -382,21 +348,16 @@ mod tests {
     #[cfg(feature = "offline")]
     #[kithara::test]
     fn an_offline_thread_ticks_its_decks_only_ahead_of_a_block() {
-        let ticks = Arc::new(AtomicUsize::new(0));
-        let (id, held, _) = deck(&ticks);
+        let (id, held, seen) = probe();
         let mut thread = DeckThread::spawn(Pace::Blocks);
 
         thread.hold(id, held).expect("the thread takes the deck");
         sleep(consts::SESSION_PUMP_INTERVAL * 3);
-        assert_eq!(
-            ticks.load(Ordering::Relaxed),
-            0,
-            "no clock ticks an offline deck"
-        );
+        assert_eq!(ticks(&so_far(&seen)), 0, "no clock ticks an offline deck");
 
         thread.tick_block();
         assert_eq!(
-            ticks.load(Ordering::Relaxed),
+            ticks(&so_far(&seen)),
             1,
             "the block's tick is done before tick_block returns"
         );

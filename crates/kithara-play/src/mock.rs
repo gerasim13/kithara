@@ -9,9 +9,9 @@ use kithara_render::bridge::{NodeInputs, slot_channels};
 
 pub use crate::api::equalizer::EqualizerMock;
 use crate::{
-    PlayError, SlotId, StreamShape,
+    SlotId, StreamShape,
     player::PlayerControlSource,
-    session::{AllocatedSlot, Cmd, Reply, SessionBinding, SessionDispatcher, SessionSampleRate},
+    session::{AllocatedSlot, SessionBinding, SessionDispatcher, SessionSampleRate},
 };
 
 /// Sample rate every `SessionMock` answers with.
@@ -22,7 +22,6 @@ pub const SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
 
 /// A session that builds each deck's slot without a graph, as a Host's insert would.
 pub struct SessionMock {
-    asked: Mutex<Vec<&'static str>>,
     next_slot: AtomicU64,
     nodes: Mutex<Vec<NodeInputs>>,
     sample_rate: NonZeroU32,
@@ -32,11 +31,6 @@ pub struct SessionMock {
 impl<S> SessionDispatcher<S> for SessionMock {
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::RealtimeDeferred
-    }
-
-    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-        self.asked.lock().push(asked(cmd));
-        Ok(Reply::Ok)
     }
 
     fn sample_rate(&self) -> SessionSampleRate {
@@ -81,13 +75,6 @@ pub fn session_at<S>(sample_rate: NonZeroU32) -> SessionBinding<S> {
     binding(None, sample_rate)
 }
 
-/// What the session was asked, by command.
-const fn asked(cmd: Cmd) -> &'static str {
-    match cmd {
-        Cmd::Tick => "tick",
-    }
-}
-
 fn binding<S>(shape: Option<StreamShape>, sample_rate: NonZeroU32) -> SessionBinding<S> {
     SessionBinding::new(Arc::new(SessionMock::new(shape, sample_rate)), sample_rate)
 }
@@ -95,7 +82,6 @@ fn binding<S>(shape: Option<StreamShape>, sample_rate: NonZeroU32) -> SessionBin
 impl SessionMock {
     fn new(shape: Option<StreamShape>, sample_rate: NonZeroU32) -> Self {
         Self {
-            asked: Mutex::default(),
             shape,
             sample_rate,
             next_slot: AtomicU64::new(0),
@@ -109,12 +95,6 @@ impl SessionMock {
         let (inputs, control) = slot_channels();
         self.nodes.lock().push(inputs);
         player.seat(AllocatedSlot::new(control, slot));
-    }
-
-    /// Every command the session was asked, in order.
-    #[cfg(test)]
-    pub(crate) fn asked(&self) -> Vec<&'static str> {
-        self.asked.lock().clone()
     }
 
     /// Answer as the audio thread of every slot it built.

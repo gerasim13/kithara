@@ -1,7 +1,7 @@
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::SampleBuffer;
 use kithara_platform::sync::{Mutex, mpsc};
-use kithara_play::{Cmd, PlayError, Reply, SessionDispatcher, SessionSampleRate, StreamShape};
+use kithara_play::{PlayError, SessionDispatcher, SessionSampleRate, StreamShape};
 use kithara_worker::TaskControl;
 
 use super::{OfflineSessionError, task::OfflineMsg};
@@ -94,16 +94,6 @@ impl<S: Send + Sync + 'static> SessionDispatcher<S> for OfflineSessionClient<S> 
     /// that may block and read the clock, so a reader wakes its producer inline.
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::ImmediateOffRt
-    }
-
-    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-        match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
-            HostReply::Play(reply) => Ok(reply),
-            HostReply::Err(error) => Err(error),
-            HostReply::Ok | HostReply::Attached(_) => Err(PlayError::Internal(
-                "unexpected offline Host reply for player command".into(),
-            )),
-        }
     }
 
     delegate::delegate! {

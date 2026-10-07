@@ -3,7 +3,7 @@ use std::task::Waker;
 use kithara_bufpool::HasPool;
 use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
 
-use super::{PlayerImpl, PlayerRuntime};
+use super::PlayerImpl;
 use crate::{AllocatedSlot, DeckRegistration, PlayError, SessionBinding};
 
 /// What an executor that holds a player or decorator calls on it.
@@ -30,7 +30,7 @@ pub trait Player: MaybeSend + 'static {
     /// for the next executor to hold it.
     fn release(&mut self);
 
-    /// Advance control-plane and audio-backend work.
+    /// Advance control-plane work.
     fn tick(&mut self) -> Result<(), PlayError>;
 }
 
@@ -60,7 +60,8 @@ pub trait PlayerControlSource: Player {
 }
 
 /// A bare player runs its control's commands on the caller, behind its own
-/// operations gate, so an executor that holds it has nothing to drain.
+/// operations gate, so an executor that holds it has nothing to drain; its
+/// session pumps itself, so there is nothing to tick either.
 impl<S> Player for PlayerImpl<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
@@ -76,7 +77,7 @@ where
     fn release(&mut self) {}
 
     fn tick(&mut self) -> Result<(), PlayError> {
-        self.runtime.with_open_result(PlayerRuntime::tick)
+        Ok(())
     }
 }
 

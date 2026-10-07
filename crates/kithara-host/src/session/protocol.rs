@@ -4,8 +4,7 @@ use kithara_output::OutputGroup;
 use kithara_platform::sync::mpsc;
 use kithara_play::PlayError;
 pub(crate) use kithara_play::{
-    AllocatedSlot, Cmd, DeckRegistration, PlayerId, Reply, SessionDispatcher, SessionError,
-    SessionSampleRate,
+    AllocatedSlot, DeckRegistration, PlayerId, SessionDispatcher, SessionError, SessionSampleRate,
 };
 use kithara_signal::SessionFrame;
 use kithara_warp::BeatGridId;
@@ -19,7 +18,6 @@ pub(crate) type StartStreamFn<T> =
     Box<dyn FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static>;
 
 pub(crate) enum HostCmd<S> {
-    Play(Cmd),
     Attach {
         registration: DeckRegistration<S>,
     },
@@ -46,7 +44,6 @@ pub(crate) enum HostCmd<S> {
 }
 
 pub(crate) enum HostReply {
-    Play(Reply),
     /// The session took the deck and built the slot it plays through.
     Attached(Box<AllocatedSlot>),
     Ok,

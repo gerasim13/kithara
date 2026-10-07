@@ -269,7 +269,7 @@ mod tests {
     use kithara_audio::ConsumerWakeMode;
     use kithara_platform::{sync::Arc, time};
     use kithara_play::{
-        Cmd, PlayError, Reply, SessionDispatcher, SessionSampleRate, StreamShape, player::Player,
+        PlayError, SessionDispatcher, SessionSampleRate, StreamShape, player::Player,
     };
     use kithara_test_utils::{bufpool::TestPools, kithara};
     use kithara_warp::BeatGridId;
@@ -286,10 +286,6 @@ mod tests {
     impl<S> SessionDispatcher<S> for FixtureSession {
         fn consumer_wake_mode(&self) -> ConsumerWakeMode {
             ConsumerWakeMode::RealtimeDeferred
-        }
-
-        fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
-            Ok(Reply::Ok)
         }
 
         fn sample_rate(&self) -> SessionSampleRate {
@@ -366,8 +362,6 @@ mod tests {
     impl SessionDispatcher<TestPools> for Dispatcher {
         delegate! {
             to &self.session {
-                #[through(SessionDispatcher::<TestPools>)]
-                fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
                 #[through(SessionDispatcher::<TestPools>)]
                 fn consumer_wake_mode(&self) -> ConsumerWakeMode;
                 #[through(SessionDispatcher::<TestPools>)]

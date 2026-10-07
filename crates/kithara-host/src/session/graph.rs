@@ -340,8 +340,8 @@ mod tests {
         consts,
         host::{HostSettingsChange, HostSettingsExec},
         session::{
-            dispatch::{invalidate_audio_route, run_cmd, run_host_cmd},
-            protocol::{Cmd, DeckRegistration, HostCmd, HostReply, Reply},
+            dispatch::{invalidate_audio_route, run_host_cmd, tick_session},
+            protocol::{DeckRegistration, HostCmd, HostReply},
             tests::graph::{committed_transport, state as test_state},
         },
     };
@@ -465,7 +465,7 @@ mod tests {
         match run_host_cmd(state, HostCmd::Attach { registration }) {
             HostReply::Attached(_) => grid_id,
             HostReply::Err(err) => panic!("the deck failed to start: {err}"),
-            _ => panic!("attach returned an unexpected reply"),
+            HostReply::Ok => panic!("attach returned an unexpected reply"),
         }
     }
 
@@ -474,7 +474,7 @@ mod tests {
         match run_host_cmd(state, HostCmd::Detach { grid_id }) {
             HostReply::Ok => {}
             HostReply::Err(err) => panic!("the deck failed to leave: {err}"),
-            _ => panic!("detach returned an unexpected reply"),
+            HostReply::Attached(_) => panic!("detach returned an unexpected reply"),
         }
     }
 
@@ -499,7 +499,7 @@ mod tests {
         insert(&mut state);
         assert!(deliver_one_block(), "the transport must render a block");
 
-        assert!(matches!(run_cmd(&mut state, Cmd::Tick), Reply::Ok));
+        assert!(tick_session(&mut state).is_ok());
 
         let committed = state
             .transport_control
@@ -795,7 +795,7 @@ mod tests {
             dev.retired_processors.clear();
             dev.defer_processor_drop = false;
         });
-        assert!(matches!(run_cmd(&mut state, Cmd::Tick), Reply::Ok));
+        assert!(tick_session(&mut state).is_ok());
         assert!(!state.stream_needs_restart);
         assert!(state.reserved_session_grid.is_none());
         let converged = state

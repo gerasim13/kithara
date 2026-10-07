@@ -14,7 +14,7 @@ use super::protocol::HostCmdMsg;
 use super::{
     graph::{lifecycle, player_index, tap},
     protocol::{
-        AllocatedSlot, Cmd, DeckRegistration, HostCmd, HostReply, PlayerId, Reply, SessionError,
+        AllocatedSlot, DeckRegistration, HostCmd, HostReply, PlayerId, SessionError,
         SessionSampleRate,
     },
     queue::settle_receipts,
@@ -33,7 +33,6 @@ where
 {
     settle_receipts(state);
     match cmd {
-        HostCmd::Play(cmd) => HostReply::Play(run_cmd(state, cmd)),
         HostCmd::Attach { registration } => attach_deck(state, registration).map_or_else(
             |error| HostReply::Err(error.into()),
             |slot| HostReply::Attached(Box::new(slot)),
@@ -133,12 +132,6 @@ fn detach_deck<T, S>(
     Ok(())
 }
 
-pub(crate) fn run_cmd<T, S>(state: &mut SessionState<T, S>, cmd: Cmd) -> Reply {
-    match cmd {
-        Cmd::Tick => tick_session(state),
-    }
-}
-
 /// The shape of the stream the session is actually running on, if it is
 /// running on one. Firewheel keeps a deactivated context's stream description
 /// until the processor comes back, so a session awaiting a restart would
@@ -168,33 +161,33 @@ pub(super) fn stream_shape<T, S>(state: &SessionState<T, S>) -> Option<StreamSha
     })
 }
 
-pub(super) fn tick_session<T, S>(state: &mut SessionState<T, S>) -> Reply {
+/// One pump of the session on its own interval: a deferred or dead stream
+/// restarts, the graph updates, and the transport's commits and receipts
+/// settle.
+pub(super) fn tick_session<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     if state.stream_needs_restart {
-        match restart_stream(state) {
-            Ok(()) => {}
-            Err(err) => {
-                warn!(?err, "[KITHARA-ROUTE] deferred stream restart failed");
-                return Reply::Err(SessionError::RestartFailed {
-                    reason: "deferred stream restart".into(),
-                    r#source: err.to_string(),
-                });
-            }
+        if let Err(err) = restart_stream(state) {
+            warn!(?err, "[KITHARA-ROUTE] deferred stream restart failed");
+            return Err(SessionError::RestartFailed {
+                reason: "deferred stream restart".into(),
+                r#source: err.to_string(),
+            });
         }
         if state.stream_needs_restart {
-            return Reply::Ok;
+            return Ok(());
         }
     }
 
     let update = state.ctx.as_mut().map(FirewheelContext::update);
     if let Some(Err(err)) = update {
-        return handle_update_error(state, &err);
+        return Err(update_failed(&err));
     }
     if stream_died(state) {
         return restart_dead_stream(state);
     }
     transport::observe_commits(state);
     settle_receipts(state);
-    Reply::Ok
+    Ok(())
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -211,7 +204,7 @@ pub(super) fn drain_host_channel<T, S>(
         msg.reply_tx.send(reply).ok();
     }
 
-    if let Reply::Err(err) = tick_session(state) {
+    if let Err(err) = tick_session(state) {
         warn!(?err, "session tick in host drain failed");
     }
 }
@@ -244,12 +237,9 @@ fn unregister_player<T, S>(
     Ok(())
 }
 
-pub(super) fn handle_update_error<T, S>(
-    _state: &mut SessionState<T, S>,
-    err: &UpdateError,
-) -> Reply {
+fn update_failed(err: &UpdateError) -> SessionError {
     warn!(?err, "[KITHARA-ROUTE] firewheel update failed");
-    Reply::Err(SessionError::Graph(format!("{err:?}")))
+    SessionError::Graph(format!("{err:?}"))
 }
 
 /// A context that went inactive under a session that believes its stream is
@@ -260,7 +250,7 @@ pub(super) fn stream_died<T, S>(state: &SessionState<T, S>) -> bool {
     !state.stream_needs_restart && state.ctx.as_ref().is_some_and(|ctx| !ctx.is_active())
 }
 
-fn restart_dead_stream<T, S>(state: &mut SessionState<T, S>) -> Reply {
+fn restart_dead_stream<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     state.stream_needs_restart = true;
     state.publish_root();
     warn!("session stream stopped unexpectedly; restarting audio stream");
@@ -268,13 +258,10 @@ fn restart_dead_stream<T, S>(state: &mut SessionState<T, S>) -> Reply {
         sample_rate = state.settings.config().sample_rate().get(),
         "[KITHARA-ROUTE] firewheel context went inactive under a live stream"
     );
-    match restart_stream(state) {
-        Ok(()) => Reply::Ok,
-        Err(restart_err) => Reply::Err(SessionError::RestartFailed {
-            reason: "audio stream stopped".to_owned(),
-            r#source: restart_err.to_string(),
-        }),
-    }
+    restart_stream(state).map_err(|restart_err| SessionError::RestartFailed {
+        reason: "audio stream stopped".to_owned(),
+        r#source: restart_err.to_string(),
+    })
 }
 
 /// Restarts the output on the platform's new route and tells every deck's
@@ -403,7 +390,7 @@ mod tests {
         rt::MetronomeConfigChange,
         session::{
             applied_spans,
-            protocol::{Cmd, Reply, SessionError},
+            protocol::SessionError,
             state::{Deck, SessionState, TapSlot, add_graph_node},
             tests::{
                 graph::state as test_state,
@@ -577,7 +564,7 @@ mod tests {
         ) {
             HostReply::Attached(_) => grid_id,
             HostReply::Err(err) => panic!("the deck failed to start: {err}"),
-            _ => panic!("attach returned an unexpected reply"),
+            HostReply::Ok => panic!("attach returned an unexpected reply"),
         }
     }
 
@@ -958,7 +945,7 @@ mod tests {
         let before_route = host_grid(&state);
 
         state.stream = None;
-        assert!(matches!(run_cmd(&mut state, Cmd::Tick), Reply::Ok));
+        assert!(tick_session(&mut state).is_ok());
 
         assert_eq!(
             route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
@@ -1045,7 +1032,7 @@ mod tests {
                 .exec(HostSettingsChange::Tempo(tempo), When::Next, &mut ())
                 .is_ok()
         );
-        assert!(matches!(tick_session(&mut state), Reply::Ok));
+        assert!(tick_session(&mut state).is_ok());
         for clock_samples in [512, 1024, 1536] {
             state
                 .stream
@@ -1077,12 +1064,12 @@ mod tests {
 
         state.stream = None;
         route_loss(|probe| probe.fail_next_start.store(true, Ordering::SeqCst));
-        match run_cmd(&mut state, Cmd::Tick) {
-            Reply::Err(err) => assert!(
+        match tick_session(&mut state) {
+            Err(err) => assert!(
                 matches!(err, SessionError::RestartFailed { .. }),
                 "restart failure must be surfaced, got {err:?}"
             ),
-            _ => panic!("failed restart must return Reply::Err"),
+            Ok(()) => panic!("failed restart must return an error"),
         }
 
         assert!(
@@ -1096,7 +1083,7 @@ mod tests {
         let boundary = host_grid(&state);
         assert_route_boundary(&before_route, &boundary);
 
-        assert!(matches!(run_cmd(&mut state, Cmd::Tick), Reply::Ok));
+        assert!(tick_session(&mut state).is_ok());
         assert_eq!(
             route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
             3,
@@ -1267,8 +1254,8 @@ mod tests {
         route_loss(|probe| probe.fail_next_start.store(true, Ordering::SeqCst));
         state.stream = None;
         assert!(matches!(
-            run_cmd(&mut state, Cmd::Tick),
-            Reply::Err(SessionError::RestartFailed { .. })
+            tick_session(&mut state),
+            Err(SessionError::RestartFailed { .. })
         ));
 
         let host = *state.settings.config();
@@ -1428,7 +1415,7 @@ mod tests {
             HostReply::Err(error) => {
                 panic!("a deck that joined after a route boundary must follow the next: {error}")
             }
-            _ => panic!("detach returned an unexpected reply"),
+            HostReply::Attached(_) => panic!("detach returned an unexpected reply"),
         }
     }
 

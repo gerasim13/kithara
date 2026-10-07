@@ -143,7 +143,7 @@ impl<S> Host<S> {
         match self.dispatcher.exec_host(cmd).map_err(PlayError::from)? {
             HostReply::Ok => Ok(()),
             HostReply::Err(error) => Err(error),
-            HostReply::Play(_) | HostReply::Attached(_) => Err(PlayError::Internal(format!(
+            HostReply::Attached(_) => Err(PlayError::Internal(format!(
                 "unexpected host reply for {what}"
             ))),
         }

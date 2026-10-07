@@ -154,7 +154,7 @@ fn spawn_player_worker(sender: wasm::HostSender<TestPools>, stage: Arc<AtomicU64
             control.play();
             stage.store(6, Ordering::Relaxed);
 
-            while control.tick().is_ok() {
+            while !control.is_closed() {
                 sleep(WORKER_TICK).await;
             }
             stage.store(7, Ordering::Relaxed);
@@ -434,7 +434,7 @@ fn spawn_deck_pair_worker(sender: wasm::HostSender<TestPools>, pair: Arc<DeckPai
                     pair.applied.store(applied, Ordering::Release);
                 }
                 for (deck, position) in decks.iter().zip(&pair.positions) {
-                    if deck.control().tick().is_err() {
+                    if deck.control().is_closed() {
                         pair.stage.store(3, Ordering::Relaxed);
                         return;
                     }

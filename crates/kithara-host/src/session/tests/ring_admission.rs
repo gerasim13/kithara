@@ -68,7 +68,7 @@ fn start_deck(session: &ManualRingSession) -> BeatGridId {
     {
         HostReply::Attached(_) => grid_id,
         HostReply::Err(error) => panic!("the session failed to start the deck: {error}"),
-        _ => panic!("unexpected attach reply"),
+        HostReply::Ok => panic!("unexpected attach reply"),
     }
 }
 
@@ -79,7 +79,7 @@ fn remove_deck(session: &ManualRingSession, grid_id: BeatGridId) {
     {
         HostReply::Ok => {}
         HostReply::Err(error) => panic!("the session failed to remove the deck: {error}"),
-        _ => panic!("unexpected detach reply"),
+        HostReply::Attached(_) => panic!("unexpected detach reply"),
     }
 }
 
@@ -102,7 +102,7 @@ fn seated_player(session: &Arc<ManualRingSession>) -> PlayerImpl<TestPools> {
     {
         HostReply::Attached(slot) => player.seat(*slot),
         HostReply::Err(error) => panic!("the session refused the player: {error}"),
-        _ => panic!("unexpected attach reply"),
+        HostReply::Ok => panic!("unexpected attach reply"),
     }
     player
 }
@@ -384,5 +384,5 @@ impl AudioNodeProcessor for PanickingProcessor {
 async fn session_command_bridge_does_not_suppress_runtime_blocking() {
     let _mode = force_panic_mode();
     let session = ManualRingSession::start(config(1)).expect("ring session");
-    let _ = session.exec(Cmd::Tick);
+    let _ = session.tick();
 }

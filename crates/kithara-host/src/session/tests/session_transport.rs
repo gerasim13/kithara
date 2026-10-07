@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use kithara_command::When;
 use kithara_events::{EventBus, EventReceiver};
 use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
-use kithara_play::{Cmd, DeckRegistration, Reply, SessionTransportSnapshot, Tempo};
+use kithara_play::{DeckRegistration, SessionTransportSnapshot, Tempo};
 use kithara_signal::SessionFrame;
 use kithara_test_utils::{bufpool::pools, kithara};
 use kithara_warp::BeatGridId;
@@ -24,14 +24,6 @@ fn session(block_frames: u32, capacity_blocks: usize) -> ManualRingSession {
         .expect("invariant: manual ring session starts")
 }
 
-fn expect_ok(reply: Reply) {
-    match reply {
-        Reply::Ok => {}
-        Reply::Err(error) => panic!("session command failed: {error}"),
-        _ => panic!("unexpected session command reply"),
-    }
-}
-
 fn register_transport_events(session: &ManualRingSession) -> EventReceiver<TransportEvent> {
     let bus = EventBus::default();
     let events = bus.subscribe();
@@ -47,7 +39,7 @@ fn register_transport_events(session: &ManualRingSession) -> EventReceiver<Trans
     {
         HostReply::Attached(_) => events,
         HostReply::Err(error) => panic!("the session refused the deck: {error}"),
-        _ => panic!("unexpected attach reply"),
+        HostReply::Ok => panic!("unexpected attach reply"),
     }
 }
 
@@ -74,7 +66,7 @@ fn set_tempo_at(session: &ManualRingSession, beats_per_minute: f64, at: When<Ses
     {
         HostReply::Ok => {}
         HostReply::Err(error) => panic!("tempo command failed: {error}"),
-        _ => panic!("unexpected tempo command reply"),
+        HostReply::Attached(_) => panic!("unexpected tempo command reply"),
     }
 }
 
@@ -85,11 +77,10 @@ fn set_tempo(session: &ManualRingSession, beats_per_minute: f64) {
 /// Ticks the session first, as its owner loop does between device blocks, so
 /// the receipts of the rendered blocks are settled before the query.
 fn snapshot(session: &ManualRingSession) -> SessionTransportSnapshot {
-    expect_ok(
-        session
-            .exec(Cmd::Tick)
-            .expect("invariant: tick reaches the session"),
-    );
+    session
+        .tick()
+        .expect("invariant: tick reaches the session")
+        .expect("the session tick succeeds");
     session
         .transport()
         .expect("invariant: transport read reaches the session")

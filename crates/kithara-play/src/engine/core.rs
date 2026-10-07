@@ -296,10 +296,6 @@ impl<S> EngineImpl<S> {
         self.slot.lock().id()
     }
 
-    pub(crate) fn tick(&self) -> Result<(), PlayError> {
-        self.session.tick()
-    }
-
     fn validate_session_sample_rate(&self, session: u32) -> Result<(), PlayError> {
         let player = self.configured_sample_rate();
         if player == session {

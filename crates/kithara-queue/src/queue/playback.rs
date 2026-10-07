@@ -305,16 +305,14 @@ where
     }
 
     pub(super) fn tick_player(&mut self) -> Result<(), PlayError> {
-        self.with_open_result(Self::tick_player_inner)
+        self.with_open(Self::tick_player_inner)
     }
 
-    fn tick_player_inner(&mut self) -> Result<(), PlayError> {
-        self.player.tick()?;
+    fn tick_player_inner(&mut self) {
         self.player.process_notifications();
         self.drain_player_events();
         self.update_cached_position();
         self.reconcile_successor();
-        Ok(())
     }
 
     fn update_cached_position(&mut self) {
