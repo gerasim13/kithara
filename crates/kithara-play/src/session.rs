@@ -8,11 +8,11 @@ mod wire {
     use kithara_events::EventBus;
     use kithara_render::{
         bridge::{SharedEq, SlotControl},
-        rt::{BufferGeometryError, DeckMixerConfig, StreamShape},
+        rt::{BufferGeometryError, DeckMixerConfig},
     };
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
 
-    use crate::api::{SessionTransportSnapshot, SlotId};
+    use crate::api::SlotId;
 
     pub type PlayerId = u64;
 
@@ -99,9 +99,6 @@ mod wire {
             eq_layout: Vec<EqBandConfig>,
             player_id: PlayerId,
         },
-        QuerySessionTransport,
-        QuerySampleRate,
-        QueryStreamShape,
         Tick,
     }
 
@@ -109,10 +106,7 @@ mod wire {
     pub enum Reply {
         Ok,
         PlayerRegistered(RegisteredPlayer),
-        SessionTransport(SessionTransportSnapshot),
         SlotAllocated(Box<AllocatedSlot>),
-        SampleRate(SessionSampleRate),
-        StreamShape(Option<StreamShape>),
         Err(SessionError),
     }
 
@@ -199,24 +193,13 @@ mod handle {
             }
         }
 
-        /// Rate the running backend settled on, which only the session knows.
-        fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
-            match self.exec_ok(Cmd::QuerySampleRate)? {
-                Reply::SampleRate(sample_rate) => Ok(sample_rate),
-                _ => Err(PlayError::Internal(
-                    "unexpected reply for session sample rate query".into(),
-                )),
-            }
-        }
+        /// The output rate the session last published: the rate the running
+        /// backend settled on, beside the one the settings ask for.
+        fn sample_rate(&self) -> SessionSampleRate;
 
-        fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError> {
-            match self.exec_ok(Cmd::QueryStreamShape)? {
-                Reply::StreamShape(shape) => Ok(shape),
-                _ => Err(PlayError::Internal(
-                    "unexpected reply for session stream-shape query".into(),
-                )),
-            }
-        }
+        /// The output shape the session last published: the measured stream
+        /// once one runs, the requested block before.
+        fn stream_shape(&self) -> Option<StreamShape>;
     }
 
     /// Opaque one-shot capability used to attach a Player to its session.
@@ -410,14 +393,14 @@ mod handle {
             self.exec_ok(Cmd::StopPlayer { player_id }).map(|_| ())
         }
 
-        pub(crate) fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError> {
+        pub(crate) fn stream_shape(&self) -> Option<StreamShape> {
             let dispatcher = self
                 .0
                 .binding
                 .lock()
                 .as_ref()
                 .map(|binding| Arc::clone(&binding.dispatcher));
-            dispatcher.map_or(Ok(None), |dispatcher| dispatcher.stream_shape())
+            dispatcher.and_then(|dispatcher| dispatcher.stream_shape())
         }
 
         /// Record that the platform suspended the output at `tick`.
@@ -456,6 +439,7 @@ mod handle {
 
         delegate::delegate! {
             to self.dispatcher()? {
+                #[expr(Ok($))]
                 pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError>;
             }
         }
@@ -477,7 +461,7 @@ mod tests {
     use kithara_audio::ConsumerWakeMode;
     use kithara_events::EventBus;
     use kithara_platform::sync::Arc;
-    use kithara_render::rt::DeckMixerConfig;
+    use kithara_render::rt::{DeckMixerConfig, StreamShape};
     use kithara_test_utils::kithara;
     use kithara_warp::BeatGridId;
 
@@ -506,6 +490,14 @@ mod tests {
         fn exec(&self, _cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             Ok(Reply::Ok)
         }
+
+        fn sample_rate(&self) -> SessionSampleRate {
+            SessionSampleRate::new(None, sample_rate().get())
+        }
+
+        fn stream_shape(&self) -> Option<StreamShape> {
+            None
+        }
     }
 
     impl SessionDispatcher<TestPools> for RateCapture {
@@ -515,13 +507,6 @@ mod tests {
 
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             match cmd {
-                Cmd::QuerySampleRate => {
-                    self.queries.fetch_add(1, Ordering::Relaxed);
-                    Ok(Reply::SampleRate(SessionSampleRate::new(
-                        None,
-                        sample_rate().get(),
-                    )))
-                }
                 Cmd::RegisterPlayer { .. } => {
                     Ok(Reply::PlayerRegistered(crate::session::RegisteredPlayer {
                         id: 1,
@@ -530,6 +515,15 @@ mod tests {
                 }
                 _ => Ok(Reply::Ok),
             }
+        }
+
+        fn sample_rate(&self) -> SessionSampleRate {
+            self.queries.fetch_add(1, Ordering::Relaxed);
+            SessionSampleRate::new(None, sample_rate().get())
+        }
+
+        fn stream_shape(&self) -> Option<StreamShape> {
+            None
         }
     }
 

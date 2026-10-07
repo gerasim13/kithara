@@ -557,7 +557,7 @@ mod tests {
         session::{
             dispatch::{invalidate_audio_route, run_cmd},
             protocol::Cmd,
-            tests::graph::{attach_player, state as test_state},
+            tests::graph::{attach_player, committed_transport, state as test_state},
         },
     };
 
@@ -718,11 +718,7 @@ mod tests {
 
     fn render_and_read_session_grid(state: &mut TestState) -> SessionTransportSnapshot {
         assert!(deliver_one_block(), "the transport must render a block");
-        match run_cmd(state, Cmd::QuerySessionTransport) {
-            Reply::SessionTransport(snapshot) => snapshot,
-            Reply::Err(error) => panic!("transport snapshot failed: {error}"),
-            _ => panic!("transport query returned an unexpected reply"),
-        }
+        committed_transport(state).expect("the rendered block committed the transport")
     }
 
     #[kithara::test]
@@ -1038,15 +1034,17 @@ mod tests {
             reserved.stamp()
         );
         assert!(state.stream_needs_restart);
-        let Reply::SampleRate(rate) = run_cmd(&mut state, Cmd::QuerySampleRate) else {
-            panic!("the pending route restart must answer the sample-rate query")
-        };
-        assert_eq!(rate.measured, None);
+        let rate = state.root_view.sample_rate();
+        assert_eq!(
+            rate.measured, None,
+            "a pending route restart publishes no measured stream"
+        );
         assert_eq!(rate.requested, 44_100);
-        assert!(matches!(
-            run_cmd(&mut state, Cmd::QuerySessionTransport),
-            Reply::Err(SessionError::TransportNotProcessed)
-        ));
+        assert_eq!(
+            committed_transport(&mut state),
+            None,
+            "a route restart holding the session grid has nothing committed to read"
+        );
         assert_eq!(
             state.root.grid().clone(),
             reserved,
@@ -1095,11 +1093,8 @@ mod tests {
             deliver_one_block(),
             "the restarted processor must render its preserved transport"
         );
-        let restarted = match run_cmd(&mut state, Cmd::QuerySessionTransport) {
-            Reply::SessionTransport(snapshot) => snapshot,
-            Reply::Err(error) => panic!("restarted transport snapshot failed: {error}"),
-            _ => panic!("restarted transport query returned an unexpected reply"),
-        };
+        let restarted = committed_transport(&mut state)
+            .expect("the restarted transport committed its first block");
         let published = state.root.grid().clone();
         assert_eq!(published.state(), BeatGridState::Live);
         let MapAxis::Session(reserved_axis) = reserved.axis() else {

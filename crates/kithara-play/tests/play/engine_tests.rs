@@ -4,7 +4,8 @@ use kithara_audio::ConsumerWakeMode;
 use kithara_events::EventBus;
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    Cmd, EngineConfig, EngineImpl, PlayError, Reply, SessionBinding, SessionDispatcher, SlotId,
+    Cmd, EngineConfig, EngineImpl, PlayError, Reply, SessionBinding, SessionDispatcher,
+    SessionSampleRate, SlotId, StreamShape,
 };
 use kithara_test_utils::{
     bufpool::{TestPools, pools},
@@ -23,6 +24,14 @@ impl SessionDispatcher<TestPools> for FixtureSession {
 
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::RealtimeDeferred
+    }
+
+    fn sample_rate(&self) -> SessionSampleRate {
+        SessionSampleRate::new(None, SAMPLE_RATE.get())
+    }
+
+    fn stream_shape(&self) -> Option<StreamShape> {
+        None
     }
 }
 

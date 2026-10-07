@@ -19,8 +19,7 @@ use crate::{
     api::Tap,
     rt::SessionOutput,
     session::{
-        Cmd, HostCmd, HostDispatcher, HostReply, HostRoot, Reply, RootView, SessionError,
-        SessionSampleRate,
+        HostCmd, HostDispatcher, HostReply, HostRoot, RootView, SessionError, SessionSampleRate,
     },
 };
 
@@ -123,10 +122,17 @@ impl<S> Host<S> {
         Ok((grid_id, player.control()))
     }
 
-    /// Whether the session holds no deck.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.root_view.is_empty()
+    delegate::delegate! {
+        to self.root_view {
+            /// Whether the session holds no deck.
+            #[must_use]
+            pub fn is_empty(&self) -> bool;
+            /// The rate the output runs at as measured, beside the rate the
+            /// settings ask for, as the session last published them.
+            #[must_use]
+            #[call(sample_rate)]
+            pub fn output_sample_rate(&self) -> SessionSampleRate;
+        }
     }
 
     fn exec_host_ok(&self, cmd: HostCmd<S>, what: &'static str) -> Result<(), PlayError> {
@@ -172,21 +178,6 @@ impl<S> Host<S> {
             },
             "route invalidation",
         )
-    }
-
-    /// Reads the rate the output runs at as measured, beside the rate the
-    /// settings ask for.
-    ///
-    /// # Errors
-    /// Returns an error when the canonical session cannot answer the query.
-    pub fn output_sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
-        match self.dispatcher.exec(Cmd::QuerySampleRate)? {
-            Reply::SampleRate(sample_rate) => Ok(sample_rate),
-            Reply::Err(error) => Err(error.into()),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for sample-rate query".into(),
-            )),
-        }
     }
 
     pub(super) fn owned<P>(&self, id: BeatGridId, control: P::Control) -> HostOwned<P>

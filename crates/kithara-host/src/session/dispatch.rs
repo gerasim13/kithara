@@ -138,15 +138,6 @@ where
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
-        Cmd::QuerySessionTransport => match transport::snapshot(state) {
-            Ok(snapshot) => Reply::SessionTransport(snapshot),
-            Err(err) => Reply::Err(err),
-        },
-        Cmd::QuerySampleRate => {
-            trace_stream_info(state, "query-sample-rate");
-            Reply::SampleRate(sample_rate(state))
-        }
-        Cmd::QueryStreamShape => Reply::StreamShape(stream_shape(state)),
         Cmd::Tick => tick_session(state),
     }
 }
@@ -818,13 +809,11 @@ mod tests {
     }
 
     #[kithara::test]
-    fn sample_rate_query_separates_the_measured_stream_from_the_request() {
+    fn the_published_sample_rate_separates_the_measured_stream_from_the_request() {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
-        let Reply::SampleRate(before) = run_cmd(&mut state, Cmd::QuerySampleRate) else {
-            panic!("the sample-rate query answers with a sample rate");
-        };
+        let before = state.root_view.sample_rate();
         assert_eq!(
             before.measured, None,
             "a session with no stream has measured nothing"
@@ -837,30 +826,30 @@ mod tests {
 
         let player_id = register_player(&mut state);
         assert!(matches!(
-            run_cmd(&mut state, Cmd::QuerySampleRate),
-            Reply::SampleRate(SessionSampleRate {
+            state.root_view.sample_rate(),
+            SessionSampleRate {
                 measured: None,
                 requested: TestState::DEFAULT_SAMPLE_RATE,
                 ..
-            })
+            }
         ));
         configure_sample_rate(&mut state, 48_000);
         assert!(matches!(
-            run_cmd(&mut state, Cmd::QuerySampleRate),
-            Reply::SampleRate(SessionSampleRate {
+            state.root_view.sample_rate(),
+            SessionSampleRate {
                 measured: None,
                 requested: 48_000,
                 ..
-            })
+            }
         ));
         start_player_cmd(&mut state, player_id);
         assert!(matches!(
-            run_cmd(&mut state, Cmd::QuerySampleRate),
-            Reply::SampleRate(SessionSampleRate {
+            state.root_view.sample_rate(),
+            SessionSampleRate {
                 measured: Some(48_000),
                 requested: 48_000,
                 ..
-            })
+            }
         ));
     }
 
@@ -887,19 +876,18 @@ mod tests {
     }
 
     #[kithara::test]
-    fn stream_shape_query_prefers_measurement_over_an_explicit_request() {
+    fn the_published_stream_shape_prefers_measurement_over_an_explicit_request() {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
-        assert!(matches!(
-            run_cmd(&mut state, Cmd::QueryStreamShape),
-            Reply::StreamShape(None)
-        ));
+        assert_eq!(state.root_view.stream_shape(), None);
 
         state.requested_max_block_frames = NonZeroU32::new(128);
-        let Reply::StreamShape(Some(requested)) = run_cmd(&mut state, Cmd::QueryStreamShape) else {
-            panic!("the explicit output block is available before stream start")
-        };
+        state.publish_root();
+        let requested = state
+            .root_view
+            .stream_shape()
+            .expect("the explicit output block is published before stream start");
         assert_eq!(requested.max_block_frames.get(), 128);
         assert_eq!(requested.sample_rate.get(), TestState::DEFAULT_SAMPLE_RATE);
 
@@ -908,12 +896,12 @@ mod tests {
             run_cmd(&mut state, start_command(player_id),),
             Reply::Ok
         ));
-        let Reply::StreamShape(Some(measured)) = run_cmd(&mut state, Cmd::QueryStreamShape) else {
-            panic!("the running stream reports its measured output shape")
-        };
+        let measured = state
+            .root_view
+            .stream_shape()
+            .expect("the running stream publishes its measured output shape");
         assert_eq!(measured.max_block_frames.get(), 512);
         assert_eq!(measured.sample_rate.get(), TestState::DEFAULT_SAMPLE_RATE);
-        assert_eq!(state.root_view.stream_shape(), Some(measured));
         configure_sample_rate(&mut state, 48_000);
         assert_eq!(
             state
@@ -975,12 +963,12 @@ mod tests {
             Reply::Ok
         ));
         assert!(matches!(
-            run_cmd(&mut state, Cmd::QuerySampleRate),
-            Reply::SampleRate(SessionSampleRate {
+            state.root_view.sample_rate(),
+            SessionSampleRate {
                 measured: Some(44_100),
                 requested: 44_100,
                 ..
-            })
+            }
         ));
         assert!(matches!(
             run_cmd(&mut state, Cmd::AllocateSlot { player_id }),

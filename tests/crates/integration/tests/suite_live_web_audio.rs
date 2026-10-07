@@ -196,8 +196,8 @@ fn first_audible_sample(samples: &[f32]) -> Option<usize> {
 }
 
 fn session_is_live(host: &Host<TestPools>) -> bool {
-    host.output_sample_rate()
-        .is_ok_and(|rates| rates.measured == Some(rates.requested))
+    let rates = host.output_sample_rate();
+    rates.measured == Some(rates.requested)
 }
 
 /// Dominant frequency of a mono window, taken from its rising zero crossings.
@@ -271,9 +271,7 @@ async fn live_web_audio_plays_at_session_rate() {
     let frames = window.len() / CHANNELS;
     let dropped = drops.load(Ordering::Relaxed);
     let stage = stage_name(stage.load(Ordering::Relaxed));
-    let rates = host
-        .output_sample_rate()
-        .expect("read the session output rate");
+    let rates = host.output_sample_rate();
     assert_eq!(
         (rates.requested, rates.measured),
         (RATE.get(), Some(RATE.get())),
@@ -532,9 +530,7 @@ async fn two_decks_in_one_host_follow_the_crossfader() {
     let at_b = pair.positions();
 
     let dropped = drops.load(Ordering::Relaxed);
-    let rates = host
-        .output_sample_rate()
-        .expect("read the session output rate");
+    let rates = host.output_sample_rate();
     assert_eq!(
         (rates.requested, rates.measured),
         (RATE.get(), Some(RATE.get())),

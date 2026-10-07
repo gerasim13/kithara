@@ -68,10 +68,8 @@ impl<S: Send + Sync + 'static> SessionDispatcher<S> for SessionClient<S> {
 
     delegate::delegate! {
         to self.root_view {
-            #[expr(Ok($))]
-            fn sample_rate(&self) -> Result<SessionSampleRate, PlayError>;
-            #[expr(Ok($))]
-            fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError>;
+            fn sample_rate(&self) -> SessionSampleRate;
+            fn stream_shape(&self) -> Option<StreamShape>;
         }
     }
 }

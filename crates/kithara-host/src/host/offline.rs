@@ -247,10 +247,7 @@ where
         cancel: &CancelToken,
         sink: &mut dyn RenderSink,
     ) -> Result<OfflineRenderReport, OfflineRenderError> {
-        let rate = self
-            .output_sample_rate()
-            .map_err(OfflineRenderError::backend)?
-            .output();
+        let rate = self.output_sample_rate().output();
         let rate = NonZeroU32::new(rate).ok_or_else(|| {
             OfflineRenderError::backend(PlayError::Internal(
                 "offline session reported a zero output rate".into(),

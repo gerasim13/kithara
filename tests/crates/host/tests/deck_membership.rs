@@ -58,10 +58,7 @@ async fn failed_deck_preparation_releases_host_membership() {
     host.with(|host| {
         assert!(host.is_empty());
         assert!(
-            host.output_sample_rate()
-                .expect("host sample rate")
-                .measured
-                .is_none(),
+            host.output_sample_rate().measured.is_none(),
             "failed preparation must close an otherwise idle stream"
         );
     })
@@ -78,21 +75,13 @@ async fn failed_deck_preparation_releases_host_membership() {
         .expect("host can prepare the next deck");
     host.with(move |host| {
         assert!(
-            host.output_sample_rate()
-                .expect("sample rate")
-                .measured
-                .is_none(),
+            host.output_sample_rate().measured.is_none(),
             "inserting an idle deck must not start the output stream"
         );
         deck.set_eq_gain(0, -6.0).expect("configure idle EQ");
         assert_eq!(deck.eq_gain(0), Some(-6.0));
         deck.play();
-        assert!(
-            host.output_sample_rate()
-                .expect("sample rate")
-                .measured
-                .is_some()
-        );
+        assert!(host.output_sample_rate().measured.is_some());
         assert_eq!(deck.eq_gain(0), Some(-6.0));
         deck.pause();
     })

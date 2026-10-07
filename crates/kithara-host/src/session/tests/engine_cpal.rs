@@ -9,7 +9,7 @@ use kithara_platform::{
 };
 use kithara_play::{
     Cmd, EngineImpl, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply,
-    SessionBinding, SessionDispatcher, player::Player,
+    SessionBinding, SessionDispatcher, SessionSampleRate, StreamShape, player::Player,
 };
 use kithara_test_utils::{
     bufpool::{TestPools, pools},
@@ -17,9 +17,11 @@ use kithara_test_utils::{
 };
 
 use super::{engine_session_contract as contract, graph::GraphSession};
+use crate::session::state::RootView;
 
 struct CpalGraphSession {
     cmd_tx: Mutex<mpsc::Sender<CpalMessage>>,
+    view: RootView,
     worker: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -34,8 +36,10 @@ enum CpalMessage {
 impl CpalGraphSession {
     fn new() -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<CpalMessage>();
+        let (view_tx, view_rx) = mpsc::channel();
         let worker = spawn_named("kithara-engine-cpal-contract", move || {
             let mut graph = GraphSession::<CpalStream, TestPools>::new(start_stream);
+            let _ = view_tx.send(graph.view());
             while let Ok(message) = cmd_rx.recv() {
                 match message {
                     CpalMessage::Command { cmd, reply_tx } => {
@@ -47,6 +51,9 @@ impl CpalGraphSession {
         });
         Self {
             cmd_tx: Mutex::new(cmd_tx),
+            view: view_rx
+                .recv()
+                .expect("invariant: the cpal contract session publishes its view"),
             worker: Mutex::new(Some(worker)),
         }
     }
@@ -77,6 +84,13 @@ impl SessionDispatcher<TestPools> for CpalGraphSession {
         reply_rx.recv().map_err(|_| PlayError::SessionGone {
             reason: "cpal contract session dropped its reply channel",
         })
+    }
+
+    delegate::delegate! {
+        to self.view {
+            fn sample_rate(&self) -> SessionSampleRate;
+            fn stream_shape(&self) -> Option<StreamShape>;
+        }
     }
 }
 

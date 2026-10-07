@@ -4,6 +4,7 @@ use firewheel::FirewheelContext;
 use kithara_bufpool::HasPool;
 use kithara_command::Live;
 use kithara_effects::LimiterConfig;
+use kithara_play::SessionTransportSnapshot;
 #[cfg(test)]
 use kithara_test_utils::bufpool::TestPools;
 use kithara_warp::BeatGridId;
@@ -12,6 +13,7 @@ use super::super::{
     dispatch::{run_cmd, run_host_cmd},
     protocol::{Cmd, HostCmd, HostReply, Reply},
     state::{HostRoot, RootView, SessionState},
+    transport::observe_commits,
 };
 use crate::{HostSettings, rt::SessionOutput};
 /// Test-only owner for the real Host graph running on an injected backend.
@@ -61,6 +63,16 @@ where
 
     pub(crate) fn stream_mut(&mut self) -> Option<&mut T> {
         self.state.stream.as_mut()
+    }
+
+    /// What the transport last committed; see [`committed_transport`].
+    pub(crate) fn transport(&mut self) -> Option<SessionTransportSnapshot> {
+        committed_transport(&mut self.state)
+    }
+
+    /// The view the session publishes, as its clients read it.
+    pub(crate) fn view(&self) -> RootView {
+        self.state.root_view.clone()
     }
 
     #[must_use]
@@ -123,6 +135,18 @@ pub(crate) fn root_with_player(sample_rate: NonZeroU32) -> (HostRoot, RootView, 
         HostSettings::builder().sample_rate(sample_rate).build(),
     );
     (root, root_view, player_grid_id)
+}
+
+/// Brings the Host grid up to what the render graph committed, then reads
+/// that commit; nothing while a route restart holds the session grid.
+pub(crate) fn committed_transport<T, S>(
+    state: &mut SessionState<T, S>,
+) -> Option<SessionTransportSnapshot> {
+    observe_commits(state);
+    if state.reserved_session_grid.is_some() {
+        return None;
+    }
+    state.transport_control.as_mut()?.observation().snapshot()
 }
 
 fn attach_player_with_id<T, S>(state: &mut SessionState<T, S>, grid_id: BeatGridId) {

@@ -308,7 +308,7 @@ impl<S> EngineImpl<S> {
         Ok(())
     }
 
-    pub(crate) fn stream_shape(&self) -> Result<Option<StreamShape>, PlayError> {
+    pub(crate) fn stream_shape(&self) -> Option<StreamShape> {
         self.session.stream_shape()
     }
 

@@ -7,18 +7,7 @@ use super::{
     event::TransportEvent,
     process::converge_transport_restart,
 };
-use crate::{
-    api::SessionTransportSnapshot,
-    session::{SessionError, queue::settle_receipts, state::SessionState},
-};
-
-pub(crate) fn snapshot<T, S>(
-    state: &mut SessionState<T, S>,
-) -> Result<SessionTransportSnapshot, SessionError> {
-    refresh_observation(state)?
-        .snapshot()
-        .ok_or(SessionError::TransportNotProcessed)
-}
+use crate::session::{SessionError, queue::settle_receipts, state::SessionState};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RouteRestartStatus {
@@ -155,21 +144,6 @@ fn finish_route_restart<T, S>(
         ));
     }
     Ok(RouteRestartStatus::Ready)
-}
-
-fn refresh_observation<T, S>(
-    state: &mut SessionState<T, S>,
-) -> Result<TransportObservation, SessionError> {
-    if state.reserved_session_grid.is_some() {
-        return Err(SessionError::TransportNotProcessed);
-    }
-    let observation = state
-        .transport_control
-        .as_mut()
-        .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?
-        .observation();
-    publish_committed(state, &observation);
-    Ok(observation)
 }
 
 /// Brings the Host grid up to what the render graph has committed: on every

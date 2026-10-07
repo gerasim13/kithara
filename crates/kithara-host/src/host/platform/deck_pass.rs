@@ -176,7 +176,7 @@ mod tests {
     };
     use kithara_play::{
         Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply, SessionBinding,
-        SessionDispatcher,
+        SessionDispatcher, SessionSampleRate, StreamShape,
         player::{Player, PlayerControl, PlayerControlSource},
     };
     use kithara_test_utils::{
@@ -199,6 +199,14 @@ mod tests {
                 self.0.fetch_add(1, Ordering::Relaxed);
             }
             Ok(Reply::Ok)
+        }
+
+        fn sample_rate(&self) -> SessionSampleRate {
+            SessionSampleRate::new(None, consts::DEFAULT_SAMPLE_RATE.get())
+        }
+
+        fn stream_shape(&self) -> Option<StreamShape> {
+            None
         }
     }
 

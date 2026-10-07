@@ -32,7 +32,7 @@ impl<S> EngineImpl<S> {
 
     pub(crate) fn prepare(&self) -> Result<(), PlayError> {
         if let Some(quantum) = self.config.render_quantum_frames
-            && let Some(shape) = self.stream_shape()?
+            && let Some(shape) = self.stream_shape()
         {
             shape.playback_buffers(quantum, self.config.response_budget_frames)?;
         }

@@ -33,6 +33,7 @@ use kithara::{
     play::{
         AllocatedSlot, Cmd, NodeInputs, PlayError, PlayerConfig, PlayerImpl, Reply, ResourceConfig,
         ResourceSrc, SessionBinding, SessionDispatcher, SessionSampleRate, SharedEq, SlotId,
+        StreamShape,
         player::{Player, PlayerControlSource},
     },
     queue::{Queue, QueueConfig, QueueEvent, TrackSource, Transition},
@@ -93,14 +94,17 @@ impl SessionDispatcher<TestPools> for StartGatedSession {
                 self.nodes.lock().push(inputs);
                 Reply::SlotAllocated(Box::new(AllocatedSlot::new(control, slot)))
             }
-            Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(
-                None,
-                shared::NON_ZERO_SAMPLE_RATE.get(),
-            )),
-            Cmd::QueryStreamShape => Reply::StreamShape(None),
             _ => Reply::Ok,
         };
         Ok(reply)
+    }
+
+    fn sample_rate(&self) -> SessionSampleRate {
+        SessionSampleRate::new(None, shared::NON_ZERO_SAMPLE_RATE.get())
+    }
+
+    fn stream_shape(&self) -> Option<StreamShape> {
+        None
     }
 
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {

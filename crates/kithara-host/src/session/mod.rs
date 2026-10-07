@@ -17,9 +17,7 @@ pub(crate) mod offline;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web;
 
-pub(crate) use protocol::{
-    Cmd, HostCmd, HostDispatcher, HostReply, Reply, SessionError, SessionSampleRate,
-};
+pub(crate) use protocol::{HostCmd, HostDispatcher, HostReply, SessionError, SessionSampleRate};
 pub(crate) use queue::HostProtocol;
 pub(crate) use state::{HostRoot, RootView};
 pub use transport::TransportEvent;

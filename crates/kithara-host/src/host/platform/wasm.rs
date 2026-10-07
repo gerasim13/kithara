@@ -273,7 +273,9 @@ mod tests {
     use delegate::delegate;
     use kithara_audio::ConsumerWakeMode;
     use kithara_platform::{sync::Arc, time};
-    use kithara_play::{PlayError, SessionDispatcher, player::Player};
+    use kithara_play::{
+        Cmd, PlayError, Reply, SessionDispatcher, SessionSampleRate, StreamShape, player::Player,
+    };
     use kithara_test_utils::{bufpool::TestPools, kithara};
     use kithara_warp::BeatGridId;
 
@@ -281,9 +283,7 @@ mod tests {
     use crate::{
         HostSettings, consts,
         host::owner::SessionRoot,
-        session::{
-            Cmd, HostCmd, HostDispatcher, HostReply, HostRoot, Reply, protocol::HostDispatchError,
-        },
+        session::{HostCmd, HostDispatcher, HostReply, HostRoot, protocol::HostDispatchError},
     };
 
     struct FixtureSession;
@@ -295,6 +295,14 @@ mod tests {
 
         fn exec(&self, _cmd: Cmd<S>) -> Result<Reply, PlayError> {
             Ok(Reply::Ok)
+        }
+
+        fn sample_rate(&self) -> SessionSampleRate {
+            SessionSampleRate::new(None, consts::DEFAULT_SAMPLE_RATE.get())
+        }
+
+        fn stream_shape(&self) -> Option<StreamShape> {
+            None
         }
     }
 
@@ -364,9 +372,13 @@ mod tests {
         delegate! {
             to &self.session {
                 #[through(SessionDispatcher::<TestPools>)]
-                fn exec(&self, cmd: kithara_play::Cmd<TestPools>) -> Result<Reply, PlayError>;
+                fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError>;
                 #[through(SessionDispatcher::<TestPools>)]
                 fn consumer_wake_mode(&self) -> ConsumerWakeMode;
+                #[through(SessionDispatcher::<TestPools>)]
+                fn sample_rate(&self) -> SessionSampleRate;
+                #[through(SessionDispatcher::<TestPools>)]
+                fn stream_shape(&self) -> Option<StreamShape>;
             }
         }
     }

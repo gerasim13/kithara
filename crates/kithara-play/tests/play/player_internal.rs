@@ -19,7 +19,7 @@ use kithara_play::{
     AllocatedSlot, Cmd, CrossfadeSettings, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig,
     PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus, Reply, Resource, SeekOutcome,
     SelectionPlayback, SessionBinding, SessionDispatcher, SessionSampleRate, SharedEq, SlotId,
-    SuccessorLink,
+    StreamShape, SuccessorLink,
 };
 use kithara_render::bridge::slot_channels;
 use kithara_test_fixtures::integration_fixtures::constant_half;
@@ -74,9 +74,6 @@ impl SessionDispatcher<TestPools> for FixtureSession {
                 self.nodes.lock().push(inputs);
                 Reply::SlotAllocated(Box::new(AllocatedSlot::new(control, slot)))
             }
-            Cmd::QuerySampleRate => {
-                Reply::SampleRate(SessionSampleRate::new(None, SAMPLE_RATE.get()))
-            }
             _ => Reply::Ok,
         };
         Ok(reply)
@@ -84,6 +81,14 @@ impl SessionDispatcher<TestPools> for FixtureSession {
 
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::RealtimeDeferred
+    }
+
+    fn sample_rate(&self) -> SessionSampleRate {
+        SessionSampleRate::new(None, SAMPLE_RATE.get())
+    }
+
+    fn stream_shape(&self) -> Option<StreamShape> {
+        None
     }
 }
 

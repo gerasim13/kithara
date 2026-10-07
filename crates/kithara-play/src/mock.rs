@@ -47,13 +47,17 @@ impl<S> SessionDispatcher<S> for SessionMock {
                 self.nodes.lock().push(inputs);
                 Reply::SlotAllocated(Box::new(AllocatedSlot::new(control, slot)))
             }
-            Cmd::QuerySampleRate => {
-                Reply::SampleRate(SessionSampleRate::new(None, self.sample_rate.get()))
-            }
-            Cmd::QueryStreamShape => Reply::StreamShape(self.shape),
             _ => Reply::Ok,
         };
         Ok(reply)
+    }
+
+    fn sample_rate(&self) -> SessionSampleRate {
+        SessionSampleRate::new(None, self.sample_rate.get())
+    }
+
+    fn stream_shape(&self) -> Option<StreamShape> {
+        self.shape
     }
 }
 

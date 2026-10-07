@@ -90,14 +90,10 @@ fn snapshot(session: &ManualRingSession) -> SessionTransportSnapshot {
             .exec(Cmd::Tick)
             .expect("invariant: tick reaches the session"),
     );
-    match session
-        .exec(Cmd::QuerySessionTransport)
-        .expect("invariant: transport query reaches the session")
-    {
-        Reply::SessionTransport(snapshot) => snapshot,
-        Reply::Err(error) => panic!("transport query failed: {error}"),
-        _ => panic!("unexpected transport query reply"),
-    }
+    session
+        .transport()
+        .expect("invariant: transport read reaches the session")
+        .expect("the rendered blocks committed the transport")
 }
 
 fn commit_initial_transport(

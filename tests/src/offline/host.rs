@@ -480,10 +480,7 @@ fn output_spec<S>(host: &Host<S>) -> AudioSpec
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    let rate = host
-        .output_sample_rate()
-        .unwrap_or_else(|error| panic!("query product offline Host output rate: {error}"))
-        .output();
+    let rate = host.output_sample_rate().output();
     AudioSpec::new(
         CHANNELS,
         NonZeroU32::new(rate).expect("product offline Host renders at a non-zero rate"),

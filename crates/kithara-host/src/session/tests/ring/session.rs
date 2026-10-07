@@ -1,6 +1,7 @@
 use std::{
     any::Any,
     num::{NonZeroU32, NonZeroUsize},
+    sync::OnceLock,
 };
 
 use firewheel::FirewheelContext;
@@ -10,7 +11,10 @@ use kithara_platform::{
     sync::{Mutex, mpsc},
     thread::{JoinHandle, spawn_named},
 };
-use kithara_play::{Cmd, PlayError, Reply, SessionDispatcher, SessionError};
+use kithara_play::{
+    Cmd, PlayError, Reply, SessionDispatcher, SessionError, SessionSampleRate,
+    SessionTransportSnapshot, StreamShape,
+};
 use kithara_test_utils::{
     bufpool::{TestPools, pools},
     kithara,
@@ -21,7 +25,10 @@ use super::{
     super::graph::GraphSession, MasterRing, RingBackend, RingBackendConfig, RingBackendProbe,
     RingLayout, RingReader, RingRenderError,
 };
-use crate::session::protocol::{HostCmd, HostReply};
+use crate::session::{
+    protocol::{HostCmd, HostReply},
+    state::RootView,
+};
 
 type RingSetup =
     Box<dyn FnOnce(&mut FirewheelContext) -> Result<(), RingSessionError> + Send + 'static>;
@@ -102,6 +109,9 @@ enum RingMsg {
         blocks: usize,
         reply_tx: mpsc::Sender<CreditReply>,
     },
+    Transport {
+        reply_tx: mpsc::Sender<Option<SessionTransportSnapshot>>,
+    },
     Shutdown,
 }
 
@@ -123,6 +133,7 @@ pub(crate) struct ManualRingSession {
     reader: Mutex<RingReader>,
     snapshot: Mutex<RingSnapshot>,
     terminal_error: Mutex<Option<RingSessionError>>,
+    view: OnceLock<RootView>,
     worker: Mutex<Option<JoinHandle<()>>>,
     probe: RingBackendProbe,
 }
@@ -213,6 +224,26 @@ impl ManualRingSession {
         reply_rx.recv().map_or_else(|_| self.worker_failure(), Ok)
     }
 
+    /// What the transport last committed; `None` while a route restart holds
+    /// the session grid.
+    pub(crate) fn transport(&self) -> Result<Option<SessionTransportSnapshot>, RingSessionError> {
+        self.ensure_available()?;
+        let (reply_tx, reply_rx) = mpsc::channel();
+        let Some(cmd_tx) = self.cmd_tx.lock().clone() else {
+            return self.worker_failure();
+        };
+        if cmd_tx.send(RingMsg::Transport { reply_tx }).is_err() {
+            return self.worker_failure();
+        }
+        reply_rx.recv().map_or_else(|_| self.worker_failure(), Ok)
+    }
+
+    fn view(&self) -> &RootView {
+        self.view
+            .get()
+            .expect("invariant: a started ring session holds its view")
+    }
+
     fn join_worker(&self) -> Result<(), RingSessionError> {
         let Some(worker) = self.worker.lock().take() else {
             return Ok(());
@@ -297,11 +328,13 @@ impl ManualRingSession {
             reader: Mutex::new(reader),
             snapshot: Mutex::new(RingSnapshot::default()),
             terminal_error: Mutex::new(None),
+            view: OnceLock::new(),
             worker: Mutex::new(Some(worker)),
         };
         match ready_rx.recv() {
-            Ok(Ok(snapshot)) => {
+            Ok(Ok((snapshot, view))) => {
                 *session.snapshot.lock() = snapshot;
+                let _ = session.view.set(view);
                 Ok(session)
             }
             Ok(Err(error)) => {
@@ -337,6 +370,13 @@ impl SessionDispatcher<TestPools> for ManualRingSession {
     fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
         Self::exec(self, cmd).map_err(|error| PlayError::Internal(error.to_string()))
     }
+
+    delegate::delegate! {
+        to self.view() {
+            fn sample_rate(&self) -> SessionSampleRate;
+            fn stream_shape(&self) -> Option<StreamShape>;
+        }
+    }
 }
 
 impl Drop for ManualRingSession {
@@ -347,7 +387,7 @@ impl Drop for ManualRingSession {
 
 fn ring_session_thread(
     cmd_rx: &mpsc::Receiver<RingMsg>,
-    ready_tx: &mpsc::Sender<Result<RingSnapshot, RingSessionError>>,
+    ready_tx: &mpsc::Sender<Result<(RingSnapshot, RootView), RingSessionError>>,
     backend_config: RingBackendConfig,
     session_rate: NonZeroU32,
     probe: RingBackendProbe,
@@ -372,7 +412,9 @@ fn ring_session_thread(
             Ok(backend)
         },
     );
-    let ready = bootstrap(&mut state, setup).and_then(|()| snapshot(&mut state));
+    let ready = bootstrap(&mut state, setup)
+        .and_then(|()| snapshot(&mut state))
+        .map(|snapshot| (snapshot, state.view()));
     let is_ready = ready.is_ok();
     if ready_tx.send(ready).is_err() || !is_ready {
         return;
@@ -387,6 +429,9 @@ fn ring_session_thread(
             }
             RingMsg::Credit { blocks, reply_tx } => {
                 let _ = reply_tx.send(credit_blocks(&mut state, blocks));
+            }
+            RingMsg::Transport { reply_tx } => {
+                let _ = reply_tx.send(state.transport());
             }
             RingMsg::Shutdown => return,
         }

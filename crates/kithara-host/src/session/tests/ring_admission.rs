@@ -390,5 +390,5 @@ impl AudioNodeProcessor for PanickingProcessor {
 async fn session_command_bridge_does_not_suppress_runtime_blocking() {
     let _mode = force_panic_mode();
     let session = ManualRingSession::start(config(1)).expect("ring session");
-    let _ = session.exec(Cmd::QuerySampleRate);
+    let _ = session.exec(Cmd::Tick);
 }
