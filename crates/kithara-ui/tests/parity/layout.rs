@@ -478,6 +478,7 @@ impl LayoutWalker<'_> {
             }
             ExpandedNode::Control { .. }
             | ExpandedNode::Popover { .. }
+            | ExpandedNode::Modal { .. }
             | ExpandedNode::Pressable { .. } => {
                 self.document(&path, layout, depth, already_attributed);
                 self.opaque_control_children(layout);
@@ -631,6 +632,7 @@ impl LayoutWalker<'_> {
             }
             ExpandedNode::Control { .. }
             | ExpandedNode::Popover { .. }
+            | ExpandedNode::Modal { .. }
             | ExpandedNode::Pressable { .. } => self.unplaced(&path, depth),
             _ => panic!("unsupported expanded node at document path `{path}`"),
         }
@@ -766,6 +768,7 @@ fn expanded_path(node: &ExpandedNode, ui: &CompiledUi, parent: &str, position: u
         ExpandedNode::Slot { id, .. } => named_path(parent, ui.resolve(*id)),
         ExpandedNode::Control { path, .. }
         | ExpandedNode::Popover { path, .. }
+        | ExpandedNode::Modal { path, .. }
         | ExpandedNode::Pressable { path, .. } => ui.resolve(*path).to_owned(),
         _ => positional_path(parent, "expanded", position),
     }

@@ -17,7 +17,7 @@ use crate::{
     module::MeasureAxis,
     render::{
         Published,
-        document::{Band, Measured as Plan},
+        document::{Band, GroupMount, Measured as Plan},
     },
     solve::{self, Distribution, Input, Item, Measure},
 };
@@ -39,6 +39,8 @@ pub(super) struct Flex<'a> {
 #[derive(Clone, Copy)]
 struct ChildLayout {
     band: Band,
+    /// Whether the child stands above the flow, taking no slot in it.
+    floats: bool,
     declared: Option<Size<Length>>,
     main_minimum: Option<f32>,
     main_weight: Option<f32>,
@@ -62,14 +64,9 @@ impl<'a> Flex<'a> {
     }
 
     pub(super) fn column(
-        children: impl IntoIterator<Item = (Element<'a, Published>, Option<f32>, Band)>,
+        children: impl IntoIterator<Item = GroupMount<Element<'a, Published>>>,
     ) -> Self {
-        Self::with_children(
-            Axis::Vertical,
-            children
-                .into_iter()
-                .map(|(child, main_minimum, band)| (child, None, main_minimum, None, band)),
-        )
+        Self::mounted(Axis::Vertical, children)
     }
 
     pub(super) fn column_weighted(
@@ -99,40 +96,44 @@ impl<'a> Flex<'a> {
         self
     }
 
-    fn push(
-        mut self,
-        child: Element<'a, Published>,
-        declared: Option<Size<Length>>,
-        main_minimum: Option<f32>,
-        main_weight: Option<f32>,
-        band: Band,
-    ) -> Self {
-        let size_hint = declared.unwrap_or_else(|| child.as_widget().size_hint());
+    fn push(mut self, child: Element<'a, Published>, layout: ChildLayout) -> Self {
+        let size_hint = layout
+            .declared
+            .unwrap_or_else(|| child.as_widget().size_hint());
 
         if !size_hint.is_void() {
             self.width = self.width.enclose(size_hint.width);
             self.height = self.height.enclose(size_hint.height);
             self.children.push(child);
-            self.child_layouts.push(ChildLayout {
-                band,
-                declared,
-                main_minimum,
-                main_weight,
-            });
+            self.child_layouts.push(layout);
         }
 
         self
     }
 
-    pub(super) fn row(
-        children: impl IntoIterator<Item = (Element<'a, Published>, Option<f32>, Band)>,
+    fn mounted(
+        axis: Axis,
+        children: impl IntoIterator<Item = GroupMount<Element<'a, Published>>>,
     ) -> Self {
         Self::with_children(
-            Axis::Horizontal,
-            children
-                .into_iter()
-                .map(|(child, main_minimum, band)| (child, None, main_minimum, None, band)),
+            axis,
+            children.into_iter().map(|child| {
+                let layout = ChildLayout {
+                    band: child.band,
+                    floats: child.floats,
+                    declared: None,
+                    main_minimum: child.minimum,
+                    main_weight: None,
+                };
+                (child.output, layout)
+            }),
         )
+    }
+
+    pub(super) fn row(
+        children: impl IntoIterator<Item = GroupMount<Element<'a, Published>>>,
+    ) -> Self {
+        Self::mounted(Axis::Horizontal, children)
     }
 
     pub(super) fn row_weighted(
@@ -155,7 +156,14 @@ impl<'a> Flex<'a> {
             children
                 .into_iter()
                 .map(|(child, declared, main_weight, band)| {
-                    (child, Some(declared), None, Some(main_weight), band)
+                    let layout = ChildLayout {
+                        band,
+                        floats: false,
+                        declared: Some(declared),
+                        main_minimum: None,
+                        main_weight: Some(main_weight),
+                    };
+                    (child, layout)
                 }),
         )
     }
@@ -167,15 +175,7 @@ impl<'a> Flex<'a> {
 
     fn with_children(
         axis: Axis,
-        children: impl IntoIterator<
-            Item = (
-                Element<'a, Published>,
-                Option<Size<Length>>,
-                Option<f32>,
-                Option<f32>,
-                Band,
-            ),
-        >,
+        children: impl IntoIterator<Item = (Element<'a, Published>, ChildLayout)>,
     ) -> Self {
         let iterator = children.into_iter();
         let capacity = iterator.size_hint().0;
@@ -191,8 +191,8 @@ impl<'a> Flex<'a> {
             child_layouts: Vec::with_capacity(capacity),
         };
 
-        for (child, declared, main_minimum, main_weight, band) in iterator {
-            flex = flex.push(child, declared, main_minimum, main_weight, band);
+        for (child, layout) in iterator {
+            flex = flex.push(child, layout);
         }
 
         flex
@@ -212,8 +212,9 @@ impl<'a> Flex<'a> {
             state
                 .shown
                 .iter()
+                .zip(&self.child_layouts)
                 .enumerate()
-                .filter_map(|(index, on)| on.then_some(index)),
+                .filter_map(|(index, (on, child))| (*on && !child.floats).then_some(index)),
         );
     }
 
@@ -781,8 +782,8 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{
-        Alignment, Band, Element, Flex, IcedWidget, Layout, Length, MeasureAxis, Measured, Padding,
-        Plan, Published, Renderer, Size, State, Theme, Tree,
+        Alignment, Band, Element, Flex, GroupMount, IcedWidget, Layout, Length, MeasureAxis,
+        Measured, Padding, Plan, Published, Renderer, Size, State, Theme, Tree,
     };
     use crate::{
         render::fonts::{FONT_BYTES, SANS},
@@ -805,6 +806,19 @@ mod tests {
         FallbackRenderer::Secondary(TinySkiaRenderer::new(SANS, Pixels(14.0)))
     }
 
+    fn mounted(
+        child: Element<'static, Published>,
+        band: Band,
+    ) -> GroupMount<Element<'static, Published>> {
+        GroupMount {
+            band,
+            block: None,
+            minimum: None,
+            floats: false,
+            output: child,
+        }
+    }
+
     fn cell(width: f32) -> Element<'static, Published> {
         Space::new().width(width).height(20.0).into()
     }
@@ -820,9 +834,9 @@ mod tests {
     /// stands, a cell from 440, and one from 350.
     fn bar() -> Flex<'static> {
         Flex::row([
-            (cell(10.0), None, Band::ALWAYS),
-            (cell(20.0), None, Band::new(440.0, None)),
-            (cell(30.0), None, Band::new(350.0, None)),
+            mounted(cell(10.0), Band::ALWAYS),
+            mounted(cell(20.0), Band::new(440.0, None)),
+            mounted(cell(30.0), Band::new(350.0, None)),
         ])
         .spacing(consts::GAP)
         .align(Alignment::Center)
@@ -857,16 +871,16 @@ mod tests {
     fn a_measuring_row_gives_its_cells_the_portions_a_plain_row_gives() {
         let room = 400.0;
         let mut measuring = Flex::row([
-            (portion(1), None, Band::ALWAYS),
-            (portion(3), None, Band::ALWAYS),
-            (portion(4), None, Band::new(900.0, None)),
+            mounted(portion(1), Band::ALWAYS),
+            mounted(portion(3), Band::ALWAYS),
+            mounted(portion(4), Band::new(900.0, None)),
         ])
         .width(Length::Fill)
         .height(Length::Fixed(42.0))
         .measure(Some(MeasureAxis::Width));
         let mut plain = Flex::row([
-            (portion(1), None, Band::ALWAYS),
-            (portion(3), None, Band::ALWAYS),
+            mounted(portion(1), Band::ALWAYS),
+            mounted(portion(3), Band::ALWAYS),
         ])
         .width(Length::Fill)
         .height(Length::Fixed(42.0));
@@ -920,8 +934,8 @@ mod tests {
     #[kithara::test]
     fn a_band_hands_the_line_over_at_the_number_it_ends_on() {
         let mut flex = Flex::row([
-            (cell(10.0), None, Band::new(0.0, Some(350.0))),
-            (cell(30.0), None, Band::new(350.0, None)),
+            mounted(cell(10.0), Band::new(0.0, Some(350.0))),
+            mounted(cell(30.0), Band::new(350.0, None)),
         ])
         .spacing(consts::GAP)
         .align(Alignment::Center)

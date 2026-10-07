@@ -1,4 +1,6 @@
-use super::{Group, GroupMount, Measured, Module, PlacedMount, Popover, SplitMount, StageMount};
+use super::{
+    Group, GroupMount, Measured, Modal, Module, PlacedMount, Popover, SplitMount, StageMount,
+};
 use crate::{
     draw::Transform,
     expand::{Binding, ControlSpec, ExpandedNode},
@@ -59,6 +61,16 @@ pub trait Host {
     /// Every branch is mounted because the choice is the layout pass's to make;
     /// the host draws, measures, and drives only the one that stands.
     fn measured(&mut self, plan: Measured, branches: Vec<Self::Output>) -> Self::Output;
+
+    /// Mounts a modal, which takes no room in flow. While it stands open the
+    /// host covers the whole window with a scrim and centres the content
+    /// `content` expands above it; the content is handed over unexpanded for
+    /// the reason [`Self::popover`] gives.
+    fn modal(
+        &mut self,
+        modal: Modal<'_>,
+        content: &mut dyn FnMut(&mut Self) -> Self::Output,
+    ) -> Self::Output;
 
     /// Mounts one compiled module around its already-produced content.
     fn module(&mut self, module: Module<'_>, content: Option<Self::Output>) -> Self::Output;

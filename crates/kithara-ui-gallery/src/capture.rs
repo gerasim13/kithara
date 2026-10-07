@@ -49,9 +49,10 @@ impl Shot {
         /// A photographer opens a surface to photograph it, where a reader opens it by
         /// pressing the control that turns it. Both hosts are handed this the same way,
         /// so neither can photograph a page the other one left shut.
-        const DEMONSTRATED: [(Page, &str); 2] = [
+        const DEMONSTRATED: [(Page, &str); 3] = [
             ("menu", "app-menu/menu"),
             ("clock", "clock-components/clock"),
+            ("modal", "modal/settings"),
         ];
 
         let tab = self.tab;

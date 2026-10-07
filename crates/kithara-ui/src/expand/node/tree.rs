@@ -99,6 +99,13 @@ pub enum ExpandedNode {
         anchor: Box<Self>,
         content: Box<Self>,
     },
+    /// `content` is laid out only inside the overlay, so the node takes no
+    /// room in flow.
+    Modal {
+        path: InternId,
+        open: Binding,
+        content: Box<Self>,
+    },
     Pressable {
         path: InternId,
         press: Binding,
@@ -561,6 +568,7 @@ pub(crate) fn motion_of(node: &ExpandedNode) -> Unprompted {
         ExpandedNode::Popover {
             anchor, content, ..
         } => motion_of(anchor).or(motion_of(content)),
+        ExpandedNode::Modal { content, .. } => motion_of(content),
         ExpandedNode::Optional { child, .. }
         | ExpandedNode::Placed { child, .. }
         | ExpandedNode::Pressable { child, .. }

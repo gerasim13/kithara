@@ -1055,6 +1055,30 @@ mod compiled {
     }
 
     #[kithara::test]
+    fn a_modal_takes_no_room_and_no_gap_in_the_flow_it_is_written_in() {
+        const FLOW_WITH_MODAL: &str = r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Row(gap: 9.0, pad: 0.0, children: [
+                Knob(id: "volume"),
+                Knob(id: "trim"),
+                Modal(id: "settings", open: View(id: "settings"),
+                    close: View(id: "settings", set: Off),
+                    content: Knob(id: "low")),
+            ]))"#;
+        const FLOW: &str = r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Row(gap: 9.0, pad: 0.0, children: [
+                Knob(id: "volume"),
+                Knob(id: "trim"),
+            ]))"#;
+        let full = compiled(FLOW_WITH_MODAL);
+        let trimmed = compiled(FLOW);
+
+        assert_eq!(size_of(&full, DEFAULTS), size_of(&trimmed, DEFAULTS));
+        let boxed =
+            FLOW_WITH_MODAL.replacen("Row(", "Row(size: (w: Fixed(65.0), h: Fixed(39.0)), ", 1);
+        compiled(&boxed);
+    }
+
+    #[kithara::test]
     fn a_slot_whose_only_child_is_hidden_fills_like_an_empty_one() {
         let full = compiled(
             r#"(schema: "kithara.module", version: 1, id: "mixer",

@@ -92,6 +92,17 @@ pub fn masonry_text_event(input: Input<'_>) -> Option<TextEvent> {
     }
 }
 
+/// Whether the event only says which modifiers are held, the way
+/// [`masonry_text_event`] carries a modifier change.
+#[must_use]
+pub fn changes_modifiers(event: &TextEvent) -> bool {
+    let TextEvent::Keyboard(keyboard) = event else {
+        return false;
+    };
+    let held = Input::ModifiersChanged(portable_modifiers(keyboard.modifiers));
+    masonry_text_event(held).as_ref() == Some(event)
+}
+
 fn keyboard_event(state: KeyState, key: Key<'_>, modifiers: Modifiers) -> TextEvent {
     TextEvent::Keyboard(KeyboardEvent {
         state,

@@ -12,8 +12,8 @@ use kithara_ui::{
     render::{
         Clock, InputOwner, ReadValue, Reads,
         document::{
-            Band, Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover, SplitMount,
-            StageMount, render,
+            Band, Ctx, Group, GroupMount, Host, Measured, Modal, Module, PlacedMount, Popover,
+            SplitMount, StageMount, render,
         },
     },
     size::SizeSpec,
@@ -82,6 +82,14 @@ impl Host for Spy {
         _content: &mut dyn FnMut(&mut Self) -> Self::Output,
     ) -> Self::Output {
         anchor
+    }
+
+    fn modal(
+        &mut self,
+        _modal: Modal<'_>,
+        _content: &mut dyn FnMut(&mut Self) -> Self::Output,
+    ) -> Self::Output {
+        Vec::new()
     }
 
     fn pressable(
