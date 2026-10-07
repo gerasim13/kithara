@@ -169,6 +169,15 @@ impl Container<'_> {
     pub(super) const PIDS_LIMIT: u32 = 8192;
 }
 
+/// The image a runner's unit starts from: the floating tag of its flavour's
+/// pin, which is the tag the machine holds.
+pub(super) fn image(runner: &LinuxRunner, pins: &CiPins) -> Result<String> {
+    floating_tag(match runner.flavor {
+        RunnerFlavor::Plain => &pins.linux_runner_image,
+        RunnerFlavor::Android => &pins.linux_android_runner_image,
+    })
+}
+
 pub(super) fn container<'a>(
     host: &'a LinuxHost,
     runner: &'a LinuxRunner,
@@ -177,10 +186,7 @@ pub(super) fn container<'a>(
 ) -> Result<Container<'a>> {
     Ok(Container {
         name: format!("kithara-ci-{}", runner.name),
-        image: floating_tag(match runner.flavor {
-            RunnerFlavor::Plain => &pins.linux_runner_image,
-            RunnerFlavor::Android => &pins.linux_android_runner_image,
-        })?,
+        image: image(runner, pins)?,
         network: &host.network,
         cpuset,
         memory: &runner.memory,
