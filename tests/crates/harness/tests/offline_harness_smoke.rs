@@ -52,7 +52,7 @@ async fn file_resource(harness: &OfflinePlayer, path: &Path, store_dir: &Path) -
     .build();
     let config = harness
         .player()
-        .prepare_config(config)
+        .prepare_config(config, harness.worker().clone())
         .expect("offline player remains open");
     Resource::new(config).await.expect("open local resource")
 }
@@ -145,8 +145,8 @@ async fn offline_harness_glide_varispeed(drain_tone: &'static [u8], temp_dir: Te
         })
         .await;
     harness
-        .player()
-        .set_default_rate(GLIDE_RATE)
+        .with_player(move |player| player.set_default_rate(GLIDE_RATE))
+        .await
         .expect("a finite rate is accepted");
 
     let audible = audible_frames_until_end(&harness).await;

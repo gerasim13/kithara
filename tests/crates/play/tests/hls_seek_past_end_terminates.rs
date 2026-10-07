@@ -109,9 +109,9 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
         pos_before > 0.2,
         "decoder never produced PCM before the seek (pos={pos_before:.3}s)"
     );
-    let _ = player.take_notification_kinds();
+    let _ = player.take_notification_kinds().await;
 
-    player.seek(consts::SEEK_TARGET_SECS);
+    player.seek(consts::SEEK_TARGET_SECS).await;
     eprintln!(
         "[red] seek issued target={:.1}s (past 12 s fixture duration)",
         consts::SEEK_TARGET_SECS
@@ -124,7 +124,7 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
     .await;
 
     let pos_after = player.position();
-    let kinds = player.take_notification_kinds();
+    let kinds = player.take_notification_kinds().await;
     eprintln!("[red] post-seek position={pos_after:.3}s notifications={kinds:?}");
 
     let terminal = kinds

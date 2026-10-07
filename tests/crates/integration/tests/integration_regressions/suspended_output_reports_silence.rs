@@ -27,8 +27,8 @@ async fn a_suspended_output_reports_silence_until_the_rt_processor_runs_again(
     assert!(harness.player().is_playing());
 
     harness
-        .player()
-        .notify_interruption(InterruptionKind::Began);
+        .with_player(move |player| player.notify_interruption(InterruptionKind::Began))
+        .await;
     assert_eq!(
         harness.player().rate(),
         0.0,
@@ -43,10 +43,12 @@ async fn a_suspended_output_reports_silence_until_the_rt_processor_runs_again(
     // it over, the stream rebuild takes it, and until the processor runs the
     // last thing it published still describes an output that is gone.
     harness
-        .player()
-        .notify_interruption(InterruptionKind::Ended {
-            should_resume: true,
-        });
+        .with_player(move |player| {
+            player.notify_interruption(InterruptionKind::Ended {
+                should_resume: true,
+            })
+        })
+        .await;
     assert_eq!(
         harness.player().rate(),
         0.0,

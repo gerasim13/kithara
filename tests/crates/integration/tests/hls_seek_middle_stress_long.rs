@@ -336,7 +336,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(
     for iter in 0..consts::STRESS_ITERATIONS {
         let target = consts::SEEK_TARGETS[(iter as usize) % consts::SEEK_TARGETS.len()];
         let pos_before = player.position();
-        player.seek(target);
+        player.seek(target).await;
         let segment = segment_for_target(target);
         if let Some(index) = gates
             .iter()

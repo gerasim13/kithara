@@ -240,7 +240,7 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
          (pos={pos_before_seek:.3}s, delay_ms={delay_ms})"
     );
 
-    player.seek(consts::SEEK_TARGET_SECS);
+    player.seek(consts::SEEK_TARGET_SECS).await;
     eprintln!(
         "[{label} delay_ms={delay_ms}] seek issued target={:.1}s epoch=1",
         consts::SEEK_TARGET_SECS

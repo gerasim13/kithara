@@ -343,7 +343,10 @@ async fn prepare_player(
             .build(),
     )
     .await;
-    player.set_volume(0.9).expect("the player takes the volume");
+    player
+        .set_volume(0.9)
+        .await
+        .expect("the player takes the volume");
     player.load_and_fadein(resource).await;
 
     // Render to a capture point fixed in *frames*, not to whichever frame the

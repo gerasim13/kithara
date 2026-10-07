@@ -121,17 +121,6 @@ where
         Ok(())
     }
 
-    /// The armed successor. `None` when none is armed (or after
-    /// `commit_next` has consumed it for the current handover).
-    #[must_use]
-    fn armed_next(&self) -> Option<TrackId> {
-        self.phase
-            .lock()
-            .pending()
-            .filter(|pending| !pending.state.activated())
-            .map(|pending| pending.item_id)
-    }
-
     /// Commit the armed successor `item` and start the cross-fade with this
     /// transition's own `settings`.
     ///
@@ -218,6 +207,20 @@ where
     }
 }
 
+impl<S> PlayerRuntime<S> {
+    /// The successor armed on the deck and not yet committed: `None` when
+    /// none is armed, or after `commit_next` consumed it for the current
+    /// handover.
+    #[must_use]
+    pub fn armed_next(&self) -> Option<TrackId> {
+        self.phase
+            .lock()
+            .pending()
+            .filter(|pending| !pending.state.activated())
+            .map(|pending| pending.item_id)
+    }
+}
+
 impl<S> PlayerRuntime<S>
 where
     S: HasPool<f32>,
@@ -235,12 +238,6 @@ where
         link: SuccessorLink,
     ) -> Result<(), PlayError> {
         Handover::new(self).arm_next(item, resource, link)
-    }
-
-    /// The successor armed on the deck and not yet committed.
-    #[must_use]
-    pub fn armed_next(&self) -> Option<TrackId> {
-        Handover::new(self).armed_next()
     }
 
     /// Commit the armed successor `item` with this transition's `settings`.

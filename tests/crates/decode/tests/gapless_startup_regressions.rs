@@ -126,8 +126,9 @@ async fn create_delayed_gapless_hls_resource(
     )
     .store(store)
     .build();
+    let worker = harness.worker().clone();
     config = harness
-        .with_player(move |player| player.prepare_config(config))
+        .with_player(move |player| player.prepare_config(config, worker))
         .await
         .expect("prepare delayed gapless HLS resource config");
 

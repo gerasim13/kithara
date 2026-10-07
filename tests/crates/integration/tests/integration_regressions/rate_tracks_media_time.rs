@@ -45,7 +45,7 @@ async fn file_resource(harness: &OfflinePlayer, path: &Path, store_dir: &Path) -
     .build();
     let config = harness
         .player()
-        .prepare_config(config)
+        .prepare_config(config, harness.worker().clone())
         .expect("offline player remains open");
     Resource::new(config).await.expect("open local resource")
 }
@@ -93,8 +93,8 @@ async fn blocks_until_end(drain_tone: &'static [u8], temp_dir: &TestTempDir, rat
         })
         .await;
     harness
-        .player()
-        .set_default_rate(rate)
+        .with_player(move |player| player.set_default_rate(rate))
+        .await
         .expect("a finite rate is accepted");
 
     let mut blocks = 0usize;
@@ -152,8 +152,8 @@ async fn media_time_advances_with_the_playing_rate(tone_mp3: &'static [u8], temp
     );
 
     harness
-        .player()
-        .set_default_rate(FAST_RATE)
+        .with_player(move |player| player.set_default_rate(FAST_RATE))
+        .await
         .expect("a finite rate is accepted");
     render_blocks(&harness, SETTLE_BLOCKS).await;
     let accelerated = media_advance(&harness, MEASURE_BLOCKS).await;

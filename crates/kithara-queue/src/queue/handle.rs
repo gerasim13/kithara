@@ -1,12 +1,11 @@
 use kithara_bufpool::HasPool;
 use kithara_command::Refused;
 use kithara_events::TrackId;
-use kithara_play::{CrossfadeSettings, EqBandConfig, InterruptionKind, PlayError};
-
-use super::{
-    QueueControl, Transition,
-    command::{PlayerCall, QueueCommand},
+use kithara_play::{
+    CrossfadeSettings, EqBandConfig, InterruptionKind, PlayError, player::PlayerCommand,
 };
+
+use super::{QueueControl, Transition, command::QueueCommand};
 use crate::{
     error::QueueError,
     navigation::{ActionAtItemEnd, PlaybackOrder, RepeatMode},
@@ -117,7 +116,7 @@ where
     /// Recording the fact is all this does: an interruption leaves the native
     /// output unscheduled, and restoring it is the route-invalidation path.
     pub fn notify_interruption(&self, kind: InterruptionKind) {
-        let _ = self.call_player(PlayerCall::NotifyInterruption(kind));
+        let _ = self.call_player(PlayerCommand::NotifyInterruption(kind));
     }
 
     /// Pause playback and freeze the queue-visible head position.
@@ -158,7 +157,7 @@ where
     /// # Errors
     /// Returns [`QueueError::Play`] with the underlying player's refusal.
     pub fn reset_eq(&self) -> Result<(), QueueError> {
-        self.call_player(PlayerCall::ResetEq)
+        self.call_player(PlayerCommand::ResetEq)
     }
 
     /// Seek within the currently-playing track.
@@ -212,7 +211,7 @@ where
     /// [`PlayError::InvalidParameter`] for a rate that is not a finite number,
     /// or the deck's refusal of the new rate.
     pub fn set_default_rate(&self, rate: f32) -> Result<(), QueueError> {
-        self.call_player(PlayerCall::SetDefaultRate(rate))
+        self.call_player(PlayerCommand::SetDefaultRate(rate))
     }
 
     /// Set gain for an EQ band.
@@ -220,7 +219,7 @@ where
     /// # Errors
     /// Returns [`QueueError::Play`] with the underlying player's refusal.
     pub fn set_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), QueueError> {
-        self.call_player(PlayerCall::SetEqGain { band, gain_db })
+        self.call_player(PlayerCommand::SetEqGain { band, gain_db })
     }
 
     /// Replace the live player's EQ band layout.
@@ -228,7 +227,7 @@ where
     /// # Errors
     /// Returns [`QueueError::Play`] with the underlying player's refusal.
     pub fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), QueueError> {
-        self.call_player(PlayerCall::SetEqLayout(layout))
+        self.call_player(PlayerCommand::SetEqLayout(layout))
     }
 
     /// Set the deck's mix level, a linear amplitude in `0.0..=1.0` over its volume.
@@ -237,7 +236,7 @@ where
     /// Returns [`QueueError::Play`] with the underlying player's refusal: [`PlayError::MixLevel`] for a level
     /// outside `0.0..=1.0`, or the deck's refusal of the change.
     pub fn set_level(&self, level: f32) -> Result<(), QueueError> {
-        self.call_player(PlayerCall::SetLevel(level))
+        self.call_player(PlayerCommand::SetLevel(level))
     }
 
     /// Set the mute flag.
@@ -245,7 +244,7 @@ where
     /// # Errors
     /// Returns [`QueueError::Play`] with the underlying player's refusal.
     pub fn set_muted(&self, muted: bool) -> Result<(), QueueError> {
-        self.call_player(PlayerCall::SetMuted(muted))
+        self.call_player(PlayerCommand::SetMuted(muted))
     }
 
     pub fn set_playback_order(&self, order: PlaybackOrder) {
@@ -260,7 +259,7 @@ where
     /// [`PlayError::InvalidParameter`] for a rate that is not a finite number,
     /// or the lanes' or the deck's refusal of the new rate.
     pub fn set_rate(&self, rate: f32) -> Result<(), QueueError> {
-        self.call_player(PlayerCall::SetRate(rate))
+        self.call_player(PlayerCommand::SetRate(rate))
     }
 
     /// Set repeat mode.
@@ -288,7 +287,7 @@ where
     /// # Errors
     /// Returns [`QueueError::Play`] with the underlying player's refusal.
     pub fn set_volume(&self, volume: f32) -> Result<(), QueueError> {
-        self.call_player(PlayerCall::SetVolume(volume))
+        self.call_player(PlayerCommand::SetVolume(volume))
     }
 
     /// Periodic tick: drives `PlayerImpl::tick` and drains queued engine
@@ -313,7 +312,7 @@ where
         })
     }
 
-    fn call_player(&self, call: PlayerCall) -> Result<(), QueueError> {
-        self.call(QueueCommand::Player(call))
+    fn call_player(&self, command: PlayerCommand) -> Result<(), QueueError> {
+        self.call(QueueCommand::Player(Box::new(command)))
     }
 }

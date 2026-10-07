@@ -5,4 +5,5 @@ mod prepare;
 mod query;
 mod transport;
 
+pub(crate) use prepare::ResourcePrep;
 pub use transport::SelectTransition;

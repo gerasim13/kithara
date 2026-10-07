@@ -3,9 +3,9 @@ use kithara_platform::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-use super::RtMetrics;
+use super::{RtMetrics, RtMetricsSnapshot};
 
-/// One read of each live playback scalar.
+/// One read of each live playback scalar and of the slot's real-time counters.
 ///
 /// The fields are independent relaxed loads and can straddle two audio blocks, so a consumer
 /// needing two of them to agree must derive both from one field.
@@ -30,6 +30,9 @@ pub struct PlaybackSnapshot {
     pub(crate) position: f64,
     /// Current output sample rate.
     pub(crate) sample_rate: u32,
+    /// The slot's real-time counters.
+    #[field(get(copy))]
+    pub(crate) metrics: RtMetricsSnapshot,
 }
 
 impl PlaybackSnapshot {
@@ -168,7 +171,7 @@ impl PlaybackShared {
         self.adopted_epoch.store(epoch, Ordering::Release);
     }
 
-    /// Read every live playback scalar once. See [`PlaybackSnapshot`] for what the fields do and do
+    /// Read every live playback scalar and the real-time counters once. See [`PlaybackSnapshot`] for what the fields do and do
     /// not guarantee about each other.
     #[must_use]
     pub fn snapshot(&self) -> PlaybackSnapshot {
@@ -176,11 +179,13 @@ impl PlaybackShared {
         let rate = self.rate.load();
         let sample_rate = self.sample_rate.load();
         let playing = self.playing.load(Ordering::Relaxed);
+        let metrics = self.metrics.snapshot();
         if self.adopted_epoch.load(Ordering::Acquire) < leading {
             return PlaybackSnapshot {
                 playing,
                 rate,
                 sample_rate,
+                metrics,
                 duration: self.leading_duration.load(),
                 ..PlaybackSnapshot::default()
             };
@@ -193,6 +198,7 @@ impl PlaybackShared {
             playing,
             rate,
             sample_rate,
+            metrics,
             cached: self.cached.load(),
             duration: self.duration.load(),
         }

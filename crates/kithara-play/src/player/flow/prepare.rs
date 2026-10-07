@@ -1,51 +1,62 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_audio::{AudioDecoderConfig, DecoderResamplerSettings, ResamplerOptions};
 use kithara_bufpool::HasPool;
-use kithara_platform::sync::Arc;
+use kithara_decode::GaplessMode;
+use kithara_events::EventBus;
+use kithara_platform::{CancelToken, sync::Arc};
+use kithara_render::rt::StreamShape;
+use kithara_warp::WarpConfig;
 
 #[cfg(test)]
 use super::super::PlayerImpl;
 use super::super::core::PlayerRuntime;
-use crate::{PlayError, resource::ResourceConfig};
+use crate::{EngineLoad, PlayError, PlayWorker, resource::ResourceConfig};
 
-struct ConfigPrep<'a, S> {
-    player: &'a PlayerRuntime<S>,
+/// What a resource takes from the player it is prepared for, as the player
+/// stood when it was read.
+pub(crate) struct ResourcePrep {
+    bus: EventBus,
+    cancel: Option<CancelToken>,
+    warp: WarpConfig,
+    host_sample_rate: Option<NonZeroU32>,
+    stream_shape: Option<StreamShape>,
+    response_budget_frames: Option<NonZeroUsize>,
+    gapless_mode: GaplessMode,
+    block_on_underrun: bool,
+    engine_load: Arc<EngineLoad>,
 }
 
-impl<S> ConfigPrep<'_, S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    /// Before attachment no deadline can be checked without the real output shape, so buffer depths
-    /// sized to the render quantum and response budget overwrite whatever `audio:` configured.
-    fn prepare<B>(&self, config: ResourceConfig<S, B>) -> Result<ResourceConfig<S, B>, PlayError>
+impl ResourcePrep {
+    /// Prepares `config` to play on the player's `worker`. Before attachment
+    /// no deadline can be checked without the real output shape, so buffer
+    /// depths sized to the render quantum and response budget overwrite
+    /// whatever `audio:` configured.
+    pub(crate) fn prepare<S, B>(
+        &self,
+        config: ResourceConfig<S, B>,
+        worker: PlayWorker<S>,
+    ) -> Result<ResourceConfig<S, B>, PlayError>
     where
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
         B: Clone + Default,
     {
-        let bus = config
-            .bus
-            .or_else(|| Some(self.player.core.engine.bus().scoped()));
+        let bus = config.bus.or_else(|| Some(self.bus.scoped()));
         let cancel = config
             .cancel
-            .or_else(|| self.player.core.engine.cancel_token())
+            .or_else(|| self.cancel.clone())
             .map(|parent| parent.child());
-        let next = self.player.core.tracks.lock().next();
-        let warp = next.warp(&self.player.core.config.warp);
-        let output = self.player.core.engine.session_output();
-        let host_sample_rate = NonZeroU32::new(self.player.core.engine.output_rate(output))
-            .or_else(|| NonZeroU32::new(self.player.core.engine.configured_sample_rate()));
-        let stream_shape = output.and_then(|output| output.stream_shape);
         let mut audio = config.audio;
-        if let (Some(quantum), Some(shape)) = (warp.render_quantum_frames(), stream_shape) {
-            let (preload, ring) =
-                shape.playback_buffers(quantum, self.player.core.config.response_budget_frames)?;
+        if let (Some(quantum), Some(shape)) = (self.warp.render_quantum_frames(), self.stream_shape)
+        {
+            let (preload, ring) = shape.playback_buffers(quantum, self.response_budget_frames)?;
             audio.preload_chunks = Some(preload);
             audio.audio_buffer_chunks = Some(ring.get());
         }
         let resampler = match config.decoder.resampler().cloned() {
             Some(settings) => Some(settings),
-            None => stream_shape
+            None => self
+                .stream_shape
                 .map(|shape| {
                     let chunk_size =
                         usize::try_from(shape.max_block_frames.get()).map_err(|_| {
@@ -62,21 +73,43 @@ where
         };
         let decoder = AudioDecoderConfig::builder()
             .backend(config.decoder.backend())
-            .gapless_mode(self.player.core.config.gapless_mode)
+            .gapless_mode(self.gapless_mode)
             .maybe_resampler(resampler)
             .build();
         Ok(ResourceConfig {
             bus,
             cancel,
-            worker: Some(self.player.core.config.worker.clone()),
-            block_on_underrun: self.player.core.config.block_on_underrun,
+            worker: Some(worker),
+            block_on_underrun: self.block_on_underrun,
             audio,
-            host_sample_rate,
+            host_sample_rate: self.host_sample_rate,
             decoder,
-            warp,
-            engine_load: Some(Arc::clone(&self.player.core.engine_load)),
+            warp: self.warp.clone(),
+            engine_load: Some(Arc::clone(&self.engine_load)),
             ..config
         })
+    }
+}
+
+impl<S> PlayerRuntime<S> {
+    /// What a resource prepared for this player takes from it now: the next
+    /// track's warp, the session's output, and the player's bus and cancel
+    /// scope.
+    pub(crate) fn resource_prep(&self) -> ResourcePrep {
+        let core = &self.core;
+        let output = core.engine.session_output();
+        ResourcePrep {
+            bus: core.engine.bus().clone(),
+            cancel: core.engine.cancel_token(),
+            warp: core.tracks.lock().next().warp(&core.config.warp),
+            host_sample_rate: NonZeroU32::new(core.engine.output_rate(output))
+                .or_else(|| NonZeroU32::new(core.engine.configured_sample_rate())),
+            stream_shape: output.and_then(|output| output.stream_shape),
+            response_budget_frames: core.config.response_budget_frames,
+            gapless_mode: core.config.gapless_mode,
+            block_on_underrun: core.config.block_on_underrun,
+            engine_load: Arc::clone(&core.engine_load),
+        }
     }
 }
 
@@ -102,7 +135,8 @@ where
     where
         B: Clone + Default,
     {
-        ConfigPrep { player: self }.prepare(config)
+        self.resource_prep()
+            .prepare(config, self.core.config.worker.clone())
     }
 }
 

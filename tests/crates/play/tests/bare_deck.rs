@@ -8,7 +8,7 @@ use std::num::NonZeroU32;
 use kithara::{
     audio::mock::TestPcmReader,
     events::TrackId,
-    play::{Resource, SelectionPlayback, player::PlayerControl},
+    play::{Resource, SelectionPlayback},
     signal::AudioSpec,
 };
 use kithara_integration_tests::offline::{
@@ -53,7 +53,7 @@ async fn a_bare_deck_keeps_its_item_past_the_end() {
         peak = block.iter().map(|sample| sample.abs()).fold(peak, f32::max);
         let _ = harness.tick_and_drain().await;
     }
-    let current = harness.with_player(PlayerControl::current_item).await;
+    let current = harness.with_player(|player| player.current_item()).await;
     harness.close().await;
 
     assert!(

@@ -355,7 +355,7 @@ mod tests {
     fn close_waits_for_an_admitted_operation() {
         let player = player();
         let runtime = Arc::clone(&player.runtime);
-        let control = player.make_control();
+        let closing = Arc::clone(&player.runtime);
         let (entered_tx, entered_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         let operation = thread::spawn(move || {
@@ -375,7 +375,7 @@ mod tests {
         let closer = thread::spawn(move || {
             attempting_tx.send(()).expect("report close attempt");
             closing_tx
-                .send(control.close())
+                .send(closing.close())
                 .expect("report close result");
         });
         attempting_rx
@@ -392,10 +392,7 @@ mod tests {
             .expect("close result returned after the operation")
             .expect("close succeeds");
         assert!(player.runtime.is_closed());
-        assert!(matches!(
-            player.make_control().reset_eq(),
-            Err(PlayError::Closed)
-        ));
+        assert!(matches!(player.reset_eq(), Err(PlayError::Closed)));
         assert!(matches!(
             player.runtime.with_open(|_| ()),
             Err(PlayError::Closed)
@@ -632,6 +629,45 @@ mod tests {
         );
         assert!((player.default_rate() - 1.0).abs() < f32::EPSILON);
         assert!((player.core.tracks.lock().next().speed() - 1.0).abs() < f32::EPSILON);
+    }
+
+    /// Wakes the test once per post its player's mailbox takes.
+    #[cfg(not(target_arch = "wasm32"))]
+    struct PostWake(mpsc::Sender<()>);
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl std::task::Wake for PostWake {
+        fn wake(self: Arc<Self>) {
+            let _ = self.0.send(());
+        }
+    }
+
+    /// A command posted through a control runs where the player's holder
+    /// drains it: the post wakes the holder, and the player is untouched
+    /// until that drain.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn a_posted_command_waits_for_its_holder_to_drain_it() {
+        use crate::player::Player as _;
+
+        let (mut player, _audio_thread) = seated();
+        let before = player.volume();
+        let (woke_tx, woke_rx) = mpsc::channel();
+        player.hold(std::task::Waker::from(Arc::new(PostWake(woke_tx))));
+        let control = player.control();
+        let poster = thread::spawn(move || control.set_volume(0.25));
+
+        woke_rx.recv().expect("the post wakes the holder");
+        assert!(
+            (player.volume() - before).abs() < f32::EPSILON,
+            "a posted volume reached the player before its holder drained it"
+        );
+        player.drain();
+        poster
+            .join()
+            .expect("the poster thread ends")
+            .expect("the drained player takes the volume");
+        assert!((player.volume() - 0.25).abs() < f32::EPSILON);
     }
 
     #[kithara::test]

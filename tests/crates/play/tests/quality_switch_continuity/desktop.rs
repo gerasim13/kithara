@@ -227,7 +227,7 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
     .build();
     let config = harness
         .player()
-        .prepare_config(config)
+        .prepare_config(config, harness.worker().clone())
         .unwrap_or_else(|error| panic!("prepare {label} Kithara App resource: {error}"));
     let resource = Resource::new(config)
         .await

@@ -728,8 +728,9 @@ async fn create_resource(
     )
     .store(store)
     .build();
+    let worker = harness.worker().clone();
     config = harness
-        .with_player(move |player| player.prepare_config(config))
+        .with_player(move |player| player.prepare_config(config, worker))
         .await
         .expect("prepare gapless e2e HLS resource config");
     let mut resource = Resource::new(config)
@@ -767,8 +768,9 @@ async fn create_apple_fused_resource(
             .build(),
     )
     .build();
+    let worker = harness.worker().clone();
     let config = harness
-        .with_player(move |player| player.prepare_config(config))
+        .with_player(move |player| player.prepare_config(config, worker))
         .await
         .expect("prepare Apple fused HLS resource config");
     let mut resource = Resource::new(config)
@@ -808,8 +810,8 @@ async fn render_synthetic_fused_deficit_seam(
     )
     .await;
     harness
-        .player()
-        .set_level(FUSED_FIXTURE_MASTER_LEVEL)
+        .with_player(move |player| player.set_level(FUSED_FIXTURE_MASTER_LEVEL))
+        .await
         .expect("set the mix level");
     let first_frames = synthetic_tail_trimmed_first_frames(tail_compensation, stereo);
     let first_frame_count = first_frames.len();

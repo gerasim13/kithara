@@ -16,7 +16,7 @@ where
     /// Closes the resident player, then irreversibly cancels queue-owned
     /// work. A failed close leaves the queue open, so its holder can retry.
     fn close(&mut self) -> Result<(), PlayError> {
-        self.player.close()?;
+        self.resident.close()?;
         self.shutdown.cancel();
         self.loader.close(&mut self.tracks);
         Ok(())

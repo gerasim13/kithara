@@ -229,7 +229,7 @@ mod tests {
         let ids = [first, second];
         queue.navigation.select(second, &ids);
         queue
-            .player
+            .resident
             .set_rate(1.0)
             .expect("a finite rate is accepted");
         (first, second)
@@ -331,7 +331,7 @@ mod tests {
             ]);
             queue.pending_select = SelectPhase::Idle;
             queue.navigation.select(first, &[first, second]);
-            queue.player.play();
+            queue.resident.play();
             queue.set_action_at_item_end(action);
             queue.publish();
             let mut events = queue.subscribe();
@@ -372,7 +372,7 @@ mod tests {
         ]);
         queue.pending_select = SelectPhase::Idle;
         queue.navigation.select(first, &[first, second]);
-        queue.player.play();
+        queue.resident.play();
         queue.set_action_at_item_end(ActionAtItemEnd::Pause);
 
         queue.player.bus().publish(PlayerEvent::ItemDidPlayToEnd {
@@ -408,7 +408,7 @@ mod tests {
             .set_status(failed, TrackStatus::Failed("decode".into()));
         let resource = queue.tracks.take_resource(successor);
         queue
-            .player
+            .resident
             .select(successor, resource, SelectionPlayback::Play)
             .expect("the deck takes the successor");
 

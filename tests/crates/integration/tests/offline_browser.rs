@@ -62,7 +62,7 @@ async fn playing_worker() -> OfflineWorker {
                 .await
                 .expect("open the fixture as a product resource");
             resource.preload().await.expect("preload the fixture");
-            player.set_fade_duration(0.0);
+            player.set_fade_duration(0.0).await;
             player.load_and_fadein(resource).await;
         })
         .await;

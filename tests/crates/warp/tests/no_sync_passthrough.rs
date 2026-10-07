@@ -438,7 +438,7 @@ async fn render_passthrough(
             .build(),
     )
     .await;
-    target.set_fade_duration(0.0);
+    target.set_fade_duration(0.0).await;
     target
         .load_and_fadein(resource_from_reader(target_audio))
         .await;
@@ -453,7 +453,7 @@ async fn render_passthrough(
                 .build(),
         )
         .await;
-        player.set_fade_duration(0.0);
+        player.set_fade_duration(0.0).await;
         player.load_and_fadein(resource_from_reader(audio)).await;
         Some(player)
     } else {

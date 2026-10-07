@@ -14,7 +14,7 @@ use kithara::{
     play::{
         CrossfadeSettings, DEFAULT_CROSSFADE_DURATION, PlayError, PlayWorker, PlayWorkerConfig,
         PlayerConfig, PlayerEvent, PlayerImpl, Resource, RtMetricsSnapshot, SelectionPlayback,
-        player::{PlayerControl, PlayerControlSource},
+        player::{PlayerControl, PlayerControlSource, PlayerView},
     },
     queue::{Queue, QueueConfig, QueueControl},
     warp::WarpConfig,
@@ -35,7 +35,7 @@ pub struct OfflinePlayer {
     events: Mutex<EventReceiver<TestEvent>>,
     host: OfflineHostHarness<TestPools>,
     slot: Mutex<PlayerSlot>,
-    player_control: PlayerControl<TestPools>,
+    player_control: PlayerControl,
     worker: PlayWorker<TestPools>,
 }
 
@@ -155,10 +155,16 @@ impl OfflinePlayer {
         }
     }
 
+    /// What the player last published. A command goes through
+    /// [`with_player`](Self::with_player): it waits for the player's owner,
+    /// which an async test body must not.
+    #[must_use]
+    pub fn player(&self) -> &PlayerView {
+        &self.player_control
+    }
+
     delegate::delegate! {
         to self {
-            #[field(&player_control)]
-            pub const fn player(&self) -> &PlayerControl<TestPools>;
             /// Decode worker this player pulls from, for opening resources
             /// beside it.
             #[field(&worker)]
@@ -167,22 +173,30 @@ impl OfflinePlayer {
             #[field(&host)]
             pub const fn host(&self) -> &OfflineHostHarness<TestPools>;
         }
-        to self.player_control {
-            /// Set the transition duration used by the next load.
-            #[call(set_crossfade_duration)]
-            pub fn set_fade_duration(&self, seconds: f32);
-            /// Set the player volume used by subsequent offline renders.
-            ///
-            /// # Errors
-            /// Returns the player's refusal of the change.
-            pub fn set_volume(&self, volume: f32) -> Result<(), PlayError>;
-        }
+    }
+
+    /// Set the transition duration used by the next load.
+    pub async fn set_fade_duration(&self, seconds: f32) {
+        self.with_player(move |control| control.set_crossfade_duration(seconds))
+            .await;
+    }
+
+    /// Set the player volume used by subsequent offline renders.
+    ///
+    /// # Errors
+    /// Returns the player's refusal of the change.
+    pub async fn set_volume(&self, volume: f32) -> Result<(), PlayError> {
+        self.with_player(move |control| control.set_volume(volume))
+            .await
     }
 
     /// Snapshot the real-time counters owned by this player slot.
     #[must_use]
     pub fn metrics(&self) -> RtMetricsSnapshot {
-        self.player_control.rt_metrics().unwrap_or_default()
+        self.player()
+            .playback_snapshot()
+            .map(|snapshot| snapshot.metrics())
+            .unwrap_or_default()
     }
 
     /// Current playback position in seconds.
@@ -207,14 +221,22 @@ impl OfflinePlayer {
 
     /// Issues player control calls from the host owner thread, as the app
     /// would.
+    ///
+    /// # Panics
+    ///
+    /// Panics once the player was handed to another facade: that facade
+    /// holds it now and takes its commands.
     pub async fn with_player<R>(
         &self,
-        use_player: impl FnOnce(&PlayerControl<TestPools>) -> R + MaybeSend + 'static,
+        use_player: impl FnOnce(&PlayerControl) -> R + MaybeSend + 'static,
     ) -> R
     where
         R: MaybeSend + 'static,
     {
-        self.ensure_player_inserted().await;
+        assert!(
+            self.ensure_player_inserted().await,
+            "the offline harness player was handed to another facade; command that facade"
+        );
         self.run(&self.player_control, use_player).await
     }
 
@@ -270,9 +292,9 @@ impl OfflinePlayer {
     /// # Panics
     ///
     /// Panics if the product player rejects the seek.
-    pub fn seek(&self, seconds: f64) {
-        self.player_control
-            .seek_seconds(seconds)
+    pub async fn seek(&self, seconds: f64) {
+        self.with_player(move |control| control.seek_seconds(seconds))
+            .await
             .unwrap_or_else(|error| panic!("seek offline player: {error}"));
     }
 
@@ -280,20 +302,16 @@ impl OfflinePlayer {
     /// A resident player then publishes what the block produced, as the app
     /// update loop would.
     pub async fn render(&self, frames: usize) -> Vec<f32> {
-        let resident = self.ensure_player_inserted().await;
+        self.ensure_player_inserted().await;
         let output = self.host.render(frames).await;
-        if resident {
-            self.run(&self.player_control, PlayerControl::process_notifications)
-                .await;
-        }
+        self.tick_player().await;
         output
     }
 
     /// Pump the player's notification ringbuf and drain `PlayerEvent`s
     /// from the bus subscriber.
     pub async fn tick_and_drain(&self) -> Vec<PlayerEvent> {
-        self.run(&self.player_control, PlayerControl::process_notifications)
-            .await;
+        self.tick_player().await;
         self.drain_events()
             .into_iter()
             .filter_map(|event| match event {
@@ -304,8 +322,8 @@ impl OfflinePlayer {
     }
 
     /// Drain the product event stream into the scenario observation tags.
-    pub fn take_notification_kinds(&self) -> Vec<NotificationKind> {
-        self.player_control.process_notifications();
+    pub async fn take_notification_kinds(&self) -> Vec<NotificationKind> {
+        self.tick_player().await;
         self.drain_events()
             .into_iter()
             .filter_map(|event| match event {
@@ -350,6 +368,14 @@ impl OfflinePlayer {
 
     /// Moves a pending player into the Host; returns whether the player is
     /// resident here rather than transferred.
+    /// Ticks the player while the harness holds it; a facade that took the
+    /// player ticks it itself.
+    async fn tick_player(&self) {
+        if self.ensure_player_inserted().await {
+            self.run(&self.player_control, PlayerControl::tick).await;
+        }
+    }
+
     async fn ensure_player_inserted(&self) -> bool {
         let previous = std::mem::replace(&mut *self.slot.lock(), PlayerSlot::Resident);
         match previous {

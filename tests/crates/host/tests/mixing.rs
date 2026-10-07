@@ -169,7 +169,7 @@ impl MixHarness {
     // worker and samples underruns instead of the steady state.
     async fn render_block(&self) -> Vec<f32> {
         for player in &self.players {
-            player.process_notifications();
+            player.tick();
         }
         let block = self.host.render(BLOCK_FRAMES).await;
         let block_frames: f64 = BLOCK_FRAMES.as_();
@@ -202,7 +202,7 @@ impl MixHarness {
 
 /// Sends `player`'s deck parts until its ring refuses one, with no block
 /// rendered in between; returns the refusal.
-fn fill_the_deck(player: &PlayerControl<TestPools>) -> Option<PlayError> {
+fn fill_the_deck(player: &PlayerControl) -> Option<PlayError> {
     (0..RING_OVERFILL).find_map(|_| player.set_eq_gain(0, 0.0).err())
 }
 

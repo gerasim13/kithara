@@ -67,7 +67,7 @@ where
     ) -> Result<(), PlayError> {
         let settings = settings.validate()?;
         self.with_open_result(|queue| {
-            queue.player.set_crossfade_duration(settings.duration);
+            queue.resident.set_crossfade_duration(settings.duration);
             let relinked = SuccessorLink::from(queue.config.crossfade_settings())
                 != SuccessorLink::from(settings);
             queue.config.set_crossfade_settings(settings);

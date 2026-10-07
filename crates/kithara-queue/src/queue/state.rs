@@ -7,10 +7,7 @@ use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::{
     CancelScope, CancelToken, sync::Arc, tokio::runtime::Handle as RuntimeHandle,
 };
-use kithara_play::{
-    PlayError, PlayerImpl,
-    player::{PlayerControl, PlayerControlSource},
-};
+use kithara_play::{PlayError, PlayerImpl, player::PlayerView};
 use smallvec::SmallVec;
 
 use super::{
@@ -32,7 +29,7 @@ pub struct QueueRuntime<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    pub(super) player: PlayerControl<S>,
+    pub(super) player: PlayerView,
     pub(super) view: QueueView<S>,
     /// Cancelled once the queue closes.
     pub(super) shutdown: CancelToken,
@@ -146,14 +143,15 @@ where
         });
         player.set_crossfade_duration(crossfade_settings.duration);
         let bus = player.bus().clone();
-        let player_control = player.control();
+        let player_view = player.view().clone();
         let tracks = Tracks::default();
         let mut navigation = NavigationState::new(max_history_size);
         navigation.set_playback_order(playback_order, &[]);
         let view = QueueView::new(&tracks, &navigation);
         let (postbox, mailbox) = mailbox();
         let loader = Loader::new(
-            player_control.clone(),
+            player_view.clone(),
+            player.worker().clone(),
             runtime.or_else(|| RuntimeHandle::try_current().ok()),
             store,
             max_concurrent_loads,
@@ -164,7 +162,7 @@ where
         Self {
             resident: player,
             runtime: Arc::new(QueueRuntime {
-                player: player_control,
+                player: player_view,
                 view,
                 bus,
                 config: Arc::new(config),

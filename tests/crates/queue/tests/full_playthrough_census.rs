@@ -305,12 +305,10 @@ async fn build_queue(
         SAMPLE_RATE,
     )
     .await;
-    harness
-        .player()
-        .set_level(CENSUS_LEVEL)
-        .expect("set the mix level");
+    let player = harness.take_player();
+    player.set_level(CENSUS_LEVEL).expect("set the mix level");
     let config = QueueConfig::builder()
-        .player(harness.take_player())
+        .player(player)
         .crossfade_settings(kithara::play::CrossfadeSettings {
             duration: seam.crossfade_seconds(),
             ..kithara::play::CrossfadeSettings::default()

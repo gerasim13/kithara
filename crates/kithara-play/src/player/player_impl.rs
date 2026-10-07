@@ -3,6 +3,7 @@ use std::{num::NonZeroUsize, ops::Deref};
 use delegate::delegate;
 use kithara_abr::{AbrController, AbrSettings};
 use kithara_bufpool::HasPool;
+use kithara_command::mailbox;
 use kithara_events::EventBus;
 use kithara_platform::{
     CancelScope,
@@ -11,6 +12,8 @@ use kithara_platform::{
 use kithara_warp::WarpConfigPatch;
 
 use super::{
+    PlayerView,
+    command::{PlayerMailbox, PlayerPostbox},
     core::{PlayerCore, PlayerRuntime},
     lifecycle::PlayerLifecycle,
 };
@@ -26,10 +29,17 @@ use crate::{
 };
 
 /// Concrete Player implementation: one deck and the tracks it holds.
+///
+/// Its owner runs commands on it directly; its handles post them, and the
+/// executor that holds it drains them. After each command it publishes what
+/// its handles read.
 #[derive(kithara_config::ConfigOwner)]
 #[config_owner(PlayerConfig<S>, runtime.core.config)]
 pub struct PlayerImpl<S> {
     pub(crate) runtime: Arc<PlayerRuntime<S>>,
+    pub(in crate::player) view: PlayerView,
+    pub(in crate::player) postbox: PlayerPostbox,
+    pub(in crate::player) mailbox: PlayerMailbox,
 }
 
 impl<S> Deref for PlayerImpl<S> {
@@ -93,42 +103,62 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
             .keylock(config.warp.keylock())
             .backend(config.warp.backend());
         let tracks = Mutex::new(Tracks::new(settings.build()));
+        let engine_load = Arc::new(EngineLoad::default());
         let core = PlayerCore {
             engine,
             config,
-            engine_load: Arc::new(EngineLoad::default()),
+            engine_load: Arc::clone(&engine_load),
             status: Mutex::default(),
             start_position: Mutex::default(),
-            current: CurrentItem::new(bus),
+            current: CurrentItem::new(bus.clone()),
             tracks,
         };
+        let runtime = PlayerRuntime {
+            core,
+            lifecycle: PlayerLifecycle::open(),
+            operations: ExclusiveGate::default(),
+            phase: Mutex::new(PlayerPhase::Idle),
+        };
+        let view = PlayerView::new(runtime.state(), engine_load, bus);
+        let (postbox, mailbox) = mailbox();
         Self {
-            runtime: Arc::new(PlayerRuntime {
-                core,
-                lifecycle: PlayerLifecycle::open(),
-                operations: ExclusiveGate::default(),
-                phase: Mutex::new(PlayerPhase::Idle),
-            }),
+            runtime: Arc::new(runtime),
+            view,
+            postbox,
+            mailbox,
         }
-    }
-
-    pub(in crate::player) fn make_control(&self) -> PlayerControl<S>
-    where
-        S: HasPool<f32>,
-    {
-        PlayerControl::new(Arc::clone(&self.runtime))
     }
 }
 
+impl<S> PlayerImpl<S> {
+    /// Publishes what the player's handles read, as it stands now.
+    pub(in crate::player) fn publish(&self) {
+        self.view.publish(self.runtime.state());
+    }
+
+    /// What the player last published, for whoever reads it beside its owner.
+    #[must_use]
+    pub const fn view(&self) -> &PlayerView {
+        &self.view
+    }
+
+    pub(in crate::player) fn make_control(&self) -> PlayerControl {
+        PlayerControl::new(self.postbox.clone(), self.view.clone())
+    }
+}
+
+/// Closes the player for every handle; posts it never drained read
+/// unanswered.
 impl<S> Drop for PlayerImpl<S> {
     fn drop(&mut self) {
         self.runtime.invalidate();
+        self.view.publish(self.runtime.state());
     }
 }
 
 impl<S> crate::api::Equalizer for PlayerImpl<S>
 where
-    S: Send + Sync + 'static,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
     delegate! {
         to self {

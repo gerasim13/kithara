@@ -1,131 +1,113 @@
-use delegate::delegate;
-use kithara_abr::AbrHandle;
-use kithara_audio::SeekOutcome;
-use kithara_bufpool::HasPool;
-use kithara_events::{EventBus, TrackId};
-use kithara_platform::sync::Arc;
-use kithara_render::bridge::RtMetricsSnapshot;
+use core::ops::Deref;
 
-use super::{PlayerRuntime, SelectTransition};
+use kithara_command::Refused;
+use kithara_events::TrackId;
+
+use super::{PlayerCommand, PlayerView, SelectTransition, command::PlayerPostbox};
 use crate::{
-    EngineLoadSnapshot, EqBandConfig, InterruptionKind, PlayError, PlaybackSnapshot, PlayerStatus,
-    Resource, ResourceConfig, SelectionPlayback, SuccessorLink,
+    EqBandConfig, InterruptionKind, PlayError, Resource, SelectionPlayback, SuccessorLink,
 };
 
-/// Cloneable runtime capability used by player-owned orchestration.
+/// A handle on one player: it posts commands for the executor that holds the
+/// player and reads what the player last published.
 ///
-/// The handle deliberately excludes beat-grid identity, synchronization
-/// topology, and engine/session getters. Closing the resident player
-/// invalidates every outstanding clone through the shared runtime gate.
-#[derive_where::derive_where(Clone)]
-pub struct PlayerControl<S> {
-    runtime: Arc<PlayerRuntime<S>>,
+/// Every command waits for its answer, which the holder gives once it drains
+/// the player; a command posted before any executor holds the player waits
+/// for one, so a command must never be called on the thread that holds the
+/// player. Once the player is dropped a command fails with
+/// [`PlayError::Closed`].
+#[derive(Clone)]
+pub struct PlayerControl {
+    postbox: PlayerPostbox,
+    view: PlayerView,
 }
 
-impl<S> PlayerControl<S>
-where
-    S: HasPool<f32>,
-{
-    pub(super) fn new(runtime: Arc<PlayerRuntime<S>>) -> Self {
-        Self { runtime }
+impl Deref for PlayerControl {
+    type Target = PlayerView;
+
+    fn deref(&self) -> &Self::Target {
+        &self.view
+    }
+}
+
+impl PlayerControl {
+    pub(super) const fn new(postbox: PlayerPostbox, view: PlayerView) -> Self {
+        Self { postbox, view }
     }
 
     /// Attach `resource` to the deck as `item`, ahead of the current item and
     /// joined to it by `link`.
     ///
     /// # Errors
-    /// Returns a closed-owner error, the failure to allocate its buffers, or
-    /// the deck's refusal for want of room. Nothing is armed then, and the
-    /// resource is spent: the item must be loaded again.
+    /// [`PlayError::Closed`] after close, the failure to allocate its
+    /// buffers, or the deck's refusal for want of room. Nothing is armed
+    /// then, and the resource is spent: the item must be loaded again.
     pub fn arm_next(
         &self,
         item: TrackId,
         resource: Resource,
         link: SuccessorLink,
     ) -> Result<(), PlayError> {
-        self.runtime
-            .with_open_result(|runtime| runtime.arm_next(item, resource, link))
+        self.call(PlayerCommand::ArmNext {
+            item,
+            resource,
+            link,
+        })
+    }
+
+    /// Silences the deck, then closes the player.
+    ///
+    /// # Errors
+    /// [`PlayError::Closed`] after close, or the deck's refusal of the clear;
+    /// the player stays open then.
+    pub fn close(&self) -> Result<(), PlayError> {
+        self.call(PlayerCommand::Close)
     }
 
     /// Drop the armed successor from the deck without committing it.
     pub fn unarm_next(&self) {
-        self.command(PlayerRuntime::unarm_next);
-    }
-
-    /// Root event bus used to scope per-track loader events.
-    #[must_use]
-    pub fn bus(&self) -> EventBus {
-        self.runtime.bus().clone()
-    }
-
-    fn command(&self, command: impl FnOnce(&PlayerRuntime<S>)) {
-        let _ = self.runtime.with_open(command);
-    }
-
-    /// Whether playback is explicitly paused.
-    #[must_use]
-    pub fn is_paused(&self) -> bool {
-        self.runtime.is_closed() || self.runtime.is_paused()
-    }
-
-    /// Whether the resident player is currently active.
-    #[must_use]
-    pub fn is_playing(&self) -> bool {
-        !self.runtime.is_closed() && self.runtime.is_playing()
+        self.command(PlayerCommand::UnarmNext);
     }
 
     /// Record that the platform interrupted, or released, the audio output.
     pub fn notify_interruption(&self, kind: InterruptionKind) {
-        self.command(|runtime| runtime.notify_interruption(kind));
+        self.command(PlayerCommand::NotifyInterruption(kind));
     }
 
-    /// Pause playback unless the owning player is closed.
+    /// Pause playback.
     pub fn pause(&self) {
-        self.command(PlayerRuntime::pause);
+        self.command(PlayerCommand::Pause);
     }
 
-    /// Start or resume playback unless the owning player is closed.
+    /// Start or resume playback.
     pub fn play(&self) {
-        self.command(PlayerRuntime::play);
-    }
-
-    /// Prepare one resource for this player's runtime.
-    pub fn prepare_config<B>(
-        &self,
-        config: ResourceConfig<S, B>,
-    ) -> Result<ResourceConfig<S, B>, PlayError>
-    where
-        B: Clone + Default,
-        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    {
-        self.runtime
-            .with_open_result(|runtime| runtime.prepare_config(config))
-    }
-
-    /// Drain pending player notifications.
-    pub fn process_notifications(&self) {
-        self.command(PlayerRuntime::process_notifications);
+        self.command(PlayerCommand::Play);
     }
 
     /// Drop every track the deck holds and release its slot.
     ///
     /// # Errors
-    /// Returns [`PlayError::Closed`] after close, and the deck's refusal of
-    /// the clear; the player keeps its tracks then.
+    /// [`PlayError::Closed`] after close, or the deck's refusal of the clear;
+    /// the player keeps its tracks then.
     pub fn remove_all_items(&self) -> Result<(), PlayError> {
-        self.runtime
-            .with_open_result(PlayerRuntime::remove_all_items)
+        self.call(PlayerCommand::RemoveAllItems)
     }
 
     /// Reset all EQ bands.
+    ///
+    /// # Errors
+    /// [`PlayError::Closed`] after close, or the deck's refusal.
     pub fn reset_eq(&self) -> Result<(), PlayError> {
-        self.runtime.with_open_result(PlayerRuntime::reset_eq)
+        self.call(PlayerCommand::ResetEq)
     }
 
-    /// Seek within the current player item.
-    pub fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError> {
-        self.runtime
-            .with_open_result(|runtime| runtime.seek_seconds(seconds))
+    /// Seek within the current item; where it landed is read from the view
+    /// once the seek is answered.
+    ///
+    /// # Errors
+    /// [`PlayError::Closed`] after close, or the deck's refusal of the seek.
+    pub fn seek_seconds(&self, seconds: f64) -> Result<(), PlayError> {
+        self.call(PlayerCommand::Seek(seconds))
     }
 
     /// Make `item` current with the configured crossfade.
@@ -138,8 +120,11 @@ where
         resource: Option<Resource>,
         playback: SelectionPlayback,
     ) -> Result<(), PlayError> {
-        self.runtime
-            .with_open_result(|runtime| runtime.select(item, resource, playback))
+        self.call(PlayerCommand::Select {
+            item,
+            resource,
+            playback,
+        })
     }
 
     /// Make `item` current: a given `resource` loads as `item`; without one
@@ -147,8 +132,8 @@ where
     /// item.
     ///
     /// # Errors
-    /// Returns a closed-owner error, [`PlayError::ItemConsumed`] when the deck
-    /// holds no `item` and no resource came, or the load's failure. The
+    /// [`PlayError::Closed`] after close, [`PlayError::ItemConsumed`] when the
+    /// deck holds no `item` and no resource came, or the load's failure. The
     /// resource is spent on any error.
     pub fn select_with_crossfade(
         &self,
@@ -156,137 +141,95 @@ where
         resource: Option<Resource>,
         transition: SelectTransition,
     ) -> Result<(), PlayError> {
-        self.runtime
-            .with_open_result(|runtime| runtime.select_with_crossfade(item, resource, transition))
+        self.call(PlayerCommand::SelectWithCrossfade {
+            item,
+            resource,
+            transition,
+        })
     }
 
-    /// Update crossfade duration unless the owning player is closed.
+    /// Set the crossfade duration later selections use.
     pub fn set_crossfade_duration(&self, seconds: f32) {
-        self.command(|runtime| runtime.set_crossfade_duration(seconds));
+        self.command(PlayerCommand::SetCrossfadeDuration(seconds));
     }
 
-    /// Update the default playback rate.
+    /// Set the default playback rate.
     ///
     /// # Errors
-    /// Returns a closed-owner error, [`PlayError::InvalidParameter`] for a rate
-    /// that is not a finite number, or the deck's refusal of the new rate.
+    /// [`PlayError::Closed`] after close, [`PlayError::InvalidParameter`] for
+    /// a rate that is not a finite number, or the deck's refusal of the rate.
     pub fn set_default_rate(&self, rate: f32) -> Result<(), PlayError> {
-        self.runtime
-            .with_open_result(|runtime| runtime.set_default_rate(rate))
+        self.call(PlayerCommand::SetDefaultRate(rate))
     }
 
-    /// Update one EQ band.
+    /// Set one EQ band's gain.
+    ///
+    /// # Errors
+    /// [`PlayError::Closed`] after close, or the band's or the deck's refusal.
     pub fn set_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
-        self.runtime
-            .with_open_result(|runtime| runtime.set_eq_gain(band, gain_db))
+        self.call(PlayerCommand::SetEqGain { band, gain_db })
     }
 
     /// Replace the EQ band layout.
+    ///
+    /// # Errors
+    /// [`PlayError::Closed`] after close, or the layout's or the deck's
+    /// refusal.
     pub fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), PlayError> {
-        self.runtime
-            .with_open_result(|runtime| runtime.set_eq_layout(layout))
+        self.call(PlayerCommand::SetEqLayout(layout))
     }
 
-    /// Set the deck's mix level, a linear amplitude in `0.0..=1.0` over its volume.
+    /// Set the deck's mix level, a linear amplitude in `0.0..=1.0` over its
+    /// volume.
     ///
     /// # Errors
-    /// Returns a closed-owner error, [`PlayError::MixLevel`] for a level outside
-    /// `0.0..=1.0`, or the deck's refusal of the change.
+    /// [`PlayError::Closed`] after close, [`PlayError::MixLevel`] for a level
+    /// outside `0.0..=1.0`, or the deck's refusal.
     pub fn set_level(&self, level: f32) -> Result<(), PlayError> {
-        self.runtime
-            .with_open_result(|runtime| runtime.set_level(level))
+        self.call(PlayerCommand::SetLevel(level))
     }
 
-    /// Update mute state.
+    /// Set the mute state.
     ///
     /// # Errors
-    /// Returns a closed-owner error or the deck's refusal of the change.
+    /// [`PlayError::Closed`] after close, or the deck's refusal.
     pub fn set_muted(&self, muted: bool) -> Result<(), PlayError> {
-        self.runtime
-            .with_open_result(|runtime| runtime.set_muted(muted))
+        self.call(PlayerCommand::SetMuted(muted))
     }
 
-    /// Update the live playback rate.
+    /// Set the live playback rate.
     ///
     /// # Errors
-    /// Returns a closed-owner error, [`PlayError::InvalidParameter`] for a rate
-    /// that is not a finite number, or the deck's refusal of the new rate.
+    /// [`PlayError::Closed`] after close, [`PlayError::InvalidParameter`] for
+    /// a rate that is not a finite number, or the deck's refusal of the rate.
     pub fn set_rate(&self, rate: f32) -> Result<(), PlayError> {
-        self.runtime
-            .with_open_result(|runtime| runtime.set_rate(rate))
+        self.call(PlayerCommand::SetRate(rate))
     }
 
-    /// Update output volume.
+    /// Set the output volume.
     ///
     /// # Errors
-    /// Returns a closed-owner error or the deck's refusal of the change.
+    /// [`PlayError::Closed`] after close, or the deck's refusal.
     pub fn set_volume(&self, volume: f32) -> Result<(), PlayError> {
-        self.runtime
-            .with_open_result(|runtime| runtime.set_volume(volume))
+        self.call(PlayerCommand::SetVolume(volume))
     }
 
-    delegate! {
-        to self.runtime {
-            /// Whether the owning player has been closed or is closing.
-            #[must_use]
-            pub fn is_closed(&self) -> bool;
-            /// Close the player runtime and invalidate every outstanding control.
-            ///
-            /// # Errors
-            ///
-            /// Returns [`PlayError::Closed`] while another close is under way.
-            pub fn close(&self) -> Result<(), PlayError>;
-            /// Configured crossfade duration in seconds.
-            #[must_use]
-            pub fn crossfade_duration(&self) -> f32;
-            /// The item the deck leads, as last announced.
-            #[must_use]
-            pub fn current_item(&self) -> Option<TrackId>;
-            /// The successor armed on the deck and not yet committed.
-            #[must_use]
-            pub fn armed_next(&self) -> Option<TrackId>;
-            /// Latest playback position.
-            #[must_use]
-            pub fn position_seconds(&self) -> Option<f64>;
-            /// Latest coherent playback state.
-            #[must_use]
-            pub fn playback_snapshot(&self) -> Option<PlaybackSnapshot>;
-            /// Current ABR handle for the active item.
-            #[must_use]
-            pub fn current_abr_handle(&self) -> Option<AbrHandle>;
-            /// Current live playback rate.
-            #[must_use]
-            pub fn rate(&self) -> f32;
-            /// Rate the player's master bus runs at.
-            #[must_use]
-            pub fn sample_rate(&self) -> u32;
-            /// Configured default playback rate.
-            #[must_use]
-            pub fn default_rate(&self) -> f32;
-            /// Current output volume.
-            #[must_use]
-            pub fn volume(&self) -> f32;
-            /// Whether output is muted.
-            #[must_use]
-            pub fn is_muted(&self) -> bool;
-            /// Current player status.
-            #[must_use]
-            pub fn status(&self) -> PlayerStatus;
-            /// Current engine cost snapshot.
-            #[must_use]
-            pub fn engine_load(&self) -> EngineLoadSnapshot;
-            /// Read the active audio slot's real-time counters.
-            #[must_use]
-            pub fn rt_metrics(&self) -> Option<RtMetricsSnapshot>;
-            /// Number of EQ bands.
-            #[must_use]
-            pub fn eq_band_count(&self) -> usize;
-            /// Gain of one EQ band.
-            #[must_use]
-            pub fn eq_gain(&self, band: usize) -> Option<f32>;
-            /// Current item duration.
-            #[must_use]
-            pub fn duration_seconds(&self) -> Option<f64>;
-        }
+    /// Handle what the deck reported since the last tick.
+    pub fn tick(&self) {
+        self.command(PlayerCommand::Tick);
+    }
+
+    /// Posts `command` and waits for the player's answer.
+    fn call(&self, command: PlayerCommand) -> Result<(), PlayError> {
+        let ticket = self.postbox.post(command).map_err(|_| PlayError::Closed)?;
+        ticket.wait().map_err(|refused| match refused {
+            Refused::Owner(error) => error,
+            Refused::Unanswered => PlayError::Closed,
+        })
+    }
+
+    /// Posts a command only a closed player refuses, and waits for it.
+    fn command(&self, command: PlayerCommand) {
+        let _ = self.call(command);
     }
 }

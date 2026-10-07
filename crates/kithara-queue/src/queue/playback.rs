@@ -179,7 +179,7 @@ where
             debug!(id = id.as_u64(), "the successor has no resource to arm");
             return false;
         };
-        match self.player.arm_next(id, resource, link) {
+        match self.resident.arm_next(id, resource, link) {
             Ok(()) => true,
             Err(error) => {
                 debug!(%error, id = id.as_u64(), "the successor would not arm");
@@ -201,7 +201,7 @@ where
     /// onto the deck, so the track is consumed and reloads once it is wanted
     /// again.
     pub(super) fn disarm_successor(&mut self, id: TrackId) {
-        self.player.unarm_next();
+        self.resident.unarm_next();
         self.tracks.set_status(id, TrackStatus::Consumed);
     }
 
@@ -212,7 +212,7 @@ where
     /// [`Self::pause`] on an open queue, as the tick does when a drained end
     /// pauses the queue.
     pub(super) fn pause_inner(&mut self) {
-        self.player.pause();
+        self.resident.pause();
         if let SelectPhase::Pending(pending) = &mut self.pending_select {
             pending.playback = SelectionPlayback::Pause;
         }
@@ -229,7 +229,7 @@ where
         if let SelectPhase::Pending(pending) = &mut self.pending_select {
             pending.playback = SelectionPlayback::Play;
         }
-        self.player.play();
+        self.resident.play();
 
         let pending = match self.pending_select {
             SelectPhase::Pending(pending) => Some(pending),
@@ -248,7 +248,7 @@ where
         match status {
             TrackStatus::Loaded => {
                 let resource = self.tracks.take_resource(id);
-                if let Err(error) = self.player.select(id, resource, SelectionPlayback::Play) {
+                if let Err(error) = self.resident.select(id, resource, SelectionPlayback::Play) {
                     debug!(%error, id = id.as_u64(), "play could not start the loaded track");
                 }
                 self.tracks.set_status(id, TrackStatus::Consumed);
@@ -293,7 +293,7 @@ where
             self.navigation.select(id, &ids);
             self.handle_current_item_changed();
         }
-        let outcome = self.player.seek_seconds(seconds)?;
+        let outcome = self.resident.seek_seconds(seconds)?;
         if let SeekOutcome::Landed { landed_at, .. } = outcome {
             self.position = CachedPosition::known(landed_at.as_secs_f64());
         }
@@ -309,7 +309,7 @@ where
     }
 
     fn tick_player_inner(&mut self) {
-        self.player.process_notifications();
+        self.resident.process_notifications();
         self.drain_player_events();
         self.update_cached_position();
         self.reconcile_successor();

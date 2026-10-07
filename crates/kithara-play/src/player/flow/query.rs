@@ -1,9 +1,11 @@
 use delegate::delegate;
 use kithara_events::{EventBus, EventReceiver, EventSet};
-use kithara_platform::sync::atomic::Ordering;
-use kithara_render::bridge::{PlaybackSnapshot, RtMetricsSnapshot};
+use kithara_render::bridge::PlaybackSnapshot;
 
-use super::super::core::PlayerRuntime;
+use super::super::{
+    core::PlayerRuntime,
+    view::{PlayerState, observed_playback},
+};
 use crate::{
     EngineLoadSnapshot, PlayWorker,
     api::{PlayerStatus, TrackId},
@@ -46,22 +48,8 @@ impl<S> PlayerRuntime<S> {
     /// / `duration_seconds` / `is_playing` / `buffered_seconds` getters are
     /// thin derivations of this snapshot — one shared read primitive.
     pub fn playback_snapshot(&self) -> Option<PlaybackSnapshot> {
-        let slot_id = self.slot()?;
-        let shared = self.core.engine.slot_playback(slot_id)?;
-        // The count comes first: the values read after it are at least what the
-        // blocks before the counted one published.
-        let calls = shared.process_count.load(Ordering::Acquire);
-        let snapshot = shared.snapshot();
-        let stalled = self
-            .core
-            .engine
-            .suspended_at()
-            .is_some_and(|tick| (tick..=tick.saturating_add(1)).contains(&calls));
-        Some(if stalled {
-            snapshot.silenced()
-        } else {
-            snapshot
-        })
+        let shared = self.slot_playback()?;
+        Some(observed_playback(&shared, self.core.engine.suspended_at()))
     }
 
     /// Current playback position in seconds.
@@ -83,17 +71,28 @@ impl<S> PlayerRuntime<S> {
             .map(|held| held.as_secs_f64())
     }
 
-    /// Read the active audio slot's real-time counters.
-    #[must_use]
-    pub fn rt_metrics(&self) -> Option<RtMetricsSnapshot> {
-        let slot_id = self.slot()?;
-        Some(
-            self.core
-                .engine
-                .slot_playback(slot_id)?
-                .metrics()
-                .snapshot(),
-        )
+    /// What this player's handles read, as it stands now.
+    pub(crate) fn state(&self) -> PlayerState {
+        PlayerState {
+            closed: self.is_closed(),
+            paused: self.is_paused(),
+            playback: self.slot_playback(),
+            suspended_at: self.core.engine.suspended_at(),
+            start_position: *self.core.start_position.lock(),
+            crossfade_duration: self.crossfade_duration(),
+            default_rate: self.default_rate(),
+            volume: self.volume(),
+            muted: self.is_muted(),
+            current_item: self.current_item(),
+            armed_next: self.armed_next(),
+            abr_handle: self.current_abr_handle(),
+            sample_rate: self.sample_rate(),
+            status: self.status(),
+            eq_gains: (0..self.eq_band_count())
+                .filter_map(|band| self.eq_gain(band))
+                .collect(),
+            prep: self.resource_prep(),
+        }
     }
 
     /// Get current player status.

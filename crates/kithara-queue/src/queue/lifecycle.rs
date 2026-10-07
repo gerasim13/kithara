@@ -57,7 +57,7 @@ where
     }
 
     fn clear_inner(&mut self) -> Result<(), QueueError> {
-        self.player.remove_all_items()?;
+        self.resident.remove_all_items()?;
         let ids = self.track_ids();
         self.tracks.records_mut().clear();
 
@@ -193,7 +193,7 @@ where
             .flatten();
         drop(self.tracks.records_mut().remove(pos));
         if self.player.armed_next() == Some(id) {
-            self.player.unarm_next();
+            self.resident.unarm_next();
         }
         self.announce(QueueEvent::TrackRemoved { id });
 
@@ -217,7 +217,7 @@ where
                 )?;
                 self.commit_navigation_to(next);
             } else {
-                self.player.pause();
+                self.resident.pause();
             }
         }
         Ok(())
@@ -345,7 +345,7 @@ mod tests {
             .expect("open queue accepts a replacement track");
         queue.navigation.select(replacement, &[replacement]);
         queue
-            .player
+            .resident
             .set_rate(1.0)
             .expect("a finite rate is accepted");
 

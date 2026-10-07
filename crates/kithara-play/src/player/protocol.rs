@@ -1,6 +1,7 @@
 use std::task::Waker;
 
 use kithara_bufpool::HasPool;
+use kithara_command::Post;
 use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
 
 use super::PlayerImpl;
@@ -56,24 +57,32 @@ pub trait PlayerControlSource: Player {
     fn seat(&mut self, slot: AllocatedSlot);
 }
 
-/// A bare player runs its control's commands on the caller, behind its own
-/// operations gate, so an executor that holds it has nothing to drain; its
-/// session pumps itself, so there is nothing to tick either.
+/// A bare player runs each command its handles posted when its executor
+/// drains it, publishes, then answers; a tick handles what its deck
+/// reported.
 impl<S> Player for PlayerImpl<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     fn close(&mut self) -> Result<(), PlayError> {
-        self.make_control().close()
+        Self::close(self)
     }
 
-    fn drain(&mut self) {}
+    fn drain(&mut self) {
+        for Post { command, answer } in self.mailbox.drain() {
+            answer.answer(self.run(command));
+        }
+    }
 
-    fn hold(&mut self, _waker: Waker) {}
-
-    fn release(&mut self) {}
+    delegate::delegate! {
+        to self.mailbox {
+            fn hold(&mut self, waker: Waker);
+            fn release(&mut self);
+        }
+    }
 
     fn tick(&mut self) -> Result<(), PlayError> {
+        self.process_notifications();
         Ok(())
     }
 }
@@ -82,7 +91,7 @@ impl<S> PlayerControlSource for PlayerImpl<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    type Control = crate::player::PlayerControl<S>;
+    type Control = crate::player::PlayerControl;
     type Schema = S;
 
     fn attach_session(
@@ -90,6 +99,7 @@ where
         binding: SessionBinding,
     ) -> Result<DeckRegistration<S>, PlayError> {
         self.runtime.attach_session(binding)?;
+        self.publish();
         Ok(self.runtime.core.engine.registration())
     }
 
@@ -99,5 +109,6 @@ where
 
     fn seat(&mut self, slot: AllocatedSlot) {
         self.runtime.core.engine.seat(slot);
+        self.publish();
     }
 }

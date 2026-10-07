@@ -55,7 +55,7 @@ where
             });
         }
         let resource = self.tracks.take_resource(id);
-        if let Err(error) = self.player.select_with_crossfade(
+        if let Err(error) = self.resident.select_with_crossfade(
             id,
             resource,
             SelectTransition {
@@ -153,12 +153,12 @@ where
                 snapshot.duration() > 0.0 && snapshot.position() >= snapshot.duration()
             });
             if reason == AdvanceReason::NaturalEof || finished {
-                self.player.seek_seconds(0.0)?;
+                self.resident.seek_seconds(0.0)?;
             }
             if playback == SelectionPlayback::Play {
-                self.player.play();
+                self.resident.play();
             } else {
-                self.player.pause();
+                self.resident.pause();
             }
             self.commit_navigation_to(id);
             self.announce(QueueEvent::CurrentTrackAdvance {

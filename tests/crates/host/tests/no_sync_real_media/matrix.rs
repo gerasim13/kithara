@@ -8,7 +8,7 @@ use kithara::{
     platform::time::{self, Duration},
     play::{
         CrossfadeSettings, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
-        Resource, ResourceConfig, ResourceSrc, SeekOutcome, SelectTransition, SelectionPlayback,
+        Resource, ResourceConfig, ResourceSrc, SelectTransition, SelectionPlayback,
     },
     signal::TransportRevision,
     warp::{StretchKind, WarpConfig},
@@ -525,7 +525,7 @@ async fn capture_pass(
         runtime::drain_all_events(decks, label, EventPolicy::AudiblePlayback, failures);
     }
     for deck in &*decks {
-        deck.player.process_notifications();
+        deck.player.tick();
     }
     runtime::drain_all_events(
         decks,
@@ -657,16 +657,18 @@ fn request_capture_seeks(
     let mut requested = true;
     for (deck_index, deck) in decks.iter().enumerate() {
         match deck.player.seek_seconds(deck.capture_target_secs) {
-            Ok(SeekOutcome::Landed { .. }) => {}
-            Ok(SeekOutcome::PastEof { duration, .. }) => {
-                requested = false;
-                failures.push(format!(
-                    "{} {label} deck {deck_index} ({}): capture start {:.3}s is past EOF at {:.3}s",
-                    case.label,
-                    deck.observation.label,
-                    deck.capture_target_secs,
-                    duration.as_secs_f64(),
-                ));
+            Ok(()) => {
+                if let Some(duration) = deck
+                    .player
+                    .duration_seconds()
+                    .filter(|duration| deck.capture_target_secs >= *duration)
+                {
+                    requested = false;
+                    failures.push(format!(
+                        "{} {label} deck {deck_index} ({}): capture start {:.3}s is past EOF at {duration:.3}s",
+                        case.label, deck.observation.label, deck.capture_target_secs,
+                    ));
+                }
             }
             Err(error) => {
                 requested = false;
@@ -1162,7 +1164,7 @@ async fn render_paced(
     sample_rate: u32,
 ) -> Vec<f32> {
     for deck in decks {
-        deck.player.process_notifications();
+        deck.player.tick();
     }
     let block = host.render(BLOCK_FRAMES).await;
     time::sleep(Duration::from_secs_f64(

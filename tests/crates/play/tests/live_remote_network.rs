@@ -301,10 +301,11 @@ async fn player_mp3_duration_matches_app_flow(
     let store = asset_store(&temp_dir, true, pools.clone());
 
     let mut host = Host::new(HostConfig::builder().build()).expect("create playback host");
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(host.sample_rate())
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools).build()))
+            .worker(worker.clone())
             .build(),
     );
     let player = host
@@ -321,7 +322,7 @@ async fn player_mp3_duration_matches_app_flow(
             )
             .build();
     config = player
-        .prepare_config(config)
+        .prepare_config(config, worker)
         .expect("prepare live remote resource config");
 
     let resource = Box::pin(Resource::new(config))

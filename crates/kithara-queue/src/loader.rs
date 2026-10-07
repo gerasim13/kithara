@@ -13,8 +13,8 @@ use kithara_platform::{
     tokio::{runtime::Handle as RuntimeHandle, task::spawn_on},
 };
 use kithara_play::{
-    ArtifactLoadError, Cover, DispatcherProtocol, LoadRefusal, Resource, ResourceConfig,
-    ResourceLoad, ResourceSrc, dispatch, player::PlayerControl,
+    ArtifactLoadError, Cover, DispatcherProtocol, LoadRefusal, PlayWorker, Resource,
+    ResourceConfig, ResourceLoad, ResourceSrc, dispatch, player::PlayerView,
 };
 use kithara_test_utils::kithara;
 use tracing::{debug, warn};
@@ -47,7 +47,11 @@ where
     /// Where a task beside a load reports to the queue.
     postbox: QueuePostbox<S>,
     store: AssetStore<S>,
-    player: PlayerControl<S>,
+    /// What the player published: its bus, and the shape a config is
+    /// prepared to.
+    player: PlayerView,
+    /// The worker every prepared config plays on.
+    worker: PlayWorker<S>,
 }
 
 /// The dispatcher the queue's tracks open on, and the runtime it and the
@@ -92,7 +96,8 @@ where
     /// A loader whose dispatcher runs on `runtime`, holding both lanes'
     /// opens in flight at once.
     pub(crate) fn new(
-        player: PlayerControl<S>,
+        player: PlayerView,
+        worker: PlayWorker<S>,
         runtime: Option<RuntimeHandle>,
         store: AssetStore<S>,
         max_concurrent_loads: NonZeroUsize,
@@ -114,6 +119,7 @@ where
             postbox,
             store,
             player,
+            worker,
         }
     }
 
@@ -126,7 +132,7 @@ where
     /// - [`TrackSource::Config`] is passed through untouched (DRM keys,
     ///   headers, format hints preserved).
     ///
-    /// Both paths finish with `PlayerImpl::prepare_config` so worker /
+    /// Both paths finish with the player's prepare so worker /
     /// sample-rate / runtime / default bus are injected.
     pub(crate) fn build_config(
         &self,
@@ -149,7 +155,9 @@ where
                 ..ScopeLabel::default()
             }));
         }
-        self.player.prepare_config(config).map_err(QueueError::from)
+        self.player
+            .prepare_config(config, self.worker.clone())
+            .map_err(QueueError::from)
     }
 
     /// The queue closed: cancel every live load, then let the dispatcher go,
@@ -475,7 +483,6 @@ mod tests {
     };
     use kithara_play::{
         ArtifactSource, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, StreamShape, mock,
-        player::PlayerControlSource,
     };
     use kithara_test_utils::{TestTempDir, kithara, temp_dir};
     use kithara_warp::WarpConfig;
@@ -942,7 +949,14 @@ mod tests {
             let (woke_tx, woke) = unbounded_channel();
             let waker = Waker::from(Arc::new(Wakes(woke_tx)));
             mailbox.hold(waker.clone());
-            let mut loader = Loader::new(player.control(), self.runtime, store, self.cap, postbox);
+            let mut loader = Loader::new(
+                player.view().clone(),
+                player.worker().clone(),
+                self.runtime,
+                store,
+                self.cap,
+                postbox,
+            );
             loader.hold(waker);
             LoaderFixture {
                 loader,
@@ -1151,7 +1165,8 @@ mod tests {
         let tracks = Tracks::default();
         let (postbox, _no_load_reports) = mailbox();
         let loader = Loader::new(
-            player.control(),
+            player.view().clone(),
+            player.worker().clone(),
             None,
             AssetStore::builder(player.pools().clone()).build(),
             NonZeroUsize::MIN,

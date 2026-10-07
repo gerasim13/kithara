@@ -346,7 +346,7 @@ async fn local_seek_middle_hang_iters(
         );
 
         let seek_target = player.position() + 30.0;
-        player.seek(seek_target);
+        player.seek(seek_target).await;
 
         // Wait for the seek to land in produced audio before measuring: the
         // post-seek render pull emits `PlaybackProgress` past the target once

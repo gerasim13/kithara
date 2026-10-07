@@ -107,7 +107,7 @@ fn render(
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(consts::SAMPLE_RATE)
-            .worker(worker)
+            .worker(worker.clone())
             .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
@@ -121,6 +121,7 @@ fn render(
             FfiResourceConfig::for_src(ResourceSrc::Path(input.to_path_buf()))
                 .store(store)
                 .build(),
+            worker,
         )
         .map_err(|err| CaptureError::step("resource-config", err))?;
     let resource = runtime.block_on(async {

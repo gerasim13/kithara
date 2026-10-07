@@ -1,7 +1,10 @@
 use kithara_bufpool::HasPool;
 use kithara_command::{Mailbox, Post, Postbox};
 use kithara_events::TrackId;
-use kithara_play::{CrossfadeSettings, EqBandConfig, InterruptionKind, PlayError, player::Player};
+use kithara_play::{
+    CrossfadeSettings, PlayError,
+    player::{Player, PlayerCommand},
+};
 
 use super::{Queue, Transition};
 use crate::{
@@ -52,24 +55,11 @@ where
     SetPlaybackOrder(PlaybackOrder),
     SetRepeat(RepeatMode),
     SetCrossfadeSettings(CrossfadeSettings),
-    /// A setting or notice the queue hands its player unchanged.
-    Player(PlayerCall),
+    /// A command the queue hands its player unchanged.
+    Player(Box<PlayerCommand>),
     Close,
     /// A task beside a track's load reports what it found.
     Load(LoadReport),
-}
-
-/// A player setting or platform notice the queue passes to its player.
-pub(crate) enum PlayerCall {
-    NotifyInterruption(InterruptionKind),
-    ResetEq,
-    SetDefaultRate(f32),
-    SetEqGain { band: usize, gain_db: f32 },
-    SetEqLayout(Vec<EqBandConfig>),
-    SetLevel(f32),
-    SetMuted(bool),
-    SetRate(f32),
-    SetVolume(f32),
 }
 
 impl<S> Queue<S>
@@ -124,7 +114,7 @@ where
             QueueCommand::SetCrossfadeSettings(settings) => {
                 Ok(self.set_crossfade_settings(settings)?)
             }
-            QueueCommand::Player(call) => Ok(self.call_player(call)?),
+            QueueCommand::Player(command) => Ok(self.call_player(*command)?),
             QueueCommand::Close => Ok(Player::close(self)?),
             QueueCommand::Load(report) => {
                 self.tracks.apply_report(report);
@@ -133,22 +123,8 @@ where
         }
     }
 
-    fn call_player(&self, call: PlayerCall) -> Result<(), PlayError> {
+    fn call_player(&self, command: PlayerCommand) -> Result<(), PlayError> {
         self.ensure_open()?;
-        let player = &self.player;
-        match call {
-            PlayerCall::NotifyInterruption(kind) => {
-                player.notify_interruption(kind);
-                Ok(())
-            }
-            PlayerCall::ResetEq => player.reset_eq(),
-            PlayerCall::SetDefaultRate(rate) => player.set_default_rate(rate),
-            PlayerCall::SetEqGain { band, gain_db } => player.set_eq_gain(band, gain_db),
-            PlayerCall::SetEqLayout(layout) => player.set_eq_layout(layout),
-            PlayerCall::SetLevel(level) => player.set_level(level),
-            PlayerCall::SetMuted(muted) => player.set_muted(muted),
-            PlayerCall::SetRate(rate) => player.set_rate(rate),
-            PlayerCall::SetVolume(volume) => player.set_volume(volume),
-        }
+        self.resident.run(command)
     }
 }
