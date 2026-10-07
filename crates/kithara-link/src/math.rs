@@ -1,8 +1,9 @@
+use kithara_beat::BeatGridModel;
 use kithara_play::{Bound, Position};
 use kithara_signal::SessionFrame;
 use kithara_warp::{MIN_SPEED, SessionBeat, SpeedCurve};
 
-use crate::{TempoTrajectory, TrackGrid};
+use crate::TempoTrajectory;
 
 /// Track-media seconds ahead of the Host phase, modulo `period` media seconds.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -45,10 +46,38 @@ impl CorrectionPlan {
     }
 }
 
+/// Whether the grid's observed beats bracket a position and prove its phase.
+#[must_use]
+pub fn covers(grid: &BeatGridModel, position: Position) -> bool {
+    let raw = grid.as_raw();
+    match (raw.beats.first(), raw.beats.last()) {
+        (Some(first), Some(last)) => {
+            (first.at..=last.at).contains(&position.as_secs_f64())
+                && boundary_at_or_before(grid, position).is_some()
+        }
+        _ => false,
+    }
+}
+
+/// The last phase boundary at or before a position: a bar line, or a beat
+/// when the grid proves no meter.
+fn boundary_at_or_before(grid: &BeatGridModel, position: Position) -> Option<Position> {
+    let raw = grid.as_raw();
+    let metered = raw.meter.is_some();
+    raw.downbeats
+        .iter()
+        .filter(|_| metered)
+        .map(|beat| beat.at)
+        .chain(raw.beats.iter().filter(|_| !metered).map(|beat| beat.at))
+        .take_while(|seconds| *seconds <= position.as_secs_f64())
+        .last()
+        .and_then(|seconds| Position::try_from_secs_f64(seconds).ok())
+}
+
 /// Track speed at a frame, as Host BPM divided by analyzed track BPM.
 #[must_use]
-pub fn speed(host: &TempoTrajectory, grid: &TrackGrid, at: SessionFrame) -> f32 {
-    (host.tempo_at(at).beats_per_minute() / grid.bpm()) as f32
+pub fn speed(host: &TempoTrajectory, grid: &BeatGridModel, at: SessionFrame) -> f32 {
+    (host.tempo_at(at).beats_per_minute() / grid.as_raw().bpm) as f32
 }
 
 /// The nearest in-phase entry on the requested side of a frame.
@@ -58,16 +87,17 @@ pub fn speed(host: &TempoTrajectory, grid: &TrackGrid, at: SessionFrame) -> f32 
 #[must_use]
 pub fn entry(
     host: &TempoTrajectory,
-    grid: &TrackGrid,
+    grid: &BeatGridModel,
     position: Position,
     bound: Bound,
 ) -> Option<SessionFrame> {
-    if !grid.covers(position) {
+    if !covers(grid, position) {
         return None;
     }
-    let offset =
-        (position - grid.downbeat_at_or_before(position)?).as_secs_f64() * grid.bpm() / 60.0;
-    let stride = if grid.meter().is_some() {
+    let offset = (position - boundary_at_or_before(grid, position)?).as_secs_f64()
+        * grid.as_raw().bpm
+        / 60.0;
+    let stride = if grid.as_raw().meter.is_some() {
         host.beats_per_bar()
     } else {
         1.0
@@ -99,24 +129,24 @@ pub fn entry(
 #[must_use]
 pub fn phase_error(
     host: &TempoTrajectory,
-    grid: &TrackGrid,
+    grid: &BeatGridModel,
     position: Position,
     at: SessionFrame,
 ) -> PhaseError {
     assert!(
-        grid.covers(position),
+        covers(grid, position),
         "phase requires a covering track grid"
     );
-    let boundary = match grid.downbeat_at_or_before(position) {
+    let boundary = match boundary_at_or_before(grid, position) {
         Some(boundary) => boundary,
         None => unreachable!("a covering grid has a preceding phase boundary"),
     };
-    let stride = if grid.meter().is_some() {
+    let stride = if grid.as_raw().meter.is_some() {
         host.beats_per_bar()
     } else {
         1.0
     };
-    let seconds_per_beat = 60.0 / grid.bpm();
+    let seconds_per_beat = 60.0 / grid.as_raw().bpm;
     let period = stride * seconds_per_beat;
     let host_phase = f64::from(host.beat_at(at)).rem_euclid(stride) * seconds_per_beat;
     PhaseError {
@@ -256,7 +286,7 @@ mod tests {
             revision: 0,
         })
         .expect("consistent grid");
-        let grid = TrackGrid::from(model);
+        let grid = model;
         let position = Position::from_secs_f64(0.5);
         assert_eq!(speed(&host, &grid, SessionFrame::new(0)), 2.0);
         assert_eq!(

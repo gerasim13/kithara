@@ -23,8 +23,14 @@ pub enum LinkedHostCommand<S> {
     /// A Host command: registration and tempo go through the decorator,
     /// the rest to the owner it wraps.
     Host(HostCommand<S, dyn LinkedDeck<S>>),
-    Sync { deck: DeckId, on: bool },
-    Grid { deck: DeckId, answer: GridAnswer },
+    Sync {
+        deck: DeckId,
+        on: bool,
+    },
+    Grid {
+        deck: DeckId,
+        answer: GridAnswer,
+    },
 }
 
 impl<S> From<HostCommand<S, dyn LinkedDeck<S>>> for LinkedHostCommand<S> {

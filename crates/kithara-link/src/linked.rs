@@ -1,3 +1,4 @@
+use kithara_beat::BeatGridModel;
 use kithara_command::{Seq, When};
 use kithara_config::Config;
 use kithara_play::{
@@ -9,7 +10,7 @@ use kithara_warp::SpeedCurve;
 use tracing::warn;
 
 use crate::{
-    CorrectionPlan, GridAnswer, LinkError, TempoTrajectory, TrackGrid, entry, jump_target,
+    CorrectionPlan, GridAnswer, LinkError, TempoTrajectory, covers, entry, jump_target,
     phase_error, speed,
 };
 
@@ -121,7 +122,7 @@ impl<T: AsRef<TrackSnapshot>> AsRef<TrackSnapshot> for LinkedSnapshot<T> {
 pub struct Linked<P> {
     inner: P,
     config: LinkConfig,
-    grid: Option<TrackGrid>,
+    grid: Option<BeatGridModel>,
     host: TempoTrajectory,
     pub(crate) mode: SyncMode,
     load: Option<Seq>,
@@ -207,7 +208,7 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
             TrackCommand::Play { at } => {
                 let track = self.inner.snapshot();
                 let required = track.as_ref().position;
-                let Some(grid) = self.grid.as_ref().filter(|grid| grid.covers(required)) else {
+                let Some(grid) = self.grid.as_ref().filter(|grid| covers(grid, required)) else {
                     self.waiting = Some(Waiting::Play { required, at });
                     return Ok(None);
                 };
@@ -242,7 +243,7 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
                 ) {
                     return self.inner.apply(TrackCommand::Seek { to }, out);
                 }
-                let Some(grid) = self.grid.as_ref().filter(|grid| grid.covers(to)) else {
+                let Some(grid) = self.grid.as_ref().filter(|grid| covers(grid, to)) else {
                     self.waiting = Some(Waiting::Seek { required: to });
                     return Ok(None);
                 };
@@ -320,7 +321,7 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
         }
         let track = self.inner.snapshot();
         let required = track.as_ref().position;
-        let Some(grid) = self.grid.as_ref().filter(|grid| grid.covers(required)) else {
+        let Some(grid) = self.grid.as_ref().filter(|grid| covers(grid, required)) else {
             self.waiting = Some(Waiting::Sync { required });
             return Ok(None);
         };
@@ -379,7 +380,7 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
         }
         match answer.model {
             Ok(model) => {
-                self.grid = Some(TrackGrid::from(model));
+                self.grid = Some(model);
                 if self.synced() {
                     let _ = out;
                     todo!(

@@ -14,10 +14,11 @@ mod trajectory;
 pub use deck::LinkedDeck;
 pub use error::LinkError;
 pub use factory::LinkedFactory;
-pub use grid::{GridAnswer, GridRefusal, TrackGrid};
+pub use grid::{GridAnswer, GridRefusal};
 pub use host::{LinkedHost, LinkedHostCommand, PendingTempo};
 pub use linked::{LinkConfig, Linked, LinkedPlayer, LinkedSnapshot, SyncMode, SyncStatus, Waiting};
 pub use math::{
-    CorrectionPlan, CorrectionStep, PhaseError, correction, entry, jump_target, phase_error, speed,
+    CorrectionPlan, CorrectionStep, PhaseError, correction, covers, entry, jump_target,
+    phase_error, speed,
 };
 pub use trajectory::{TempoStep, TempoTrajectory};
