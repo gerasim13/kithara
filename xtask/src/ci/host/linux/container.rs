@@ -259,10 +259,9 @@ mod tests {
                 .expect("executable tool trap");
         }
         let inherited_path = env::var_os("PATH").expect("PATH");
-        let path = env::join_paths(
-            std::iter::once(bin.clone()).chain(env::split_paths(&inherited_path)),
-        )
-        .expect("tool trap PATH");
+        let path =
+            env::join_paths(std::iter::once(bin.clone()).chain(env::split_paths(&inherited_path)))
+                .expect("tool trap PATH");
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("repository root");
@@ -272,9 +271,11 @@ mod tests {
                 .current_dir(root)
                 .arg("_xtask-self-target")
                 .env_remove("CI_CONCURRENT_ID")
-                .envs(environment.iter().map(|entry| {
-                    entry.split_once('=').expect("container environment entry")
-                }))
+                .envs(
+                    environment
+                        .iter()
+                        .map(|entry| entry.split_once('=').expect("container environment entry")),
+                )
                 .env("KITHARA_CI_CACHE_ROOT", &cache)
                 .env("KITHARA_CACHE_TRUST", runner.cache_trust.as_str())
                 .env("RUNNER_NAME", format!("{}-{registration}", runner.name))
@@ -289,7 +290,11 @@ mod tests {
                 "bootstrap target failed: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
-            PathBuf::from(String::from_utf8(output.stdout).expect("target path").trim())
+            PathBuf::from(
+                String::from_utf8(output.stdout)
+                    .expect("target path")
+                    .trim(),
+            )
         };
         let first_target = target(first, "12345");
         let second_target = target(second, "12345");
