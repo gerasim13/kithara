@@ -153,6 +153,14 @@ impl Container<'_> {
     }
 
     pub(super) const PIDS_LIMIT: u32 = 8192;
+
+    /// `RLIMIT_NICE` for every process of a job: 20 minus the lowest nice
+    /// value a thread may set for itself, so 40 allows -20, as Android's init
+    /// grants its processes. The player runs the thread that feeds a deck's
+    /// output ring at nice -16. At 0 the kernel refuses that, and on a machine
+    /// full of compile jobs the thread waits for a CPU longer than the ring
+    /// lasts.
+    pub(super) const NICE_LIMIT: u8 = 40;
 }
 
 pub(super) fn container<'a>(

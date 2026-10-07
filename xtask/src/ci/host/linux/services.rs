@@ -386,6 +386,7 @@ fn unit(
          --memory {memory} \
          --cgroup-parent {cgroup_parent} \
          --pids-limit {pids} \
+         --ulimit nice={nice}:{nice} \
          --security-opt no-new-privileges \
          --env-file {env_file}",
         name = job.name,
@@ -394,6 +395,7 @@ fn unit(
         memory = job.memory,
         cgroup_parent = job.cgroup_parent,
         pids = Container::PIDS_LIMIT,
+        nice = Container::NICE_LIMIT,
         env_file = job.env_file,
     )?;
     for entry in Container::environment(runner) {
@@ -856,6 +858,9 @@ mod tests {
         assert!(android.contains(&emulator), "{emulator}: {android}");
         for unit in [&plain, &gpu, &android] {
             assert!(unit.contains("--security-opt no-new-privileges"), "{unit}");
+            // The player's audio feed thread asks for nice -16; a job that
+            // may not lower a nice value keeps it at the compile jobs' level.
+            assert!(unit.contains("--ulimit nice=40:40"), "{unit}");
             assert!(!unit.contains("docker.sock"), "{unit}");
         }
     }
