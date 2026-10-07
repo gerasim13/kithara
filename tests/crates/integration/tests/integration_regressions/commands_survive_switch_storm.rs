@@ -249,7 +249,10 @@ async fn commands_still_work_after_a_switch_storm(tone_mp3: &'static [u8], temp_
         )
     });
 
-    queue.run(move |q| q.clear()).await;
+    queue
+        .run(move |q| q.clear())
+        .await
+        .expect("the queue clears");
     ticker.stop().await;
     queue.close().await;
 }

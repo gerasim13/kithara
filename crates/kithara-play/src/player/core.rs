@@ -88,8 +88,13 @@ impl<S> PlayerRuntime<S> {
         self.with_open_result(|runtime| runtime.core.engine.attach_session(binding))
     }
 
+    /// Silences the deck, then closes. A deck that refuses the clear leaves
+    /// the player open, so a later close can still silence it.
     pub(super) fn close(&self) -> Result<(), PlayError> {
         let _admission = self.operations.lock();
+        if !self.is_closed() {
+            self.clear_deck()?;
+        }
         match self.begin_close()? {
             CloseAdmission::AlreadyClosed => return Ok(()),
             CloseAdmission::Begin => {}
@@ -173,21 +178,35 @@ impl<S> PlayerRuntime<S> {
     ///
     /// Also clears any held start position, since the item it targeted no
     /// longer exists once the deck is empty.
-    pub fn remove_all_items(&self)
+    ///
+    /// # Errors
+    /// Returns the deck's refusal of the clear; the player keeps its tracks
+    /// then.
+    pub fn remove_all_items(&self) -> Result<(), PlayError>
     where
         S: HasPool<f32>,
     {
+        self.clear_deck()?;
         self.unarm_next();
         self.core.current.clear();
         self.set_status(PlayerStatus::Unknown);
         *self.core.start_position.lock() = None;
-        let _ = self.send_to_slot(DeckPart::Clear);
         self.enter_stopped();
         self.core
             .engine
             .bus()
             .publish(PlayerEvent::RateChanged { rate: 0.0 });
         debug!("all items removed");
+        Ok(())
+    }
+
+    /// Clears the deck from its next block; a player without a slot has no
+    /// deck to clear.
+    fn clear_deck(&self) -> Result<(), PlayError> {
+        match self.send_to_slot(DeckPart::Clear) {
+            Ok(()) | Err(PlayError::NoActiveSlot) => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     /// Rate the player's master bus runs at. Decoded frames handed to an
@@ -577,7 +596,7 @@ mod tests {
         player.play();
         assert!(player.slot().is_some(), "setup must take the deck's slot");
 
-        player.remove_all_items();
+        player.remove_all_items().expect("the deck takes the clear");
 
         assert!(
             player.slot().is_none(),
@@ -589,7 +608,7 @@ mod tests {
         player.play();
 
         assert!(player.slot().is_some(), "play must take the slot again");
-        player.remove_all_items();
+        player.remove_all_items().expect("the deck takes the clear");
     }
 
     #[kithara::test]

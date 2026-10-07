@@ -402,7 +402,9 @@ fn clearing_the_queue_drops_the_held_start_position() {
     let player = player();
     player.seek_seconds(30.0).expect("must accept");
 
-    player.remove_all_items();
+    player
+        .remove_all_items()
+        .expect("an idle player has no deck to refuse the clear");
 
     assert_eq!(player.position_seconds(), None);
 }

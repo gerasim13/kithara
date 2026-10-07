@@ -227,7 +227,10 @@ async fn transient_failure_does_not_kill_the_track(
         )
     });
 
-    queue.run(move |q| q.clear()).await;
+    queue
+        .run(move |q| q.clear())
+        .await
+        .expect("the queue clears");
     ticker.stop().await;
     queue.close().await;
 }

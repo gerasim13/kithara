@@ -121,7 +121,7 @@ async fn playback_starts_from_the_seeked_position(
     first_queue
         .run(move |q| {
             q.pause();
-            q.clear();
+            q.clear().expect("the queue clears");
         })
         .await;
     let saved = played;

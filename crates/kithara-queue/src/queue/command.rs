@@ -38,10 +38,10 @@ where
         id: TrackId,
         reply: Reply<Result<(), QueueError>>,
     },
-    Clear(Reply<()>),
+    Clear(Reply<Result<(), QueueError>>),
     SetTracks {
         sources: Vec<TrackSource<S>>,
-        reply: Reply<()>,
+        reply: Reply<Result<(), QueueError>>,
     },
     Select {
         id: TrackId,
@@ -127,13 +127,9 @@ where
                 reply,
             } => answer(&reply, self.insert_with_id(id, source, after)),
             QueueCommand::Remove { id, reply } => answer(&reply, self.remove(id)),
-            QueueCommand::Clear(reply) => {
-                self.clear();
-                answer(&reply, ());
-            }
+            QueueCommand::Clear(reply) => answer(&reply, self.clear()),
             QueueCommand::SetTracks { sources, reply } => {
-                self.set_tracks(sources);
-                answer(&reply, ());
+                answer(&reply, self.set_tracks(sources));
             }
             QueueCommand::Select {
                 id,

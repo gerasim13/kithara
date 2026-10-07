@@ -235,6 +235,9 @@ async fn played_tracks_land_in_the_disk_cache(tone_mp3: &'static [u8], temp_dir:
          ({after_first} -> {after_second} bytes)"
     );
 
-    queue.run(QueueControl::clear).await;
+    queue
+        .run(QueueControl::clear)
+        .await
+        .expect("the queue clears");
     queue.close().await;
 }

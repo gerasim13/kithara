@@ -233,10 +233,12 @@ fn dispatch_cmd(
             let result = queue.select(id, transition).map_err(|e| e.to_string());
             crate::web::interop::send_reply(request_id, result);
         }
-        WorkerCmd::RemoveAll => {
-            analysis.borrow_mut().clear();
-            queue.clear();
-        }
+        WorkerCmd::RemoveAll => match queue.clear() {
+            Ok(()) => analysis.borrow_mut().clear(),
+            Err(error) => {
+                tracing::warn!(%error, "the queue refused to clear and keeps its items");
+            }
+        },
         WorkerCmd::SetAbrMode { variant_index } => {
             apply_abr_mode(queue, variant_index);
         }

@@ -195,7 +195,7 @@ async fn first_sound_arrives_after_an_outage_before_playback(
         "the track stalled at {started_at:.3}s after the network returned"
     );
 
-    queue.run(|q| q.clear()).await;
+    queue.run(|q| q.clear()).await.expect("the queue clears");
     ticker.stop().await;
     queue.close().await;
 }

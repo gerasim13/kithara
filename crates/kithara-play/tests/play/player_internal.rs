@@ -117,7 +117,7 @@ async fn player_remove_all_resets_state(constant_half: &'static [u8], #[case] wi
             .expect("select an item");
         assert!(player.current_item().is_some());
     }
-    player.remove_all_items();
+    player.remove_all_items().expect("the deck takes the clear");
     assert_eq!(player.current_item(), None);
     assert_eq!(player.status(), PlayerStatus::Unknown);
 }

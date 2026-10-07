@@ -45,11 +45,19 @@ where
             .map_err(QueueError::from)
     }
 
-    pub(crate) fn clear(&mut self) {
-        self.command(Self::clear_inner);
+    /// Remove every track, as [`QueueControl::clear`](super::QueueControl::clear)
+    /// does, while the caller still owns this queue.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueueError::Play`] after the resident player is closed, and
+    /// the deck's refusal to clear; the queue keeps its tracks then.
+    pub(crate) fn clear(&mut self) -> Result<(), QueueError> {
+        self.with_open_result(Self::clear_inner)
     }
 
-    fn clear_inner(&mut self) {
+    fn clear_inner(&mut self) -> Result<(), QueueError> {
+        self.player.remove_all_items()?;
         let ids = self.track_ids();
         self.tracks.records_mut().clear();
 
@@ -61,11 +69,11 @@ where
         self.navigation.set_playback_order(order, &[]);
         self.position = CachedPosition::Unknown;
         self.autoplay_target = None;
-        self.player.remove_all_items();
         self.player_rx = self.bus.subscribe();
         for id in ids {
             self.announce(QueueEvent::TrackRemoved { id });
         }
+        Ok(())
     }
 
     /// Insert a track after `after`, or at the head when it is absent, as
@@ -215,13 +223,22 @@ where
         Ok(())
     }
 
-    pub(crate) fn set_tracks(&mut self, sources: Vec<TrackSource<S>>) {
-        self.command(|queue| {
-            queue.clear_inner();
+    /// Replace every track with `sources`, as
+    /// [`QueueControl::set_tracks`](super::QueueControl::set_tracks) does,
+    /// while the caller still owns this queue.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueueError::Play`] after the resident player is closed, and
+    /// the deck's refusal to clear; the queue keeps its tracks then.
+    pub(crate) fn set_tracks(&mut self, sources: Vec<TrackSource<S>>) -> Result<(), QueueError> {
+        self.with_open_result(|queue| {
+            queue.clear_inner()?;
             for source in sources {
                 queue.insert_entry(TrackId::allocate(), source, Placement::Append);
             }
-        });
+            Ok(())
+        })
     }
 }
 
@@ -303,7 +320,7 @@ mod tests {
         let _a = append(&mut queue, "https://example.com/a.mp3");
         let _b = append(&mut queue, "https://example.com/b.mp3");
         assert_eq!(queue.len(), 2);
-        queue.clear();
+        queue.clear().expect("the idle deck takes the clear");
         assert_eq!(queue.len(), 0);
     }
 
@@ -322,7 +339,7 @@ mod tests {
             )),
         });
 
-        queue.clear();
+        queue.clear().expect("the idle deck takes the clear");
         let replacement = queue
             .append("https://example.com/replacement.mp3")
             .expect("open queue accepts a replacement track");
@@ -344,15 +361,17 @@ mod tests {
     async fn set_tracks_replaces_queue() {
         let mut queue = make_queue();
         let _a = append(&mut queue, "https://example.com/a.mp3");
-        queue.set_tracks(
-            [
-                "https://example.com/1.mp3",
-                "https://example.com/2.mp3",
-                "https://example.com/3.mp3",
-            ]
-            .map(TrackSource::from)
-            .into(),
-        );
+        queue
+            .set_tracks(
+                [
+                    "https://example.com/1.mp3",
+                    "https://example.com/2.mp3",
+                    "https://example.com/3.mp3",
+                ]
+                .map(TrackSource::from)
+                .into(),
+            )
+            .expect("the idle deck takes the clear");
         assert_eq!(queue.len(), 3);
     }
 

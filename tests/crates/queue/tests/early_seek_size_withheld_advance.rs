@@ -361,7 +361,9 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
             // *in-withheld-window* contract only.)
         }
         Outcome::AutoAdvanced { new_index, trigger } => {
-            harness.run(&queue, QueueControl::clear).await;
+            harness
+                .run(&queue, |queue| queue.clear().expect("the queue clears"))
+                .await;
             drop(queue);
             drop(hls);
             panic!(
@@ -375,7 +377,9 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
         }
     }
 
-    harness.run(&queue, QueueControl::clear).await;
+    harness
+        .run(&queue, |queue| queue.clear().expect("the queue clears"))
+        .await;
     drop(queue);
     drop(hls);
     harness.close().await;

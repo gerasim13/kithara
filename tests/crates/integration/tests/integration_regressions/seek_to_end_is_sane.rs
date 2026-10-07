@@ -249,7 +249,10 @@ async fn run_case(
          after seeking to {target:.3}s"
     );
 
-    queue.run(QueueControl::clear).await;
+    queue
+        .run(QueueControl::clear)
+        .await
+        .expect("the queue clears");
     queue.close().await;
 }
 

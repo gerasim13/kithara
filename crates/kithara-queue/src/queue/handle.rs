@@ -49,8 +49,13 @@ where
 
     /// Remove all tracks from the queue. Dropping the records aborts
     /// their in-flight loads.
-    pub fn clear(&self) {
-        self.command(QueueCommand::Clear);
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueueError::Play`] after the resident player is closed, and
+    /// the deck's refusal to clear; the queue keeps its tracks then.
+    pub fn clear(&self) -> Result<(), QueueError> {
+        self.call(QueueCommand::Clear)?
     }
 
     /// Close the resident player, then irreversibly cancel queue-owned work.
@@ -261,13 +266,18 @@ where
     }
 
     /// Replace the entire queue with the given sources.
-    pub fn set_tracks<I, T>(&self, sources: I)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueueError::Play`] after the resident player is closed, and
+    /// the deck's refusal to clear; the queue keeps its tracks then.
+    pub fn set_tracks<I, T>(&self, sources: I) -> Result<(), QueueError>
     where
         I: IntoIterator<Item = T>,
         T: Into<TrackSource<S>>,
     {
         let sources = sources.into_iter().map(Into::into).collect();
-        self.command(|reply| QueueCommand::SetTracks { sources, reply });
+        self.call(|reply| QueueCommand::SetTracks { sources, reply })?
     }
 
     /// Set the volume (0.0..=1.0).

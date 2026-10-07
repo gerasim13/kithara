@@ -12,7 +12,7 @@ use kithara::{
     platform::time::{self, Duration},
     play::{
         PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SelectTransition,
-        SessionDuckingMode,
+        SessionDuckingMode, player::PlayerControl,
     },
     signal::{AudioSpec, SessionFrame},
 };
@@ -49,6 +49,8 @@ const TAKE_BLOCKS: usize = 345;
 const SOFT_DUCKED: f32 = 0.16;
 /// The share of the session output `Hard` ducking leaves: 28 dB down.
 const HARD_DUCKED: f32 = 0.04;
+/// More parts than a deck's ring holds between two blocks.
+const RING_OVERFILL: usize = 64;
 
 struct MixHarness {
     host: OfflineHostHarness<TestPools>,
@@ -140,7 +142,7 @@ impl MixHarness {
         self.host
             .run(move || {
                 for player in &players {
-                    player.remove_all_items();
+                    player.remove_all_items().expect("the deck takes the clear");
                 }
             })
             .await;
@@ -196,6 +198,12 @@ impl MixHarness {
         drop(players);
         host.close().await;
     }
+}
+
+/// Sends `player`'s deck parts until its ring refuses one, with no block
+/// rendered in between; returns the refusal.
+fn fill_the_deck(player: &PlayerControl<TestPools>) -> Option<PlayError> {
+    (0..RING_OVERFILL).find_map(|_| player.set_eq_gain(0, 0.0).err())
 }
 
 fn spec() -> AudioSpec {
@@ -352,6 +360,112 @@ async fn a_mix_level_outlives_clearing_the_deck(constant_four: &'static [u8]) {
         harness.steady_peak().await,
         0.2,
         "level after the deck was cleared",
+    );
+    harness.close().await;
+}
+
+/// Closing a player silences its deck though the Host still holds it.
+#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+async fn closing_a_playing_deck_silences_it(constant_four: &'static [u8]) {
+    let harness = MixHarness::new(1).await;
+    harness.play(&[constant_four]).await;
+    assert_near(harness.steady_peak().await, 0.4, "the deck plays its track");
+
+    let player = harness.players[0].control().clone();
+    harness
+        .host
+        .run(move || player.close())
+        .await
+        .expect("the deck takes the close");
+    assert_near(
+        harness.steady_peak().await,
+        0.0,
+        "a closed player's deck is silent",
+    );
+    harness.close().await;
+}
+
+/// A deck that refuses the clear a close sends keeps its player open and
+/// playing, so a later close still silences it.
+#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+async fn a_refused_close_leaves_the_player_open(constant_four: &'static [u8]) {
+    let harness = MixHarness::new(1).await;
+    harness.play(&[constant_four]).await;
+    assert_near(harness.steady_peak().await, 0.4, "the deck plays its track");
+
+    let player = harness.players[0].control().clone();
+    let (refused, closed) = harness
+        .host
+        .run(move || (fill_the_deck(&player), player.close()))
+        .await;
+    assert!(
+        matches!(refused, Some(PlayError::SlotChannelFull { .. })),
+        "the deck's ring fills: {refused:?}"
+    );
+    assert!(
+        matches!(closed, Err(PlayError::SlotChannelFull { .. })),
+        "a full ring refuses the close: {closed:?}"
+    );
+    assert_near(
+        harness.steady_peak().await,
+        0.4,
+        "the deck keeps playing its track",
+    );
+
+    let player = harness.players[0].control().clone();
+    harness
+        .host
+        .run(move || player.close())
+        .await
+        .expect("the player stayed open for a later close");
+    assert_near(
+        harness.steady_peak().await,
+        0.0,
+        "the later close silences the deck",
+    );
+    harness.close().await;
+}
+
+/// Removing every item takes effect only when the deck takes the clear: a
+/// refused clear leaves the player its track and the deck playing it.
+#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
+async fn a_refused_clear_keeps_the_track_the_deck_plays(constant_four: &'static [u8]) {
+    let harness = MixHarness::new(1).await;
+    harness.play(&[constant_four]).await;
+    assert_near(harness.steady_peak().await, 0.4, "the deck plays its track");
+
+    let player = harness.players[0].control().clone();
+    let (refused, cleared, kept) = harness
+        .host
+        .run(move || {
+            let refused = fill_the_deck(&player);
+            let cleared = player.remove_all_items();
+            (refused, cleared, player.current_item())
+        })
+        .await;
+    assert!(
+        matches!(refused, Some(PlayError::SlotChannelFull { .. })),
+        "the deck's ring fills: {refused:?}"
+    );
+    assert!(
+        matches!(cleared, Err(PlayError::SlotChannelFull { .. })),
+        "a full ring refuses the clear: {cleared:?}"
+    );
+    assert!(
+        kept.is_some(),
+        "a refused clear leaves the player its track"
+    );
+    assert_near(
+        harness.steady_peak().await,
+        0.4,
+        "the deck keeps playing its track",
+    );
+
+    harness.remove_all_items().await;
+    assert_near(
+        harness.steady_peak().await,
+        0.0,
+        "a clear the deck takes silences it",
     );
     harness.close().await;
 }

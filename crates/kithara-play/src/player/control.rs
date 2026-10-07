@@ -108,8 +108,13 @@ where
     }
 
     /// Drop every track the deck holds and release its slot.
-    pub fn remove_all_items(&self) {
-        self.command(PlayerRuntime::remove_all_items);
+    ///
+    /// # Errors
+    /// Returns [`PlayError::Closed`] after close, and the deck's refusal of
+    /// the clear; the player keeps its tracks then.
+    pub fn remove_all_items(&self) -> Result<(), PlayError> {
+        self.runtime
+            .with_open_result(PlayerRuntime::remove_all_items)
     }
 
     /// Reset all EQ bands.

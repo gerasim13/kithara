@@ -77,7 +77,10 @@ async fn a_cleared_queue_plays_the_track_appended_after_it(
         .await
         .expect("the first track must play before the queue is emptied");
 
-    queue.run(kithara::queue::QueueControl::clear).await;
+    queue
+        .run(kithara::queue::QueueControl::clear)
+        .await
+        .expect("the queue clears");
     assert_eq!(queue.control().len(), 0, "clear must empty the queue");
 
     let mut rx = queue.subscribe();

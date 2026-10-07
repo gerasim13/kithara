@@ -422,7 +422,7 @@ async fn resumes_after_outage(
          (starved at {starved_at:.3}s, outage began at {before_outage:.3}s)"
     );
 
-    queue.run(|q| q.clear()).await;
+    queue.run(|q| q.clear()).await.expect("the queue clears");
     ticker.stop().await;
     queue.close().await;
 }
