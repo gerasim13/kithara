@@ -61,8 +61,8 @@ to the single `decoder` field.
 
 - `PlayWorker` owns playback pools and a dedicated dispatcher derived from an
   optional shared `kithara-worker` base.
-- `EngineImpl` owns session dispatch, slot registration, and master output
-  state.
+- `EngineImpl` owns session dispatch, the deck's slot while it runs, and
+  master output state.
 - `PlayerImpl` owns playlist and parameter state, transport flow, status, item
   handover, and one clone of its explicitly supplied `PlayWorker`.
 - `Resource` opens file, HLS, and reader sources from `ResourceConfig`.
@@ -74,8 +74,8 @@ to the single `decoder` field.
 
 ## Integration
 
-- **Lifecycle:** start the engine, allocate a slot, attach a player item, play,
-  then release the slot and stop the engine.
+- **Lifecycle:** start the engine, which builds the deck's slot, attach a
+  player item, play, then stop the engine, which drops the slot.
 - **Configuration:** `PlayerConfig`, `EngineConfig`, and `ResourceConfig` expose
   builders while their fields remain crate-private.
 - **Tempo and key-lock:** `PlayerConfig::builder().warp(...)` supplies the

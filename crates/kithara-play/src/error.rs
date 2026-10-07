@@ -49,9 +49,6 @@ pub enum PlayError {
     #[error("slot already occupied: {0:?}")]
     SlotOccupied(SlotId),
 
-    #[error("no available slots in arena")]
-    ArenaFull,
-
     #[error("crossfade already in progress")]
     CrossfadeActive,
 

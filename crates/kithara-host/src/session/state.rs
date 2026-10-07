@@ -27,16 +27,10 @@ use super::{
     transport::{SessionGridGeneration, TransportControl, install},
 };
 use crate::{
-    api::{SlotId, Tap},
+    api::Tap,
     host::HostSettings,
     rt::{MasterNode, SessionOutput},
 };
-
-#[derive(Debug)]
-pub(super) struct SlotNodes {
-    pub(super) player_node_id: NodeID,
-    pub(super) slot_id: SlotId,
-}
 
 pub(super) struct Deck<S> {
     pub(super) grid_id: BeatGridId,
@@ -44,8 +38,8 @@ pub(super) struct Deck<S> {
     pub(super) player_id: PlayerId,
     pub(super) pools: PoolRegion<S>,
     pub(super) mixer: DeckMixerConfig,
-    pub(super) slots: Vec<SlotNodes>,
-    pub(super) started: bool,
+    /// The deck's slot node while the deck runs.
+    pub(super) slot_node: Option<NodeID>,
     pub(super) next_slot_id: u64,
 }
 
@@ -64,9 +58,12 @@ impl<S> Deck<S> {
             player_id,
             grid_id,
             next_slot_id: 1,
-            slots: Vec::new(),
-            started: false,
+            slot_node: None,
         }
+    }
+
+    pub(super) const fn started(&self) -> bool {
+        self.slot_node.is_some()
     }
 }
 

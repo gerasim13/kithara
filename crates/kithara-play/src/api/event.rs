@@ -410,12 +410,6 @@ pub enum PlayerEvent {
 pub enum EngineEvent {
     Started,
     Stopped,
-    SlotAllocated {
-        slot: SlotId,
-    },
-    SlotReleased {
-        slot: SlotId,
-    },
     CrossfadeStarted {
         from: SlotId,
         to: SlotId,

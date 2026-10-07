@@ -12,7 +12,7 @@ use tracing::{debug, trace, warn};
 #[cfg(any(target_arch = "wasm32", test))]
 use super::protocol::HostCmdMsg;
 use super::{
-    graph::{lifecycle, player_index, slots, tap},
+    graph::{lifecycle, player_index, tap},
     protocol::{Cmd, HostCmd, HostReply, PlayerId, Reply, SessionError, SessionSampleRate},
     queue::settle_receipts,
     state::{SessionState, register_player},
@@ -102,23 +102,14 @@ where
             player_id,
             render_quantum_frames,
             response_budget_frames,
-        } => match lifecycle::start_player(
+        } => lifecycle::start_player(
             state,
             player_id,
             render_quantum_frames,
             response_budget_frames,
-        ) {
-            Ok(()) => Reply::Ok,
-            Err(err) => Reply::Err(err),
-        },
+        )
+        .unwrap_or_else(Reply::Err),
         Cmd::StopPlayer { player_id } => match lifecycle::stop_player(state, player_id) {
-            Ok(()) => Reply::Ok,
-            Err(err) => Reply::Err(err),
-        },
-        Cmd::AllocateSlot { player_id } => {
-            slots::allocate_slot(state, player_id).unwrap_or_else(Reply::Err)
-        }
-        Cmd::ReleaseSlot { player_id, slot } => match slots::release_slot(state, player_id, slot) {
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
@@ -213,7 +204,7 @@ fn unregister_player<T, S>(
         .graph
         .deck(idx)
         .ok_or_else(|| SessionError::Graph("registered deck is missing".to_owned()))?
-        .started;
+        .started();
     if started {
         lifecycle::stop_player(state, player_id)?;
     } else if state.ctx.is_some() {
@@ -650,9 +641,9 @@ mod tests {
 
         assert!(matches!(
             run_cmd(&mut state, start_command(player_id),),
-            Reply::Ok
+            Reply::PlayerStarted(..)
         ));
-        assert!(deck_by_player_id(&state, player_id).started);
+        assert!(deck_by_player_id(&state, player_id).started());
         assert!(matches!(
             run_cmd(&mut state, Cmd::UnregisterPlayer { player_id }),
             Reply::Ok
@@ -876,7 +867,7 @@ mod tests {
         let player_id = register_player(&mut state);
         assert!(matches!(
             run_cmd(&mut state, start_command(player_id),),
-            Reply::Ok
+            Reply::PlayerStarted(..)
         ));
         let measured = state
             .root_view
@@ -930,7 +921,7 @@ mod tests {
                 }
             ))
         ));
-        assert!(!deck_by_player_id(&state, player_id).started);
+        assert!(!deck_by_player_id(&state, player_id).started());
     }
 
     #[kithara::test]
@@ -942,7 +933,7 @@ mod tests {
 
         assert!(matches!(
             run_cmd(&mut state, start_command(player_id),),
-            Reply::Ok
+            Reply::PlayerStarted(..)
         ));
         assert!(matches!(
             state.root_view.sample_rate(),
@@ -952,10 +943,9 @@ mod tests {
                 ..
             }
         ));
-        assert!(matches!(
-            run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
-            Reply::SlotAllocated(..)
-        ));
+        let slot_node = deck(&state, 0)
+            .slot_node
+            .expect("a started deck has its slot node");
         assert_eq!(
             route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
             1
@@ -983,28 +973,22 @@ mod tests {
             "route invalidation must keep the graph context"
         );
         assert!(
-            deck(&state, 0).started,
+            deck(&state, 0).started(),
             "route invalidation must keep the player graph logically started"
         );
-        assert_eq!(
-            deck(&state, 0).slots.len(),
-            1,
-            "route invalidation must not drop active slots"
+        assert!(
+            state
+                .ctx
+                .as_ref()
+                .is_some_and(|ctx| ctx.contains_node(slot_node)),
+            "route invalidation must keep the deck's slot node in the graph"
         );
-        assert!(matches!(
-            run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
-            Reply::SlotAllocated(..)
-        ));
-        assert_eq!(
-            deck(&state, 0).slots.len(),
-            2,
-            "session must accept future slots after explicit route restart"
-        );
+        assert_eq!(deck(&state, 0).slot_node, Some(slot_node));
         assert!(!state.stream_needs_restart);
     }
 
     #[kithara::test]
-    fn unexpected_stream_stop_restarts_stream_without_dropping_player_graph_or_future_slots() {
+    fn unexpected_stream_stop_restarts_stream_without_dropping_the_deck_slot() {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
@@ -1012,19 +996,17 @@ mod tests {
 
         assert!(matches!(
             run_cmd(&mut state, start_command(player_id),),
-            Reply::Ok
+            Reply::PlayerStarted(..)
         ));
         assert!(state.ctx.is_some());
-        assert!(deck(&state, 0).started);
+        assert!(deck(&state, 0).started());
         assert_eq!(
             route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
             1
         );
-        assert!(matches!(
-            run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
-            Reply::SlotAllocated(..)
-        ));
-        assert_eq!(deck(&state, 0).slots.len(), 1);
+        let slot_node = deck(&state, 0)
+            .slot_node
+            .expect("a started deck has its slot node");
         let before_route = host_grid(&state);
 
         state.stream = None;
@@ -1045,23 +1027,17 @@ mod tests {
             "session output node id must survive stream restart"
         );
         assert!(
-            deck(&state, 0).started,
+            deck(&state, 0).started(),
             "player graph must remain logically started after stream restart"
         );
-        assert_eq!(
-            deck(&state, 0).slots.len(),
-            1,
-            "active slot graph must survive stream restart"
+        assert!(
+            state
+                .ctx
+                .as_ref()
+                .is_some_and(|ctx| ctx.contains_node(slot_node)),
+            "the deck's slot node must stay in the graph across stream restart"
         );
-        assert!(matches!(
-            run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
-            Reply::SlotAllocated(..)
-        ));
-        assert_eq!(
-            deck(&state, 0).slots.len(),
-            2,
-            "session must accept a future slot after route-loss reinit"
-        );
+        assert_eq!(deck(&state, 0).slot_node, Some(slot_node));
         assert!(!state.stream_needs_restart);
     }
 
@@ -1074,7 +1050,7 @@ mod tests {
 
         assert!(matches!(
             run_cmd(&mut state, start_command(player_id)),
-            Reply::Ok
+            Reply::PlayerStarted(..)
         ));
         assert_eq!(
             route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
@@ -1153,7 +1129,7 @@ mod tests {
 
         assert!(matches!(
             run_cmd(&mut state, start_command(player_id),),
-            Reply::Ok
+            Reply::PlayerStarted(..)
         ));
         assert_eq!(
             route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
@@ -1192,13 +1168,13 @@ mod tests {
         assert_eq!(retried.stamp(), boundary.stamp());
         assert_eq!(retried.axis(), boundary.axis());
         assert!(!state.stream_needs_restart);
-        assert!(deck(&state, 0).started);
+        assert!(deck(&state, 0).started());
     }
 
     fn start_player_cmd(state: &mut TestState, player_id: u64) {
         assert!(matches!(
             run_cmd(&mut *state, start_command(player_id),),
-            Reply::Ok
+            Reply::PlayerStarted(..)
         ));
     }
 

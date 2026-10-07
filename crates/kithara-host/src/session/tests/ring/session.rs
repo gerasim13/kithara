@@ -457,7 +457,7 @@ fn bootstrap(
         render_quantum_frames: None,
         response_budget_frames: NonZeroUsize::new(448),
     }) {
-        Reply::Ok => {}
+        Reply::PlayerStarted(..) => {}
         Reply::Err(error) => return Err(error.into()),
         _ => return Err(RingSessionError::Protocol("start anchor player reply")),
     }

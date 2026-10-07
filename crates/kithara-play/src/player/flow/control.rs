@@ -14,7 +14,7 @@ use crate::{
 };
 
 impl<S> PlayerRuntime<S> {
-    /// Ensure we have an active slot, allocating one if needed.
+    /// Ensure we hold the deck's slot, taking it if we do not.
     pub fn ensure_slot(&self) -> Result<SlotId, PlayError>
     where
         S: HasPool<f32>,
@@ -22,7 +22,7 @@ impl<S> PlayerRuntime<S> {
         if let Some(id) = self.slot() {
             return Ok(id);
         }
-        let id = self.core.engine.allocate_slot()?;
+        let id = self.core.engine.slot().ok_or(PlayError::EngineNotRunning)?;
         self.enter_loading_with_slot(id);
         self.core.engine.send_slot_cmd(
             id,
@@ -202,6 +202,26 @@ mod tests {
         player::{PlayerConfig, PlayerImpl},
         test_pools::pools,
     };
+
+    /// The deck's slot is built with the deck: a player takes it without asking the session.
+    #[kithara::test]
+    fn a_player_takes_its_deck_slot_without_asking_the_session() {
+        let (session, audio_thread) = mock::session_with_mock();
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(mock::SAMPLE_RATE)
+                .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+                .session(session)
+                .build(),
+        );
+        player
+            .ensure_engine_started()
+            .expect("engine start must succeed");
+
+        player.ensure_slot().expect("the deck's slot is handed out");
+
+        assert_eq!(audio_thread.asked(), ["register", "start"]);
+    }
 
     /// An EQ gain is the deck's: a slot is handed the layout when it is taken, and a band cut
     /// goes to that slot's ring.

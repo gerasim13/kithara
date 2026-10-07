@@ -72,7 +72,7 @@ fn register_started_player(session: &ManualRingSession) -> PlayerId {
         Reply::Err(error) => panic!("register player failed: {error}"),
         _ => panic!("unexpected register player reply"),
     };
-    expect_ok(
+    assert!(matches!(
         session
             .exec(Cmd::StartPlayer {
                 player_id,
@@ -80,7 +80,8 @@ fn register_started_player(session: &ManualRingSession) -> PlayerId {
                 response_budget_frames: NonZeroUsize::new(448),
             })
             .expect("start player command"),
-    );
+        Reply::PlayerStarted(..)
+    ));
     player_id
 }
 

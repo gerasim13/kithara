@@ -53,9 +53,6 @@ pub struct EngineConfig<S> {
     /// change nothing the engine actually does.
     #[config(builder(default = 2))]
     pub(crate) channels: u16,
-    /// Maximum number of concurrent player slots. Default: 4.
-    #[config(builder(default = 4))]
-    pub(crate) max_slots: usize,
 }
 
 impl<S> Clone for EngineConfig<S> {
@@ -71,7 +68,6 @@ impl<S> Clone for EngineConfig<S> {
             eq_layout: Mutex::new(self.eq_layout.lock().clone()),
             mixer: self.mixer,
             channels: self.channels,
-            max_slots: self.max_slots,
         }
     }
 }
@@ -94,7 +90,6 @@ mod tests {
             .build();
 
         assert_eq!(config.channels, 2);
-        assert_eq!(config.max_slots, 4);
         assert_eq!(config.eq_layout.lock().len(), 10);
         assert_eq!(config.mixer, DeckMixerConfig::default());
     }
@@ -116,7 +111,6 @@ mod tests {
         assert_eq!(values.render_quantum_frames, None);
         assert_eq!(values.mixer, DeckMixerConfig::default());
         assert_eq!(values.channels, 2);
-        assert_eq!(values.max_slots, 4);
         assert_eq!(values.eq_layout.len(), 10);
     }
 }

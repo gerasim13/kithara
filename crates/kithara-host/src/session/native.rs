@@ -336,7 +336,7 @@ mod tests {
                 render_quantum_frames: None,
                 response_budget_frames: None,
             }),
-            Ok(Reply::Ok)
+            Ok(Reply::PlayerStarted(..))
         ));
         let stream = stream_rx.recv().expect("active graph backend");
         stream.lock().arm();

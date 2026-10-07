@@ -447,10 +447,9 @@ impl TryFrom<&EngineEvent> for FfiPlayerEvent {
             EngineEvent::MasterVolumeChanged { volume } => {
                 Self::MasterVolumeChanged { volume: *volume }
             }
-            EngineEvent::SlotAllocated { .. }
-            | EngineEvent::SlotReleased { .. }
-            | EngineEvent::CrossfadeStarted { .. }
-            | EngineEvent::CrossfadeProgress { .. } => return Err(NotForwarded),
+            EngineEvent::CrossfadeStarted { .. } | EngineEvent::CrossfadeProgress { .. } => {
+                return Err(NotForwarded);
+            }
         })
     }
 }
@@ -1497,8 +1496,10 @@ mod tests {
             Err(NotForwarded)
         ));
         assert!(matches!(
-            FfiPlayerEvent::try_from(&EngineEvent::SlotAllocated {
-                slot: SlotId::new(3),
+            FfiPlayerEvent::try_from(&EngineEvent::CrossfadeProgress {
+                from: SlotId::new(1),
+                to: SlotId::new(2),
+                progress: 0.5,
             }),
             Err(NotForwarded)
         ));

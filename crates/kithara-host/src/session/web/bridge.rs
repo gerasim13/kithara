@@ -50,9 +50,9 @@ pub(crate) fn tick_and_poll_remote<S>(
     }
 
     drain_host_channel(state, rx, |reply| {
-        if let HostReply::Play(Reply::SlotAllocated(allocated)) = reply {
+        if let HostReply::Play(Reply::PlayerStarted(started)) = reply {
             BRIDGE_PLAYBACK.with(|playback| {
-                *playback.borrow_mut() = Some(Arc::clone(&allocated.control.playback));
+                *playback.borrow_mut() = Some(Arc::clone(&started.control.playback));
             });
         }
     });

@@ -9,9 +9,7 @@ use tracing::{debug, warn};
 use super::{
     protocol::{AllocatedSlot, PlayerId, Reply, SessionError},
     queue::settle_receipts,
-    state::{
-        Deck, GraphRegistry, SessionState, SlotNodes, TapSlot, Taps, add_graph_node, ensure_ctx,
-    },
+    state::{Deck, GraphRegistry, SessionState, TapSlot, Taps, add_graph_node, ensure_ctx},
 };
 use crate::{
     api::SlotId,
@@ -149,7 +147,7 @@ pub(super) mod lifecycle {
         player_id: PlayerId,
         render_quantum_frames: Option<NonZeroUsize>,
         response_budget_frames: Option<NonZeroUsize>,
-    ) -> Result<(), SessionError>
+    ) -> Result<Reply, SessionError>
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
@@ -157,13 +155,39 @@ pub(super) mod lifecycle {
         ensure_ctx(state)?;
         validate_response_geometry(state, render_quantum_frames, response_budget_frames)?;
         let idx = player_index(state, player_id)?;
-        let player = deck_at_mut(&mut state.graph, idx)?;
-        if player.started {
+        if deck_at(state, idx)?.started() {
             return Err(SessionError::AlreadyStarted(player_id));
         }
-        player.started = true;
-        debug!(player_id, "[KITHARA-ROUTE] player graph started");
-        Ok(())
+        let Some(session_output_id) = state.session_output_node_id else {
+            return Err(graph_state("session output node is not initialised"));
+        };
+        let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
+        let player = deck_at_mut(&mut state.graph, idx)?;
+        let slot_id = SlotId::new(player.next_slot_id);
+        player.next_slot_id += 1;
+        let (inputs, control) = slot_channels();
+        let player_node =
+            PlayerNode::new(inputs, player.pools.clone(), player.mixer).with_session_context();
+        let player_node_id = add_graph_node(fw_ctx, player_node)?;
+        let player_to_output = "connect player->session_output";
+        connect_stereo(fw_ctx, player_node_id, session_output_id, player_to_output)?;
+        if let Err(err) = fw_ctx.update() {
+            warn!(
+                player_id,
+                ?slot_id,
+                "graph update after player start failed: {err:?}"
+            );
+        }
+        player.slot_node = Some(player_node_id);
+        debug!(
+            player_id,
+            ?slot_id,
+            ?player_node_id,
+            "[KITHARA-ROUTE] player graph started"
+        );
+        Ok(Reply::PlayerStarted(Box::new(AllocatedSlot::new(
+            control, slot_id,
+        ))))
     }
 
     fn validate_response_geometry<T, S>(
@@ -198,19 +222,18 @@ pub(super) mod lifecycle {
         {
             let (ctx, graph) = (&mut state.ctx, &mut state.graph);
             let player = deck_at_mut(graph, idx)?;
-            if !player.started {
-                return Err(SessionError::NotRunning(player.player_id));
-            }
+            let player_id = player.player_id;
+            let Some(slot_node) = player.slot_node.take() else {
+                return Err(SessionError::NotRunning(player_id));
+            };
             if let Some(fw_ctx) = ctx {
-                remove_player_graph(fw_ctx, player);
+                if let Err(err) = fw_ctx.remove_node(slot_node) {
+                    warn!(player_id, ?err, "failed to remove the deck's slot node");
+                }
                 if let Err(err) = fw_ctx.update() {
-                    warn!(
-                        player_id = player.player_id,
-                        "graph update after player stop failed: {err:?}"
-                    );
+                    warn!(player_id, "graph update after player stop failed: {err:?}");
                 }
             }
-            player.started = false;
         }
         shutdown_if_idle(state)?;
         debug!("[KITHARA-ROUTE] player stopped");
@@ -232,7 +255,7 @@ pub(super) mod lifecycle {
         if state.retains_output {
             return Ok(());
         }
-        let idle = state.graph.decks().all(|deck| !deck.started);
+        let idle = state.graph.decks().all(|deck| !deck.started());
         if idle {
             debug!("[KITHARA-ROUTE] shutting down idle session stream");
             if state.ctx.is_none() {
@@ -288,109 +311,6 @@ pub(super) mod lifecycle {
             state.session_metronome_node_id = None;
         }
         Ok(())
-    }
-    pub(super) fn remove_player_graph<S>(fw_ctx: &mut FirewheelContext, player: &mut Deck<S>) {
-        let player_id = player.player_id;
-        for slot in player.slots.drain(..) {
-            if let Err(err) = fw_ctx.remove_node(slot.player_node_id) {
-                warn!(player_id, ?err, "failed to remove slot player node");
-            }
-        }
-    }
-}
-
-pub(super) mod slots {
-    use super::*;
-
-    pub(in crate::session) fn allocate_slot<T, S>(
-        state: &mut SessionState<T, S>,
-        player_id: PlayerId,
-    ) -> Result<Reply, SessionError>
-    where
-        S: HasPool<f32> + Send + Sync + 'static,
-    {
-        debug!(player_id, "[KITHARA-ROUTE] allocating player slot");
-        let idx = player_index(state, player_id)?;
-        if !deck_at(state, idx)?.started {
-            return Err(SessionError::NotRunning(player_id));
-        }
-        let Some(session_output_id) = state.session_output_node_id else {
-            return Err(graph_state("session output node is not initialised"));
-        };
-        let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-        let player = deck_at_mut(&mut state.graph, idx)?;
-        let slot_id = SlotId::new(player.next_slot_id);
-        player.next_slot_id += 1;
-        let (inputs, control) = slot_channels();
-        let player_node =
-            PlayerNode::new(inputs, player.pools.clone(), player.mixer).with_session_context();
-        let player_node_id = add_graph_node(fw_ctx, player_node)?;
-        let player_to_output = "connect player->session_output";
-        connect_stereo(fw_ctx, player_node_id, session_output_id, player_to_output)?;
-        if let Err(err) = fw_ctx.update() {
-            warn!(
-                player_id,
-                ?slot_id,
-                "graph update after slot allocate failed: {err:?}"
-            );
-        }
-        player.slots.push(SlotNodes {
-            player_node_id,
-            slot_id,
-        });
-        debug!(
-            player_id,
-            ?slot_id,
-            ?player_node_id,
-            slots = player.slots.len(),
-            "[KITHARA-ROUTE] player slot allocated"
-        );
-        let reply = Reply::SlotAllocated(Box::new(AllocatedSlot::new(control, slot_id)));
-        Ok(reply)
-    }
-    pub(in crate::session) fn release_slot<T, S>(
-        state: &mut SessionState<T, S>,
-        player_id: PlayerId,
-        slot: SlotId,
-    ) -> Result<(), SessionError> {
-        debug!(player_id, ?slot, "[KITHARA-ROUTE] releasing player slot");
-        let idx = player_index(state, player_id)?;
-        let slot_nodes = {
-            let player = deck_at_mut(&mut state.graph, idx)?;
-            if !player.started {
-                return Err(SessionError::NotRunning(player_id));
-            }
-            take_slot(player, slot)?
-        };
-        let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-        remove_slot_graph(fw_ctx, player_id, &slot_nodes);
-        debug!(
-            player_id,
-            ?slot_nodes,
-            "[KITHARA-ROUTE] player slot released"
-        );
-        Ok(())
-    }
-    pub(super) fn take_slot<S>(
-        player: &mut Deck<S>,
-        slot: SlotId,
-    ) -> Result<SlotNodes, SessionError> {
-        let Some(slot_idx) = player.slots.iter().position(|s| s.slot_id == slot) else {
-            return Err(SessionError::SlotNotFound(slot));
-        };
-        Ok(player.slots.remove(slot_idx))
-    }
-    pub(super) fn remove_slot_graph(
-        fw_ctx: &mut FirewheelContext,
-        player_id: PlayerId,
-        slot: &SlotNodes,
-    ) {
-        if let Err(err) = fw_ctx.remove_node(slot.player_node_id) {
-            warn!(player_id, ?err, "failed to remove slot player node");
-        }
-        if let Err(err) = fw_ctx.update() {
-            warn!(player_id, "graph update after slot release failed: {err:?}");
-        }
     }
 }
 
@@ -560,7 +480,7 @@ mod tests {
                 response_budget_frames: NonZeroUsize::new(448),
             },
         ) {
-            Reply::Ok => {}
+            Reply::PlayerStarted(..) => {}
             Reply::Err(err) => panic!("player {player_id} failed to start: {err}"),
             _ => panic!("player start returned unexpected reply"),
         }
@@ -580,6 +500,15 @@ mod tests {
             Reply::Err(err) => panic!("player {player_id} failed to stop: {err}"),
             _ => panic!("player stop returned unexpected reply"),
         }
+    }
+
+    fn slot_node(state: &TestState, player_id: PlayerId) -> NodeID {
+        state
+            .graph
+            .decks()
+            .find(|deck| deck.player_id == player_id)
+            .and_then(|deck| deck.slot_node)
+            .expect("a started deck has its slot node")
     }
 
     fn render_and_read_session_grid(state: &mut TestState) -> SessionTransportSnapshot {
@@ -653,6 +582,34 @@ mod tests {
         );
     }
 
+    /// A stopped deck takes its slot node out of the graph the other decks
+    /// keep rendering.
+    #[kithara::test]
+    fn a_stopped_deck_takes_its_slot_node_out_of_the_graph() {
+        device(|dev| *dev = AudioDevice::default());
+        let mut state = test_state(start_test_stream);
+        let leaving = register(&mut state);
+        let staying = register(&mut state);
+        start(&mut state, leaving);
+        start(&mut state, staying);
+        let (left, kept) = (slot_node(&state, leaving), slot_node(&state, staying));
+
+        stop(&mut state, leaving);
+
+        let ctx = state
+            .ctx
+            .as_ref()
+            .expect("the deck still playing keeps the output");
+        assert!(
+            !ctx.contains_node(left),
+            "a stopped deck's slot node leaves the graph"
+        );
+        assert!(
+            ctx.contains_node(kept),
+            "the deck still playing keeps its slot node"
+        );
+    }
+
     #[kithara::test]
     fn a_second_player_started_after_the_last_one_left_gets_a_processed_stream() {
         device(|dev| *dev = AudioDevice::default());
@@ -674,10 +631,6 @@ mod tests {
 
         let second = register(&mut state);
         start(&mut state, second);
-        assert!(matches!(
-            run_cmd(&mut state, Cmd::AllocateSlot { player_id: second }),
-            Reply::SlotAllocated(..)
-        ));
 
         let before = processed_frames(&state);
         assert!(

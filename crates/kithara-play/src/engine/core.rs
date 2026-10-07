@@ -17,9 +17,9 @@ use kithara_render::{
 };
 use kithara_warp::RenderSnapshot;
 use ringbuf::traits::Consumer;
-use tracing::{debug, info};
+use tracing::info;
 
-use super::{config::EngineConfig, slots::SlotTable};
+use super::{config::EngineConfig, slots::DeckSlot};
 use crate::{
     api::{EngineEvent, SlotId},
     error::PlayError,
@@ -36,7 +36,7 @@ pub struct EngineImpl<S> {
     #[field(get, vis = "pub(crate)")]
     pub(super) bus: EventBus,
     pub(super) registration: Mutex<Option<PlayerId>>,
-    slots: Mutex<SlotTable>,
+    slot: Mutex<DeckSlot>,
     start_lock: Mutex<()>,
     pub(super) session: SessionHandle<S>,
 }
@@ -49,7 +49,6 @@ impl<S> EngineImpl<S> {
             .session
             .take()
             .map_or_else(SessionHandle::pending, SessionHandle::new);
-        let max_slots = config.max_slots;
         Self {
             config,
             bus,
@@ -57,35 +56,8 @@ impl<S> EngineImpl<S> {
             registration: Mutex::default(),
             running: AtomicValue::<bool, Acquire, Release>::new(false),
             start_lock: Mutex::new(()),
-            slots: Mutex::new(SlotTable::with_capacity(max_slots)),
+            slot: Mutex::default(),
         }
-    }
-
-    pub fn active_slots(&self) -> Vec<SlotId> {
-        self.slots.lock().ids()
-    }
-
-    pub fn allocate_slot(&self) -> Result<SlotId, PlayError> {
-        if !self.running.load() {
-            return Err(PlayError::EngineNotRunning);
-        }
-
-        {
-            let slots = self.slots.lock();
-            if slots.len() >= self.config.max_slots {
-                return Err(PlayError::ArenaFull);
-            }
-        }
-
-        let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
-        let allocated = self.session.allocate_slot(player_id)?;
-        let slot_id = allocated.slot;
-
-        self.slots.lock().insert(slot_id, allocated.control);
-
-        debug!(?slot_id, player_id, "slot allocated");
-        self.emit(EngineEvent::SlotAllocated { slot: slot_id });
-        Ok(slot_id)
     }
 
     pub(crate) fn attach_session(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
@@ -94,11 +66,11 @@ impl<S> EngineImpl<S> {
     }
 
     pub(crate) fn begin_slot_seek(&self, slot: SlotId, position: Duration) {
-        let slots = self.slots.lock();
-        if let Some(handle) = slots.get(slot) {
+        let deck = self.slot.lock();
+        if let Some(handle) = deck.get(slot) {
             handle.begin_seek(position);
         }
-        drop(slots);
+        drop(deck);
     }
 
     pub(crate) fn cancel(&self) {
@@ -124,7 +96,7 @@ impl<S> EngineImpl<S> {
 
         if self.running.load() {
             self.session.stop_player(player_id)?;
-            self.slots.lock().clear();
+            self.slot.lock().clear();
             self.running.store(false);
             self.emit(EngineEvent::Stopped);
         }
@@ -143,7 +115,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub(crate) fn drain_slot_trash(&self, slot: SlotId) -> bool {
-        self.slots.lock().get_mut(slot).is_some_and(|handle| {
+        self.slot.lock().get_mut(slot).is_some_and(|handle| {
             Self::drain_slot_trash_handle(handle);
             true
         })
@@ -216,41 +188,15 @@ impl<S> EngineImpl<S> {
             .map_or_else(|_| self.config.sample_rate.get(), SessionSampleRate::output)
     }
 
-    pub const fn max_slots(&self) -> usize {
-        self.config.max_slots
-    }
-
     pub(crate) const fn pools(&self) -> &PoolRegion<S> {
         &self.config.pools
     }
 
     pub(crate) fn pop_slot_notification(&self, slot: SlotId) -> Option<PlayerNotification> {
-        self.slots
+        self.slot
             .lock()
             .get_mut(slot)
             .and_then(|handle| handle.notif_rx.try_pop())
-    }
-
-    pub fn release_slot(&self, slot: SlotId) -> Result<(), PlayError> {
-        if !self.running.load() {
-            return Err(PlayError::EngineNotRunning);
-        }
-
-        {
-            let slots = self.slots.lock();
-            if !slots.contains(slot) {
-                return Err(PlayError::SlotNotFound(slot));
-            }
-        }
-
-        let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
-        self.session.release_slot(player_id, slot)?;
-
-        let _ = self.slots.lock().remove(slot);
-
-        debug!(?slot, player_id, "slot released");
-        self.emit(EngineEvent::SlotReleased { slot });
-        Ok(())
     }
 
     /// Sends `commands` to the slot's deck as one batch, applied together in its next block.
@@ -266,17 +212,17 @@ impl<S> EngineImpl<S> {
         })
     }
 
-    /// Runs `send` on the control half of the slot's deck under the slots lock.
+    /// Runs `send` on the control half of the deck's slot under its lock.
     pub(crate) fn with_deck<R>(
         &self,
         slot: SlotId,
         send: impl FnOnce(&mut SlotControl) -> Result<R, PlayError>,
     ) -> Result<R, PlayError> {
-        let mut slots = self.slots.lock();
-        let result = slots
+        let mut deck = self.slot.lock();
+        let result = deck
             .get_mut(slot)
             .map_or(Err(PlayError::SlotNotFound(slot)), send);
-        drop(slots);
+        drop(deck);
         result
     }
 
@@ -336,18 +282,19 @@ impl<S> EngineImpl<S> {
         }
 
         let player_id = self.ensure_player_id()?;
-        self.session.start_player(
+        let started = self.session.start_player(
             player_id,
             self.config.render_quantum_frames,
             self.config.response_budget_frames,
         )?;
+        self.slot.lock().set(started.slot, started.control);
 
         self.running.store(true);
 
         info!(
             sample_rate = self.config.sample_rate.get(),
             channels = self.config.channels,
-            max_slots = self.config.max_slots,
+            slot = ?started.slot,
             player_id,
             "engine started"
         );
@@ -363,7 +310,7 @@ impl<S> EngineImpl<S> {
         let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
         self.session.stop_player(player_id)?;
 
-        self.slots.lock().clear();
+        self.slot.lock().clear();
 
         self.running.store(false);
         info!(player_id, "engine stopped");
@@ -390,6 +337,11 @@ impl<S> EngineImpl<S> {
         self.session.suspended_at()
     }
 
+    /// The deck's slot, while the engine runs.
+    pub fn slot(&self) -> Option<SlotId> {
+        self.slot.lock().id()
+    }
+
     pub(crate) fn tick(&self) -> Result<(), PlayError> {
         self.session.tick()
     }
@@ -404,7 +356,7 @@ impl<S> EngineImpl<S> {
     }
 
     delegate::delegate! {
-        to self.slots.lock() {
+        to self.slot.lock() {
             #[call(playback)]
             pub(crate) fn slot_playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>>;
             #[call(render_snapshot)]
@@ -431,12 +383,10 @@ mod config_tests {
             .pools(pools())
             .sample_rate(NonZeroU32::new(48_000).expect("48000 is not zero"))
             .response_budget_frames(NonZeroUsize::new(448).expect("448 is not zero"))
-            .max_slots(3)
             .build();
         let engine = EngineImpl::new(config, EventBus::new(32));
 
         assert_eq!(engine.config.values().sample_rate.get(), 48_000);
-        assert_eq!(engine.config.values().max_slots, 3);
         assert_eq!(engine.config.values().eq_layout.len(), 10);
         engine
             .set_eq_layout(kithara_effects::eq::generate_log_spaced_bands(4), |_| {

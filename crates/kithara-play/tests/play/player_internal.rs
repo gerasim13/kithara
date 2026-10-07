@@ -65,11 +65,11 @@ impl SessionDispatcher<TestPools> for FixtureSession {
             Cmd::RegisterPlayer { .. } => {
                 Reply::PlayerRegistered(self.next_player.fetch_add(1, Ordering::Relaxed))
             }
-            Cmd::AllocateSlot { .. } => {
+            Cmd::StartPlayer { .. } => {
                 let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
                 let (inputs, control) = slot_channels();
                 self.nodes.lock().push(inputs);
-                Reply::SlotAllocated(Box::new(AllocatedSlot::new(control, slot)))
+                Reply::PlayerStarted(Box::new(AllocatedSlot::new(control, slot)))
             }
             _ => Reply::Ok,
         };

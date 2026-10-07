@@ -154,7 +154,7 @@ where
     /// Process audio-thread notifications, emitting `ItemDidPlayToEnd`
     /// only when a track finishes via natural EOF.
     fn process_notifications(&self) {
-        for slot_id in self.core.engine.active_slots() {
+        if let Some(slot_id) = self.core.engine.slot() {
             let mut saw_slot = false;
             while let Some(notification) = self.core.engine.pop_slot_notification(slot_id) {
                 saw_slot = true;

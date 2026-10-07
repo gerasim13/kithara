@@ -172,8 +172,7 @@ impl<S> PlayerRuntime<S> {
         self.core.engine.cancel();
     }
 
-    /// Drop every track the deck holds, release the active slot, and stop the
-    /// engine.
+    /// Drop every track the deck holds and stop the engine.
     ///
     /// Also clears any held start position, since the item it targeted no
     /// longer exists once the deck is empty.
@@ -185,18 +184,12 @@ impl<S> PlayerRuntime<S> {
         self.core.current.clear();
         self.set_status(PlayerStatus::Unknown);
         *self.core.start_position.lock() = None;
-        let slot = self.slot();
         let _ = self.send_to_slot(DeckPart::Clear);
 
-        if self.core.engine.is_running() {
-            if let Some(slot) = slot
-                && let Err(error) = self.core.engine.release_slot(slot)
-            {
-                warn!(?slot, ?error, "failed to release player slot during stop");
-            }
-            if let Err(error) = self.core.engine.stop() {
-                warn!(?error, "failed to stop player engine");
-            }
+        if self.core.engine.is_running()
+            && let Err(error) = self.core.engine.stop()
+        {
+            warn!(?error, "failed to stop player engine");
         }
 
         self.enter_stopped();

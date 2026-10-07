@@ -149,7 +149,6 @@ fn player_config_custom() {
         .default_rate(0.5)
         .gapless_mode(GaplessMode::MediaOnly)
         .eq_layout(generate_log_spaced_bands(5))
-        .max_slots(2)
         .warp(WarpConfig::builder().build())
         .build();
     let player = PlayerImpl::new(config);
@@ -199,10 +198,8 @@ fn player_config_builder() {
         .session(mock::session())
         .default_rate(0.5)
         .crossfade_duration(2.5)
-        .max_slots(8)
         .eq_layout(generate_log_spaced_bands(5))
         .build();
-    assert_eq!(config.max_slots, 8);
     assert!((config.default_rate.load() - 0.5).abs() < f32::EPSILON);
     assert!((config.crossfade_duration.load() - 2.5).abs() < f32::EPSILON);
     assert_eq!(config.eq_layout.len(), 5);

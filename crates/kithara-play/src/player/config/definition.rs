@@ -109,10 +109,6 @@ pub struct PlayerConfig<S> {
     /// An injected [`EventBus`] keeps its own capacity and identity.
     #[config(builder(default = default_event_bus_capacity()))]
     pub event_bus_capacity: NonZeroUsize,
-    /// Maximum concurrent slots of the engine this player builds.
-    /// Default: 4.
-    #[config(builder(default = consts::DEFAULT_MAX_SLOTS))]
-    pub max_slots: usize,
     /// Stable identity the player's deck registers under in its session.
     #[config(
         skip = "player-owned deck identity",
@@ -179,7 +175,6 @@ mod tests {
         assert!((config.crossfade_duration.load() - 1.0).abs() < f32::EPSILON);
         assert!((config.default_rate.load() - 1.0).abs() < f32::EPSILON);
         assert_eq!(config.event_bus_capacity.get(), 1024);
-        assert_eq!(config.max_slots, 4);
     }
 
     #[kithara::test]
@@ -216,9 +211,9 @@ mod document_tests {
         assert!(error.to_string().contains("event_bus_capacity"), "{error}");
     }
 
-    /// `slot_ceiling` is not a prefix of any real field (unlike `max_slot`,
-    /// which would pass this assertion vacuously because the error message
-    /// lists the real `max_slots` field among the valid names).
+    /// `slot_ceiling` is not a prefix of any real field: a prefix would pass
+    /// this assertion vacuously, because the error message lists the valid
+    /// names.
     #[kithara::test(native, flash(false))]
     fn an_unknown_field_is_rejected_and_named() {
         let error = serde_yaml_ng::from_str::<PlayerConfigPatch>("slot_ceiling: 8\n")
@@ -298,9 +293,9 @@ mod document_tests {
     #[kithara::test]
     fn rejected_warp_geometry_preserves_player_settings() {
         let mut config = config();
-        let previous_slots = config.max_slots;
+        let previous_capacity = config.event_bus_capacity;
         let mut patch = PlayerConfigPatch {
-            max_slots: Some(previous_slots + 1),
+            event_bus_capacity: previous_capacity.checked_add(1),
             ..PlayerConfigPatch::default()
         };
         patch.warp.backends.signalsmith.block_frames = NonZeroUsize::new(16);
@@ -310,7 +305,7 @@ mod document_tests {
             config.apply(patch),
             Err(PlayerConfigPatchError::Warp(_))
         ));
-        assert_eq!(config.max_slots, previous_slots);
+        assert_eq!(config.event_bus_capacity, previous_capacity);
         assert_eq!(
             kithara_config::Config::values(&config.warp)
                 .backends

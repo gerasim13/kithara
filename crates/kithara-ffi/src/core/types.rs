@@ -1048,7 +1048,7 @@ mod tests {
         PlayError::ItemConsumed { item: TrackId::from(3_u64) },
         (|f: &FfiError| matches!(f, FfiError::InvalidArgument { .. })) as fn(&FfiError) -> bool
     )]
-    #[case::internal_fallback(PlayError::ArenaFull, (|f: &FfiError| matches!(f, FfiError::Internal { .. })) as fn(&FfiError) -> bool)]
+    #[case::internal_fallback(PlayError::CrossfadeActive, (|f: &FfiError| matches!(f, FfiError::Internal { .. })) as fn(&FfiError) -> bool)]
     fn play_error_maps_to_expected_ffi_variant(
         #[case] input: PlayError,
         #[case] matches_variant: fn(&FfiError) -> bool,

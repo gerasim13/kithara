@@ -26,8 +26,6 @@ mod wire {
         AlreadyStarted(PlayerId),
         #[error("player not running: {0}")]
         NotRunning(PlayerId),
-        #[error("slot not found: {0:?}")]
-        SlotNotFound(SlotId),
         #[error("session context not initialised")]
         NoContext,
         #[error("stream start failed: {0}")]
@@ -72,13 +70,6 @@ mod wire {
         StopPlayer {
             player_id: PlayerId,
         },
-        AllocateSlot {
-            player_id: PlayerId,
-        },
-        ReleaseSlot {
-            player_id: PlayerId,
-            slot: SlotId,
-        },
         Tick,
     }
 
@@ -86,7 +77,8 @@ mod wire {
     pub enum Reply {
         Ok,
         PlayerRegistered(PlayerId),
-        SlotAllocated(Box<AllocatedSlot>),
+        /// The deck's slot, built when it started.
+        PlayerStarted(Box<AllocatedSlot>),
         Err(SessionError),
     }
 
@@ -150,7 +142,7 @@ mod handle {
     use kithara_warp::BeatGridId;
 
     use super::wire::{AllocatedSlot, Cmd, PlayerId, Reply, SessionSampleRate};
-    use crate::{api::SlotId, error::PlayError};
+    use crate::error::PlayError;
 
     /// Handle used by resident players to reach their session owner.
     ///
@@ -235,15 +227,6 @@ mod handle {
             }))
         }
 
-        pub fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
-            match self.exec_ok(Cmd::AllocateSlot { player_id })? {
-                Reply::SlotAllocated(allocated) => Ok(*allocated),
-                _ => Err(PlayError::Internal(
-                    "unexpected reply for session allocate slot".into(),
-                )),
-            }
-        }
-
         pub(crate) fn bind(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
             let mut current = self.0.binding.lock();
             if current.is_some() {
@@ -312,11 +295,6 @@ mod handle {
             }
         }
 
-        pub fn release_slot(&self, player_id: PlayerId, slot: SlotId) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::ReleaseSlot { player_id, slot })
-                .map(|_| ())
-        }
-
         pub(crate) fn requested_sample_rate(&self) -> Result<NonZeroU32, PlayError> {
             self.0
                 .binding
@@ -326,18 +304,23 @@ mod handle {
                 .ok_or(PlayError::SessionUnbound)
         }
 
+        /// Starts the player's deck and hands back the slot the session built for it.
         pub fn start_player(
             &self,
             player_id: PlayerId,
             render_quantum_frames: Option<NonZeroUsize>,
             response_budget_frames: Option<NonZeroUsize>,
-        ) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::StartPlayer {
+        ) -> Result<AllocatedSlot, PlayError> {
+            match self.exec_ok(Cmd::StartPlayer {
                 player_id,
                 render_quantum_frames,
                 response_budget_frames,
-            })
-            .map(|_| ())
+            })? {
+                Reply::PlayerStarted(started) => Ok(*started),
+                _ => Err(PlayError::Internal(
+                    "unexpected reply for session player start".into(),
+                )),
+            }
         }
 
         pub fn stop_player(&self, player_id: PlayerId) -> Result<(), PlayError> {
@@ -410,13 +393,19 @@ mod tests {
     use kithara_audio::ConsumerWakeMode;
     use kithara_events::EventBus;
     use kithara_platform::sync::Arc;
-    use kithara_render::rt::{DeckMixerConfig, StreamShape};
+    use kithara_render::{
+        bridge::slot_channels,
+        rt::{DeckMixerConfig, StreamShape},
+    };
     use kithara_test_utils::kithara;
     use kithara_warp::BeatGridId;
 
-    use super::{Cmd, Reply, SessionBinding, SessionDispatcher, SessionHandle, SessionSampleRate};
+    use super::{
+        AllocatedSlot, Cmd, Reply, SessionBinding, SessionDispatcher, SessionHandle,
+        SessionSampleRate,
+    };
     use crate::{
-        PlayError,
+        PlayError, SlotId,
         test_pools::{TestPools, pools},
     };
 
@@ -457,6 +446,10 @@ mod tests {
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             match cmd {
                 Cmd::RegisterPlayer { .. } => Ok(Reply::PlayerRegistered(1)),
+                Cmd::StartPlayer { .. } => Ok(Reply::PlayerStarted(Box::new(AllocatedSlot::new(
+                    slot_channels().1,
+                    SlotId::new(1),
+                )))),
                 _ => Ok(Reply::Ok),
             }
         }

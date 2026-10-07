@@ -58,9 +58,7 @@ pub(crate) const TASK_BURST: NonZeroU32 = match NonZeroU32::new(32) {
 pub(crate) const LOAD_ALPHA: f32 = 0.2;
 
 pub(crate) const MS_PER_SEC: f64 = 1000.0;
-
 pub(crate) const DEFAULT_EQ_BAND_COUNT: usize = 10;
-pub(crate) const DEFAULT_MAX_SLOTS: usize = 4;
 
 #[cfg(test)]
 pub(crate) const DROPPED_AFTER_CANCEL: u8 = 2;

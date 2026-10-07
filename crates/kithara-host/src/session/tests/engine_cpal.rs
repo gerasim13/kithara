@@ -105,12 +105,11 @@ fn start_stream(ctx: &mut FirewheelContext, sample_rate: u32) -> Result<CpalStre
     CpalStream::new(ctx, config).map_err(|error| error.to_string())
 }
 
-fn run_contract(max_slots: usize, contract: impl FnOnce(&EngineImpl<TestPools>)) {
+fn run_contract(contract: impl FnOnce(&EngineImpl<TestPools>)) {
     let session: Arc<dyn SessionDispatcher<TestPools>> = Arc::new(CpalGraphSession::new());
     let mut player = PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(GraphSession::<CpalStream, TestPools>::DEFAULT_SAMPLE_RATE)
-            .max_slots(max_slots)
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(SessionBinding::new(
                 session,
@@ -124,15 +123,10 @@ fn run_contract(max_slots: usize, contract: impl FnOnce(&EngineImpl<TestPools>))
 
 #[kithara::test]
 fn engine_start_stop_roundtrip() {
-    run_contract(4, contract::start_stop_roundtrip);
+    run_contract(contract::start_stop_roundtrip);
 }
 
 #[kithara::test]
-fn engine_allocate_and_release_slot() {
-    run_contract(4, contract::allocate_and_release_slot);
-}
-
-#[kithara::test]
-fn engine_arena_full_error() {
-    run_contract(1, contract::arena_full_error);
+fn engine_holds_its_slot_while_running() {
+    run_contract(contract::holds_its_slot_while_running);
 }

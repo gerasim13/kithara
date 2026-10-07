@@ -19,8 +19,9 @@ pub const SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
     None => unreachable!(),
 };
 
-/// A session that registers players and hands out slots without a graph.
+/// A session that registers and starts players, building each deck's slot without a graph.
 pub struct SessionMock {
+    asked: Mutex<Vec<&'static str>>,
     next_player: AtomicU64,
     next_slot: AtomicU64,
     nodes: Mutex<Vec<NodeInputs>>,
@@ -34,15 +35,16 @@ impl<S> SessionDispatcher<S> for SessionMock {
     }
 
     fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
+        self.asked.lock().push(asked(&cmd));
         let reply = match cmd {
             Cmd::RegisterPlayer { .. } => {
                 Reply::PlayerRegistered(self.next_player.fetch_add(1, Ordering::Relaxed))
             }
-            Cmd::AllocateSlot { .. } => {
+            Cmd::StartPlayer { .. } => {
                 let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
                 let (inputs, control) = slot_channels();
                 self.nodes.lock().push(inputs);
-                Reply::SlotAllocated(Box::new(AllocatedSlot::new(control, slot)))
+                Reply::PlayerStarted(Box::new(AllocatedSlot::new(control, slot)))
             }
             _ => Reply::Ok,
         };
@@ -77,12 +79,23 @@ pub fn session_at<S>(sample_rate: NonZeroU32) -> SessionBinding<S> {
 }
 
 /// A binding to a fresh `SessionMock`, together with that mock standing in
-/// for the audio threads of the slots it allocates.
+/// for the audio threads of the slots it builds.
 #[cfg(test)]
 pub(crate) fn session_with_mock<S>() -> (SessionBinding<S>, Arc<SessionMock>) {
     let mock = Arc::new(SessionMock::new(None, SAMPLE_RATE));
     let dispatcher: Arc<dyn SessionDispatcher<S>> = Arc::clone(&mock) as _;
     (SessionBinding::new(dispatcher, SAMPLE_RATE), mock)
+}
+
+/// What the session was asked, by command.
+const fn asked<S>(cmd: &Cmd<S>) -> &'static str {
+    match cmd {
+        Cmd::RegisterPlayer { .. } => "register",
+        Cmd::UnregisterPlayer { .. } => "unregister",
+        Cmd::StartPlayer { .. } => "start",
+        Cmd::StopPlayer { .. } => "stop",
+        Cmd::Tick => "tick",
+    }
 }
 
 fn binding<S>(shape: Option<StreamShape>, sample_rate: NonZeroU32) -> SessionBinding<S> {
@@ -92,6 +105,7 @@ fn binding<S>(shape: Option<StreamShape>, sample_rate: NonZeroU32) -> SessionBin
 impl SessionMock {
     fn new(shape: Option<StreamShape>, sample_rate: NonZeroU32) -> Self {
         Self {
+            asked: Mutex::default(),
             shape,
             sample_rate,
             next_player: AtomicU64::new(1),
@@ -100,7 +114,13 @@ impl SessionMock {
         }
     }
 
-    /// Answer as the audio thread of every allocated slot.
+    /// Every command the session was asked, in order.
+    #[cfg(test)]
+    pub(crate) fn asked(&self) -> Vec<&'static str> {
+        self.asked.lock().clone()
+    }
+
+    /// Answer as the audio thread of every slot it built.
     #[cfg(test)]
     pub(crate) fn notify(&self, notification: &kithara_render::bridge::PlayerNotification) {
         for node in self.nodes.lock().iter_mut() {
@@ -111,7 +131,7 @@ impl SessionMock {
         }
     }
 
-    /// Everything the audio threads of the allocated slots were sent, in order.
+    /// Everything the audio threads of the slots it built were sent, in order.
     #[cfg(test)]
     pub(crate) fn take_commands(&self) -> Vec<kithara_render::bridge::DeckPart> {
         self.nodes
