@@ -25,6 +25,7 @@ derive_more = { workspace = true }
 fieldwork = { workspace = true }
 fs4 = { workspace = true }
 glob = { workspace = true }
+hex = { workspace = true }
 proc-macro2 = { workspace = true, features = ["span-locations"] }
 quote = { workspace = true }
 rayon = { workspace = true }
@@ -33,6 +34,7 @@ roxmltree = { workspace = true }
 same-file = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 syn = { workspace = true, features = ["full", "extra-traits", "visit"] }
 toml = { workspace = true }
 tracing = { workspace = true }

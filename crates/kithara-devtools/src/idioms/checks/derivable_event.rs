@@ -63,7 +63,7 @@ impl Check for DerivableEvent {
                                 format!("{}::{name}", relative.display()),
                                 format!("{name} implements Event by hand outside kithara-events"),
                             )
-                            .with_explanation(consts::EXPLANATION),
+                            .with_explanation(consts::EXPLANATION.into()),
                         );
                     }
                 }
@@ -77,7 +77,7 @@ impl Check for DerivableEvent {
                         name.clone(),
                         format!("{name} derives Event but no EventSet forwards it"),
                     )
-                    .with_explanation(consts::EXPLANATION),
+                    .with_explanation(consts::EXPLANATION.into()),
                 );
             }
         }

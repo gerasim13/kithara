@@ -68,7 +68,7 @@ impl Check for TokioDepQuarantine {
                              may couple to tokio — depend on its re-exports instead"
                         ),
                     )
-                    .with_explanation(consts::EXPLANATION),
+                    .with_explanation(consts::EXPLANATION.into()),
                 );
             }
         }

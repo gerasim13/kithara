@@ -19,6 +19,12 @@ type TraversalKey = (Vec<String>, String);
 type TraversalLines = (Option<usize>, Option<usize>);
 
 impl Check for DerivableSkinWalk {
+    /// This check reads one file to judge it, so the driver keeps its
+    /// verdict per file. See `Check::caches_by_file`.
+    fn caches_by_file(&self) -> bool {
+        true
+    }
+
     fn id(&self) -> &'static str {
         "derivable_skin_walk"
     }

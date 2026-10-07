@@ -46,6 +46,23 @@ impl CheckPolicy {
 }
 
 pub(crate) trait Check: Sync {
+    /// Whether this check's findings about a file depend on that file alone.
+    ///
+    /// A check declares this; it is never inferred, and the default is `false`
+    /// because a wrong declaration fails silently. Declaring it lets the
+    /// driver run the check over one file at a time and keep each verdict
+    /// beside the digest of the bytes it judged, so an unchanged file is not
+    /// read, parsed or analysed again. The check itself runs as it always
+    /// does, over a scan that holds the one file.
+    ///
+    /// A check that correlates files must not declare it: whatever it reads
+    /// beyond the file - another file, the crate graph, a tool - is in no key,
+    /// so a change there would leave a kept verdict standing. The tests below
+    /// run every declaring check over a directory and again over each of its
+    /// files alone, and the two must agree.
+    fn caches_by_file(&self) -> bool {
+        false
+    }
     fn fix(&self, _ctx: &Context<'_>) -> Result<FixOutcome> {
         Ok(FixOutcome::default())
     }
@@ -108,4 +125,157 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(no_passthrough_builder::NoPassthroughBuilder),
         Box::new(thin_wrapper_economy::ThinWrapperEconomy),
     ]
+}
+
+#[cfg(test)]
+mod per_file_declaration_tests {
+    use std::path::Path;
+
+    use anyhow::Result;
+    use cargo_metadata::{Metadata, MetadataCommand};
+    use rayon::prelude::*;
+
+    use super::{Check, Context, registry};
+    use crate::{
+        common::{scan::Scan, scope::Scope, violation::Violation},
+        idioms::config::IdiomsConfig,
+    };
+
+    /// The keys `check` finds over the whole scope, and the keys it finds
+    /// over each file of the scope alone, each sorted.
+    fn both_ways(check: &dyn Check, ctx: &Context<'_>) -> (Vec<String>, Vec<String>) {
+        let keys = |violations: Vec<Violation>| {
+            violations
+                .into_iter()
+                .map(|violation| violation.key)
+                .collect::<Vec<_>>()
+        };
+        let mut together = keys(check.run(ctx).expect("a whole-scope run"));
+        let mut apart = Vec::new();
+        for path in ctx.scan.rs_files(ctx.scope).expect("walk the scope").iter() {
+            let view = ctx.scan.for_file(path);
+            apart.extend(keys(
+                check
+                    .run(&Context {
+                        scan: &view,
+                        ..*ctx
+                    })
+                    .expect("a single-file run"),
+            ));
+        }
+        together.sort();
+        apart.sort();
+        (together, apart)
+    }
+
+    /// A check that reports the first file of its scope only when another
+    /// file is beside it, so its verdict depends on what else was scanned.
+    struct Neighbourly;
+
+    impl Check for Neighbourly {
+        fn caches_by_file(&self) -> bool {
+            true
+        }
+
+        fn id(&self) -> &'static str {
+            "neighbourly"
+        }
+
+        fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
+            let files = ctx.scan.rs_files(ctx.scope)?;
+            Ok(files
+                .get(1)
+                .map(|_| {
+                    Violation::warn(self.id(), files[0].display().to_string(), "has a neighbour")
+                })
+                .into_iter()
+                .collect())
+        }
+    }
+
+    /// The workspace, its idioms configuration, and a scope over the checks'
+    /// own sources, which are dense with the shapes the checks look for.
+    fn fixture() -> (Metadata, IdiomsConfig, Scope) {
+        let metadata = MetadataCommand::new().exec().expect("workspace metadata");
+        let config = IdiomsConfig::load(
+            &metadata
+                .workspace_root
+                .as_std_path()
+                .join(".config")
+                .join("idioms"),
+        )
+        .expect("idioms config");
+        let checks = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("idioms")
+            .join("checks");
+        (metadata, config, Scope::new(Vec::new(), vec![checks]))
+    }
+
+    /// The declaration says a check's verdict about a file depends on that
+    /// file alone. Here the claim is exercised rather than trusted: a check
+    /// that correlates files loses the correlation file by file and differs.
+    #[test]
+    fn a_declared_per_file_check_finds_the_same_in_each_file_alone() {
+        let (metadata, config, scope) = fixture();
+        let workspace_root = metadata.workspace_root.as_std_path();
+        let scan = Scan::new(workspace_root);
+        let ctx = Context {
+            config: &config,
+            metadata: &metadata,
+            workspace_root,
+            scan: &scan,
+            scope: &scope,
+        };
+
+        let judged: Vec<(&'static str, usize, bool)> = registry()
+            .par_iter()
+            .filter(|check| check.caches_by_file())
+            .map(|check| {
+                let effective = check.policy().scope(&scope);
+                let (together, apart) = both_ways(
+                    check.as_ref(),
+                    &Context {
+                        scope: &effective,
+                        ..ctx
+                    },
+                );
+                (check.id(), together.len(), together == apart)
+            })
+            .collect();
+
+        assert!(
+            judged.iter().map(|(_, found, _)| found).sum::<usize>() > 0,
+            "the scope produced no findings, so agreeing about it proves nothing"
+        );
+        let disagreeing: Vec<&str> = judged
+            .iter()
+            .filter(|(_, _, agreed)| !agreed)
+            .map(|(id, _, _)| *id)
+            .collect();
+        assert!(
+            disagreeing.is_empty(),
+            "these checks declare per-file verdicts but correlate files: {disagreeing:?}"
+        );
+    }
+
+    /// The comparison above must be able to fail.
+    #[test]
+    fn a_check_that_reads_its_neighbours_is_caught() {
+        let (metadata, config, scope) = fixture();
+        let workspace_root = metadata.workspace_root.as_std_path();
+        let scan = Scan::new(workspace_root);
+        let ctx = Context {
+            config: &config,
+            metadata: &metadata,
+            workspace_root,
+            scan: &scan,
+            scope: &scope,
+        };
+
+        let (together, apart) = both_ways(&Neighbourly, &ctx);
+
+        assert_eq!(together.len(), 1);
+        assert!(apart.is_empty(), "alone, no file has a neighbour");
+    }
 }

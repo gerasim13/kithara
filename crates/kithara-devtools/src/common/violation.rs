@@ -1,4 +1,10 @@
-#[derive(Clone, Copy, Debug, derive_more::Display, Eq, PartialEq, Ord, PartialOrd)]
+use std::borrow::Cow;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(
+    Clone, Copy, Debug, Deserialize, derive_more::Display, Eq, PartialEq, Ord, PartialOrd, Serialize,
+)]
 pub enum Severity {
     #[display("WARN")]
     Warn,
@@ -6,9 +12,12 @@ pub enum Severity {
     Deny,
 }
 
-#[derive(Clone, Debug, fieldwork::Fieldwork)]
+#[derive(Clone, Debug, Deserialize, fieldwork::Fieldwork, Serialize)]
 #[fieldwork(opt_in, with)]
 pub struct Violation {
+    /// The check that found this. A kept verdict is read back by the check
+    /// that reached it, which names itself again, so it is not stored.
+    #[serde(skip)]
     pub check: &'static str,
     pub severity: Severity,
     pub key: String,
@@ -17,7 +26,7 @@ pub struct Violation {
     /// Suppress block) shown in `--verbose` output and markdown reports.
     /// `None` keeps the compact one-line render.
     #[field(with, option_set_some)]
-    pub(crate) explanation: Option<&'static str>,
+    pub(crate) explanation: Option<Cow<'static, str>>,
 }
 
 impl Violation {

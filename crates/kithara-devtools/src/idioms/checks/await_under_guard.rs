@@ -56,6 +56,12 @@ deadlocks are silent.";
 pub(crate) struct AwaitUnderGuard;
 
 impl Check for AwaitUnderGuard {
+    /// This check reads one file to judge it, so the driver keeps its
+    /// verdict per file. See `Check::caches_by_file`.
+    fn caches_by_file(&self) -> bool {
+        true
+    }
+
     fn id(&self) -> &'static str {
         consts::ID
     }
@@ -133,8 +139,9 @@ impl<'ast> Visit<'ast> for AwaitVisitor<'_> {
                 method = g.method,
                 decl_line = g.decl_line,
             );
-            self.out
-                .push(Violation::warn(consts::ID, key, msg).with_explanation(consts::EXPLANATION));
+            self.out.push(
+                Violation::warn(consts::ID, key, msg).with_explanation(consts::EXPLANATION.into()),
+            );
         }
     }
 

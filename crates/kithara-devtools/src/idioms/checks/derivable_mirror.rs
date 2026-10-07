@@ -12,6 +12,12 @@ use crate::{
 pub(crate) struct DerivableMirror;
 
 impl Check for DerivableMirror {
+    /// This check reads one file to judge it, so the driver keeps its
+    /// verdict per file. See `Check::caches_by_file`.
+    fn caches_by_file(&self) -> bool {
+        true
+    }
+
     fn id(&self) -> &'static str {
         "derivable_mirror"
     }

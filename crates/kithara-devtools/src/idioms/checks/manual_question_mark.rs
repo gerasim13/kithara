@@ -39,6 +39,12 @@ recovery before returning).";
 pub(crate) struct ManualQuestionMark;
 
 impl Check for ManualQuestionMark {
+    /// This check reads one file to judge it, so the driver keeps its
+    /// verdict per file. See `Check::caches_by_file`.
+    fn caches_by_file(&self) -> bool {
+        true
+    }
+
     fn id(&self) -> &'static str {
         consts::ID
     }
@@ -86,7 +92,7 @@ impl<'ast> Visit<'ast> for MatchVisitor<'_> {
                 let key = format!("{}:{}:{}", self.rel, s.line, s.column);
                 self.out.push(
                     Violation::warn(consts::ID, key, pattern.message())
-                        .with_explanation(consts::EXPLANATION),
+                        .with_explanation(consts::EXPLANATION.into()),
                 );
             }
         }

@@ -72,7 +72,7 @@ impl Check for CfgDensity {
                         &key,
                         format!("{count} #[cfg] attributes (deny threshold {})", cfg.deny),
                     )
-                    .with_explanation(consts::EXPLANATION),
+                    .with_explanation(consts::EXPLANATION.into()),
                 );
             } else if count >= cfg.warn {
                 violations.push(
@@ -81,7 +81,7 @@ impl Check for CfgDensity {
                         &key,
                         format!("{count} #[cfg] attributes (warn threshold {})", cfg.warn),
                     )
-                    .with_explanation(consts::EXPLANATION),
+                    .with_explanation(consts::EXPLANATION.into()),
                 );
             }
         }

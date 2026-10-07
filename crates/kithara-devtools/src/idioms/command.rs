@@ -22,6 +22,7 @@ use crate::common::{
     report,
     scan::Scan,
     scope::Scope,
+    verdict_cache::VerdictCache,
     violation::{Report, Violation},
 };
 
@@ -101,7 +102,14 @@ pub(crate) fn run(args: &IdiomsArgs) -> Result<()> {
         .collect();
     let ran: Vec<&'static str> = selected.iter().map(|check| check.id()).collect();
 
-    let outcomes = run_checks(&selected, &ctx, &scope, &project, &workspace_root)?;
+    let cache = VerdictCache::open(
+        metadata.target_directory.as_std_path(),
+        "idioms",
+        &std::env::current_exe().context("locate the running linter")?,
+        &workspace_root,
+        &format!("{config:?}"),
+    )?;
+    let outcomes = run_checks(&selected, &ctx, &scope, &project, &cache)?;
 
     if args.timings {
         let rows: Vec<_> = ran
@@ -176,7 +184,7 @@ fn apply_common_exclusions(
 }
 
 /// Runs each selected check, returning its wall time and its violations in
-/// registry order.
+/// registry order, each check's ordered by key.
 ///
 /// A parsed `syn::File` holds `proc_macro2` spans and is neither `Send` nor
 /// `Sync`, so a tree can be neither shared between checks nor moved across a
@@ -191,7 +199,7 @@ fn run_checks(
     ctx: &Context<'_>,
     scope: &Scope,
     project: &ProjectConfig,
-    workspace_root: &Path,
+    cache: &VerdictCache,
 ) -> Result<Vec<(Duration, Vec<Violation>)>> {
     selected
         .par_iter()
@@ -203,17 +211,35 @@ fn run_checks(
             };
             let started = Instant::now();
             let mut check_report = Report::default();
-            check_report.extend(check.run(&check_ctx)?);
+            check_report.extend(run_one_check(*check, &check_ctx, cache)?);
             apply_common_exclusions(
                 &mut check_report,
                 check.policy(),
                 &project.lint_exclude.runtime_paths(),
                 &project.lint_exclude.modules,
-                workspace_root,
+                ctx.workspace_root,
             );
+            check_report.violations.sort_by(|a, b| a.key.cmp(&b.key));
             Ok((started.elapsed(), check_report.violations))
         })
         .collect()
+}
+
+/// Runs `check` over its scope: file by file through the verdict cache when
+/// it declares that its findings about a file depend on that file alone,
+/// and over the whole scope at once when it correlates files.
+fn run_one_check(
+    check: &dyn Check,
+    ctx: &Context<'_>,
+    cache: &VerdictCache,
+) -> Result<Vec<Violation>> {
+    if !check.caches_by_file() {
+        return check.run(ctx);
+    }
+    let files = ctx.scan.rs_files(ctx.scope)?;
+    cache.verdicts(check.id(), ctx.scan, &files, |scan| {
+        check.run(&Context { scan, ..*ctx })
+    })
 }
 
 fn run_fix(
@@ -347,6 +373,89 @@ mod tests {
             dir.path(),
         );
         assert_eq!(derivable.violations.len(), 1);
+    }
+
+    /// Reports each file of its scope by its path, in key order, as a check
+    /// that sorts its findings does.
+    struct EveryFile;
+
+    impl Check for EveryFile {
+        fn caches_by_file(&self) -> bool {
+            true
+        }
+
+        fn id(&self) -> &'static str {
+            "every_file"
+        }
+
+        fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
+            let mut found: Vec<Violation> = ctx
+                .scan
+                .rs_files(ctx.scope)?
+                .iter()
+                .map(|path| {
+                    let key = crate::common::walker::relative_to(ctx.workspace_root, path)
+                        .to_string_lossy()
+                        .into_owned();
+                    Violation::warn(self.id(), key, "seen")
+                })
+                .collect();
+            found.sort_by(|a, b| a.key.cmp(&b.key));
+            Ok(found)
+        }
+    }
+
+    /// A module file sorts before its directory's files by key and after
+    /// them by path, so a check judged file by file meets its files in
+    /// another order than the one it reports in over the whole scope.
+    #[test]
+    fn a_check_judged_file_by_file_reports_as_it_does_over_the_whole_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("crates").join("one").join("src");
+        fs::create_dir_all(src.join("a")).unwrap();
+        fs::write(src.join("a.rs"), "").unwrap();
+        fs::write(src.join("a").join("b.rs"), "").unwrap();
+        let metadata = MetadataCommand::new().exec().unwrap();
+        let config = IdiomsConfig::default();
+        let scope = Scope::default();
+        let scan = Scan::new(dir.path());
+        let ctx = Context {
+            config: &config,
+            metadata: &metadata,
+            workspace_root: dir.path(),
+            scan: &scan,
+            scope: &scope,
+        };
+        let cache = VerdictCache::open(
+            &dir.path().join("target"),
+            "idioms",
+            &std::env::current_exe().unwrap(),
+            dir.path(),
+            "",
+        )
+        .unwrap();
+        let whole: Vec<String> = EveryFile
+            .run(&ctx)
+            .unwrap()
+            .into_iter()
+            .map(|violation| violation.key)
+            .collect();
+
+        for run in ["cold", "warm"] {
+            let keys: Vec<String> = run_checks(
+                &[&EveryFile],
+                &ctx,
+                &scope,
+                &ProjectConfig::default(),
+                &cache,
+            )
+            .unwrap()
+            .into_iter()
+            .flat_map(|(_, violations)| violations)
+            .map(|violation| violation.key)
+            .collect();
+            assert_eq!(keys, whole, "{run}");
+        }
     }
 
     #[test]

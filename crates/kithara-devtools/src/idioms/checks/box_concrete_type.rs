@@ -50,6 +50,12 @@ without guilt.";
 pub(crate) struct BoxConcreteType;
 
 impl Check for BoxConcreteType {
+    /// This check reads one file to judge it, so the driver keeps its
+    /// verdict per file. See `Check::caches_by_file`.
+    fn caches_by_file(&self) -> bool {
+        true
+    }
+
     fn id(&self) -> &'static str {
         consts::ID
     }
@@ -134,7 +140,7 @@ impl BoxVisitor<'_> {
                          store inline unless the variant is genuinely large or this is \
                          `Box<dyn Trait>` after coercion",
                 )
-                .with_explanation(consts::EXPLANATION),
+                .with_explanation(consts::EXPLANATION.into()),
             );
         }
     }
