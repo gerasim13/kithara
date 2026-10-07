@@ -65,6 +65,14 @@ impl Observer for PlaybackObserver {
             Event::TaskPanicked { task } => {
                 tracing::warn!(track_id = task.get(), "playback task panicked");
             }
+            Event::ThreadClassRefused { class, error } => {
+                tracing::warn!(
+                    ?class,
+                    ?error,
+                    "the OS refused the playback worker's thread class; \
+                     a busy machine can starve the decks' rings"
+                );
+            }
             Event::Progress(report)
             | Event::Idle(report)
             | Event::Waiting(report)

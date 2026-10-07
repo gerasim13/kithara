@@ -5,7 +5,8 @@ use masonry::{
     accesskit::TreeUpdate,
     app::{RenderRoot, RenderRootOptions, RenderRootSignal},
     core::{
-        CursorIcon, ErasedAction, Handled, PointerEvent, TextEvent, Widget, WidgetId, WindowEvent,
+        CursorIcon, ErasedAction, Handled, NewWidget, PointerEvent, TextEvent, Widget, WidgetId,
+        WindowEvent,
     },
     kurbo::{Point, Rect as MasonryRect},
     ui_events::keyboard::{Key, NamedKey},
@@ -22,13 +23,17 @@ use super::{
     custom::HostAction,
     node::Node,
     picker::{self, HostedEngine},
+    popover::SurfaceKind,
     window_layer::WindowLayer,
 };
 #[cfg(feature = "capture")]
 use crate::draw::Rgba;
 use crate::{
     draw::Pt,
-    interact::{CursorShape, masonry::cursor_icon},
+    interact::{
+        CursorShape,
+        masonry::{changes_modifiers, cursor_icon},
+    },
     render::{
         DragSession, Published,
         document::{Ctx, placements},
@@ -108,14 +113,15 @@ where
         node: MasonryNode<Action>,
         options: RenderRootOptions,
     ) -> Result<Self, MasonryRootError> {
-        let (base, layers, registrations, boxes, native, window) = RootParts::from(node);
+        let (base, mut layers, registrations, boxes, native, window) = RootParts::from(node);
         let Registrations {
             watched,
             blocks,
-            popovers,
+            mut popovers,
             engines,
             ..
         } = registrations;
+        stack_modals_on_top(&mut layers, &mut popovers, window.as_ref());
         let scale = options.scale_factor;
         let signals = Rc::new(RefCell::new(VecDeque::new()));
         let sink = Rc::clone(&signals);
@@ -182,8 +188,16 @@ where
             TextEvent::Keyboard(event)
                 if event.state.is_down() && event.key == Key::Named(NamedKey::Escape)
         );
-        let handled = self.root.handle_text_event(event);
-        self.sync()?;
+        let kept = !matches!(event, TextEvent::WindowFocusChange(_))
+            && !changes_modifiers(&event)
+            && self.modal_keeps_keys();
+        let handled = if kept {
+            Handled::No
+        } else {
+            let handled = self.root.handle_text_event(event);
+            self.sync()?;
+            handled
+        };
         if handled == Handled::No
             && dismiss
             && let Some(action) = self
@@ -196,7 +210,23 @@ where
             self.push_action(Box::new(action))?;
             return Ok(Handled::Yes);
         }
-        Ok(handled)
+        Ok(if kept { Handled::Yes } else { handled })
+    }
+
+    /// Whether a modal stands while the keyboard focus is outside it, so a
+    /// key pressed there is the modal's.
+    fn modal_keeps_keys(&self) -> bool {
+        let Some(modal) = self.popovers.iter().rev().find(|popover| {
+            matches!(popover.item.state.kind(), SurfaceKind::Modal)
+                && popover.item.state.standing().is_some()
+        }) else {
+            return false;
+        };
+        !self.root.focused_widget().is_some_and(|focused| {
+            self.root
+                .get_widget(modal.item.layer)
+                .is_some_and(|layer| layer.find_widget_by_id(focused).is_some())
+        })
     }
 
     /// Dispatches a window event and reflows positioned layers after resize.
@@ -441,7 +471,12 @@ where
         let at = at?;
         let point = Point::new(at.x.into(), at.y.into());
         self.popovers.iter().rposition(|popover| {
-            popover.item.state.standing().is_some() && popover.item.state.surface().contains(point)
+            let state = &popover.item.state;
+            state.standing().is_some()
+                && match state.kind() {
+                    SurfaceKind::Popover { .. } => state.surface().contains(point),
+                    SurfaceKind::Modal => true,
+                }
         })
     }
 
@@ -551,9 +586,7 @@ where
         for engine in self.routers() {
             let owner = engine.owner();
             let held = engine.captures_pointer();
-            if !held
-                && covered.is_some_and(|index| !self.popovers[index].item.controls.contains(&owner))
-            {
+            if !self.reaches(&engine, covered) {
                 continue;
             }
             let routed = engine.route(input, at);
@@ -577,6 +610,15 @@ where
             }
         }
         Ok(false)
+    }
+
+    /// Whether the pointer reaches this engine past the surface that covers
+    /// the point, if one does: an engine holding the pointer keeps it, and
+    /// otherwise only the controls the surface answers for are reached.
+    fn reaches(&self, engine: &HostedEngine, covered: Option<usize>) -> bool {
+        engine.captures_pointer()
+            || covered
+                .is_none_or(|index| self.popovers[index].item.controls.contains(&engine.owner()))
     }
 
     fn follow_drag(
@@ -663,9 +705,11 @@ where
     /// is over the deck that is the deck, which knows nothing about the drag.
     /// The list that started it does, so its answer is the last word.
     fn show_cursor(&mut self, point: Pt) {
+        let covered = self.covering_surface(Some(point));
         let shape = self
             .routers()
             .into_iter()
+            .filter(|engine| self.reaches(engine, covered))
             .map(|engine| engine.cursor(point))
             .find(|shape| *shape != CursorShape::None);
         if let Some(shape) = shape {
@@ -904,6 +948,27 @@ where
         }
         self.sync_menus();
     }
+}
+
+/// Stacks every modal above the other surfaces and layers, under only the
+/// window's own layer, whatever its place in the document: the layer order is
+/// the paint order, and the surface order is the order input finds them in.
+fn stack_modals_on_top(
+    layers: &mut [NewWidget<dyn Widget>],
+    popovers: &mut [Within<PopoverRegistration>],
+    window: Option<&WindowTracker>,
+) {
+    popovers.sort_by_key(|popover| matches!(popover.item.state.kind(), SurfaceKind::Modal));
+    let modals: Vec<WidgetId> = popovers
+        .iter()
+        .filter(|popover| matches!(popover.item.state.kind(), SurfaceKind::Modal))
+        .map(|popover| popover.item.layer)
+        .collect();
+    let edges = window.and_then(|window| window.layer);
+    layers.sort_by_key(|layer| {
+        let id = layer.id();
+        (Some(id) == edges, modals.contains(&id))
+    });
 }
 
 fn complete_frame_signals(signals: &mut Vec<RenderRootSignal>) -> bool {

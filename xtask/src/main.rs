@@ -117,10 +117,10 @@ fn work() -> anyhow::Result<()> {
         Command::Ci(args) if ci::is_standalone(args) => return ci::run_standalone(args),
         _ => {}
     }
+    let ctx = Ctx::load()?;
     // Held for the life of the process so the host's build-cache budget
     // leaves the shared target directory alone while work runs in it.
-    let _target_lease = ci::hold_target_lease();
-    let ctx = Ctx::load()?;
+    let _target = ci::hold_target(&ctx.root, &|name| std::env::var_os(name))?;
 
     match cli.command {
         Command::Android { command } => android::run(command, &ctx),

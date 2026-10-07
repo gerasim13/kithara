@@ -1,6 +1,6 @@
 .release-build:
   extends:
-    - .macos-job
+    - .apple-device-job
     - .rules-release
   stage: release-build
   timeout: 180 minutes
@@ -28,7 +28,7 @@ release:xcframework:
 # `only_allow_merge_if_pipeline_succeeds`.
 release:framework-snapshot:
   extends:
-    - .macos-job
+    - .apple-device-job
     - .rules-package
   stage: release-build
   timeout: 90 minutes

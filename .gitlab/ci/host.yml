@@ -22,7 +22,7 @@
 # A provisioning run leaves it out: the roll-out builds the image itself, and
 # a tag moved underneath it fails the digest check its runner step makes.
 linux:image:
-  extends: .macos-job
+  extends: .apple-device-job
   stage: linux
   timeout: 90 minutes
   needs: []

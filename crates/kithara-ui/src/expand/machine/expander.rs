@@ -81,9 +81,16 @@ pub(crate) struct Expander<'m, 'v> {
     pub(super) budget: &'m mut Budget,
     pub(super) visitor: &'m mut ControlVisitor<'v>,
     text: &'m TextDoc,
-    /// The popover whose content is being expanded: what opens and what shuts it.
-    pub(super) popover: Option<(BindingRef, PopoverDismiss)>,
+    /// The surface whose content is being expanded.
+    surface: Option<Surface>,
     max_depth: usize,
+}
+
+/// A surface whose content is being expanded: a popover with what opens and
+/// what shuts it, or a modal.
+enum Surface {
+    Popover(BindingRef, PopoverDismiss),
+    Modal,
 }
 
 impl<'m, 'v> Expander<'m, 'v> {
@@ -104,7 +111,7 @@ impl<'m, 'v> Expander<'m, 'v> {
             interner,
             text,
             visitor,
-            popover: None,
+            surface: None,
             address: Vec::new(),
             includes: Vec::new(),
         }
@@ -116,8 +123,8 @@ impl<'m, 'v> Expander<'m, 'v> {
         site: ControlSite<'_>,
         origin: &SourceUri,
     ) -> Result<(), UiDocError> {
-        let shuts = match &self.popover {
-            Some((open, PopoverDismiss::OnAnyAction)) => Some(open),
+        let shuts = match &self.surface {
+            Some(Surface::Popover(open, PopoverDismiss::OnAnyAction)) => Some(open),
             _ => None,
         };
         (self.visitor)(ControlSite { shuts, ..site }, origin)
@@ -314,6 +321,21 @@ fn expand_control(
     let (read, write) = control.bindings();
     let fields = ControlFields::new(id, control.size().copied(), read, write);
     let path = begin_control(context, fields.id, machine)?;
+    if matches!(machine.surface, Some(Surface::Modal))
+        && match control {
+            ControlNode::WindowDrag { .. }
+            | ControlNode::TitleBar { .. }
+            | ControlNode::WindowControls { .. } => true,
+            ControlNode::ContextBar { scope_items, .. } => !scope_items.is_empty(),
+            _ => false,
+        }
+    {
+        return Err(UiDocError::InvalidId {
+            origin: context.origin.clone(),
+            id: path,
+            reason: "a modal hosts in-flow content only".to_owned(),
+        });
+    }
     let extra = ExtraBindings::substitute(context, control, &path)?;
     let Some(spec) = control_spec(context, control, &extra, &path, machine)? else {
         return walk(context, control, depth, machine);
@@ -416,6 +438,26 @@ fn expand_reveal(
     })
 }
 
+/// Refuses a surface of kind `inner` opening inside the surface being expanded.
+fn refuse_nested(
+    context: &Context<'_>,
+    path: &str,
+    inner: &str,
+    machine: &Expander<'_, '_>,
+) -> Result<(), UiDocError> {
+    let outer = match machine.surface {
+        None => return Ok(()),
+        Some(Surface::Popover(..)) => "popover",
+        Some(Surface::Modal) => "modal",
+    };
+    let article = if outer == inner { "another" } else { "a" };
+    Err(UiDocError::InvalidId {
+        origin: context.origin.clone(),
+        id: path.to_owned(),
+        reason: format!("a {inner} must not open inside {article} {outer}"),
+    })
+}
+
 fn expand_popover(
     context: &Context<'_>,
     node: &ControlNode,
@@ -428,13 +470,7 @@ fn expand_popover(
     let ((open, at, align, dismiss), (anchor, content)) = (declared, subtrees);
     machine.budget.charge(&context.origin)?;
     let path = child_path(&context.prefix, id);
-    if machine.popover.is_some() {
-        return Err(UiDocError::InvalidId {
-            origin: context.origin.clone(),
-            id: path,
-            reason: "a popover must not open inside another popover".to_owned(),
-        });
-    }
+    refuse_nested(context, &path, "popover", machine)?;
     let open = context.substitute(open, &path)?;
     if dismiss == PopoverDismiss::OnAnyAction && !matches!(open, BindingRef::View { .. }) {
         return Err(UiDocError::InvalidId {
@@ -451,15 +487,48 @@ fn expand_popover(
         &context.origin,
     )?;
     let anchor = walk_child(context, anchor, 0, depth, machine)?;
-    machine.popover = Some((open.clone(), dismiss));
+    machine.surface = Some(Surface::Popover(open.clone(), dismiss));
     let content = walk_child(context, content, 1, depth, machine);
-    machine.popover = None;
+    machine.surface = None;
     Ok(ExpandedNode::Popover {
         at,
         align,
         path: machine.interner.intern(&path, &context.origin)?,
         open: intern_binding(machine.interner, &open, &context.origin)?,
         anchor: Box::new(anchor),
+        content: Box::new(content?),
+    })
+}
+
+fn expand_modal(
+    context: &Context<'_>,
+    node: &ControlNode,
+    id: &NodeId,
+    declared: (&BindingRef, &BindingRef),
+    content: &ControlNode,
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    let (open, close) = declared;
+    machine.budget.charge(&context.origin)?;
+    let path = child_path(&context.prefix, id);
+    refuse_nested(context, &path, "modal", machine)?;
+    let open = context.substitute(open, &path)?;
+    let close = context.substitute(close, &path)?;
+    machine.visit(
+        ControlSite {
+            read: Some(&open),
+            write: Some(&close),
+            ..ControlSite::new(node, &path)
+        },
+        &context.origin,
+    )?;
+    machine.surface = Some(Surface::Modal);
+    let content = walk_child(context, content, 0, depth, machine);
+    machine.surface = None;
+    Ok(ExpandedNode::Modal {
+        path: machine.interner.intern(&path, &context.origin)?,
+        open: intern_binding(machine.interner, &open, &context.origin)?,
         content: Box::new(content?),
     })
 }
@@ -724,6 +793,12 @@ pub(in crate::expand) fn walk(
                 machine,
             )
         }
+        ControlNode::Modal {
+            id,
+            open,
+            close,
+            content,
+        } => expand_modal(context, node, id, (open, close), content, depth, machine),
         ControlNode::Pressable {
             id,
             press,

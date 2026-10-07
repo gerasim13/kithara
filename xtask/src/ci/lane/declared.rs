@@ -13,18 +13,17 @@ use tracing::warn;
 
 use crate::{
     ci::{
-        cache::snapshot, config::CiPins, environment::CacheTrust, lane_build::LaneBuild,
-        process::Process, run::PipelineKind,
+        cache::snapshot, config::CiPins, environment::CacheTrust, process::Process,
+        run::PipelineKind,
     },
-    config::{CiLaneConfig, CiLanePin, CiLaneStep, LaneFreshness},
+    config::{CiLaneConfig, CiLanePin, CiLaneStep},
     consts,
 };
 
 /// Run a lane the way `.config/xtask.toml` declares it: the pipeline kinds it
 /// declines, the platform it refuses to run anywhere but on, the tools it needs,
 /// the versions those tools have to report, then its commands in order. A step
-/// that checks its rebuild is repeated building only, after `claim` replays
-/// the claim the next job of this commit would make.
+/// that checks its rebuild is repeated building only.
 ///
 /// A lane whose whole content is this needs no Rust of its own; the ones that
 /// keep a function are the ones that do something a parameter cannot say.
@@ -34,20 +33,10 @@ pub(crate) fn run(
     pins: &CiPins,
     tools: &ToolsConfig,
     kind: PipelineKind,
-    claim: Option<&LaneBuild>,
 ) -> Result<()> {
     let kind = kind_name(kind);
     if let Some(reason) = lane.kinds_refused.get(&kind) {
         bail!("{reason}");
-    }
-    if let Some(step) = lane.steps.iter().find(|step| step.rebuild_check)
-        && claim.is_none()
-        && !process.is_recording()
-    {
-        bail!(
-            "{} checks its rebuild by replaying its lane slot's next claim, which only `ci lane` on the fleet hands it",
-            step.label
-        );
     }
     if !lane.os.is_empty() {
         process.require_os(&lane.os, &lane.label)?;
@@ -89,13 +78,13 @@ pub(crate) fn run(
             .iter()
             .map(|arg| resolve(arg, process, pins))
             .collect::<Result<Vec<_>>>()?;
-        let vars = step_vars(lane, step, process, pins)?;
+        let vars = step_vars(step, process, pins)?;
         process.run_command(
             process.command(&program).args(&args).envs(&vars),
             &step.label,
         )?;
         if step.rebuild_check {
-            rebuild_check(process, claim, &program, &args, &vars, &step.label)?;
+            rebuild_check(process, &program, &args, &vars, &step.label)?;
         }
     }
     if !process.is_recording() && lane.publishes_sources {
@@ -121,21 +110,17 @@ pub(crate) fn run(
     Ok(())
 }
 
-/// Asks cargo what the next job of this commit would build: replays the claim
-/// that job would make, then repeats the step building only, with cargo saying
-/// why it builds each unit. The timings report is left out: a build that
-/// compiles nothing would still replace the suite's own.
+/// Asks cargo what the next job of this commit would build: repeats the step
+/// building only, in the same build directory, with cargo saying why it builds
+/// each unit. The timings report is left out: a build that compiles nothing
+/// would still replace the suite's own.
 fn rebuild_check(
     process: &Process,
-    claim: Option<&LaneBuild>,
     program: &OsStr,
     args: &[String],
     vars: &BTreeMap<String, String>,
     label: &str,
 ) -> Result<()> {
-    if let Some(claim) = claim {
-        claim.replay()?;
-    }
     let repeat = args
         .iter()
         .map(String::as_str)
@@ -320,28 +305,16 @@ fn resolve(value: &str, process: &Process, pins: &CiPins) -> Result<String> {
     Ok(filled)
 }
 
-/// The step's own variables, and for a checksum lane the two that make cargo
-/// judge the lane's directory by checksum: the flag and the nightly that
-/// honours it.
+/// The step's own variables, resolved against the checkout and the pins.
 fn step_vars(
-    lane: &CiLaneConfig,
     step: &CiLaneStep,
     process: &Process,
     pins: &CiPins,
 ) -> Result<BTreeMap<String, String>> {
-    let mut vars = step
-        .env
+    step.env
         .iter()
         .map(|(key, value)| Ok((key.clone(), resolve(value, process, pins)?)))
-        .collect::<Result<BTreeMap<_, _>>>()?;
-    if lane.freshness == LaneFreshness::Checksum {
-        vars.insert(consts::CHECKSUM_FRESHNESS_ENV.to_owned(), "true".to_owned());
-        vars.insert(
-            consts::TOOLCHAIN_ENV.to_owned(),
-            pins.nightly_toolchain.clone(),
-        );
-    }
-    Ok(vars)
+        .collect()
 }
 
 fn require_pinned_version(
@@ -398,13 +371,12 @@ mod tests {
         process::{Recording, Step},
     };
 
-    /// A lane of the given freshness whose one step runs the suite and leaves
-    /// its hang dumps under the checkout.
-    fn checksum_lane(freshness: LaneFreshness) -> CiLaneConfig {
+    /// A lane whose one step runs the suite and leaves its hang dumps under
+    /// the checkout.
+    fn suite_lane() -> CiLaneConfig {
         CiLaneConfig {
             label: "fixture".to_owned(),
             program: "just".to_owned(),
-            freshness,
             steps: vec![CiLaneStep {
                 args: vec!["test".to_owned(), "run".to_owned()],
                 label: "suite".to_owned(),
@@ -427,40 +399,25 @@ mod tests {
             &fixture().pins,
             &ToolsConfig::default(),
             PipelineKind::Branch,
-            None,
         )
         .unwrap();
         process.recorded().unwrap().steps().to_vec()
     }
 
-    /// Checksum freshness is honoured only by nightly cargo, so the lane that
-    /// asks for it gets the flag and the pinned nightly together.
+    /// A lane's build follows one checkout, so cargo judges it by mtime on
+    /// whatever toolchain the step names: the step builds with its own
+    /// variables and nothing else.
     #[test]
-    fn a_checksum_lane_builds_with_the_pinned_nightly() {
-        let steps = recorded(&checksum_lane(LaneFreshness::Checksum));
+    fn a_step_builds_with_its_own_variables_alone() {
+        let steps = recorded(&suite_lane());
 
-        let env = &steps[0].env;
         assert_eq!(
-            env.get(consts::CHECKSUM_FRESHNESS_ENV).map(String::as_str),
-            Some("true")
+            steps[0].env,
+            BTreeMap::from([(
+                "KITHARA_HANG_DUMP_DIR".to_owned(),
+                "/checkout/target/hang".to_owned()
+            )])
         );
-        assert_eq!(
-            env.get(consts::TOOLCHAIN_ENV),
-            Some(&fixture().pins.nightly_toolchain)
-        );
-        assert_eq!(
-            env.get("KITHARA_HANG_DUMP_DIR").map(String::as_str),
-            Some("/checkout/target/hang")
-        );
-    }
-
-    #[test]
-    fn an_mtime_lane_leaves_the_toolchain_to_the_step() {
-        let steps = recorded(&checksum_lane(LaneFreshness::Mtime));
-
-        let env = &steps[0].env;
-        assert!(!env.contains_key(consts::CHECKSUM_FRESHNESS_ENV), "{env:?}");
-        assert!(!env.contains_key(consts::TOOLCHAIN_ENV), "{env:?}");
     }
 
     /// The check repeats its step with the same variables, building only, with
@@ -468,7 +425,7 @@ mod tests {
     /// timings report a build that compiles nothing would still rewrite.
     #[test]
     fn a_rebuild_check_repeats_its_step_building_only() {
-        let mut lane = checksum_lane(LaneFreshness::Checksum);
+        let mut lane = suite_lane();
         lane.steps[0].args.push("--timings".to_owned());
         lane.steps[0].rebuild_check = true;
 
@@ -490,27 +447,6 @@ mod tests {
             ]
         );
         assert_eq!(check.env, suite.env);
-    }
-
-    /// Only `ci lane` on the fleet hands the check the claim it replays; any
-    /// other run refuses before its suite spends a build.
-    #[test]
-    fn a_rebuild_check_without_a_slot_refuses_before_the_suite_runs() {
-        let mut lane = checksum_lane(LaneFreshness::Checksum);
-        lane.steps[0].rebuild_check = true;
-        let process = Process::new(Path::new("/checkout"), BTreeMap::new());
-
-        let error = run(
-            &process,
-            &lane,
-            &fixture().pins,
-            &ToolsConfig::default(),
-            PipelineKind::Branch,
-            None,
-        )
-        .expect_err("no slot to replay");
-
-        assert!(error.to_string().contains("ci lane"), "{error}");
     }
 
     #[test]

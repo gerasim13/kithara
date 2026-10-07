@@ -72,24 +72,13 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # The store the build-time audio assets are read from. A job that finds it
-  # empty regenerates every asset it needs, which is encode work no test should
-  # pay for. The path is the one the Linux executor already mounts, and a
-  # called workflow inherits nothing from its caller, so every workflow that
-  # runs a lane on that fleet says it for itself.
-  KITHARA_FIXTURE_CACHE: /cache/fixtures
   # What this run produces again rather than reads from the store; empty unless
   # the pipeline was dispatched to refill it.
   KITHARA_FIXTURE_REFRESH: ${{ inputs.fixture-refresh }}
-  # Bootstrap xtask under the build root every runner mounts. Without this,
-  # every fresh Actions checkout recompiles xtask before the lane can start;
-  # kept per runner, each runner held its own bootstrap build and Cargo home
-  # and compiled xtask again for a commit another runner had already built.
-  KITHARA_CI_CACHE_ROOT: /cache/lanes/.kithara-ci
-  # No build directory here. `ci lane` takes the first free slot of the
-  # lane's pool under `KITHARA_CI_TARGET_ROOT`, so jobs of one lane build side
-  # by side instead of queueing for one directory, and exports the slot as
-  # `KITHARA_LANE_TARGET` for the steps after it.
+  # No cache paths here: the runner's container names the fixture store,
+  # Cargo's home, the xtask build and the build directory. `ci lane` points
+  # that build directory at the lane's own under the runner's build root and
+  # exports it as `KITHARA_LANE_TARGET` for the steps after it.
 
 jobs:
   # Named after the lane, not after this file. A caller reaches this workflow

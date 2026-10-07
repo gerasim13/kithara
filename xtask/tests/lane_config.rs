@@ -364,57 +364,6 @@ fn every_declared_lane_names_a_known_role_and_known_kinds() {
     }
 }
 
-/// Every lane that runs the suite, whole or under the real-time sanitizer,
-/// builds in a directory named after it on a root runners share, so the
-/// artefacts a lane finds were built by whichever branch ran it last. Only a
-/// checksum lane has cargo judge what rustc read by content and has its claim
-/// decide every build-script run, so a lane that runs the suite and is judged
-/// by mtime could run another branch's tests.
-#[test]
-fn every_test_lane_judges_freshness_by_checksum() {
-    let root = workspace_root();
-    let config: toml::Value = toml::from_str(
-        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
-    )
-    .expect("xtask config is valid TOML");
-    let lanes = config["ext"]["ci"]["lanes"]
-        .as_table()
-        .expect("the catalog declares lanes");
-    let runs_the_suite = |args: &toml::Value| {
-        let args: Vec<&str> = args
-            .as_array()
-            .map_or(&[][..], Vec::as_slice)
-            .iter()
-            .filter_map(toml::Value::as_str)
-            .collect();
-        matches!(args.as_slice(), ["test", recipe, ..] if *recipe == "run" || recipe.starts_with("rtsan"))
-    };
-    let mut checked = 0;
-    for (name, lane) in lanes {
-        let steps = lane
-            .get("steps")
-            .and_then(toml::Value::as_array)
-            .map_or(&[][..], Vec::as_slice);
-        let suite = steps.iter().any(|step| {
-            step.get("args").is_some_and(runs_the_suite)
-                || step
-                    .get("args_by_kind")
-                    .and_then(toml::Value::as_table)
-                    .is_some_and(|kinds| kinds.values().any(runs_the_suite))
-        });
-        if !suite {
-            continue;
-        }
-        assert_eq!(
-            lane.get("freshness").and_then(toml::Value::as_str),
-            Some("checksum"),
-            "{name}"
-        );
-        checked += 1;
-    }
-    assert!(checked > 0, "the catalog runs the suite");
-}
-
 /// The kinds a lane enters the GitHub fan-out under: its own `kinds_github`
 /// where it names any, the shared `kinds` otherwise, and none at all for a lane
 /// that is not Linux-only, because that fan-out has only Linux machines.

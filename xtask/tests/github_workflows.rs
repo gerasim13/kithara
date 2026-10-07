@@ -2073,46 +2073,6 @@ fn the_ui_workflow_names_its_lane_instead_of_repeating_it() {
     }
 }
 
-/// Where a lane builds is `ci lane`'s to choose: the first free slot of the
-/// lane's pool under the runner's build root. A workflow that names the build
-/// directory sends every job of the lane to one directory, where the lane
-/// build lock queues them one at a time. What a workflow still names is what
-/// runs before the lane: the xtask bootstrap, which outlives the checkout.
-///
-/// It sits under the build root every runner mounts, not in one runner's own
-/// directory. Kept per runner, the host held one bootstrap build and one Cargo
-/// home for each of its runners, 10 GB apiece outside every budget, and a
-/// runner that had not yet seen a commit compiled xtask for it again.
-#[test]
-fn a_lane_leaves_its_build_directory_to_the_slot_it_claims() {
-    for name in ["lane.yml", "ui.yml", "android.yml"] {
-        let workflow = github_workflow(name);
-        let env = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "env")
-            .as_mapping()
-            .expect("env is a mapping");
-        assert!(
-            env.get("CARGO_TARGET_DIR").is_none(),
-            "{name} sends every job of its lane to one build directory"
-        );
-        let fixtures = mapping_field(env, "KITHARA_FIXTURE_CACHE")
-            .as_str()
-            .expect("the executor names where the fixtures are read from");
-        let bootstrap = mapping_field(env, "KITHARA_CI_CACHE_ROOT")
-            .as_str()
-            .expect("the executor names where xtask is bootstrapped");
-        let cache_root = Path::new(fixtures)
-            .parent()
-            .expect("the fixture store has a mounted-volume parent")
-            .display()
-            .to_string();
-        assert_eq!(
-            bootstrap,
-            format!("{cache_root}/lanes/.kithara-ci"),
-            "{name}: the xtask bootstrap is one per host, beside the lane slots"
-        );
-    }
-}
-
 /// A job checks out the commit it runs, never every branch.
 ///
 /// `actions/checkout` at depth zero fetches every branch and tag, and a fleet
@@ -2424,19 +2384,6 @@ fn a_caller_always_passes_every_input_the_called_workflow_requires() {
 #[test]
 fn the_role_runner_reads_its_matrix_from_the_catalog() {
     let workflow = github_workflow("run.yml");
-    let workflow_env = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "env")
-        .as_mapping()
-        .expect("the role runner has an environment");
-    assert_eq!(
-        mapping_field(workflow_env, "CARGO_TARGET_DIR").as_str(),
-        Some("/cache/target"),
-        "matrix selection reuses the fleet build cache"
-    );
-    assert_eq!(
-        mapping_field(workflow_env, "KITHARA_CI_CACHE_ROOT").as_str(),
-        Some("/cache/lanes/.kithara-ci"),
-        "matrix selection reuses the host's xtask bootstrap"
-    );
     let jobs = workflow_jobs(&workflow);
     assert_eq!(
         workflow_job_names(jobs),

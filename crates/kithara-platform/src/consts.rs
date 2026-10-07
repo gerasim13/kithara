@@ -75,3 +75,8 @@ pub(crate) const WORK_TEST_BUDGET_MS: u64 = 10;
 #[cfg(all(not(target_arch = "wasm32"), feature = "no-block"))]
 #[cfg(test)]
 pub(crate) const WORK_TEST_SPIN_CPU_MS: u64 = 50;
+
+/// The nice value of an audio-feed thread: Android's `THREAD_PRIORITY_AUDIO`,
+/// the priority its media players feed audio at.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(crate) const AUDIO_FEED_NICE: libc::c_int = -16;

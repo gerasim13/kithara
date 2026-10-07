@@ -13,7 +13,7 @@ use kithara_ui::{
     render::{
         InputOwner, Reads,
         document::{
-            Clock, Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover,
+            Clock, Ctx, Group, GroupMount, Host, Measured, Modal, Module, PlacedMount, Popover,
             SplitMount, StageMount, render,
         },
     },
@@ -134,6 +134,18 @@ impl Host for WaveHost<'_> {
             anchor.extend(content(self));
         }
         anchor
+    }
+
+    fn modal(
+        &mut self,
+        modal: Modal<'_>,
+        content: &mut dyn FnMut(&mut Self) -> Self::Output,
+    ) -> Self::Output {
+        if modal.is_open() {
+            content(self)
+        } else {
+            Vec::new()
+        }
     }
 
     fn pressable(

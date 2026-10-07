@@ -9,7 +9,7 @@ use kithara_command::{ChannelConfig, channel};
 use kithara_decode::{DecodeError, DecodeResult};
 use kithara_effects::EffectDrain;
 use kithara_events::EventBus;
-use kithara_platform::{CancelGroup, CancelToken, sync::Arc};
+use kithara_platform::{CancelGroup, CancelToken, sync::Arc, thread::ThreadClass};
 use kithara_stream::{Stream, StreamType};
 use kithara_warp::Warp;
 use kithara_worker::{
@@ -106,6 +106,7 @@ impl<S> PlayWorker<S> {
             .observer(PlaybackObserver::default())
             .slow_tick_threshold(slow_tick_threshold)
             .task_burst(task_burst)
+            .thread_class(ThreadClass::AudioFeed)
             .wait_timeout(wait_timeout)
             .maybe_cancel(dispatcher_cancel)
             .build();

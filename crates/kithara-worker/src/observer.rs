@@ -1,4 +1,6 @@
-use kithara_platform::time::Duration;
+use std::io;
+
+use kithara_platform::{thread::ThreadClass, time::Duration};
 
 use crate::{Priority, TaskId, TickResult};
 
@@ -89,8 +91,19 @@ pub enum Event {
     Waiting(PassReport),
     UpstreamPending(PassReport),
     Backpressured(PassReport),
-    SlowTick { task: TaskId, elapsed: Duration },
-    TaskPanicked { task: TaskId },
+    SlowTick {
+        task: TaskId,
+        elapsed: Duration,
+    },
+    TaskPanicked {
+        task: TaskId,
+    },
+    /// The OS refused the dispatcher's thread class, so its tasks run at the
+    /// class the thread started with.
+    ThreadClassRefused {
+        class: ThreadClass,
+        error: io::ErrorKind,
+    },
 }
 
 /// Consumer of scheduler lifecycle events.

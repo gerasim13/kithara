@@ -133,8 +133,9 @@ impl<'ast> Visit<'ast> for AwaitVisitor<'_> {
                 method = g.method,
                 decl_line = g.decl_line,
             );
-            self.out
-                .push(Violation::warn(consts::ID, key, msg).with_explanation(consts::EXPLANATION));
+            self.out.push(
+                Violation::warn(consts::ID, key, msg).with_explanation(consts::EXPLANATION.into()),
+            );
         }
     }
 
