@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
-use kithara_command::Live;
+use kithara_command::{Live, Post, mailbox};
 use kithara_config::Config;
 use kithara_platform::{
     sync::{Arc, mpsc, mpsc::TryRecvError},
@@ -17,7 +17,7 @@ use super::super::decks::{DeckMsg, Decks};
 use super::{
     super::{
         dispatch::run_host_cmd,
-        protocol::{HostCmd, answer},
+        protocol::{HostCmd, HostMailbox},
         queue::{HostProtocol, settle_receipts},
         state::{HostRoot, RootView, SessionState, ensure_ctx},
         transport,
@@ -31,8 +31,9 @@ pub(crate) mod consts {
     pub(crate) const CHANNELS: usize = 2;
 }
 
-pub(super) enum OfflineMsg<S> {
-    Host(HostCmd<S>),
+pub(super) enum OfflineMsg {
+    /// The Host posted commands: run them now, in order with the rest.
+    Posted,
     #[cfg(not(target_arch = "wasm32"))]
     Deck(DeckMsg),
     Position {
@@ -47,7 +48,9 @@ pub(super) enum OfflineMsg<S> {
 
 struct OfflineSessionTask<S> {
     max_block_frames: NonZeroU32,
-    cmd_rx: Option<mpsc::Receiver<OfflineMsg<S>>>,
+    cmd_rx: Option<mpsc::Receiver<OfflineMsg>>,
+    /// The Host's posts; it goes with the channel on shutdown.
+    mailbox: Option<HostMailbox<S>>,
     state: Option<SessionState<OfflineStream, S>>,
     /// The Host's decks; on the web they stay on the Host's Worker.
     #[cfg(not(target_arch = "wasm32"))]
@@ -102,19 +105,27 @@ where
         Ok(output)
     }
 
-    /// Runs one Host command. The session state goes only with the channel on
-    /// shutdown or with the task on cancel, so a command never finds it gone.
-    fn tick_host(&mut self, cmd: HostCmd<S>) -> TickResult {
-        if let HostCmd::Shutdown(reply) = cmd {
-            drop(self.cmd_rx.take());
-            self.stop();
-            answer(&reply, ());
-            return TickResult::Done;
-        }
-        let Some(state) = self.state.as_mut() else {
+    /// Runs the Host's posts in order. A shutdown disconnects queued callers,
+    /// leaves the posts after it unanswered and stops the session before it
+    /// answers. The session state goes only with the mailbox on shutdown or
+    /// with the task on cancel, so a command never finds it gone.
+    fn tick_host(&mut self) -> TickResult {
+        let Some(mailbox) = self.mailbox.as_mut() else {
             return TickResult::Done;
         };
-        run_host_cmd(state, cmd);
+        for Post { command, answer } in mailbox.drain() {
+            if matches!(command, HostCmd::Shutdown) {
+                drop(self.cmd_rx.take());
+                drop(self.mailbox.take());
+                self.stop();
+                answer.answer(Ok(()));
+                return TickResult::Done;
+            }
+            let Some(state) = self.state.as_mut() else {
+                return TickResult::Done;
+            };
+            answer.answer(run_host_cmd(state, command));
+        }
         TickResult::Progress
     }
 
@@ -128,9 +139,9 @@ where
         drop(std::mem::take(&mut self.decks));
     }
 
-    fn tick_message(&mut self, message: OfflineMsg<S>) -> TickResult {
+    fn tick_message(&mut self, message: OfflineMsg) -> TickResult {
         match message {
-            OfflineMsg::Host(message) => self.tick_host(message),
+            OfflineMsg::Posted => self.tick_host(),
             #[cfg(not(target_arch = "wasm32"))]
             OfflineMsg::Deck(message) => {
                 self.decks.run(message);
@@ -207,11 +218,12 @@ where
         settings,
     } = config;
     let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (postbox, mailbox) = mailbox();
     let pending = dispatcher.reserve(task_config).map_err(|error| {
         PlayError::Internal(format!("offline session task reservation: {error}"))
     })?;
     let control = pending.context().control();
-    let client = Arc::new(OfflineSessionClient::new(cmd_tx, control));
+    let client = Arc::new(OfflineSessionClient::new(postbox, cmd_tx, control));
     let task = pending
         .start_local(move |_| {
             let start_stream = move |ctx: &mut firewheel::FirewheelContext, rate: u32| {
@@ -226,6 +238,7 @@ where
             };
             OfflineSessionTask {
                 cmd_rx: Some(cmd_rx),
+                mailbox: Some(mailbox),
                 max_block_frames,
                 pools,
                 position: 0,

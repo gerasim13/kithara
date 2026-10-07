@@ -34,6 +34,14 @@ pub struct NodeInputs {
     pub(crate) trash_tx: HeapProd<DeckTrash>,
 }
 
+impl NodeInputs {
+    /// The playback state the node shares with its slot's control half.
+    #[must_use]
+    pub fn playback(&self) -> &Arc<PlaybackShared> {
+        &self.playback
+    }
+}
+
 /// What a deck's audio thread hands back to be dropped off it.
 pub enum DeckTrash {
     /// A track the deck no longer holds.

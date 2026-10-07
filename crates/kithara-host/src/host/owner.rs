@@ -18,9 +18,7 @@ use super::{
 use crate::{
     api::Tap,
     rt::SessionOutput,
-    session::{
-        HostCmd, HostDispatcher, HostRoot, Reply, RootView, SessionError, SessionSampleRate, ask,
-    },
+    session::{HostCmd, HostDispatcher, HostRoot, RootView, SessionError, SessionSampleRate, ask},
 };
 
 /// Typed command proxy for one player value exclusively resident in a Host.
@@ -127,9 +125,8 @@ impl<S> Host<S> {
         }
     }
 
-    /// Runs the command `command` builds around its reply on the session and
-    /// waits for the answer.
-    fn ask<T>(&self, command: impl FnOnce(Reply<T>) -> HostCmd<S>) -> Result<T, PlayError> {
+    /// Posts `command` to the session and waits for its answer.
+    fn ask(&self, command: HostCmd<S>) -> Result<(), PlayError> {
         ask(&*self.dispatcher, command).map_err(PlayError::from)
     }
 
@@ -139,11 +136,7 @@ impl<S> Host<S> {
     ///
     /// Returns an error when `tap` already has a consumer or graph dispatch fails.
     pub fn attach_outputs(&self, tap: Tap, outputs: OutputGroup) -> Result<(), PlayError> {
-        self.ask(|reply| HostCmd::AttachOutputs {
-            tap,
-            outputs,
-            reply,
-        })?
+        self.ask(HostCmd::AttachOutputs { tap, outputs })
     }
 
     /// Removes the output group attached to `tap`, if any.
@@ -152,7 +145,7 @@ impl<S> Host<S> {
     ///
     /// Returns an error when graph dispatch fails.
     pub fn detach_outputs(&self, tap: Tap) -> Result<(), PlayError> {
-        self.ask(|reply| HostCmd::DetachOutputs { tap, reply })
+        self.ask(HostCmd::DetachOutputs { tap })
     }
 
     /// Restarts the output on the platform's new route, keeping Host-owned
@@ -164,10 +157,9 @@ impl<S> Host<S> {
     where
         R: Into<String>,
     {
-        self.ask(|reply| HostCmd::InvalidateAudioRoute {
+        self.ask(HostCmd::InvalidateAudioRoute {
             reason: reason.into(),
-            reply,
-        })?
+        })
     }
 
     pub(super) fn owned<P>(&self, id: BeatGridId, control: P::Control) -> HostOwned<P>
@@ -283,7 +275,7 @@ impl<S> Configure<HostSettingsChange> for Host<S> {
     type Output = ();
 
     fn configure(&self, change: HostSettingsChange, at: Self::At) -> Result<(), PlayError> {
-        self.ask(|reply| HostCmd::Configure { change, at, reply })?
+        self.ask(HostCmd::Configure { change, at })
     }
 
     fn settings(&self) -> HostSettings {

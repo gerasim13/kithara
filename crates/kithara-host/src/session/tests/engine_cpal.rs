@@ -8,7 +8,7 @@ use kithara_test_utils::{
 };
 use kithara_warp::BeatGridId;
 
-use super::graph::GraphSession;
+use super::graph::{GraphSession, attach};
 use crate::session::protocol::HostCmd;
 
 fn start_stream(ctx: &mut FirewheelContext, sample_rate: u32) -> Result<CpalStream, String> {
@@ -35,24 +35,13 @@ fn a_deck_runs_the_cpal_stream_from_attach_to_detach() {
         DeckMixerConfig::default(),
     );
 
-    assert!(
-        graph
-            .ask(|reply| HostCmd::Attach {
-                registration,
-                reply,
-            })
-            .is_ok()
-    );
+    assert!(graph.ask(attach(registration)).is_ok());
     assert!(
         graph.ctx_mut().is_some(),
         "an attached deck runs the stream"
     );
 
-    assert!(
-        graph
-            .ask(|reply| HostCmd::Detach { grid_id, reply })
-            .is_ok()
-    );
+    assert!(graph.ask(HostCmd::Detach { grid_id }).is_ok());
     assert!(
         graph.ctx_mut().is_none(),
         "the last deck the session hands back takes the stream with it"

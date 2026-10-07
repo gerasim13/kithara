@@ -43,7 +43,6 @@ pub(super) struct Deck<S> {
     pub(super) mixer: DeckMixerConfig,
     /// The deck's slot node while the deck runs.
     pub(super) slot_node: Option<NodeID>,
-    pub(super) next_slot_id: u64,
 }
 
 impl<S> Deck<S> {
@@ -60,7 +59,6 @@ impl<S> Deck<S> {
             pools,
             player_id,
             grid_id,
-            next_slot_id: 1,
             slot_node: None,
         }
     }

@@ -2,8 +2,8 @@ use std::cell::Cell;
 
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::HasPool;
-use kithara_command::Live;
-use kithara_platform::sync::{Arc, Mutex, mpsc};
+use kithara_command::{Live, Post, Ticket};
+use kithara_platform::sync::{Arc, Mutex};
 
 use super::bridge::{init_bridge_state, reset_bridge_state, start_stream_web_audio};
 use crate::{
@@ -13,7 +13,9 @@ use crate::{
     session::{
         HostProtocol,
         dispatch::run_host_cmd,
-        protocol::{HostCmd, HostDispatchError, HostDispatcher, answer},
+        protocol::{
+            HostCmd, HostDispatchError, HostDispatcher, HostMailbox, HostPostbox, not_taken,
+        },
         state::{HostRoot, RootView, SessionState},
     },
 };
@@ -22,11 +24,17 @@ pub(crate) type WebSessionState<S> =
     Arc<Mutex<Option<SessionState<firewheel_web_audio::WebAudioBackend, S>>>>;
 
 enum SessionHost<S> {
-    Local { state: WebSessionState<S> },
-    Remote { tx: mpsc::Sender<HostCmd<S>> },
+    /// The session lives on this thread and drains each post as it lands.
+    Local {
+        state: WebSessionState<S>,
+        mailbox: Mutex<HostMailbox<S>>,
+    },
+    /// The session lives on the main thread, which drains on its frame tick.
+    Remote,
 }
 
 pub(crate) struct SessionClient<S> {
+    postbox: HostPostbox<S>,
     host: SessionHost<S>,
 }
 
@@ -39,32 +47,36 @@ where
     }
 
     /// A local session runs the command inline, so its answer is there by the
-    /// time this returns; a remote one sends it to the session's thread.
-    fn dispatch(&self, cmd: HostCmd<S>) -> Result<(), HostDispatchError> {
-        match &self.host {
-            SessionHost::Local { state } => {
-                if let HostCmd::Shutdown(reply) = cmd {
-                    drop(state.lock().take());
-                    WASM_SESSION_ACTIVE.with(|active| active.set(false));
-                    reset_bridge_state();
-                    answer(&reply, ());
-                    return Ok(());
-                }
-                let mut state = state.lock();
-                let state = state.as_mut().ok_or_else(|| {
-                    HostDispatchError::NotTaken(PlayError::Internal(
-                        "local session state missing".into(),
-                    ))
-                })?;
-                run_host_cmd(state, cmd);
-                Ok(())
-            }
-            SessionHost::Remote { tx } => tx.send(cmd).map_err(|_| {
-                HostDispatchError::NotTaken(PlayError::SessionGone {
-                    reason: "session host stopped accepting commands",
-                })
-            }),
+    /// time this returns; a remote one answers on the main thread's next tick.
+    fn dispatch(&self, cmd: HostCmd<S>) -> Result<Ticket<PlayError>, HostDispatchError> {
+        let ticket = self.postbox.post(cmd).map_err(not_taken)?;
+        if let SessionHost::Local { state, mailbox } = &self.host {
+            drain_local(state, &mut mailbox.lock());
         }
+        Ok(ticket)
+    }
+}
+
+/// Runs and answers every post the local session holds. Shutdown drops the
+/// session; a post after it is refused.
+fn drain_local<S>(state: &WebSessionState<S>, mailbox: &mut HostMailbox<S>)
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    for Post { command, answer } in mailbox.drain() {
+        if matches!(command, HostCmd::Shutdown) {
+            drop(state.lock().take());
+            WASM_SESSION_ACTIVE.with(|active| active.set(false));
+            reset_bridge_state();
+            answer.answer(Ok(()));
+            continue;
+        }
+        let mut state = state.lock();
+        let outcome = state.as_mut().map_or_else(
+            || Err(PlayError::Internal("local session state missing".into())),
+            |state| run_host_cmd(state, command),
+        );
+        answer.answer(outcome);
     }
 }
 
@@ -100,22 +112,22 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     session.retains_output = true;
     let state = Arc::new(Mutex::new(Some(session)));
     init_bridge_state();
+    let (postbox, mailbox) = kithara_command::mailbox();
     let client = Arc::new(SessionClient {
+        postbox,
         host: SessionHost::Local {
             state: Arc::clone(&state),
+            mailbox: Mutex::new(mailbox),
         },
     });
     Ok((client, state))
 }
 
 pub(crate) fn remote<S: HasPool<f32> + Send + Sync + 'static>(
-    tx: mpsc::Sender<HostCmd<S>>,
+    postbox: HostPostbox<S>,
 ) -> Arc<dyn HostDispatcher<S>> {
     Arc::new(SessionClient {
-        host: SessionHost::Remote { tx },
+        postbox,
+        host: SessionHost::Remote,
     })
-}
-
-pub(crate) fn worker_channel<S>() -> (mpsc::Sender<HostCmd<S>>, mpsc::Receiver<HostCmd<S>>) {
-    mpsc::channel()
 }

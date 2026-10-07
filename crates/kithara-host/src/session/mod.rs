@@ -18,7 +18,7 @@ pub(crate) mod offline;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod web;
 
-pub(crate) use protocol::{HostCmd, HostDispatcher, Reply, SessionError, SessionSampleRate, ask};
+pub(crate) use protocol::{HostCmd, HostDispatcher, SessionError, SessionSampleRate, ask};
 pub(crate) use queue::HostProtocol;
 pub(crate) use state::{HostRoot, RootView};
 pub use transport::TransportEvent;
@@ -26,5 +26,5 @@ pub(crate) use transport::{Span, applied_spans};
 #[cfg(target_arch = "wasm32")]
 pub(crate) use web::{
     bridge_duration_secs, bridge_is_playing, bridge_position_secs, bridge_process_calls,
-    bridge_underruns, remote, tick_and_poll_remote, warm_up_audio, worker_channel,
+    bridge_underruns, remote, tick_and_poll_remote, warm_up_audio,
 };

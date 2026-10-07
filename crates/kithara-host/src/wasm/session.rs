@@ -1,13 +1,17 @@
 use kithara_bufpool::HasPool;
 use kithara_platform::{
-    sync::{Arc, Mutex, mpsc},
+    sync::{Arc, Mutex},
     thread::{assert_main_thread, assert_not_main_thread},
 };
 use kithara_warp::BeatGridId;
 
 use crate::{
     Host, PlayError,
-    session::{self as host_session, RootView, protocol::HostCmd, web::WebSessionState},
+    session::{
+        self as host_session, RootView,
+        protocol::{HostCmd, HostMailbox, HostPostbox},
+        web::WebSessionState,
+    },
 };
 
 fn assert_message_send<S: Send + Sync>() {
@@ -20,7 +24,7 @@ fn assert_message_send<S: Send + Sync>() {
 pub struct HostSender<S> {
     id: BeatGridId,
     root_view: RootView,
-    tx: mpsc::Sender<HostCmd<S>>,
+    postbox: HostPostbox<S>,
 }
 
 /// Main-thread receiver for one canonical Host command route.
@@ -30,18 +34,18 @@ pub struct HostReceiver<S> {
 }
 
 pub(crate) struct HostRoute<S> {
-    receiver: Mutex<Option<mpsc::Receiver<HostCmd<S>>>>,
+    mailbox: Mutex<Option<HostMailbox<S>>>,
 }
 
 impl<S> HostRoute<S> {
-    fn new(receiver: mpsc::Receiver<HostCmd<S>>) -> Self {
+    fn new(mailbox: HostMailbox<S>) -> Self {
         Self {
-            receiver: Mutex::new(Some(receiver)),
+            mailbox: Mutex::new(Some(mailbox)),
         }
     }
 
     pub(crate) fn close(&self) {
-        self.receiver.lock().take();
+        self.mailbox.lock().take();
     }
 }
 
@@ -56,15 +60,19 @@ pub fn worker_host_channel<S: HasPool<f32> + Send + Sync + 'static>(
     assert_main_thread("worker_host_channel");
     assert_message_send::<S>();
     let (id, root_view) = host.remote_identity();
-    let (tx, rx) = host_session::worker_channel();
+    let (postbox, mailbox) = kithara_command::mailbox();
     let state = host
         .web_state()
         .cloned()
         .ok_or_else(|| PlayError::Internal("worker route requires a local host".into()))?;
-    let route = Arc::new(HostRoute::new(rx));
+    let route = Arc::new(HostRoute::new(mailbox));
     host.register_remote_route(Arc::clone(&route));
     Ok((
-        HostSender { id, root_view, tx },
+        HostSender {
+            id,
+            root_view,
+            postbox,
+        },
         HostReceiver { route, state },
     ))
 }
@@ -77,7 +85,7 @@ pub fn worker_host_channel<S: HasPool<f32> + Send + Sync + 'static>(
 #[must_use]
 pub fn remote_host<S: HasPool<f32> + Send + Sync + 'static>(sender: HostSender<S>) -> Host<S> {
     assert_not_main_thread("remote_host");
-    let dispatcher = host_session::remote(sender.tx);
+    let dispatcher = host_session::remote(sender.postbox);
     Host::remote(sender.id, sender.root_view, dispatcher)
 }
 
@@ -109,8 +117,8 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     assert_main_thread("tick_and_poll");
-    let route = receiver.route.receiver.lock();
-    if let Some(rx) = route.as_ref() {
-        host_session::tick_and_poll_remote(&receiver.state, rx);
+    let mut route = receiver.route.mailbox.lock();
+    if let Some(mailbox) = route.as_mut() {
+        host_session::tick_and_poll_remote(&receiver.state, mailbox);
     }
 }

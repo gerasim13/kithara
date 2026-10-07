@@ -23,9 +23,12 @@ use kithara_test_utils::{
 };
 use kithara_warp::BeatGridId;
 
-use super::ring::{
-    CountingNode, CountingProbe, DeterministicToneNode, ManualRingConfig, ManualRingSession,
-    RingRenderError, RingSessionError, fixtures::install_stereo_source,
+use super::{
+    graph::attach,
+    ring::{
+        CountingNode, CountingProbe, DeterministicToneNode, ManualRingConfig, ManualRingSession,
+        RingRenderError, RingSessionError, fixtures::install_stereo_source,
+    },
 };
 use crate::{consts, session::protocol::HostCmd};
 
@@ -60,10 +63,7 @@ fn start_deck(session: &ManualRingSession) -> BeatGridId {
     );
     registration.response_budget_frames = NonZeroUsize::new(448);
     if let Err(error) = session
-        .ask(|reply| HostCmd::Attach {
-            registration,
-            reply,
-        })
+        .ask(attach(registration))
         .expect("attach deck command")
     {
         panic!("the session failed to start the deck: {error}");
@@ -73,7 +73,7 @@ fn start_deck(session: &ManualRingSession) -> BeatGridId {
 
 fn remove_deck(session: &ManualRingSession, grid_id: BeatGridId) {
     if let Err(error) = session
-        .ask(|reply| HostCmd::Detach { grid_id, reply })
+        .ask(HostCmd::Detach { grid_id })
         .expect("detach deck command")
     {
         panic!("the session failed to remove the deck: {error}");
@@ -92,16 +92,11 @@ fn seated_player(session: &Arc<ManualRingSession>) -> PlayerImpl<TestPools> {
     let registration = player
         .attach_session(session.binding())
         .expect("the player binds the session");
-    match session
-        .ask(|reply| HostCmd::Attach {
-            registration,
-            reply,
-        })
-        .expect("attach player command")
-    {
-        Ok(slot) => player.seat(slot),
-        Err(error) => panic!("the session refused the player: {error}"),
+    let (command, slot) = HostCmd::attach(registration);
+    if let Err(error) = session.ask(command).expect("attach player command") {
+        panic!("the session refused the player: {error}");
     }
+    player.seat(slot);
     player
 }
 

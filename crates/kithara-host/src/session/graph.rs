@@ -7,13 +7,12 @@ use kithara_warp::MapAxis;
 use tracing::{debug, warn};
 
 use super::{
-    protocol::{AllocatedSlot, PlayerId, SessionError},
+    protocol::{PlayerId, SessionError},
     queue::settle_receipts,
     state::{Deck, GraphRegistry, SessionState, TapSlot, Taps, add_graph_node, ensure_ctx},
 };
 use crate::{
-    api::SlotId,
-    bridge::slot_channels,
+    bridge::NodeInputs,
     rt::{PlayerNode, TapNode},
 };
 pub(super) fn player_index<T, S>(
@@ -145,9 +144,10 @@ pub(super) mod lifecycle {
     pub(in crate::session) fn start_player<T, S>(
         state: &mut SessionState<T, S>,
         player_id: PlayerId,
+        inputs: NodeInputs,
         render_quantum_frames: Option<NonZeroUsize>,
         response_budget_frames: Option<NonZeroUsize>,
-    ) -> Result<AllocatedSlot, SessionError>
+    ) -> Result<(), SessionError>
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
@@ -163,29 +163,21 @@ pub(super) mod lifecycle {
         };
         let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
         let player = deck_at_mut(&mut state.graph, idx)?;
-        let slot_id = SlotId::new(player.next_slot_id);
-        player.next_slot_id += 1;
-        let (inputs, control) = slot_channels();
         let player_node =
             PlayerNode::new(inputs, player.pools.clone(), player.mixer).with_session_context();
         let player_node_id = add_graph_node(fw_ctx, player_node)?;
         let player_to_output = "connect player->session_output";
         connect_stereo(fw_ctx, player_node_id, session_output_id, player_to_output)?;
         if let Err(err) = fw_ctx.update() {
-            warn!(
-                player_id,
-                ?slot_id,
-                "graph update after player start failed: {err:?}"
-            );
+            warn!(player_id, "graph update after player start failed: {err:?}");
         }
         player.slot_node = Some(player_node_id);
         debug!(
             player_id,
-            ?slot_id,
             ?player_node_id,
             "[KITHARA-ROUTE] player graph started"
         );
-        Ok(AllocatedSlot::new(control, slot_id))
+        Ok(())
     }
 
     fn validate_response_geometry<T, S>(
@@ -345,7 +337,7 @@ mod tests {
         session::{
             dispatch::{invalidate_audio_route, tick_session},
             protocol::{DeckRegistration, HostCmd},
-            tests::graph::{ask, committed_transport, state as test_state},
+            tests::graph::{ask, attach, committed_transport, state as test_state},
         },
     };
 
@@ -465,10 +457,7 @@ mod tests {
             kithara_play::DeckMixerConfig::default(),
         );
         registration.response_budget_frames = NonZeroUsize::new(448);
-        match ask(state, |reply| HostCmd::Attach {
-            registration,
-            reply,
-        }) {
+        match ask(state, attach(registration)) {
             Ok(_) => grid_id,
             Err(err) => panic!("the deck failed to start: {err}"),
         }
@@ -476,7 +465,7 @@ mod tests {
 
     /// Stops the deck `grid_id` and removes it from the session.
     fn remove(state: &mut TestState, grid_id: BeatGridId) {
-        match ask(state, |reply| HostCmd::Detach { grid_id, reply }) {
+        match ask(state, HostCmd::Detach { grid_id }) {
             Ok(()) => {}
             Err(err) => panic!("the deck failed to leave: {err}"),
         }

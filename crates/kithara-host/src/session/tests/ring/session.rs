@@ -11,7 +11,9 @@ use kithara_platform::{
     sync::{Mutex, mpsc},
     thread::{JoinHandle, spawn_named},
 };
-use kithara_play::{DeckRegistration, SessionBinding, SessionError, SessionTransportSnapshot};
+use kithara_play::{
+    DeckRegistration, PlayError, SessionBinding, SessionError, SessionTransportSnapshot,
+};
 use kithara_test_utils::{
     bufpool::{TestPools, pools},
     kithara,
@@ -19,13 +21,11 @@ use kithara_test_utils::{
 use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
 
 use super::{
-    super::graph::GraphSession, MasterRing, RingBackend, RingBackendConfig, RingBackendProbe,
-    RingLayout, RingReader, RingRenderError,
+    super::graph::{GraphSession, attach},
+    MasterRing, RingBackend, RingBackendConfig, RingBackendProbe, RingLayout, RingReader,
+    RingRenderError,
 };
-use crate::session::{
-    protocol::{HostCmd, Reply},
-    state::RootView,
-};
+use crate::session::{protocol::HostCmd, state::RootView};
 
 type RingSetup =
     Box<dyn FnOnce(&mut FirewheelContext) -> Result<(), RingSessionError> + Send + 'static>;
@@ -95,7 +95,10 @@ enum RingMsg {
     Tick {
         reply_tx: mpsc::Sender<Result<(), SessionError>>,
     },
-    Host(HostCmd<TestPools>),
+    Host {
+        cmd: HostCmd<TestPools>,
+        reply_tx: mpsc::Sender<Result<(), PlayError>>,
+    },
     Credit {
         blocks: usize,
         reply_tx: mpsc::Sender<CreditReply>,
@@ -202,22 +205,21 @@ impl ManualRingSession {
         reply_rx.recv().map_or_else(|_| self.worker_failure(), Ok)
     }
 
-    /// Runs the command `command` builds around its reply and waits for the
-    /// answer; call from a blocking control thread.
-    pub(crate) fn ask<T>(
+    /// Runs `cmd` and waits for whether it applied; call from a blocking
+    /// control thread.
+    pub(crate) fn ask(
         &self,
-        command: impl FnOnce(Reply<T>) -> HostCmd<TestPools>,
-    ) -> Result<T, RingSessionError> {
+        cmd: HostCmd<TestPools>,
+    ) -> Result<Result<(), PlayError>, RingSessionError> {
         self.ensure_available()?;
-        let (reply, answer) = mpsc::channel();
+        let (reply_tx, reply_rx) = mpsc::channel();
         let Some(cmd_tx) = self.cmd_tx.lock().clone() else {
             return self.worker_failure();
         };
-        let sent = cmd_tx.send(RingMsg::Host(command(reply)));
-        if sent.is_err() {
+        if cmd_tx.send(RingMsg::Host { cmd, reply_tx }).is_err() {
             return self.worker_failure();
         }
-        answer.recv().map_or_else(|_| self.worker_failure(), Ok)
+        reply_rx.recv().map_or_else(|_| self.worker_failure(), Ok)
     }
 
     /// What the transport last committed; `None` while a route restart holds
@@ -408,7 +410,9 @@ fn ring_session_thread(
             RingMsg::Tick { reply_tx } => {
                 let _ = reply_tx.send(state.tick());
             }
-            RingMsg::Host(cmd) => state.run(cmd),
+            RingMsg::Host { cmd, reply_tx } => {
+                let _ = reply_tx.send(state.ask(cmd));
+            }
             RingMsg::Credit { blocks, reply_tx } => {
                 let _ = reply_tx.send(credit_blocks(&mut state, blocks));
             }
@@ -432,10 +436,7 @@ fn bootstrap(
     );
     registration.response_budget_frames = NonZeroUsize::new(448);
     state
-        .ask(|reply| HostCmd::Attach {
-            registration,
-            reply,
-        })
+        .ask(attach(registration))
         .map_err(|error| RingSessionError::Setup(error.to_string()))?;
     let ctx = state.ctx_mut().ok_or(RingSessionError::NotStarted)?;
     setup(ctx)

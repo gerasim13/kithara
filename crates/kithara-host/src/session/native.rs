@@ -6,7 +6,7 @@ use firewheel::{
 };
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::HasPool;
-use kithara_command::Live;
+use kithara_command::{Answer, Live, Post, Ticket, mailbox};
 use kithara_platform::{
     sync::{Arc, Mutex, mpsc},
     thread::spawn_named,
@@ -17,21 +17,23 @@ use tracing::{debug, warn};
 use super::{
     decks::{DeckInbox, DeckMsg, Decks},
     dispatch::{run_host_cmd, tick_session},
-    protocol::{HostCmd, HostDispatchError, HostDispatcher, Reply, answer},
+    protocol::{HostCmd, HostDispatchError, HostDispatcher, HostMailbox, HostPostbox, not_taken},
     queue::HostProtocol,
     state::{HostRoot, RootView, SessionState},
 };
 use crate::{HostSettings, consts, error::PlayError, rt::SessionOutput};
 
-/// What the native session thread takes: the Host's commands and the
+/// What the native session thread takes: word of the Host's posts and the
 /// messages for the decks it holds.
-enum EngineMsg<S> {
-    Host(HostCmd<S>),
+enum EngineMsg {
+    /// The Host posted commands: run them now, between ticks.
+    Posted,
     Deck(DeckMsg),
 }
 
 pub(crate) struct SessionClient<S> {
-    cmd_tx: Mutex<mpsc::Sender<EngineMsg<S>>>,
+    postbox: HostPostbox<S>,
+    cmd_tx: Mutex<mpsc::Sender<EngineMsg>>,
 }
 
 impl<S: Send + Sync + 'static> HostDispatcher<S> for SessionClient<S> {
@@ -39,12 +41,16 @@ impl<S: Send + Sync + 'static> HostDispatcher<S> for SessionClient<S> {
         ConsumerWakeMode::RealtimeDeferred
     }
 
-    fn dispatch(&self, cmd: HostCmd<S>) -> Result<(), HostDispatchError> {
-        self.cmd_tx.lock().send(EngineMsg::Host(cmd)).map_err(|_| {
+    /// Posts `cmd`, then tells the session thread, so the post keeps its
+    /// order with the deck messages sent around it.
+    fn dispatch(&self, cmd: HostCmd<S>) -> Result<Ticket<PlayError>, HostDispatchError> {
+        let ticket = self.postbox.post(cmd).map_err(not_taken)?;
+        self.cmd_tx.lock().send(EngineMsg::Posted).map_err(|_| {
             HostDispatchError::NotTaken(PlayError::SessionGone {
                 reason: "session thread stopped accepting commands",
             })
-        })
+        })?;
+        Ok(ticket)
     }
 }
 
@@ -67,17 +73,19 @@ fn stop<T, S>(state: SessionState<T, S>, mut decks: Decks) {
     drop(decks);
 }
 
-/// Disconnects queued callers and stops the session with its decks before
-/// it replies.
+/// Disconnects queued callers, leaving the posts after the shutdown
+/// unanswered, and stops the session with its decks before it answers.
 fn complete_shutdown<T, S>(
-    cmd_rx: mpsc::Receiver<EngineMsg<S>>,
+    cmd_rx: mpsc::Receiver<EngineMsg>,
+    mailbox: HostMailbox<S>,
     state: SessionState<T, S>,
     decks: Decks,
-    reply: &Reply<()>,
+    answer: Answer<PlayError>,
 ) {
     drop(cmd_rx);
+    drop(mailbox);
     stop(state, decks);
-    answer(reply, ());
+    answer.answer(Ok(()));
 }
 
 /// Waits for the next message: until `deadline` while `active`, so the caller
@@ -126,25 +134,12 @@ fn service_due_tick<T, S>(
 }
 
 fn engine_thread<T, S>(
-    cmd_rx: mpsc::Receiver<EngineMsg<S>>,
-    root: HostRoot,
-    root_view: RootView,
-    requested_max_block_frames: Option<NonZeroU32>,
-    output: SessionOutput,
-    settings: Live<HostSettings, HostProtocol>,
-    start_stream_fn: impl FnMut(&mut FirewheelContext, u32) -> Result<T, String> + Send + 'static,
+    cmd_rx: mpsc::Receiver<EngineMsg>,
+    mut mailbox: HostMailbox<S>,
+    mut state: SessionState<T, S>,
 ) where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    let mut state = SessionState::<T, S>::new(
-        root,
-        root_view,
-        requested_max_block_frames,
-        None,
-        output,
-        settings,
-        start_stream_fn,
-    );
     let mut decks = Decks::default();
     debug!("[KITHARA-ROUTE] native session worker started");
     let mut deadline = Instant::now() + consts::SESSION_PUMP_INTERVAL;
@@ -153,12 +148,16 @@ fn engine_thread<T, S>(
             break;
         };
         match message {
-            Some(EngineMsg::Host(HostCmd::Shutdown(reply))) => {
-                complete_shutdown(cmd_rx, state, decks, &reply);
-                debug!("[KITHARA-ROUTE] native session worker stopped");
-                return;
+            Some(EngineMsg::Posted) => {
+                for Post { command, answer } in mailbox.drain() {
+                    if matches!(command, HostCmd::Shutdown) {
+                        complete_shutdown(cmd_rx, mailbox, state, decks, answer);
+                        debug!("[KITHARA-ROUTE] native session worker stopped");
+                        return;
+                    }
+                    answer.answer(run_host_cmd(&mut state, command));
+                }
             }
-            Some(EngineMsg::Host(cmd)) => run_host_cmd(&mut state, cmd),
             Some(EngineMsg::Deck(message)) => decks.run(message),
             None => {}
         }
@@ -180,19 +179,22 @@ fn spawn_session_client<T, S>(
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    let (cmd_tx, cmd_rx) = mpsc::channel::<EngineMsg<S>>();
+    let (cmd_tx, cmd_rx) = mpsc::channel::<EngineMsg>();
+    let (postbox, mailbox) = mailbox();
     spawn_named(thread_name, move || {
-        engine_thread::<T, S>(
-            cmd_rx,
+        let state = SessionState::<T, S>::new(
             root,
             root_view,
             requested_max_block_frames,
+            None,
             output,
             settings,
             start_stream_fn,
         );
+        engine_thread(cmd_rx, mailbox, state);
     });
     Arc::new(SessionClient {
+        postbox,
         cmd_tx: Mutex::new(cmd_tx),
     })
 }
@@ -485,12 +487,14 @@ mod tests {
             .expect("the transport's own tempo reaches the read-only Host view without a command");
 
         assert!(matches!(
-            ask(&*client, |reply| HostCmd::Configure {
-                change: HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(true)),
-                at: When::Next,
-                reply,
-            }),
-            Ok(Ok(()))
+            ask(
+                &*client,
+                HostCmd::Configure {
+                    change: HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(true)),
+                    at: When::Next,
+                }
+            ),
+            Ok(())
         ));
         let mut on_blocks = 0;
         runtime
@@ -516,12 +520,14 @@ mod tests {
             });
 
         assert!(matches!(
-            ask(&*client, |reply| HostCmd::Configure {
-                change: HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(false)),
-                at: When::Next,
-                reply,
-            }),
-            Ok(Ok(()))
+            ask(
+                &*client,
+                HostCmd::Configure {
+                    change: HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(false)),
+                    at: When::Next,
+                }
+            ),
+            Ok(())
         ));
         runtime
             .block_on(wait_until(

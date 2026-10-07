@@ -281,6 +281,7 @@ mod tests {
     };
 
     use kithara_audio::ConsumerWakeMode;
+    use kithara_command::{Post, Ticket};
     use kithara_platform::{sync::Arc, time};
     use kithara_play::{PlayError, player::Player};
     use kithara_test_utils::{bufpool::TestPools, kithara};
@@ -292,7 +293,7 @@ mod tests {
         host::owner::SessionRoot,
         session::{
             HostCmd, HostDispatcher, HostRoot,
-            protocol::{HostDispatchError, answer},
+            protocol::{HostDispatchError, HostMailbox, HostPostbox, not_taken},
         },
     };
 
@@ -352,9 +353,12 @@ mod tests {
         })
     }
 
+    /// Answers each `Detach` it is posted with the chosen outcome.
     struct Dispatcher {
         detach: Outcome,
         root: RefCell<HostRoot>,
+        postbox: HostPostbox<TestPools>,
+        mailbox: RefCell<HostMailbox<TestPools>>,
     }
 
     impl HostDispatcher<TestPools> for Dispatcher {
@@ -362,21 +366,27 @@ mod tests {
             ConsumerWakeMode::RealtimeDeferred
         }
 
-        fn dispatch(&self, cmd: HostCmd<TestPools>) -> Result<(), HostDispatchError> {
-            let HostCmd::Detach { grid_id, reply } = cmd else {
-                panic!("unexpected fixture Host command")
-            };
-            let detached = match self.detach {
-                Outcome::SessionGone => {
-                    return Err(HostDispatchError::NotTaken(PlayError::SessionGone {
-                        reason: "fixture detach",
-                    }));
-                }
-                Outcome::OtherError => Err(PlayError::Internal("fixture detach failed".into())),
-                Outcome::Ok => self.root.borrow_mut().detach(grid_id).map_err(Into::into),
-            };
-            answer(&reply, detached);
-            Ok(())
+        fn dispatch(
+            &self,
+            cmd: HostCmd<TestPools>,
+        ) -> Result<Ticket<PlayError>, HostDispatchError> {
+            if self.detach == Outcome::SessionGone {
+                return Err(HostDispatchError::NotTaken(PlayError::SessionGone {
+                    reason: "fixture detach",
+                }));
+            }
+            let ticket = self.postbox.post(cmd).map_err(not_taken)?;
+            for Post { command, answer } in self.mailbox.borrow_mut().drain() {
+                let HostCmd::Detach { grid_id } = command else {
+                    panic!("unexpected fixture Host command")
+                };
+                answer.answer(if self.detach == Outcome::OtherError {
+                    Err(PlayError::Internal("fixture detach failed".into()))
+                } else {
+                    self.root.borrow_mut().detach(grid_id).map_err(Into::into)
+                });
+            }
+            Ok(ticket)
         }
     }
 
@@ -400,9 +410,12 @@ mod tests {
         let deck_id = BeatGridId::allocate().expect("fixture deck grid id");
         root.attach(deck_id).expect("fixture deck attachment");
 
+        let (postbox, mailbox) = kithara_command::mailbox();
         let dispatcher: Arc<dyn HostDispatcher<TestPools>> = Arc::new(Dispatcher {
             detach,
             root: RefCell::new(root),
+            postbox,
+            mailbox: RefCell::new(mailbox),
         });
         let drops = Rc::default();
         let probe = deck(close, &drops);

@@ -3,12 +3,12 @@ use std::{cell::RefCell, num::NonZeroU32, sync::atomic::Ordering};
 use firewheel::FirewheelContext;
 use firewheel_web_audio::WebAudioBackend;
 use kithara_bufpool::HasPool;
-use kithara_platform::sync::{Arc, mpsc};
+use kithara_platform::sync::Arc;
 
 use super::client::WebSessionState;
 use crate::{
     bridge::PlaybackShared,
-    session::{dispatch::drain_host_channel, protocol::HostCmd, state::ensure_ctx},
+    session::{dispatch::drain_host_posts, protocol::HostMailbox, state::ensure_ctx},
 };
 
 thread_local! {
@@ -28,7 +28,7 @@ pub(super) fn reset_bridge_state() {
 /// The one tick point that feeds the web stream's clock timestamps and notices a terminated
 /// worklet, since Firewheel no longer owns the backend and nothing else polls the stream on the
 /// session's behalf.
-pub(crate) fn tick_and_poll_remote<S>(state: &WebSessionState<S>, rx: &mpsc::Receiver<HostCmd<S>>)
+pub(crate) fn tick_and_poll_remote<S>(state: &WebSessionState<S>, mailbox: &mut HostMailbox<S>)
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
@@ -43,9 +43,9 @@ where
         state.stream = None;
     }
 
-    drain_host_channel(state, rx, |started| {
+    drain_host_posts(state, mailbox, |started| {
         BRIDGE_PLAYBACK.with(|playback| {
-            *playback.borrow_mut() = Some(Arc::clone(&started.control.playback));
+            *playback.borrow_mut() = Some(Arc::clone(started));
         });
     });
 }

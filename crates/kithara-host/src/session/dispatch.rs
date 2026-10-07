@@ -2,29 +2,36 @@ use std::num::NonZeroU32;
 
 use firewheel::{FirewheelContext, error::UpdateError};
 use kithara_bufpool::HasPool;
+#[cfg(any(target_arch = "wasm32", test))]
+use kithara_command::Post;
 use kithara_config::ConfigOwner;
 #[cfg(any(target_arch = "wasm32", test))]
-use kithara_platform::sync::mpsc;
-use kithara_play::{RouteChangeReason, RouteDescription, SessionEvent, StreamShape};
+use kithara_platform::sync::Arc;
+use kithara_play::{PlayError, RouteChangeReason, RouteDescription, SessionEvent, StreamShape};
 use kithara_warp::BeatGridId;
 use tracing::{debug, trace, warn};
 
+#[cfg(any(target_arch = "wasm32", test))]
+use super::protocol::HostMailbox;
 use super::{
     graph::{lifecycle, player_index, tap},
-    protocol::{
-        AllocatedSlot, DeckRegistration, HostCmd, PlayerId, SessionError, SessionSampleRate, answer,
-    },
+    protocol::{DeckRegistration, HostCmd, PlayerId, SessionError, SessionSampleRate},
     queue::settle_receipts,
     state::{SessionState, register_player},
     transport,
     transport::RouteRestartStatus,
 };
-use crate::host::HostSettingsExec;
+#[cfg(any(target_arch = "wasm32", test))]
+use crate::bridge::PlaybackShared;
+use crate::{bridge::NodeInputs, host::HostSettingsExec};
 
 /// Runs one Host command after settling the transport's receipts, so the
 /// queue's credits come back and the settings catch up even while no tick
-/// runs, and answers it through the reply it carries.
-pub(crate) fn run_host_cmd<T, S>(state: &mut SessionState<T, S>, cmd: HostCmd<S>)
+/// runs, and answers whether it applied.
+pub(crate) fn run_host_cmd<T, S>(
+    state: &mut SessionState<T, S>,
+    cmd: HostCmd<S>,
+) -> Result<(), PlayError>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
@@ -32,39 +39,34 @@ where
     match cmd {
         HostCmd::Attach {
             registration,
-            reply,
-        } => answer(&reply, attach_deck(state, registration).map_err(Into::into)),
-        HostCmd::Detach { grid_id, reply } => {
-            answer(&reply, detach_deck(state, grid_id).map_err(Into::into));
-        }
-        HostCmd::Configure { change, at, reply } => answer(&reply, state.exec(change, at, &mut ())),
+            inputs,
+        } => attach_deck(state, *registration, inputs).map_err(Into::into),
+        HostCmd::Detach { grid_id } => detach_deck(state, grid_id).map_err(Into::into),
+        HostCmd::Configure { change, at } => state.exec(change, at, &mut ()),
         HostCmd::AttachOutputs {
             tap: target,
             outputs,
-            reply,
-        } => answer(
-            &reply,
-            tap::attach(state, target, outputs).map_err(Into::into),
-        ),
-        HostCmd::DetachOutputs { tap: target, reply } => {
+        } => tap::attach(state, target, outputs).map_err(Into::into),
+        HostCmd::DetachOutputs { tap: target } => {
             tap::detach(state, target);
-            answer(&reply, ());
+            Ok(())
         }
-        HostCmd::InvalidateAudioRoute { reason, reply } => {
-            answer(&reply, change_route(state, &reason).map_err(Into::into));
+        HostCmd::InvalidateAudioRoute { reason } => {
+            change_route(state, &reason).map_err(Into::into)
         }
-        HostCmd::Shutdown(reply) => answer(&reply, ()),
+        HostCmd::Shutdown => Ok(()),
     }
 }
 
-/// Adds one deck to the session, registers it and starts it, answering the
-/// slot it plays through. An identity the session or its graph already holds
-/// is refused; a deck that fails to register or start leaves the session as
-/// it found it.
+/// Adds one deck to the session, registers it and starts it on `inputs`, the
+/// render half of its slot. An identity the session or its graph already
+/// holds is refused; a deck that fails to register or start leaves the
+/// session as it found it.
 fn attach_deck<T, S>(
     state: &mut SessionState<T, S>,
     registration: DeckRegistration<S>,
-) -> Result<AllocatedSlot, SessionError>
+    inputs: NodeInputs,
+) -> Result<(), SessionError>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
@@ -86,6 +88,7 @@ where
             let started = lifecycle::start_player(
                 state,
                 player_id,
+                inputs,
                 render_quantum_frames,
                 response_budget_frames,
             );
@@ -190,39 +193,26 @@ pub(super) fn tick_session<T, S>(state: &mut SessionState<T, S>) -> Result<(), S
     Ok(())
 }
 
-/// Runs every Host command waiting on `rx`, showing `on_attach` each slot a
-/// deck starts with on its way to the caller, then ticks the session.
+/// Runs every Host command posted to `mailbox` and answers each, showing
+/// `on_attach` the playback of each deck that starts, then ticks the session.
 #[cfg(any(target_arch = "wasm32", test))]
-pub(super) fn drain_host_channel<T, S>(
+pub(super) fn drain_host_posts<T, S>(
     state: &mut SessionState<T, S>,
-    rx: &mpsc::Receiver<HostCmd<S>>,
-    mut on_attach: impl FnMut(&AllocatedSlot),
+    mailbox: &mut HostMailbox<S>,
+    mut on_attach: impl FnMut(&Arc<PlaybackShared>),
 ) where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    for cmd in rx.try_iter() {
-        let HostCmd::Attach {
-            registration,
-            reply,
-        } = cmd
-        else {
-            run_host_cmd(state, cmd);
-            continue;
+    for Post { command, answer } in mailbox.drain() {
+        let playback = match &command {
+            HostCmd::Attach { inputs, .. } => Some(Arc::clone(inputs.playback())),
+            _ => None,
         };
-        let (started_tx, started) = mpsc::channel();
-        run_host_cmd(
-            state,
-            HostCmd::Attach {
-                registration,
-                reply: started_tx,
-            },
-        );
-        if let Ok(started) = started.try_recv() {
-            if let Ok(slot) = &started {
-                on_attach(slot);
-            }
-            answer(&reply, started);
+        let outcome = run_host_cmd(state, command);
+        if let (Ok(()), Some(playback)) = (&outcome, &playback) {
+            on_attach(playback);
         }
+        answer.answer(outcome);
     }
 
     if let Err(err) = tick_session(state) {
@@ -384,7 +374,7 @@ mod tests {
         },
         processor::FirewheelProcessor,
     };
-    use kithara_command::When;
+    use kithara_command::{When, mailbox};
     use kithara_config::{Config, ConfigOwner};
     use kithara_events::EventBus;
     use kithara_output::OutputGroup;
@@ -414,7 +404,7 @@ mod tests {
             protocol::SessionError,
             state::{Deck, SessionState, TapSlot, add_graph_node},
             tests::{
-                graph::{ask, state as test_state},
+                graph::{ask, attach, state as test_state},
                 ring::{MasterRing, RingBackend, RingBackendConfig, RingLayout},
             },
         },
@@ -577,10 +567,7 @@ mod tests {
     /// Attaches a deck, which the session registers and starts.
     fn insert(state: &mut TestState) -> BeatGridId {
         let grid_id = BeatGridId::allocate().expect("fixture player grid id");
-        match ask(state, |reply| HostCmd::Attach {
-            registration: registration(grid_id),
-            reply,
-        }) {
+        match ask(state, attach(registration(grid_id))) {
             Ok(_) => grid_id,
             Err(err) => panic!("the deck failed to start: {err}"),
         }
@@ -588,21 +575,20 @@ mod tests {
 
     /// Stops the deck `grid_id` and removes it from the session.
     fn remove(state: &mut TestState, grid_id: BeatGridId) {
-        assert!(matches!(
-            ask(state, |reply| HostCmd::Detach { grid_id, reply }),
-            Ok(())
-        ));
+        assert!(matches!(ask(state, HostCmd::Detach { grid_id }), Ok(())));
     }
 
     /// Asks the session for `rate` from the next block on.
     fn configure_sample_rate(state: &mut TestState, rate: u32) {
         let rate = NonZeroU32::new(rate).expect("a fixture rate is not zero");
         assert!(matches!(
-            ask(state, |reply| HostCmd::Configure {
-                change: HostSettingsChange::SampleRate(rate),
-                at: When::Next,
-                reply
-            }),
+            ask(
+                state,
+                HostCmd::Configure {
+                    change: HostSettingsChange::SampleRate(rate),
+                    at: When::Next,
+                }
+            ),
             Ok(())
         ));
     }
@@ -610,10 +596,12 @@ mod tests {
     /// Moves the session's output to a new platform route.
     fn change_route_to(state: &mut TestState, reason: &str) {
         assert!(matches!(
-            ask(state, |reply| HostCmd::InvalidateAudioRoute {
-                reason: reason.to_owned(),
-                reply
-            }),
+            ask(
+                state,
+                HostCmd::InvalidateAudioRoute {
+                    reason: reason.to_owned(),
+                }
+            ),
             Ok(())
         ));
     }
@@ -686,7 +674,7 @@ mod tests {
         let next_player_id = state.next_player_id;
 
         assert!(matches!(
-            ask(&mut state, |reply| HostCmd::Attach { registration: registration(grid_id), reply }),
+            ask(&mut state, attach(registration(grid_id))),
             Err(PlayError::Session(SessionError::DeckAttached(refused)))
                 if refused == grid_id
         ));
@@ -703,7 +691,7 @@ mod tests {
         let grid_id = BeatGridId::allocate().expect("fixture foreign grid id");
 
         assert!(matches!(
-            ask(&mut state, |reply| HostCmd::Detach { grid_id, reply }),
+            ask(&mut state, HostCmd::Detach { grid_id }),
             Err(PlayError::Session(SessionError::DeckNotFound(refused)))
                 if refused == grid_id
         ));
@@ -731,10 +719,7 @@ mod tests {
         let grid_id = BeatGridId::allocate().expect("fixture player grid id");
         state.next_player_id = u64::MAX;
 
-        let reply = ask(&mut state, |reply| HostCmd::Attach {
-            registration: registration(grid_id),
-            reply,
-        });
+        let reply = ask(&mut state, attach(registration(grid_id)));
 
         assert!(matches!(
             reply,
@@ -866,10 +851,7 @@ mod tests {
         registration.response_budget_frames = NonZeroUsize::new(441);
 
         assert!(matches!(
-            ask(&mut state, |reply| HostCmd::Attach {
-                registration,
-                reply
-            }),
+            ask(&mut state, attach(registration)),
             Err(PlayError::Session(SessionError::BufferGeometry(
                 BufferGeometryError::BudgetExceeded {
                     max_block_frames: 512,
@@ -1005,10 +987,10 @@ mod tests {
             1
         );
 
-        let (_tx, rx) = mpsc::channel::<HostCmd<TestPools>>();
+        let (_postbox, mut mailbox) = mailbox::<HostCmd<TestPools>, PlayError>();
 
         state.stream = None;
-        drain_host_channel(&mut state, &rx, |_| {});
+        drain_host_posts(&mut state, &mut mailbox, |_| {});
 
         assert_eq!(
             route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
@@ -1061,9 +1043,9 @@ mod tests {
             let _ = reader.drain(512);
         }
         let before = state.root_view.grid();
-        let (_tx, rx) = mpsc::channel::<HostCmd<TestPools>>();
+        let (_postbox, mut mailbox) = mailbox::<HostCmd<TestPools>, PlayError>();
 
-        drain_host_channel(&mut state, &rx, |_| {});
+        drain_host_posts(&mut state, &mut mailbox, |_| {});
 
         assert!(state.root_view.grid().revision() > before.revision());
     }
@@ -1133,11 +1115,13 @@ mod tests {
         outputs.push(mix_tap_writer(&drops));
         outputs.push(mix_tap_writer(&drops));
         assert!(matches!(
-            ask(&mut state, |reply| HostCmd::AttachOutputs {
-                tap: Tap::Master,
-                outputs,
-                reply
-            }),
+            ask(
+                &mut state,
+                HostCmd::AttachOutputs {
+                    tap: Tap::Master,
+                    outputs,
+                }
+            ),
             Ok(())
         ));
         assert!(
@@ -1149,11 +1133,13 @@ mod tests {
         second.push(mix_tap_writer(&drops));
         assert!(
             matches!(
-                ask(&mut state, |reply| HostCmd::AttachOutputs {
-                    tap: Tap::Master,
-                    outputs: second,
-                    reply
-                }),
+                ask(
+                    &mut state,
+                    HostCmd::AttachOutputs {
+                        tap: Tap::Master,
+                        outputs: second,
+                    }
+                ),
                 Err(PlayError::Session(SessionError::TapActive))
             ),
             "a second consumer must be rejected instead of silently replacing the first"
@@ -1163,11 +1149,13 @@ mod tests {
         beside.push(mix_tap_writer(&drops));
         assert!(
             matches!(
-                ask(&mut state, |reply| HostCmd::AttachOutputs {
-                    tap: Tap::Output,
-                    outputs: beside,
-                    reply
-                }),
+                ask(
+                    &mut state,
+                    HostCmd::AttachOutputs {
+                        tap: Tap::Output,
+                        outputs: beside,
+                    }
+                ),
                 Ok(())
             ),
             "the output tap takes its own group beside the master tap"
@@ -1188,11 +1176,13 @@ mod tests {
         let mut state = test_state(start_route_loss_stream);
         let id = insert(&mut state);
         assert!(matches!(
-            ask(&mut state, |reply| HostCmd::Configure {
-                change: HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(true)),
-                at: When::Next,
-                reply
-            }),
+            ask(
+                &mut state,
+                HostCmd::Configure {
+                    change: HostSettingsChange::Metronome(MetronomeConfigChange::Enabled(true)),
+                    at: When::Next,
+                }
+            ),
             Ok(())
         ));
         assert!(
@@ -1220,11 +1210,13 @@ mod tests {
 
     /// Sends `change` for the next block.
     fn configure_next(state: &mut TestState, change: HostSettingsChange) -> Result<(), PlayError> {
-        ask(state, |reply| HostCmd::Configure {
-            change,
-            at: When::Next,
-            reply,
-        })
+        ask(
+            state,
+            HostCmd::Configure {
+                change,
+                at: When::Next,
+            },
+        )
     }
 
     /// The Host queue's capacity: the batches in flight before a block
@@ -1377,11 +1369,13 @@ mod tests {
         );
 
         assert!(matches!(
-            ask(&mut state, |reply| HostCmd::Configure {
-                change: HostSettingsChange::Ducking(SessionDuckingMode::Hard),
-                at: When::Next,
-                reply
-            }),
+            ask(
+                &mut state,
+                HostCmd::Configure {
+                    change: HostSettingsChange::Ducking(SessionDuckingMode::Hard),
+                    at: When::Next,
+                }
+            ),
             Ok(())
         ));
         let after = render_left(&mut state, &mut clock, 40);
@@ -1413,10 +1407,7 @@ mod tests {
         remove(&mut state, first);
 
         let second = insert(&mut state);
-        match ask(&mut state, |reply| HostCmd::Detach {
-            grid_id: second,
-            reply,
-        }) {
+        match ask(&mut state, HostCmd::Detach { grid_id: second }) {
             Ok(()) => {}
             Err(error) => {
                 panic!("a deck that joined after a route boundary must follow the next: {error}")

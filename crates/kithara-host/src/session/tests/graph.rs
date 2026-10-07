@@ -4,14 +4,13 @@ use firewheel::FirewheelContext;
 use kithara_bufpool::HasPool;
 use kithara_command::Live;
 use kithara_effects::LimiterConfig;
-use kithara_platform::sync::mpsc;
-use kithara_play::SessionTransportSnapshot;
+use kithara_play::{DeckRegistration, PlayError, SessionTransportSnapshot};
 use kithara_test_utils::bufpool::TestPools;
 use kithara_warp::BeatGridId;
 
 use super::super::{
     dispatch::{run_host_cmd, tick_session},
-    protocol::{HostCmd, Reply, SessionError},
+    protocol::{HostCmd, SessionError},
     state::{HostRoot, RootView, SessionState},
     transport::observe_commits,
 };
@@ -51,15 +50,9 @@ where
         tick_session(&mut self.state)
     }
 
-    /// Runs `cmd`, which the session answers through the reply it carries.
-    pub(crate) fn run(&mut self, cmd: HostCmd<S>) {
-        run_host_cmd(&mut self.state, cmd);
-    }
-
-    /// Runs the command `command` builds around its reply and takes the
-    /// answer; see [`ask`].
-    pub(crate) fn ask<A>(&mut self, command: impl FnOnce(Reply<A>) -> HostCmd<S>) -> A {
-        ask(&mut self.state, command)
+    /// Runs `cmd` and answers whether it applied.
+    pub(crate) fn ask(&mut self, cmd: HostCmd<S>) -> Result<(), PlayError> {
+        run_host_cmd(&mut self.state, cmd)
     }
 
     pub(crate) fn stream_mut(&mut self) -> Option<&mut T> {
@@ -129,20 +122,18 @@ pub(crate) fn empty_root(sample_rate: NonZeroU32) -> (HostRoot, RootView) {
     (root, root_view)
 }
 
-/// Runs the command `command` builds around its reply on `state` and takes the
-/// answer, which the session gives before the command returns.
-pub(crate) fn ask<T, S, A>(
-    state: &mut SessionState<T, S>,
-    command: impl FnOnce(Reply<A>) -> HostCmd<S>,
-) -> A
+/// Runs `cmd` on `state` and answers whether it applied.
+pub(crate) fn ask<T, S>(state: &mut SessionState<T, S>, cmd: HostCmd<S>) -> Result<(), PlayError>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    let (reply, answer) = mpsc::channel();
-    run_host_cmd(state, command(reply));
-    answer
-        .try_recv()
-        .expect("the session answers every command it runs")
+    run_host_cmd(state, cmd)
+}
+
+/// The command that starts `registration`'s deck; the control half of its
+/// slot is dropped.
+pub(crate) fn attach<S>(registration: DeckRegistration<S>) -> HostCmd<S> {
+    HostCmd::attach(registration).0
 }
 
 /// Brings the Host grid up to what the render graph committed, then reads

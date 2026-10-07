@@ -10,7 +10,10 @@ use kithara_signal::SessionFrame;
 use kithara_test_utils::{bufpool::pools, kithara};
 use kithara_warp::BeatGridId;
 
-use super::ring::{ManualRingConfig, ManualRingSession};
+use super::{
+    graph::attach,
+    ring::{ManualRingConfig, ManualRingSession},
+};
 use crate::{
     consts,
     host::HostSettingsChange,
@@ -34,10 +37,7 @@ fn register_transport_events(session: &ManualRingSession) -> EventReceiver<Trans
         kithara_play::DeckMixerConfig::default(),
     );
     if let Err(error) = session
-        .ask(|reply| HostCmd::Attach {
-            registration,
-            reply,
-        })
+        .ask(attach(registration))
         .expect("invariant: the deck reaches the session")
     {
         panic!("the session refused the deck: {error}");
@@ -60,10 +60,9 @@ fn drain_transport_events(events: &mut EventReceiver<TransportEvent>) -> Vec<Tra
 fn set_tempo_at(session: &ManualRingSession, beats_per_minute: f64, at: When<SessionFrame>) {
     let tempo = Tempo::new(beats_per_minute).expect("invariant: test tempo is valid");
     if let Err(error) = session
-        .ask(|reply| HostCmd::Configure {
+        .ask(HostCmd::Configure {
             at,
             change: HostSettingsChange::Tempo(tempo),
-            reply,
         })
         .expect("invariant: tempo command reaches the session")
     {
