@@ -10,7 +10,7 @@ use firewheel::node::ProcBuffers;
 use kithara_audio::mock::{Fault, MockReader, TEST_PCM_DEFAULT_VALUE, TestPcmReader};
 use kithara_events::TrackId;
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_play::{Resource, SharedEq};
+use kithara_play::Resource;
 use kithara_render::{
     bridge::{DeckPart, RtMetricsSnapshot, SlotControl, TrackTransition, slot_channels},
     rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
@@ -41,7 +41,7 @@ fn spec() -> AudioSpec {
 }
 
 fn processor() -> (DeckMixer, SlotControl) {
-    let (inputs, control) = slot_channels(SharedEq::new(0));
+    let (inputs, control) = slot_channels();
     let shape = StreamShape {
         sample_rate: NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"),
         max_block_frames: NonZeroU32::new(BLOCK_FRAMES).expect("non-zero block"),

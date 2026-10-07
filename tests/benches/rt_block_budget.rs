@@ -15,7 +15,7 @@ use kithara::{
 };
 use kithara_integration_tests::bufpool_ext::{Pools, pools};
 use kithara_render::{
-    bridge::{DeckPart, SharedEq, SlotControl, slot_channels},
+    bridge::{DeckPart, SlotControl, slot_channels},
     rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
 };
 use kithara_test_fixtures::integration_fixtures::benchmark_half;
@@ -57,7 +57,7 @@ fn spec() -> AudioSpec {
 }
 
 fn processor() -> (DeckMixer, SlotControl, Pools) {
-    let (inputs, control) = slot_channels(SharedEq::new(0));
+    let (inputs, control) = slot_channels();
     let pools = pools();
     let shape = StreamShape {
         sample_rate: non_zero(consts::SAMPLE_RATE, "sample rate"),

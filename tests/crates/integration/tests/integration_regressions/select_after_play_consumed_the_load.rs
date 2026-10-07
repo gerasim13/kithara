@@ -32,8 +32,7 @@ use kithara::{
     },
     play::{
         AllocatedSlot, Cmd, NodeInputs, PlayError, PlayerConfig, PlayerImpl, Reply, ResourceConfig,
-        ResourceSrc, SessionBinding, SessionDispatcher, SessionSampleRate, SharedEq, SlotId,
-        StreamShape,
+        ResourceSrc, SessionBinding, SessionDispatcher, SessionSampleRate, SlotId, StreamShape,
         player::{Player, PlayerControlSource},
     },
     queue::{Queue, QueueConfig, QueueEvent, TrackSource, Transition},
@@ -83,14 +82,11 @@ impl SessionDispatcher<TestPools> for StartGatedSession {
                 Reply::Ok
             }
             Cmd::RegisterPlayer { .. } => {
-                Reply::PlayerRegistered(kithara::play::session::RegisteredPlayer {
-                    id: self.next_player.fetch_add(1, Ordering::Relaxed),
-                    eq: SharedEq::new(10),
-                })
+                Reply::PlayerRegistered(self.next_player.fetch_add(1, Ordering::Relaxed))
             }
             Cmd::AllocateSlot { .. } => {
                 let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
-                let (inputs, control) = slot_channels(SharedEq::new(10));
+                let (inputs, control) = slot_channels();
                 self.nodes.lock().push(inputs);
                 Reply::SlotAllocated(Box::new(AllocatedSlot::new(control, slot)))
             }

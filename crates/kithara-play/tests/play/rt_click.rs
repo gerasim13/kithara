@@ -10,7 +10,7 @@ use kithara_audio::mock::{TEST_PCM_DEFAULT_VALUE, TestPcmReader};
 use kithara_command::{Batch, Outcome, When};
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
-use kithara_play::{Resource, SharedEq};
+use kithara_play::Resource;
 use kithara_render::{
     bridge::{
         DeckApplied, DeckMixSettingsChange, DeckPart, SlotControl, TrackTransition, slot_channels,
@@ -46,7 +46,7 @@ fn spec() -> AudioSpec {
 }
 
 fn processor() -> (DeckMixer, SlotControl) {
-    let (inputs, control) = slot_channels(SharedEq::new(0));
+    let (inputs, control) = slot_channels();
     let shape = StreamShape {
         sample_rate: NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"),
         max_block_frames: NonZeroU32::new(128).expect("non-zero block"),

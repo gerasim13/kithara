@@ -16,7 +16,7 @@ use super::{
     DeckMixerConfig,
     processor::{ContextRequirement, DeckMixer, StreamShape},
 };
-use crate::bridge::{NodeInputs, SharedEq, slot_channels};
+use crate::bridge::{NodeInputs, slot_channels};
 
 /// A player source node that outputs mixed audio from loaded tracks.
 ///
@@ -110,7 +110,7 @@ where
             .inputs
             .lock()
             .take()
-            .unwrap_or_else(|| slot_channels(SharedEq::new(0)).0);
+            .unwrap_or_else(|| slot_channels().0);
         Ok(DeckMixer::with_context_requirement(
             inputs,
             shape,
@@ -135,13 +135,10 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{
-        bridge::SharedEq,
-        test_pools::{TestPools, pools},
-    };
+    use crate::test_pools::{TestPools, pools};
 
     fn make_node() -> (PlayerNode<TestPools>, crate::bridge::SlotControl) {
-        let (inputs, control) = slot_channels(SharedEq::new(0));
+        let (inputs, control) = slot_channels();
         let node = PlayerNode::new(inputs, pools(), DeckMixerConfig::default());
         (node, control)
     }

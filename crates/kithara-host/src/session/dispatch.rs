@@ -12,7 +12,7 @@ use tracing::{debug, trace, warn};
 #[cfg(any(target_arch = "wasm32", test))]
 use super::protocol::HostCmdMsg;
 use super::{
-    graph::{controls, lifecycle, player_index, slots, tap},
+    graph::{lifecycle, player_index, slots, tap},
     protocol::{Cmd, HostCmd, HostReply, PlayerId, Reply, SessionError, SessionSampleRate},
     queue::settle_receipts,
     state::{SessionState, register_player},
@@ -88,10 +88,9 @@ where
         Cmd::RegisterPlayer {
             grid_id,
             bus,
-            eq_layout,
             mixer,
             pools,
-        } => match register_player(state, grid_id, bus, eq_layout, pools, mixer) {
+        } => match register_player(state, grid_id, bus, pools, mixer) {
             Ok(player_id) => Reply::PlayerRegistered(player_id),
             Err(error) => Reply::Err(error),
         },
@@ -120,21 +119,6 @@ where
             slots::allocate_slot(state, player_id).unwrap_or_else(Reply::Err)
         }
         Cmd::ReleaseSlot { player_id, slot } => match slots::release_slot(state, player_id, slot) {
-            Ok(()) => Reply::Ok,
-            Err(err) => Reply::Err(err),
-        },
-        Cmd::SetPlayerEqGain {
-            band,
-            gain_db,
-            player_id,
-        } => match controls::set_player_eq_gain(state, player_id, band, gain_db) {
-            Ok(()) => Reply::Ok,
-            Err(err) => Reply::Err(err),
-        },
-        Cmd::SetPlayerEqLayout {
-            eq_layout,
-            player_id,
-        } => match controls::set_player_eq_layout(state, player_id, eq_layout) {
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
@@ -562,7 +546,6 @@ mod tests {
         Cmd::RegisterPlayer {
             grid_id,
             bus: EventBus::default(),
-            eq_layout: Vec::new(),
             mixer: DeckMixerConfig::default(),
             pools: pools(),
         }
@@ -571,7 +554,7 @@ mod tests {
     fn register_player(state: &mut TestState) -> u64 {
         let grid_id = attach_player(state);
         match run_cmd(state, register_command(grid_id)) {
-            Reply::PlayerRegistered(registered) => registered.id,
+            Reply::PlayerRegistered(player_id) => player_id,
             Reply::Err(err) => panic!("player registration failed: {err}"),
             _ => panic!("player registration returned unexpected reply"),
         }
@@ -723,11 +706,10 @@ mod tests {
     fn detach_is_rejected_while_the_graph_projection_is_live() {
         let mut state = test_state(start_route_loss_stream);
         let grid_id = attach_player(&mut state);
-        let Reply::PlayerRegistered(registered) = run_cmd(&mut state, register_command(grid_id))
+        let Reply::PlayerRegistered(player_id) = run_cmd(&mut state, register_command(grid_id))
         else {
             panic!("fixture player is registered")
         };
-        let player_id = registered.id;
 
         assert!(matches!(
             run_host_cmd(&mut state, HostCmd::Detach { grid_id }),

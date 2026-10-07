@@ -1,33 +1,22 @@
-use kithara_render::bridge::SharedEq;
-
 use super::EngineImpl;
 use crate::{error::PlayError, session::PlayerId};
 
 impl<S> EngineImpl<S> {
     pub(in crate::engine) fn ensure_player_id(&self) -> Result<PlayerId, PlayError> {
         let mut registration = self.registration.lock();
-        if let Some(registered) = registration.as_ref() {
-            return Ok(registered.id);
+        if let Some(id) = *registration {
+            return Ok(id);
         }
         self.validate_session_sample_rate(self.session.requested_sample_rate()?.get())?;
-        let registered = self.session.register_player(
+        let id = self.session.register_player(
             self.config.grid_id,
             self.bus.clone(),
-            self.config.eq_layout.lock().clone(),
             self.pools().clone(),
             self.config.mixer,
         )?;
-        let id = registered.id;
-        *registration = Some(registered);
+        *registration = Some(id);
         drop(registration);
         Ok(id)
-    }
-
-    pub(crate) fn eq(&self) -> Option<SharedEq> {
-        self.registration
-            .lock()
-            .as_ref()
-            .map(|registered| registered.eq.clone())
     }
 
     pub(crate) fn prepare(&self) -> Result<(), PlayError> {
@@ -40,9 +29,6 @@ impl<S> EngineImpl<S> {
     }
 
     pub(super) fn registered_id(&self) -> Option<PlayerId> {
-        self.registration
-            .lock()
-            .as_ref()
-            .map(|registered| registered.id)
+        *self.registration.lock()
     }
 }

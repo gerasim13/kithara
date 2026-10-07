@@ -40,8 +40,8 @@ pub use kithara_render::{
     CrossfadeCurve, CrossfadeSettings, InvalidCrossfade, ServiceClass,
     bridge::{
         MixTapWriter, NodeInputs, PlaybackFault, PlaybackShared, PlaybackSnapshot,
-        PlayerNotification, RtMetricsSnapshot, SharedEq, SlotControl, TrackPlaybackStopReason,
-        TrackState, TrackTransition,
+        PlayerNotification, RtMetricsSnapshot, SlotControl, TrackPlaybackStopReason, TrackState,
+        TrackTransition,
     },
     rt::{BufferGeometryError, DeckMixerConfig, PlayerNode, StreamShape},
 };

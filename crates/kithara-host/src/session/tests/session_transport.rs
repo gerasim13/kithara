@@ -39,7 +39,6 @@ fn register_transport_events(session: &ManualRingSession) -> EventReceiver<Trans
         .exec(Cmd::RegisterPlayer {
             bus,
             grid_id: BeatGridId::allocate().expect("fixture grid id"),
-            eq_layout: Vec::new(),
             mixer: kithara_play::DeckMixerConfig::default(),
             pools: pools(),
         })

@@ -2,6 +2,7 @@ use std::{convert::Infallible, fmt};
 
 use kithara_audio::DecodeErrorKind;
 use kithara_command::Protocol;
+use kithara_effects::{GainDb, eq::EqLayout};
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use kithara_signal::SessionFrame;
@@ -76,6 +77,17 @@ pub enum DeckPart {
     Mix(DeckMixSettingsChange),
     /// Update the media seconds every track consumes per output second.
     SetRate(f32),
+    /// Change the deck's equaliser from this frame on.
+    Eq(DeckEqChange),
+}
+
+/// One change to a deck's equaliser.
+#[derive(Debug)]
+pub enum DeckEqChange {
+    /// Ramp `band` of the layout the deck was last handed to `gain`.
+    Gain { band: usize, gain: GainDb },
+    /// Cross over to a layout built off the audio thread.
+    Layout(Box<EqLayout>),
 }
 
 impl fmt::Debug for DeckPart {
@@ -113,6 +125,7 @@ impl fmt::Debug for DeckPart {
             Self::StopAll => f.write_str("StopAll"),
             Self::Mix(change) => f.debug_tuple("Mix").field(change).finish(),
             Self::SetRate(rate) => f.debug_tuple("SetRate").field(rate).finish(),
+            Self::Eq(change) => f.debug_tuple("Eq").field(change).finish(),
         }
     }
 }

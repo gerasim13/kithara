@@ -63,13 +63,12 @@ fn register_started_player(session: &ManualRingSession) -> PlayerId {
         .exec(Cmd::RegisterPlayer {
             grid_id: BeatGridId::allocate().expect("fixture grid id"),
             bus: EventBus::default(),
-            eq_layout: Vec::new(),
             mixer: kithara_play::DeckMixerConfig::default(),
             pools: pools(),
         })
         .expect("register player command")
     {
-        Reply::PlayerRegistered(registered) => registered.id,
+        Reply::PlayerRegistered(player_id) => player_id,
         Reply::Err(error) => panic!("register player failed: {error}"),
         _ => panic!("unexpected register player reply"),
     };

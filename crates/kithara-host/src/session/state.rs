@@ -4,17 +4,15 @@ use arc_swap::ArcSwap;
 use firewheel::{
     FirewheelConfig, FirewheelContext,
     channel_config::ChannelCount,
-    diff::Memo,
     node::{AudioNode, NodeID},
 };
 use kithara_bufpool::PoolRegion;
 use kithara_command::Live;
 use kithara_config::ConfigOwner;
-use kithara_effects::{GainDb, eq::EqBandConfig};
 use kithara_events::EventBus;
 use kithara_output::OutputGroup;
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_play::{DeckMixerConfig, SessionSampleRate, StreamShape, session::RegisteredPlayer};
+use kithara_play::{DeckMixerConfig, SessionSampleRate, StreamShape};
 use kithara_signal::SessionEpoch;
 use kithara_warp::{
     BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridStamp, MapAxis, SessionAxis,
@@ -30,9 +28,8 @@ use super::{
 };
 use crate::{
     api::{SlotId, Tap},
-    bridge::SharedEq,
     host::HostSettings,
-    rt::{MasterEqNode, MasterNode, SessionOutput},
+    rt::{MasterNode, SessionOutput},
 };
 
 #[derive(Debug)]
@@ -44,13 +41,9 @@ pub(super) struct SlotNodes {
 pub(super) struct Deck<S> {
     pub(super) grid_id: BeatGridId,
     pub(super) bus: EventBus,
-    pub(super) master_eq_memo: Option<Memo<MasterEqNode<S>>>,
-    pub(super) master_eq_node_id: Option<NodeID>,
     pub(super) player_id: PlayerId,
     pub(super) pools: PoolRegion<S>,
-    pub(super) shared_eq: SharedEq,
     pub(super) mixer: DeckMixerConfig,
-    pub(super) eq_layout: Vec<EqBandConfig>,
     pub(super) slots: Vec<SlotNodes>,
     pub(super) started: bool,
     pub(super) next_slot_id: u64,
@@ -61,24 +54,15 @@ impl<S> Deck<S> {
         player_id: PlayerId,
         grid_id: BeatGridId,
         bus: EventBus,
-        eq_layout: Vec<EqBandConfig>,
         pools: PoolRegion<S>,
         mixer: DeckMixerConfig,
     ) -> Self {
-        let (eq_layout, gains) = prepare_eq_layout(eq_layout);
-        let band_count = eq_layout.len();
-        let shared_eq = SharedEq::new(band_count);
-        shared_eq.replace(&gains);
         Self {
             bus,
-            eq_layout,
             mixer,
             pools,
             player_id,
             grid_id,
-            shared_eq,
-            master_eq_memo: None,
-            master_eq_node_id: None,
             next_slot_id: 1,
             slots: Vec::new(),
             started: false,
@@ -133,11 +117,6 @@ impl<S> GraphRegistry<S> {
             pub(super) fn len(&self) -> usize;
         }
     }
-}
-
-pub(super) fn prepare_eq_layout(eq_layout: Vec<EqBandConfig>) -> (Vec<EqBandConfig>, Vec<GainDb>) {
-    let gains = eq_layout.iter().map(EqBandConfig::gain_db).collect();
-    (eq_layout, gains)
 }
 
 pub(super) enum TapSlot {
@@ -428,10 +407,9 @@ pub(super) fn register_player<T, S>(
     state: &mut SessionState<T, S>,
     grid_id: BeatGridId,
     bus: EventBus,
-    eq_layout: Vec<EqBandConfig>,
     pools: PoolRegion<S>,
     mixer: DeckMixerConfig,
-) -> Result<RegisteredPlayer, SessionError> {
+) -> Result<PlayerId, SessionError> {
     let player_id = state.next_player_id;
     let next_player_id = player_id
         .checked_add(1)
@@ -439,19 +417,16 @@ pub(super) fn register_player<T, S>(
     if !state.root.holds(grid_id) {
         return Err(SessionError::DeckNotFound(grid_id));
     }
-    let deck = Deck::new(player_id, grid_id, bus, eq_layout, pools, mixer);
-    let registration = RegisteredPlayer {
-        id: player_id,
-        eq: deck.shared_eq.clone(),
-    };
-    state.graph.insert(deck)?;
+    state
+        .graph
+        .insert(Deck::new(player_id, grid_id, bus, pools, mixer))?;
     state.next_player_id = next_player_id;
     debug!(
         player_id,
         players = state.graph.len(),
         "[KITHARA-ROUTE] session player registered"
     );
-    Ok(registration)
+    Ok(player_id)
 }
 
 pub(super) fn ensure_ctx<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {

@@ -1,17 +1,15 @@
 pub mod channels;
-pub mod eq;
 pub mod metrics;
 pub mod mix;
 pub mod playback;
 pub mod protocol;
 
-pub use channels::{MixTapWriter, NodeInputs, SlotControl, slot_channels};
-pub use eq::{EqBandOutOfRange, SharedEq};
+pub use channels::{DeckTrash, MixTapWriter, NodeInputs, SlotControl, slot_channels};
 pub use metrics::{RtMetrics, RtMetricsSnapshot};
 pub use mix::{DeckMixSettings, DeckMixSettingsChange, InvalidMixLevel};
 pub(crate) use playback::PublishingEpochs;
 pub use playback::{PlaybackShared, PlaybackSnapshot};
 pub use protocol::{
-    DeckApplied, DeckPart, DeckProtocol, PlaybackFault, PlayerNotification,
+    DeckApplied, DeckEqChange, DeckPart, DeckProtocol, PlaybackFault, PlayerNotification,
     TrackPlaybackStopReason, TrackState, TrackTransition,
 };

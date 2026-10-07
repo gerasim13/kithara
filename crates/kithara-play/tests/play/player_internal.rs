@@ -18,8 +18,8 @@ use kithara_platform::sync::{Arc, Mutex};
 use kithara_play::{
     AllocatedSlot, Cmd, CrossfadeSettings, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig,
     PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus, Reply, Resource, SeekOutcome,
-    SelectionPlayback, SessionBinding, SessionDispatcher, SessionSampleRate, SharedEq, SlotId,
-    StreamShape, SuccessorLink,
+    SelectionPlayback, SessionBinding, SessionDispatcher, SessionSampleRate, SlotId, StreamShape,
+    SuccessorLink,
 };
 use kithara_render::bridge::slot_channels;
 use kithara_test_fixtures::integration_fixtures::constant_half;
@@ -63,14 +63,11 @@ impl SessionDispatcher<TestPools> for FixtureSession {
     fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
         let reply = match cmd {
             Cmd::RegisterPlayer { .. } => {
-                Reply::PlayerRegistered(kithara_play::session::RegisteredPlayer {
-                    id: self.next_player.fetch_add(1, Ordering::Relaxed),
-                    eq: SharedEq::new(10),
-                })
+                Reply::PlayerRegistered(self.next_player.fetch_add(1, Ordering::Relaxed))
             }
             Cmd::AllocateSlot { .. } => {
                 let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
-                let (inputs, control) = slot_channels(SharedEq::new(10));
+                let (inputs, control) = slot_channels();
                 self.nodes.lock().push(inputs);
                 Reply::SlotAllocated(Box::new(AllocatedSlot::new(control, slot)))
             }

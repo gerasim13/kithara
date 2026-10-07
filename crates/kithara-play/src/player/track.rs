@@ -222,7 +222,7 @@ mod tests {
     use kithara_audio::mock::TestPcmReader;
     use kithara_command::{ChannelConfig, Inbox, channel};
     use kithara_platform::sync::Arc;
-    use kithara_render::bridge::{SharedEq, slot_channels};
+    use kithara_render::bridge::slot_channels;
     use kithara_signal::AudioSpec;
     use kithara_test_fixtures::integration_fixtures::constant_half;
     use kithara_test_utils::kithara;
@@ -279,7 +279,7 @@ mod tests {
     fn a_track_loaded_behind_another_attaches_and_chains_in_one_batch(
         constant_half: &'static [u8],
     ) {
-        let (mut inputs, mut deck) = slot_channels(SharedEq::new(0));
+        let (mut inputs, mut deck) = slot_channels();
         let leading = TrackId::allocate();
         let mut track = Track::new(TrackId::allocate(), settings()).expect("valid settings");
 
@@ -316,7 +316,7 @@ mod tests {
 
     #[kithara::test]
     fn every_part_a_track_sends_names_that_track(constant_half: &'static [u8]) {
-        let (mut inputs, mut deck) = slot_channels(SharedEq::new(0));
+        let (mut inputs, mut deck) = slot_channels();
         let mut track = Track::new(TrackId::allocate(), settings()).expect("valid settings");
         let mut out = Outbox::new(DECK_SLOT, &mut deck);
         for command in [
@@ -352,7 +352,7 @@ mod tests {
 
     #[kithara::test]
     fn a_load_the_deck_refuses_leaves_the_lane_untouched(constant_half: &'static [u8]) {
-        let (_inputs, mut deck) = slot_channels(SharedEq::new(0));
+        let (_inputs, mut deck) = slot_channels();
         while deck.send(DeckPart::StopAll).is_ok() {}
         let (sender, mut inbox) = lane();
         let mut track = Track::new(TrackId::allocate(), settings()).expect("valid settings");
@@ -376,7 +376,7 @@ mod tests {
 
     #[kithara::test]
     fn a_loaded_track_sends_its_speed_and_each_change_to_its_lane(constant_half: &'static [u8]) {
-        let (_inputs, mut deck) = slot_channels(SharedEq::new(0));
+        let (_inputs, mut deck) = slot_channels();
         let (sender, mut inbox) = lane();
         let mut track = Track::new(TrackId::allocate(), settings()).expect("valid settings");
         let mut out = Outbox::new(DECK_SLOT, &mut deck);

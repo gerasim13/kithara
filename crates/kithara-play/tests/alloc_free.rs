@@ -10,7 +10,7 @@ use firewheel::node::ProcBuffers;
 use kithara_audio::mock::TestPcmReader;
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
-use kithara_play::{CrossfadeSettings, Resource, SharedEq};
+use kithara_play::{CrossfadeSettings, Resource};
 use kithara_render::{
     bridge::{DeckPart, SlotControl, TrackTransition, slot_channels},
     rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
@@ -38,7 +38,7 @@ fn fade(transition: TrackTransition) -> DeckPart {
 fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating(
     constant_half: &'static [u8],
 ) {
-    let (inputs, mut control) = slot_channels(SharedEq::new(0));
+    let (inputs, mut control) = slot_channels();
     let shape = StreamShape {
         sample_rate: SAMPLE_RATE,
         max_block_frames: BLOCK,

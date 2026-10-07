@@ -1,6 +1,9 @@
 use kithara_audio::ConsumerWakeMode;
-use kithara_bufpool::PoolRegion;
-use kithara_effects::eq::EqBandConfig;
+use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_effects::{
+    GainDb,
+    eq::{EqBandConfig, EqConfig, EqLayout},
+};
 use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{
     CancelToken,
@@ -9,7 +12,7 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_render::{
-    bridge::{DeckPart, PlaybackShared, PlayerNotification, SlotControl},
+    bridge::{DeckEqChange, DeckPart, DeckTrash, PlaybackShared, PlayerNotification, SlotControl},
     rt::StreamShape,
 };
 use kithara_warp::RenderSnapshot;
@@ -20,7 +23,7 @@ use super::{config::EngineConfig, slots::SlotTable};
 use crate::{
     api::{EngineEvent, SlotId},
     error::PlayError,
-    session::{RegisteredPlayer, SessionBinding, SessionHandle, SessionSampleRate},
+    session::{PlayerId, SessionBinding, SessionHandle, SessionSampleRate},
 };
 
 type SlotHandle = SlotControl;
@@ -32,7 +35,7 @@ pub struct EngineImpl<S> {
     pub(super) config: EngineConfig<S>,
     #[field(get, vis = "pub(crate)")]
     pub(super) bus: EventBus,
-    pub(super) registration: Mutex<Option<RegisteredPlayer>>,
+    pub(super) registration: Mutex<Option<PlayerId>>,
     slots: Mutex<SlotTable>,
     start_lock: Mutex<()>,
     pub(super) session: SessionHandle<S>,
@@ -147,7 +150,10 @@ impl<S> EngineImpl<S> {
     }
 
     fn drain_slot_trash_handle(handle: &mut SlotHandle) {
-        while let Some(track) = handle.trash_rx.try_pop() {
+        while let Some(trash) = handle.trash_rx.try_pop() {
+            let DeckTrash::Track(track) = trash else {
+                continue;
+            };
             if let Some(seek) = track.seek_handle() {
                 handle.unbind_seek(track.item_id(), &seek);
             }
@@ -163,6 +169,32 @@ impl<S> EngineImpl<S> {
 
     pub(crate) fn eq_band_count(&self) -> usize {
         self.config.eq_layout.lock().len()
+    }
+
+    /// The gain, in dB, `band` of the deck's EQ layout is set to.
+    pub(crate) fn eq_gain(&self, band: usize) -> Option<f32> {
+        self.config
+            .eq_layout
+            .lock()
+            .get(band)
+            .map(|band| f32::from(band.gain_db()))
+    }
+
+    /// The part that hands a slot the deck's EQ layout, built off the audio thread.
+    pub(crate) fn eq_part(&self) -> Result<DeckPart, PlayError>
+    where
+        S: HasPool<f32>,
+    {
+        self.eq_layout_part(&self.config.eq_layout.lock())
+    }
+
+    fn eq_layout_part(&self, bands: &[EqBandConfig]) -> Result<DeckPart, PlayError>
+    where
+        S: HasPool<f32>,
+    {
+        let config = EqConfig::builder(self.pools().clone()).build();
+        let layout = EqLayout::new(&config, bands, self.config.sample_rate)?;
+        Ok(DeckPart::Eq(DeckEqChange::Layout(Box::new(layout))))
     }
 
     pub fn is_running(&self) -> bool {
@@ -248,21 +280,52 @@ impl<S> EngineImpl<S> {
         result
     }
 
-    pub(crate) fn set_master_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
-        let player_id = self.registered_id().ok_or(PlayError::EngineNotRunning)?;
-        self.session.set_player_eq_gain(player_id, band, gain_db)
+    /// Sends the deck a gain for `band` and keeps it; an idle player keeps it for its next slot.
+    ///
+    /// # Errors
+    /// Returns [`PlayError::EqBandOutOfRange`] for a band the layout does not have, and the
+    /// deck's refusal of the gain; the gain stays as it was then.
+    pub(crate) fn set_eq_gain(
+        &self,
+        band: usize,
+        gain: GainDb,
+        send: impl FnOnce(DeckPart) -> Result<(), PlayError>,
+    ) -> Result<(), PlayError> {
+        let mut layout = self.config.eq_layout.lock();
+        let bands = layout.len();
+        let Some(config) = layout.get_mut(band) else {
+            return Err(PlayError::EqBandOutOfRange { band, bands });
+        };
+        match send(DeckPart::Eq(DeckEqChange::Gain { band, gain })) {
+            Ok(()) | Err(PlayError::NoActiveSlot) => {}
+            Err(error) => return Err(error),
+        }
+        config.set_gain_db(gain);
+        drop(layout);
+        Ok(())
     }
 
-    pub(crate) fn set_master_eq_layout(
+    /// Sends the deck `bands`, built here, and keeps them; an idle player keeps them for its
+    /// next slot.
+    ///
+    /// # Errors
+    /// Returns the pool's refusal to build the layout and the deck's refusal of it; the layout
+    /// stays as it was then.
+    pub(crate) fn set_eq_layout(
         &self,
-        eq_layout: Vec<EqBandConfig>,
-    ) -> Result<(), PlayError> {
-        let player_id = self.registered_id();
-        if let Some(player_id) = player_id {
-            self.session
-                .set_player_eq_layout(player_id, eq_layout.clone())?;
+        bands: Vec<EqBandConfig>,
+        send: impl FnOnce(DeckPart) -> Result<(), PlayError>,
+    ) -> Result<(), PlayError>
+    where
+        S: HasPool<f32>,
+    {
+        let mut layout = self.config.eq_layout.lock();
+        match send(self.eq_layout_part(&bands)?) {
+            Ok(()) | Err(PlayError::NoActiveSlot) => {}
+            Err(error) => return Err(error),
         }
-        *self.config.eq_layout.lock() = eq_layout;
+        *layout = bands;
+        drop(layout);
         Ok(())
     }
 
@@ -376,8 +439,10 @@ mod config_tests {
         assert_eq!(engine.config.values().max_slots, 3);
         assert_eq!(engine.config.values().eq_layout.len(), 10);
         engine
-            .set_master_eq_layout(kithara_effects::eq::generate_log_spaced_bands(4))
-            .expect("unregistered engine accepts its next layout");
+            .set_eq_layout(kithara_effects::eq::generate_log_spaced_bands(4), |_| {
+                Err(PlayError::NoActiveSlot)
+            })
+            .expect("an idle engine keeps its next layout");
         assert_eq!(engine.config.values().eq_layout.len(), 4);
     }
 }

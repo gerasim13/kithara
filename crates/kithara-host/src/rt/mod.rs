@@ -1,4 +1,4 @@
-pub(crate) use kithara_effects::node::{LimiterNode, MasterEqNode};
+pub(crate) use kithara_effects::node::LimiterNode;
 pub(crate) use kithara_render::rt::PlayerNode;
 
 mod master;

@@ -1,3 +1,4 @@
+use kithara_bufpool::HasPool;
 use kithara_effects::{GainDb, eq::EqBandConfig};
 use kithara_platform::sync::atomic::Ordering;
 use kithara_render::bridge::{DeckMixSettingsChange, DeckPart};
@@ -14,7 +15,10 @@ use crate::{
 
 impl<S> PlayerRuntime<S> {
     /// Ensure we have an active slot, allocating one if needed.
-    pub fn ensure_slot(&self) -> Result<SlotId, PlayError> {
+    pub fn ensure_slot(&self) -> Result<SlotId, PlayError>
+    where
+        S: HasPool<f32>,
+    {
         if let Some(id) = self.slot() {
             return Ok(id);
         }
@@ -28,6 +32,7 @@ impl<S> PlayerRuntime<S> {
                 ))),
                 DeckPart::Mix(DeckMixSettingsChange::Muted(self.is_muted())),
                 DeckPart::Mix(DeckMixSettingsChange::Level(self.core.config.level())),
+                self.core.engine.eq_part()?,
             ],
         )?;
         Ok(id)
@@ -56,9 +61,8 @@ impl<S> PlayerRuntime<S> {
 
     /// Reset EQ gains to 0 dB for all bands.
     pub fn reset_eq(&self) -> Result<(), PlayError> {
-        let eq = self.core.engine.eq().ok_or(PlayError::EngineNotRunning)?;
-        for band in 0..eq.bands() {
-            self.core.engine.set_master_eq_gain(band, 0.0)?;
+        for band in 0..self.core.engine.eq_band_count() {
+            self.set_eq_gain(band, 0.0)?;
         }
         Ok(())
     }
@@ -78,12 +82,29 @@ impl<S> PlayerRuntime<S> {
         self.set_rate(target);
     }
 
-    /// Set EQ gain for a band in dB.
+    /// Set EQ gain for a band in dB; an idle player keeps it for its next slot.
+    ///
+    /// # Errors
+    /// Returns [`PlayError::EqBandOutOfRange`] for a band the layout does not have, and the
+    /// deck's refusal of the gain.
     pub fn set_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
-        let gain_db = GainDb::from(gain_db);
         self.core
             .engine
-            .set_master_eq_gain(band, f32::from(gain_db))
+            .set_eq_gain(band, GainDb::from(gain_db), |part| self.send_to_slot(part))
+    }
+
+    /// Replaces the EQ layout and gains without releasing the running slot: the deck crosses
+    /// over to it; an idle player keeps it for its next slot.
+    ///
+    /// # Errors
+    /// Returns the pool's refusal to build the layout and the deck's refusal of it.
+    pub fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), PlayError>
+    where
+        S: HasPool<f32>,
+    {
+        self.core
+            .engine
+            .set_eq_layout(layout, |part| self.send_to_slot(part))
     }
 
     /// Set the deck's mix level, a linear amplitude in `0.0..=1.0` over its volume.
@@ -164,15 +185,57 @@ impl<S> PlayerRuntime<S> {
 
     delegate::delegate! {
         to self.core.engine {
-            /// Replaces the master EQ layout and gains without releasing the running slot.
-            ///
-            /// # Errors
-            /// Returns a session graph error when a running player's EQ node cannot be
-            /// replaced.
-            #[call(set_master_eq_layout)]
-            pub fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), PlayError>;
             /// Pump audio backend/runtime state.
             pub fn tick(&self) -> Result<(), PlayError>;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_effects::GainDb;
+    use kithara_render::bridge::{DeckEqChange, DeckPart};
+    use kithara_test_utils::kithara;
+
+    use crate::{
+        PlayWorker, PlayWorkerConfig, mock,
+        player::{PlayerConfig, PlayerImpl},
+        test_pools::pools,
+    };
+
+    /// An EQ gain is the deck's: a slot is handed the layout when it is taken, and a band cut
+    /// goes to that slot's ring.
+    #[kithara::test]
+    fn an_eq_cut_rides_the_deck_not_the_session() {
+        let (session, audio_thread) = mock::session_with_mock();
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(mock::SAMPLE_RATE)
+                .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+                .session(session)
+                .build(),
+        );
+        player
+            .ensure_engine_started()
+            .expect("engine start must succeed");
+        player.ensure_slot().expect("slot allocation must succeed");
+
+        player.set_eq_gain(1, -12.0).expect("band 1 exists");
+
+        let parts = audio_thread.take_commands();
+        assert!(
+            parts
+                .iter()
+                .any(|part| matches!(part, DeckPart::Eq(DeckEqChange::Layout(_)))),
+            "the slot is handed the layout: {parts:?}"
+        );
+        assert!(
+            parts.iter().any(|part| matches!(
+                part,
+                DeckPart::Eq(DeckEqChange::Gain { band: 1, gain }) if *gain == GainDb::from(-12.0)
+            )),
+            "the cut rides the slot's ring: {parts:?}"
+        );
+        assert_eq!(player.eq_gain(1), Some(-12.0));
     }
 }

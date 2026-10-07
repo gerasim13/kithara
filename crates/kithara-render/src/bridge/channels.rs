@@ -2,6 +2,7 @@ use std::num::NonZeroUsize;
 
 use kithara_audio::SeekBegin;
 use kithara_command::{Batch, ChannelConfig, Inbox, SendError, Sender, Seq, When, channel};
+use kithara_effects::eq::EqLayout;
 use kithara_events::TrackId;
 use kithara_output::LiveOutput;
 use kithara_platform::{
@@ -20,7 +21,7 @@ use ringbuf::{
 
 use super::PlaybackShared;
 use crate::{
-    bridge::{DeckPart, DeckProtocol, PlayerNotification, SharedEq},
+    bridge::{DeckPart, DeckProtocol, PlayerNotification},
     rt::track::PlayerTrack,
 };
 
@@ -30,7 +31,15 @@ pub struct NodeInputs {
     pub(crate) playback: Arc<PlaybackShared>,
     pub(crate) deck: Inbox<DeckProtocol>,
     pub(crate) notif_tx: HeapProd<PlayerNotification>,
-    pub(crate) trash_tx: HeapProd<PlayerTrack>,
+    pub(crate) trash_tx: HeapProd<DeckTrash>,
+}
+
+/// What a deck's audio thread hands back to be dropped off it.
+pub enum DeckTrash {
+    /// A track the deck no longer holds.
+    Track(PlayerTrack),
+    /// An EQ layout the deck's equaliser displaced.
+    Eq(Box<EqLayout>),
 }
 
 /// Producer for interleaved stereo mix samples and their drop count.
@@ -83,9 +92,8 @@ impl LiveOutput for MixTapWriter {
 pub struct SlotControl {
     pub playback: Arc<PlaybackShared>,
     pub notif_rx: HeapCons<PlayerNotification>,
-    pub trash_rx: HeapCons<PlayerTrack>,
+    pub trash_rx: HeapCons<DeckTrash>,
     pub deck: Sender<DeckProtocol>,
-    pub eq: SharedEq,
     render: RenderBindings,
     seek: SeekBindings,
 }
@@ -198,7 +206,7 @@ impl SlotControl {
 }
 
 #[must_use]
-pub fn slot_channels(eq: SharedEq) -> (NodeInputs, SlotControl) {
+pub fn slot_channels() -> (NodeInputs, SlotControl) {
     const DECK_CAPACITY: NonZeroUsize = match NonZeroUsize::new(32) {
         Some(capacity) => capacity,
         None => unreachable!(),
@@ -209,7 +217,7 @@ pub fn slot_channels(eq: SharedEq) -> (NodeInputs, SlotControl) {
     let (sender, inbox) =
         channel::<DeckProtocol>(ChannelConfig::builder().capacity(DECK_CAPACITY).build());
     let (notif_tx, notif_rx) = HeapRb::<PlayerNotification>::new(NOTIFICATION_CAPACITY).split();
-    let (trash_tx, trash_rx) = HeapRb::<PlayerTrack>::new(TRASH_CAPACITY).split();
+    let (trash_tx, trash_rx) = HeapRb::<DeckTrash>::new(TRASH_CAPACITY).split();
     let playback = Arc::new(PlaybackShared::default());
 
     let inputs = NodeInputs {
@@ -223,7 +231,6 @@ pub fn slot_channels(eq: SharedEq) -> (NodeInputs, SlotControl) {
         notif_rx,
         trash_rx,
         deck: sender,
-        eq,
         seek: SeekBindings::default(),
         render: RenderBindings::default(),
     };

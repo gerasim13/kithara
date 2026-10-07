@@ -9,7 +9,10 @@ use super::{
 };
 use crate::{
     CrossfadeSettings,
-    bridge::{DeckApplied, DeckPart, PlayerNotification, TrackState, TrackTransition},
+    bridge::{
+        DeckApplied, DeckEqChange, DeckPart, DeckTrash, PlayerNotification, TrackState,
+        TrackTransition,
+    },
 };
 
 impl Deck {
@@ -148,6 +151,14 @@ impl Deck {
             DeckPart::SetRate(rate) => {
                 self.apply_rate(rate);
             }
+            DeckPart::Eq(DeckEqChange::Gain { band, gain }) => {
+                self.render.set_eq_gain(band, gain);
+            }
+            DeckPart::Eq(DeckEqChange::Layout(layout)) => {
+                if let Some(displaced) = self.render.take_eq_layout(layout) {
+                    self.discard(DeckTrash::Eq(displaced));
+                }
+            }
         }
     }
 
@@ -199,7 +210,7 @@ impl Deck {
         track.set_playback_rate(self.rate);
 
         if let Some(rejected) = self.tracks.insert(track) {
-            self.discard_track(rejected);
+            self.discard(DeckTrash::Track(rejected));
             return;
         }
 

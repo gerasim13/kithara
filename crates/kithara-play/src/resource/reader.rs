@@ -341,7 +341,7 @@ mod tests {
     use kithara_events::TrackId;
     use kithara_platform::{CancelToken, sync::Arc};
     use kithara_render::{
-        bridge::{DeckPart, PlayerNotification, SharedEq, TrackTransition, slot_channels},
+        bridge::{DeckPart, PlayerNotification, TrackTransition, slot_channels},
         rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
     };
     use kithara_signal::{AudioSpec, OutputContext, SessionEpoch, SessionFrame};
@@ -565,7 +565,7 @@ mod tests {
     fn a_loaded_track_takes_the_processor_rate(half: Vec<f32>) {
         let pools = pools();
         let effective_rate = if supports_playback_rate() { 1.5 } else { 1.0 };
-        let (inputs, mut control) = slot_channels(SharedEq::new(0));
+        let (inputs, mut control) = slot_channels();
         let shape = StreamShape {
             sample_rate: NonZeroU32::new(consts::SAMPLE_RATE).expect("static sample rate"),
             max_block_frames: NonZeroU32::new(

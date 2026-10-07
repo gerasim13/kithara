@@ -40,11 +40,6 @@ impl<S> PlayerRuntime<S> {
         self.core.engine_load.snapshot()
     }
 
-    /// Get EQ gain for a band in dB.
-    pub fn eq_gain(&self, band: usize) -> Option<f32> {
-        self.core.engine.eq().and_then(|eq| eq.gain(band))
-    }
-
     /// Single coherent read of the active slot's live playback scalars.
     ///
     /// `None` when no slot is allocated. The standalone `position_seconds`
@@ -136,6 +131,8 @@ impl<S> PlayerRuntime<S> {
             pub fn bus(&self) -> &EventBus;
             /// Number of EQ bands available for this player.
             pub fn eq_band_count(&self) -> usize;
+            /// Get EQ gain for a band in dB.
+            pub fn eq_gain(&self, band: usize) -> Option<f32>;
         }
         to self {
             /// Returns `true` if the player is in playing state.

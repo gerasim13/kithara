@@ -25,8 +25,8 @@ use ringbuf::{HeapProd, traits::Producer};
 use super::{DeckMixerConfig, context::read_render_context, track::PlayerTrack};
 use crate::{
     bridge::{
-        DeckApplied, DeckMixSettings, DeckProtocol, NodeInputs, PlaybackShared, PlayerNotification,
-        TrackState,
+        DeckApplied, DeckMixSettings, DeckProtocol, DeckTrash, NodeInputs, PlaybackShared,
+        PlayerNotification, TrackState,
     },
     rt::{LeadingPlayhead, RenderPass, RenderTargets, TrackSlot, TrackSlots},
 };
@@ -61,7 +61,7 @@ pub(super) struct Deck {
     pub(super) rate: f32,
     /// The ramp every track starts and stops with.
     pub(super) declick: SmootherConfig,
-    trash_tx: HeapProd<PlayerTrack>,
+    trash_tx: HeapProd<DeckTrash>,
     /// Last effective rate successfully delivered to the control thread.
     last_notified_rate: f32,
 }
@@ -291,8 +291,9 @@ impl Deck {
         }
     }
 
-    pub(super) fn discard_track(&mut self, track: PlayerTrack) {
-        if self.trash_tx.try_push(track).is_err() {
+    /// Hands `trash` to the control side to drop; a full ring drops it here and counts it.
+    pub(super) fn discard(&mut self, trash: DeckTrash) {
+        if self.trash_tx.try_push(trash).is_err() {
             self.playback.metrics().record_trash_overflow();
         }
     }
@@ -314,7 +315,7 @@ impl Deck {
             if let Some(track) = self.tracks.remove_at(slot) {
                 let item_id = track.item_id();
                 let src = Arc::clone(track.src());
-                self.discard_track(track);
+                self.discard(DeckTrash::Track(track));
                 self.notif_tx
                     .try_push(PlayerNotification::Unloaded { src, item_id })
                     .ok();
@@ -372,7 +373,7 @@ impl Deck {
     fn retire(&mut self, track: PlayerTrack) {
         let item_id = track.item_id();
         let src = Arc::clone(track.src());
-        self.discard_track(track);
+        self.discard(DeckTrash::Track(track));
         self.notif_tx
             .try_push(PlayerNotification::Unloaded { src, item_id })
             .ok();
@@ -478,6 +479,10 @@ mod tests {
         node::{ProcStore, StreamStatus},
     };
     use kithara_audio::mock::TestPcmReader;
+    use kithara_effects::{
+        GainDb,
+        eq::{EqBandConfig, EqConfig, EqLayout},
+    };
     use kithara_platform::time::Duration;
     use kithara_signal::{AudioSpec, OutputContext, SessionEpoch, SessionFrame, TransportRevision};
     use kithara_test_fixtures::integration_fixtures::constant_half;
@@ -486,7 +491,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        bridge::{DeckPart, SharedEq, slot_channels},
+        bridge::{DeckEqChange, DeckPart, slot_channels},
         rt::track::{PcmConsumer, PlayerResource},
         test_pools::pools,
     };
@@ -514,7 +519,7 @@ mod tests {
     }
 
     fn processor() -> (DeckMixer, crate::bridge::SlotControl) {
-        let (inputs, control) = slot_channels(SharedEq::new(0));
+        let (inputs, control) = slot_channels();
         let shape = StreamShape {
             sample_rate: NonZeroU32::new(44_100).expect("static sample rate"),
             max_block_frames: NonZeroU32::new(512).expect("static block size"),
@@ -526,7 +531,7 @@ mod tests {
     }
 
     fn session_processor() -> DeckMixer {
-        let (inputs, _control) = slot_channels(SharedEq::new(0));
+        let (inputs, _control) = slot_channels();
         let shape = StreamShape {
             sample_rate: NonZeroU32::new(44_100).expect("static sample rate"),
             max_block_frames: NonZeroU32::new(512).expect("static block size"),
@@ -611,7 +616,8 @@ mod tests {
         )
     }
 
-    fn render(processor: &mut DeckMixer) {
+    /// Renders one 512-frame block and answers its left channel.
+    fn render(processor: &mut DeckMixer) -> Vec<f32> {
         let frames = 512;
         let mut left = vec![0.0f32; frames];
         let mut right = vec![0.0f32; frames];
@@ -622,6 +628,65 @@ mod tests {
             outputs: &mut outputs,
         };
         processor.render_block(SessionFrame::default(), &mut buffers, frames);
+        left
+    }
+
+    fn eq_layout(gains: &[GainDb]) -> Box<EqLayout> {
+        let bands: Vec<_> = gains
+            .iter()
+            .map(|gain| EqBandConfig::builder().gain_db(*gain).build())
+            .collect();
+        Box::new(
+            EqLayout::new(
+                &EqConfig::builder(pools()).build(),
+                &bands,
+                NonZeroU32::new(44_100).expect("static sample rate"),
+            )
+            .expect("an EQ layout fits the test pool budget"),
+        )
+    }
+
+    /// A band cut sent to a playing deck rides the deck's own ring: the block after it renders
+    /// the deck lowered by the cut.
+    #[kithara::test(tokio)]
+    async fn a_band_cut_lowers_the_deck_output_in_the_next_block(constant_half: &'static [u8]) {
+        const CUT_DB: f32 = -12.0;
+        let (mut processor, mut control) = processor();
+        let item_id = TrackId::allocate();
+        control
+            .send(DeckPart::Attach {
+                resource: pcm_resource(constant_half, "eq", 60.0),
+                item_id,
+            })
+            .ok();
+        control
+            .send(DeckPart::Eq(DeckEqChange::Layout(eq_layout(&[
+                GainDb::DEFAULT,
+            ]))))
+            .ok();
+        control.send(DeckPart::StartAll).ok();
+        render(&mut processor);
+        processor
+            .track_mut(item_id)
+            .expect("the track is attached")
+            .play();
+        render(&mut processor);
+        let open = render(&mut processor)[511];
+
+        control
+            .send(DeckPart::Eq(DeckEqChange::Gain {
+                band: 0,
+                gain: GainDb::from(CUT_DB),
+            }))
+            .ok();
+        let cut = render(&mut processor)[511];
+
+        let expected = open * 10f32.powf(CUT_DB / 20.0);
+        assert!(open > 0.1, "the deck sounds before the cut: {open}");
+        assert!(
+            (cut - expected).abs() < 1e-3,
+            "cut {cut}, expected {expected} from {open}"
+        );
     }
 
     /// A successor the deck stitches in leads under the epoch its chain carries: until the

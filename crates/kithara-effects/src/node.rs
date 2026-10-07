@@ -1,3 +1,5 @@
+//! Firewheel nodes that put an effect on a session bus.
+
 use core::num::{NonZeroU32, NonZeroUsize};
 
 use firewheel::{

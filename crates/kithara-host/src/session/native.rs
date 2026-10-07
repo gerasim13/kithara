@@ -322,11 +322,10 @@ mod tests {
         let player_id = match client.exec(Cmd::RegisterPlayer {
             grid_id: player_grid_id,
             bus: EventBus::default(),
-            eq_layout: Vec::new(),
             mixer: DeckMixerConfig::default(),
             pools: pools(),
         }) {
-            Ok(Reply::PlayerRegistered(registered)) => registered.id,
+            Ok(Reply::PlayerRegistered(player_id)) => player_id,
             Ok(Reply::Err(error)) => panic!("register fixture player: {error}"),
             Err(error) => panic!("register fixture player: {error}"),
             _ => panic!("unexpected register fixture player reply"),

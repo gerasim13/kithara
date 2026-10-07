@@ -445,11 +445,10 @@ fn bootstrap(
     let player_id = match state.exec(Cmd::RegisterPlayer {
         grid_id: BeatGridId::allocate().map_err(RingSessionError::GridId)?,
         bus: EventBus::default(),
-        eq_layout: Vec::new(),
         mixer: kithara_play::DeckMixerConfig::default(),
         pools: pools(),
     }) {
-        Reply::PlayerRegistered(registered) => registered.id,
+        Reply::PlayerRegistered(player_id) => player_id,
         Reply::Err(error) => return Err(error.into()),
         _ => return Err(RingSessionError::Protocol("register anchor player reply")),
     };

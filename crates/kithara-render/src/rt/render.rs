@@ -6,6 +6,10 @@ use std::{
 use firewheel::node::ProcBuffers;
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_dsp::param::{SmoothedParam, SmootherConfig};
+use kithara_effects::{
+    GainDb,
+    eq::{EqConfig, EqLayout, StereoEq},
+};
 use kithara_warp::RenderContext;
 use num_traits::cast::AsPrimitive;
 use ringbuf::HeapProd;
@@ -45,6 +49,8 @@ pub(crate) type LeadingPlayhead = (u64, f64, f64);
 pub(crate) struct RenderPass {
     /// The deck's output gain, ramped to each new target from the frame it is set on.
     gain: SmoothedParam,
+    /// The deck's equaliser, after its gain.
+    eq: StereoEq,
     scratch_bufs: [SampleBuffer; Self::MIN_STEREO],
     range_tracks: RangeTracks,
     /// Set until the first range renders, which moves every ramp to its target at once.
@@ -73,6 +79,7 @@ impl RenderPass {
                 SmootherConfig::default(),
                 shape.sample_rate,
             ),
+            eq: StereoEq::new(&EqConfig::builder(pools.clone()).build(), shape.sample_rate),
             scratch_bufs: std::array::from_fn(|_| pools.get::<f32>()),
             range_tracks: RangeTracks::new(config.slots()),
             capacity: 0,
@@ -241,6 +248,8 @@ impl RenderPass {
 
         let [bus_left, bus_right] = &mut bus_bufs;
         self.apply_gain(&mut bus_left[start..], &mut bus_right[start..]);
+        self.eq
+            .process(&mut bus_left[start..], &mut bus_right[start..]);
 
         (playback_started, leading_outcome_pos_dur)
     }
@@ -250,8 +259,20 @@ impl RenderPass {
             /// Ramp the deck's output gain to `gain` from the next frame rendered.
             #[call(set_value)]
             pub(crate) fn set_gain(&mut self, gain: f32);
-            pub(crate) fn update_sample_rate(&mut self, sample_rate: NonZeroU32);
         }
+        to self.eq {
+            /// Ramp `band` of the deck's equaliser to `gain` from the next frame rendered.
+            #[call(set_gain)]
+            pub(crate) fn set_eq_gain(&mut self, band: usize, gain: GainDb);
+            /// Cross the deck's equaliser over to `layout`, answering the layout it displaced.
+            #[call(take_layout)]
+            pub(crate) fn take_eq_layout(&mut self, layout: Box<EqLayout>) -> Option<Box<EqLayout>>;
+        }
+    }
+
+    pub(crate) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
+        self.gain.update_sample_rate(sample_rate);
+        self.eq.update_sample_rate(sample_rate);
     }
 
     fn apply_gain(&mut self, left: &mut [f32], right: &mut [f32]) {

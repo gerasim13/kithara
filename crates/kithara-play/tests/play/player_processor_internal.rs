@@ -19,7 +19,7 @@ use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use kithara_play::{PlayerNotification, Resource, SharedEq, TrackState, TrackTransition};
+use kithara_play::{PlayerNotification, Resource, TrackState, TrackTransition};
 use kithara_render::{
     bridge::{DeckPart, SlotControl, slot_channels},
     rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
@@ -48,7 +48,7 @@ fn stream_shape(sample_rate: NonZeroU32) -> StreamShape {
 }
 
 fn make_processor() -> (DeckMixer, SlotControl) {
-    let (inputs, control) = slot_channels(SharedEq::new(0));
+    let (inputs, control) = slot_channels();
     let processor = DeckMixer::new(
         inputs,
         stream_shape(SAMPLE_RATE),
@@ -125,7 +125,7 @@ async fn load_track_propagates_host_sample_rate() {
             .expect("player resource fits the test pool budget"),
     );
 
-    let (inputs, mut control) = slot_channels(SharedEq::new(0));
+    let (inputs, mut control) = slot_channels();
     let sample_rate = NonZeroU32::new(host_rate).expect("BUG: non-zero");
     let mut processor = DeckMixer::new(
         inputs,
@@ -403,7 +403,7 @@ async fn a_deck_holds_as_many_tracks_as_its_config_gives_it_slots(
     let config = DeckMixerConfig::builder()
         .slots(NonZeroUsize::new(slots).expect("a test deck has a slot"))
         .build();
-    let (inputs, mut control) = slot_channels(SharedEq::new(0));
+    let (inputs, mut control) = slot_channels();
     let mut processor = DeckMixer::new(inputs, stream_shape(SAMPLE_RATE), &pools(), config);
     let ids: Vec<TrackId> = (0..=slots).map(|_| TrackId::allocate()).collect();
 

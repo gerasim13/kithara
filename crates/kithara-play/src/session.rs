@@ -4,10 +4,9 @@ mod wire {
     use std::num::NonZeroUsize;
 
     use kithara_bufpool::PoolRegion;
-    use kithara_effects::eq::EqBandConfig;
     use kithara_events::EventBus;
     use kithara_render::{
-        bridge::{SharedEq, SlotControl},
+        bridge::SlotControl,
         rt::{BufferGeometryError, DeckMixerConfig},
     };
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
@@ -15,13 +14,6 @@ mod wire {
     use crate::api::SlotId;
 
     pub type PlayerId = u64;
-
-    /// Registered deck identity and its Host-owned EQ controls.
-    #[derive(Clone, Debug)]
-    pub struct RegisteredPlayer {
-        pub id: PlayerId,
-        pub eq: SharedEq,
-    }
 
     #[derive(Debug, Clone, thiserror::Error)]
     #[non_exhaustive]
@@ -38,8 +30,6 @@ mod wire {
         SlotNotFound(SlotId),
         #[error("session context not initialised")]
         NoContext,
-        #[error("eq band out of range: {band} (bands: {bands})")]
-        EqBandOutOfRange { band: usize, bands: usize },
         #[error("stream start failed: {0}")]
         StreamStart(String),
         #[error("graph edit failed: {0}")]
@@ -68,7 +58,6 @@ mod wire {
         RegisterPlayer {
             grid_id: BeatGridId,
             bus: EventBus,
-            eq_layout: Vec<EqBandConfig>,
             mixer: DeckMixerConfig,
             pools: PoolRegion<S>,
         },
@@ -90,22 +79,13 @@ mod wire {
             player_id: PlayerId,
             slot: SlotId,
         },
-        SetPlayerEqGain {
-            band: usize,
-            gain_db: f32,
-            player_id: PlayerId,
-        },
-        SetPlayerEqLayout {
-            eq_layout: Vec<EqBandConfig>,
-            player_id: PlayerId,
-        },
         Tick,
     }
 
     #[non_exhaustive]
     pub enum Reply {
         Ok,
-        PlayerRegistered(RegisteredPlayer),
+        PlayerRegistered(PlayerId),
         SlotAllocated(Box<AllocatedSlot>),
         Err(SessionError),
     }
@@ -161,7 +141,6 @@ mod handle {
 
     use kithara_audio::ConsumerWakeMode;
     use kithara_bufpool::PoolRegion;
-    use kithara_effects::eq::EqBandConfig;
     use kithara_events::EventBus;
     use kithara_platform::{
         maybe_send::{MaybeSend, MaybeSync},
@@ -170,7 +149,7 @@ mod handle {
     use kithara_render::rt::{DeckMixerConfig, StreamShape};
     use kithara_warp::BeatGridId;
 
-    use super::wire::{AllocatedSlot, Cmd, PlayerId, RegisteredPlayer, Reply, SessionSampleRate};
+    use super::wire::{AllocatedSlot, Cmd, PlayerId, Reply, SessionSampleRate};
     use crate::{api::SlotId, error::PlayError};
 
     /// Handle used by resident players to reach their session owner.
@@ -317,14 +296,12 @@ mod handle {
             &self,
             grid_id: BeatGridId,
             bus: EventBus,
-            eq_layout: Vec<EqBandConfig>,
             pools: PoolRegion<S>,
             mixer: DeckMixerConfig,
-        ) -> Result<RegisteredPlayer, PlayError> {
+        ) -> Result<PlayerId, PlayError> {
             match self.exec_ok(Cmd::RegisterPlayer {
                 grid_id,
                 bus,
-                eq_layout,
                 mixer,
                 pools,
             })? {
@@ -347,32 +324,6 @@ mod handle {
                 .as_ref()
                 .map(SessionBinding::requested_sample_rate)
                 .ok_or(PlayError::SessionUnbound)
-        }
-
-        pub fn set_player_eq_gain(
-            &self,
-            player_id: PlayerId,
-            band: usize,
-            gain_db: f32,
-        ) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::SetPlayerEqGain {
-                band,
-                gain_db,
-                player_id,
-            })
-            .map(|_| ())
-        }
-
-        pub fn set_player_eq_layout(
-            &self,
-            player_id: PlayerId,
-            eq_layout: Vec<EqBandConfig>,
-        ) -> Result<(), PlayError> {
-            self.exec_ok(Cmd::SetPlayerEqLayout {
-                eq_layout,
-                player_id,
-            })
-            .map(|_| ())
         }
 
         pub fn start_player(
@@ -447,9 +398,7 @@ mod handle {
 }
 
 pub use handle::{SessionBinding, SessionDispatcher, SessionHandle};
-pub use wire::{
-    AllocatedSlot, Cmd, PlayerId, RegisteredPlayer, Reply, SessionError, SessionSampleRate,
-};
+pub use wire::{AllocatedSlot, Cmd, PlayerId, Reply, SessionError, SessionSampleRate};
 
 #[cfg(test)]
 mod tests {
@@ -507,12 +456,7 @@ mod tests {
 
         fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             match cmd {
-                Cmd::RegisterPlayer { .. } => {
-                    Ok(Reply::PlayerRegistered(crate::session::RegisteredPlayer {
-                        id: 1,
-                        eq: kithara_render::bridge::SharedEq::new(10),
-                    }))
-                }
+                Cmd::RegisterPlayer { .. } => Ok(Reply::PlayerRegistered(1)),
                 _ => Ok(Reply::Ok),
             }
         }
@@ -579,12 +523,10 @@ mod tests {
             .register_player(
                 BeatGridId::allocate().expect("player id"),
                 EventBus::default(),
-                Vec::new(),
                 pools(),
                 DeckMixerConfig::default(),
             )
-            .expect("register player")
-            .id;
+            .expect("register player");
         handle
             .start_player(player_id, None, NonZeroUsize::new(448))
             .expect("start player");

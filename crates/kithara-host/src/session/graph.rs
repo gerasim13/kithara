@@ -1,11 +1,7 @@
 use std::num::NonZeroUsize;
 
-use firewheel::{FirewheelContext, diff::Memo, node::NodeID};
+use firewheel::{FirewheelContext, node::NodeID};
 use kithara_bufpool::HasPool;
-use kithara_effects::{
-    GainDb,
-    eq::{EqBandConfig, EqConfig},
-};
 use kithara_output::OutputGroup;
 use kithara_warp::MapAxis;
 use tracing::{debug, warn};
@@ -15,13 +11,12 @@ use super::{
     queue::settle_receipts,
     state::{
         Deck, GraphRegistry, SessionState, SlotNodes, TapSlot, Taps, add_graph_node, ensure_ctx,
-        prepare_eq_layout,
     },
 };
 use crate::{
     api::SlotId,
     bridge::slot_channels,
-    rt::{MasterEqNode, PlayerNode, TapNode},
+    rt::{PlayerNode, TapNode},
 };
 pub(super) fn player_index<T, S>(
     state: &SessionState<T, S>,
@@ -162,35 +157,12 @@ pub(super) mod lifecycle {
         ensure_ctx(state)?;
         validate_response_geometry(state, render_quantum_frames, response_budget_frames)?;
         let idx = player_index(state, player_id)?;
-        let Some(session_output_id) = state.session_output_node_id else {
-            return Err(graph_state("session output node is not initialised"));
-        };
-        let (ctx, graph) = (&mut state.ctx, &mut state.graph);
-        let fw_ctx = ctx.as_mut().ok_or(SessionError::NoContext)?;
-        let player = deck_at_mut(graph, idx)?;
+        let player = deck_at_mut(&mut state.graph, idx)?;
         if player.started {
             return Err(SessionError::AlreadyStarted(player_id));
         }
-        let eq_config = EqConfig::builder(player.pools.clone()).build();
-        let mut master_eq = MasterEqNode::new(eq_config, &player.eq_layout);
-        for (band, gain) in player.shared_eq.snapshot().into_iter().enumerate() {
-            master_eq.set_gain(band, GainDb::from(gain));
-        }
-        let master_eq_memo = Memo::new(master_eq.clone());
-        let master_eq_id = add_graph_node(fw_ctx, master_eq)?;
-        let eq_to_output = "connect player master_eq->session_output";
-        connect_stereo(fw_ctx, master_eq_id, session_output_id, eq_to_output)?;
-        if let Err(err) = fw_ctx.update() {
-            warn!(player_id, "graph update after player start failed: {err:?}");
-        }
-        player.master_eq_node_id = Some(master_eq_id);
-        player.master_eq_memo = Some(master_eq_memo);
         player.started = true;
-        debug!(
-            player_id,
-            ?master_eq_id,
-            "[KITHARA-ROUTE] player graph started"
-        );
+        debug!(player_id, "[KITHARA-ROUTE] player graph started");
         Ok(())
     }
 
@@ -237,8 +209,6 @@ pub(super) mod lifecycle {
                         "graph update after player stop failed: {err:?}"
                     );
                 }
-            } else {
-                clear_player_graph_state(player);
             }
             player.started = false;
         }
@@ -326,15 +296,6 @@ pub(super) mod lifecycle {
                 warn!(player_id, ?err, "failed to remove slot player node");
             }
         }
-        if let Some(master_eq_id) = player.master_eq_node_id.take()
-            && let Err(err) = fw_ctx.remove_node(master_eq_id)
-        {
-            warn!(player_id, ?err, "failed to remove player master eq node");
-        }
-        clear_player_graph_state(player);
-    }
-    pub(super) fn clear_player_graph_state<S>(player: &mut Deck<S>) {
-        player.master_eq_memo = None;
     }
 }
 
@@ -353,22 +314,19 @@ pub(super) mod slots {
         if !deck_at(state, idx)?.started {
             return Err(SessionError::NotRunning(player_id));
         }
-        let master_eq_id = deck_at(state, idx)?.master_eq_node_id;
-        let (fw_ctx, master_eq_id) = match (&mut state.ctx, master_eq_id) {
-            (None, _) => return Err(SessionError::NoContext),
-            (Some(_), None) => return Err(graph_state("player master eq node is not initialised")),
-            (Some(fw_ctx), Some(master_eq_id)) => (fw_ctx, master_eq_id),
+        let Some(session_output_id) = state.session_output_node_id else {
+            return Err(graph_state("session output node is not initialised"));
         };
+        let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
         let player = deck_at_mut(&mut state.graph, idx)?;
         let slot_id = SlotId::new(player.next_slot_id);
         player.next_slot_id += 1;
-        let shared_eq = player.shared_eq.clone();
-        let (inputs, control) = slot_channels(shared_eq);
+        let (inputs, control) = slot_channels();
         let player_node =
             PlayerNode::new(inputs, player.pools.clone(), player.mixer).with_session_context();
         let player_node_id = add_graph_node(fw_ctx, player_node)?;
-        let player_to_master = "connect player->player_master_eq";
-        connect_stereo(fw_ctx, player_node_id, master_eq_id, player_to_master)?;
+        let player_to_output = "connect player->session_output";
+        connect_stereo(fw_ctx, player_node_id, session_output_id, player_to_output)?;
         if let Err(err) = fw_ctx.update() {
             warn!(
                 player_id,
@@ -436,96 +394,6 @@ pub(super) mod slots {
     }
 }
 
-pub(super) mod controls {
-    use super::*;
-
-    pub(in crate::session) fn set_player_eq_gain<T, S>(
-        state: &mut SessionState<T, S>,
-        player_id: PlayerId,
-        band: usize,
-        gain_db: f32,
-    ) -> Result<(), SessionError> {
-        let idx = player_index(state, player_id)?;
-        let player = deck_at(state, idx)?;
-        if band >= player.eq_layout.len() {
-            return Err(SessionError::EqBandOutOfRange {
-                band,
-                bands: player.eq_layout.len(),
-            });
-        }
-        player
-            .shared_eq
-            .set_gain(band, GainDb::from(gain_db))
-            .map_err(|_| SessionError::EqBandOutOfRange {
-                band,
-                bands: player.eq_layout.len(),
-            })?;
-        if !player.started {
-            return Ok(());
-        }
-        let (ctx, graph) = (&mut state.ctx, &mut state.graph);
-        let player = deck_at_mut(graph, idx)?;
-        let fw_ctx = ctx.as_mut().ok_or(SessionError::NoContext)?;
-        let Some(master_eq_id) = player.master_eq_node_id else {
-            return Err(graph_state("player master eq node is not initialised"));
-        };
-        let Some(memo) = &mut player.master_eq_memo else {
-            return Err(graph_state("player master eq memo is not initialised"));
-        };
-        if band >= memo.band_count() {
-            return Err(SessionError::EqBandOutOfRange {
-                band,
-                bands: memo.band_count(),
-            });
-        }
-        memo.set_gain(band, GainDb::from(gain_db));
-        let mut queue = fw_ctx.event_queue(master_eq_id);
-        memo.update_memo(&mut queue);
-        Ok(())
-    }
-    pub(in crate::session) fn set_player_eq_layout<T, S>(
-        state: &mut SessionState<T, S>,
-        player_id: PlayerId,
-        eq_layout: Vec<EqBandConfig>,
-    ) -> Result<(), SessionError>
-    where
-        S: HasPool<f32> + Send + Sync + 'static,
-    {
-        let idx = player_index(state, player_id)?;
-        let (eq_layout, gains) = prepare_eq_layout(eq_layout);
-        if !deck_at(state, idx)?.started {
-            let player = deck_at_mut(&mut state.graph, idx)?;
-            player.eq_layout = eq_layout;
-            player.shared_eq.replace(&gains);
-            return Ok(());
-        }
-
-        let (master_eq_id, pools) = {
-            let player = deck_at(state, idx)?;
-            let master_eq_id = player
-                .master_eq_node_id
-                .ok_or_else(|| graph_state("player master eq node is not initialised"))?;
-            (master_eq_id, player.pools.clone())
-        };
-        let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-        let sample_rate = fw_ctx
-            .stream_info()
-            .map(|info| info.sample_rate)
-            .ok_or_else(|| graph_state("session stream is not running"))?;
-        let master_eq = MasterEqNode::new(EqConfig::builder(pools).build(), &eq_layout);
-        let event = master_eq.layout_event(sample_rate).map_err(|error| {
-            SessionError::Graph(format!("prepare master EQ layout failed: {error}"))
-        })?;
-        fw_ctx.queue_event_for(master_eq_id, event);
-
-        let player = deck_at_mut(&mut state.graph, idx)?;
-        player.eq_layout = eq_layout;
-        player.shared_eq.replace(&gains);
-        player.master_eq_memo = Some(Memo::new(master_eq));
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{cell::RefCell, num::NonZeroU32};
@@ -536,7 +404,6 @@ mod tests {
         processor::FirewheelProcessor,
     };
     use kithara_command::When;
-    use kithara_effects::eq::generate_log_spaced_bands;
     use kithara_events::EventBus;
     use kithara_platform::time::Duration;
     use kithara_signal::{SessionEpoch, SessionFrame};
@@ -674,12 +541,11 @@ mod tests {
             Cmd::RegisterPlayer {
                 grid_id,
                 bus: EventBus::default(),
-                eq_layout: generate_log_spaced_bands(5),
                 mixer: kithara_play::DeckMixerConfig::default(),
                 pools: pools(),
             },
         ) {
-            Reply::PlayerRegistered(registered) => registered.id,
+            Reply::PlayerRegistered(player_id) => player_id,
             Reply::Err(err) => panic!("player registration failed: {err}"),
             _ => panic!("player registration returned unexpected reply"),
         }
@@ -785,59 +651,6 @@ mod tests {
             state.ctx.is_some(),
             "a session whose device cannot be rebuilt must hold it while idle"
         );
-    }
-
-    #[kithara::test]
-    fn a_running_player_changes_its_eq_layout_in_place() {
-        device(|dev| *dev = AudioDevice::default());
-        let mut state = test_state(start_test_stream);
-        let player_id = register(&mut state);
-        start(&mut state, player_id);
-        let slot = match run_cmd(&mut state, Cmd::AllocateSlot { player_id }) {
-            Reply::SlotAllocated(allocated) => allocated.slot,
-            Reply::Err(err) => panic!("slot allocation failed: {err}"),
-            _ => panic!("slot allocation returned unexpected reply"),
-        };
-        let previous_eq = deck_at(&state, 0)
-            .expect("the registered deck is present")
-            .master_eq_node_id;
-        let mut layout = generate_log_spaced_bands(4);
-        for (band, gain) in layout.iter_mut().zip([-6.0, -3.0, 1.5, 4.0]) {
-            band.set_gain_db(GainDb::from(gain));
-        }
-
-        assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::SetPlayerEqLayout {
-                    player_id,
-                    eq_layout: layout,
-                },
-            ),
-            Reply::Ok
-        ));
-
-        let player = deck_at(&state, 0).expect("the registered deck is present");
-        assert_eq!(player.eq_layout.len(), 4);
-        assert_eq!(player.shared_eq.snapshot(), vec![-6.0, -3.0, 1.5, 4.0]);
-        assert_eq!(player.slots.len(), 1);
-        assert_eq!(player.slots[0].slot_id, slot);
-        assert_eq!(player.master_eq_node_id, previous_eq);
-        assert_eq!(
-            player.master_eq_memo.as_ref().map(|memo| memo.band_count()),
-            Some(4)
-        );
-        assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::SetPlayerEqGain {
-                    player_id,
-                    band: 3,
-                    gain_db: 5.0,
-                },
-            ),
-            Reply::Ok
-        ));
     }
 
     #[kithara::test]

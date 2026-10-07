@@ -9,7 +9,7 @@ use kithara_render::bridge::{NodeInputs, slot_channels};
 
 pub use crate::api::equalizer::EqualizerMock;
 use crate::{
-    PlayError, SharedEq, SlotId, StreamShape,
+    PlayError, SlotId, StreamShape,
     session::{AllocatedSlot, Cmd, Reply, SessionBinding, SessionDispatcher, SessionSampleRate},
 };
 
@@ -36,14 +36,11 @@ impl<S> SessionDispatcher<S> for SessionMock {
     fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
         let reply = match cmd {
             Cmd::RegisterPlayer { .. } => {
-                Reply::PlayerRegistered(crate::session::RegisteredPlayer {
-                    id: self.next_player.fetch_add(1, Ordering::Relaxed),
-                    eq: SharedEq::new(10),
-                })
+                Reply::PlayerRegistered(self.next_player.fetch_add(1, Ordering::Relaxed))
             }
             Cmd::AllocateSlot { .. } => {
                 let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
-                let (inputs, control) = slot_channels(SharedEq::new(10));
+                let (inputs, control) = slot_channels();
                 self.nodes.lock().push(inputs);
                 Reply::SlotAllocated(Box::new(AllocatedSlot::new(control, slot)))
             }
