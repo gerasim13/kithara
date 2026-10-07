@@ -9,7 +9,11 @@
 //! with the mtime a claim gave that content. A claim gives each file whose
 //! content the record names that mtime back and every other file the time of
 //! the claim, so Cargo builds what changed since this directory's own builds,
-//! whatever ran in the checkout between them. Those mtimes are older than the
+//! whatever ran in the checkout between them. A build script that watches a
+//! directory reruns by the newest mtime below it, the directories' own
+//! included, and git moves a directory whenever it writes a file into it, so
+//! a directory reads as new as the newest file it holds, or as the claim when
+//! a file the record names has left it. Those mtimes are older than the
 //! ones git wrote, so every build directory of a CI checkout claims before it
 //! builds: one that did not would judge a file by a time another directory's
 //! record gave it. A settled claim gives them back, so the checkout reads as
@@ -24,8 +28,7 @@
 use std::{
     collections::BTreeMap,
     ffi::OsString,
-    fs::{self, File},
-    io,
+    fs, io,
     path::{Path, PathBuf},
     process::Command,
     time::{Duration, SystemTime},
@@ -53,8 +56,9 @@ pub(crate) struct Claim {
     checkout: PathBuf,
     record: PathBuf,
     stamped: BTreeMap<String, Stamped>,
-    /// Each stamped file's mtime before the claim, given back when it settles.
-    before: BTreeMap<String, SystemTime>,
+    /// Each stamped file's and directory's mtime before the claim and the one
+    /// it was given; the first comes back when the claim settles.
+    before: BTreeMap<String, (SystemTime, SystemTime)>,
 }
 
 /// Stamps `checkout` for a build in `dir` and records what it stamped, held
@@ -72,7 +76,12 @@ pub(crate) fn claim(checkout: &Path, dir: &Path) -> Result<Claim> {
     let mut stamped = BTreeMap::new();
     let mut before = BTreeMap::new();
     let mut kept = 0_usize;
-    for (path, blob) in list(checkout)? {
+    let listed = list(checkout)?;
+    let gone: Vec<&String> = recorded
+        .keys()
+        .filter(|path| !listed.contains_key(*path))
+        .collect();
+    for (path, blob) in listed {
         let at = match recorded.get(&path) {
             Some(entry) if entry.blob == blob => {
                 kept += 1;
@@ -81,8 +90,12 @@ pub(crate) fn claim(checkout: &Path, dir: &Path) -> Result<Claim> {
             _ => now,
         };
         let (was, mtime) = stamp(&checkout.join(&path), at)?;
-        before.insert(path.clone(), was);
+        before.insert(path.clone(), (was, mtime));
         stamped.insert(path, Stamped { blob, mtime });
+    }
+    for (directory, at) in directory_stamps(&stamped, &gone, now) {
+        let stamps = stamp(&checkout.join(&directory), at)?;
+        before.insert(directory, stamps);
     }
     write(&record, &stamped, true)?;
     info!(
@@ -124,25 +137,27 @@ impl Drop for Claim {
     /// job, so what was built from it read content no claim stamped, and the
     /// record lets it go.
     ///
-    /// Every other file gets back the mtime it had before the claim. A build
+    /// Every other file, and every directory the job left as stamped, gets
+    /// back the mtime it had before the claim. A build
     /// that claims nothing judges the checkout by when git wrote each file,
     /// and a stamp older than that write would call a build of other content
     /// fresh.
     fn drop(&mut self) {
         let checkout = &self.checkout;
-        self.stamped.retain(|path, entry| {
+        let untouched = |path: &str, given: SystemTime| {
             fs::metadata(checkout.join(path))
                 .and_then(|metadata| metadata.modified())
-                .is_ok_and(|mtime| mtime == entry.mtime)
-        });
+                .is_ok_and(|mtime| mtime == given)
+        };
+        self.stamped
+            .retain(|path, entry| untouched(path, entry.mtime));
         if let Err(error) = write(&self.record, &self.stamped, false) {
             warn!("{error:#}; the next claim of this build directory stamps every file");
         }
-        for path in self.stamped.keys() {
-            let Some(&was) = self.before.get(path) else {
-                continue;
-            };
-            if let Err(error) = stamp(&checkout.join(path), was) {
+        for (path, &(was, given)) in &self.before {
+            if untouched(path, given)
+                && let Err(error) = stamp(&checkout.join(path), was)
+            {
                 warn!("{error:#}; a build that claims nothing may trust its stamp");
             }
         }
@@ -181,25 +196,53 @@ fn trusted(dir: &Path, record: &Path) -> Result<BTreeMap<String, Stamped>> {
     Ok(recorded)
 }
 
-/// Gives `file` the mtime `at` unless it reads so already, and returns the
+/// Each directory holding a listed file, with the stamp it reads as: the
+/// newest of the files below it, or `now` once a file in `gone` left it.
+fn directory_stamps(
+    stamped: &BTreeMap<String, Stamped>,
+    gone: &[&String],
+    now: SystemTime,
+) -> BTreeMap<String, SystemTime> {
+    let mut directories = BTreeMap::new();
+    for (path, entry) in stamped {
+        for directory in directories_of(path) {
+            let newest = directories.entry(directory).or_insert(entry.mtime);
+            *newest = (*newest).max(entry.mtime);
+        }
+    }
+    for path in gone {
+        for directory in directories_of(path) {
+            if let Some(at) = directories.get_mut(&directory) {
+                *at = now;
+            }
+        }
+    }
+    directories
+}
+
+/// The directories `path` lies in, the checkout's own included.
+fn directories_of(path: &str) -> impl Iterator<Item = String> + '_ {
+    Path::new(path)
+        .ancestors()
+        .skip(1)
+        .map(|directory| directory.to_string_lossy().into_owned())
+}
+
+/// Gives `path` the mtime `at` unless it reads so already, and returns the
 /// mtime it had and the one the file system kept, which may be coarser.
-fn stamp(file: &Path, at: SystemTime) -> Result<(SystemTime, SystemTime)> {
-    let mtime = fs::metadata(file)
-        .and_then(|metadata| metadata.modified())
-        .with_context(|| format!("reading {}", file.display()))?;
+fn stamp(path: &Path, at: SystemTime) -> Result<(SystemTime, SystemTime)> {
+    let modified = || {
+        fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .with_context(|| format!("reading {}", path.display()))
+    };
+    let mtime = modified()?;
     if mtime == at {
         return Ok((mtime, at));
     }
-    let handle = File::options()
-        .write(true)
-        .open(file)
-        .with_context(|| format!("opening {}", file.display()))?;
-    let kept = handle
-        .set_modified(at)
-        .and_then(|()| handle.metadata())
-        .and_then(|metadata| metadata.modified())
-        .with_context(|| format!("stamping {}", file.display()))?;
-    Ok((mtime, kept))
+    filetime::set_file_mtime(path, filetime::FileTime::from_system_time(at))
+        .with_context(|| format!("stamping {}", path.display()))?;
+    Ok((mtime, modified()?))
 }
 
 /// The record's header, `held` or `settled`, then one
@@ -356,13 +399,7 @@ fn parse_stage(listed: &str) -> Contents {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs::{self, File},
-        mem::ManuallyDrop,
-        path::Path,
-        process::Command,
-        time::SystemTime,
-    };
+    use std::{fs, mem::ManuallyDrop, path::Path, process::Command, time::SystemTime};
 
     use super::*;
     use crate::{
@@ -371,12 +408,7 @@ mod tests {
     };
 
     fn set_mtime(path: &Path, at: SystemTime) {
-        File::options()
-            .write(true)
-            .open(path)
-            .unwrap()
-            .set_modified(at)
-            .unwrap();
+        filetime::set_file_mtime(path, filetime::FileTime::from_system_time(at)).unwrap();
     }
 
     fn mtime(path: &Path) -> SystemTime {
@@ -428,6 +460,65 @@ mod tests {
         );
     }
 
+    /// A build script that watches a directory reruns when anything below it
+    /// is newer than its last run, the directories included, and git moves a
+    /// directory whenever it writes a file into it.
+    #[test]
+    fn cargo_reuses_a_build_script_whose_directory_holds_what_it_built_from() {
+        let checkout = git_checkout(&[
+            ("Cargo.toml", consts::PROBE_MANIFEST),
+            (
+                "build.rs",
+                "fn main() { println!(\"cargo::rerun-if-changed=assets\"); }\n",
+            ),
+            ("src/lib.rs", "pub fn probe() {}\n"),
+            ("assets/skin/dark.ron", "()\n"),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let skin = checkout.path().join("assets/skin");
+        let dark = skin.join("dark.ron");
+        {
+            let _claim = claim(checkout.path(), dir.path()).unwrap();
+            assert!(
+                compiles(checkout.path(), dir.path()),
+                "a first build compiles"
+            );
+        }
+        // Another branch came and went: git wrote the file again, unchanged,
+        // and its directory with it.
+        fs::remove_file(&dark).unwrap();
+        fs::write(&dark, "()\n").unwrap();
+        let rewritten = SystemTime::now() + consts::DAY;
+        for path in [checkout.path().join("assets"), skin, dark] {
+            set_mtime(&path, rewritten);
+        }
+
+        let _claim = claim(checkout.path(), dir.path()).unwrap();
+
+        assert!(
+            !compiles(checkout.path(), dir.path()),
+            "a directory holding what the build read does not run its build script again"
+        );
+    }
+
+    /// A file the directory built from left a directory, which only the
+    /// directory's own mtime says.
+    #[test]
+    fn a_directory_a_built_file_left_is_stamped_when_it_is_claimed() {
+        let checkout = git_checkout(&[("assets/kept.ron", "same"), ("assets/gone.ron", "old")]);
+        let dir = tempfile::tempdir().unwrap();
+        let assets = checkout.path().join("assets");
+        drop(claim(checkout.path(), dir.path()).unwrap());
+        fs::remove_file(assets.join("gone.ron")).unwrap();
+        set_mtime(&assets, SystemTime::UNIX_EPOCH + consts::DAY);
+        let claimed = SystemTime::now();
+
+        let _claim = claim(checkout.path(), dir.path()).unwrap();
+
+        assert!(mtime(&assets) >= claimed);
+        assert!(mtime(&assets.join("kept.ron")) < claimed);
+    }
+
     /// A branch checked out in between writes a file again with the content
     /// the directory built from: the claim gives it back the mtime that
     /// content was stamped with, and stamps what the directory never built
@@ -463,19 +554,21 @@ mod tests {
     /// other content fresh. A file the job wrote keeps the mtime it wrote.
     #[test]
     fn a_settled_claim_gives_the_checkout_its_mtimes_back() {
-        let checkout = git_checkout(&[("kept.rs", "same"), ("written.rs", "before")]);
+        let checkout = git_checkout(&[("src/kept.rs", "same"), ("written.rs", "before")]);
         let dir = tempfile::tempdir().unwrap();
-        let kept = checkout.path().join("kept.rs");
+        let src = checkout.path().join("src");
+        let kept = src.join("kept.rs");
         let written = checkout.path().join("written.rs");
         drop(claim(checkout.path(), dir.path()).unwrap());
         let git_wrote = mtime(&kept) + consts::DAY;
-        set_mtime(&kept, git_wrote);
-        set_mtime(&written, git_wrote);
+        for path in [&src, &kept, &written] {
+            set_mtime(path, git_wrote);
+        }
         let job = claim(checkout.path(), dir.path()).unwrap();
         assert_ne!(
-            mtime(&kept),
-            git_wrote,
-            "the claim gives built content its stamp"
+            (mtime(&kept), mtime(&src)),
+            (git_wrote, git_wrote),
+            "the claim gives built content and its directory their stamp"
         );
         fs::write(&written, "after").unwrap();
         let job_wrote = mtime(&written);
@@ -483,6 +576,7 @@ mod tests {
         drop(job);
 
         assert_eq!(mtime(&kept), git_wrote);
+        assert_eq!(mtime(&src), git_wrote);
         assert_eq!(mtime(&written), job_wrote);
     }
 
