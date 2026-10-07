@@ -108,6 +108,7 @@ fn walk(
             walk(anchor, &here, skin, origin)?;
             walk(content, &here, skin, origin)
         }
+        ExpandedNode::Modal { content, .. } => walk(content, &path.push("Modal"), skin, origin),
         ExpandedNode::Control { .. } => Ok(()),
     }
 }

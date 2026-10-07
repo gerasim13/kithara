@@ -665,7 +665,7 @@ mod tests {
             render::{
                 InputOwner, Published, Skin,
                 document::{
-                    Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover,
+                    Ctx, Group, GroupMount, Host, Measured, Modal, Module, PlacedMount, Popover,
                     SplitMount, StageMount, render,
                 },
                 tree::node::IcedHost,
@@ -734,6 +734,17 @@ mod tests {
                 let mut built = Some(content(self));
                 self.inner.popover(popover, anchor, &mut |_| {
                     built.take().expect("a popover builds its content once")
+                })
+            }
+
+            fn modal(
+                &mut self,
+                modal: Modal<'_>,
+                content: &mut dyn FnMut(&mut Self) -> Self::Output,
+            ) -> Self::Output {
+                let mut built = Some(content(self));
+                self.inner.modal(modal, &mut |_| {
+                    built.take().expect("a modal builds its content once")
                 })
             }
 
@@ -1473,6 +1484,7 @@ mod tests {
             "library2",
             "stress",
             "menu",
+            "modal",
             "clock",
             "pivot",
             "shader",
@@ -1780,7 +1792,8 @@ mod tests {
             | ExpandedNode::Reveal { child, .. }
             | ExpandedNode::Scroll { child, .. }
             | ExpandedNode::Placed { child, .. }
-            | ExpandedNode::Pressable { child, .. } => {
+            | ExpandedNode::Pressable { child, .. }
+            | ExpandedNode::Modal { content: child, .. } => {
                 claimed_components(child, components);
             }
             ExpandedNode::Adaptive { base, steps, .. } => {
@@ -4276,7 +4289,7 @@ mod tests {
         assert_eq!(ui.resolve(*module), "gallery-nav");
         let mut components = Vec::new();
         claimed_components(root, &mut components);
-        assert_eq!(components, ["activation"; 31]);
+        assert_eq!(components, ["activation"; 32]);
 
         let full = render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
@@ -4317,6 +4330,7 @@ mod tests {
                 "gallery/library2/item",
                 "gallery/stress/item",
                 "gallery/menu/item",
+                "gallery/modal/item",
                 "gallery/clock/item",
                 "gallery/pivot/item",
                 "gallery/shader/item",

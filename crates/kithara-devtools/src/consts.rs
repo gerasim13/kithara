@@ -575,3 +575,10 @@ pub(crate) const LOCK_WAIT_POLL: Duration = Duration::from_secs(1);
 
 /// How often a lock waiter repeats what it waits for and who holds it.
 pub(crate) const LOCK_WAIT_HEARTBEAT: Duration = Duration::from_secs(30);
+
+/// How long a job waits for a reclaim to let go of its build directory's lease.
+/// A reclaim holds it only to move the directory away.
+pub(crate) const LEASE_WAIT: Duration = Duration::from_secs(10 * 60);
+
+/// How often a held lease rewrites its heartbeat file.
+pub(crate) const LEASE_HEARTBEAT: Duration = Duration::from_secs(30);

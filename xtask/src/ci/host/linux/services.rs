@@ -19,12 +19,15 @@ use crate::{
 ///
 /// Each service configures its runner just before starting it, so a machine
 /// that has been off for a week still comes back with credentials that were
-/// minted seconds ago rather than ones that expired while it slept.
+/// minted seconds ago rather than ones that expired while it slept. A machine
+/// that hosts the Windows guest also gets the timer that rebuilds it from the
+/// repository at `root`.
 pub(super) fn install(
     process: &Process,
     host: &LinuxHost,
     pins: &CiPins,
     executable: &str,
+    root: &Path,
 ) -> Result<()> {
     require_pinned_images(process, host, pins)?;
     if Path::new(executable) != Path::new(consts::SERVICE_EXECUTABLE) {
@@ -58,6 +61,9 @@ pub(super) fn install(
     }
     install_slice()?;
     install_cleanup_timer(&installed_images(host, pins)?)?;
+    if host.windows.is_some() {
+        install_renewal_timer(root)?;
+    }
     process.run("systemctl", &["daemon-reload"], "reload systemd")?;
     for runner in &host.runners {
         process.run(
@@ -71,6 +77,13 @@ pub(super) fn install(
         &["enable", "--now", consts::SERVICE_CLEANUP_TIMER],
         "enable the cleanup timer",
     )?;
+    if host.windows.is_some() {
+        process.run(
+            "systemctl",
+            &["enable", "--now", consts::SERVICE_RENEWAL_TIMER],
+            "enable the Windows renewal timer",
+        )?;
+    }
     Ok(())
 }
 
@@ -196,6 +209,40 @@ fn cleanup_timer() -> &'static str {
      WantedBy=timers.target\n"
 }
 
+/// The guest is built from the answers, the provisioning script and the pins
+/// the repository tracks, so the unit runs in the checkout it was installed
+/// from. The command itself decides whether the guest needs rebuilding; the
+/// timer only asks once a day.
+fn renewal_unit(root: &Path) -> Result<String> {
+    let root = root
+        .to_str()
+        .with_context(|| format!("the repository path {} is not UTF-8", root.display()))?;
+    Ok(format!(
+        "[Unit]\n\
+         Description=Kithara CI Windows guest renewal\n\
+         After=libvirtd.service network-online.target\n\
+         Wants=network-online.target\n\n\
+         [Service]\n\
+         Type=oneshot\n\
+         WorkingDirectory={root}\n\
+         ExecStart={executable} ci host linux --config {config} renew-windows\n",
+        executable = consts::SERVICE_EXECUTABLE,
+        config = consts::LINUX_CONFIG_PATH,
+    ))
+}
+
+/// Daily: a licence runs for weeks and the rebuild waits for a free guest, so
+/// a day between looks leaves several chances inside the last week.
+fn renewal_timer() -> &'static str {
+    "[Unit]\n\
+     Description=Kithara CI Windows guest renewal\n\n\
+     [Timer]\n\
+     OnCalendar=daily\n\
+     Persistent=true\n\n\
+     [Install]\n\
+     WantedBy=timers.target\n"
+}
+
 /// The budget the whole fleet shares, generated here so that rewriting the
 /// units can never again leave them outside it.
 ///
@@ -251,6 +298,19 @@ fn install_cleanup_timer(keep: &[String]) -> Result<()> {
         let path = PathBuf::from(consts::SERVICE_SYSTEMD_ROOT).join(name);
         std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
         info!(unit = name, "cleanup unit installed");
+    }
+    Ok(())
+}
+
+fn install_renewal_timer(root: &Path) -> Result<()> {
+    let service = renewal_unit(root)?;
+    for (name, body) in [
+        (consts::SERVICE_RENEWAL_UNIT, service.as_str()),
+        (consts::SERVICE_RENEWAL_TIMER, renewal_timer()),
+    ] {
+        let path = PathBuf::from(consts::SERVICE_SYSTEMD_ROOT).join(name);
+        std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
+        info!(unit = name, "Windows renewal unit installed");
     }
     Ok(())
 }
@@ -326,6 +386,7 @@ fn unit(
          --memory {memory} \
          --cgroup-parent {cgroup_parent} \
          --pids-limit {pids} \
+         --ulimit nice={nice}:{nice} \
          --security-opt no-new-privileges \
          --env-file {env_file}",
         name = job.name,
@@ -334,6 +395,7 @@ fn unit(
         memory = job.memory,
         cgroup_parent = job.cgroup_parent,
         pids = Container::PIDS_LIMIT,
+        nice = Container::NICE_LIMIT,
         env_file = job.env_file,
     )?;
     for entry in Container::environment(runner) {
@@ -459,6 +521,25 @@ mod tests {
         assert!(Cli::try_parse_from(argv).is_ok(), "{command:?}");
     }
 
+    /// The guest is built from files the repository tracks, so the timer that
+    /// rebuilds it has to run where they are and say so: a unit runs from no
+    /// particular directory unless it is told one.
+    #[test]
+    fn the_renewal_unit_runs_a_command_this_executable_accepts_in_the_repository() {
+        let text = renewal_unit(Path::new("/srv/kithara")).expect("the unit must render");
+
+        assert!(text.contains("WorkingDirectory=/srv/kithara\n"), "{text}");
+        let command = text
+            .lines()
+            .find_map(|line| line.strip_prefix("ExecStart="))
+            .expect("the unit must start something")
+            .split_whitespace()
+            .skip(1)
+            .collect::<Vec<_>>();
+        let argv = std::iter::once("xtask").chain(command.iter().copied());
+        assert!(Cli::try_parse_from(argv).is_ok(), "{command:?}");
+    }
+
     /// The cadence is the whole of the disk policy: the cleaner runs when the
     /// timer says so and at no other time. A daily pass was measured arriving
     /// at up to 515 GB of build caches, and that was one two-hour window's
@@ -525,10 +606,6 @@ mod tests {
         }
         assert!(
             text.contains("--env SCCACHE_BASEDIRS=/runner/_work/kithara/kithara"),
-            "{text}"
-        );
-        assert!(
-            text.contains("--env SCCACHE_DIR=/cache/sccache/kithara-ci-octocat"),
             "{text}"
         );
         assert!(
@@ -631,15 +708,11 @@ mod tests {
         assert!(text.contains("RuntimeDirectoryPreserve=yes"), "{text}");
     }
 
-    /// A build directory holds artefacts valid only for the configuration that
-    /// made them, and a lane asks for the same configuration every run. So the
-    /// lane root is one for the whole fleet and the lane claims its directory
-    /// underneath: a lane that lands on another runner still finds its own warm
-    /// build instead of compiling the workspace again. A job that claims no
-    /// lane keeps the runner's own directory, because sharing one cargo
-    /// directory between runners shares its lock as well.
+    /// A runner keeps its build root and its workspace to itself: a lane's
+    /// directory lives behind an alias the job re-points, and the checkout is
+    /// the one the alias's builds were keyed against.
     #[test]
-    fn every_runner_mounts_the_same_build_root() {
+    fn every_runner_keeps_its_own_build_root_and_workspace() {
         let host = host_fixture();
         let first = Container::mounts(&host, host.runner("kithara-ci-octocat").expect("runner"));
         let second = Container::mounts(&host, host.runner("kithara-ci-hubot").expect("runner"));
@@ -652,47 +725,17 @@ mod tests {
                 .0
                 .clone()
         };
+        for at in [consts::BUILD_ROOT_MOUNT, "/runner/_work"] {
+            assert_ne!(mount(&first, at), mount(&second, at), "{at}");
+        }
         assert_eq!(
-            mount(&first, "/cache/lanes"),
-            mount(&second, "/cache/lanes"),
-            "a lane must find its build wherever it lands"
-        );
-        assert_eq!(mount(&first, "/cache/lanes"), "/var/lib/kithara-ci/lanes");
-        assert_ne!(
-            mount(&first, "/cache/target"),
-            mount(&second, "/cache/target"),
-            "a job that claims no lane must not meet another runner's cargo lock"
-        );
-        assert_eq!(
-            mount(&first, "/cache/target"),
+            mount(&first, consts::BUILD_ROOT_MOUNT),
             "/var/lib/kithara-ci/target/kithara-ci-octocat"
         );
-
-        let workspace = |mounts: &[(String, &str)]| {
-            mounts
-                .iter()
-                .find(|(_, at)| *at == "/runner/_work")
-                .expect("a persistent workspace")
-                .0
-                .clone()
-        };
-        assert_ne!(workspace(&first), workspace(&second));
         assert_eq!(
-            workspace(&first),
+            mount(&first, "/runner/_work"),
             "/var/lib/kithara-ci/workspaces/kithara-ci-octocat"
         );
-
-        for shared in ["/home/runner/.cargo", "/cache/sccache"] {
-            let name = |mounts: &[(String, &str)]| {
-                mounts
-                    .iter()
-                    .find(|(_, at)| *at == shared)
-                    .expect(shared)
-                    .0
-                    .clone()
-            };
-            assert_eq!(name(&first), name(&second), "{shared} must be shared");
-        }
     }
 
     /// More runners than cores is the point of the exercise: an idle listener
@@ -777,6 +820,9 @@ mod tests {
         assert!(android.contains(&emulator), "{emulator}: {android}");
         for unit in [&plain, &gpu, &android] {
             assert!(unit.contains("--security-opt no-new-privileges"), "{unit}");
+            // The player's audio feed thread asks for nice -16; a job that
+            // may not lower a nice value keeps it at the compile jobs' level.
+            assert!(unit.contains("--ulimit nice=40:40"), "{unit}");
             assert!(!unit.contains("docker.sock"), "{unit}");
         }
     }

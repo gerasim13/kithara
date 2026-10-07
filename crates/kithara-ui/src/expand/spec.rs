@@ -373,6 +373,7 @@ fn fixed_control_spec(control: &ControlNode) -> Option<ControlSpec> {
         | ControlNode::Object { .. }
         | ControlNode::Optional { .. }
         | ControlNode::Popover { .. }
+        | ControlNode::Modal { .. }
         | ControlNode::Reveal { .. }
         | ControlNode::Placed { .. }
         | ControlNode::Pressable { .. }

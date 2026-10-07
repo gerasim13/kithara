@@ -1,0 +1,44 @@
+# What production/main (95392559fd) tells a job, what its workflows name, and
+# what it keeps on a host. A host deployed from a branch serves main's
+# workflows too until that branch merges, so it keeps every path here where
+# main expects it. Delete this once main builds in the branch's layout.
+
+# The compiler wrapper main's justfile names, relative to the checkout.
+[repository]
+rustc_wrapper = ".config/sccache/sccache"
+
+# Path-valued variables main's Linux container tells a job, at main's values.
+# Its per-runner `SCCACHE_DIR` is left out: the compiler cache is the bucket
+# the runner's credentials name, for both layouts.
+[linux.told]
+CARGO_HOME = "/home/runner/.cargo"
+CARGO_TARGET_DIR = "/cache/target"
+KITHARA_BEAT_MODEL_CACHE = "/cache/fixtures/beat-models"
+KITHARA_CI_TARGET_ROOT = "/cache/lanes"
+KITHARA_FIXTURE_CACHE = "/cache/fixtures"
+SCCACHE_BASEDIRS = "/runner/_work/kithara/kithara"
+
+# Absolute paths main's workflows name for a Linux job to build in or cache
+# under. `cache_root` is their `KITHARA_CI_CACHE_ROOT`: main bootstraps xtask in
+# `<cache_root>/bootstrap/<trust>`.
+[linux.named]
+cache_root = "/cache/lanes/.kithara-ci"
+paths = [
+  "/cache/fixtures",
+  "/cache/lanes/.kithara-ci",
+  "/cache/target",
+  "/cache/target/lane-network",
+]
+
+# The directories main's Mac jobs write under the host's cache root, each of
+# which main's cleanup keeps.
+[mac]
+cache_namespaces = [
+  ".kithara-ci-sccache-slots",
+  "bootstrap",
+  "gitlab-runner",
+  "quarantine",
+  "review",
+  "target-slots",
+  "trusted",
+]

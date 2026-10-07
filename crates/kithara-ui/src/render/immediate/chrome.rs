@@ -330,19 +330,13 @@ impl From<&Skin> for CornerTicks {
 
 impl CornerTicks {
     fn marks(self, bounds: Rectangle) -> [(Point, Size); 4] {
-        let along = Size::new(self.size, self.width);
-        let across = Size::new(self.width, self.size);
-        let near = Point::new(self.offset, self.offset);
-        let far_x = (bounds.width - self.offset - self.width).max(0.0);
-        let far_y = (bounds.height - self.offset - self.width).max(0.0);
-        let tail_x = (bounds.width - self.offset - self.size).max(0.0);
-        let tail_y = (bounds.height - self.offset - self.size).max(0.0);
-        [
-            (near, along),
-            (near, across),
-            (Point::new(tail_x, far_y), along),
-            (Point::new(far_x, tail_y), across),
-        ]
+        crate::render::tick_marks(
+            crate::solve::Size::new(bounds.width, bounds.height),
+            self.size,
+            self.width,
+            self.offset,
+        )
+        .map(|bar| (Point::new(bar.x, bar.y), Size::new(bar.w, bar.h)))
     }
 }
 

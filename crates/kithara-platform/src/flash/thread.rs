@@ -5,7 +5,10 @@ pub use crate::{
         Duration, JoinHandle, Thread, ThreadId, assert_main_thread, assert_not_main_thread,
         available_parallelism, current, current_thread_id, is_main_thread, is_worker_thread, park,
     },
-    common::thread_id::active_named_thread_count,
+    common::{
+        thread_class::{ThreadClass, set_current_class},
+        thread_id::active_named_thread_count,
+    },
 };
 use crate::{
     flash::{ids::ThreadKey, join::Join},

@@ -38,6 +38,14 @@ pub(crate) mod consts {
 pub(crate) struct DerivableGetter;
 
 impl Check for DerivableGetter {
+    /// A getter is left alone when the architecture's redundant-accessor
+    /// check pairs it with a public field of the same type name, which any
+    /// file of the scope may declare, so the verdict about the file holding
+    /// the getter depends on other files.
+    fn caches_by_file(&self) -> bool {
+        false
+    }
+
     fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
         let cfg = &ctx.config.thresholds.derivable_getter;
         if !cfg.enabled {

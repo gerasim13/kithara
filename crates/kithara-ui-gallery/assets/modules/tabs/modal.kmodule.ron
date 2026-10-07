@@ -1,0 +1,88 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-modal",
+    root: Stage(
+        id: "page",
+        size: (w: Fill, h: Fill),
+        children: [
+            Column(
+                id: "intro",
+                size: (w: Fill, h: Fill),
+                gap: Some(14.0),
+                pad: Some(14.0),
+                children: [
+                    Text(id: "title", style: Section, label: "MODAL"),
+                    Text(
+                        id: "hint",
+                        style: MicroLabel,
+                        label: "THE BUTTON OPENS A CENTRED SURFACE OVER A SCRIM THAT TAKES EVERY INPUT.",
+                        size: (w: Fill, h: Fixed(38.0)),
+                    ),
+                    Button(
+                        id: "open",
+                        size: (w: Fixed(120.0), h: Fixed(28.0)),
+                        label: "OPEN SETTINGS",
+                        write: View(id: "settings", set: On),
+                    ),
+                ],
+            ),
+            Modal(
+                id: "settings",
+                open: View(id: "settings"),
+                close: View(id: "settings", set: Off),
+                content: Column(
+                    id: "window",
+                    size: (w: Fixed(520.0), h: Shrink),
+                    gap: 0.0,
+                    children: [
+                        Row(
+                            id: "head",
+                            size: (w: Fill, h: Fixed(26.0)),
+                            pad_x: 10.0,
+                            background: BgPanel2,
+                            frame: (top: false, right: false, bottom: true, left: false),
+                            frame_color: LineInner,
+                            children: [
+                                Text(id: "head-title", size: (w: Fill, h: Fill), style: Section, label: "SETTINGS"),
+                            ],
+                        ),
+                        Column(
+                            id: "rows",
+                            size: (w: Fill, h: Shrink),
+                            gap: 0.0,
+                            pad: Some(10.0),
+                            children: [
+                                Text(
+                                    id: "note",
+                                    style: MicroLabel,
+                                    label: "PRESS OUTSIDE, ESC OR DONE TO CLOSE.",
+                                    size: (w: Fill, h: Fixed(36.0)),
+                                ),
+                            ],
+                        ),
+                        Row(
+                            id: "foot",
+                            size: (w: Fill, h: Fixed(40.0)),
+                            pad_x: 10.0,
+                            gap: 8.0,
+                            background: BgFooter,
+                            frame: (top: true, right: false, bottom: false, left: false),
+                            frame_color: LineInner,
+                            children: [
+                                Spacer(id: "foot-gap", size: Some((w: Fill, h: Fixed(1.0)))),
+                                Button(
+                                    id: "done",
+                                    size: (w: Fixed(72.0), h: Fixed(28.0)),
+                                    label: "DONE",
+                                    style: TransportPrimary,
+                                    write: View(id: "settings", set: Off),
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            ),
+        ],
+    ),
+)

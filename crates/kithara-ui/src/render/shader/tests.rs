@@ -142,6 +142,7 @@ fn spec(ui: &CompiledUi) -> ShaderSpec {
                 find(base).or_else(|| steps.iter().find_map(|(_, branch)| find(branch)))
             }
             ExpandedNode::Popover { anchor, .. } => find(anchor),
+            ExpandedNode::Modal { content, .. } => find(content),
             ExpandedNode::Row { children, .. }
             | ExpandedNode::Column { children, .. }
             | ExpandedNode::Slot { children, .. }

@@ -17,12 +17,12 @@ use crate::{
     layout::Axis,
     module::{MeasureAxis, TextAlign},
     render::{
-        Anchored, ControlAction, InputOwner, ModuleChrome, Placement, Published, Skin, Viewport,
-        WheelSurface, Widget,
+        Anchored, ControlAction, InputOwner, Modal, ModuleChrome, Placement, Published, Skin,
+        Viewport, WheelSurface, Widget,
         document::{
             Ctx, Group, GroupMount, Host as DocumentHost, Measured as MeasuredPlan,
-            Module as DocumentModule, PlacedMount, Popover as DocumentPopover, SplitMount,
-            StageMount,
+            Modal as DocumentModal, Module as DocumentModule, PlacedMount,
+            Popover as DocumentPopover, SplitMount, StageMount,
         },
         drop_outline, placed, window_layers,
     },
@@ -68,23 +68,15 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
     fn group(&mut self, group: Group<'_>, children: Vec<GroupMount<Self::Output>>) -> Self::Output {
         let size = content_size(group.size());
         let flex = match group.axis() {
-            Axis::Horizontal => Flex::row(
-                children
-                    .into_iter()
-                    .map(|child| (child.output, child.minimum, child.band)),
-            )
-            .spacing(group.gap())
-            .align(column_alignment(group.alignment()))
-            .width(size.0)
-            .height(size.1),
-            Axis::Vertical => Flex::column(
-                children
-                    .into_iter()
-                    .map(|child| (child.output, child.minimum, child.band)),
-            )
-            .spacing(group.gap())
-            .align(column_alignment(group.alignment()))
-            .width(size.0),
+            Axis::Horizontal => Flex::row(children)
+                .spacing(group.gap())
+                .align(column_alignment(group.alignment()))
+                .width(size.0)
+                .height(size.1),
+            Axis::Vertical => Flex::column(children)
+                .spacing(group.gap())
+                .align(column_alignment(group.alignment()))
+                .width(size.0),
         }
         .measure(group.measure())
         .padding(padding(group.padding_x(), group.padding_y()));
@@ -216,6 +208,28 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         apply_size(Rendered::leading(element), popover.size())
     }
 
+    fn modal(
+        &mut self,
+        modal: DocumentModal<'_>,
+        content: &mut dyn FnMut(&mut Self) -> Self::Output,
+    ) -> Self::Output {
+        let content = if modal.is_open() {
+            content(self)
+        } else {
+            Space::new().into()
+        };
+        Modal::new(
+            content,
+            modal.is_open(),
+            crate::render::control_event(
+                self.ctx.ui.resolve(modal.path()),
+                ControlAction::Activate,
+            ),
+            self.skin,
+        )
+        .into()
+    }
+
     fn pressable(
         &mut self,
         path: InternId,
@@ -261,13 +275,9 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         size: Option<SizeSpec>,
     ) -> Self::Output {
         let element = container(
-            Flex::column(
-                children
-                    .into_iter()
-                    .map(|child| (child.output, child.minimum, child.band)),
-            )
-            .spacing(self.skin.layout.grid_gap)
-            .width(Length::Fill),
+            Flex::column(children)
+                .spacing(self.skin.layout.grid_gap)
+                .width(Length::Fill),
         )
         .width(Length::Fill)
         .into();
@@ -313,10 +323,7 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         children: Vec<StageMount<Self::Output>>,
         size: Option<SizeSpec>,
     ) -> Self::Output {
-        stage(
-            children.into_iter().map(|child| child.output).collect(),
-            size,
-        )
+        stage(children, size)
     }
 
     fn window(&mut self, content: Self::Output, resize_edges: bool) -> Self::Output {
@@ -345,16 +352,27 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
 /// retained host makes: measured on the sprites page, where a 96-tall sprite
 /// came out 112 tall here and 96 there, which a turn then carried 8 across the
 /// screen.
+///
+/// A child floating above the stage takes no room in it, so it stands after
+/// the children that do and never sizes the stack.
 fn stage<'a>(
-    children: Vec<Element<'a, Published>>,
+    children: Vec<StageMount<Element<'a, Published>>>,
     size: Option<SizeSpec>,
 ) -> Element<'a, Published> {
-    let size = match (size, children.is_empty()) {
+    let count = children.len();
+    let (in_flow, floating): (Vec<_>, Vec<_>) =
+        children.into_iter().partition(|child| !child.floats);
+    let bare = in_flow.is_empty();
+    let children = in_flow
+        .into_iter()
+        .chain(floating)
+        .map(|child| child.output);
+    let size = match (size, bare) {
         (Some(size), _) => size,
         (None, false) => return Stack::with_children(children).into(),
         (None, true) => SizeSpec::FILL,
     };
-    let mut layers: Vec<Element<'a, Published>> = Vec::with_capacity(children.len() + 1);
+    let mut layers: Vec<Element<'a, Published>> = Vec::with_capacity(count + 1);
     layers.push(Element::from(Space::new()));
     layers.extend(children);
     Stack::with_children(layers)
@@ -453,14 +471,16 @@ mod tests {
     /// underneath them and measures only what the document asked for.
     fn document_children(count: usize) -> Vec<Size> {
         let children = (0..count)
-            .map(|_| {
-                apply_size(
+            .map(|_| StageMount {
+                block: None,
+                floats: false,
+                output: apply_size(
                     Rendered::leading(Space::new().into()),
                     Some(SizeSpec::new(
                         Dim::Fixed(consts::CHILD),
                         Dim::Fixed(consts::CHILD),
                     )),
-                )
+                ),
             })
             .collect();
         let stage_height = consts::CHILD + 16.0;

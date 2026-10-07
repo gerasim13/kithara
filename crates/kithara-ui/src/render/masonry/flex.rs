@@ -48,6 +48,8 @@ pub(crate) struct ChildLayout {
     /// question - whether this child is in the picture - and neither of them
     /// rebuilds the flow to answer it.
     block: Option<Rc<BlockState>>,
+    /// Whether the child stands above the flow, taking no slot in it.
+    floats: bool,
     declared: Option<Size<solve::Length>>,
     main_minimum: Option<f32>,
     main_weight: Option<f32>,
@@ -67,6 +69,7 @@ impl ChildLayout {
             main_minimum,
             band: Band::ALWAYS,
             block: None,
+            floats: false,
             declared: None,
             main_weight: None,
         }
@@ -81,10 +84,17 @@ impl ChildLayout {
             natural: Natural::Fixed(declared),
             band: Band::ALWAYS,
             block: None,
+            floats: false,
             declared: Some(declared),
             main_minimum: None,
             main_weight: Some(main_weight),
         }
+    }
+
+    /// Whether this child stands above the flow rather than in it.
+    pub(crate) const fn floating(mut self, floats: bool) -> Self {
+        self.floats = floats;
+        self
     }
 
     /// The band of room this child stands in.
@@ -145,16 +155,29 @@ impl Flex {
         let outer_limits = limits.width(self.width).height(self.height);
         let inner_limits = outer_limits.shrink(self.padding).loose();
         self.stand(outer_limits);
-        let Self { stands, slots, .. } = &mut *self;
+        let Self {
+            stands,
+            slots,
+            children: layouts,
+            ..
+        } = &mut *self;
         slots.clear();
         slots.extend(
             stands
                 .iter()
+                .zip(layouts.iter())
                 .enumerate()
-                .filter_map(|(index, on)| on.then_some(index)),
+                .filter_map(|(index, (on, layout))| (*on && !layout.floats).then_some(index)),
         );
-        for (index, on) in self.stands.iter().enumerate() {
-            ctx.set_stashed(&mut children[index], !on);
+        for (index, (on, layout)) in self.stands.iter().zip(&self.children).enumerate() {
+            let child = &mut children[index];
+            ctx.set_stashed(child, !on);
+            if *on && layout.floats {
+                let nothing = Limits::new(Size::ZERO, Size::ZERO);
+                Node::set_child_limits(ctx, child, nothing);
+                ctx.run_layout(child, &box_constraints(nothing));
+                ctx.place_child(child, Point::ORIGIN);
+            }
         }
         let items = self
             .slots

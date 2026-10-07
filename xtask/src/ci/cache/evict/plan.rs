@@ -110,17 +110,6 @@ pub(super) fn prune(reads: &mut HashMap<Entry, u64>, listing: &Listing) {
     });
 }
 
-/// Whether enough has left a bucket that the store should recount it.
-///
-/// The store's quota counts every write and none of the deletes until it
-/// recounts the bucket, and left to itself it recounts only when a write would
-/// cross the quota - under load, with every concurrent write waiting on it. So
-/// once a twentieth of the quota has left the bucket, or the evictor does not
-/// know how much has, it is worth a recount at a quiet moment instead.
-pub(super) fn recount_wanted(unreconciled: Option<u64>, quota: u64) -> bool {
-    unreconciled.is_none_or(|bytes| bytes >= quota / 20)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,14 +225,5 @@ mod tests {
         prune(&mut reads, &listing);
 
         assert_eq!(reads, HashMap::from([(entry(1), 150)]));
-    }
-
-    #[test]
-    fn a_recount_waits_for_a_twentieth_of_the_quota_to_leave() {
-        let quota = 2000;
-
-        assert!(recount_wanted(Some(100), quota));
-        assert!(recount_wanted(None, quota));
-        assert!(!recount_wanted(Some(99), quota));
     }
 }

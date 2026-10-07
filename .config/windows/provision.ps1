@@ -1,12 +1,43 @@
 # Turns a freshly installed Windows guest into a runner for this repository.
 #
 # Runs once, at the first sign-in after an unattended install. Everything it
-# installs is pinned by the caller through the environment, so rebuilding the
+# installs is pinned by the caller through E:\guest.json, so rebuilding the
 # guest a year from now produces the same toolchain rather than whatever is
 # current then.
+#
+# The host sees nothing else of a guest that is not yet a runner, so each step
+# is announced on the first serial port, which the host keeps as a file, and so
+# is how the script ended: `done`, or `failed:` with the error that stopped it.
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+
+# One line to the host. The port is opened per line rather than held, because
+# the runner's start script writes to it too.
+function Send-Host {
+    param([string]$Line)
+
+    $port = New-Object System.IO.Ports.SerialPort 'COM1', 115200
+    $port.Open()
+    try {
+        $port.WriteLine($Line)
+    } finally {
+        $port.Close()
+    }
+}
+
+function Start-Step {
+    param([string]$Name)
+
+    Write-Host "==> $Name"
+    Send-Host "kithara-guest: step $Name"
+}
+
+# Whatever stops this script reaches the host as its last word.
+trap {
+    Send-Host ("kithara-guest: failed: $_" -replace '\s+', ' ')
+    break
+}
 
 function Get-Verified {
     param([string]$Url, [string]$Sha256, [string]$Path)
@@ -41,13 +72,13 @@ function Get-Verified {
 # Whether it worked is reported rather than assumed: an expired Windows shuts
 # itself down on a timer, and a guest that does that mid-suite is worth knowing
 # about before a lane starts blaming the tests.
+Start-Step 'Rearming the evaluation licence'
 $rearm = Start-Process -FilePath 'cscript.exe' `
                        -ArgumentList '//nologo', "$env:SystemRoot\System32\slmgr.vbs", '/rearm' `
                        -Wait -PassThru -NoNewWindow
 if ($rearm.ExitCode -ne 0) {
     Write-Warning "could not rearm the evaluation licence (exit $($rearm.ExitCode))"
 }
-Write-Host '==> Licence state'
 & cscript.exe //nologo "$env:SystemRoot\System32\slmgr.vbs" /dli
 
 $settings = Get-Content 'E:\guest.json' -Raw | ConvertFrom-Json
@@ -65,7 +96,7 @@ $settings = Get-Content 'E:\guest.json' -Raw | ConvertFrom-Json
 # it just keeps charging its system image.
 $data = Get-Disk | Where-Object { $_.PartitionStyle -eq 'RAW' } | Select-Object -First 1
 if ($data) {
-    Write-Host '==> Preparing the data disk'
+    Start-Step 'Preparing the data disk'
     $data | Initialize-Disk -PartitionStyle GPT -PassThru |
         New-Partition -DriveLetter D -UseMaximumSize |
         Format-Volume -FileSystem NTFS -NewFileSystemLabel 'kithara-data' -Confirm:$false |
@@ -101,7 +132,7 @@ New-Item -ItemType Directory -Force -Path $root, "$root\downloads" | Out-Null
 
 # The Visual Studio build tools carry the MSVC linker and the Windows SDK,
 # without which no Rust target on this platform links at all.
-Write-Host '==> Installing the MSVC build tools'
+Start-Step 'Installing the MSVC build tools'
 Get-Verified -Url $settings.build_tools_url `
              -Sha256 $settings.build_tools_sha256 `
              -Path "$root\downloads\vs_buildtools.exe"
@@ -123,7 +154,7 @@ if ($install.ExitCode -notin 0, 3010) {
 # the same version the Linux image pins, and for the same reason: CMake 4
 # refuses any project asking for a minimum below 3.5, which several vendored
 # trees still do.
-Write-Host '==> Installing CMake'
+Start-Step 'Installing CMake'
 Get-Verified -Url $settings.cmake_url `
              -Sha256 $settings.cmake_sha256 `
              -Path "$root\downloads\cmake.zip"
@@ -134,30 +165,78 @@ $cmake = (Get-ChildItem -Path $root -Directory -Filter 'cmake-*-windows-x86_64')
     [Environment]::GetEnvironmentVariable('PATH', 'Machine') + ";$cmake\bin",
     'Machine')
 
-Write-Host "==> Installing Monkey's Audio"
+# The encoder links Monkey's Audio as a static library, which only the Visual
+# Studio project its authors ship builds on Windows: their CMake build makes a
+# DLL here. Whole-program optimisation stays off, because it leaves objects
+# that only the same compiler can read, not the linker Rust drives. The C
+# runtime becomes the DLL one Rust links by default; the static one the
+# project asks for would be a second C runtime in the same binary.
+Start-Step "Building Monkey's Audio"
 Get-Verified -Url $settings.monkeys_audio_source_url `
              -Sha256 $settings.monkeys_audio_source_sha256 `
              -Path "$root\downloads\monkeys-audio.zip"
 $monkeySource = "$root\monkeys-audio-source"
 $monkeyPrefix = "$root\monkeys-audio"
 Expand-Archive -Path "$root\downloads\monkeys-audio.zip" -DestinationPath $monkeySource -Force
-& "$cmake\bin\cmake.exe" -S $monkeySource -B "$monkeySource\build" "-DCMAKE_INSTALL_PREFIX=$monkeyPrefix"
-if ($LASTEXITCODE -ne 0) { throw "Monkey's Audio configuration failed" }
-& "$cmake\bin\cmake.exe" --build "$monkeySource\build" --config Release --parallel 2
-if ($LASTEXITCODE -ne 0) { throw "Monkey's Audio build failed" }
-& "$cmake\bin\cmake.exe" --install "$monkeySource\build" --config Release
-if ($LASTEXITCODE -ne 0) { throw "Monkey's Audio installation failed" }
+$msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+    -latest -products * -requires Microsoft.Component.MSBuild `
+    -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+if (-not $msbuild) { throw 'the build tools carry no MSBuild' }
+$runtime = "$root\downloads\dynamic-runtime.props"
+Set-Content -Path $runtime -Encoding UTF8 -Value @'
+<Project>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+    </ClCompile>
+  </ItemDefinitionGroup>
+</Project>
+'@
+$project = "$monkeySource\Source\Projects\Visual Studio - 2022\MACLib"
+& $msbuild "$project\MACLib.vcxproj" `
+    /p:Configuration=Release /p:Platform=x64 /p:WholeProgramOptimization=false `
+    "/p:ForceImportBeforeCppTargets=$runtime" /m:2 /nologo
+if ($LASTEXITCODE -ne 0) { throw "Monkey's Audio build failed with $LASTEXITCODE" }
+New-Item -ItemType Directory -Force -Path "$monkeyPrefix\lib" | Out-Null
+Copy-Item -Path "$project\x64\Release\MACLib.lib" -Destination "$monkeyPrefix\lib\MAC.lib"
+[Environment]::SetEnvironmentVariable('MONKEYS_AUDIO_DIR', $monkeyPrefix, 'Machine')
+
+# `ffmpeg-next` builds against the FFmpeg that FFMPEG_DIR names, headers and
+# import libraries, and its tests load the DLLs beside them from PATH.
+Start-Step 'Installing FFmpeg'
+Get-Verified -Url $settings.ffmpeg_url `
+             -Sha256 $settings.ffmpeg_sha256 `
+             -Path "$root\downloads\ffmpeg.zip"
+Expand-Archive -Path "$root\downloads\ffmpeg.zip" -DestinationPath $root -Force
+$ffmpeg = (Get-ChildItem -Path $root -Directory -Filter 'ffmpeg-*-shared-*').FullName
+if (-not $ffmpeg) { throw 'the FFmpeg archive holds no shared build' }
+[Environment]::SetEnvironmentVariable('FFMPEG_DIR', $ffmpeg, 'Machine')
 [Environment]::SetEnvironmentVariable(
     'PATH',
-    [Environment]::GetEnvironmentVariable('PATH', 'Machine') + ";$monkeyPrefix\bin",
+    [Environment]::GetEnvironmentVariable('PATH', 'Machine') + ";$ffmpeg\bin",
     'Machine')
 
-[Environment]::SetEnvironmentVariable('MONKEYS_AUDIO_DIR', $monkeyPrefix, 'Machine')
+# The FFmpeg bindings are generated during the build by bindgen, which loads
+# libclang. Only that library is wanted, so the installer is unpacked rather
+# than run: nothing is registered and nothing lands on PATH.
+Start-Step 'Unpacking libclang'
+Get-Verified -Url $settings.llvm_url `
+             -Sha256 $settings.llvm_sha256 `
+             -Path "$root\downloads\llvm.msi"
+$unpack = Start-Process -FilePath 'msiexec.exe' `
+                       -ArgumentList '/a', "$root\downloads\llvm.msi", '/qn', "TARGETDIR=$root\llvm" `
+                       -Wait -PassThru
+if ($unpack.ExitCode -ne 0) {
+    throw "unpacking LLVM exited with $($unpack.ExitCode)"
+}
+$libclang = Get-ChildItem -Path "$root\llvm" -Recurse -Filter 'libclang.dll' | Select-Object -First 1
+if (-not $libclang) { throw 'the LLVM package holds no libclang.dll' }
+[Environment]::SetEnvironmentVariable('LIBCLANG_PATH', $libclang.DirectoryName, 'Machine')
 
 # The repository's recipes are bash scripts, so `just` on this machine is
 # useless without a shell to run them in. Git for Windows carries one, and the
 # checkout the runner performs wants git anyway.
-Write-Host '==> Installing Git for Windows'
+Start-Step 'Installing Git for Windows'
 Get-Verified -Url $settings.git_url `
              -Sha256 $settings.git_sha256 `
              -Path "$root\downloads\git.exe"
@@ -173,7 +252,7 @@ if ($install.ExitCode -ne 0) {
     [Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';C:\Program Files\Git\bin',
     'Machine')
 
-Write-Host '==> Installing the Rust toolchain'
+Start-Step 'Installing the Rust toolchain'
 Get-Verified -Url $settings.rustup_url `
              -Sha256 $settings.rustup_sha256 `
              -Path "$root\downloads\rustup-init.exe"
@@ -187,12 +266,12 @@ $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
     'Machine')
 
 foreach ($tool in $settings.cargo_tools.PSObject.Properties) {
-    Write-Host "==> Installing $($tool.Name) $($tool.Value)"
+    Start-Step "Installing $($tool.Name) $($tool.Value)"
     cargo install --locked --version $tool.Value $tool.Name
     if ($LASTEXITCODE -ne 0) { throw "cargo install $($tool.Name) failed" }
 }
 
-Write-Host '==> Installing the GitHub Actions runner'
+Start-Step 'Installing the GitHub Actions runner'
 New-Item -ItemType Directory -Force -Path "$root\runner" | Out-Null
 Get-Verified -Url $settings.runner_url `
              -Sha256 $settings.runner_sha256 `
@@ -204,7 +283,25 @@ Expand-Archive -Path "$root\downloads\runner.zip" -DestinationPath "$root\runner
 # it is restarted. The registration outlives a restart, so the enrolment branch
 # is taken exactly once per installed guest; a guest that boots before the host
 # has left it anything says so and stops rather than looking busy.
+#
+# First it tells the host when the evaluation licence ends, so the host can
+# build a new guest before it does. It says so at every sign-in, because the
+# file the port writes into starts empty whenever the guest is powered on.
 $runner = @'
+$licence = Get-CimInstance -ClassName SoftwareLicensingProduct `
+    -Filter "ApplicationID = '55c92734-d682-4d71-983e-d6ec3f16059f' AND PartialProductKey IS NOT NULL" |
+    Select-Object -First 1
+if ($licence) {
+    $expires = [DateTimeOffset]::UtcNow.AddMinutes($licence.GracePeriodRemaining).ToUnixTimeSeconds()
+    $port = New-Object System.IO.Ports.SerialPort 'COM1', 115200
+    $port.Open()
+    try {
+        $port.WriteLine("kithara-guest: licence-expires $expires")
+    } finally {
+        $port.Close()
+    }
+}
+
 Set-Location C:\kithara-ci\runner
 if (-not (Test-Path '.runner')) {
     if (-not (Test-Path 'E:\enrolment.json')) {
@@ -229,7 +326,11 @@ Set-Content -Path "$startup\kithara-ci-runner.cmd" `
             -Encoding ASCII
 
 Remove-Item -Recurse -Force "$root\downloads"
-Write-Host '==> Guest provisioned'
+
+# The host may power the guest off as soon as it reads `done`, so everything
+# written here is on disk first.
+Write-VolumeCache -DriveLetter C
+Send-Host 'kithara-guest: done'
 
 # The sign-in that ran this one was granted by the answer file; every later one
 # is the automatic sign-in, which only takes effect on a restart.

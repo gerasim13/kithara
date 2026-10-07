@@ -17,12 +17,21 @@ use crate::common::{
 
 pub(crate) mod consts {
     pub(crate) const ID: &str = "derivable_event";
+    /// Where the `EventSet` enums that forward events to the FFI surface live.
+    pub(crate) const FORWARDING_SOURCES: &str = "crates/kithara-ffi/src";
     pub(super) const EXPLANATION: &str = "Every event type must be reachable from the FFI surface. Add its type to an #[derive(EventSet)] enum under crates/kithara-ffi/src, or list it in [derivable_event] unforwarded with the reason it is deliberately internal. Event is implemented only by #[derive(Event)]; a hand-written impl outside kithara-events bypasses the census.";
 }
 
 pub(crate) struct DerivableEvent;
 
 impl Check for DerivableEvent {
+    /// An event is reported by what the `EventSet` enums under the FFI
+    /// sources forward. Those live in another crate than the event, so the
+    /// verdict about the file declaring it depends on other files.
+    fn caches_by_file(&self) -> bool {
+        false
+    }
+
     fn id(&self) -> &'static str {
         consts::ID
     }
@@ -51,7 +60,7 @@ impl Check for DerivableEvent {
             declared.extend(census.events.into_iter().filter_map(|(name, span)| {
                 (!suppress.is_suppressed(span.start().line, consts::ID)).then_some(name)
             }));
-            if relative.starts_with("crates/kithara-ffi/src") {
+            if relative.starts_with(consts::FORWARDING_SOURCES) {
                 forwarded.extend(census.forwarded);
             }
             if !relative.starts_with("crates/kithara-events") {
@@ -63,7 +72,7 @@ impl Check for DerivableEvent {
                                 format!("{}::{name}", relative.display()),
                                 format!("{name} implements Event by hand outside kithara-events"),
                             )
-                            .with_explanation(consts::EXPLANATION),
+                            .with_explanation(consts::EXPLANATION.into()),
                         );
                     }
                 }
@@ -77,7 +86,7 @@ impl Check for DerivableEvent {
                         name.clone(),
                         format!("{name} derives Event but no EventSet forwards it"),
                     )
-                    .with_explanation(consts::EXPLANATION),
+                    .with_explanation(consts::EXPLANATION.into()),
                 );
             }
         }

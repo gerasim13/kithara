@@ -35,6 +35,13 @@ type SymbolKey = (String, String);
 pub(crate) struct ThinWrapperEconomy;
 
 impl Check for ThinWrapperEconomy {
+    /// A wrapper's economy counts its calls and its namesakes across its
+    /// crate, so the verdict about the file declaring it depends on the
+    /// crate's other files.
+    fn caches_by_file(&self) -> bool {
+        false
+    }
+
     fn id(&self) -> &'static str {
         consts::ID
     }

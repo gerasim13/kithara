@@ -29,10 +29,6 @@ on:
           kinds that schedule it, so this is what selects them.
         required: true
         type: string
-      test-filter:
-        description: Nextest expression that narrows the selected test steps.
-        default: ''
-        type: string
       only:
         description: >-
           Space-separated lane names to run instead of the role's whole
@@ -48,10 +44,6 @@ on:
 # Not inherited from the caller: a called workflow gets its own environment.
 env:
   CARGO_TERM_COLOR: always
-  # Matrix selection compiles xtask, so keep that build across ephemeral jobs,
-  # in the one bootstrap every runner of the host shares.
-  CARGO_TARGET_DIR: /cache/target
-  KITHARA_CI_CACHE_ROOT: /cache/lanes/.kithara-ci
   RUST_BACKTRACE: 1
 
 jobs:
@@ -61,7 +53,6 @@ jobs:
   # instead of a caller splitting the object in shell.
   select:
     name: Select ${{ inputs.role }} lanes
-    if: ${{ github.actor == github.repository_owner && github.triggering_actor == github.repository_owner }}
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 10
     outputs:
@@ -129,7 +120,6 @@ jobs:
       artifact-when: ${{ matrix.artifact.when || 'always' }}
       runner: ${{ matrix.runner || '' }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
-      test-filter: ${{ inputs.test-filter }}
 
   # A lane that reads what the matrix produced. It runs under `always()` so a
   # report still describes a night in which one measurement failed - a report
@@ -156,4 +146,3 @@ jobs:
       artifact-when: ${{ matrix.artifact.when || 'always' }}
       runner: ${{ matrix.runner || '' }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
-      test-filter: ${{ inputs.test-filter }}
