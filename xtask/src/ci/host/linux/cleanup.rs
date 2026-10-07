@@ -1,6 +1,6 @@
-use std::{fs, io, path::PathBuf};
+use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use tracing::info;
 
 use super::{container::Container, profile::LinuxHost};
@@ -13,12 +13,11 @@ use crate::{
 ///
 /// The machine is shared: other stacks keep images and volumes here, so a
 /// blanket `docker system prune` would take theirs. A live cache stays and is
-/// held to a budget instead: the per-runner target directories under the
-/// configured cache root are trimmed here, `kithara-ci-sccache` and
-/// `kithara-ci-fixtures` are what this exists to protect, and Cargo home is
-/// never touched. A volume of this
-/// project's that no container is attached to any more is not a cache but a
-/// leftover, and it is reclaimed.
+/// held to a budget instead: the per-runner build roots under the configured
+/// cache root are trimmed here, `kithara-ci-fixtures` is what this exists to
+/// protect, and Cargo home is never touched. A volume of this project's that
+/// no container is attached to any more is not a cache but a leftover, and it
+/// is reclaimed.
 ///
 /// What to keep is named by the caller rather than read from the pins, because
 /// this runs from a timer and the pins move with the repository. Read there,
@@ -85,7 +84,7 @@ pub(super) fn run(process: &Process, host: &LinuxHost, keep: &[String]) -> Resul
         ],
         "prune the build cache",
     );
-    let target_dirs = target_dirs(host)?;
+    let target_dirs = target_dirs(host);
     build_cache::enforce_budget(&target_dirs, host.build_cache_budget_bytes()?)?;
     Ok(())
 }
@@ -102,9 +101,8 @@ fn superseded<'a>(listed: &'a str, keep: &[String]) -> Vec<&'a str> {
 
 /// This project's volumes that no container is attached to any more.
 ///
-/// The live per-runner caches (`kithara-ci-target-<owner>-<n>`,
-/// `kithara-ci-sccache`, `kithara-ci-fixtures`) all carry a link and are never
-/// listed here — Docker's own `dangling` filter is the authority on that, not a
+/// A live cache (`kithara-ci-fixtures`) carries a link and is never listed
+/// here — Docker's own `dangling` filter is the authority on that, not a
 /// name pattern. What this catches is a generation the fleet has moved off:
 /// the single shared `kithara-ci-target` left behind when the runners went to
 /// one volume each held 231 GB on a 1.8 TB disk that was 99% full, and nothing
@@ -120,39 +118,13 @@ fn orphaned_volumes(listed: &str) -> Vec<&str> {
 }
 
 /// Where the live build caches sit on disk, so their contents can be held to a
-/// budget: the root every runner claims a lane directory under, the xtask
-/// bootstrap of each trust every runner shares, and the per-runner directory a
-/// job that claims no lane still builds in.
-fn target_dirs(host: &LinuxHost) -> Result<Vec<PathBuf>> {
-    let mut dirs = vec![Container::lane_root(host)];
-    let bootstrap = Container::bootstrap_root(host);
-    match fs::read_dir(&bootstrap) {
-        Ok(entries) => {
-            for entry in entries {
-                let entry = entry.with_context(|| {
-                    format!(
-                        "reading an entry in xtask bootstrap {}",
-                        bootstrap.display()
-                    )
-                })?;
-                if entry.file_type()?.is_dir() {
-                    dirs.push(entry.path());
-                }
-            }
-        }
-        // No job has bootstrapped xtask on this host yet.
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("reading xtask bootstrap {}", bootstrap.display()));
-        }
-    }
-    dirs.extend(
-        host.runners
-            .iter()
-            .map(|runner| Container::target_dir(host, runner)),
-    );
-    Ok(dirs)
+/// budget: each runner's build root, which holds its lanes and its xtask
+/// bootstrap alike.
+fn target_dirs(host: &LinuxHost) -> Vec<PathBuf> {
+    host.runners
+        .iter()
+        .map(|runner| Container::build_root(host, runner))
+        .collect()
 }
 
 #[cfg(test)]
@@ -189,33 +161,25 @@ mod tests {
         );
     }
 
-    /// Every runner of the host bootstraps xtask in one build per trust, and
-    /// that build answers to the budget like the lane slots beside it.
+    /// The budget is held over every directory a job builds in and nothing
+    /// else: the root each runner's alias points into, which holds its lanes
+    /// and its xtask bootstrap alike.
     #[test]
-    fn the_xtask_bootstrap_every_runner_shares_answers_to_the_budget() {
-        let root = tempfile::tempdir().unwrap();
-        let mut host = crate::ci::host::linux::profile::tests::host_fixture();
-        host.cache_root = root.path().to_path_buf();
-        let review = Container::bootstrap_root(&host).join("review");
-        fs::create_dir_all(&review).unwrap();
+    fn the_budget_covers_exactly_the_build_roots_jobs_build_in() {
+        use super::super::container::tests::{mounted_at, told};
 
-        assert!(
-            target_dirs(&host).unwrap().contains(&review),
-            "the shared xtask bootstrap escapes the budget"
-        );
-    }
-
-    #[test]
-    fn build_cache_budget_uses_the_profile_storage_root() {
         let host = crate::ci::host::linux::profile::tests::host_fixture();
-        let expected: Vec<_> = std::iter::once(host.cache_root.join("lanes"))
-            .chain(
-                host.runners
-                    .iter()
-                    .map(|runner| host.cache_root.join("target").join(&runner.name)),
-            )
+        let roots: Vec<PathBuf> = host
+            .runners
+            .iter()
+            .map(|runner| {
+                let alias = told(runner, "CARGO_TARGET_DIR");
+                let root = alias.parent().expect("the alias sits in a build root");
+                PathBuf::from(mounted_at(&host, runner, root))
+            })
             .collect();
-        assert_eq!(target_dirs(&host).unwrap(), expected);
+
+        assert_eq!(target_dirs(&host), roots);
     }
 
     #[test]

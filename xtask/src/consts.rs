@@ -309,8 +309,14 @@ pub(crate) const LISTED: &str = "kithara-ci:linux-20260729\n\
 /// Where the generated project is written when no path is given.
 pub(crate) const FILE: &str = "/etc/kithara-ci/docker-compose.yml";
 
-/// Where a job builds and what it reuses, before the linker entries are added.
-pub(crate) const CACHE_ENVIRONMENT: [&str; 8] = [
+/// Where a Linux runner mounts its own build root.
+pub(crate) const BUILD_ROOT_MOUNT: &str = "/cache/target";
+
+/// Where a Linux runner mounts the Cargo home of its trust.
+pub(crate) const CARGO_HOME_MOUNT: &str = "/cache/cargo";
+
+/// What a job reuses, before its build paths and linker entries are added.
+pub(crate) const CACHE_ENVIRONMENT: [&str; 5] = [
     // Encoded audio fixtures. Their default home is the container's own temp
     // directory, and a container serves one job and is thrown away — so every
     // job re-encoded every fixture it touched, and a test that builds one
@@ -324,16 +330,6 @@ pub(crate) const CACHE_ENVIRONMENT: [&str; 8] = [
     // every test binary above those: minutes of a test lane for a commit that
     // changed no Rust. A model is placed only once its SHA-256 checks out.
     "KITHARA_BEAT_MODEL_CACHE=/cache/fixtures/beat-models",
-    // Every runner mounts this one root, and a lane claims the directory named
-    // after it underneath: a lane that lands on a different runner than last
-    // time then still finds its own warm build. A runner-owned directory made
-    // that a full rebuild, which is most of what a lane spent its time on.
-    "KITHARA_CI_TARGET_ROOT=/cache/lanes",
-    // What a job builds into when it claims no lane directory. It stays one
-    // directory per runner, on a path of its own, so a checkout that predates
-    // the lane keying keeps exactly the cache it reused before instead of
-    // meeting every other job in one cargo lock.
-    "CARGO_TARGET_DIR=/cache/target",
     "RUSTC_WRAPPER=sccache",
     // Without this the wrapper is inert: sccache declines to cache an
     // incremental compilation, and cargo leaves incremental on by default.
@@ -342,11 +338,8 @@ pub(crate) const CACHE_ENVIRONMENT: [&str; 8] = [
     "CARGO_INCREMENTAL=0",
     // GitHub checks each job out under this stable container path. Without a
     // base directory sccache hashes the host-specific checkout path, so two
-    // otherwise identical runners cannot reuse Rust objects.
+    // otherwise identical runners cannot reuse C objects.
     "SCCACHE_BASEDIRS=/runner/_work/kithara/kithara",
-    // Well under the volume it lives on, and sccache evicts by least use
-    // rather than growing until the disk decides for it.
-    "SCCACHE_CACHE_SIZE=100G",
 ];
 
 /// Address blocks a job has no business reaching. The machine's neighbours live

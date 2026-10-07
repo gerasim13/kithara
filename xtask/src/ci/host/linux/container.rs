@@ -40,30 +40,26 @@ pub(super) struct Container<'a> {
 }
 
 impl Container<'_> {
-    /// The cargo home is mounted whole rather than as its registry and its git
-    /// checkouts separately: cargo guards both with a lock file kept beside
-    /// them, and jobs on this machine run at the same time. Mounting the data
-    /// without the lock leaves two of them unpacking one crate into one
-    /// directory.
-    /// The cache mounts every runner shares, and the build directory it keeps
-    /// to itself under the host's configured cache root.
+    /// The volumes this runner mounts.
     ///
-    /// The registry of downloaded crates is shared because that is what it is
-    /// for, and the compiler cache because `sccache` keys on the inputs of a
-    /// compilation, so one runner's entry is another's hit.
-    ///
-    /// The build root is shared, and a lane claims the directory named after it
-    /// underneath. Build artefacts are valid only for the exact features,
-    /// profile and toolchain that produced them, which is why one directory for
-    /// every job reuses nothing — but a lane asks for the same shape on every
-    /// run, so the directory it claims is warm whichever runner picked the job
-    /// up. A runner-owned directory instead decided reuse by which runner
-    /// happened to be free, and a lane that moved compiled the workspace again.
-    /// A host path keeps that write-heavy cache on the disk selected by the
-    /// machine profile instead of wherever Docker stores named volumes.
+    /// The build root is the runner's own: one job runs per container, and the
+    /// lane runner re-points the alias inside it at the lane's build, which
+    /// two jobs sharing one root would race. Cargo's home is shared by the
+    /// runners of one trust, so a crate is downloaded once per trust, while a
+    /// review job never writes what a trusted job reads. It is mounted whole
+    /// rather than as its registry and its git checkouts separately: cargo
+    /// guards both with a lock file kept beside them, and mounting the data
+    /// without the lock leaves two jobs unpacking one crate into one directory.
+    /// Host paths keep these write-heavy caches on the disk the machine profile
+    /// selects instead of wherever Docker stores named volumes.
     pub(super) fn mounts(host: &LinuxHost, runner: &LinuxRunner) -> Vec<(String, &'static str)> {
         vec![
-            ("kithara-ci-cargo-home".to_owned(), "/home/runner/.cargo"),
+            (
+                Self::cargo_home(host, runner)
+                    .to_string_lossy()
+                    .into_owned(),
+                consts::CARGO_HOME_MOUNT,
+            ),
             (
                 host.cache_root
                     .join("workspaces")
@@ -73,37 +69,25 @@ impl Container<'_> {
                 "/runner/_work",
             ),
             (
-                Self::target_dir(host, runner)
+                Self::build_root(host, runner)
                     .to_string_lossy()
                     .into_owned(),
-                "/cache/target",
+                consts::BUILD_ROOT_MOUNT,
             ),
-            (
-                Self::lane_root(host).to_string_lossy().into_owned(),
-                "/cache/lanes",
-            ),
-            ("kithara-ci-sccache".to_owned(), "/cache/sccache"),
             ("kithara-ci-fixtures".to_owned(), "/cache/fixtures"),
         ]
     }
 
-    /// Where a job that claims no lane directory builds. One per runner, which
-    /// is what such a job reused before the lane keying existed.
-    pub(super) fn target_dir(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
+    /// Where a runner's jobs build: every lane's directory, the alias pointing
+    /// at the current one, and the xtask bootstrap.
+    pub(super) fn build_root(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
         host.cache_root.join("target").join(&runner.name)
     }
 
-    /// The one build root every runner mounts. A lane owns one directory under
-    /// it; the budget is enforced over the root.
-    pub(super) fn lane_root(host: &LinuxHost) -> PathBuf {
-        host.cache_root.join("lanes")
-    }
-
-    /// Where every runner bootstraps xtask: one build per trust, under the CI
-    /// cache root the workflows name (`KITHARA_CI_CACHE_ROOT`) beside the lane
-    /// slots, so a commit's xtask is compiled once for the whole host.
-    pub(super) fn bootstrap_root(host: &LinuxHost) -> PathBuf {
-        Self::lane_root(host).join(".kithara-ci").join("bootstrap")
+    fn cargo_home(host: &LinuxHost, runner: &LinuxRunner) -> PathBuf {
+        host.cache_root
+            .join("cargo")
+            .join(runner.cache_trust.as_str())
     }
 
     pub(super) fn mount_type(source: &str) -> &'static str {
@@ -116,34 +100,40 @@ impl Container<'_> {
 
     /// What the job is told about where to build and what to reuse.
     ///
-    /// `sccache` is in the image and was reaching nothing: without
-    /// `RUSTC_WRAPPER` every job compiled the workspace from source, and the
-    /// only thing the runners shared was the registry of downloaded crates and
-    /// one build directory that had grown past two hundred gigabytes. A build
-    /// directory is the wrong thing to share — its artefacts are valid only for
-    /// the exact features, profile and toolchain that produced them, so
-    /// twenty-four jobs of different shapes pile up beside each other and reuse
-    /// nothing.
-    /// `sccache` keys on the inputs of a compilation instead, which is what
-    /// makes sharing it across runners sound rather than merely concurrent.
+    /// Cargo is told the alias in the build root, the same path in every
+    /// container, so every lane's compilations are keyed alike fleet-wide and
+    /// the compiler cache serves one runner's entries to another. The store
+    /// itself is the one the runner's credentials name; nothing of it is kept
+    /// on this disk.
     ///
     /// The linker entries come from [`LINUX_LINKER_ENV`](consts::LINUX_LINKER_ENV), which the GitLab lane
     /// executor reads too: one statement of what a Linux job links with rather
     /// than one per way of starting a job.
     pub(super) fn environment(runner: &LinuxRunner) -> Vec<String> {
+        let root = Path::new(consts::BUILD_ROOT_MOUNT);
         let mut environment: Vec<String> = consts::CACHE_ENVIRONMENT
             .iter()
             .map(|entry| (*entry).to_owned())
             .collect();
-        environment.push(format!(
-            "SCCACHE_IDLE_TIMEOUT={SCCACHE_IDLE_TIMEOUT}",
-            SCCACHE_IDLE_TIMEOUT = consts::SCCACHE_IDLE_TIMEOUT
-        ));
-        // The S3 backend is shared, but each runner needs its own daemon
-        // endpoint. An explicit socket lets the lane start that daemon before
-        // Cargo's parallel compilers can race to start it.
-        environment.push(format!("SCCACHE_DIR=/cache/sccache/{}", runner.name));
-        environment.push(format!("SCCACHE_SERVER_UDS=/tmp/{}.sock", runner.name));
+        environment.extend([
+            format!("CARGO_HOME={}", consts::CARGO_HOME_MOUNT),
+            format!(
+                "CARGO_TARGET_DIR={}",
+                root.join(consts::BUILD_ALIAS).display()
+            ),
+            format!(
+                "KITHARA_XTASK_TARGET={}",
+                root.join(consts::XTASK_BUILD).display()
+            ),
+            format!(
+                "SCCACHE_IDLE_TIMEOUT={SCCACHE_IDLE_TIMEOUT}",
+                SCCACHE_IDLE_TIMEOUT = consts::SCCACHE_IDLE_TIMEOUT
+            ),
+            // Each runner needs its own daemon endpoint. An explicit socket
+            // lets the lane start that daemon before Cargo's parallel
+            // compilers can race to start it.
+            format!("SCCACHE_SERVER_UDS=/tmp/{}.sock", runner.name),
+        ]);
         environment.extend(
             consts::LINUX_LINKER_ENV
                 .iter()
@@ -179,8 +169,178 @@ pub(super) fn container<'a>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use std::{ffi::OsStr, fs};
+
+    use serde_yaml_ng::Value;
+
     use super::*;
+    use crate::ci::{
+        config::workspace_root, environment::CacheTrust, host::linux::profile::tests::host_fixture,
+    };
+
+    /// The value a runner's job is told for `name`.
+    pub(crate) fn told(runner: &LinuxRunner, name: &str) -> PathBuf {
+        let prefix = format!("{name}=");
+        Container::environment(runner)
+            .iter()
+            .find_map(|entry| entry.strip_prefix(&prefix).map(PathBuf::from))
+            .unwrap_or_else(|| panic!("{} is not told {name}", runner.name))
+    }
+
+    /// The host directory or volume a runner mounts at `destination`.
+    pub(crate) fn mounted_at(host: &LinuxHost, runner: &LinuxRunner, destination: &Path) -> String {
+        Container::mounts(host, runner)
+            .into_iter()
+            .find(|(_, at)| Path::new(at) == destination)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{} mounts nothing at {}",
+                    runner.name,
+                    destination.display()
+                )
+            })
+            .0
+    }
+
+    /// Cargo is told one path in every container, so every compilation of
+    /// every lane is keyed the same fleet-wide. The directory it names is the
+    /// alias the lane runner points at the lane's own build, inside a root the
+    /// runner keeps to itself: one job per container, so re-pointing it never
+    /// races another job.
+    #[test]
+    fn a_job_builds_behind_the_alias_in_its_runners_own_build_root() {
+        let host = host_fixture();
+        let [first, second, ..] = host.runners.as_slice() else {
+            panic!("the host fixture serves more than one runner");
+        };
+        let alias = told(first, "CARGO_TARGET_DIR");
+
+        assert_eq!(alias, told(second, "CARGO_TARGET_DIR"));
+        assert_eq!(alias.file_name(), Some(OsStr::new(consts::BUILD_ALIAS)));
+        let root = alias.parent().expect("the alias sits in a build root");
+        assert_ne!(
+            mounted_at(&host, first, root),
+            mounted_at(&host, second, root),
+            "two jobs re-point one alias"
+        );
+    }
+
+    /// The xtask bootstrap is one more build in the runner's build root, under
+    /// the one name no lane may take, so the budget and the evictor see it like
+    /// any lane's.
+    #[test]
+    fn a_job_bootstraps_xtask_beside_its_lanes() {
+        let host = host_fixture();
+        let runner = host.runner("kithara-ci-octocat").expect("runner");
+        let alias = told(runner, "CARGO_TARGET_DIR");
+        let xtask = told(runner, "KITHARA_XTASK_TARGET");
+
+        assert_eq!(xtask.parent(), alias.parent());
+        assert_eq!(xtask.file_name(), Some(OsStr::new(consts::XTASK_BUILD)));
+    }
+
+    /// Cargo's home holds what jobs download and what they unpack it into, and
+    /// a review job must never write what a trusted job reads: two runners
+    /// share a home exactly when they share a trust.
+    #[test]
+    fn runners_share_a_cargo_home_exactly_when_they_share_a_trust() {
+        let mut host = host_fixture();
+        host.runners[0].cache_trust = CacheTrust::Trusted;
+        let home = |runner: &LinuxRunner| mounted_at(&host, runner, &told(runner, "CARGO_HOME"));
+
+        for first in &host.runners {
+            for second in &host.runners {
+                assert_eq!(
+                    home(first) == home(second),
+                    first.cache_trust == second.cache_trust,
+                    "{} and {}",
+                    first.name,
+                    second.name
+                );
+            }
+        }
+    }
+
+    /// The compiler cache is the store the runner's credentials name. A local
+    /// directory beside it was never read and only held a disk.
+    #[test]
+    fn a_job_keeps_no_compiler_cache_on_disk() {
+        let host = host_fixture();
+        let runner = host.runner("kithara-ci-octocat").expect("runner");
+
+        assert!(
+            !Container::environment(runner)
+                .iter()
+                .any(|entry| entry.starts_with("SCCACHE_DIR=")),
+            "{:?}",
+            Container::environment(runner)
+        );
+    }
+
+    /// Where a job's caches live is the container's to say. A workflow that
+    /// names one of those paths again overrides the container for every job
+    /// it runs: the role runner named the build root itself, so its xtask
+    /// built into the root, beside the lanes rather than as one of them.
+    #[test]
+    fn no_workflow_restates_where_the_container_keeps_a_cache() {
+        let host = host_fixture();
+        let runner = host.runner("kithara-ci-octocat").expect("runner");
+        let mounts = Container::mounts(&host, runner);
+        let inside = |value: &str| {
+            mounts
+                .iter()
+                .any(|(_, at)| Path::new(value).starts_with(at))
+        };
+        let environment = Container::environment(runner);
+        let said: Vec<&str> = environment
+            .iter()
+            .filter_map(|entry| entry.split_once('='))
+            .filter(|(_, value)| inside(value))
+            .map(|(name, _)| name)
+            .collect();
+        let workflows = workspace_root().join(".github/workflows");
+
+        for entry in fs::read_dir(&workflows).expect("the workflows are readable") {
+            let path = entry.expect("a workflow entry").path();
+            let text = fs::read_to_string(&path).expect("a workflow is readable");
+            let workflow: Value = serde_yaml_ng::from_str(&text).expect("a workflow is YAML");
+            for (name, value) in environments(&workflow) {
+                assert!(
+                    !(said.contains(&name) && inside(value)),
+                    "{} names {name}={value}, which the container says",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    /// Every variable an `env` block anywhere in `workflow` sets.
+    fn environments(workflow: &Value) -> Vec<(&str, &str)> {
+        let mut found = Vec::new();
+        let mut pending = vec![workflow];
+        while let Some(value) = pending.pop() {
+            match value {
+                Value::Mapping(mapping) => {
+                    for (key, value) in mapping {
+                        if key.as_str() == Some("env")
+                            && let Some(block) = value.as_mapping()
+                        {
+                            found.extend(
+                                block
+                                    .iter()
+                                    .filter_map(|(name, value)| name.as_str().zip(value.as_str())),
+                            );
+                        }
+                        pending.push(value);
+                    }
+                }
+                Value::Sequence(values) => pending.extend(values),
+                _ => {}
+            }
+        }
+        found
+    }
 
     /// The linker a Linux job links with is part of what a job is told, not a
     /// property of whichever image happened to be built: an unnamed linker is
@@ -188,7 +348,7 @@ mod tests {
     /// testing.
     #[test]
     fn a_job_is_told_which_linker_to_use() {
-        let host = super::super::profile::tests::host_fixture();
+        let host = host_fixture();
         let runner = host.runner("kithara-ci-octocat").expect("runner");
         let environment = Container::environment(runner);
 
@@ -206,7 +366,7 @@ mod tests {
     /// build, and everything that embeds them is rebuilt.
     #[test]
     fn a_job_keeps_the_beat_models_on_a_mount_every_runner_shares() {
-        let host = super::super::profile::tests::host_fixture();
+        let host = host_fixture();
         let [first, second, ..] = host.runners.as_slice() else {
             panic!("the host fixture serves more than one runner");
         };
@@ -231,7 +391,7 @@ mod tests {
 
     #[test]
     fn a_runner_keeps_its_ready_cache_daemon_available_for_its_job() {
-        let host = super::super::profile::tests::host_fixture();
+        let host = host_fixture();
         let runner = host.runner("kithara-ci-octocat").expect("runner");
 
         assert!(Container::environment(runner).contains(&format!(

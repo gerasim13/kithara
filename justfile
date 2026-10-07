@@ -2,18 +2,14 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 # Empty when absent: cargo reads that as "no wrapper", not as an error. Empty on
 # Windows as well: sccache cannot spawn the compiler `ffmpeg-sys-next` asks for
-# there, and the wrapper below is a POSIX script.
+# there.
 sccache := if os_family() == "windows" { "" } else { `command -v sccache 2>/dev/null || true` }
 
-# sccache keys a Rust compile on every `CARGO_*` value, and Cargo builds at a
-# lane slot's own path, which native build tools record. The wrapper runs
-# sccache without the build directory, so that value no longer gives every
-# dependency a copy per slot and job directory. The path still reaches a
-# compile through `OUT_DIR` and through the proc macros a slot builds, so a
-# crate that reads `OUT_DIR`, uses a proc macro, or depends on one that does is
-# still kept once per slot.
-rustc_wrapper := justfile_directory() / ".config/sccache/sccache"
-export RUSTC_WRAPPER := if sccache == "" { "" } else { rustc_wrapper }
+# sccache keys a Rust compile on its working directory, every `CARGO_*` value
+# and `OUT_DIR`, so two builds share an entry only when they build at the same
+# paths. CI gives every lane the same checkout and build directory path for
+# that reason; nothing here rewrites the key.
+export RUSTC_WRAPPER := sccache
 
 # A C compile's cache key includes the absolute paths in its preprocessor
 # output, so the same C source built in two worktrees hashes twice and neither
@@ -21,10 +17,8 @@ export RUSTC_WRAPPER := if sccache == "" { "" } else { rustc_wrapper }
 # prefix is then stripped from that output, and what is left is the same
 # workspace-relative path everywhere, so the keys coincide. A Rust compile is
 # keyed on its raw working directory and every `CARGO_*` value, which this
-# does not touch: a workspace crate is keyed per checkout regardless, and a
-# dependency, which Cargo compiles inside its own home, shares its key across
-# checkouts as far as the wrapper above lets it share across slots. This
-# rewrites the cache key, not what the compiler is asked to compile.
+# does not touch. This rewrites the cache key, not what the compiler is asked
+# to compile.
 export SCCACHE_BASEDIRS := if sccache == "" { "" } else { justfile_directory() }
 
 # The cache was found sitting at exactly its ceiling - 60 GiB stored against a
@@ -103,10 +97,13 @@ gallery *ARGS: _desktop-ready
 _desktop-ready:
     @if [[ -d "$PWD/.git" ]] && [[ "$(git rev-parse --absolute-git-dir)" = "$PWD/.git" ]] && [[ "$(git config --local --bool core.bare || true)" = true ]] && [[ "$(git rev-parse --is-bare-repository)" = false ]] && [[ "$(git rev-parse --show-toplevel)" = "$PWD" ]]; then git config --local core.bare false; printf 'Repaired contradictory core.bare setting for this checkout.\n' >&2; fi
 
+# A CI executor names the directory the self-cache builds in, and the job
+# leases it for as long as xtask runs: the host's cache eviction then never
+# deletes the binary a lane is running. Nothing evicts a local checkout's.
 [no-exit-message]
 [positional-arguments]
 _xtask *ARGS:
-    @if [[ -z "${KITHARA_CI_CACHE_ROOT:-}" ]]; then exec just _xtask-unleased "$@"; fi; trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then build_target="$CARGO_TARGET_DIR"; else build_target=$(just _xtask-self-target) || exit $?; fi; mkdir -p "$build_target"; export CARGO_HOME="$KITHARA_CI_CACHE_ROOT/$trust/$(rustc --print cfg | sed -n 's/^target_os="\(.*\)"$/\1/p')-$(rustc --print cfg | sed -n 's/^target_arch="\(.*\)"$/\1/p')/cargo"; mkdir -p "$CARGO_HOME"; helper="${TMPDIR:-/tmp}/kithara-target-lease-${CI_JOB_ID:-$$}-$$"; rustc --edition=2024 "$PWD/xtask/bootstrap_lease.rs" -o "$helper"; exec "$helper" "$build_target/.kithara-job-lease" just _xtask-unleased "$@"
+    @if [[ -z "${KITHARA_XTASK_TARGET:-}" ]]; then exec just _xtask-unleased "$@"; fi; helper="${TMPDIR:-/tmp}/kithara-target-lease-${CI_JOB_ID:-$$}-$$"; rustc --edition=2024 "$PWD/xtask/bootstrap_lease.rs" -o "$helper"; exec "$helper" "$KITHARA_XTASK_TARGET" just _xtask-unleased "$@"
 
 [no-exit-message]
 [positional-arguments]
@@ -131,27 +128,22 @@ _xtask-ready:
     fi; \
     target=$(just _xtask-self-target) || exit $?; CARGO_TARGET_DIR="$target" exec just _xtask-cached strict self-cache refresh </dev/null >/dev/null
 
-# Where the self-cache builds: the checkout's own directory locally, and on
-# CI the bootstrap namespace the host cleaner owns, never a lane's directory.
+# Where the self-cache builds: the directory a CI executor names, else the
+# checkout's own.
 [no-exit-message]
 [private]
 _xtask-self-target:
-    @if [[ -z "${KITHARA_CI_CACHE_ROOT:-}" ]]; then printf '%s\n' "$PWD/target/xtask-self-cache"; exit 0; fi; trust="${KITHARA_CACHE_TRUST:?a CI cache root needs the trust namespace it belongs to}"; owner="${CI_CONCURRENT_ID:-local}"; case "$owner" in *[!A-Za-z0-9_.-]*) printf 'error: invalid xtask bootstrap cache owner: %s\n' "$owner" >&2; exit 1 ;; esac; printf '%s\n' "$KITHARA_CI_CACHE_ROOT/bootstrap/$trust/target-$(uname -s)-$(uname -m)-$owner"
+    @printf '%s\n' "${KITHARA_XTASK_TARGET:-$PWD/target/xtask-self-cache}"
 
-# The one build with no caches of its own. Their variables are normally produced
-# by `CiEnvironment`, inside the binary this build is compiling. Its target and
-# compiler cache stay in the bootstrap namespace the host cleaner owns, but its
-# `CARGO_HOME` is the job's own: this build is what fetches the git
-# dependencies, and giving it a home of its own made the lane fetch the same
-# submodules a second time minutes later. `_xtask` names that home, and
-# `CiEnvironment` refuses to disagree with it. A daemon keeps the cache
-# directory it started with, so an executor-provided socket gets a distinct
-# bootstrap endpoint when the directory changes.
+# The one build with no caches of its own: their variables are normally
+# produced by `CiEnvironment`, inside the binary this build is compiling. It
+# uses the job's `CARGO_HOME` and compiler cache as they stand, so the git
+# dependencies it fetches are the ones the lane then reads.
 [no-exit-message]
 [positional-arguments]
 [private]
 _xtask-bootstrap *ARGS:
-    @target=$(just _xtask-self-target) || exit $?; if [[ -n "${KITHARA_CI_CACHE_ROOT:-}" ]]; then root="${target%/*}"; export SCCACHE_DIR="$root/sccache"; if [[ -n "${SCCACHE_SERVER_UDS:-}" ]]; then export SCCACHE_SERVER_UDS="/tmp/kithara-xtask-${root##*/}-${target##*/target-}.sock"; fi; fi; exec env CARGO_TARGET_DIR="$target" cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
+    @target=$(just _xtask-self-target) || exit $?; exec env CARGO_TARGET_DIR="$target" cargo run --locked --manifest-path "$PWD/Cargo.toml" -p xtask --bin xtask -- self-cache bootstrap "$@"
 
 # The pointer to the active generation lives beside the generations it names,
 # inside the Git directory. A CI runner cleans the working tree before every
