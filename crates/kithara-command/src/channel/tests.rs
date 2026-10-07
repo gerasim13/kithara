@@ -1,4 +1,9 @@
-use std::{mem, num::NonZeroUsize, ops::Range};
+use std::{
+    mem,
+    num::NonZeroUsize,
+    ops::Range,
+    task::{Context, Poll},
+};
 
 use kithara_platform::{thread, tokio::sync::oneshot};
 use kithara_test_utils::kithara;
@@ -8,6 +13,7 @@ use crate::{
     ChannelConfig, Inbox,
     protocol::{Batch, Protocol, Seq, Target, When},
     receipt::{Outcome, Rejection},
+    wakes::waker,
 };
 
 const BLOCK: usize = 64;
@@ -562,4 +568,168 @@ fn a_dropped_due_batch_comes_back_unanswered() {
     assert_eq!(outcome, Outcome::Rejected(Rejection::Unanswered));
     assert_eq!(returned.commands, [1]);
     assert!(sender.send(When::Next, batch(2, &[])).is_ok());
+}
+
+#[kithara::test]
+fn a_deferred_batch_is_answered_when_its_executor_resumes_it() {
+    let (mut sender, mut inbox) = pair(1, 0);
+    let seq = send(&mut sender, When::Next, batch(1, &[]));
+    inbox.drain();
+    let due = inbox.next_due(Frame(64), BLOCK).expect("the batch is due");
+    assert_eq!(due.defer(), seq);
+
+    assert!(
+        outcomes(&mut sender).is_empty(),
+        "a deferred batch waits for its answer"
+    );
+    assert!(
+        matches!(
+            sender.send(When::Next, batch(2, &[])),
+            Err(SendError::Full(_))
+        ),
+        "a deferred batch keeps its credit"
+    );
+
+    inbox
+        .resume(seq)
+        .expect("the deferred batch waits in its inbox")
+        .apply(());
+    assert_eq!(outcomes(&mut sender), [(seq, applied(64))]);
+    assert!(inbox.resume(seq).is_none(), "an answered batch is gone");
+}
+
+#[kithara::test]
+fn a_deferred_batch_leaves_the_block_to_the_batches_after_it() {
+    let (mut sender, mut inbox) = pair(8, 0);
+    let deferred = send(&mut sender, When::Next, batch(1, &[]));
+    let next = send(&mut sender, When::Next, batch(2, &[]));
+    inbox.drain();
+    inbox
+        .next_due(Frame(0), BLOCK)
+        .expect("the first batch is due")
+        .defer();
+
+    assert_eq!(run_block(&mut inbox, 0, BLOCK), [(0, 2)]);
+    assert_eq!(outcomes(&mut sender), [(next, applied(0))]);
+    drop(inbox.resume(deferred));
+    assert_eq!(
+        outcomes(&mut sender),
+        [(deferred, Outcome::Rejected(Rejection::Unanswered))]
+    );
+}
+
+#[kithara::test]
+fn a_send_wakes_an_executor_waiting_on_its_inbox() {
+    let (mut sender, mut inbox) = pair(8, 0);
+    let (waker, wakes) = waker();
+    let mut cx = Context::from_waker(&waker);
+    assert_eq!(inbox.poll_drain(&mut cx), Poll::Pending, "nothing waits");
+
+    send(&mut sender, When::Next, batch(1, &[]));
+
+    assert_eq!(wakes.count(), 1, "one send, one wake");
+    assert_eq!(inbox.poll_drain(&mut cx), Poll::Ready(()));
+    assert_eq!(run_block(&mut inbox, 0, BLOCK), [(0, 1)]);
+}
+
+#[kithara::test]
+fn a_dropped_sender_closes_the_inbox_and_wakes_its_executor() {
+    let (sender, mut inbox) = pair(8, 0);
+    let (waker, wakes) = waker();
+    let mut cx = Context::from_waker(&waker);
+    assert_eq!(inbox.poll_drain(&mut cx), Poll::Pending, "nothing waits");
+    assert!(!inbox.is_closed(), "the sender still sends");
+
+    drop(sender);
+
+    assert_eq!(wakes.count(), 1, "the sender's drop wakes its executor");
+    assert!(inbox.is_closed());
+    assert_eq!(
+        inbox.poll_drain(&mut cx),
+        Poll::Ready(()),
+        "a closed inbox leaves nothing to wait for"
+    );
+}
+
+#[kithara::test]
+fn a_dropped_inbox_answers_every_batch_it_holds() {
+    let (mut sender, mut inbox) = pair(8, 0);
+    let parked = send(&mut sender, When::Next, batch(1, &[]));
+    let scheduled = send(&mut sender, When::At(Frame(1_000)), batch(2, &[]));
+    inbox.drain();
+    inbox
+        .next_due(Frame(0), BLOCK)
+        .expect("the first batch is due")
+        .defer();
+    let pending = send(&mut sender, When::Next, batch(3, &[]));
+
+    drop(inbox);
+
+    let mut answered: Vec<_> = sender
+        .receipts()
+        .map(|receipt| {
+            let seq = receipt.seq();
+            let (outcome, returned): Parts = receipt.into();
+            (seq, outcome, returned.commands)
+        })
+        .collect();
+    answered.sort_by_key(|&(seq, ..)| seq);
+    let unanswered = || Outcome::Rejected(Rejection::Unanswered);
+    assert_eq!(
+        answered,
+        [
+            (parked, unanswered(), vec![1]),
+            (scheduled, unanswered(), vec![2]),
+            (pending, unanswered(), vec![3]),
+        ],
+        "parked, scheduled and undrained batches each come back whole"
+    );
+}
+
+/// An owner holding its sender is woken by each receipt, so it reads the
+/// answer without waiting for a tick of its own.
+#[kithara::test]
+fn a_held_sender_is_woken_by_each_receipt() {
+    let (mut sender, mut inbox) = pair(8, 0);
+    let (waker, wakes) = waker();
+    sender.hold(waker);
+    send(&mut sender, When::Next, batch(1, &[]));
+    send(&mut sender, When::Next, batch(2, &[]));
+    inbox.drain();
+
+    inbox
+        .next_due(Frame(0), BLOCK)
+        .expect("the first batch is due")
+        .apply(());
+    assert_eq!(wakes.count(), 1, "the receipt wakes the sender's owner");
+    assert_eq!(sender.receipts().count(), 1);
+    inbox
+        .next_due(Frame(0), BLOCK)
+        .expect("the second batch is due")
+        .apply(());
+
+    assert_eq!(
+        wakes.count(),
+        2,
+        "the owner reading its receipts stays held for the next one"
+    );
+}
+
+/// A released sender's owner reads its receipts on its own time.
+#[kithara::test]
+fn a_released_sender_is_not_woken_by_a_receipt() {
+    let (mut sender, mut inbox) = pair(8, 0);
+    let (waker, wakes) = waker();
+    sender.hold(waker);
+    sender.release();
+    send(&mut sender, When::Next, batch(1, &[]));
+    inbox.drain();
+
+    inbox
+        .next_due(Frame(0), BLOCK)
+        .expect("the batch is due")
+        .apply(());
+
+    assert_eq!(wakes.count(), 0);
+    assert_eq!(sender.receipts().count(), 1);
 }

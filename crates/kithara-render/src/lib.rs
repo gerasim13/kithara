@@ -7,6 +7,7 @@
 pub mod bridge;
 mod consts;
 mod crossfade;
+mod dispatcher;
 mod lane;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
@@ -15,6 +16,7 @@ pub mod rt;
 mod source;
 mod worker;
 pub use crossfade::{CrossfadeCurve, CrossfadeSettings, InvalidCrossfade};
+pub use dispatcher::{DispatcherProtocol, Open, dispatch};
 #[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
 pub use lane::{LaneCommand, LaneFrame, LaneProtocol};

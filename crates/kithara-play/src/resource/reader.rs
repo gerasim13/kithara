@@ -1,6 +1,11 @@
-use std::num::NonZeroU32;
+use std::{
+    fmt::{self, Debug, Formatter},
+    num::NonZeroU32,
+    pin::pin,
+};
 
 use delegate::delegate;
+use futures::future::{Either, select};
 use kithara_audio::{
     AudioObserver, AudioReader, ChunkOutcome, ConsumerWakeMode, ReadOutcome, ResamplerBackend,
     SeekOutcome,
@@ -9,16 +14,16 @@ use kithara_bufpool::HasPool;
 use kithara_command::Sender;
 use kithara_decode::{DecodeError, DecodeResult, TrackMetadata};
 use kithara_events::{EventBus, EventReceiver, EventSet};
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::{maybe_send::MaybeSendFuture, sync::Arc, time::Duration};
 use kithara_render::{
-    LaneProtocol,
+    LaneProtocol, LoadRefusal, Open,
     rt::track::{PcmConsumer, PlaybackRate},
 };
 use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
 use tracing::warn;
 
-use super::{ResourceConfig, SourceType};
+use super::{PlaybackResamplerBackend, ResourceConfig, SourceType};
 use crate::{PlayWorker, TrackConfig};
 
 /// Type-erased audio resource wrapping any `AudioReader`.
@@ -90,7 +95,7 @@ impl Resource {
         B: Default + ResamplerBackend,
         S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     {
-        Self::open(config, None).await
+        Ok(Self::open(config, None).await?)
     }
 
     /// Create a resource from any `AudioReader`.
@@ -129,7 +134,7 @@ impl Resource {
         config: TrackConfig<T, B>,
         src: Arc<str>,
         worker: &PlayWorker<S>,
-    ) -> DecodeResult<Self>
+    ) -> Result<Self, LoadRefusal>
     where
         T: StreamType<Events = EventBus> + 'static,
         B: Default + ResamplerBackend,
@@ -158,28 +163,12 @@ impl Resource {
         Ok(resource)
     }
 
-    /// Create a resource with a bounded observer of decoded audio attached.
-    ///
-    /// This is a narrow cross-crate composition seam used by queue-owned
-    /// orchestration. The ordinary resource API remains [`Self::new`].
-    #[doc(hidden)]
-    pub async fn new_observed<S, B>(
-        config: ResourceConfig<S, B>,
-        observer: Box<dyn AudioObserver>,
-    ) -> DecodeResult<Self>
-    where
-        B: Default + ResamplerBackend,
-        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    {
-        Self::open(config, Some(observer)).await
-    }
-
     /// Captures the per-track cancel token before `build_*_config` consumes `config`; the same
     /// token is cloned by identity into both the inner stream and the audio path.
     async fn open<S, B>(
         config: ResourceConfig<S, B>,
         observer: Option<Box<dyn AudioObserver>>,
-    ) -> DecodeResult<Self>
+    ) -> Result<Self, LoadRefusal>
     where
         B: Default + ResamplerBackend,
         S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
@@ -297,6 +286,73 @@ impl Resource {
     }
 }
 
+impl Debug for Resource {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Resource")
+            .field("src", &self.src)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A track's open as a dispatcher runs it: the resource's config and the
+/// observer of the audio it decodes.
+pub struct ResourceLoad<S, B: Default = PlaybackResamplerBackend>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    config: ResourceConfig<S, B>,
+    observer: Box<dyn AudioObserver>,
+}
+
+impl<S, B> ResourceLoad<S, B>
+where
+    B: Default,
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    /// Opens `config` with `observer` attached to its decoder.
+    #[must_use]
+    pub fn new(config: ResourceConfig<S, B>, observer: Box<dyn AudioObserver>) -> Self {
+        Self { config, observer }
+    }
+}
+
+impl<S, B> Debug for ResourceLoad<S, B>
+where
+    B: Default,
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ResourceLoad")
+            .field("src", &self.config.src)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<S, B> Open for ResourceLoad<S, B>
+where
+    B: Default + ResamplerBackend,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    type Opened = Resource;
+
+    /// Ends the moment the track's cancel fires: a cancelled track's open is
+    /// never polled, and one in flight drops only after its token reads
+    /// cancelled.
+    fn open(self) -> impl MaybeSendFuture<Output = Result<Resource, LoadRefusal>> {
+        let cancel = self.config.cancel.clone();
+        let open = Resource::open(self.config, Some(self.observer));
+        async move {
+            let Some(cancel) = cancel else {
+                return open.await;
+            };
+            match select(pin!(cancel.cancelled()), pin!(open)).await {
+                Either::Left(((), _open)) => Err(LoadRefusal::Cancelled),
+                Either::Right((opened, _cancel)) => opened,
+            }
+        }
+    }
+}
+
 /// Unwrap a `Resource` into its underlying reader, e.g. to hand the opened
 /// source to the shared `kithara-analysis` worker.
 ///
@@ -335,7 +391,10 @@ mod tests {
             StreamStatus,
         },
     };
-    use kithara_audio::{AudioControl, AudioRead, AudioSession, ReadOutcome, SeekOutcome};
+    use kithara_assets::{AssetStore, StorageBackend};
+    use kithara_audio::{
+        AudioControl, AudioObserverSlot, AudioRead, AudioSession, ReadOutcome, SeekOutcome,
+    };
     use kithara_bufpool::PoolRegion;
     use kithara_decode::TrackMetadata;
     use kithara_events::TrackId;
@@ -354,7 +413,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        consts,
+        PlayWorkerConfig, ResourceSrc, consts,
         test_pools::{TestPools, pools},
     };
 
@@ -680,6 +739,35 @@ mod tests {
         );
         assert!(audio_sub.is_cancelled());
         assert!(track.is_cancelled());
+    }
+
+    /// A load whose track is cancelled ends at once, refused `Cancelled`,
+    /// without opening its source: whoever sent it does not wait on an open
+    /// nobody wants.
+    #[kithara::test(tokio)]
+    async fn a_cancelled_load_is_refused_without_opening_its_source() {
+        let pools = pools();
+        let mut config: ResourceConfig<TestPools> =
+            ResourceConfig::for_src(ResourceSrc::Path("/kithara/missing.mp3".into()))
+                .store(
+                    AssetStore::builder(pools.clone())
+                        .backend(StorageBackend::Memory)
+                        .build(),
+                )
+                .worker(PlayWorker::new(PlayWorkerConfig::builder(pools).build()))
+                .build();
+        let track = CancelToken::never().child();
+        track.cancel();
+        config.cancel = Some(track);
+
+        let refused = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()))
+            .open()
+            .await;
+
+        assert!(
+            matches!(refused, Err(LoadRefusal::Cancelled)),
+            "a cancelled load opened its source: {refused:?}"
+        );
     }
 
     /// A resource with no per-track cancel wired in (custom reader) drops

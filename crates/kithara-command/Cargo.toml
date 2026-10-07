@@ -15,6 +15,7 @@ kithara-platform = { workspace = true }
 
 delegate = { workspace = true }
 fieldwork = { workspace = true }
+futures = { workspace = true }
 ringbuf = { workspace = true }
 thiserror = { workspace = true }
 

@@ -52,9 +52,10 @@ impl<C: LiveConfig, P: Protocol> Live<C, P> {
     }
 
     /// Folds every copy in flight into the configuration in the order the
-    /// executor applies them, `(When, Seq)`, for a queue destroyed without
-    /// answering them. Returns whether there was a copy, so the configuration
-    /// may have changed.
+    /// executor applies them, `(When, Seq)`, for an owner about to destroy its
+    /// executor: the receipts a dropped inbox answers then carry no copy.
+    /// Returns whether there was a copy, so the configuration may have
+    /// changed.
     pub fn abandon(&mut self) -> bool {
         let abandoned = !self.in_flight.is_empty();
         self.in_flight

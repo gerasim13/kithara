@@ -7,9 +7,9 @@ use super::super::{
     types::{PendingSelect, Transition},
 };
 use crate::{
-    attempts::LoadClass,
     error::QueueError,
     event::{AdvanceReason, QueueEvent, TrackStatus},
+    loading::LoadClass,
 };
 
 impl<S> Queue<S>

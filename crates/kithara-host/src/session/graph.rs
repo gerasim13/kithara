@@ -292,6 +292,11 @@ pub(super) mod lifecycle {
             );
             state.publish_root();
             state.reserved_session_grid = Some(session_grid_generation);
+            // The settings changes the transport has not answered fold into
+            // the settings before it goes, so the next stream renders them;
+            // its inbox answers them unanswered as it drops.
+            settle_receipts(state);
+            state.settings.abandon();
             state
                 .ctx
                 .as_mut()
@@ -299,8 +304,6 @@ pub(super) mod lifecycle {
                 .request_deactivate();
             state.stream = None;
             state.ctx = None;
-            settle_receipts(state);
-            state.settings.abandon();
             state.publish_root();
             state.transport_control = None;
             state.taps = Taps::default();

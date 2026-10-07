@@ -36,14 +36,15 @@ pub use kithara_audio::SeekOutcome;
 pub use kithara_effects::eq::EqBandConfig;
 pub use kithara_net::Headers;
 pub use kithara_render::{
-    CrossfadeCurve, CrossfadeSettings, EngineLoad, EngineLoadSnapshot, InvalidCrossfade,
-    LoadRefusal, PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch, RegisteredAudio,
-    ServiceClass, TrackConfig,
+    CrossfadeCurve, CrossfadeSettings, DispatcherProtocol, EngineLoad, EngineLoadSnapshot,
+    InvalidCrossfade, LoadRefusal, PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch,
+    RegisteredAudio, ServiceClass, TrackConfig,
     bridge::{
         MixTapWriter, NodeInputs, PlaybackFault, PlaybackShared, PlaybackSnapshot,
         PlayerNotification, RtMetricsSnapshot, SlotControl, TrackPlaybackStopReason, TrackState,
         TrackTransition,
     },
+    dispatch,
     rt::{BufferGeometryError, DeckMixerConfig, PlayerNode, StreamShape},
 };
 pub use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot, MIN_SPEED};
@@ -53,7 +54,7 @@ pub use player::{
 };
 pub use resource::{
     ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, Cover, MAX_ARTIFACT_BYTES,
-    PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType,
+    PlaybackResamplerBackend, Resource, ResourceConfig, ResourceLoad, ResourceSrc, SourceType,
 };
 pub use session::{
     AllocatedSlot, DeckRegistration, OutputSnapshot, PlayerId, SessionBinding, SessionError,

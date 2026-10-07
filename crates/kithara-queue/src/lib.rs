@@ -1,10 +1,10 @@
 //! AVQueuePlayer-analogue orchestration layer on top of `kithara-play`.
 
-mod attempts;
 mod config;
 mod error;
 mod event;
 mod loader;
+mod loading;
 mod navigation;
 mod queue;
 #[cfg(test)]

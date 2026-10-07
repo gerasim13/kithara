@@ -7,8 +7,8 @@ use kithara_play::{
 
 use super::{Queue, Transition};
 use crate::{
-    attempts::AttemptReport,
     error::QueueError,
+    loading::LoadReport,
     navigation::{ActionAtItemEnd, PlaybackOrder, RepeatMode},
     track::TrackSource,
 };
@@ -16,8 +16,8 @@ use crate::{
 /// Where the queue sends a command's answer; the caller waits on the other end.
 pub(super) type Reply<T> = Sender<T>;
 
-/// What a [`QueueControl`](super::QueueControl) or a load attempt asks the
-/// queue to do. The executor that holds the queue runs commands one at a
+/// What a [`QueueControl`](super::QueueControl) or a task beside a track's
+/// load asks the queue to do. The executor that holds the queue runs commands one at a
 /// time, in the order they were posted.
 pub(crate) enum QueueCommand<S>
 where
@@ -85,8 +85,8 @@ where
         reply: Reply<Result<(), PlayError>>,
     },
     Close(Reply<Result<(), PlayError>>),
-    /// A track's load attempt reports a transition.
-    Attempt(AttemptReport),
+    /// A task beside a track's load reports what it found.
+    Load(LoadReport),
 }
 
 /// A player setting or platform notice the queue passes to its player.
@@ -106,9 +106,10 @@ impl<S> Queue<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// Runs every command posted since the last drain, then publishes what
-    /// the reports among them changed.
+    /// Settles the loads the dispatcher answered and runs every command
+    /// posted since the last drain, then publishes what they changed.
     pub(super) fn drain_commands(&mut self) {
+        self.settle_loads();
         for command in self.mailbox.drain() {
             self.run(command);
         }
@@ -167,7 +168,7 @@ where
             }
             QueueCommand::Player { call, reply } => answer(&reply, self.call_player(call)),
             QueueCommand::Close(reply) => answer(&reply, Player::close(self)),
-            QueueCommand::Attempt(report) => self.apply_report(report),
+            QueueCommand::Load(report) => self.tracks.apply_report(report),
         }
     }
 

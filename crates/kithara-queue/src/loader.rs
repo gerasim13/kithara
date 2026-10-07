@@ -1,93 +1,122 @@
-use std::{error::Error as StdError, io::Error, num::NonZeroUsize};
+use std::{error::Error as StdError, io::Error, num::NonZeroUsize, task::Waker};
 
 use kithara_assets::AssetStore;
-use kithara_audio::AudioObserverSlot;
 use kithara_bufpool::HasPool;
-use kithara_command::Postbox;
+use kithara_command::{
+    Batch, ChannelConfig, Outcome, Postbox, Rejection, Sender, Seq, When, channel,
+};
 use kithara_download::DownloaderEvent;
-use kithara_events::{Envelope, EventBus, RecvError, ScopeLabel, TrackId};
+use kithara_events::{Envelope, EventReceiver, RecvError, ScopeLabel, TrackId};
 use kithara_net::NetError;
 use kithara_platform::{
-    CancelGroup, CancelToken,
+    CancelToken,
     sync::Arc,
-    time::Duration,
     tokio,
-    tokio::{runtime::Handle as RuntimeHandle, sync::Semaphore, task::spawn_on},
+    tokio::{runtime::Handle as RuntimeHandle, task::spawn_on},
 };
 use kithara_play::{
-    ArtifactLoadError, Cover, Resource, ResourceConfig, ResourceSrc, player::PlayerControl,
+    ArtifactLoadError, Cover, DispatcherProtocol, LoadRefusal, Resource, ResourceConfig,
+    ResourceLoad, ResourceSrc, dispatch, player::PlayerControl,
 };
 use kithara_test_utils::kithara;
 use tracing::{debug, warn};
 
 use crate::{
-    attempts::{AttemptReport, LoadClass, Ticket},
     error::QueueError,
     event::TrackStatus,
+    loading::{LoadClass, LoadReport, OpenFailure, TrackLoad},
     queue::QueueCommand,
     track::{TrackSource, Tracks},
 };
 
-/// Async track loader: `ResourceConfig` -> `Resource`, run in two
-/// isolated permit lanes with one abortable attempt per track. The queue
-/// starts each attempt; the attempt's task posts what happens to it back to
-/// the queue, which applies it.
+/// What the queue's dispatcher speaks: one track's open per batch.
+type Loads<S> = DispatcherProtocol<ResourceLoad<S>>;
+
+/// Track loader: `ResourceConfig` -> `Resource`, opened by the worker's
+/// dispatcher in two isolated lanes, one live load per track. The queue owns
+/// it and settles what the dispatcher answers on its own thread; a task
+/// beside a load reports a slow transfer or a cover to the queue's mailbox.
 pub(crate) struct Loader<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// User-selection lane: one dedicated permit, isolated from prefetch.
-    interactive_lane: Arc<Semaphore>,
-    /// Background prefetch lane (`max_concurrent_loads` permits).
-    prefetch_lane: Arc<Semaphore>,
-    /// Where an attempt's task reports to the queue.
+    /// `None` when the queue was built with no runtime: nothing can open.
+    dispatcher: Option<Dispatcher<S>>,
+    /// User-selection lane: one slot, isolated from prefetch.
+    interactive: Lane,
+    /// Background prefetch lane (`max_concurrent_loads` slots).
+    prefetch: Lane,
+    /// Where a task beside a load reports to the queue.
     postbox: Postbox<QueueCommand<S>>,
     store: AssetStore<S>,
-    cancel: CancelToken,
-    runtime: Option<RuntimeHandle>,
     player: PlayerControl<S>,
+}
+
+/// The dispatcher the queue's tracks open on, and the runtime it and the
+/// tasks beside each load run on.
+struct Dispatcher<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    sender: Sender<Loads<S>>,
+    runtime: RuntimeHandle,
+}
+
+/// One loader lane: how many opens it keeps in flight, and the ones it has.
+struct Lane {
+    limit: usize,
+    running: Vec<Seq>,
+}
+
+impl Lane {
+    const fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            running: Vec::new(),
+        }
+    }
+
+    fn has_room(&self) -> bool {
+        self.running.len() < self.limit
+    }
+
+    /// The open sent as `seq` was answered; its slot is free when it was this
+    /// lane's.
+    fn finish(&mut self, seq: Seq) {
+        self.running.retain(|running| *running != seq);
+    }
 }
 
 impl<S> Loader<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// Repeated asks with nothing to show for them: the downloader's own budget.
-    const HANG_TIMEOUT: Duration = Duration::from_secs(60);
-
+    /// A loader whose dispatcher runs on `runtime`, holding both lanes'
+    /// opens in flight at once.
     pub(crate) fn new(
         player: PlayerControl<S>,
         runtime: Option<RuntimeHandle>,
         store: AssetStore<S>,
         max_concurrent_loads: NonZeroUsize,
         postbox: Postbox<QueueCommand<S>>,
-        cancel: CancelToken,
     ) -> Self {
+        let dispatcher = runtime.map(|runtime| {
+            let (sender, inbox) = channel(
+                ChannelConfig::builder()
+                    .capacity(max_concurrent_loads.saturating_add(1))
+                    .build(),
+            );
+            drop(spawn_on(&runtime, dispatch(inbox)));
+            Dispatcher { sender, runtime }
+        });
         Self {
-            cancel,
-            player,
-            runtime,
+            dispatcher,
+            interactive: Lane::new(1),
+            prefetch: Lane::new(max_concurrent_loads.get()),
             postbox,
             store,
-            interactive_lane: Arc::new(Semaphore::new(1)),
-            prefetch_lane: Arc::new(Semaphore::new(max_concurrent_loads.get())),
+            player,
         }
-    }
-
-    /// What a load attempt needs before it begins: its config, its
-    /// per-track cancel, and the runtime it runs on.
-    fn attempt_config(
-        &self,
-        id: TrackId,
-        source: TrackSource<S>,
-    ) -> Result<(ResourceConfig<S>, CancelToken, RuntimeHandle), QueueError> {
-        let config = self.build_config(id, source)?;
-        let Some(cancel) = config.cancel().cloned() else {
-            return Err(QueueError::Resource(format!(
-                "track {id:?}: resource config missing per-track cancel"
-            )));
-        };
-        Ok((config, cancel, self.runtime()?.clone()))
     }
 
     /// Build a [`ResourceConfig`] for the given [`TrackSource`].
@@ -125,114 +154,98 @@ where
         self.player.prepare_config(config).map_err(QueueError::from)
     }
 
-    /// Load a [`Resource`] from a prepared config, attaching the observer
-    /// left in the track's `observer` slot when there is one. Caller is responsible
-    /// for admitting it into the track list and emitting [`TrackStatus::Loaded`].
-    ///
-    /// A load that failed on something the network can answer later is not a
-    /// verdict on the track: the attempt reports the failure and asks again,
-    /// so a track chosen during an outage plays when connectivity returns
-    /// instead of waiting to be chosen a second time. An HLS segment already
-    /// gets exactly this — a transient failure returns its slot to the pool
-    /// and the next dispatch asks again. Whether anyone waits for the track
-    /// is the queue's call, not the attempt's: the queue owns the selection.
-    ///
-    /// Nothing here polls for the network's state: each ask spends the
-    /// downloader's own retry budget before returning, which is what paces the
-    /// repeat, and the per-track cancel ends it the moment the selection moves
-    /// on, or the moment the queue answers that nobody selected the attempt,
-    /// so it never holds its lane permit against a network that is not
-    /// answering.
-    #[kithara::hang_watchdog(timeout = Self::HANG_TIMEOUT)]
-    async fn load(
-        &self,
-        ticket: Ticket,
-        config: ResourceConfig<S>,
-        observer: &AudioObserverSlot,
-    ) -> Result<Resource, QueueError> {
-        let id = ticket.id;
-        let slow_watcher =
-            Self::watch_for_slow_status(ticket, config.bus().cloned(), self.postbox.clone());
-        tokio::pin!(slow_watcher);
-        loop {
-            let relay = observer.relay();
-            let attempt = async { Resource::new_observed(config.clone(), Box::new(relay)).await };
-            let result = tokio::select! {
-                biased;
-                result = attempt => result,
-                never = &mut slow_watcher => match never {},
-            };
-            let err = match result {
-                Ok(resource) => return Ok(resource),
-                Err(err) => err,
-            };
-            let error = QueueError::Resource(format!("{err}"));
-            if !can_answer_later(&err) {
-                return Err(error);
-            }
-            Self::report(&self.postbox, AttemptReport::Stalled { ticket, error });
-            hang_tick!();
-            debug!(?id, error = %err, "load failed on a cause a later ask can answer; asking again");
+    /// The queue closed: cancel every live load, then let the dispatcher go,
+    /// which drops the opens still running once their tokens read cancelled.
+    pub(crate) fn close(&mut self, tracks: &mut Tracks<S>) {
+        tracks.cancel_loads();
+        self.dispatcher = None;
+    }
+
+    /// Wake `waker` with each open the dispatcher answers, so the executor
+    /// holding the queue settles it.
+    pub(crate) fn hold(&mut self, waker: Waker) {
+        if let Some(dispatcher) = &mut self.dispatcher {
+            dispatcher.sender.hold(waker);
         }
     }
 
-    /// Move a track's pending load into the interactive lane.
+    /// What a load needs before it begins: its prepared config, and the
+    /// runtime the tasks beside it run on.
+    fn prepare(
+        &self,
+        id: TrackId,
+        source: TrackSource<S>,
+        class: LoadClass,
+    ) -> Result<(TrackLoad<S>, RuntimeHandle), QueueError> {
+        let load = TrackLoad::new(self.build_config(id, source)?, class)?;
+        let dispatcher = self.dispatcher.as_ref().ok_or(QueueError::NoRuntime)?;
+        Ok((load, dispatcher.runtime.clone()))
+    }
+
+    /// The selection reached `id`, which is still loading: its load is
+    /// wanted. A live load keeps going, moved to the interactive lane while
+    /// it still waits for one; a track with none gets a fresh interactive
+    /// load.
     pub(crate) fn promote_load(
-        self: &Arc<Self>,
+        &mut self,
         tracks: &mut Tracks<S>,
         id: TrackId,
         source: TrackSource<S>,
     ) {
-        let (config, cancel, runtime) = match self.attempt_config(id, source) {
-            Ok(attempt) => attempt,
-            Err(err) => {
-                tracks.set_status(id, TrackStatus::Failed(err.to_string()));
-                return;
-            }
-        };
-        if let Some(ticket) = tracks.promote_attempt(id, cancel.clone()) {
-            let attempt = AttemptTask {
-                ticket,
-                config,
-                cancel,
-                observer: tracks.observer_slot(id),
-            };
-            self.spawn_attempt(&runtime, attempt, LoadClass::Interactive);
+        if tracks.promote_load(id) {
+            self.pump(tracks);
+        } else {
+            self.spawn_load(tracks, id, source, LoadClass::Interactive);
         }
     }
 
-    /// Post `report` to the queue. A queue that is gone has no track left to
-    /// report on.
-    fn report(postbox: &Postbox<QueueCommand<S>>, report: AttemptReport) {
-        if postbox.post(QueueCommand::Attempt(report)).is_err() {
-            debug!("the queue is gone: dropping a load attempt's report");
-        }
-    }
-
-    /// Read the track's cover beside its audio, over the attempt's transport
-    /// and cancel token, and report it to the queue, which places it while
-    /// that attempt's token lives. The audio never waits for the cover, and a
-    /// cover that never arrives leaves the load untouched.
-    fn read_cover(
-        &self,
-        runtime: &RuntimeHandle,
-        id: TrackId,
-        config: &ResourceConfig<S>,
-        attempt: &CancelToken,
-    ) {
-        let Some(cover) = config.artwork().cloned() else {
+    /// Send the loads waiting for a lane to the dispatcher while their lanes
+    /// have room, the interactive lane first.
+    pub(crate) fn pump(&mut self, tracks: &mut Tracks<S>) {
+        let Some(dispatcher) = &mut self.dispatcher else {
             return;
         };
-        let config = config.clone();
-        let attempt = attempt.clone();
+        for (class, lane) in [
+            (LoadClass::Interactive, &mut self.interactive),
+            (LoadClass::Prefetch, &mut self.prefetch),
+        ] {
+            while lane.has_room()
+                && let Some((id, load)) = tracks.next_unsent(class)
+            {
+                let batch = Batch {
+                    basis: Vec::new(),
+                    commands: vec![load],
+                };
+                match dispatcher.sender.send(When::Next, batch) {
+                    Ok(seq) => {
+                        kithara::probe_event!(admission_started, track_id = id.as_u64());
+                        lane.running.push(seq);
+                        tracks.mark_sent(id, seq);
+                    }
+                    Err(error) => tracks.fail(id, &QueueError::Resource(error.to_string())),
+                }
+            }
+        }
+    }
+
+    /// Read the track's cover beside its audio, over the load's transport and
+    /// the track's token, and report it to the queue, which places it while
+    /// that token lives. The audio never waits for the cover, and a cover
+    /// that never arrives leaves the load untouched.
+    fn read_cover(&self, runtime: &RuntimeHandle, id: TrackId, load: &TrackLoad<S>) {
+        let Some(cover) = load.config.artwork().cloned() else {
+            return;
+        };
+        let config = load.config.clone();
+        let token = load.token().clone();
         let postbox = self.postbox.clone();
         drop(spawn_on(runtime, async move {
             match config.artifact_fetch().load::<Cover>(&cover).await {
-                Ok(cover) => Self::report(
+                Ok(cover) => report(
                     &postbox,
-                    AttemptReport::Cover {
+                    LoadReport::Cover {
                         id,
-                        attempt,
+                        load: token,
                         cover: Arc::new(cover.into()),
                     },
                 ),
@@ -242,191 +255,135 @@ where
         }));
     }
 
-    /// Run one load attempt: wait for a permit in `class`'s lane, report the
-    /// start, and load. A cancel before the permit ends it without loading.
-    async fn run_attempt(
-        &self,
-        attempt: AttemptTask<S>,
-        class: LoadClass,
-    ) -> Result<Resource, QueueError> {
-        let AttemptTask {
-            ticket,
-            config,
-            cancel: track_cancel,
-            observer,
-        } = attempt;
-        let track_cancel = &track_cancel;
-        let id = ticket.id;
-        let cancel = CancelGroup::new(vec![track_cancel.clone(), self.cancel.clone()]);
-        let lane = match class {
-            LoadClass::Interactive => &self.interactive_lane,
-            LoadClass::Prefetch => &self.prefetch_lane,
-        };
-        kithara::probe_event!(admission_started, track_id = id.as_u64());
-        let permit = tokio::select! {
-            biased;
-            _ = Self::wait_and_cancel_track(&cancel, track_cancel) => {
-                return Err(QueueError::Cancelled(id));
-            }
-            permit = Arc::clone(lane).acquire_owned() => permit
-                .map_err(|e| QueueError::Resource(format!("semaphore closed: {e}")))?,
-        };
-        Self::report(&self.postbox, AttemptReport::Started(ticket));
-
-        let result = tokio::select! {
-            biased;
-            _ = Self::wait_and_cancel_track(&cancel, track_cancel) =>
-                Err(QueueError::Cancelled(id)),
-            result = self.load(ticket, config, &observer) => result,
-        };
-        drop(permit);
-        result
+    /// Stop waking the executor that held the queue.
+    pub(crate) fn release(&mut self) {
+        if let Some(dispatcher) = &mut self.dispatcher {
+            dispatcher.sender.release();
+        }
     }
 
-    fn spawn_attempt(
-        self: &Arc<Self>,
-        runtime: &RuntimeHandle,
-        attempt: AttemptTask<S>,
-        class: LoadClass,
-    ) {
-        let ticket = attempt.ticket;
-        self.read_cover(runtime, ticket.id, &attempt.config, &attempt.cancel);
-        let this = Arc::clone(self);
-        let finish = Finish {
-            ticket,
-            postbox: self.postbox.clone(),
-            outcome: None,
-        };
-        drop(spawn_on(runtime, async move {
-            finish.settle(this.run_attempt(attempt, class).await.map(Box::new));
-        }));
+    /// The next open the dispatcher answered, with its lane slot freed;
+    /// `None` once every answer is read. The queue settles it on the track
+    /// that sent it, then [`Self::pump`]s the loads waiting for the slots.
+    pub(crate) fn answered(&mut self) -> Option<(Seq, Result<Resource, OpenFailure>)> {
+        let receipt = self.dispatcher.as_mut()?.sender.receipts().next()?;
+        let seq = receipt.seq();
+        self.interactive.finish(seq);
+        self.prefetch.finish(seq);
+        let (outcome, _batch) = receipt.into();
+        Some((seq, settled(outcome)))
     }
 
-    /// The runtime the queue was built with. The queue never borrows the
-    /// calling thread's: a Host ticks it from a thread that has none.
-    fn runtime(&self) -> Result<&RuntimeHandle, QueueError> {
-        self.runtime.as_ref().ok_or(QueueError::NoRuntime)
-    }
-
-    /// Spawn a fresh async load in the given lane, unless a live attempt
-    /// already exists - one track never occupies two permits.
+    /// Begin loading `id` from `source` in `class`'s lane, unless a live load
+    /// already runs for it - one track never holds two lane slots. A load
+    /// that cannot begin fails its track at once, never reaching `Loading`.
     pub(crate) fn spawn_load(
-        self: &Arc<Self>,
+        &mut self,
         tracks: &mut Tracks<S>,
         id: TrackId,
         source: TrackSource<S>,
         class: LoadClass,
     ) {
-        let (config, cancel, runtime) = match self.attempt_config(id, source) {
-            Ok(attempt) => attempt,
-            Err(err) => {
-                tracks.set_status(id, TrackStatus::Failed(err.to_string()));
+        let (load, runtime) = match self.prepare(id, source, class) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                tracks.set_status(id, TrackStatus::Failed(error.to_string()));
                 return;
             }
         };
-        if let Some(ticket) =
-            tracks.begin_attempt(id, cancel.clone(), class == LoadClass::Interactive)
-        {
-            let attempt = AttemptTask {
-                ticket,
-                config,
-                cancel,
-                observer: tracks.observer_slot(id),
-            };
-            self.spawn_attempt(&runtime, attempt, class);
+        if let Some(load) = tracks.begin_load(id, load) {
+            self.read_cover(&runtime, id, load);
+            self.watch_for_slow_transfer(&runtime, id, load);
         }
+        self.pump(tracks);
     }
 
-    async fn wait_and_cancel_track(cancel: &CancelGroup, track_cancel: &CancelToken) {
-        cancel.cancelled().await;
-        track_cancel.cancel();
-    }
-
-    /// Watches the [`EventBus`] for the first
-    /// [`DownloaderEvent::LoadSlow`] and reports it to the queue, which
-    /// flips a track the attempt still loads to [`TrackStatus::Slow`].
-    /// Returns a never-completing future:
-    /// the caller `select!`s it against `Resource::new`, so the
-    /// completion side always belongs to the resource future.
-    /// A `Lagged` bus dropped the oldest envelopes and keeps
-    /// delivering, so the watch survives the gap and only `Closed`
-    /// ends it.
-    async fn watch_for_slow_status(
-        ticket: Ticket,
-        bus: Option<EventBus>,
-        postbox: Postbox<QueueCommand<S>>,
-    ) -> std::convert::Infallible {
-        let mut rx = match bus {
-            Some(b) => b.subscribe::<DownloaderEvent>(),
-            None => return std::future::pending().await,
+    /// Watch the load's bus for its first slow transfer. The watch
+    /// subscribes here, before the load is sent, so no `LoadSlow` slips past
+    /// it, and ends with the load.
+    fn watch_for_slow_transfer(&self, runtime: &RuntimeHandle, id: TrackId, load: &TrackLoad<S>) {
+        let Some(bus) = load.config.bus() else {
+            return;
         };
-        let mut marked = false;
+        drop(spawn_on(
+            runtime,
+            slow_transfer(
+                id,
+                load.watch().clone(),
+                bus.subscribe(),
+                self.postbox.clone(),
+            ),
+        ));
+    }
+}
+
+/// Post `report` to the queue. A queue that is gone has no track left to
+/// report on.
+fn report<S>(postbox: &Postbox<QueueCommand<S>>, report: LoadReport)
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    if postbox.post(QueueCommand::Load(report)).is_err() {
+        debug!("the queue is gone: dropping a load's report");
+    }
+}
+
+/// What became of an open, as the queue answers it: a refusal a later ask
+/// can answer is told apart from one that is final.
+fn settled<S>(outcome: Outcome<Loads<S>>) -> Result<Resource, OpenFailure>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    match outcome {
+        Outcome::Applied { data, .. } => Ok(data),
+        Outcome::Rejected(Rejection::Refused(LoadRefusal::Open(error))) => {
+            let later = can_answer_later(&error);
+            let error = QueueError::Resource(error.to_string());
+            Err(if later {
+                OpenFailure::AskAgain(error)
+            } else {
+                OpenFailure::Final(error)
+            })
+        }
+        Outcome::Rejected(Rejection::Refused(refusal)) => Err(OpenFailure::Final(
+            QueueError::Resource(refusal.to_string()),
+        )),
+        Outcome::Rejected(rejection) => Err(OpenFailure::Final(QueueError::Resource(format!(
+            "the load ended without an open: {rejection:?}"
+        )))),
+    }
+}
+
+/// Report the first [`DownloaderEvent::LoadSlow`] `events` delivers to the
+/// queue, which turns the track [`TrackStatus::Slow`], unless `watch` ends
+/// first. A `Lagged` bus dropped the oldest envelopes and keeps delivering,
+/// so the watch survives the gap; only `Closed` ends it.
+async fn slow_transfer<S>(
+    id: TrackId,
+    watch: CancelToken,
+    mut events: EventReceiver<DownloaderEvent>,
+    postbox: Postbox<QueueCommand<S>>,
+) where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    let slow = async {
         loop {
-            match rx.recv().await {
-                Ok(Envelope { event: ev, .. }) => {
-                    if !marked && matches!(ev, DownloaderEvent::LoadSlow { .. }) {
-                        Self::report(&postbox, AttemptReport::Slow(ticket));
-                        marked = true;
-                    }
-                }
-                Err(RecvError::Lagged(_)) => {}
-                Err(RecvError::Closed) => break,
+            match events.recv().await {
+                Ok(Envelope {
+                    event: DownloaderEvent::LoadSlow { .. },
+                    ..
+                }) => return true,
+                Ok(_) | Err(RecvError::Lagged(_)) => {}
+                Err(RecvError::Closed) => return false,
             }
         }
-        std::future::pending().await
-    }
-}
-
-/// One load attempt as its task runs it: the ticket it reports under, the
-/// config it loads, its per-track cancel, and the slot that reaches the
-/// track's decoder.
-struct AttemptTask<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    ticket: Ticket,
-    config: ResourceConfig<S>,
-    cancel: CancelToken,
-    observer: AudioObserverSlot,
-}
-
-/// Reports its attempt's `Finished` to the queue however the attempt's task
-/// ends: with the outcome the attempt returned, or with a failure when a
-/// panic or a runtime going away dropped the task first, so the queue never
-/// waits on an attempt nothing runs.
-struct Finish<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    ticket: Ticket,
-    postbox: Postbox<QueueCommand<S>>,
-    /// `None` until the attempt returns.
-    outcome: Option<Result<Box<Resource>, QueueError>>,
-}
-
-impl<S> Finish<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    /// The attempt returned `outcome`: report it.
-    fn settle(mut self, outcome: Result<Box<Resource>, QueueError>) {
-        self.outcome = Some(outcome);
-    }
-}
-
-impl<S> Drop for Finish<S>
-where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
-    fn drop(&mut self) {
-        let ticket = self.ticket;
-        let outcome = self.outcome.take().unwrap_or_else(|| {
-            Err(QueueError::Resource(format!(
-                "track {:?}: its load ended without an outcome",
-                ticket.id
-            )))
-        });
-        Loader::report(&self.postbox, AttemptReport::Finished { ticket, outcome });
+    };
+    tokio::select! {
+        biased;
+        () = watch.cancelled() => {}
+        slow = slow => if slow {
+            report(&postbox, LoadReport::Slow { id, watch: watch.clone() });
+        },
     }
 }
 
@@ -472,11 +429,10 @@ fn net_cause<'e>(error: &'e (dyn StdError + 'static)) -> Option<&'e NetError> {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::VecDeque,
-        future::{self, Future},
+        future::Future,
         num::{NonZeroU16, NonZeroU32, NonZeroU64},
         pin::pin,
-        task::{Context, Wake, Waker},
+        task::{Context, Poll, Wake},
     };
 
     use kithara_assets::{AssetStore, StorageBackend};
@@ -484,21 +440,14 @@ mod tests {
     use kithara_download::RequestId;
     use kithara_events::EventBus;
     use kithara_platform::{
-        sync::atomic::{AtomicUsize, Ordering},
         time::{self, Duration},
-        tokio::{
-            sync::{
-                mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
-                oneshot,
-            },
-            task::spawn,
-        },
+        tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
     };
     use kithara_play::{
         ArtifactSource, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, StreamShape, mock,
         player::PlayerControlSource,
     };
-    use kithara_test_utils::{TestTempDir, cancel_token, kithara, temp_dir};
+    use kithara_test_utils::{TestTempDir, kithara, temp_dir};
     use kithara_warp::WarpConfig;
     use kithara_waveform::Waveform;
 
@@ -506,21 +455,10 @@ mod tests {
     use crate::{
         consts,
         event::QueueEvent,
+        loading::tests::config,
         test_pools::{TestPools, pools},
         track::TrackRecord,
     };
-
-    struct CancelDropProbe {
-        state: Arc<AtomicUsize>,
-        cancel: CancelToken,
-    }
-
-    impl Drop for CancelDropProbe {
-        fn drop(&mut self) {
-            self.state
-                .store(usize::from(self.cancel.is_cancelled()), Ordering::SeqCst);
-        }
-    }
 
     /// A spent budget over a refusal keeps the resource askable: the load is
     /// repeated while the selection wants it, which is how a track chosen during
@@ -584,7 +522,7 @@ mod tests {
     #[fieldwork(with, vis = "")]
     struct LoaderFixtureSpec {
         cap: NonZeroUsize,
-        /// What the loader runs its attempts on.
+        /// What the loader's dispatcher runs on.
         runtime: Option<RuntimeHandle>,
     }
 
@@ -601,104 +539,156 @@ mod tests {
         }
     }
 
-    /// A runtime that goes away drops the tasks it never ran to the end.
-    /// An attempt's task still reports how it ended, so the queue never
-    /// waits on an attempt nothing runs any more.
-    #[kithara::test]
-    fn an_attempt_its_runtime_dropped_fails_its_track() {
-        let attempts = tokio::runtime::Builder::new_current_thread()
+    /// A runtime nothing drives: the loader sends to a dispatcher that never
+    /// opens anything, so every load it sends stays in flight.
+    fn idle_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
             .build()
-            .expect("a runtime for the attempt");
+            .expect("a runtime for the dispatcher")
+    }
+
+    fn queued(tracks: &mut Tracks<TestPools>, id: TrackId, url: &str) -> TrackSource<TestPools> {
+        let source = TrackSource::Uri(url.into());
+        tracks
+            .records_mut()
+            .push(TrackRecord::new(id, String::new(), source.clone()));
+        source
+    }
+
+    fn status_of(tracks: &Tracks<TestPools>, id: TrackId) -> TrackStatus {
+        tracks
+            .records()
+            .iter()
+            .find(|record| record.id == id)
+            .map(|record| record.status.clone())
+            .expect("the track stays queued")
+    }
+
+    /// A runtime that goes away drops the dispatcher with the opens it
+    /// never ran. Each still comes back answered, so the queue never waits
+    /// on a load nothing runs any more.
+    #[kithara::test]
+    fn a_load_its_runtime_dropped_fails_its_track() {
+        let runtime = idle_runtime();
         let mut fixture = LoaderFixtureSpec::default()
-            .with_runtime(Some(attempts.handle().clone()))
+            .with_runtime(Some(runtime.handle().clone()))
             .build();
         let id = TrackId::allocate();
-        let source = TrackSource::Uri("https://example.com/abandoned.mp3".into());
-        fixture
-            .tracks
-            .records_mut()
-            .push(TrackRecord::new(id, "abandoned".into(), source.clone()));
+        let source = queued(&mut fixture.tracks, id, "https://example.com/abandoned.mp3");
         fixture
             .loader
             .spawn_load(&mut fixture.tracks, id, source, LoadClass::Prefetch);
+        assert_eq!(status_of(&fixture.tracks, id), TrackStatus::Loading);
 
-        drop(attempts);
-        for report in posted(&mut fixture.mailbox) {
-            fixture.tracks.apply_report(report);
-        }
+        drop(runtime);
+        assert_eq!(settle(&mut fixture.loader, &mut fixture.tracks), 0);
 
         assert!(
-            matches!(fixture.tracks.records()[0].status, TrackStatus::Failed(_)),
-            "the track waits on an attempt nothing runs: {:?}",
-            fixture.tracks.records()[0].status
+            matches!(status_of(&fixture.tracks, id), TrackStatus::Failed(_)),
+            "the track waits on a load nothing runs: {:?}",
+            status_of(&fixture.tracks, id)
         );
     }
 
-    #[kithara::test(tokio)]
-    async fn cancellation_precedes_in_flight_future_drop() {
-        let owner = CancelToken::root();
-        let queue_cancel = owner.child();
-        let track_cancel = owner.child();
-        let group = CancelGroup::new(vec![queue_cancel.clone(), track_cancel.clone()]);
-        let state = Arc::new(AtomicUsize::new(0));
-        let probe_state = Arc::clone(&state);
-        let probe_cancel = track_cancel.clone();
-        let (started_tx, started_rx) = oneshot::channel();
-        let in_flight = async move {
-            let _probe = CancelDropProbe {
-                cancel: probe_cancel,
-                state: probe_state,
-            };
-            let _ = started_tx.send(());
-            future::pending::<()>().await;
-        };
-        let canceller = spawn(async move {
-            started_rx.await.expect("in-flight future must start");
-            queue_cancel.cancel();
-        });
-
-        tokio::select! {
-            biased;
-            _ = Loader::<TestPools>::wait_and_cancel_track(&group, &track_cancel) => {}
-            () = in_flight => panic!("in-flight future must stay pending"),
+    /// Each lane keeps its own count of opens in flight: prefetch never holds
+    /// more than its cap, the loads past it wait in queue order, and a
+    /// selection still opens beside a full prefetch lane.
+    #[kithara::test]
+    fn each_lane_caps_its_own_opens_in_flight() {
+        let runtime = idle_runtime();
+        let mut fixture = LoaderFixtureSpec::default()
+            .with_cap(NonZeroUsize::new(2).expect("two prefetch slots"))
+            .with_runtime(Some(runtime.handle().clone()))
+            .build();
+        let prefetched: Vec<TrackId> = (0..4).map(|_| TrackId::allocate()).collect();
+        for (index, id) in prefetched.iter().enumerate() {
+            let source = queued(
+                &mut fixture.tracks,
+                *id,
+                &format!("https://example.com/prefetch-{index}.mp3"),
+            );
+            fixture
+                .loader
+                .spawn_load(&mut fixture.tracks, *id, source, LoadClass::Prefetch);
         }
-        canceller.await.expect("canceller task must not panic");
+        let selected = TrackId::allocate();
+        let source = queued(
+            &mut fixture.tracks,
+            selected,
+            "https://example.com/selected.mp3",
+        );
+        fixture.loader.spawn_load(
+            &mut fixture.tracks,
+            selected,
+            source,
+            LoadClass::Interactive,
+        );
 
-        assert_eq!(state.load(Ordering::SeqCst), 1);
+        let statuses: Vec<TrackStatus> = prefetched
+            .iter()
+            .map(|id| status_of(&fixture.tracks, *id))
+            .collect();
+        assert_eq!(
+            statuses,
+            [
+                TrackStatus::Loading,
+                TrackStatus::Loading,
+                TrackStatus::Pending,
+                TrackStatus::Pending
+            ],
+            "prefetch opens past its cap"
+        );
+        assert_eq!(
+            status_of(&fixture.tracks, selected),
+            TrackStatus::Loading,
+            "a full prefetch lane starves the selection"
+        );
     }
 
-    #[kithara::test(tokio)]
-    async fn cancellation_wakes_an_attempt_waiting_for_admission() {
+    /// A closed queue wants nothing it was loading: every live load is
+    /// cancelled, so its open ends instead of fetching for nobody.
+    #[kithara::test]
+    fn closing_cancels_every_live_load() {
+        let runtime = idle_runtime();
         let mut fixture = LoaderFixtureSpec::default()
-            .with_cap(NonZeroUsize::MIN)
+            .with_runtime(Some(runtime.handle().clone()))
             .build();
-        let permit = Arc::clone(&fixture.loader.prefetch_lane)
-            .acquire_owned()
-            .await
-            .expect("loader keeps the prefetch semaphore open");
         let id = TrackId::allocate();
-        let source = TrackSource::Uri("https://example.com/pending.mp3".into());
-        fixture
-            .tracks
-            .records_mut()
-            .push(TrackRecord::new(id, "pending".into(), source.clone()));
+        let source = queued(&mut fixture.tracks, id, "https://example.com/closing.mp3");
         fixture
             .loader
             .spawn_load(&mut fixture.tracks, id, source, LoadClass::Prefetch);
-        assert!(fixture.tracks.records().iter().any(|track| {
-            track.id == id && track.load.as_ref().is_some_and(|attempt| attempt.waiting)
-        }));
+        let token = fixture.tracks.records()[0]
+            .load
+            .as_ref()
+            .map(|load| load.token().clone())
+            .expect("the track loads");
 
-        fixture.loader.cancel.cancel();
+        fixture.loader.close(&mut fixture.tracks);
 
-        assert!(matches!(
-            fixture.report().await,
-            AttemptReport::Finished {
-                outcome: Err(QueueError::Cancelled(cancelled)),
-                ..
-            } if cancelled == id
-        ));
-        drop(permit);
+        assert!(token.is_cancelled(), "a closed queue's load keeps running");
+        assert_eq!(status_of(&fixture.tracks, id), TrackStatus::Cancelled);
+    }
+
+    /// The first track's live load, begun from a config the test owns.
+    fn loading(tracks: &mut Tracks<TestPools>) -> TrackId {
+        let id = TrackId::allocate();
+        queued(tracks, id, "https://example.com/slow.mp3");
+        let load = TrackLoad::new(
+            config("https://example.com/slow.mp3", CancelToken::never().child()),
+            LoadClass::Prefetch,
+        )
+        .expect("the config carries its token");
+        assert!(tracks.begin_load(id, load).is_some());
+        id
+    }
+
+    fn watch(tracks: &Tracks<TestPools>) -> CancelToken {
+        tracks.records()[0]
+            .load
+            .as_ref()
+            .map(|load| load.watch().clone())
+            .expect("the track loads")
     }
 
     /// The bus drops the oldest envelopes under a burst and keeps
@@ -706,33 +696,15 @@ mod tests {
     /// below is longer than the bus capacity with nothing reading, which
     /// makes the drop certain, and the `LoadSlow` behind it still has to
     /// reach the watch.
-    #[kithara::test(native)]
-    fn a_slow_watch_survives_a_bus_that_dropped_a_burst(cancel_token: CancelToken) {
+    #[kithara::test]
+    fn a_slow_watch_survives_a_bus_that_dropped_a_burst() {
         const CAPACITY: usize = 4;
 
         let bus = EventBus::new(CAPACITY);
         let mut tracks = Tracks::<TestPools>::default();
-        let id = TrackId::allocate();
-        tracks.records_mut().push(TrackRecord::new(
-            id,
-            "slow".into(),
-            TrackSource::Uri("https://example.com/slow.mp3".into()),
-        ));
-        let ticket = tracks
-            .begin_attempt(id, cancel_token, false)
-            .expect("a fresh track starts one load attempt");
+        let id = loading(&mut tracks);
         let (postbox, mut mailbox) = mailbox();
-
-        let mut watch = pin!(Loader::watch_for_slow_status(
-            ticket,
-            Some(bus.clone()),
-            postbox
-        ));
-        let mut cx = Context::from_waker(Waker::noop());
-        assert!(
-            watch.as_mut().poll(&mut cx).is_pending(),
-            "the watch must subscribe before the burst it has to survive"
-        );
+        let events = bus.subscribe();
 
         let request_id = RequestId::new(NonZeroU64::MIN);
         for _ in 0..=CAPACITY {
@@ -746,9 +718,12 @@ mod tests {
             elapsed: Duration::ZERO,
         });
 
+        let mut slow = pin!(slow_transfer(id, watch(&tracks), events, postbox));
         assert!(
-            watch.as_mut().poll(&mut cx).is_pending(),
-            "the watch never completes: it ends only with the resource it races"
+            slow.as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready(),
+            "the watch ends once it reported the slow transfer"
         );
         for report in posted(&mut mailbox) {
             tracks.apply_report(report);
@@ -760,43 +735,28 @@ mod tests {
         );
     }
 
-    /// A slow transfer is news only while its attempt still loads the track.
-    /// Once the selection moved on and cancelled that attempt, a `LoadSlow`
-    /// its download reports afterwards leaves the track `Cancelled`.
-    #[kithara::test(native)]
-    fn a_slow_transfer_after_its_attempt_was_cancelled_leaves_the_track_cancelled(
-        cancel_token: CancelToken,
-    ) {
+    /// A slow transfer is news only while its load runs. Once the selection
+    /// moved on and cancelled that load, a `LoadSlow` its download reports
+    /// afterwards leaves the track `Cancelled`.
+    #[kithara::test]
+    fn a_slow_transfer_after_its_load_was_cancelled_leaves_the_track_cancelled() {
         let bus = EventBus::new(4);
         let mut tracks = Tracks::<TestPools>::default();
-        let id = TrackId::allocate();
-        tracks.records_mut().push(TrackRecord::new(
-            id,
-            "slow".into(),
-            TrackSource::Uri("https://example.com/slow.mp3".into()),
-        ));
-        let ticket = tracks
-            .begin_attempt(id, cancel_token, false)
-            .expect("a fresh track starts one load attempt");
+        let id = loading(&mut tracks);
         let (postbox, mut mailbox) = mailbox();
-
-        let mut watch = pin!(Loader::watch_for_slow_status(
-            ticket,
-            Some(bus.clone()),
-            postbox
-        ));
+        let mut slow = pin!(slow_transfer(id, watch(&tracks), bus.subscribe(), postbox));
         let mut cx = Context::from_waker(Waker::noop());
-        assert!(
-            watch.as_mut().poll(&mut cx).is_pending(),
-            "the watch must subscribe before the attempt is cancelled"
-        );
+        assert!(slow.as_mut().poll(&mut cx).is_pending());
 
         tracks.set_status(id, TrackStatus::Cancelled);
         bus.publish(DownloaderEvent::LoadSlow {
             request_id: RequestId::new(NonZeroU64::MIN),
             elapsed: Duration::ZERO,
         });
-        assert!(watch.as_mut().poll(&mut cx).is_pending());
+        assert!(
+            matches!(slow.as_mut().poll(&mut cx), Poll::Ready(())),
+            "the watch ends with its load"
+        );
         for report in posted(&mut mailbox) {
             tracks.apply_report(report);
         }
@@ -804,17 +764,18 @@ mod tests {
         assert_eq!(
             tracks.records()[0].status,
             TrackStatus::Cancelled,
-            "a cancelled attempt's slow transfer must not revive its track"
+            "a cancelled load's slow transfer must not revive its track"
         );
     }
 
-    /// The reports a loader posted since the last drain, in post order.
+    /// The reports the tasks beside a load posted since the last drain, in
+    /// post order.
     fn posted(
         mailbox: &mut Mailbox<QueueCommand<TestPools>>,
-    ) -> impl Iterator<Item = AttemptReport> + use<> {
+    ) -> impl Iterator<Item = LoadReport> + use<> {
         mailbox.drain().map(|command| {
-            let QueueCommand::Attempt(report) = command else {
-                panic!("a loader posts only its attempts' reports");
+            let QueueCommand::Load(report) = command else {
+                panic!("a load's tasks post only their reports");
             };
             report
         })
@@ -830,46 +791,49 @@ mod tests {
     }
 
     /// Test fixture: the [`Loader`] under test, the [`Tracks`] store it
-    /// starts attempts on (so tests can seed entries), the root
-    /// [`EventBus`] (so tests can subscribe for assertions), and the
-    /// mailbox its attempts report to, held as a queue would hold it.
+    /// loads into (so tests can seed entries), the root [`EventBus`] (so
+    /// tests can subscribe for assertions), and the mailbox the tasks beside
+    /// its loads report to, held as a queue would hold both.
     struct LoaderFixture {
-        loader: Arc<Loader<TestPools>>,
+        loader: Loader<TestPools>,
         tracks: Tracks<TestPools>,
         bus: EventBus,
         mailbox: Mailbox<QueueCommand<TestPools>>,
         woke: UnboundedReceiver<()>,
-        reports: VecDeque<AttemptReport>,
         _player: PlayerImpl<TestPools>,
     }
 
-    impl LoaderFixture {
-        /// The next report the loader's attempts posted, in post order.
-        async fn report(&mut self) -> AttemptReport {
-            loop {
-                if let Some(report) = self.reports.pop_front() {
-                    return report;
-                }
-                self.reports.extend(posted(&mut self.mailbox));
-                if self.reports.is_empty() {
-                    time::timeout(Duration::from_secs(2), self.woke.recv())
-                        .await
-                        .expect("a load attempt reports")
-                        .expect("the fixture holds the waker");
-                }
+    /// Settle every open the dispatcher answered as the queue does, admitting
+    /// what opened; returns how many opened.
+    fn settle(loader: &mut Loader<TestPools>, tracks: &mut Tracks<TestPools>) -> usize {
+        let mut opened = 0;
+        while let Some((seq, outcome)) = loader.answered() {
+            if let Some((id, resource)) = tracks.settle_load(seq, outcome) {
+                tracks.admit(id, resource);
+                opened += 1;
             }
         }
+        loader.pump(tracks);
+        opened
+    }
 
-        /// Apply the loader's reports as the queue would, through the next
-        /// attempt's finish.
-        async fn apply_through_finish(&mut self) {
+    impl LoaderFixture {
+        /// Settle what the dispatcher answered and apply what the tasks
+        /// reported, as the queue does when its holder wakes it, until
+        /// `done` holds.
+        async fn run_until(&mut self, done: impl Fn(&Tracks<TestPools>) -> bool) {
             loop {
-                let report = self.report().await;
-                let finished = matches!(report, AttemptReport::Finished { .. });
-                self.tracks.apply_report(report);
-                if finished {
+                settle(&mut self.loader, &mut self.tracks);
+                for report in posted(&mut self.mailbox) {
+                    self.tracks.apply_report(report);
+                }
+                if done(&self.tracks) {
                     return;
                 }
+                time::timeout(Duration::from_secs(2), self.woke.recv())
+                    .await
+                    .expect("the loader answers")
+                    .expect("the fixture holds the waker");
             }
         }
     }
@@ -889,31 +853,25 @@ mod tests {
             let store = AssetStore::builder(player.pools().clone()).build();
             let (postbox, mut mailbox) = mailbox();
             let (woke_tx, woke) = unbounded_channel();
-            mailbox.hold(Waker::from(Arc::new(Wakes(woke_tx))));
-            let loader = Arc::new(Loader::new(
-                player.control(),
-                self.runtime,
-                store,
-                self.cap,
-                postbox,
-                CancelToken::root(),
-            ));
+            let waker = Waker::from(Arc::new(Wakes(woke_tx)));
+            mailbox.hold(waker.clone());
+            let mut loader = Loader::new(player.control(), self.runtime, store, self.cap, postbox);
+            loader.hold(waker);
             LoaderFixture {
                 loader,
                 tracks,
                 bus,
                 mailbox,
                 woke,
-                reports: VecDeque::new(),
                 _player: player,
             }
         }
     }
 
-    /// A load attempt reads its track's cover beside the audio and places it
-    /// while that attempt is current; a superseded attempt's cover never lands.
+    /// A load reads its track's cover beside the audio and places it while
+    /// that load is current; a superseded load's cover never lands.
     #[kithara::test(native, tokio)]
-    async fn only_the_current_attempt_places_its_cover(temp_dir: TestTempDir) {
+    async fn only_the_current_load_places_its_cover(temp_dir: TestTempDir) {
         let mut fixture = LoaderFixtureSpec::default().build();
         let id = TrackId::allocate();
         let audio = ResourceSrc::Path(temp_dir.path().join("missing.mp3"));
@@ -935,25 +893,16 @@ mod tests {
             .loader
             .spawn_load(&mut fixture.tracks, id, superseded, LoadClass::Prefetch);
         fixture.tracks.set_status(id, TrackStatus::Cancelled);
-        fixture.apply_through_finish().await;
         fixture
             .loader
             .spawn_load(&mut fixture.tracks, id, current, LoadClass::Prefetch);
-        fixture.apply_through_finish().await;
-        assert!(
-            matches!(fixture.tracks.records()[0].status, TrackStatus::Failed(_)),
-            "the audio is missing"
-        );
+        fixture
+            .run_until(|tracks| matches!(tracks.records()[0].status, TrackStatus::Failed(_)))
+            .await;
+        fixture
+            .run_until(|tracks| tracks.records()[0].entry().metadata().artwork.is_some())
+            .await;
 
-        while fixture.tracks.records()[0]
-            .entry()
-            .metadata()
-            .artwork
-            .is_none()
-        {
-            let report = fixture.report().await;
-            fixture.tracks.apply_report(report);
-        }
         let entry = fixture.tracks.records()[0].entry();
         assert_eq!(
             entry.metadata().artwork.as_deref().map(Vec::as_slice),
@@ -966,7 +915,7 @@ mod tests {
                 changes += 1;
             }
         }
-        assert_eq!(changes, 1, "the superseded attempt's cover landed");
+        assert_eq!(changes, 1, "the superseded load's cover landed");
     }
 
     #[kithara::test(tokio)]
@@ -1056,42 +1005,7 @@ mod tests {
         assert!(matches!(err, QueueError::InvalidUrl(_)));
     }
 
-    #[kithara::test(tokio, multi_thread)]
-    async fn prefetch_lane_caps_concurrent_loads() {
-        let cap = NonZeroUsize::new(2).expect("BUG: 2 > 0 is mathematically guaranteed");
-        let fixture = LoaderFixtureSpec::default().with_cap(cap).build();
-        let loader = &fixture.loader;
-
-        let in_flight = Arc::new(AtomicUsize::new(0));
-        let max_seen = Arc::new(AtomicUsize::new(0));
-
-        let mut handles = Vec::new();
-        for _ in 0..6 {
-            let sem = Arc::clone(&loader.prefetch_lane);
-            let in_flight = Arc::clone(&in_flight);
-            let max_seen = Arc::clone(&max_seen);
-            handles.push(spawn(async move {
-                let _permit = sem
-                    .acquire_owned()
-                    .await
-                    .expect("BUG: semaphore not closed in test");
-                let cur = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
-                max_seen.fetch_max(cur, Ordering::SeqCst);
-                time::sleep(Duration::from_millis(50)).await;
-                in_flight.fetch_sub(1, Ordering::SeqCst);
-            }));
-        }
-        for h in handles {
-            h.await.expect("BUG: spawned task panicked");
-        }
-        assert!(
-            max_seen.load(Ordering::SeqCst) <= 2,
-            "concurrency exceeded cap: {}",
-            max_seen.load(Ordering::SeqCst)
-        );
-    }
-
-    #[kithara::test(tokio, multi_thread)]
+    #[kithara::test(tokio)]
     async fn spawn_load_bad_url_emits_failed_status() {
         let mut fx = LoaderFixtureSpec::default().build();
         fx.tracks.records_mut().push(TrackRecord::new(
@@ -1099,9 +1013,8 @@ mod tests {
             String::new(),
             TrackSource::Uri("not-a-url".into()),
         ));
-        let loader = fx.loader;
 
-        loader.spawn_load(
+        fx.loader.spawn_load(
             &mut fx.tracks,
             TrackId(42),
             TrackSource::Uri("not-a-url".into()),
@@ -1126,11 +1039,7 @@ mod tests {
     }
 
     /// A player on a mock session, its track records, and a loader over them.
-    type LoaderParts = (
-        PlayerImpl<TestPools>,
-        Tracks<TestPools>,
-        Arc<Loader<TestPools>>,
-    );
+    type LoaderParts = (PlayerImpl<TestPools>, Tracks<TestPools>, Loader<TestPools>);
 
     /// A loader built with no runtime, over a player on a mock session.
     fn loader_without_runtime() -> LoaderParts {
@@ -1153,24 +1062,23 @@ mod tests {
                 .build(),
         );
         let tracks = Tracks::default();
-        let (postbox, _no_attempt_reports) = mailbox();
-        let loader = Arc::new(Loader::new(
+        let (postbox, _no_load_reports) = mailbox();
+        let loader = Loader::new(
             player.control(),
             None,
             AssetStore::builder(player.pools().clone()).build(),
             NonZeroUsize::MIN,
             postbox,
-            CancelToken::root(),
-        ));
+        );
         (player, tracks, loader)
     }
 
     /// A queue built with no runtime has nowhere to run a load: the track
     /// fails, and the load never reaches for whatever runtime the calling
-    /// thread has. A Host's deck thread, which ticks the queue, has none.
+    /// thread has. A Host's session thread, which ticks the queue, has none.
     #[kithara::test]
     fn a_load_without_a_runtime_fails_its_track() {
-        let (_player, mut tracks, loader) = loader_without_runtime();
+        let (_player, mut tracks, mut loader) = loader_without_runtime();
         let id = TrackId(42);
         let source = TrackSource::Uri("/kithara/a-track.wav".into());
         tracks
@@ -1187,7 +1095,7 @@ mod tests {
 
     #[kithara::test]
     fn config_failure_without_runtime_updates_tracks_synchronously() {
-        let (_player, mut tracks, loader) = loader_without_runtime();
+        let (_player, mut tracks, mut loader) = loader_without_runtime();
         let source = TrackSource::Uri("not a url".into());
         let spawn_id = TrackId(42);
         let promote_id = TrackId(43);

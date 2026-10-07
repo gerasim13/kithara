@@ -113,34 +113,11 @@ impl<C> Drop for Mailbox<C> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::atomic::{AtomicUsize, Ordering},
-        task::{Wake, Waker},
-    };
-
-    use kithara_platform::sync::{Arc, mpsc};
+    use kithara_platform::sync::mpsc;
     use kithara_test_utils::kithara;
 
     use super::{PostError, mailbox};
-
-    /// A holder's waker that counts its wakes.
-    #[derive(Default)]
-    struct Wakes(AtomicUsize);
-
-    impl Wake for Wakes {
-        fn wake(self: Arc<Self>) {
-            self.wake_by_ref();
-        }
-
-        fn wake_by_ref(self: &Arc<Self>) {
-            self.0.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    fn waker() -> (Waker, Arc<Wakes>) {
-        let wakes = Arc::new(Wakes::default());
-        (Waker::from(Arc::clone(&wakes)), wakes)
-    }
+    use crate::wakes::waker;
 
     #[kithara::test]
     fn a_post_made_before_a_holder_waits_for_it() {
@@ -150,7 +127,7 @@ mod tests {
         postbox.post(1).expect("an open mailbox takes the post");
         mailbox.hold(waker);
 
-        assert_eq!(wakes.0.load(Ordering::Relaxed), 0, "nobody held it to wake");
+        assert_eq!(wakes.count(), 0, "nobody held it to wake");
         assert_eq!(mailbox.drain().collect::<Vec<_>>(), [1]);
     }
 
@@ -162,7 +139,7 @@ mod tests {
 
         postbox.post(1).expect("a held mailbox takes the post");
 
-        assert_eq!(wakes.0.load(Ordering::Relaxed), 1, "one post, one wake");
+        assert_eq!(wakes.count(), 1, "one post, one wake");
     }
 
     #[kithara::test]
@@ -190,7 +167,7 @@ mod tests {
         mailbox.release();
         postbox.post(1).expect("an open mailbox takes the post");
 
-        assert_eq!(released_wakes.0.load(Ordering::Relaxed), 0);
+        assert_eq!(released_wakes.count(), 0);
         mailbox.hold(waker().0);
         assert_eq!(mailbox.drain().collect::<Vec<_>>(), [1]);
     }

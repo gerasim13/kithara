@@ -2,8 +2,8 @@ use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
 
 use crate::{
-    attempts::LoadClass,
     event::TrackStatus,
+    loading::LoadClass,
     queue::{
         Queue,
         types::{PendingSelect, SelectPhase},

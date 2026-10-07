@@ -4,7 +4,6 @@ use kithara_play::Resource;
 use tracing::{debug, warn};
 
 use crate::{
-    attempts::AttemptReport,
     event::QueueEvent,
     queue::{Queue, types::SelectPhase},
 };
@@ -13,12 +12,15 @@ impl<S> Queue<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// Apply what a load attempt reported, and admit the resource its live
-    /// attempt finished with.
-    pub(in crate::queue) fn apply_report(&mut self, report: AttemptReport) {
-        if let Some((id, resource)) = self.tracks.apply_report(report) {
-            self.apply_loaded(id, resource);
+    /// Settle the opens the loader's dispatcher answered, and admit what
+    /// they opened.
+    pub(in crate::queue) fn settle_loads(&mut self) {
+        while let Some((seq, opened)) = self.loader.answered() {
+            if let Some((id, resource)) = self.tracks.settle_load(seq, opened) {
+                self.apply_loaded(id, resource);
+            }
         }
+        self.loader.pump(&mut self.tracks);
     }
 
     /// Admit a finished load and apply the selection that waited for it.

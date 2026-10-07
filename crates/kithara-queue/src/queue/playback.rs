@@ -9,9 +9,9 @@ use super::{
 };
 use crate::{
     ActionAtItemEnd,
-    attempts::LoadClass,
     error::QueueError,
     event::{AdvanceReason, TrackStatus},
+    loading::LoadClass,
     track::TrackEntry,
 };
 

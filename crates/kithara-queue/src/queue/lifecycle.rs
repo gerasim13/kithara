@@ -9,9 +9,9 @@ use super::{
     },
 };
 use crate::{
-    attempts::LoadClass,
     error::QueueError,
     event::{AdvanceReason, QueueEvent},
+    loading::LoadClass,
     navigation::{NavigationState, PlaybackOrder},
     track::{TrackRecord, TrackSource},
 };

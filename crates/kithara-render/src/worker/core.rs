@@ -30,8 +30,11 @@ pub enum LoadRefusal {
     /// Every worker slot is held; the track's source was not opened.
     #[error("play worker holds its capacity of {capacity} tracks")]
     Capacity { capacity: usize },
-    /// The track did not open: its source or decoder failed, the load was
-    /// cancelled, or the worker stopped.
+    /// The track's cancel ended the load before its source opened.
+    #[error("the track's load was cancelled before it opened")]
+    Cancelled,
+    /// The track did not open: its source or decoder failed, or the worker
+    /// stopped.
     #[error(transparent)]
     Open(#[from] DecodeError),
 }
@@ -40,8 +43,8 @@ impl From<LoadRefusal> for DecodeError {
     fn from(refusal: LoadRefusal) -> Self {
         match refusal {
             LoadRefusal::Open(error) => error,
-            capacity @ LoadRefusal::Capacity { .. } => {
-                Self::audio_stream("play worker load", capacity)
+            refusal @ (LoadRefusal::Capacity { .. } | LoadRefusal::Cancelled) => {
+                Self::audio_stream("play worker load", refusal)
             }
         }
     }

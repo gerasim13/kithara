@@ -21,6 +21,8 @@ mod live;
 mod mailbox;
 mod protocol;
 mod receipt;
+#[cfg(test)]
+mod wakes;
 
 pub use channel::{Due, Inbox, SendError, Sender, Step, channel};
 pub use config::ChannelConfig;

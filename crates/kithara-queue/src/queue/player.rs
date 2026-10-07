@@ -18,7 +18,20 @@ where
     fn close(&mut self) -> Result<(), PlayError> {
         self.player.close()?;
         self.shutdown.cancel();
+        self.loader.close(&mut self.tracks);
         Ok(())
+    }
+
+    /// Hold the queue: each command posted to it and each load its
+    /// dispatcher answers wakes `waker`.
+    fn hold(&mut self, waker: Waker) {
+        self.loader.hold(waker.clone());
+        self.mailbox.hold(waker);
+    }
+
+    fn release(&mut self) {
+        self.loader.release();
+        self.mailbox.release();
     }
 
     delegate::delegate! {
@@ -27,10 +40,6 @@ where
             fn drain(&mut self);
             #[call(tick_player)]
             fn tick(&mut self) -> Result<(), PlayError>;
-        }
-        to self.mailbox {
-            fn hold(&mut self, waker: Waker);
-            fn release(&mut self);
         }
     }
 }

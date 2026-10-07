@@ -34,7 +34,7 @@ where
 {
     pub(super) player: PlayerControl<S>,
     pub(super) view: QueueView<S>,
-    /// Master cancel token for queue-owned loader work.
+    /// Cancelled once the queue closes.
     pub(super) shutdown: CancelToken,
     pub(super) bus: EventBus,
     pub(super) config: Arc<QueueConfig<S>>,
@@ -68,7 +68,7 @@ where
 {
     pub(super) resident: PlayerImpl<S>,
     pub(super) runtime: Arc<QueueRuntime<S>>,
-    pub(super) loader: Arc<Loader<S>>,
+    pub(super) loader: Loader<S>,
     pub(super) navigation: NavigationState,
     /// The track list: status, source, and live load attempt per track.
     /// Every status transition goes through
@@ -152,14 +152,13 @@ where
         navigation.set_playback_order(playback_order, &[]);
         let view = QueueView::new(&tracks, &navigation);
         let (postbox, mailbox) = mailbox();
-        let loader = Arc::new(Loader::new(
+        let loader = Loader::new(
             player_control.clone(),
             runtime.or_else(|| RuntimeHandle::try_current().ok()),
             store,
             max_concurrent_loads,
             postbox.clone(),
-            cancel.child(),
-        ));
+        );
         let player_rx = player.subscribe();
         config.view = Some(view.clone());
         Self {
@@ -268,6 +267,7 @@ where
 {
     fn drop(&mut self) {
         self.shutdown.cancel();
+        self.loader.close(&mut self.tracks);
     }
 }
 
