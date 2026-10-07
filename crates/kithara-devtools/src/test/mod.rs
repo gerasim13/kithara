@@ -11,6 +11,6 @@ pub(crate) mod repository_tests;
 mod tests;
 
 pub(crate) use command::run;
-pub use command::{NextestAction, TestArgs, nextest_command_for_lane};
+pub use command::{NextestAction, TestArgs, nextest_command_for_lane, selects_any_lane};
 pub(crate) use resolve::{LaneChoice, ResolvedLane, resolve};
 pub(crate) use selection::{LaneToggles, toggled};

@@ -1460,6 +1460,7 @@ fn a_newer_dispatch_of_one_selection_supersedes_the_older() {
         "github.ref",
         cadence.trim_start_matches("${{ ").trim_end_matches(" }}"),
         "inputs.only",
+        "inputs.narrow",
         "inputs.mutants",
     ] {
         assert!(
@@ -1988,6 +1989,51 @@ fn mutation_suites_run_only_when_asked_for() {
 // have no selection to render, so they answer it in their own condition. A
 // request for one lane that also started the Windows guest, the emulator and
 // the stress campaign would be a request for one lane in name only.
+/// A dispatch narrowed to a filterset narrows every lane it runs: each call
+/// passes the filterset on, and the executor hands it to the lane through the
+/// environment, never spliced into the script, since a filterset is shell
+/// syntax.
+#[test]
+fn a_dispatched_narrowing_reaches_every_lane_it_runs() {
+    let calls = local_workflow_calls();
+    for (caller, callee, forwarded) in [
+        ("dispatch.yml", "run.yml", "${{ inputs.narrow || '' }}"),
+        ("run.yml", "lane.yml", "${{ inputs.narrow }}"),
+    ] {
+        let passed: Vec<_> = calls
+            .iter()
+            .filter(|(from, _, to, _)| from == caller && to == callee)
+            .map(|(_, job, _, with)| (job.clone(), with.get("narrow").and_then(Value::as_str)))
+            .collect();
+        assert!(!passed.is_empty(), "{caller} calls {callee}");
+        for (job, narrow) in passed {
+            assert_eq!(
+                narrow,
+                Some(forwarded),
+                "{caller} `{job}` drops the narrowing"
+            );
+        }
+    }
+
+    let workflow = github_workflow("lane.yml");
+    let job = workflow_job(workflow_jobs(&workflow), "run");
+    let step = named_step(job, "Run the lane");
+    let env = mapping_field(step, "env")
+        .as_mapping()
+        .expect("the lane step has an environment");
+    assert_eq!(
+        mapping_field(env, "NARROW").as_str(),
+        Some("${{ inputs.narrow }}")
+    );
+    let script = mapping_field(step, "run")
+        .as_str()
+        .expect("the lane step is a script");
+    assert!(
+        script.contains(r#"${NARROW:+--narrow "$NARROW"}"#),
+        "{script}"
+    );
+}
+
 #[test]
 fn a_request_for_one_lane_starts_nothing_beside_it() {
     let workflow = github_workflow("dispatch.yml");

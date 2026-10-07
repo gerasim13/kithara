@@ -5,7 +5,7 @@ use clap::Args;
 
 use super::{
     request::TestRequest,
-    resolve::resolve,
+    resolve::{ResolvedLane, resolve},
     selection::{requested, select_lane, validate_config},
 };
 use crate::{
@@ -20,8 +20,8 @@ use crate::{
 pub struct TestArgs {
     /// Arguments for the configured test command. Recipe-level flags accepted anywhere:
     /// `--lane=<configured-name>`, `--touched`, `--flash=true|false|on|off`, `--no-flash`,
-    /// `--loom=true|false|on|off`, `--no-loom`, `--no-block=true|false|on|off`, and
-    /// `--net-backend=<configured-name>`.
+    /// `--loom=true|false|on|off`, `--no-loom`, `--no-block=true|false|on|off`,
+    /// `--net-backend=<configured-name>`, and `--narrow=<filterset>`.
     #[arg(value_name = "ARGS", allow_hyphen_values = true)]
     pub(crate) args: Vec<String>,
 }
@@ -35,26 +35,53 @@ pub(crate) fn run(args: &TestArgs) -> Result<()> {
     let root = Path::new(ROOT);
     let project = ProjectConfig::load(root)?;
     let test = &project.test;
-    validate_config(test)?;
 
-    if request.touched {
-        return run_touched(test, root, &request);
+    match plan(test, root, &request)? {
+        Plan::Touched(selected) if selected.is_empty() => {
+            println!("no owned path touched; the nightly sweep covers these lanes");
+            Ok(())
+        }
+        Plan::Touched(selected) => run_each(&selected, |run| {
+            let mut command = touched_command(test, run, &request)?;
+            execute(test, root, run.lane(), &mut command)
+        }),
+        Plan::Lane(lane_name) => run_lane(test, root, lane_name, &request),
     }
-    let lane_name = select_lane(test, &request)?;
-    run_lane(test, root, lane_name, &request)
 }
 
-/// Run every lane the branch touched.
-fn run_touched(test: &TestCommandConfig, root: &Path, request: &TestRequest) -> Result<()> {
-    let selected = touched::lanes(test, root, &request.lanes)?;
-    if selected.is_empty() {
-        println!("no owned path touched; the nightly sweep covers these lanes");
-        return Ok(());
-    }
-    run_each(&selected, |run| {
-        let mut command = touched_command(test, run, request)?;
-        execute(test, root, run.lane(), &mut command)
+/// Whether the test command given `args` runs any lane: a `--touched` run
+/// whose branch touched none of its lanes runs nothing.
+///
+/// # Errors
+///
+/// Fails when `args` are not a valid request, the test configuration is
+/// invalid, or git cannot say what the branch touched.
+pub fn selects_any_lane(root: &Path, project: &ProjectConfig, args: &[String]) -> Result<bool> {
+    let request = TestRequest::parse(args)?;
+    Ok(match plan(&project.test, root, &request)? {
+        Plan::Touched(selected) => !selected.is_empty(),
+        Plan::Lane(_) => true,
     })
+}
+
+/// The lanes a request runs.
+enum Plan<'a> {
+    /// The runs the branch touched, possibly none.
+    Touched(Vec<Touched>),
+    /// One lane, whole.
+    Lane(&'a str),
+}
+
+fn plan<'a>(
+    test: &'a TestCommandConfig,
+    root: &Path,
+    request: &'a TestRequest,
+) -> Result<Plan<'a>> {
+    validate_config(test)?;
+    if request.touched {
+        return Ok(Plan::Touched(touched::lanes(test, root, &request.lanes)?));
+    }
+    select_lane(test, request).map(Plan::Lane)
 }
 
 /// Run `selected` serially without letting the first failure hide the rest:
@@ -123,8 +150,20 @@ pub(super) fn lane_command(
     lane_name: &str,
     request: &TestRequest,
 ) -> Result<Command> {
-    resolve(test, &requested(test, lane_name, Some(request))?)?
-        .command(NextestAction::Run, &request.passthrough)
+    requested_lane(test, lane_name, request)?.command(NextestAction::Run, &request.passthrough)
+}
+
+/// The lane as `request` asks for it, narrowed to the request's filterset.
+fn requested_lane(
+    test: &TestCommandConfig,
+    lane_name: &str,
+    request: &TestRequest,
+) -> Result<ResolvedLane> {
+    let lane = resolve(test, &requested(test, lane_name, Some(request))?)?;
+    match &request.narrow {
+        Some(filterset) => lane.filtered(filterset.clone()),
+        None => Ok(lane),
+    }
 }
 
 /// The command of one touched run: a lane whole, or narrowed to packages.
@@ -135,11 +174,9 @@ pub(super) fn touched_command(
 ) -> Result<Command> {
     match run {
         Touched::Whole(lane_name) => lane_command(test, lane_name, request),
-        Touched::Narrowed { lane, packages } => {
-            resolve(test, &requested(test, lane, Some(request))?)?
-                .narrowed(packages)?
-                .command(NextestAction::Run, &request.passthrough)
-        }
+        Touched::Narrowed { lane, packages } => requested_lane(test, lane, request)?
+            .narrowed(packages)?
+            .command(NextestAction::Run, &request.passthrough),
     }
 }
 
