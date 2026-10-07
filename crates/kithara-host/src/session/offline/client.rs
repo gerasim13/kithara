@@ -5,6 +5,8 @@ use kithara_play::{PlayError, SessionDispatcher, SessionSampleRate, StreamShape}
 use kithara_worker::TaskControl;
 
 use super::{OfflineSessionError, task::OfflineMsg};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::session::decks::{DeckInbox, DeckMsg};
 use crate::session::{
     HostCmd, HostDispatcher, HostReply,
     protocol::{HostCmdMsg, HostDispatchError},
@@ -107,5 +109,15 @@ impl<S: Send + Sync + 'static> SessionDispatcher<S> for OfflineSessionClient<S> 
 impl<S: Send + Sync + 'static> HostDispatcher<S> for OfflineSessionClient<S> {
     fn exec_host(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
         self.call(cmd)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<S: Send + Sync + 'static> DeckInbox for OfflineSessionClient<S> {
+    fn post(&self, message: DeckMsg) -> Result<(), PlayError> {
+        self.send(OfflineMsg::Deck(message))
+            .map_err(|_| PlayError::SessionGone {
+                reason: "offline session stopped taking decks",
+            })
     }
 }

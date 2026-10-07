@@ -16,6 +16,7 @@ use kithara_play::{SessionSampleRate, StreamShape};
 use tracing::{debug, warn};
 
 use super::{
+    decks::{DeckInbox, DeckMsg, Decks},
     dispatch::{run_host_cmd, tick_session},
     protocol::{
         HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply, SessionDispatcher,
@@ -25,20 +26,28 @@ use super::{
 };
 use crate::{HostSettings, consts, error::PlayError, rt::SessionOutput};
 
+/// What the native session thread takes: the Host's commands and the
+/// messages for the decks it holds.
+enum EngineMsg<S> {
+    Host(HostCmdMsg<S>),
+    Deck(DeckMsg),
+}
+
 pub(crate) struct SessionClient<S> {
-    cmd_tx: Mutex<mpsc::Sender<HostCmdMsg<S>>>,
+    cmd_tx: Mutex<mpsc::Sender<EngineMsg<S>>>,
     root_view: RootView,
 }
 
 impl<S> SessionClient<S> {
     fn call(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
         let (reply_tx, reply_rx) = mpsc::channel();
-        if let Err(error) = self.cmd_tx.lock().send(HostCmdMsg { cmd, reply_tx }) {
+        let message = EngineMsg::Host(HostCmdMsg { cmd, reply_tx });
+        if let Err(mpsc::SendError(EngineMsg::Host(message))) = self.cmd_tx.lock().send(message) {
             return Err(HostDispatchError::before_send(
                 PlayError::SessionGone {
                     reason: "session thread stopped accepting commands",
                 },
-                error.0.cmd,
+                message.cmd,
             ));
         }
         let reply = reply_rx.recv().map_err(|_| {
@@ -69,15 +78,35 @@ impl<S: Send + Sync + 'static> HostDispatcher<S> for SessionClient<S> {
     }
 }
 
-/// Disconnects queued callers, stops the stream with the session state, and
-/// only then replies, so the Host drops its decks once nothing renders them.
+impl<S: Send + Sync + 'static> DeckInbox for SessionClient<S> {
+    fn post(&self, message: DeckMsg) -> Result<(), PlayError> {
+        self.cmd_tx
+            .lock()
+            .send(EngineMsg::Deck(message))
+            .map_err(|_| PlayError::SessionGone {
+                reason: "session thread stopped taking decks",
+            })
+    }
+}
+
+/// Stops the stream with the session state, then drops the decks it
+/// rendered, each released first: only the session thread lets go of them.
+fn stop<T, S>(state: SessionState<T, S>, mut decks: Decks) {
+    decks.release_all();
+    drop(state);
+    drop(decks);
+}
+
+/// Disconnects queued callers and stops the session with its decks before
+/// it replies.
 fn complete_shutdown<T, S>(
-    cmd_rx: mpsc::Receiver<HostCmdMsg<S>>,
+    cmd_rx: mpsc::Receiver<EngineMsg<S>>,
     state: SessionState<T, S>,
+    decks: Decks,
     reply_tx: &mpsc::Sender<HostReply>,
 ) {
     drop(cmd_rx);
-    drop(state);
+    stop(state, decks);
     if reply_tx.send(HostReply::Ok).is_err() {
         warn!("[KITHARA-ROUTE] native shutdown reply receiver dropped");
     }
@@ -104,9 +133,24 @@ pub(crate) fn receive_message<M>(
     }
 }
 
-fn service_due_tick<T, S>(state: &mut SessionState<T, S>, deadline: &mut Instant) {
-    if state.ctx.is_some() && Instant::now() >= *deadline {
-        if let Err(error) = tick_session(state) {
+/// Whether the session pumps on its interval: while it runs a graph or holds
+/// a deck.
+fn pumping<T, S>(state: &SessionState<T, S>, decks: &Decks) -> bool {
+    state.ctx.is_some() || !decks.is_empty()
+}
+
+/// One pump once it is due: the decks tick first, so the changes they post
+/// reach the graph in the same pump.
+fn service_due_tick<T, S>(
+    state: &mut SessionState<T, S>,
+    decks: &mut Decks,
+    deadline: &mut Instant,
+) {
+    if pumping(state, decks) && Instant::now() >= *deadline {
+        decks.tick();
+        if state.ctx.is_some()
+            && let Err(error) = tick_session(state)
+        {
             warn!(?error, "native session tick failed");
         }
         *deadline = Instant::now() + consts::SESSION_PUMP_INTERVAL;
@@ -114,7 +158,7 @@ fn service_due_tick<T, S>(state: &mut SessionState<T, S>, deadline: &mut Instant
 }
 
 fn engine_thread<T, S>(
-    cmd_rx: mpsc::Receiver<HostCmdMsg<S>>,
+    cmd_rx: mpsc::Receiver<EngineMsg<S>>,
     root: HostRoot,
     root_view: RootView,
     requested_max_block_frames: Option<NonZeroU32>,
@@ -133,25 +177,31 @@ fn engine_thread<T, S>(
         settings,
         start_stream_fn,
     );
+    let mut decks = Decks::default();
     debug!("[KITHARA-ROUTE] native session worker started");
     let mut deadline = Instant::now() + consts::SESSION_PUMP_INTERVAL;
     loop {
-        let Ok(message) = receive_message(&cmd_rx, state.ctx.is_some(), deadline) else {
+        let Ok(message) = receive_message(&cmd_rx, pumping(&state, &decks), deadline) else {
             break;
         };
-        if let Some(HostCmdMsg { cmd, reply_tx }) = message {
-            if matches!(&cmd, HostCmd::Shutdown) {
-                complete_shutdown(cmd_rx, state, &reply_tx);
-                debug!("[KITHARA-ROUTE] native session worker stopped");
-                return;
+        match message {
+            Some(EngineMsg::Host(HostCmdMsg { cmd, reply_tx })) => {
+                if matches!(&cmd, HostCmd::Shutdown) {
+                    complete_shutdown(cmd_rx, state, decks, &reply_tx);
+                    debug!("[KITHARA-ROUTE] native session worker stopped");
+                    return;
+                }
+                let reply = run_host_cmd(&mut state, cmd);
+                if reply_tx.send(reply).is_err() {
+                    warn!("[KITHARA-ROUTE] native session reply receiver dropped");
+                }
             }
-            let reply = run_host_cmd(&mut state, cmd);
-            if reply_tx.send(reply).is_err() {
-                warn!("[KITHARA-ROUTE] native session reply receiver dropped");
-            }
+            Some(EngineMsg::Deck(message)) => decks.run(message),
+            None => {}
         }
-        service_due_tick(&mut state, &mut deadline);
+        service_due_tick(&mut state, &mut decks, &mut deadline);
     }
+    stop(state, decks);
     debug!("[KITHARA-ROUTE] native session worker stopped");
 }
 
@@ -167,7 +217,7 @@ fn spawn_session_client<T, S>(
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    let (cmd_tx, cmd_rx) = mpsc::channel::<HostCmdMsg<S>>();
+    let (cmd_tx, cmd_rx) = mpsc::channel::<EngineMsg<S>>();
     let client_view = root_view.clone();
     spawn_named(thread_name, move || {
         engine_thread::<T, S>(
@@ -224,7 +274,7 @@ pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     output_block_frames: Option<NonZeroU32>,
     output: SessionOutput,
     settings: Live<HostSettings, HostProtocol>,
-) -> Arc<dyn HostDispatcher<S>> {
+) -> Arc<SessionClient<S>> {
     spawn_session_client::<CpalStream, S>(
         "kithara-engine",
         root,
@@ -241,7 +291,7 @@ mod tests {
     use kithara_command::When;
     use kithara_effects::LimiterConfig;
     use kithara_events::EventBus;
-    use kithara_platform::time::Duration;
+    use kithara_platform::{thread::sleep, time::Duration};
     use kithara_play::{DeckMixerConfig, DeckRegistration};
     use kithara_test_utils::{
         bufpool::{TestPools, pools},
@@ -252,11 +302,148 @@ mod tests {
     use super::*;
     use crate::{
         HostSettingsChange, MetronomeConfigChange,
-        session::tests::{
-            graph::empty_root,
-            ring::{MasterRing, RingBackend, RingBackendConfig, RingLayout},
+        session::{
+            decks::SessionDecks,
+            tests::{
+                deck_probe::{Seen, next, probe, so_far, ticks},
+                graph::empty_root,
+                ring::{MasterRing, RingBackend, RingBackendConfig, RingLayout},
+            },
         },
     };
+
+    /// A session with no graph that holds probe decks.
+    fn deck_session() -> (Arc<SessionClient<TestPools>>, SessionDecks) {
+        let sample_rate = NonZeroU32::new(48_000).expect("test sample rate");
+        let (root, root_view) = empty_root(sample_rate);
+        let client = spawn_session_client::<(), TestPools>(
+            consts::DECK_SESSION,
+            root,
+            root_view,
+            None,
+            SessionOutput::new(LimiterConfig::default()),
+            Live::new(HostSettings::builder().sample_rate(sample_rate).build())
+                .expect("the fixture settings are valid"),
+            |_, _| Err("a probe deck opens no stream".to_owned()),
+        );
+        let decks = SessionDecks::new(client.clone());
+        (client, decks)
+    }
+
+    fn shut_down(client: &SessionClient<TestPools>) {
+        assert!(matches!(
+            client.exec_host(HostCmd::Shutdown),
+            Ok(HostReply::Ok)
+        ));
+    }
+
+    /// Commands posted before the deck was held woke no one, so the session
+    /// thread runs them as soon as it holds the deck.
+    #[kithara::test]
+    fn the_session_thread_drains_a_deck_as_it_takes_it() {
+        let (client, decks) = deck_session();
+        let (id, deck, seen) = probe();
+
+        decks.hold(id, deck).expect("the session takes the deck");
+
+        assert!(matches!(next(&seen), Seen::Held(_)));
+        assert!(
+            matches!(next(&seen), Seen::Drained(thread) if thread.as_deref() == Some(consts::DECK_SESSION)),
+            "the session thread drains a deck it takes before ticking it"
+        );
+        shut_down(&client);
+    }
+
+    #[kithara::test]
+    fn the_session_thread_ticks_a_held_deck_until_it_is_released() {
+        let (client, decks) = deck_session();
+        let (id, deck, seen) = probe();
+
+        decks.hold(id, deck).expect("the session takes the deck");
+        let mut ticked = 0;
+        while ticked < 2 {
+            if let Seen::Ticked(thread) = next(&seen) {
+                assert_eq!(thread.as_deref(), Some(consts::DECK_SESSION));
+                ticked += 1;
+            }
+        }
+        let released = decks.release(id).expect("the session hands the deck back");
+        drop(so_far(&seen));
+        sleep(consts::SESSION_PUMP_INTERVAL * 3);
+
+        assert_eq!(
+            ticks(&so_far(&seen)),
+            0,
+            "a released deck is no longer ticked"
+        );
+        drop(released);
+        shut_down(&client);
+    }
+
+    #[kithara::test]
+    fn a_deck_the_session_lets_go_is_released_before_it_is_handed_back() {
+        let (client, decks) = deck_session();
+        let (id, deck, seen) = probe();
+        decks.hold(id, deck).expect("the session takes the deck");
+
+        let released = decks.release(id).expect("the session hands the deck back");
+
+        assert!(
+            so_far(&seen)
+                .iter()
+                .any(|seen| matches!(seen, Seen::Released)),
+            "a deck comes back released, so nothing waits on what it had queued"
+        );
+        drop(released);
+        shut_down(&client);
+    }
+
+    /// The session lets go of its decks on its own thread as it shuts down:
+    /// each is released, then dropped, before the shutdown answers.
+    #[kithara::test]
+    fn shutdown_lets_go_of_every_deck_before_it_answers() {
+        let (client, decks) = deck_session();
+        let (id, deck, seen) = probe();
+        decks.hold(id, deck).expect("the session takes the deck");
+
+        shut_down(&client);
+
+        let after = so_far(&seen);
+        let released = after.iter().position(|seen| matches!(seen, Seen::Released));
+        let dropped = after.iter().position(|seen| matches!(seen, Seen::Dropped));
+        assert!(
+            matches!((released, dropped), (Some(released), Some(dropped)) if released < dropped),
+            "a deck is released, then dropped"
+        );
+    }
+
+    #[kithara::test]
+    fn a_woken_deck_drains_on_the_session_thread() {
+        let (client, decks) = deck_session();
+        let (id, deck, seen) = probe();
+        decks.hold(id, deck).expect("the session takes the deck");
+        let Seen::Held(waker) = next(&seen) else {
+            panic!("the session holds the deck before anything else");
+        };
+        assert!(
+            matches!(next(&seen), Seen::Drained(_)),
+            "drained as it is held"
+        );
+
+        waker.wake_by_ref();
+
+        loop {
+            match next(&seen) {
+                Seen::Drained(thread) => {
+                    assert_eq!(thread.as_deref(), Some(consts::DECK_SESSION));
+                    break;
+                }
+                Seen::Ticked(_) => {}
+                _ => panic!("a woken deck is drained while it stays held"),
+            }
+        }
+        shut_down(&client);
+    }
 
     #[kithara::test]
     fn output_block_override_preserves_the_backend_default_or_sets_128() {

@@ -17,14 +17,20 @@ use kithara_play::{PlayError, player::PlayerControlSource};
 use kithara_warp::BeatGridId;
 use send_wrapper::SendWrapper;
 
-use super::{
-    super::{Host, HostOwned, owner::SessionRuntime},
-    decks::{Deck, Decks},
+use super::super::{Host, HostOwned, owner::SessionRuntime};
+#[cfg(feature = "offline")]
+use super::super::{
+    HostConfig,
+    offline::{OfflineRuntime, StartedOffline},
 };
 use crate::{
     HostSettings, consts,
     rt::SessionOutput,
-    session::{HostDispatcher, HostProtocol, HostRoot, RootView, web::WebSessionState},
+    session::{
+        HostDispatcher, HostProtocol, HostRoot, RootView,
+        decks::{Deck, Decks},
+        web::WebSessionState,
+    },
     wasm::HostRoute,
 };
 /// The decks a Worker Host holds. The Worker is one thread: the Host borrows
@@ -39,11 +45,11 @@ pub(in crate::host) struct Platform<S> {
 }
 
 impl<S> Platform<S> {
-    pub(in crate::host) fn close(platform: &mut Self, host_id: BeatGridId) {
-        for route in mem::take(&mut *platform.remote_routes.lock()) {
+    pub(in crate::host) fn close(&self, host_id: BeatGridId) {
+        for route in mem::take(&mut *self.remote_routes.lock()) {
             route.close();
         }
-        if let Some(decks) = platform.remote_decks.take() {
+        if let Some(decks) = &self.remote_decks {
             let mut decks = mem::take(&mut *decks.borrow_mut());
             decks.release_all();
             let mut deck_count = 0_usize;
@@ -65,14 +71,23 @@ impl<S> Platform<S> {
         self.worker_decks()?.borrow_mut().close(id)
     }
 
+    /// Starts an offline session; the Worker that starts it holds its decks.
     #[cfg(feature = "offline")]
-    pub(in crate::host) fn offline() -> Result<Self, PlayError> {
+    pub(in crate::host) fn offline(
+        config: HostConfig<S>,
+        root: HostRoot,
+        view: RootView,
+    ) -> Result<StartedOffline<S>, PlayError>
+    where
+        S: HasPool<f32> + Send + Sync + 'static,
+    {
         if kithara_platform::thread::is_main_thread() {
             return Err(PlayError::SessionCategoryUnsupported {
                 reason: "offline Host must run in a Web Worker".to_owned(),
             });
         }
-        Ok(Self::remote(WorkerDecks::default()))
+        let (dispatcher, runtime) = OfflineRuntime::new(config, root, view)?;
+        Ok((dispatcher, Self::remote(WorkerDecks::default()), runtime))
     }
 
     /// Ticks the decks of an offline session ahead of one rendered block.

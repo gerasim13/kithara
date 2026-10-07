@@ -5469,6 +5469,7 @@ dependencies = [
 name = "kithara-host-tests"
 version = "0.0.1-alpha5"
 dependencies = [
+ "delegate",
  "kithara",
  "kithara-command",
  "kithara-config",

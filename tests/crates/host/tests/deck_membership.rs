@@ -1,14 +1,24 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::{
+    num::{NonZeroU32, NonZeroUsize},
+    task::Waker,
+};
 
+use delegate::delegate;
 use kithara::{
     host::{HostConfig, HostSettings},
+    platform::{
+        sync::{Arc, Mutex},
+        thread,
+    },
     play::{
-        BufferGeometryError, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
-        SessionError, SessionEvent,
+        AllocatedSlot, BufferGeometryError, DeckRegistration, PlayError, PlayWorker,
+        PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionBinding, SessionError, SessionEvent,
+        player::{Player, PlayerControlSource},
     },
     warp::WarpConfig,
+    worker::DispatcherConfig,
 };
 use kithara_integration_tests::{offline::OfflineHostHarness, smoothing::consts};
 use kithara_test_utils::bufpool::{Pools, TestPools, pools};
@@ -17,14 +27,16 @@ use kithara_test_utils::bufpool::{Pools, TestPools, pools};
 async fn offline_host(region: &Pools) -> OfflineHostHarness<TestPools> {
     let config = HostConfig::offline(region.clone())
         .settings(HostSettings::builder().sample_rate(sample_rate()).build())
-        .max_block_frames(
-            u32::try_from(consts::BLOCK_FRAMES)
-                .ok()
-                .and_then(NonZeroU32::new)
-                .expect("block size"),
-        )
+        .max_block_frames(block_frames())
         .build();
     OfflineHostHarness::new(config).await.expect("offline host")
+}
+
+fn block_frames() -> NonZeroU32 {
+    u32::try_from(consts::BLOCK_FRAMES)
+        .ok()
+        .and_then(NonZeroU32::new)
+        .expect("block size")
 }
 
 fn sample_rate() -> NonZeroU32 {
@@ -149,5 +161,103 @@ async fn a_route_change_reaches_every_deck_the_host_holds() {
             "every deck the Host holds hears the route change"
         );
     }
+    host.close().await;
+}
+
+/// A player that notes the thread each drain and tick of the player it wraps
+/// runs on.
+struct ThreadProbe<P> {
+    inner: P,
+    seen: Arc<Mutex<Vec<Option<String>>>>,
+}
+
+impl<P> ThreadProbe<P> {
+    fn note(&self) {
+        self.seen
+            .lock()
+            .push(thread::current().name().map(str::to_owned));
+    }
+}
+
+impl<P: Player> Player for ThreadProbe<P> {
+    fn drain(&mut self) {
+        self.note();
+        self.inner.drain();
+    }
+
+    fn tick(&mut self) -> Result<(), PlayError> {
+        self.note();
+        self.inner.tick()
+    }
+
+    delegate! {
+        to self.inner {
+            fn close(&mut self) -> Result<(), PlayError>;
+            fn hold(&mut self, waker: Waker);
+            fn release(&mut self);
+        }
+    }
+}
+
+impl<P: PlayerControlSource> PlayerControlSource for ThreadProbe<P> {
+    type Control = P::Control;
+    type Schema = P::Schema;
+
+    fn close_control(control: &Self::Control) -> Result<(), PlayError> {
+        P::close_control(control)
+    }
+
+    delegate! {
+        to self.inner {
+            fn attach_session(
+                &mut self,
+                binding: SessionBinding<Self::Schema>,
+            ) -> Result<DeckRegistration<Self::Schema>, PlayError>;
+            fn control(&self) -> Self::Control;
+            fn seat(&mut self, slot: AllocatedSlot);
+        }
+    }
+}
+
+/// The Host's session thread holds its decks: it runs a deck's commands as it
+/// takes the deck and ticks the deck ahead of each block it renders.
+#[kithara::test(tokio)]
+async fn the_session_thread_drains_and_ticks_the_decks_it_holds() {
+    const SESSION: &str = "deck-session";
+    let region = pools();
+    let config = HostConfig::offline(region.clone())
+        .settings(HostSettings::builder().sample_rate(sample_rate()).build())
+        .max_block_frames(block_frames())
+        .dispatcher(
+            DispatcherConfig::builder()
+                .name(SESSION)
+                .capacity(NonZeroUsize::MIN)
+                .build(),
+        )
+        .build();
+    let host = OfflineHostHarness::new(config).await.expect("offline host");
+    let seen = Arc::default();
+    host.insert(ThreadProbe {
+        inner: PlayerImpl::new(
+            PlayerConfig::builder()
+                .sample_rate(sample_rate())
+                .worker(PlayWorker::new(PlayWorkerConfig::builder(region).build()))
+                .build(),
+        ),
+        seen: Arc::clone(&seen),
+    })
+    .await
+    .expect("the Host takes the deck");
+    host.render(consts::BLOCK_FRAMES).await;
+
+    let seen = seen.lock().clone();
+    assert!(
+        seen.len() >= 2,
+        "a drain as the Host takes the deck, a tick ahead of the block: {seen:?}"
+    );
+    assert!(
+        seen.iter().all(|name| name.as_deref() == Some(SESSION)),
+        "every deck call runs on the session thread: {seen:?}"
+    );
     host.close().await;
 }

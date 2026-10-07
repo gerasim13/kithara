@@ -76,16 +76,7 @@ impl<S> SessionRuntime<S> {
         }
     }
 
-    #[cfg(target_arch = "wasm32")]
     pub(super) const fn platform(&self) -> &Platform<S> {
-        match self {
-            Self::Realtime(platform) => platform,
-            #[cfg(feature = "offline")]
-            Self::Offline { platform, .. } => platform,
-        }
-    }
-
-    pub(super) const fn platform_mut(&mut self) -> &mut Platform<S> {
         match self {
             Self::Realtime(platform) => platform,
             #[cfg(feature = "offline")]
@@ -274,10 +265,9 @@ where
             }
             #[cfg(feature = "offline")]
             config @ HostConfig::Offline { .. } => {
-                let platform = Platform::offline().resolve()?;
                 let root = Self::session_root(config.settings())?;
-                let (dispatcher, runtime) =
-                    OfflineRuntime::new(config, root.root, root.view.clone())?;
+                let (dispatcher, platform, runtime) =
+                    Platform::offline(config, root.root, root.view.clone())?;
                 Ok(Self::owner(
                     root.id,
                     root.view,
@@ -308,7 +298,8 @@ impl<S> Configure<HostSettingsChange> for Host<S> {
 
 impl<S> Drop for Host<S> {
     fn drop(&mut self) {
-        Platform::close(self.session.platform_mut(), self.id);
+        #[cfg(target_arch = "wasm32")]
+        self.session.platform().close(self.id);
         if self.owns_session
             && let Err(error) = self.dispatcher.exec_host(HostCmd::Shutdown)
         {

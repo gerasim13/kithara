@@ -2,29 +2,25 @@ use std::{marker::PhantomData, num::NonZeroU32};
 
 use kithara_bufpool::HasPool;
 use kithara_command::Live;
-use kithara_platform::sync::{Arc, Mutex};
+use kithara_platform::sync::Arc;
 use kithara_play::{PlayError, player::PlayerControlSource};
-use kithara_warp::BeatGridId;
 
+#[cfg(feature = "offline")]
+use super::super::{
+    HostConfig,
+    offline::{OfflineRuntime, StartedOffline},
+};
 use super::{
     super::{Host, HostOwned},
     PlatformResult,
-    deck_pass::{DeckThread, Pace},
-    decks::Decks,
 };
 use crate::{
     HostSettings,
     rt::SessionOutput,
-    session::{HostDispatcher, HostProtocol, HostRoot, RootView},
+    session::{HostDispatcher, HostProtocol, HostRoot, RootView, decks::SessionDecks},
 };
 
 type StartedPlatform<S> = (Arc<dyn HostDispatcher<S>>, Platform<S>);
-
-impl<S> PlatformResult<Self> for Platform<S> {
-    fn resolve(self) -> Result<Self, PlayError> {
-        Ok(self)
-    }
-}
 
 impl<S> PlatformResult<Self> for StartedPlatform<S> {
     fn resolve(self) -> Result<Self, PlayError> {
@@ -32,32 +28,31 @@ impl<S> PlatformResult<Self> for StartedPlatform<S> {
     }
 }
 
+/// A native Host reaches the decks its session thread holds.
 pub(in crate::host) struct Platform<S> {
-    decks: DeckThread,
-    /// The decks the Host stopped ticking as it closed. They drop with the
-    /// platform, after the session that renders them has shut down. Only
-    /// `close` reaches them; the lock lets a Host be shared while a deck,
-    /// which only its holder reaches, need not be.
-    retired: Mutex<Decks>,
+    decks: SessionDecks,
     marker: PhantomData<fn() -> S>,
 }
 
 impl<S> Platform<S> {
-    /// Stops ticking the Host's decks and keeps them until the platform
-    /// drops, after the session shutdown that stops their stream.
-    pub(in crate::host) fn close(platform: &mut Self, _host_id: BeatGridId) {
-        *platform.retired.lock() = platform.decks.close();
-    }
-
+    /// Starts an offline session whose task holds the Host's decks.
     #[cfg(feature = "offline")]
-    pub(in crate::host) fn offline() -> Self {
-        Self::owner(DeckThread::spawn(Pace::Blocks))
+    pub(in crate::host) fn offline(
+        config: HostConfig<S>,
+        root: HostRoot,
+        view: RootView,
+    ) -> Result<StartedOffline<S>, PlayError>
+    where
+        S: HasPool<f32> + Send + Sync + 'static,
+    {
+        let (dispatcher, runtime) = OfflineRuntime::new(config, root, view)?;
+        let platform = Self::owner(SessionDecks::new(runtime.deck_inbox()));
+        Ok((dispatcher, platform, runtime))
     }
 
-    fn owner(decks: DeckThread) -> Self {
+    const fn owner(decks: SessionDecks) -> Self {
         Self {
             decks,
-            retired: Mutex::new(Decks::default()),
             marker: PhantomData,
         }
     }
@@ -78,9 +73,10 @@ impl<S> Platform<S> {
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
-        let dispatcher =
+        let session =
             crate::session::native::spawn::<S>(root, view, output_block_frames, output, settings);
-        (dispatcher, Self::owner(DeckThread::spawn(Pace::Clock)))
+        let decks = SessionDecks::new(session.clone());
+        (session, Self::owner(decks))
     }
 }
 
@@ -102,7 +98,7 @@ where
         let (grid_id, control) = self.bind_player(&mut player)?;
         if let Err(error) = self
             .session
-            .platform_mut()
+            .platform()
             .decks
             .hold(grid_id, Box::new(player))
         {
@@ -125,10 +121,6 @@ where
         self.validate_removal(player)?;
         P::close_control(player.control())?;
         self.dispatcher.detach(player.id())?;
-        self.session
-            .platform_mut()
-            .decks
-            .release(player.id())
-            .map(drop)
+        self.session.platform().decks.release(player.id()).map(drop)
     }
 }

@@ -12,6 +12,8 @@ use kithara_signal::AudioSpec;
 use kithara_worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig};
 
 use super::{Host, HostConfig, platform::Platform};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::session::decks::DeckInbox;
 use crate::{
     HostSettings,
     rt::SessionOutput,
@@ -92,6 +94,8 @@ pub(super) struct OfflineRuntime<S> {
 }
 
 type StartedOfflineRuntime<S> = (Arc<dyn HostDispatcher<S>>, OfflineRuntime<S>);
+/// An offline session started beside the platform that holds its decks.
+pub(super) type StartedOffline<S> = (Arc<dyn HostDispatcher<S>>, Platform<S>, OfflineRuntime<S>);
 
 impl<S> OfflineRuntime<S>
 where
@@ -146,8 +150,16 @@ where
         ))
     }
 
-    fn position(&self) -> Result<u64, OfflineRenderError> {
-        self.client.position().map_err(OfflineRenderError::backend)
+    delegate::delegate! {
+        to self.client {
+            /// The session task that holds the Host's decks.
+            #[cfg(not(target_arch = "wasm32"))]
+            #[call(clone)]
+            #[expr($ as Arc<dyn DeckInbox>)]
+            pub(super) fn deck_inbox(&self) -> Arc<dyn DeckInbox>;
+            #[expr($.map_err(OfflineRenderError::backend))]
+            fn position(&self) -> Result<u64, OfflineRenderError>;
+        }
     }
 
     /// Renders `request` block by block, the Host's decks ticking ahead of

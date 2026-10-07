@@ -1,5 +1,6 @@
 //! Concrete session state, graph dispatch, and platform backends.
 
+pub(crate) mod decks;
 mod dispatch;
 mod graph;
 pub(crate) mod protocol;
