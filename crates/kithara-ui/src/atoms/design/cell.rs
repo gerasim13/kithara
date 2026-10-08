@@ -111,7 +111,7 @@ mod tests {
         };
         let cell = Cell::new(skin);
         let draw = |label, highlighted| {
-            let mut text = TextContext::from(skin.text_resources());
+            let mut text = TextContext::from(skin.text_resources.as_ref());
             let mut list = DrawListBuilder::default();
             cell.paint(&mut list, &mut text, label, highlighted, bounds);
             list.finish()

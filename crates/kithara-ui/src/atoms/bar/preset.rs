@@ -256,7 +256,7 @@ mod tests {
 
     fn draw(active: Option<usize>, visual: IndexedVisual) -> DrawList {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         Preset::new(skin).paint(&mut list, &mut text, &data(active), consts::BOUNDS, visual);
         list.finish()
@@ -409,7 +409,7 @@ mod tests {
             spacing: 0.0,
             weight: skin.global_bar.chip_text.weight,
         };
-        let mut shaper = TextContext::from(skin.text_resources());
+        let mut shaper = TextContext::from(skin.text_resources.as_ref());
         assert_eq!(text[0].0, "MICRO");
         assert_eq!(text[0].1, shaper.shape("MICRO", role, None));
         assert_eq!(text[0].2, skin.palette.bg);

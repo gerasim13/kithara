@@ -105,7 +105,7 @@ impl IcedWidget<Published, Theme, Renderer> for Viewport<'_> {
         renderer.with_layer(bounds, |renderer| {
             renderer.with_translation(Vector::new(bounds.x, bounds.y), |renderer| {
                 let mut frame = Frame::new(renderer, bounds.size());
-                replay_ordered(&list, &mut frame, self.skin.text_resources());
+                replay_ordered(&list, &mut frame, self.skin.text_resources.as_ref());
                 renderer.draw_geometry(frame.into_geometry());
             });
         });

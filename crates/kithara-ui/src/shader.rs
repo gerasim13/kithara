@@ -17,27 +17,18 @@ pub(crate) struct ShaderUniform {
 }
 
 /// Validated WGSL and the endpoint bindings that feed it.
-#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ShaderSpec {
     #[cfg(feature = "render")]
-    module: Arc<ShaderModule>,
-    #[field(get, vis = "pub(crate)")]
-    uniforms: Vec<ShaderUniform>,
-}
-
-#[cfg(feature = "render")]
-impl ShaderSpec {
-    pub(crate) fn source(&self) -> Arc<str> {
-        Arc::clone(&self.module.source)
-    }
+    pub(crate) module: Arc<ShaderModule>,
+    pub(crate) uniforms: Vec<ShaderUniform>,
 }
 
 #[cfg(feature = "render")]
 #[derive(Debug, PartialEq)]
-struct ShaderModule {
-    source: Arc<str>,
+pub(crate) struct ShaderModule {
+    pub(crate) source: Arc<str>,
     origin: SourceUri,
 }
 

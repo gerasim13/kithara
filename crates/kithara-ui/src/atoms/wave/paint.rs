@@ -311,7 +311,7 @@ mod tests {
             x: 11.0,
             y: 17.0,
         };
-        let mut text = TextContext::from(builtin::skin().text_resources());
+        let mut text = TextContext::from(builtin::skin().text_resources.as_ref());
         let mut list = DrawListBuilder::default();
 
         paint.paint_wave(&mut list, &mut text, bounds);
@@ -444,7 +444,7 @@ mod tests {
                 }),
                 zoom: 1.0,
             };
-            let mut text = TextContext::from(builtin::skin().text_resources());
+            let mut text = TextContext::from(builtin::skin().text_resources.as_ref());
             let mut list = DrawListBuilder::default();
 
             paint.paint(&mut list, &mut text, bounds, false);
@@ -519,7 +519,7 @@ mod tests {
             waveform: None,
             zoom: 1.0,
         };
-        let mut text = TextContext::from(builtin::skin().text_resources());
+        let mut text = TextContext::from(builtin::skin().text_resources.as_ref());
         let mut list = DrawListBuilder::default();
 
         paint.paint(&mut list, &mut text, consts::BOUNDS, false);

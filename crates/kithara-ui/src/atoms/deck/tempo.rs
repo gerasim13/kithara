@@ -121,7 +121,7 @@ mod tests {
 
     fn drawn(data: Reading) -> DrawList {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         Tempo::new(skin).paint(&mut list, &mut text, &data, consts::BOUNDS);
         list.finish()

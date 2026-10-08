@@ -148,7 +148,7 @@ impl Painted<'_> {
 
     /// What this paragraph draws in the box it was given.
     fn list(&self, state: &PaintState<Words>, bounds: Rect) -> DrawList {
-        state.shaped(self.skin.text_resources(), |text| {
+        state.shaped(self.skin.text_resources.as_ref(), |text| {
             let mut builder = DrawListBuilder::default();
             TextAtom::new(&self.content, self.role, self.padding_x, self.skin).paint(
                 &mut builder,
@@ -194,13 +194,13 @@ impl IcedWidget<Published, Theme, Renderer> for Painted<'_> {
             renderer,
             bounds,
             |_| Rectangle::with_size(bounds.size()),
-            self.skin.text_resources(),
+            self.skin.text_resources.as_ref(),
         );
     }
 
     fn layout(&mut self, tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits) -> Node {
         let state = tree.state.downcast_mut::<PaintState<Words>>();
-        let (width, height) = state.shaped(self.skin.text_resources(), |text| {
+        let (width, height) = state.shaped(self.skin.text_resources.as_ref(), |text| {
             TextAtom::new(&self.content, self.role, self.padding_x, self.skin).measure(text)
         });
         Node::new(limits.resolve(Length::Shrink, Length::Fill, Size::new(width, height)))

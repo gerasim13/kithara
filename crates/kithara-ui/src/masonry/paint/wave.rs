@@ -4,9 +4,8 @@ use crate::{
     atoms::wave::{
         face::{Drawn, cached_extent, read_art, read_text},
         snapshot::{OverlayData, WaveformData},
-        zoom_math::Zoom,
     },
-    render::{ReadValue, Reads, WaveformView, model::derived},
+    render::{ReadValue, Reads, WaveformView, Zoom, model::derived},
 };
 
 impl Drawn {

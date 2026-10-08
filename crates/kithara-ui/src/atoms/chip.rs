@@ -133,7 +133,7 @@ mod tests {
             y: 5.0,
         };
         let draw = |label, style, active| {
-            let mut text = TextContext::from(skin.text_resources());
+            let mut text = TextContext::from(skin.text_resources.as_ref());
             let mut builder = DrawListBuilder::default();
             Chip::new(style, skin).paint(&mut builder, &mut text, label, active, bounds);
             builder.finish()
@@ -217,7 +217,7 @@ mod tests {
             y: 0.0,
         };
         let chip = Chip::new(ChipStyle::Deck, skin);
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut draw = |active| {
             let mut builder = DrawListBuilder::default();
             chip.paint(&mut builder, &mut text, "A", active, bounds);

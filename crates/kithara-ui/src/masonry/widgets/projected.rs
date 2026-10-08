@@ -29,7 +29,7 @@ where
     pub(crate) fn new(plan: P, skin: &Skin) -> Self {
         Self {
             plan,
-            text: TextContext::from(skin.text_resources()),
+            text: TextContext::from(skin.text_resources.as_ref()),
         }
     }
 }

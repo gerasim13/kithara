@@ -840,7 +840,7 @@ mod tests {
         let picture = TableFace::new(rows, columns.clone(), skin, TableFrame::new(0.0, 0.0, true));
         (
             picture,
-            TextContext::from(skin.text_resources()),
+            TextContext::from(skin.text_resources.as_ref()),
             Rect {
                 h: 160.0,
                 w: 180.0,

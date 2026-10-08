@@ -24,7 +24,7 @@ fn plain(label: &str) -> ButtonLabel<&str> {
 fn micro_fill(active: bool) -> Rgba {
     let skin = builtin::skin();
     let glyph = char::from(lucide_icons::Icon::Play);
-    let mut text = TextContext::from(skin.text_resources());
+    let mut text = TextContext::from(skin.text_resources.as_ref());
     let mut builder = DrawListBuilder::default();
     Button::new(
         ButtonConfig::builder()
@@ -75,7 +75,7 @@ fn idle_fill(skin: &Skin) -> Rgba {
         x: 0.0,
         y: 0.0,
     };
-    let mut text = TextContext::from(skin.text_resources());
+    let mut text = TextContext::from(skin.text_resources.as_ref());
     let mut builder = DrawListBuilder::default();
     Button::new(
         ButtonConfig::builder().style(ButtonStyle::Default).build(),
@@ -131,7 +131,7 @@ fn a_default_button_draws_fill_border_and_label_in_order() {
         x: 0.0,
         y: 0.0,
     };
-    let mut text = TextContext::from(skin.text_resources());
+    let mut text = TextContext::from(skin.text_resources.as_ref());
     let mut builder = DrawListBuilder::default();
     Button::new(
         ButtonConfig::builder().style(ButtonStyle::Default).build(),
@@ -177,7 +177,7 @@ fn a_default_button_draws_fill_border_and_label_in_order() {
 fn a_micro_button_draws_its_lucide_glyph_through_the_text_command() {
     let skin = builtin::skin();
     let glyph = char::from(lucide_icons::Icon::Play);
-    let mut text = TextContext::from(skin.text_resources());
+    let mut text = TextContext::from(skin.text_resources.as_ref());
     let mut builder = DrawListBuilder::default();
     Button::new(
         ButtonConfig::builder()
@@ -220,7 +220,7 @@ fn a_transport_button_draws_only_its_declared_seams() {
         x: 0.0,
         y: 0.0,
     };
-    let mut text = TextContext::from(skin.text_resources());
+    let mut text = TextContext::from(skin.text_resources.as_ref());
     let mut builder = DrawListBuilder::default();
     Button::new(
         ButtonConfig::builder()
@@ -282,7 +282,7 @@ fn a_transport_button_draws_only_its_declared_seams() {
 #[kithara::test]
 fn an_active_transport_button_uses_its_accent_and_active_label() {
     let skin = builtin::skin();
-    let mut text = TextContext::from(skin.text_resources());
+    let mut text = TextContext::from(skin.text_resources.as_ref());
     let mut builder = DrawListBuilder::default();
     Button::new(
         ButtonConfig::builder()

@@ -5,12 +5,11 @@ use super::{
     overlay::{Overlay, OverlayPalette},
     paint::{WavePaint, WavePalette},
     snapshot::{OverlayData, WaveformData},
-    zoom_math::Zoom,
 };
 use crate::{
     draw::{DrawListBuilder, Rect, Rgba},
     module::WaveStyle,
-    render::{ReadValue, Reads, Skin, WaveformView, model::derived},
+    render::{ReadValue, Reads, Skin, WaveformView, Zoom, model::derived},
     shaping::TextContext,
     skin::WaveSkin,
 };
@@ -365,7 +364,7 @@ pub(crate) mod tests {
     fn artwork_is_drawn_instead_of_the_art_placeholder() {
         let skin = builtin::skin();
         let painter = Wave::new(WaveStyle::Hero, skin);
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let bounds = Rect {
             x: 0.0,
             y: 0.0,
@@ -415,7 +414,7 @@ pub(crate) mod tests {
             &SummaryReads,
             "@deck=a",
         );
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         painter.paint(
             &mut list,
@@ -464,7 +463,7 @@ pub(crate) mod tests {
     fn a_hero_wave_paints_every_layer_through_the_draw_seam() {
         let skin = builtin::skin();
         let (painter, data) = hero(skin);
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         painter.paint(
             &mut list,
@@ -532,7 +531,7 @@ pub(crate) mod tests {
             x: 0.0,
             y: 0.0,
         };
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         painter.paint(&mut list, &mut text, &data, bounds, false);
         let list = list.finish();

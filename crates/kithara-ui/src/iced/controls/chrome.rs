@@ -116,7 +116,7 @@ impl IcedWidget<Published, Theme, Renderer> for LeafPaint<'_, '_> {
         let bounds = snapped(bounds);
         let state = tree.state.downcast_ref::<LeafState>();
         let mut text = state.text.borrow_mut();
-        let text = text.get_or_insert_with(|| self.skin.text_resources().into());
+        let text = text.get_or_insert_with(|| self.skin.text_resources.as_ref().into());
         renderer.with_translation(Vector::new(bounds.x, bounds.y), |renderer| {
             let mut frame = Frame::new(renderer, bounds.size());
             let mut builder = DrawListBuilder::default();
@@ -130,7 +130,11 @@ impl IcedWidget<Published, Theme, Renderer> for LeafPaint<'_, '_> {
                     y: 0.0,
                 },
             );
-            replay_ordered(&builder.finish(), &mut frame, self.skin.text_resources());
+            replay_ordered(
+                &builder.finish(),
+                &mut frame,
+                self.skin.text_resources.as_ref(),
+            );
             renderer.draw_geometry(frame.into_geometry());
         });
     }
@@ -139,7 +143,7 @@ impl IcedWidget<Published, Theme, Renderer> for LeafPaint<'_, '_> {
         let intrinsic = if let Some((label, content)) = self.label() {
             let state = tree.state.downcast_mut::<LeafState>();
             let mut text = state.text.borrow_mut();
-            let text = text.get_or_insert_with(|| self.skin.text_resources().into());
+            let text = text.get_or_insert_with(|| self.skin.text_resources.as_ref().into());
             let (width, height) = label.intrinsic(text, content);
             Size::new(width, height)
         } else {
@@ -245,7 +249,11 @@ impl ChevronPaint<'_> {
             },
             self.collapsed,
         );
-        replay_ordered(&list.finish(), &mut frame, self.skin.text_resources());
+        replay_ordered(
+            &list.finish(),
+            &mut frame,
+            self.skin.text_resources.as_ref(),
+        );
         vec![frame.into_geometry()]
     }
 }
@@ -328,7 +336,7 @@ mod tests {
             leaf: ChromeLeaf::Chip("FX"),
         };
         let mut builder = DrawListBuilder::default();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         leaf.paint(
             &mut builder,
             &mut text,

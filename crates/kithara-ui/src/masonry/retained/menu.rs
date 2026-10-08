@@ -43,7 +43,7 @@ impl PickerLayer {
             engine,
             menu: PickerMenu::new(skin),
             scratch: Scene::new(),
-            text: TextContext::from(skin.text_resources()),
+            text: TextContext::from(skin.text_resources.as_ref()),
         }
     }
 }

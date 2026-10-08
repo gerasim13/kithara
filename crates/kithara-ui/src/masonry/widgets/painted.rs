@@ -212,7 +212,7 @@ where
             press: Press::default(),
             refresh: None,
             repaint: false,
-            text: TextContext::from(skin.text_resources()),
+            text: TextContext::from(skin.text_resources.as_ref()),
         }
     }
 

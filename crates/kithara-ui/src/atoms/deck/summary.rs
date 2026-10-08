@@ -142,13 +142,13 @@ mod tests {
     /// The width a summary settles for itself, asked the way a row asks it.
     fn measured(title: &str) -> f32 {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         Summary::new(DeckSummaryStyle::Default, skin).intrinsic_width(&mut text, &loaded(title))
     }
 
     fn drawn(style: DeckSummaryStyle) -> DrawList {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         Summary::new(style, skin).paint(
             &mut list,
@@ -197,7 +197,7 @@ mod tests {
     #[kithara::test]
     fn a_summary_measures_through_its_painter() {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
 
         let size = Summary::new(DeckSummaryStyle::Default, skin)
             .measure(&mut text, &loaded("Midnight Circuit"));
@@ -213,7 +213,7 @@ mod tests {
     #[kithara::test]
     fn a_summary_leaves_its_height_to_the_row() {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
 
         let size = Summary::new(DeckSummaryStyle::Default, skin)
             .measure(&mut text, &loaded("Midnight Circuit"));

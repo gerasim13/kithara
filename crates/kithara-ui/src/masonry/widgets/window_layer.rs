@@ -51,7 +51,7 @@ impl WindowLayer {
             resize_edges,
             active: None,
             resize_edge: skin.window.resize_edge,
-            text: TextContext::from(skin.text_resources()),
+            text: TextContext::from(skin.text_resources.as_ref()),
         }
     }
 

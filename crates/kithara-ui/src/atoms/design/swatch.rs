@@ -128,7 +128,7 @@ mod tests {
             x: 2.0,
             y: 3.0,
         };
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         Swatch::new(ColorRole::Accent, skin).paint(&mut list, &mut text, "accent", bounds);
         let list = list.finish();

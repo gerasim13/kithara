@@ -456,7 +456,7 @@ fn through_iced(list: &DrawList) -> Vec<u8> {
         &renderer,
         Size::new(f32::from(consts::SURFACE.0), f32::from(consts::SURFACE.1)),
     );
-    replay_ordered(list, &mut frame, skin.text_resources());
+    replay_ordered(list, &mut frame, skin.text_resources.as_ref());
     let geometry = frame.into_geometry();
     renderer.with_translation(
         Vector::new(consts::ORIGIN.0, consts::ORIGIN.1),

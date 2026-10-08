@@ -78,11 +78,11 @@ impl overlay::Overlay<Published, Theme, Renderer> for PickerOverlay<'_, '_> {
         _cursor: mouse::Cursor,
     ) {
         let mut text = self.state.text().borrow_mut();
-        let text = text.get_or_insert_with(|| self.paint.skin().text_resources().into());
+        let text = text.get_or_insert_with(|| self.paint.skin().text_resources.as_ref().into());
         let layer =
             self.paint
                 .popup_layer(text, self.anchor.into(), self.state.snapshot().highlighted);
-        draw_host_layer(renderer, &layer, self.paint.skin().text_resources());
+        draw_host_layer(renderer, &layer, self.paint.skin().text_resources.as_ref());
     }
 
     fn layout(&mut self, _renderer: &Renderer, _bounds: Size) -> Node {

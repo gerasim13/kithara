@@ -328,7 +328,7 @@ mod tests {
     #[kithara::test]
     fn a_window_layer_leaf_is_inert_below_and_emits_from_its_overlay() {
         let mut element = window_layer(TestProgram {
-            resources: builtin::skin().text_resources().clone(),
+            resources: builtin::skin().text_resources.as_ref().clone(),
         });
         let renderer = FallbackRenderer::Secondary(TinySkiaRenderer::new(SANS, Pixels(14.0)));
         let viewport = Size::new(100.0, 60.0);

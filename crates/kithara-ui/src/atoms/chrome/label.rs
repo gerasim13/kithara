@@ -145,7 +145,7 @@ mod tests {
 
     fn drawn(paint: impl FnOnce(&mut DrawListBuilder, &mut TextContext)) -> Vec<DrawCmd> {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         paint(&mut list, &mut text);
         list.finish().commands().to_vec()
@@ -183,7 +183,7 @@ mod tests {
     #[kithara::test]
     fn a_label_asks_for_the_padding_either_side_of_its_word() {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let label = ChromeLabel::title(skin);
         let run = text.shape("DECK", label.role, None);
         let word = run.width();
@@ -199,7 +199,7 @@ mod tests {
     #[kithara::test]
     fn a_label_asks_for_the_height_of_its_own_run() {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let label = ChromeLabel::title(skin);
         let run = text.shape("DECK", label.role, None);
         let line = run.height();

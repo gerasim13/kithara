@@ -58,8 +58,7 @@ macro_rules! define_skin {
             /// resolved. A document names a picture; the skin is what answers
             /// the name, so switching skins switches the drawings.
             pictures: Arc<Pictures>,
-            #[field(get, vis = "pub(crate)")]
-            text_resources: Arc<TextResources>,
+            pub(crate) text_resources: Arc<TextResources>,
             /// The document this skin was resolved from, which is what a
             /// host compiles its pages against: what a page measures comes
             /// from the skin's own numbers, not only what it is painted with.

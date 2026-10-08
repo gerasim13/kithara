@@ -201,7 +201,7 @@ fn geometry(
     let bounds = snapped(bounds);
     let mut frame = Frame::new(renderer, bounds.size());
     let mut text = state.text.borrow_mut();
-    let text = text.get_or_insert_with(|| picture.skin().text_resources().into());
+    let text = text.get_or_insert_with(|| picture.skin().text_resources.as_ref().into());
     let viewport = Rect {
         h: bounds.height,
         w: bounds.width,
@@ -216,7 +216,7 @@ fn geometry(
         cursor,
     );
     let list = picture.row_commands(text, viewport, state.scroll.offset(), hovered);
-    replay_ordered(&list, &mut frame, picture.skin().text_resources());
+    replay_ordered(&list, &mut frame, picture.skin().text_resources.as_ref());
     vec![frame.into_geometry()]
 }
 

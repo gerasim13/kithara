@@ -2,12 +2,11 @@ use kithara_platform::time::Duration;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    atoms::wave::zoom_math::DEFAULT_ZOOM,
     compile::CompiledUi,
     draw::Pt,
     expand::{Binding, BindingKind, BlockSpec},
     registry::SECONDS,
-    render::{ReadValue, Reads, custom::CustomKinds},
+    render::{DEFAULT_ZOOM, ReadValue, Reads, custom::CustomKinds},
     size::Snapshot,
     skin::SkinDoc,
     view::ViewState,

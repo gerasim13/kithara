@@ -80,7 +80,7 @@ impl ControlsProgram {
             frame_color,
             color: skin.rgba(skin.window.icon_color),
             hover_color: skin.rgba(skin.window.icon_hover_color),
-            resources: skin.text_resources().clone(),
+            resources: skin.text_resources.as_ref().clone(),
             stroke_width: skin.window.icon_stroke_width,
         }
     }

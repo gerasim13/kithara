@@ -77,7 +77,7 @@ mod tests {
         )
         .unwrap();
         let role = skin.text.body;
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let plain = Text::new(
             "TRACKING",
             TextRoleSkin {
@@ -112,7 +112,7 @@ mod tests {
             &builtin::resolver(),
         )
         .unwrap();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         Text::new("", skin.text.body, 0.0, &skin).paint(
             &mut list,
@@ -138,7 +138,7 @@ mod tests {
             &builtin::resolver(),
         )
         .unwrap();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         let bounds = Rect {
             h: 40.0,

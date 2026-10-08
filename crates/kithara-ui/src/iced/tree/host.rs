@@ -5445,13 +5445,13 @@ mod tests {
                 w: drop_fixture::WIDTH,
                 h: drop_fixture::HEIGHT,
             };
-            let mut text = TextContext::from(skin.text_resources());
+            let mut text = TextContext::from(skin.text_resources.as_ref());
             let layer =
                 DragGhost::new(Some(title), skin).layer(Some(Pt { x, y }), bounds, &mut text);
             let over = |background: Color| {
                 let mut renderer = headless_renderer();
                 renderer.with_layer(Rectangle::with_size(viewport()), |renderer| {
-                    draw_host_layer(renderer, &layer, skin.text_resources());
+                    draw_host_layer(renderer, &layer, skin.text_resources.as_ref());
                 });
                 screenshot(&mut renderer, background)
             };

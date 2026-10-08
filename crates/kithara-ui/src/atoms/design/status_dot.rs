@@ -112,7 +112,7 @@ mod tests {
             y: 5.0,
         };
         let draw = |tone| {
-            let mut text = TextContext::from(skin.text_resources());
+            let mut text = TextContext::from(skin.text_resources.as_ref());
             let mut list = DrawListBuilder::default();
             StatusDot::with_active_tone(tone, None, None, skin)
                 .paint_with_state(&mut list, &mut text, "LIVE", bounds, false);
@@ -148,7 +148,7 @@ mod tests {
         );
 
         let active = StatusDot::with_active_tone(Tone::Neutral, Some(Tone::Danger), None, skin);
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         active.paint_with_state(&mut list, &mut text, "LIVE", bounds, true);
         assert!(matches!(
@@ -167,7 +167,7 @@ mod tests {
     fn a_captioned_dot_measures_its_own_word() {
         let skin = builtin::skin();
         let dot = StatusDot::with_active_tone(Tone::Neutral, None, None, skin);
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let word = text.shape("REC", dot.role, None).width();
 
         let measured = ControlPainter::measure(&dot, &mut text, &captioned("REC"));
@@ -183,7 +183,7 @@ mod tests {
     fn an_uncaptioned_dot_measures_the_dot_alone() {
         let skin = builtin::skin();
         let dot = StatusDot::with_active_tone(Tone::Neutral, None, None, skin);
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
 
         let measured = ControlPainter::measure(&dot, &mut text, &captioned(""));
 
@@ -196,7 +196,7 @@ mod tests {
     fn a_dot_leaves_its_height_to_the_row() {
         let skin = builtin::skin();
         let dot = StatusDot::with_active_tone(Tone::Neutral, None, None, skin);
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
 
         let measured = ControlPainter::measure(&dot, &mut text, &captioned("REC"));
 

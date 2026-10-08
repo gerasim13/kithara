@@ -77,7 +77,7 @@ struct WindowOverlay<'a> {
 impl WindowOverlay<'_> {
     fn draw_layers(&self, renderer: &mut Renderer) {
         if let Some(layer) = self.resize_layer() {
-            draw_host_layer(renderer, &layer, self.skin.text_resources());
+            draw_host_layer(renderer, &layer, self.skin.text_resources.as_ref());
         }
     }
 

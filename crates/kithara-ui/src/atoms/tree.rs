@@ -433,7 +433,7 @@ mod tests {
     fn commands(offset: f32, viewport: Rect) -> DrawList {
         let skin = builtin::skin();
         let picture = Tree::new(&rows(), None, skin);
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         picture.row_commands(&mut text, viewport, offset, None)
     }
 
@@ -523,7 +523,7 @@ mod tests {
     fn the_zvuk_row_stays_on_the_neutral_geometry_seam() {
         let skin = builtin::skin();
         let picture = Tree::new(&rows()[2..], None, skin);
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let list = picture.row_commands(
             &mut text,
             Rect {

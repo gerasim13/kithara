@@ -29,14 +29,14 @@ pub(super) fn context_bar<'a>(
     let (scope_items, scope) = scope;
     let skin = cx.skin;
     if scope_items.is_empty() {
-        return Paint::pooled(painter, data, skin, cx.ctx.ui.draw_buffers())
+        return Paint::pooled(painter, data, skin, &cx.ctx.ui.draw_buffers)
             .posed(cx.transform)
             .view();
     }
     let scope_value = scope.and_then(|binding| cx.ctx.read(binding));
-    let mut text = TextContext::from(skin.text_resources());
+    let mut text = TextContext::from(skin.text_resources.as_ref());
     let Some(face) = painter.face(&mut text, &data) else {
-        return Paint::pooled(painter, data, skin, cx.ctx.ui.draw_buffers())
+        return Paint::pooled(painter, data, skin, &cx.ctx.ui.draw_buffers)
             .posed(cx.transform)
             .view();
     };
@@ -49,7 +49,7 @@ pub(super) fn context_bar<'a>(
         scope_value.as_ref(),
         skin,
         cx.owner,
-        Paint::pooled(painter, data, skin, cx.ctx.ui.draw_buffers())
+        Paint::pooled(painter, data, skin, &cx.ctx.ui.draw_buffers)
             .posed(cx.transform)
             .view(),
         move |bounds: Rect| Context::placed(face, bounds),

@@ -104,7 +104,7 @@ mod tests {
     #[kithara::test]
     fn shaped_width_stays_equal_to_the_iced_tab_width() {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let (width, height) = TabLarge::new(skin).intrinsic_size(&mut text, "DECK MICRO");
 
         assert!(
@@ -126,7 +126,7 @@ mod tests {
         };
         let tab = TabLarge::new(skin);
         let draw = |active| {
-            let mut text = TextContext::from(skin.text_resources());
+            let mut text = TextContext::from(skin.text_resources.as_ref());
             let mut builder = DrawListBuilder::default();
             tab.paint(&mut builder, &mut text, "DECK MICRO", active, bounds);
             builder.finish()

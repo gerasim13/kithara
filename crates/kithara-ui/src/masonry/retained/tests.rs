@@ -2036,7 +2036,7 @@ fn picker_portal_honours_engine_and_leaf_owners_beneath_the_root_window_layer() 
         // Where the strip drew its face, asked of the painter that drew it —
         // an anchor worked out a second time here would agree with the host
         // only until one of the two changed.
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let anchor = Context::placed(
             Context::new(skin).face_of(&mut text, ["ZVUK", "LOCAL"]),
             Rect {
@@ -2223,7 +2223,7 @@ fn scope_root(ui: &CompiledUi, reads: &dyn Reads) -> (MasonryRoot<TestAction>, R
         .ctx()
         .bounding_rect();
     let skin = builtin::skin();
-    let mut text = TextContext::from(skin.text_resources());
+    let mut text = TextContext::from(skin.text_resources.as_ref());
     let face = Context::placed(
         Context::new(skin).face_of(&mut text, ["ZVUK", "LOCAL"]),
         Rect {
@@ -5216,7 +5216,7 @@ fn the_ghost_carries_the_dragged_rows_title_until_it_is_let_go() {
     let mut root = dropping_root(&ui, &reads);
 
     let skin = builtin::skin();
-    let mut text = TextContext::from(skin.text_resources());
+    let mut text = TextContext::from(skin.text_resources.as_ref());
     let title = text.shape(drop_fixture::DRAGGED_TITLE, skin.drag.text, None);
     let title: Vec<u32> = title
         .segments()

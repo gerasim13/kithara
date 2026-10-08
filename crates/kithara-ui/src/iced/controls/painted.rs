@@ -356,7 +356,7 @@ where
             data,
             painter,
             pools: Some(pools.clone()),
-            text_resources: skin.text_resources(),
+            text_resources: skin.text_resources.as_ref(),
             transform: Transform::IDENTITY,
         }
     }
@@ -2432,7 +2432,7 @@ mod lengths {
             };
 
             assert_eq!(
-                painter.length(&mut skin.text_resources().into(), &data),
+                painter.length(&mut skin.text_resources.as_ref().into(), &data),
                 TabLarge::declared_length(skin.tab_large.height)
             );
         }

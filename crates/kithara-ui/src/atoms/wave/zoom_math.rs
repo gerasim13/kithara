@@ -1,19 +1,8 @@
 use std::ops::Range;
 
-use kithara_derive::Ranged;
 use num_traits::cast::AsPrimitive;
 
-use crate::render::WaveBucket;
-
-#[derive(Clone, Copy, Debug, PartialEq, Ranged)]
-#[ranged(min = 0.015, max = 0.5, default = 0.12, clamp)]
-pub struct Zoom(f32);
-
-pub const DEFAULT_ZOOM: f32 = Zoom::DEFAULT.0;
-
-mod consts {
-    pub(super) const BUTTON_FACTOR: f32 = 0.7;
-}
+use crate::render::{WaveBucket, Zoom};
 
 /// Bars tile the track from its origin, so a bar's content never depends on
 /// the playhead; the window only selects which bars are visible and where
@@ -111,23 +100,12 @@ pub(crate) fn zoom_for_wheel(zoom: impl Into<Zoom>, delta_y: f32) -> Zoom {
     Zoom::from(f32::from(zoom) * factor)
 }
 
-/// Narrows the visible window by one button press.
-#[must_use]
-pub fn zoom_in(zoom: Zoom) -> Zoom {
-    Zoom::from(f32::from(zoom) * consts::BUTTON_FACTOR)
-}
-
-/// Widens the visible window by one button press.
-#[must_use]
-pub fn zoom_out(zoom: Zoom) -> Zoom {
-    Zoom::from(f32::from(zoom) / consts::BUTTON_FACTOR)
-}
-
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::render::DEFAULT_ZOOM;
 
     mod consts {
         pub(super) const EPSILON: f32 = 0.000_1;
@@ -157,10 +135,10 @@ mod tests {
         let narrow = window_bounds(-1.0, 0.0);
         let wide = window_bounds(2.0, 2.0);
 
-        assert_near(narrow.start, -Zoom::MIN.0 / 2.0);
-        assert_near(narrow.end, Zoom::MIN.0 / 2.0);
-        assert_near(wide.start, 1.0 - Zoom::MAX.0 / 2.0);
-        assert_near(wide.end, 1.0 + Zoom::MAX.0 / 2.0);
+        assert_near(narrow.start, -f32::from(Zoom::MIN) / 2.0);
+        assert_near(narrow.end, f32::from(Zoom::MIN) / 2.0);
+        assert_near(wide.start, 1.0 - f32::from(Zoom::MAX) / 2.0);
+        assert_near(wide.end, 1.0 + f32::from(Zoom::MAX) / 2.0);
     }
 
     #[kithara::test]
@@ -263,24 +241,13 @@ mod tests {
     fn wheel_uses_canonical_factors_and_clamps() {
         assert_near(zoom_for_wheel(0.12, 1.0), 0.15);
         assert_near(zoom_for_wheel(0.12, -1.0), 0.096);
-        assert_near(zoom_for_wheel(Zoom::MAX.0, 1.0), Zoom::MAX.0);
-        assert_near(zoom_for_wheel(Zoom::MIN.0, -1.0), Zoom::MIN.0);
-    }
-
-    #[kithara::test]
-    fn buttons_step_wider_than_a_detent_and_clamp() {
-        assert_near(zoom_in(DEFAULT_ZOOM.into()), 0.084);
-        assert_near(zoom_out(DEFAULT_ZOOM.into()), 0.171_428_57);
-        assert_near(zoom_in(Zoom::MIN.0.into()), Zoom::MIN.0);
-        assert_near(zoom_out(Zoom::MAX.0.into()), Zoom::MAX.0);
-    }
-
-    #[kithara::test]
-    fn zoom_rejects_non_finite_documents_and_clamps_knob_input() {
-        assert!(Zoom::checked(f32::NAN).is_none());
-        assert!(Zoom::checked(f32::INFINITY).is_none());
-        assert_eq!(Zoom::from(0.0), Zoom::MIN);
-        assert_eq!(Zoom::from(1.0), Zoom::MAX);
-        assert_eq!(Zoom::from(f32::NAN), Zoom::DEFAULT);
+        assert_near(
+            zoom_for_wheel(f32::from(Zoom::MAX), 1.0),
+            f32::from(Zoom::MAX),
+        );
+        assert_near(
+            zoom_for_wheel(f32::from(Zoom::MIN), -1.0),
+            f32::from(Zoom::MIN),
+        );
     }
 }

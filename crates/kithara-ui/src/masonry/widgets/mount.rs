@@ -581,7 +581,7 @@ where
         control.painter(cx.skin),
         data,
         cx.skin,
-        host.ctx.ui.draw_buffers(),
+        &host.ctx.ui.draw_buffers,
     );
     let leaf = if let Some(refresh) = refresh {
         leaf.refreshing(refresh)

@@ -8,6 +8,7 @@ mod owner;
 pub mod picture;
 pub mod skin;
 pub mod theme;
+mod zoom;
 
 pub use address::{Node, Scope, Walk};
 pub use document::{Clock, Ctx, PlacedMount, Snap};
@@ -19,8 +20,8 @@ pub use model::{
 pub use owner::InputOwner;
 pub use picture::{Pictures, Sheet, SheetError};
 pub use skin::{CrossfaderLabels, CustomSkin, Skin};
+pub use zoom::{DEFAULT_ZOOM, Zoom, zoom_in, zoom_out};
 
-pub use crate::atoms::wave::zoom_math::{DEFAULT_ZOOM, Zoom, zoom_in, zoom_out};
 #[cfg(feature = "iced")]
 pub use crate::iced::{fonts, immediate::LayoutPreview, tree};
 #[cfg(feature = "masonry")]

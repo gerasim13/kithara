@@ -166,7 +166,7 @@ mod tests {
             x: 10.0,
             y: 20.0,
         };
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
 
         let first = ghost.layer(Some(Pt { x: 20.0, y: 30.0 }), bounds, &mut text);
         let second = ghost.layer(Some(Pt { x: 40.0, y: 50.0 }), bounds, &mut text);

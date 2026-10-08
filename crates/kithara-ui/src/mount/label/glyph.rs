@@ -211,7 +211,7 @@ mod host {
             let mut list = DrawListBuilder::default();
             painter.paint(
                 &mut list,
-                &mut TextContext::from(skin.text_resources()),
+                &mut TextContext::from(skin.text_resources.as_ref()),
                 &GlyphData {
                     active,
                     active_mark: None,

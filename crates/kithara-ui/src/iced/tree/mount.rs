@@ -178,7 +178,7 @@ where
         control.painter(cx.skin),
         data,
         cx.skin,
-        cx.ctx.ui.draw_buffers(),
+        &cx.ctx.ui.draw_buffers,
     )
     .posed(cx.transform);
     let element = if cx.owner == InputOwner::Leaf {

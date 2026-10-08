@@ -50,6 +50,12 @@ pub(crate) enum ShaderFrameError {
     },
 }
 
+impl ShaderSpec {
+    pub(crate) fn source(&self) -> Arc<str> {
+        Arc::clone(&self.module.source)
+    }
+}
+
 impl ShaderFrame {
     pub(crate) fn read(
         spec: &ShaderSpec,
@@ -58,7 +64,7 @@ impl ShaderFrame {
         ui: &CompiledUi,
     ) -> Result<Self, ShaderFrameError> {
         let values = spec
-            .uniforms()
+            .uniforms
             .iter()
             .map(|uniform| {
                 let name = ui.resolve(uniform.name);

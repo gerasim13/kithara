@@ -83,7 +83,7 @@ impl TablePaint {
         let (horizontal, vertical) = state.paint_offsets();
         let size = bounds.size();
         let mut text = state.text.borrow_mut();
-        let text = text.get_or_insert_with(|| self.face.skin().text_resources().into());
+        let text = text.get_or_insert_with(|| self.face.skin().text_resources.as_ref().into());
         let point = cursor.position_in(bounds).map(Into::into);
         let bounds = local_rect(bounds);
         let hovered = hovered_row(
@@ -117,7 +117,7 @@ impl TablePaint {
     /// nothing changed cost nothing to draw.
     #[kithara::measure(label = "iced.table.tessellate")]
     fn tessellate(&self, frame: &mut Frame, list: &DrawList) {
-        replay_ordered(list, frame, self.face.skin().text_resources());
+        replay_ordered(list, frame, self.face.skin().text_resources.as_ref());
     }
 }
 

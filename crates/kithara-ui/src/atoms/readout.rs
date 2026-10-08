@@ -110,7 +110,7 @@ mod tests {
 
     fn drawn(tone: Tone, framed: bool) -> crate::draw::DrawList {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         Readout::new(tone, framed, skin).paint(&mut list, &mut text, &data(), consts::BOUNDS);
         list.finish()

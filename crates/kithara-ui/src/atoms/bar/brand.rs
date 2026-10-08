@@ -68,7 +68,7 @@ mod tests {
     #[kithara::test]
     fn the_wordmark_spells_itself_left_to_right() {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         Brand::new(skin).paint(
             &mut list,

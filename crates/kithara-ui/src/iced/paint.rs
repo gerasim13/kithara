@@ -53,10 +53,11 @@ mod tests {
         atoms::wave::{
             bars::{CoverageSpan, coverage_spans},
             face::tests::hero,
-            zoom_math::{DEFAULT_ZOOM, Zoom, norm_to_x, window_bounds},
+            zoom_math::{norm_to_x, window_bounds},
         },
         builtin,
         draw::{Pt, Rect},
+        render::{DEFAULT_ZOOM, Zoom},
     };
 
     #[kithara::test]

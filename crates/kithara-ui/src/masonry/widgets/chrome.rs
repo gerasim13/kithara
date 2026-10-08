@@ -46,7 +46,7 @@ where
                 label,
                 content.to_owned(),
                 self.skin,
-                self.ctx.ui.draw_buffers(),
+                &self.ctx.ui.draw_buffers,
             ),
             Size::new(Length::Shrink, Length::Fill),
         )
@@ -62,7 +62,7 @@ where
                 ChromeChevron::new(self.skin),
                 collapsed,
                 self.skin,
-                self.ctx.ui.draw_buffers(),
+                &self.ctx.ui.draw_buffers,
             ),
             declared,
         );
@@ -87,7 +87,7 @@ where
                 padding_x: metrics.footer_pad,
                 color: self.skin.rgba(role.color),
                 lit: None,
-                text: Box::new(TextContext::from(self.skin.text_resources())),
+                text: Box::new(TextContext::from(self.skin.text_resources.as_ref())),
             }),
             Size::new(Length::Fill, Length::Fixed(metrics.footer_height)),
             Vec::new(),

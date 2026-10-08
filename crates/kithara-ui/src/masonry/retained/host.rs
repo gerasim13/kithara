@@ -207,7 +207,7 @@ where
             NodeLayout::Leaf(Leaf::Custom {
                 widget,
                 skin: kind.map_or_else(CustomSkin::default, |kind| self.skin.custom(kind).clone()),
-                text: Box::new(TextContext::from(self.skin.text_resources())),
+                text: Box::new(TextContext::from(self.skin.text_resources.as_ref())),
             }),
             declared,
             Vec::new(),
@@ -369,7 +369,7 @@ where
                 color,
                 align: spec.align,
                 lit: lit.map(|(_, lit)| TextFaces { idle, lit }),
-                text: Box::new(TextContext::from(self.skin.text_resources())),
+                text: Box::new(TextContext::from(self.skin.text_resources.as_ref())),
             }),
             declared,
             Vec::new(),

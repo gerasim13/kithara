@@ -155,11 +155,11 @@ impl canvas::Program<Published> for MiniWaveCanvas<'_> {
                 .cache
                 .draw(renderer, Size::new(placed.width, placed.height), |frame| {
                     let mut text = state.text.borrow_mut();
-                    let text = text.get_or_insert_with(|| self.skin.text_resources().into());
+                    let text = text.get_or_insert_with(|| self.skin.text_resources.as_ref().into());
                     let mut list = DrawListBuilder::default();
                     self.painter
                         .paint(&mut list, text, &self.data, bounds, show_overlay);
-                    replay_ordered(&list.finish(), frame, self.skin.text_resources());
+                    replay_ordered(&list.finish(), frame, self.skin.text_resources.as_ref());
                 });
         vec![geometry]
     }

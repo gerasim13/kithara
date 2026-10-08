@@ -194,7 +194,7 @@ mod tests {
     fn popup_commands_are_a_separate_unclipped_frame_list() {
         let skin = builtin::skin();
         let paint = PickerPaint::new(vec!["ZVUK", "LOCAL"], Some(0), skin);
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let bounds = Rect {
             h: skin.tree.scope_item_height,
             w: 72.0,

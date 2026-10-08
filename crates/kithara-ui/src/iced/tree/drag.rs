@@ -277,14 +277,14 @@ impl IcedWidget<Published, Theme, Renderer> for DragRoot<'_> {
         let root = tree.state.downcast_ref::<Root>();
         if root.session.label().is_some() {
             let mut text = root.text.borrow_mut();
-            let text = text.get_or_insert_with(|| self.skin.text_resources().into());
+            let text = text.get_or_insert_with(|| self.skin.text_resources.as_ref().into());
             let layer = root.ghost.layer(
                 cursor.position().map(Into::into),
                 layout.bounds().into(),
                 text,
             );
             renderer.with_layer(layout.bounds(), |renderer| {
-                draw_host_layer(renderer, &layer, self.skin.text_resources());
+                draw_host_layer(renderer, &layer, self.skin.text_resources.as_ref());
             });
         }
     }

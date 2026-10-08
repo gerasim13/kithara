@@ -83,7 +83,7 @@ mod tests {
 
     fn filled(state: VisualState) -> DrawCmd {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         Settings::new(skin).paint(&mut list, &mut text, gear(), consts::BOUNDS, state);
         list.finish()
@@ -112,7 +112,7 @@ mod tests {
     #[kithara::test]
     fn the_mark_is_centred_in_the_box() {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         Settings::new(skin).paint(
             &mut list,

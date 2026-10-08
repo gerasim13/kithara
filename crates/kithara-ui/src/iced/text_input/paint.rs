@@ -26,7 +26,7 @@ pub(super) struct SearchPaint<'a> {
 
 impl<'a> SearchPaint<'a> {
     pub(super) fn new(query: &str, skin: &'a Skin) -> Self {
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         Self {
             input: TextInputPaint::with_context(query.to_owned().into(), skin, &mut text),
             skin,
@@ -69,7 +69,11 @@ impl<'a> SearchPaint<'a> {
             self.skin,
             snapshot,
         );
-        crate::backends::replay_ordered(&list.finish(), &mut frame, self.skin.text_resources());
+        crate::backends::replay_ordered(
+            &list.finish(),
+            &mut frame,
+            self.skin.text_resources.as_ref(),
+        );
         vec![frame.into_geometry()]
     }
 }

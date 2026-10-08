@@ -136,7 +136,7 @@ mod tests {
             y: 5.0,
         };
         let mark = Mark::Glyph(char::from(lucide_icons::Icon::Disc));
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut builder = DrawListBuilder::default();
         NavItem::new(skin).paint(&mut builder, &mut text, &data(mark, true), bounds);
         let list = builder.finish();
@@ -215,7 +215,7 @@ mod tests {
     #[kithara::test]
     fn an_inactive_nav_item_keeps_both_rectangles_clear_and_dims_its_content() {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut builder = DrawListBuilder::default();
         NavItem::new(skin).paint(
             &mut builder,
@@ -268,7 +268,7 @@ mod tests {
         };
         let item = NavItem::new(skin);
         let mark = Mark::Glyph(char::from(lucide_icons::Icon::Disc));
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut draw = |active| {
             let mut builder = DrawListBuilder::default();
             item.paint(&mut builder, &mut text, &data(mark, active), bounds);

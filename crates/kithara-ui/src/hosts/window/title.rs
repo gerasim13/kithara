@@ -43,7 +43,7 @@ impl TitleProgram {
             color: skin.rgba(metrics.titlebar_text.color),
             label: label.to_owned(),
             padding_x: metrics.titlebar_padding_x,
-            resources: skin.text_resources().clone(),
+            resources: skin.text_resources.as_ref().clone(),
             role: metrics.titlebar_text,
         }
     }

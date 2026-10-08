@@ -163,7 +163,7 @@ fn headless_renderer() -> Renderer {
 /// and the canvas state is the one thing that survived the last frame.
 /// Reports what that frame cost.
 fn marked(state: &TableState, paint: &TablePaint, drawn: &Drawn) -> Marked {
-    let mut text = TextContext::from(paint.face.skin().text_resources());
+    let mut text = TextContext::from(paint.face.skin().text_resources.as_ref());
     let bounds = Rect {
         h: 120.0,
         w: 180.0,
@@ -316,7 +316,7 @@ fn drawn_word(skin: &Skin, wanted: &str) -> Rgba {
         "library/tracks",
         TableFace::new(rows(), columns(), skin, TableFrame::new(0.0, 0.0, true)),
     );
-    let mut text = TextContext::from(skin.text_resources());
+    let mut text = TextContext::from(skin.text_resources.as_ref());
     let bounds = Rect {
         h: 240.0,
         w: 900.0,
@@ -357,7 +357,7 @@ fn a_primary_cell_follows_a_skin_written_over_the_builtin_one() {
 #[kithara::test]
 fn body_rows_are_scoped_under_a_vertical_clip() {
     let paint = paint();
-    let mut text = TextContext::from(paint.face.skin().text_resources());
+    let mut text = TextContext::from(paint.face.skin().text_resources.as_ref());
     let bounds = Rect {
         h: 120.0,
         w: 180.0,
@@ -388,7 +388,7 @@ fn body_rows_are_scoped_under_a_vertical_clip() {
 fn outer_horizontal_clip_exists_only_while_columns_overflow() {
     for (width, clipped) in [(180.0, true), (900.0, false)] {
         let paint = paint();
-        let mut text = TextContext::from(paint.face.skin().text_resources());
+        let mut text = TextContext::from(paint.face.skin().text_resources.as_ref());
         let list = paint.face.commands(
             &mut text,
             Rect {
@@ -705,7 +705,7 @@ fn horizontal_wheel_passes_the_movable_vertical_state() {
 fn the_body_below_the_last_row_takes_the_idle_row_fill() {
     let paint = paint();
     let skin = paint.face.skin();
-    let mut text = TextContext::from(skin.text_resources());
+    let mut text = TextContext::from(skin.text_resources.as_ref());
     let bounds = Rect {
         h: 400.0,
         w: 900.0,

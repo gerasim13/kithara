@@ -17,7 +17,7 @@ use crate::{
         },
         text_input::text_input_layout,
         tree::Tree,
-        wave::zoom_math::{Zoom, window_bounds, zoom_for_wheel},
+        wave::zoom_math::{window_bounds, zoom_for_wheel},
     },
     draw::{Pt, Rect},
     engine::{Descriptor, ScrollConfig, Target},
@@ -27,7 +27,7 @@ use crate::{
     interact::{CursorShape, Hit, Hover, ScrollAxis, recognizers::WheelStep},
     module::{FaderStyle, TableColumn, WaveStyle},
     mount,
-    render::{ReadValue, Skin, TableRow, TreeRow, document::Ctx, model::derived},
+    render::{ReadValue, Skin, TableRow, TreeRow, Zoom, document::Ctx, model::derived},
     shaping::TextContext,
 };
 /// What a control plan is resolved against: the compiled document that names
@@ -517,7 +517,7 @@ fn context_bar_plan(
 ) -> HostedControlPlan {
     let scope_value = scope.and_then(|binding| ctx.read(binding));
     let selected = picker_selected_index(scope_value.as_ref(), scope_items.len());
-    let mut text = TextContext::from(skin.text_resources());
+    let mut text = TextContext::from(skin.text_resources.as_ref());
     let items: Vec<String> = scope_items
         .iter()
         .map(|item| ctx.ui.resolve(*item).to_owned())

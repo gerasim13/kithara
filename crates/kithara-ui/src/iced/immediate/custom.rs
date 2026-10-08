@@ -94,16 +94,18 @@ impl CustomState {
 impl Custom<'_> {
     fn list(&self, state: &CustomState, bounds: Rect) -> DrawList {
         let mut list = DrawListBuilder::default();
-        state.paint.shaped(self.skin.text_resources(), |text| {
-            if let Some(widget) = state.widget.borrow_mut().as_mut() {
-                widget.paint(
-                    &mut list,
-                    &mut TextMeasurer::new(text),
-                    bounds,
-                    self.skin.custom(&state.kind),
-                );
-            }
-        });
+        state
+            .paint
+            .shaped(self.skin.text_resources.as_ref(), |text| {
+                if let Some(widget) = state.widget.borrow_mut().as_mut() {
+                    widget.paint(
+                        &mut list,
+                        &mut TextMeasurer::new(text),
+                        bounds,
+                        self.skin.custom(&state.kind),
+                    );
+                }
+            });
         list.finish()
     }
 
@@ -147,12 +149,12 @@ impl IcedWidget<Published, Theme, Renderer> for Custom<'_> {
             renderer,
             bounds,
             |_| Rectangle::with_size(bounds.size()),
-            self.skin.text_resources(),
+            self.skin.text_resources.as_ref(),
         );
     }
 
     fn layout(&mut self, tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits) -> Node {
-        let resources = self.skin.text_resources();
+        let resources = self.skin.text_resources.as_ref();
         let state = self.state_for(tree);
         let asked = SizeLimits::new(
             Size2::new(limits.min().width, limits.min().height),
