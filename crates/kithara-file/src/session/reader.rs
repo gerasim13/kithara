@@ -58,17 +58,14 @@ impl ReaderEventSink for FileReaderEventSink {
 #[cfg(test)]
 mod tests {
     use kithara_events::BusEvent;
-    use kithara_stream::{PlayheadState, SeekState};
+    use kithara_stream::PlayheadState;
     use kithara_test_utils::kithara;
 
     use super::*;
 
     fn sink(bus: EventBus, event_capacity: usize) -> FileReaderEventSink {
-        let coord = Arc::new(FileCoord::new(
-            Arc::new(PlayheadState::new()),
-            Arc::new(SeekState::new()),
-        ));
-        FileReaderEventSink::new(bus, coord, Arc::new(AtomicU64::new(0)), event_capacity)
+        let coord = Arc::new(FileCoord::new(Arc::new(PlayheadState::new())));
+        FileReaderEventSink::new(bus, coord, event_capacity)
     }
 
     fn burst(sink: &mut FileReaderEventSink, chunks: usize) {

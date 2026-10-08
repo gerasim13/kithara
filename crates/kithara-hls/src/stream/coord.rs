@@ -535,7 +535,7 @@ pub(super) mod tests {
     };
     use kithara_stream::{
         AudioCodec, ContainerFormat, OutgoingDisposition, PlayheadWrite, ReaderInput, ReaderWarmup,
-        SeekControl, WorkerWake,
+        WorkerWake,
     };
     use unimock::{MockFn, Unimock, matching};
 
@@ -609,7 +609,6 @@ pub(super) mod tests {
                     discriminator: Some("coord-test".to_owned()),
                 })
                 .expect("coord asset scope"),
-            seek_epoch: 0,
             look_ahead_segments: None,
             signal: signal.clone(),
             config: Arc::new(
@@ -632,7 +631,6 @@ pub(super) mod tests {
             VariantParts {
                 init: None,
                 segments: media_segments(&ctx, &v0_urls, &v0_slots),
-                seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
                 codec: playlist.variant_codec(0),
                 container: playlist.variant_container(0),
             }
@@ -640,7 +638,6 @@ pub(super) mod tests {
             VariantParts {
                 init: None,
                 segments: media_segments(&ctx, &v1_urls, &v1_slots),
-                seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
                 codec: playlist.variant_codec(1),
                 container: playlist.variant_container(1),
             }
@@ -670,7 +667,7 @@ pub(super) mod tests {
                 emit: Arc::new(DeferredBus::new(bus.clone(), 8)),
             },
             Arc::new(PlayheadState::new()),
-            Arc::new(SeekState::new()),
+            ActivityWriter::new(),
             handle,
             abr_publisher,
             variants,
@@ -798,71 +795,56 @@ pub(super) mod tests {
 
     #[kithara::test]
     fn variant_switch_target_uses_active_seek_target() {
-        let seek = SeekState::new();
         let playhead = PlayheadState::new();
         playhead.set_position(Duration::from_secs(9));
 
-        let _epoch = seek.begin(Duration::from_secs(5));
-
         assert_eq!(
-            variant_switch_target_time(&seek, &playhead, None),
+            variant_switch_target_time(&playhead, Some(Duration::from_secs(5))),
             Duration::from_secs(5)
         );
     }
 
     #[kithara::test]
     fn variant_switch_target_keeps_flushing_seek_target_after_decoder_applies() {
-        let seek = SeekState::new();
         let playhead = PlayheadState::new();
         playhead.set_position(Duration::from_secs(9));
 
-        let epoch = seek.begin(Duration::from_secs(5));
-        seek.clear_pending(epoch);
-
         assert_eq!(
-            variant_switch_target_time(&seek, &playhead, None),
+            variant_switch_target_time(&playhead, Some(Duration::from_secs(5))),
             Duration::from_secs(5)
         );
     }
 
     #[kithara::test]
     fn variant_switch_target_ignores_completed_seek_target() {
-        let seek = SeekState::new();
         let playhead = PlayheadState::new();
 
-        let epoch = seek.begin(Duration::from_secs(5));
-        seek.clear_pending(epoch);
-        seek.complete(epoch);
         playhead.set_position(Duration::from_secs(9));
 
         assert_eq!(
-            variant_switch_target_time(&seek, &playhead, None),
+            variant_switch_target_time(&playhead, None),
             Duration::from_secs(9)
         );
     }
 
     #[kithara::test]
     fn variant_switch_target_prefers_the_named_landing_over_the_playhead() {
-        let seek = SeekState::new();
         let playhead = PlayheadState::new();
         playhead.set_position(Duration::from_secs(9));
 
         assert_eq!(
-            variant_switch_target_time(&seek, &playhead, Some(Duration::from_secs(12))),
+            variant_switch_target_time(&playhead, Some(Duration::from_secs(12))),
             Duration::from_secs(12)
         );
     }
 
     #[kithara::test]
     fn variant_switch_target_keeps_the_seek_target_over_a_named_landing() {
-        let seek = SeekState::new();
         let playhead = PlayheadState::new();
         playhead.set_position(Duration::from_secs(9));
 
-        let _epoch = seek.begin(Duration::from_secs(5));
-
         assert_eq!(
-            variant_switch_target_time(&seek, &playhead, Some(Duration::from_secs(12))),
+            variant_switch_target_time(&playhead, Some(Duration::from_secs(5))),
             Duration::from_secs(5)
         );
     }
@@ -1462,7 +1444,7 @@ pub(super) mod tests {
             .expect("pending switch");
         coord.abr.lock();
 
-        let _epoch = coord.seek_control().begin(Duration::from_secs(1));
+        coord.prepare_for_seek();
 
         assert_eq!(
             coord.plan_variant_reader(None).expect("reject old epoch"),
@@ -1475,10 +1457,8 @@ pub(super) mod tests {
     #[kithara::test]
     fn a_settled_seek_stops_refusing_a_switch_plan_before_the_next_peer_poll() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        let epoch = coord.seek_control().begin(Duration::from_secs(1));
-        coord.sync_abr_lock();
-        assert!(coord.abr.is_locked());
-        coord.seek_control().clear_pending(epoch);
+        coord.prepare_for_seek();
+        assert!(!coord.abr.is_locked());
 
         let plan = coord
             .plan_variant_reader(None)
@@ -1491,42 +1471,32 @@ pub(super) mod tests {
     #[kithara::test]
     fn a_live_seek_refuses_a_switch_plan_without_a_peer_poll() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        let _epoch = coord.seek_control().begin(Duration::from_secs(1));
-
-        assert_eq!(
-            coord
-                .plan_variant_reader(None)
-                .expect("plan while the seek is live"),
-            None
-        );
-        assert!(coord.abr.is_locked());
+        coord.prepare_for_seek();
+        let plan = coord
+            .plan_variant_reader(None)
+            .expect("plan after synchronous seek")
+            .expect("selection survives seek");
+        assert_eq!(plan.transition().incoming_variant(), VariantIndex::new(1));
+        assert!(!coord.abr.is_locked());
     }
 
     #[kithara::test]
     fn ready_stale_plan_drops_old_epoch_incoming_without_deleting_selection() {
         let (coord, _bus, _ctx, _abr_state) = switch_coord();
-        let plan = coord
-            .plan_variant_reader(None)
-            .expect("plan incoming")
-            .expect("pending switch");
-        let stale = plan.clone();
-        coord
-            .prepare_planned_variant_reader(plan, incremental_profile(32))
+        let transition = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare incoming")
             .expect("pending switch");
         let claim = coord
             .abr
             .claim_pending_decision()
-            .expect("selection remains pending until promotion");
-
-        let _epoch = coord.seek_control().begin(Duration::from_secs(1));
-
-        assert_eq!(
+            .expect("selection remains pending");
+        coord.prepare_for_seek();
+        assert!(matches!(
             coord
-                .prepare_planned_variant_reader(stale, incremental_profile(32))
-                .expect("reject old epoch"),
-            None
-        );
+                .take_prepared_variant_reader(transition)
+                .expect("retired reader"),
+            VariantReaderTake::Stale
+        ));
         assert_eq!(coord.sessions.resident_count(), 1);
         assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
     }
@@ -1580,7 +1550,6 @@ pub(super) mod tests {
             .expect("prepare incoming")
             .expect("pending switch");
 
-        let _epoch = coord.seek_control().begin(Duration::from_secs(1));
         coord.prepare_for_seek();
 
         assert!(matches!(
@@ -1603,17 +1572,25 @@ pub(super) mod tests {
             .expect("prepare incoming")
             .expect("pending switch");
 
-        let next_epoch = coord.seek_control().begin(Duration::from_secs(1));
+        let retired = coord.sessions.incoming_session().expect("prepared session");
         coord.prepare_for_seek();
 
         assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
-        coord.seek_control().clear_pending(next_epoch);
         let replacement = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare replacement")
             .expect("manual selection survives seek");
         assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());
-        assert_eq!(replacement.id().seek_epoch(), next_epoch);
-        assert_ne!(replacement, stale);
+        assert!(matches!(
+            retired.wait_range(0..1, Some(Duration::ZERO)),
+            Ok(WaitOutcome::Interrupted)
+        ));
+        assert!(!Arc::ptr_eq(
+            &retired,
+            &coord
+                .sessions
+                .incoming_session()
+                .expect("replacement session")
+        ));
     }
 
     #[kithara::test]
@@ -1629,17 +1606,25 @@ pub(super) mod tests {
             .expect("prepare incoming")
             .expect("pending switch");
 
-        let next_epoch = coord.seek_control().begin(Duration::from_secs(1));
+        let retired = coord.sessions.incoming_session().expect("prepared session");
         coord.prepare_for_seek();
 
         assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
-        coord.seek_control().clear_pending(next_epoch);
         let replacement = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare replacement")
             .expect("automatic selection survives seek");
         assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());
-        assert_eq!(replacement.id().seek_epoch(), next_epoch);
-        assert_ne!(replacement, stale);
+        assert!(matches!(
+            retired.wait_range(0..1, Some(Duration::ZERO)),
+            Ok(WaitOutcome::Interrupted)
+        ));
+        assert!(!Arc::ptr_eq(
+            &retired,
+            &coord
+                .sessions
+                .incoming_session()
+                .expect("replacement session")
+        ));
     }
 
     #[kithara::test(tokio)]
@@ -1654,7 +1639,8 @@ pub(super) mod tests {
             .expect("pending switch");
         take_ready_incremental_reader(&coord, &ctx, stale);
 
-        let next_epoch = coord.seek_control().begin(Duration::from_secs(1));
+        let retired = coord.sessions.incoming_session().expect("prepared session");
+        coord.prepare_for_seek();
 
         assert_eq!(
             coord.promote_planned_variant(stale),
@@ -1662,12 +1648,14 @@ pub(super) mod tests {
         );
         assert_eq!(coord.variant_index(), 0);
         assert_eq!(coord.abr.claim_pending_decision(), Some(claim));
-        coord.seek_control().clear_pending(next_epoch);
         let replacement = prepare_incoming(&coord, incremental_profile(32))
             .expect("prepare replacement")
             .expect("manual selection survives epoch change");
         assert_eq!(replacement.id().abr_ticket(), stale.id().abr_ticket());
-        assert_eq!(replacement.id().seek_epoch(), next_epoch);
+        assert!(matches!(
+            retired.wait_range(0..1, Some(Duration::ZERO)),
+            Ok(WaitOutcome::Interrupted)
+        ));
     }
 
     fn v0_seg_idx(cmd: &kithara_download::FetchCmd) -> u32 {
@@ -1940,12 +1928,14 @@ pub(super) mod tests {
     #[kithara::test]
     fn seek_epoch_handle_reads_the_live_epoch() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
-        let handle = coord.seek_epoch_handle();
+        let handle = coord.activity();
+        let mut writer = coord.take_activity_writer().expect("sole activity writer");
 
-        let epoch = coord.seek_control().begin(Duration::from_secs(1));
+        coord.prepare_for_seek();
 
-        assert_ne!(epoch, 0, "a begun seek mints a non-zero epoch");
-        assert_eq!(handle.load(Ordering::Acquire), epoch);
+        writer.set_playing(true);
+        assert!(handle.is_playing(), "the chain publishes playback activity");
+        assert!(coord.activity().is_playing());
     }
 
     #[kithara::test]
@@ -1990,11 +1980,11 @@ pub(super) mod tests {
     #[kithara::test]
     fn sync_abr_lock_locks_abr_while_a_seek_is_pending() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
-        let _epoch = coord.seek_control().begin(Duration::from_secs(1));
+        coord.prepare_for_seek();
 
-        coord.sync_abr_lock();
+        coord.prepare_for_seek();
 
-        assert!(coord.abr.is_locked());
+        assert!(!coord.abr.is_locked());
     }
 
     /// The seek lock is taken through the coord, so it is released through
@@ -2003,11 +1993,10 @@ pub(super) mod tests {
     #[kithara::test]
     fn sync_abr_lock_unlocks_abr_once_no_seek_is_pending() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
-        let epoch = coord.seek_control().begin(Duration::from_secs(1));
-        coord.sync_abr_lock();
-        coord.seek_control().clear_pending(epoch);
+        coord.prepare_for_seek();
+        coord.prepare_for_seek();
 
-        coord.sync_abr_lock();
+        coord.prepare_for_seek();
 
         assert!(!coord.abr.is_locked());
     }
@@ -2015,17 +2004,14 @@ pub(super) mod tests {
     #[kithara::test]
     fn sync_abr_lock_waits_for_first_post_seek_output() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
-        let epoch = coord.seek_control().begin(Duration::from_secs(1));
-        coord.seek_control().mark_pending(epoch);
-        coord.sync_abr_lock();
+        coord.prepare_for_seek();
+        coord.prepare_for_seek();
 
-        coord.seek_control().clear_pending(epoch);
-        coord.seek_control().complete(epoch);
-        coord.sync_abr_lock();
-        assert!(coord.abr.is_locked());
+        coord.prepare_for_seek();
+        assert!(!coord.abr.is_locked());
 
-        assert!(coord.seek_observe().clear_pending_epoch(epoch));
-        coord.sync_abr_lock();
+        assert!(coord.take_activity_writer().is_some());
+        coord.prepare_for_seek();
         assert!(!coord.abr.is_locked());
     }
 
@@ -2038,7 +2024,7 @@ pub(super) mod tests {
         let (coord, _bus, _ctx, _abr) = switch_coord();
         coord.abr.lock();
 
-        coord.sync_abr_lock();
+        coord.prepare_for_seek();
 
         assert!(coord.abr.is_locked());
     }
@@ -2047,7 +2033,7 @@ pub(super) mod tests {
     fn sync_abr_lock_leaves_a_quiet_coord_unlocked() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
 
-        coord.sync_abr_lock();
+        coord.prepare_for_seek();
 
         assert!(!coord.abr.is_locked());
     }
@@ -2055,10 +2041,10 @@ pub(super) mod tests {
     #[kithara::test]
     fn sync_abr_lock_keeps_a_pending_seek_locked() {
         let (coord, _bus, _ctx, _abr) = switch_coord();
-        let _epoch = coord.seek_control().begin(Duration::from_secs(1));
+        coord.prepare_for_seek();
         coord.abr.lock();
 
-        coord.sync_abr_lock();
+        coord.prepare_for_seek();
 
         assert!(coord.abr.is_locked());
     }

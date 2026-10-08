@@ -317,37 +317,42 @@ const fn merge_user_and_stream_media_info(
         (None, stream) => stream,
     }
 }
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_events::DeferredBus;
-    use kithara_signal::AudioChunk;
-    use kithara_stream::PlayheadState;
+    use kithara_assets::{AssetStore, StorageBackend};
+    use kithara_file::{File, FileConfig, FileSrc};
+    use kithara_resampler::NoResamplerBackend;
+    use kithara_stream::mock::NoopWorkerWake;
+    use kithara_test_fixtures::assets;
     use kithara_test_utils::kithara;
-    use unimock::Unimock;
 
     use super::*;
-    use crate::{ConsumerWakeMode, traits::AudioSource};
+    use crate::test_pools::{TestPools, pools};
 
-    #[kithara::test]
-    fn prepares_source_registration_without_worker_activity() {
-        let emit = Arc::new(DeferredBus::new(EventBus::new(8), 8));
-        let epoch = Arc::new(AtomicU64::new(0));
-        let (port, ring) =
-            prepare_pcm_ring(1, &emit, &epoch, false, ConsumerWakeMode::RealtimeDeferred);
-        let preload_gate = Arc::new(super::super::PreloadGate::default());
-        let source: Box<dyn AudioSource<Chunk = AudioChunk>> = Box::new(Unimock::new(()));
-        let lane = PreparedAudioLane {
-            source,
-            port,
-            emit,
-            preload_gate: Arc::clone(&preload_gate),
-            preload_chunks: 1,
-            playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadWrite>,
-        };
-
-        let registration =
-            prepare_stream_source_registration(lane, ring, Arc::clone(&preload_gate));
-
-        assert!(Arc::ptr_eq(&registration.preload_gate, &preload_gate));
+    #[kithara::test(native, tokio)]
+    async fn prepares_source_registration_without_worker_activity() {
+        let pools = pools();
+        let path = assets::audio_wav_frames_44100()
+            .path()
+            .expect("native WAV fixture");
+        let stream = FileConfig::for_src(FileSrc::Local(path.to_owned()))
+            .store(
+                AssetStore::builder(pools.clone())
+                    .backend(StorageBackend::Memory)
+                    .build(),
+            )
+            .pools(pools.clone())
+            .build();
+        let config = AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(stream).build();
+        let mut audio = Audio::prepare(config, Arc::new(NoopWorkerWake), pools)
+            .await
+            .expect("prepare decoded source without a decoder worker");
+        let activity = audio.activity();
+        let mut writer = audio
+            .take_activity_writer()
+            .expect("source hands off its sole writer");
+        writer.set_playing(true);
+        assert!(activity.is_playing());
+        assert!(audio.take_activity_writer().is_none());
     }
 }

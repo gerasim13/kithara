@@ -562,20 +562,16 @@ where
 }
 #[cfg(test)]
 mod tests {
-    use kithara_stream::SeekState;
+    use kithara_stream::ActivityWriter;
 
     use super::*;
 
     #[kithara::test]
     fn abr_cancel_observes_the_hls_track_scope() {
         let track_cancel = CancelToken::never();
-        let seek = Arc::new(SeekState::new());
-        let peer: HlsPeer<crate::test_pools::TestPools> = HlsPeer::new(
-            Arc::clone(&seek) as Arc<dyn SeekObserve>,
-            seek as Arc<dyn Activity>,
-            AbrMode::default(),
-            track_cancel.clone(),
-        );
+        let writer = ActivityWriter::new();
+        let peer: HlsPeer<crate::test_pools::TestPools> =
+            HlsPeer::new(writer.reader(), AbrMode::default(), track_cancel.clone());
         let observed = Abr::cancel(&peer);
 
         assert!(!observed.is_cancelled());

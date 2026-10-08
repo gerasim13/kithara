@@ -37,6 +37,9 @@ enum OwnerPhase {
     Failed(Option<DecodeError>),
 }
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) struct StreamAudioSource<T: StreamType> {
     decode: ActiveDecode,
     factory: DecoderFactory,
@@ -112,6 +115,16 @@ impl<T: StreamType> StreamAudioSource<T> {
         let _ = control.abort_variant(transition);
     }
 
+    fn abandon_incoming(&mut self) {
+        if let Some(transition) = self.decode.incoming_transition()
+            && let Some(control) = self.variant_control.clone()
+        {
+            self.abort_local_incoming(control.as_ref(), transition);
+        } else {
+            self.discard_local_incoming();
+        }
+    }
+
     fn start_incoming_build(
         &mut self,
         control: &dyn VariantControl,
@@ -179,7 +192,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         recreate: RecreateState,
         landing: Option<Duration>,
     ) -> Result<(), DecodeError> {
-        self.discard_local_incoming();
+        self.abandon_incoming();
         self.shared_stream
             .probe_seek(SeekFrom::Start(recreate.offset))
             .map_err(|source| DecodeError::Io { source })?;
@@ -545,7 +558,11 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
         if self.host_rate == Some(rate) {
             return;
         }
+        let initial_binding = self.host_rate.is_none();
         self.host_rate = Some(rate);
+        if initial_binding && self.decode.output_spec().sample_rate == rate {
+            return;
+        }
         let landing = self
             .resume
             .position()
@@ -647,7 +664,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
 
 impl<T: StreamType> Drop for StreamAudioSource<T> {
     fn drop(&mut self) {
-        self.discard_local_incoming();
+        self.abandon_incoming();
         self.emit.flush();
     }
 }

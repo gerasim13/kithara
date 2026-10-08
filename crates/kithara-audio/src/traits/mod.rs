@@ -11,8 +11,6 @@ pub use outcome::{ChunkOutcome, PendingReason, ReadOutcome, SeekOutcome};
 pub use reader::{AudioControl, AudioRead, AudioReader, AudioSession};
 #[cfg(any(test, feature = "mock"))]
 pub use reader::{AudioControlMock, AudioReadMock, AudioSessionMock};
-#[cfg(test)]
-pub(crate) use source::AudioSourceExt;
 #[cfg(any(test, feature = "mock"))]
 pub use source::AudioSourceMock;
 pub use source::{AudioSource, SourceDiscontinuity};

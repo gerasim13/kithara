@@ -191,17 +191,6 @@ impl super::core::ActiveDecode {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn incoming_is_building(&self, transition: VariantTransition) -> bool {
-        matches!(
-            self.incoming,
-            Some(IncomingDecode::Building {
-                transition: current,
-                ..
-            }) if current == transition
-        )
-    }
-
     pub(crate) fn incoming_is_preparing(&self, transition: VariantTransition) -> bool {
         matches!(
             self.incoming,

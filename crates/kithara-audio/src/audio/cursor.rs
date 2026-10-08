@@ -238,18 +238,16 @@ fn interpolated_position(meta: AudioChunkInfo, consumed_frames: u64) -> Duration
 }
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU32, sync::atomic::AtomicU64};
+    use std::num::NonZeroU32;
 
-    use kithara_platform::{sync::Arc, time::Duration};
+    use kithara_platform::time::Duration;
     use kithara_signal::{AudioChunkInfo, AudioSpec};
-    use kithara_stream::PlayheadState;
+    use kithara_stream::{PlayheadRead, PlayheadState};
     use kithara_test_fixtures::unit_fixtures::cursor_half;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
-        ConsumerWakeMode, SourceEnd,
-        audio::{Fetch, ThreadWake, connect, ring::RingParts},
         consts,
         test_pools::{Pools, pools, sample_buffer},
     };
@@ -267,262 +265,76 @@ mod tests {
             duration.saturating_sub(Duration::from_millis(2)),
             duration.saturating_add(Duration::from_millis(2)),
         );
-        let (mut data_tx, data_rx) = connect::<Fetch<AudioChunk>>(4, None);
-        let (trash_tx, _trash_rx) = connect::<AudioChunk>(8, None);
-        let mut ring = RingConsumer::new(RingParts {
-            trash_tx,
-            audio_rx: data_rx,
-            reader_wake: Arc::new(ThreadWake::default()),
-            epoch: Arc::new(AtomicU64::new(0)),
-            block_on_underrun: false,
-            consumer_wake_mode: ConsumerWakeMode::RealtimeDeferred,
-        });
-        ring.preloaded = true;
-        data_tx
-            .try_push(Fetch::data(chunk, 0))
-            .expect("chunk reaches test ring");
-
         let playhead = PlayheadState::new();
         playhead.set_duration(Some(duration));
         let mut cursor = ChunkCursor::new(spec);
-        let mut events = AudioEvents::test();
         let mut buf = vec![0.0; 200];
         let read = cursor
-            .read(
-                &mut ring,
-                &mut events,
+            .copy_into(
+                &chunk,
+                None,
+                &mut ReadBuffer::Interleaved(&mut buf),
+                0,
                 &playhead,
-                RecvCtx {
-                    cancel: None,
-                    worker: None,
-                    abr: None,
-                },
-                &mut buf,
             )
             .expect("partial read succeeds");
-        let ReadOutcome::Frames {
-            count,
-            position,
-            source_span,
-        } = read.outcome
-        else {
-            panic!("expected frames from partial resampled chunk");
-        };
-        assert_eq!(count.get(), 200);
+        let count = read.count;
+        let position = playhead.position();
+        let source_span = read.source_span;
+        assert_eq!(count, 200);
         assert_eq!(position, duration);
         assert_eq!(source_span, None);
         assert_eq!(cursor.current_chunk_consumed_frames, 100);
     }
 
     #[kithara::test]
-    fn reads_preserve_consecutive_rendered_source_spans_and_revisions(cursor_half: Vec<f32>) {
-        let pools = pools();
-        let rate = NonZeroU32::new(48_000).expect("test rate");
-        let spec = AudioSpec::new(1, rate);
-        let (mut data_tx, data_rx) = connect::<Fetch<AudioChunk>>(4, None);
-        let (trash_tx, _trash_rx) = connect::<AudioChunk>(8, None);
-        let mut ring = RingConsumer::new(RingParts {
-            trash_tx,
-            audio_rx: data_rx,
-            reader_wake: Arc::new(ThreadWake::default()),
-            epoch: Arc::new(AtomicU64::new(0)),
-            block_on_underrun: false,
-            consumer_wake_mode: ConsumerWakeMode::RealtimeDeferred,
-        });
-        ring.preloaded = true;
-        let mut first = timed_chunk(
-            &pools,
-            &cursor_half,
-            spec,
-            3,
-            Duration::ZERO,
-            Duration::from_millis(3),
-        );
-        first.meta.frame_offset = 100;
-        first.meta.render_revision = 7;
-        let mut second = timed_chunk(
-            &pools,
-            &cursor_half,
-            spec,
-            2,
-            Duration::from_millis(3),
-            Duration::from_millis(5),
-        );
-        second.meta.frame_offset = 1_000;
-        second.meta.render_revision = 7;
-        let mut changed = timed_chunk(
-            &pools,
-            &cursor_half,
-            spec,
-            2,
-            Duration::from_millis(5),
-            Duration::from_millis(7),
-        );
-        changed.meta.frame_offset = 2_000;
-        changed.meta.render_revision = 8;
-        data_tx
-            .try_push(Fetch::rendered(first, 0, SourceEnd::new(106, rate)))
-            .expect("first rendered chunk reaches ring");
-        data_tx
-            .try_push(Fetch::rendered(second, 0, SourceEnd::new(110, rate)))
-            .expect("second rendered chunk reaches ring");
-        data_tx
-            .try_push(Fetch::rendered(changed, 0, SourceEnd::new(114, rate)))
-            .expect("changed-revision rendered chunk reaches ring");
-
-        let playhead = PlayheadState::new();
-        let mut cursor = ChunkCursor::new(spec);
-        let mut events = AudioEvents::test();
-        let mut output = [0.0; 8];
-        let first_read = cursor
-            .read(
-                &mut ring,
-                &mut events,
-                &playhead,
-                RecvCtx {
-                    cancel: None,
-                    worker: None,
-                    abr: None,
-                },
-                &mut output,
-            )
-            .expect("first read succeeds");
-        assert_eq!(
-            first_read.first_output_meta.map(|meta| meta.timestamp),
-            Some(Duration::ZERO)
-        );
-        let ReadOutcome::Frames {
-            count, source_span, ..
-        } = first_read.outcome
-        else {
-            panic!("expected first rendered frames");
-        };
-        assert_eq!(count.get(), 5);
-        assert_eq!(
-            source_span,
-            SourceSpan::new(100, 110, rate, 5).map(|span| span.with_render_revision(7))
-        );
-
-        let second_read = cursor
-            .read(
-                &mut ring,
-                &mut events,
-                &playhead,
-                RecvCtx {
-                    cancel: None,
-                    worker: None,
-                    abr: None,
-                },
-                &mut output[..1],
-            )
-            .expect("partial changed-revision read succeeds");
-        let ReadOutcome::Frames { source_span, .. } = second_read.outcome else {
-            panic!("expected partial changed-revision frames");
-        };
-        assert_eq!(
-            source_span,
-            SourceSpan::new(110, 112, rate, 1).map(|span| span.with_render_revision(8))
-        );
-
-        let final_read = cursor
-            .read(
-                &mut ring,
-                &mut events,
-                &playhead,
-                RecvCtx {
-                    cancel: None,
-                    worker: None,
-                    abr: None,
-                },
-                &mut output,
-            )
-            .expect("final changed-revision read succeeds");
-        let ReadOutcome::Frames { source_span, .. } = final_read.outcome else {
-            panic!("expected final changed-revision frames");
-        };
-        assert_eq!(
-            source_span,
-            SourceSpan::new(112, 114, rate, 1).map(|span| span.with_render_revision(8))
-        );
-    }
-
-    #[kithara::test]
     fn read_buffer_shorter_than_frame_preserves_current_chunk(cursor_half: Vec<f32>) {
         let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
-        let (mut data_tx, data_rx) = connect::<Fetch<AudioChunk>>(1, None);
-        let (trash_tx, mut trash_rx) = connect::<AudioChunk>(3, None);
-        let mut ring = RingConsumer::new(RingParts {
-            trash_tx,
-            audio_rx: data_rx,
-            reader_wake: Arc::new(ThreadWake::default()),
-            epoch: Arc::new(AtomicU64::new(0)),
-            block_on_underrun: false,
-            consumer_wake_mode: ConsumerWakeMode::RealtimeDeferred,
-        });
-        ring.preloaded = true;
-        data_tx
-            .try_push(Fetch::data(
-                timed_chunk(
-                    &pools,
-                    &cursor_half,
-                    spec,
-                    1,
-                    Duration::ZERO,
-                    Duration::from_millis(1),
-                ),
-                0,
-            ))
-            .expect("chunk reaches test ring");
+        let chunk = timed_chunk(
+            &pools,
+            &cursor_half,
+            spec,
+            1,
+            Duration::ZERO,
+            Duration::from_millis(1),
+        );
         let mut cursor = ChunkCursor::new(spec);
-        let mut events = AudioEvents::test();
         let mut output = [0.0];
-
         let read = cursor
-            .read(
-                &mut ring,
-                &mut events,
+            .copy_into(
+                &chunk,
+                None,
+                &mut ReadBuffer::Interleaved(&mut output),
+                0,
                 &PlayheadState::new(),
-                RecvCtx {
-                    cancel: None,
-                    worker: None,
-                    abr: None,
-                },
-                &mut output,
             )
             .expect("short read remains pending");
-
-        assert!(matches!(read.outcome, ReadOutcome::Pending { .. }));
-        assert!(ring.current_chunk.is_some());
-        assert!(trash_rx.try_pop().is_none());
+        assert_eq!(read.count, 0);
+        assert!(!read.finished);
+        assert_eq!(cursor.current_chunk_consumed_frames, 0);
+        assert_eq!(&*chunk.samples, &cursor_half[..2]);
     }
 
     #[kithara::test]
     fn mono_planar_read_consumes_one_source_frame_per_output_frame() {
         let pools = pools();
-        let (mut cursor, mut ring, mut events, playhead) = mono_ramp_cursor(&pools);
+        let (mut cursor, chunk, playhead) = mono_ramp_cursor(&pools);
         let mut left = vec![0.0; consts::MONO_OUTPUT_FRAMES];
         let mut right = vec![0.0; consts::MONO_OUTPUT_FRAMES];
         let mut planar: [&mut [f32]; 2] = [&mut left, &mut right];
 
         let read = cursor
-            .read_planar(
-                &mut ring,
-                &mut events,
+            .copy_into(
+                &chunk,
+                None,
+                &mut ReadBuffer::Planar(&mut planar),
+                0,
                 &playhead,
-                RecvCtx {
-                    cancel: None,
-                    worker: None,
-                    abr: None,
-                },
-                &mut planar,
             )
             .expect("mono planar read succeeds");
 
-        let ReadOutcome::Frames { count, .. } = read.outcome else {
-            panic!("expected frames from mono chunk");
-        };
-        assert_eq!(count.get(), consts::MONO_OUTPUT_FRAMES);
+        assert_eq!(read.count, consts::MONO_OUTPUT_FRAMES);
         assert_eq!(
             cursor.current_chunk_consumed_frames,
             consts::MONO_OUTPUT_FRAMES as u64,
@@ -533,22 +345,18 @@ mod tests {
     #[kithara::test]
     fn mono_planar_read_carries_each_sample_to_both_channels() {
         let pools = pools();
-        let (mut cursor, mut ring, mut events, playhead) = mono_ramp_cursor(&pools);
+        let (mut cursor, chunk, playhead) = mono_ramp_cursor(&pools);
         let mut left = vec![0.0; consts::MONO_OUTPUT_FRAMES];
         let mut right = vec![0.0; consts::MONO_OUTPUT_FRAMES];
         let mut planar: [&mut [f32]; 2] = [&mut left, &mut right];
 
         cursor
-            .read_planar(
-                &mut ring,
-                &mut events,
+            .copy_into(
+                &chunk,
+                None,
+                &mut ReadBuffer::Planar(&mut planar),
+                0,
                 &playhead,
-                RecvCtx {
-                    cancel: None,
-                    worker: None,
-                    abr: None,
-                },
-                &mut planar,
             )
             .expect("mono planar read succeeds");
 
@@ -566,7 +374,7 @@ mod tests {
 
     /// A cursor over one mono chunk whose samples ramp `0.0, 1.0, ...` so a
     /// misread of the interleave shows up as a gap in the recovered order.
-    fn mono_ramp_cursor(pools: &Pools) -> (ChunkCursor, RingConsumer, AudioEvents, PlayheadState) {
+    fn mono_ramp_cursor(pools: &Pools) -> (ChunkCursor, AudioChunk, PlayheadState) {
         let spec = AudioSpec::new(1, NonZeroU32::new(48_000).expect("test rate"));
         let frames =
             u16::try_from(consts::MONO_OUTPUT_FRAMES * 2).expect("test frame count fits u16");
@@ -581,26 +389,7 @@ mod tests {
             },
             sample_buffer(pools, &samples),
         );
-        let (mut data_tx, data_rx) = connect::<Fetch<AudioChunk>>(4, None);
-        let (trash_tx, _trash_rx) = connect::<AudioChunk>(8, None);
-        let mut ring = RingConsumer::new(RingParts {
-            trash_tx,
-            audio_rx: data_rx,
-            reader_wake: Arc::new(ThreadWake::default()),
-            epoch: Arc::new(AtomicU64::new(0)),
-            block_on_underrun: false,
-            consumer_wake_mode: ConsumerWakeMode::RealtimeDeferred,
-        });
-        ring.preloaded = true;
-        data_tx
-            .try_push(Fetch::data(chunk, 0))
-            .expect("chunk reaches test ring");
-        (
-            ChunkCursor::new(spec),
-            ring,
-            AudioEvents::test(),
-            PlayheadState::new(),
-        )
+        (ChunkCursor::new(spec), chunk, PlayheadState::new())
     }
 
     fn timed_chunk(
@@ -624,87 +413,6 @@ mod tests {
             },
             sample_buffer(pools, samples),
         )
-    }
-    #[kithara::test]
-    fn planar_read_crosses_chunks_but_preserves_mapping_boundaries() {
-        let pools = pools();
-        let rate = NonZeroU32::new(48_000).expect("test rate");
-        let spec = AudioSpec::new(2, rate);
-        let (mut data_tx, data_rx) = connect::<Fetch<AudioChunk>>(4, None);
-        let (trash_tx, mut trash_rx) = connect::<AudioChunk>(8, None);
-        let mut ring = RingConsumer::new(RingParts {
-            trash_tx,
-            audio_rx: data_rx,
-            reader_wake: Arc::new(ThreadWake::default()),
-            epoch: Arc::new(AtomicU64::new(0)),
-            block_on_underrun: false,
-            consumer_wake_mode: ConsumerWakeMode::RealtimeDeferred,
-        });
-        ring.preloaded = true;
-        let first_map = std::num::NonZeroU64::new(1);
-        let next_map = std::num::NonZeroU64::new(2);
-        for (offset, pcm, mapping) in [
-            (0, [0.0, 10.0, 1.0, 11.0], first_map),
-            (2, [2.0, 12.0, 3.0, 13.0], first_map),
-            (4, [4.0, 14.0, 5.0, 15.0], next_map),
-        ] {
-            let mut chunk = timed_chunk(
-                &pools,
-                &pcm,
-                spec,
-                2,
-                Duration::ZERO,
-                Duration::from_millis(1),
-            );
-            chunk.meta.frame_offset = offset;
-            chunk.meta.mapping_revision = mapping;
-            data_tx
-                .try_push(Fetch::rendered(chunk, 0, SourceEnd::new(offset + 2, rate)))
-                .expect("rendered chunk reaches ring");
-        }
-        let mut cursor = ChunkCursor::new(spec);
-        let mut events = AudioEvents::test();
-        let playhead = PlayheadState::new();
-        let mut left = [-1.0; 5];
-        let mut right = [-1.0; 5];
-        let read = cursor
-            .read_planar(
-                &mut ring,
-                &mut events,
-                &playhead,
-                RecvCtx {
-                    cancel: None,
-                    worker: None,
-                    abr: None,
-                },
-                &mut [&mut left, &mut right],
-            )
-            .expect("planar read succeeds");
-        let ReadOutcome::Frames {
-            count, source_span, ..
-        } = read.outcome
-        else {
-            panic!("expected planar frames");
-        };
-        assert_eq!(count.get(), 4);
-        assert_eq!(left, [0.0, 1.0, 2.0, 3.0, -1.0]);
-        assert_eq!(right, [10.0, 11.0, 12.0, 13.0, -1.0]);
-        assert_eq!(
-            source_span,
-            SourceSpan::new(0, 4, rate, 4).map(|span| span.with_mapping_revision(first_map))
-        );
-        assert!(trash_rx.try_pop().is_some());
-        assert!(trash_rx.try_pop().is_some());
-        assert!(trash_rx.try_pop().is_none());
-        assert_eq!(
-            ring.current_chunk
-                .as_ref()
-                .expect("next map remains resident")
-                .meta
-                .mapping_revision,
-            next_map
-        );
-        assert_eq!(cursor.current_chunk_consumed_frames, 0);
     }
 
     #[kithara::test]
@@ -745,51 +453,25 @@ mod tests {
         chunk.meta.frame_offset = origin;
         chunk.meta.render_revision = 7;
         chunk.meta.mapping_revision = mapping;
-        let (mut data_tx, data_rx) = connect::<Fetch<AudioChunk>>(4, None);
-        let (trash_tx, _trash_rx) = connect::<AudioChunk>(8, None);
-        let mut ring = RingConsumer::new(RingParts {
-            trash_tx,
-            audio_rx: data_rx,
-            reader_wake: Arc::new(ThreadWake::default()),
-            epoch: Arc::new(AtomicU64::new(0)),
-            block_on_underrun: false,
-            consumer_wake_mode: ConsumerWakeMode::RealtimeDeferred,
-        });
-        ring.preloaded = true;
-        data_tx
-            .try_push(Fetch::rendered(
-                chunk,
-                0,
-                SourceEnd::new(origin + 192, rate),
-            ))
-            .expect("rendered chunk reaches ring");
+        let span = SourceSpan::new(origin, origin + 192, rate, 128)
+            .map(|span| span.with_render_revision(7).with_mapping_revision(mapping));
         let mut cursor = ChunkCursor::new(spec);
-        let mut events = AudioEvents::test();
         let playhead = PlayheadState::new();
         let mut left = [0.0; 127];
         let mut right = [0.0; 127];
+        let mut output = [&mut left[..], &mut right[..]];
         let read = cursor
-            .read_planar(
-                &mut ring,
-                &mut events,
+            .copy_into(
+                &chunk,
+                span,
+                &mut ReadBuffer::Planar(&mut output),
+                0,
                 &playhead,
-                RecvCtx {
-                    cancel: None,
-                    worker: None,
-                    abr: None,
-                },
-                &mut [&mut left, &mut right],
             )
             .expect("partial read");
-        let ReadOutcome::Frames {
-            count,
-            source_span: Some(source),
-            ..
-        } = read.outcome
-        else {
-            panic!("expected mapped PCM");
-        };
-        assert_eq!(count.get(), 127);
+        let count = read.count;
+        let source = read.source_span.expect("expected mapped PCM");
+        assert_eq!(count, 127);
         assert_eq!(source.end(), origin + 190);
         let consumed = source.for_output_range(0..2).expect("consumer subrange");
         assert_eq!(consumed.end(), origin + 3);

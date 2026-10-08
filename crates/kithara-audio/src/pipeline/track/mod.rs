@@ -16,8 +16,3 @@ pub enum WaitingReason {
     WaitingDemand,
     WaitingMetadata,
 }
-
-#[cfg(test)]
-mod fsm;
-#[cfg(test)]
-mod tests;

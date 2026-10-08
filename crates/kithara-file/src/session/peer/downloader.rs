@@ -431,7 +431,7 @@ mod tests {
         };
         use kithara_events::EventBus;
         use kithara_platform::{CancelToken, sync::Arc};
-        use kithara_stream::{PlayheadState, SeekState, WorkerWake};
+        use kithara_stream::{PlayheadState, WorkerWake};
         use url::Url;
 
         use super::super::*;
@@ -464,10 +464,7 @@ mod tests {
         }
 
         pub(super) fn make_coord() -> Arc<FileCoord> {
-            Arc::new(FileCoord::new(
-                Arc::new(PlayheadState::new()),
-                Arc::new(SeekState::new()),
-            ))
+            Arc::new(FileCoord::new(Arc::new(PlayheadState::new())))
         }
 
         pub(super) fn attach_pending(
@@ -1435,11 +1432,6 @@ mod tests {
                 .expect("a peer fetch carries its own cancel")
                 .clone();
 
-            inner
-                .source
-                .coord
-                .seek_control()
-                .begin(Duration::from_secs(30));
             inner.source.coord.set_position(3072);
 
             assert!(matches!(Peer::poll_next(&peer, &mut cx), Poll::Pending));

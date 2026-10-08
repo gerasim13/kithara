@@ -15,8 +15,6 @@ pub mod mock;
 mod pipeline;
 mod producer;
 #[cfg(test)]
-mod runtime;
-#[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
 mod traits;
 

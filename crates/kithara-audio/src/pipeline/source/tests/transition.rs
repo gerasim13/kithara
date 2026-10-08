@@ -20,13 +20,10 @@ use crate::{
     DecoderChangeCause, DecoderEvent, consts,
     pipeline::{
         decode::{DecoderGeneration, transition::OutgoingFrontier},
-        rebuild::{DecoderBuildComplete, DecoderBuildPurpose, state::BuildId},
-        seek::{ResumeState, SeekContext, SeekRequest, engine::SeekTransition},
-        track::{
-            AtEof, CurrentFsm, Failed, Track, TrackFailure, TrackStep, fsm::apply_seek_transition,
-        },
+        source::OwnerPhase,
+        track::TrackStep,
     },
-    traits::{AudioSource, AudioSourceExt},
+    traits::AudioSource,
 };
 
 fn incoming_plan() -> VariantReaderPlan {
@@ -84,7 +81,7 @@ fn request_incoming_plan_with_disposition(
         .claim_pending_decision(VariantIndex::new(0))
         .expect("exact transition fixture requires a pending ABR claim");
     let transition = VariantTransition::new(
-        VariantTransitionId::new(claim.ticket(), 0),
+        VariantTransitionId::new(claim.ticket()),
         VariantIndex::new(0),
         VariantIndex::new(1),
     )
@@ -111,7 +108,8 @@ fn assert_route_signal(chunk: &AudioChunk, expected_offset: u64) {
 async fn wait_for_incoming_priming(fixture: &mut RouteFixture, transition: VariantTransition) {
     loop {
         yield_now().await;
-        fixture.source.flush_deferred();
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
         if fixture.source.decode.incoming_is_priming(transition) {
             return;
         }
@@ -125,7 +123,8 @@ async fn wait_for_incoming_priming(fixture: &mut RouteFixture, transition: Varia
 async fn wait_for_transition_settled(fixture: &mut RouteFixture) {
     loop {
         yield_now().await;
-        fixture.source.flush_deferred();
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
         if fixture.control.promote_calls() != 0 || fixture.control.aborted_transition().is_some() {
             return;
         }
@@ -140,7 +139,8 @@ async fn wait_for_abandoned_incoming_progress(
 ) {
     loop {
         yield_now().await;
-        fixture.source.flush_deferred();
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
         if fixture.control.promote_calls() != 0
             || fixture.source.decode.incoming_is_priming(transition)
         {
@@ -158,16 +158,18 @@ async fn eof_transition_retires_staged_incoming_and_aborts_variant(route_pcm: Ro
     fixture.control.set_exact_plan(plan);
     fixture.control.set_exact_reader_ready();
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
 
     assert!(fixture.source.decode.incoming_is_priming(transition));
     assert_eq!(fixture.control.aborted_transition(), None);
     assert!(fixture.drops.lock().is_empty());
 
-    fixture.source.update_state(Track::<AtEof>::new(()).erase());
-    assert!(matches!(fixture.source.state, CurrentFsm::AtEof(_)));
-    fixture.source.flush_deferred();
+    fixture.source.phase = OwnerPhase::AtEof;
+    assert!(matches!(fixture.source.phase, OwnerPhase::AtEof));
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
 
     assert!(fixture.source.decode.incoming_transition().is_none());
     assert_eq!(fixture.control.aborted_transition(), Some(transition));
@@ -182,38 +184,22 @@ async fn an_applied_seek_retires_the_incoming_its_epoch_superseded(route_pcm: Ro
     fixture.control.set_exact_plan(plan);
     fixture.control.set_exact_reader_ready();
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
 
     assert!(fixture.source.decode.incoming_is_priming(transition));
 
     let target = Duration::from_secs(1);
-    let epoch = fixture.source.shared_stream.seek_control().begin(target);
-    assert_ne!(
-        epoch,
-        transition.id().seek_epoch(),
-        "the fixture seek must supersede the epoch that minted the transition"
-    );
-    apply_seek_transition(
-        &mut fixture.source,
-        SeekTransition::Applied {
-            epoch,
-            resume: ResumeState {
-                seek: SeekContext { target, epoch },
-                ..Default::default()
-            },
-        },
-    );
-
-    assert!(matches!(
-        fixture.source.state,
-        CurrentFsm::AwaitingResume(_)
-    ));
+    let outcome = fixture.source.seek(target).expect("synchronous seek");
+    assert!(matches!(outcome, crate::SeekOutcome::Landed { landed_at, .. } if landed_at == target));
+    assert!(matches!(fixture.source.phase, OwnerPhase::Decoding));
     assert!(fixture.source.decode.incoming_transition().is_none());
     assert!(!fixture.source.decode.transition_holds_output());
     assert_eq!(fixture.control.aborted_transition(), None);
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
 
     assert_eq!(fixture.drops.lock().as_slice(), &[99]);
 }
@@ -226,29 +212,24 @@ async fn a_preempting_seek_retires_the_incoming_it_leaves_without_a_join(route_p
     fixture.control.set_exact_plan(plan);
     fixture.control.set_exact_reader_ready();
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
 
     assert!(fixture.source.decode.incoming_is_priming(transition));
     assert!(fixture.drops.lock().is_empty());
 
-    fixture
-        .source
-        .shared_stream
-        .seek_control()
-        .begin(Duration::from_secs(1));
-
-    assert!(matches!(
-        fixture.source.step_track(),
-        TrackStep::StateChanged
-    ));
-
-    assert!(matches!(fixture.source.state, CurrentFsm::SeekRequested(_)));
+    let target = Duration::from_secs(1);
+    assert!(
+        matches!(fixture.source.seek(target), Ok(crate::SeekOutcome::Landed { landed_at, .. }) if landed_at == target)
+    );
+    assert!(matches!(fixture.source.phase, OwnerPhase::Decoding));
     assert!(fixture.source.decode.incoming_transition().is_none());
     assert!(!fixture.source.decode.transition_holds_output());
     assert_eq!(fixture.control.aborted_transition(), None);
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
 
     assert_eq!(fixture.drops.lock().as_slice(), &[99]);
 }
@@ -261,16 +242,15 @@ async fn failed_source_removal_retires_staged_incoming_and_aborts_variant(route_
     fixture.control.set_exact_plan(plan);
     fixture.control.set_exact_reader_ready();
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
 
     assert!(fixture.source.decode.incoming_is_priming(transition));
     assert_eq!(fixture.control.aborted_transition(), None);
     assert!(fixture.drops.lock().is_empty());
 
-    fixture
-        .source
-        .update_state(Track::<Failed>::new(TrackFailure::SourceCancelled).erase());
+    fixture.source.phase = OwnerPhase::Failed(None);
     let control = fixture.control.clone();
     let drops = fixture.drops.clone();
     drop(fixture.source);
@@ -284,7 +264,8 @@ async fn exact_incoming_reader_pending_keeps_outgoing_pcm_running(route_pcm: Rou
     let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
     fixture.control.set_exact_plan(incoming_plan());
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
 
     let TrackStep::Produced(fetch) = fixture.source.step_track() else {
         panic!("outgoing must keep producing while the incoming reader is preparing");
@@ -304,7 +285,7 @@ async fn exact_incoming_reader_pending_keeps_outgoing_pcm_running(route_pcm: Rou
             .and_then(|info| info.variant_index),
         Some(0)
     );
-    assert!(matches!(fixture.source.state, CurrentFsm::Decoding(_)));
+    assert!(matches!(fixture.source.phase, OwnerPhase::Decoding));
 }
 
 #[kithara::test(tokio)]
@@ -315,9 +296,10 @@ async fn exact_incoming_build_pending_keeps_outgoing_pcm_running(route_pcm: Rout
     fixture.control.set_exact_plan(plan);
     fixture.control.set_exact_reader_ready();
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
 
-    assert!(fixture.source.decode.incoming_is_building(transition));
+    assert!(fixture.source.decode.incoming_is_priming(transition));
     let TrackStep::Produced(fetch) = fixture.source.step_track() else {
         panic!("outgoing must keep producing while the incoming decoder is building");
     };
@@ -336,7 +318,7 @@ async fn exact_incoming_build_pending_keeps_outgoing_pcm_running(route_pcm: Rout
             .and_then(|info| info.variant_index),
         Some(0)
     );
-    assert!(matches!(fixture.source.state, CurrentFsm::Decoding(_)));
+    assert!(matches!(fixture.source.phase, OwnerPhase::Decoding));
 }
 
 #[kithara::test(tokio)]
@@ -357,11 +339,10 @@ async fn raw_decode_head_is_independent_of_downstream_frame_shape(route_pcm: Rou
         .saturating_mul(usize::from(transformed.meta.spec.channels));
     transformed.samples.truncate(samples);
 
-    let epoch = fixture.source.seek_obs.epoch();
     let raw_head = fixture
         .source
         .resume
-        .decode_head(epoch)
+        .decode_head()
         .expect("raw decode must advance the sole resume cursor");
     let transformed_end = transformed
         .meta
@@ -402,17 +383,17 @@ async fn raw_decode_head_ignores_pcm_held_back_by_gapless_trimming(route_pcm: Ro
             fixture.source.step_track(),
             TrackStep::StateChanged
         ));
-        fixture.source.flush_deferred();
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
     }
     let TrackStep::Produced(fetch) = fixture.source.step_track() else {
         panic!("gapless trimming must eventually release its first raw output chunk");
     };
     let output = produced_data(fetch);
-    let epoch = fixture.source.seek_obs.epoch();
     let raw_head = fixture
         .source
         .resume
-        .decode_head(epoch)
+        .decode_head()
         .expect("released post-gapless PCM must advance the resume cursor");
     let emitted_end = output
         .meta
@@ -430,7 +411,8 @@ async fn incoming_completion_never_replaces_active_before_staged_pcm(route_pcm: 
     fixture.control.set_exact_plan(plan);
     fixture.control.set_exact_reader_ready();
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
 
     assert_eq!(fixture.control.promote_calls(), 0);
@@ -449,7 +431,8 @@ async fn incoming_completion_never_replaces_active_before_staged_pcm(route_pcm: 
             fixture.source.step_track(),
             TrackStep::StateChanged
         ));
-        fixture.source.flush_deferred();
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
     }
     let TrackStep::Produced(fetch) = fixture.source.step_track() else {
         panic!("outgoing must remain authoritative while incoming PCM is staged");
@@ -476,7 +459,8 @@ async fn same_spec_priming_retains_the_full_join_after_the_emitted_frontier(rout
     fixture.control.set_exact_plan(plan);
     fixture.control.set_exact_reader_ready();
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
 
     // Retain the 1,764-frame join after the first 256-frame output packet.
@@ -485,7 +469,8 @@ async fn same_spec_priming_retains_the_full_join_after_the_emitted_frontier(rout
             fixture.source.step_track(),
             TrackStep::StateChanged
         ));
-        fixture.source.flush_deferred();
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
     }
     let TrackStep::Produced(fetch) = fixture.source.step_track() else {
         panic!("outgoing must emit while the same-spec incoming generation is priming");
@@ -527,7 +512,8 @@ async fn exact_primed_generation_promotes_once_at_outgoing_frontier(route_pcm: R
     fixture.control.set_exact_reader_ready();
     fixture.control.set_promotion(VariantPromotion::Promoted);
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
 
     // Retain the 1,764-frame join after the first 256-frame output packet.
@@ -536,7 +522,8 @@ async fn exact_primed_generation_promotes_once_at_outgoing_frontier(route_pcm: R
             fixture.source.step_track(),
             TrackStep::StateChanged
         ));
-        fixture.source.flush_deferred();
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
     }
     let TrackStep::Produced(outgoing) = fixture.source.step_track() else {
         panic!("outgoing must remain authoritative while incoming PCM is first staged");
@@ -544,7 +531,8 @@ async fn exact_primed_generation_promotes_once_at_outgoing_frontier(route_pcm: R
     assert_eq!(produced_data(outgoing).meta.frame_offset, 0);
     assert_eq!(fixture.control.promote_calls(), 0);
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
 
     assert_eq!(fixture.control.promote_calls(), 1);
     assert_eq!(
@@ -567,7 +555,8 @@ async fn exact_primed_generation_promotes_once_at_outgoing_frontier(route_pcm: R
         assert_route_signal(&incoming, expected_offset);
         expected_offset = expected_offset.saturating_add(u64::from(incoming.meta.frames));
         post_cut_frames = post_cut_frames.saturating_add(incoming.frames());
-        fixture.source.flush_deferred();
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
         assert_eq!(fixture.control.promote_calls(), 1);
     }
     assert!(post_cut_frames >= 1_024);
@@ -585,7 +574,8 @@ async fn retained_reader_plan_keeps_promotion_cut_open_before_decoder_build(rout
     let transition = plan.transition();
     fixture.control.set_exact_plan(plan);
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
 
     assert!(fixture.source.decode.incoming_is_preparing(transition));
     assert_eq!(
@@ -605,7 +595,7 @@ async fn retained_reader_plan_keeps_promotion_cut_open_before_decoder_build(rout
     };
     assert_eq!(produced_data(next_outgoing).meta.frame_offset, cut);
     assert_eq!(
-        fixture.source.resume.decode_head(0),
+        fixture.source.resume.decode_head(),
         Some((cut.saturating_mul(2), consts::SAMPLE_RATE))
     );
     assert!(fixture.source.decode.active().staged_span().is_none());
@@ -642,9 +632,11 @@ async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail(route_pc
     fixture.control.set_exact_reader_ready();
     fixture.control.set_promotion(VariantPromotion::Promoted);
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
 
     let staged = fixture
         .source
@@ -657,7 +649,8 @@ async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail(route_pc
     assert_eq!(fixture.control.promote_calls(), 0);
     assert_eq!(fixture.control.aborted_transition(), None);
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
 
     assert_eq!(fixture.source.decode.incoming_staged_span(), Some(staged));
     assert!(fixture.source.decode.incoming_is_priming(transition));
@@ -670,7 +663,8 @@ async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail(route_pc
             fixture.source.step_track(),
             TrackStep::StateChanged
         ));
-        fixture.source.flush_deferred();
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
     }
     let TrackStep::Blocked(_) = fixture.source.step_track() else {
         panic!("outgoing publication must stop at the latched cut while its join tail fills");
@@ -685,11 +679,12 @@ async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail(route_pc
         Some((256, 2_048))
     );
     assert_eq!(
-        fixture.source.resume.decode_head(0),
+        fixture.source.resume.decode_head(),
         Some((cut, consts::SAMPLE_RATE))
     );
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
 
     assert_eq!(fixture.control.promote_calls(), 1);
     assert_eq!(fixture.control.aborted_transition(), None);
@@ -731,13 +726,14 @@ async fn an_incoming_finishing_on_the_frontier_outlives_the_exhaustion_gap(route
     let landing =
         u64::try_from(LANDING_CHUNKS * consts::ROUTE_CHUNK_FRAMES).expect("landing fits u64");
     assert_eq!(
-        fixture.source.resume.decode_head(0),
+        fixture.source.resume.decode_head(),
         Some((landing, consts::SAMPLE_RATE))
     );
 
     fixture.control.set_exact_plan(incoming_plan_at(landing));
     fixture.control.set_promotion(VariantPromotion::Promoted);
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
 
     for _ in LANDING_CHUNKS..TOTAL_CHUNKS {
         let TrackStep::Produced(_) = fixture.source.step_track() else {
@@ -747,7 +743,7 @@ async fn an_incoming_finishing_on_the_frontier_outlives_the_exhaustion_gap(route
     let frontier =
         u64::try_from(TOTAL_CHUNKS * consts::ROUTE_CHUNK_FRAMES).expect("fixture media fits u64");
     assert_eq!(
-        fixture.source.resume.decode_head(0),
+        fixture.source.resume.decode_head(),
         Some((frontier, consts::SAMPLE_RATE))
     );
 
@@ -784,20 +780,24 @@ async fn live_same_spec_promotion_arms_the_crossfade_ramp(route_pcm: RoutePcm) {
     fixture.control.set_exact_reader_ready();
     fixture.control.set_promotion(VariantPromotion::Promoted);
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     for _ in 0..6 {
         assert!(matches!(
             fixture.source.step_track(),
             TrackStep::StateChanged
         ));
-        fixture.source.flush_deferred();
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
     }
     let TrackStep::Blocked(_) = fixture.source.step_track() else {
         panic!("outgoing publication must stop at the latched cut while its join tail fills");
     };
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     assert_eq!(fixture.control.promote_calls(), 1);
 
     assert!(
@@ -832,11 +832,13 @@ async fn abandoned_incoming_hard_cuts_without_outgoing_join_pcm(route_pcm: Route
     fixture.control.set_exact_reader_ready();
     fixture.control.set_promotion(VariantPromotion::Promoted);
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     wait_for_abandoned_incoming_progress(&mut fixture, transition).await;
 
     assert_eq!(fixture.control.landing(), Some(landing));
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
 
     assert_eq!(fixture.control.promote_calls(), 1);
     assert_eq!(fixture.control.aborted_transition(), None);
@@ -854,7 +856,8 @@ async fn abandoned_incoming_hard_cuts_without_outgoing_join_pcm(route_pcm: Route
     };
     let incoming = produced_data(incoming);
     assert_route_signal(&incoming, cut);
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     assert_eq!(fixture.control.promote_calls(), 1);
 }
 
@@ -870,7 +873,8 @@ async fn promotion_preserves_the_normalized_timeline_gap(route_pcm: RoutePcm) {
     fixture.control.set_exact_reader_ready();
     fixture.control.set_promotion(VariantPromotion::Promoted);
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
     // Retain the 1,764-frame join after the first 256-frame output packet.
     for _ in 0..7 {
@@ -878,13 +882,15 @@ async fn promotion_preserves_the_normalized_timeline_gap(route_pcm: RoutePcm) {
             fixture.source.step_track(),
             TrackStep::StateChanged
         ));
-        fixture.source.flush_deferred();
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
     }
     assert!(matches!(
         fixture.source.step_track(),
         TrackStep::Produced(_)
     ));
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
 
     assert_eq!(
         fixture.source.decode.active().timeline_gap(),
@@ -913,7 +919,8 @@ async fn incoming_lands_on_the_outgoing_frontier_not_ahead_of_it(route_pcm: Rout
     let mut landing = None;
     for _ in 0..64 {
         yield_now().await;
-        fixture.source.flush_deferred();
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
         landing = fixture.control.landing();
         if landing.is_some() {
             break;
@@ -946,7 +953,8 @@ async fn locked_promotion_keeps_primed_incoming_and_outgoing_authoritative(route
     fixture.control.set_exact_reader_ready();
     fixture.control.set_promotion(VariantPromotion::Deferred);
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
 
     // Retain the 1,764-frame join after the first 256-frame output packet.
@@ -955,14 +963,16 @@ async fn locked_promotion_keeps_primed_incoming_and_outgoing_authoritative(route
             fixture.source.step_track(),
             TrackStep::StateChanged
         ));
-        fixture.source.flush_deferred();
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
     }
     let TrackStep::Produced(first_outgoing) = fixture.source.step_track() else {
         panic!("outgoing must remain audible while incoming PCM is first staged");
     };
     assert_eq!(produced_data(first_outgoing).meta.frame_offset, 0);
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
 
     assert_eq!(fixture.control.promote_calls(), 1);
     assert!(fixture.source.decode.incoming_is_priming(transition));
@@ -992,7 +1002,8 @@ async fn locked_promotion_keeps_primed_incoming_and_outgoing_authoritative(route
         produced_data(next_outgoing).meta.frame_offset,
         u64::try_from(consts::ROUTE_CHUNK_FRAMES).unwrap_or(u64::MAX)
     );
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     assert_eq!(fixture.control.promote_calls(), 2);
     let incoming_first = fixture
         .source
@@ -1005,7 +1016,8 @@ async fn locked_promotion_keeps_primed_incoming_and_outgoing_authoritative(route
     );
 
     fixture.control.set_promotion(VariantPromotion::Promoted);
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
 
     assert_eq!(fixture.control.promote_calls(), 3);
     assert_eq!(
@@ -1023,7 +1035,8 @@ async fn locked_promotion_keeps_primed_incoming_and_outgoing_authoritative(route
         panic!("the restored incoming generation must produce after publication unlock");
     };
     assert_route_signal(&produced_data(incoming), expected_offset);
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     assert_eq!(fixture.control.promote_calls(), 3);
 }
 
@@ -1036,7 +1049,8 @@ async fn stale_prepared_promotion_returns_incoming_for_shell_retirement(route_pc
     fixture.control.set_exact_reader_ready();
     fixture.control.set_promotion(VariantPromotion::Stale);
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
     // Retain the 1,764-frame join after the first 256-frame output packet.
     for _ in 0..7 {
@@ -1044,13 +1058,15 @@ async fn stale_prepared_promotion_returns_incoming_for_shell_retirement(route_pc
             fixture.source.step_track(),
             TrackStep::StateChanged
         ));
-        fixture.source.flush_deferred();
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
     }
     let TrackStep::Produced(outgoing) = fixture.source.step_track() else {
         panic!("outgoing must name the cut before stale publication");
     };
     assert_eq!(produced_data(outgoing).meta.frame_offset, 0);
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
 
     assert_eq!(fixture.control.promote_calls(), 1);
     assert!(fixture.source.decode.incoming_transition().is_none());
@@ -1085,7 +1101,8 @@ async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks(
     fixture.control.set_exact_plan(plan);
     fixture.control.set_exact_reader_ready();
     fixture.control.set_promotion(VariantPromotion::Deferred);
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
 
     let expected = RAW_CHUNKS
@@ -1105,9 +1122,10 @@ async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks(
             }
             TrackStep::StateChanged | TrackStep::Blocked(_) => {}
             TrackStep::Eof => panic!("EOF must stay held while a transition is in flight"),
-            TrackStep::Failed => panic!("finite gapless fixture must reach EOF cleanly"),
+            TrackStep::Failed(_) => panic!("finite gapless fixture must reach EOF cleanly"),
         }
-        fixture.source.flush_deferred();
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
     }
 
     // Resolve the wedged transition: the next promote attempt retires the
@@ -1124,9 +1142,10 @@ async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks(
             }
             TrackStep::StateChanged | TrackStep::Blocked(_) => {}
             TrackStep::Eof => break,
-            TrackStep::Failed => panic!("finite gapless fixture must reach EOF cleanly"),
+            TrackStep::Failed(_) => panic!("finite gapless fixture must reach EOF cleanly"),
         }
-        fixture.source.flush_deferred();
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
     }
 
     assert_eq!(
@@ -1145,7 +1164,8 @@ async fn newer_ticket_supersedes_only_incoming_generation(route_pcm: RoutePcm) {
     fixture.control.set_exact_plan(first);
     fixture.control.set_exact_reader_ready();
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     wait_for_incoming_priming(&mut fixture, first_transition).await;
     // Retain the 1,764-frame join after the first 256-frame output packet.
     for _ in 0..7 {
@@ -1153,7 +1173,8 @@ async fn newer_ticket_supersedes_only_incoming_generation(route_pcm: RoutePcm) {
             fixture.source.step_track(),
             TrackStep::StateChanged
         ));
-        fixture.source.flush_deferred();
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
     }
     let TrackStep::Produced(outgoing) = fixture.source.step_track() else {
         panic!("outgoing must remain audible while the first incoming generation is staged");
@@ -1162,14 +1183,10 @@ async fn newer_ticket_supersedes_only_incoming_generation(route_pcm: RoutePcm) {
 
     fixture.control.set_exact_plan(second);
     fixture.control.set_exact_reader_ready();
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
 
-    assert!(
-        fixture
-            .source
-            .decode
-            .incoming_is_building(second_transition)
-    );
+    assert!(fixture.source.decode.incoming_is_priming(second_transition));
     assert_eq!(
         fixture
             .source
@@ -1188,8 +1205,6 @@ async fn stale_incoming_completion_retires_generation_in_shell(route_pcm: RouteP
     let (first, second) = successive_incoming_plans();
     let first_transition = first.transition();
     let second_transition = second.transition();
-    let first_build = BuildId::fixture(41);
-
     assert!(
         fixture
             .source
@@ -1201,7 +1216,7 @@ async fn stale_incoming_completion_retires_generation_in_shell(route_pcm: RouteP
         fixture
             .source
             .decode
-            .mark_incoming_building(first_transition, first_build)
+            .incoming_is_preparing(first_transition)
     );
     assert!(
         fixture
@@ -1210,28 +1225,21 @@ async fn stale_incoming_completion_retires_generation_in_shell(route_pcm: RouteP
             .begin_incoming(second_transition, OutgoingFrontier::Awaiting)
             .is_none()
     );
-
-    let pushed = fixture
-        .source
-        .rebuild
-        .completion()
-        .push(DecoderBuildComplete {
-            build: first_build,
-            purpose: DecoderBuildPurpose::Incoming(first_transition),
-            result: Ok(DecoderGeneration::new(
-                Box::new(TestDecoder::new(77, fixture.drops.clone())),
-                Some(media_info(1)),
-                0,
-                0,
-                None,
-                GaplessMode::Disabled,
-            )),
-        });
-    assert!(pushed.is_ok());
+    let rejected = fixture.source.decode.install_incoming(
+        first_transition,
+        DecoderGeneration::new(
+            Box::new(TestDecoder::new(77, fixture.drops.clone())),
+            Some(media_info(1)),
+            0,
+            None,
+            None,
+            GaplessMode::Disabled,
+        ),
+    );
+    assert!(rejected.is_some());
     assert!(fixture.drops.lock().is_empty());
-
-    fixture.source.flush_deferred();
-
+    drop(rejected);
+    fixture.source.finish_deferred();
     assert_eq!(fixture.drops.lock().as_slice(), &[77]);
     assert_eq!(
         fixture
@@ -1261,7 +1269,8 @@ async fn incoming_media_facts_choose_reader_profile(route_pcm: RoutePcm) {
     );
     fixture.control.set_exact_plan(plan);
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
 
     let byte_map = fixture.source.shared_stream.byte_map();
     let expected = DecoderBuilder::reader_profile(&incoming_media, byte_map.as_deref());
@@ -1275,16 +1284,15 @@ async fn exact_promotion_emits_variant_switch_decoder_event(route_pcm: RoutePcm)
     let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
     let bus = EventBus::new(16);
     let mut events = bus.subscribe();
-    fixture.source = fixture
-        .source
-        .with_emit(Arc::new(DeferredBus::new(bus, 16)));
+    fixture.source.emit = Arc::new(DeferredBus::new(bus, 16));
     let plan = incoming_plan();
     let transition = plan.transition();
     fixture.control.set_exact_plan(plan);
     fixture.control.set_exact_reader_ready();
     fixture.control.set_promotion(VariantPromotion::Promoted);
 
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
     wait_for_incoming_priming(&mut fixture, transition).await;
     // Retain the 1,764-frame join after the first 256-frame output packet.
     for _ in 0..7 {
@@ -1292,13 +1300,15 @@ async fn exact_promotion_emits_variant_switch_decoder_event(route_pcm: RoutePcm)
             fixture.source.step_track(),
             TrackStep::StateChanged
         ));
-        fixture.source.flush_deferred();
+        fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
     }
     assert!(matches!(
         fixture.source.step_track(),
         TrackStep::Produced(_)
     ));
-    fixture.source.flush_deferred();
+    fixture.source.prepare_deferred();
+    fixture.source.finish_deferred();
 
     let mut changed = false;
     while let Ok(envelope) = events.try_recv() {
@@ -1316,27 +1326,17 @@ async fn exact_promotion_emits_variant_switch_decoder_event(route_pcm: RoutePcm)
 #[kithara::test(tokio)]
 async fn failed_seek_commits_its_epoch_for_the_terminal_marker(route_pcm: RoutePcm) {
     let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
-    let request = SeekRequest {
-        seek: SeekContext {
-            target: Duration::from_secs(2),
-            epoch: 3,
-        },
-        emit_request: false,
-    };
-
-    apply_seek_transition(
-        &mut fixture.source,
-        SeekTransition::Failed {
-            request,
-            error: DecodeError::Interrupted,
-            context: "test seek failure",
-        },
-    );
-
-    // The consumer's validator already sits at the failed seek's epoch, and a
-    // terminal `Failed` track never applies another seek. The failure marker
-    // is stamped with `decode_epoch`, so the epoch must be committed here or
-    // the marker is discarded as stale and a blocking reader hangs forever.
-    assert_eq!(fixture.source.decode_epoch(), request.seek.epoch);
-    assert!(matches!(fixture.source.step_track(), TrackStep::Failed));
+    drop(fixture.source.decode.replace_active(DecoderGeneration::new(
+        Box::new(
+            TestDecoder::new(8, fixture.drops.clone()).with_seek_error(DecodeError::Interrupted),
+        ),
+        Some(media_info(0)),
+        0,
+        None,
+        None,
+        GaplessMode::Disabled,
+    )));
+    let result = fixture.source.seek(Duration::from_secs(2));
+    assert!(matches!(result, Err(DecodeError::Interrupted)));
+    assert!(matches!(fixture.source.step_track(), TrackStep::Failed(_)));
 }
