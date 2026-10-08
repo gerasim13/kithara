@@ -22,7 +22,6 @@ struct TempoOperation {
     pending: PendingTempo,
     caller: Seq,
     epoch: Option<SessionEpoch>,
-    lanes: bool,
     retry: bool,
 }
 
@@ -107,54 +106,63 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
         lead
     }
 
-    fn retime(&mut self, frame: SessionFrame) -> bool {
-        let mut lanes = false;
+    fn retime(&mut self, frame: SessionFrame) {
         let trajectory = &self.trajectory;
         self.inner.each_deck(&mut |_id, deck, out, _pass| {
             if deck.synced() {
-                lanes = true;
                 deck.retime(trajectory, frame, out);
             }
         });
-        lanes
     }
 
-    fn lane_applied(&mut self, pending: &PendingTempo) -> Option<bool> {
-        let mut applied = false;
-        let mut awaiting = false;
-        self.inner.each_deck(
-            &mut |_id, deck, _out, _pass| match deck.retime_applied(pending.frame) {
-                Some(true) => applied = true,
-                None => awaiting = true,
-                Some(false) => {}
-            },
-        );
-        if applied {
-            Some(true)
-        } else if awaiting {
-            None
-        } else {
-            Some(false)
+    fn admit_tempo(
+        &mut self,
+        now: SessionFrame,
+        delivery: FrameCount,
+        at: When<SessionFrame>,
+    ) -> Result<SessionFrame, PlayError> {
+        let bound = now + self.lead(delivery);
+        let frame = match at {
+            When::Next => bound,
+            When::At(frame) if frame < bound => return Err(PlayError::Late),
+            When::At(frame) => frame,
+            When::Deferred => {
+                return Err(PlayError::Internal(
+                    "a tempo has no deferred executor moment".into(),
+                ));
+            }
+        };
+        if self.inner.host_room() == 0 {
+            return Err(PlayError::Full("host"));
         }
+        let mut lanes_full = false;
+        let mut scopes_full = false;
+        self.inner.each_deck(&mut |_id, deck, out, _pass| {
+            if deck.synced() && deck.lane_room() == 0 {
+                lanes_full = true;
+            }
+            if out.deck_available() < deck.scope_parts() {
+                scopes_full = true;
+            }
+        });
+        if lanes_full {
+            return Err(PlayError::Full("lane"));
+        }
+        if scopes_full {
+            return Err(PlayError::Full("deck"));
+        }
+        Ok(frame)
     }
 
     fn retry_tempo(&mut self, operation: &mut TempoOperation) -> Result<bool, PlayError> {
         let Some((now, delivery)) = self.inner.clock() else {
             return Ok(false);
         };
-        if self.inner.host_room() == 0 {
-            return Ok(false);
-        }
-        let mut full = false;
-        self.inner.each_deck(&mut |_id, deck, _out, _pass| {
-            if deck.synced() && deck.lane_room() == 0 {
-                full = true;
-            }
-        });
-        if full {
-            return Ok(false);
-        }
-        let frame = now + delivery;
+        let frame = match self.admit_tempo(now, delivery, When::Next) {
+            Ok(frame) => frame,
+            Err(PlayError::Full(_)) => return Ok(false),
+            Err(error) => return Err(error),
+        };
         let mut trajectory = self.trajectory.clone();
         if operation.epoch == self.epoch {
             trajectory.withdraw(operation.pending.frame);
@@ -175,13 +183,7 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
         operation.pending.frame = frame;
         operation.epoch = self.epoch;
         operation.retry = false;
-        let correction_at = now + self.lead(delivery);
-        let trajectory = &self.trajectory;
-        self.inner.each_deck(&mut |_id, deck, out, _pass| {
-            if deck.synced() {
-                deck.realign(trajectory, correction_at, out);
-            }
-        });
+        self.retime(frame);
         Ok(true)
     }
 
@@ -217,27 +219,20 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
             };
             let mut operation = self.tempo.remove(index);
             if matches!(&outcome, Err(Rejection::Late | Rejection::Refused(_))) {
-                if operation.lanes {
-                    match self.lane_applied(&operation.pending) {
-                        Some(true) => {
-                            operation.retry = true;
-                            self.tempo.push(operation);
-                            continue;
-                        }
-                        None => {
-                            self.tempo.push(operation);
-                            self.settled.push(HostSettled::Settings {
-                                seq,
-                                change: HostSettingsChange::Tempo(value),
-                                outcome,
-                            });
-                            continue;
-                        }
-                        Some(false) => {}
-                    }
-                }
                 if operation.epoch == self.epoch {
                     self.trajectory.withdraw(operation.pending.frame);
+                }
+                let newer = self.tempo[index..]
+                    .iter()
+                    .any(|pending| pending.pending.at == When::Next);
+                if operation.pending.at == When::Next && !newer {
+                    operation.retry = true;
+                    self.tempo.insert(index, operation);
+                    continue;
+                }
+                if let Some((now, delivery)) = self.inner.clock() {
+                    let frame = now + self.lead(delivery);
+                    self.retime(frame);
                 }
             }
             answers.push(HostSettled::Settings {
@@ -425,32 +420,7 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> HostSettingsExec<()>
             self.trajectory.initial_tempo(value);
             return Ok(sent);
         };
-        let bound = now + self.lead(delivery);
-        let frame = match at {
-            When::Next => bound,
-            When::At(frame) if frame < bound => return Err(PlayError::Late),
-            When::At(frame) => frame,
-            When::Deferred => unreachable!("deferred tempo was refused before admission"),
-        };
-        if self.inner.host_room() == 0 {
-            return Err(PlayError::Full("host"));
-        }
-        let mut lanes_full = false;
-        let mut scopes_full = false;
-        self.inner.each_deck(&mut |_id, deck, out, _pass| {
-            if deck.synced() && deck.lane_room() == 0 {
-                lanes_full = true;
-            }
-            if out.deck_available() < deck.scope_parts() {
-                scopes_full = true;
-            }
-        });
-        if lanes_full {
-            return Err(PlayError::Full("lane"));
-        }
-        if scopes_full {
-            return Err(PlayError::Full("deck"));
-        }
+        let frame = self.admit_tempo(now, delivery, at)?;
         let mut trajectory = self.trajectory.clone();
         trajectory
             .push(frame, value)
@@ -462,7 +432,7 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> HostSettingsExec<()>
                 PlayError::Internal("a timed tempo did not produce an executor receipt".into())
             })?;
         self.trajectory = trajectory;
-        let lanes = self.retime(frame);
+        self.retime(frame);
         self.tempo.push(TempoOperation {
             pending: PendingTempo {
                 seq,
@@ -472,7 +442,6 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> HostSettingsExec<()>
             },
             caller: seq,
             epoch: self.epoch,
-            lanes,
             retry: false,
         });
         Ok(Some(seq))

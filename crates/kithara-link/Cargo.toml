@@ -30,6 +30,9 @@ tracing = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
+kithara-assets = { workspace = true }
+kithara-audio = { workspace = true }
+kithara-play = { workspace = true, features = ["mock", "symphonia", "stretch-identity"] }
 kithara-test-utils = { workspace = true }
 
 [lints]
