@@ -1,10 +1,9 @@
 /// A tempo axis carrying one arc from the master tempo to each portal target.
-#[derive(kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.portal_map.size)]
-#[derive(kithara_derive::NodeControl)]
 pub(crate) struct PortalMap;
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::PortalMap;
     use crate::{

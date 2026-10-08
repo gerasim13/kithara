@@ -1,20 +1,21 @@
-use bon::Builder;
-
-use crate::{ids::InternId, module::Tone};
-
 /// A caption with a value beside it, toned by the document.
-#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.readout.size)]
-#[derive(kithara_derive::NodeControl)]
-pub(crate) struct Readout {
-    pub(crate) label: Option<InternId>,
-    pub(crate) tone: Tone,
-    pub(crate) framed: bool,
-}
+pub(crate) struct Readout;
 
-#[cfg(feature = "render")]
-mod host {
-    use super::Readout;
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    use crate::{ids::InternId, module::Tone};
+
+    #[derive(Builder)]
+    pub(crate) struct Readout {
+        pub(crate) label: Option<InternId>,
+        pub(crate) tone: Tone,
+        pub(crate) framed: bool,
+    }
+
     use crate::{
         atoms::readout::{Readout as Face, ReadoutData},
         hosts::controls::{Draws, Reading},

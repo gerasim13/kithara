@@ -529,7 +529,11 @@ impl TablePlan {
 }
 
 impl TableSource {
-    pub(crate) fn new(table: &mount::Table<'_>, ctx: Ctx<'_, '_>, read: Option<&Binding>) -> Self {
+    pub(crate) fn new(
+        table: &mount::panel::table::host::Table<'_>,
+        ctx: Ctx<'_, '_>,
+        read: Option<&Binding>,
+    ) -> Self {
         Self {
             columns: table.columns.to_vec(),
             width: ctx.endpoint(table.width).map(str::to_owned),

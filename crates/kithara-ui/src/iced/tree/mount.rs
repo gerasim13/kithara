@@ -52,7 +52,7 @@ impl ViewControl for mount::Drag {
     }
 }
 
-impl ViewControl for mount::TitleBar {
+impl ViewControl for mount::window::title_bar::host::TitleBar {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
         Rendered::leading(titlebar(self.label, cx.ctx.ui, cx.skin))
     }
@@ -114,19 +114,19 @@ impl ViewControl for mount::Vis {
     }
 }
 
-impl ViewControl for mount::Shader<'_> {
+impl ViewControl for mount::panel::shader::host::Shader<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
         Rendered::leading(shader::view(self.spec, cx.path, cx.ctx))
     }
 }
 
-impl ViewControl for mount::Custom {
+impl ViewControl for mount::panel::custom::host::Custom {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
         Rendered::leading(Custom::new(cx.ctx.ui.resolve(self.kind), cx.ctx.kinds, cx.skin).into())
     }
 }
 
-impl ViewControl for mount::Table<'_> {
+impl ViewControl for mount::panel::table::host::Table<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
         Rendered::leading(table(cx, self))
     }
@@ -144,13 +144,13 @@ impl ViewControl for mount::Search {
     }
 }
 
-impl ViewControl for mount::Tree<'_> {
+impl ViewControl for mount::panel::tree::host::Tree<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
         Rendered::leading(tree(cx.path, self, cx.value, cx.ctx, cx.skin, cx.owner))
     }
 }
 
-impl ViewControl for mount::ContextBar<'_> {
+impl ViewControl for mount::panel::context_bar::host::ContextBar<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
         let Some(data) = self.data(reading(cx)) else {
             return Rendered::leading(Space::new().into());
@@ -211,5 +211,29 @@ fn horizontal(align: TextAlign) -> Horizontal {
         TextAlign::Start => Horizontal::Left,
         TextAlign::Center => Horizontal::Center,
         TextAlign::End => Horizontal::Right,
+    }
+}
+
+impl ViewControl for mount::Preset {
+    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
+        painted(self, cx)
+    }
+}
+
+impl ViewControl for mount::deck::summary::host::Summary {
+    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
+        painted(self, cx)
+    }
+}
+
+impl ViewControl for mount::panel::lottie::host::Lottie<'_> {
+    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
+        painted(self, cx)
+    }
+}
+
+impl ViewControl for mount::panel::sprite::host::Sprite {
+    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
+        painted(self, cx)
     }
 }

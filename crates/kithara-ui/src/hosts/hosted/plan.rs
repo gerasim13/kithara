@@ -394,7 +394,7 @@ impl HostedControlPlan {
                     Some(ReadValue::Tree(rows)) => rows,
                     _ => &[],
                 };
-                let tree = mount::Tree {
+                let tree = mount::panel::tree::host::Tree {
                     query: query.as_ref(),
                     search: *search,
                     toggle: *toggle,
@@ -411,7 +411,7 @@ impl HostedControlPlan {
                 },
                 value,
             ) => {
-                let table = mount::Table {
+                let table = mount::panel::table::host::Table {
                     columns,
                     columns_state: columns_state.as_ref(),
                     status: status.as_ref(),
@@ -475,7 +475,7 @@ impl HostedControlPlan {
 
 fn tree_plan(
     path: &str,
-    tree: &mount::Tree<'_>,
+    tree: &mount::panel::tree::host::Tree<'_>,
     _read: Option<&Binding>,
     rows: &[TreeRow<'_>],
     cx: Resolving<'_>,
@@ -728,7 +728,7 @@ impl TablePlan {
 
     fn resolved(
         path: &str,
-        table: &mount::Table<'_>,
+        table: &mount::panel::table::host::Table<'_>,
         _read: Option<&Binding>,
         rows: &[TableRow<'_>],
         cx: Resolving<'_>,

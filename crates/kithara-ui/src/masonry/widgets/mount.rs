@@ -12,7 +12,7 @@ use crate::{
     draw::{DrawListBuilder, Rect as DrawRect},
     expand::{Binding, BindingKind, ControlSpec},
     hosts::{
-        controls::{DataRefresh, Draws, Reading},
+        controls::{Draws, Reading},
         hosted::HostedControlPlan,
         scroll::{Bar, Window},
         solve::{self, Alignment, Length, Limits, Size},
@@ -20,7 +20,7 @@ use crate::{
     },
     interact::Input,
     masonry::{
-        refresh::Refresh,
+        refresh::{DataRefresh, Refresh},
         retained::{
             MasonryHost, MasonryNode, Painted,
             controls::{Retained, SearchLeaf, TableLeaf, TreeLeaf},
@@ -83,7 +83,7 @@ impl NodeControl for mount::Drag {
     }
 }
 
-impl NodeControl for mount::TitleBar {
+impl NodeControl for mount::window::title_bar::host::TitleBar {
     fn wire<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>, output: &mut MasonryNode<A>)
     where
         A: std::fmt::Debug + Send + 'static,
@@ -117,7 +117,7 @@ impl NodeControl for mount::Vis {
         host.vis_leaf(preset, value, cx.declared)
     }
 }
-impl NodeControl for mount::Shader<'_> {
+impl NodeControl for mount::panel::shader::host::Shader<'_> {
     fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where
         A: std::fmt::Debug + Send + 'static,
@@ -127,7 +127,7 @@ impl NodeControl for mount::Shader<'_> {
         output
     }
 }
-impl NodeControl for mount::Custom {
+impl NodeControl for mount::panel::custom::host::Custom {
     fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where
         A: std::fmt::Debug + Send + 'static,
@@ -170,9 +170,9 @@ macro_rules! hosted_controls {
 }
 
 hosted_controls!(
-    mount::Table<'_> => Table, TableLeaf, "Table mount is incomplete";
+    mount::panel::table::host::Table<'_> => Table, TableLeaf, "Table mount is incomplete";
     mount::Search => Search, SearchLeaf, "Search mount is incomplete";
-    mount::Tree<'_> => Tree, TreeLeaf, "Tree mount is incomplete";
+    mount::panel::tree::host::Tree<'_> => Tree, TreeLeaf, "Tree mount is incomplete";
 );
 impl NodeControl for mount::label::text::host::Text<'_> {
     fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
@@ -530,9 +530,7 @@ where
     Control::Painter: Retained + 'static,
     A: std::fmt::Debug + Send + 'static,
 {
-    drawn(control, host, cx, |reading| {
-        control.retained_refresh(reading, host.ctx.endpoint(cx.read))
-    })
+    drawn(control, host, cx, |_| None)
 }
 
 /// Mounts a control that draws itself and, once mounted, steps its own data
@@ -548,7 +546,7 @@ where
     A: std::fmt::Debug + Send + 'static,
 {
     drawn(control, host, cx, |reading| {
-        Some(control.refresh(reading, host.ctx.endpoint(cx.read)))
+        control.refresh(reading, host.ctx.endpoint(cx.read))
     })
 }
 
@@ -636,5 +634,14 @@ mod owns {
             pointer_owner(InputOwner::Engine, &ControlSpec::Knob { label: None }),
             InputOwner::Engine
         );
+    }
+}
+
+impl NodeControl for mount::panel::context_bar::host::ContextBar<'_> {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        painted(self, host, cx)
     }
 }

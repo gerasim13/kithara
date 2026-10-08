@@ -1,10 +1,9 @@
 /// A sliding switch bound to one boolean endpoint.
-#[derive(kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.toggle.size)]
-#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Toggle;
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Toggle;
     use crate::{

@@ -1,19 +1,20 @@
-use bon::Builder;
-
-use crate::ids::InternId;
-
 /// One box of a grid, optionally captioned and optionally picked out.
-#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.cell.size)]
-#[derive(kithara_derive::NodeControl)]
-pub(crate) struct Cell {
-    pub(crate) label: Option<InternId>,
-    pub(crate) highlighted: bool,
-}
+pub(crate) struct Cell;
 
-#[cfg(feature = "render")]
-mod host {
-    use super::Cell;
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    use crate::ids::InternId;
+
+    #[derive(Builder)]
+    pub(crate) struct Cell {
+        pub(crate) label: Option<InternId>,
+        pub(crate) highlighted: bool,
+    }
+
     use crate::{
         atoms::{design::cell::Cell as Face, painter::CellData},
         hosts::controls::{Draws, Reading},

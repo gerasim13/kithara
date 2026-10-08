@@ -23,13 +23,11 @@ default = []
 event = []
 enum-str = []
 mirror = []
-node-control = []
 patch = []
 phase = []
 ranged = []
 skin-walk = []
 variants = []
-view-control = []
 
 [dependencies]
 proc-macro2 = { workspace = true }

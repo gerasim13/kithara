@@ -2178,7 +2178,9 @@ mod dragged {
     /// What a captioned fader publishes for a press at `fraction` of its rail.
     fn fader_press(fraction: f32) -> f64 {
         let skin = builtin::skin();
-        let control = mount::Fader::builder().style(FaderStyle::Default).build();
+        let control = mount::scalar::fader::host::Fader::builder()
+            .style(FaderStyle::Default)
+            .build();
         let data = || Captioned {
             label: Some("VOL".to_owned()),
             value: 0.5,
@@ -2225,7 +2227,9 @@ mod dragged {
     #[kithara::test]
     fn an_absolute_drag_seeks_to_the_fraction_the_press_landed_on() {
         let skin = builtin::skin();
-        let control = mount::Crossfader::builder().ticks(false).build();
+        let control = mount::scalar::crossfader::host::Crossfader::builder()
+            .ticks(false)
+            .build();
         let value = 0.8_f32;
         let Grip::Drag(drag) = control.grip(skin, &value) else {
             panic!("a crossfader must grip a drag");

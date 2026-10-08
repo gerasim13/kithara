@@ -1,38 +1,34 @@
-#[cfg(feature = "render")]
-use crate::{atoms::bar::preset::PresetItem, builtin};
-
-mod consts {
-    use super::*;
-
-    #[cfg(feature = "render")]
-    pub(super) const ITEMS: [PresetItem; 2] = [
-        PresetItem {
-            label: "MICRO",
-            name: builtin::MICRO_PRESET,
-        },
-        PresetItem {
-            label: "PLAYER",
-            name: builtin::PLAYER_PRESET,
-        },
-    ];
-}
-
 /// The global bar's preset picker.
-#[derive(kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.global_bar.preset_size)]
-#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Preset;
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
-    use super::{Preset, consts::ITEMS};
-    #[cfg(feature = "masonry")]
-    use crate::hosts::controls::DataRefresh;
+    use consts::ITEMS;
+
+    use super::Preset;
     use crate::{
         atoms::bar::preset::{Preset as Face, PresetData, PresetItem},
+        builtin,
         hosts::controls::{Draws, Grip, IndexEvent, Reading},
         render::{ControlAction, ReadValue, Skin, document::Ctx},
     };
+
+    mod consts {
+        use super::{PresetItem, builtin};
+
+        pub(super) const ITEMS: [PresetItem; 2] = [
+            PresetItem {
+                label: "MICRO",
+                name: builtin::MICRO_PRESET,
+            },
+            PresetItem {
+                label: "PLAYER",
+                name: builtin::PLAYER_PRESET,
+            },
+        ];
+    }
 
     impl Draws for Preset {
         type Painter = Face;
@@ -54,42 +50,27 @@ mod host {
         fn painter(&self, skin: &Skin) -> Face {
             Face::new(skin)
         }
-
-        #[cfg(feature = "masonry")]
-        fn retained_refresh(
-            &self,
-            _read: Reading<'_>,
-            _endpoint: Option<&str>,
-        ) -> Option<DataRefresh<PresetData>> {
-            Some(Box::new(refresh))
-        }
     }
 
     impl Preset {
         pub(crate) fn snapshot(ctx: Ctx<'_, '_>) -> PresetData {
             let items = &ITEMS;
-            let active = active(items, ctx);
+            let active = Self::active(items, ctx);
             PresetData { items, active }
         }
-    }
 
-    fn active(items: &[PresetItem], ctx: Ctx<'_, '_>) -> Option<usize> {
-        let Some(ReadValue::Text(name)) = ctx.get("ui.preset") else {
-            return None;
-        };
-        items.iter().position(|item| item.name == name)
+        pub(crate) fn active(items: &[PresetItem], ctx: Ctx<'_, '_>) -> Option<usize> {
+            let Some(ReadValue::Text(name)) = ctx.get("ui.preset") else {
+                return None;
+            };
+            items.iter().position(|item| item.name == name)
+        }
     }
 
     fn select(data: &PresetData, index: usize) -> Option<ControlAction> {
         data.items
             .get(index)
             .map(|item| ControlAction::Text(item.name.to_owned()))
-    }
-
-    #[cfg(feature = "masonry")]
-    fn refresh(data: &mut PresetData, ctx: Ctx<'_, '_>) -> bool {
-        let active = active(data.items, ctx);
-        std::mem::replace(&mut data.active, active) != active
     }
 
     #[cfg(test)]

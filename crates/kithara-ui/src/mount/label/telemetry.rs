@@ -1,19 +1,20 @@
-use bon::Builder;
-
-use crate::module::ScalarFormat;
-
 /// One formatted number read from an endpoint.
-#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.telemetry.size)]
-#[derive(kithara_derive::NodeControl)]
-pub(crate) struct Telemetry {
-    pub(crate) format: ScalarFormat,
-    pub(crate) framed: bool,
-}
+pub(crate) struct Telemetry;
 
-#[cfg(feature = "render")]
-mod host {
-    use super::Telemetry;
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    use crate::module::ScalarFormat;
+
+    #[derive(Builder)]
+    pub(crate) struct Telemetry {
+        pub(crate) format: ScalarFormat,
+        pub(crate) framed: bool,
+    }
+
     use crate::{
         atoms::label::Telemetry as Face,
         hosts::controls::{Draws, Reading},

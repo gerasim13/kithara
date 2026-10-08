@@ -60,7 +60,10 @@ pub(super) fn vis<'a>(value: Option<&ReadValue<'_>>, ctx: Ctx<'_, '_>) -> Elemen
     vis::view(value, ctx)
 }
 
-pub(super) fn table<'a>(cx: &Cx<'a, '_, '_>, table: &mount::Table<'_>) -> Element<'a, Published> {
+pub(super) fn table<'a>(
+    cx: &Cx<'a, '_, '_>,
+    table: &mount::panel::table::host::Table<'_>,
+) -> Element<'a, Published> {
     let rows = match cx.value {
         Some(ReadValue::Table(rows)) => *rows,
         _ => &[],
@@ -82,7 +85,7 @@ pub(super) fn table<'a>(cx: &Cx<'a, '_, '_>, table: &mount::Table<'_>) -> Elemen
 
 pub(super) fn tree<'a>(
     path: &'a str,
-    tree: &mount::Tree<'_>,
+    tree: &mount::panel::tree::host::Tree<'_>,
     value: Option<&ReadValue<'_>>,
     ctx: Ctx<'_, '_>,
     skin: &'a Skin,

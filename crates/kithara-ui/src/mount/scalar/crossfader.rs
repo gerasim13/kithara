@@ -1,18 +1,19 @@
-use bon::Builder;
-
 /// A horizontal fader centred on its midpoint.
-#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.crossfader.size)]
-#[derive(kithara_derive::NodeControl)]
-pub(crate) struct Crossfader {
-    pub(crate) ticks: bool,
-}
+pub(crate) struct Crossfader;
 
-#[cfg(feature = "render")]
-mod host {
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    #[derive(Builder)]
+    pub(crate) struct Crossfader {
+        pub(crate) ticks: bool,
+    }
+
     use num_traits::cast::AsPrimitive;
 
-    use super::Crossfader;
     use crate::{
         atoms::design::crossfader::Crossfader as Face,
         hosts::controls::{Drag, Draws, Grip, Reading},

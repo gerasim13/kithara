@@ -435,7 +435,7 @@ mod dragged {
 
     fn mounted(value: f32) -> Painted<Knob> {
         let skin = builtin::skin();
-        let control = mount::Knob::builder().build();
+        let control = mount::scalar::knob::host::Knob::builder().build();
         let data = Captioned { value, label: None };
         let grip = control.grip(skin, &data);
         Painted::pooled(control.painter(skin), data, skin, &DrawBuffers::default()).interactive(

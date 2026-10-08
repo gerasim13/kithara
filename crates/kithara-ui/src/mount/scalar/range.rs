@@ -1,10 +1,9 @@
 /// An interval with a handle at each end, each writing its own endpoint.
-#[derive(kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.range.size)]
-#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Range;
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Range;
     use crate::{

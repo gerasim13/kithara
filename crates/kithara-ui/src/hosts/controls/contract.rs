@@ -27,25 +27,7 @@ pub(crate) trait Draws {
 
     /// The painter, with the skin already resolved into it.
     fn painter(&self, skin: &Skin) -> Self::Painter;
-
-    /// How a leaf that is mounted once steps itself afterwards, given the
-    /// endpoint its reading came from.
-    ///
-    /// The name is passed rather than kept on the reading because only a
-    /// retained host has anything to do with it: an immediate one asks the
-    /// document again every frame and never holds a leaf across two.
-    #[cfg(feature = "masonry")]
-    fn retained_refresh(
-        &self,
-        _read: Reading<'_>,
-        _endpoint: Option<&str>,
-    ) -> Option<DataRefresh<<Self::Painter as ControlPainter>::Data>> {
-        None
-    }
 }
-
-#[cfg(feature = "masonry")]
-pub(crate) type DataRefresh<Data> = Box<dyn Fn(&mut Data, Ctx<'_, '_>) -> bool>;
 
 /// What a control is handed when it decides what to draw.
 ///

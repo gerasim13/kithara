@@ -1,10 +1,6 @@
 #[cfg(feature = "control")]
 pub(crate) mod control;
-#[cfg(feature = "node-control")]
-pub(crate) mod node;
 #[cfg(feature = "control-painter")]
 pub(crate) mod painter;
 #[cfg(feature = "skin-walk")]
 pub(crate) mod skin;
-#[cfg(feature = "view-control")]
-pub(crate) mod view;

@@ -1,20 +1,21 @@
-use bon::Builder;
-
-use crate::ids::InternId;
-
 /// A row of mutually exclusive segments, one of them picked.
-#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.segmented.size)]
-#[derive(kithara_derive::NodeControl)]
-pub(crate) struct Segmented<'a> {
-    pub(crate) items: &'a [InternId],
-}
+pub(crate) struct Segmented;
 
-#[cfg(feature = "render")]
-mod host {
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    use crate::ids::InternId;
+
+    #[derive(Builder)]
+    pub(crate) struct Segmented<'a> {
+        pub(crate) items: &'a [InternId],
+    }
+
     use num_traits::ToPrimitive;
 
-    use super::Segmented;
     use crate::{
         atoms::design::segmented::{Segmented as Face, SegmentedData},
         hosts::controls::{Draws, Grip, Reading},

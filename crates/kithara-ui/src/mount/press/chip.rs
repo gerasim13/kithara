@@ -1,19 +1,20 @@
-use bon::Builder;
-
-use crate::{ids::InternId, module::ChipStyle};
-
 /// A small labelled toggle that reads as a tag.
-#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.chip.size)]
-#[derive(kithara_derive::NodeControl)]
-pub(crate) struct Chip {
-    pub(crate) style: ChipStyle,
-    pub(crate) label: InternId,
-}
+pub(crate) struct Chip;
 
-#[cfg(feature = "render")]
-mod host {
-    use super::Chip;
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    use crate::{ids::InternId, module::ChipStyle};
+
+    #[derive(Builder)]
+    pub(crate) struct Chip {
+        pub(crate) style: ChipStyle,
+        pub(crate) label: InternId,
+    }
+
     use crate::{
         atoms::{chip::Chip as Face, painter::Labelled},
         hosts::controls::{Draws, Grip, Reading},

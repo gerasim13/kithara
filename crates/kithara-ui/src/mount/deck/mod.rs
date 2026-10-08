@@ -4,8 +4,8 @@ pub(crate) use time::Time;
 pub(crate) use vis::Vis;
 pub(crate) use wave::Wave;
 
-mod bpm;
-mod summary;
+pub(crate) mod bpm;
+pub(crate) mod summary;
 mod time;
 mod vis;
 pub(crate) mod wave;

@@ -1,22 +1,13 @@
-use bon::Builder;
-
 use crate::{
-    ids::InternId,
-    layout::FrameSides,
-    module::{ButtonStyle, IconName},
+    module::ButtonStyle,
     mount::Control,
     size::{Dim, SizeSpec},
     skin::SkinDoc,
 };
 
 /// A pressable button, worded and optionally iconed by the document.
-#[derive(Builder, kithara_derive::ViewControl, kithara_derive::NodeControl)]
 pub(crate) struct Button {
     pub(crate) style: ButtonStyle,
-    pub(crate) label: InternId,
-    pub(crate) active_label: Option<InternId>,
-    pub(crate) frame: Option<FrameSides>,
-    pub(crate) icon: Option<IconName>,
 }
 
 impl Control for Button {
@@ -35,9 +26,21 @@ fn square(side: f32) -> SizeSpec {
     SizeSpec::new(Dim::Fixed(side), Dim::Fixed(side))
 }
 
-#[cfg(feature = "render")]
-mod host {
-    use super::Button;
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    use crate::{ids::InternId, layout::FrameSides};
+
+    #[derive(Builder)]
+    pub(crate) struct Button {
+        pub(crate) style: ButtonStyle,
+        pub(crate) label: InternId,
+        pub(crate) active_label: Option<InternId>,
+        pub(crate) frame: Option<FrameSides>,
+        pub(crate) icon: Option<IconName>,
+    }
+
     use crate::{
         atoms::{
             button::{Button as Face, ButtonConfig, ButtonLabel},

@@ -1,10 +1,9 @@
 /// A horizontal pair of level bars with a volume cap.
-#[derive(kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.vu_stereo.size)]
-#[derive(kithara_derive::NodeControl)]
 pub(crate) struct VuStereo;
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::VuStereo;
     use crate::{

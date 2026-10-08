@@ -1,10 +1,9 @@
 /// A horizontal bar filled from the left to show one fraction.
-#[derive(kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.meter.size)]
-#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Meter;
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use num_traits::cast::AsPrimitive;
 

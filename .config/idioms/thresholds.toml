@@ -124,19 +124,11 @@ severity = "deny"
 enabled = true
 severity = "deny"
 
-[derivable_view_control]
-enabled = true
-severity = "deny"
-
 [derivable_control]
 enabled = true
 severity = "deny"
 
 [derivable_control_painter]
-enabled = true
-severity = "deny"
-
-[derivable_node_control]
 enabled = true
 severity = "deny"
 

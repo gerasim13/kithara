@@ -66,8 +66,6 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) derivable_mirror: DerivableRangedConfig,
     #[serde(default)]
-    pub(crate) derivable_node_control: DerivableRangedConfig,
-    #[serde(default)]
     pub(crate) derivable_patch: DerivableRangedConfig,
     #[serde(default)]
     pub(crate) derivable_phase: DerivableRangedConfig,
@@ -79,8 +77,6 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) derivable_skin_walk: DerivableRangedConfig,
     #[serde(default)]
     pub(crate) derivable_variants: DerivableRangedConfig,
-    #[serde(default)]
-    pub(crate) derivable_view_control: DerivableRangedConfig,
     #[serde(default)]
     pub(crate) fat_loop_body: FatLoopBodyConfig,
     #[serde(default)]

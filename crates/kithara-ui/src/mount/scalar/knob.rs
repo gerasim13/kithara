@@ -1,20 +1,21 @@
-use bon::Builder;
-
-use crate::ids::InternId;
-
 /// A rotary control dragged along the vertical axis.
-#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.knob.size)]
-#[derive(kithara_derive::NodeControl)]
-pub(crate) struct Knob {
-    pub(crate) label: Option<InternId>,
-}
+pub(crate) struct Knob;
 
-#[cfg(feature = "render")]
-mod host {
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    use crate::ids::InternId;
+
+    #[derive(Builder)]
+    pub(crate) struct Knob {
+        pub(crate) label: Option<InternId>,
+    }
+
     use num_traits::cast::AsPrimitive;
 
-    use super::Knob;
     use crate::{
         atoms::{knob::Knob as Face, painter::Captioned},
         hosts::controls::{Drag, Draws, Grip, Reading},

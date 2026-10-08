@@ -1,21 +1,22 @@
-use bon::Builder;
-
-use crate::{ids::InternId, module::FaderStyle};
-
 /// A rail and a cap, dragged along the rail.
-#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.fader.size)]
-#[derive(kithara_derive::NodeControl)]
-pub(crate) struct Fader {
-    pub(crate) style: FaderStyle,
-    pub(crate) label: Option<InternId>,
-}
+pub(crate) struct Fader;
 
-#[cfg(feature = "render")]
-mod host {
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    use crate::{ids::InternId, module::FaderStyle};
+
+    #[derive(Builder)]
+    pub(crate) struct Fader {
+        pub(crate) style: FaderStyle,
+        pub(crate) label: Option<InternId>,
+    }
+
     use num_traits::cast::AsPrimitive;
 
-    use super::Fader;
     use crate::{
         atoms::{design::fader::Fader as Face, painter::Captioned},
         hosts::controls::{Drag, Draws, Grip, Reading},
