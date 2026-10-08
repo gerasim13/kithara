@@ -3,7 +3,10 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
-    audio::{AudioControl, AudioRead, AudioSession, ChunkOutcome, ReadOutcome, SeekOutcome},
+    audio::{
+        AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome, ReadOutcome,
+        SeekOutcome,
+    },
     decode::{
         DecodeError, GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer,
         SilenceTrimParams, TrackMetadata,
@@ -1073,7 +1076,7 @@ impl AudioSession for SyntheticPcmReader {
 }
 
 impl AudioRead for SyntheticPcmReader {
-    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+    fn next_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError> {
         Ok(ChunkOutcome::Eof {
             position: self.position(),
         })
@@ -1083,7 +1086,7 @@ impl AudioRead for SyntheticPcmReader {
         duration_for_test_frames(self.position_frames)
     }
 
-    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
         let frames = self.fill_interleaved(buf);
         Ok(self.read_outcome(frames))
     }
@@ -1091,7 +1094,7 @@ impl AudioRead for SyntheticPcmReader {
     fn read_planar<'a>(
         &mut self,
         output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
+    ) -> Result<ReadOutcome, AudioReadError> {
         let frames = self.fill_planar(output);
         Ok(self.read_outcome(frames))
     }

@@ -708,17 +708,27 @@ pub enum FfiPlaybackResamplerKind {
     Unknown,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, kithara_derive::Mirror)]
-#[mirror(from = TrackFailureKind)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FfiTrackFailureKind {
-    Decode,
-    RecreateFailed {
-        offset: u64,
-    },
+    Decode { kind: FfiDecodeErrorKind },
+    RecreateFailed { offset: u64 },
     SourceCancelled,
-    #[mirror(skip)]
+    ChannelClosed,
+    Render,
     Unknown,
+}
+
+impl From<TrackFailureKind> for FfiTrackFailureKind {
+    fn from(value: TrackFailureKind) -> Self {
+        match value {
+            TrackFailureKind::Decode { kind } => Self::Decode { kind: kind.into() },
+            TrackFailureKind::RecreateFailed { offset } => Self::RecreateFailed { offset },
+            TrackFailureKind::SourceCancelled => Self::SourceCancelled,
+            TrackFailureKind::ChannelClosed => Self::ChannelClosed,
+            TrackFailureKind::Render => Self::Render,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, kithara_derive::Mirror)]

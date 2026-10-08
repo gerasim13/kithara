@@ -115,21 +115,27 @@ impl ResolvedLane {
     ///
     /// Only the filterset changes: selecting the packages instead would make
     /// cargo resolve features over them alone and build different units.
-    pub(crate) fn narrowed(mut self, packages: &BTreeSet<String>) -> Result<Self> {
+    pub(crate) fn narrowed(self, packages: &BTreeSet<String>) -> Result<Self> {
+        let union = packages
+            .iter()
+            .map(|package| format!("package({package})"))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        self.filtered(union)
+    }
+
+    /// The lane with its own build, running only the tests it selects that
+    /// `filterset` selects too.
+    pub(crate) fn filtered(mut self, filterset: String) -> Result<Self> {
         let TestRunner::Nextest(nextest) = &mut self.runner else {
             bail!(
                 "test lane `{}` runs `cargo test`, which a filterset cannot narrow",
                 self.lane
             );
         };
-        let union = packages
-            .iter()
-            .map(|package| format!("package({package})"))
-            .collect::<Vec<_>>()
-            .join(" | ");
         nextest.filter = Some(match &nextest.filter {
-            Some(filter) => intersect(filter, &[union]),
-            None => union,
+            Some(filter) => intersect(filter, &[filterset]),
+            None => filterset,
         });
         Ok(self)
     }

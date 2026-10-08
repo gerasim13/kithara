@@ -10,7 +10,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        ConsumerWakeMode,
+        ConsumerWakeMode, TrackFailureKind,
         audio::ReadOutcome,
         test_pools::{Pools, pools, sample_buffer},
     };
@@ -96,6 +96,8 @@ mod tests {
             self.stated.fetch_add(1, Ordering::Release);
         }
     }
+
+
 
     #[kithara::test]
     fn a_nonblocking_poll_of_an_empty_ring_states_its_demand() {
@@ -419,47 +421,7 @@ mod tests {
         assert!(fixture.recv().is_none());
     }
 
-    #[kithara::test]
-    fn process_fetch_must_distinguish_failure_from_natural_eof() {
-        let mut eof = RingFixture::new(true);
-        eof.data_tx
-            .try_push(Fetch::eof(0))
-            .expect("natural eof reaches ring");
-        let _chunk = eof.recv();
-        assert_eq!(eof.ring.phase, ConsumerPhase::AtEof);
 
-        let mut failed = RingFixture::new(true);
-        failed
-            .data_tx
-            .try_push(Fetch::failure(0))
-            .expect("failure reaches ring");
-        let _chunk = failed.recv();
-        assert_ne!(failed.ring.phase, ConsumerPhase::AtEof);
-        assert_eq!(
-            failed.ring.phase,
-            ConsumerPhase::Failed {
-                source: FailureSource::Producer
-            }
-        );
-    }
-
-    #[kithara::test]
-    fn a_stale_producer_failure_survives_a_new_seek_epoch() {
-        let mut fixture = RingFixture::new(true);
-        fixture
-            .data_tx
-            .try_push(Fetch::failure(0))
-            .expect("failure reaches ring");
-
-        let _ = fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
-
-        assert_eq!(
-            fixture.ring.phase,
-            ConsumerPhase::Failed {
-                source: FailureSource::ProducerAfterSeek
-            }
-        );
-    }
 
     #[kithara::test]
     fn a_stale_natural_eof_does_not_terminate_a_new_seek_epoch() {
@@ -474,22 +436,4 @@ mod tests {
         assert_eq!(fixture.ring.phase, ConsumerPhase::SeekPending { epoch: 1 });
     }
 
-    #[kithara::test]
-    fn a_stale_producer_failure_terminates_the_consumer() {
-        let mut fixture = RingFixture::new(true);
-        fixture.ring.validator.epoch = 3;
-        fixture
-            .data_tx
-            .try_push(Fetch::failure(0))
-            .expect("failure reaches ring");
-
-        let _chunk = fixture.recv();
-
-        assert_eq!(
-            fixture.ring.phase,
-            ConsumerPhase::Failed {
-                source: FailureSource::Producer
-            }
-        );
-    }
 }

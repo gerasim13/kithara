@@ -476,3 +476,47 @@ fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
     assert!(sent.is_none(), "no lane to send to yet");
     assert!((track.snapshot().speed - 1.25).abs() < f32::EPSILON);
 }
+
+
+#[kithara::test]
+fn failed_deck_event_preserves_item_identity_and_the_first_terminal_cause() {
+    use kithara_render::bridge::PlaybackFault;
+    use kithara_audio::TrackFailureKind;
+    let mut rig = rig();
+    let mut player = track(A);
+    let item = player.snapshot().item;
+    player.status = TrackStatus::Playing { since: frame(0) };
+    let fault = PlaybackFault::Source(TrackFailureKind::SourceCancelled);
+    player.settle(TrackReceipt::Event(DeckEvent::Failed { slot: A, at: frame(7), fault }), &mut rig.outbox());
+    let terminal = player.snapshot();
+    assert_eq!(terminal.item, item);
+    assert_eq!(terminal.slot, A);
+    assert_eq!(terminal.status, TrackStatus::Failed { at: frame(7), fault });
+    for event in [
+        DeckEvent::Failed { slot: A, at: frame(8), fault: PlaybackFault::Source(TrackFailureKind::ChannelClosed) },
+        DeckEvent::Ended { slot: A, at: frame(9) },
+        DeckEvent::Failed { slot: B, at: frame(10), fault },
+    ] {
+        player.settle(TrackReceipt::Event(event), &mut rig.outbox());
+        assert_eq!(player.snapshot().item, item);
+        assert_eq!(player.snapshot().status, terminal.status);
+    }
+    assert!(fault.to_string().contains("source cancelled"));
+}
+
+#[kithara::test]
+#[case::stale(false)]
+#[case::paused(true)]
+fn stale_or_paused_failure_does_not_change_the_scoped_player(#[case] paused: bool) {
+    use kithara_render::bridge::PlaybackFault;
+    use kithara_audio::{DecodeErrorKind, TrackFailureKind};
+    let mut rig = rig();
+    let mut player = track(A);
+    player.status = if paused { TrackStatus::Paused { at: Position::ZERO } } else { TrackStatus::Playing { since: frame(8) } };
+    let before = player.snapshot();
+    player.settle(TrackReceipt::Event(DeckEvent::Failed {
+        slot: A, at: frame(7), fault: PlaybackFault::Source(TrackFailureKind::Decode { kind: DecodeErrorKind::InvalidData }),
+    }), &mut rig.outbox());
+    assert_eq!(player.snapshot().item, before.item);
+    assert_eq!(player.snapshot().status, before.status);
+}

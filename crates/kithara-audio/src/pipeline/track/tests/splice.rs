@@ -1,7 +1,7 @@
 use std::{
-    num::NonZeroUsize,
+    num::{NonZeroU32, NonZeroUsize},
     ops::Range,
-    sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering},
+    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
 use kithara_bufpool::PoolRegion;
@@ -10,13 +10,12 @@ use kithara_hls::parse_media_playlist;
 use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,
-    tokio::runtime::Handle as RuntimeHandle,
 };
 use kithara_signal::AudioChunk;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    Activity, AudioCodec, ByteMap, ContainerFormat, MediaInfo, PlayheadRead, PlayheadState,
-    PlayheadWrite, ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekState,
+    Activity, ActivityWriter, AudioCodec, ByteMap, ContainerFormat, MediaInfo, PlayheadRead, PlayheadState,
+    PlayheadWrite, ReadOutcome, ReaderProfile,
     SegmentDescriptor, Source, SourceError, SourcePhase, SourceProbe, SourceSeekAnchor, Stream,
     StreamError, StreamResult, StreamType, VariantControl, VariantPromotion, VariantReaderPlan,
     VariantReaderTake, VariantTransition, mock::NoopWorkerWake,
@@ -27,17 +26,15 @@ use url::Url;
 use crate::{
     consts,
     pipeline::{
-        decode::core::{DecodeInit, DecoderFactory},
+        decode::{DecoderGeneration, core::{ActiveDecode, DecoderFactory}},
         fetch::Fetch,
-        parts::SourceParts,
-        rebuild::{RecreateCause, RecreateNext, RecreateState, port::RebuildRuntime},
-        seek::{SeekContext, SeekRequest},
+        rebuild::{RecreateCause, RecreateState},
         source::StreamAudioSource,
         stream::shared::SharedStream,
-        track::{self, TrackStep},
+        track::TrackStep,
     },
     test_pools::{TestPools, pools},
-    traits::{AudioSource, AudioSourceExt},
+    traits::AudioSource,
 };
 
 fn produced_data(fetch: Fetch<AudioChunk>) -> AudioChunk {
@@ -202,7 +199,7 @@ impl ByteMap for SpliceState {
 struct SpliceSource {
     playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
-    seek: Arc<SeekState>,
+    activity: ActivityWriter,
     state: Arc<SpliceState>,
 }
 
@@ -212,7 +209,7 @@ impl SpliceSource {
             state,
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
-            seek: Arc::new(SeekState::new()),
+            activity: ActivityWriter::new(),
         }
     }
 }
@@ -251,8 +248,8 @@ impl SourceProbe for ReadyProbe {
 }
 
 impl Source for SpliceSource {
-    fn activity(&self) -> Arc<dyn Activity> {
-        Arc::clone(&self.seek) as Arc<dyn Activity>
+    fn activity(&self) -> Activity {
+        self.activity.reader()
     }
 
     fn advance(&self, n: u64) {
@@ -307,13 +304,9 @@ impl Source for SpliceSource {
         ))
     }
 
-    fn seek_control(&self) -> Arc<dyn SeekControl> {
-        Arc::clone(&self.seek) as Arc<dyn SeekControl>
-    }
 
-    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
-    }
+
+
 
     fn set_position(&self, pos: u64) {
         self.position.store(pos, Ordering::Release);
@@ -481,11 +474,10 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
         decoder_config(&shared_stream, backend, initial_byte_len, &pools),
     )
     .expect("create initial slq fMP4 decoder");
-    let host_sample_rate = Arc::new(AtomicU32::new(consts::SAMPLE_RATE));
     let factory_byte_len = Arc::new(AtomicU64::new(0));
     let factory_pools = pools.clone();
     let decoder_factory = DecoderFactory::new(
-        move |mut reader, info| {
+        move |mut reader, info, _rate| {
             let byte_len = reader.byte_len().unwrap_or(0);
             factory_byte_len.store(byte_len, Ordering::Release);
             let config: DecoderConfig<kithara_resampler::NoResamplerBackend, TestPools> =
@@ -498,44 +490,38 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
                     .gapless(false)
                     .build();
             let input = reader.into_inner();
-            let decoder = DecodeFactory::create_from_media_info(input, &info, config)?;
+            let decoder = DecodeFactory::create_from_media_info(input, info.as_ref().expect("splice media info"), config)?;
             decoder.update_byte_len(byte_len);
             Ok(decoder)
         },
         None,
     );
-    let decode = DecodeInit {
-        decoder_factory,
-        host_sample_rate,
-        pools,
-        decoder: initial_decoder,
-        decoder_backend: backend,
-        gapless_mode: GaplessMode::Disabled,
-        media_info: Some(media_info(consts::SLQ_VARIANT)),
-        playback_resampler_backend: "none",
-        recreate_on_host_rate_change: false,
-    }
-    .into_parts(None, shared_stream.seek_observe().epoch())
-    .expect("decode scratch fits test pools");
-    let parts = SourceParts::new(
-        &shared_stream,
-        decode,
-        Arc::new(AtomicU64::new(0)),
-        RebuildRuntime {
-            handle: RuntimeHandle::try_current().expect("test requires tokio runtime"),
-            wake: Arc::new(NoopWorkerWake),
-        },
-        Some(state.clone() as Arc<dyn VariantControl>),
+    let generation = DecoderGeneration::new(
+        initial_decoder,
+        Some(media_info(consts::SLQ_VARIANT)),
+        0,
+        None,
+        None,
+        GaplessMode::Disabled,
     );
-    SpliceFixture {
-        state,
-        source: StreamAudioSource::new(shared_stream, parts),
-    }
+    let decode = ActiveDecode::new(generation, GaplessMode::Disabled, None, &pools)
+        .expect("decode scratch fits test pools");
+    let source = StreamAudioSource::new(
+        shared_stream,
+        decode,
+        decoder_factory,
+        NonZeroU32::new(consts::SAMPLE_RATE),
+        backend,
+        "none",
+        Arc::new(kithara_events::DeferredBus::new(kithara_events::EventBus::new(16), 16)),
+        Arc::new(NoopWorkerWake),
+    );
+    SpliceFixture { state, source }
 }
 
 fn run_pending_rebuild_inline(source: &mut StreamAudioSource<SpliceStream>) {
-    source.rebuild.run_inline();
-    source.flush_deferred();
+    source.prepare_deferred();
+    source.finish_deferred();
 }
 
 fn append_left_channel(left: &mut Vec<f32>, chunk: &AudioChunk) {
@@ -621,7 +607,7 @@ async fn hls_aac_lc_abr_variant_switch_splice_continuity_metric(
             }
             TrackStep::StateChanged | TrackStep::Blocked(_) => {}
             TrackStep::Eof => break,
-            TrackStep::Failed => panic!("splice source failed before metric collection"),
+            TrackStep::Failed(_) => panic!("splice source failed before metric collection"),
         }
     }
 
@@ -691,29 +677,21 @@ async fn hls_aac_lc_same_variant_recreate_continuity_metric(slq_layout: VariantL
                         consts::SLQ_VARIANT,
                         "same-variant recreate test must stay on the SLQ variant",
                     );
-                    let epoch = source.seek_engine.epoch();
-                    track::start_recreating_decoder(
-                        &mut source,
+                    source.install_replacement(
                         RecreateState {
                             cause: RecreateCause::VariantSwitch,
-                            media_info: media_info(active),
-                            next: RecreateNext::ApplySeek(SeekRequest {
-                                seek: SeekContext {
-                                    epoch,
-                                    target: chunk.meta.end_timestamp,
-                                },
-                                emit_request: false,
-                            }),
+                            media_info: Some(media_info(active)),
                             offset: state.active_layout().init_range.start,
                         },
-                    );
+                        Some(chunk.meta.end_timestamp),
+                    ).expect("same-variant decoder recreation");
                     recreated = true;
                     recreate_frame = Some(left.len());
                 }
             }
             TrackStep::StateChanged | TrackStep::Blocked(_) => {}
             TrackStep::Eof => break,
-            TrackStep::Failed => {
+            TrackStep::Failed(_) => {
                 panic!("same-variant recreate source failed before metric collection");
             }
         }

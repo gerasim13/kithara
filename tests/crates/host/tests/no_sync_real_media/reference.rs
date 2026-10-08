@@ -176,7 +176,7 @@ async fn wait_for_reference_seek_completion(
                 }
                 RecvError::Closed => "reference event receiver closed".to_owned(),
             })?;
-            observe_reference_seek_event(envelope.event, request_epoch, completion)?;
+            observe_reference_seek_event(&envelope.event, request_epoch, completion)?;
         }
         Ok(())
     })
@@ -212,7 +212,7 @@ fn drain_reference_seek_events(
     loop {
         match events.try_recv() {
             Ok(envelope) => {
-                observe_reference_seek_event(envelope.event, request_epoch, completion)?;
+                observe_reference_seek_event(&envelope.event, request_epoch, completion)?;
             }
             Err(TryRecvError::Empty) => return Ok(()),
             Err(TryRecvError::Lagged(count)) => {
@@ -224,7 +224,7 @@ fn drain_reference_seek_events(
 }
 
 fn observe_reference_seek_event(
-    event: TestEvent,
+    event: &TestEvent,
     request_epoch: &mut Option<u64>,
     completion: &mut Option<u64>,
 ) -> Result<(), String> {
@@ -233,9 +233,9 @@ fn observe_reference_seek_event(
             stage: SeekLifecycleStage::SeekRequest,
             seek_epoch,
             ..
-        }) => *request_epoch = Some(seek_epoch),
+        }) => *request_epoch = Some(*seek_epoch),
         TestEvent::Audio(AudioEvent::SeekComplete { seek_epoch, .. }) => {
-            *completion = Some(seek_epoch);
+            *completion = Some(*seek_epoch);
         }
         TestEvent::Audio(AudioEvent::SeekRejected { epoch, target }) => {
             return Err(format!(

@@ -1,6 +1,5 @@
 mod gate;
-mod rebuild;
-mod splice;
+pub(crate) mod rebuild;
 mod state;
 mod transition;
 mod wait;

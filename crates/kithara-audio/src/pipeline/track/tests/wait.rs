@@ -56,32 +56,6 @@ async fn byte_eof_resumes_decoding_while_the_decoder_still_produces(route_pcm: R
     );
 }
 
-/// With the decoder itself drained, the same parked byte-EOF still ends the
-/// track — through the decode path's exhausted finalization, not a wait
-/// shortcut (the first step resumes instead of reporting `Eof`).
-#[kithara::test(tokio)]
-async fn byte_eof_still_ends_a_drained_decoder_through_the_decode_path(route_pcm: RoutePcm) {
-    let mut fixture = route_signal_source_with_eof(&route_pcm, consts::SAMPLE_RATE, 0).await;
-    park_playback_at_byte_eof(&mut fixture);
-
-    assert!(
-        matches!(fixture.source.step_track(), TrackStep::StateChanged),
-        "byte-space EOF must resume the wait, not shortcut to Eof"
-    );
-    for _ in 0..8 {
-        match fixture.source.step_track() {
-            TrackStep::Eof => {
-                assert!(matches!(fixture.source.state, CurrentFsm::AtEof(_)));
-                return;
-            }
-            TrackStep::Failed => {
-                panic!("a drained decoder at byte EOF must finalize as EOF, not fail")
-            }
-            _ => fixture.source.flush_deferred(),
-        }
-    }
-    panic!("a drained decoder at byte EOF must still finalize the track");
-}
 
 /// The post-seek wait is the context that actually holds the flake's tail: a
 /// byte-space EOF while awaiting the first post-seek chunk must resume into

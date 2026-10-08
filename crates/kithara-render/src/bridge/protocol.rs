@@ -1,6 +1,6 @@
 use std::fmt;
 
-use kithara_audio::DecodeErrorKind;
+use kithara_audio::TrackFailureKind;
 use kithara_command::{Protocol, Target};
 use kithara_effects::{GainDb, eq::EqLayout};
 use kithara_signal::{SegmentId, SessionFrame};
@@ -134,6 +134,11 @@ pub enum DeckEvent {
         slot: Slot,
         at: SessionFrame,
     },
+    Failed {
+        slot: Slot,
+        at: SessionFrame,
+        fault: PlaybackFault,
+    },
     Faded {
         slot: Slot,
         at: SessionFrame,
@@ -227,7 +232,7 @@ pub enum SlotState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaybackFault {
-    Decode(DecodeErrorKind),
+    Source(TrackFailureKind),
     OutputRateMismatch,
     OutputRangeUnavailable,
 }
@@ -235,7 +240,7 @@ pub enum PlaybackFault {
 impl fmt::Display for PlaybackFault {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Decode(kind) => write!(formatter, "decode error ({kind:?})"),
+            Self::Source(failure) => write!(formatter, "{failure}"),
             Self::OutputRateMismatch => formatter.write_str("output sample-rate mismatch"),
             Self::OutputRangeUnavailable => {
                 formatter.write_str("render context has no output range")

@@ -27,7 +27,7 @@ pub enum PendingReason {
 /// Each variant carries distinct caller semantics — the type system
 /// guarantees forward progress in `Frames` (via [`NonZeroUsize`]),
 /// while non-progress is explicit in `Pending` with a typed
-/// [`PendingReason`]. Failures surface as `Err(DecodeError)`, never
+/// [`PendingReason`]. Failures surface as `Err(AudioReadError)`, never
 /// as an enum variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadOutcome {
@@ -82,7 +82,7 @@ pub enum SeekOutcome {
 
 /// Result of `next_chunk` — either a decoded chunk (with embedded
 /// spec/timing metadata), a typed non-progress signal, or natural
-/// EOF. Failures surface as `Err(DecodeError)`.
+/// EOF. Failures surface as `Err(AudioReadError)`.
 #[derive(Debug)]
 pub enum ChunkOutcome {
     /// Next decoded chunk.

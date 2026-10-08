@@ -526,7 +526,7 @@ where
     fn current_end(&self) -> Option<SessionFrame> {
         let track = self.current_track()?.snapshot();
         let track = track.as_ref();
-        if let PlayingStatus::Ended { at } = track.status {
+        if let PlayingStatus::Ended { at } | PlayingStatus::Failed { at, .. } = track.status {
             return Some(at);
         }
         if !matches!(track.status, PlayingStatus::Playing { .. }) {

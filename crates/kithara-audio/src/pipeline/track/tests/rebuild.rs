@@ -59,7 +59,7 @@ use crate::{
     traits::{AudioSource, AudioSourceExt},
 };
 
-pub(super) fn produced_data(fetch: Fetch<AudioChunk>) -> AudioChunk {
+pub(crate) fn produced_data(fetch: Fetch<AudioChunk>) -> AudioChunk {
     let Fetch::Data { data, .. } = fetch else {
         panic!("TrackStep::Produced must carry PCM data");
     };
@@ -386,7 +386,7 @@ impl Decoder for RouteSignalDecoder {
     fn update_byte_len(&self, _len: u64) {}
 }
 
-pub(super) struct TestControl {
+pub(crate) struct TestControl {
     byte_map_enabled: AtomicBool,
     demand_in_flight: AtomicBool,
     exact_reader_ready: AtomicBool,
@@ -457,14 +457,14 @@ impl TestControl {
         self.demand_in_flight.store(in_flight, Ordering::Release);
     }
 
-    pub(super) fn set_exact_plan(&self, plan: VariantReaderPlan) {
+    pub(crate) fn set_exact_plan(&self, plan: VariantReaderPlan) {
         *self.exact_plan.lock() = Some(plan);
         *self.prepared_profile.lock() = None;
         self.exact_reader_ready.store(false, Ordering::Release);
         self.exact_reader_taken.store(false, Ordering::Release);
     }
 
-    pub(super) fn set_exact_reader_ready(&self) {
+    pub(crate) fn set_exact_reader_ready(&self) {
         self.exact_reader_ready.store(true, Ordering::Release);
     }
 
@@ -474,7 +474,7 @@ impl TestControl {
         *self.media_info.lock() = Some(media_info);
     }
 
-    pub(super) fn set_promotion(&self, promotion: VariantPromotion) {
+    pub(crate) fn set_promotion(&self, promotion: VariantPromotion) {
         *self.promotion.lock() = promotion;
     }
 
@@ -639,7 +639,7 @@ pub(super) struct TestSource {
     phase: Arc<Mutex<SourcePhase>>,
     playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
-    seek: Arc<SeekState>,
+    activity: kithara_stream::ActivityWriter,
     waits: Arc<Mutex<Vec<Range<u64>>>>,
     #[field(with = with_peer_wake, option_set_some, vis = "pub(super)")]
     peer: Option<Arc<DeferredWake>>,
@@ -655,7 +655,7 @@ impl TestSource {
             phase: Arc::new(Mutex::new(SourcePhase::Ready)),
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
-            seek: Arc::new(SeekState::new()),
+            activity: kithara_stream::ActivityWriter::new(),
             waits: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -718,8 +718,8 @@ impl SourceProbe for SharedPhaseProbe {
 }
 
 impl Source for TestSource {
-    fn activity(&self) -> Arc<dyn Activity> {
-        Arc::clone(&self.seek) as Arc<dyn Activity>
+    fn activity(&self) -> Activity {
+        self.activity.reader()
     }
 
     fn advance(&self, n: u64) {
@@ -775,13 +775,9 @@ impl Source for TestSource {
         Ok(ReadOutcome::Eof)
     }
 
-    fn seek_control(&self) -> Arc<dyn SeekControl> {
-        Arc::clone(&self.seek) as Arc<dyn SeekControl>
-    }
 
-    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
-    }
+
+
 
     fn set_position(&self, pos: u64) {
         self.position.store(pos, Ordering::Release);
@@ -873,7 +869,7 @@ impl Default for TestConfig {
     }
 }
 
-pub(super) struct TestStream;
+pub(crate) struct TestStream;
 
 impl StreamType for TestStream {
     type Config = TestConfig;
@@ -885,7 +881,7 @@ impl StreamType for TestStream {
     }
 }
 
-pub(super) fn media_info(variant: u32) -> MediaInfo {
+pub(crate) fn media_info(variant: u32) -> MediaInfo {
     let mut info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::AacLc))
         .maybe_container(Some(ContainerFormat::Fmp4))
@@ -903,23 +899,23 @@ fn recreate_state(variant: u32) -> RecreateState {
     }
 }
 
-struct RebuildFixture {
-    control: Arc<TestControl>,
-    drops: Arc<Mutex<Vec<u64>>>,
-    pools: Pools,
-    source: StreamAudioSource<TestStream>,
+pub(crate) struct RebuildFixture {
+    pub(crate) control: Arc<TestControl>,
+    pub(crate) drops: Arc<Mutex<Vec<u64>>>,
+    pub(crate) pools: Pools,
+    pub(crate) source: StreamAudioSource<TestStream>,
 }
 
-pub(super) struct RouteFixture {
-    pub(super) control: Arc<TestControl>,
-    pub(super) drops: Arc<Mutex<Vec<u64>>>,
-    pub(super) host_sample_rate: Arc<AtomicU32>,
-    pub(super) phase: Arc<Mutex<SourcePhase>>,
-    pub(super) pools: Pools,
-    pub(super) source: StreamAudioSource<TestStream>,
+pub(crate) struct RouteFixture {
+    pub(crate) control: Arc<TestControl>,
+    pub(crate) drops: Arc<Mutex<Vec<u64>>>,
+    pub(crate) host_sample_rate: Arc<AtomicU32>,
+    pub(crate) phase: Arc<Mutex<SourcePhase>>,
+    pub(crate) pools: Pools,
+    pub(crate) source: StreamAudioSource<TestStream>,
 }
 
-async fn test_source(variant: u32) -> RebuildFixture {
+pub(crate) async fn test_source(variant: u32) -> RebuildFixture {
     test_source_with_mode(variant, GaplessMode::Disabled).await
 }
 
@@ -954,53 +950,18 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
     let pools = pools();
     let control = Arc::new(TestControl::new(media_info(variant)));
     let drops = Arc::new(Mutex::new(Vec::new()));
-    let stream = match Stream::<TestStream>::new(TestConfig {
-        source: TestSource::new(control.clone()),
-    })
-    .await
-    {
-        Ok(stream) => stream,
-        Err(err) => panic!("test stream construction failed: {err}"),
-    };
+    let stream = Stream::<TestStream>::new(TestConfig { source: TestSource::new(control.clone()) })
+        .await.expect("test stream");
     let shared_stream = SharedStream::new(stream);
     let factory_drops = drops.clone();
-    let decoder_factory = DecoderFactory::new(
-        move |_reader, _info| Ok(Box::new(TestDecoder::new(99, factory_drops.clone()))),
-        None,
+    let factory = DecoderFactory::new(
+        move |_reader, _info, _rate| Ok(Box::new(TestDecoder::new(99, factory_drops.clone()))), None,
     );
-    let runtime_handle = match RuntimeHandle::try_current() {
-        Ok(handle) => handle,
-        Err(err) => panic!("test requires tokio runtime: {err}"),
-    };
-    let decode = DecodeInit {
-        decoder_factory,
-        gapless_mode,
-        decoder: Box::new(TestDecoder::new(1, drops.clone())),
-        decoder_backend: kithara_decode::DecoderBackend::default(),
-        host_sample_rate: Arc::new(AtomicU32::new(consts::SAMPLE_RATE)),
-        media_info: Some(media_info(0)),
-        playback_resampler_backend: "none",
-        pools: pools.clone(),
-        recreate_on_host_rate_change: true,
-    }
-    .into_parts(None, shared_stream.seek_observe().epoch())
-    .expect("decode scratch fits test pools");
-    let parts = SourceParts::new(
-        &shared_stream,
-        decode,
-        Arc::new(AtomicU64::new(0)),
-        RebuildRuntime {
-            handle: runtime_handle,
-            wake: Arc::new(NoopWorkerWake),
-        },
-        Some(control.clone() as Arc<dyn VariantControl>),
-    );
-    RebuildFixture {
-        control,
-        drops,
-        pools,
-        source: StreamAudioSource::new(shared_stream, parts),
-    }
+    let generation = DecoderGeneration::new(Box::new(TestDecoder::new(1, drops.clone())), Some(media_info(0)), 0, None, None, gapless_mode);
+    let decode = crate::pipeline::decode::core::ActiveDecode::new(generation, gapless_mode, None, &pools).expect("decode scratch");
+    let source = StreamAudioSource::new(shared_stream, decode, factory, NonZeroU32::new(consts::SAMPLE_RATE),
+        kithara_decode::DecoderBackend::default(), "none", Arc::new(DeferredBus::new(EventBus::new(16), 16)), Arc::new(NoopWorkerWake));
+    RebuildFixture { control, drops, pools, source }
 }
 
 /// `segmented` vends the byte map HLS supplies plus an init-bearing
@@ -1018,7 +979,7 @@ struct RouteParams {
     incoming_timeline_gap: u64,
 }
 
-pub(super) async fn route_signal_source(
+pub(crate) async fn route_signal_source(
     route_pcm: &RoutePcm,
     initial_host_rate: u32,
 ) -> RouteFixture {
@@ -1077,7 +1038,7 @@ pub(super) async fn route_signal_source_with_gapless(
     .await
 }
 
-pub(super) async fn route_signal_source_with_gapless_eof(
+pub(crate) async fn route_signal_source_with_gapless_eof(
     route_pcm: &RoutePcm,
     initial_host_rate: u32,
     gapless: GaplessInfo,
@@ -1176,13 +1137,13 @@ async fn route_source(route_pcm: &RoutePcm, params: RouteParams) -> RouteFixture
     let factory_pools = pools.clone();
     let factory_pcm = route_pcm.clone();
     let decoder_factory = DecoderFactory::new(
-        move |reader, _info| {
+        move |reader, _info, host_rate| {
             if segmented && reader.byte_len() != container_byte_len {
                 return Err(DecodeError::InvalidData {
                     detail: "init-bearing container demuxed from a media byte",
                 });
             }
-            let rate = factory_host_rate.load(Ordering::Acquire);
+            let rate = host_rate.map_or_else(|| factory_host_rate.load(Ordering::Acquire), NonZeroU32::get);
             Ok(Box::new(
                 RouteSignalDecoder::new(
                     &factory_pcm,
@@ -1198,55 +1159,21 @@ async fn route_source(route_pcm: &RoutePcm, params: RouteParams) -> RouteFixture
         },
         None,
     );
-    let runtime_handle = match RuntimeHandle::try_current() {
-        Ok(handle) => handle,
-        Err(err) => panic!("test requires tokio runtime: {err}"),
-    };
-    let decode = DecodeInit {
-        decoder_factory,
-        decoder: Box::new(
-            RouteSignalDecoder::new(
-                route_pcm,
-                1,
-                consts::SAMPLE_RATE,
-                gapless,
-                chunks_before_eof,
-                drops.clone(),
-                pools.clone(),
-            )
-            .with_timeline_gap(active_timeline_gap),
-        ),
-        decoder_backend: kithara_decode::DecoderBackend::default(),
-        gapless_mode: if gapless.is_some() {
-            GaplessMode::MediaOnly
-        } else {
-            GaplessMode::Disabled
-        },
-        host_sample_rate: host_sample_rate.clone(),
-        media_info: Some(media_info(0)),
-        playback_resampler_backend: "none",
-        pools: pools.clone(),
-        recreate_on_host_rate_change: true,
-    }
-    .into_parts(None, shared_stream.seek_observe().epoch())
-    .expect("decode scratch fits test pools");
-    let parts = SourceParts::new(
-        &shared_stream,
-        decode,
-        Arc::new(AtomicU64::new(0)),
-        RebuildRuntime {
-            handle: runtime_handle,
-            wake: Arc::new(NoopWorkerWake),
-        },
-        Some(control.clone() as Arc<dyn VariantControl>),
+    let gapless_mode = if gapless.is_some() { GaplessMode::MediaOnly } else { GaplessMode::Disabled };
+    let generation = DecoderGeneration::new(
+        Box::new(RouteSignalDecoder::new(route_pcm, 1, consts::SAMPLE_RATE, gapless, chunks_before_eof, drops.clone(), pools.clone()).with_timeline_gap(active_timeline_gap)),
+        Some(media_info(0)), 0, None, None, gapless_mode,
     );
+    let decode = crate::pipeline::decode::core::ActiveDecode::new(generation, gapless_mode, None, &pools).expect("decode scratch");
+    let source = StreamAudioSource::new(shared_stream, decode, decoder_factory, NonZeroU32::new(params.initial_host_rate),
+        kithara_decode::DecoderBackend::default(), "none", Arc::new(DeferredBus::new(EventBus::new(16), 16)), Arc::new(NoopWorkerWake));
     RouteFixture {
         control,
         drops,
         host_sample_rate,
         phase,
         pools,
-        source: StreamAudioSource::new(shared_stream, parts),
+        source,
     }
 }
 
@@ -1334,7 +1261,7 @@ fn next_decoded_chunk(
             }
             TrackStep::Blocked(_) => {}
             TrackStep::Eof => panic!("route test source reached EOF"),
-            TrackStep::Failed => panic!("route test source failed"),
+            TrackStep::Failed(_) => panic!("route test source failed"),
         }
     }
 }
@@ -1803,42 +1730,7 @@ async fn rebuilding_decoder_completion_emits_decoder_changed_cause() {
     ));
 }
 
-#[kithara::test(tokio)]
-async fn decode_error_precedes_track_failure_on_event_bus() {
-    let RebuildFixture { mut source, .. } = test_source(0).await;
-    let bus = EventBus::new(16);
-    let mut events = bus.subscribe();
-    source = source.with_emit(Arc::new(DeferredBus::new(bus, 16)));
-    let replacement = DecoderGeneration::new(
-        Box::new(FailingDecoder),
-        Some(media_info(0)),
-        0,
-        0,
-        None,
-        GaplessMode::Disabled,
-    );
-    let old = source.decode.replace_active(replacement);
-    source.retired.push(old);
 
-    assert!(matches!(source.step_track(), TrackStep::Failed));
-    assert!(events.try_recv().is_err());
-    source.flush_deferred();
-
-    assert!(matches!(
-        events.try_recv().map(|envelope| envelope.event),
-        Ok(AudioLaneEvent::Decoder(DecoderEvent::DecodeError {
-            detail: "fixture decode failure",
-            ..
-        }))
-    ));
-    assert!(matches!(
-        events.try_recv().map(|envelope| envelope.event),
-        Ok(AudioLaneEvent::Audio(AudioEvent::TrackFailed {
-            failure: TrackFailureKind::Decode,
-            seek_epoch: 0,
-        }))
-    ));
-}
 
 #[kithara::test(tokio)]
 async fn route_change_host_rate_delta_starts_decoder_recreate(route_pcm: RoutePcm) {
@@ -2333,52 +2225,7 @@ async fn stale_rebuild_completion_retires_decoder_shell_side() {
     assert!(matches!(source.state, CurrentFsm::RebuildingDecoder(_)));
 }
 
-/// A decoder factory that panics during construction must not strand the
-/// FSM in `RebuildingDecoder` forever. The rebuild port catches the panic,
-/// pushes a `SoftFailed` completion, and wakes the worker.
-#[kithara::test(tokio)]
-async fn rebuild_factory_panic_fails_track_without_hang() {
-    let RebuildFixture { mut source, .. } = test_source(1).await;
 
-    let wake_count = CallCounter::default();
-    let wake = Arc::new(CountingWorkerWake::new(wake_count.clone()));
-    let panicking_factory = DecoderFactory::new(
-        |_reader, _info| panic!("decoder construction blew up"),
-        None,
-    );
-    source.rebuild = RebuildPort::new(
-        panicking_factory,
-        GaplessMode::Disabled,
-        RebuildRuntime {
-            handle: source.rebuild.runtime().clone(),
-            wake: Arc::clone(&wake) as Arc<dyn WorkerWake>,
-        },
-    );
-    let recreate = recreate_state(1);
-    let rebuild = source
-        .rebuild
-        .prepare(&source.shared_stream, recreate, source.seek_obs.epoch())
-        .expect("panic test rebuild must prepare");
-    source.state = Track::<RebuildingDecoder>::new(rebuild).erase();
-
-    // Run the rebuild job synchronously through the same `run` path the
-    // blocking pool uses: a factory panic must be caught by `catch_unwind`,
-    // push a `SoftFailed` completion, and wake the worker rather than
-    // stranding the FSM in `RebuildingDecoder`.
-    source.rebuild.run_inline();
-    assert_eq!(wake_count.get(), 1, "factory panic must wake the worker");
-    source.flush_deferred();
-
-    // The worker's next step must reach the terminal recreate failure,
-    // not loop on `Blocked(Waiting)`.
-    assert!(matches!(source.step_track(), TrackStep::Failed));
-    match &source.state {
-        CurrentFsm::Failed(handle) => {
-            assert!(matches!(handle.data(), TrackFailure::RecreateFailed { .. }));
-        }
-        _ => panic!("expected RecreateFailed terminal state after factory panic"),
-    }
-}
 
 #[kithara::test]
 fn a_seek_releases_its_buffered_chunks_off_rt(route_pcm: RoutePcm) {

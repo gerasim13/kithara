@@ -6,7 +6,7 @@ pub enum TrackStep<C> {
     Blocked(WaitingReason),
     StateChanged,
     Eof,
-    Failed(crate::DecodeError),
+    Failed(crate::TrackFailureKind),
 }
 
 /// Why source progress is waiting on upstream work.
@@ -20,4 +20,4 @@ pub enum WaitingReason {
 #[cfg(test)]
 mod fsm;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

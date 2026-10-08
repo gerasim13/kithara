@@ -46,16 +46,22 @@ impl PlayerTrack {
         let Some(outcome) = self.resource.poll_end(budget) else {
             return false;
         };
-        if matches!(outcome, ReadOutcome::Failed(_)) {
-            sink.metrics.record_decode_error();
-        }
+        let event = match outcome {
+            ReadOutcome::Eof => DeckEvent::Ended { slot: sink.slot, at: sink.at(offset) },
+            ReadOutcome::Failed(source) => {
+                sink.metrics.record_decode_error();
+                DeckEvent::Failed {
+                    slot: sink.slot,
+                    at: sink.at(offset),
+                    fault: PlaybackFault::Source(source.into()),
+                }
+            }
+            ReadOutcome::Full { .. } | ReadOutcome::Partial { .. } => return false,
+        };
         self.gap = 0;
         self.state = SlotState::Ended;
         self.shut();
-        sink.report(DeckEvent::Ended {
-            slot: sink.slot,
-            at: sink.at(offset),
-        });
+        sink.report(event);
         true
     }
 
@@ -99,7 +105,7 @@ impl PlayerTrack {
             ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
             ReadOutcome::Eof => return TrackReadOutcome::Eof,
             ReadOutcome::Failed(kind) => {
-                return TrackReadOutcome::Failed(PlaybackFault::Decode(kind));
+                return TrackReadOutcome::Failed(PlaybackFault::Source(kind.into()));
             }
         };
         if frames > 0 {

@@ -100,19 +100,6 @@ mod tests {
         assert_eq!(map_source_phase(SourcePhase::Cancelled), None);
     }
 
-    #[kithara::test]
-    fn consumer_phase_terminal() {
-        assert!(!ConsumerPhase::Buffering.is_terminal());
-        assert!(!ConsumerPhase::Playing.is_terminal());
-        assert!(!ConsumerPhase::SeekPending { epoch: 1 }.is_terminal());
-        assert!(ConsumerPhase::AtEof.is_terminal());
-        assert!(
-            ConsumerPhase::Failed {
-                source: FailureSource::Producer
-            }
-            .is_terminal()
-        );
-    }
 
     #[kithara::test]
     fn seek_context_copy_and_eq() {

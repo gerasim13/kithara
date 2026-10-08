@@ -67,6 +67,12 @@ on:
         description: Stable runner label for a lane-owned persistent build cache.
         default: ''
         type: string
+      narrow:
+        description: >-
+          Nextest filterset the lane's test suite is narrowed to. Empty narrows
+          nothing; a lane with no suite refuses one.
+        default: ''
+        type: string
 
 # Not inherited from the caller: a called workflow gets its own environment.
 env:
@@ -122,6 +128,8 @@ jobs:
       - name: Run the lane
         env:
           GITHUB_FETCH_TOKEN: ${{ github.token }}
+          # A filterset is shell syntax, so it reaches the script as data.
+          NARROW: ${{ inputs.narrow }}
         run: |
           # Cargo fetches into a cache outside checkout's credential scope.
           # Scope the header to the pinned dependency and RustSec database.
@@ -131,7 +139,7 @@ jobs:
           export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
           export GIT_CONFIG_KEY_1=http.https://github.com/RustSec/advisory-db.extraheader
           export GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $auth"
-          just ci lane "${{ inputs.lane }}" --kind "${{ inputs.kind }}"
+          just ci lane "${{ inputs.lane }}" --kind "${{ inputs.kind }}" ${NARROW:+--narrow "$NARROW"}
 
       # The report is in the slot the lane built in. A lane that stopped before
       # it took one built nothing, so there is nothing to upload.

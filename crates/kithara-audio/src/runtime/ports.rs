@@ -3,8 +3,10 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use kithara_test_utils::kithara;
+    use ringbuf::wrap::Wrap;
 
     use super::*;
+    use crate::runtime::wake::ThreadWake;
 
     struct TestWake {
         woken: AtomicBool,
@@ -20,11 +22,35 @@ mod tests {
         count: AtomicUsize,
     }
 
+    struct ClosureWake {
+        observer: ringbuf::Arc<HeapRb<i32>>,
+        thread: ThreadWake,
+        wakes: AtomicUsize,
+        flushes: AtomicUsize,
+    }
+
+    impl WakeSignal for ClosureWake {
+        fn wake(&self) {
+            assert!(
+                !self.observer.write_is_held(),
+                "the final wake must follow the canonical producer release"
+            );
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn flush_deferred(&self) {
+            assert_eq!(self.wakes.load(Ordering::SeqCst), 1);
+            self.flushes.fetch_add(1, Ordering::SeqCst);
+            self.thread.wake();
+        }
+    }
+
     impl WakeSignal for CountingWake {
         fn wake(&self) {
             self.count.fetch_add(1, Ordering::SeqCst);
         }
     }
+
 
     #[kithara::test]
     fn connect_push_pop() {

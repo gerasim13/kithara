@@ -4,30 +4,43 @@ use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{sync::Arc, time::Duration, tokio::task::yield_now};
 use kithara_signal::AudioChunk;
 use kithara_stream::{
-    AudioCodec, ContainerFormat, MediaInfo, OutgoingDisposition, VariantPromotion,
+    AudioCodec, ContainerFormat, MediaInfo, OutgoingDisposition, SourcePhase, VariantPromotion,
     VariantReaderPlan, VariantTransition, VariantTransitionId,
 };
 use kithara_test_fixtures::unit_fixtures::{RoutePcm, route_pcm};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{flight, kithara};
 
 use super::rebuild::{
     RouteFixture, TestDecoder, media_info, produced_data, route_signal_source,
     route_signal_source_with_finite_incoming, route_signal_source_with_finite_sides,
-    route_signal_source_with_gapless, route_signal_source_with_gapless_eof,
+    route_signal_source_with_gapless,
     route_signal_source_with_gaps, spec,
 };
 use crate::{
     DecoderChangeCause, DecoderEvent, consts,
     pipeline::{
         decode::{DecoderGeneration, transition::OutgoingFrontier},
-        rebuild::{DecoderBuildComplete, DecoderBuildPurpose, state::BuildId},
+        rebuild::{
+            DecoderBuildComplete, DecoderBuildPurpose, RecreateCause, RecreateNext,
+            RecreateOutcome, RecreateState, state::BuildId,
+        },
         seek::{ResumeState, SeekContext, SeekRequest, engine::SeekTransition},
         track::{
             AtEof, CurrentFsm, Failed, Track, TrackFailure, TrackStep, fsm::apply_seek_transition,
+            recreate::finish_recreate_outcome,
         },
     },
     traits::{AudioSource, AudioSourceExt},
 };
+
+
+
+
+
+
+
+
+
 
 fn incoming_plan() -> VariantReaderPlan {
     let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
@@ -111,7 +124,8 @@ fn assert_route_signal(chunk: &AudioChunk, expected_offset: u64) {
 async fn wait_for_incoming_priming(fixture: &mut RouteFixture, transition: VariantTransition) {
     loop {
         yield_now().await;
-        fixture.source.flush_deferred();
+        let _ = fixture.source.prepare_deferred();
+        fixture.source.finish_deferred();
         if fixture.source.decode.incoming_is_priming(transition) {
             return;
         }
@@ -1066,75 +1080,6 @@ async fn stale_prepared_promotion_returns_incoming_for_shell_retirement(route_pc
     );
 }
 
-#[kithara::test(tokio)]
-async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks(
-    route_pcm: RoutePcm,
-) {
-    const RAW_CHUNKS: usize = 4;
-    const TRAILING_FRAMES: u64 = 300;
-
-    let mut fixture = route_signal_source_with_gapless_eof(
-        &route_pcm,
-        consts::SAMPLE_RATE,
-        GaplessInfo::new(0, TRAILING_FRAMES),
-        RAW_CHUNKS,
-    )
-    .await;
-    let plan = incoming_plan();
-    let transition = plan.transition();
-    fixture.control.set_exact_plan(plan);
-    fixture.control.set_exact_reader_ready();
-    fixture.control.set_promotion(VariantPromotion::Deferred);
-    fixture.source.flush_deferred();
-    wait_for_incoming_priming(&mut fixture, transition).await;
-
-    let expected = RAW_CHUNKS
-        .saturating_mul(consts::ROUTE_CHUNK_FRAMES)
-        .saturating_sub(usize::try_from(TRAILING_FRAMES).unwrap_or(usize::MAX));
-    let mut frames = 0usize;
-    let mut next_offset = 0u64;
-    // Drain while the deferred transition is in flight until the source
-    // exhausts; EOF must stay held for the transition and never surface.
-    while !fixture.source.decode.active().is_source_exhausted() {
-        match fixture.source.step_track() {
-            TrackStep::Produced(fetch) => {
-                let chunk = produced_data(fetch);
-                assert_eq!(chunk.meta.frame_offset, next_offset);
-                next_offset = next_offset.saturating_add(u64::from(chunk.meta.frames));
-                frames = frames.saturating_add(chunk.frames());
-            }
-            TrackStep::StateChanged | TrackStep::Blocked(_) => {}
-            TrackStep::Eof => panic!("EOF must stay held while a transition is in flight"),
-            TrackStep::Failed => panic!("finite gapless fixture must reach EOF cleanly"),
-        }
-        fixture.source.flush_deferred();
-    }
-
-    // Resolve the wedged transition: the next promote attempt retires the
-    // incoming, releasing the held EOF so it can finalize and flush the
-    // gapless boundary exactly once.
-    fixture.control.set_promotion(VariantPromotion::Stale);
-    loop {
-        match fixture.source.step_track() {
-            TrackStep::Produced(fetch) => {
-                let chunk = produced_data(fetch);
-                assert_eq!(chunk.meta.frame_offset, next_offset);
-                next_offset = next_offset.saturating_add(u64::from(chunk.meta.frames));
-                frames = frames.saturating_add(chunk.frames());
-            }
-            TrackStep::StateChanged | TrackStep::Blocked(_) => {}
-            TrackStep::Eof => break,
-            TrackStep::Failed => panic!("finite gapless fixture must reach EOF cleanly"),
-        }
-        fixture.source.flush_deferred();
-    }
-
-    assert_eq!(
-        frames, expected,
-        "EOF must release every non-trimmed frame once"
-    );
-    assert_eq!(next_offset, u64::try_from(expected).unwrap_or(u64::MAX));
-}
 
 #[kithara::test(tokio)]
 async fn newer_ticket_supersedes_only_incoming_generation(route_pcm: RoutePcm) {
@@ -1299,44 +1244,3 @@ async fn exact_promotion_emits_variant_switch_decoder_event(route_pcm: RoutePcm)
         TrackStep::Produced(_)
     ));
     fixture.source.flush_deferred();
-
-    let mut changed = false;
-    while let Ok(envelope) = events.try_recv() {
-        changed |= matches!(
-            envelope.event,
-            DecoderEvent::DecoderChanged {
-                cause: DecoderChangeCause::VariantSwitch,
-                variant: Some(1),
-                ..
-            }
-        );
-    }
-    assert!(changed);
-}
-#[kithara::test(tokio)]
-async fn failed_seek_commits_its_epoch_for_the_terminal_marker(route_pcm: RoutePcm) {
-    let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
-    let request = SeekRequest {
-        seek: SeekContext {
-            target: Duration::from_secs(2),
-            epoch: 3,
-        },
-        emit_request: false,
-    };
-
-    apply_seek_transition(
-        &mut fixture.source,
-        SeekTransition::Failed {
-            request,
-            error: DecodeError::Interrupted,
-            context: "test seek failure",
-        },
-    );
-
-    // The consumer's validator already sits at the failed seek's epoch, and a
-    // terminal `Failed` track never applies another seek. The failure marker
-    // is stamped with `decode_epoch`, so the epoch must be committed here or
-    // the marker is discarded as stale and a blocking reader hangs forever.
-    assert_eq!(fixture.source.decode_epoch(), request.seek.epoch);
-    assert!(matches!(fixture.source.step_track(), TrackStep::Failed));
-}

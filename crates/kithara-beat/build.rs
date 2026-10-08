@@ -1,7 +1,7 @@
 use std::{
-    env, fs,
+    env, fs, io,
     path::{Path, PathBuf},
-    process::Command,
+    process::{self, Command},
 };
 
 use sha2::{Digest, Sha256};
@@ -50,6 +50,7 @@ fn main() {
         source: None,
     };
 
+    println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-env-changed={CACHE_ENV}");
     if env::var_os("CARGO_FEATURE_EMBED_MODEL").is_none() {
         return;
@@ -68,21 +69,39 @@ fn main() {
 }
 
 fn cache_dir() -> PathBuf {
-    env::var_os(CACHE_ENV).map_or_else(
-        || env::temp_dir().join("kithara-beat-models"),
-        PathBuf::from,
-    )
+    if let Some(cache) = env::var_os(CACHE_ENV) {
+        return PathBuf::from(cache);
+    }
+    println!("cargo::rerun-if-env-changed=CARGO_HOME");
+    if let Some(cargo_home) = env::var_os("CARGO_HOME") {
+        return PathBuf::from(cargo_home).join("kithara-beat-models");
+    }
+    println!("cargo::rerun-if-env-changed=HOME");
+    let home = env::var_os("HOME").or_else(|| {
+        println!("cargo::rerun-if-env-changed=USERPROFILE");
+        env::var_os("USERPROFILE")
+    });
+    let Some(home) = home else {
+        println!("cargo::error=cannot determine Cargo home; set {CACHE_ENV} or CARGO_HOME");
+        process::exit(1);
+    };
+    PathBuf::from(home).join(".cargo/kithara-beat-models")
 }
 
-/// Puts the model in the cache and names it to the compiler. A model upstream
-/// publishes is fetched and checked; one that is quantized locally can only be
-/// reported missing.
+/// Names a build-owned snapshot to the compiler after resolving its source.
+/// Upstream bytes must match their pinned digest; locally quantized bytes have
+/// to be supplied by the user.
 fn resolve(cache: &Path, model: &Model) {
     let file = model.file;
     let path = cache.join(file);
-    println!("cargo::rerun-if-changed={}", path.display());
-    if !path.exists() {
-        let Some((url, sha256)) = model.source else {
+    let ready = if let Some((url, sha256)) = model.source {
+        fetch(cache, &path, url, sha256)
+    } else {
+        println!("cargo::rerun-if-changed={}", path.display());
+        let Some(_lock) = model_lock(cache, &path) else {
+            return;
+        };
+        if !path.exists() {
             println!(
                 "cargo::error={file} is missing from {}; quantize it with \
                  `uv run --with onnx --with onnxruntime \
@@ -93,26 +112,27 @@ fn resolve(cache: &Path, model: &Model) {
                 path.display()
             );
             return;
-        };
-        if !fetch(cache, &path, url, sha256) {
-            return;
         }
+        let Some(bytes) = read_model(&path, None) else {
+            return;
+        };
+        materialize(&path, &bytes)
+    };
+    if !ready {
+        return;
     }
-    println!("cargo::rustc-env={}={}", model.env, path.display());
+    let Some(output) = output_path(&path) else {
+        return;
+    };
+    println!("cargo::rustc-env={}={}", model.env, output.display());
 }
 
-/// Fetches under a lock on the model's name and moves the download into place
-/// once it checks out, so builds sharing one cache never read a partial file.
-/// The cache is shared by CI containers, whose process ids collide, so the
-/// lock rather than a per-process name is what keeps two fetches apart: the
-/// second one waits, finds the model placed, and leaves it untouched, because
-/// replacing it would make it newer than what other builds already embedded.
-/// A download cut short by a cancelled job leaves its partial file behind for
-/// the next holder of the lock to overwrite.
-fn fetch(cache: &Path, path: &Path, url: &str, sha256: &str) -> bool {
+/// Holds the model name across source validation and output publication. CI
+/// containers share the cache and can have colliding process ids.
+fn model_lock(cache: &Path, path: &Path) -> Option<fs::File> {
     if let Err(err) = fs::create_dir_all(cache) {
         println!("cargo::error=cannot create {}: {err}", cache.display());
-        return false;
+        return None;
     }
     let lock_path = path.with_extension("onnx.lock");
     let lock = match fs::OpenOptions::new()
@@ -124,15 +144,28 @@ fn fetch(cache: &Path, path: &Path, url: &str, sha256: &str) -> bool {
         Ok(lock) => lock,
         Err(err) => {
             println!("cargo::error=cannot open {}: {err}", lock_path.display());
-            return false;
+            return None;
         }
     };
-    if let Err(err) = lock.lock() {
+    if let Err(err) = fs4::FileExt::lock(&lock) {
         println!("cargo::error=cannot lock {}: {err}", lock_path.display());
-        return false;
+        return None;
     }
+    Some(lock)
+}
+
+/// Validates a cached source or fetches a missing one, then publishes the
+/// validated bytes while still holding the model-name lock. An interrupted
+/// download leaves its partial file for the next holder to overwrite.
+fn fetch(cache: &Path, path: &Path, url: &str, sha256: &str) -> bool {
+    let Some(_lock) = model_lock(cache, path) else {
+        return false;
+    };
     if path.exists() {
-        return true;
+        let Some(bytes) = read_model(path, Some(sha256)) else {
+            return false;
+        };
+        return materialize(path, &bytes);
     }
     let partial = path.with_extension("onnx.part");
     let status = Command::new("curl")
@@ -152,31 +185,72 @@ fn fetch(cache: &Path, path: &Path, url: &str, sha256: &str) -> bool {
             return false;
         }
     }
-    if !verify(&partial, sha256) {
+    let Some(bytes) = read_model(&partial, Some(sha256)) else {
         let _ = fs::remove_file(&partial);
         return false;
-    }
+    };
     if let Err(err) = fs::rename(&partial, path) {
         println!("cargo::error=cannot place {}: {err}", path.display());
         return false;
     }
-    true
+    materialize(path, &bytes)
 }
 
-fn verify(path: &Path, expected: &str) -> bool {
+fn read_model(path: &Path, expected: Option<&str>) -> Option<Vec<u8>> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(err) => {
             println!("cargo::error=cannot read {}: {err}", path.display());
-            return false;
+            return None;
         }
     };
-    let actual = hex::encode(Sha256::digest(&bytes));
-    if actual != expected {
-        println!(
-            "cargo::error={} hashes to {actual}, expected {expected}",
-            path.display()
-        );
+    if let Some(expected) = expected {
+        let actual = hex::encode(Sha256::digest(&bytes));
+        if actual != expected {
+            println!(
+                "cargo::error={} hashes to {actual}, expected {expected}",
+                path.display()
+            );
+            return None;
+        }
+    }
+    Some(bytes)
+}
+
+fn output_path(source: &Path) -> Option<PathBuf> {
+    let Some(out) = env::var_os("OUT_DIR") else {
+        println!("cargo::error=OUT_DIR is not set");
+        return None;
+    };
+    let Some(file) = source.file_name() else {
+        println!("cargo::error={} has no model filename", source.display());
+        return None;
+    };
+    Some(PathBuf::from(out).join(file))
+}
+
+/// Keeps an identical snapshot untouched so another resolution does not make
+/// Cargo rebuild units that already embedded these bytes.
+fn materialize(source: &Path, bytes: &[u8]) -> bool {
+    let Some(output) = output_path(source) else {
+        return false;
+    };
+    match fs::read(&output) {
+        Ok(current) if current == bytes => return true,
+        Ok(_) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            println!("cargo::error=cannot read {}: {err}", output.display());
+            return false;
+        }
+    }
+    let partial = output.with_extension("onnx.part");
+    if let Err(err) = fs::write(&partial, bytes) {
+        println!("cargo::error=cannot write {}: {err}", partial.display());
+        return false;
+    }
+    if let Err(err) = fs::rename(&partial, &output) {
+        println!("cargo::error=cannot place {}: {err}", output.display());
         return false;
     }
     true

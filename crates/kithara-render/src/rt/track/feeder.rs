@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use kithara_audio::DecodeErrorKind;
+use kithara_audio::FailureSource;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_decode::TrackMetadata;
 use kithara_platform::{maybe_send::WasmSend, sync::Arc, time::Duration};
@@ -18,8 +18,9 @@ pub struct PlayerResource {
     lane: LaneFrame,
     position: Duration,
     mapped: bool,
+    awaiting_segment: bool,
     eof: bool,
-    failed: Option<DecodeErrorKind>,
+    failed: Option<FailureSource>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,7 +28,7 @@ pub enum ReadOutcome {
     Full { frames: usize },
     Partial { frames: usize },
     Eof,
-    Failed(DecodeErrorKind),
+    Failed(FailureSource),
 }
 
 impl PlayerResource {
@@ -55,6 +56,7 @@ impl PlayerResource {
             },
             position,
             mapped: false,
+            awaiting_segment: false,
             eof: false,
             failed: None,
         })
@@ -123,7 +125,7 @@ impl PlayerResource {
             self.lane = LaneFrame { segment, frame: 0 };
             self.mapped = false;
             self.eof = false;
-            self.failed = None;
+            self.awaiting_segment = true;
         }
     }
 
@@ -147,7 +149,7 @@ impl PlayerResource {
     pub(super) fn recycle_obsolete(&mut self, budget: &mut usize) {
         loop {
             if let Some(packet) = &self.packet {
-                let older = packet_segment(packet) < self.lane.segment;
+                let older = matches!(packet, PcmPacket::Chunk(chunk) if chunk.meta.segment < self.lane.segment);
                 let spent = match packet {
                     PcmPacket::Chunk(chunk) => self.offset >= chunk.frames(),
                     PcmPacket::Failed { .. } => true,
@@ -172,7 +174,7 @@ impl PlayerResource {
             let Some(next) = receiver.peek() else {
                 return;
             };
-            if packet_segment(next) >= self.lane.segment || *budget == 0 {
+            if matches!(next, PcmPacket::Failed { .. }) || packet_segment(next) >= self.lane.segment || *budget == 0 {
                 return;
             }
             self.packet = receiver.pop();
@@ -191,7 +193,14 @@ impl PlayerResource {
             return None;
         }
         let receiver = &mut self.consumer.get_mut().receiver;
-        match receiver.peek()? {
+        let Some(next) = receiver.peek() else {
+            if receiver.is_closed() {
+                self.failed = Some(FailureSource::ChannelClosed);
+                return Some(ReadOutcome::Failed(FailureSource::ChannelClosed));
+            }
+            return None;
+        };
+        match next {
             PcmPacket::Chunk(chunk)
                 if chunk.meta.segment == self.lane.segment
                     && chunk.meta.end_of_track
@@ -204,8 +213,12 @@ impl PlayerResource {
                 }
                 self.eof = true;
             }
-            PcmPacket::Failed { segment, kind } if *segment == self.lane.segment => {
-                self.failed = Some(*kind);
+            PcmPacket::Failed { failure, .. } => {
+                self.failed = Some(if !self.awaiting_segment {
+                    FailureSource::Producer { failure: *failure }
+                } else {
+                    FailureSource::ProducerAfterSeek { failure: *failure }
+                });
             }
             _ => return None,
         }
@@ -277,6 +290,7 @@ impl PlayerResource {
                     break;
                 }
                 self.packet = receiver.pop();
+                self.awaiting_segment = false;
                 self.offset = 0;
             }
             let Some(PcmPacket::Chunk(chunk)) = &self.packet else {
@@ -440,3 +454,7 @@ mod tests {
         assert_eq!(consumed.mapping_revision(), mapping);
     }
 }
+
+#[cfg(test)]
+#[path = "terminal_tests.rs"]
+mod terminal_tests;

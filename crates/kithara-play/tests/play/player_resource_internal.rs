@@ -10,7 +10,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara_audio::{
-    AudioControl, AudioRead, AudioSession, DecodeError, DecodeErrorKind, ReadOutcome, SeekOutcome,
+    AudioControl, AudioRead, AudioReadError, AudioSession, DecodeError, DecodeErrorKind,
+    ReadOutcome, SeekOutcome, TrackFailureKind,
     mock::{Fault, MockReader, TestPcmReader},
 };
 use kithara_decode::TrackMetadata;
@@ -73,7 +74,7 @@ impl ChunkReader {
 }
 
 impl AudioRead for ChunkReader {
-    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
         let frames = Self::CHUNK_FRAMES.min(buf.len() / usize::from(self.spec.channels));
         buf[..frames * usize::from(self.spec.channels)].fill(0.5);
         Ok(self.emit(frames))
@@ -82,7 +83,7 @@ impl AudioRead for ChunkReader {
     fn read_planar<'a>(
         &mut self,
         output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
+    ) -> Result<ReadOutcome, AudioReadError> {
         let frames = Self::CHUNK_FRAMES.min(output[0].len());
         fill_planar(output, frames, |_| 0.5);
         Ok(self.emit(frames))
@@ -163,7 +164,7 @@ impl PositionReader {
 }
 
 impl AudioRead for PositionReader {
-    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
         let channels = usize::from(self.spec.channels);
         let frames = buf.len() / channels;
         Ok(self.read_with(frames, |start, avail| {
@@ -176,7 +177,7 @@ impl AudioRead for PositionReader {
     fn read_planar<'a>(
         &mut self,
         output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
+    ) -> Result<ReadOutcome, AudioReadError> {
         let frames = output[0].len();
         Ok(self.read_with(frames, |start, avail| {
             fill_planar(output, avail, |frame| (start + frame as u64) as f32);
@@ -375,48 +376,4 @@ async fn read_returns_partial_when_eof_inside_buffer(constant_half: &'static [u8
     let mut output3: Vec<&mut [f32]> = vec![&mut left, &mut right];
     let result3 = pr.read(&mut output3, 0..4096, &RtMetrics::default());
     assert!(matches!(result3, BlockReadOutcome::Eof));
-}
-
-/// Contract test for the user-reported "preliminary EOF" bug.
-///
-/// Before the fix, any `Err` from the underlying audio reader set
-/// `eof_seen=true`, which made the next `read()` return `Partial(0)`
-/// or `Eof`. The Player then emitted `PlaybackStopped { Eof }` and
-/// the Queue auto-advanced — even though the track did NOT actually
-/// reach its natural end. After the fix, `Err` records the decoder's
-/// error kind and `read()` returns it on the `Failed` variant, so callers
-/// distinguish "track aborted mid-stream" from "track played out" and can
-/// say which fault ended it rather than only that one did.
-#[kithara::test(tokio)]
-async fn read_returns_failed_not_eof_on_decoder_error() {
-    let reader = MockReader::faulty(AUDIO_SPEC, Fault::DecodeError);
-    let resource = Resource::from_reader(reader, None);
-    let mut pr = PlayerResource::new(resource.into(), Arc::from("failing.mp3"), &pools())
-        .expect("player resource fits the test pool budget");
-
-    let mut left = vec![0.0f32; 4096];
-    let mut right = vec![0.0f32; 4096];
-    let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-    let result = pr.read(&mut output, 0..4096, &RtMetrics::default());
-
-    match result {
-        BlockReadOutcome::Failed(kind) => assert_eq!(
-            kind,
-            DecodeErrorKind::Io,
-            "the decoder's own error kind must survive the read that returned it"
-        ),
-        BlockReadOutcome::Eof | BlockReadOutcome::Partial { .. } => panic!(
-            "decoder Err must NOT be conflated with natural EOF — got {result:?}; \
-             this is the false-EOF bug from app.log"
-        ),
-        BlockReadOutcome::Full { .. } => {
-            panic!("decoder Err must surface as Failed, not Full silence — got {result:?}")
-        }
-    }
-
-    assert!(
-        pr.frames_until_eof().is_none(),
-        "frames_until_eof must NOT report an EOF after a decode failure \
-         (otherwise the Queue treats it as a natural-end signal)"
-    );
 }

@@ -60,7 +60,7 @@ where
                             .push((index, active.track.settle(TrackReceipt::Event(event), out)));
                     }
                 }
-                self.item_event(event);
+                self.item_event(event, out);
             }
             TrackReceipt::Loaded(receipt) => {
                 let seq = receipt.seq();
@@ -282,7 +282,33 @@ where
         retry
     }
 
-    fn item_event(&mut self, event: DeckEvent) {
+    fn item_event(&mut self, event: DeckEvent, out: &mut Outbox<'_, S>) {
+        if let DeckEvent::Failed { slot, at, fault } = event {
+            let Some(active) = self.active.iter().find(|active| active.slot == slot && active.role == Role::Current) else {
+                return;
+            };
+            let snapshot = active.track.snapshot();
+            if !matches!(snapshot.as_ref().status, kithara_play::TrackStatus::Failed { at: failed_at, fault: actual } if failed_at == at && actual == fault) {
+                return;
+            }
+            let id = active.item;
+            if self.track(id).is_some_and(|entry| matches!(entry.status, TrackStatus::Failed(_))) {
+                return;
+            }
+            let reason = fault.to_string();
+            self.tracks.set_status(id, TrackStatus::Failed(reason.clone()));
+            self.announce(QueueEvent::TrackLoadFailed {
+                id, reason, auto_skipped: self.config.action_at_item_end == ActionAtItemEnd::Advance,
+            });
+            if self.target.is_none() && self.config.action_at_item_end == ActionAtItemEnd::Advance {
+                match self.next_target(super::Transition::None, crate::AdvanceReason::TrackFailed, true, out) {
+                    Ok(Some(_)) => {}
+                    Ok(None) => self.announce(QueueEvent::QueueEnded),
+                    Err(error) => warn!(%error, "queue could not advance after source failure"),
+                }
+            }
+            return;
+        }
         if let DeckEvent::Ended { slot, .. } = event {
             let current = self
                 .active
@@ -310,3 +336,8 @@ pub(super) fn refusal(reason: &Rejection<PlayError>) -> PlayError {
         Rejection::Refused(error) => error.clone(),
     }
 }
+
+
+#[cfg(test)]
+#[path = "hosted_terminal_tests.rs"]
+mod terminal_tests;

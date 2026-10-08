@@ -10,7 +10,7 @@ use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_render::{
     CrossfadeSettings, DispatcherProtocol, LaneCommand, LaneProtocol,
-    bridge::{DeckEvent, DeckPart, DeckProtocol, Fade, FadeDir, Released, Slot},
+    bridge::{PlaybackFault, DeckEvent, DeckPart, DeckProtocol, Fade, FadeDir, Released, Slot},
 };
 use kithara_signal::SessionFrame;
 use kithara_warp::SpeedCurve;
@@ -81,8 +81,9 @@ pub enum TrackStatus {
     Paused { at: Position },
     /// Faded to silence on `at`; the slot stopped.
     Faded { at: SessionFrame },
-    /// Played to its end marker, or its source failed, on `at`.
+    /// Played to its natural end marker on `at`.
     Ended { at: SessionFrame },
+    Failed { at: SessionFrame, fault: PlaybackFault },
     /// Out of its slot.
     Released,
 }
@@ -347,11 +348,18 @@ impl<S> PlayerImpl<S> {
 
     /// Takes in an event of this track's slot.
     fn event(&mut self, event: DeckEvent) {
-        if !self.attached() {
+        if !self.attached() || matches!(self.status, TrackStatus::Failed { .. }) {
             return;
         }
         match event {
             DeckEvent::Ended { at, .. } => self.status = TrackStatus::Ended { at },
+            DeckEvent::Failed { at, fault, .. } => {
+                if let TrackStatus::Playing { since } = self.status
+                    && at.frames_since(since).is_some()
+                {
+                    self.status = TrackStatus::Failed { at, fault };
+                }
+            }
             DeckEvent::Faded { at, .. } => self.status = TrackStatus::Faded { at },
             DeckEvent::Underrun { at, frames, .. } => {
                 warn!(item = ?self.item, ?at, frames, "track underran");

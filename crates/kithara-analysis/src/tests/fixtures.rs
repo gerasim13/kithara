@@ -3,7 +3,7 @@ use std::{collections::VecDeque, num::NonZeroU32};
 #[cfg(feature = "analysis-waveform")]
 use kithara_audio::PendingReason;
 use kithara_audio::{
-    AudioControl, AudioRead, AudioSession, ChunkOutcome, ReadOutcome, SeekOutcome,
+    AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome, ReadOutcome, SeekOutcome,
 };
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
@@ -244,22 +244,25 @@ impl AudioSession for FakeReader {
 }
 
 impl AudioRead for FakeReader {
-    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
-        self.outcomes.pop_front().unwrap_or_else(|| Ok(eof()))
+    fn next_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError> {
+        self.outcomes
+            .pop_front()
+            .unwrap_or_else(|| Ok(eof()))
+            .map_err(Into::into)
     }
 
     fn position(&self) -> Duration {
         Duration::ZERO
     }
 
-    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
         unreachable!("analysis uses next_chunk")
     }
 
     fn read_planar<'a>(
         &mut self,
         _output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
+    ) -> Result<ReadOutcome, AudioReadError> {
         unreachable!("analysis uses next_chunk")
     }
 

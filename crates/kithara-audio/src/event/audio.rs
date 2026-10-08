@@ -111,9 +111,28 @@ pub enum PlaybackResamplerKind {
     None,
 }
 
-#[derive(Debug, Clone)]
+/// Terminal classification carried by a decoded-audio source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum TrackFailureKind {
-    Decode,
-    RecreateFailed { offset: u64 },
+    /// A decoder failure with its concrete kind.
+    #[error("decode failure: {kind:?}")]
+    Decode {
+        /// The decoder's classification.
+        kind: super::DecodeErrorKind,
+    },
+    /// Decoder recreation failed at a source byte offset.
+    #[error("decoder recreation failed at offset {offset}")]
+    RecreateFailed {
+        /// The attempted source byte offset.
+        offset: u64,
+    },
+    /// The source cancelled before natural EOF.
+    #[error("source cancelled")]
     SourceCancelled,
+    /// The producer closed without a terminal marker.
+    #[error("PCM channel closed with no failure marker")]
+    ChannelClosed,
+    /// The render adapter failed without a more specific upstream cause.
+    #[error("audio render failed")]
+    Render,
 }

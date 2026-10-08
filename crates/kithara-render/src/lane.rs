@@ -7,7 +7,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use kithara_audio::{AudioSource, DecodeError};
+use kithara_audio::{AudioSource, TrackFailureKind};
 use kithara_bufpool::HasPool;
 use kithara_command::{Inbox, Protocol, Seq};
 use kithara_platform::time::Duration;
@@ -152,7 +152,7 @@ impl Lane {
         source: &mut T,
         warp: &mut WarpRenderer<S>,
         spec: AudioSpec,
-    ) -> Result<LaneChange, DecodeError>
+    ) -> Result<LaneChange, TrackFailureKind>
     where
         T: AudioSource<Chunk = AudioChunk>,
         S: HasPool<f32>,
@@ -172,7 +172,7 @@ impl Lane {
                 match command {
                     LaneCommand::SetSpeed(curve) => warp
                         .set_speed(curve.clone(), revision)
-                        .map_err(|error| DecodeError::audio_stream("lane speed curve", error))?,
+                        .map_err(|_| TrackFailureKind::Render)?,
                     LaneCommand::SetKeylock(on) => warp.set_keylock(*on),
                     LaneCommand::SetBackend(kind) => warp.set_backend(*kind),
                     LaneCommand::Jump { to } => {
@@ -187,15 +187,13 @@ impl Lane {
                         });
                     }
                     LaneCommand::Segment { id, from, speed } => {
-                        self.position = Some(landing_position(source.seek(*from)?));
-                        warp.reset();
-                        warp.set_speed(speed.clone(), revision).map_err(|error| {
-                            DecodeError::audio_stream("lane segment speed curve", error)
-                        })?;
                         self.cursor = LaneFrame {
                             segment: *id,
                             frame: 0,
                         };
+                        self.position = Some(landing_position(source.seek(*from).map_err(|error| TrackFailureKind::from(&error))?));
+                        warp.reset();
+                        warp.set_speed(speed.clone(), revision).map_err(|_| TrackFailureKind::Render)?;
                         self.jump = None;
                         segment = Some(*id);
                         changed = LaneChange::Source;
@@ -216,7 +214,7 @@ impl Lane {
             let next_spec = source.prepare_deferred().unwrap_or(spec);
             let latency = warp
                 .prepare_engine_latency(next_spec)
-                .map_err(|error| DecodeError::audio_stream("lane engine preparation", error))?;
+                .map_err(|_| TrackFailureKind::Render)?;
             if segment.is_some() {
                 let seq = due.defer();
                 self.finish_pending(None);
@@ -232,11 +230,11 @@ impl Lane {
         if let Some(Jump::Down { to, start, frames }) = self.jump {
             let frames = u64::try_from(frames).map_or(u64::MAX, |frames| frames);
             if self.cursor.frame.saturating_sub(start) >= frames {
-                self.position = Some(landing_position(source.seek(to)?));
+                self.position = Some(landing_position(source.seek(to).map_err(|error| TrackFailureKind::from(&error))?));
                 warp.reset();
                 let next_spec = source.prepare_deferred().unwrap_or(spec);
                 warp.prepare_engine_latency(next_spec)
-                    .map_err(|error| DecodeError::audio_stream("lane jump preparation", error))?;
+                    .map_err(|_| TrackFailureKind::Render)?;
                 self.jump = Some(Jump::Up {
                     start: self.cursor.frame,
                     frames: usize::try_from(frames).map_or(usize::MAX, |frames| frames),

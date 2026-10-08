@@ -129,6 +129,7 @@ impl<T: StreamType> SharedStream<T> {
 
     delegate! {
         to self.probe {
+            pub(crate) fn phase(&self) -> kithara_stream::SourcePhase;
             /// Current read position — the source's atomic cursor.
             pub(crate) fn position(&self) -> u64;
             /// Absolute byte cursor set — forwards to the inner source's
