@@ -1,4 +1,4 @@
-use std::{fs::File, path::Path};
+use std::{fs::File, io::BufReader, path::Path};
 
 use kithara_test_utils::kithara;
 use kithara_ui_capture::{Geometry, Locate, Region, Stage, part_file, shoot_part};
@@ -61,8 +61,10 @@ fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
 /// The size and RGBA8 pixels of a picture that was written.
 fn read(path: &Path) -> ((u32, u32), Vec<u8>) {
     let file = File::open(path).expect("a picture that was just written");
-    let mut reader = Decoder::new(file).read_info().expect("a PNG header");
-    let mut rgba = vec![0; reader.output_buffer_size()];
+    let mut reader = Decoder::new(BufReader::new(file))
+        .read_info()
+        .expect("a PNG header");
+    let mut rgba = vec![0; reader.output_buffer_size().expect("a small capture image")];
     let info = reader.next_frame(&mut rgba).expect("one PNG frame");
     rgba.truncate(info.buffer_size());
     ((info.width, info.height), rgba)

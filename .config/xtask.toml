@@ -1351,7 +1351,7 @@ kinds = ["weekly"]
 kinds_github = ["nightly"]
 timeout_minutes = 30
 
-[ext.ci.lanes.deps-features]
+[ext.ci.lanes.deps-features-full]
 cache_group = "linux"
 label = "dependency audit"
 os = "linux"
@@ -1360,15 +1360,7 @@ program = "just"
 steps = [{ args = ["deps", "hack"], label = "feature powerset check" }]
 role = "gate"
 kinds = ["weekly"]
-# Not on a branch push. This checks about 375 feature combinations - the count
-# moves as crates and features do - and the workspace is unpublished: the
-# configurations anyone actually builds are the ones the platform lanes name,
-# roughly a dozen. Paying 6.9 to 38.3 minutes of a one-host fleet on every push
-# of every branch to cover the rest is the wrong trade - 30.8 hours of runner time over 117 runs. On the default branch
-# it still gates what lands, and the nightly pass covers the days nothing
-# lands, which is where a dependency update would break a combination with no
-# push to blame. GitLab already said `weekly`; this is the same judgement.
-kinds_github = ["main", "nightly"]
+kinds_github = []
 # The measurement, not a nap: over 117 runs on the fork's runners this lane took
 # 6.9 to 38.3 minutes green, with p95 at 29.5, and the six that failed all
 # failed inside eleven minutes - the shape of a check that stops at the first
@@ -1377,6 +1369,50 @@ kinds_github = ["main", "nightly"]
 # stuck, which is what a backstop exists to prevent. Sixty is the next rung
 # above the worst run measured, and what every other gate lane of this weight
 # already says.
+timeout_minutes = 60
+
+[ext.ci.lanes.deps-features-workspace]
+cache_group = "linux"
+label = "dependency audit"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "deps",
+    "hack-workspace",
+  ], label = "workspace feature powerset check" },
+]
+role = "gate"
+kinds = []
+# Not on a branch push. Together the two parts check about 375 feature
+# combinations - the count moves as crates and features do - and the workspace
+# is unpublished: the configurations anyone actually builds are the ones the
+# platform lanes name, roughly a dozen. Paying 6.9 to 38.3 minutes of a one-host
+# fleet on every push of every branch to cover the rest is the wrong trade -
+# 30.8 hours of runner time over 117 runs. On the default branch it still gates
+# what lands, and the nightly pass covers the days nothing lands, which is where
+# a dependency update would break a combination with no push to blame. GitLab
+# runs the whole plan weekly; this is the same judgement.
+kinds_github = ["main", "nightly"]
+timeout_minutes = 60
+
+[ext.ci.lanes.deps-features-invariants]
+cache_group = "linux"
+label = "dependency audit"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "deps",
+    "hack-invariants",
+  ], label = "invariant and product feature checks" },
+]
+role = "gate"
+kinds = []
+# The same schedule as the workspace part: together they are the whole plan.
+kinds_github = ["main", "nightly"]
 timeout_minutes = 60
 
 [ext.ci.lanes.deps-semver]
@@ -2494,8 +2530,8 @@ kinds = ["nightly"]
 timeout_minutes = 120
 
 # Both Android lanes boot an emulator, which the Mac mini and the Linux KVM
-# runners each carry, so both name the two machines and neither declares
-# `kinds_github`: the shared GitHub fan-out has no emulator. GitHub starts the
+# runners each carry, so both name the two machines and leave `kinds_github`
+# empty: the shared GitHub fan-out has no emulator. GitHub starts the
 # emulator through `.github/workflows/android.yml`, which names the runner pool
 # the catalog cannot yet name.
 [ext.ci.lanes.android-build]
@@ -2518,6 +2554,7 @@ steps = [
 ]
 role = "platforms"
 kinds = ["platforms", "main", "nightly"]
+kinds_github = []
 timeout_minutes = 45
 
 # CI and prepared local runners execute the same complete baseline. The test
@@ -2544,6 +2581,7 @@ steps = [
 ]
 role = "platforms"
 kinds = ["platforms", "main", "nightly"]
+kinds_github = []
 timeout_minutes = 90
 
 # Every Apple job repeats the preflight instead of inheriting it from a

@@ -5,6 +5,8 @@ pub(crate) mod consts {
 
     pub(crate) const HEIGHT: u16 = 120;
     pub(crate) const LAYOUT: &str = "fixture.klayout.ron";
+    /// Moving reads exercise actual frame cost: Sprite cuts its sheet once and
+    /// draws one picture per frame; Lottie reads once but emits fresh artwork.
     pub(crate) const SCENARIOS: &[Scenario] = &[
         Scenario {
             name: "Brand",
@@ -216,9 +218,6 @@ pub(crate) mod consts {
             control: r#"Range(id: "control", read: Model(id: "pivot.range"), write: Parameter(id: "pivot.range"))"#,
             interaction: Interaction::Drag,
         },
-        // A sheet is cut once and a frame of it is one picture draw; an artwork is
-        // read once and every frame of it is emitted afresh. Both are driven by a
-        // reading that moves, which is the frame their hosts actually pay for.
         Scenario {
             name: "Sprite",
             control: r#"Sprite(id: "control", sheet: "spinner", seconds: 1.6, read: Model(id: "deck.view.zoom"))"#,

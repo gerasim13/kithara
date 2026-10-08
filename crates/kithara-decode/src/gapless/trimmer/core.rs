@@ -570,22 +570,9 @@ fn trim_tail_frames(
     }
 }
 
-/// Walk frames from the end of `tail_buffer`, group them into
-/// `consts::TRAILING_SILENCE_WINDOW_MS` windows, and count frames as silent
-/// while window-mean-|sample| stays below `threshold_amp`. Returns the
-/// largest tail length whose energy is still below the floor.
-///
-/// Per-sample testing (the original implementation) misclassifies
-/// zero-crossings of any periodic signal as silence: AAC quantisation
-/// noise around a ZCR can dip below `1e-3` for a handful of frames at
-/// every cycle. Integrating over a few-millisecond window prevents
-/// the search from chewing into audible content via those gaps.
-///
-/// Mean-|sample| (rather than RMS) is used because it is less peak-
-/// sensitive: for an audible sine its mean-abs is ≈0.6 of peak, while
-/// for a noisy quiet region it tracks the average linear amplitude.
-/// This widens the gap between "real" audio and codec quantisation
-/// noise, making the threshold easier to pick.
+/// Count trailing frames whose windowed mean absolute amplitude stays below the threshold.
+/// Window integration avoids mistaking periodic zero crossings for silence; mean amplitude
+/// is less peak-sensitive than RMS and separates audible content from quantisation noise.
 fn trailing_silent_frames(tail_buffer: &TailBuffer, threshold_amp: f32) -> u64 {
     if tail_buffer.is_empty() {
         return 0;

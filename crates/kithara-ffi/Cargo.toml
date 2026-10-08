@@ -32,7 +32,17 @@ required-features = ["uniffi-bindgen-cli"]
 # hardware backend is the sole decoder there.
 default = ["uniffi", "symphonia", "standard", "client-reqwest", "tls-rustls"]
 uniffi = ["dep:uniffi"]
-uniffi-bindgen-cli = ["uniffi", "uniffi/cli", "uniffi/cargo-metadata"]
+# The host-side generator needs decoder, stretch and HTTP backends even when
+# device builds use only their native backends.
+uniffi-bindgen-cli = [
+    "uniffi",
+    "uniffi/cli",
+    "uniffi/cargo-metadata",
+    "symphonia",
+    "stretch-identity",
+    "client-reqwest",
+    "tls-rustls",
+]
 standard = ["stretch-signalsmith"]
 # A device reads analysis artifacts and talks to the analysis server, so the
 # analysis contracts ship; no beat detector (`beat-dsp`, `beat-nn`) runs there.
@@ -184,7 +194,6 @@ tracing-wasm = { workspace = true }
 # pulled.
 uuid = { workspace = true }
 wasm-bindgen = { workspace = true }
-wasm-bindgen-futures = { workspace = true }
 web-sys = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
@@ -201,7 +210,6 @@ kithara = { workspace = true, features = ["usdt", "audio", "download", "net", "o
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["wav"] }
 kithara-test-utils = { workspace = true, features = ["usdt", "mock", "hang"] }
 
-futures = { workspace = true }
 tempfile = { workspace = true }
 unimock = { workspace = true }
 

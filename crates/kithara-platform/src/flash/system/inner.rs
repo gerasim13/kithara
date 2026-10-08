@@ -123,16 +123,9 @@ pub(in crate::flash) struct Registry {
     /// diagnostic: it lets the hang dump label an opaque `Condvar(CvId(n))` waiter
     /// with the real async primitive (kind + creation site) instead of a bare id.
     pub(super) cv_desc: BTreeMap<u64, CvDesc>,
-    /// Gate state and poll count of every live async task, keyed by task id and
-    /// shared with its [`TaskGate`](super::gate::TaskGate). Inserted at
-    /// `async_acquire`, removed when the task completes or drops.
-    ///
-    /// A holder alone says a task pins the clock, not how. These two numbers
-    /// separate the two ways it can: a task spinning through wake-poll-park
-    /// climbs its poll count without bound, while one left `Runnable` by a wake
-    /// whose re-poll never arrived holds the slot at a poll count that never
-    /// moves again. Both look identical in `active_async=1`.
-    pub(super) task_diag: BTreeMap<u64, Arc<TaskDiag>>,
+    /// Canonical task records share gate diagnostics and own retained grants.
+    /// Done records remain until their final grant receipt settles.
+    pub(super) task_diag: BTreeMap<u64, TaskRecord>,
     /// OS threads currently inside a BRIDGED wait — blocked on the engine from
     /// within an async poll (`enter_wait_locked`'s bridged arm inserts, the
     /// matching `resume_after_wait` removes). Such a thread polls nothing while
@@ -147,10 +140,8 @@ pub(in crate::flash) struct Registry {
     pub(super) next_id: u64,
     /// Monotonic async-task-id mint (one per [`crate::flash::participate`]).
     pub(super) next_task_id: u64,
-    /// SYNC participants currently RUNNING (OS threads not inside a wrapped
-    /// `park_timeout`/`Condvar` wait). Bumped by the firer on wake (real OS
-    /// scheduling latency must be covered), decremented at the next wait /
-    /// thread exit via the thread-local `Credit` bracket (`credit` module).
+    /// Running sync participants, completion credits and untracked async
+    /// grants. Participated grants belong to their canonical task record.
     pub(super) active: usize,
     /// ASYNC tasks the engine counts as NON-QUIESCENT. A task is counted from the
     /// moment it becomes RUNNABLE — spawned, or woken (its waker fired and it is
@@ -162,6 +153,13 @@ pub(in crate::flash) struct Registry {
     /// closes the wake→poll window. The engine may advance only when BOTH
     /// `active` and `active_async` are zero.
     pub(super) active_async: usize,
+}
+
+/// Engine-owned grant count with the gate's existing shared diagnostics.
+/// The count remains retained while a stranded task cannot be polled.
+pub(super) struct TaskRecord {
+    pub(super) diag: Arc<TaskDiag>,
+    pub(super) grants: usize,
 }
 
 /// Diagnostic identity of a sync `active` holder — a dedicated pacer thread.
@@ -373,13 +371,9 @@ impl FlashInner {
         Self::new()
     }
 
-    /// Reset the timeline to its base and clear the engine state (for the
-    /// in-process test harness; nextest gives production tests per-process
-    /// isolation). Order matters: store the base first, then drop the engine
-    /// state, so afterwards the clock reads `Instant::BASE_NANOS` and the
-    /// engine is empty. Deliberately untouched: the pacer's published wake
-    /// handle, the real-clock anchor, and the per-thread credit cells (separate
-    /// `reset_credit()`).
+    /// Reset a drained test/loom run; no old waiter, receipt or participant
+    /// may remain reachable. Preserve the pacer wake handle; per-thread
+    /// credit cells are reset separately through reset_credit().
     #[cfg(any(test, feature = "loom"))]
     pub(in crate::flash) fn reset(&self) {
         self.clock.reset();

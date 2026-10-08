@@ -35,7 +35,7 @@ webcodecs = ["kithara-decode/webcodecs"]
 # Enable libfdk-aac for HE-AAC v1/v2 decode. Symphonia's stock AAC
 # decoder is LC-only; without this feature, HE-AAC v2 streams fail to
 # play through the software fallback.
-fdk-aac = ["kithara-decode/fdk-aac"]
+fdk-aac = ["symphonia", "kithara-decode/fdk-aac"]
 resample-glide = ["kithara-decode/resample-glide", "kithara-resampler/resample-glide"]
 resample-rubato = ["kithara-resampler/resample-rubato"]
 [dependencies]
@@ -71,15 +71,6 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 hotpath = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-js-sys = { workspace = true }
-wasm-bindgen = { workspace = true }
-web-sys = { workspace = true, features = [
-    "AudioContext",
-    "AudioWorkletNode",
-    "AudioWorkletNodeOptions",
-    "BaseAudioContext",
-    "MessagePort",
-] }
 
 [dev-dependencies]
 kithara-audio = { path = ".", default-features = false, features = ["mock", "usdt"] }
@@ -89,13 +80,8 @@ kithara-storage = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock", "hang"] }
 
-aes = { workspace = true }
-assert_no_alloc = { workspace = true }
-bytes = { workspace = true }
-cbc = { workspace = true }
 num-traits = { workspace = true }
 serde_yaml_ng = { workspace = true }
-tempfile = { workspace = true }
 tracing = { workspace = true }
 unimock = { workspace = true }
 url = { workspace = true }
@@ -105,12 +91,9 @@ wasm-bindgen-test = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-file = { workspace = true }
 kithara-hls = { workspace = true }
-kithara-net = { workspace = true, default-features = false }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["hls"] }
 
-axum = { workspace = true }
 hotpath = { workspace = true }
-tracing-subscriber = { workspace = true }
 
 [target.'cfg(not(target_os = "android"))'.dev-dependencies]
 kithara-audio = { path = ".", default-features = false, features = ["symphonia"] }

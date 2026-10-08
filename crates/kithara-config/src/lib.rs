@@ -1,14 +1,11 @@
 //! Owned snapshots of retained settings, with builders and accessors.
 
 pub use bon;
-/// `#[derive(Config)]` generates the builder, accessors, `Default`, `Debug`,
-/// the owned snapshot, field checks and live field changes of a struct, every
-/// facet declared through `#[config(...)]`. `construction` treats unmarked
-/// fields as consumed builder inputs and generates no retained snapshot. On a struct
-/// `fields(...)` supplies field defaults using the same grammar as a field
-/// declaration, for example `fields(value, get(copy), builder(default))`.
-/// `get(ref)` borrows the retained field; `get(skip)` disables an inherited
-/// getter. Explicit field facets override defaults; groups replace whole groups.
+/// `#[derive(Config)]` declares builders, accessors, defaults, debug output,
+/// snapshots, checks and live changes through `#[config(...)]`. `construction`
+/// consumes unmarked builder inputs without a snapshot. `fields(...)` supplies
+/// field defaults; explicit facets override them and groups replace whole groups.
+/// `get(ref)` borrows the field; `get(skip)` disables an inherited getter.
 ///
 /// ```compile_fail
 /// #[derive(kithara_config::Config)]

@@ -26,12 +26,9 @@ impl<T: AsMut<[u8]>> DirectBuffer<T> {
         let len = bytes.len();
         let address = bytes.as_mut_ptr();
 
-        // SAFETY: the region is boxed, so `address` names `len` bytes that
-        // keep that address until this value drops. Java may keep its own
-        // reference past that drop; soundness rests on the transport contract,
-        // under which the transport touches a buffer only until the callback
-        // answering it or ending its call, and on the owner holding this value
-        // until that callback.
+        // SAFETY: Boxing fixes the address of these len bytes until drop. Java may
+        // retain references longer, but transport touches bytes only until its
+        // answer/end callback, and the owner holds this value through that callback.
         let buffer = unsafe { env.new_direct_byte_buffer(address, len) }
             .map_err(AndroidBackendError::jni("jni-new-direct-byte-buffer"))?;
         let object = env

@@ -247,21 +247,12 @@ pub(super) fn append(
     invalid == 0 && !files.limit_exceeded && missing.is_empty()
 }
 
-/// Fold a dump's per-thread OS readings into one entry per thread name.
-///
-/// The engine names a quiescence holder by a hashed thread id that nothing
-/// outside the engine can look up, so the reading is joined to it by name.
-/// Per-name state counts answer what the holder line cannot: the name is
-/// missing entirely (its thread exited and the credit leaked), every instance
-/// is parked (`S`/`D`, so nothing is spinning), or one is runnable (`R`).
-/// Thread ids and tick counters are volatile and stay in the raw artifact.
-///
-/// A parked thread is counted with what it is parked on, because a wedge
-/// leaves every thread parked and the state letter alone then separates
-/// nothing. The kernel's wait channel does: a holder on a futex is inside a
-/// lock it took without releasing its credit, one on the reactor is waiting
-/// for real I/O, and one on a timer is sleeping out a real deadline. A
-/// runnable thread is on CPU and has no channel to report.
+/// Joins OS readings to engine holders by thread name; hashed engine IDs cannot
+/// be looked up externally. Counts distinguish exited/leaked holders, parked
+/// instances (`S`/`D`), and runnable ones (`R`); volatile IDs and ticks stay raw.
+/// Parked counts include the kernel wait channel because a wedge parks every
+/// thread: futex means a lock held without releasing credit, reactor means I/O,
+/// and timer means a real deadline. Runnable threads have no wait channel.
 fn thread_census(lines: &[String]) -> Vec<String> {
     let mut census: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     for line in lines {

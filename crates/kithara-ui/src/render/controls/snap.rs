@@ -1,19 +1,9 @@
 use iced::Rectangle;
 
-/// The whole-pixel box a control is drawn into.
-///
-/// The retained host never sees anything else: Masonry snaps a node's origin
-/// and size to the pixel grid before the painter runs, so the painter is handed
-/// the pixels the box covers rather than the float the solver arrived at. The
-/// immediate host has to snap the same way, or the two hosts hand the same
-/// painter two different widths for the same box.
-///
-/// Snapping the two edges is not the same as rounding the width, and that is
-/// the whole point: a 262.5-wide box covers 263 pixels from an integer origin
-/// and 262 from a half-pixel one, while `262.5.round()` says 263 either way. A
-/// painter that lays a grid across the box - the waveform's bar columns - then
-/// fits one more column on the immediate host than on the retained one, and
-/// every column summarises a different slice of the track from there on.
+/// Snaps both control edges to the pixel grid used by Masonry, so the immediate
+/// and retained hosts pass the same box to their painter. Rounding width alone
+/// is different: 262.5 covers 263 pixels at an integer origin but 262 at a half
+/// origin. A differing waveform width changes every column's source slice.
 pub(crate) fn snapped(bounds: Rectangle) -> Rectangle {
     let x = bounds.x.round();
     let y = bounds.y.round();

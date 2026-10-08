@@ -66,20 +66,11 @@ pub(crate) enum Visual {
     Whole(VisualState),
 }
 
-/// Everything the picture a painter draws is a function of: the painter, what
-/// the host handed it this frame, the box it was given, what the pointer made
-/// of it, and the pose an object put it under.
-///
-/// These are the arguments [`ControlPainter::draw`] receives rather than a
-/// digest of them, so a painter that starts reading one more thing cannot leave
-/// the key behind: whatever it reads, it reads through one of these, and
-/// equality is derived from all of them at once.
-///
-/// The painter and its data are a type parameter each so that the same fields
-/// serve as both the probe a frame asks with and the key a miss keeps: the two
-/// are `PaintKey<&Painter, &Data>` and `PaintKey<Painter, Data>`, and every way
-/// across is a struct literal, which the compiler will not let name fewer
-/// fields than there are.
+/// All inputs to [`ControlPainter::draw`]: painter, data, bounds, pointer and
+/// pose. Derived equality covers the arguments themselves rather than a digest,
+/// so newly read data cannot be omitted from the key. Type parameters share one
+/// shape between `PaintKey<&Painter, &Data>` probes and `PaintKey<Painter, Data>`
+/// stored keys; struct-literal conversions require every field.
 #[derive(PartialEq)]
 pub(crate) struct PaintKey<Painter, Data> {
     data: Data,

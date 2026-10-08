@@ -17,29 +17,14 @@ pub(crate) fn clippy_cleared() -> &'static [&'static str] {
     clippy_cleared_for(in_ci())
 }
 
-/// `sccache` aborts outright rather than fall back when it meets an incremental
-/// build, so a Clippy run gets one of the two and never both. Which one is worth
-/// more depends entirely on where it runs.
-///
-/// On a workstation, incremental: the dependencies are already built in the
-/// local target directory, so the cache would serve almost nothing, while
-/// incremental turns a fifteen-second re-check into two. Dropping the two
-/// variables is what selects it - Cargo already compiles workspace crates
-/// incrementally and registry ones never, so only the blanket
-/// `CARGO_INCREMENTAL=0` the `justfile` exports was suppressing it. Answering
-/// with `1` instead says the same thing to Cargo and one thing more to
-/// everything else: `sccache` reads that variable too, so a C or C++ dependency
-/// reaching it through a `CMake` compiler launcher dies on a Rust flag it never
-/// used.
-///
-/// In CI, the cache: `sccache` is one content-addressed volume shared by every
-/// runner, so one runner's entry is another's hit, while incremental state is
-/// per-runner, invalidated by any toolchain or feature change, and was how a
-/// build directory grew past two hundred gigabytes. Clearing the wrapper there
-/// is what made every job re-check five hundred dependency crates from source.
-///
-/// Only `clippy-driver`'s own compilations - the workspace crates - go
-/// uncached either way, which is the part this cannot help.
+/// Selects caching in CI and incremental Clippy checks on workstations;
+/// `sccache` aborts on incremental builds, so the two cannot coexist.
+/// Local dependencies already reside in the target, making incremental checks
+/// more useful. Removing both variables lets Cargo choose its normal policy;
+/// setting `CARGO_INCREMENTAL=1` would also make C/C++ sccache launchers abort.
+/// CI shares content-addressed cache entries across runners; incremental state
+/// is runner-local, feature/toolchain-specific, and grows build directories.
+/// `clippy-driver` workspace compilations remain uncached in either case.
 const fn clippy_cleared_for(in_ci: bool) -> &'static [&'static str] {
     if in_ci {
         &[]

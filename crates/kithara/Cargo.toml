@@ -343,7 +343,7 @@ perf = [
 ]
 # Apple HW decoder. Does NOT include `fdk-aac` — Apple AudioToolbox
 # decodes HE-AAC v1/v2 natively via kAudioFormatMPEG4AAC_HE / _HE_V2
-# (see crates/kithara-decode/src/apple/codec.rs). fdk-aac stays
+# (handled by AppleCodec). fdk-aac stays
 # coupled to symphonia for desktop/WASM software fallback builds only. HTTP
 # backend selection is separate so macOS desktop/tests can use the decoder
 # without pulling the real-clock NSURLSession backend.
@@ -439,9 +439,6 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 
 [dev-dependencies]
 kithara = { path = ".", default-features = false }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-url = { workspace = true }
 
 [lints]
 workspace = true

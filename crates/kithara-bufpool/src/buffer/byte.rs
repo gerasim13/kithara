@@ -3,24 +3,7 @@ use crate::PoolError;
 
 /// Pooled bytes returned to their typed pool on drop.
 ///
-/// Capacity growth is available only through checked methods. Raw `Vec`
-/// growth and extraction are intentionally unavailable:
-///
-/// ```compile_fail
-/// use kithara_bufpool::ByteBuffer;
-///
-/// fn unchecked_growth(mut buffer: ByteBuffer) {
-///     buffer.resize(1024, 0);
-/// }
-/// ```
-///
-/// ```compile_fail
-/// use kithara_bufpool::ByteBuffer;
-///
-/// fn detach(buffer: ByteBuffer) {
-///     let _ = buffer.into_inner();
-/// }
-/// ```
+/// Growth uses checked methods; raw `Vec` growth and extraction are unavailable.
 #[derive(derive_more::Debug)]
 #[debug("{:?}", _0.value)]
 pub struct ByteBuffer(pub(super) OwnedBuffer<32, Vec<u8>, false>);
@@ -73,4 +56,29 @@ impl ByteBuffer {
             pub fn try_extend_from_slice(&mut self, values: &[u8]) -> Result<(), PoolError>;
         }
     }
+}
+
+#[cfg(doctest)]
+mod contracts {
+    /// Raw resizing cannot bypass the pool's hard budgets.
+    ///
+    /// ```compile_fail
+    /// use kithara_bufpool::ByteBuffer;
+    ///
+    /// fn unchecked_growth(mut buffer: ByteBuffer) {
+    ///     buffer.resize(1024, 0);
+    /// }
+    /// ```
+    mod unchecked_growth {}
+
+    /// The allocation cannot be detached from its return-on-drop guard.
+    ///
+    /// ```compile_fail
+    /// use kithara_bufpool::ByteBuffer;
+    ///
+    /// fn detach(buffer: ByteBuffer) {
+    ///     let _ = buffer.into_inner();
+    /// }
+    /// ```
+    mod detach {}
 }

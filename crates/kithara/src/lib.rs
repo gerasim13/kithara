@@ -1,41 +1,10 @@
 #![forbid(unsafe_code)]
 
-//! # Kithara
-//!
-//! Facade crate providing a unified API for audio streaming and decoding.
-//!
-//! ## Quick start
-//!
-//! ```ignore
-//! use kithara::{
-//!     assets::AssetStore,
-//!     bufpool::{OverallBudget, PoolConfig, pool_schema},
-//!     prelude::*,
-//! };
-//!
-//! pool_schema! {
-//!     AppPools {
-//!         bytes: u8,
-//!         samples: f32,
-//!     }
-//! }
-//! let pool_config = || PoolConfig::builder().max_buffers(128).build();
-//! let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
-//!     .bytes(pool_config())
-//!     .samples(pool_config())
-//!     .build()?;
-//! let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-//! let config: ResourceConfig<AppPools> =
-//!     ResourceConfig::for_src(ResourceSrc::parse("https://example.com/song.mp3")?)
-//!         .store(AssetStore::builder(pools).build())
-//!         .worker(worker)
-//!         .build();
-//! let mut resource = Resource::new(config).await?;
-//!
-//! // Read interleaved PCM
-//! let mut buf = [0.0f32; 1024];
-//! resource.read(&mut buf);
-//! ```
+//! Unified facade for audio streaming and decoding through `Resource`.
+//! `ResourceConfig` combines a source with the caller's `AssetStore`, typed pools
+//! and `PlayWorker`. `Resource::new` opens decoded interleaved PCM through the
+//! common `AudioReader` read/seek interface; `ReadOutcome` distinguishes frames,
+//! pending work and end of input.
 
 #[cfg(feature = "audio")]
 pub mod audio {

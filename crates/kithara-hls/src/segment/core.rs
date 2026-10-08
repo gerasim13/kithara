@@ -28,21 +28,9 @@ impl From<Option<DecryptContext>> for SegmentContent {
     }
 }
 
-/// One cache slot in the variant's content domain. The shared-but-distinct
-/// kinds — a separately fetched `#EXT-X-MAP` init prefix vs a media segment —
-/// are folded under one enum (req 6): callers treat any slot uniformly through
-/// the cascade methods (`state` / `size` / `resource` / `contains` / `len`
-/// / `url`), and the few media-only queries (`decode_time` / `duration`)
-/// live on [`MediaSegment`].
-///
-/// Each cascade method dispatches DOWN into the arm, reproducing exactly the
-/// per-kind code path the variant's `read_at` / `range_ready` /
-/// `media_descriptor` / `init_descriptor_at` ran before the fold. `contains`
-/// routes through the segment's [`ResourceHandle`] — the same handle
-/// `segment_handle` / `init_handle` vended — built from the passed scope plus
-/// the arm's `resource_id` + `url`. Reads go through
-/// [`VariantSegments`](crate::variant::VariantSegments), which holds the open
-/// resource across them.
+/// An init prefix or media segment cache slot in the variant's content domain.
+/// Common queries delegate to the arm; decode time and duration belong to [`MediaSegment`].
+/// Reads use [`VariantSegments`](crate::variant::VariantSegments) to retain the scoped resource handle.
 #[derive(Debug)]
 pub(crate) enum Segment {
     Init(InitSegment),

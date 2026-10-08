@@ -1,12 +1,8 @@
-//! # Kithara Encode
-//!
 //! Portable PCM/WAV sessions and optional native audio encoders.
-//!
-//! Use [`EncodeConfig`], [`EncoderSession`], and [`ContainerSession`] for a
-//! continuous output, or [`EncoderFactory`] for finite native encoding:
+//! Use [`EncodeConfig`], [`EncoderSession`] and [`ContainerSession`] for continuous
+//! output, or [`EncoderFactory`] for finite native encoding:
 //! ```ignore
 //! use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
-//!
 //! let encoded = EncoderFactory::encode_bytes(&BytesEncodeRequest {
 //!     pcm: &pcm_source,
 //!     target: BytesEncodeTarget::Mp3,

@@ -4,9 +4,9 @@ use std::{
     task::{Context, Poll},
 };
 
-use futures::{
+use ::futures::{
     channel::oneshot,
-    future::{Aborted, abortable},
+    future::{AbortHandle as FutureAbortHandle, Aborted, abortable},
 };
 
 /// The fairness yield of a task that still has work: on wasm it is the same
@@ -93,7 +93,7 @@ where
     T: Send + 'static,
 {
     let (tx, rx) = oneshot::channel();
-    let (abort_handle, _registration) = futures::future::AbortHandle::new_pair();
+    let (abort_handle, _registration) = FutureAbortHandle::new_pair();
 
     if crate::thread::is_worker_thread() {
         drop(crate::thread::spawn(move || {
@@ -120,7 +120,7 @@ where
 
 /// Handle to a spawned async task.
 pub struct JoinHandle<T> {
-    abort_handle: futures::future::AbortHandle,
+    abort_handle: FutureAbortHandle,
     rx: oneshot::Receiver<Result<T, JoinError>>,
 }
 

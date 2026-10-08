@@ -1,8 +1,9 @@
 use anyhow::Result;
-use syn::{Generics, ImplItem, Item, ItemImpl, Type};
+use syn::{Generics, ImplItem, Item, ItemImpl};
 
 use super::{Check, Context};
 use crate::common::{
+    parse::{qualified, self_ty_name},
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
@@ -95,7 +96,7 @@ fn walk_items(items: &[Item], scope: &mut Vec<String>, out: &mut Vec<Hit>) {
 }
 
 fn walk_impl(im: &ItemImpl, scope: &[String], out: &mut Vec<Hit>) {
-    let owner = self_ty_label(im);
+    let owner = self_ty_name(&im.self_ty).unwrap_or_else(|| "?".to_string());
     for it in &im.items {
         if let ImplItem::Fn(f) = it {
             push(
@@ -119,23 +120,4 @@ fn push(out: &mut Vec<Hit>, scope: &[String], name: &str, g: &Generics) {
         where_bounds,
         label: qualified(scope, name),
     });
-}
-
-fn qualified(scope: &[String], name: &str) -> String {
-    if scope.is_empty() {
-        name.to_string()
-    } else {
-        format!("{}::{name}", scope.join("::"))
-    }
-}
-
-fn self_ty_label(im: &ItemImpl) -> String {
-    match im.self_ty.as_ref() {
-        Type::Path(p) => p
-            .path
-            .segments
-            .last()
-            .map_or_else(|| "?".to_string(), |s| s.ident.to_string()),
-        _ => "?".to_string(),
-    }
 }

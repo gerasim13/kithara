@@ -1,19 +1,8 @@
 #![forbid(unsafe_code)]
 
-//! `kithara-storage`
-//!
-//! Storage primitives for Kithara.
-//!
-//! Provides a phantom-typestate [`Resource<S, D>`] parameterized by a phase `S`
-//! and a [`Driver`] `D`:
-//! - [`ResourceWriter`] (`Resource<Active, D>`) - single-owner writable handle.
-//! - [`Resource<Committed, D>`] — sealed, read-final handle.
-//! - [`ResourceReader`] (`Resource<Reader, D>`) — cloneable read-only view.
-//!
-//! Backends: [`MmapResource`] (mmap, filesystem) and [`MemResource`]
-//! (in-memory, WASM). [`StorageResource`] is a unified enum combining both.
-//!
-//! The consumer-facing read API is the sealed [`ResourceRead`] trait.
+//! Storage resources with driver-selected backends and lifecycle typestate.
+//! [`ResourceWriter`] owns writes; Committed seals them; [`ResourceReader`] is a cloneable read view.
+//! [`MmapResource`] and [`MemResource`] back [`StorageResource`]; [`ResourceRead`] seals consumer reads.
 
 mod backend;
 mod decorator;

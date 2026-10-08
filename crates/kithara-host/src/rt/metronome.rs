@@ -240,9 +240,9 @@ struct Click {
 }
 
 impl Click {
+    /// Multiplying the two f32 values in f64 is exact, so level one reaches
+    /// the ceiling exactly.
     fn new(downbeat: bool, sample_rate: NonZeroU32, level: f32, shape: Shape, from: f64) -> Self {
-        // WHY: The product of two `f32` values is exact in `f64`, so a click
-        // at a level of one peaks exactly at the ceiling.
         let peak = f64::from(level) * shape.ceiling;
         let (hz, peak) = if downbeat {
             (consts::DOWNBEAT_HZ, peak)

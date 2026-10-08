@@ -52,10 +52,7 @@ async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory
     let probe = create_decoder_with_probe(
         fixture.bytes.clone(),
         "m4a",
-        TestDecoderConfig::builder()
-            .pools(pools())
-            .hint("m4a")
-            .build(),
+        TestDecoderConfig::builder().pools(pools()).build(),
     )
     .expect("create probe AAC fMP4 decoder");
     let probe_gapless = probe.track_info().gapless.expect("probe gapless metadata");

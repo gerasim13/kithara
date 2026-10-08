@@ -12,24 +12,11 @@ use tracing::warn;
 
 use crate::{consts, lock::FileLock};
 
-/// The file a process locks for as long as it works in a build directory, so a
-/// reclaim running elsewhere can tell "in use" from "left behind".
-///
-/// A build directory needs protecting for longer than it is being written to.
-/// A stress run that had finished compiling and was merely executing its own
-/// binaries looked idle, the host's build-cache budget deleted them out from
-/// under it, and the repetitions that then failed to exec read as the product
-/// breaking rather than the CI eating itself.
+/// Lease filename protecting a build directory during compilation and execution.
 pub const FILE: &str = ".kithara-job-lease";
 
-/// The file a held lease rewrites every [`consts::LEASE_HEARTBEAT`], for a
-/// reclaim that cannot see the lock.
-///
-/// A lock does not cross a virtual machine's boundary: a build directory
-/// shared into a VM is locked inside it, and a reclaim on the host sees the
-/// lock file but not the lock.
-/// The last holder to let go removes it, so a directory nobody holds reads as
-/// free at once.
+/// Heartbeat filename refreshed every [`consts::LEASE_HEARTBEAT`] for reclaims
+/// outside the lock's virtual machine. The last holder removes the heartbeat.
 pub const HEARTBEAT: &str = ".kithara-job-heartbeat";
 
 /// A live claim on a build directory, released when this drops or the process
@@ -55,20 +42,14 @@ struct Heartbeat {
 
 /// Claims `directory` until the returned guard drops, creating it first.
 ///
-/// The lock is shared, so several holders coexist: a run and the harness
-/// invocations it spawns. A reclaim asks for the same file exclusively, which
-/// is the only request a shared holder refuses; a claim waits out a reclaim
-/// for up to [`consts::LEASE_WAIT`]. Taking the lease marks the directory used
-/// now, which is the date a reclaim orders directories by.
-///
-/// The result has to be bound: dropping it on the spot releases the claim
-/// immediately, which reads at the call site as holding one.
+/// Shared holders coexist with spawned harness runs; only an exclusive reclaim
+/// blocks a claim. Claims wait up to [`consts::LEASE_WAIT`] and mark the directory
+/// used now, which reclaim uses to order candidates.
+/// Bind the guard; dropping it immediately releases the claim.
 ///
 /// # Errors
-///
-/// When the directory or its lease file cannot be made, or a reclaim still
-/// holds it at the end of the wait. A job never builds unleased: a reclaim
-/// would delete the directory under it.
+/// Directory/lease creation fails, or a reclaim outlasts the wait. Never build
+/// without a lease: reclaim could delete the live directory.
 pub fn hold(directory: &Path) -> io::Result<Lease> {
     hold_within(directory, consts::LEASE_WAIT)
 }
@@ -177,14 +158,14 @@ fn beat(path: &Path) -> io::Result<()> {
 }
 
 impl Drop for Lease {
+    /// Stops this holder's heartbeat before releasing its shared lock. Only the
+    /// last holder removes the heartbeat file, under an exclusive eviction lock.
     fn drop(&mut self) {
         if let Some(Heartbeat { stop, beating }) = self.heartbeat.take() {
             drop(stop);
             let _ = beating.join();
         }
         drop(self.lock.take());
-        // Only a holder that finds nobody else holding the directory may take
-        // the heartbeat away; another holder is still beating into it.
         if let Ok(Some(_last)) = evict(&self.directory) {
             let _ = fs::remove_file(self.directory.join(HEARTBEAT));
         }

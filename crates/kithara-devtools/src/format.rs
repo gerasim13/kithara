@@ -267,15 +267,10 @@ fn run_manifest_format(check: bool, ctx: &Ctx) -> Result<()> {
                 .tools
                 .install_hint("cargo-sort", "cargo install --locked cargo-sort"),
         )?;
-        run_status(
+        run_path_status(
             "cargo",
-            &[
-                "sort",
-                "--workspace",
-                "--grouped",
-                "--config",
-                ".config/tomlfmt.toml",
-            ],
+            &["sort", "--grouped", "--config", ".config/tomlfmt.toml"],
+            &manifest::handwritten_workspace_manifest_dirs()?,
         )?;
     }
 

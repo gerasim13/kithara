@@ -106,6 +106,8 @@ impl AppleAudioFile {
 
     /// `read_packet_count` and `read_max_packet_size` force a full-file scan for VBR formats with
     /// no on-disk packet index, such as FLAC.
+    /// Discard stale callback errors after a successful open: optional streamed tail probes
+    /// may fail without invalidating the opened file.
     fn open_inner(
         source: BoxedSource,
         hint: Option<u32>,
@@ -126,7 +128,6 @@ impl AppleAudioFile {
                 op: "AudioFileOpenWithCallbacks",
             }
         })?;
-        // A successful open can leave an error from an optional tail probe on a streamed source.
         handle.callbacks().last_error.set(None);
         let data_format = read_data_format(&handle)?;
         let packet_count = if has_size && scan_packets {
@@ -148,20 +149,9 @@ impl AppleAudioFile {
         })
     }
 
-    /// Open a streamed `source` whose total length the source reports at open
-    /// (`Content-Length` / committed size). Skips the eager packet-count scan
-    /// (the demuxer sources duration / read-buffer size from header metadata);
-    /// otherwise identical to [`Self::open`]. The known total is what lets the
-    /// codec treat a not-ready read as a transient `Pending` (not EOF) and
-    /// resolve seeks by size-estimation instead of an O(N) forward frame-scan.
-    /// If the source reports no length (no `Content-Length`, not yet
-    /// committed), falls back to the size-less [`SizeMode::Unknown`] path.
-    ///
-    /// The source must report its TRUE total here, never a partial in-flight
-    /// length: `AudioFileServices` never reads past the size `get_size`
-    /// reports, so a partial would pin a false EOF at the open-time prefix
-    /// (the "plays a fraction then freezes" device bug). `FileSource::len`
-    /// owns that guarantee.
+    /// Open a streamed source without an eager packet-count scan; headers supply its metadata.
+    /// The true total size enables pending reads and estimated seeks; no length uses `SizeMode::Unknown`.
+    /// Never report a partial in-flight length: `AudioFile` would freeze that prefix as false EOF.
     pub(crate) fn open_sized_streaming(
         source: BoxedSource,
         hint: Option<u32>,

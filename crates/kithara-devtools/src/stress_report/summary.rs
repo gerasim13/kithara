@@ -619,27 +619,13 @@ fn validate_expected_count(expected_count: usize) -> Result<()> {
     Ok(())
 }
 
-/// The units of one run: each lane's modes side by side, ordered by how much
-/// they disagree.
-///
-/// A unit is one mode on one lane, or one command mode. Disagreement is what
-/// each table is for. A test that fails at the same rate on both clocks is a
-/// flake that owes nothing to either of them; a test that fails on one and not
-/// the other is the run's whole point, and it must not be buried under a
-/// hundred rows of the first kind.
-///
-/// A lane is compared only with itself. Its tests are not another lane's, so a
-/// column per lane would mark every test of one as not selected by the other.
-/// Within a lane, a test present in one mode and absent from another is
-/// reported as absent rather than as zero: a mode's toggles put targets behind
-/// a feature in or out, and calling that a rate of zero would invent a passing
-/// result for a test that never ran.
-/// Modes measured by attempts are reported separately. Their verdict is one
-/// exit code per attempt, so they have no per-test rate to place in a table
-/// and would otherwise be a column of tests that were never selected.
-/// Units kept out of the comparison are named with the reason that kept them
-/// out. A run that silently drops a unit reads as though it covered every
-/// unit it requested, which is the one thing the summary must never imply.
+/// Compares modes within each lane, ordered by disagreement: equal failure
+/// rates do not implicate the clocks, while differing rates must remain visible.
+/// A unit is one lane mode or command mode. Lanes have different tests and are
+/// never compared with one another. A missing test is absent, not a zero failure
+/// rate: feature toggles can exclude targets. Attempt-based modes are reported
+/// separately because their exit codes provide no per-test rates. Every excluded
+/// unit is named with its reason so the report cannot imply unmeasured coverage.
 pub(crate) fn render_run_comparison(
     measured: &[Comparison],
     commanded: &[(String, LaneRate)],

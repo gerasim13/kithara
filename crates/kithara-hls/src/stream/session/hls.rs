@@ -223,13 +223,9 @@ where
         })
     }
 
-    /// Whether the construction window this session was prepared for is
-    /// readable.
-    ///
-    /// A pure readiness question queried under the transition lock. Taking the
-    /// peer's state lock here would invert the peer's state-to-transition order.
-    /// The caller must wake the peer after releasing the transition lock so
-    /// incoming fetches progress independently of the active reader's demand.
+    /// Pure query of the prepared construction window's readability.
+    /// Never wake the peer under the transition lock: the peer state lock has the opposite order.
+    /// The caller owes [`wake_peer_for_readiness`] after releasing the transition lock.
     pub(crate) fn is_ready(&self) -> StreamResult<bool> {
         match &self.readiness {
             SessionReadiness::Active => Ok(true),

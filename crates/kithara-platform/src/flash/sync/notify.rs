@@ -166,7 +166,7 @@ impl Drop for Notified<'_> {
     /// drop is handed to the next waiter or stored as a permit.
     fn drop(&mut self) {
         match std::mem::replace(&mut self.state, NotifiedState::Done) {
-            NotifiedState::Engine(handle) => system::cancel_async_wait(&handle),
+            NotifiedState::Engine(handle) => drop(handle),
             NotifiedState::Real(granted) => {
                 let mut real = self.notify.real.lock();
                 let before = real.waiters.len();

@@ -451,7 +451,8 @@ fn strictly_sorted(paths: &[PathBuf]) -> bool {
 mod tests {
     use std::{fs, path::PathBuf};
 
-    use anyhow::Result;
+    use anyhow::{Context, Result};
+    use cargo_metadata::{DependencyKind, MetadataCommand};
 
     use super::{CacheManifest, Freshness};
     use crate::{config::XtaskCacheConfig, consts};
@@ -478,6 +479,129 @@ mod tests {
             generation_grace_secs: 3600,
         };
         Ok((temp, root, config))
+    }
+
+    fn dependency_fixture() -> Result<(tempfile::TempDir, PathBuf, XtaskCacheConfig)> {
+        let (temp, root, config) = fixture()?;
+        fs::write(
+            root.join("Cargo.toml"),
+            r#"[workspace]
+members = ["xtask", "build", "dev", "dev-transitive", "mixed", "normal", "normal-dev", "transitive"]
+resolver = "2"
+"#,
+        )?;
+        for (name, dependencies) in [
+            (
+                "xtask",
+                r#"[dependencies]
+normal = { path = "../normal" }
+mixed = { path = "../mixed" }
+
+[build-dependencies]
+build = { path = "../build" }
+mixed = { path = "../mixed" }
+
+[dev-dependencies]
+dev = { path = "../dev" }
+mixed = { path = "../mixed" }
+"#,
+            ),
+            (
+                "normal",
+                r#"[dependencies]
+transitive = { path = "../transitive" }
+
+[dev-dependencies]
+normal-dev = { path = "../normal-dev" }
+"#,
+            ),
+            (
+                "dev",
+                "[dependencies]\ndev-transitive = { path = \"../dev-transitive\" }\n",
+            ),
+            ("build", ""),
+            ("dev-transitive", ""),
+            ("mixed", ""),
+            ("normal-dev", ""),
+            ("transitive", ""),
+        ] {
+            fs::create_dir_all(root.join(name).join("src"))?;
+            fs::write(
+                root.join(name).join("Cargo.toml"),
+                format!(
+                    "[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n{dependencies}"
+                ),
+            )?;
+            fs::write(root.join(name).join("src/lib.rs"), "pub fn input() {}\n")?;
+        }
+        fs::write(
+            root.join("xtask/build.rs"),
+            "fn main() { build::input(); mixed::input(); }\n",
+        )?;
+        let root = fs::canonicalize(root)?;
+        let metadata = MetadataCommand::new()
+            .current_dir(&root)
+            .manifest_path(root.join("Cargo.toml"))
+            .other_options(vec!["--offline".to_owned()])
+            .exec()?;
+        let graph = metadata.resolve.as_ref().context("fixture graph")?;
+        let xtask = graph
+            .nodes
+            .iter()
+            .find(|node| metadata[&node.id].name == "xtask")
+            .context("fixture xtask node")?;
+        let mixed = xtask
+            .deps
+            .iter()
+            .find(|dependency| dependency.name == "mixed")
+            .context("fixture mixed dependency")?;
+        for kind in [
+            DependencyKind::Normal,
+            DependencyKind::Build,
+            DependencyKind::Development,
+        ] {
+            assert!(mixed.dep_kinds.iter().any(|edge| edge.kind == kind));
+        }
+        Ok((temp, root, config))
+    }
+
+    #[test]
+    fn discovery_omits_development_only_source_inputs() -> Result<()> {
+        let (_temp, root, config) = dependency_fixture()?;
+        let manifest = CacheManifest::discover(&root, &config)?;
+        assert_eq!(
+            manifest.package_roots,
+            ["build", "mixed", "normal", "transitive", "xtask"].map(PathBuf::from)
+        );
+
+        for name in ["dev", "dev-transitive", "normal-dev"] {
+            fs::write(root.join(name).join("src/lib.rs"), "pub fn changed() {}\n")?;
+            assert_eq!(manifest.freshness(&root, &config)?, Freshness::Current);
+            assert_eq!(
+                CacheManifest::discover(&root, &config)?.source_stamp,
+                manifest.source_stamp
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn discovered_normal_build_and_mixed_inputs_make_cache_stale() -> Result<()> {
+        let (_temp, root, config) = dependency_fixture()?;
+        let manifest = CacheManifest::discover(&root, &config)?;
+
+        for name in ["normal", "build", "mixed", "transitive"] {
+            let source = root.join(name).join("src/lib.rs");
+            fs::write(&source, "pub fn changed() {}\n")?;
+            assert_eq!(manifest.freshness(&root, &config)?, Freshness::Stale);
+            assert_ne!(
+                CacheManifest::discover(&root, &config)?.source_stamp,
+                manifest.source_stamp
+            );
+            fs::write(source, "pub fn input() {}\n")?;
+            assert_eq!(manifest.freshness(&root, &config)?, Freshness::Current);
+        }
+        Ok(())
     }
 
     #[test]
