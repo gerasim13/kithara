@@ -1,11 +1,11 @@
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, time::Duration};
 
 use kithara_beat::BeatGridModel;
-use kithara_play::{Bound, Position};
 use kithara_signal::SessionFrame;
 use kithara_warp::{MIN_SPEED, SessionBeat, SpeedCurve};
+use num_traits::ToPrimitive;
 
-use crate::TempoTrajectory;
+use crate::{Bound, TempoTrajectory};
 
 /// Track-media seconds ahead of the Host phase, modulo `period` media seconds.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -57,7 +57,9 @@ impl CorrectionPlan {
         }
     }
 
-    pub(crate) fn checked_curve(&self, sample_rate: NonZeroU32) -> Option<(SpeedCurve, u64)> {
+    /// Returns the curve and its last frame offset, or `None` if unrepresentable.
+    #[must_use]
+    pub fn checked_curve(&self, sample_rate: NonZeroU32) -> Option<(SpeedCurve, u64)> {
         let steps = self.frame_steps(sample_rate).collect::<Option<Vec<_>>>()?;
         let frames = steps.last().map_or(0, |(frame, _speed)| *frame);
         Some((SpeedCurve::Steps(steps.into()), frames))
@@ -80,17 +82,19 @@ impl CorrectionPlan {
             let next_seconds = seconds + step.seconds;
             let duration = next_seconds * f64::from(sample_rate.get());
             let rounded = (seconds * f64::from(sample_rate.get())).round();
+            let limit = u64::MAX.to_f64()?;
             if !duration.is_finite()
-                || duration >= u64::MAX as f64
+                || duration >= limit
                 || !rounded.is_finite()
                 || rounded < 0.0
-                || rounded >= u64::MAX as f64
+                || rounded >= limit
             {
                 return None;
             }
+            let rounded = rounded.to_u64()?;
             let frame = match previous {
-                Some(frame) => (rounded as u64).max(frame.checked_add(1)?),
-                None => rounded as u64,
+                Some(frame) => rounded.max(frame.checked_add(1)?),
+                None => rounded,
             };
             previous = Some(frame);
             seconds = next_seconds;
@@ -99,57 +103,77 @@ impl CorrectionPlan {
     }
 }
 
-/// Whether the grid's observed beats bracket a position and prove its phase.
+/// Whether a position lies inside the grid's inclusive observed beat span.
 #[must_use]
-pub fn covers(grid: &BeatGridModel, position: Position) -> bool {
+pub fn covers(grid: &BeatGridModel, position: Duration) -> bool {
     let raw = grid.as_raw();
     match (raw.beats.first(), raw.beats.last()) {
         (Some(first), Some(last)) => {
-            (first.at..=last.at).contains(&position.as_secs_f64())
-                && boundary_at_or_before(grid, position).is_some()
+            match (
+                Duration::try_from_secs_f64(first.at),
+                Duration::try_from_secs_f64(last.at),
+            ) {
+                (Ok(first), Ok(last)) => (first..=last).contains(&position),
+                _ => false,
+            }
         }
         _ => false,
     }
 }
 
-/// The last phase boundary at or before a position: a bar line, or a beat
-/// when the grid proves no meter.
-fn boundary_at_or_before(grid: &BeatGridModel, position: Position) -> Option<Position> {
+/// The cue's beat phase, interpolated between observed beat ordinals.
+fn phase_at(grid: &BeatGridModel, position: Duration) -> Option<f64> {
+    if !covers(grid, position) {
+        return None;
+    }
     let raw = grid.as_raw();
-    let metered = raw.meter.is_some();
-    raw.downbeats
-        .iter()
-        .filter(|_| metered)
-        .map(|beat| beat.at)
-        .chain(raw.beats.iter().filter(|_| !metered).map(|beat| beat.at))
-        .take_while(|seconds| *seconds <= position.as_secs_f64())
-        .last()
-        .and_then(|seconds| Position::try_from_secs_f64(seconds).ok())
+    let index = raw.beats.partition_point(|beat| {
+        Duration::try_from_secs_f64(beat.at).is_ok_and(|at| at <= position)
+    });
+    let before = raw.beats.get(index.checked_sub(1)?)?;
+    let fraction = match raw.beats.get(index) {
+        Some(after) => {
+            let before_at = Duration::try_from_secs_f64(before.at).ok()?;
+            let after_at = Duration::try_from_secs_f64(after.at).ok()?;
+            let ordinals = (i128::from(after.ordinal) - i128::from(before.ordinal)).to_f64()?;
+            (position - before_at).as_secs_f64() / (after_at - before_at).as_secs_f64()
+                * ordinals
+        }
+        None => 0.0,
+    };
+    let (origin, stride) = raw.meter.map_or((0, 1), |meter| {
+        (meter.origin_beat_ordinal, meter.beats_per_bar.get())
+    });
+    let whole = (i128::from(before.ordinal) - i128::from(origin))
+        .rem_euclid(i128::from(stride))
+        .to_f64()?;
+    Some((whole + fraction).rem_euclid(f64::from(stride)))
 }
 
 /// Track speed at a frame, as Host BPM divided by analyzed track BPM.
+///
+/// # Panics
+/// Panics if the numeric conversion cannot produce an output speed.
 #[must_use]
 pub fn speed(host: &TempoTrajectory, grid: &BeatGridModel, at: SessionFrame) -> f32 {
-    (host.tempo_at(at).beats_per_minute() / grid.as_raw().bpm) as f32
+    (host.tempo_at(at).beats_per_minute() / grid.as_raw().bpm)
+        .to_f32()
+        .unwrap_or_else(|| unreachable!("f64 values can be converted to f32"))
 }
 
 /// The nearest in-phase entry on the requested side of a frame.
 ///
 /// On constant tempo this is a Host boundary plus the media offset divided
 /// by speed; beat inversion also accounts for intervening Host tempo steps.
+/// Candidates are compared on rounded session frames, inclusively on both sides.
 #[must_use]
 pub fn entry(
     host: &TempoTrajectory,
     grid: &BeatGridModel,
-    position: Position,
+    position: Duration,
     bound: Bound,
 ) -> Option<SessionFrame> {
-    if !covers(grid, position) {
-        return None;
-    }
-    let offset = (position - boundary_at_or_before(grid, position)?).as_secs_f64()
-        * grid.as_raw().bpm
-        / 60.0;
+    let offset = phase_at(grid, position)?;
     let stride = if grid.as_raw().meter.is_some() {
         host.beats_per_bar()
     } else {
@@ -159,20 +183,39 @@ pub fn entry(
         Bound::AtOrAfter(frame) => (frame, true),
         Bound::AtOrBefore(frame) => (frame, false),
     };
-    let boundary = (f64::from(host.beat_at(frame)) - offset) / stride;
-    let ordinal = if after {
-        boundary.ceil()
-    } else {
-        boundary.floor()
+    let direction = if after { 1.0 } else { -1.0 };
+    let admitted = |candidate| {
+        if after { candidate >= frame } else { candidate <= frame }
     };
-    let beat = SessionBeat::new(ordinal * stride + offset).ok()?;
-    let candidate = host.try_frame_at(beat)?;
-    if (after && candidate < frame) || (!after && candidate > frame) {
-        let beat = SessionBeat::new(f64::from(beat) + if after { stride } else { -stride }).ok()?;
+    let frame_at = |ordinal| {
+        let beat = SessionBeat::new(ordinal * stride + offset).ok()?;
         host.try_frame_at(beat)
-    } else {
-        Some(candidate)
+    };
+    let mut ordinal = ((f64::from(host.beat_at(frame)) - offset) / stride).floor();
+    let mut candidate = frame_at(ordinal)?;
+    while !admitted(candidate) {
+        let next = ordinal + direction;
+        if next == ordinal {
+            return None;
+        }
+        ordinal = next;
+        candidate = frame_at(ordinal)?;
     }
+    loop {
+        let next = ordinal - direction;
+        if next == ordinal {
+            break;
+        }
+        let Some(closer) = frame_at(next) else {
+            break;
+        };
+        if !admitted(closer) {
+            break;
+        }
+        ordinal = next;
+        candidate = closer;
+    }
+    Some(candidate)
 }
 
 /// Phase ahead of the Host, modulo a Host bar or one beat without track meter.
@@ -183,17 +226,11 @@ pub fn entry(
 pub fn phase_error(
     host: &TempoTrajectory,
     grid: &BeatGridModel,
-    position: Position,
+    position: Duration,
     at: SessionFrame,
 ) -> PhaseError {
-    assert!(
-        covers(grid, position),
-        "phase requires a covering track grid"
-    );
-    let boundary = match boundary_at_or_before(grid, position) {
-        Some(boundary) => boundary,
-        None => unreachable!("a covering grid has a preceding phase boundary"),
-    };
+    let phase = phase_at(grid, position)
+        .unwrap_or_else(|| panic!("phase requires a covering track grid"));
     let stride = if grid.as_raw().meter.is_some() {
         host.beats_per_bar()
     } else {
@@ -201,9 +238,9 @@ pub fn phase_error(
     };
     let seconds_per_beat = 60.0 / grid.as_raw().bpm;
     let period = stride * seconds_per_beat;
-    let host_phase = f64::from(host.beat_at(at)).rem_euclid(stride) * seconds_per_beat;
+    let host_phase = f64::from(host.beat_at(at)).rem_euclid(stride);
     PhaseError {
-        seconds: ((position - boundary).as_secs_f64() - host_phase).rem_euclid(period),
+        seconds: (phase - host_phase).rem_euclid(stride) * seconds_per_beat,
         period,
         beat_seconds: seconds_per_beat,
     }
@@ -214,16 +251,16 @@ pub fn phase_error(
 /// # Panics
 /// Panics if the phase period is not finite and positive, or the target is unrepresentable.
 #[must_use]
-pub fn jump_target(position: Position, error: PhaseError) -> Position {
+pub fn jump_target(position: Duration, error: PhaseError) -> Duration {
     assert!(error.seconds.is_finite() && error.period.is_finite() && error.period > 0.0);
     let phase = error.seconds.rem_euclid(error.period);
-    let backwards = Position::from_secs_f64(phase);
+    let backwards = Duration::from_secs_f64(phase);
     if phase <= error.period / 2.0
         && let Some(target) = position.checked_sub(backwards)
     {
         target
     } else {
-        position + Position::from_secs_f64(error.period - phase)
+        position + Duration::from_secs_f64(error.period - phase)
     }
 }
 
@@ -237,13 +274,14 @@ pub fn jump_target(position: Position, error: PhaseError) -> Position {
 /// correcting speed exists within epsilon and the renderer's speed range.
 #[must_use]
 pub fn correction(from: f32, to: f32, error: PhaseError, epsilon: f32) -> CorrectionPlan {
-    match checked_correction(from, to, error, epsilon) {
-        Some(plan) => plan,
-        None => panic!("correction requires finite inputs and representable bounded speed steps"),
-    }
+    checked_correction(from, to, error, epsilon).unwrap_or_else(|| {
+        panic!("correction requires finite inputs and representable bounded speed steps")
+    })
 }
 
-pub(crate) fn checked_correction(
+/// Returns bounded correction steps, or `None` for invalid or unrepresentable inputs.
+#[must_use]
+pub fn checked_correction(
     from: f32,
     to: f32,
     error: PhaseError,
@@ -279,7 +317,7 @@ pub(crate) fn checked_correction(
         });
     }
     if remaining != 0.0 {
-        let target = to - remaining.signum() as f32 * epsilon;
+        let target = to - remaining.signum().to_f32()? * epsilon;
         if !target.is_finite() || target < MIN_SPEED {
             return None;
         }
@@ -319,11 +357,17 @@ mod tests {
     use std::num::{NonZeroU16, NonZeroU32};
 
     use kithara_beat::{BeatGridModel, BeatGridState, GridBeat, GridDownbeat, Meter, RawBeatGrid};
-    use kithara_host::api::Tempo;
+    use std::time::Duration as Position;
+
+    use crate::Tempo;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::TempoStep;
+
+    mod fixtures;
+    mod preparation;
+    mod relocation;
 
     #[kithara::test]
     fn entry_family_uses_the_media_offset_and_the_requested_side() {
@@ -347,7 +391,7 @@ mod tests {
             beats: (0..=8)
                 .map(|ordinal| GridBeat {
                     confidence: None,
-                    at: ordinal as f64,
+                    at: ordinal.to_f64().expect("fixture beat ordinal fits f64"),
                     ordinal,
                 })
                 .collect(),
@@ -355,7 +399,7 @@ mod tests {
                 .into_iter()
                 .map(|beat_ordinal| GridDownbeat {
                     confidence: None,
-                    at: beat_ordinal as f64,
+                    at: beat_ordinal.to_f64().expect("fixture downbeat ordinal fits f64"),
                     beat_ordinal,
                 })
                 .collect(),

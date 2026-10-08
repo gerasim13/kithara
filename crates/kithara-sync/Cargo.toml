@@ -1,0 +1,30 @@
+[package]
+name = "kithara-sync"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pure beat-phase, entry-placement, and tempo-trajectory mathematics."
+keywords = ["audio", "beatgrid", "tempo", "sync"]
+categories = ["multimedia::audio"]
+
+[dependencies]
+kithara-beat = { workspace = true }
+kithara-derive = { workspace = true, features = ["ranged"] }
+kithara-signal = { workspace = true }
+kithara-warp = { workspace = true }
+fieldwork = { workspace = true }
+num-traits = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
+
+[dev-dependencies]
+kithara-test-utils = { workspace = true }
+kithara-warp = { workspace = true, features = ["stretch-identity"] }
+
+[lints]
+workspace = true

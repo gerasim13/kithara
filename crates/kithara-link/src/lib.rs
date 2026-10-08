@@ -7,18 +7,15 @@ mod factory;
 mod grid;
 mod host;
 mod linked;
-mod math;
 mod queue;
-mod trajectory;
 
 pub use deck::LinkedDeck;
 pub use error::LinkError;
 pub use factory::LinkedFactory;
 pub use grid::{GridAnswer, GridRefusal};
 pub use host::{LinkedHost, LinkedHostCommand, PendingTempo};
-pub use linked::{LinkConfig, Linked, LinkedPlayer, LinkedSnapshot, SyncMode, SyncStatus, Waiting};
-pub use math::{
-    CorrectionPlan, CorrectionStep, PhaseError, correction, covers, entry, jump_target,
-    phase_error, speed,
+pub use kithara_sync::{
+    CorrectionPlan, CorrectionStep, PhaseError, TempoStep, TempoTrajectory, correction, covers, entry,
+    jump_target, phase_error, speed,
 };
-pub use trajectory::{TempoStep, TempoTrajectory};
+pub use linked::{LinkConfig, Linked, LinkedPlayer, LinkedSnapshot, SyncMode, SyncStatus, Waiting};
