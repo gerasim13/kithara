@@ -4,19 +4,13 @@ use kithara_assets::AssetResource;
 #[cfg(test)]
 use kithara_assets::ResourceKey;
 use kithara_bufpool::HasPool;
-use kithara_download::FetchCmd;
 use kithara_drm::DecryptContext;
-use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::{StreamResult, needs_exact_byte_sizes};
 
 use crate::{
     HlsResult, consts,
-    handle::ResourceHandle,
     playlist::PlaylistState,
-    segment::{
-        Downloading, FetchClaim, InitSegment, Segment, SegmentContent, SegmentSize,
-        SegmentSlotState,
-    },
+    segment::{InitSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
     variant::{HlsVariant, PlanCtx},
 };
 
@@ -24,35 +18,6 @@ impl<S> HlsVariant<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    pub(in crate::variant) fn build_init_cmd(
-        self: &Arc<Self>,
-        ctx: &PlanCtx<S>,
-        handle: FetchClaim<Downloading, S>,
-        cancel: CancelToken,
-    ) -> Option<FetchCmd> {
-        let init = self.init()?;
-        let resource_handle = self.init_handle()?;
-        let resource = match resource_handle.acquire(init.content()) {
-            Ok(resource) => resource,
-            Err(error) => {
-                tracing::debug!(
-                    variant = self.variant,
-                    error = %error,
-                    "build_init_cmd: acquire_resource dropped (variant switch in flight)"
-                );
-                let _ = handle.into_missing();
-                return None;
-            }
-        };
-        self.build_cmd(
-            resource_handle.url().clone(),
-            resource,
-            handle,
-            ctx.signal.clone(),
-            cancel,
-        )
-    }
-
     /// Builds the variant's init slot. The slot exists (`Some(Segment::Init)`) iff the
     /// playlist carries an `#EXT-X-MAP` URL — NOT iff the init's byte length is already
     /// known (R5). A not-yet-resolved init leaves `init_size() == 0` while the URL is
@@ -121,6 +86,11 @@ where
             .is_some_and(|seg| seg.state().is_failed())
     }
 
+    /// A declared unsized init reserves the addressable prefix even after a terminal failure.
+    pub(in crate::variant) fn init_prefix_is_unsized(&self) -> bool {
+        self.has_init() && self.init_size() == 0 && self.served_from() == 0
+    }
+
     /// Read `range` of the init segment into `dst` via the [`Segment`]
     /// cascade. `Ok(None)` when there is no init or its bytes are not on disk
     /// yet.
@@ -143,7 +113,7 @@ where
 
     /// Resource key for the variant's init segment — `None` when the
     /// playlist has no `#EXT-X-MAP` (raw TS/AAC). Test-only assertion helper;
-    /// the reader paths read the init through [`Self::init_handle`].
+    /// the reader paths read the init through its segment resource.
     #[cfg(test)]
     pub(crate) fn init_resource(&self) -> Option<ResourceKey> {
         Some(self.segments.init.as_ref()?.resource_id().clone())
@@ -170,11 +140,6 @@ where
             /// atom. `None` for a variant with no separate init.
             #[call(as_ref)]
             pub(in crate::variant) const fn init(&self) -> Option<&Segment>;
-            /// Narrow disk handle for the variant's separately fetched init segment,
-            /// or `None` for a variant with no `#EXT-X-MAP` init.
-            #[expr(Some($?.resource(&self.segments.scope)))]
-            #[call(as_ref)]
-            fn init_handle(&self) -> Option<ResourceHandle<'_, S>>;
             #[expr($.map_or(0, Segment::len))]
             #[call(as_ref)]
             pub(in crate::variant) fn init_route_size(&self) -> u64;

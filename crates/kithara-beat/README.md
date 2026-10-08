@@ -62,9 +62,13 @@ let raw: RawBeats = bt.analyze(&mono_22050)?;
   of these exposes `MEL_MODEL_BYTES` / `BEAT_MODEL_BYTES` / `BEAT_MODEL_TAG`, so
   FFI/mobile builds need no asset plumbing. Off by default. The build script
   fetches the selected model and the mel model into `KITHARA_BEAT_MODEL_CACHE`
-  (default `$TMPDIR/kithara-beat-models`) and checks each against a pinned
-  SHA-256, so the first build with a cold cache needs network. The int8 model
-  is quantized locally and has to be placed in the cache by hand.
+  (default `$CARGO_HOME/kithara-beat-models`, with Cargo home defaulting to
+  `~/.cargo`) and checks fetched and cached bytes against a pinned SHA-256.
+  The compiler embeds a stable snapshot in Cargo's `OUT_DIR`; deleting pinned
+  source-cache files does not invalidate an unchanged build. The first build
+  with a cold cache needs network. The int8 model is quantized locally and has
+  to be placed in the cache by hand; it has no pinned digest, and changes to
+  this user-supplied input rerun the build script.
 
 | feature | size | mean octave-folded error over 40 tracks |
 |---|---|---|

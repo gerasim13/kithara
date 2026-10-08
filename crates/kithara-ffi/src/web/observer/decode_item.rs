@@ -416,11 +416,15 @@ impl ItemDecode {
     fn decode_track_failure_kind(data: &JsValue) -> Option<FfiTrackFailureKind> {
         let value = get_str(data, "reason");
         Some(match value.as_deref() {
-            Some("Decode") => FfiTrackFailureKind::Decode,
+            Some("Decode") => FfiTrackFailureKind::Decode {
+                kind: Self::decode_decode_error_kind(get_str(data, "decode_kind")),
+            },
             Some("RecreateFailed") => FfiTrackFailureKind::RecreateFailed {
                 offset: Self::narrow_u64(get_f64(data, "offset")?),
             },
             Some("SourceCancelled") => FfiTrackFailureKind::SourceCancelled,
+            Some("ChannelClosed") => FfiTrackFailureKind::ChannelClosed,
+            Some("Render") => FfiTrackFailureKind::Render,
             Some("Unknown") | None => FfiTrackFailureKind::Unknown,
             Some(_) => FfiTrackFailureKind::Unknown,
         })

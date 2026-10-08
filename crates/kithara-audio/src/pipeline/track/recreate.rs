@@ -3,8 +3,8 @@ use kithara_stream::{SourcePhase, StreamType};
 use tracing::{debug, warn};
 
 use super::{
-    AwaitingResume, Decoding, Failed, RecreatingDecoder, SeekRequested, Track, TrackFailure,
-    TrackStep, WaitContext, WaitState, WaitingForSource, WaitingReason, fsm::apply_seek_transition,
+    AwaitingResume, Decoding, RecreatingDecoder, SeekRequested, Track, TrackFailure, TrackStep,
+    WaitContext, WaitState, WaitingForSource, WaitingReason, fsm::apply_seek_transition,
     rebuild::start_recreating_decoder,
 };
 use crate::{
@@ -67,12 +67,9 @@ fn finish_route_change_after_recreate<T: StreamType>(
                 ?target,
                 "route-change recreate: recreated decoder seek failed"
             );
-            src.update_state(
-                Track::<Failed>::new(TrackFailure::RecreateFailed {
-                    offset: src.decode.active().base_offset(),
-                })
-                .erase(),
-            );
+            src.fail(TrackFailure::RecreateFailed {
+                offset: src.decode.active().base_offset(),
+            });
             TrackStep::StateChanged
         }
     }
@@ -144,15 +141,9 @@ pub(super) fn finish_recreate_outcome<T: StreamType>(
 ) -> TrackStep<AudioChunk> {
     match outcome {
         RecreateOutcome::Done => apply_recreate_next(src, &recreate),
-        RecreateOutcome::SoftFailed => {
-            src.update_state(
-                Track::<Failed>::new(TrackFailure::RecreateFailed {
-                    offset: recreate.offset,
-                })
-                .erase(),
-            );
-            TrackStep::Failed
-        }
+        RecreateOutcome::SoftFailed => TrackStep::Failed(src.fail(TrackFailure::RecreateFailed {
+            offset: recreate.offset,
+        })),
         RecreateOutcome::NeedsSourceWait => wait_for_source_on_recreate(src, recreate),
     }
 }
@@ -323,8 +314,7 @@ pub(super) fn wait_for_source_on_recreate<T: StreamType>(
         return TrackStep::Blocked(reason);
     }
     if phase == SourcePhase::Cancelled {
-        src.update_state(Track::<Failed>::new(TrackFailure::SourceCancelled).erase());
-        return TrackStep::Failed;
+        return TrackStep::Failed(src.fail(TrackFailure::SourceCancelled));
     }
     src.update_state(Track::<RecreatingDecoder>::new(recreate).erase());
     super::waiting_branch!("recreate_not_ready_unparked");

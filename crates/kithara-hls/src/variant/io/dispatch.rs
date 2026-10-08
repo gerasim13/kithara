@@ -146,74 +146,53 @@ where
             let Some((planned, plan_revision)) = planned else {
                 break;
             };
-            match planned {
-                PlannedFetch::Init => {
-                    let Some(init) = self.init() else {
-                        continue;
-                    };
-                    let Some(handle) = init.state().try_claim(
-                        PlannedFetch::Init,
-                        plan_revision,
-                        Arc::downgrade(self),
-                        ctx.signal.clone(),
-                    ) else {
-                        if !init.state().is_loaded() && !init.state().is_failed() {
-                            deferred.push((planned, plan_revision));
-                        }
-                        continue;
-                    };
-                    if let Some(actual) = self.init_committed_final_len() {
-                        handle.into_loaded(actual);
-                        ctx.signal.fire();
-                        continue;
-                    }
-                    let Some(mut cmd) = self.build_init_cmd(ctx, handle, cancel.clone()) else {
-                        if self
-                            .init()
-                            .is_some_and(|i| !i.state().is_loaded() && !i.state().is_failed())
-                        {
-                            deferred.push((planned, plan_revision));
-                        }
-                        continue;
-                    };
-                    cmd.set_priority(RequestPriority::High);
-                    out.push(cmd);
+            let entry = match planned {
+                PlannedFetch::Init => self.init(),
+                PlannedFetch::Segment(seg_idx) => self.segments.get(seg_idx as usize),
+            };
+            let Some(entry) = entry else {
+                continue;
+            };
+            let Some(handle) = entry.state().try_claim(
+                planned,
+                plan_revision,
+                Arc::downgrade(self),
+                ctx.signal.clone(),
+            ) else {
+                if !entry.state().is_loaded() && !entry.state().is_failed() {
+                    deferred.push((planned, plan_revision));
                 }
+                continue;
+            };
+            if let Some(actual) = entry.committed_len(&self.segments.scope) {
+                handle.into_loaded(actual);
+                ctx.signal.fire();
+                continue;
+            }
+            let cmd = match planned {
+                PlannedFetch::Init => self.build_fetch_cmd(ctx, entry, handle, cancel.clone()),
                 PlannedFetch::Segment(seg_idx) => {
-                    let Some(entry) = self.segments.get(seg_idx as usize) else {
-                        continue;
-                    };
-                    let Some(handle) = entry.state().try_claim(
-                        PlannedFetch::Segment(seg_idx),
-                        plan_revision,
-                        Arc::downgrade(self),
-                        ctx.signal.clone(),
-                    ) else {
-                        if !entry.state().is_loaded() && !entry.state().is_failed() {
-                            deferred.push((planned, plan_revision));
-                        }
-                        continue;
-                    };
-                    if let Some(actual) = self.committed_final_len(seg_idx) {
-                        handle.into_loaded(actual);
-                        ctx.signal.fire();
-                        continue;
-                    }
                     let token = if beyond_owed(seg_idx) {
                         lookahead.clone()
                     } else {
                         cancel.clone()
                     };
-                    let Some(mut cmd) = self.emit_fetch_cmd(ctx, seg_idx, handle, token) else {
-                        deferred.push((planned, plan_revision));
-                        continue;
-                    };
-                    if owed(seg_idx) {
-                        cmd.set_priority(RequestPriority::High);
-                    }
-                    out.push(cmd);
+                    self.emit_fetch_cmd(ctx, seg_idx, handle, token)
                 }
+            };
+            let Some(mut cmd) = cmd else {
+                if !entry.state().is_loaded() && !entry.state().is_failed() {
+                    deferred.push((planned, plan_revision));
+                }
+                continue;
+            };
+            if match planned {
+                PlannedFetch::Init => true,
+                PlannedFetch::Segment(seg_idx) => owed(seg_idx),
+            } {
+                cmd.set_priority(RequestPriority::High);
             }
+            out.push(cmd);
             remaining -= 1;
         }
         if !deferred.is_empty() {
@@ -239,17 +218,24 @@ where
         cancel: CancelToken,
     ) -> Option<FetchCmd> {
         let entry = &self.segments[seg_idx as usize];
-        let Some(resource_handle) = self.segment_handle(seg_idx) else {
-            let _ = handle.into_missing();
-            return None;
-        };
+        self.build_fetch_cmd(ctx, entry, handle, cancel)
+    }
+
+    fn build_fetch_cmd(
+        self: &Arc<Self>,
+        ctx: &PlanCtx<S>,
+        entry: &Segment,
+        handle: FetchClaim<Downloading, S>,
+        cancel: CancelToken,
+    ) -> Option<FetchCmd> {
+        let resource_handle = entry.resource(&self.segments.scope);
         let resource = match resource_handle.acquire(entry.content()) {
             Ok(r) => {
                 entry.state().clear_acquire_failures();
                 r
             }
             Err(err) => {
-                self.settle_unacquirable(ctx, entry, seg_idx, handle, &err);
+                self.settle_unacquirable(ctx, entry, handle, &err);
                 return None;
             }
         };
@@ -279,7 +265,6 @@ where
         &self,
         ctx: &PlanCtx<S>,
         entry: &Segment,
-        seg_idx: u32,
         handle: FetchClaim<Downloading, S>,
         err: &AssetsError,
     ) {
@@ -288,22 +273,23 @@ where
             AcquireSettle::Requeue => {
                 debug!(
                     variant = self.variant,
-                    seg_idx,
+                    planned = ?handle.planned(),
                     failures,
                     error = %err,
-                    "emit_fetch_cmd: segment resource not acquirable yet; requeued"
+                    "resource not acquirable yet; requeued"
                 );
                 let _ = handle.into_missing();
             }
             AcquireSettle::Fail => {
                 warn!(
                     variant = self.variant,
-                    seg_idx,
+                    planned = ?handle.planned(),
                     failures,
                     error = %err,
-                    "emit_fetch_cmd: segment resource cannot be acquired; settling as failed"
+                    "resource cannot be acquired; settling as failed"
                 );
                 let _ = handle.into_failed();
+                ctx.signal.fire();
             }
         }
     }

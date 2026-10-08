@@ -290,7 +290,7 @@ mod tests {
     use std::sync::{Condvar, Mutex as StdMutex, PoisonError};
 
     use kithara::{
-        audio::DecodeErrorKind,
+        audio::{DecodeErrorKind, TrackFailureKind},
         events::{EventBus, SlotId, TrackId},
         platform::{
             sync::{Arc, Mutex},
@@ -567,7 +567,9 @@ mod tests {
                 SlotId::new(0),
                 shared_src,
             )),
-            fault: PlaybackFault::Decode(DecodeErrorKind::InvalidData),
+            fault: PlaybackFault::Source(TrackFailureKind::Decode {
+                kind: DecodeErrorKind::InvalidData,
+            }),
         });
 
         assert!(matches!(

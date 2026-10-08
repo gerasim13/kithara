@@ -37,6 +37,12 @@ on:
           asks for a full run: every lane that some full kind schedules.
         type: string
         default: ''
+      narrow:
+        description: >-
+          Nextest filterset every test suite of the run is narrowed to. A lane
+          with no suite refuses it, so name the lanes to narrow in `only`.
+        type: string
+        default: ''
       mutants:
         description: >-
           Run every mutation suite. They cost hours and run only when asked
@@ -49,7 +55,7 @@ on:
 # whole night per push for the fleet. Another selection, or the other cadence,
 # is another question and keeps its run.
 concurrency:
-  group: dispatch-${{ github.ref }}-${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}-${{ inputs.only || '' }}-${{ inputs.mutants || false }}
+  group: dispatch-${{ github.ref }}-${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}-${{ inputs.only || '' }}-${{ inputs.narrow || '' }}-${{ inputs.mutants || false }}
   cancel-in-progress: true
 
 jobs:
@@ -62,6 +68,7 @@ jobs:
       role: gate
       kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}
       only: ${{ inputs.only || '' }}
+      narrow: ${{ inputs.narrow || '' }}
 
   # Reachable by name; the fan-out itself renders nothing here, because every
   # platform lane names a machine this fleet does not have. The jobs below call
@@ -73,6 +80,7 @@ jobs:
       role: platforms
       kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}
       only: ${{ inputs.only || '' }}
+      narrow: ${{ inputs.narrow || '' }}
 
   # The lanes that ask for the whole fleet take turns with each other. One
   # machine serves every lane, and a queue that also stalled the pushes was
@@ -91,6 +99,7 @@ jobs:
       role: deep
       kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}
       only: ${{ inputs.only || '' }}
+      narrow: ${{ inputs.narrow || '' }}
 
   # Never on a schedule: `mutants` runs every suite, and `only` runs the lanes
   # it names.
@@ -107,6 +116,7 @@ jobs:
       role: mutants
       kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}
       only: ${{ inputs.only || 'all' }}
+      narrow: ${{ inputs.narrow || '' }}
 
   quality:
     if: vars.KITHARA_RUNNER_LABELS != ''
@@ -119,6 +129,7 @@ jobs:
       role: quality
       kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}
       only: ${{ inputs.only || '' }}
+      narrow: ${{ inputs.narrow || '' }}
 
   # The one Linux lane the fan-out cannot carry: it needs build-time secrets,
   # and one executor serves every declared lane.

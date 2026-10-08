@@ -74,7 +74,7 @@ async fn byte_eof_still_ends_a_drained_decoder_through_the_decode_path(route_pcm
                 assert!(matches!(fixture.source.state, CurrentFsm::AtEof(_)));
                 return;
             }
-            TrackStep::Failed => {
+            TrackStep::Failed(_) => {
                 panic!("a drained decoder at byte EOF must finalize as EOF, not fail")
             }
             _ => fixture.source.flush_deferred(),

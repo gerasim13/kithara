@@ -35,8 +35,16 @@ pub(crate) fn check_module_node_ids(doc: &ModuleDoc, origin: &SourceUri) -> Resu
         &NodePath::default(),
         origin,
         &mut seen,
-        Sibling::Only,
+        Sibling::Among,
     )
+}
+
+pub(crate) fn check_module_root(doc: &ModuleDoc, origin: &SourceUri) -> Result<(), UiDocError> {
+    let ControlNode::Optional { id, .. } = &doc.root else {
+        return Ok(());
+    };
+    let here = NodePath::default().push(format!("Optional({id})"));
+    check_block_position(id, &here, origin, Sibling::Only)
 }
 
 pub(super) fn claim(

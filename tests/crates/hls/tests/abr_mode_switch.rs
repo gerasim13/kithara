@@ -30,7 +30,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     mixed_plain,
-    reads::{read_to_eof, read_until_samples},
+    reads::{blocking_audio, read_to_eof, read_until_samples},
     waits::wait_for_event,
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -219,6 +219,37 @@ impl EventCollector {
         self.dropped_events.load(Ordering::Relaxed)
     }
 
+    async fn finish_read<A>(&self, (audio, total): (A, u64), bus: &EventBus) -> u64 {
+        let mut rx = bus.subscribe();
+        self.drain();
+        if !self.request_map.lock().is_empty() {
+            wait_for_event(
+                &mut rx,
+                "all collected segment GETs reaching a terminal downloader event",
+                |_| {
+                    self.drain();
+                    self.request_map.lock().is_empty()
+                },
+                Duration::from_secs(20),
+            )
+            .await
+            .unwrap_or_else(|error| {
+                panic!(
+                    "GETs must settle before dropping the stream owner: {error}; pending={:?}",
+                    *self.request_map.lock()
+                );
+            });
+        }
+        assert_eq!(
+            self.dropped_events(),
+            0,
+            "final fetch snapshot must not lose events"
+        );
+        drop(audio);
+        self.drain();
+        total
+    }
+
     fn push_audio_trace(&self, entry: String) {
         let mut trace = self.audio_trace.lock();
         if trace.len() < 64 {
@@ -280,6 +311,12 @@ impl EventCollector {
                     if let Some(seg) = self.request_map.lock().remove(request_id) {
                         self.network_fetches.lock().insert(seg);
                     }
+                }
+                TestEvent::Downloader(
+                    DownloaderEvent::RequestFailed { request_id, .. }
+                    | DownloaderEvent::RequestCancelled { request_id, .. },
+                ) => {
+                    self.request_map.lock().remove(request_id);
                 }
                 TestEvent::Hls(HlsEvent::SegmentReadStart {
                     variant,
@@ -405,6 +442,131 @@ struct PhaseReadStats {
     samples: u64,
     pending: u64,
     saw_eof: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[kithara::test(tokio)]
+async fn final_fetch_snapshot_waits_for_completion_before_owner_drop() {
+    use std::{
+        future::{Future, poll_fn},
+        num::NonZeroU64,
+        pin::pin,
+        task::Poll,
+    };
+
+    use kithara::{
+        download::{CancelReason, RequestPriority},
+        net::NetError,
+    };
+
+    let bus = EventBus::new(32);
+    let collector = EventCollector::new(&bus);
+    let request_id = RequestId::new(NonZeroU64::new(1).expect("request id"));
+    let unrelated_id = RequestId::new(NonZeroU64::new(2).expect("unrelated request id"));
+    let failed_id = RequestId::new(NonZeroU64::new(3).expect("failed request id"));
+    let cancelled_id = RequestId::new(NonZeroU64::new(4).expect("cancelled request id"));
+    bus.publish(DownloaderEvent::RequestEnqueued {
+        request_id,
+        url: Url::parse("https://example.com/seg/v1_29.m4s").expect("segment url"),
+        method: RequestMethod::Get,
+        priority: RequestPriority::High,
+    });
+    bus.publish(HlsEvent::SegmentReadStart {
+        variant: 1,
+        segment_index: 29,
+        byte_offset: 5_800_044,
+    });
+    assert!(collector.segments()[0].cached);
+    assert_eq!(
+        collector.request_map.lock().get(&request_id),
+        Some(&(1, 29))
+    );
+    assert_eq!(collector.dropped_events(), 0);
+
+    for (request_id, url) in [
+        (failed_id, "https://example.com/seg/v0_28.m4s"),
+        (cancelled_id, "https://example.com/seg/v0_27.m4s"),
+    ] {
+        bus.publish(DownloaderEvent::RequestEnqueued {
+            request_id,
+            url: Url::parse(url).expect("request url"),
+            method: RequestMethod::Get,
+            priority: RequestPriority::High,
+        });
+    }
+
+    let owner = Arc::new(());
+    let live_owner = Arc::downgrade(&owner);
+    let mut finished = pin!(collector.finish_read((owner, 200_000), &bus));
+    let pending =
+        poll_fn(|context| Poll::Ready(finished.as_mut().poll(context).is_pending())).await;
+    assert!(
+        pending,
+        "reader EOF must not finish an in-flight GET snapshot"
+    );
+    assert!(
+        live_owner.upgrade().is_some(),
+        "EOF must retain the fetch owner"
+    );
+
+    bus.publish(DownloaderEvent::RequestCompleted {
+        request_id: unrelated_id,
+        bytes_transferred: 1,
+        duration: Duration::ZERO,
+        bandwidth_bps: 0,
+    });
+    let pending =
+        poll_fn(|context| Poll::Ready(finished.as_mut().poll(context).is_pending())).await;
+    assert!(
+        pending,
+        "an unrelated completion must not release the owner"
+    );
+    assert!(live_owner.upgrade().is_some());
+
+    bus.publish(DownloaderEvent::RequestCompleted {
+        request_id,
+        bytes_transferred: 200_000,
+        duration: Duration::ZERO,
+        bandwidth_bps: 0,
+    });
+    let pending =
+        poll_fn(|context| Poll::Ready(finished.as_mut().poll(context).is_pending())).await;
+    assert!(
+        pending,
+        "the final segment completion must not ignore other in-flight GETs"
+    );
+    assert!(live_owner.upgrade().is_some());
+
+    bus.publish(DownloaderEvent::RequestFailed {
+        request_id: failed_id,
+        error: NetError::Timeout,
+        retryable: true,
+    });
+    let pending =
+        poll_fn(|context| Poll::Ready(finished.as_mut().poll(context).is_pending())).await;
+    assert!(
+        pending,
+        "a queued GET must still hold the owner until its terminal event"
+    );
+    assert!(live_owner.upgrade().is_some());
+
+    bus.publish(DownloaderEvent::RequestCancelled {
+        request_id: cancelled_id,
+        reason: CancelReason::BeforeStart,
+        bytes_transferred: 0,
+    });
+    assert_eq!(finished.await, 200_000);
+    assert!(
+        live_owner.upgrade().is_none(),
+        "completion must release the owner"
+    );
+    assert!(!collector.segments()[0].cached);
+    assert_eq!(
+        collector.segments().len(),
+        1,
+        "only completed GETs count as fetched"
+    );
+    assert_eq!(collector.dropped_events(), 0);
 }
 
 fn read_phase_until_samples<S: StreamType>(
@@ -665,7 +827,7 @@ async fn vod_manual_switch_affects_future_segments(
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .events(bus)
+        .events(bus.clone())
         .media_info(wav_info)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
@@ -701,7 +863,7 @@ async fn vod_manual_switch_affects_future_segments(
         .set_mode(AbrMode::manual(1))
         .expect("Manual(1) target must be valid");
     gate.release();
-    let (mut audio, transition) = read_until_manual_applied(
+    let (audio, transition) = read_until_manual_applied(
         audio,
         &collector,
         applied_before,
@@ -715,9 +877,9 @@ async fn vod_manual_switch_affects_future_segments(
         "the requested manual switch must apply before EOF"
     );
 
-    let total = spawn_blocking(move || read_to_eof(&mut audio))
-        .await
-        .expect("read");
+    let total = collector
+        .finish_read(blocking_audio(audio, read_to_eof).await, &bus)
+        .await;
 
     let segments = collector.segments();
     let switches = collector.switch_count();
@@ -851,10 +1013,10 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .events(bus)
+        .events(bus.clone())
         .media_info(wav_info)
         .build();
-    let mut audio = worker.load(config).await.expect("create audio");
+    let audio = worker.load(config).await.expect("create audio");
 
     let mut stalled_requests = HashSet::new();
     let mut saw_load_slow = false;
@@ -888,7 +1050,7 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
         "the gated V0 segment body must be parked before reading"
     );
 
-    let read = spawn_blocking(move || read_to_eof(&mut audio));
+    let read = spawn(blocking_audio(audio, read_to_eof));
     let mut saw_escape = false;
     wait_for_event(
         &mut rescue_rx,
@@ -912,7 +1074,7 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
     .expect("stalled-boundary EscapeStalled rescue");
     gate.release();
 
-    let total = read.await.expect("read");
+    let total = collector.finish_read(read.await.expect("read"), &bus).await;
 
     let segments = collector.segments();
     let switches = collector.switch_count();
@@ -1006,14 +1168,14 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
         .build();
 
     let config1 = AudioConfig::<Hls<TestPools>>::for_stream(hls1)
-        .events(bus1)
+        .events(bus1.clone())
         .media_info(wav_info.clone())
         .build();
-    let mut audio1 = worker.load(config1).await.expect("track 1");
+    let audio1 = worker.load(config1).await.expect("track 1");
 
-    let t1_samples = spawn_blocking(move || read_to_eof(&mut audio1))
-        .await
-        .expect("read t1");
+    let t1_samples = collector1
+        .finish_read(blocking_audio(audio1, read_to_eof).await, &bus1)
+        .await;
 
     let t1_segs = collector1.segments();
     eprintln!(
@@ -1043,14 +1205,14 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
         .build();
 
     let config2 = AudioConfig::<Hls<TestPools>>::for_stream(hls2)
-        .events(bus2)
+        .events(bus2.clone())
         .media_info(wav_info.clone())
         .build();
-    let mut audio2 = worker.load(config2).await.expect("track 2");
+    let audio2 = worker.load(config2).await.expect("track 2");
 
-    let t2_samples = spawn_blocking(move || read_to_eof(&mut audio2))
-        .await
-        .expect("read t2");
+    let t2_samples = collector2
+        .finish_read(blocking_audio(audio2, read_to_eof).await, &bus2)
+        .await;
 
     let t2_segs = collector2.segments();
     eprintln!(
@@ -1079,14 +1241,14 @@ async fn multi_track_shared_abr_with_cache(#[future(awt)] shared_tracks: (Create
         .build();
 
     let config3 = AudioConfig::<Hls<TestPools>>::for_stream(hls3)
-        .events(bus3)
+        .events(bus3.clone())
         .media_info(wav_info)
         .build();
-    let mut audio3 = worker.load(config3).await.expect("track 1 replay");
+    let audio3 = worker.load(config3).await.expect("track 1 replay");
 
-    let t3_samples = spawn_blocking(move || read_to_eof(&mut audio3))
-        .await
-        .expect("read t3");
+    let t3_samples = collector3
+        .finish_read(blocking_audio(audio3, read_to_eof).await, &bus3)
+        .await;
 
     let t3_segs = collector3.segments();
     assert!(t3_samples > 0, "Track 1 replay must produce samples");
@@ -1162,7 +1324,7 @@ async fn abr_switch_must_not_redownload_covered_segments(
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .events(bus)
+        .events(bus.clone())
         .media_info(wav_info)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
@@ -1189,7 +1351,7 @@ async fn abr_switch_must_not_redownload_covered_segments(
         .set_mode(AbrMode::manual(1))
         .expect("Manual(1) target must be valid");
     gate.release();
-    let (mut audio, transition) = read_until_manual_applied(
+    let (audio, transition) = read_until_manual_applied(
         audio,
         &collector,
         applied_before,
@@ -1203,9 +1365,9 @@ async fn abr_switch_must_not_redownload_covered_segments(
         "the requested switch must apply before EOF"
     );
 
-    let tail_samples = spawn_blocking(move || read_to_eof(&mut audio))
-        .await
-        .expect("read");
+    let tail_samples = collector
+        .finish_read(blocking_audio(audio, read_to_eof).await, &bus)
+        .await;
     let total = transition.samples + tail_samples;
     assert!(total > 0, "expected audio after the switch command");
 

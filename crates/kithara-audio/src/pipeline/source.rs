@@ -29,7 +29,8 @@ use crate::{
         rebuild::{DecoderBuildComplete, DecoderBuildPurpose, port::RebuildPort},
         seek::SeekEngine,
         track::{
-            self, CurrentFsm, Decoding, Track, TrackFailure, TrackStep, WaitContext, WaitingReason,
+            self, CurrentFsm, Decoding, Failed, Track, TrackFailure, TrackStep, WaitContext,
+            WaitingReason,
         },
     },
     traits::AudioSource,
@@ -56,6 +57,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     pub(crate) seek_obs: Arc<dyn SeekObserve>,
     /// Explicit FSM state — single source of truth for track phase.
     pub(crate) state: CurrentFsm,
+    failure_logged: bool,
     pub(crate) decoder_backend: kithara_decode::DecoderBackend,
     /// Deferred sink for FSM lifecycle events ([`AudioEvent`]). The FSM runs on
     /// the produce core, so `emit_event` enqueues lock-free; the scheduler shell
@@ -139,6 +141,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             resume,
             variant_control,
             state: Track::<Decoding>::new(()).erase(),
+            failure_logged: false,
             emit: None,
             retired: Vec::with_capacity(2),
             pending_seek_cleanup: false,
@@ -169,6 +172,29 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.activity.set_playing(playing_for_state(&new));
         self.state = new;
     }
+
+    pub(crate) fn fail(&mut self, failure: TrackFailure) -> TrackFailureKind {
+        let kind = map_track_failure_kind(&failure);
+        self.update_state(Track::<Failed>::new(failure).erase());
+        kind
+    }
+
+    fn finish_failure_diagnostic(&mut self) {
+        if self.failure_logged {
+            return;
+        }
+        let CurrentFsm::Failed(handle) = &self.state else {
+            return;
+        };
+        match handle.data() {
+            TrackFailure::Decode(err) => warn!(?err, "track failed: decode error"),
+            TrackFailure::RecreateFailed { offset } => {
+                warn!(offset = *offset, "track failed: decoder recreation failed");
+            }
+            TrackFailure::SourceCancelled => warn!("track failed: source cancelled"),
+        }
+        self.failure_logged = true;
+    }
 }
 
 impl<T: StreamType> Drop for StreamAudioSource<T> {
@@ -179,6 +205,7 @@ impl<T: StreamType> Drop for StreamAudioSource<T> {
         if matches!(self.state, CurrentFsm::AtEof(_) | CurrentFsm::Failed(_)) {
             self.progress_variant_transition();
         }
+        self.finish_failure_diagnostic();
         if let Some(ref emit) = self.emit {
             emit.flush();
         }
@@ -583,6 +610,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
 
     /// Flushes operations deferred from the non-blocking produce core.
     fn finish_deferred(&mut self) {
+        self.finish_failure_diagnostic();
         self.retired.clear();
         self.rebuild.submit();
         if let Some(ref emit) = self.emit {
@@ -644,9 +672,11 @@ pub(crate) const fn playing_for_state(state: &CurrentFsm) -> bool {
     !matches!(state, CurrentFsm::AtEof(_) | CurrentFsm::Failed(_))
 }
 
-const fn map_track_failure_kind(failure: &TrackFailure) -> TrackFailureKind {
+pub(crate) const fn map_track_failure_kind(failure: &TrackFailure) -> TrackFailureKind {
     match failure {
-        TrackFailure::Decode(_) => TrackFailureKind::Decode,
+        TrackFailure::Decode(error) => TrackFailureKind::Decode {
+            kind: crate::map_decode_error_kind(error),
+        },
         TrackFailure::RecreateFailed { offset } => {
             TrackFailureKind::RecreateFailed { offset: *offset }
         }

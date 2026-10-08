@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, num::NonZeroU32, ops::Range};
 
-use kithara_audio::{DecodeErrorKind, SourceEnd, map_decode_error_kind};
+use kithara_audio::{SourceEnd, TrackFailureKind};
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_platform::{maybe_send::WasmSend, sync::Arc};
 use kithara_signal::{FrameCount, SourceSpan};
@@ -22,7 +22,7 @@ use crate::{bridge::RtMetrics, worker::ServiceClass};
 pub struct PlayerResource {
     #[field(get, deref = false)]
     src: Arc<str>,
-    failed: Option<DecodeErrorKind>,
+    failed: Option<TrackFailureKind>,
     last_source_end: Option<SourceEnd>,
     source_spans: VecDeque<SourceWindow>,
     resource: WasmSend<Resource>,
@@ -84,9 +84,9 @@ pub enum ReadOutcome {
     /// mid-stream. Distinct from [`Eof`](Self::Eof): the track did NOT
     /// reach its natural end — surface this as a track-failed signal
     /// upstream instead of letting the queue auto-advance as if the
-    /// track played out. The payload names the decoder fault, so a
+    /// track played out. The payload names the source fault, so a
     /// consumer reports which error ended the track rather than that one did.
-    Failed(DecodeErrorKind),
+    Failed(TrackFailureKind),
 }
 
 impl PlayerResource {
@@ -214,7 +214,7 @@ impl PlayerResource {
                 }
                 Err(error) => {
                     metrics.record_decode_error();
-                    self.failed = Some(map_decode_error_kind(&error));
+                    self.failed = Some(TrackFailureKind::from(&error));
                     (0, None)
                 }
             };

@@ -3,6 +3,8 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+
 mod consts {
     pub(super) const BANDS: usize = 32;
     pub(super) const ROWS: usize = 2;
@@ -71,9 +73,13 @@ fn count_f64(value: usize) -> f64 {
 /// Pairs of ids whose sets agree on every row of at least one band.
 pub(super) fn candidates(sets: &[(usize, &BTreeSet<u64>)]) -> BTreeSet<(usize, usize)> {
     let seeds = seeds();
+    let signatures: Vec<_> = sets
+        .par_iter()
+        .map(|&(id, set)| (id, signature(set, &seeds)))
+        .collect();
     let mut buckets: HashMap<(usize, [u64; consts::ROWS]), Vec<usize>> = HashMap::new();
-    for &(id, set) in sets {
-        for (band, rows) in signature(set, &seeds).into_iter().enumerate() {
+    for (id, signature) in signatures {
+        for (band, rows) in signature.into_iter().enumerate() {
             buckets.entry((band, rows)).or_default().push(id);
         }
     }
@@ -103,11 +109,14 @@ fn seeds() -> Signature {
 
 /// The least seeded hash of the set under each row's hash function.
 fn signature(set: &BTreeSet<u64>, seeds: &Signature) -> Signature {
+    let shingles: Vec<_> = set.iter().copied().collect();
     let mut signature = [[u64::MAX; consts::ROWS]; consts::BANDS];
-    for &shingle in set {
-        for (slot, seed) in signature.iter_mut().flatten().zip(seeds.iter().flatten()) {
-            *slot = (*slot).min(splitmix(shingle ^ seed));
-        }
+    for (slot, seed) in signature.iter_mut().flatten().zip(seeds.iter().flatten()) {
+        *slot = shingles
+            .iter()
+            .map(|shingle| splitmix(shingle ^ seed))
+            .min()
+            .unwrap_or(u64::MAX);
     }
     signature
 }
@@ -137,6 +146,7 @@ mod tests {
         let pairs = candidates(&[(0, &a), (1, &b), (2, &c)]);
         assert!(pairs.contains(&(0, 1)));
         assert!(!pairs.contains(&(0, 2)));
+        assert_eq!(pairs, candidates(&[(2, &c), (1, &b), (0, &a)]));
     }
 
     #[test]

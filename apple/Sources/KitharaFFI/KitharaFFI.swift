@@ -8363,10 +8363,13 @@ public func FfiConverterTypeFfiTotalBytesSource_lower(_ value: FfiTotalBytesSour
 
 public enum FfiTrackFailureKind: Equatable, Hashable {
 
-    case decode
+    case decode(kind: FfiDecodeErrorKind
+    )
     case recreateFailed(offset: UInt64
     )
     case sourceCancelled
+    case channelClosed
+    case render
     case unknown
 
 
@@ -8389,14 +8392,19 @@ public struct FfiConverterTypeFfiTrackFailureKind: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
 
-        case 1: return .decode
+        case 1: return .decode(kind: try FfiConverterTypeFfiDecodeErrorKind.read(from: &buf)
+        )
 
         case 2: return .recreateFailed(offset: try FfiConverterUInt64.read(from: &buf)
         )
 
         case 3: return .sourceCancelled
 
-        case 4: return .unknown
+        case 4: return .channelClosed
+
+        case 5: return .render
+
+        case 6: return .unknown
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -8406,8 +8414,9 @@ public struct FfiConverterTypeFfiTrackFailureKind: FfiConverterRustBuffer {
         switch value {
 
 
-        case .decode:
+        case let .decode(kind):
             writeInt(&buf, Int32(1))
+            FfiConverterTypeFfiDecodeErrorKind.write(kind, into: &buf)
 
 
         case let .recreateFailed(offset):
@@ -8419,8 +8428,16 @@ public struct FfiConverterTypeFfiTrackFailureKind: FfiConverterRustBuffer {
             writeInt(&buf, Int32(3))
 
 
-        case .unknown:
+        case .channelClosed:
             writeInt(&buf, Int32(4))
+
+
+        case .render:
+            writeInt(&buf, Int32(5))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(6))
 
         }
     }

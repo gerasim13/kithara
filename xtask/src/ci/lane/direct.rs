@@ -9,7 +9,7 @@ use std::{
 use anyhow::{Result, bail};
 use clap::Args;
 use kithara_devtools::Ctx;
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::declared;
 use crate::{
@@ -40,6 +40,9 @@ pub(crate) struct LaneArgs {
     // over a resolution the caller owns.
     #[arg(long, value_enum)]
     kind: PipelineKind,
+    /// A nextest filterset the lane's test suite is narrowed to.
+    #[arg(long)]
+    narrow: Option<String>,
 }
 
 fn lookup<'a>(lanes: &'a BTreeMap<String, CiLaneConfig>, name: &str) -> Result<&'a CiLaneConfig> {
@@ -85,6 +88,14 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
     ext.ci.validate()?;
     let lane = lookup(&ext.ci.lanes, &args.lane)?;
     let pins = CiPins::load(&ctx.root.join(&ext.ci.pins))?;
+    let narrow = args.narrow.as_deref();
+    if !declared::runs_anything(lane, args.kind, narrow, &ctx.root, &ctx.config)? {
+        info!(
+            lane = %args.lane,
+            "the lane's suite selects no test lane on this branch; nothing to build"
+        );
+        return Ok(());
+    }
     let target = Target::enter(
         &ctx.root,
         LaneTarget {
@@ -98,7 +109,7 @@ fn run_in(args: &LaneArgs, ctx: &Ctx, var: &dyn Fn(&str) -> Option<OsString>) ->
     }
     let process = Process::new(&ctx.root, executor_vars(target.cargo_dir(), args.kind));
     crate::ci::run::journalled(&process, &args.lane, || {
-        let result = declared::run(&process, lane, &pins, &ctx.config.tools, args.kind);
+        let result = declared::run(&process, lane, &pins, &ctx.config.tools, args.kind, narrow);
         if var("RUSTC_WRAPPER").is_some_and(|wrapper| !wrapper.is_empty()) {
             let on_github =
                 crate::job::github_in(&|name| var(name).and_then(|value| value.into_string().ok()));
@@ -137,7 +148,7 @@ fn announce(dir: &Path, var: &dyn Fn(&str) -> Option<OsString>) {
 mod tests {
     use std::{env, ffi::OsStr, fs, path::Path};
 
-    use kithara_devtools::lease;
+    use kithara_devtools::{common::project::TestCommandConfig, lease};
 
     use super::*;
     use crate::ci::{
@@ -279,6 +290,7 @@ label = "run"
         let args = LaneArgs {
             lane: "trivial".to_owned(),
             kind: PipelineKind::Branch,
+            narrow: None,
         };
         (ctx, args)
     }
@@ -389,6 +401,7 @@ label = "run"
         );
         ctx.config.tools = toml::from_str(&format!("[just]\nprogram = \"{}\"\n", just.display()))
             .expect("parse the tools table");
+        ctx.config.test = test_lanes();
         let anywhere = environment(&[]);
 
         fs::write(&status, "   Compiling probe v0.0.0 (/w)\n").expect("write cargo's answer");
@@ -401,6 +414,156 @@ label = "run"
 
         fs::write(&status, "       Fresh probe v0.0.0 (/w)\n").expect("write cargo's answer");
         run_in(&args, &ctx, &anywhere).expect("a suite the next job reuses whole passes");
+    }
+
+    /// A checkout on branch `topic`, one commit past `origin/main`, that
+    /// changed `changed`, declaring one lane whose step runs the touched suite
+    /// through a `just` that records whether it ran. The `workspace` lane is
+    /// the default and `tooling` owns `xtask/`.
+    #[cfg(unix)]
+    fn touched_lane(root: &Path, changed: &str) -> (Ctx, LaneArgs, PathBuf) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (mut ctx, args) = lane_running(
+            root,
+            "just",
+            r#"args = ["test", "run", "--touched", "--timings"]"#,
+        );
+        let commit = |message: &str| {
+            git(
+                root,
+                &[
+                    "-c",
+                    "user.name=fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "commit",
+                    "--allow-empty",
+                    "--no-gpg-sign",
+                    "-qm",
+                    message,
+                ],
+            );
+        };
+        git(root, &["checkout", "-qb", "main"]);
+        commit("base");
+        git(
+            root,
+            &[
+                "remote",
+                "add",
+                "origin",
+                root.to_str().expect("a UTF-8 root"),
+            ],
+        );
+        git(root, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        git(root, &["checkout", "-qb", "topic"]);
+        let path = root.join(changed);
+        fs::create_dir_all(path.parent().expect("a changed file has a directory")).unwrap();
+        fs::write(&path, "changed").unwrap();
+        git(root, &["add", changed]);
+        commit("change");
+
+        let called = root.join("called");
+        let just = root.join("just");
+        fs::write(
+            &just,
+            format!("#!/bin/sh\nprintf ran > '{}'\n", called.display()),
+        )
+        .unwrap();
+        fs::set_permissions(&just, fs::Permissions::from_mode(0o755)).unwrap();
+        ctx.config.tools = toml::from_str(&format!("[just]\nprogram = \"{}\"\n", just.display()))
+            .expect("parse the tools table");
+        ctx.config.test = test_lanes();
+        (ctx, args, called)
+    }
+
+    /// Test lanes for a suite step to select from: the default `workspace`
+    /// lane, and `tooling`, which owns `xtask/` and builds what the default
+    /// lane leaves out.
+    fn test_lanes() -> TestCommandConfig {
+        toml::from_str(
+            r#"
+default_lane = "workspace"
+default_backend = "http"
+nextest_config = ".config/nextest.toml"
+[net_backends.http]
+[lanes.workspace.cargo]
+workspace = true
+exclude = ["tools"]
+[lanes.tooling]
+owns = ["xtask/"]
+cargo.packages = ["tools"]
+"#,
+        )
+        .expect("parse the test lanes")
+    }
+
+    /// Runs a touched lane as a CI job would, building under `builds`, and
+    /// returns what the job's later steps were told.
+    #[cfg(unix)]
+    fn run_touched(root: &Path, changed: &str, builds: &Path) -> (Result<()>, String, PathBuf) {
+        let (ctx, args, called) = touched_lane(root, changed);
+        let github_env = root.join("github-env");
+        fs::write(&github_env, "").expect("create the job's GITHUB_ENV");
+        let result = run_in(
+            &args,
+            &ctx,
+            &environment(&[
+                ("CI", "true"),
+                (
+                    "CARGO_TARGET_DIR",
+                    builds.to_str().expect("a UTF-8 build root"),
+                ),
+                (
+                    "GITHUB_ENV",
+                    github_env.to_str().expect("a UTF-8 GITHUB_ENV"),
+                ),
+            ]),
+        );
+        (result, fs::read_to_string(github_env).unwrap(), called)
+    }
+
+    /// A lane whose suite runs only what the branch touched, on a branch that
+    /// touched none of its lanes, has nothing to build: it claims no build
+    /// directory, tells the job no build to upload timings from, and runs
+    /// nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_touched_lane_that_selects_nothing_claims_no_build() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let builds = tempfile::tempdir().expect("create the runner's build root");
+
+        let (result, told, called) = run_touched(temp.path(), "xtask/probe.rs", builds.path());
+
+        result.expect("a lane with nothing selected succeeds");
+        assert!(
+            fs::read_dir(builds.path()).unwrap().next().is_none(),
+            "a lane with nothing selected claimed a build directory"
+        );
+        assert_eq!(told, "", "a lane with nothing selected announced a build");
+        assert!(
+            !called.exists(),
+            "a lane with nothing selected ran its suite"
+        );
+    }
+
+    /// A path no lane owns runs the default lane, so the same lane builds.
+    #[cfg(unix)]
+    #[test]
+    fn a_touched_lane_that_selects_a_lane_builds_it() {
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let builds = tempfile::tempdir().expect("create the runner's build root");
+
+        let (result, told, called) = run_touched(temp.path(), "crates/probe.rs", builds.path());
+
+        result.expect("the selected lane runs");
+        assert!(called.exists(), "the selected suite must run");
+        let own = fs::read_link(builds.path().join(consts::BUILD_ALIAS)).unwrap();
+        assert_eq!(
+            told,
+            format!("{}={}\n", consts::LANE_TARGET_ENV, own.display())
+        );
     }
 
     /// A job compiling through the cache says what the cache carried for it;
