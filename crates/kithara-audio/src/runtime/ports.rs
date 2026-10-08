@@ -31,21 +31,27 @@ pub(crate) trait WakeSignal: Send + Sync + 'static {
 /// [`try_push`]: Outlet::try_push
 /// [`flush`]: Outlet::flush
 pub(crate) struct Outlet<T> {
-    /// Held during every operation; teardown takes it before waking the consumer.
-    producer: Option<HeapProd<T>>,
+    producer: HeapProd<T>,
     overflow: Option<T>,
-    wake: Option<Arc<dyn WakeSignal>>,
+    /// Dropped after the producer and overflow to signal completed teardown.
+    wake: OutletWake,
+}
+
+struct OutletWake(Option<Arc<dyn WakeSignal>>);
+
+impl Drop for OutletWake {
+    fn drop(&mut self) {
+        if let Some(wake) = &self.0 {
+            wake.wake();
+            wake.flush_deferred();
+        }
+    }
 }
 
 impl<T> Outlet<T> {
     /// Whether one item can enter the ring without occupying overflow.
     pub(crate) fn can_push_direct(&self) -> bool {
-        self.overflow.is_none()
-            && !self
-                .producer
-                .as_ref()
-                .expect("outlet producer is held until teardown")
-                .is_full()
+        self.overflow.is_none() && !self.producer.is_full()
     }
 
     /// Try to drain the parked overflow item into the ring buffer.
@@ -63,13 +69,13 @@ impl<T> Outlet<T> {
 
     /// Flush any deferred work owned by the wake signal.
     pub(crate) fn flush_wake_signals(&self) {
-        if let Some(wake) = &self.wake {
+        if let Some(wake) = &self.wake.0 {
             wake.flush_deferred();
         }
     }
 
     fn notify(&self) {
-        if let Some(wake) = &self.wake {
+        if let Some(wake) = &self.wake.0 {
             wake.wake();
         }
     }
@@ -128,27 +134,13 @@ impl<T> Outlet<T> {
     }
 
     fn try_push_ring(&mut self, item: T) -> Result<(), T> {
-        match self
-            .producer
-            .as_mut()
-            .expect("outlet producer is held until teardown")
-            .try_push(item)
-        {
+        match self.producer.try_push(item) {
             Ok(()) => {
                 self.notify();
                 Ok(())
             }
             Err(item) => Err(item),
         }
-    }
-}
-
-impl<T> Drop for Outlet<T> {
-    fn drop(&mut self) {
-        drop(self.producer.take());
-        drop(self.overflow.take());
-        self.notify();
-        self.flush_wake_signals();
     }
 }
 
@@ -178,8 +170,8 @@ pub(crate) fn connect<T>(
     let (producer, consumer) = rb.split();
     (
         Outlet {
-            producer: Some(producer),
-            wake,
+            producer,
+            wake: OutletWake(wake),
             overflow: None,
         },
         Inlet { consumer },
@@ -248,7 +240,7 @@ mod tests {
             wakes: AtomicUsize::new(0),
             flushes: AtomicUsize::new(0),
         });
-        out.wake = Some(wake.clone());
+        out.wake.0 = Some(wake.clone());
         let since = wake.thread.current();
         assert!(inl.consumer.write_is_held());
 
