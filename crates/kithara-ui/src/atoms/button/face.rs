@@ -1,12 +1,15 @@
 use crate::{
     atoms::icon::mark::Marked,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
+    hosts::{
+        icons::Mark,
+        solve::{Length, Size},
+    },
     layout::FrameSides,
     module::ButtonStyle,
-    render::{Mark, Skin},
+    render::Skin,
     shaping::{GlyphRun, TextContext},
     skin::{FrameSkin, TextRoleSkin},
-    solve::{Length, Size},
 };
 
 /// What a document asks a button to be, before a skin resolves it.

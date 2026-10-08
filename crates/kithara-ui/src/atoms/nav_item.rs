@@ -114,7 +114,7 @@ mod tests {
     use crate::{
         builtin,
         draw::{DrawCmd, Geom, Paint},
-        render::Mark,
+        hosts::icons::Mark,
         shaping::{FontId, GlyphFace, GlyphSegment},
     };
 

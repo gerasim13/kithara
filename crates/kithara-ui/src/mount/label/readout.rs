@@ -17,10 +17,8 @@ mod host {
     use super::Readout;
     use crate::{
         atoms::readout::{Readout as Face, ReadoutData},
-        render::{
-            ReadValue, Skin,
-            controls::{Draws, Reading},
-        },
+        hosts::controls::{Draws, Reading},
+        render::{ReadValue, Skin},
     };
 
     impl Draws for Readout {

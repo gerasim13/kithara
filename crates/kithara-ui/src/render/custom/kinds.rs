@@ -1,5 +1,7 @@
-use super::{mounted::MappedCustom, widget::CustomWidget};
-use crate::render::{Published, UiEvent, custom::MountedCustom};
+use crate::{
+    hosts::custom::{MappedCustom, MountedCustom},
+    render::{Published, UiEvent, custom::CustomWidget},
+};
 
 /// What the application registers under one extension kind: how to build a
 /// fresh widget, already speaking the document's own event vocabulary.

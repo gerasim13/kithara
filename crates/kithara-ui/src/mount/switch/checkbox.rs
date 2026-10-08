@@ -9,10 +9,8 @@ mod host {
     use super::Checkbox;
     use crate::{
         atoms::toggle::Binary,
-        render::{
-            ReadValue, Skin,
-            controls::{Draws, Grip, Reading},
-        },
+        hosts::controls::{Draws, Grip, Reading},
+        render::{ReadValue, Skin},
     };
 
     impl Draws for Checkbox {

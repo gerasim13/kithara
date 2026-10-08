@@ -20,10 +20,8 @@ mod host {
     use super::NavItem;
     use crate::{
         atoms::{nav_item::NavItem as Face, painter::NavData},
-        render::{
-            ReadValue, Skin,
-            controls::{Draws, Grip, Reading},
-        },
+        hosts::controls::{Draws, Grip, Reading},
+        render::{ReadValue, Skin},
     };
 
     impl Draws for NavItem {

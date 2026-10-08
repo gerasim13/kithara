@@ -20,11 +20,11 @@ mod host {
     use super::ContextBar;
     use crate::{
         atoms::bar::context::{Context, Scope, Viewed},
-        render::{
-            ReadValue, Skin,
+        hosts::{
             controls::{Draws, Reading},
-            picker_selected_index,
+            picker::picker_selected_index,
         },
+        render::{ReadValue, Skin},
     };
 
     impl Draws for ContextBar<'_> {

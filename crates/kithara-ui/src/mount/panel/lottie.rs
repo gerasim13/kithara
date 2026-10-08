@@ -28,15 +28,13 @@ mod host {
 
     use super::Lottie;
     #[cfg(feature = "masonry")]
-    use crate::render::controls::DataRefresh;
+    use crate::hosts::controls::DataRefresh;
     use crate::{
         atoms::picture::lottie::{Lottie as Face, Standing},
         expand::Binding,
+        hosts::controls::{Draws, Reading},
         lottie::builtin_artwork,
-        render::{
-            Ctx, ReadValue, Skin,
-            controls::{Draws, Reading},
-        },
+        render::{Ctx, ReadValue, Skin},
     };
 
     impl Draws for Lottie<'_> {

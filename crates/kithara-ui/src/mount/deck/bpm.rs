@@ -15,11 +15,8 @@ mod host {
     use super::Bpm;
     use crate::{
         atoms::deck::tempo::{Reading as Beat, Tempo as Face},
-        render::{
-            ReadValue, Skin, WaveformView,
-            controls::{Draws, Reading},
-            model::derived,
-        },
+        hosts::controls::{Draws, Reading},
+        render::{ReadValue, Skin, WaveformView, model::derived},
     };
 
     mod consts {

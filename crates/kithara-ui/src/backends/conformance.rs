@@ -36,7 +36,7 @@ use crate::{
         DrawList, DrawListBuilder, FillRule, LineCap, LineJoin, Paint, Path, Pen, Pt, Rect, Rgba,
         Stop, Stops, Verb, replay,
     },
-    render::fonts::{FONT_BYTES, SANS},
+    iced::fonts::{FONT_BYTES, SANS},
 };
 
 /// The one fixture both backends are asked to paint.

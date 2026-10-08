@@ -8,4 +8,4 @@ mod glyph;
 mod readout;
 mod select;
 mod telemetry;
-mod text;
+pub(crate) mod text;

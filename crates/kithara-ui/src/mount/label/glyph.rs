@@ -47,11 +47,9 @@ mod host {
     use crate::{
         atoms::icon::glyph::{Glyph as Face, GlyphData},
         draw::Rgba,
+        hosts::controls::{Draws, Reading},
         module::{GlyphStyle, IconName},
-        render::{
-            ReadValue, Skin,
-            controls::{Draws, Reading},
-        },
+        render::{ReadValue, Skin},
     };
 
     impl Draws for Glyph<'_> {
@@ -115,8 +113,9 @@ mod host {
         use crate::{
             builtin,
             draw::{DrawList, DrawListBuilder, Rect},
+            hosts::controls::Draws,
             module::IconName,
-            render::{Skin, controls::Draws},
+            render::Skin,
             shaping::TextContext,
             skin::ColorRole,
         };

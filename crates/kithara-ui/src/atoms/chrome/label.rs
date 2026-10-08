@@ -5,10 +5,10 @@ use crate::{
         painter::ControlPainter,
     },
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
+    hosts::solve::{Length, Size},
     render::Skin,
     shaping::TextContext,
     skin::{ColorRole, FrameSkin, TextRoleSkin},
-    solve::{Length, Size},
 };
 
 /// The word a module's footer carries, in the one role both hosts shape it in.

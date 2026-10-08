@@ -18,11 +18,9 @@ mod host {
     use super::Fader;
     use crate::{
         atoms::{design::fader::Fader as Face, painter::Captioned},
+        hosts::controls::{Drag, Draws, Grip, Reading},
         interact::{CursorShape, recognizers::Track},
-        render::{
-            ReadValue, Skin,
-            controls::{Drag, Draws, Grip, Reading},
-        },
+        render::{ReadValue, Skin},
     };
 
     impl Draws for Fader {

@@ -9,10 +9,8 @@ mod host {
     use super::PortalMap;
     use crate::{
         atoms::pivot::map::{PortalMap as Face, PortalMapData},
-        render::{
-            ReadValue, Skin,
-            controls::{Draws, Reading},
-        },
+        hosts::controls::{Draws, Reading},
+        render::{ReadValue, Skin},
     };
 
     impl Draws for PortalMap {

@@ -12,7 +12,7 @@ use masonry::vello::{
 use crate::{
     app::Frame,
     backends::read_back,
-    render::{shader::ShaderPass, vis::VisPass},
+    masonry::{shader::ShaderPass, vis::VisPass},
 };
 
 /// A wgpu device with no surface, plus the Vello renderer that targets it.

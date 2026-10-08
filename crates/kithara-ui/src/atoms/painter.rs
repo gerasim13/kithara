@@ -12,10 +12,12 @@ use crate::{
         wave::face::{Drawn, Wave},
     },
     draw::{DrawListBuilder, Rect},
+    hosts::{
+        icons::Mark,
+        solve::{Length, Size, length},
+    },
     interact::Hit,
-    render::Mark,
     shaping::TextContext,
-    solve::{Length, Size, length},
 };
 
 /// Transient per-cell state owned by an indexed control adapter.

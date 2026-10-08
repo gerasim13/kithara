@@ -1,11 +1,11 @@
 use crate::{
     atoms::design::quad::{center_y, quad},
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
+    hosts::solve::{Length, Size},
     module::ScalarFormat,
     render::Skin,
     shaping::TextContext,
     skin::{TelemetrySkin, TextRoleSkin},
-    solve::{Length, Size},
 };
 
 /// One formatted number, centred in its box and framed only when the document
@@ -94,7 +94,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{ScalarFormat, Telemetry};
-    use crate::{builtin, solve::Length};
+    use crate::{builtin, hosts::solve::Length};
 
     /// A percentage is padded so the row does not shuffle as the reading
     /// changes; a plain scalar is not.

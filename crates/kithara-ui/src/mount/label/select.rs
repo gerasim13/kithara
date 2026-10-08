@@ -15,10 +15,8 @@ mod host {
     use super::Select;
     use crate::{
         atoms::design::select::Select as Face,
-        render::{
-            Skin,
-            controls::{Draws, Reading},
-        },
+        hosts::controls::{Draws, Reading},
+        render::Skin,
     };
 
     impl Draws for Select {

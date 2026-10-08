@@ -11,10 +11,8 @@ mod host {
     use super::Divider;
     use crate::{
         atoms::bar::divider::Divider as Face,
-        render::{
-            Skin,
-            controls::{Draws, Reading},
-        },
+        hosts::controls::{Draws, Reading},
+        render::Skin,
     };
 
     impl Draws for Divider {

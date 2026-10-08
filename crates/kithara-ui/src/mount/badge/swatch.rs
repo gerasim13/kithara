@@ -16,10 +16,8 @@ mod host {
     use super::Swatch;
     use crate::{
         atoms::design::swatch::Swatch as Face,
-        render::{
-            Skin,
-            controls::{Draws, Reading},
-        },
+        hosts::controls::{Draws, Reading},
+        render::Skin,
     };
 
     impl Draws for Swatch {

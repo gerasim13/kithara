@@ -9,10 +9,8 @@ mod host {
     use super::Spacer;
     use crate::{
         atoms::bar::spacer::Spacer as Face,
-        render::{
-            Skin,
-            controls::{Draws, Reading},
-        },
+        hosts::controls::{Draws, Reading},
+        render::Skin,
     };
 
     impl Draws for Spacer {

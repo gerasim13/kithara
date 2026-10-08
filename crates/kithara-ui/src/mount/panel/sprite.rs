@@ -44,14 +44,12 @@ mod host {
 
     use super::{Sprite, frame_at};
     #[cfg(feature = "masonry")]
-    use crate::render::controls::DataRefresh;
+    use crate::hosts::controls::DataRefresh;
     use crate::{
         atoms::picture::sprite::Sprite as Face,
         draw::Image,
-        render::{
-            ReadValue, Sheet, Skin,
-            controls::{Draws, Reading},
-        },
+        hosts::controls::{Draws, Reading},
+        render::{ReadValue, Sheet, Skin},
     };
 
     impl Draws for Sprite {

@@ -9,11 +9,9 @@ mod host {
     use super::Range;
     use crate::{
         atoms::pivot::range::Range as Face,
+        hosts::controls::{Draws, Grip, Reading, Span},
         interact::CursorShape,
-        render::{
-            ReadValue, ScalarRange, Skin,
-            controls::{Draws, Grip, Reading, Span},
-        },
+        render::{ReadValue, ScalarRange, Skin},
     };
 
     impl Draws for Range {

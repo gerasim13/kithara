@@ -7,10 +7,10 @@ use crate::{
         painter::IndexedVisual,
     },
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
+    hosts::solve::{Length, Size},
     render::Skin,
     shaping::TextContext,
     skin::{GlobalBarSkin, TextRoleSkin},
-    solve::{Length, Size},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -222,11 +222,11 @@ mod tests {
     use crate::{
         builtin,
         draw::{DrawCmd, DrawList, DrawListBuilder, Geom, Paint, Pt, Rect},
+        hosts::solve::{Length, Size},
         mount,
         render::{ReadValue, Reads, document::probe},
         shaping::TextContext,
         skin::{ColorRole, FontFamily, TextRoleSkin},
-        solve::{Length, Size},
     };
 
     mod consts {

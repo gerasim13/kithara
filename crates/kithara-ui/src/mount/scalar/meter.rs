@@ -11,10 +11,8 @@ mod host {
     use super::Meter;
     use crate::{
         atoms::design::meter::Meter as Face,
-        render::{
-            ReadValue, Skin,
-            controls::{Draws, Reading},
-        },
+        hosts::controls::{Draws, Reading},
+        render::{ReadValue, Skin},
     };
 
     impl Draws for Meter {

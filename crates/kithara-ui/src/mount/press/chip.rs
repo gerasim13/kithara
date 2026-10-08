@@ -16,10 +16,8 @@ mod host {
     use super::Chip;
     use crate::{
         atoms::{chip::Chip as Face, painter::Labelled},
-        render::{
-            ReadValue, Skin,
-            controls::{Draws, Grip, Reading},
-        },
+        hosts::controls::{Draws, Grip, Reading},
+        render::{ReadValue, Skin},
     };
 
     impl Draws for Chip {

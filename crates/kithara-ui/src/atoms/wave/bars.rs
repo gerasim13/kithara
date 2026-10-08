@@ -304,10 +304,7 @@ fn stub_positions(span: [f32; 2], pitch: f32) -> impl Iterator<Item = f32> {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{
-        super::zoom_math::{Zoom, norm_to_x, window_bounds, x_to_norm},
-        *,
-    };
+    use super::*;
     use crate::{
         builtin,
         draw::{DrawCmd, Geom},
@@ -459,28 +456,6 @@ mod tests {
         );
     }
 
-    /// The single unready stretch a partition holds.
-    fn marked(spans: impl Iterator<Item = CoverageSpan>) -> [f32; 2] {
-        let mut marked = None;
-        for span in spans {
-            if let CoverageSpan::Unready(span, _) = span {
-                assert!(marked.replace(span).is_none(), "only one hole is marked");
-            }
-        }
-        marked.expect("one hole is marked")
-    }
-
-    fn assert_within(actual: [f32; 2], expected: [f32; 2], tolerance: f32) {
-        let off = [
-            (actual[0] - expected[0]).abs(),
-            (actual[1] - expected[1]).abs(),
-        ];
-        assert!(
-            off[0] <= tolerance && off[1] <= tolerance,
-            "{actual:?} is not {expected:?} within {tolerance}"
-        );
-    }
-
     /// Nothing uncovered leaves one unbroken covered stretch: an axis with no
     /// bars is analysed silence, which is what keeps silence from reading as
     /// absence.
@@ -539,30 +514,6 @@ mod tests {
             coverage_spans(&[[0.0, 0.1]], |norm| (norm - 0.5) * 100.0, 100.0)
                 .eq([CoverageSpan::Covered([0.0, 100.0])])
         );
-    }
-
-    /// The deck window and the overview place a region on the same audio: each
-    /// pixel span maps back to the fractions it was drawn from, outward by at
-    /// most the pixel each side was rounded by.
-    #[kithara::test]
-    fn the_deck_and_the_overview_mark_the_same_track_positions() {
-        const WIDTH: f32 = 400.0;
-        let hole = [0.25, 0.5];
-        let window = window_bounds(0.375, f32::from(Zoom::MAX));
-
-        let deck = marked(coverage_spans(
-            &[hole],
-            |norm| norm_to_x(norm, &window, WIDTH),
-            WIDTH,
-        ));
-        let overview = marked(coverage_spans(&[hole], |norm| norm * WIDTH, WIDTH));
-
-        assert_within(
-            deck.map(|x| x_to_norm(x, &window, WIDTH).expect("a positive width")),
-            hole,
-            f32::from(Zoom::MAX) / WIDTH,
-        );
-        assert_within(overview.map(|x| x / WIDTH), hole, 1.0 / WIDTH);
     }
 
     /// Stubs sit on the grid the real columns tile from, not on the region's

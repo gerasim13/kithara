@@ -8,4 +8,4 @@ mod bpm;
 mod summary;
 mod time;
 mod vis;
-mod wave;
+pub(crate) mod wave;

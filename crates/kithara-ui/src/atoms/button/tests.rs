@@ -4,10 +4,11 @@ use super::face::*;
 use crate::{
     builtin,
     draw::{DrawCmd, DrawListBuilder, Geom, Paint, Pen, Rect, Rgba},
+    hosts::icons::Mark,
     ids::SourceUri,
     layout::FrameSides,
     module::ButtonStyle,
-    render::{Mark, Skin},
+    render::Skin,
     shaping::{FontId, GlyphFace, GlyphSegment, TextContext},
     skin::parse_skin_over,
 };

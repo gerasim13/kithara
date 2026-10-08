@@ -19,10 +19,8 @@ mod host {
     use super::StatusDot;
     use crate::{
         atoms::design::status_dot::{StatusDot as Face, StatusDotData},
-        render::{
-            ReadValue, Skin,
-            controls::{Draws, Reading},
-        },
+        hosts::controls::{Draws, Reading},
+        render::{ReadValue, Skin},
     };
 
     impl Draws for StatusDot<'_> {

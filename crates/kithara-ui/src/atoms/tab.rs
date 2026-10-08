@@ -1,9 +1,9 @@
 use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
+    hosts::solve::{Length, Size},
     render::Skin,
     shaping::{GlyphRun, TextContext},
     skin::{TabLargeSkin, TextRoleSkin},
-    solve::{Length, Size},
 };
 
 #[derive(Clone, PartialEq, kithara_derive::Retained)]

@@ -9,11 +9,9 @@ mod host {
     use super::VuStereo;
     use crate::{
         atoms::vu::StereoMeter,
+        hosts::controls::{Drag, Draws, Grip, Reading},
         interact::{CursorShape, recognizers::Track},
-        render::{
-            ReadValue, Skin, StereoLevels,
-            controls::{Drag, Draws, Grip, Reading},
-        },
+        render::{ReadValue, Skin, StereoLevels},
     };
 
     impl Draws for VuStereo {

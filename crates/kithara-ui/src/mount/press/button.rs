@@ -43,11 +43,12 @@ mod host {
             button::{Button as Face, ButtonConfig, ButtonLabel},
             painter::ButtonData,
         },
-        module::{ButtonStyle, IconName},
-        render::{
-            Mark, ReadValue, Skin,
+        hosts::{
             controls::{Draws, Grip, Reading},
+            icons::Mark,
         },
+        module::{ButtonStyle, IconName},
+        render::{ReadValue, Skin},
     };
 
     /// The icon a button shows at rest, and the one it swaps in while active.

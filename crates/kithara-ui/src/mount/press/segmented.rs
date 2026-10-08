@@ -17,10 +17,8 @@ mod host {
     use super::Segmented;
     use crate::{
         atoms::design::segmented::{Segmented as Face, SegmentedData},
-        render::{
-            ReadValue, Skin,
-            controls::{Draws, Grip, Reading},
-        },
+        hosts::controls::{Draws, Grip, Reading},
+        render::{ReadValue, Skin},
     };
 
     impl Draws for Segmented<'_> {

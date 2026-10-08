@@ -27,7 +27,7 @@ pub(crate) struct Wave {
     cue_text: Rgba,
     palette: WavePalette,
     metrics: WaveSkin,
-    style: WaveStyle,
+    pub(crate) style: WaveStyle,
 }
 
 /// What the wave is handed each frame.
@@ -71,7 +71,7 @@ impl Wave {
         }
     }
 
-    fn face<'a>(&'a self, data: &'a Drawn) -> WavePaint<'a> {
+    pub(crate) fn face<'a>(&'a self, data: &'a Drawn) -> WavePaint<'a> {
         WavePaint {
             background: self.background,
             border: self.border,
@@ -107,16 +107,6 @@ impl Wave {
         }
     }
 
-    pub(crate) const fn hero(&self) -> bool {
-        matches!(self.style, WaveStyle::Hero)
-    }
-
-    /// Where the naming panel sits, so a host can tell whether the pointer is
-    /// on it.
-    pub(crate) fn overlay_bounds(&self, data: &Drawn, bounds: Rect) -> Rect {
-        self.face(data).overlay_bounds(bounds)
-    }
-
     pub(crate) fn paint(
         &self,
         list: &mut DrawListBuilder,
@@ -131,13 +121,7 @@ impl Wave {
 
 impl Drawn {
     /// What a reading shows when there is nothing to show.
-    const EM_DASH: &str = "\u{2014}";
-
-    pub(crate) fn has_waveform(&self) -> bool {
-        self.waveform
-            .as_ref()
-            .is_some_and(|waveform| !waveform.buckets.is_empty())
-    }
+    pub(crate) const EM_DASH: &str = "\u{2014}";
 
     /// Reads what a deck's wave shows: the shape from its own endpoint, the
     /// playhead and — on the hero wave — the words beside it from siblings in
@@ -185,68 +169,6 @@ impl Drawn {
             zoom: zoom.into(),
         }
     }
-
-    #[cfg(any(feature = "masonry", test))]
-    pub(crate) fn refresh(&mut self, reads: &dyn Reads, scope: &str, zoom: Option<&str>) -> bool {
-        let progress = match reads.get(&derived("deck.playback.position_normalized", scope)) {
-            Some(ReadValue::Scalar(value)) => value.as_(),
-            _ => 0.0,
-        };
-        let zoom = zoom
-            .and_then(|endpoint| reads.get(endpoint))
-            .and_then(|value| match value {
-                ReadValue::Scalar(value) => Some(AsPrimitive::<f32>::as_(value)),
-                _ => None,
-            })
-            .map_or(self.zoom, Zoom::from);
-        let cached = cached_extent(reads, scope, progress);
-        let mut changed = std::mem::replace(&mut self.progress, progress) != progress;
-        changed |= std::mem::replace(&mut self.cached, cached) != cached;
-        changed |= std::mem::replace(&mut self.zoom, zoom) != zoom;
-        if let Some(overlay) = &mut self.overlay {
-            let next = OverlayData {
-                art: read_art(reads, scope),
-                title: read_text(reads, &derived("deck.track.title", scope))
-                    .filter(|title| !title.is_empty())
-                    .unwrap_or("No track loaded")
-                    .to_owned(),
-                artist: read_text(reads, &derived("deck.track.source_kind", scope))
-                    .unwrap_or("no source")
-                    .to_owned(),
-                bpm: overlay.bpm.clone(),
-                key: read_text(reads, &derived("deck.track.key", scope))
-                    .unwrap_or(Self::EM_DASH)
-                    .to_owned(),
-                remain: read_text(reads, &derived("deck.playback.remain", scope))
-                    .unwrap_or(Self::EM_DASH)
-                    .to_owned(),
-                badge: overlay.badge.clone(),
-            };
-            changed |= std::mem::replace(overlay, next) != *overlay;
-        }
-        changed
-    }
-
-    #[cfg(any(feature = "masonry", test))]
-    pub(crate) fn set_waveform(&mut self, view: WaveformView<'_>) -> bool {
-        let waveform_changed = self
-            .waveform
-            .as_ref()
-            .is_none_or(|waveform| !waveform.matches(view));
-        if waveform_changed {
-            self.waveform = Some(WaveformData::from(view));
-        }
-        let bpm = view
-            .bpm
-            .map_or_else(|| Self::EM_DASH.to_owned(), |value| format!("{value:.2}"));
-        let bpm_changed = self.overlay.as_mut().is_some_and(|overlay| {
-            bpm != overlay.bpm && {
-                overlay.bpm = bpm;
-                true
-            }
-        });
-        waveform_changed || bpm_changed
-    }
 }
 
 fn overlay_palette(skin: &Skin) -> OverlayPalette {
@@ -276,7 +198,7 @@ fn overlay_palette(skin: &Skin) -> OverlayPalette {
 /// The host owns the answer and a deck that answers nothing is not behind:
 /// the playhead is the floor, so a wave with no cache endpoint draws the
 /// played part alone.
-fn cached_extent(reads: &dyn Reads, scope: &str, progress: f32) -> f32 {
+pub(crate) fn cached_extent(reads: &dyn Reads, scope: &str, progress: f32) -> f32 {
     let played = progress.clamp(0.0, 1.0);
     match reads.get(&derived("deck.playback.cached_normalized", scope)) {
         Some(ReadValue::Scalar(cached)) => {
@@ -287,14 +209,14 @@ fn cached_extent(reads: &dyn Reads, scope: &str, progress: f32) -> f32 {
     }
 }
 
-fn read_text<'a>(reads: &'a dyn Reads, endpoint: &str) -> Option<&'a str> {
+pub(crate) fn read_text<'a>(reads: &'a dyn Reads, endpoint: &str) -> Option<&'a str> {
     match reads.get(endpoint) {
         Some(ReadValue::Text(value)) => Some(value),
         _ => None,
     }
 }
 
-fn read_art(reads: &dyn Reads, scope: &str) -> Option<crate::draw::Image> {
+pub(crate) fn read_art(reads: &dyn Reads, scope: &str) -> Option<crate::draw::Image> {
     match reads.get(&derived("deck.track.artwork", scope)) {
         Some(ReadValue::Image(image)) => Some(image.clone()),
         _ => None,
@@ -302,7 +224,7 @@ fn read_art(reads: &dyn Reads, scope: &str) -> Option<crate::draw::Image> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
@@ -353,7 +275,7 @@ mod tests {
         assert_eq!(cached_extent(&CacheReads(Some(0.9)), "@deck=b", 0.4), 0.4);
     }
 
-    struct WaveReads {
+    pub(crate) struct WaveReads {
         buckets: [WaveBucket; 2],
     }
 
@@ -381,7 +303,7 @@ mod tests {
         }
     }
 
-    fn reads() -> WaveReads {
+    pub(crate) fn reads() -> WaveReads {
         WaveReads {
             buckets: [
                 WaveBucket {
@@ -398,7 +320,7 @@ mod tests {
         }
     }
 
-    fn hero(skin: &Skin) -> (Wave, Drawn) {
+    pub(crate) fn hero(skin: &Skin) -> (Wave, Drawn) {
         let reads = reads();
         let value = reads
             .get("deck.playback.waveform")
@@ -416,44 +338,7 @@ mod tests {
         )
     }
 
-    struct UpdatedReads;
-
-    impl Reads for UpdatedReads {
-        fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
-            match endpoint {
-                "deck.playback.position_normalized@deck=a" => Some(ReadValue::Scalar(0.75)),
-                "deck.playback.remain@deck=a" => Some(ReadValue::Text("-00:15")),
-                "deck.track.key@deck=a" => Some(ReadValue::Text("9A")),
-                "deck.track.source_kind@deck=a" => Some(ReadValue::Text("file")),
-                "deck.track.title@deck=a" => Some(ReadValue::Text("Updated")),
-                "deck.waveform.zoom@deck=a" => Some(ReadValue::Scalar(2.0)),
-                _ => None,
-            }
-        }
-    }
-
-    /// A retained wave owns all scoped words around its primary waveform, so
-    /// analysis and playback updates do not need a document rebuild.
-    #[kithara::test]
-    fn a_retained_wave_refreshes_its_scoped_snapshot() {
-        let skin = builtin::skin();
-        let (_, mut data) = hero(skin);
-
-        assert!(data.refresh(&UpdatedReads, "@deck=a", Some("deck.waveform.zoom@deck=a")));
-
-        let overlay = data
-            .overlay
-            .as_ref()
-            .expect("a hero wave must keep its naming panel");
-        assert_eq!(overlay.title, "Updated");
-        assert_eq!(overlay.artist, "file");
-        assert_eq!(overlay.key, "9A");
-        assert_eq!(overlay.remain, "-00:15");
-        assert_eq!(data.progress, 0.75);
-        assert_eq!(f32::from(data.zoom), 0.5);
-    }
-
-    struct ArtReads(Option<Image>);
+    pub(crate) struct ArtReads(pub(crate) Option<Image>);
 
     impl Reads for ArtReads {
         fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
@@ -465,7 +350,7 @@ mod tests {
         }
     }
 
-    fn art(id: &str, width: u32, height: u32) -> Image {
+    pub(crate) fn art(id: &str, width: u32, height: u32) -> Image {
         let len = usize::try_from(width * height * 4).expect("the fixture image fits usize");
         Image::pixels(
             ImageId::new(id),
@@ -474,33 +359,6 @@ mod tests {
             Arc::from(vec![255_u8; len]),
         )
         .expect("the fixture contains RGBA pixels")
-    }
-
-    #[kithara::test]
-    fn artwork_arrival_and_removal_update_both_wave_paths() {
-        let mut reads = ArtReads(None);
-        let mut retained = Drawn::read(WaveStyle::Hero, 1.0, Some("A"), None, &reads, "@deck=a");
-        assert!(!retained.refresh(&reads, "@deck=a", None));
-        for next in [Some(art("cover", 4, 2)), None] {
-            reads.0 = next;
-            assert!(retained.refresh(&reads, "@deck=a", None));
-            let immediate = Drawn::read(WaveStyle::Hero, 1.0, Some("A"), None, &reads, "@deck=a");
-            assert!(retained == immediate);
-            assert_eq!(
-                retained.overlay.as_ref().expect("hero overlay").art,
-                reads.0
-            );
-            assert!(!retained.refresh(&reads, "@deck=a", None));
-            let other = Drawn::read(WaveStyle::Hero, 1.0, Some("B"), None, &reads, "@deck=b");
-            assert!(
-                other
-                    .overlay
-                    .as_ref()
-                    .expect("other hero overlay")
-                    .art
-                    .is_none()
-            );
-        }
     }
 
     #[kithara::test]
@@ -598,47 +456,6 @@ mod tests {
             text.shape(TITLE, skin.wave.overlay.title, None).height()
         );
         assert!(at.x + run.width() <= summary.x + summary.w);
-    }
-
-    /// The continuously repainted wave keeps its owned sample arrays when the
-    /// borrowed view has not changed, while still taking a new BPM reading.
-    #[kithara::test]
-    fn an_unchanged_waveform_is_not_copied_each_frame() {
-        let skin = builtin::skin();
-        let reads = reads();
-        let (_, mut data) = hero(skin);
-        let buckets = data
-            .waveform
-            .as_ref()
-            .expect("the fixture must own waveform samples")
-            .buckets
-            .as_ptr();
-        let value = reads
-            .get("deck.playback.waveform")
-            .expect("the fixture must report a waveform");
-        let ReadValue::Waveform(mut view) = value else {
-            panic!("the waveform endpoint must report a waveform");
-        };
-
-        assert!(!data.set_waveform(view));
-        assert_eq!(
-            data.waveform
-                .as_ref()
-                .map(|waveform| waveform.buckets.as_ptr()),
-            Some(buckets)
-        );
-        view.bpm = Some(129.0);
-        assert!(data.set_waveform(view));
-        assert_eq!(
-            data.waveform
-                .as_ref()
-                .map(|waveform| waveform.buckets.as_ptr()),
-            Some(buckets)
-        );
-        assert_eq!(
-            data.overlay.as_ref().map(|overlay| overlay.bpm.as_str()),
-            Some("129.00")
-        );
     }
 
     /// Every layer of the hero wave reaches the draw seam: the frame, the beat
@@ -753,45 +570,5 @@ mod tests {
             .expect("the patched document resolves");
 
         assert_eq!(playhead_color(&skin), skin.palette.danger);
-    }
-
-    /// The panel steps aside for a pointer on it, not for one anywhere on the
-    /// wave, so the box a host tests against has to be the panel's own.
-    #[kithara::test]
-    fn the_panel_covers_the_top_of_the_wave_and_no_more() {
-        let skin = builtin::skin();
-        let (painter, data) = hero(skin);
-        let bounds = Rect {
-            h: 300.0,
-            w: 400.0,
-            x: 100.0,
-            y: 50.0,
-        };
-        let panel = painter.overlay_bounds(&data, bounds);
-
-        assert!(panel.contains(Pt {
-            x: 150.0,
-            y: 50.0 + skin.wave.overlay.height / 2.0,
-        }));
-        assert!(!panel.contains(Pt {
-            x: 150.0,
-            y: 50.0 + skin.wave.overlay.height + 40.0,
-        }));
-    }
-
-    /// And on a wave shorter than the panel it stops at the wave, rather than
-    /// hanging below it.
-    #[kithara::test]
-    fn the_panel_clamps_to_a_short_wave() {
-        let skin = builtin::skin();
-        let (painter, data) = hero(skin);
-        let bounds = Rect {
-            h: skin.wave.overlay.height / 2.0,
-            w: 200.0,
-            x: 0.0,
-            y: 0.0,
-        };
-
-        assert_eq!(painter.overlay_bounds(&data, bounds).h, bounds.h);
     }
 }

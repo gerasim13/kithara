@@ -14,14 +14,11 @@ pub(crate) struct Summary {
 mod host {
     use super::Summary;
     #[cfg(feature = "masonry")]
-    use crate::render::controls::DataRefresh;
+    use crate::hosts::controls::DataRefresh;
     use crate::{
         atoms::deck::summary::{Loaded, Summary as Face},
-        render::{
-            ReadValue, Reads, Skin,
-            controls::{Draws, Reading},
-            model::derived,
-        },
+        hosts::controls::{Draws, Reading},
+        render::{ReadValue, Reads, Skin, model::derived},
     };
 
     /// What stands in for a source nobody reported.

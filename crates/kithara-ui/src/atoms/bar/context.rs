@@ -4,7 +4,8 @@ use crate::{
         icon::mark::Marked,
     },
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
-    render::{Mark, Skin},
+    hosts::icons::Mark,
+    render::Skin,
     shaping::TextContext,
     skin::TextRoleSkin,
 };

@@ -27,14 +27,11 @@ pub(crate) struct Preset;
 mod host {
     use super::{Preset, consts::ITEMS};
     #[cfg(feature = "masonry")]
-    use crate::render::controls::DataRefresh;
+    use crate::hosts::controls::DataRefresh;
     use crate::{
         atoms::bar::preset::{Preset as Face, PresetData, PresetItem},
-        render::{
-            ControlAction, ReadValue, Skin,
-            controls::{Draws, Grip, IndexEvent, Reading},
-            document::Ctx,
-        },
+        hosts::controls::{Draws, Grip, IndexEvent, Reading},
+        render::{ControlAction, ReadValue, Skin, document::Ctx},
     };
 
     impl Draws for Preset {

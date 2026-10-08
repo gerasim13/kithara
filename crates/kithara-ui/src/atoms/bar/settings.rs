@@ -1,7 +1,8 @@
 use crate::{
     atoms::{button::VisualState, design::quad::quad, icon::mark::Marked},
     draw::{DrawListBuilder, Rect, Rgba},
-    render::{Mark, Skin},
+    hosts::icons::Mark,
+    render::Skin,
     shaping::TextContext,
     skin::FrameSkin,
 };
@@ -61,7 +62,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{DrawListBuilder, Rect, Settings, TextContext, VisualState};
-    use crate::{builtin, draw::DrawCmd, module::IconName, render::Mark};
+    use crate::{builtin, draw::DrawCmd, hosts::icons::Mark, module::IconName};
 
     mod consts {
         use super::*;

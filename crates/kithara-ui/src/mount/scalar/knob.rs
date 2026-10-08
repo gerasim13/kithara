@@ -17,14 +17,12 @@ mod host {
     use super::Knob;
     use crate::{
         atoms::{knob::Knob as Face, painter::Captioned},
+        hosts::controls::{Drag, Draws, Grip, Reading},
         interact::{
             CursorShape,
             recognizers::{Track, WheelStep},
         },
-        render::{
-            ReadValue, Skin,
-            controls::{Drag, Draws, Grip, Reading},
-        },
+        render::{ReadValue, Skin},
     };
 
     impl Draws for Knob {

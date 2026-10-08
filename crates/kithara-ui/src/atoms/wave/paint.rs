@@ -50,10 +50,6 @@ impl WavePaint<'_> {
         matches!(self.style, WaveStyle::Hero)
     }
 
-    pub(crate) fn overlay_bounds(&self, bounds: Rect) -> Rect {
-        overlay::strip(bounds, self.metrics.overlay)
-    }
-
     pub(crate) fn paint(
         &self,
         list: &mut DrawListBuilder,

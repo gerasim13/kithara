@@ -16,10 +16,8 @@ mod host {
     use super::Cell;
     use crate::{
         atoms::{design::cell::Cell as Face, painter::CellData},
-        render::{
-            Skin,
-            controls::{Draws, Reading},
-        },
+        hosts::controls::{Draws, Reading},
+        render::Skin,
     };
 
     impl Draws for Cell {

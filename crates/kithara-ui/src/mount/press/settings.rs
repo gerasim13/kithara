@@ -9,11 +9,12 @@ mod host {
     use super::Settings;
     use crate::{
         atoms::bar::settings::Settings as Face,
-        module::IconName,
-        render::{
-            Mark, Skin,
+        hosts::{
             controls::{Draws, Grip, Reading},
+            icons::Mark,
         },
+        module::IconName,
+        render::Skin,
     };
 
     impl Draws for Settings {

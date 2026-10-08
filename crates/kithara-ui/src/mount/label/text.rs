@@ -1,28 +1,16 @@
-use bon::Builder;
-
 use crate::{
-    expand::Binding,
-    ids::InternId,
-    module::{TextAlign, TextStyle},
+    module::TextStyle,
     mount::Control,
     size::{Dim, SizeSpec},
-    skin::{ColorRole, FontFamily, FontWeight, SkinDoc},
+    skin::SkinDoc,
 };
 
 /// A run of text the document supplies or reads.
-#[derive(Builder)]
-pub(crate) struct Text<'a> {
-    pub(crate) active: Option<&'a Binding>,
-    pub(crate) active_color: Option<ColorRole>,
-    pub(crate) color: Option<ColorRole>,
-    pub(crate) font: Option<FontFamily>,
-    pub(crate) label: Option<InternId>,
-    pub(crate) weight: Option<FontWeight>,
-    pub(crate) align: TextAlign,
+pub(crate) struct Text {
     pub(crate) style: TextStyle,
 }
 
-impl Control for Text<'_> {
+impl Control for Text {
     fn size(&self, skin: &SkinDoc) -> SizeSpec {
         match self.style {
             TextStyle::VisFooter => SizeSpec::new(Dim::Fill, Dim::Fixed(skin.vis.footer_height)),
@@ -50,5 +38,30 @@ impl Control for Text<'_> {
             | TextStyle::MicroLabel
             | TextStyle::Section => skin.text.size,
         }
+    }
+}
+
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    use crate::{
+        expand::Binding,
+        ids::InternId,
+        module::{TextAlign, TextStyle},
+        skin::{ColorRole, FontFamily, FontWeight},
+    };
+
+    /// The run as a host draws it: what it says, and how it is dressed.
+    #[derive(Builder)]
+    pub(crate) struct Text<'a> {
+        pub(crate) active: Option<&'a Binding>,
+        pub(crate) active_color: Option<ColorRole>,
+        pub(crate) color: Option<ColorRole>,
+        pub(crate) font: Option<FontFamily>,
+        pub(crate) label: Option<InternId>,
+        pub(crate) weight: Option<FontWeight>,
+        pub(crate) align: TextAlign,
+        pub(crate) style: TextStyle,
     }
 }

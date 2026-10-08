@@ -18,10 +18,8 @@ mod host {
     use super::Tab;
     use crate::{
         atoms::{painter::Labelled, tab::TabLarge},
-        render::{
-            ReadValue, Skin,
-            controls::{Draws, Grip, Reading},
-        },
+        hosts::controls::{Draws, Grip, Reading},
+        render::{ReadValue, Skin},
     };
 
     impl Draws for Tab {
