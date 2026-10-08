@@ -1,6 +1,27 @@
-use kithara_net::NetError;
+use kithara_app_library::{Context, Environment, RegisterError};
+use kithara_app_zvuk::Source;
+use kithara_net::{HttpClient, NetError, NetOptions};
+use kithara_platform::tokio::runtime::Handle;
+use kithara_test_utils::bufpool::pools;
+use serde_yaml_ng::Value as Section;
 
 use super::{support::queue_completed, *};
+
+#[kithara::test(tokio)]
+async fn a_mismatched_entry_names_the_plugin_and_not_its_value() {
+    let cancel = kithara_test_utils::cancel_token();
+    let net = HttpClient::new(NetOptions::default(), pools(), cancel.clone());
+    let environment = Environment::new(Handle::current(), net);
+    let entry = Section::String("secret-token-hunter2".to_owned());
+
+    let Err(cause) = (Source::FACTORY.register)(&environment, Context::new(cancel, entry)) else {
+        panic!("a token in place of the entry must not register");
+    };
+
+    let message = RegisterError::new(Source::FACTORY.id, cause).to_string();
+    assert!(message.contains("sources.zvuk"), "{message}");
+    assert!(!message.contains("hunter2"), "{message}");
+}
 
 /// Selecting the node already shown neither restarts nor drops its request,
 /// and keeps its rows, query and selected row.

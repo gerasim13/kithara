@@ -4547,6 +4547,7 @@ dependencies = [
 name = "kithara-app-library"
 version = "0.0.1-alpha5"
 dependencies = [
+ "kithara-net",
  "kithara-platform",
  "kithara-test-utils",
  "kithara-ui",
@@ -4587,6 +4588,7 @@ dependencies = [
  "kithara-workspace-hack",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "thiserror 2.0.21",
  "unimock",
  "url",
