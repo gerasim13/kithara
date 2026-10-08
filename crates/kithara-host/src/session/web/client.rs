@@ -91,6 +91,11 @@ where
                 .map(|backend| SessionStream::Realtime { _backend: backend })
         },
     );
+    // A browser unlocks its output through a user gesture and can never resume
+    // a closed `AudioContext`: releasing the device on idle is irreversible, so
+    // every later context stays suspended and the render callback never runs
+    // again. This session holds its device for as long as it lives.
+    session.retains_output = true;
     ensure_ctx(&mut session)?;
     let inbox: Arc<dyn DeckInbox> = route.wake.clone();
     let state = Arc::new(Mutex::new(Some(layer(HostCore::new(session, inbox)))));
