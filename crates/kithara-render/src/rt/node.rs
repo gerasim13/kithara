@@ -1,3 +1,5 @@
+use std::marker::PhantomData;
+
 use firewheel::{
     channel_config::{ChannelConfig, ChannelCount},
     diff::{Diff, Patch, PatchError},
@@ -10,45 +12,28 @@ use firewheel::{
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::sync::{Arc, Mutex};
 
-use super::{
-    DeckMixerConfig,
-    processor::{ContextRequirement, DeckMixer, StreamShape},
-};
-use crate::bridge::{MixerInputs, mixer_channels};
+use super::processor::{DeckMixer, StreamShape};
+use crate::bridge::{MixerInputs, SessionInbox};
 
-/// The audio node of one deck: its processor mixes the deck's slots.
-///
-/// The deck's owner drives it through the ring of [`mixer_channels`]; only
-/// `active` participates in Firewheel parameter updates.
+/// A deck node whose processor borrows its commands from the Host's session store.
 #[derive(Diff)]
 #[derive_where::derive_where(Clone)]
-pub struct PlayerNode<S> {
-    /// Whether the node is active (used by Diff/Patch for graph updates).
+pub struct PlayerNode<S, E: SessionInbox> {
     pub(crate) active: bool,
-
-    /// Mixer ends taken by the first processor.
     #[diff(skip)]
     inputs: Arc<Mutex<Option<MixerInputs>>>,
-
-    #[diff(skip)]
-    context_requirement: ContextRequirement,
-
-    /// Typed pool facade for scratch buffer allocation.
     #[diff(skip)]
     pools: PoolRegion<S>,
-
     #[diff(skip)]
-    mixer: DeckMixerConfig,
+    session: PhantomData<fn() -> E>,
 }
 
-/// A runtime parameter patch for [`PlayerNode`].
 #[non_exhaustive]
 pub enum PlayerNodePatch {
-    /// Updates whether the node is active.
     Active(<bool as Patch>::Patch),
 }
 
-impl<S> Patch for PlayerNode<S> {
+impl<S, E: SessionInbox> Patch for PlayerNode<S, E> {
     type Patch = PlayerNodePatch;
 
     fn apply(&mut self, patch: Self::Patch) {
@@ -65,29 +50,22 @@ impl<S> Patch for PlayerNode<S> {
     }
 }
 
-impl<S> PlayerNode<S> {
-    /// Create the node of the deck whose mixer ends are `inputs`.
+impl<S, E: SessionInbox> PlayerNode<S, E> {
     pub fn new(inputs: MixerInputs, pools: PoolRegion<S>) -> Self {
         Self {
             pools,
-            mixer: inputs.config,
             active: true,
             inputs: Arc::new(Mutex::new(Some(inputs))),
-            context_requirement: ContextRequirement::Standalone,
+            session: PhantomData,
         }
-    }
-
-    /// Requires the Host-written render context when constructing this node's
-    /// processor. Standalone nodes retain their context-free contract.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn with_session_context(mut self) -> Self {
-        self.context_requirement = ContextRequirement::Session;
-        self
     }
 }
 
-impl<S> AudioNode for PlayerNode<S>
+#[derive(Debug, thiserror::Error)]
+#[error("deck processor inputs have already been taken")]
+struct ProcessorInputsTaken;
+
+impl<S, E: SessionInbox> AudioNode for PlayerNode<S, E>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
@@ -98,23 +76,13 @@ where
         _config: &Self::Configuration,
         cx: ConstructProcessorContext,
     ) -> Result<impl AudioNodeProcessor, NodeError> {
-        let sample_rate = cx.stream_info.sample_rate;
-        let max_block_frames = cx.stream_info.max_block_frames;
-        let shape = StreamShape {
-            max_block_frames,
-            sample_rate,
-        };
+        let shape = StreamShape::new(cx.stream_info.max_block_frames, cx.stream_info.sample_rate);
         let inputs = self
             .inputs
             .lock()
             .take()
-            .unwrap_or_else(|| mixer_channels(self.mixer).1);
-        Ok(DeckMixer::with_context_requirement(
-            inputs,
-            shape,
-            &self.pools,
-            self.context_requirement,
-        ))
+            .ok_or_else(|| NodeError(Box::new(ProcessorInputsTaken)))?;
+        DeckMixer::<E>::new(inputs, shape, &self.pools).map_err(|error| NodeError(Box::new(error)))
     }
 
     fn info(&self, _config: &Self::Configuration) -> Result<AudioNodeInfo, NodeError> {

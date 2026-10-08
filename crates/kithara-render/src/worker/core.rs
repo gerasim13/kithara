@@ -1,43 +1,43 @@
 use std::{
     fmt,
+    num::NonZeroUsize,
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use kithara_audio::{Audio, ResamplerBackend};
+use kithara_audio::{Audio, ResamplerBackend, SeekOutcome};
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
-use kithara_command::{ChannelConfig, channel};
-use kithara_decode::{DecodeError, DecodeResult};
+use kithara_command::{ChannelConfig, Inbox, Sender, channel};
+use kithara_decode::DecodeError;
 use kithara_effects::EffectDrain;
 use kithara_events::EventBus;
-use kithara_platform::{CancelGroup, CancelToken, sync::Arc, thread::ThreadClass};
+use kithara_platform::{sync::Arc, thread::ThreadClass, time::Duration};
+use kithara_signal::{AudioChunkInfo, FrameCount};
 use kithara_stream::{Stream, StreamType};
-use kithara_warp::Warp;
+use kithara_warp::{SpeedCurve, Warp};
 use kithara_worker::{
-    Dispatcher, DispatcherConfig, PendingTask, TaskConfig, TaskError, Worker, WorkerConfig,
+    Dispatcher, DispatcherConfig, TaskConfig, TaskError, TaskHandle, Worker, WorkerConfig,
 };
 
 use super::{
-    DecoderNode, PlayWorkerConfig, RegisteredAudio, TrackConfig, TrackLease,
+    DecoderNode, PcmReceiver, PlayWorkerConfig, TrackConfig,
     scheduler::{PlaybackObserver, Wake},
 };
-use crate::{LaneProtocol, ServiceClass, WarpSource};
+use crate::{
+    LaneProtocol, ServiceClass, WarpSource,
+    dispatcher::{DispatcherProtocol, DispatcherTask, LaneStart, LaneTask, Open},
+};
 
 static WORKER_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Why a worker refused to load a track.
 #[derive(Debug, thiserror::Error)]
 pub enum LoadRefusal {
-    /// Every worker slot is held; the track's source was not opened.
     #[error("play worker holds its capacity of {capacity} tracks")]
     Capacity { capacity: usize },
-    /// The track's cancel ended the load before its source opened.
     #[error("the track's load was cancelled before it opened")]
     Cancelled,
-    /// The track did not open: its source or decoder failed, or the worker
-    /// stopped.
     #[error(transparent)]
     Open(#[from] DecodeError),
-    /// The opened track's consumer found no room in the worker's pools.
     #[error(transparent)]
     Pool(#[from] PoolError),
 }
@@ -48,31 +48,24 @@ impl From<LoadRefusal> for DecodeError {
             LoadRefusal::Open(error) => error,
             refusal @ (LoadRefusal::Capacity { .. }
             | LoadRefusal::Cancelled
-            | LoadRefusal::Pool(_)) => {
-                Self::audio_stream("play worker load", refusal)
-            }
+            | LoadRefusal::Pool(_)) => Self::audio_stream("play worker load", refusal),
         }
     }
 }
 
 struct WorkerOwner<S> {
-    /// Sizes of the channel each registered track's render lane gets.
     lane: ChannelConfig,
+    capacity: NonZeroUsize,
     dispatcher: Dispatcher,
     pools: PoolRegion<S>,
     base: Worker,
 }
 
-/// Explicit owner of the playback dispatcher.
-///
-/// Clones share one OS thread and one scheduler loop. Dropping a Player only
-/// releases that clone; the final owner shuts down its dispatcher and releases
-/// its base-worker clone.
+/// Shared scheduler and pools for the sole render dispatcher task.
 #[derive_where::derive_where(Clone)]
 pub struct PlayWorker<S>(Arc<WorkerOwner<S>>);
 
 impl<S> PlayWorker<S> {
-    /// Construct the sole playback-worker implementation.
     #[must_use]
     pub fn new(config: PlayWorkerConfig<S>) -> Self {
         let PlayWorkerConfig {
@@ -89,7 +82,7 @@ impl<S> PlayWorker<S> {
             worker,
         } = config;
         let (base, dispatcher_cancel) = if let Some(worker) = worker {
-            (worker, cancel.map(CancelGroup::from))
+            (worker, cancel.map(kithara_platform::CancelGroup::from))
         } else {
             let worker_config = cancel.map_or_else(WorkerConfig::new, |cancel| {
                 WorkerConfig::new().with_cancel(cancel)
@@ -100,7 +93,7 @@ impl<S> PlayWorker<S> {
         let dispatcher_config = DispatcherConfig::builder()
             .name(format!("kithara-play-worker-{id}"))
             .backpressure_poll_interval(backpressure_poll_interval)
-            .capacity(capacity)
+            .capacity(NonZeroUsize::MIN)
             .fairness_yield_interval(fairness_yield_interval)
             .idle_timeout(idle_timeout)
             .observer(PlaybackObserver::default())
@@ -113,21 +106,49 @@ impl<S> PlayWorker<S> {
         let dispatcher = base.dispatcher(dispatcher_config);
         Self(Arc::new(WorkerOwner {
             lane: ChannelConfig::builder().capacity(lane_capacity).build(),
+            capacity,
             dispatcher,
             pools,
             base,
         }))
     }
 
-    /// Shared typed pool facade used by every registered Player/resource.
     #[must_use]
     pub fn pools(&self) -> &PoolRegion<S> {
         &self.0.pools
     }
 
-    /// Wakes the worker's scheduler so it runs a pass now.
     pub fn wake(&self) {
         self.0.dispatcher.wake_handle().wake();
+    }
+
+    /// Allocate the lane channel whose sender stays with the requesting owner.
+    #[must_use]
+    pub fn lane_channel(&self) -> (Sender<LaneProtocol>, Inbox<LaneProtocol>) {
+        channel(self.0.lane)
+    }
+
+    /// Register the actual dispatcher owner on this worker's scheduler thread.
+    ///
+    /// # Errors
+    /// Returns a refusal if another dispatcher is registered or the worker stopped.
+    pub fn start_dispatcher<I>(
+        &self,
+        inbox: Inbox<DispatcherProtocol<I>>,
+    ) -> Result<TaskHandle, LoadRefusal>
+    where
+        I: Open + Send + 'static,
+        I::Opened: Send + 'static,
+        I::Lane: LaneTask,
+    {
+        let capacity = self.0.capacity;
+        let wake = self.0.dispatcher.wake_handle();
+        self.0
+            .dispatcher
+            .reserve(TaskConfig::new().with_priority(ServiceClass::Warm.into()))
+            .map_err(task_refusal)?
+            .start_local(move |_| DispatcherTask::new(inbox, capacity, wake))
+            .map_err(task_refusal)
     }
 }
 
@@ -135,86 +156,125 @@ impl<S> PlayWorker<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// Loads a stream-backed track: holds its worker slot first, then opens
-    /// its source once.
+    /// Open once, position synchronously, then preload the worker-owned lane.
     ///
     /// # Errors
-    ///
-    /// Returns [`LoadRefusal::Capacity`] without opening anything when every
-    /// slot is held, or [`LoadRefusal::Open`] when the track does not open.
+    /// Returns cancellation, source/decoder, invalid ring geometry, or pool failures.
     pub async fn load<T, B, C>(
         &self,
         config: C,
-    ) -> Result<RegisteredAudio<Stream<T>, S>, LoadRefusal>
+        position: Duration,
+        start: LaneStart,
+        inbox: Inbox<LaneProtocol>,
+    ) -> Result<(PcmReceiver, DecoderNode<Audio<Stream<T>>, S>, FrameCount), LoadRefusal>
     where
         T: StreamType<Events = EventBus>,
         B: Default + ResamplerBackend,
         C: Into<TrackConfig<T, B>>,
-    {
-        let config = config.into();
-        let slot = self
-            .0
-            .dispatcher
-            .reserve(Self::task_config(config.audio.cancel().cloned()))
-            .map_err(|error| match error {
-                TaskError::Capacity { capacity } => LoadRefusal::Capacity { capacity },
-                error => LoadRefusal::Open(DecodeError::audio_stream("play worker load", error)),
-            })?;
-        Ok(self.open_lane(config, slot).await?)
-    }
-
-    /// Opens the lane's source and starts it in its held `slot`.
-    async fn open_lane<T, B>(
-        &self,
-        config: TrackConfig<T, B>,
-        slot: PendingTask,
-    ) -> DecodeResult<RegisteredAudio<Stream<T>, S>>
-    where
-        T: StreamType<Events = EventBus>,
-        B: Default + ResamplerBackend,
     {
         let TrackConfig {
             audio,
             effects,
             engine_load,
             warp,
-        } = config;
-        let wake = Wake::new(self.0.dispatcher.wake_handle());
-        let prepared =
-            Audio::<Stream<T>>::prepare(audio, Arc::new(wake), self.pools().clone()).await?;
-        let drain = EffectDrain::new(effects.len(), self.pools())?;
-        let (lane_sender, inbox) = channel::<LaneProtocol>(self.0.lane);
-        let prepared = prepared.map(|audio, source| {
-            let spec = audio.spec();
-            let warp = Warp::new(audio, &warp);
-            let source = WarpSource::new(
-                source,
-                warp.renderer(spec, self.pools().clone()),
-                effects,
-                drain,
-                spec,
-                self.pools().clone(),
-                inbox,
-            );
-            (warp, source)
-        });
-        let (audio, lane) = prepared.into();
-        let task = slot
-            .start(|_| DecoderNode::new(lane, engine_load))
-            .map_err(|error| DecodeError::audio_stream("play worker start", error))?;
-        Ok(RegisteredAudio::new(
-            audio,
-            TrackLease::new(self.clone(), task),
-            lane_sender,
-        ))
-    }
-
-    fn task_config(cancel: Option<CancelToken>) -> TaskConfig {
-        let config = TaskConfig::new().with_priority(ServiceClass::default().into());
-        match cancel {
-            Some(cancel) => config.with_cancel(CancelGroup::from(cancel)),
-            None => config,
+            preload_chunks,
+            audio_buffer_chunks,
+            block_on_underrun,
+        } = config.into();
+        let cancel = audio.cancel().cloned();
+        if self.0.dispatcher.is_cancelled()
+            || cancel.as_ref().is_some_and(|cancel| cancel.is_cancelled())
+        {
+            return Err(LoadRefusal::Cancelled);
         }
+        if preload_chunks > audio_buffer_chunks {
+            return Err(LoadRefusal::Open(DecodeError::InvalidData {
+                detail: "lane preload quota exceeds PCM ring capacity",
+            }));
+        }
+        let wake = Wake::new(self.0.dispatcher.wake_handle());
+        let mut audio =
+            Audio::<Stream<T>>::prepare(audio, Arc::new(wake.clone()), self.pools().clone())
+                .await
+                .map_err(decode_refusal)?;
+        if self.0.dispatcher.is_cancelled()
+            || cancel.as_ref().is_some_and(|cancel| cancel.is_cancelled())
+        {
+            return Err(LoadRefusal::Cancelled);
+        }
+        let position = match audio.seek(position).map_err(decode_refusal)? {
+            SeekOutcome::Landed { landed_at, .. } => landed_at,
+            SeekOutcome::PastEof { duration, .. } => duration,
+        };
+        let spec = audio.spec();
+        let initial = AudioChunkInfo {
+            spec,
+            timestamp: position,
+            end_timestamp: position,
+            ..AudioChunkInfo::default()
+        };
+        let (receiver, port) = PcmReceiver::new(
+            audio_buffer_chunks,
+            block_on_underrun,
+            wake,
+            &audio,
+            position,
+        );
+        let activity = audio.take_activity_writer();
+        let SpeedCurve::Constant(speed) = start.speed else {
+            return Err(LoadRefusal::Open(DecodeError::InvalidData {
+                detail: "unsupported initial lane speed curve",
+            }));
+        };
+        let warp = Warp::new((), &warp.starting_at(speed, start.keylock, start.backend));
+        let mut renderer = warp.renderer(spec, self.pools().clone());
+        renderer
+            .prepare_engine_latency(spec)
+            .map_err(|error| DecodeError::audio_stream("lane engine preparation", error))
+            .map_err(decode_refusal)?;
+        let drain = EffectDrain::new(effects.len(), self.pools())?;
+        let source = WarpSource::new(
+            audio,
+            renderer,
+            effects,
+            drain,
+            spec,
+            self.pools().clone(),
+            inbox,
+            preload_chunks,
+        );
+        let mut lane = DecoderNode::new(
+            source,
+            port,
+            activity,
+            initial,
+            engine_load,
+            self.pools().clone(),
+        );
+        let preloaded = lane.preload().await;
+        if self.0.dispatcher.is_cancelled()
+            || cancel.as_ref().is_some_and(|cancel| cancel.is_cancelled())
+        {
+            return Err(LoadRefusal::Cancelled);
+        }
+        preloaded.map_err(decode_refusal)?;
+        let latency = lane.engine_latency();
+        Ok((receiver, lane, latency))
+    }
+}
+
+fn decode_refusal(error: DecodeError) -> LoadRefusal {
+    match error {
+        DecodeError::Pool { source } => LoadRefusal::Pool(source),
+        error => LoadRefusal::Open(error),
+    }
+}
+
+fn task_refusal(error: TaskError) -> LoadRefusal {
+    match error {
+        TaskError::Capacity { capacity } => LoadRefusal::Capacity { capacity },
+        TaskError::Cancelled => LoadRefusal::Cancelled,
+        error => LoadRefusal::Open(DecodeError::audio_stream("play worker dispatcher", error)),
     }
 }
 

@@ -1,6 +1,4 @@
-use std::num::NonZeroUsize;
-
-use kithara_command::{ChannelConfig, Inbox, Sender, channel};
+use kithara_command::{LevelInbox, ScopeId};
 use kithara_output::LiveOutput;
 use kithara_platform::sync::{
     Arc,
@@ -16,20 +14,13 @@ use triple_buffer::{Input, Output, triple_buffer};
 use super::{DeckEvent, DeckProtocol, DeckSnapshot, SlotSnapshot};
 use crate::rt::DeckMixerConfig;
 
-/// Batches a deck's ring holds in flight.
-const RING_CAPACITY: NonZeroUsize = match NonZeroUsize::new(32) {
-    Some(capacity) => capacity,
-    None => unreachable!(),
-};
-
 /// Events a deck's mixer can hold for its owner per slot before it counts an overflow.
 const EVENTS_PER_SLOT: usize = 16;
 
-/// The owner's ends of one deck's mixer: the ring its batches go down and its receipts come
-/// back on, the mixer's events, and the snapshot it publishes once per block.
+/// The scope identity and observation ends of one deck's mixer.
 #[non_exhaustive]
 pub struct DeckEnds {
-    pub ring: Sender<DeckProtocol>,
+    pub scope: ScopeId,
     pub events: DeckEvents,
     pub snapshot: Output<DeckSnapshot>,
 }
@@ -37,10 +28,15 @@ pub struct DeckEnds {
 /// The mixer's ends of the same channels, taken by the mixer when it is built.
 #[non_exhaustive]
 pub struct MixerInputs {
-    pub(crate) inbox: Inbox<DeckProtocol>,
+    pub(crate) scope: ScopeId,
     pub(crate) events: HeapProd<DeckEvent>,
     pub(crate) snapshot: Input<DeckSnapshot>,
     pub(crate) config: DeckMixerConfig,
+}
+
+/// Borrows a deck's command level from the session's processor store.
+pub trait SessionInbox: Send + 'static {
+    fn scope(&mut self, id: ScopeId) -> Option<LevelInbox<'_, DeckProtocol>>;
 }
 
 /// Events a deck's mixer reported, in the order it reported them.
@@ -55,14 +51,8 @@ impl DeckEvents {
 
 /// The channels between a deck's owner and the mixer `config` builds.
 #[must_use]
-pub fn mixer_channels(config: DeckMixerConfig) -> (DeckEnds, MixerInputs) {
+pub fn scope_channels(scope: ScopeId, config: DeckMixerConfig) -> (DeckEnds, MixerInputs) {
     let slots = config.slots().get();
-    let (ring, inbox) = channel::<DeckProtocol>(
-        ChannelConfig::builder()
-            .capacity(RING_CAPACITY)
-            .targets(slots)
-            .build(),
-    );
     let (events_tx, events_rx) = HeapRb::<DeckEvent>::new(slots * EVENTS_PER_SLOT).split();
     let initial = DeckSnapshot {
         slots: vec![SlotSnapshot::default(); slots],
@@ -71,12 +61,12 @@ pub fn mixer_channels(config: DeckMixerConfig) -> (DeckEnds, MixerInputs) {
     let (snapshot_in, snapshot_out) = triple_buffer(&initial);
     (
         DeckEnds {
-            ring,
+            scope,
             events: DeckEvents(events_rx),
             snapshot: snapshot_out,
         },
         MixerInputs {
-            inbox,
+            scope,
             config,
             events: events_tx,
             snapshot: snapshot_in,

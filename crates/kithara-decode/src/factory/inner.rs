@@ -139,9 +139,6 @@ pub struct DecoderConfig<B, S> {
     /// Enable gapless trim wiring through the per-backend codec.
     #[config(value, builder(default = true))]
     pub gapless: bool,
-    /// Epoch counter for decoder recreation tracking.
-    #[config(skip = "transferred to decoder runtime state", builder(default))]
-    pub epoch: u64,
 }
 
 /// Creates decoders under the backend selected by [`DecoderConfig::backend`].
@@ -403,7 +400,6 @@ where
         codec_impl,
         DecoderRuntime {
             pools: pools.clone(),
-            epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
@@ -509,7 +505,6 @@ where
         crate::composed::DecoderRuntime {
             pools: pools.clone(),
             hooks: config.hooks,
-            epoch: config.epoch,
             byte_len_handle: config.byte_len_handle,
         },
     )?;
@@ -571,7 +566,6 @@ where
         codec_impl,
         DecoderRuntime {
             pools: pools.clone(),
-            epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
@@ -767,7 +761,6 @@ where
         codec_impl,
         DecoderRuntime {
             pools: pools.clone(),
-            epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
@@ -841,7 +834,6 @@ where
         codec,
         DecoderRuntime {
             pools: config.pools.clone(),
-            epoch: config.epoch,
             byte_len_handle: Some(byte_len_handle),
             hooks: config.hooks,
         },
@@ -937,7 +929,6 @@ where
         codec_impl,
         DecoderRuntime {
             pools: pools.clone(),
-            epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
@@ -1024,7 +1015,6 @@ where
         codec,
         DecoderRuntime {
             pools: pools.clone(),
-            epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },

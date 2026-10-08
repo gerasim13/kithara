@@ -1,416 +1,357 @@
-use std::{collections::VecDeque, num::NonZeroU32, ops::Range};
+use std::ops::Range;
 
-use kithara_audio::{DecodeErrorKind, SourceEnd, map_decode_error_kind};
-use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
-use kithara_platform::{maybe_send::WasmSend, sync::Arc};
-use kithara_signal::{FrameCount, SourceSpan};
-use kithara_test_macros as kithara;
-use kithara_warp::{PresentationFrontier, RenderContext, RenderReader};
+use kithara_audio::DecodeErrorKind;
+use kithara_bufpool::{HasPool, PoolError, PoolRegion};
+use kithara_decode::TrackMetadata;
+use kithara_platform::{maybe_send::WasmSend, sync::Arc, time::Duration};
+use kithara_signal::{AudioChunk, AudioSpec, SegmentId, SessionFrame};
 
 use super::PcmConsumer;
-use crate::{ServiceClass, bridge::RtMetrics};
+use crate::{LaneFrame, bridge::SlotMark, worker::PcmPacket};
 
-/// RT-safe resource wrapper with internal scratch buffers.
-///
-/// Wraps a [`PcmConsumer`] and maintains per-channel scratch buffers
-/// that are filled from the underlying `AudioReader`. The audio thread
-/// reads from these buffers, avoiding direct interaction with the
-/// potentially-blocking decoder on every callback.
-#[derive(fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
+/// Owns at most one popped packet, including a packet the reverse ring refused.
 pub struct PlayerResource {
-    #[field(get, deref = false)]
     src: Arc<str>,
-    failed: Option<DecodeErrorKind>,
-    last_source_end: Option<SourceEnd>,
-    source_spans: VecDeque<SourceWindow>,
     consumer: WasmSend<PcmConsumer>,
-    channel_buffers: [SampleBuffer; Self::STEREO_CHANNELS],
-    eof_seen: bool,
-    write_len: usize,
-    write_pos: usize,
+    packet: Option<PcmPacket>,
+    offset: usize,
+    lane: LaneFrame,
+    position: Duration,
+    mapped: bool,
+    eof: bool,
+    failed: Option<DecodeErrorKind>,
 }
 
-#[derive(Clone, Copy)]
-struct SourceWindow {
-    source: Option<SourceSpan>,
-    frames: usize,
-}
-
-impl SourceWindow {
-    fn new(source: Option<SourceSpan>, frames: usize) -> Self {
-        Self { source, frames }
-    }
-
-    fn source_for(&self, frames: usize) -> Option<SourceSpan> {
-        self.source?
-            .for_output_range(0..u64::try_from(frames.min(self.frames)).ok()?)
-    }
-
-    fn take(&mut self, frames: usize) -> Option<SourceSpan> {
-        let consumed = frames.min(self.frames);
-        let taken = self.source_for(consumed);
-        self.source = self.source.and_then(|source| {
-            (consumed < self.frames)
-                .then(|| {
-                    source.for_output_range(u64::try_from(consumed).ok()?..source.output_frames())
-                })
-                .flatten()
-        });
-        self.frames -= consumed;
-        taken
-    }
-}
-
-/// Result of a bounded audio-thread read from [`PlayerResource`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadOutcome {
-    /// The requested range was filled completely.
-    ///
-    /// `frames` counts real audio frames copied out of the wrapped reader or
-    /// scratch buffer. The remainder may be zero-filled during a non-terminal
-    /// underrun and must not advance playback position.
     Full { frames: usize },
-    /// A strict prefix of the requested range was written.
-    ///
-    /// The payload is the number of written frames. This outcome is reserved
-    /// for natural EOF inside the requested block; the next read must return
-    /// [`ReadOutcome::Eof`].
     Partial { frames: usize },
-    /// The resource was already drained and nothing was written.
     Eof,
-    /// The underlying decoder/source reported a non-recoverable error
-    /// mid-stream. Distinct from [`Eof`](Self::Eof): the track did NOT
-    /// reach its natural end — surface this as a track-failed signal
-    /// upstream instead of letting the queue auto-advance as if the
-    /// track played out. The payload names the decoder fault, so a
-    /// consumer reports which error ended the track rather than that one did.
     Failed(DecodeErrorKind),
 }
 
 impl PlayerResource {
-    /// Buffer duration divisor: `sample_rate` / `BUFFER_DURATION_DIVISOR` gives ~200ms of frames.
-    const BUFFER_DURATION_DIVISOR: usize = 5;
-
-    /// Number of stereo output channels.
-    const STEREO_CHANNELS: usize = 2;
-
-    /// Create a new `PlayerResource` reading the given consumer.
-    ///
-    /// Allocates two per-channel scratch buffers through the given pool facade,
-    /// each holding [`Self::scratch_frames`] frames.
+    /// Wraps a prepared packet receiver without calling its source.
     ///
     /// # Errors
-    /// Returns the pool's error when it cannot hand out both buffers.
+    /// The resource signature shares the pool error boundary with deck construction.
     pub fn new<S>(
         consumer: PcmConsumer,
         src: Arc<str>,
-        pools: &PoolRegion<S>,
+        _pools: &PoolRegion<S>,
     ) -> Result<Self, PoolError>
     where
         S: HasPool<f32>,
     {
-        let buffer_frames = Self::scratch_frames(consumer.reader().spec().sample_rate.get()).get();
-        let left = pools.get_with_len::<f32>(buffer_frames)?;
-        let right = pools.get_with_len::<f32>(buffer_frames)?;
-
+        let position = consumer.receiver.position();
         Ok(Self {
             src,
-            channel_buffers: [left, right],
-            source_spans: VecDeque::with_capacity(buffer_frames),
             consumer: WasmSend::new(consumer),
-            write_len: 0,
-            write_pos: 0,
-            last_source_end: None,
-            eof_seen: false,
+            packet: None,
+            offset: 0,
+            lane: LaneFrame {
+                segment: SegmentId::FIRST,
+                frame: 0,
+            },
+            position,
+            mapped: false,
+            eof: false,
             failed: None,
         })
     }
 
-    pub(crate) fn apply_playback_rate(&mut self, rate: f32) -> f32 {
-        self.consumer.get_mut().apply_playback_rate(rate)
-    }
-
-    /// Cached span in seconds: how much of the source is on disk and needs no
-    /// further network.
     #[must_use]
-    pub fn cached_span(&self) -> f64 {
-        self.consumer.get().reader().cached_span().as_secs_f64()
+    pub fn src(&self) -> &Arc<str> {
+        &self.src
     }
 
-    fn consume_source(&mut self, mut frames: usize, context: Option<&RenderContext>) {
-        let mut output_start = 0usize;
-        while frames > 0 {
-            let Some(mut span) = self.source_spans.pop_front() else {
-                break;
-            };
-            let consumed = frames.min(span.frames);
-            let output_end = output_start.saturating_add(consumed);
-            match (context, span.take(consumed)) {
-                (Some(context), Some(source)) => {
-                    kithara::probe_event!(
-                        pcm_consumed,
-                        render_revision = source.render_revision(),
-                        output_start = i64::from(context.output().output_frames().start)
-                            .saturating_add(i64::try_from(output_start).unwrap_or(i64::MAX)),
-                        output_end = i64::from(context.output().output_frames().start)
-                            .saturating_add(i64::try_from(output_end).unwrap_or(i64::MAX)),
-                        source_start = source.start(),
-                        source_end = source.end()
-                    );
-                    self.last_source_end = Some(
-                        SourceEnd::new(source.end(), source.sample_rate())
-                            .with_mapping_revision(source.mapping_revision()),
-                    );
-                }
-                (_, source) => {
-                    self.last_source_end = source.map(|source| {
-                        SourceEnd::new(source.end(), source.sample_rate())
-                            .with_mapping_revision(source.mapping_revision())
-                    });
-                }
-            }
-            frames -= consumed;
-            output_start = output_end;
-            if span.frames > 0 {
-                self.source_spans.push_front(span);
-            }
-        }
-        if frames > 0 {
-            self.last_source_end = None;
-        }
+    #[must_use]
+    pub fn spec(&self) -> AudioSpec {
+        self.consumer.get().receiver.spec()
     }
 
-    /// Decoded-ahead frontier in seconds: how much content has been decoded
-    /// and is ready to play (always `>=` the served playback position).
+    #[must_use]
+    pub fn metadata(&self) -> &TrackMetadata {
+        self.consumer.get().receiver.metadata()
+    }
+
+    #[must_use]
+    pub fn duration(&self) -> f64 {
+        self.consumer
+            .get()
+            .receiver
+            .duration()
+            .map_or(0.0, |duration| duration.as_secs_f64())
+    }
+
     #[must_use]
     pub fn decoded_frontier(&self) -> f64 {
         self.consumer
             .get()
-            .reader()
+            .receiver
             .decoded_frontier()
             .as_secs_f64()
     }
 
-    fn fill_scratch(&mut self, target_frames: usize, metrics: &RtMetrics) -> bool {
-        let mut eof_reached = self.eof_seen;
+    #[must_use]
+    pub fn cached_span(&self) -> f64 {
+        self.consumer.get().receiver.cached_span().as_secs_f64()
+    }
 
-        while target_frames > self.write_len && !eof_reached {
-            let needed = target_frames - self.write_len;
-            let avail = (self.channel_buffers[0].len() - self.write_pos).min(needed);
-            if avail == 0 {
-                break;
+    pub(super) fn segment(&self) -> SegmentId {
+        self.lane.segment
+    }
+
+    pub(super) fn position(&self) -> Duration {
+        self.position
+    }
+
+    pub(super) fn set_playing(&mut self, playing: bool) {
+        self.consumer.get_mut().receiver.set_playing(playing);
+    }
+
+    pub(super) fn mark(&self, session: SessionFrame) -> Option<SlotMark> {
+        self.mapped.then_some(SlotMark {
+            session,
+            lane: self.lane,
+            position: self.position,
+        })
+    }
+
+    pub(super) fn select_segment(&mut self, segment: SegmentId) {
+        if self.lane.segment != segment {
+            self.lane = LaneFrame { segment, frame: 0 };
+            self.mapped = false;
+            self.eof = false;
+            self.failed = None;
+        }
+    }
+
+    fn return_packet(&mut self) -> bool {
+        let Some(packet) = self.packet.take() else {
+            return true;
+        };
+        match self.consumer.get_mut().receiver.recycle(packet) {
+            Ok(()) => {
+                self.offset = 0;
+                true
             }
+            Err(packet) => {
+                self.packet = Some(packet);
+                false
+            }
+        }
+    }
 
-            let channel_buffers = &mut self.channel_buffers;
-            let (left_buf, right_buf) = channel_buffers.split_at_mut(1);
-            let left = &mut left_buf[0][self.write_pos..self.write_pos + avail];
-            let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
-            let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
-
-            let (n, source) = match self
-                .consumer
-                .get_mut()
-                .reader_mut()
-                .read_planar(&mut planar)
-            {
-                Ok(kithara_audio::ReadOutcome::Frames {
-                    count, source_span, ..
-                }) => (count.get(), source_span),
-                Ok(kithara_audio::ReadOutcome::Pending { .. }) => (0, None),
-                Ok(kithara_audio::ReadOutcome::Eof { .. }) => {
-                    self.eof_seen = true;
-                    eof_reached = true;
-                    (0, None)
+    /// Does not pop the current segment while silent, and never pops a newer one.
+    pub(super) fn recycle_obsolete(&mut self, budget: &mut usize) {
+        loop {
+            if let Some(packet) = &self.packet {
+                let older = packet_segment(packet) < self.lane.segment;
+                let spent = match packet {
+                    PcmPacket::Chunk(chunk) => self.offset >= chunk.frames(),
+                    PcmPacket::Failed { .. } => true,
+                };
+                if !older && !spent {
+                    return;
                 }
-                Err(error) => {
-                    metrics.record_decode_error();
-                    self.failed = Some(map_decode_error_kind(&error));
-                    (0, None)
+                if older {
+                    if *budget == 0 {
+                        return;
+                    }
+                    *budget -= 1;
                 }
+                if !self.return_packet() {
+                    if older {
+                        *budget += 1;
+                    }
+                    return;
+                }
+            }
+            let receiver = &mut self.consumer.get_mut().receiver;
+            let Some(next) = receiver.peek() else {
+                return;
             };
-            if n == 0 {
+            if packet_segment(next) >= self.lane.segment || *budget == 0 {
+                return;
+            }
+            self.packet = receiver.pop();
+        }
+    }
+
+    pub(super) fn poll_end(&mut self, budget: &mut usize) -> Option<ReadOutcome> {
+        self.recycle_obsolete(budget);
+        if self.eof {
+            return Some(ReadOutcome::Eof);
+        }
+        if let Some(kind) = self.failed {
+            return Some(ReadOutcome::Failed(kind));
+        }
+        if self.packet.is_some() {
+            return None;
+        }
+        let receiver = &mut self.consumer.get_mut().receiver;
+        match receiver.peek()? {
+            PcmPacket::Chunk(chunk)
+                if chunk.meta.segment == self.lane.segment
+                    && chunk.meta.end_of_track
+                    && chunk.frames() == 0 =>
+            {
+                self.lane.frame = chunk.meta.lane_frame;
+                self.position = chunk.meta.end_timestamp;
+                self.mapped = true;
+                self.eof = true;
+            }
+            PcmPacket::Failed { segment, kind } if *segment == self.lane.segment => {
+                self.failed = Some(*kind);
+            }
+            _ => return None,
+        }
+        receiver.set_position(self.position);
+        self.packet = receiver.pop();
+        let _ = self.return_packet();
+        Some(self.failed.map_or(ReadOutcome::Eof, ReadOutcome::Failed))
+    }
+
+    pub(super) fn refresh_mark(&mut self, budget: &mut usize) {
+        self.recycle_obsolete(budget);
+        let next = self
+            .packet
+            .as_ref()
+            .or_else(|| self.consumer.get().receiver.peek());
+        if let Some(PcmPacket::Chunk(chunk)) = next
+            && chunk.meta.segment == self.lane.segment
+        {
+            let offset = if self.packet.is_some() {
+                self.offset
+            } else {
+                0
+            };
+            self.mapped = if let Some((frame, position)) = chunk
+                .meta
+                .lane_frame
+                .checked_add(u64::try_from(offset).unwrap_or(u64::MAX))
+                .zip(chunk_position(chunk, offset..offset))
+            {
+                self.lane.frame = frame;
+                self.position = position;
+                true
+            } else {
+                false
+            };
+        }
+        if self.mapped {
+            self.consumer.get_mut().receiver.set_position(self.position);
+        }
+    }
+
+    pub(super) fn read(
+        &mut self,
+        buffers: &mut [&mut [f32]],
+        range: Range<usize>,
+        budget: &mut usize,
+    ) -> ReadOutcome {
+        let [left, right, ..] = buffers else {
+            return ReadOutcome::Full { frames: 0 };
+        };
+        let requested = range
+            .len()
+            .min(left.len().saturating_sub(range.start))
+            .min(right.len().saturating_sub(range.start));
+        let mut written = 0;
+        while written < requested {
+            if let Some(end) = self.poll_end(budget) {
+                return if written == 0 {
+                    end
+                } else {
+                    ReadOutcome::Partial { frames: written }
+                };
+            }
+            if self.packet.is_none() {
+                let receiver = &mut self.consumer.get_mut().receiver;
+                if !receiver.peek().is_some_and(|packet| {
+                    matches!(packet, PcmPacket::Chunk(chunk) if chunk.meta.segment == self.lane.segment && chunk.frames() > 0)
+                }) {
+                    break;
+                }
+                self.packet = receiver.pop();
+                self.offset = 0;
+            }
+            let Some(PcmPacket::Chunk(chunk)) = &self.packet else {
+                break;
+            };
+            let channels = usize::from(chunk.spec().channels);
+            let count = chunk
+                .frames()
+                .saturating_sub(self.offset)
+                .min(requested - written);
+            if count == 0 {
                 break;
             }
-            self.source_spans.push_back(SourceWindow::new(source, n));
-            self.write_len += n;
-            self.write_pos += n;
-        }
-
-        eof_reached
-    }
-
-    /// Remaining buffered frames when the wrapped reader has reached EOF.
-    ///
-    /// `Some(0)` means the current read drained the last buffered frame exactly;
-    /// the next read will return [`ReadOutcome::Eof`].
-    #[must_use]
-    pub fn frames_until_eof(&self) -> Option<usize> {
-        self.eof_seen.then_some(self.write_len)
-    }
-
-    pub(crate) fn playback_rate(&self) -> f32 {
-        self.consumer.get().playback_rate()
-    }
-
-    fn prefetch_target(&self, callback_frames: usize) -> usize {
-        self.write_len
-            .saturating_add(callback_frames)
-            .min(self.channel_buffers[0].len())
-    }
-
-    pub(crate) fn presentation_source_end(&self, sample_rate: NonZeroU32) -> Option<SourceEnd> {
-        let source_end = self.last_source_end?;
-        (source_end.sample_rate() == sample_rate
-            && source_end.sample_rate() == self.consumer.get().reader().spec().sample_rate)
-            .then_some(source_end)
-    }
-
-    /// Read audio frames into the output buffers for the given range.
-    ///
-    /// Fills internal scratch buffers from the underlying resource as needed,
-    /// then copies the requested frames into `output`. Shifts any remaining
-    /// data to the front of the scratch buffers.
-    ///
-    /// When the underlying reader temporarily returns zero frames without EOF
-    /// (for example, while an async seek is still settling), this method
-    /// zero-fills the requested range and reports [`ReadOutcome::Full`].
-    /// That silence is not a terminal condition and must not trigger track
-    /// advancement.
-    pub fn read(
-        &mut self,
-        output: &mut [&mut [f32]],
-        range: Range<usize>,
-        metrics: &RtMetrics,
-    ) -> ReadOutcome {
-        self.read_with_context(None, output, range, metrics)
-    }
-
-    pub(crate) fn read_with_context(
-        &mut self,
-        context: Option<&RenderContext>,
-        output: &mut [&mut [f32]],
-        range: Range<usize>,
-        metrics: &RtMetrics,
-    ) -> ReadOutcome {
-        let frames_to_read = range.end - range.start;
-        let mut eof_reached = self.fill_scratch(frames_to_read, metrics);
-
-        if let Some(fault) = self.failed
-            && self.write_len == 0
-            && !self.eof_seen
-        {
-            let range_len = range.len();
-            for ch in output.iter_mut() {
-                ch[..range_len].fill(0.0);
+            for frame in 0..count {
+                let input = (self.offset + frame) * channels;
+                let output = range.start + written + frame;
+                left[output] = chunk.samples[input];
+                right[output] = chunk.samples[input + usize::from(channels > 1)];
             }
-            return ReadOutcome::Failed(fault);
-        }
-
-        if self.write_len > 0 {
-            let frames_to_write = frames_to_read.min(self.write_len);
-            let tail_size = self.write_len - frames_to_write;
-
-            if output.len() >= Self::STEREO_CHANNELS {
-                output[0][..frames_to_write]
-                    .copy_from_slice(&self.channel_buffers[0][..frames_to_write]);
-                output[1][..frames_to_write]
-                    .copy_from_slice(&self.channel_buffers[1][..frames_to_write]);
-            }
-
-            self.consume_source(frames_to_write, context);
-
-            if tail_size > 0 {
-                self.channel_buffers[0]
-                    .copy_within(frames_to_write..frames_to_write + tail_size, 0);
-                self.channel_buffers[1]
-                    .copy_within(frames_to_write..frames_to_write + tail_size, 0);
-            }
-
-            self.write_len -= frames_to_write;
-            self.write_pos = tail_size;
-
-            if frames_to_write == frames_to_read {
-                let target = self.prefetch_target(frames_to_read);
-                eof_reached |= self.fill_scratch(target, metrics);
-            }
-
-            if frames_to_write == frames_to_read {
-                ReadOutcome::Full {
-                    frames: frames_to_write,
-                }
-            } else if eof_reached {
-                ReadOutcome::Partial {
-                    frames: frames_to_write,
-                }
+            let offset = self.offset;
+            self.offset += count;
+            written += count;
+            self.mapped = if let Some((frame, position)) = chunk
+                .meta
+                .lane_frame
+                .checked_add(u64::try_from(self.offset).unwrap_or(u64::MAX))
+                .zip(chunk_position(chunk, offset..self.offset))
+            {
+                self.lane.frame = frame;
+                self.position = position;
+                true
             } else {
-                metrics.record_underrun();
-                for ch in output.iter_mut() {
-                    ch[frames_to_write..frames_to_read].fill(0.0);
-                }
-                ReadOutcome::Full {
-                    frames: frames_to_write,
-                }
-            }
-        } else if eof_reached {
-            ReadOutcome::Eof
-        } else {
-            metrics.record_underrun();
-            let range_len = range.len();
-            for ch in output.iter_mut() {
-                ch[..range_len].fill(0.0);
-            }
-            ReadOutcome::Full { frames: 0 }
+                false
+            };
         }
-    }
-
-    pub(crate) fn render_reader(&self) -> Option<RenderReader> {
-        self.consumer.get().render_reader()
-    }
-
-    /// Drop everything buffered ahead of a seek the control thread began. Lock-free: the reader
-    /// picks up the epoch itself via `sync_seek`.
-    pub fn reset_for_seek(&mut self) {
-        self.consumer.get_mut().reader_mut().sync_seek();
-        self.write_len = 0;
-        self.write_pos = 0;
-        self.source_spans.clear();
-        self.last_source_end = None;
-        self.consumer.get().clear_render();
-        self.eof_seen = false;
-        self.failed = None;
-    }
-
-    const fn scratch_frames(sample_rate: u32) -> FrameCount {
-        FrameCount::new(sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
-    }
-
-    /// Control-plane handle used to begin a seek off the audio thread.
-    #[must_use]
-    pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>> {
-        self.consumer.get().reader().seek_handle()
-    }
-
-    delegate::delegate! {
-        to self.consumer.get().reader() {
-            /// Total duration in seconds. Returns 0.0 if unknown.
-            #[must_use]
-            #[expr($.map_or(0.0, |d| d.as_secs_f64()))]
-            pub fn duration(&self) -> f64;
-            /// Set the target sample rate of the audio host.
-            pub(crate) fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
+        if self.mapped {
+            self.consumer.get_mut().receiver.set_position(self.position);
         }
-        to self.consumer.get() {
-            /// Update the scheduling priority hint for the shared worker.
-            pub(crate) fn set_service_class(&self, class: ServiceClass);
-            pub(crate) fn clear_render(&self);
-            pub(crate) fn publish_render(
-                &self,
-                context: &RenderContext,
-                frontier: PresentationFrontier,
-            );
-        }
+        ReadOutcome::Full { frames: written }
     }
+}
+
+fn packet_segment(packet: &PcmPacket) -> SegmentId {
+    match packet {
+        PcmPacket::Chunk(chunk) => chunk.meta.segment,
+        PcmPacket::Failed { segment, .. } => *segment,
+    }
+}
+
+fn chunk_position(chunk: &AudioChunk, range: Range<usize>) -> Option<Duration> {
+    if let Some(source) = chunk.meta.source_span {
+        let start = u64::try_from(range.start).ok()?;
+        let end = u64::try_from(range.end).ok()?;
+        return source
+            .for_output_range(start..end)?
+            .position_at(end.checked_sub(start)?);
+    }
+    let offset = range.end;
+    let frames = chunk.frames();
+    if frames == 0 || offset == 0 {
+        return Some(chunk.meta.timestamp);
+    }
+    if offset >= frames {
+        return Some(chunk.meta.end_timestamp);
+    }
+    let start = chunk.meta.timestamp.as_nanos();
+    let end = chunk.meta.end_timestamp.as_nanos();
+    let delta = start.abs_diff(end).checked_mul(offset as u128)? / frames as u128;
+    let position = if end >= start {
+        start.saturating_add(delta)
+    } else {
+        start.saturating_sub(delta)
+    };
+    Some(Duration::new(
+        u64::try_from(position / 1_000_000_000).unwrap_or(u64::MAX),
+        u32::try_from(position % 1_000_000_000).unwrap_or(0),
+    ))
 }
 
 #[cfg(test)]

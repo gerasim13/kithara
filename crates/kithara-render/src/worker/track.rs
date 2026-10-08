@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use kithara_audio::{AudioConfig, ResamplerBackend};
 use kithara_config::Config;
 use kithara_effects::AudioEffect;
@@ -24,6 +26,21 @@ where
     )]
     #[field(get)]
     pub(crate) audio: AudioConfig<T, B>,
+    /// Final rendered chunks required before initial or segment readiness.
+    #[config(value, builder(default = NonZeroUsize::MIN))]
+    #[field(get, copy)]
+    pub(crate) preload_chunks: NonZeroUsize,
+    /// Chunk capacity of each forward and reverse PCM ring.
+    #[config(value, builder(default = crate::consts::CAPACITY))]
+    #[field(get, copy)]
+    pub(crate) audio_buffer_chunks: NonZeroUsize,
+    /// Enable waits only for explicit off-real-time `PcmReceiver::pop_blocking` reads.
+    #[config(
+        skip = "blocking reads are an explicit off-real-time choice",
+        builder(default)
+    )]
+    #[field(get, copy)]
+    pub(crate) block_on_underrun: bool,
     /// Optional live cost meter for this play-owned producer lane.
     #[field(get)]
     #[config(skip = "transferred to the producer cost meter")]

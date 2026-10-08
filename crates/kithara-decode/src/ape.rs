@@ -108,7 +108,6 @@ where
                 end_timestamp: self.spec.duration_for(self.frame_offset)?,
                 frames: u32::try_from(frames)?,
                 frame_offset: start,
-                epoch: self.runtime.epoch,
                 ..AudioChunkInfo::default()
             },
             output,

@@ -3,7 +3,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_dsp::param::{MIN_SETTLE_RATIO, SmoothedParam, SmootherConfig};
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount};
 use kithara_stretch::{
     BackendCapabilities, ElasticBackendConfig, ElasticEngine, ElasticError, ElasticRequest,
     StretchKind,
@@ -14,7 +14,8 @@ use tracing::warn;
 
 use super::renderer_target::PreparedTarget;
 use crate::{
-    ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, SpeedCurve, WarpConfig, consts,
+    ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, SpeedCurve, WarpConfig,
+    WarpRenderError, consts,
 };
 
 /// The speed a renderer renders at and the revision that set it.
@@ -242,6 +243,49 @@ where
 }
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
+    /// Output latency of the installed engine, even before activation.
+    ///
+    /// Returns zero when no engine is installed. During a transition this is
+    /// the outgoing engine's latency; use [`Self::prepare_engine_latency`] for
+    /// the requested engine's after-state.
+    #[must_use]
+    pub fn engine_latency(&self) -> FrameCount {
+        FrameCount::new(
+            self.engine
+                .as_ref()
+                .map_or(0, |engine| engine.capabilities().latency().output_frames()),
+        )
+    }
+
+    /// Prepare the requested engine and report its output latency.
+    ///
+    /// Retires an outgoing engine into the crossfade without emitting PCM or
+    /// advancing the rendered source frontier, then installs the target.
+    /// Returns [`WarpRenderError::NeedsService`] if previously queued unity
+    /// output must be consumed before applying the next batch.
+    pub fn prepare_engine_latency(
+        &mut self,
+        spec: AudioSpec,
+    ) -> Result<FrameCount, WarpRenderError> {
+        self.prepare(spec);
+        if self.pending_unity_meta.is_some() {
+            return Err(WarpRenderError::NeedsService);
+        }
+        if self.reprime_pending || self.backend_transition_pending {
+            self.retire_for_reprime()?;
+            self.prepare(spec);
+        }
+        if self.transition_pending()
+            || self.stretch_target() != (self.current_kind, self.current_keylock)
+        {
+            return Err(WarpRenderError::NeedsService);
+        }
+        if self.engine.is_none() {
+            return Err(ElasticError::EnginePreparation("engine is unavailable").into());
+        }
+        Ok(self.engine_latency())
+    }
+
     /// Whether the renderer can accept another source chunk without dropping it.
     #[must_use]
     pub fn accepts_input(&self) -> bool {
@@ -655,5 +699,195 @@ mod tests {
         assert_eq!(committed.frontier().source(), source);
         assert_eq!(committed.frontier().output(), SessionFrame::new(1_032));
         assert_eq!(committed.frontier().warp_map(), Some(revision));
+    }
+}
+
+#[cfg(all(test, any(feature = "stretch-signalsmith", feature = "stretch-bungee")))]
+mod latency_tests {
+    use kithara_signal::FrameCount;
+
+    use super::*;
+    use crate::{
+        Warp, WarpRenderError,
+        test_pools::{pools, sample_buffer},
+    };
+
+    fn prepared_renderer(backend: StretchKind) -> WarpRenderer<crate::test_pools::TestPools> {
+        let spec = AudioSpec::new(
+            consts::CH,
+            NonZeroU32::new(consts::SR).expect("fixture rate is non-zero"),
+        );
+        let config = WarpConfig::builder()
+            .speed(0.5)
+            .keylock(true)
+            .backend(backend)
+            .build();
+        Warp::new((), &config).renderer(spec, pools())
+    }
+
+    fn active_renderer(backend: StretchKind) -> WarpRenderer<crate::test_pools::TestPools> {
+        let mut renderer = prepared_renderer(backend);
+        let frames = renderer.source_block_frames.get().min(4096);
+        let samples = vec![0.25; frames * usize::from(renderer.spec.channels)];
+        let input = AudioChunk::new(
+            AudioChunkInfo {
+                spec: renderer.spec,
+                frames: u32::try_from(frames).expect("fixture frames fit"),
+                ..AudioChunkInfo::default()
+            },
+            sample_buffer(&renderer.pools, &samples),
+        );
+        drop(
+            renderer
+                .render(input)
+                .continue_value()
+                .expect("fixture fits one source span"),
+        );
+        renderer.prepare(renderer.spec);
+        assert!(renderer.active);
+        renderer
+    }
+
+    #[kithara::test]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith(StretchKind::Signalsmith)
+    )]
+    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+    fn prepared_engine_latency_is_visible_before_activation(#[case] backend: StretchKind) {
+        let renderer = prepared_renderer(backend);
+        let expected = renderer
+            .engine
+            .as_ref()
+            .expect("fixture engine is prepared")
+            .capabilities()
+            .latency()
+            .output_frames();
+
+        assert!(!renderer.active);
+        assert!(renderer.rendered_source_end.is_none());
+        assert!(expected > 0);
+        assert_eq!(renderer.engine_latency(), FrameCount::new(expected));
+    }
+
+    #[kithara::test]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith(StretchKind::Signalsmith)
+    )]
+    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+    fn latency_receipt_retires_engine_without_advancing_output(#[case] backend: StretchKind) {
+        let mut renderer = active_renderer(backend);
+        let frontier = renderer.rendered_source_end();
+        let source_meta = renderer.last_input_meta;
+        renderer.set_keylock(false);
+
+        assert!(renderer.transition_pending());
+        let latency = renderer
+            .prepare_engine_latency(renderer.spec)
+            .expect("outgoing tail retires into the crossfade");
+
+        assert_eq!(latency, FrameCount::new(0));
+        assert!(!renderer.transition_pending());
+        assert_eq!(renderer.rendered_source_end(), frontier);
+        assert_eq!(renderer.last_input_meta, source_meta);
+        assert!(
+            !renderer
+                .residency
+                .as_ref()
+                .expect("crossfade residency is retained")
+                .replacement
+                .is_empty()
+        );
+    }
+
+    #[kithara::test]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith(StretchKind::Signalsmith)
+    )]
+    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+    fn latency_receipt_waits_for_queued_unity(#[case] backend: StretchKind) {
+        let mut renderer = active_renderer(backend);
+        renderer.pending_unity_meta = Some(AudioChunkInfo::default());
+        renderer.set_keylock(false);
+
+        assert!(matches!(
+            renderer.prepare_engine_latency(renderer.spec),
+            Err(WarpRenderError::NeedsService)
+        ));
+    }
+
+    #[kithara::test]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith(StretchKind::Signalsmith)
+    )]
+    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+    fn latency_receipt_uses_the_prepared_replacement(#[case] backend: StretchKind) {
+        let mut renderer = prepared_renderer(backend);
+        assert!(renderer.engine_latency().get() > 0);
+        renderer.set_keylock(false);
+
+        let latency = renderer
+            .prepare_engine_latency(renderer.spec)
+            .expect("inactive backend replacement is prepared");
+
+        assert!(!renderer.active);
+        assert!(!renderer.transition_pending());
+        assert_eq!(latency, FrameCount::new(0));
+        assert_eq!(renderer.engine_latency(), latency);
+    }
+
+    #[cfg(feature = "stretch-identity")]
+    #[kithara::test]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith(StretchKind::Signalsmith)
+    )]
+    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+    fn backend_latency_preparation_preserves_crossfade_into_identity(#[case] backend: StretchKind) {
+        let mut renderer = active_renderer(backend);
+        let frontier = renderer.rendered_source_end();
+        renderer.set_backend(StretchKind::Identity);
+
+        assert_eq!(
+            renderer
+                .prepare_engine_latency(renderer.spec)
+                .expect("Identity is prepared at the switch moment"),
+            FrameCount::new(0)
+        );
+        assert_eq!(renderer.rendered_source_end(), frontier);
+        assert!(!renderer.transition_pending());
+        assert!(!renderer.requires_staging());
+        assert!(
+            !renderer
+                .residency
+                .as_ref()
+                .expect("Identity retains the outgoing crossfade")
+                .replacement
+                .is_empty()
+        );
+
+        let frames = 64;
+        let samples = vec![-0.25; frames * usize::from(renderer.spec.channels)];
+        let input = AudioChunk::new(
+            AudioChunkInfo {
+                spec: renderer.spec,
+                frame_offset: 4096,
+                frames: u32::try_from(frames).expect("fixture frames fit"),
+                ..AudioChunkInfo::default()
+            },
+            sample_buffer(&renderer.pools, &samples),
+        );
+        let output = renderer
+            .render(input)
+            .continue_value()
+            .expect("Identity accepts one source span")
+            .expect("Identity emits the crossfaded source");
+
+        assert_eq!(output.frames(), frames);
+        assert!(output.samples.iter().all(|sample| sample.is_finite()));
+        assert_ne!(output.samples[0], samples[0]);
     }
 }

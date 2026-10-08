@@ -3,6 +3,7 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
+use kithara_config::{Config, ConfigOwner};
 use kithara_platform::{
     CancelGroup, CancelToken, CancelWakerGuard,
     sync::{
@@ -318,7 +319,7 @@ impl PendingTask {
             cancel: self.context.cancel_group().clone(),
             control: self.context.control(),
             id: self.id,
-            priority: self.context.control().priority(),
+            priority: self.context.control().config().values().priority,
             token: self.token.clone(),
         };
         self.inner.register(registration)?;
@@ -361,7 +362,7 @@ impl TaskHandle {
 
     delegate::delegate! {
         to self.control {
-            /// Clone the restricted priority and wake control.
+            /// Clone the restricted cancellation and wake control.
             #[must_use]
             #[call(clone)]
             pub fn control(&self) -> TaskControl;

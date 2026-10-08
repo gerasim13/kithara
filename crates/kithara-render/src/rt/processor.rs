@@ -1,86 +1,65 @@
 use std::{
+    marker::PhantomData,
     num::{NonZeroU32, NonZeroUsize},
-    ops::Range,
 };
 
 use firewheel::{
     StreamInfo,
-    node::{
-        AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStore, ProcStreamCtx,
-        ProcessStatus,
-    },
+    node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
 };
-use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
-use kithara_command::{Inbox, Seq, Target};
+use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
+use kithara_command::{LevelInbox, ScopeId, Seq, Target};
 use kithara_dsp::param::SmootherConfig;
-use kithara_signal::SessionFrame;
+use kithara_signal::{FrameCount, SegmentId, SessionFrame};
 use kithara_test_utils::kithara;
 use kithara_warp::RenderContext;
-use num_traits::cast::AsPrimitive;
 use ringbuf::HeapProd;
-use tracing::warn;
 use triple_buffer::Input;
 
 use super::{
-    command::Orphan,
+    command::Armed,
     context::read_render_context,
     tail::SlotTail,
     track::{PlayerTrack, RtSink},
 };
 use crate::{
     bridge::{
-        DeckEvent, DeckMixSettings, DeckProtocol, DeckSnapshot, MixerInputs, RtMetrics, Slot,
-        SlotSnapshot, SlotState,
+        DeckEvent, DeckMixSettings, DeckProtocol, DeckSnapshot, MixerInputs, RtMetrics,
+        SessionInbox, Slot, SlotSnapshot, SlotState,
     },
     rt::{RenderPass, TrackSlots},
 };
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) enum ContextRequirement {
-    #[default]
-    Standalone,
-    Session,
-}
-
-/// The realtime mixer of one deck.
-///
-/// Takes the deck's batches from its inbox at the frames they apply on, renders the tracks of
-/// its slots between them into the Firewheel output buffers, reports what its slots did as
-/// events, and publishes a snapshot once per block.
-pub struct DeckMixer {
-    inbox: Inbox<DeckProtocol>,
+/// The realtime executor of one generation of a session's deck scope.
+pub struct DeckMixer<E: SessionInbox> {
+    scope: ScopeId,
     deck: Deck,
-    /// Per-channel buffers a track reads into before it is mixed.
     scratch: [SampleBuffer; MIN_STEREO],
-    /// Frames the scratch holds; a longer block is clamped.
     capacity: usize,
     snapshot: Input<DeckSnapshot>,
     blocks: u64,
-    context_requirement: ContextRequirement,
+    recycle_per_block: usize,
+    retired: bool,
+    session: PhantomData<fn() -> E>,
 }
 
 const MIN_STEREO: usize = 2;
 
-/// The tracks a deck's slots hold, how they mix, and what the mixer reports of them.
 pub(super) struct Deck {
     pub(super) tracks: TrackSlots,
-    /// The batch chained behind each slot's end, and the slot it starts.
-    pub(super) chains: Vec<Option<(Slot, Seq)>>,
-    /// What each slot still sounds of a consumer a `Replace` took out of it.
-    pub(super) tails: Vec<Option<SlotTail>>,
-    /// Chained batches a detach left without their slot, answered once the batch is.
-    pub(super) orphans: Vec<Orphan>,
-    /// Which slots hold a track as a batch's parts are checked, one entry per slot.
-    pub(super) held: Vec<bool>,
-    /// Which slots rendered in the current range, one entry per slot.
-    rendered: Vec<bool>,
-    /// How loud the deck sounds, as its parts last set it.
+    pub(super) armed: Vec<Option<Armed>>,
+    pub(super) ended: Vec<bool>,
+    pub(super) tails: Vec<SlotTail>,
+    pub(super) held: Vec<Option<SegmentId>>,
+    pub(super) stops: Vec<Option<Seq>>,
+    pub(super) recycle: Vec<usize>,
+    pub(super) declick_frames: usize,
+    pub(super) evict_frames: usize,
     pub(super) mix: DeckMixSettings,
     pub(super) render: RenderPass,
     events: HeapProd<DeckEvent>,
     pub(super) metrics: RtMetrics,
     pub(super) sample_rate: NonZeroU32,
-    /// The ramp every track starts and stops with.
     pub(super) declick: SmootherConfig,
 }
 
@@ -153,56 +132,57 @@ impl StreamShape {
     }
 }
 
-impl DeckMixer {
-    /// Create a mixer over the channel ends `inputs`, built as their config says.
-    #[must_use]
-    pub fn new<S>(inputs: MixerInputs, shape: StreamShape, pools: &PoolRegion<S>) -> Self
-    where
-        S: HasPool<f32>,
-    {
-        Self::with_context_requirement(inputs, shape, pools, ContextRequirement::Standalone)
-    }
-
-    pub(super) fn with_context_requirement<S>(
+impl<E: SessionInbox> DeckMixer<E> {
+    /// Allocates every slot tail and the fixed render scratch before stream processing.
+    ///
+    /// # Errors
+    /// Returns a pool error if either scratch or any required tail cannot be allocated.
+    pub fn new<S>(
         inputs: MixerInputs,
         shape: StreamShape,
         pools: &PoolRegion<S>,
-        context_requirement: ContextRequirement,
-    ) -> Self
+    ) -> Result<Self, PoolError>
     where
         S: HasPool<f32>,
     {
         let MixerInputs {
-            inbox,
+            scope,
             events,
             snapshot,
             config,
         } = inputs;
         let slots = config.slots();
-        let mix = config.mix();
+        let capacity = usize::try_from(shape.max_block_frames.get()).unwrap_or(usize::MAX);
+        let declick_frames = config.declick_frames(shape.sample_rate).get();
+        let evict_frames = config.evict_fade().get();
+        let tail_frames = FrameCount::new(declick_frames.max(evict_frames));
         let tails = (0..slots.get())
-            .map(|_| {
-                SlotTail::new(pools, config.evict_fade())
-                    .inspect_err(|error| {
-                        warn!(%error, "sample pool budget cannot afford a slot tail; replace cuts");
-                    })
-                    .ok()
-            })
-            .collect();
-        let mut mixer = Self {
-            inbox,
+            .map(|_| SlotTail::new(pools, tail_frames))
+            .collect::<Result<Vec<_>, _>>()?;
+        let scratch = [
+            pools.get_with_len::<f32>(capacity)?,
+            pools.get_with_len::<f32>(capacity)?,
+        ];
+        let mix = config.mix();
+        Ok(Self {
+            scope,
             snapshot,
-            context_requirement,
-            scratch: std::array::from_fn(|_| pools.get::<f32>()),
-            capacity: 0,
+            scratch,
+            capacity,
             blocks: 0,
+            recycle_per_block: config.recycle_per_block().get(),
+            retired: false,
+            session: PhantomData,
             deck: Deck {
                 tracks: TrackSlots::new(slots),
-                chains: vec![None; slots.get()],
+                armed: vec![None; slots.get()],
+                ended: vec![false; slots.get()],
                 tails,
-                orphans: Vec::with_capacity(slots.get()),
-                held: Vec::with_capacity(slots.get()),
-                rendered: vec![false; slots.get()],
+                held: vec![None; slots.get()],
+                stops: vec![None; slots.get()],
+                recycle: vec![0; slots.get()],
+                declick_frames,
+                evict_frames,
                 render: RenderPass::new(pools, shape, mix.gain()),
                 mix,
                 events,
@@ -210,216 +190,183 @@ impl DeckMixer {
                 sample_rate: shape.sample_rate,
                 declick: config.declick(),
             },
-        };
-        mixer.resize(shape.max_block_frames.get().as_());
-        mixer
+        })
     }
 
-    /// Renders one block of `frames` frames starting at `start` on the session clock, without a
-    /// render context: the deck's batches apply at their frames, and the slots render between
-    /// them. Returns whether any slot sounded.
-    pub fn render_block(
-        &mut self,
-        start: SessionFrame,
-        buffers: &mut ProcBuffers,
-        frames: usize,
-    ) -> bool {
-        self.render_block_in(None, start, buffers, frames)
-    }
-
-    /// The track `slot` holds.
     #[must_use]
     pub fn track(&self, slot: Slot) -> Option<&PlayerTrack> {
-        self.deck.tracks.at(slot)
-    }
-
-    fn render_context<'a>(
-        &self,
-        store: &'a ProcStore,
-        info: &ProcInfo,
-    ) -> Result<Option<&'a RenderContext>, &'static str> {
-        match self.context_requirement {
-            ContextRequirement::Standalone => Ok(None),
-            ContextRequirement::Session => read_render_context(store, info).map(Some),
+        if self.retired {
+            None
+        } else {
+            self.deck.tracks.at(slot)
         }
     }
 
     fn render_block_in(
         &mut self,
+        level: &mut LevelInbox<'_, DeckProtocol>,
         context: Option<&RenderContext>,
         start: SessionFrame,
         buffers: &mut ProcBuffers,
         frames: usize,
     ) -> bool {
-        let Self {
-            inbox,
-            deck,
-            scratch,
-            capacity,
-            ..
-        } = self;
-        inbox.drain();
-        let mut reached = 0;
+        self.deck.recycle.fill(self.recycle_per_block);
+        self.deck.arrivals(level);
         let mut sounded = false;
-        loop {
-            let due = inbox
-                .frames_until_due(start)
-                .map_or(frames, |due| usize::try_from(due).unwrap_or(usize::MAX));
-            let boundary = due.clamp(reached, frames);
-            if boundary > reached {
-                sounded |= deck.render_range(
-                    context,
-                    buffers,
-                    (scratch, *capacity),
-                    reached..boundary,
-                    (inbox, start),
-                );
-                reached = boundary;
+        for cursor in 0..frames {
+            let at = SessionFrame::new(
+                i64::from(start).saturating_add(i64::try_from(cursor).unwrap_or(i64::MAX)),
+            );
+            loop {
+                let Some(due) = level.next_due(start, cursor.saturating_add(1)) else {
+                    break;
+                };
+                self.deck.take_due(due, context.is_some());
+                self.deck.resolve_armed(level, start, at);
             }
-            if reached >= frames {
-                break;
+            self.deck.maintain();
+            self.deck.finish_stops(level, start, at);
+            if context.is_some() {
+                self.deck.observe_ends(cursor, start);
             }
-            let Some(due) = inbox.next_due(start, frames) else {
-                continue;
-            };
-            let at = due.at();
-            deck.take_due(due);
-            deck.resolve_orphans(inbox, at);
+            self.deck.fire_ended(level, start, at, context.is_some());
+            self.deck.finish_stops(level, start, at);
+            sounded |= self.deck.render_frame(
+                context,
+                buffers,
+                &mut self.scratch,
+                self.capacity,
+                cursor,
+                start,
+            );
+            let after = SessionFrame::new(i64::from(at).saturating_add(1));
+            self.deck.finish_stops(level, start, after);
         }
-        self.blocks = self.blocks.saturating_add(1);
-        self.publish();
+        self.deck.maintain();
+        let end = SessionFrame::new(
+            i64::from(start).saturating_add(i64::try_from(frames).unwrap_or(i64::MAX)),
+        );
+        self.deck.finish_stops(level, start, end);
         sounded
     }
 
-    /// Publish what the slots stand at after the block.
-    fn publish(&mut self) {
+    fn publish(&mut self, at: SessionFrame) {
         let snapshot = self.snapshot.input_buffer_mut();
         for (entry, slot) in snapshot.slots.iter_mut().zip(self.deck.tracks.slots()) {
-            *entry = self
-                .deck
-                .tracks
-                .at(slot)
-                .map_or_else(SlotSnapshot::default, slot_snapshot);
+            *entry = if self.retired {
+                SlotSnapshot::default()
+            } else {
+                self.deck
+                    .tracks
+                    .at(slot)
+                    .map_or_else(SlotSnapshot::default, |track| slot_snapshot(track, at))
+            };
         }
         snapshot.sample_rate = self.deck.sample_rate.get();
         snapshot.blocks = self.blocks;
         snapshot.metrics = self.deck.metrics.snapshot();
         self.snapshot.publish();
     }
-
-    fn resize(&mut self, max_frames: usize) {
-        let mut capacity = usize::MAX;
-        for buf in &mut self.scratch {
-            if buf.ensure_len(max_frames).is_err() {
-                warn!(
-                    max_frames,
-                    held = buf.len(),
-                    "sample pool budget cannot afford the render scratch; blocks are clamped"
-                );
-            }
-            buf.fill(0.0);
-            capacity = capacity.min(buf.len());
-        }
-        self.capacity = capacity;
-    }
 }
 
-fn slot_snapshot(track: &PlayerTrack) -> SlotSnapshot {
+fn slot_snapshot(track: &PlayerTrack, at: SessionFrame) -> SlotSnapshot {
     let position = track.position();
     SlotSnapshot {
         state: track.state(),
+        mark: track.mark(at),
         position,
         duration: track.duration(),
         frontier: track.decoded_frontier().max(position),
         cached: track.cached_span(),
         gain: track.gain(),
-        rate: track.playback_rate(),
     }
 }
 
 impl Deck {
-    /// Render the playing slots over `range` of the block into the same frames of the output
-    /// buffers, firing the chain behind each slot that ends inside it.
-    ///
-    /// Frames are clamped rather than grown, since growing a pooled buffer here would allocate on
-    /// the audio thread; frames past the clamp are already silence-filled.
-    fn render_range(
+    fn maintain(&mut self) {
+        for (slot, track) in self.tracks.iter_mut() {
+            track.recycle_obsolete(&mut self.recycle[slot.index()]);
+        }
+    }
+
+    fn observe_ends(&mut self, cursor: usize, start: SessionFrame) {
+        for (slot, track) in self.tracks.iter_mut() {
+            let mut sink = RtSink::new(&mut self.events, &self.metrics, slot, start);
+            self.ended[slot.index()] =
+                track.poll_end(cursor, &mut self.recycle[slot.index()], &mut sink);
+        }
+    }
+
+    fn render_frame(
         &mut self,
         context: Option<&RenderContext>,
         buffers: &mut ProcBuffers,
-        (scratch, capacity): (&mut [SampleBuffer; MIN_STEREO], usize),
-        range: Range<usize>,
-        (inbox, start): (&mut Inbox<DeckProtocol>, SessionFrame),
+        scratch: &mut [SampleBuffer; MIN_STEREO],
+        capacity: usize,
+        cursor: usize,
+        start: SessionFrame,
     ) -> bool {
-        if buffers.outputs.len() < MIN_STEREO {
+        if context.is_none()
+            || cursor >= capacity
+            || buffers.outputs.len() < MIN_STEREO
+            || buffers
+                .outputs
+                .iter()
+                .take(MIN_STEREO)
+                .any(|channel| cursor >= channel.len())
+        {
+            for tail in &mut self.tails {
+                tail.advance(1);
+            }
             return false;
         }
-        for channel in buffers.outputs.iter_mut() {
-            channel[range.clone()].fill(0.0);
-        }
-        let frames = range.end.min(capacity);
-        let begin = range.start.min(frames);
         if self.render.take_priming() {
             for (_, track) in self.tracks.iter_mut() {
                 track.snap_gate();
             }
         }
+        let range = cursor..cursor.saturating_add(1);
         let [scratch_left, scratch_right] = scratch;
-        let mut read = [&mut scratch_left[..frames], &mut scratch_right[..frames]];
+        let mut read = [
+            &mut scratch_left[..capacity],
+            &mut scratch_right[..capacity],
+        ];
         let (out_left, out_right) = buffers.outputs.split_at_mut(1);
-        let mut bus = [&mut out_left[0][..frames], &mut out_right[0][..frames]];
-        self.rendered.fill(false);
+        let mut bus = [&mut out_left[0][..], &mut out_right[0][..]];
         let mut sounded = false;
-
-        for first in self.tracks.slots() {
-            let mut slot = first;
-            let mut span = begin..frames;
-            loop {
-                if self.rendered.get(slot.index()).copied().unwrap_or(true) {
-                    break;
-                }
-                let Some(track) = self
-                    .tracks
-                    .at_mut(slot)
-                    .filter(|track| track.state() == SlotState::Playing)
-                else {
-                    break;
-                };
-                if let Some(rendered) = self.rendered.get_mut(slot.index()) {
-                    *rendered = true;
-                }
-                let mut sink = RtSink::new(&mut self.events, &self.metrics, slot, start);
-                let outcome = track.render(context, &mut read, &mut bus, span.clone(), &mut sink);
-                sounded = true;
-                let Some(end) = outcome.ended_at(&span) else {
-                    break;
-                };
-                let at = sink.at(end);
-                let Some(to) = self.fire_chain(inbox, slot, at) else {
-                    break;
-                };
-                if end >= span.end {
-                    break;
-                }
-                slot = to;
-                span = end..span.end;
+        for (slot, track) in self.tracks.iter_mut() {
+            if track.state() != SlotState::Playing {
+                continue;
             }
+            let mut sink = RtSink::new(&mut self.events, &self.metrics, slot, start);
+            let _ = track.render(
+                context,
+                &mut read,
+                &mut bus,
+                range.clone(),
+                &mut self.recycle[slot.index()],
+                &mut sink,
+            );
+            sounded = true;
         }
-
-        let [bus_left, bus_right] = &mut bus;
-        for tail in self.tails.iter_mut().flatten() {
+        let [left, right] = &mut bus;
+        for tail in &mut self.tails {
             if tail.is_sounding() {
-                tail.mix(bus_left, bus_right, begin..frames);
+                tail.mix(left, right, range.clone());
                 sounded = true;
             }
         }
         if sounded {
             self.render
-                .finish(&mut bus_left[begin..], &mut bus_right[begin..]);
+                .finish(&mut left[range.clone()], &mut right[range]);
         } else {
             self.render.idle();
         }
         sounded
+    }
+
+    fn tails_quiet(&self) -> bool {
+        self.tails.iter().all(|tail| !tail.is_sounding())
     }
 
     fn update_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
@@ -427,6 +374,7 @@ impl Deck {
             return;
         }
         self.sample_rate = sample_rate;
+        self.declick_frames = super::config::declick_frame_count(self.declick, sample_rate).get();
         for (_, track) in self.tracks.iter_mut() {
             track.set_host_sample_rate(sample_rate);
         }
@@ -434,10 +382,9 @@ impl Deck {
     }
 }
 
-impl AudioNodeProcessor for DeckMixer {
+impl<E: SessionInbox> AudioNodeProcessor for DeckMixer<E> {
     fn new_stream(&mut self, stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
         self.deck.update_host_sample_rate(stream_info.sample_rate);
-        self.resize(stream_info.max_block_frames.get().as_());
     }
 
     #[kithara::rtsan_forbid_blocking]
@@ -447,15 +394,57 @@ impl AudioNodeProcessor for DeckMixer {
         mut buffers: ProcBuffers,
         extra: &mut ProcExtra,
     ) -> ProcessStatus {
-        let context = match self.render_context(&extra.store, info) {
-            Ok(context) => context,
-            Err(reason) => {
-                let _ = extra.logger.try_error(reason);
-                return ProcessStatus::ClearAllOutputs;
-            }
-        };
+        for channel in buffers.outputs.iter_mut() {
+            channel.fill(0.0);
+        }
         let start = SessionFrame::new(info.clock_samples.0);
-        if self.render_block_in(context, start, &mut buffers, info.frames) {
+        let geometry_valid = info.frames <= self.capacity
+            && buffers.outputs.len() >= MIN_STEREO
+            && buffers
+                .outputs
+                .iter()
+                .take(MIN_STEREO)
+                .all(|channel| channel.len() >= info.frames)
+            && self.deck.tails.iter().all(|tail| {
+                tail.capacity() >= self.deck.declick_frames.max(self.deck.evict_frames)
+            });
+        let context = read_render_context(&extra.store, info)
+            .ok()
+            .filter(|_| geometry_valid)
+            .cloned();
+        let mut sounded = false;
+        if !self.retired {
+            if let Some(mut level) = extra
+                .store
+                .try_get_mut::<E>()
+                .and_then(|session| session.scope(self.scope))
+            {
+                sounded = self.render_block_in(
+                    &mut level,
+                    context.as_ref(),
+                    start,
+                    &mut buffers,
+                    info.frames,
+                );
+                if level.is_closing() && self.deck.tails_quiet() {
+                    level.retire();
+                    self.retired = true;
+                }
+            } else {
+                self.retired = true;
+            }
+            if self.retired {
+                for (_, track) in self.deck.tracks.iter_mut() {
+                    track.shut();
+                }
+            }
+        }
+        self.blocks = self.blocks.saturating_add(1);
+        let end = SessionFrame::new(
+            i64::from(start).saturating_add(i64::try_from(info.frames).unwrap_or(i64::MAX)),
+        );
+        self.publish(end);
+        if sounded {
             ProcessStatus::OutputsModified
         } else {
             ProcessStatus::ClearAllOutputs

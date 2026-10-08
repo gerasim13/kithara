@@ -8,7 +8,7 @@ mod sink;
 
 pub use core::PlayerTrack;
 
-pub use consumer::{PcmConsumer, PlaybackRate};
+pub use consumer::PcmConsumer;
 pub use feeder::{PlayerResource, ReadOutcome};
 pub use read::TrackReadOutcome;
 pub use sink::RtSink;

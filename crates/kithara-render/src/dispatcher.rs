@@ -1,33 +1,107 @@
-//! The worker's dispatcher: the one place a track's source opens.
+//! Dispatcher-thread ownership of open sources and resident render lanes.
 
-use std::{convert::Infallible, fmt::Debug, future::poll_fn, marker::PhantomData, task::Poll};
+use std::{
+    convert::Infallible,
+    fmt::{self, Debug},
+    future::poll_fn,
+    marker::PhantomData,
+    num::NonZeroUsize,
+    task::{Context, Poll, Waker},
+};
 
-use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
-use kithara_command::{Inbox, Protocol};
-use kithara_platform::maybe_send::MaybeSendFuture;
+use futures::{FutureExt, StreamExt, future::LocalBoxFuture, stream::FuturesUnordered};
+use kithara_command::{Inbox, Protocol, Seq};
+use kithara_platform::{maybe_send::MaybeSendFuture, time::Duration};
+use kithara_signal::FrameCount;
+use kithara_warp::{SpeedCurve, StretchKind};
+use kithara_worker::{Priority, Task, TickResult};
 
-use crate::LoadRefusal;
+use crate::{LaneProtocol, LoadRefusal, ServiceClass, worker::scheduler::Wake};
 
-/// What the dispatcher opens: a track's source, on the worker that will
-/// render it.
-pub trait Open: Debug {
-    /// What an open hands to the owner that asked for it.
-    type Opened: Debug;
+/// Dispatcher-issued identity in load admission order.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct LaneId(u64);
 
-    /// Opens the item. The worker holds a slot for it before the source
-    /// opens, so a worker at capacity refuses without opening anything.
-    fn open(self) -> impl MaybeSendFuture<Output = Result<Self::Opened, LoadRefusal>>;
+#[derive(Debug)]
+pub enum DispatcherCommand<I> {
+    Load(LoadRequest<I>),
+    Release(LaneId),
+    SetPriority(LaneId, ServiceClass),
 }
 
-/// The dispatcher's queue: each batch is one item to open, answered with what
-/// it opened or why it did not.
+pub struct LoadRequest<I> {
+    pub item: I,
+    pub position: Duration,
+    pub start: LaneStart,
+    pub inbox: Inbox<LaneProtocol>,
+}
+
+impl<I: Debug> Debug for LoadRequest<I> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LoadRequest")
+            .field("item", &self.item)
+            .field("position", &self.position)
+            .field("start", &self.start)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct LaneStart {
+    pub speed: SpeedCurve,
+    pub keylock: bool,
+    pub backend: StretchKind,
+}
+
+impl PartialEq for LaneStart {
+    fn eq(&self, other: &Self) -> bool {
+        matches!((self.speed, other.speed), (SpeedCurve::Constant(left), SpeedCurve::Constant(right)) if left == right)
+            && self.keylock == other.keylock
+            && self.backend == other.backend
+    }
+}
+
+#[derive(Debug)]
+pub struct Loaded<O> {
+    pub lane: LaneId,
+    pub opened: O,
+    pub engine_latency: FrameCount,
+}
+
+#[derive(Debug)]
+pub enum Dispatched<O> {
+    Loaded(Loaded<O>),
+    Released,
+    Prioritized,
+}
+
+/// One source open yielding its receiver and its actual worker-owned lane.
+pub trait Open: Debug {
+    type Opened: Debug;
+    type Lane;
+
+    fn open(
+        self,
+        position: Duration,
+        start: LaneStart,
+        inbox: Inbox<LaneProtocol>,
+    ) -> impl MaybeSendFuture<Output = Result<(Self::Opened, Self::Lane, FrameCount), LoadRefusal>>;
+}
+
+/// Mutable lane state accessed only by the dispatcher that owns the task.
+pub trait LaneTask: Task {
+    fn set_priority(&mut self, class: ServiceClass);
+    fn poll_commands(&mut self, cx: &mut Context<'_>) -> Poll<()>;
+}
+
 #[derive(Debug)]
 pub struct DispatcherProtocol<I>(PhantomData<fn() -> I>);
 
 impl<I: Open> Protocol for DispatcherProtocol<I> {
-    type Applied = I::Opened;
+    type Applied = Dispatched<I::Opened>;
     type Clock = ();
-    type Command = I;
+    type Command = DispatcherCommand<I>;
     type Refusal = LoadRefusal;
     type Target = Infallible;
 
@@ -36,44 +110,202 @@ impl<I: Open> Protocol for DispatcherProtocol<I> {
     }
 }
 
-/// Opens the items its inbox receives, all at once, and answers each batch
-/// with what its item opened or why it did not, in the order the opens end.
-/// It ends when the sender is gone, dropping the opens still running.
-///
-/// A batch carries one item; a batch of any other size comes back
-/// unanswered, whole.
-pub async fn dispatch<I: Open>(mut inbox: Inbox<DispatcherProtocol<I>>) {
-    let mut opening = FuturesUnordered::new();
-    poll_fn(|cx| {
-        loop {
-            while let Poll::Ready(Some((seq, opened))) = opening.poll_next_unpin(cx) {
-                let Some(due) = inbox.resume(seq, ()) else {
-                    continue;
-                };
-                match opened {
-                    Ok(opened) => due.apply(opened),
-                    Err(refusal) => due.refuse(refusal),
+type Opening<O, L> =
+    LocalBoxFuture<'static, (Seq, LaneId, Result<(O, L, FrameCount), LoadRefusal>)>;
+
+struct DispatchState<I: Open> {
+    inbox: Inbox<DispatcherProtocol<I>>,
+    opening: FuturesUnordered<Opening<I::Opened, I::Lane>>,
+    lanes: Vec<(LaneId, I::Lane)>,
+    capacity: NonZeroUsize,
+    outcome: TickResult,
+}
+
+impl<I> DispatchState<I>
+where
+    I: Open + 'static,
+    I::Opened: 'static,
+    I::Lane: LaneTask,
+{
+    fn new(inbox: Inbox<DispatcherProtocol<I>>, capacity: NonZeroUsize) -> Self {
+        Self {
+            inbox,
+            opening: FuturesUnordered::new(),
+            lanes: Vec::with_capacity(capacity.get()),
+            capacity,
+            outcome: TickResult::Waiting,
+        }
+    }
+
+    fn poll(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+        let mut progress = false;
+        while let Poll::Ready(Some((seq, lane, result))) = self.opening.poll_next_unpin(cx) {
+            progress = true;
+            let Some(due) = self.inbox.resume(seq, (), ()) else {
+                continue;
+            };
+            match result {
+                Ok((opened, task, engine_latency)) => {
+                    self.lanes.push((lane, task));
+                    due.apply(Dispatched::Loaded(Loaded {
+                        lane,
+                        opened,
+                        engine_latency,
+                    }));
                 }
-            }
-            if inbox.poll_drain(cx).is_pending() {
-                return Poll::Pending;
-            }
-            if inbox.is_closed() {
-                return Poll::Ready(());
-            }
-            while let Some(mut due) = inbox.next_due((), 1) {
-                if due.commands().len() != 1 {
-                    continue;
-                }
-                let Some(item) = due.commands_mut().pop() else {
-                    continue;
-                };
-                let seq = due.defer();
-                opening.push(item.open().map(move |opened| (seq, opened)));
+                Err(refusal) => due.refuse(refusal),
             }
         }
-    })
-    .await;
+        let _ = self.inbox.poll_drain(cx);
+        if self.inbox.is_closed() {
+            return Poll::Ready(());
+        }
+        while let Some(mut due) = self.inbox.next_due((), 1) {
+            progress = true;
+            if due.commands().len() != 1 {
+                continue;
+            }
+            let Some(command) = due.commands_mut().pop() else {
+                continue;
+            };
+            match command {
+                DispatcherCommand::Load(request) => {
+                    if self.lanes.len() + self.opening.len() >= self.capacity.get() {
+                        due.refuse(LoadRefusal::Capacity {
+                            capacity: self.capacity.get(),
+                        });
+                        continue;
+                    }
+                    let seq = due.defer();
+                    let lane = LaneId(seq.get());
+                    self.opening.push(
+                        async move {
+                            let result = request
+                                .item
+                                .open(request.position, request.start, request.inbox)
+                                .await;
+                            (seq, lane, result)
+                        }
+                        .boxed_local(),
+                    );
+                }
+                DispatcherCommand::Release(lane) => {
+                    if let Some(index) = self.lanes.iter().position(|(id, _)| *id == lane) {
+                        self.lanes.remove(index);
+                        due.apply(Dispatched::Released);
+                    } else {
+                        due.commands_mut().push(DispatcherCommand::Release(lane));
+                    }
+                }
+                DispatcherCommand::SetPriority(lane, class) => {
+                    if let Some((_, task)) = self.lanes.iter_mut().find(|(id, _)| *id == lane) {
+                        task.set_priority(class);
+                        due.apply(Dispatched::Prioritized);
+                    } else {
+                        due.commands_mut()
+                            .push(DispatcherCommand::SetPriority(lane, class));
+                    }
+                }
+            }
+        }
+        self.lanes
+            .sort_unstable_by(|(left_id, left), (right_id, right)| {
+                right
+                    .priority()
+                    .cmp(&left.priority())
+                    .then_with(|| left_id.cmp(right_id))
+            });
+        let mut waiting = !self.opening.is_empty();
+        let mut upstream = false;
+        for (_, lane) in &mut self.lanes {
+            let _ = lane.poll_commands(cx);
+            lane.recycle();
+            let result = lane.tick();
+            progress |= result == TickResult::Progress;
+            waiting |= result == TickResult::Waiting;
+            upstream |= result == TickResult::UpstreamPending;
+        }
+        self.outcome = if progress {
+            TickResult::Progress
+        } else if waiting {
+            TickResult::Waiting
+        } else if upstream {
+            TickResult::UpstreamPending
+        } else {
+            TickResult::Backpressured
+        };
+        if progress {
+            cx.waker().wake_by_ref();
+        }
+        Poll::Pending
+    }
+
+    fn priority(&self) -> Option<Priority> {
+        self.lanes
+            .iter()
+            .filter_map(|(_, task)| task.priority())
+            .max()
+    }
+}
+
+/// Drive source opens, commands and resident lanes on the current owner thread.
+pub async fn dispatch<I>(inbox: Inbox<DispatcherProtocol<I>>)
+where
+    I: Open + 'static,
+    I::Opened: 'static,
+    I::Lane: LaneTask,
+{
+    let mut dispatcher = DispatchState::new(inbox, crate::consts::CAPACITY);
+    poll_fn(|cx| dispatcher.poll(cx)).await;
+}
+
+pub(crate) struct DispatcherTask<I: Open> {
+    dispatcher: DispatchState<I>,
+    waker: Waker,
+}
+
+impl<I> DispatcherTask<I>
+where
+    I: Open + 'static,
+    I::Opened: 'static,
+    I::Lane: LaneTask,
+{
+    pub(crate) fn new(
+        inbox: Inbox<DispatcherProtocol<I>>,
+        capacity: NonZeroUsize,
+        wake: kithara_worker::Wake,
+    ) -> Self {
+        Self {
+            dispatcher: DispatchState::new(inbox, capacity),
+            waker: Waker::from(std::sync::Arc::new(Wake::new(wake))),
+        }
+    }
+}
+
+impl<I> Task for DispatcherTask<I>
+where
+    I: Open + 'static,
+    I::Opened: 'static,
+    I::Lane: LaneTask,
+{
+    fn priority(&self) -> Option<Priority> {
+        self.dispatcher.priority()
+    }
+
+    fn on_cancel(&mut self) {
+        for (_, task) in &mut self.dispatcher.lanes {
+            task.on_cancel();
+        }
+    }
+
+    fn tick(&mut self) -> TickResult {
+        let mut context = Context::from_waker(&self.waker);
+        if self.dispatcher.poll(&mut context).is_ready() {
+            TickResult::Done
+        } else {
+            self.dispatcher.outcome
+        }
+    }
 }
 
 #[cfg(test)]

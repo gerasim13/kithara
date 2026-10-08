@@ -1,4 +1,4 @@
-use super::{RtMetricsSnapshot, SlotState};
+use super::{RtMetricsSnapshot, SlotMark, SlotState};
 
 /// What a deck's mixer last published of each slot and of itself, once per block.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -17,6 +17,7 @@ pub struct DeckSnapshot {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SlotSnapshot {
     pub state: SlotState,
+    pub mark: Option<SlotMark>,
     /// Media position in seconds.
     pub position: f64,
     /// Visible media duration in seconds; `0.0` when unknown.
@@ -27,6 +28,4 @@ pub struct SlotSnapshot {
     pub cached: f64,
     /// The slot's envelope gain on its last mixed frame.
     pub gain: f32,
-    /// Effective media seconds the slot consumes per output second.
-    pub rate: f32,
 }

@@ -1,59 +1,58 @@
-use std::ops::ControlFlow;
+use std::{
+    num::{NonZeroU32, NonZeroUsize},
+    ops::ControlFlow,
+    task::{Context, Poll},
+};
 
-use kithara_audio::{AudioSource, Fetch, SourceDiscontinuity, SourceEnd, TrackStep, WaitingReason};
+use kithara_audio::{
+    AudioSource, DecodeError, Fetch, SeekOutcome, SourceDiscontinuity, SourceEnd, TrackStep,
+    WaitingReason,
+};
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_command::Inbox;
 use kithara_effects::{
     AudioEffect, EffectDrain, EffectDrainStep, apply_effects, held_source_frames, reset_effects,
 };
-use kithara_platform::sync::Arc;
-use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount};
-use kithara_stream::SeekObserve;
+use kithara_platform::time::Duration;
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SourceSpan};
 use kithara_warp::WarpRenderError;
 
-use crate::{LaneProtocol, lane::Lane};
+use crate::{
+    LaneFrame, LaneProtocol,
+    lane::{Lane, LaneChange},
+};
 
 #[derive(Clone, Copy)]
 enum DrainState {
     Open,
-    LiveWarp(u64),
-    Warp(u64),
-    Effects(u64),
-    Exhausted(u64),
-}
-
-impl DrainState {
-    const fn epoch(self) -> Option<u64> {
-        match self {
-            Self::Open => None,
-            Self::LiveWarp(epoch)
-            | Self::Warp(epoch)
-            | Self::Effects(epoch)
-            | Self::Exhausted(epoch) => Some(epoch),
-        }
-    }
+    LiveWarp,
+    Warp,
+    Effects,
+    Exhausted,
 }
 
 struct PendingInput {
     chunk: AudioChunk,
-    epoch: u64,
     consumed_frames: usize,
+}
+
+struct PendingOutput {
+    chunk: AudioChunk,
+    source_end: Option<SourceEnd>,
 }
 
 /// The sole producer-side Warp/effect stage before the play output ring.
 pub struct WarpSource<T, S> {
-    seek: Arc<dyn SeekObserve>,
     spec: AudioSpec,
     drain_state: DrainState,
     drain: EffectDrain,
     discontinuity: Option<SourceDiscontinuity>,
     lane: Lane,
     pending_input: Option<PendingInput>,
+    pending_output: Option<PendingOutput>,
     prepared_frames: Option<usize>,
     render_input: Option<SampleBuffer>,
-    reset_epoch: Option<u64>,
     retired_input: Option<AudioChunk>,
-    staged_epoch: Option<u64>,
     staged_meta: Option<AudioChunkInfo>,
     pools: PoolRegion<S>,
     source: T,
@@ -78,24 +77,22 @@ where
         spec: AudioSpec,
         pools: PoolRegion<S>,
         inbox: Inbox<LaneProtocol>,
+        preload_chunks: NonZeroUsize,
     ) -> Self {
         let discontinuity = source.discontinuity();
-        let seek = source.seek_observe();
         Self {
             source,
             warp,
             effects,
             drain,
-            seek,
             discontinuity,
             spec,
             pools,
-            lane: Lane::new(inbox),
+            lane: Lane::new(inbox, preload_chunks),
             drain_state: DrainState::Open,
-            reset_epoch: None,
             pending_input: None,
+            pending_output: None,
             staged_meta: None,
-            staged_epoch: None,
             prepared_frames: None,
             render_input: None,
             retired_input: None,
@@ -103,17 +100,79 @@ where
         }
     }
 
+    /// Current segment-relative output frame.
+    #[must_use]
+    pub const fn cursor(&self) -> LaneFrame {
+        self.lane.cursor()
+    }
+
+    /// Exact source position represented by the lane output cursor, when established.
+    #[must_use]
+    pub const fn position(&self) -> Option<Duration> {
+        self.lane.position()
+    }
+
+    /// Exact output latency of the prepared engine.
+    #[must_use]
+    pub fn engine_latency(&self) -> FrameCount {
+        self.warp.engine_latency()
+    }
+
+    /// Records successful admission of the current segment's chunk.
+    pub fn admitted(&mut self) {
+        self.lane.admitted();
+    }
+
+    /// Whether the current segment's preload quota is in the PCM ring.
+    #[must_use]
+    pub fn is_preloaded(&self) -> bool {
+        self.lane.is_preloaded()
+    }
+
+    /// Registers the owning task's wake for lane command arrivals.
+    pub fn poll_commands(&mut self, context: &mut Context<'_>) -> Poll<()> {
+        self.lane.poll_commands(context)
+    }
+
+    /// Executes commands at the output cursor before producing more samples.
+    ///
+    /// # Errors
+    /// Returns the open source's synchronous seek error.
+    pub fn service_commands(&mut self) -> Result<(), DecodeError> {
+        let changed = self
+            .lane
+            .execute_due(&mut self.source, &mut self.warp, self.spec)?;
+        if changed == LaneChange::Source {
+            self.discard_staged_input();
+            reset_effects(&mut self.effects);
+            self.drain.reset();
+            self.drain_state = DrainState::Open;
+            self.discontinuity = self.source.discontinuity();
+            self.spec = self.discontinuity.map_or(self.spec, |stamp| *stamp.spec());
+        } else if changed == LaneChange::Controls {
+            self.prepared_frames = None;
+        }
+        self.prepare_renderers(self.spec);
+        Ok(())
+    }
+
+    fn failed_quantum() -> TrackStep<AudioChunk> {
+        TrackStep::Failed(DecodeError::InvalidData {
+            detail: "invalid lane render quantum",
+        })
+    }
+
     fn clear_staging(&mut self) {
         if let Some(input) = self.render_input.as_mut() {
             input.clear();
         }
         self.staged_meta = None;
-        self.staged_epoch = None;
         self.prepared_frames = None;
     }
 
     fn discard_staged_input(&mut self) {
         self.retire_pending_input();
+        self.pending_output = None;
         self.clear_staging();
         self.quantum_failed = false;
     }
@@ -125,7 +184,7 @@ where
         if self.prepared_frames.is_some() {
             return;
         }
-        let Some((meta, remaining)) = self.pending_input.as_ref().and_then(|pending| {
+        let pending_span = self.pending_input.as_ref().and_then(|pending| {
             let remaining = pending
                 .chunk
                 .frames()
@@ -134,14 +193,22 @@ where
                 Self::span_meta(pending.chunk.meta, pending.consumed_frames, remaining)?,
                 remaining,
             ))
-        }) else {
+        });
+        let staged = self.staged_frames();
+        let span = self.staged_meta.map_or(pending_span, |meta| {
+            Some((
+                meta,
+                staged.saturating_add(pending_span.map_or(0, |(_, remaining)| remaining)),
+            ))
+        });
+        let Some((meta, remaining)) = span else {
             return;
         };
         let frames = match self.prepare_quantum(meta, remaining) {
             Ok(frames) => frames,
             Err(WarpRenderError::NeedsService) => {
                 if self.warp.transition_pending() {
-                    self.drain_state = DrainState::LiveWarp(self.source.decode_epoch());
+                    self.drain_state = DrainState::LiveWarp;
                 }
                 return;
             }
@@ -160,16 +227,16 @@ where
             .render_input
             .take()
             .unwrap_or_else(|| self.pools.get::<f32>());
-        if input.ensure_len(required).is_err() {
+        let staged_samples = input.len();
+        if input.ensure_len(required.max(staged_samples)).is_err() {
             self.render_input = Some(input);
             self.quantum_failed = true;
             return;
         }
-        input.clear();
+        input.truncate(staged_samples);
         self.render_input = Some(input);
         if frames == 0 {
             self.staged_meta = Self::span_meta(meta, 0, 0);
-            self.staged_epoch = self.pending_input.as_ref().map(|pending| pending.epoch);
         }
         self.prepared_frames = Some(frames);
     }
@@ -178,7 +245,9 @@ where
         let Some(pending) = self.pending_input.take() else {
             return;
         };
-        debug_assert!(self.retired_input.is_none());
+        if let Some(chunk) = self.retired_input.take() {
+            self.source.retire_chunk(chunk);
+        }
         self.retired_input = Some(pending.chunk);
     }
 
@@ -186,6 +255,19 @@ where
         let offset = u64::try_from(offset).ok()?;
         let frames = u32::try_from(frames).ok()?;
         let mut meta = original;
+        if let Some(span) = original.source_span {
+            let end = offset.checked_add(u64::from(frames))?;
+            let span = span.for_output_range(offset..end)?;
+            meta.frame_offset = span.start();
+            meta.timestamp = span.position_at(0)?;
+            meta.end_timestamp = span.position_at(span.output_frames())?;
+            meta.frames = frames;
+            meta.source_span = Some(span);
+            meta.source_byte_offset = None;
+            meta.source_bytes = 0;
+            meta.end_of_track = original.end_of_track && end == u64::from(original.frames);
+            return Some(meta);
+        }
         meta.frame_offset = original.frame_offset.checked_add(offset)?;
         meta.timestamp = original
             .timestamp
@@ -196,6 +278,8 @@ where
             .checked_add(original.spec.duration_for(u64::from(frames)).ok()?)?;
         meta.source_byte_offset = None;
         meta.source_bytes = 0;
+        meta.end_of_track = original.end_of_track
+            && offset.checked_add(u64::from(frames))? == u64::from(original.frames);
         Some(meta)
     }
 
@@ -212,7 +296,7 @@ where
         let Some(pending) = self.pending_input.as_mut() else {
             return false;
         };
-        if pending.chunk.spec() != self.spec || pending.epoch != self.seek.epoch() {
+        if pending.chunk.spec() != self.spec {
             self.quantum_failed = true;
             return false;
         }
@@ -224,9 +308,7 @@ where
             meta.frame_offset
                 .checked_add(u64::try_from(staged_frames).ok()?)
         });
-        if staged > 0
-            && (self.staged_epoch != Some(pending.epoch) || expected_frame != pending_frame)
-        {
+        if staged > 0 && expected_frame != pending_frame {
             self.quantum_failed = true;
             return false;
         }
@@ -245,8 +327,27 @@ where
             return false;
         };
         if staged == 0 {
-            self.staged_meta = Self::span_meta(pending.chunk.meta, pending.consumed_frames, 0);
-            self.staged_epoch = Some(pending.epoch);
+            self.staged_meta = Self::span_meta(pending.chunk.meta, pending.consumed_frames, frames);
+        } else if let Some(meta) = self.staged_meta.as_mut() {
+            let Some(next) = Self::span_meta(pending.chunk.meta, pending.consumed_frames, frames)
+            else {
+                self.quantum_failed = true;
+                return false;
+            };
+            if let Some(span) = meta.source_span {
+                let Some(span) = next.source_span.and_then(|next| span.followed_by(next)) else {
+                    self.quantum_failed = true;
+                    return false;
+                };
+                meta.source_span = Some(span);
+            }
+            meta.end_timestamp = next.end_timestamp;
+            let Ok(total) = u32::try_from(staged_frames.saturating_add(frames)) else {
+                self.quantum_failed = true;
+                return false;
+            };
+            meta.frames = total;
+            meta.end_of_track = next.end_of_track;
         }
         let Some(input) = self.render_input.as_mut() else {
             self.quantum_failed = true;
@@ -276,46 +377,12 @@ where
     T: AudioSource<Chunk = AudioChunk>,
     S: HasPool<f32>,
 {
-    fn begin_drain(&mut self, epoch: u64) {
-        self.drain_state = DrainState::Warp(epoch);
-    }
-
-    fn cancel_stale_drain(&mut self) -> bool {
-        let stale = self
-            .drain_state
-            .epoch()
-            .is_some_and(|epoch| self.seek.epoch() != epoch || self.source.decode_epoch() != epoch);
-        if !stale {
-            return false;
-        }
-        let epoch = self.seek.epoch();
-        self.reset_renderers();
-        self.drain.reset();
-        self.drain_state = DrainState::Open;
-        self.reset_epoch = Some(epoch);
-        true
-    }
-
-    fn cancel_stale_input(&mut self) -> bool {
-        let stale = self.pending_input.as_ref().is_some_and(|pending| {
-            self.seek.epoch() != pending.epoch || self.source.decode_epoch() != pending.epoch
-        }) || self
-            .staged_epoch
-            .is_some_and(|epoch| self.seek.epoch() != epoch || self.source.decode_epoch() != epoch);
-        if !stale {
-            return false;
-        }
-        let epoch = self.seek.epoch();
-        self.discard_staged_input();
-        self.reset_renderers();
-        self.drain.reset();
-        self.drain_state = DrainState::Open;
-        self.reset_epoch = Some(epoch);
-        true
+    fn begin_drain(&mut self) {
+        self.drain_state = DrainState::Warp;
     }
 
     fn drain_step(&mut self) -> Option<TrackStep<AudioChunk>> {
-        if let DrainState::LiveWarp(epoch) = self.drain_state {
+        if let DrainState::LiveWarp = self.drain_state {
             let chunk = self.warp.flush();
             if !self.warp.transition_pending() {
                 self.drain_state = DrainState::Open;
@@ -323,49 +390,138 @@ where
             return Some(
                 chunk
                     .and_then(|chunk| apply_effects(&mut self.effects, chunk))
-                    .map_or(TrackStep::StateChanged, |output| {
-                        TrackStep::Produced(self.fetch(output, epoch))
-                    }),
+                    .and_then(|output| self.fetch(output))
+                    .map_or(TrackStep::StateChanged, TrackStep::Produced),
             );
         }
 
-        if let DrainState::Warp(epoch) = self.drain_state {
+        if let DrainState::Warp = self.drain_state {
             if let Some(chunk) = self.warp.flush() {
                 return Some(
                     apply_effects(&mut self.effects, chunk)
-                        .map_or(TrackStep::StateChanged, |output| {
-                            TrackStep::Produced(self.fetch(output, epoch))
-                        }),
+                        .and_then(|output| self.fetch(output))
+                        .map_or(TrackStep::StateChanged, TrackStep::Produced),
                 );
             }
-            self.drain_state = DrainState::Effects(epoch);
+            self.drain_state = DrainState::Effects;
         }
 
-        let DrainState::Effects(epoch) = self.drain_state else {
+        let DrainState::Effects = self.drain_state else {
             return None;
         };
         Some(match self.drain.step(&mut self.effects) {
-            EffectDrainStep::Produced(chunk) => TrackStep::Produced(self.fetch(chunk, epoch)),
+            EffectDrainStep::Produced(chunk) => self
+                .fetch(chunk)
+                .map_or(TrackStep::StateChanged, TrackStep::Produced),
             EffectDrainStep::Progress => TrackStep::StateChanged,
             EffectDrainStep::Exhausted => {
-                self.drain_state = DrainState::Exhausted(epoch);
+                self.drain_state = DrainState::Exhausted;
                 TrackStep::Eof
             }
         })
     }
 
-    fn fetch(&mut self, data: AudioChunk, epoch: u64) -> Fetch<AudioChunk> {
-        self.lane.advance(data.frames());
+    fn fetch(&mut self, mut data: AudioChunk) -> Option<Fetch<AudioChunk>> {
         let source_end = self.warp.rendered_source_end().map(|(frame, sample_rate)| {
             SourceEnd::new(
                 frame.saturating_sub(held_source_frames(&self.effects)),
                 sample_rate,
             )
         });
-        match source_end {
-            Some(source_end) => Fetch::rendered(data, epoch, source_end),
-            None => Fetch::data(data, epoch),
+        if data.meta.source_span.is_none() {
+            data.meta.source_span = source_end.and_then(|end| {
+                SourceSpan::new(
+                    data.meta.frame_offset,
+                    end.frame(),
+                    end.sample_rate(),
+                    u64::try_from(data.frames()).ok()?,
+                )
+                .map(|span| {
+                    span.with_mapping_revision(data.meta.mapping_revision)
+                        .with_render_revision(data.meta.render_revision)
+                })
+            });
         }
+        self.emit_output(data, source_end)
+    }
+
+    fn output_meta(
+        mut meta: AudioChunkInfo,
+        offset: usize,
+        frames: usize,
+    ) -> Option<AudioChunkInfo> {
+        meta.end_of_track &= offset.checked_add(frames)? == usize::try_from(meta.frames).ok()?;
+        meta.frames = u32::try_from(frames).ok()?;
+        if let Some(span) = meta.source_span {
+            let offset = u64::try_from(offset).ok()?;
+            let end = offset.checked_add(u64::from(meta.frames))?;
+            let span = span.for_output_range(offset..end)?;
+            meta.frame_offset = span.start();
+            meta.timestamp = span.position_at(0)?;
+            meta.end_timestamp = span.position_at(span.output_frames())?;
+            meta.source_span = Some(span);
+        } else {
+            let offset = u64::try_from(offset).ok()?;
+            meta.frame_offset = meta.frame_offset.checked_add(offset)?;
+            meta.timestamp = meta
+                .timestamp
+                .checked_add(meta.spec.duration_for(offset).ok()?)?;
+            meta.end_timestamp = meta
+                .timestamp
+                .checked_add(meta.spec.duration_for(u64::from(meta.frames)).ok()?)?;
+        }
+        meta.source_byte_offset = None;
+        meta.source_bytes = 0;
+        Some(meta)
+    }
+
+    fn emit_output(
+        &mut self,
+        mut data: AudioChunk,
+        source_end: Option<SourceEnd>,
+    ) -> Option<Fetch<AudioChunk>> {
+        let frames = data.frames();
+        let limit = self.lane.output_limit();
+        if limit == 0 {
+            self.pending_output = Some(PendingOutput {
+                chunk: data,
+                source_end,
+            });
+            return None;
+        }
+        let (mut output, admitted_end) = if frames > limit {
+            let prefix_samples = limit.checked_mul(usize::from(data.spec().channels))?;
+            let prefix_meta = Self::output_meta(data.meta, 0, limit)?;
+            let suffix_meta = Self::output_meta(data.meta, limit, frames - limit)?;
+            let mut samples = self.pools.get::<f32>();
+            if samples.ensure_len(prefix_samples).is_err() {
+                self.quantum_failed = true;
+                return None;
+            }
+            samples.copy_from_slice(data.samples.get(..prefix_samples)?);
+            drop(data.samples.drain(..prefix_samples));
+            data.meta = suffix_meta;
+            self.pending_output = Some(PendingOutput {
+                chunk: data,
+                source_end,
+            });
+            let admitted_end = prefix_meta.source_span.map(|span| {
+                SourceEnd::new(span.end(), span.sample_rate())
+                    .with_mapping_revision(span.mapping_revision())
+            });
+            (AudioChunk::new(prefix_meta, samples), admitted_end)
+        } else {
+            (data, source_end)
+        };
+        if let Some(span) = output.meta.source_span {
+            output.meta.timestamp = span.position_at(0)?;
+            output.meta.end_timestamp = span.position_at(span.output_frames())?;
+        }
+        self.lane.stamp(&mut output);
+        Some(match admitted_end {
+            Some(end) => Fetch::rendered(output, end),
+            None => Fetch::data(output),
+        })
     }
 
     /// Executes the lane batches due at its cursor, then prepares the quantum
@@ -375,7 +531,6 @@ where
         meta: AudioChunkInfo,
         remaining: usize,
     ) -> Result<FrameCount, WarpRenderError> {
-        self.lane.execute_due(&mut self.warp);
         self.warp
             .prepare_quantum(meta, remaining, self.lane.output_limit())
     }
@@ -384,7 +539,7 @@ where
         self.spec = spec;
         self.warp.prepare(spec);
         if self.warp.transition_pending() && matches!(self.drain_state, DrainState::Open) {
-            self.drain_state = DrainState::LiveWarp(self.source.decode_epoch());
+            self.drain_state = DrainState::LiveWarp;
         }
         if !self.warp.transition_pending() {
             self.prepare_staging();
@@ -396,28 +551,23 @@ where
 
     fn render_full_quantum(&mut self) -> Option<TrackStep<AudioChunk>> {
         let frames = self.prepared_frames?;
-        (self.staged_frames() == frames).then(|| self.render_staged(frames))
+        (self.staged_frames() >= frames).then(|| self.render_staged(frames))
     }
 
     fn render_quantum(
         &mut self,
         chunk: AudioChunk,
-        epoch: u64,
     ) -> ControlFlow<AudioChunk, Option<Fetch<AudioChunk>>> {
         let output = self.warp.render_quantum(chunk)?;
         if self.warp.transition_pending() {
-            self.drain_state = DrainState::LiveWarp(epoch);
+            self.drain_state = DrainState::LiveWarp;
         }
         let output = output.and_then(|chunk| apply_effects(&mut self.effects, chunk));
-        ControlFlow::Continue(output.map(|output| self.fetch(output, epoch)))
+        ControlFlow::Continue(output.and_then(|output| self.fetch(output)))
     }
 
-    fn render_source_quantum(
-        &mut self,
-        chunk: AudioChunk,
-        epoch: u64,
-    ) -> Option<Fetch<AudioChunk>> {
-        match self.render_quantum(chunk, epoch) {
+    fn render_source_quantum(&mut self, chunk: AudioChunk) -> Option<Fetch<AudioChunk>> {
+        match self.render_quantum(chunk) {
             ControlFlow::Continue(output) => output,
             ControlFlow::Break(input) => {
                 debug_assert!(self.retired_input.is_none());
@@ -430,48 +580,60 @@ where
 
     fn render_staged(&mut self, frames: usize) -> TrackStep<AudioChunk> {
         if self.quantum_failed {
-            return TrackStep::Failed;
+            return Self::failed_quantum();
         }
         let channels = usize::from(self.spec.channels.max(1));
         let Some(samples) = frames.checked_mul(channels) else {
             self.quantum_failed = true;
-            return TrackStep::Failed;
+            return Self::failed_quantum();
         };
-        let Some(meta) = self
-            .staged_meta
-            .and_then(|meta| Self::span_meta(meta, 0, frames))
-        else {
+        let Some(staged_meta) = self.staged_meta else {
             self.quantum_failed = true;
-            return TrackStep::Failed;
+            return Self::failed_quantum();
         };
-        let Some(epoch) = self.staged_epoch else {
+        let Some(meta) = Self::span_meta(staged_meta, 0, frames) else {
             self.quantum_failed = true;
-            return TrackStep::Failed;
+            return Self::failed_quantum();
         };
-        let Some(input) = self.render_input.take() else {
+        let Some(mut input) = self.render_input.take() else {
             return TrackStep::StateChanged;
         };
-        if input.len() != samples {
+        if input.len() < samples {
             self.render_input = Some(input);
             self.quantum_failed = true;
-            return TrackStep::Failed;
+            return Self::failed_quantum();
         }
         self.staged_meta = None;
-        self.staged_epoch = None;
         self.prepared_frames = None;
-        match self.render_quantum(AudioChunk::new(meta, input), epoch) {
+        if input.len() > samples {
+            let mut prefix = self.pools.get::<f32>();
+            if prefix.ensure_len(samples).is_err() {
+                self.render_input = Some(input);
+                self.quantum_failed = true;
+                return Self::failed_quantum();
+            }
+            prefix.copy_from_slice(&input[..samples]);
+            drop(input.drain(..samples));
+            self.staged_meta = Self::span_meta(staged_meta, frames, input.len() / channels);
+            self.render_input = Some(input);
+            input = prefix;
+        }
+        match self.render_quantum(AudioChunk::new(meta, input)) {
             ControlFlow::Continue(output) => {
                 output.map_or(TrackStep::StateChanged, TrackStep::Produced)
             }
             ControlFlow::Break(input) => {
                 self.render_input = Some(input.samples);
                 self.quantum_failed = true;
-                TrackStep::Failed
+                Self::failed_quantum()
             }
         }
     }
 
     fn render_whole_pending(&mut self) -> Option<TrackStep<AudioChunk>> {
+        if self.staged_frames() != 0 {
+            return None;
+        }
         let prepared = self.prepared_frames?;
         let pending = self.pending_input.as_ref()?;
         if pending.consumed_frames != 0 || pending.chunk.frames() != prepared {
@@ -480,7 +642,7 @@ where
         let pending = self.pending_input.take()?;
         self.prepared_frames = None;
         Some(
-            self.render_source_quantum(pending.chunk, pending.epoch)
+            self.render_source_quantum(pending.chunk)
                 .map_or(TrackStep::StateChanged, TrackStep::Produced),
         )
     }
@@ -501,16 +663,11 @@ where
             self.spec = *discontinuity.spec();
         }
         self.discontinuity = next;
-        let already_reset = self.reset_epoch == Some(self.source.decode_epoch());
         if !revision_changed {
             return;
         }
         self.discard_staged_input();
-        if already_reset {
-            self.reset_epoch = None;
-        } else {
-            self.reset_renderers();
-        }
+        self.reset_renderers();
         self.drain.reset();
         self.drain_state = DrainState::Open;
     }
@@ -537,23 +694,22 @@ where
         spec
     }
 
-    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        Arc::clone(&self.seek)
-    }
-
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
+        if let Err(error) = self.service_commands() {
+            return TrackStep::Failed(error);
+        }
         self.sync_discontinuity();
-        if self.cancel_stale_input() {
-            return TrackStep::StateChanged;
-        }
-        if self.cancel_stale_drain() {
-            return TrackStep::StateChanged;
-        }
         if self.quantum_failed {
-            return TrackStep::Failed;
+            return Self::failed_quantum();
         }
 
-        if matches!(self.drain_state, DrainState::Exhausted(_)) {
+        if let Some(output) = self.pending_output.take() {
+            return self
+                .emit_output(output.chunk, output.source_end)
+                .map_or(TrackStep::StateChanged, TrackStep::Produced);
+        }
+
+        if matches!(self.drain_state, DrainState::Exhausted) {
             return TrackStep::Eof;
         }
         if let Some(step) = self.drain_step() {
@@ -575,11 +731,11 @@ where
                 .unwrap_or(TrackStep::StateChanged);
         }
         if !self.warp.accepts_input() {
-            return TrackStep::Failed;
+            return Self::failed_quantum();
         }
 
         match self.source.step_track() {
-            TrackStep::Produced(Fetch::Data { data, epoch, .. }) => {
+            TrackStep::Produced(Fetch::Data { data, .. }) => {
                 if data.spec() == self.spec
                     && self.prepared_frames.is_none()
                     && self
@@ -587,11 +743,10 @@ where
                         .is_ok_and(|frames| frames.get() == data.frames())
                 {
                     return self
-                        .render_source_quantum(data, epoch)
+                        .render_source_quantum(data)
                         .map_or(TrackStep::StateChanged, TrackStep::Produced);
                 }
                 self.pending_input = Some(PendingInput {
-                    epoch,
                     chunk: data,
                     consumed_frames: 0,
                 });
@@ -599,14 +754,14 @@ where
             }
             TrackStep::Produced(fetch) => TrackStep::Produced(fetch),
             TrackStep::Eof => {
-                self.begin_drain(self.source.decode_epoch());
+                self.begin_drain();
                 let frames = self.staged_frames();
                 if frames == 0 {
                     TrackStep::StateChanged
                 } else {
                     let Some(frames) = self.warp.prepare_terminal_quantum(frames) else {
                         self.quantum_failed = true;
-                        return TrackStep::Failed;
+                        return Self::failed_quantum();
                     };
                     self.prepared_frames = Some(frames.get());
                     self.render_staged(frames.get())
@@ -617,14 +772,16 @@ where
                 TrackStep::StateChanged
             }
             TrackStep::Blocked(reason) => TrackStep::Blocked(reason),
-            TrackStep::Failed => TrackStep::Failed,
+            TrackStep::Failed(error) => TrackStep::Failed(error),
         }
     }
 
     delegate::delegate! {
         to self.source {
-            fn decode_epoch(&self) -> u64;
-            fn commit_source_end(&mut self, source_end: SourceEnd, epoch: u64);
+            fn commit_source_end(&mut self, source_end: SourceEnd);
+            fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
+            fn set_host_sample_rate(&mut self, rate: NonZeroU32);
+            fn host_sample_rate(&self) -> Option<NonZeroU32>;
             fn retire_chunk(&self, chunk: AudioChunk);
             fn finish_deferred(&mut self);
             fn warm_up(&mut self);

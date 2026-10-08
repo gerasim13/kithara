@@ -3,155 +3,72 @@ use std::num::NonZeroU32;
 use bon::bon;
 use kithara_dsp::param::SmootherConfig;
 use kithara_platform::sync::Arc;
-use kithara_warp::RenderReader;
-use num_traits::cast::{AsPrimitive, ToPrimitive};
+use kithara_signal::{SegmentId, SessionFrame};
 
 use super::{PlayerResource, fade::TrackFade, gate::TrackGate};
 use crate::{
-    CrossfadeSettings, ServiceClass,
-    bridge::{Fade, FadeDir, SlotState},
+    CrossfadeCurve, CrossfadeSettings,
+    bridge::{Fade, FadeDir, SlotMark, SlotState},
     consts::DEFAULT_DECLICK,
 };
 
-/// The track a mixer slot holds: its consumer, its transport and its envelope.
-///
-/// A track that is not playing has its gate shut, so it is silent and not read, and holds its
-/// position until it is started again.
-#[derive(fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
+/// A slot's packet consumer and data-driven envelope.
 pub struct PlayerTrack {
     pub(super) resource: Box<PlayerResource>,
     pub(super) fade: TrackFade,
     pub(super) gate: TrackGate,
-    #[field(get, copy)]
     pub(super) state: SlotState,
-    /// Last observed duration snapshot.
-    ///
-    /// Mirrors `PlayerResource::duration()` (post-gapless-trim, visible
-    /// duration) captured under the resource lock.
-    pub(super) observed_duration: f64,
-    /// Cumulative *media* frames this track has served into the mix output,
-    /// scaled by the resource's current effective playback rate.
-    ///
-    /// The source of truth for the published position, so it reflects what
-    /// has been rendered to the audio output, not the decoder's pre-buffered
-    /// position.
-    pub(super) served_media_frames: f64,
-    pub(super) sample_rate: u32,
+    pub(super) gap: u32,
+    pub(super) stop_at: Option<SessionFrame>,
+    pub(super) stop_resume: Option<SlotMark>,
+    sample_rate: NonZeroU32,
+    declick: SmootherConfig,
 }
 
 #[bon]
 impl PlayerTrack {
-    /// A stopped track over `resource`: silent and not read until it is started.
     #[builder]
     #[must_use]
     pub fn new(
-        #[builder(finish_fn)] resource: Box<PlayerResource>,
+        #[builder(finish_fn)] mut resource: Box<PlayerResource>,
         sample_rate: NonZeroU32,
-        /// The ramp of the track's start and stop.
-        #[builder(default = DEFAULT_DECLICK)]
-        declick: SmootherConfig,
+        #[builder(default = DEFAULT_DECLICK)] declick: SmootherConfig,
+        #[builder(default = SegmentId::FIRST)] segment: SegmentId,
     ) -> Self {
-        let observed_duration = resource.duration();
-        let mut fade = TrackFade::default();
-        fade.play(sample_rate);
-        let track = Self {
+        resource.select_segment(segment);
+        Self {
             resource,
-            observed_duration,
-            fade,
-            state: SlotState::Stopped,
+            fade: TrackFade::default(),
             gate: TrackGate::new(false, declick, sample_rate),
-            sample_rate: sample_rate.get(),
-            served_media_frames: 0.0,
-        };
-        track.update_service_class();
-        track
-    }
-
-    fn rate(&self) -> NonZeroU32 {
-        NonZeroU32::new(self.sample_rate).unwrap_or(NonZeroU32::MIN)
-    }
-
-    /// Let the track sound from the next frame it renders, entering with `fade`.
-    pub fn start(&mut self, fade: Fade) {
-        let rate = self.rate();
-        match fade {
-            Fade::Declick => {
-                self.fade.play(rate);
-                self.gate.steer(true);
-            }
-            Fade::Crossfade(settings) => {
-                self.fade.stop(rate);
-                self.fade.fade_in(settings, rate);
-                self.gate.steer(true);
-                self.gate.snap();
-            }
-        }
-        self.set_state(SlotState::Playing);
-    }
-
-    /// Take the track out from the next frame it renders with `fade`; once silent it is not read.
-    pub fn stop(&mut self, fade: Fade) {
-        match fade {
-            Fade::Declick => self.gate.steer(false),
-            Fade::Crossfade(settings) => self.fade.fade_out(settings, self.rate()),
-        }
-        if self.state != SlotState::Playing {
-            self.shut();
+            state: SlotState::Stopped,
+            gap: 0,
+            stop_at: None,
+            stop_resume: None,
+            sample_rate,
+            declick,
         }
     }
 
-    /// Ramp the envelope from its gain on the next frame along one half of `settings`.
-    pub fn fade(&mut self, settings: CrossfadeSettings, dir: FadeDir) {
-        let rate = self.rate();
-        match dir {
-            FadeDir::In => self.fade.fade_in(settings, rate),
-            FadeDir::Out => self.fade.fade_out(settings, rate),
-        }
+    #[must_use]
+    pub const fn state(&self) -> SlotState {
+        self.state
     }
 
-    /// Move the gate to where it is steered at once.
-    pub(crate) fn snap_gate(&mut self) {
-        self.gate.snap();
+    #[must_use]
+    pub fn segment(&self) -> SegmentId {
+        self.resource.segment()
     }
 
-    /// Shut the gate at once: the track is silent from the next frame.
-    pub(super) fn shut(&mut self) {
-        self.gate.steer(false);
-        self.gate.snap();
+    #[must_use]
+    pub fn mark(&self, session: SessionFrame) -> Option<SlotMark> {
+        self.resource.mark(session)
     }
 
-    delegate::delegate! {
-        to self.resource {
-            /// Cached span in seconds: how much of the source is on disk.
-            #[must_use]
-            pub fn cached_span(&self) -> f64;
-            /// Decoded-ahead frontier in seconds.
-            #[must_use]
-            pub fn decoded_frontier(&self) -> f64;
-            /// Current visible (post-gapless-trim) duration in seconds.
-            #[must_use]
-            #[expr(observed_duration(self.observed_duration, $))]
-            pub fn duration(&self) -> f64;
-            /// Control-plane handle used to begin this track's seeks off the audio thread.
-            #[must_use]
-            pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>>;
-            /// Reader of the render this track publishes, when it publishes one.
-            #[must_use]
-            pub fn render_reader(&self) -> Option<RenderReader>;
-            /// Source identifier.
-            #[must_use]
-            pub fn src(&self) -> &Arc<str>;
-            /// Effective media seconds consumed per output second.
-            #[must_use]
-            pub(crate) fn playback_rate(&self) -> f32;
-            /// Apply a playback-rate target directly to this track's Warp controls.
-            #[call(apply_playback_rate)]
-            pub fn set_playback_rate(&mut self, rate: f32);
-        }
+    #[must_use]
+    pub fn position(&self) -> f64 {
+        self.resource.position().as_secs_f64()
     }
 
-    /// The envelope's gain on the last mixed frame.
     #[must_use]
     pub fn gain(&self) -> f32 {
         if self.state == SlotState::Playing {
@@ -161,89 +78,130 @@ impl PlayerTrack {
         }
     }
 
-    /// Current media position in seconds.
-    ///
-    /// Tracks `served_media_frames / sample_rate` — i.e. what has actually
-    /// been mixed into the output, on the media clock — so the value matches
-    /// `duration` instead of the decoder's pre-buffered position.
-    #[must_use]
-    pub fn position(&self) -> f64 {
-        let sample_rate = self.sample_rate.max(1);
-        self.served_media_frames / f64::from(sample_rate)
-    }
-
-    /// Re-base the track on a seek the control thread already begun.
-    ///
-    /// Lock-free, so it is safe from the audio callback: it drops what the feeder buffered and
-    /// moves the media clock, while the begin half of the seek happened on the control thread
-    /// through [`PlayerResource::seek_handle`]. A track that ended stands stopped at the new
-    /// position.
-    pub fn seek(&mut self, seconds: f64) {
-        self.resource.reset_for_seek();
-        let frames = seek_frame_index(seconds, self.sample_rate, self.observed_duration);
-        self.served_media_frames = AsPrimitive::as_(frames);
-        if self.state == SlotState::Ended {
-            self.set_state(SlotState::Stopped);
+    delegate::delegate! {
+        to self.resource {
+            #[must_use]
+            pub fn duration(&self) -> f64;
+            #[must_use]
+            pub fn decoded_frontier(&self) -> f64;
+            #[must_use]
+            pub fn cached_span(&self) -> f64;
+            #[must_use]
+            pub fn src(&self) -> &Arc<str>;
         }
     }
 
-    /// Propagate a stream sample-rate change to the resource and envelopes.
+    fn settings(&self, fade: Fade) -> CrossfadeSettings {
+        match fade {
+            Fade::Declick => CrossfadeSettings {
+                duration: self.declick.smooth_seconds.max(0.0),
+                curve: CrossfadeCurve::Linear,
+                depth: 0.0,
+                position: 0.5,
+            },
+            Fade::Crossfade(settings) => settings,
+        }
+    }
+
+    pub fn start(&mut self, fade: Fade) {
+        self.fade.fade_in(self.settings(fade), self.sample_rate);
+        if self.fade.remaining() == 0 {
+            self.fade.play(self.sample_rate);
+        }
+        self.gate.steer(true);
+        self.gate.snap();
+        self.state = SlotState::Playing;
+        self.gap = 0;
+        self.resource.set_playing(true);
+    }
+
+    pub(crate) fn stop(&mut self, fade: Fade, at: SessionFrame) {
+        self.gap = 0;
+        self.stop_resume = None;
+        if self.state == SlotState::Playing {
+            self.fade.fade_out(self.settings(fade), self.sample_rate);
+            let frames = i64::try_from(self.fade.remaining()).unwrap_or(i64::MAX);
+            self.stop_at = Some(SessionFrame::new(i64::from(at).saturating_add(frames)));
+            if self.fade.remaining() > 0 {
+                return;
+            }
+        } else {
+            self.stop_at = Some(at);
+        }
+        self.settle_stop();
+    }
+
+    pub fn fade(&mut self, settings: CrossfadeSettings, dir: FadeDir) {
+        match dir {
+            FadeDir::In => self.fade.fade_in(settings, self.sample_rate),
+            FadeDir::Out => self.fade.fade_out(settings, self.sample_rate),
+        }
+        if dir == FadeDir::Out && self.fade.remaining() == 0 {
+            self.settle_stop();
+        }
+    }
+
+    pub(crate) fn adopt(&mut self, segment: SegmentId) {
+        let playing = self.state == SlotState::Playing || self.state == SlotState::Ended;
+        self.resource.select_segment(segment);
+        self.gap = 0;
+        if playing {
+            self.fade.stop(self.sample_rate);
+            self.start(Fade::Declick);
+        }
+    }
+
+    pub(crate) fn recycle_obsolete(&mut self, budget: &mut usize) {
+        self.resource.refresh_mark(budget);
+        if self.state == SlotState::Stopped && self.stop_at.is_some() {
+            self.settle_stop();
+        }
+    }
+
+    pub(crate) fn stop_resume(&self) -> Option<SlotMark> {
+        self.stop_resume
+    }
+
+    pub(crate) fn clear_stop(&mut self) {
+        self.stop_at = None;
+        self.stop_resume = None;
+    }
+
+    pub(crate) fn interrupt_stop(&mut self) -> Option<SlotMark> {
+        let resume = self.stop_resume;
+        self.clear_stop();
+        resume
+    }
+
+    pub(super) fn settle_stop(&mut self) {
+        self.state = SlotState::Stopped;
+        self.shut();
+        self.fade.stop(self.sample_rate);
+        if let Some(at) = self.stop_at {
+            self.stop_resume = self.resource.mark(at);
+        }
+    }
+
+    pub(crate) fn snap_gate(&mut self) {
+        self.gate.snap();
+    }
+
+    pub(in crate::rt) fn shut(&mut self) {
+        self.gate.steer(false);
+        self.gate.snap();
+        self.resource.set_playing(false);
+    }
+
     pub fn set_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
-        self.resource.set_host_sample_rate(sample_rate);
         self.fade.update_sample_rate(sample_rate);
         self.gate.update_sample_rate(sample_rate);
-        self.sample_rate = sample_rate.get();
+        self.sample_rate = sample_rate;
     }
 
-    /// Hand the consumer back, for the receipt that returns it off the audio thread.
     #[must_use]
-    pub fn into_resource(self) -> Box<PlayerResource> {
+    pub fn into_resource(mut self) -> Box<PlayerResource> {
+        self.resource.set_playing(false);
         self.resource
-    }
-
-    pub(super) fn set_state(&mut self, state: SlotState) {
-        if self.state != state {
-            self.state = state;
-            self.update_service_class();
-        }
-    }
-
-    /// Map the track's state to the shared worker's scheduling priority.
-    fn update_service_class(&self) {
-        self.resource
-            .set_service_class(service_class_for_state(self.state));
-    }
-}
-
-fn observed_duration(observed: f64, resource: f64) -> f64 {
-    if observed > 0.0 { observed } else { resource }
-}
-
-fn seek_frame_index(seconds: f64, sample_rate: u32, duration: f64) -> u64 {
-    let sample_rate = sample_rate.max(1);
-    let target_seconds = if seconds.is_nan() {
-        0.0
-    } else if seconds.is_finite() {
-        seconds.max(0.0)
-    } else if seconds.is_sign_positive() {
-        duration.max(0.0)
-    } else {
-        0.0
-    };
-    let bounded_seconds = if duration > 0.0 {
-        target_seconds.min(duration)
-    } else {
-        target_seconds
-    };
-    let frames = bounded_seconds * f64::from(sample_rate);
-    ToPrimitive::to_u64(&frames).unwrap_or(0)
-}
-
-const fn service_class_for_state(state: SlotState) -> ServiceClass {
-    match state {
-        SlotState::Playing => ServiceClass::Audible,
-        SlotState::Stopped => ServiceClass::Warm,
-        SlotState::Empty | SlotState::Ended => ServiceClass::Idle,
     }
 }
 

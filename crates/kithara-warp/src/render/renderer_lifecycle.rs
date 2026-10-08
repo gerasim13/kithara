@@ -300,9 +300,15 @@ where
         self.emit(Some(samples), held_source_frames)
     }
 
-    fn process_unity(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+    fn process_unity(&mut self, mut chunk: AudioChunk) -> Option<AudioChunk> {
         let channels = usize::from(self.spec.channels.max(1));
         if !self.active && self.pending_frames(channels) == 0 {
+            if let Some(resident) = self.residency.as_mut()
+                && let Err(error) = resident.blend_replacement(&mut chunk.samples, channels)
+            {
+                warn!(%error, "time-stretch passthrough crossfade failed");
+                return None;
+            }
             self.record_rendered_source_end(chunk.meta, 0);
             return Some(chunk);
         }
@@ -394,7 +400,9 @@ where
         }
         let snapshot = self.context.load();
         if self.reprime_pending {
-            self.retire_for_reprime();
+            if let Err(error) = self.retire_for_reprime() {
+                warn!(%error, "time-stretch re-prime retirement failed");
+            }
             return None;
         }
         if let Some(scratch) = self.scratch.as_mut() {
@@ -566,7 +574,7 @@ where
 impl<S: HasPool<f32>> WarpRenderer<S> {
     /// Retire the running engine's tail into the replacement the re-primed
     /// engine fades from, leaving the held source in the residency.
-    fn retire_for_reprime(&mut self) {
+    pub(super) fn retire_for_reprime(&mut self) -> Result<(), ElasticError> {
         match self.retain_replacement() {
             Ok(()) => {
                 if let Some(pending) = self.pending_source.as_mut() {
@@ -575,11 +583,12 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 self.pending_meta = None;
                 self.output_remainder = 0.0;
                 self.resident_feed = None;
+                Ok(())
             }
             Err(error) => {
-                warn!(%error, "time-stretch re-prime retirement failed");
                 self.retire_engine();
                 self.clear_render_state();
+                Err(error)
             }
         }
     }

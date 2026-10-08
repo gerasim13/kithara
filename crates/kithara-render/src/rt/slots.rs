@@ -27,9 +27,17 @@ impl TrackSlots {
         self.slots.get_mut(slot.index())?.as_mut()
     }
 
-    /// Put `track` into `slot`, handing back the track it held.
-    pub(crate) fn put(&mut self, slot: Slot, track: PlayerTrack) -> Option<PlayerTrack> {
-        self.slots.get_mut(slot.index())?.replace(track)
+    /// Returns ownership intact if the slot is occupied or outside the deck.
+    pub(crate) fn put(&mut self, slot: Slot, track: PlayerTrack) -> Result<(), PlayerTrack> {
+        let Some(entry) = self
+            .slots
+            .get_mut(slot.index())
+            .filter(|entry| entry.is_none())
+        else {
+            return Err(track);
+        };
+        *entry = Some(track);
+        Ok(())
     }
 
     /// Take the track out of `slot`.
@@ -37,9 +45,15 @@ impl TrackSlots {
         self.slots.get_mut(slot.index())?.take()
     }
 
-    /// Whether `slot` holds a track.
-    pub(crate) fn is_held(&self, slot: Slot) -> bool {
-        self.at(slot).is_some()
+    pub(crate) fn replace(
+        &mut self,
+        slot: Slot,
+        track: PlayerTrack,
+    ) -> Result<PlayerTrack, PlayerTrack> {
+        let Some(current) = self.slots.get_mut(slot.index()).and_then(Option::as_mut) else {
+            return Err(track);
+        };
+        Ok(std::mem::replace(current, track))
     }
 
     pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = (Slot, &mut PlayerTrack)> {
@@ -52,10 +66,6 @@ impl TrackSlots {
     /// Every slot, held or empty, in order.
     pub(crate) fn slots(&self) -> impl Iterator<Item = Slot> + use<> {
         (0..self.slots.len()).map(slot)
-    }
-
-    pub(crate) fn count(&self) -> usize {
-        self.slots.len()
     }
 }
 

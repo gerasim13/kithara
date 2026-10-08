@@ -32,9 +32,28 @@ impl SlotTail {
     }
 
     /// Fill the tail from `track`'s next frames, ramped from its gain down to silence.
-    pub(crate) fn fill(&mut self, track: &mut PlayerTrack, metrics: &RtMetrics) {
-        self.len = track.read_tail(&mut self.left, &mut self.right, metrics);
+    pub(crate) fn fill(
+        &mut self,
+        track: &mut PlayerTrack,
+        frames: usize,
+        metrics: &RtMetrics,
+        budget: &mut usize,
+    ) {
+        if self.is_sounding() {
+            return;
+        }
+        let frames = frames.min(self.left.len()).min(self.right.len());
+        self.len = track.read_tail(
+            &mut self.left[..frames],
+            &mut self.right[..frames],
+            metrics,
+            budget,
+        );
         self.pos = 0;
+    }
+
+    pub(crate) fn advance(&mut self, frames: usize) {
+        self.pos = self.pos.saturating_add(frames).min(self.len);
     }
 
     /// Add the tail's next frames into `range` of a stereo pair.
@@ -57,5 +76,9 @@ impl SlotTail {
     /// Whether frames are left to mix.
     pub(crate) const fn is_sounding(&self) -> bool {
         self.pos < self.len
+    }
+
+    pub(crate) fn capacity(&self) -> usize {
+        self.left.len().min(self.right.len())
     }
 }

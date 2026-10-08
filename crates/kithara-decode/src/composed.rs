@@ -76,7 +76,6 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec, S> {
     /// Set on every seek; the next emitted chunk may re-anchor the PCM cursor.
     resync_frame_offset_to_pts: bool,
     zero_frame_count: u32,
-    epoch: u64,
     /// Cumulative frame counter. Anchored to `landed_at` on seek (so the
     /// next chunk's `frame_offset / sample_rate ≈ timestamp`) and
     /// incremented by `decoded.frames` per emitted chunk. Tracking it
@@ -94,7 +93,6 @@ pub(crate) struct DecoderRuntime<S> {
     pub(crate) byte_len_handle: Option<Arc<AtomicU64>>,
     pub(crate) hooks: Option<BoxedEventSink>,
     pub(crate) pools: PoolRegion<S>,
-    pub(crate) epoch: u64,
 }
 
 enum Prefill {
@@ -121,7 +119,6 @@ where
             pools: runtime.pools,
             output: None,
             prefill: Prefill::Needed,
-            epoch: runtime.epoch,
             byte_len_handle: runtime.byte_len_handle,
             hooks: runtime.hooks,
             frame_offset: 0,
@@ -176,9 +173,9 @@ where
             source_byte_offset: None,
             variant_index: self.demuxer.current_variant_index(),
             spec: live_spec,
-            epoch: self.epoch,
             render_revision: 0,
             mapping_revision: None,
+            ..AudioChunkInfo::default()
         };
         AudioChunk::new(meta, buf)
     }

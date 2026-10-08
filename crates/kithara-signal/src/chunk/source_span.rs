@@ -3,6 +3,8 @@ use std::{
     ops::Range,
 };
 
+use kithara_platform::time::Duration;
+
 /// Decoded-source interval represented by a physical output interval.
 ///
 /// Slices retain the exact rational source position and slope. Integer source
@@ -25,6 +27,17 @@ pub struct SourceSpan {
 }
 
 impl SourceSpan {
+    /// Source position at an output boundary, retaining rational phase.
+    #[must_use]
+    pub fn position_at(self, output_frame: u64) -> Option<Duration> {
+        let point = self.for_output_range(output_frame..output_frame)?;
+        let denominator = u128::from(point.denominator.get()) * u128::from(point.sample_rate.get());
+        let seconds = u64::try_from(point.numerator / denominator).ok()?;
+        let nanos =
+            u32::try_from((point.numerator % denominator) * 1_000_000_000 / denominator).ok()?;
+        Some(Duration::new(seconds, nanos))
+    }
+
     /// Creates a mapping for a nonempty physical output interval.
     #[must_use]
     pub fn new(start: u64, end: u64, sample_rate: NonZeroU32, output_frames: u64) -> Option<Self> {
@@ -118,6 +131,18 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+
+    #[kithara::test]
+    fn output_positions_retain_fractional_source_phase() {
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let span = SourceSpan::new(100, 292, rate, 128).expect("span");
+        let sliced = span.for_output_range(1..127).expect("slice");
+        assert_eq!(span.position_at(1), Some(Duration::from_nanos(2_114_583)));
+        assert_eq!(sliced.position_at(1), span.position_at(2));
+        assert_eq!(span.position_at(129), None);
+        let large = SourceSpan::new(u64::MAX - 192, u64::MAX, rate, 128).expect("span");
+        assert!(large.position_at(127).is_some());
+    }
 
     #[kithara::test]
     fn nested_source_slices_keep_the_original_rational_phase() {

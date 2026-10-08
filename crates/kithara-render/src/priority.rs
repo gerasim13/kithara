@@ -1,4 +1,4 @@
-use kithara_worker::{Priority, TaskControl};
+use kithara_worker::Priority;
 use serde::Serialize;
 
 /// Priority class for playback scheduling.
@@ -21,24 +21,6 @@ impl From<ServiceClass> for Priority {
             ServiceClass::Warm => 1,
             ServiceClass::Audible => 2,
         })
-    }
-}
-
-/// The worker priority of one track's decode task, set by the deck slot
-/// from the state of its track.
-#[derive(Clone)]
-pub struct TrackPriority {
-    control: TaskControl,
-}
-
-impl TrackPriority {
-    #[must_use]
-    pub const fn new(control: TaskControl) -> Self {
-        Self { control }
-    }
-
-    pub(crate) fn set(&self, class: ServiceClass) {
-        self.control.set_priority(class.into());
     }
 }
 

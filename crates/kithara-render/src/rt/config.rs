@@ -3,6 +3,7 @@ use std::num::NonZeroUsize;
 use kithara_config::Config;
 use kithara_dsp::param::SmootherConfig;
 use kithara_signal::FrameCount;
+use num_traits::ToPrimitive;
 
 use crate::{
     bridge::DeckMixSettings,
@@ -23,7 +24,29 @@ pub struct DeckMixerConfig {
     /// Default: 512.
     #[config(builder(default = DEFAULT_EVICT_FADE))]
     evict_fade: FrameCount,
+    /// Maximum obsolete packets recycled by each slot in one block.
+    #[config(builder(default = crate::consts::CAPACITY))]
+    recycle_per_block: NonZeroUsize,
     /// How loud the deck sounds before its owner changes it.
     #[config(builder(default))]
     mix: DeckMixSettings,
+}
+
+impl DeckMixerConfig {
+    pub(crate) fn declick_frames(self, sample_rate: std::num::NonZeroU32) -> FrameCount {
+        declick_frame_count(self.declick, sample_rate)
+    }
+}
+
+pub(crate) fn declick_frame_count(
+    declick: SmootherConfig,
+    sample_rate: std::num::NonZeroU32,
+) -> FrameCount {
+    let rate = sample_rate.get().to_f32().unwrap_or(f32::MAX);
+    FrameCount::new(
+        (declick.smooth_seconds.max(0.0) * rate)
+            .round()
+            .to_usize()
+            .unwrap_or(usize::MAX),
+    )
 }

@@ -8,6 +8,7 @@ mod coverage;
 mod error;
 mod fader;
 mod sample;
+mod segment;
 mod session;
 mod spec;
 #[cfg(test)]
@@ -21,6 +22,7 @@ pub use coverage::{CoverageRead, CoverageWrite, FrameCoverage, FrameSpan};
 pub use error::SignalError;
 pub use fader::FaderValue;
 pub use sample::sanitize_sample;
+pub use segment::SegmentId;
 pub use session::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
 pub use spec::AudioSpec;
 pub use units::{FrameCount, SampleCount};

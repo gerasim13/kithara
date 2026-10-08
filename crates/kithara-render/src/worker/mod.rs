@@ -3,14 +3,13 @@ mod core;
 mod load;
 mod node;
 mod reader;
-mod scheduler;
+pub(crate) mod scheduler;
 mod track;
 
 pub use core::{LoadRefusal, PlayWorker};
 
 pub use config::{PlayWorkerConfig, PlayWorkerConfigPatch};
 pub use load::{EngineLoad, EngineLoadSnapshot};
-pub(crate) use node::DecoderNode;
-pub use reader::RegisteredAudio;
-pub(crate) use reader::TrackLease;
+pub use node::DecoderNode;
+pub use reader::{PcmPacket, PcmReceiver};
 pub use track::TrackConfig;

@@ -16,3 +16,13 @@ impl kithara_stream::WorkerWake for Wake {
         }
     }
 }
+
+impl std::task::Wake for Wake {
+    fn wake(self: std::sync::Arc<Self>) {
+        kithara_stream::WorkerWake::wake(&*self);
+    }
+
+    fn wake_by_ref(self: &std::sync::Arc<Self>) {
+        kithara_stream::WorkerWake::wake(&**self);
+    }
+}

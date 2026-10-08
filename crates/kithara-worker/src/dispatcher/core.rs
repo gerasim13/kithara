@@ -1,5 +1,6 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+use kithara_config::{Config, ConfigOwner};
 use kithara_platform::{
     CancelToken,
     sync::mpsc::{self, TryRecvError},
@@ -147,7 +148,6 @@ fn drain_commands(
                     cancel_slot(&mut slot);
                 } else {
                     slot.task.warm_up();
-                    slot.priority = slot.control.priority();
                     slots.push(slot);
                     *needs_reorder = true;
                 }
@@ -203,7 +203,10 @@ pub(super) fn remove_terminal(slots: &mut Vec<Slot>) -> bool {
 
 pub(super) fn refresh_priorities(slots: &mut [Slot], needs_reorder: &mut bool) {
     for slot in slots {
-        let priority = slot.control.priority();
+        let priority = slot
+            .task
+            .priority()
+            .unwrap_or(slot.control.config().values().priority);
         if priority != slot.priority {
             slot.priority = priority;
             *needs_reorder = true;

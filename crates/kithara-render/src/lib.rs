@@ -16,14 +16,17 @@ pub mod rt;
 mod source;
 mod worker;
 pub use crossfade::{CrossfadeCurve, CrossfadeSettings, InvalidCrossfade};
-pub use dispatcher::{DispatcherProtocol, Open, dispatch};
+pub use dispatcher::{
+    Dispatched, DispatcherCommand, DispatcherProtocol, LaneId, LaneStart, LaneTask, LoadRequest,
+    Loaded, Open, dispatch,
+};
 use humantime_serde as _;
 #[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
-pub use lane::{LaneCommand, LaneFrame, LaneProtocol};
-pub use priority::{ServiceClass, TrackPriority};
+pub use lane::{LaneApplied, LaneCommand, LaneFrame, LaneProtocol};
+pub use priority::ServiceClass;
 pub use source::WarpSource;
 pub use worker::{
-    EngineLoad, EngineLoadSnapshot, LoadRefusal, PlayWorker, PlayWorkerConfig,
-    PlayWorkerConfigPatch, RegisteredAudio, TrackConfig,
+    DecoderNode, EngineLoad, EngineLoadSnapshot, LoadRefusal, PcmPacket, PcmReceiver, PlayWorker,
+    PlayWorkerConfig, PlayWorkerConfigPatch, TrackConfig,
 };

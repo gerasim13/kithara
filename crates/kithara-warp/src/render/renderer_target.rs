@@ -57,11 +57,12 @@ where
             ));
         }
         if !kind.capabilities().contains(BackendCapabilities::RATE) {
-            drop(reusable);
+            let residency = reusable.residency;
             let engine = Self::config_for(kind, backends, source_block_frames, spec, pools)
                 .and_then(build_engine)?;
             return Ok(PreparedTarget {
                 engine: Some(engine),
+                residency,
                 ..PreparedTarget::default()
             });
         }

@@ -1,305 +1,306 @@
+use std::{
+    future::poll_fn,
+    task::{Context, Poll},
+};
+
 use kithara_audio::{
-    AudioEvent, AudioLaneEvent, AudioSource, Fetch, PreloadGate, PreparedAudioLane, ProducerPort,
-    TrackStep, WaitingReason,
+    AudioSource, Fetch, SourceEnd, TrackStep, WaitingReason, map_decode_error_kind,
 };
-use kithara_events::DeferredBus;
-use kithara_platform::{
-    sync::Arc,
-    time::{Duration, Instant, WallInstant},
-};
-use kithara_signal::AudioChunk;
-use kithara_stream::{PlayheadWrite, SeekObserve};
+use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_decode::DecodeError;
+use kithara_platform::{sync::Arc, time::WallInstant};
+use kithara_signal::{AudioChunk, AudioChunkInfo, FrameCount, SegmentId};
+use kithara_stream::ActivityWriter;
 use kithara_test_utils::kithara;
-use kithara_worker::{Task, TickResult};
+use kithara_worker::{Priority, Task, TickResult};
+use ringbuf::traits::{Consumer, Observer, Producer};
 
-use super::EngineLoad;
+use super::{EngineLoad, PcmPacket, reader::PcmProducer};
+use crate::{ServiceClass, WarpSource, dispatcher::LaneTask};
 
-/// Per-tick state of a [`DecoderNode`].
-#[derive(Default)]
-#[non_exhaustive]
-pub(in crate::worker) struct DecoderRuntime {
-    pub(in crate::worker) last_buffer_health_emit: Option<Instant>,
-    pub(in crate::worker) last_engine_load_emit: Option<Instant>,
-    pub(in crate::worker) eof_sent: bool,
-    pub(in crate::worker) preloaded: bool,
-    pub(in crate::worker) seek_epoch: u64,
-    pub(in crate::worker) chunks_sent: usize,
+struct PendingPacket {
+    packet: PcmPacket,
+    source_end: Option<SourceEnd>,
 }
 
-/// Play-owned node that drives one still-concrete audio source.
-pub(crate) struct DecoderNode<S> {
-    emit: Arc<DeferredBus<AudioLaneEvent>>,
-    playhead: Arc<dyn PlayheadWrite>,
-    preload_gate: Arc<PreloadGate>,
-    seek_obs: Arc<dyn SeekObserve>,
-    runtime: DecoderRuntime,
+/// Worker-owned source, rendering, ring producer and transport publisher.
+pub struct DecoderNode<T, S> {
+    source: WarpSource<T, S>,
+    port: PcmProducer,
+    activity: Option<ActivityWriter>,
+    priority: ServiceClass,
+    pending: Option<PendingPacket>,
+    terminal: Option<SegmentId>,
+    load_error: Option<DecodeError>,
+    last_output: AudioChunkInfo,
     engine_load: Option<Arc<EngineLoad>>,
-    port: ProducerPort,
-    source: S,
-    preload_chunks: usize,
+    pools: PoolRegion<S>,
 }
 
-impl<S> DecoderNode<S> {
-    const BUFFER_HEALTH_EMIT_MIN: Duration = Duration::from_millis(250);
-    const ENGINE_LOAD_EMIT_MIN: Duration = Duration::from_millis(500);
-
-    /// Open the one-shot preload latch that resource construction waits on.
-    ///
-    /// Openers are the chunk count, a terminal step (EOF, failure, cancel),
-    /// and an upstream park that has audio behind it. The park belongs here
-    /// because the latch gates on the decoder, not on the network: once the
-    /// producer is waiting for bytes, every chunk the delivered data can
-    /// yield has been yielded, and how many that is depends on where the
-    /// demuxer's buffered read lands relative to the delivered segment's end.
-    /// Keeping the latch shut would make construction — which owns no
-    /// deadline — wait for a fetch the loader already owns and already bounds.
-    fn complete_preload(&mut self) {
-        if !self.runtime.preloaded {
-            self.preload_gate.signal_epoch(self.runtime.seek_epoch);
-            self.runtime.preloaded = true;
-        }
-    }
-
-    /// Open the latch for a producer that parked upstream with audio already
-    /// emitted.
-    ///
-    /// A park says the delivered bytes are spent, which only releases
-    /// construction when they yielded something: with nothing emitted the
-    /// statement is vacuous, and opening on it starts playback on a ring that
-    /// holds no audio, where the playhead cannot advance past what the first
-    /// fetch happened to deliver. That case stays shut and waits for the
-    /// quota, a terminal step, or the next chunk.
-    fn complete_preload_on_park(&mut self) {
-        if self.runtime.chunks_sent > 0 {
-            self.complete_preload();
-        }
-    }
-
-    fn mark_preload_progress(&mut self) {
-        if self.runtime.preloaded {
-            return;
-        }
-
-        self.runtime.chunks_sent += 1;
-        if self.runtime.chunks_sent >= self.preload_chunks {
-            self.complete_preload();
-        }
-    }
-
-    fn maybe_emit_buffer_health(&mut self, now: Instant) {
-        if self
-            .runtime
-            .last_buffer_health_emit
-            .is_some_and(|last| now.duration_since(last) < Self::BUFFER_HEALTH_EMIT_MIN)
-        {
-            return;
-        }
-        self.runtime.last_buffer_health_emit = Some(now);
-        let position = self.playhead.position();
-        let decoded_frontier = self.playhead.decoded_frontier();
-        let decoded_frontier_ms = decoded_frontier.as_millis().try_into().unwrap_or(u64::MAX);
-        let buffered_ms = decoded_frontier
-            .saturating_sub(position)
-            .as_millis()
-            .try_into()
-            .unwrap_or(u64::MAX);
-        self.emit.enqueue(AudioEvent::BufferHealth {
-            buffered_ms,
-            decoded_frontier_ms,
-            seek_epoch: self.runtime.seek_epoch,
-        });
-    }
-
-    fn maybe_emit_engine_load(&mut self, now: Instant) {
-        let Some(load) = self.engine_load.as_ref() else {
-            return;
-        };
-        if self
-            .runtime
-            .last_engine_load_emit
-            .is_some_and(|last| now.duration_since(last) < Self::ENGINE_LOAD_EMIT_MIN)
-        {
-            return;
-        }
-        self.runtime.last_engine_load_emit = Some(now);
-        let snapshot = load.snapshot();
-        self.emit.enqueue(AudioEvent::EngineLoad {
-            load: snapshot.load(),
-            ms_per_chunk: snapshot.ms(),
-            realtime_factor: snapshot.realtime(),
-        });
-    }
-
-    fn maybe_emit_worker_telemetry(&mut self, now: Instant) {
-        self.maybe_emit_buffer_health(now);
-        self.maybe_emit_engine_load(now);
-    }
-
-    fn record_load(&self, busy: Duration, fetch: &Fetch<AudioChunk>) {
-        if let (Some(load), Fetch::Data { data, .. }) = (self.engine_load.as_ref(), fetch) {
-            load.record(busy, data.frames(), data.spec().sample_rate.get());
-        }
-    }
-}
-
-impl<S> DecoderNode<S>
+impl<T, S> DecoderNode<T, S>
 where
-    S: AudioSource<Chunk = AudioChunk>,
+    T: AudioSource<Chunk = AudioChunk>,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
-    fn sync_seek_epoch(&mut self) {
-        if !self.seek_obs.take_decoder_seek() {
-            return;
-        }
-        let current = self.seek_obs.epoch();
-        if current == self.runtime.seek_epoch {
-            return;
-        }
-
-        self.preload_gate.rearm();
-        self.runtime = DecoderRuntime {
-            seek_epoch: current,
-            ..Default::default()
-        };
-    }
-}
-
-impl<S> DecoderNode<S>
-where
-    S: AudioSource<Chunk = AudioChunk>,
-{
-    pub(in crate::worker) fn new(
-        lane: PreparedAudioLane<S>,
+    pub(super) fn new(
+        source: WarpSource<T, S>,
+        port: PcmProducer,
+        activity: Option<ActivityWriter>,
+        initial: AudioChunkInfo,
         engine_load: Option<Arc<EngineLoad>>,
+        pools: PoolRegion<S>,
     ) -> Self {
-        let seek_obs = lane.source.seek_observe();
-        let seek_epoch = seek_obs.epoch();
         Self {
-            seek_obs,
+            source,
+            port,
+            activity,
+            priority: ServiceClass::Warm,
+            pending: None,
+            terminal: None,
+            load_error: None,
+            last_output: initial,
             engine_load,
-            source: lane.source,
-            port: lane.port,
-            playhead: lane.playhead,
-            emit: lane.emit,
-            preload_gate: lane.preload_gate,
-            preload_chunks: lane.preload_chunks,
-            runtime: DecoderRuntime {
-                seek_epoch,
-                ..Default::default()
-            },
+            pools,
         }
+    }
+
+    pub(super) async fn preload(&mut self) -> Result<(), DecodeError> {
+        self.warm_up();
+        poll_fn(|cx| {
+            let _ = self.source.poll_commands(cx);
+            self.recycle();
+            let result = self.tick();
+            if let Some(error) = self.load_error.take() {
+                return Poll::Ready(Err(error));
+            }
+            if self.source.is_preloaded() || self.terminal.is_some() {
+                return Poll::Ready(Ok(()));
+            }
+            if result == TickResult::Progress {
+                cx.waker().wake_by_ref();
+            }
+            Poll::Pending
+        })
+        .await
+    }
+
+    pub(super) fn engine_latency(&self) -> FrameCount {
+        self.source.engine_latency()
+    }
+
+    fn synchronize(&mut self) -> Result<(), DecodeError> {
+        self.source.service_commands()?;
+        let segment = self.source.cursor().segment;
+        if self.terminal.is_some_and(|terminal| terminal != segment) {
+            self.terminal = None;
+        }
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| match &pending.packet {
+                PcmPacket::Chunk(chunk) => chunk.meta.segment != segment,
+                PcmPacket::Failed {
+                    segment: pending_segment,
+                    ..
+                } => *pending_segment != segment,
+            })
+            && let Some(pending) = self.pending.take()
+        {
+            self.retire(pending.packet);
+        }
+        Ok(())
+    }
+
+    fn retire(&self, packet: PcmPacket) {
+        if let PcmPacket::Chunk(chunk) = packet {
+            self.source.retire_chunk(chunk);
+        }
+    }
+
+    fn fail(&mut self, error: DecodeError) {
+        let kind = map_decode_error_kind(&error);
+        self.load_error = Some(error);
+        self.pending = Some(PendingPacket {
+            packet: PcmPacket::Failed {
+                segment: self.source.cursor().segment,
+                kind,
+            },
+            source_end: None,
+        });
+    }
+
+    fn admit(&mut self) -> TickResult {
+        let Some(pending) = self.pending.take() else {
+            return TickResult::Waiting;
+        };
+        let (meta, terminal) = match &pending.packet {
+            PcmPacket::Chunk(chunk) => (Some(chunk.meta), chunk.meta.end_of_track),
+            PcmPacket::Failed { .. } => (None, true),
+        };
+        match self.port.forward.try_push(pending.packet) {
+            Ok(()) => {
+                if let Some(meta) = meta {
+                    self.last_output = meta;
+                    if meta.segment == self.source.cursor().segment {
+                        if let Some(end) = pending.source_end {
+                            self.source.commit_source_end(end);
+                        }
+                        if !meta.end_of_track && meta.frames > 0 {
+                            self.source.admitted();
+                        }
+                        kithara::probe_event!(chunk_admitted, segment = meta.segment.get());
+                    }
+                }
+                if terminal {
+                    self.terminal = Some(self.source.cursor().segment);
+                }
+                self.port.signal();
+                TickResult::Progress
+            }
+            Err(packet) => {
+                self.pending = Some(PendingPacket {
+                    packet,
+                    source_end: pending.source_end,
+                });
+                TickResult::Backpressured
+            }
+        }
+    }
+
+    fn eof(&mut self) {
+        let cursor = self.source.cursor();
+        let position = self
+            .source
+            .position()
+            .unwrap_or(self.last_output.end_timestamp);
+        let mut samples = self.pools.get::<f32>();
+        samples.clear();
+        let meta = AudioChunkInfo {
+            segment: cursor.segment,
+            lane_frame: cursor.frame,
+            timestamp: position,
+            end_timestamp: position,
+            frames: 0,
+            end_of_track: true,
+            source_span: None,
+            ..self.last_output
+        };
+        self.pending = Some(PendingPacket {
+            packet: PcmPacket::Chunk(AudioChunk::new(meta, samples)),
+            source_end: None,
+        });
     }
 }
 
-impl<S> Task for DecoderNode<S>
+impl<T, S> LaneTask for DecoderNode<T, S>
 where
-    S: AudioSource<Chunk = AudioChunk>,
+    T: AudioSource<Chunk = AudioChunk>,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
+    fn set_priority(&mut self, class: ServiceClass) {
+        self.priority = class;
+    }
+
+    fn poll_commands(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+        self.source.poll_commands(cx)
+    }
+}
+
+impl<T, S> Task for DecoderNode<T, S>
+where
+    T: AudioSource<Chunk = AudioChunk>,
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    fn priority(&self) -> Option<Priority> {
+        Some(self.priority.into())
+    }
+
     fn on_cancel(&mut self) {
-        self.complete_preload();
+        if let Some(activity) = &mut self.activity {
+            activity.set_playing(false);
+        }
     }
 
     fn recycle(&mut self) {
-        self.port.recycle();
+        while let Some(packet) = self.port.reverse.try_pop() {
+            self.retire(packet);
+        }
+        if let Some(activity) = &mut self.activity {
+            activity.set_playing(*self.port.playing.read());
+        }
         let _ = self.source.prepare_deferred();
         self.source.finish_deferred();
-        self.port.flush_wake();
     }
 
     #[kithara::measure(label = "play.decoder.tick")]
-    #[kithara::rtsan_forbid_blocking]
     fn tick(&mut self) -> TickResult {
-        self.sync_seek_epoch();
-
-        // A pass reports one `Backpressured` for two unrelated reasons, and the
-        // count alone cannot separate them: the playback ring has no room for
-        // the next chunk, or the source is spent and its end marker is already
-        // queued. The first clears when the reader drains; the second never
-        // does. Naming each park at the site that takes it is what tells a
-        // wedge that is waiting for the reader from one that is already over.
-        if !self.port.can_push_direct() {
-            kithara::probe_event!(
-                decoder_ring_full,
-                epoch = self.runtime.seek_epoch,
-                chunks_sent = self.runtime.chunks_sent
-            );
+        if let Err(error) = self.synchronize() {
+            self.fail(error);
+        }
+        if self.pending.is_some() {
+            return self.admit();
+        }
+        if self.port.forward.is_full() {
             return TickResult::Backpressured;
         }
-
-        if self.runtime.chunks_sent >= self.preload_chunks && !self.runtime.preloaded {
-            self.complete_preload();
-        }
-
         let start = WallInstant::now();
-        let result = match self.source.step_track() {
-            TrackStep::Produced(fetch) => {
-                self.record_load(start.elapsed(), &fetch);
-                self.runtime.eof_sent = false;
-                let (frontier, source_end) = match &fetch {
-                    Fetch::Data {
-                        data,
-                        epoch,
-                        source_end,
-                    } => (
-                        Some(data.meta.end_timestamp),
-                        source_end.map(|source_end| (source_end, *epoch)),
-                    ),
-                    _ => (None, None),
-                };
-                self.port.push_direct(fetch);
-                kithara::probe_event!(chunk_admitted, epoch = self.runtime.seek_epoch);
-                if let Some((source_end, epoch)) = source_end {
-                    self.source.commit_source_end(source_end, epoch);
+        match self.source.step_track() {
+            TrackStep::Produced(Fetch::Data { data, source_end }) => {
+                self.terminal = None;
+                if let Some(load) = &self.engine_load {
+                    load.record(
+                        start.elapsed(),
+                        data.frames(),
+                        data.spec().sample_rate.get(),
+                    );
                 }
-                if let Some(frontier) = frontier {
-                    self.playhead.set_decoded_frontier(frontier);
-                }
-                self.mark_preload_progress();
-                TickResult::Progress
+                self.pending = Some(PendingPacket {
+                    packet: PcmPacket::Chunk(data),
+                    source_end,
+                });
             }
-
+            TrackStep::Produced(Fetch::NaturalEof) | TrackStep::Eof => {
+                if self.terminal == Some(self.source.cursor().segment) {
+                    return TickResult::Backpressured;
+                }
+                self.eof();
+            }
+            TrackStep::Produced(Fetch::Failure) => {
+                if self.terminal == Some(self.source.cursor().segment) {
+                    return TickResult::Backpressured;
+                }
+                self.fail(DecodeError::InvalidData {
+                    detail: "lane source failed",
+                });
+            }
+            TrackStep::Failed(error) => {
+                if self.terminal == Some(self.source.cursor().segment) {
+                    return TickResult::Backpressured;
+                }
+                self.fail(error);
+            }
             TrackStep::StateChanged => {
-                self.runtime.eof_sent = false;
-                TickResult::Progress
+                self.terminal = None;
+                return TickResult::Progress;
             }
-
-            TrackStep::Blocked(reason) => {
-                self.complete_preload_on_park();
-                match reason {
-                    WaitingReason::WaitingDemand => TickResult::UpstreamPending,
-                    WaitingReason::Waiting | WaitingReason::WaitingMetadata => TickResult::Waiting,
-                }
+            TrackStep::Blocked(WaitingReason::WaitingDemand) => return TickResult::UpstreamPending,
+            TrackStep::Blocked(WaitingReason::Waiting | WaitingReason::WaitingMetadata) => {
+                return TickResult::Waiting;
             }
-
-            TrackStep::Eof if self.runtime.eof_sent => {
-                kithara::probe_event!(decoder_source_spent, epoch = self.runtime.seek_epoch);
-                TickResult::Backpressured
-            }
-
-            TrackStep::Eof => {
-                let epoch = self.source.decode_epoch();
-                let marker = Fetch::eof(epoch);
-                self.port.push_direct(marker);
-                self.complete_preload();
-                self.emit
-                    .enqueue(AudioEvent::EndOfStream { seek_epoch: epoch });
-                self.runtime.eof_sent = true;
-                TickResult::Progress
-            }
-
-            TrackStep::Failed => {
-                let epoch = self.source.decode_epoch();
-                let marker = Fetch::failure(epoch);
-                self.port.push_direct(marker);
-                self.complete_preload();
-                TickResult::Done
-            }
-        };
-        self.maybe_emit_worker_telemetry(Instant::now());
-        result
+        }
+        self.admit()
     }
 
     fn warm_up(&mut self) {
         self.source.warm_up();
+    }
+}
+
+impl<T, S> Drop for DecoderNode<T, S> {
+    fn drop(&mut self) {
+        if let Some(activity) = &mut self.activity {
+            activity.set_playing(false);
+        }
     }
 }
 
