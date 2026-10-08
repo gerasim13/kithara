@@ -18,8 +18,7 @@ use kithara_warp::SpeedCurve;
 use tracing::warn;
 
 use crate::{
-    GridAnswer, LinkError, TempoTrajectory, covers, entry, jump_target,
-    phase_error, speed,
+    GridAnswer, LinkError, TempoTrajectory, covers, entry, jump_target, phase_error, speed,
 };
 
 /// A player that can align itself and receive the Host's planned tempo trajectory.
@@ -330,7 +329,7 @@ impl<P> Linked<P> {
         let Some(required) = self.cue else {
             return;
         };
-        let Some(grid) = self.grid.as_ref().filter(|grid| covers(grid, required)) else {
+        let Some(grid) = self.grid.as_ref() else {
             return;
         };
         let raw = grid.as_raw();
@@ -725,6 +724,7 @@ where
 
 impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
     fn sync(&mut self, on: bool, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
+        let previous = self.mode;
         self.mode = if on { SyncMode::On } else { SyncMode::Off };
         if !on {
             if self.start_caller.is_none() {
@@ -734,36 +734,11 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
             self.alignment = None;
             return Ok(None);
         }
-        let track = self.inner.snapshot();
-        let required = track.as_ref().position;
-        let Some(grid) = self.grid.as_ref().filter(|grid| covers(grid, required)) else {
-            self.waiting = Some(Waiting::Sync { required });
-            return Ok(None);
-        };
-        if matches!(track.as_ref().status, TrackStatus::Playing { .. }) {
-            let at = self.jump_frame(out)?;
-            let (position, _speed) = self.planned::<S>(at)?;
-            if !covers(grid, position) {
-                self.waiting = Some(Waiting::Sync { required: position });
-                return Ok(None);
-            }
-            if self.lane_room() < 2 {
-                return Err(PlayError::Full("lane"));
-            }
-            let to = jump_target(position, phase_error(&self.host, grid, position, at));
-            self.inner.apply(
-                TrackCommand::SetSpeed {
-                    speed: SpeedCurve::Constant(speed(&self.host, grid, at)),
-                    at: When::At(at),
-                },
-                out,
-            )?;
-            self.correction = None;
-            self.waiting = None;
-            return self.inner.apply(TrackCommand::Jump { to, at }, out);
+        let result = self.align(out);
+        if result.is_err() {
+            self.mode = previous;
         }
-        let at = self.earliest(out)?;
-        self.inner.cue(required, speed(&self.host, grid, at), out)
+        result
     }
 
     fn retime(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>) {
@@ -815,6 +790,9 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
         }
         match answer.model {
             Ok(model) => {
+                if self.grid.as_ref() == Some(&model) {
+                    return;
+                }
                 self.grid = Some(model);
                 if self.synced() {
                     if matches!(
@@ -913,5 +891,46 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
             self.alignment = Some(false);
             warn!(?at, %error, "tempo phase correction awaits a lane");
         }
+    }
+}
+
+impl<P> Linked<P> {
+    fn align<S>(&mut self, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError>
+    where
+        P: Track<S>,
+    {
+        let track = self.inner.snapshot();
+        let required = track.as_ref().position;
+        let Some(grid) = self.grid.as_ref().filter(|grid| covers(grid, required)) else {
+            self.waiting = Some(Waiting::Sync { required });
+            return Ok(None);
+        };
+        if matches!(track.as_ref().status, TrackStatus::Playing { .. }) {
+            let at = self.jump_frame(out)?;
+            let (position, _speed) = self.planned::<S>(at)?;
+            if !covers(grid, position) {
+                self.waiting = Some(Waiting::Sync { required: position });
+                return Ok(None);
+            }
+            if self.lane_room() < 2 {
+                return Err(PlayError::Full("lane"));
+            }
+            if out.deck_available() == 0 {
+                return Err(PlayError::Full("deck"));
+            }
+            let to = jump_target(position, phase_error(&self.host, grid, position, at));
+            self.inner.apply(
+                TrackCommand::SetSpeed {
+                    speed: SpeedCurve::Constant(speed(&self.host, grid, at)),
+                    at: When::At(at),
+                },
+                out,
+            )?;
+            self.correction = None;
+            self.waiting = None;
+            return self.inner.apply(TrackCommand::Jump { to, at }, out);
+        }
+        let at = self.earliest(out)?;
+        self.inner.cue(required, speed(&self.host, grid, at), out)
     }
 }

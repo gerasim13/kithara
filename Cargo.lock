@@ -5513,6 +5513,8 @@ dependencies = [
 name = "kithara-link"
 version = "0.0.1-alpha5"
 dependencies = [
+ "kithara-assets",
+ "kithara-audio",
  "kithara-beat",
  "kithara-bufpool",
  "kithara-command",
