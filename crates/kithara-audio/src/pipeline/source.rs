@@ -40,6 +40,17 @@ enum OwnerPhase {
     },
 }
 
+fn write_failure_diagnostic(failure: TrackFailureKind, error: Option<&DecodeError>) {
+    let message = match failure {
+        TrackFailureKind::Decode { .. } => "track failed: decode error",
+        TrackFailureKind::RecreateFailed { .. } => "track failed: decoder recreation failed",
+        TrackFailureKind::SourceCancelled => "track failed: source cancelled",
+        TrackFailureKind::ChannelClosed => "track failed: channel closed",
+        TrackFailureKind::Render => "track failed: render error",
+    };
+    warn!(?failure, err = ?error, "{message}");
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -127,16 +138,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         let OwnerPhase::Failed { failure, error } = &mut self.phase else {
             return;
         };
-        let error = error.take();
-        match failure {
-            TrackFailureKind::Decode { .. } => warn!(err = ?error, "track failed: decode error"),
-            TrackFailureKind::RecreateFailed { offset } => {
-                warn!(offset, "track failed: decoder recreation failed");
-            }
-            TrackFailureKind::SourceCancelled => warn!("track failed: source cancelled"),
-            TrackFailureKind::ChannelClosed => warn!("track failed: channel closed"),
-            TrackFailureKind::Render => warn!("track failed: render error"),
-        }
+        write_failure_diagnostic(*failure, error.take().as_ref());
         self.failure_logged = true;
     }
 
@@ -595,7 +597,6 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
             self.fail(TrackFailureKind::SourceCancelled, None);
         }
         if let OwnerPhase::Failed { failure, .. } = self.phase {
-            self.finish_deferred();
             return Err(crate::AudioReadError::Stream {
                 what: "seek decoded source",
                 source: crate::FailureSource::ProducerAfterSeek { failure },
@@ -613,20 +614,11 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
             }),
             Err(error) => {
                 let failure = TrackFailureKind::from(error);
-                let first_failure = !matches!(self.phase, OwnerPhase::Failed { .. });
                 self.fail(failure, None);
-                if first_failure
-                    && !self.failure_logged
-                    && let crate::AudioReadError::Decode(error) = error
-                {
-                    warn!(err = ?error, "track failed: decode error");
-                    self.failure_logged = true;
-                }
                 self.emit
                     .enqueue(AudioEvent::SeekRejected { target: position });
             }
         }
-        self.finish_deferred();
         result
     }
     fn host_sample_rate(&self) -> Option<NonZeroU32> {
@@ -679,7 +671,6 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
                 Some(error),
             );
         }
-        self.finish_deferred();
     }
     fn finish_deferred(&mut self) {
         self.finish_failure_diagnostic();
