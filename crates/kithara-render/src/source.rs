@@ -414,7 +414,7 @@ where
                     SourceEnd::new(span.end(), span.sample_rate())
                         .with_mapping_revision(span.mapping_revision())
                 });
-                self.emit_output(chunk, source_end)
+                self.emit_output(*chunk, source_end)
                     .map_or(TrackStep::StateChanged, TrackStep::Produced)
             }
             EffectDrainStep::Progress => TrackStep::StateChanged,
