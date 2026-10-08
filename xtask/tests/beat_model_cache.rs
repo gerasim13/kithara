@@ -3,6 +3,7 @@ use std::{
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
+    time::SystemTime,
 };
 
 use sha2::{Digest, Sha256};
@@ -16,6 +17,8 @@ mod consts {
 }
 
 mod script {
+    use std::io::{Write, stdout};
+
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../crates/kithara-beat/build.rs"
@@ -24,8 +27,6 @@ mod script {
     #[test]
     #[ignore = "run: just test run --lane=tooling -p xtask --test beat_model_cache"]
     fn probe() {
-        use std::io::Write;
-
         main();
         let mode = env::var("KITHARA_TEST_MODEL_MODE").expect("probe mode");
         if mode == "cache-dir" {
@@ -37,7 +38,7 @@ mod script {
         let hash = env::var("KITHARA_TEST_MODEL_HASH").expect("pinned source hash");
         if mode == "fetch" {
             println!("probe-ready");
-            io::stdout().flush().expect("announce lock contender");
+            stdout().flush().expect("announce lock contender");
             println!(
                 "model-accepted={}",
                 fetch(&cache, &cache.join(super::consts::FILE), &url, &hash)
@@ -420,7 +421,7 @@ fn the_default_source_cache_survives_temporary_directory_relocation() {
 }
 
 #[test]
-fn a_fresh_fetch_and_source_cache_eviction_rebuild_zero_units_on_the_next_cargo_build() {
+fn a_fresh_fetch_and_source_cache_churn_rebuild_zero_units_on_the_next_cargo_build() {
     let fixture = Fixture::new();
     let root = fixture.cargo_fixture();
     assert!(
@@ -515,6 +516,13 @@ fn a_fresh_fetch_and_source_cache_eviction_rebuild_zero_units_on_the_next_cargo_
     let second = fixture.cargo_build(&root);
     assert_fresh(&second);
 
+    fs::File::open(fixture.cached_path())
+        .expect("cached model to touch")
+        .set_modified(SystemTime::now())
+        .expect("touch cached model without changing bytes");
+    let after_touch = fixture.cargo_build(&root);
+    assert_fresh(&after_touch);
+
     fs::remove_file(fixture.cached_path()).expect("evict only this fixture's source cache");
     let after_eviction = fixture.cargo_build(&root);
     assert_fresh(&after_eviction);
@@ -522,6 +530,19 @@ fn a_fresh_fetch_and_source_cache_eviction_rebuild_zero_units_on_the_next_cargo_
         !fixture.cached_path().exists(),
         "a fresh Cargo build must not refetch"
     );
+
+    fixture.resolve(&out);
+    assert_eq!(
+        fs::read(fixture.cached_path()).expect("refetched source bytes"),
+        consts::BYTES
+    );
+    let after_refetch = fixture.cargo_build(&root);
+    assert_fresh(&after_refetch);
+
+    fs::remove_dir_all(&fixture.cache).expect("evict the fixture's entire cache directory");
+    let after_directory_eviction = fixture.cargo_build(&root);
+    assert_fresh(&after_directory_eviction);
+    assert!(!fixture.cache.exists());
     assert_eq!(
         fs::read(&embedded).expect("snapshot survives source eviction"),
         consts::BYTES

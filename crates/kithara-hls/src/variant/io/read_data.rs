@@ -161,10 +161,6 @@ where
         range: Range<u64>,
         on_demand: impl FnMut(PlannedFetch),
     ) -> StreamResult<WaitOutcome> {
-        if self.flow.reader.is_flushing() {
-            self.flow.reader.clear_wait();
-            return Ok(WaitOutcome::Interrupted);
-        }
         let stable_pending = match self.range_gate(&range) {
             Some(RangeGate::Eof) => {
                 self.flow.reader.clear_wait();
@@ -178,6 +174,10 @@ where
             Some(RangeGate::Metadata(_) | RangeGate::Pending) => true,
             None => false,
         };
+        if self.flow.reader.is_flushing() {
+            self.flow.reader.clear_wait();
+            return Ok(WaitOutcome::Interrupted);
+        }
         if stable_pending && self.range_has_failed(&range) {
             self.flow.reader.clear_wait();
             return Err(StreamError::Source(HlsError::SegmentUnavailable.into()));

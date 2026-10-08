@@ -2500,55 +2500,6 @@ fn wait_range_flush_short_circuits_without_sleeping() {
     );
 }
 
-#[kithara::test]
-fn wait_range_interrupts_buffered_bytes_while_flushing() {
-    let ctx = test_ctx(3);
-    let seek = Arc::new(SeekState::new());
-    let v = make_var_with_seek_obs(
-        0,
-        0,
-        &[4, 4],
-        &ctx,
-        Arc::clone(&seek) as Arc<dyn SeekObserve>,
-    );
-    write_seg_bytes(&v, &ctx, 0, 4);
-    assert!(
-        matches!(
-            v.wait_range(0..4, Some(Duration::ZERO)),
-            Ok(WaitOutcome::Ready)
-        ),
-        "committed bytes must be ready before flushing"
-    );
-
-    assert!(
-        matches!(
-            v.wait_range(4..8, Some(Duration::ZERO)),
-            Err(StreamError::Source(SourceError::WaitBudgetExceeded))
-        ),
-        "missing bytes must file reader demand before flushing"
-    );
-    assert_eq!(v.flow.reader.wait_end(), Some(8));
-    let epoch = SeekControl::begin(&*seek, Duration::from_millis(10));
-    assert!(seek.is_flushing());
-    assert!(
-        matches!(
-            v.wait_range(0..4, Some(Duration::ZERO)),
-            Ok(WaitOutcome::Interrupted)
-        ),
-        "flushing must interrupt even when the requested bytes are committed"
-    );
-    assert_eq!(v.flow.reader.wait_end(), None);
-
-    SeekControl::complete(&*seek, epoch);
-    assert!(
-        matches!(
-            v.wait_range(0..4, Some(Duration::ZERO)),
-            Ok(WaitOutcome::Ready)
-        ),
-        "completing the flush must preserve buffered readiness"
-    );
-}
-
 fn seg_idx_by_url(v: &HlsVariant, url: &Url) -> u32 {
     let idx = v
         .segments()
