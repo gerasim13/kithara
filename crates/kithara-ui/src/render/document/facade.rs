@@ -1,7 +1,7 @@
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    Band, Ctx, Group, GroupMount, Host, Lit, Measured, Module, PlacedMount, Popover, Snap,
+    Band, Ctx, Group, GroupMount, Host, Lit, Measured, Modal, Module, PlacedMount, Popover, Snap,
     SplitMount, StageMount,
 };
 use crate::{
@@ -14,7 +14,8 @@ use crate::{
     render::{InputOwner, ReadValue},
     size::{
         BlockNode, Dim, SizeSpec, Snapshot, branch as adaptive_branch,
-        compiled_node_size_with_hidden, effective_size, is_hidden, visible_compiled_children,
+        compiled_node_size_with_hidden, effective_size, floats, is_hidden,
+        visible_compiled_children,
     },
     skin::{ColorRole, SkinDoc},
 };
@@ -503,6 +504,28 @@ where
             ctx,
             host,
         ),
+        ExpandedNode::Modal {
+            path,
+            open,
+            content,
+        } => {
+            let content_address = address.child(0);
+            host.modal(
+                Modal {
+                    path: *path,
+                    open: ctx.flag(Some(open)),
+                    flag: open,
+                },
+                &mut |host| {
+                    let child = expanded(content, &content_address, branch, ctx, host);
+                    if branch.input_owner == InputOwner::Engine {
+                        host.hosted(content, child)
+                    } else {
+                        child
+                    }
+                },
+            )
+        }
         ExpandedNode::Pressable { path, child, .. } => {
             let child = expanded(child, &address.child(0), branch, ctx, host);
             host.pressable(*path, child, effective_size(node, ctx.skin, snapshot))
@@ -531,6 +554,7 @@ where
                 .filter(|(_, child)| H::MOUNTS_HIDDEN || !is_hidden(*child, snapshot))
                 .map(|(index, child)| StageMount {
                     block: block_of(child),
+                    floats: floats(child),
                     output: mount_staged(child, &address.child(index), branch, &scene, ctx, host),
                 })
                 .collect();
@@ -626,6 +650,7 @@ where
         .map(|(index, child)| GroupMount {
             band: band_of(child),
             block: block_of(child),
+            floats: floats(child),
             minimum: main_minimum(child, axis, ctx.skin, snapshot),
             output: expanded(
                 child,

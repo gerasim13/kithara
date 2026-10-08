@@ -1,6 +1,6 @@
 use std::hash::Hash;
 
-pub(in crate::flash) use super::system::{CvId, WaiterId};
+pub(in crate::flash) use super::system::CvId;
 use crate::common::thread_id::thread_id_hash;
 
 /// Park/wake backend latched from `flash_ambient()` at primitive construction.

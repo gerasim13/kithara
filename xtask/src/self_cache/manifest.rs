@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail, ensure};
-use cargo_metadata::MetadataCommand;
+use cargo_metadata::{DependencyKind, MetadataCommand};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -411,12 +411,20 @@ fn discover_package_roots(root: &Path) -> Result<Vec<PathBuf>> {
         let node = nodes
             .get(&id)
             .with_context(|| format!("resolve Cargo dependency node {id}"))?;
-        for dependency in &node.dependencies {
+        // A dev-dependency is built only for its package's own tests, never
+        // into the xtask binary.
+        let built_in = node.deps.iter().filter(|dependency| {
+            dependency
+                .dep_kinds
+                .iter()
+                .any(|info| info.kind != DependencyKind::Development)
+        });
+        for dependency in built_in {
             let dependency_package = packages
-                .get(dependency)
-                .with_context(|| format!("resolve Cargo dependency {dependency}"))?;
+                .get(&dependency.pkg)
+                .with_context(|| format!("resolve Cargo dependency {}", dependency.pkg))?;
             if dependency_package.source.is_none() {
-                pending.push_back(dependency.clone());
+                pending.push_back(dependency.pkg.clone());
             }
         }
     }
@@ -582,6 +590,55 @@ handler = "format-edited-paths"
         fs::write(&path, vec![b' '; consts::MANIFEST_LIMIT + 1])?;
 
         assert!(CacheManifest::read(&path).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn the_source_closure_leaves_out_what_only_tests_need() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let package = |name: &str, manifest_tail: &str| -> Result<()> {
+            fs::create_dir_all(root.join(name).join("src"))?;
+            fs::write(root.join(name).join("src/lib.rs"), "")?;
+            fs::write(
+                root.join(name).join("Cargo.toml"),
+                format!("[package]\nname = \"{name}\"\nversion = \"0.0.0\"\n{manifest_tail}"),
+            )?;
+            Ok(())
+        };
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"xtask\", \"a\", \"b\", \"c\", \"d\"]\nresolver = \"2\"\n",
+        )?;
+        package(
+            "xtask",
+            "[dependencies]\na = { path = \"../a\" }\n[dev-dependencies]\nd = { path = \"../d\" }\n",
+        )?;
+        package(
+            "a",
+            "[dev-dependencies]\nb = { path = \"../b\" }\n[build-dependencies]\nc = { path = \"../c\" }\n",
+        )?;
+        fs::write(root.join("a/build.rs"), "fn main() {}\n")?;
+        for name in ["b", "c", "d"] {
+            package(name, "")?;
+        }
+        fs::write(
+            root.join("Cargo.lock"),
+            "version = 4\n\n[[package]]\nname = \"a\"\nversion = \"0.0.0\"\ndependencies = [\n \"b\",\n \"c\",\n]\n\n\
+             [[package]]\nname = \"b\"\nversion = \"0.0.0\"\n\n[[package]]\nname = \"c\"\nversion = \"0.0.0\"\n\n\
+             [[package]]\nname = \"d\"\nversion = \"0.0.0\"\n\n\
+             [[package]]\nname = \"xtask\"\nversion = \"0.0.0\"\ndependencies = [\n \"a\",\n \"d\",\n]\n",
+        )?;
+        let root = fs::canonicalize(root)?;
+
+        let mut roots = super::discover_package_roots(&root)?;
+        roots.sort();
+
+        assert_eq!(
+            roots,
+            ["a", "c", "xtask"].map(PathBuf::from),
+            "the xtask binary is built from its normal and build dependencies only"
+        );
         Ok(())
     }
 

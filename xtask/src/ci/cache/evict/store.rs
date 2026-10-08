@@ -155,16 +155,6 @@ impl Store {
         Ok(Some(output.stdout))
     }
 
-    /// Asks for an object only so that the request reaches the audit log;
-    /// whether the object exists does not matter.
-    pub(super) fn probe(&self, bucket: &str, object: &str) -> Result<()> {
-        let output = self.output(&["object", "stat", &Self::remote(bucket, object)])?;
-        if output.status.code() == Some(Self::NOT_FOUND) {
-            return Ok(());
-        }
-        require_success(&output, "look up an object")
-    }
-
     fn output(&self, arguments: &[&str]) -> Result<Output> {
         Command::new(&self.program)
             .args(arguments)
@@ -257,9 +247,7 @@ esac
             directory.path(),
             r#""object show ci/ci-cache-recency/absent") echo "Not found" >&2; exit 5 ;;
 "object show ci/ci-cache-recency/denied") echo "Access denied" >&2; exit 4 ;;
-"object show ci/ci-cache-recency/present") printf 'record' ;;
-"object stat ci/kithara-review/absent") exit 5 ;;
-"object stat ci/kithara-review/denied") exit 4 ;;"#,
+"object show ci/ci-cache-recency/present") printf 'record' ;;"#,
         );
 
         assert_eq!(store.get("ci-cache-recency", "absent").unwrap(), None);
@@ -268,8 +256,6 @@ esac
             store.get("ci-cache-recency", "present").unwrap().as_deref(),
             Some(&b"record"[..])
         );
-        store.probe("kithara-review", "absent").unwrap();
-        assert!(store.probe("kithara-review", "denied").is_err());
     }
 
     #[test]

@@ -35,7 +35,7 @@ impl Check for SmoothingPrimitiveSites {
                             site.pattern
                         ),
                     )
-                    .with_explanation(consts::EXPLANATION)
+                    .with_explanation(consts::EXPLANATION.into())
                     })
                     .collect()
             },

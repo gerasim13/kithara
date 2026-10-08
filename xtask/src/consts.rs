@@ -156,6 +156,8 @@ pub(crate) const CONTROL_PATHS: &[&str] = &[
     ".config/just/",
     ".config/mutation-suites.toml",
     ".config/nextest.toml",
+    // `production/main`'s compiler wrapper, judged from the base while a host
+    // deployed from this branch serves main.
     ".config/sccache/",
     ".config/xtask.toml",
     "ci/",
@@ -175,10 +177,6 @@ pub(crate) const PULL_HEAD: &str = "8a4e697a770d5e6f8091a2b3c4d5e6f708192a3b";
 
 #[cfg(test)]
 pub(crate) const RETIRED_HEAD: &str = "6cd1433327cd8f9e0a1b2c3d4e5f60718293a4b5";
-
-pub(crate) const TARGET_SLOT_CACHE_NAMESPACE: &str = "target-slots";
-
-pub(crate) const TARGET_HEARTBEAT_FILE: &str = ".kithara-job-heartbeat";
 
 // Two cleanup intervals tolerate a paused VM while bounding a killed job's
 // stale claim. A live helper refreshes this every 30 seconds.
@@ -250,11 +248,6 @@ pub(crate) const RECENCY_RECORD_VERSION: u8 = 1;
 /// read.
 pub(crate) const RECENCY_RECORD_BYTES: usize = 32 + 8;
 
-/// The object the evictor asks for to learn that the audit log is arriving,
-/// and writes to make the store recount a bucket. It is no compiler-cache
-/// entry.
-pub(crate) const EVICT_MARKER: &str = ".evict/recount";
-
 /// The largest body the evictor reads from one audit delivery. The store
 /// sends one request per delivery, a few hundred bytes; anything larger is
 /// not its audit log.
@@ -283,10 +276,6 @@ pub(crate) const OPEN_FILES: u64 = 65536;
 /// on rather than the scale a compiler writes files on.
 pub(crate) const JOB_ROOM_POLL: Duration = Duration::from_secs(15);
 
-/// Where a runner mounts the build root every lane claims a directory under.
-/// Absent on an executor that builds in its checkout.
-pub(crate) const TARGET_ROOT_ENV: &str = "KITHARA_CI_TARGET_ROOT";
-
 #[cfg(test)]
 #[cfg(unix)]
 pub(crate) const CACHE_ROOT: &str = "KITHARA_TEST_CACHE_ROOT";
@@ -298,10 +287,6 @@ pub(crate) const FAILED_PREPARE: &str = "KITHARA_TEST_FAILED_ENV_CHILD";
 #[cfg(test)]
 #[cfg(unix)]
 pub(crate) const LANE_PREPARED: &str = "KITHARA_TEST_LANE_PREPARED_ENV_CHILD";
-
-#[cfg(test)]
-#[cfg(unix)]
-pub(crate) const PREPARED: &str = "KITHARA_TEST_PREPARED_ENV_CHILD";
 
 /// Build cache older than this is rebuilt faster than it is worth keeping.
 pub(crate) const BUILD_CACHE_AGE: &str = "168h";
@@ -316,8 +301,49 @@ pub(crate) const LISTED: &str = "kithara-ci:linux-20260729\n\
 /// Where the generated project is written when no path is given.
 pub(crate) const FILE: &str = "/etc/kithara-ci/docker-compose.yml";
 
-/// Where a job builds and what it reuses, before the linker entries are added.
-pub(crate) const CACHE_ENVIRONMENT: [&str; 8] = [
+/// Where a Linux runner mounts its own build root.
+pub(crate) const BUILD_ROOT_MOUNT: &str = "/cache/target";
+
+/// The host directory, under the cache root, holding one directory of lane
+/// build slots per trust, and where a Linux runner mounts its trust's.
+pub(crate) const BUILD_SLOTS_DIR: &str = "builds";
+pub(crate) const BUILD_SLOTS_MOUNT: &str = "/cache/builds";
+
+/// Where a Linux runner mounts the Cargo home of its trust: the image's own
+/// `CARGO_HOME`, so a job that names no home and one that is told it key their
+/// compilations alike.
+pub(crate) const CARGO_HOME_MOUNT: &str = "/home/runner/.cargo";
+
+/// The host directory, under the cache root, that `production/main` claims its
+/// lane directories in, and where a Linux runner mounts it. A host deployed
+/// from this branch serves main's workflows until the branch merges.
+pub(crate) const PREVIOUS_LANES: &str = "lanes";
+pub(crate) const PREVIOUS_LANES_MOUNT: &str = "/cache/lanes";
+
+/// The cache root `production/main`'s Linux workflows name, under its lanes
+/// directory.
+pub(crate) const PREVIOUS_CACHE_ROOT: &str = ".kithara-ci";
+
+/// Where, under its cache root, `production/main` bootstraps xtask: one
+/// directory per trust, holding one build per machine.
+pub(crate) const PREVIOUS_BOOTSTRAP: &str = "bootstrap";
+
+/// Where, under a Mac host's cache root, `production/main` keeps its lane build
+/// slots, each with its `.lock` beside it.
+pub(crate) const PREVIOUS_TARGET_SLOTS: &str = "target-slots";
+
+/// The cache namespaces `production/main` writes on a Mac host and this layout
+/// does not: its xtask bootstraps, its lane build slots and its compiler-cache
+/// slot locks. Cleanup keeps them whatever the profile lists until the branch
+/// that deployed the host merges.
+pub(crate) const PREVIOUS_CACHE_NAMESPACES: [&str; 3] = [
+    PREVIOUS_BOOTSTRAP,
+    PREVIOUS_TARGET_SLOTS,
+    ".kithara-ci-sccache-slots",
+];
+
+/// What a job reuses, before its build paths and linker entries are added.
+pub(crate) const CACHE_ENVIRONMENT: [&str; 5] = [
     // Encoded audio fixtures. Their default home is the container's own temp
     // directory, and a container serves one job and is thrown away — so every
     // job re-encoded every fixture it touched, and a test that builds one
@@ -331,16 +357,6 @@ pub(crate) const CACHE_ENVIRONMENT: [&str; 8] = [
     // every test binary above those: minutes of a test lane for a commit that
     // changed no Rust. A model is placed only once its SHA-256 checks out.
     "KITHARA_BEAT_MODEL_CACHE=/cache/fixtures/beat-models",
-    // Every runner mounts this one root, and a lane claims the directory named
-    // after it underneath: a lane that lands on a different runner than last
-    // time then still finds its own warm build. A runner-owned directory made
-    // that a full rebuild, which is most of what a lane spent its time on.
-    "KITHARA_CI_TARGET_ROOT=/cache/lanes",
-    // What a job builds into when it claims no lane directory. It stays one
-    // directory per runner, on a path of its own, so a checkout that predates
-    // the lane keying keeps exactly the cache it reused before instead of
-    // meeting every other job in one cargo lock.
-    "CARGO_TARGET_DIR=/cache/target",
     "RUSTC_WRAPPER=sccache",
     // Without this the wrapper is inert: sccache declines to cache an
     // incremental compilation, and cargo leaves incremental on by default.
@@ -349,11 +365,8 @@ pub(crate) const CACHE_ENVIRONMENT: [&str; 8] = [
     "CARGO_INCREMENTAL=0",
     // GitHub checks each job out under this stable container path. Without a
     // base directory sccache hashes the host-specific checkout path, so two
-    // otherwise identical runners cannot reuse Rust objects.
+    // otherwise identical runners cannot reuse C objects.
     "SCCACHE_BASEDIRS=/runner/_work/kithara/kithara",
-    // Well under the volume it lives on, and sccache evicts by least use
-    // rather than growing until the disk decides for it.
-    "SCCACHE_CACHE_SIZE=100G",
 ];
 
 /// Address blocks a job has no business reaching. The machine's neighbours live
@@ -482,20 +495,6 @@ pub(crate) const TEST_SERVER_PORT: u16 = 3444;
 /// Where `ci lane` tells the job's later steps its build directory is.
 pub(crate) const LANE_TARGET_ENV: &str = "KITHARA_LANE_TARGET";
 
-/// The content the directory's artifacts may have been built from.
-pub(crate) const SOURCES_FILE: &str = ".kithara-lane-sources";
-
-/// The build-script runs a checksum lane's slot kept, and what each was run
-/// against. A change to its format renames the file.
-pub(crate) const UNITS_FILE: &str = ".kithara-lane-units.json";
-
-/// Stands for content a build the record did not see may have used.
-pub(crate) const UNKNOWN_BLOB: &str = "unknown";
-
-/// The mtime record's first line while a job holds the slot. One a dead job
-/// left behind tells the next claim that its builds were recorded first.
-pub(crate) const HELD_LINE: &str = "held";
-
 /// What a rebuild check adds to the step it repeats: build without running,
 /// have cargo say why it builds each unit, and say it in plain text, since a
 /// runner that forces colour wraps cargo's status words in escapes.
@@ -505,53 +504,71 @@ pub(crate) const REBUILD_CHECK_ARGS: [&str; 4] =
 /// Lines of a captured command's output a failure carries.
 pub(crate) const TRANSCRIPT_TAIL_LINES: usize = 40;
 
-/// Asks the pinned nightly's cargo to judge what rustc read by checksum.
-pub(crate) const CHECKSUM_FRESHNESS_ENV: &str = "CARGO_UNSTABLE_CHECKSUM_FRESHNESS";
-
-/// The toolchain rustup runs a step's cargo with.
-pub(crate) const TOOLCHAIN_ENV: &str = "RUSTUP_TOOLCHAIN";
-
 /// Where Cargo builds when told; unset, it builds in `<workspace>/target`.
 pub(crate) const TARGET_DIR_ENV: &str = "CARGO_TARGET_DIR";
 
 /// The commit web release packaging tells the FFI build it is built from.
 pub(crate) const BUILD_REVISION_ENV: &str = "KITHARA_BUILD_REVISION";
 
-/// Hours a lane slot keeps a build unit its builds stopped using, unless the
+/// Hours a lane's build directory keeps a unit its builds stopped using, unless the
 /// project config names another window.
 pub(crate) const LANE_UNIT_WINDOW_HOURS: u64 = 24;
-
-/// Makes nightly Cargo mark each unit it reuses as used, which a lane slot's
-/// pruning reads. Stable Cargo ignores it.
-pub(crate) const MTIME_ON_USE_ENV: &str = "CARGO_UNSTABLE_MTIME_ON_USE";
 
 /// Hex digits in the hash Cargo names a build unit's files with.
 pub(crate) const UNIT_HASH_LEN: usize = 16;
 
-/// The gap between lane artifacts of neighbouring mtimes once a claim moves
-/// them past its instant: every filesystem a lane slot lives on keeps it, and
-/// the ladder of a whole slot ends before the claim that writes it does.
-pub(crate) const ALIGN_STEP: Duration = Duration::from_micros(1);
+/// The directory a runner's Cargo home takes under the root it keeps its
+/// caches in. On the cache share it is a namespace cleanup keeps.
+pub(crate) const CARGO_HOME_DIR: &str = "cargo";
 
-/// The window lane slot tests prune by.
+/// The host tree the container runner checks out into, under the build root.
+/// The container sees it where every runner checks out, `workspaces/gitlab`;
+/// the host's runners never do.
+pub(crate) const CONTAINER_BUILDS: &str = "workspaces/colima";
+
+/// Where a CI job's lanes take their build slots, when not in the root Cargo
+/// is told: runners that share their lanes' builds are told the directory they
+/// share.
+pub(crate) const BUILD_SLOTS_ENV: &str = "KITHARA_CI_BUILD_SLOTS";
+
+/// The link in a build root every build of the root's runner goes through,
+/// pointed at the build directory of the job that runs.
+pub(crate) const BUILD_ALIAS: &str = "build";
+
+/// The file in a build directory that records the content its builds read.
+pub(crate) const SOURCES_RECORD: &str = "sources.tsv";
+
+/// The header of a sources record a job still holds.
+pub(crate) const SOURCES_HELD: &str = "held";
+
+/// The header of a sources record its job settled.
+pub(crate) const SOURCES_SETTLED: &str = "settled";
+
+/// The directory in a build root that xtask itself is built in.
+pub(crate) const XTASK_BUILD: &str = "xtask";
+
+/// What an eviction renames a build directory to before it removes it, ahead
+/// of the directory's own name.
+pub(crate) const EVICTING_PREFIX: &str = ".evicting-";
+
+/// The lock Cargo holds a profile directory by while it builds there.
+pub(crate) const CARGO_LOCK: &str = ".cargo-lock";
+
+/// How far below a build directory Cargo's lock sits: in a profile, under a
+/// target triple or not.
+pub(crate) const CARGO_LOCK_DEPTH: usize = 2;
+
+/// How far below a build directory a job's lease and heartbeat sit: at its
+/// top, or one level down, where `production/main`'s executor slots lease the
+/// build inside them.
+pub(crate) const LEASE_DEPTH: usize = 1;
+
+/// The window build directory tests keep an unused unit for.
 #[cfg(test)]
 pub(crate) const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[cfg(test)]
 pub(crate) const FIXTURE_FAILURE_EXIT_CODE: i32 = 7;
-
-/// A build-script run of the one-package workspace `probe`.
-#[cfg(test)]
-pub(crate) const PROBE_BUILD_RUN: &str = "debug/build/probe-0123456789abcdef";
-
-/// A workspace of one package, `probe`, that cargo can describe.
-#[cfg(test)]
-pub(crate) const PROBE_MANIFEST: &str =
-    "[workspace]\n\n[package]\nname = \"probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n";
-
-/// A run of `probe`'s script that watches its tracked library source.
-#[cfg(test)]
-pub(crate) const PROBE_DIRECTIVE: &str = "cargo::rerun-if-changed=src/lib.rs\n";
 
 pub(crate) const CONNECTION_REFUSED_CODE: Option<&str> = if cfg!(target_os = "macos") {
     Some("(os error 61)")
@@ -611,26 +628,12 @@ pub(crate) const LINUX_LINKER_ENV: [(&str, &str); 2] = [
 
 pub(crate) const LINUX_LINKER_RUSTFLAGS: &str = "-Clink-arg=-fuse-ld=lld";
 
-/// Host-global lock namespace that coordinates the compiler-cache slots.
-pub(crate) const SCCACHE_SLOT_CONTROL_NAMESPACE: &str = ".kithara-ci-sccache-slots";
-
-/// CI-owned compiler-cache slots, kept disjoint from the local cache directory.
-pub(crate) const SCCACHE_SLOT_CACHE_NAMESPACE: &str = "sccache-slots";
-
 /// A runner owns one cache daemon for the life of its job or container.
 ///
 /// The daemon can be ready well before a lane reaches its first compiler
 /// process, so the default idle expiry would make an otherwise initialized
 /// cache disappear and force concurrent clients to race its restart.
 pub(crate) const SCCACHE_IDLE_TIMEOUT: &str = "0";
-
-/// The compiler wrapper Cargo runs, relative to the checkout: sccache, minus
-/// the build directory. Cargo builds at a slot's own path, which native build
-/// tools record, and sccache keys a compilation on every `CARGO_*` variable,
-/// so that path would give every slot and job directory entries of its own.
-/// cc-rs hands it a build script's C compiles only under a compiler cache's
-/// name.
-pub(crate) const COMPILER_CACHE_WRAPPER: &str = ".config/sccache/sccache";
 
 /// How many `main` runs the journal keeps. One is not enough: a test that fails
 /// a quarter of the time would otherwise land in a branch's column whenever the
@@ -858,6 +861,23 @@ pub(crate) const GUEST_ENROLMENT_ATTEMPTS: u32 = 60;
 /// thirty-second attempts.
 pub(crate) const GUEST_FIRST_PHASE_ATTEMPTS: u32 = 60;
 
+/// How long to wait for a guest to provision itself, in thirty-second
+/// attempts. It installs the build tools and compiles its cargo tools from
+/// source, the larger part of the two hours a whole install takes; three hours
+/// tells slow from stuck.
+pub(crate) const GUEST_PROVISION_ATTEMPTS: u32 = 360;
+
+/// What starts every line a guest writes for the host on its first serial
+/// port. The firmware writes there too, so the host reads only these.
+pub(crate) const GUEST_CONSOLE_PREFIX: &str = "kithara-guest:";
+
+/// How many of a guest's own console lines a failure carries.
+pub(crate) const GUEST_CONSOLE_TAIL: usize = 20;
+
+/// With fewer whole days than this left on its evaluation licence, a guest is
+/// built again: a daily attempt gets a week of tries before it expires.
+pub(crate) const GUEST_RENEWAL_DAYS: u64 = 7;
+
 /// A tracked file a Windows guest is built from, rather than anything pasted
 /// into a machine by hand.
 pub(crate) const GUEST_ANSWER_FILE: &str = ".config/windows/autounattend.xml";
@@ -885,3 +905,17 @@ pub(crate) const SERVICE_SLICE: &str = "kithara-ci.slice";
 pub(crate) const SERVICE_CLEANUP_UNIT: &str = "kithara-ci-cleanup.service";
 
 pub(crate) const SERVICE_CLEANUP_TIMER: &str = "kithara-ci-cleanup.timer";
+
+pub(crate) const SERVICE_RENEWAL_UNIT: &str = "kithara-ci-windows-renewal.service";
+
+pub(crate) const SERVICE_RENEWAL_TIMER: &str = "kithara-ci-windows-renewal.timer";
+
+/// A package of its own, for the tests that ask Cargo whether it builds.
+#[cfg(test)]
+pub(crate) const PROBE_MANIFEST: &str =
+    "[package]\nname = \"probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\n";
+
+/// How far back from a unit's newest build the build-directory tests keep its
+/// other builds.
+#[cfg(test)]
+pub(crate) const GARBAGE_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);

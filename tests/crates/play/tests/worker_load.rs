@@ -75,3 +75,21 @@ async fn a_load_opens_its_source_once_and_a_load_past_capacity_opens_nothing(
         .expect("a released lane frees its slot");
     assert_eq!(opened(&trace), 2, "the next load opens its own source");
 }
+
+/// The worker refills every deck's ring, and a ring drains while its worker
+/// waits for a CPU, so the worker asks the OS to run it ahead of ordinary work.
+/// Whether the OS grants that is the machine's policy, not the worker's.
+#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(30)))]
+async fn the_play_worker_asks_the_os_to_schedule_it_as_an_audio_feed() {
+    let trace = usdt_trace::scope();
+    let _worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+
+    trace
+        .wait_for(|events| {
+            events
+                .iter()
+                .any(|event| event.probe == "thread_class" && event.field("audio_feed") == Some(1))
+        })
+        .await;
+    drop(trace);
+}

@@ -5,7 +5,10 @@ pub use crate::{
         Duration, JoinHandle, Thread, ThreadId, assert_main_thread, assert_not_main_thread,
         available_parallelism, current, current_thread_id, is_main_thread, is_worker_thread, park,
     },
-    common::thread_id::active_named_thread_count,
+    common::{
+        thread_class::{ThreadClass, set_current_class},
+        thread_id::active_named_thread_count,
+    },
 };
 use crate::{
     flash::{ids::ThreadKey, join::Join},
@@ -239,20 +242,14 @@ pub fn sleep(duration: Duration) {
     }
 }
 
-/// Back off a synchronous poll loop whose data is produced by another
-/// engine-visible thread. A bare `sleep` here would register a free virtual
-/// `Timed` deadline (deadline = virtual now + `duration`) that the engine
-/// services in isolation: each wake re-polls and re-sleeps, racing the virtual
-/// clock far ahead of the real producer (the analysis decode loop vs the audio
-/// worker fed by a real download). A deadline-less cooperative yield instead
-/// relinquishes the engine and is re-woken on the next clock advance —
-/// advancing in lockstep with the engine-visible producer (paced by its real
-/// I/O), never inflating the clock on its own. Off the sim path it is a real
-/// `sleep(duration)` throttle (no busy-spin), via the native arm.
-///
-/// A dedicated participant takes the sim path as [`yield_now`] does. Async
-/// code backs off through a pooled `spawn_blocking` closure, and a real sleep
-/// there would hold the clock for the whole backoff.
+/// Back off a synchronous poll loop fed by another engine-visible thread.
+/// A virtual timed sleep would repeatedly advance the clock ahead of that
+/// producer. Cooperative yield instead relinquishes the engine until its next
+/// advance, paced by real I/O, without adding a deadline.
+/// Dedicated participants take this simulated path as [`yield_now`] does.
+/// Async code backs off inside a pooled `spawn_blocking` closure; sleeping
+/// there would hold the clock throughout the backoff.
+/// The native arm uses `sleep(duration)` to throttle without spinning.
 #[inline]
 #[track_caller]
 pub fn paced_backoff(duration: Duration) {

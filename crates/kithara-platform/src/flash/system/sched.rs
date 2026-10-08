@@ -299,6 +299,9 @@ impl Core {
         }
     }
 
+    /// Releases yielders immediately when timed parks are only edge backstops.
+    /// Otherwise advances to the next owed stop, waking its waiting yielders too.
+    /// Both ordinary sleeps and gate polls owe a stop.
     fn try_advance_once(&mut self, clock: &Clock) -> WakeBatch {
         let paced = self.sched.real_io != 0 && self.sched.pace_anchor.is_some();
         if self.registry.active != 0
@@ -308,12 +311,6 @@ impl Core {
             self.sched.advance_counts.blocked += 1;
             return WakeBatch(Vec::new());
         }
-        // A yielder re-checks at this instant while every parked deadline is
-        // only a backstop under an edge: crossing one would observe nothing
-        // new. A deadline the clock owes a stop is what a yielder may be
-        // waiting on, so the advance below reaches it and wakes the yielders
-        // with it. This holds for a thread park too: a gate poll owes its
-        // stop as a sleep does.
         if !self.sched.yielders.is_empty()
             && self
                 .sched

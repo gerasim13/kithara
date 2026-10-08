@@ -314,7 +314,7 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn notify_channel_and_yield_grants_share_receipt_settlement() {
+    fn notify_and_channel_grants_share_receipt_settlement() {
         let flash = FlashInner::new_arc();
         let waker = std::task::Waker::noop().clone();
         let notify_id = flash.next_condvar_id();
@@ -341,14 +341,6 @@ mod tests {
         drop(channel);
         assert_eq!(flash.active_count(), 0);
         assert_eq!(flash.indef_count(), 0);
-
-        let (yielded, advance) = flash.register_yield_async(waker);
-        advance.fire();
-        assert!(yielded.granted());
-        assert_eq!(flash.active_count(), 1);
-        drop(yielded);
-        assert_eq!(flash.active_count(), 0);
-        assert_eq!(flash.diag_yield_count(), 0);
     }
 
     #[kithara::test(native, flash(false))]
@@ -653,7 +645,7 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_done_task_keeps_its_record_until_the_grant_receipt_settles() {
+    fn a_completed_task_keeps_grant_credit_until_its_receipt_settles() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("build current-thread runtime");
@@ -677,14 +669,6 @@ mod tests {
         flash.signal_notify(notify_id);
         assert!(receipt.granted());
         assert!(flash.gate_drop(&diag.state, gate.id()).is_none());
-        assert!(
-            flash
-                .core
-                .lock()
-                .registry
-                .task_diag
-                .contains_key(&gate.id())
-        );
         flash
             .core
             .lock()
@@ -701,14 +685,6 @@ mod tests {
         assert_eq!(flash.clock.now_nanos(), base);
 
         drop(receipt);
-        assert!(
-            !flash
-                .core
-                .lock()
-                .registry
-                .task_diag
-                .contains_key(&gate.id())
-        );
         assert!(later.granted());
         drop(later);
         assert_eq!(flash.active_count(), 0);

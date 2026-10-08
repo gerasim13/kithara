@@ -383,7 +383,10 @@ impl RunnerManager<'_> {
         let brew = self.config.host.brew_root.join("bin");
         let brew = brew.display();
         let path = format!("$HOME/.cargo/bin:{brew}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
-        let tokens = Tokens::load(&self.ci_home().join(".config/kithara-ci"))?;
+        let tokens = Tokens::load(
+            &self.ci_home().join(".config/kithara-ci"),
+            self.config.host.job_concurrency,
+        )?;
         // Move the share off the auto-mounted path before anything reads it:
         // its name contains spaces, which GNU make cannot express. Nothing may
         // be running from the mount at this point, so this is the only moment
@@ -433,7 +436,7 @@ impl RunnerManager<'_> {
                 consts::WAIT_SECONDS,
             ),
             "serve GitLab jobs",
-            Some(&tokens.macos),
+            tokens.macos.first().map(String::as_str),
         )
     }
 

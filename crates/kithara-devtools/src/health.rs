@@ -250,7 +250,6 @@ fn build_stages_with(resolved: &Resolved) -> Vec<Stage> {
         Stage::new("machete", "cargo", &["machete"]).paths(machete_paths),
         Stage::new("deny", "cargo", &["deny", "check"]),
         Stage::new("hack-feature-powerset", "cargo", &["xtask", "powerset"]),
-        // The lane checks out its own commit and nothing else.
         Stage::new("semver-baseline", "git", &FETCH_MAIN),
         Stage::new(
             "semver-checks",

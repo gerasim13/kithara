@@ -22,6 +22,8 @@ pub mod style;
 pub mod suppress;
 pub mod timestamp;
 pub mod tools;
+#[cfg(feature = "lint")]
+pub mod verdict_cache;
 pub mod violation;
 pub mod walker;
 

@@ -123,7 +123,7 @@ pub fn print_grouped(report: &Report, diff: &RatchetDiff<'_>) {
                 .then_with(|| a.key.cmp(&b.key))
         });
 
-        let description = sorted.iter().find_map(|v| v.explanation);
+        let description = sorted.iter().find_map(|v| v.explanation.as_deref());
 
         let locations = sorted.iter().map(|v| {
             let loc = match v.severity {

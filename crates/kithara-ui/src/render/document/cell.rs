@@ -53,6 +53,9 @@ pub struct SplitMount<T> {
 pub struct StageMount<T> {
     /// What the document reads to know this child is hidden.
     pub block: Option<Binding>,
+    /// Whether it stands above the stage rather than in it, taking no room
+    /// there.
+    pub floats: bool,
     pub output: T,
 }
 
@@ -66,6 +69,9 @@ pub struct GroupMount<T> {
     pub block: Option<Binding>,
     /// What it needs on the flow's own axis, when it names a floor.
     pub minimum: Option<f32>,
+    /// Whether it stands above the flow rather than in it, taking no room and
+    /// no gap there.
+    pub floats: bool,
     pub output: T,
 }
 

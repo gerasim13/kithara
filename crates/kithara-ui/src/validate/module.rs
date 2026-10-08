@@ -206,6 +206,11 @@ pub(super) fn walk_module(
             walk_module(anchor, &here, origin, seen, Sibling::Only)?;
             walk_module(content, &here, origin, seen, Sibling::Only)
         }
+        ControlNode::Modal { id, content, .. } => {
+            let here = path.push(format!("Modal({id})"));
+            record(&id.0, &here, origin, seen)?;
+            walk_module(content, &here, origin, seen, Sibling::Only)
+        }
         ControlNode::Pressable { id, child, .. } => {
             let here = path.push(format!("Pressable({id})"));
             record(&id.0, &here, origin, seen)?;
@@ -314,6 +319,7 @@ pub(super) fn single_box(
         ControlNode::Slot { .. } => "Slot",
         ControlNode::Scroll { .. } => "Scroll",
         ControlNode::Popover { .. } => "Popover",
+        ControlNode::Modal { .. } => "Modal",
         ControlNode::Include { .. } => "Include",
         _ => return Ok(()),
     };
@@ -345,6 +351,7 @@ pub(super) const fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Optional { .. }
         | ControlNode::Reveal { .. }
         | ControlNode::Popover { .. }
+        | ControlNode::Modal { .. }
         | ControlNode::Placed { .. }
         | ControlNode::Pressable { .. }
         | ControlNode::Scroll { .. }

@@ -3,8 +3,11 @@ pub use std::convert::identity as wrap_pool_task;
 use std::sync::atomic::Ordering;
 pub use std::time::Duration;
 
-pub use crate::common::thread_id::active_named_thread_count;
 use crate::common::thread_id::{ACTIVE_NAMED_THREADS, thread_id_hash};
+pub use crate::common::{
+    thread_class::{ThreadClass, set_current_class},
+    thread_id::active_named_thread_count,
+};
 
 pub type Thread = std::thread::Thread;
 pub type ThreadId = std::thread::ThreadId;

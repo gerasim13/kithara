@@ -133,8 +133,9 @@ impl<'a> IdentVisitor<'a> {
             kind = kind,
             name = name,
         );
-        self.out
-            .push(Violation::deny(consts::ID, key, message).with_explanation(consts::EXPLANATION));
+        self.out.push(
+            Violation::deny(consts::ID, key, message).with_explanation(consts::EXPLANATION.into()),
+        );
     }
 }
 

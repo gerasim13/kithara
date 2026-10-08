@@ -2,7 +2,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_config::Config;
 use kithara_derive::Patch;
-use kithara_platform::{CancelGroup, sync::Mutex, time::Duration};
+use kithara_platform::{CancelGroup, sync::Mutex, thread::ThreadClass, time::Duration};
 
 use crate::{Observer, observer::Event};
 
@@ -52,6 +52,15 @@ pub struct DispatcherConfig {
         patch(skip)
     )]
     pub(crate) name: String,
+    /// How the OS schedules this dispatcher's thread. Not a document key: the
+    /// class follows from what the tasks feed, which the code that builds the
+    /// dispatcher knows.
+    #[config(
+        skip = "claimed by the dispatcher thread",
+        builder(default),
+        patch(skip)
+    )]
+    pub(crate) thread_class: ThreadClass,
 }
 
 struct NoopObserver;

@@ -49,7 +49,7 @@ impl FileLock {
     ///
     /// When the lock cannot be taken.
     pub fn exclusive(file: File, wait: &Wait<'_>) -> io::Result<Self> {
-        acquire(&file, wait.subject, <File as FileExt>::try_lock)?;
+        acquire(&file, wait.subject, <File as FileExt>::try_lock, None)?;
         let lock = Self {
             file,
             recorded: true,
@@ -74,7 +74,22 @@ impl FileLock {
     ///
     /// When the lock cannot be taken.
     pub fn shared(file: File, subject: &str) -> io::Result<Self> {
-        acquire(&file, subject, <File as FileExt>::try_lock_shared)?;
+        Self::take_shared(file, subject, None)
+    }
+
+    /// Takes `file`'s shared lock like [`Self::shared`], giving up at
+    /// `deadline`.
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::TimedOut`] when an exclusive holder still has the
+    /// file at `deadline`; otherwise when the lock cannot be taken.
+    pub fn shared_until(file: File, subject: &str, deadline: Instant) -> io::Result<Self> {
+        Self::take_shared(file, subject, Some(deadline))
+    }
+
+    fn take_shared(file: File, subject: &str, deadline: Option<Instant>) -> io::Result<Self> {
+        acquire(&file, subject, <File as FileExt>::try_lock_shared, deadline)?;
         if let Err(error) = clear_record(&file) {
             warn!("took {subject}, but a dead holder's record stays in its lock file: {error}");
         }
@@ -136,11 +151,12 @@ impl Drop for FileLock {
 }
 
 /// Takes the lock `attempt` asks for, trying again every
-/// [`consts::LOCK_WAIT_POLL`] and logging the wait.
+/// [`consts::LOCK_WAIT_POLL`] until `deadline`, and logging the wait.
 fn acquire(
     file: &File,
     subject: &str,
     attempt: fn(&File) -> Result<(), TryLockError>,
+    deadline: Option<Instant>,
 ) -> io::Result<()> {
     let started = Instant::now();
     let mut announced: Option<Instant> = None;
@@ -158,7 +174,23 @@ fn acquire(
             );
             announced = Some(Instant::now());
         }
-        thread::sleep(consts::LOCK_WAIT_POLL);
+        let pause = match deadline {
+            None => consts::LOCK_WAIT_POLL,
+            Some(deadline) => match deadline.checked_duration_since(Instant::now()) {
+                Some(left) if !left.is_zero() => left.min(consts::LOCK_WAIT_POLL),
+                _ => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!(
+                            "{subject} still held by {} after {} s",
+                            holder_of(file),
+                            started.elapsed().as_secs()
+                        ),
+                    ));
+                }
+            },
+        };
+        thread::sleep(pause);
     }
     if announced.is_some() {
         info!("took {subject} after {} s", started.elapsed().as_secs());

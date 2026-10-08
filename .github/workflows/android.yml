@@ -20,12 +20,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # A called workflow inherits nothing from its caller, so a workflow that runs
-  # a lane on the Linux fleet names the fixture store and the xtask bootstrap
-  # itself, as the shared lane workflow does. Where the lane builds is
-  # `ci lane`'s to choose: a slot of its pool under the runner's build root.
-  KITHARA_FIXTURE_CACHE: /cache/fixtures
-  KITHARA_CI_CACHE_ROOT: /cache/lanes/.kithara-ci
 
 concurrency:
   group: android-${{ github.ref }}

@@ -80,6 +80,7 @@ apple:xcframework:
   extends:
     - .apple-job
     - .rules-verify-and-branch
+    - .apple-device-job
   needs:
     - apple:lint
   script:
@@ -98,7 +99,7 @@ apple:xcframework:
 # built it instead of building a third copy.
 apple:swift-test:
   extends:
-    - .macos-job
+    - .apple-device-job
     - .rules-integration
     - .judged
   stage: apple
@@ -115,7 +116,9 @@ apple:swift-test:
       - .ci-artifacts/junit/
 
 apple:ios:
-  extends: .apple-job
+  extends:
+    - .apple-job
+    - .apple-device-job
   needs:
     - apple:xcframework
   script:
@@ -132,7 +135,7 @@ apple:ios:
 # branch with the surface it breaks never having run green.
 apple:ios-test:
   extends:
-    - .macos-job
+    - .apple-device-job
     - .rules-verify-and-branch
     - .measured
   stage: apple

@@ -37,10 +37,6 @@ on:
           asks for a full run: every lane that some full kind schedules.
         type: string
         default: ''
-      test-filter:
-        description: Nextest expression that narrows the selected test steps.
-        type: string
-        default: ''
       mutants:
         description: >-
           Run every mutation suite. They cost hours and run only when asked
@@ -48,66 +44,35 @@ on:
         type: boolean
         default: false
 
-permissions:
-  contents: read
-
 # A newer run of the same selection on the same branch makes the older one
 # obsolete: without a group, a branch that dispatched on every push queued a
 # whole night per push for the fleet. Another selection, or the other cadence,
 # is another question and keeps its run.
 concurrency:
-  group: dispatch-${{ github.ref }}-${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}-${{ inputs.only || '' }}-${{ inputs.mutants || false }}-${{ inputs.test-filter != '' && github.run_id || 'unfiltered' }}
+  group: dispatch-${{ github.ref }}-${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}-${{ inputs.only || '' }}-${{ inputs.mutants || false }}
   cancel-in-progress: true
 
 jobs:
-  authorize:
-    name: Dispatch authorization
-    if: >-
-      vars.KITHARA_RUNNER_LABELS != ''
-      || vars.KITHARA_WINDOWS_RUNNER_LABELS != ''
-      || vars.KITHARA_ANDROID_RUNNER_LABELS != ''
-      || vars.KITHARA_GPU_RUNNER_LABELS != ''
-      || vars.KITHARA_STRESS_RUNNER_LABELS != ''
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Validate repository owner and branch
-        env:
-          ACTOR: ${{ github.actor }}
-          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-          OWNER: ${{ github.repository_owner }}
-          REF: ${{ github.ref }}
-          SHA: ${{ github.sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$ACTOR" == "$OWNER" && "$TRIGGERING_ACTOR" == "$OWNER" ]] || { echo "only the repository owner may start or re-run dispatch"; exit 1; }
-          [[ "$REF" == refs/heads/* && "$SHA" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "dispatch needs the current branch SHA"; exit 1; }
-
   # The gate lanes a night adds to the ones every push already runs: the
   # sanitizer soak, the secret scan, the check the merge request does.
   gate:
-    needs: authorize
     if: vars.KITHARA_RUNNER_LABELS != ''
     uses: ./.github/workflows/run.yml
     with:
       role: gate
       kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}
       only: ${{ inputs.only || '' }}
-      test-filter: ${{ inputs.test-filter || '' }}
 
   # Reachable by name; the fan-out itself renders nothing here, because every
   # platform lane names a machine this fleet does not have. The jobs below call
   # the workflows that do.
   platforms:
-    needs: authorize
     if: vars.KITHARA_RUNNER_LABELS != ''
     uses: ./.github/workflows/run.yml
     with:
       role: platforms
       kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}
       only: ${{ inputs.only || '' }}
-      test-filter: ${{ inputs.test-filter || '' }}
 
   # The lanes that ask for the whole fleet take turns with each other. One
   # machine serves every lane, and a queue that also stalled the pushes was
@@ -116,7 +81,6 @@ jobs:
   # eighteen runner slots idle. The group is held by the calling job, so the
   # fan-out's own lanes still run concurrently inside its turn.
   deep:
-    needs: authorize
     if: vars.KITHARA_RUNNER_LABELS != ''
     concurrency:
       group: heavy-linux-${{ github.repository }}
@@ -127,12 +91,10 @@ jobs:
       role: deep
       kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}
       only: ${{ inputs.only || '' }}
-      test-filter: ${{ inputs.test-filter || '' }}
 
   # Never on a schedule: `mutants` runs every suite, and `only` runs the lanes
   # it names.
   mutants:
-    needs: authorize
     if: >-
       vars.KITHARA_RUNNER_LABELS != ''
       && (inputs.mutants || (inputs.only || '') != '')
@@ -145,10 +107,8 @@ jobs:
       role: mutants
       kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}
       only: ${{ inputs.only || 'all' }}
-      test-filter: ${{ inputs.test-filter || '' }}
 
   quality:
-    needs: authorize
     if: vars.KITHARA_RUNNER_LABELS != ''
     concurrency:
       group: heavy-linux-${{ github.repository }}
@@ -159,12 +119,10 @@ jobs:
       role: quality
       kind: ${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly') }}
       only: ${{ inputs.only || '' }}
-      test-filter: ${{ inputs.test-filter || '' }}
 
   # The one Linux lane the fan-out cannot carry: it needs build-time secrets,
   # and one executor serves every declared lane.
   network:
-    needs: authorize
     if: >-
       vars.KITHARA_RUNNER_LABELS != ''
       && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
@@ -184,7 +142,6 @@ jobs:
   # it. Each of these workflows
   # also starts on its own, which is how one of them is run by hand.
   windows:
-    needs: authorize
     if: >-
       vars.KITHARA_WINDOWS_RUNNER_LABELS != ''
       && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
@@ -194,14 +151,12 @@ jobs:
   # The Android baseline runs every night and every week, and a request for
   # it by name starts it alone.
   android:
-    needs: authorize
     if: >-
       vars.KITHARA_ANDROID_RUNNER_LABELS != ''
       && ((inputs.only || '') == '' || contains(inputs.only, 'android-test'))
     uses: ./.github/workflows/android.yml
 
   ui:
-    needs: authorize
     if: >-
       vars.KITHARA_GPU_RUNNER_LABELS != ''
       && (inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || 'nightly')) == 'nightly'
@@ -212,7 +167,6 @@ jobs:
   # of its own and a group of its own, and its own admission: only the owner of
   # a fork may spend a night of the fleet on it.
   stress:
-    needs: authorize
     if: >-
       vars.KITHARA_STRESS_ENABLED == 'true'
       && vars.KITHARA_STRESS_RUNNER_LABELS != ''

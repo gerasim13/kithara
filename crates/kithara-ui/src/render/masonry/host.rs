@@ -4,9 +4,9 @@ use std::{
     rc::Rc,
 };
 
-use masonry::core::NewWidget;
 #[cfg(feature = "capture")]
 use masonry::core::WidgetId;
+use masonry::core::{NewWidget, Widget};
 
 use super::{
     CustomWidget, MasonryNode,
@@ -14,12 +14,13 @@ use super::{
     custom::{HostAction, MappedCustom, MountedCustom},
     flex::{ChildLayout, Flex},
     leaf::{Leaf, TextFace, TextFaces, WindowLeafLayer},
+    modal::ModalLayer,
     mount::{
         Cx, NodeControl, NodeLayout, Viewport, activates, alignment, control_declared, declared,
         pointer_owner,
     },
-    node::{Detent, Face, Faces},
-    popover::{PopoverLayer, PopoverState},
+    node::{Detent, Face, Faces, Node},
+    popover::{PopoverLayer, PopoverState, SurfaceKind},
     shader::ShaderLeaf,
     spot::{Grip, Spot},
     vis::VisLeaf,
@@ -36,8 +37,8 @@ use crate::{
         ControlAction, CustomSkin, DragGhost, HostedControlPlan, InputOwner, Published, ReadValue,
         Skin,
         document::{
-            Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover, SplitMount,
-            StageMount,
+            Ctx, Group, GroupMount, Host, Measured, Modal, Module, PlacedMount, Popover,
+            SplitMount, StageMount,
         },
         hosted::hosted_control_plan,
         scroll::{Bar, Window},
@@ -80,12 +81,12 @@ impl MasonryState {
         self.paths.borrow_mut().clear();
     }
 
-    fn popover(&self, path: &str, open: bool) -> Rc<PopoverState> {
+    fn popover(&self, path: &str, open: bool, kind: SurfaceKind) -> Rc<PopoverState> {
         let mut popovers = self.popovers.borrow_mut();
         let state = Rc::clone(
             popovers
                 .entry(path.to_owned())
-                .or_insert_with(|| Rc::new(PopoverState::default())),
+                .or_insert_with(|| Rc::new(PopoverState::new(kind))),
         );
         state.latch(open);
         state
@@ -225,6 +226,7 @@ where
             layouts.push(
                 ChildLayout::natural(child.output.natural(), child.minimum)
                     .within(child.band)
+                    .floating(child.floats)
                     .blocked(block),
             );
             nodes.push(child.output);
@@ -456,6 +458,38 @@ where
         let map = Rc::clone(&self.map_event);
         Rc::new(move || map(crate::render::control_event(&path, action.clone())))
     }
+
+    /// Hangs a surface's layer, built from its content and the state it
+    /// stands by, on the node that mounts it, with the layers, registrations,
+    /// boxes, native leaves and window tracker the content carries.
+    fn hang_surface(
+        &self,
+        output: &mut MasonryNode<Action>,
+        (path, open, kind, flag): (InternId, bool, SurfaceKind, &Binding),
+        content: MasonryNode<Action>,
+        layer: impl FnOnce(NewWidget<Node>, Size<Length>, Rc<PopoverState>) -> NewWidget<dyn Widget>,
+    ) {
+        let path = self.ctx.ui.resolve(path).to_owned();
+        let state = self.state.popover(&path, open, kind);
+        let dismiss = self.shared_control_action(path, ControlAction::Activate);
+        let (content, declared, layers, registrations, boxes, native, window) =
+            LayerParts::from(content);
+        let layer = layer(content, declared, Rc::clone(&state));
+        let held = registrations
+            .engines
+            .iter()
+            .map(|engine| engine.item.owner())
+            .collect();
+        output.add_popover(layer.id(), flag, state, dismiss, held);
+        output.append_layers(layers);
+        output.append_registrations(registrations);
+        output.append_boxes(boxes);
+        output.append_native(native);
+        if let Some(window) = window {
+            output.set_window_tracker(window);
+        }
+        output.add_layer(layer);
+    }
 }
 
 impl<Action> Host for MasonryHost<'_, Action>
@@ -674,41 +708,45 @@ where
         content: &mut dyn FnMut(&mut Self) -> Self::Output,
     ) -> Self::Output {
         let content = content(self);
-        let path = self.ctx.ui.resolve(popover.path()).to_owned();
-        let state = self.state.popover(&path, popover.is_open());
-        let dismiss = self.shared_control_action(path.clone(), ControlAction::Activate);
         let size = popover.size().map_or_else(|| anchor.declared(), declared);
         let mut output =
             MasonryNode::document(NodeLayout::Stack, size, vec![anchor], false, None, None);
-        let (content, declared, layers, registrations, boxes, native, window) =
-            LayerParts::from(content);
-        let layer = NewWidget::new(PopoverLayer::new(
-            content,
-            declared,
-            Rc::clone(&state),
-            popover.at(),
-            popover.align(),
-            self.skin,
-        ))
-        .erased();
-        let held = registrations
-            .engines
-            .iter()
-            .map(|engine| engine.item.owner())
-            .collect();
-        output.add_popover(layer.id(), popover.flag(), state, Rc::clone(&dismiss), held);
-        output.append_layers(layers);
-        output.append_registrations(registrations);
-        output.append_boxes(boxes);
-        output.append_native(native);
-        if let Some(window) = window {
-            output.set_window_tracker(window);
-        }
-        output.add_layer(layer);
+        let surface = (
+            popover.path(),
+            popover.is_open(),
+            SurfaceKind::popover(),
+            popover.flag(),
+        );
+        let (at, align, skin) = (popover.at(), popover.align(), self.skin);
+        self.hang_surface(&mut output, surface, content, |content, declared, state| {
+            NewWidget::new(PopoverLayer::new(content, declared, state, at, align, skin)).erased()
+        });
+        let path = self.ctx.ui.resolve(popover.path()).to_owned();
         output.set_actions(
             Some(self.control_action(path, ControlAction::Activate)),
             None,
         );
+        output
+    }
+
+    fn modal(
+        &mut self,
+        modal: Modal<'_>,
+        content: &mut dyn FnMut(&mut Self) -> Self::Output,
+    ) -> Self::Output {
+        let content = content(self);
+        let nothing = Size::new(Length::Fixed(0.0), Length::Fixed(0.0));
+        let mut output =
+            MasonryNode::document(NodeLayout::Stack, nothing, Vec::new(), false, None, None);
+        let surface = (
+            modal.path(),
+            modal.is_open(),
+            SurfaceKind::Modal,
+            modal.flag(),
+        );
+        self.hang_surface(&mut output, surface, content, |content, declared, state| {
+            NewWidget::new(ModalLayer::new(content, declared, state, self.skin)).erased()
+        });
         output
     }
 
@@ -818,7 +856,10 @@ where
     ) -> Self::Output {
         let children = children
             .into_iter()
-            .map(|mut child| (self.block(child.block, &mut child.output), child.output))
+            .map(|mut child| {
+                let block = self.block(child.block, &mut child.output);
+                (block, child.floats, child.output)
+            })
             .collect();
         MasonryNode::stage(size, children)
     }

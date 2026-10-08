@@ -369,6 +369,13 @@
         small_icon_size: 10.0,
         cell_icon_size: 9.0,
     ),
+    modal: (
+        scrim: BgDeep,
+        scrim_alpha: 0.72,
+        background: BgPanel,
+        frame: (radius: 0.0, border_width: 1.0, border: Line),
+        shadow: (color: Shadow, alpha: 0.55, offset_x: 0.0, offset_y: 24.0, blur: 80.0),
+    ),
     pop: (
         background: BgFooter,
         frame: (radius: 0.0, border_width: 1.0, border: LineHi),
