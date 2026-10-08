@@ -230,18 +230,13 @@ impl PlayerResource {
 
     pub(super) fn refresh_mark(&mut self, budget: &mut usize) {
         self.recycle_obsolete(budget);
-        let next = self
-            .packet
-            .as_ref()
-            .or_else(|| self.consumer.get().receiver.peek());
+        let (next, offset) = match self.packet.as_ref() {
+            Some(packet) => (Some(packet), self.offset),
+            None => (self.consumer.get().receiver.peek(), 0),
+        };
         if let Some(PcmPacket::Chunk(chunk)) = next
             && chunk.meta.segment == self.lane.segment
         {
-            let offset = if self.packet.is_some() {
-                self.offset
-            } else {
-                0
-            };
             self.mapped = if let Some((frame, position)) = chunk
                 .meta
                 .lane_frame
@@ -296,6 +291,9 @@ impl PlayerResource {
             let Some(PcmPacket::Chunk(chunk)) = &self.packet else {
                 break;
             };
+            if chunk.meta.segment != self.lane.segment {
+                break;
+            }
             let channels = usize::from(chunk.spec().channels);
             let count = chunk
                 .frames()

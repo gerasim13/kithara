@@ -2,6 +2,7 @@ use std::num::NonZeroUsize;
 
 use kithara_audio::{AudioConfig, ResamplerBackend};
 use kithara_config::Config;
+use kithara_dsp::param::SmootherConfig;
 use kithara_effects::AudioEffect;
 use kithara_platform::sync::Arc;
 use kithara_stream::StreamType;
@@ -30,6 +31,10 @@ where
     #[config(value, builder(default = NonZeroUsize::MIN))]
     #[field(get, copy)]
     pub(crate) preload_chunks: NonZeroUsize,
+    /// Lane-owned Jump ramp, using the deck's frame rounding.
+    #[config(value, builder(default = crate::consts::DEFAULT_DECLICK))]
+    #[field(get, copy)]
+    pub(crate) declick: SmootherConfig,
     /// Chunk capacity of each forward and reverse PCM ring.
     #[config(value, builder(default = crate::consts::CAPACITY))]
     #[field(get, copy)]
@@ -53,6 +58,14 @@ where
     #[config(skip = "transferred to the warp lane", builder(default = WarpConfig::builder().build()))]
     #[field(get)]
     pub(crate) warp: WarpConfig,
+}
+
+impl<T: StreamType, B: ResamplerBackend> TrackConfig<T, B> {
+    /// Output frames to subtract from a Jump's intended landing frame.
+    #[must_use]
+    pub fn declick_frames(&self, rate: std::num::NonZeroU32) -> kithara_signal::FrameCount {
+        crate::rt::declick_frame_count(self.declick, rate)
+    }
 }
 
 impl<T, B> From<AudioConfig<T, B>> for TrackConfig<T, B>

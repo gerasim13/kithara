@@ -167,8 +167,8 @@ impl PlayerTrack {
         self.stop_resume = None;
     }
 
-    pub(crate) fn interrupt_stop(&mut self) -> Option<SlotMark> {
-        let resume = self.stop_resume;
+    pub(crate) fn interrupt_stop(&mut self, at: SessionFrame) -> Option<SlotMark> {
+        let resume = self.stop_resume.or_else(|| self.resource.mark(at));
         self.clear_stop();
         resume
     }

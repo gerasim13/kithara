@@ -115,7 +115,7 @@ mod tests {
 
     fn make_node() -> (PlayerNode<TestPools, TestInbox>, DeckEnds, ScopedSender<DeckProtocol, DeckProtocol>, TestInbox) {
         let config = DeckMixerConfig::default();
-        let (mut sender, inbox) = scoped_channel(ScopedConfig::builder().scope(ChannelConfig::builder().build()).build());
+        let (mut sender, inbox) = scoped_channel(ScopedConfig::builder().scope(ChannelConfig::builder().targets(config.slots().get()).build()).build());
         let scope = sender.open(config.slots().get()).expect("deck scope");
         let (ends, inputs) = scope_channels(scope, config);
         (PlayerNode::new(inputs, pools()), ends, sender, TestInbox(inbox))

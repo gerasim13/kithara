@@ -121,7 +121,7 @@ impl AudioRead for Track {
         let channels = u64::from(self.spec.channels);
         let from = (at * channels).to_usize().unwrap_or(0);
         let len = (frames * channels).to_usize().unwrap_or(0);
-        Ok(ChunkOutcome::Chunk(AudioChunk::new(
+        Ok(ChunkOutcome::Chunk(Box::new(AudioChunk::new(
             AudioChunkInfo {
                 spec: self.spec,
                 frames: u32::try_from(frames).unwrap_or(0),
@@ -129,7 +129,7 @@ impl AudioRead for Track {
                 ..Default::default()
             },
             sample_buffer(&self.pools, &self.pcm[from..from + len]),
-        )))
+        ))))
     }
 
     fn position(&self) -> Duration {

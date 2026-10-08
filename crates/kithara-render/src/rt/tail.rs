@@ -11,6 +11,8 @@ use crate::bridge::RtMetrics;
 pub(crate) struct SlotTail {
     left: SampleBuffer,
     right: SampleBuffer,
+    incoming_left: SampleBuffer,
+    incoming_right: SampleBuffer,
     /// Frames the tail holds.
     len: usize,
     /// Frames of it already mixed.
@@ -26,6 +28,8 @@ impl SlotTail {
         Ok(Self {
             left: pools.get_with_len::<f32>(frames.get())?,
             right: pools.get_with_len::<f32>(frames.get())?,
+            incoming_left: pools.get_with_len::<f32>(frames.get())?,
+            incoming_right: pools.get_with_len::<f32>(frames.get())?,
             len: 0,
             pos: 0,
         })
@@ -39,16 +43,23 @@ impl SlotTail {
         metrics: &RtMetrics,
         budget: &mut usize,
     ) {
-        if self.is_sounding() {
-            return;
-        }
+        let remaining = self.len - self.pos;
+        self.left.copy_within(self.pos..self.len, 0);
+        self.right.copy_within(self.pos..self.len, 0);
         let frames = frames.min(self.left.len()).min(self.right.len());
-        self.len = track.read_tail(
-            &mut self.left[..frames],
-            &mut self.right[..frames],
+        let written = track.read_tail(
+            &mut self.incoming_left[..frames],
+            &mut self.incoming_right[..frames],
             metrics,
             budget,
         );
+        self.len = remaining.max(written);
+        self.left[remaining..self.len].fill(0.0);
+        self.right[remaining..self.len].fill(0.0);
+        for index in 0..written {
+            self.left[index] += self.incoming_left[index];
+            self.right[index] += self.incoming_right[index];
+        }
         self.pos = 0;
     }
 

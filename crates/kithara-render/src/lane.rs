@@ -10,6 +10,7 @@ use std::{
 use kithara_audio::{AudioSource, TrackFailureKind};
 use kithara_bufpool::HasPool;
 use kithara_command::{Inbox, Protocol, Seq};
+use kithara_dsp::param::SmootherConfig;
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioSpec, FrameCount, SegmentId};
 use kithara_warp::{SpeedCurve, StretchKind, WarpRenderer};
@@ -76,11 +77,26 @@ enum Jump {
         to: Duration,
         start: u64,
         frames: usize,
+        gain: f32,
     },
     Up {
         start: u64,
         frames: usize,
     },
+}
+
+impl Jump {
+    fn gain(self, at: u64) -> f32 {
+        let (start, frames) = match self {
+            Self::Down { start, frames, .. } | Self::Up { start, frames } => (start, frames),
+        };
+        let progress = at.saturating_sub(start).to_f32().unwrap_or(f32::MAX)
+            / frames.max(1).to_f32().unwrap_or(f32::MAX);
+        match self {
+            Self::Down { gain, .. } => gain * (1.0 - progress.min(1.0)),
+            Self::Up { .. } => progress.min(1.0),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -95,18 +111,24 @@ pub(crate) struct Lane {
     cursor: LaneFrame,
     position: Option<Duration>,
     preload_chunks: NonZeroUsize,
+    declick: SmootherConfig,
     admitted: usize,
     pending: Option<(Seq, FrameCount)>,
     jump: Option<Jump>,
 }
 
 impl Lane {
-    pub(crate) fn new(inbox: Inbox<LaneProtocol>, preload_chunks: NonZeroUsize) -> Self {
+    pub(crate) fn new(
+        inbox: Inbox<LaneProtocol>,
+        preload_chunks: NonZeroUsize,
+        declick: SmootherConfig,
+    ) -> Self {
         Self {
             inbox,
             cursor: LaneFrame::default(),
             position: None,
             preload_chunks,
+            declick,
             admitted: 0,
             pending: None,
             jump: None,
@@ -119,6 +141,10 @@ impl Lane {
 
     pub(crate) const fn position(&self) -> Option<Duration> {
         self.position
+    }
+
+    pub(crate) fn declick_frames(&self, sample_rate: NonZeroU32) -> FrameCount {
+        crate::rt::declick_frame_count(self.declick, sample_rate)
     }
 
     pub(crate) fn poll_commands(&mut self, context: &mut Context<'_>) -> Poll<()> {
@@ -159,6 +185,7 @@ impl Lane {
     {
         self.inbox.drain();
         let mut changed = LaneChange::None;
+        let declick_frames = self.declick_frames(spec.sample_rate).get();
         loop {
             let Some(due) = self.inbox.next_due(self.cursor, 1) else {
                 break;
@@ -176,14 +203,13 @@ impl Lane {
                     LaneCommand::SetKeylock(on) => warp.set_keylock(*on),
                     LaneCommand::SetBackend(kind) => warp.set_backend(*kind),
                     LaneCommand::Jump { to } => {
-                        let frames = (f64::from(spec.sample_rate.get())
-                            * f64::from(crate::consts::DEFAULT_DECLICK.smooth_seconds))
-                        .to_usize()
-                        .map_or(1, |frames| frames.max(1));
+                        let frames = declick_frames;
+                        let gain = self.jump.map_or(1.0, |jump| jump.gain(self.cursor.frame));
                         self.jump = Some(Jump::Down {
                             to: *to,
                             start: self.cursor.frame,
                             frames,
+                            gain,
                         });
                     }
                     LaneCommand::Segment { id, from, speed } => {
@@ -227,7 +253,7 @@ impl Lane {
                 });
             }
         }
-        if let Some(Jump::Down { to, start, frames }) = self.jump {
+        if let Some(Jump::Down { to, start, frames, .. }) = self.jump {
             let frames = u64::try_from(frames).map_or(u64::MAX, |frames| frames);
             if self.cursor.frame.saturating_sub(start) >= frames {
                 self.position = Some(landing_position(source.seek(to).map_err(|error| TrackFailureKind::from(&error))?));
@@ -267,24 +293,9 @@ impl Lane {
         chunk.meta.lane_frame = self.cursor.frame;
         let channels = usize::from(chunk.spec().channels.max(1));
         if let Some(jump) = &self.jump {
-            let (start, frames, down) = match *jump {
-                Jump::Down { start, frames, .. } => (start, frames, true),
-                Jump::Up { start, frames } => (start, frames, false),
-            };
             for (offset, frame) in chunk.samples.chunks_exact_mut(channels).enumerate() {
                 let offset = u64::try_from(offset).map_or(u64::MAX, |offset| offset);
-                let elapsed = self
-                    .cursor
-                    .frame
-                    .saturating_add(offset)
-                    .saturating_sub(start);
-                let progress = elapsed.to_f32().map_or(1.0, |elapsed| elapsed)
-                    / frames.to_f32().map_or(1.0, |frames| frames);
-                let gain = if down {
-                    1.0 - progress.min(1.0)
-                } else {
-                    progress.min(1.0)
-                };
+                let gain = jump.gain(self.cursor.frame.saturating_add(offset));
                 for sample in frame {
                     *sample *= gain;
                 }
@@ -364,7 +375,7 @@ mod tests {
         assert_eq!(config.declick_frames(spec.sample_rate).get(), expected);
         let pools = crate::test_pools::pools();
         let (mut sender, inbox) = channel(ChannelConfig::builder().build());
-        let mut lane = Lane::new(inbox, NonZeroUsize::new(1).expect("preload"));
+        let mut lane = Lane::new(inbox, NonZeroUsize::new(1).expect("preload"), config.declick());
         let mut warp = Warp::new((), &WarpConfig::builder().build()).renderer(spec, pools);
         jump(&mut sender);
         lane.execute_due(&mut JumpSource, &mut warp, spec).expect("jump accepted");
@@ -378,7 +389,7 @@ mod tests {
         let spec = AudioSpec::new(1, NonZeroU32::new(44_100).expect("rate"));
         let pools = crate::test_pools::pools();
         let (mut sender, inbox) = channel(ChannelConfig::builder().build());
-        let mut lane = Lane::new(inbox, NonZeroUsize::new(1).expect("preload"));
+        let mut lane = Lane::new(inbox, NonZeroUsize::new(1).expect("preload"), crate::consts::DEFAULT_DECLICK);
         let mut warp = Warp::new((), &WarpConfig::builder().build()).renderer(spec, pools);
         jump(&mut sender);
         lane.execute_due(&mut JumpSource, &mut warp, spec).expect("first jump");

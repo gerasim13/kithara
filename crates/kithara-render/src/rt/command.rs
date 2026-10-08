@@ -175,6 +175,7 @@ impl Deck {
                 due.commands_mut().push(returned);
             }
             due.apply(());
+            self.finish_stops(level);
             self.resolve_armed(level, start, at);
         }
     }
@@ -401,14 +402,26 @@ impl Deck {
         let resume = self
             .tracks
             .at_mut(slot)
-            .and_then(PlayerTrack::interrupt_stop);
+            .and_then(|track| track.interrupt_stop(due.at()));
         let Some(resume) = resume else { return };
         if seq == due.seq() {
             replace_stop(&mut due.commands_mut()[remaining..], slot, resume);
+        } else {
+            self.interrupted[slot.index()] = Some((seq, resume));
         }
     }
 
     pub(super) fn finish_stops(&mut self, level: &mut LevelInbox<'_, DeckProtocol>) {
+        for (index, interrupted) in self.interrupted.iter_mut().enumerate() {
+            let Some((seq, resume)) = interrupted.take() else { continue };
+            let slot = Slot::new(u16::try_from(index).unwrap_or(u16::MAX));
+            if let Some(commands) = level.committed_mut(seq) {
+                replace_stop(commands, slot, resume);
+                if stops_complete(commands) {
+                    level.complete(seq, ());
+                }
+            }
+        }
         for index in 0..self.stops.len() {
             let Some(seq) = self.stops[index] else {
                 continue;
@@ -417,34 +430,18 @@ impl Deck {
                 self.clear_stops(seq);
                 continue;
             };
-            let complete = self
-                .stops
-                .iter()
-                .enumerate()
-                .filter(|(_, pending)| **pending == Some(seq))
-                .all(|(index, _)| {
-                    let slot = Slot::new(u16::try_from(index).unwrap_or(u16::MAX));
-                    self.tracks
-                        .at(slot)
-                        .and_then(PlayerTrack::stop_resume)
-                        .is_some()
-                });
-            if !complete {
+            let slot = Slot::new(u16::try_from(index).unwrap_or(u16::MAX));
+            let Some(resume) = self.tracks.at(slot).and_then(PlayerTrack::stop_resume) else {
                 continue;
-            }
-            for (index, pending) in self.stops.iter().enumerate() {
-                if *pending != Some(seq) {
-                    continue;
-                }
-                let slot = Slot::new(u16::try_from(index).unwrap_or(u16::MAX));
-                if let Some(resume) = self.tracks.at(slot).and_then(PlayerTrack::stop_resume) {
-                    replace_stop(commands, slot, resume);
-                }
+            };
+            replace_stop(commands, slot, resume);
+            self.stops[index] = None;
+            if let Some(track) = self.tracks.at_mut(slot) {
+                track.clear_stop();
             }
             if stops_complete(commands) {
                 level.complete(seq, ());
             }
-            self.clear_stops(seq);
         }
     }
 

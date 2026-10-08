@@ -36,7 +36,7 @@ where T: kithara_audio::AudioSource<Chunk = kithara_signal::AudioChunk> {
     let config = kithara_warp::WarpConfig::builder().build();
     let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
     let drain = kithara_effects::EffectDrain::new(0, &pools).expect("empty effect drain");
-    let warp = crate::WarpSource::new(source, renderer, Vec::new(), drain, spec, pools.clone(), inbox, std::num::NonZeroUsize::MIN);
+    let warp = crate::WarpSource::new(source, renderer, Vec::new(), drain, spec, pools.clone(), inbox, std::num::NonZeroUsize::MIN, crate::consts::DEFAULT_DECLICK);
     let node = DecoderNode::new(warp, producer, None, kithara_signal::AudioChunkInfo { spec, ..Default::default() }, None, pools);
     (node, receiver, sender)
 }

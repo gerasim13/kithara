@@ -52,6 +52,7 @@ pub(super) struct Deck {
     pub(super) tails: Vec<SlotTail>,
     pub(super) held: Vec<Option<SegmentId>>,
     pub(super) stops: Vec<Option<Seq>>,
+    pub(super) interrupted: Vec<Option<(Seq, crate::bridge::SlotMark)>>,
     pub(super) recycle: Vec<usize>,
     pub(super) declick_frames: usize,
     pub(super) evict_frames: usize,
@@ -180,6 +181,7 @@ impl<E: SessionInbox> DeckMixer<E> {
                 tails,
                 held: vec![None; slots.get()],
                 stops: vec![None; slots.get()],
+                interrupted: vec![None; slots.get()],
                 recycle: vec![0; slots.get()],
                 declick_frames,
                 evict_frames,
@@ -222,6 +224,7 @@ impl<E: SessionInbox> DeckMixer<E> {
                     break;
                 };
                 self.deck.take_due(due, context.is_some());
+                self.deck.finish_stops(level);
                 self.deck.resolve_armed(level, start, at);
             }
             self.deck.maintain();

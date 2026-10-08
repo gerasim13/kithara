@@ -181,6 +181,7 @@ where
             engine_load,
             warp,
             preload_chunks,
+            declick,
             audio_buffer_chunks,
             block_on_underrun,
         } = config.into();
@@ -250,6 +251,7 @@ where
             self.pools().clone(),
             inbox,
             preload_chunks,
+            declick,
         );
         let mut lane = DecoderNode::new(
             source,

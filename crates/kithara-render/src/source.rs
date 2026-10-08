@@ -10,6 +10,7 @@ use kithara_audio::{
 };
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_command::Inbox;
+use kithara_dsp::param::SmootherConfig;
 use kithara_effects::{AudioEffect, EffectDrain, EffectDrainStep, apply_effects, reset_effects};
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount};
@@ -71,6 +72,7 @@ where
         pools: PoolRegion<S>,
         inbox: Inbox<LaneProtocol>,
         preload_chunks: NonZeroUsize,
+        declick: SmootherConfig,
     ) -> Self {
         let discontinuity = source.discontinuity();
         Self {
@@ -81,7 +83,7 @@ where
             discontinuity,
             spec,
             pools,
-            lane: Lane::new(inbox, preload_chunks),
+            lane: Lane::new(inbox, preload_chunks, declick),
             drain_state: DrainState::Open,
             pending_input: None,
             staged_meta: None,
@@ -111,6 +113,12 @@ where
         self.warp.engine_latency()
     }
 
+    /// Output frames of this lane's Jump ramp at its current sample rate.
+    #[must_use]
+    pub fn declick_frames(&self) -> FrameCount {
+        self.lane.declick_frames(self.spec.sample_rate)
+    }
+
     /// Records successful admission of the current segment's chunk.
     pub fn admitted(&mut self) {
         self.lane.admitted();
@@ -128,10 +136,11 @@ where
     }
 
     /// Executes commands at the output cursor before producing more samples.
+    /// Returns whether a command reset the decoded source.
     ///
     /// # Errors
     /// Returns the source's seek classification or a render failure.
-    pub fn service_commands(&mut self) -> Result<(), TrackFailureKind> {
+    pub fn service_commands(&mut self) -> Result<bool, TrackFailureKind> {
         let changed = self
             .lane
             .execute_due(&mut self.source, &mut self.warp, self.spec)?;
@@ -146,7 +155,7 @@ where
             self.prepared_frames = None;
         }
         self.prepare_renderers(self.spec);
-        Ok(())
+        Ok(changed == LaneChange::Source)
     }
 
     fn fail(&mut self, failure: TrackFailureKind) -> TrackStep<AudioChunk> {
@@ -168,7 +177,7 @@ where
     }
 
     fn prepare_staging(&mut self) {
-        if self.quantum_failed {
+        if self.quantum_failed || self.lane.output_limit() == 0 {
             return;
         }
         let pending_span = self.pending_input.as_ref().and_then(|pending| {
@@ -469,9 +478,14 @@ where
     fn prepare_renderers(&mut self, spec: AudioSpec) {
         self.spec = spec;
         self.warp.prepare(spec);
-        if self.warp.transition_pending() && self.warp.prepare_engine_latency(spec).is_err() {
-            self.quantum_failed = true;
-            return;
+        if self.warp.transition_pending() {
+            match self.warp.prepare_engine_latency(spec) {
+                Ok(_) | Err(WarpRenderError::NeedsService) => {}
+                Err(_) => {
+                    self.quantum_failed = true;
+                    return;
+                }
+            }
         }
         if self.warp.transition_pending() && matches!(self.drain_state, DrainState::Open) {
             self.drain_state = DrainState::LiveWarp;
@@ -587,7 +601,7 @@ where
         reset_effects(&mut self.effects);
     }
 
-    fn sync_discontinuity(&mut self) {
+    fn sync_discontinuity(&mut self) -> bool {
         let next = self.source.discontinuity();
         let revision_changed = next.as_ref().map(SourceDiscontinuity::revision)
             != self
@@ -599,12 +613,13 @@ where
         }
         self.discontinuity = next;
         if !revision_changed {
-            return;
+            return false;
         }
         self.discard_staged_input();
         self.reset_renderers();
         self.drain.reset();
         self.drain_state = DrainState::Open;
+        true
     }
 }
 
@@ -633,10 +648,14 @@ where
         if let Some(failure) = self.terminal_failure {
             return TrackStep::Failed(failure);
         }
-        if let Err(error) = self.service_commands() {
-            return self.fail(error);
+        match self.service_commands() {
+            Ok(true) => return TrackStep::StateChanged,
+            Ok(false) => {}
+            Err(error) => return self.fail(error),
         }
-        self.sync_discontinuity();
+        if self.sync_discontinuity() {
+            return TrackStep::StateChanged;
+        }
         if self.quantum_failed {
             return self.fail(TrackFailureKind::Render);
         }
@@ -833,7 +852,7 @@ mod tests {
             drain,
             spec,
             pools.clone(),
-            idle_inbox(), NonZeroUsize::new(1).expect("preload"))
+            idle_inbox(), NonZeroUsize::new(1).expect("preload"), consts::DEFAULT_DECLICK)
     }
 
     struct RawSource {
@@ -950,6 +969,7 @@ mod tests {
             pools.clone(),
             idle_inbox(),
             NonZeroUsize::MIN,
+            consts::DEFAULT_DECLICK,
         );
         flush_deferred(&mut source);
         assert_eq!(source.warp.requires_staging(), staged);
@@ -1008,6 +1028,7 @@ mod tests {
             pools.clone(),
             idle_inbox(),
             NonZeroUsize::MIN,
+            consts::DEFAULT_DECLICK,
         );
         let mut staged_prefix_seen = false;
         let mut produced_nonzero_pcm = false;
@@ -1258,6 +1279,7 @@ mod tests {
     struct SeekApplyingSource {
         spec: AudioSpec,
         revision: u64,
+        pending: bool,
     }
 
     impl AudioSource for SeekApplyingSource {
@@ -1265,6 +1287,7 @@ mod tests {
 
         fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
             self.revision = self.revision.wrapping_add(1);
+            self.pending = true;
             Ok(SeekOutcome::Landed { target, landed_at: target })
         }
 
@@ -1277,7 +1300,11 @@ mod tests {
         }
 
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
-            TrackStep::Eof
+            if std::mem::take(&mut self.pending) {
+                TrackStep::StateChanged
+            } else {
+                TrackStep::Eof
+            }
         }
     }
 
@@ -1590,6 +1617,18 @@ mod tests {
         quarter: Vec<f32>,
         three_quarter: Vec<f32>,
     ) {
+        fn feed_whole_chunk(source: &mut WarpSource<RawSource, TestPools>) -> TrackStep<AudioChunk> {
+            let TrackStep::Produced(Fetch::Data { data, .. }) = source.source.step_track() else {
+                panic!("fixture provides a whole decoded chunk");
+            };
+            source.warp.prepare(source.spec);
+            let output = source.warp.render(data).continue_value().expect("whole source span");
+            if source.warp.transition_pending() {
+                source.drain_state = DrainState::LiveWarp;
+            }
+            output.and_then(|data| source.fetch(data)).map_or(TrackStep::StateChanged, TrackStep::Produced)
+        }
+
         for backend in keylock_backends() {
             const ACTIVE_FRAMES: u32 = 4096;
             const UNITY_FRAMES: u32 = 4096;
@@ -1637,9 +1676,9 @@ mod tests {
                 .unwrap_or_else(|error| panic!("test effect drain: {error}"));
             let (mut lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
             let mut source =
-                WarpSource::new(raw, renderer, effects, drain, spec, pools.clone(), inbox, NonZeroUsize::new(1).expect("preload"));
+                WarpSource::new(raw, renderer, effects, drain, spec, pools.clone(), inbox, NonZeroUsize::new(1).expect("preload"), consts::DEFAULT_DECLICK);
 
-            let initial = source.step_track();
+            let initial = feed_whole_chunk(&mut source);
             assert!(matches!(
                 &initial,
                 TrackStep::Produced(_) | TrackStep::StateChanged
@@ -1653,9 +1692,8 @@ mod tests {
                 flush_deferred(&mut source);
             }
 
-            lane.send(When::Next, speed_batch(1.0))
-                .expect("the lane channel has room");
-            let transition = source.step_track();
+            source.warp.set_speed(SpeedCurve::Constant(1.0), 1).expect("unity command");
+            let transition = feed_whole_chunk(&mut source);
             assert!(matches!(
                 &transition,
                 TrackStep::Produced(_) | TrackStep::StateChanged
@@ -1788,7 +1826,7 @@ mod tests {
             drain,
             spec,
             pools.clone(),
-            idle_inbox(), NonZeroUsize::new(1).expect("preload"));
+            idle_inbox(), NonZeroUsize::new(1).expect("preload"), consts::DEFAULT_DECLICK);
         let mut produced = 0;
         for _ in 0..128 {
             flush_deferred(&mut source);
@@ -1913,7 +1951,7 @@ mod tests {
                 drain,
                 spec,
                 target_pools.clone(),
-                idle_inbox(), NonZeroUsize::new(1).expect("preload"));
+                idle_inbox(), NonZeroUsize::new(1).expect("preload"), consts::DEFAULT_DECLICK);
 
             for _ in 0..3 {
                 flush_deferred(&mut source);
@@ -1931,6 +1969,7 @@ mod tests {
         let source = SeekApplyingSource {
             spec,
             revision: 0,
+            pending: false,
         };
         let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(ResettingTail {
             resets: Arc::clone(&resets),
@@ -2113,7 +2152,7 @@ mod tests {
         let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
         let drain =
             EffectDrain::new(0, pools).unwrap_or_else(|error| panic!("test effect drain: {error}"));
-        let source = WarpSource::new(raw, renderer, Vec::new(), drain, spec, pools.clone(), inbox, NonZeroUsize::new(1).expect("preload"));
+        let source = WarpSource::new(raw, renderer, Vec::new(), drain, spec, pools.clone(), inbox, NonZeroUsize::new(1).expect("preload"), consts::DEFAULT_DECLICK);
         (source, lane)
     }
 
@@ -2582,7 +2621,7 @@ mod tests {
         let drain = EffectDrain::new(0, &pools).expect("empty effect drain");
         let (mut lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
         let mut source =
-            WarpSource::new(raw, renderer, Vec::new(), drain, spec, pools.clone(), inbox, NonZeroUsize::new(1).expect("preload"));
+            WarpSource::new(raw, renderer, Vec::new(), drain, spec, pools.clone(), inbox, NonZeroUsize::new(1).expect("preload"), consts::DEFAULT_DECLICK);
         for (index, pointer) in pointers.into_iter().enumerate() {
             if index == 1 {
                 lane.send(
