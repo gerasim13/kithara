@@ -22,6 +22,8 @@ playback worker boundary; ordinary builds compile the probes out.
 
 ## Usage
 
+### Configure a resource
+
 ```rust
 use kithara_assets::AssetStore;
 use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
@@ -56,6 +58,45 @@ allocations continue to compete under one shared hard byte budget.
 builder and inspect caller-facing values through getters such as `source()`,
 `store()`, and `bus()`. Decoder backend, gapless, and resampler settings belong
 to the single `decoder` field.
+
+### Read decoded audio
+
+The async resource constructor opens the configured source and exposes its
+metadata, audio specification, and decoded samples through the same interface.
+
+```rust
+use kithara_assets::AssetStore;
+use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
+use kithara_play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc};
+
+pool_schema! {
+    pub AppPools {
+        bytes: u8,
+        samples: f32,
+    }
+}
+let config = || PoolConfig::builder().max_buffers(128).build();
+let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
+    .bytes(config())
+    .samples(config())
+    .build()?;
+let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+
+// Auto-detect: .m3u8 -> HLS, everything else -> progressive file
+let config: ResourceConfig<AppPools> = ResourceConfig::for_src(ResourceSrc::parse(
+    "https://example.com/song.mp3",
+)?)
+.store(AssetStore::builder(pools).build())
+.worker(worker)
+.build();
+let mut resource = Resource::new(config).await?;
+
+let spec = resource.spec();
+let meta = resource.metadata();
+
+let mut buf = [0.0f32; 1024];
+resource.read(&mut buf);
+```
 
 ## Key Types
 

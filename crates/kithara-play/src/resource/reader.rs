@@ -68,44 +68,7 @@ where
 
 /// Type-erased audio resource wrapping any `AudioReader`.
 ///
-/// Provides a unified interface for reading decoded audio
-/// regardless of the underlying source (file, HLS, custom).
-///
-/// # Example
-///
-/// ```ignore
-/// use kithara_assets::AssetStore;
-/// use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
-/// use kithara_play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc};
-///
-/// pool_schema! {
-///     pub AppPools {
-///         bytes: u8,
-///         samples: f32,
-///     }
-/// }
-/// let config = || PoolConfig::builder().max_buffers(128).build();
-/// let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
-///     .bytes(config())
-///     .samples(config())
-///     .build()?;
-/// let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-///
-/// // Auto-detect: .m3u8 -> HLS, everything else -> progressive file
-/// let config: ResourceConfig<AppPools> = ResourceConfig::for_src(ResourceSrc::parse(
-///     "https://example.com/song.mp3",
-/// )?)
-/// .store(AssetStore::builder(pools).build())
-/// .worker(worker)
-/// .build();
-/// let mut resource = Resource::new(config).await?;
-///
-/// let spec = resource.spec();
-/// let meta = resource.metadata();
-///
-/// let mut buf = [0.0f32; 1024];
-/// resource.read(&mut buf);
-/// ```
+/// File, HLS, and custom readers expose the same decoded-audio interface.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct Resource {

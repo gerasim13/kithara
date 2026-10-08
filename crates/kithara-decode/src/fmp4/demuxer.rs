@@ -123,22 +123,11 @@ where
         Ok(status)
     }
 
-    /// Build a demuxer by fetching + parsing the init segment.
-    ///
-    /// `source` is the byte-level Read/Seek cursor; `segments` is the
-    /// segment-layout handle (typically obtained from
-    /// [`kithara_stream::Source::byte_map`]) — the demuxer
-    /// queries it for `init_segment_range` / `segment_at_time` /
-    /// `segment_after_byte`.
+    /// Parse the init segment selected by the source's [`kithara_stream::Source::byte_map`].
     ///
     /// # Errors
-    ///
-    /// Returns [`DecodeError::InvalidData`] when the init segment range
-    /// is missing, the init buffer fails to fill, or the parsed init
-    /// segment is malformed.
-    /// Returns [`DecodeError::Interrupted`] when the source defers the
-    /// init read; the caller should retry after the underlying source
-    /// becomes ready.
+    /// Returns [`DecodeError::InvalidData`] for missing, incomplete or malformed init data.
+    /// A deferred init read returns [`DecodeError::Interrupted`]; retry when the source is ready.
     pub(crate) fn open(
         mut source: BoxedSource,
         segments: Arc<dyn ByteMap>,
@@ -342,21 +331,9 @@ where
     }
 }
 
-/// Seek warm-up back-off duration for `codec` at `sample_rate`, derived
-/// from the codec's pre-roll packet count. `None` when no pre-roll is
-/// required (`packets == 0`) or the codec has no fixed access-unit size.
-/// Where inside the landing segment the decode run may start, or `None` when
-/// it must start at the segment's first frame.
-///
-/// Starting at the frame covering the target — rather than replaying the
-/// whole segment to reach it — is only the demuxer's call to make for a codec
-/// that asks for no back-off of its own. A codec that declares
-/// [`CodecPriming`] states its pre-roll in packets and bytes *of the
-/// container*, and `warmup_backoff` already spends it by landing in an
-/// earlier segment; feeding such a codec from an arbitrary frame instead
-/// breaks the contract it declared, and the Apple HE-AACv2 path answers with
-/// audible phase drift. A codec that declares none primes itself, and needs
-/// only the generic run-up of [`seek_warmup_access_units`].
+/// Choose an intra-segment landing only when the codec declares no [`CodecPriming`].
+/// Declared pre-roll is already spent by landing in an earlier segment; an arbitrary frame
+/// would break it and cause HE-AAC phase drift. Self-priming codecs use generic warm-up units.
 fn intra_segment_landing(
     seek_target: Duration,
     priming: &CodecPriming,

@@ -5,19 +5,10 @@ use std::{
 
 use super::seqlock::AnchorEntry;
 
-/// A generation-tagged MULTI-writer seqlock cell holding `{segment, anchor}` plus a
-/// present/absent generation. Unlike [`SeqAnchorCell`](super::seqlock::SeqAnchorCell)
-/// (a single on-core body writer), the exact-seek demand is body-written from BOTH the
-/// produce-core seek path (`seek_time_anchor`) and the off-RT profiled reader
-/// preparation, with no lock shared between them. The version is therefore acquired
-/// with a CAS (even -> odd): the two writers serialize, the loser retries — writes are
-/// short (five atomic stores, no alloc/lock/log) and rare. The RT read path never spins
-/// on a write-in-flight: an odd or changed version returns `None` (not-ready) for this
-/// poll and relies on the existing level-triggered re-poll (`SchedulerWake` /
-/// `WAITING_TIMEOUT` / next `read_at`) to observe the demand a tick later — the
-/// non-blocking analog of the original `Mutex`'s blocking wait. `active` is the present
-/// generation (0 = `None`), published *inside* the version critical section so two
-/// writers' publishes can never lost-update each other.
+/// Generation-tagged multi-writer seqlock for an optional `{segment, anchor}` demand.
+/// Core seeks and off-core preparation serialize writes by CAS-acquiring an even version.
+/// Short writes include the active generation, preventing lost updates between writers.
+/// RT reads never spin: an odd or changed version returns `None` until the existing re-poll.
 pub(in crate::variant) struct CasAnchorCell {
     segment: AtomicU32,
     /// Seqlock version: even = stable, odd = a writer owns the body. Acquired

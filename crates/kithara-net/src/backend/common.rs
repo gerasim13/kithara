@@ -1,9 +1,12 @@
-use std::{fmt::Write, num::NonZeroU16};
+use std::num::NonZeroU16;
 
 use bytes::Bytes;
 use url::Url;
 
-use crate::{error::NetError, types::Headers};
+use crate::{
+    error::{NetError, truncate_error_body},
+    types::Headers,
+};
 
 pub(crate) fn status_error(url: Url, status: u16, body: &Bytes) -> NetError {
     let body = if body.is_empty() {
@@ -11,6 +14,7 @@ pub(crate) fn status_error(url: Url, status: u16, body: &Bytes) -> NetError {
     } else {
         Some(truncate_error_body(
             String::from_utf8_lossy(body).into_owned(),
+            "...",
         ))
     };
     match NonZeroU16::new(status) {
@@ -52,20 +56,4 @@ fn content_length_from_range(headers: &Headers) -> Option<String> {
         .and_then(|header| header.split('/').nth(1))
         .filter(|total| *total != "*")
         .map(str::to_owned)
-}
-
-fn truncate_error_body(mut body: String) -> String {
-    const MAX_ERROR_BODY_CHARS: usize = 200;
-
-    let total = body.chars().count();
-    if total <= MAX_ERROR_BODY_CHARS {
-        return body;
-    }
-    let cut_at = body
-        .char_indices()
-        .nth(MAX_ERROR_BODY_CHARS)
-        .map_or(body.len(), |(index, _)| index);
-    body.truncate(cut_at);
-    let _ = write!(body, "...(truncated, {total} chars total)");
-    body
 }

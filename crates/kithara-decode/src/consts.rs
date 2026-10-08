@@ -17,6 +17,10 @@ pub(crate) const PACKET_FRAMES: u32 = 1024;
 #[cfg(test)]
 pub(crate) const SAMPLE_RATE: u32 = 44_100;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) const SAMPLE_TABLE_PATH: [[u8; 4]; 6] =
+    [*b"moov", *b"trak", *b"mdia", *b"minf", *b"stbl", *b"stsd"];
+
 pub(crate) const REQUIRED_INPUT: ReaderInput = ReaderInput::InitOnly;
 pub(crate) const FLAC_STREAMINFO_BYTES: usize = 34;
 pub(crate) const FOURCC_FLAC: u32 = 0x664c_6143;

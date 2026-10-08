@@ -562,19 +562,11 @@ where
         }
     }
 
-    /// Asks every router the document mounted, and says whether one took the
-    /// event outright.
-    ///
-    /// A router with nothing under the hand answers nothing, so the order only
-    /// decides who hears a point two of them could claim, and the one drawn on
-    /// top hears it.
-    ///
-    /// A router that holds the pointer, or takes it here, ends the walk — and
-    /// the event that lets go is still its own, which is what makes a double
-    /// click that ends a drag land on the control that was dragged. A router
-    /// that merely answers — a list that hears the item it is carrying move —
-    /// leaves the event for the routers below it and for the tree, which is
-    /// how the module the item is dropped on learns the hand is above it.
+    /// Routes topmost-first and reports whether a router took the event outright.
+    /// An existing or newly taken pointer capture ends the walk, including its release
+    /// event, so a double click ending a drag reaches the dragged control. A router
+    /// that only observes leaves the event for lower routers and the tree, allowing
+    /// the destination module to observe a carried item above it.
     fn route_engines(&mut self, event: &PointerEvent) -> Result<bool, MasonryRootError> {
         let Some((input, at)) = picker::pointing(event, &mut self.double_click, self.scale) else {
             return Ok(false);
@@ -824,21 +816,10 @@ where
         moved
     }
 
-    /// Re-reads everything the mounted document shows and hands it to the
-    /// widget that draws it.
-    ///
-    /// This is what a rebuild was doing, minus the rebuild: the tree stays, so a
-    /// gesture in flight and the pointer capture that feeds it both survive, and
-    /// every control bound to the same endpoint moves together rather than one
-    /// of them being poked by hand.
-    ///
-    /// Two kinds of thing change between frames without the document changing.
-    /// A control's *value* comes from an endpoint the control names, and is
-    /// re-read one control at a time. A control's *pose* comes from the objects
-    /// around it, and is worked out by the document walk rather than named
-    /// anywhere, so it takes a walk to re-read — one for the whole document.
-    ///
-    /// Blocks are stood first, so a hidden block's content stays unread.
+    /// Refreshes mounted values and poses without rebuilding, preserving in-flight
+    /// gestures and pointer capture while updating every control sharing an endpoint.
+    /// Values are re-read per control; surrounding objects determine poses through
+    /// one document walk. Blocks stand first so hidden content remains unread.
     pub fn refresh(&mut self, ctx: Ctx<'_, '_>) {
         if self.stand_blocks(ctx) {
             self.stand_engines();

@@ -68,19 +68,11 @@ impl TryFrom<&TrackAnalysis> for BeatGridModel {
     }
 }
 
-/// The artifact's beats with the ordinal each one holds, still paired with the
-/// source frame the bar lines name them by.
-///
-/// Each beat kept is the whole beats it sits after or before its kept
-/// neighbour, so a tempo drifting from the stated one never adds up to a lost
-/// beat. Where the tracker slips off the beats - a stray marker, a phrase
-/// tracked on the off-beats - a marker names no whole beat from its kept
-/// neighbour and is left out rather than named wrongly: the grid then states a
-/// gap in its numbers, which is what a consumer following ordinals reads as
-/// "nothing proved here", while the beats around it stand as observed. The
-/// count starts inside the longest run of markers a whole beat apart, so a
-/// slip at the start of the track does not leave the music after it out.
-/// Ordinals count from the first beat kept.
+/// Pairs observed source-frame markers with beat ordinals counted from the first
+/// kept beat. Whole-beat spacing from kept neighbours prevents accumulated tempo
+/// drift; stray or off-beat markers are omitted and leave ordinal gaps, meaning
+/// nothing is proved there. Anchoring in the longest whole-beat run prevents an
+/// initial tracking slip from excluding the rest of the track.
 fn place(
     snapshot: &BeatSnapshot,
     rate: f64,

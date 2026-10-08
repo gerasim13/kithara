@@ -67,6 +67,7 @@ pub struct DownloaderConfig {
 #[cfg(all(test, not(miri)))]
 mod tests {
     use kithara_abr::AbrSettings;
+    use kithara_config::Config;
     use kithara_net::{HttpClient, NetOptions};
     use kithara_platform::{CancelToken, time::Duration};
     use kithara_test_utils::{bufpool::pools as test_pools, kithara};
@@ -112,11 +113,11 @@ mod tests {
         config.apply(settings);
 
         assert_eq!(
-            config.abr_settings.min_switch_interval,
+            config.abr_settings.values().min_switch_interval,
             Duration::from_secs(45)
         );
         assert!(
-            (config.abr_settings.down_hysteresis_ratio - 0.55).abs() < f64::EPSILON,
+            (config.abr_settings.values().down_hysteresis_ratio - 0.55).abs() < f64::EPSILON,
             "a silent inner field must survive the nested apply"
         );
     }

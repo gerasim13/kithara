@@ -92,7 +92,7 @@ deps:features:
   extends: .deps-job
   timeout: 3 hours
   script:
-    - just ci run deps-features
+    - just ci run deps-features-full
 
 deps:semver:
   extends: .deps-job

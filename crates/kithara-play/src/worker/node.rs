@@ -218,17 +218,13 @@ where
         }
     }
 
+    /// Distinct probes separate ring-full backpressure, which a reader can release,
+    /// from a queued terminal marker, whose Backpressured result will never clear.
     #[kithara::measure(label = "play.decoder.tick")]
     #[kithara::rtsan_forbid_blocking]
     fn tick(&mut self) -> TickResult {
         self.sync_seek_epoch();
 
-        // A pass reports one `Backpressured` for two unrelated reasons, and the
-        // count alone cannot separate them: the playback ring has no room for
-        // the next chunk, or the source is spent and its end marker is already
-        // queued. The first clears when the reader drains; the second never
-        // does. Naming each park at the site that takes it is what tells a
-        // wedge that is waiting for the reader from one that is already over.
         if !self.port.can_push_direct() {
             kithara::probe_event!(
                 decoder_ring_full,

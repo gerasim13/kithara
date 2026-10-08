@@ -18,7 +18,7 @@ use kithara_stream::{
 };
 use tracing::debug;
 
-use super::{super::coord::HlsCoord, cancel::SessionCancel};
+use super::cancel::SessionCancel;
 use crate::{
     signal::SizeSignal,
     variant::{HlsVariant, ResolvedSeekProjection, VariantReaderPreparation},
@@ -235,22 +235,9 @@ where
         })
     }
 
-    /// Whether the construction window this session was prepared for is
-    /// readable.
-    ///
-    /// A pure question. It used to wake the peer on a negative answer, and that
-    /// wake deadlocked the stream: this is called under the transition lock,
-    /// while `wake_peer` takes the peer's state lock — and the peer takes those
-    /// two in the opposite order, `poll_state_phase` holding its state lock
-    /// across `prepare_for_seek` -> `cancel_incoming_for_seek`, which locks the
-    /// transition. A seek epoch landing while an incoming session was being
-    /// polled for readiness stopped the stream dead, with the queue full and
-    /// nothing in flight.
-    ///
-    /// The wake is still owed — the variant plans nothing by itself, so without
-    /// it an incoming session is only serviced when the *active* session happens
-    /// to ask for bytes. It belongs to the caller, which knows when it has let
-    /// the transition lock go. See [`wake_peer_for_readiness`].
+    /// Pure query of the prepared construction window's readability.
+    /// Never wake the peer under the transition lock: the peer state lock has the opposite order.
+    /// The caller owes [`wake_peer_for_readiness`] after releasing the transition lock.
     pub(crate) fn is_ready(&self) -> StreamResult<bool> {
         match &self.readiness {
             SessionReadiness::Active => Ok(true),
@@ -344,7 +331,7 @@ where
         self.variant.phase_at(byte..byte.saturating_add(1))
     }
 
-    /// Session-scoped twin of [`HlsCoord::wait_range`]: `Some(_)` is the
+    /// Session-scoped wait: `Some(_)` is the
     /// wake-free RT probe, `None` the off-RT construction wait that parks on the
     /// readiness gate. The variant plans nothing by itself — the reader driver
     /// wakes the peer for the range — so the blocking probe notifies the peer
@@ -356,7 +343,7 @@ where
     ) -> StreamResult<WaitOutcome> {
         match timeout {
             Some(_) => self.variant.wait_range(range, timeout),
-            None => HlsCoord::<S>::wait_range_blocking(&self.signal, &self.cancel.root, || {
+            None => self.signal.wait_range_blocking(&self.cancel.root, || {
                 let outcome = self.variant.wait_range(range.clone(), Some(Duration::ZERO));
                 if matches!(
                     outcome,

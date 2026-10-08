@@ -10,9 +10,6 @@ keywords = ["ui", "text", "font", "shaping", "parley"]
 categories = ["gui", "text-processing"]
 autotests = false
 
-[package.metadata.cargo-machete]
-ignored = ["kithara-workspace-hack"]
-
 [features]
 default = ["shape"]
 # The embedded faces and the shaper. Off, the crate carries only the style
@@ -41,11 +38,6 @@ serde = { workspace = true }
 skrifa = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true, optional = true }
-
-# The same desktop-only gate `kithara-ui` carries: this crate is part of the UI
-# surface no device closure builds.
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
 kithara-test-utils = { workspace = true }

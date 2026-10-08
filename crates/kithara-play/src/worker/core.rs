@@ -202,8 +202,13 @@ where
             warp,
         } = config;
         let wake = Wake::new(self.0.dispatcher.wake_handle());
-        let prepared =
-            Audio::<Stream<T>>::prepare(audio, Arc::new(wake), self.pools().clone()).await?;
+        // Keep cold source preparation out of the callers' inline future state.
+        let prepared = Box::pin(Audio::<Stream<T>>::prepare(
+            audio,
+            Arc::new(wake),
+            self.pools().clone(),
+        ))
+        .await?;
         let drain = EffectDrain::new(effects.len(), self.pools())?;
         let (lane_sender, inbox) = channel::<LaneProtocol>(self.0.lane);
         let prepared = prepared.map(|audio, source| {
@@ -263,11 +268,45 @@ impl<S> fmt::Debug for PlayWorker<S> {
 
 #[cfg(test)]
 mod tests {
+    use std::mem::size_of_val;
+
+    use kithara_assets::{AssetStore, StorageBackend};
+    use kithara_audio::AudioConfig;
+    use kithara_file::{File, FileConfig, FileSrc};
     use kithara_platform::CancelScope;
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::pools;
+    use crate::{PlaybackResamplerBackend, test_pools::pools};
+
+    #[kithara::test]
+    fn source_preparation_future_is_bounded() {
+        let play = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+        let audio = || {
+            let file = FileConfig::for_src(FileSrc::Local("unused.wav".into()))
+                .store(
+                    AssetStore::builder(play.pools().clone())
+                        .backend(StorageBackend::Memory)
+                        .build(),
+                )
+                .pools(play.pools().clone())
+                .build();
+            AudioConfig::<File<_>, PlaybackResamplerBackend>::for_stream(file).build()
+        };
+        let preparation = play.load::<File<_>, PlaybackResamplerBackend, _>(audio());
+        let source = Audio::<Stream<File<_>>>::prepare(
+            audio(),
+            Arc::new(Wake::new(play.0.dispatcher.wake_handle())),
+            play.pools().clone(),
+        );
+        let bytes = size_of_val(&preparation);
+        let source_bytes = size_of_val(&source);
+
+        assert!(
+            bytes < source_bytes,
+            "lane holds {bytes} bytes inline versus {source_bytes} bytes of cold preparation"
+        );
+    }
 
     #[kithara::test]
     fn shared_base_outlives_play_dispatcher_and_play_cancel_stays_local() {

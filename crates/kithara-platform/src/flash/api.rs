@@ -3,7 +3,6 @@ use std::{
     marker::PhantomData,
     ops::{Add, AddAssign, Sub},
     pin::Pin,
-    sync::atomic::{AtomicBool, Ordering},
     task::{Context, Poll},
 };
 
@@ -12,11 +11,9 @@ use pin_project_lite::pin_project;
 pub use super::participant::{Participating, participate};
 use super::{
     ctx::{self, ModeSnapshot, flash_ambient, flash_enabled},
-    ids::WaiterId,
     system::{self, FLASH},
 };
 pub use crate::common::time::Duration;
-use crate::sync::Arc;
 
 /// RAII bracket for ONE real I/O operation in flight (a socket send / response
 /// or body-chunk await in `kithara-net`). While at least one scope is live the
@@ -48,8 +45,8 @@ impl Drop for RealIoScope {
 /// on the quiescence engine on its first poll, then resolves once the engine
 /// crosses that deadline. Collapses to zero wall-clock (the clock jumps when all
 /// participants park). Resolution is GRANT-driven (`handle.granted()`), never a
-/// bare clock check; the task's `active_async` slot is owned by the spawn
-/// poll-wrapper gate ([`Participating`]), so this future touches no counter.
+/// bare clock check. Its unique handle retains the grant credit until consumed
+/// or dropped; the task's separate async slot belongs to its poll-wrapper gate.
 pub(crate) struct FlashSleep {
     handle: Option<system::AsyncHandle>,
     delta_nanos: u64,
@@ -98,14 +95,6 @@ impl Future for FlashSleep {
     }
 }
 
-impl Drop for FlashSleep {
-    fn drop(&mut self) {
-        if let Some(handle) = self.handle.take() {
-            system::cancel_async_wait(&handle);
-        }
-    }
-}
-
 /// Engine-backed `tokio::task::yield_now` under `flash`. A cooperative async
 /// yield must let the virtual clock advance — in real time, time passes while a
 /// task yields and other work (a server throttle) makes progress. This parks the
@@ -116,7 +105,7 @@ impl Drop for FlashSleep {
 /// that pins `active_async` and freezes the clock (the bug a naive `yield_now`
 /// causes under quiescence).
 pub struct FlashYield {
-    handle: Option<(WaiterId, Arc<AtomicBool>)>,
+    handle: Option<system::AsyncHandle>,
     done: bool,
 }
 
@@ -127,42 +116,28 @@ impl Future for FlashYield {
         if self.done {
             return Poll::Ready(());
         }
-        if let Some((_, granted)) = self.handle.as_ref() {
-            if granted.load(Ordering::Acquire) {
+        if let Some(handle) = self.handle.as_ref() {
+            if handle.granted() {
                 self.done = true;
                 self.handle = None;
                 return Poll::Ready(());
             }
             return Poll::Pending;
         }
-        let (id, granted, adv) = system::register_yield_async(cx.waker().clone());
-        self.handle = Some((id, granted));
+        let (handle, adv) = system::register_yield_async(cx.waker().clone());
+        self.handle = Some(handle);
         adv.fire();
         Poll::Pending
     }
 }
 
-impl Drop for FlashYield {
-    fn drop(&mut self) {
-        if let Some((id, _)) = self.handle.take() {
-            system::cancel_yield(id);
-        }
-    }
-}
-
-/// Cooperative async yield. Like the stateful sync primitives (Condvar/Notify/
-/// mpsc/oneshot, which latch the ambient gate at construction), this keys on
-/// [`flash_ambient`], NOT [`flash_enabled`] — consulted per call, since a yield
-/// has no cross-thread signal partner to disagree with:
-/// engine-backed ([`FlashYield`]) only inside a flash-eligible (ambient) test,
-/// and a real `tokio::task::yield_now` otherwise. A `yield_now`'s resolution
-/// comes from an engine clock advance, whose grant requires `active_async == 0`;
-/// in a flash(false) test the surrounding task's other primitives are REAL, so it
-/// keeps its `active_async` slot across the yield, and an engine-backed yield can
-/// never be granted (a circular dependency — `active_async` never hits zero while
-/// the only `.await` blocking the task is the yield). Gating on ambient keeps the
-/// flash BUILD behavior-transparent for ambient=false (flash(false) tests AND
-/// production), exactly as the stateful-primitive ambient gate does.
+/// Cooperatively yields through [`FlashYield`] only when [`flash_ambient`] is
+/// true, otherwise through real `tokio::task::yield_now`. Unlike stateful
+/// primitives, yield has no signal partner and can consult ambient per call.
+/// Engine resolution requires `active_async == 0`; a flash(false) task retains
+/// its active slot through real primitives, so an engine yield there would
+/// wait forever on its own credit. The ambient gate keeps flash(false) tests
+/// and production behaviour-transparent.
 pub fn yield_now() -> Yield {
     if flash_ambient() {
         Yield::Flash(FlashYield {
@@ -174,17 +149,16 @@ pub fn yield_now() -> Yield {
     }
 }
 
-/// Ambient-gated cooperative yield future (see [`yield_now`]). Engine-backed under
-/// ambient, a plain scheduler yield otherwise. The mode is fixed at construction
-/// from the ambient gate, which is uniform per test.
+/// Cooperative yield future with its mode fixed at construction.
+/// [`yield_now`] selects engine quiescence under ambient eligibility and a scheduler
+/// yield otherwise; [`super::tokio::task::yield_runnable`] selects the scheduler mode.
 #[must_use = "a Yield future does nothing unless `.await`ed"]
 pub enum Yield {
     /// Engine-backed quiescence yield (ambient test).
     Flash(FlashYield),
-    /// Real cooperative yield (ambient off: flash(false) test / production):
-    /// returns `Pending` once after re-arming the waker, then `Ready` — the same
-    /// hand-back-to-the-scheduler semantics as `tokio::task::yield_now`, but
-    /// without naming `tokio`'s unnameable yield future.
+    /// Scheduler yield, selected by ambient-off `yield_now` or an explicit runnable yield.
+    /// Re-arms the waker and returns `Pending` once, then `Ready`; the immediate wake
+    /// keeps a participating task runnable across the pending poll.
     Real { yielded: bool },
 }
 
@@ -251,16 +225,8 @@ pub(crate) fn advance(delta: Duration) {
     FLASH.clock.advance(duration_to_nanos(delta));
 }
 
-/// Reset the timeline to its base and clear the quiescence engine. For unit
-/// tests that share one process; production tests get per-test process
-/// isolation from nextest. See `FlashInner::reset` for the ordering contract.
-///
-/// Crate-private and gated to the two configurations that reach it: this
-/// rewinds a process-wide clock, so a caller outside the engine could zero the
-/// timeline under someone else's running test. Callers are this crate's own
-/// unit tests and the loom harness (`backend/flash_loom/mod.rs`), which owns the
-/// per-iteration boundary. Product tests get process isolation instead and must
-/// not have it.
+/// Reset a drained unit-test/loom run. No old waiter, grant receipt or
+/// participant may remain reachable; nextest isolates product tests.
 #[cfg(any(test, feature = "loom"))]
 #[inline]
 pub(crate) fn reset() {

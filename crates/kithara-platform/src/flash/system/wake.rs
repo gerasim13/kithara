@@ -57,9 +57,8 @@ fn wait_set(cv: &Condvar, mut woken: MutexGuard<'_, bool>) {
 pub(crate) enum Wake {
     /// A blocked OS thread (`park_timeout`, `Condvar`): wake via the `Token`.
     Sync(Arc<Token>),
-    /// A parked async task (`FlashSleep`, async `Notify`): the `granted` flag is
-    /// set just before waking so the future's Drop can tell "I was granted an
-    /// `active` slot" from "I was still parked".
+    /// An async grant is published under core with one retained credit. Its
+    /// unique AsyncHandle settles the creating task or untracked engine owner.
     Task {
         waker: Waker,
         granted: Arc<AtomicBool>,
@@ -82,28 +81,17 @@ impl Wake {
         }
     }
 
-    /// True for an async-task waiter. Async tasks are counted in `active_async`
-    /// by the spawn poll-wrapper (per-poll), NOT by the firer — so a fired
-    /// async waiter is `mark_granted` but never bumps a counter. Sync OS-thread
-    /// waiters (`Sync`) ARE bumped by the firer into `active` (their wake has
-    /// real OS-scheduling latency the bump must cover).
-    pub(crate) fn is_task(&self) -> bool {
-        matches!(self, Self::Task { .. })
-    }
-
-    /// Mark an async-task wake as granted an `active` slot. MUST run under the
-    /// engine `core` lock at the same moment the firer does `active += 1`, so a
-    /// concurrent `cancel_async_wait` (which also takes the lock) sees a
-    /// consistent "entry removed ⇒ granted set" and never leaks the slot.
+    /// Publish an async grant under the same core lock that retains its
+    /// credit and removes its entry. Receipt settlement takes that lock too,
+    /// so cancellation sees either an ungranted entry or one retained credit.
     pub(crate) fn mark_granted_under_lock(&self) {
         if let Self::Task { granted, .. } = self {
             granted.store(true, Ordering::Release);
         }
     }
 
-    /// Identity of the async task parked on this waiter (`(task id, spawn site)`),
-    /// for the hang dump. `None` for a sync OS-thread waiter or when no task
-    /// context was captured at registration.
+    /// Creating task identity for grant accounting and the dump. None for a
+    /// sync waiter or when registration captured no task context.
     pub(crate) fn task(&self) -> Option<(u64, &'static Location<'static>)> {
         match self {
             Self::Task { task, .. } => *task,

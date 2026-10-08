@@ -57,12 +57,13 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
             .with_open_result(|runtime| runtime.try_set_crossfade_duration(seconds))
     }
 
-    /// Create a new player with the given configuration.
+    /// Create a player with one lifetime track grid and its own cancellation subtree.
+    /// Loads, replacements and releases revise that grid without changing group topology.
+    /// A supplied cancel token is a parent; absence creates a standalone root. Drop leaves the parent live.
+    /// Web sessions cannot stage Send receipts.
     ///
     /// # Panics
-    ///
-    /// Panics if the supplied warp configuration violates its validated
-    /// backend geometry invariant while applying the internal render quantum.
+    /// Panics if internal render-quantum admission violates validated Warp backend geometry.
     #[must_use]
     pub fn new(mut config: PlayerConfig<S>) -> Self {
         config.normalize_live_values();
@@ -76,9 +77,6 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
                 .expect("only a nonzero render quantum changes on valid backend geometry");
         }
         let pools = config.worker.pools().clone();
-        // The player's one member is its own track geometry: a grid it keeps
-        // for its whole life, so loading, replacing and releasing a track all
-        // state a later revision instead of changing the group's topology.
         let track_grid = TrackGrid::new(config.track_grid_id, config.sample_rate);
 
         let bus = config
@@ -86,9 +84,6 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
             .clone()
             .unwrap_or_else(|| EventBus::new(config.event_bus_capacity.get()));
 
-        // Composed/standalone seam: `Some(parent)` → the player's master is a
-        // child of it (so a passed cancel reaches the player but the player's
-        // Drop never cancels the passed token); `None` → own root.
         let cancel = CancelScope::new(config.cancel.clone()).token();
         config.cancel = Some(cancel.clone());
 
@@ -104,8 +99,6 @@ impl<S: Send + Sync + 'static> PlayerImpl<S> {
             .cancel(cancel.clone())
             .build();
         let engine = EngineImpl::new(engine_config, bus.clone());
-        // A web session is not `Send`, so it cannot take receipts from the
-        // staging runtime: a web player stages nothing.
         #[cfg(not(target_arch = "wasm32"))]
         let owner: Option<Arc<dyn kithara_sync::ReceiptSink>> =
             Some(Arc::new(engine.session().clone()));

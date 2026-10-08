@@ -65,21 +65,11 @@ pub struct UiConfig {
     /// this field.
     #[builder(default = SCREEN_CACHE)]
     pub screen_cache: usize,
-    /// The pools every document compiled against this configuration draws
-    /// from.
-    ///
-    /// Shared on purpose. A host compiles one screen per layout and compiles
-    /// them all again whenever the skin changes; a pool family per compiled
-    /// document would keep as many sets of retained buffers as there are
-    /// pages, and throw every one of them away at each redress. One family,
-    /// cloned into each compiled document, is what makes a retained buffer
-    /// retained. Build the configuration once and compile every screen against
-    /// it; the default builds a family of its own, which is one host drawing
-    /// one page.
-    ///
-    /// Not a document key: it is a built value assembled from
-    /// [`DrawPoolLimits`](crate::source::DrawPoolLimits), which the document
-    /// names instead -- see `Config::ui` in `kithara-app`.
+    /// Pools shared by every document compiled against this configuration.
+    /// Build once per host: cloning one family preserves retained buffers across
+    /// pages and skin changes instead of rebuilding per-document pool families.
+    /// The default creates a family for one host/page. This built value is not a
+    /// document key; documents configure [`DrawPoolLimits`](crate::source::DrawPoolLimits).
     #[cfg(any(feature = "render", feature = "vello"))]
     #[builder(default)]
     #[patch(skip)]

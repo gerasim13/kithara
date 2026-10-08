@@ -47,20 +47,9 @@ struct TmpClaim {
 }
 
 impl TmpClaim {
-    /// Take the claim on `path`, or report who holds it.
-    ///
-    /// Wipes the tmp on the way in, but only once the lock is won: winning it
-    /// proves no other writer is live, while a claimant that loses must leave
-    /// the winner's in-flight bytes untouched — which is why the open itself
-    /// must not truncate.
-    ///
-    /// The wipe is what `OpenOptions::create_new` used to give for free, and
-    /// emptiness is the invariant the driver reads the tmp against: a
-    /// `MmapDriver::open` that finds a non-empty file adopts it whole —
-    /// `available.insert(0..len)`, `is_committed: true`, `final_len:
-    /// Some(len)` — so a dead owner's bytes would come back not as unreachable
-    /// residue but as committed, readable payload. `commit` is no backstop
-    /// either: it trims to `final_len` only when the caller knows it.
+    /// Claim the tmp exclusively, then truncate; a losing claimant must not touch live writer bytes.
+    /// Stale bytes would otherwise be adopted as committed by mmap, and commit cannot trim them
+    /// when final length is unknown. The lock, not the tmp's existence or size, proves ownership.
     fn take(path: PathBuf) -> StorageResult<Self> {
         let file = OpenOptions::new()
             .read(true)
@@ -118,19 +107,9 @@ pub enum OpenIntent {
     Reopen,
 }
 
-/// Factory used to (re)open the inner writer at a given path.
-///
-/// Called twice in the atomic-chunked lifecycle:
-///   1. With [`OpenIntent::Fresh`] — at [`AtomicChunked::open`],
-///      opens the inner mmap on the sibling tmp path so chunked
-///      writes accumulate there.
-///   2. With [`OpenIntent::Reopen`] — at [`AtomicChunked::commit`]
-///      after the atomic rename, opens a fresh read-only inner mmap
-///      on the canonical path (a writer handle whose backing file is
-///      already committed). The caller MUST honour the intent and
-///      produce a Committed-status resource, otherwise the wrapping
-///      layer (`LeaseResource::drop`) will mistake the just-renamed
-///      file for an abandoned writer and delete it.
+/// Open the tmp writer with [`OpenIntent::Fresh`], then the canonical file with Reopen after rename.
+/// Reopen must return Committed status; otherwise a lease mistakes the renamed file for
+/// an abandoned writer and deletes it.
 type FactoryFn<D> =
     Box<dyn Fn(&Path, OpenIntent) -> StorageResult<ResourceWriter<D>> + Send + Sync>;
 
@@ -208,33 +187,55 @@ impl<D: DriverIo> AtomicChunked<D> {
         };
         let TmpClaim { path: tmp, file } = &claim;
 
-        self.inner.load().seal_in_place(final_len)?;
-        let _handover = self.handover.write();
-        self.inner.load().release_backing_in_place()?;
+        let handover = self.handover.write();
+        let inner = self.inner.load();
+        let result: StorageResult<_> = (|| {
+            inner.seal_in_place(final_len)?;
+            inner.release_backing_in_place()?;
 
-        if let Some(len) = final_len
-            && file.metadata().is_ok_and(|m| m.len() > len)
-        {
-            file.set_len(len).map_err(|e| {
-                StorageError::Failed(format!("AtomicChunked commit: trim {tmp:?}: {e}"))
+            if let Some(len) = final_len
+                && file.metadata().is_ok_and(|m| m.len() > len)
+            {
+                file.set_len(len).map_err(|e| {
+                    StorageError::Failed(format!("AtomicChunked commit: trim {tmp:?}: {e}"))
+                })?;
+            }
+            if self.barrier == Barrier::Inline {
+                file.sync_data().map_err(|e| {
+                    StorageError::Failed(format!("AtomicChunked commit: sync_data {tmp:?}: {e}"))
+                })?;
+            }
+            fs::rename(tmp, &self.canonical_path).map_err(|e| {
+                StorageError::Failed(format!(
+                    "AtomicChunked commit: rename {tmp:?} -> {:?}: {e}",
+                    self.canonical_path
+                ))
             })?;
-        }
-        if self.barrier == Barrier::Inline {
-            file.sync_data().map_err(|e| {
-                StorageError::Failed(format!("AtomicChunked commit: sync_data {tmp:?}: {e}"))
-            })?;
-        }
-        fs::rename(tmp, &self.canonical_path).map_err(|e| {
-            StorageError::Failed(format!(
-                "AtomicChunked commit: rename {tmp:?} -> {:?}: {e}",
-                self.canonical_path
-            ))
-        })?;
 
-        if let Some(factory) = self.factory.as_ref() {
-            let new_inner = factory(&self.canonical_path, OpenIntent::Reopen)?;
-            self.inner.store(Arc::new(new_inner));
+            let new_inner = self
+                .factory
+                .as_ref()
+                .map(|factory| factory(&self.canonical_path, OpenIntent::Reopen))
+                .transpose()?;
+            let new_inner = new_inner.map(|resource| {
+                resource.stage_commit_in_place();
+                Arc::new(resource)
+            });
+            if let Some(new_inner) = &new_inner {
+                self.inner.store(Arc::clone(new_inner));
+            }
+            Ok(new_inner)
+        })();
+        if let Err(error) = &result {
+            inner.fail_in_place(error.to_string());
         }
+        drop(handover);
+        let new_inner = result?;
+        inner.notify_commit_in_place(final_len);
+        if let Some(new_inner) = new_inner {
+            new_inner.publish_commit_in_place(final_len);
+        }
+        inner.publish_commit_in_place(final_len);
         Ok(())
     }
 
@@ -263,25 +264,12 @@ impl<D: DriverIo> AtomicChunked<D> {
         self.read_settled(|view| view.next_gap(from, limit))
     }
 
-    /// Open a fresh chunked-atomic resource at `canonical_path`.
-    /// The provided `factory` opens the inner at a given filesystem
-    /// path; it is called once with the temp path during this
-    /// constructor and once more with the canonical path after the
-    /// atomic rename in [`AtomicChunked::commit`].
-    ///
-    /// Claims `<canonical>.tmp` by taking an exclusive advisory lock on it
-    /// — see [`TmpClaim`]. Returns [`StorageError::TmpClaimed`] only while
-    /// another `AssetStore` instance (or another process) is *alive* and
-    /// writing the same canonical path; a tmp whose owner is gone carries
-    /// no lock, so this open reclaims it.
+    /// Claim `<canonical>.tmp` with an exclusive advisory lock, reclaiming dead owners' tmp files.
+    /// The factory opens Fresh at the tmp path and Reopen at the canonical path after commit rename.
     ///
     /// # Errors
-    ///
-    /// - [`StorageError::Failed`] — canonical path has no parent /
-    ///   non-utf8 file name.
-    /// - [`StorageError::TmpClaimed`] — a live writer holds the tmp.
-    /// - [`StorageError::Io`] / [`StorageError::Mmap`] — propagated
-    ///   from the OS or from the supplied factory.
+    /// Returns [`StorageError::Failed`] for a missing parent or non-UTF8 filename,
+    /// [`StorageError::TmpClaimed`] for a live writer, and OS/factory I/O or mmap errors.
     pub fn open<F>(canonical_path: PathBuf, factory: F) -> StorageResult<Self>
     where
         F: Fn(&Path, OpenIntent) -> StorageResult<ResourceWriter<D>> + Send + Sync + 'static,

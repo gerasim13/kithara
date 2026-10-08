@@ -1,9 +1,27 @@
-use std::num::NonZeroU16;
+use std::{fmt::Write, num::NonZeroU16};
 
 use thiserror::Error;
 use url::Url;
 
 pub type NetResult<T> = Result<T, NetError>;
+
+/// Keep at most 200 Unicode characters of an HTTP error body and append
+/// its original length with the backend's diagnostic ellipsis.
+pub(crate) fn truncate_error_body(mut body: String, ellipsis: &str) -> String {
+    const MAX_ERROR_BODY_CHARS: usize = 200;
+
+    let total = body.chars().count();
+    if total <= MAX_ERROR_BODY_CHARS {
+        return body;
+    }
+    let cut_at = body
+        .char_indices()
+        .nth(MAX_ERROR_BODY_CHARS)
+        .map_or(body.len(), |(index, _)| index);
+    body.truncate(cut_at);
+    let _ = write!(body, "{ellipsis}(truncated, {total} chars total)");
+    body
+}
 
 /// Centralized error type for kithara-net.
 #[non_exhaustive]
@@ -56,25 +74,10 @@ impl NetError {
     /// HTTP 429 Too Many Requests.
     const HTTP_TOO_MANY_REQUESTS: u16 = 429;
 
-    /// Whether asking again later can answer differently.
-    ///
-    /// [`Self::retryability`] answers whether *this request* may be retried
-    /// now, which is why a spent budget is [`Retryability::Fatal`] there. This
-    /// is the other question, asked by callers that hold a resource and can
-    /// come back to it: a track waiting to be played, a segment slot a reader
-    /// will want again. A spent budget is classified by what it was retrying.
-    ///
-    /// True when nothing of the resource was delivered and the obstacle was
-    /// reachability, which changes on its own: a host that refused with a
-    /// transient status, or one that was not there at all.
-    ///
-    /// False for a timeout. A transfer that established and then stopped
-    /// delivering has already been retried and resumed by the resilient body,
-    /// so its exhaustion is a verdict about a server that answers without
-    /// delivering — and the layers that own giving up (the segment slot, and
-    /// through it every blocking read above it) have nothing else to hear it
-    /// from. Also false for everything a later ask cannot change: a missing
-    /// resource, a body that will not decode, a cancel.
+    /// Whether a later resource request can answer differently, distinct from retrying this request now.
+    /// Classifies spent budgets by their underlying cause: transient status/reachability with no delivered
+    /// resource may recover. Timeout means the resumed transfer stalled and is terminal for blocking reads;
+    /// missing, undecodable or cancelled resources cannot answer differently.
     #[must_use]
     pub fn can_answer_later(&self) -> bool {
         let cause = self.cause();
@@ -141,6 +144,29 @@ mod tests {
     }
 
     use super::*;
+
+    #[kithara::test]
+    #[case::empty(String::new(), "...", String::new())]
+    #[case::short("x".repeat(199), "...", "x".repeat(199))]
+    #[case::at_limit("x".repeat(200), "...", "x".repeat(200))]
+    #[case::ascii(
+        "x".repeat(201),
+        "...",
+        format!("{}...(truncated, 201 chars total)", "x".repeat(200))
+    )]
+    #[case::unicode_at_limit("\u{e9}".repeat(200), "\u{2026}", "\u{e9}".repeat(200))]
+    #[case::unicode(
+        "\u{e9}".repeat(201),
+        "\u{2026}",
+        format!("{}\u{2026}(truncated, 201 chars total)", "\u{e9}".repeat(200))
+    )]
+    fn error_body_preserves_character_limit_and_backend_suffix(
+        #[case] body: String,
+        #[case] ellipsis: &str,
+        #[case] expected: String,
+    ) {
+        assert_eq!(truncate_error_body(body, ellipsis), expected);
+    }
 
     fn test_url(raw: &str) -> Url {
         Url::parse(raw).expect("BUG: hard-coded test URL is valid")

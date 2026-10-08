@@ -8,9 +8,6 @@ edition = "2024"
 [package.metadata]
 cargo-fuzz = true
 
-[package.metadata.cargo-machete]
-ignored = ["kithara-workspace-hack"]
-
 [[bin]]
 name = "aes_decrypt"
 path = "fuzz_targets/aes_decrypt.rs"
@@ -78,7 +75,6 @@ kithara = { workspace = true, features = [
     "tls-rustls",
 ] }
 kithara-test-utils = { workspace = true }
-kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../../crates/kithara-workspace-hack" }
 
 arbitrary = { workspace = true }
 libfuzzer-sys = { workspace = true }

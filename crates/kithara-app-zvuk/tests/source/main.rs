@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 use bytes::Bytes;
 use kithara_app_library::PageStatus;
 use kithara_net::mock::NetMock;

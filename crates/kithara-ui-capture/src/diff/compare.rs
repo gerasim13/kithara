@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     fmt,
     fs::{File, create_dir_all, read_dir, read_to_string},
+    io::BufReader,
     iter::once,
     path::{Path, PathBuf},
 };
@@ -122,21 +123,13 @@ impl fmt::Display for Report {
     }
 }
 
-/// Compares two capture sets page by page, writing a difference mask per page
-/// into `masks`.
-///
-/// It is only meaningful when both sets were photographed at the same
-/// geometry: each set records its own in `frame.txt`, and a mismatch is
-/// refused, because two hosts scaled differently can be made to agree or
-/// disagree at will.
-///
-/// A budget turns the numbers into a gate: the file names a per-page
-/// allowance, and a page over its allowance — or missing from either set —
-/// fails the run. Without one this only reports.
+/// Compares capture sets page by page and writes masks into `masks`.
+/// Both sets must record identical geometry in `frame.txt`; different host scales
+/// can manufacture agreement or disagreement. A budget gates each page's allowance
+/// and fails missing or over-budget pages; without it, comparison only reports.
 ///
 /// # Errors
-/// Fails when a set has no recorded geometry, the two disagree on it, a page
-/// cannot be read, or a mask cannot be written.
+/// Fails for absent/mismatched geometry, unreadable pages or unwritable masks.
 pub fn compare(
     left: &Path,
     right: &Path,
@@ -268,11 +261,17 @@ pub(super) struct Image {
 
 fn read_png(path: &Path) -> Result<Image, String> {
     let file = File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?;
-    let decoder = Decoder::new(file);
+    let decoder = Decoder::new(BufReader::new(file));
     let mut reader = decoder
         .read_info()
         .map_err(|error| format!("decode {}: {error}", path.display()))?;
-    let mut rgba = vec![0; reader.output_buffer_size()];
+    let mut rgba = vec![
+        0;
+        reader.output_buffer_size().ok_or_else(|| format!(
+            "decode {}: image exceeds buffer capacity",
+            path.display()
+        ))?
+    ];
     let info = reader
         .next_frame(&mut rgba)
         .map_err(|error| format!("decode {}: {error}", path.display()))?;

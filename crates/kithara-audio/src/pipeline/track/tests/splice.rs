@@ -395,13 +395,15 @@ fn build_variant_layout(label: &str, variant_index: usize) -> VariantLayout {
         let start = byte_cursor;
         let end = start + u64::try_from(bytes.len()).expect("segment length fits u64");
         let segment_index = u32::try_from(segment_index).expect("segment index fits u32");
-        segments.push(SegmentDescriptor::new(
-            start..end,
-            decode_time,
-            segment.duration,
-            segment_index,
-            variant_index,
-        ));
+        segments.push(
+            SegmentDescriptor::builder()
+                .byte_range(start..end)
+                .decode_time(decode_time)
+                .duration(segment.duration)
+                .segment_index(segment_index)
+                .variant_index(variant_index)
+                .build(),
+        );
         blob.extend_from_slice(&bytes);
         byte_cursor = end;
         decode_time = decode_time.saturating_add(segment.duration);

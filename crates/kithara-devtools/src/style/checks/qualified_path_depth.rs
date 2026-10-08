@@ -17,6 +17,7 @@ use syn::{
 use super::{Check, Context};
 use crate::{
     common::{
+        exclude::item_attrs,
         fix::{FixOutcome, SourceRewriter},
         violation::Violation,
         walker::{compile_globs, matches_any, relative_to},
@@ -1192,27 +1193,6 @@ fn impl_item_attrs(item: &ImplItem) -> &[syn::Attribute] {
         ImplItem::Fn(value) => &value.attrs,
         ImplItem::Type(value) => &value.attrs,
         ImplItem::Macro(value) => &value.attrs,
-        _ => &[],
-    }
-}
-
-fn item_attrs(item: &Item) -> &[syn::Attribute] {
-    match item {
-        Item::Const(value) => &value.attrs,
-        Item::Enum(value) => &value.attrs,
-        Item::ExternCrate(value) => &value.attrs,
-        Item::Fn(value) => &value.attrs,
-        Item::ForeignMod(value) => &value.attrs,
-        Item::Impl(value) => &value.attrs,
-        Item::Macro(value) => &value.attrs,
-        Item::Mod(value) => &value.attrs,
-        Item::Static(value) => &value.attrs,
-        Item::Struct(value) => &value.attrs,
-        Item::Trait(value) => &value.attrs,
-        Item::TraitAlias(value) => &value.attrs,
-        Item::Type(value) => &value.attrs,
-        Item::Union(value) => &value.attrs,
-        Item::Use(value) => &value.attrs,
         _ => &[],
     }
 }

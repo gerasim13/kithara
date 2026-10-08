@@ -344,26 +344,10 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
     }
 }
 
-/// The layers a stage hands the toolkit.
-///
-/// The declared box goes to the stack itself rather than to a container around
-/// it. `Stack::layout` resolves its own size from its width, height and first
-/// layer, then offers every other layer that size loosely — which is the same
-/// arithmetic `NodeLayout::Stage` runs on the retained host. Wrapping it instead
-/// leaves the stack the width of its first layer inside a filled container, and
-/// a wider child is then clipped to the first one: measured on the motion page,
-/// where a 120-wide chip came out 107.
-///
-/// That first layer is offered the stack's own box tightly rather than loosely,
-/// so whichever child a document happened to write first would be stretched to
-/// the stage while its siblings kept the box they asked for. A layer that draws
-/// nothing takes that offer, and every child the document wrote gets the one the
-/// retained host makes: measured on the sprites page, where a 96-tall sprite
-/// came out 112 tall here and 96 there, which a turn then carried 8 across the
-/// screen.
-///
-/// A child floating above the stage takes no room in it, so it stands after
-/// the children that do and never sizes the stack.
+/// Builds stage layers with the declared box on `Stack` itself, matching retained
+/// `NodeLayout::Stage`. A blank first layer takes the stack's tight size offer,
+/// leaving authored children the loose offer used by the retained host. Floating
+/// children follow in-flow children and never size the stack.
 fn stage<'a>(
     children: Vec<StageMount<Element<'a, Published>>>,
     size: Option<SizeSpec>,

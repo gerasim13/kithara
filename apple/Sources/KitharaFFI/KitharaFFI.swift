@@ -667,20 +667,13 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func eqGain(band: UInt32)  -> Float
 
     /**
-     * Insert an item into the queue.
-     *
-     * Registers the item's URL + caller-supplied preferences with the
-     * Queue, which starts loading in the background and emits
-     * `TrackStatusChanged` events through the player's event stream.
-     *
-     * `after == None` places the item at the head (position 0),
-     * mirroring the iOS `AudioPlayerProtocol.insert(_:after:)` contract.
-     * Use [`Self::append`] for AVQueuePlayer-style append.
+     * Inserts a URL and caller preferences, starts background queue loading, and
+     * emits `TrackStatusChanged` through the player event stream.
+     * `after == None` inserts at position 0, matching iOS
+     * `AudioPlayerProtocol.insert(_:after:)`; [`Self::append`] appends instead.
      *
      * # Errors
-     *
-     * Returns [`FfiError::InvalidArgument`] if `after` is not currently
-     * in the queue, or if the item's URL is malformed.
+     * Returns [`FfiError::InvalidArgument`] for an absent `after` item or malformed URL.
      */
     func insert(item: AudioPlayerItem, after: AudioPlayerItem?) throws
 
@@ -879,19 +872,14 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func setPlaybackOrder(order: FfiPlaybackOrder) throws
 
     /**
-     * Select `item` in the queue with the given transition.
-     *
-     * `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
-     * user-initiated-selection idiom: tap a track in a list).
-     * `FfiTransition::Crossfade` uses the player's configured duration
-     * (typical for Next/Prev buttons). Play state is not changed here:
-     * the engine continues playing if it was, pauses if it was.
+     * Selects `item` with an immediate cut for `FfiTransition::None`, or the
+     * configured crossfade duration for `FfiTransition::Crossfade`.
+     * The current playing or paused state is preserved.
      *
      * # Errors
-     *
-     * Returns [`FfiError::InvalidArgument`] if `item` is not in the
-     * queue, [`FfiError::NotReady`] if its resource is not yet loaded,
-     * or [`FfiError::Internal`] if the underlying Queue fails to select.
+     * Returns [`FfiError::InvalidArgument`] for an absent item,
+     * [`FfiError::NotReady`] for an unloaded resource, or [`FfiError::Internal`]
+     * when the underlying Queue cannot select it.
      */
     func select(item: AudioPlayerItem, transition: FfiTransition) throws
 
@@ -1086,20 +1074,13 @@ open func eqGain(band: UInt32) -> Float  {
 }
 
     /**
-     * Insert an item into the queue.
-     *
-     * Registers the item's URL + caller-supplied preferences with the
-     * Queue, which starts loading in the background and emits
-     * `TrackStatusChanged` events through the player's event stream.
-     *
-     * `after == None` places the item at the head (position 0),
-     * mirroring the iOS `AudioPlayerProtocol.insert(_:after:)` contract.
-     * Use [`Self::append`] for AVQueuePlayer-style append.
+     * Inserts a URL and caller preferences, starts background queue loading, and
+     * emits `TrackStatusChanged` through the player event stream.
+     * `after == None` inserts at position 0, matching iOS
+     * `AudioPlayerProtocol.insert(_:after:)`; [`Self::append`] appends instead.
      *
      * # Errors
-     *
-     * Returns [`FfiError::InvalidArgument`] if `after` is not currently
-     * in the queue, or if the item's URL is malformed.
+     * Returns [`FfiError::InvalidArgument`] for an absent `after` item or malformed URL.
      */
 open func insert(item: AudioPlayerItem, after: AudioPlayerItem?)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
     uniffi_kithara_ffi_fn_method_audioplayer_insert(
@@ -1501,19 +1482,14 @@ open func setPlaybackOrder(order: FfiPlaybackOrder)throws   {try rustCallWithErr
 }
 
     /**
-     * Select `item` in the queue with the given transition.
-     *
-     * `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
-     * user-initiated-selection idiom: tap a track in a list).
-     * `FfiTransition::Crossfade` uses the player's configured duration
-     * (typical for Next/Prev buttons). Play state is not changed here:
-     * the engine continues playing if it was, pauses if it was.
+     * Selects `item` with an immediate cut for `FfiTransition::None`, or the
+     * configured crossfade duration for `FfiTransition::Crossfade`.
+     * The current playing or paused state is preserved.
      *
      * # Errors
-     *
-     * Returns [`FfiError::InvalidArgument`] if `item` is not in the
-     * queue, [`FfiError::NotReady`] if its resource is not yet loaded,
-     * or [`FfiError::Internal`] if the underlying Queue fails to select.
+     * Returns [`FfiError::InvalidArgument`] for an absent item,
+     * [`FfiError::NotReady`] for an unloaded resource, or [`FfiError::Internal`]
+     * when the underlying Queue cannot select it.
      */
 open func select(item: AudioPlayerItem, transition: FfiTransition)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
     uniffi_kithara_ffi_fn_method_audioplayer_select(
@@ -2021,24 +1997,18 @@ public func FfiConverterTypeAudioPlayerItem_lower(_ value: AudioPlayerItem) -> U
 
 
 /**
- * Foreign cache layout callback.
- *
- * Implementations must be pure and deterministic, fast, non-blocking,
- * non-throwing, and safe to call from arbitrary background threads. Returned
- * values must not contain query text, credentials, or other secrets.
- * `root` is called once for each store scope being created. `path` is called
- * once for each resource key being minted. Cache operations using that key do
- * not invoke either callback again.
- * Invalid output fails scope or key creation and never falls back to the
- * default layout.
- *
- * `root` must return exactly one non-empty component and cannot equal
- * `_index`. `path` must return a non-empty relative path of components
- * separated by `/`; no component may end in `.tmp`. Components are ASCII,
- * at most 96 bytes, never `.` or `..`, do not end in a dot or space, are not
- * Windows device names, and contain neither control bytes nor
- * `< > : " / \ | ? *`. Comparisons for `_index`, `.tmp`, and device names are
- * case-insensitive. The store rejects invalid output instead of rewriting it.
+ * Pure, deterministic cache-layout callbacks, fast, non-blocking, non-throwing
+ * and safe on arbitrary background threads. Output must contain no query text,
+ * credentials or other secrets.
+ * `root` runs once per new store scope, `path` once per new resource key;
+ * operations on that key do not repeat either callback. Invalid output fails
+ * creation without rewriting it or falling back to the default layout.
+ * `root` is one non-empty component other than `_index`; `path` is a non-empty
+ * relative `/`-separated path with no component ending in `.tmp`.
+ * Components are ASCII, at most 96 bytes, never `.` or `..`, never end in dot
+ * or space, and contain no controls or `< > : " / \ | ? *`.
+ * Windows device names are refused; `_index`, `.tmp` and device-name checks
+ * are case-insensitive.
  */
 public protocol FfiAssetLayout: AnyObject, Sendable {
 
@@ -2048,24 +2018,18 @@ public protocol FfiAssetLayout: AnyObject, Sendable {
 
 }
 /**
- * Foreign cache layout callback.
- *
- * Implementations must be pure and deterministic, fast, non-blocking,
- * non-throwing, and safe to call from arbitrary background threads. Returned
- * values must not contain query text, credentials, or other secrets.
- * `root` is called once for each store scope being created. `path` is called
- * once for each resource key being minted. Cache operations using that key do
- * not invoke either callback again.
- * Invalid output fails scope or key creation and never falls back to the
- * default layout.
- *
- * `root` must return exactly one non-empty component and cannot equal
- * `_index`. `path` must return a non-empty relative path of components
- * separated by `/`; no component may end in `.tmp`. Components are ASCII,
- * at most 96 bytes, never `.` or `..`, do not end in a dot or space, are not
- * Windows device names, and contain neither control bytes nor
- * `< > : " / \ | ? *`. Comparisons for `_index`, `.tmp`, and device names are
- * case-insensitive. The store rejects invalid output instead of rewriting it.
+ * Pure, deterministic cache-layout callbacks, fast, non-blocking, non-throwing
+ * and safe on arbitrary background threads. Output must contain no query text,
+ * credentials or other secrets.
+ * `root` runs once per new store scope, `path` once per new resource key;
+ * operations on that key do not repeat either callback. Invalid output fails
+ * creation without rewriting it or falling back to the default layout.
+ * `root` is one non-empty component other than `_index`; `path` is a non-empty
+ * relative `/`-separated path with no component ending in `.tmp`.
+ * Components are ASCII, at most 96 bytes, never `.` or `..`, never end in dot
+ * or space, and contain no controls or `< > : " / \ | ? *`.
+ * Windows device names are refused; `_index`, `.tmp` and device-name checks
+ * are case-insensitive.
  */
 open class FfiAssetLayoutImpl: FfiAssetLayout, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -3848,8 +3812,8 @@ public struct FfiItemConfig: Equatable, Hashable {
     public let uuidI64: Int64?
     /**
      * Audio source. Accepts a network URL (`https://example.com/song.mp3`,
-     * `https://…/master.m3u8`) **or** an absolute local file path
-     * (`/Users/…/song.flac`). Parsed via
+     * `https://.../master.m3u8`) **or** an absolute local file path
+     * (`/Users/.../song.flac`). Parsed via
      * [`kithara::play::ResourceSrc::parse`] at insert time, then passed
      * to [`kithara::play::ResourceConfig::for_src`].
      */
@@ -3886,8 +3850,8 @@ public struct FfiItemConfig: Equatable, Hashable {
          */uuidI64: Int64?,
         /**
          * Audio source. Accepts a network URL (`https://example.com/song.mp3`,
-         * `https://…/master.m3u8`) **or** an absolute local file path
-         * (`/Users/…/song.flac`). Parsed via
+         * `https://.../master.m3u8`) **or** an absolute local file path
+         * (`/Users/.../song.flac`). Parsed via
          * [`kithara::play::ResourceSrc::parse`] at insert time, then passed
          * to [`kithara::play::ResourceConfig::for_src`].
          */url: String,
@@ -4116,7 +4080,7 @@ public func FfiConverterTypeFfiItemState_lower(_ value: FfiItemState) -> RustBuf
 /**
  * FFI-friendly mirror of [`kithara::hls::KeyOptions`].
  *
- * Holds domain-scoped DRM rules — providers with different key
+ * Holds domain-scoped DRM rules - providers with different key
  * processors and headers can coexist.
  */
 public struct FfiKeyOptions {
@@ -4186,7 +4150,7 @@ public struct FfiKeyRule {
      */
     public let salt: String?
     /**
-     * Domain patterns — exact (`"example.com"`), wildcard subdomain
+     * Domain patterns - exact (`"example.com"`), wildcard subdomain
      * (`"*.example.com"`), or match-any (`"*"`).
      */
     public let domains: [String]
@@ -4202,7 +4166,7 @@ public struct FfiKeyRule {
          * [`crate::observer::SALT_HEADER`] in the player-wide header map.
          */salt: String?,
         /**
-         * Domain patterns — exact (`"example.com"`), wildcard subdomain
+         * Domain patterns - exact (`"example.com"`), wildcard subdomain
          * (`"*.example.com"`), or match-any (`"*"`).
          */domains: [String]) {
         self.processor = processor
@@ -4375,7 +4339,7 @@ public func FfiConverterTypeFfiPlayerConfig_lower(_ value: FfiPlayerConfig) -> R
 /**
  * Snapshot of the player's current state, returned by [`crate::player::AudioPlayer::snapshot`].
  *
- * Fields are `Option` when no current item is loaded — callers should
+ * Fields are `Option` when no current item is loaded - callers should
  * not assume defaults.
  */
 public struct FfiPlayerSnapshot: Equatable, Hashable {
@@ -5125,6 +5089,7 @@ public enum FfiAudioCodecKind: Equatable, Hashable {
     case alac
     case pcm
     case adpcm
+    case ape
     case unknown
 
 
@@ -5167,7 +5132,9 @@ public struct FfiConverterTypeFfiAudioCodecKind: FfiConverterRustBuffer {
 
         case 10: return .adpcm
 
-        case 11: return .unknown
+        case 11: return .ape
+
+        case 12: return .unknown
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -5217,8 +5184,12 @@ public struct FfiConverterTypeFfiAudioCodecKind: FfiConverterRustBuffer {
             writeInt(&buf, Int32(10))
 
 
-        case .unknown:
+        case .ape:
             writeInt(&buf, Int32(11))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(12))
 
         }
     }
@@ -5336,6 +5307,8 @@ public enum FfiContainerKind: Equatable, Hashable {
     case ogg
     case caf
     case mkv
+    case aiff
+    case ape
     case unknown
 
 
@@ -5378,7 +5351,11 @@ public struct FfiConverterTypeFfiContainerKind: FfiConverterRustBuffer {
 
         case 10: return .mkv
 
-        case 11: return .unknown
+        case 11: return .aiff
+
+        case 12: return .ape
+
+        case 13: return .unknown
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -5428,8 +5405,16 @@ public struct FfiConverterTypeFfiContainerKind: FfiConverterRustBuffer {
             writeInt(&buf, Int32(10))
 
 
-        case .unknown:
+        case .aiff:
             writeInt(&buf, Int32(11))
+
+
+        case .ape:
+            writeInt(&buf, Int32(12))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(13))
 
         }
     }
@@ -6391,7 +6376,7 @@ public enum FfiItemEvent: Equatable, Hashable {
     )
     /**
      * Buffered byte ranges, expressed as `[start, start + duration)` in
-     * seconds. Replaces the older scalar `BufferedDurationChanged` —
+     * seconds. Replaces the older scalar `BufferedDurationChanged` -
      * the total buffered time is the sum of `range.duration_seconds`.
      * Mirrors the iOS `AudioPlayerItemProtocol.rxLoadedRanges` shape.
      */
@@ -7410,7 +7395,7 @@ public enum FfiPlayerEvent: Equatable, Hashable {
     case queueEnded
     /**
      * A crossfade between tracks just started. `duration_seconds` is
-     * the configured crossfade window — UIs can drive progress from it.
+     * the configured crossfade window - UIs can drive progress from it.
      */
     case crossfadeStarted(settings: FfiCrossfadeSettings
     )
@@ -8378,10 +8363,13 @@ public func FfiConverterTypeFfiTotalBytesSource_lower(_ value: FfiTotalBytesSour
 
 public enum FfiTrackFailureKind: Equatable, Hashable {
 
-    case decode
+    case decode(kind: FfiDecodeErrorKind
+    )
     case recreateFailed(offset: UInt64
     )
     case sourceCancelled
+    case channelClosed
+    case render
     case unknown
 
 
@@ -8404,14 +8392,19 @@ public struct FfiConverterTypeFfiTrackFailureKind: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
 
-        case 1: return .decode
+        case 1: return .decode(kind: try FfiConverterTypeFfiDecodeErrorKind.read(from: &buf)
+        )
 
         case 2: return .recreateFailed(offset: try FfiConverterUInt64.read(from: &buf)
         )
 
         case 3: return .sourceCancelled
 
-        case 4: return .unknown
+        case 4: return .channelClosed
+
+        case 5: return .render
+
+        case 6: return .unknown
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -8421,8 +8414,9 @@ public struct FfiConverterTypeFfiTrackFailureKind: FfiConverterRustBuffer {
         switch value {
 
 
-        case .decode:
+        case let .decode(kind):
             writeInt(&buf, Int32(1))
+            FfiConverterTypeFfiDecodeErrorKind.write(kind, into: &buf)
 
 
         case let .recreateFailed(offset):
@@ -8434,8 +8428,16 @@ public struct FfiConverterTypeFfiTrackFailureKind: FfiConverterRustBuffer {
             writeInt(&buf, Int32(3))
 
 
-        case .unknown:
+        case .channelClosed:
             writeInt(&buf, Int32(4))
+
+
+        case .render:
+            writeInt(&buf, Int32(5))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(6))
 
         }
     }
@@ -9283,7 +9285,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_is_live_stream() != 3373) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_is_playable() != 41740) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_is_playable() != 38758) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_load() != 14409) {
@@ -9301,7 +9303,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_remove_observer() != 50876) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_state() != 41337) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_state() != 47776) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_url() != 18833) {
@@ -9319,13 +9321,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_ffikeyprocessor_process_key() != 2649) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_itemloadcallback_on_complete() != 38539) {
+    if (uniffi_kithara_ffi_checksum_method_itemloadcallback_on_complete() != 59565) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_itemobserver_on_event() != 48962) {
+    if (uniffi_kithara_ffi_checksum_method_itemobserver_on_event() != 33340) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_playerobserver_on_event() != 2479) {
+    if (uniffi_kithara_ffi_checksum_method_playerobserver_on_event() != 54871) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_seekcallback_on_complete() != 52837) {
@@ -9340,13 +9342,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_fficipher_process_key() != 57446) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_action_at_item_end() != 13245) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_action_at_item_end() != 49131) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_append() != 35753) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_append() != 45079) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_crossfade_settings() != 23497) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_crossfade_settings() != 40198) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_current_item() != 65110) {
@@ -9361,7 +9363,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_eq_gain() != 64291) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_insert() != 21561) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_insert() != 50006) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_is_muted() != 12244) {
@@ -9379,7 +9381,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_play() != 3044) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_playback_order() != 46526) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_playback_order() != 1221) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_playing_rate() != 25490) {
@@ -9388,28 +9390,28 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_rate() != 63306) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_remove() != 44566) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_remove() != 24945) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_remove_all_items() != 21301) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_repeat_mode() != 59485) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_repeat_mode() != 64165) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_replace_item() != 29947) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_replace_item() != 28586) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_reset_eq() != 48058) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_reset_eq() != 64063) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_seek() != 27715) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_abr_mode() != 6807) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_abr_mode() != 18523) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_gain() != 50895) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_gain() != 47120) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_muted() != 56476) {
@@ -9421,7 +9423,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playing_rate() != 63075) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_repeat_mode() != 38270) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_repeat_mode() != 42867) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_volume() != 21146) {
@@ -9430,13 +9432,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes() != 49387) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes_with_rule() != 46772) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes_with_rule() != 47213) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_network() != 65125) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_snapshot() != 4273) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_snapshot() != 47089) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_stop() != 2997) {
@@ -9448,34 +9450,34 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_volume() != 3417) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_advance_to_next_item() != 33255) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_advance_to_next_item() != 37535) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_return_to_previous_item() != 29933) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_return_to_previous_item() != 24092) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_action_at_item_end() != 23535) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_action_at_item_end() != 48442) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_crossfade_settings() != 50899) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_crossfade_settings() != 61726) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playback_order() != 43219) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playback_order() != 38063) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_select() != 43272) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_select() != 6525) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_audio_route_changed() != 52900) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_audio_route_changed() != 20633) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_interruption() != 39618) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_interruption() != 57273) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_ducking_mode() != 53086) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_ducking_mode() != 36471) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new() != 40748) {
+    if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new() != 59437) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_constructor_ffiassetlayoutregistry_new() != 47006) {
@@ -9487,7 +9489,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_constructor_fficipher_new() != 23745) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new() != 23244) {
+    if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new() != 26443) {
         return InitializationResult.apiChecksumMismatch
     }
 

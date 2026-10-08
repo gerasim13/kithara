@@ -162,6 +162,7 @@ mod tests {
         ResamplerOptions,
     };
     use kithara_decode::DecodeError;
+    use kithara_stream::StreamType;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -266,7 +267,7 @@ mod tests {
                 .events(EventBus::new(32))
                 .build();
         let audio_config = config.build_file_config(&worker, None);
-        assert!(audio_config.stream().bus.is_some());
+        assert!(kithara_file::File::<TestPools>::event_bus(audio_config.stream()).is_some());
     }
 
     #[kithara::test]
@@ -278,7 +279,7 @@ mod tests {
                 .events(EventBus::new(32))
                 .build();
         let audio_config = config.build_hls_config(&worker, None).unwrap();
-        assert!(audio_config.stream().bus.is_some());
+        assert!(kithara_hls::Hls::<TestPools>::event_bus(audio_config.stream()).is_some());
     }
 
     #[kithara::test]

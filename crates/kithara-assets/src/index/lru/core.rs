@@ -26,21 +26,9 @@ pub(crate) struct EvictConfig {
     pub(crate) max_bytes: Option<u64>,
 }
 
-/// In-memory + best-effort disk-backed LRU index over `asset_root`.
-///
-/// Architecturally symmetric to [`AvailabilityIndex`](super::AvailabilityIndex)
-/// and [`PinsIndex`](super::PinsIndex): the `Arc` is encapsulated
-/// **inside** the type, [`Clone`] is cheap (atomic refcount bump),
-/// every mutation flushes the optional disk-backed index file.
-///
-/// Persistence is **lazy**: the disk file is materialised only on the
-/// first [`Self::flush`]. A pre-existing on-disk file from a previous
-/// run is read eagerly during `Self::with_persist_at` (native only)
-/// for hydration. On wasm32 the index is always ephemeral.
-///
-/// Two call-sites share a single instance per `cache_dir`:
-///   * `EvictAssets` (touch/remove during open and eviction),
-///   * `DiskAssetDeleter` (drop entry when an `asset_root` is fully removed).
+/// Cloneable shared LRU index over asset roots, with optional best-effort disk persistence.
+/// Hydrates an existing file eagerly; mutations flush it, but creation waits for the first flush.
+/// The evictor and disk deleter share one instance per cache directory; wasm stays ephemeral.
 #[derive(Clone)]
 pub(crate) struct LruIndex {
     pub(super) inner: Arc<LruInner>,
@@ -122,13 +110,7 @@ impl LruIndex {
 
     /// Return total bytes across all assets (best-effort).
     pub(crate) fn total_bytes_best_effort(&self) -> u64 {
-        self.inner
-            .state
-            .lock()
-            .by_root
-            .values()
-            .filter_map(|e| e.bytes)
-            .sum()
+        self.inner.state.lock().total_bytes()
     }
 
     /// Touch (mark as most-recent) an asset. Returns `true` if a new
@@ -209,6 +191,10 @@ pub(crate) struct LruState {
 }
 
 impl LruState {
+    fn total_bytes(&self) -> u64 {
+        self.by_root.values().filter_map(|e| e.bytes).sum()
+    }
+
     pub(crate) fn eviction_candidates(
         &self,
         cfg: &EvictConfig,
@@ -222,7 +208,7 @@ impl LruState {
         }
 
         let total_assets = self.len();
-        let total_bytes: u64 = self.by_root.values().filter_map(|e| e.bytes).sum();
+        let total_bytes = self.total_bytes();
 
         if max_assets.is_none_or(|max| total_assets <= max)
             && max_bytes.is_none_or(|max| total_bytes <= max)

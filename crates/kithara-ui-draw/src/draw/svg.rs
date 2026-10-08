@@ -32,19 +32,13 @@ pub enum SvgError {
     Empty,
 }
 
-/// Reads one SVG document as a single outline in the unit square.
-///
-/// Only `<path>` is read, because only `<path>` is what an authored icon is
-/// here. Anything else — a `<circle>`, a group with a transform of its own — is
-/// refused rather than dropped, so an icon that this cannot draw says so
-/// instead of appearing blank.
-///
-/// The `viewBox` is fitted into the unit square the way SVG itself fits one by
-/// default: scaled by its longer side and centred on the shorter one, so the
-/// art keeps the proportions it was drawn with.
+/// Reads an SVG as one outline in the unit square. Authored icons contain only
+/// `<path>`; other elements or their transforms are refused rather than silently
+/// dropped. The `viewBox` keeps its proportions by scaling its longer side and
+/// centring its shorter side, matching SVG's default fit.
 ///
 /// # Errors
-/// Returns [`SvgError`] for a document this cannot read.
+/// Returns [`SvgError`] for an unsupported or unreadable document.
 pub fn outline(document: &str) -> Result<Outline, SvgError> {
     let parsed =
         Document::parse(document).map_err(|error| SvgError::Malformed(error.to_string()))?;

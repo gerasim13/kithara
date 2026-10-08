@@ -33,7 +33,7 @@ mod consts {
 /// keys, not to media segments. Even if one segment writes html bytes into
 /// its `AssetResource`, sibling fetches in the same `HlsPeer::poll_next`
 /// batch share `peer_cancel + epoch_cancel` and neither token fires from
-/// `on_complete` failure paths (`crates/kithara-hls/src/peer.rs:624..676`).
+/// `HlsPeer`'s `on_complete` failure paths.
 ///
 /// Failure mode the test would reveal: if a future change wires the
 /// segment writer / `on_complete` failure into `epoch_cancel.cancel()` or

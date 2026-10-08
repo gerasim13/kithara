@@ -13,6 +13,7 @@ mod downloader;
 mod event;
 mod peer;
 mod registry;
+mod request;
 mod response;
 /// This module tests the HTTP download layer, and Miri can reach neither half of
 /// it: the shared client initialises `aws-lc` — a C library Miri cannot enter —

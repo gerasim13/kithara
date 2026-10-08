@@ -62,6 +62,10 @@ fn claim_thread_class(class: ThreadClass, observer: &mut dyn Observer) {
 ///
 /// Leaves no terminal slot behind for the next pass to park on, and preserves the existing order of
 /// whatever slots remain.
+/// The probe carries the first backpressured task so repeated identical counts
+/// distinguish one stuck holder from shifting holders without another reading.
+/// USDT's five payload slots replace `done`: finished tasks unregister in that pass,
+/// so repeating passes have none. The hang detector supplies the waiting task's route.
 pub(super) fn run_pass(
     slots: &mut Vec<Slot>,
     needs_reorder: &mut bool,
@@ -78,16 +82,6 @@ pub(super) fn run_pass(
     recycle_all(slots);
 
     let report = produce_pass(slots, budgets, observer);
-    // A stalled pass repeats its counts unchanged, so the counts alone cannot
-    // say whether one task is stuck or the stuck one keeps changing hands. The
-    // report already picked the first backpressured task; carrying it names the
-    // holder without taking a reading of its own.
-    //
-    // USDT allows five payload slots and the counts fill them, so this takes
-    // the place of `done`: a finished task is unregistered on the same pass
-    // that reports it, so the count is zero on every pass that repeats. The
-    // waiting task keeps its own route into the record through the hang
-    // detector's context.
     kithara::probe_event!(
         scheduler_pass,
         active = report.active_tasks,

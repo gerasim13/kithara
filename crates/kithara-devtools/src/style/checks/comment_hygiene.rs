@@ -12,6 +12,7 @@ use crate::{
     common::{
         exclude::apply_lint_excludes,
         fix::FixOutcome,
+        parse::qualified,
         project::ProjectConfig,
         violation::{Report, Violation},
         walker::relative_to,
@@ -541,14 +542,6 @@ fn walk_items_for_fns(items: &[Item], path: &mut Vec<String>, out: &mut Vec<FnSp
             }
             _ => {}
         }
-    }
-}
-
-fn qualified(path: &[String], name: &str) -> String {
-    if path.is_empty() {
-        name.to_string()
-    } else {
-        format!("{}::{name}", path.join("::"))
     }
 }
 

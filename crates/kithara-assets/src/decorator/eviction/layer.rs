@@ -60,22 +60,10 @@ pub(crate) trait ByteRecorder: Send + Sync {
     fn record_bytes(&self, asset_root: &str, bytes: u64);
 }
 
-/// A decorator that enforces LRU eviction with optional per-asset byte accounting.
-///
-/// This layer sits between `LeaseAssets` (pinning) and the concrete store (disk).
-/// It does NOT wrap resources; it only intercepts `open_resource` calls to
-/// perform eviction decisions at asset-creation time.
-///
-/// ## Normative
-/// - Eviction is evaluated only when a new `asset_root` is observed (i.e., the first
-///   `open_resource` for that root in this process).
-/// - The decision uses the in-memory snapshots of [`LruIndex`] and [`PinsIndex`]
-///   (which are themselves backed by best-effort disk persistence).
-/// - Pinned assets are excluded from eviction candidates.
-/// - Both `max_assets` and `max_bytes` are soft caps enforced best-effort.
-/// - Byte accounting is best-effort and must be explicitly updated via
-///   `touch_asset_bytes`; the evictor does NOT walk the filesystem.
-/// - When `enabled` is `false`, all operations delegate directly to the inner layer.
+/// Evict unpinned assets on the first open of each root, between the lease and store layers.
+/// Uses in-memory LRU/pin snapshots and best-effort asset/byte caps; resources are not wrapped.
+/// Byte accounting requires explicit updates and never walks the filesystem.
+/// When disabled, every operation delegates directly to the inner store.
 #[derive_where::derive_where(Clone; A: Assets)]
 #[derive(derive_more::Debug, kithara_config::ConfigOwner)]
 #[debug("EvictAssets {{ .. }}")]
@@ -223,22 +211,11 @@ where
         }
     }
 
-    /// Record asset size for byte-based eviction.
-    ///
-    /// Uses [`LruIndex::update_bytes`] — only the byte counter is
-    /// adjusted. Recency (LRU clock) is not bumped because the asset
-    /// already had its access tracked when the resource was opened;
-    /// re-bumping per segment commit would coalesce all bytes-bearing
-    /// assets to the same logical-time tail and skew eviction order.
-    /// If the asset is unknown to the LRU (e.g. evicted concurrently)
-    /// this is a no-op.
+    /// Record bytes without changing recency: per-segment touches would skew eviction order.
+    /// Unknown or concurrently evicted roots are ignored.
     ///
     /// # Errors
-    ///
-    /// Returns `AssetsError` if the LRU index cannot persist the
-    /// update — caller must decide whether the lost durability is
-    /// acceptable for its scenario (the [`ByteRecorder`] adapter
-    /// downgrades it to a `tracing::warn`).
+    /// Propagates LRU persistence errors; the [`ByteRecorder`] adapter logs them as warnings.
     pub fn record_asset_bytes(&self, asset_root: &str, bytes: u64) -> AssetsResult<()> {
         if !self.is_active() {
             return Ok(());

@@ -10,6 +10,7 @@ ARG CARGO_DENY_VERSION
 ARG CARGO_FUZZ_VERSION
 ARG CARGO_GEIGER_VERSION
 ARG CARGO_HACK_VERSION
+ARG CARGO_HAKARI_VERSION
 ARG CARGO_LLVM_COV_VERSION
 ARG CARGO_MACHETE_VERSION
 ARG CARGO_MODULES_VERSION
@@ -186,6 +187,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_FUZZ_VERSION}" cargo-fuzz \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_GEIGER_VERSION}" cargo-geiger \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_HACK_VERSION}" cargo-hack \
+ && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_HAKARI_VERSION}" cargo-hakari \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_LLVM_COV_VERSION}" cargo-llvm-cov \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_MACHETE_VERSION}" cargo-machete \
  && cargo install --root "${CARGO_INSTALL_ROOT}" --locked --version "${CARGO_MODULES_VERSION}" cargo-modules \

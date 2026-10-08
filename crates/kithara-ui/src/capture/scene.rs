@@ -84,19 +84,12 @@ impl Offscreen {
         })
     }
 
-    /// Rasterises one scene into `out` as tightly packed RGBA.
-    ///
-    /// The caller owns the pixels so a walk over a set of pages fills one
-    /// buffer per set rather than one per page.
-    ///
-    /// The base colour is the window's, not this capture's: the page behind a
-    /// document belongs to the skin, and a set cleared to anything else
-    /// differs from the other host wherever a document leaves its rectangle
-    /// bare.
+    /// Rasterises tightly packed RGBA into caller-owned `out`, reused across pages.
+    /// `base` is the skin's window colour; another clear colour differs from the
+    /// other host wherever a document leaves its rectangle bare.
     ///
     /// # Errors
-    /// Fails when the scene cannot be rendered or the pixels cannot be read
-    /// back.
+    /// Fails when the scene cannot render or pixels cannot be read back.
     pub fn rasterise(
         &mut self,
         frame: &Frame,

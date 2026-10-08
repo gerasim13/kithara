@@ -300,22 +300,9 @@ where
         }
     }
 
-    /// Wait for a sibling `AssetStore` to release the atomic-chunked
-    /// tmp file, then open. The sibling owner signals release either by
-    /// committing (canonical appears) or by dropping without commit
-    /// (tmp disappears) - both unblock our next
-    /// `OpenOptions::create_new` call.
-    ///
-    /// `TmpClaimed` only ever names a *live* holder - a crashed-out
-    /// process releases its advisory lock to the OS, and the next
-    /// `AtomicChunked::open` reclaims that tmp - so this loop is
-    /// guaranteed to terminate and carries no watchdog of its own. A
-    /// watchdog here could only read the tmp's length, and a holder that
-    /// has filled the playback buffer stops growing it while staying
-    /// perfectly alive: the disk store is that buffer, not a cache racing
-    /// to completion. Judging the holder by those bytes turned a paced
-    /// download into a reported hang. The caller's own deadline is what
-    /// bounds this wait.
+    /// Wait for a live tmp claimant to settle, then open; dead owners' advisory locks are reclaimed.
+    /// The caller's cancellation/deadline bounds the wait. Tmp growth is not a liveness signal:
+    /// a paced download may stop filling its playback buffer while its holder remains alive.
     async fn create_remote_wait_for_claim(
         url: Url,
         config: Arc<FileConfig<S>>,

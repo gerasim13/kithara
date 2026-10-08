@@ -271,24 +271,9 @@ impl super::core::ActiveDecode {
         None
     }
 
-    /// Content time an incoming variant must be landed at to be spliceable.
-    ///
-    /// The audible playhead is not that time: it trails the decode frontier by
-    /// the whole PCM ring, and a reader that pulls faster than real time can
-    /// open the gap without bound. An incoming landed behind the frontier has
-    /// to decode the entire gap before it can cover it, and it decodes no
-    /// faster than the outgoing does — so the gap never closes and the switch
-    /// never commits. Only [`OutgoingFrontier::Exact`] names a frame; the other
-    /// two states carry no frontier to land against and the source keeps its
-    /// own seek-derived target.
-    ///
-    /// The frontier itself, and never ahead of it. A promotion proof is minted
-    /// when the outgoing walks *into* the staged span, and the outgoing stops
-    /// decoding the moment its PCM ring is full — so a landing placed ahead of
-    /// the frontier is a bet on motion the outgoing owes nobody, and a consumer
-    /// that stops pulling wedges the switch for good. Landing on the frontier
-    /// removes the bet: priming extends the staged *end*, and the end only has
-    /// to overtake a frontier that moves no faster than the incoming decodes.
+    /// Land incoming content at the exact outgoing decode frontier, never the lagging playhead.
+    /// A landing behind it cannot catch up; one ahead assumes progress a paused consumer may refuse.
+    /// Non-exact frontiers return `None`, preserving the source's seek-derived target.
     pub(crate) fn landing_for(&self, outgoing_frontier: OutgoingFrontier) -> Option<Duration> {
         let OutgoingFrontier::Exact { frame, rate } = outgoing_frontier else {
             return None;

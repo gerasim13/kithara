@@ -53,7 +53,6 @@ impl Options {
                     "default" => options.built_default = true,
                     "construction" => options.construction = true,
                     "check" => {
-                        // `declared_check` reads the error type.
                         group(&meta)?;
                         options.checked = true;
                     }
@@ -71,7 +70,6 @@ impl Options {
                         }
                     }
                     "patch" => {
-                        // `Patch` reads this group; the builder gate below reads its check.
                         group(&meta)?;
                     }
                     "values_vis" => {
@@ -377,10 +375,10 @@ fn owner_accessors(item: &DeriveInput, members: &[Member<'_>]) -> Option<TokenSt
     })
 }
 
+/// Declared defaults are infallible; rejected defaults indicate a code defect.
 fn built_default(item: &DeriveInput, fallible: bool) -> TokenStream {
     let name = &item.ident;
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
-    // Declared defaults are an infallible contract; a rejected set is a code defect.
     let build = if fallible {
         quote! {
             Self::builder().build().unwrap_or_else(|_| {

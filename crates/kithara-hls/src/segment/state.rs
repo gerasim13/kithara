@@ -33,26 +33,10 @@ bitflags! {
     }
 }
 
-/// Lock-free cache-state discriminant for a segment / init slot.
-/// `Downloading` exists to dedupe in-flight fetches: `dispatch` only claims
-/// (`Missing -> Downloading`) slots before emitting a `FetchCmd`. The settle
-/// path drives `Downloading -> Loaded` (success or "another writer already
-/// committed"), `Downloading -> Missing` (recoverable failure / cancel), and
-/// `Downloading -> Failed` (terminal: the downloader exhausted its retry
-/// budget). Eviction is the only producer of `Loaded -> Missing`, and never
-/// takes a `Downloading` slot from its claim: the claim alone settles it, and
-/// an eviction that lands first turns its `Loaded` settle into `Missing`.
-///
-/// `Failed` is terminal by construction: `try_claim` only CAS's from
-/// `Missing`, so a failed slot is never re-dispatched (no extra scheduler
-/// check needed) and a reader observing it via `is_failed` surfaces a
-/// terminal error instead of spinning.
-///
-/// The only mutators are the typed transitions on the phase-specific
-/// `impl FetchClaim<Downloading>` / `impl FetchClaim<Loaded>` blocks (plus
-/// the `on_slow` hook and eviction), so there is no silent fallback. Reads
-/// stay a plain atomic (no lock) because `download_head` scans every slot on
-/// the ABR tick.
+/// Lock-free segment/init state; claiming `Missing -> Downloading` deduplicates fetches.
+/// Only the claim settles to Loaded, Missing (recoverable/cancelled) or terminal Failed.
+/// Eviction cannot steal a Downloading claim; if it races first, that claim settles to Missing.
+/// Failed is never claimable. Typed phase transitions own mutation; ABR scans remain atomic reads.
 #[derive(Debug)]
 pub(crate) struct SegmentSlotState {
     /// Whether a parked read needs the in-flight fetch's bytes. Set only

@@ -427,6 +427,8 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
 
     /// Latency is expressed once at the engine boundary; the map itself already converts source
     /// frames per session output frame.
+    /// Short chunks whose whole-frame endpoints advance no audible source are
+    /// retained; the next chunk projects the output span afresh.
     pub(super) fn prepare_resident_projection(
         &mut self,
         plan: &WarpPlan,
@@ -572,9 +574,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             meta,
             remaining,
         )?;
-        // A short chunk can project to an output span whose whole-frame
-        // endpoints advance no audible source; its source is only retained, and
-        // the next chunk projects the span afresh.
         if !audible && let Some(projection) = prepared.projection.as_mut() {
             projection.output_frames = 0;
             if let Some(resident) = self.residency.as_mut() {

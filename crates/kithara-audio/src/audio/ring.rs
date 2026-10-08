@@ -192,6 +192,8 @@ impl RingConsumer {
         }
     }
 
+    /// An empty non-blocking poll must wake the backpressured producer: unlike a blocking read,
+    /// it has no park carrying demand, and simulated-clock timers require global quiescence.
     pub(super) fn recv_outcome(&mut self, ctx: RecvCtx<'_>, wait: Wait) -> RecvOutcome {
         if matches!(wait, Wait::Never)
             || receive_is_nonblocking(self.preloaded, self.block_on_underrun)
@@ -199,12 +201,6 @@ impl RingConsumer {
             if let Some(outcome) = self.try_recv_outcome(ctx) {
                 return outcome;
             }
-            // An empty ring is the consumer's demand for the next chunk. The
-            // producer parks itself as soon as it reports backpressure and is
-            // released by this wake or by a poll timer; under a simulated clock
-            // that timer needs global quiescence, so the wake is the only
-            // release that costs nothing. The blocking path states the demand
-            // before it parks, and a non-blocking poll has no park to carry it.
             wake_worker(ctx.worker, self.consumer_wake_mode);
             return RecvOutcome::Empty;
         }

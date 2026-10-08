@@ -260,7 +260,7 @@ impl<T> Drop for AwaitChange<'_, T> {
                     .wakers
                     .retain(|w| !w.will_wake(&waker));
             }
-            Some(Parked::Engine(handle)) => system::cancel_async_wait(&handle),
+            Some(Parked::Engine(handle)) => drop(handle),
             None => {}
         }
     }

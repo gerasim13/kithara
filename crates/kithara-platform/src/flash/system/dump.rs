@@ -73,7 +73,7 @@ impl fmt::Display for FlashInner {
             f,
             "virtual_now_ns={now} active={} active_async={} real_io={} pace_anchor={} \
              yielders={} {}",
-            s.registry.active,
+            s.registry.total_active(),
             s.registry.active_async,
             s.sched.real_io,
             if s.sched.pace_anchor.is_some() {
@@ -86,7 +86,8 @@ impl fmt::Display for FlashInner {
         )?;
         for (id, loc) in &s.registry.active_async_holders {
             write!(f, "  active_async holder task={id} spawned_at={loc}")?;
-            if let Some(diag) = s.registry.task_diag.get(id) {
+            if let Some(task) = s.registry.task_diag.get(id) {
+                let diag = &task.diag;
                 write!(f, " state={:?} polls={}", diag.state.load(), diag.polls())?;
                 if let Some(driver) = diag.driver() {
                     write!(f, " driver={driver:?}")?;

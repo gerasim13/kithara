@@ -171,18 +171,9 @@ fn source_phase_for_seek_landing<T: StreamType>(
     demand_phase(stream, byte..end)
 }
 
-/// Phase poll that arms the polled range as reader demand when it parks.
-///
-/// A phase snapshot alone leaves a parked decoder invisible to the source:
-/// dispatch budgets cover only ranges the source knows a reader waits on
-/// ([`Source::wait_range`]'s side of the contract), and a variant transition
-/// caps the audible variant at that owed window — a parked forward window
-/// nobody filed starves one segment past the cap forever. Ready, EOF, and
-/// seek polls stay pure snapshots.
-///
-/// The filing call itself locks source state (`Source::wait_range`), so this
-/// poll only arms the wait-free demand cell; the scheduler shell delivers it
-/// via `SharedStream::flush_demand` — same core/shell split as `DeferredWake`.
+/// Poll phase and arm demand when waiting; an unfiled range can starve behind a fetch cap.
+/// The core only arms a wait-free cell; `SharedStream::flush_demand` files it off-core because
+/// [`Source::wait_range`] locks source state. Ready, EOF and seek polls remain pure queries.
 ///
 /// [`Source::wait_range`]: kithara_stream::Source::wait_range
 fn demand_phase<T: StreamType>(stream: &SharedStream<T>, range: Range<u64>) -> SourcePhase {
@@ -348,13 +339,13 @@ mod tests {
 
         fn descriptor(index: u32) -> SegmentDescriptor {
             let start = Self::INIT_BYTES + u64::from(index) * Self::SEGMENT_BYTES;
-            SegmentDescriptor::new(
-                start..start + Self::SEGMENT_BYTES,
-                Duration::from_secs(u64::from(index) * Self::SEGMENT_SECS),
-                Duration::from_secs(Self::SEGMENT_SECS),
-                index,
-                0,
-            )
+            SegmentDescriptor::builder()
+                .byte_range(start..start + Self::SEGMENT_BYTES)
+                .decode_time(Duration::from_secs(u64::from(index) * Self::SEGMENT_SECS))
+                .duration(Duration::from_secs(Self::SEGMENT_SECS))
+                .segment_index(index)
+                .variant_index(0)
+                .build()
         }
 
         fn segment_start(index: u32) -> u64 {

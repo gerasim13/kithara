@@ -30,19 +30,10 @@ enum AcquireSettle {
     Fail,
 }
 
-/// Decide how an acquire failure settles, given how many the slot has already
-/// taken (this one included).
-///
-/// A live sibling writer holding the tmp is the one obstruction the system
-/// itself promises to clear: that holder always settles and releases, so the
-/// retry is guaranteed to resolve and needs no budget. Nothing promises as
-/// much for any other error — but a momentary one, a descriptor the host was
-/// briefly short of or a parent directory a concurrent eviction was removing,
-/// must not cost the whole segment either. Those retry against `budget`
-/// ([`crate::HlsConfig::acquire_attempt_budget`]) and settle `Fail` once it is spent,
-/// because a requeue that never resolves is invisible: the slot stays planned,
-/// so `range_wait_phase` answers `WaitingDemand` and `range_has_failed` stays
-/// false while the decode gate parks for good.
+/// Settle an acquisition error after `failures` attempts, including this one.
+/// A live tmp claimant owns release, so `TmpClaimed` requeues without spending the budget.
+/// Other errors spend [`crate::HlsConfig::acquire_attempt_budget`] then fail; endless requeues
+/// would leave a planned slot permanently `WaitingDemand` without a visible terminal error.
 const fn settle_for(err: &AssetsError, failures: u8, budget: u8) -> AcquireSettle {
     if matches!(err, AssetsError::Storage(StorageError::TmpClaimed(_))) {
         return AcquireSettle::Requeue;

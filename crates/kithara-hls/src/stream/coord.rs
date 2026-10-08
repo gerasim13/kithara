@@ -9,16 +9,15 @@ use kithara_bufpool::HasPool;
 use kithara_events::DeferredBus;
 use kithara_platform::{
     CancelToken,
-    sync::{Arc, Mutex, WaitGate},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, ByteMap, DeferredWake, MediaInfo, PlayheadRead, PlayheadState, PlayheadWrite,
     ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekPrepare, SeekState,
-    SegmentDescriptor, SourceError, SourcePhase, SourceProbe, SourceSeekAnchor, StreamError,
-    StreamResult, VariantControl, VariantPromotion, VariantReaderPlan, VariantReaderTake,
-    VariantTransition,
+    SegmentDescriptor, SourcePhase, SourceProbe, SourceSeekAnchor, StreamError, StreamResult,
+    VariantControl, VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
 };
 use kithara_test_utils::kithara;
 
@@ -26,7 +25,6 @@ use super::{session::HlsSession, transition::SessionSlots};
 use crate::{
     HlsEvent,
     config::HlsConfig,
-    consts,
     signal::SizeSignal,
     variant::{HlsVariant, PlanCtx},
 };
@@ -85,16 +83,6 @@ impl<S> HlsCoord<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    /// Re-aim heartbeat for the off-RT blocking wait. The wait wakes immediately
-    /// on any readiness signal (the fact of a write/commit/fence/seek) —
-    /// event-driven. This interval bounds only the *quiet* case: if no signal
-    /// arrives within it, the peer may be mis-aimed after a seek (it fetched,
-    /// went idle, and the range the reader now wants is outside its prefetch
-    /// window), so the wait yields `WaitBudgetExceeded` to let the off-RT reader
-    /// re-assert the peer's aim (`notify_peer_wake`) and re-enter. It never polls
-    /// for data — readiness is always learned from a signal, never from a timer.
-    const READER_REAIM_INTERVAL: Duration = Duration::from_millis(25);
-
     pub(crate) fn new(
         env: HlsCoordEnv<S>,
         playhead: Arc<PlayheadState>,
@@ -343,46 +331,9 @@ where
     ) -> StreamResult<WaitOutcome> {
         match timeout {
             Some(_) => self.probe_range(range, timeout),
-            None => Self::wait_range_blocking(&self.signal, &self.cancel, || {
+            None => self.signal.wait_range_blocking(&self.cancel, || {
                 self.probe_range(range.clone(), Some(Duration::ZERO))
             }),
-        }
-    }
-
-    /// Off-RT blocking wait: park on the readiness gate until [`probe_range`]
-    /// resolves (`Ready`/`Eof`/`Interrupted`) or returns a terminal error.
-    /// Event-driven — every transition that can flip the probe (segment
-    /// write/commit/fail, seek reset, cancel) `signal`s the gate. The
-    /// pre-probe [`current`](WaitGate::current) snapshot + park-only-
-    /// if-unchanged is a seqlock guard closing the lost-wakeup window even
-    /// though the probe predicate and the gate sit under different locks
-    /// (mirrors `kithara-storage` `wait_range_inner`). A genuine wedge (no
-    /// signal at all) trips the hang watchdog rather than parking forever.
-    #[kithara::hang_watchdog(timeout = consts::WAIT_HANG_TIMEOUT)]
-    pub(super) fn wait_range_blocking(
-        signal: &SizeSignal,
-        cancel: &CancelToken,
-        mut probe: impl FnMut() -> StreamResult<WaitOutcome>,
-    ) -> StreamResult<WaitOutcome> {
-        let _cancel_wake = {
-            let ready = signal.ready_gate();
-            cancel.on_cancel(move || ready.signal())
-        };
-        loop {
-            hang_tick!();
-            let since = signal.current();
-            match probe() {
-                Ok(WaitOutcome::Ready) => return Ok(WaitOutcome::Ready),
-                Ok(WaitOutcome::Eof) => return Ok(WaitOutcome::Eof),
-                Ok(WaitOutcome::Interrupted) => return Ok(WaitOutcome::Interrupted),
-                Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {}
-                Err(e) => return Err(e),
-            }
-            if signal.wait_timeout(since, Self::READER_REAIM_INTERVAL) {
-                hang_reset!();
-            } else {
-                return Err(StreamError::Source(SourceError::WaitBudgetExceeded));
-            }
         }
     }
 
@@ -598,7 +549,7 @@ pub(super) mod tests {
     };
     use kithara_stream::{
         AudioCodec, ContainerFormat, OutgoingDisposition, PlayheadWrite, ReaderInput, ReaderWarmup,
-        SeekControl, WorkerWake,
+        SeekControl, SourceError, WorkerWake,
     };
     use unimock::{MockFn, Unimock, matching};
 
