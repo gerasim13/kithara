@@ -853,6 +853,10 @@ fn locked_field() -> Case {
             r"
 pub struct Mutex<T> { value: T }
 pub struct MutexGuard<'a, T> { value: &'a mut T }
+impl<T> std::ops::Deref for MutexGuard<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T { self.value }
+}
 impl<T> Mutex<T> {
     pub fn lock(&mut self) -> MutexGuard<'_, T> { MutexGuard { value: &mut self.value } }
 }

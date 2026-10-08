@@ -14,8 +14,10 @@ mod pairs;
 mod report;
 mod resolve;
 mod search;
+mod standard;
 #[cfg(test)]
 mod tests;
+mod ty;
 
 pub(crate) use self::{
     config::ChainConfig,

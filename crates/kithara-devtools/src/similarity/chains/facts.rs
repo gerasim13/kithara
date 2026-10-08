@@ -7,8 +7,8 @@ use anyhow::{Context, Result};
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use quote::ToTokens;
 use syn::{
-    Attribute, Expr, FnArg, GenericArgument, GenericParam, ImplItem, Item, Lit, Meta, Pat,
-    PathArguments, ReturnType, TraitItem, Type, TypeParamBound, UseTree, WherePredicate,
+    Attribute, Expr, FnArg, GenericParam, ImplItem, Item, Lit, Meta, Pat, ReturnType, TraitItem,
+    Type, TypeParamBound, UseTree, WherePredicate,
     parse::{ParseStream, Parser},
     spanned::Spanned,
     visit,
@@ -33,11 +33,9 @@ mod consts {
         "non_exhaustive",
         "serde",
     ];
-    /// Name and trait of the synthetic function that holds a derive's calls.
+    /// Name of the synthetic function that holds a derive's calls.
     pub(super) const DERIVE_FN: &str = "#derive";
-    /// `Deref` and its associated type: a method or field the type lacks is
-    /// looked up on the target.
-    pub(super) const DEREF: &str = "Deref";
+    /// The associated type used by a canonical `Deref` implementation.
     pub(super) const DEREF_TARGET: &str = "Target";
 }
 
@@ -47,6 +45,7 @@ mod consts {
 pub(super) struct Import {
     pub(super) alias: String,
     pub(super) path: Vec<String>,
+    pub(super) absolute: bool,
 }
 
 #[derive(Debug)]
@@ -68,16 +67,14 @@ pub(super) struct Place {
 #[derive(Debug)]
 pub(super) struct FnFact {
     /// Bounds of every generic parameter in scope, impl parameters included.
-    pub(super) generics: BTreeMap<String, Vec<String>>,
+    pub(super) generics: BTreeMap<String, Vec<syn::Path>>,
     pub(super) body: BodyFacts,
-    pub(super) owner: Option<String>,
-    pub(super) trait_name: Option<String>,
+    pub(super) owner: Option<Type>,
+    pub(super) trait_name: Option<syn::Path>,
     pub(super) place: Place,
     pub(super) name: String,
     pub(super) cfg: Vec<String>,
-    pub(super) ret: Vec<String>,
-    /// Type arguments of the impl's self type: `impl Foo<Bar>` holds `[[Bar]]`.
-    pub(super) self_args: Vec<Vec<String>>,
+    pub(super) ret: Option<Type>,
     pub(super) tokens: Vec<String>,
     pub(super) default: bool,
     pub(super) public: bool,
@@ -85,39 +82,53 @@ pub(super) struct FnFact {
 
 #[derive(Debug)]
 pub(super) struct StructFact {
-    pub(super) bounds: BTreeMap<String, Vec<String>>,
-    pub(super) fields: BTreeMap<String, Vec<String>>,
-    pub(super) krate: String,
+    pub(super) bounds: BTreeMap<String, Vec<syn::Path>>,
+    pub(super) fields: BTreeMap<String, Type>,
+    pub(super) place: Place,
     pub(super) name: String,
     pub(super) params: Vec<String>,
 }
 
 #[derive(Debug)]
 pub(super) struct EnumFact {
-    pub(super) payload: BTreeMap<String, BTreeMap<String, Vec<String>>>,
-    pub(super) krate: String,
+    pub(super) payload: BTreeMap<String, BTreeMap<String, Type>>,
+    pub(super) place: Place,
     pub(super) name: String,
     pub(super) variants: Vec<String>,
+    pub(super) params: Vec<String>,
+    pub(super) bounds: BTreeMap<String, Vec<syn::Path>>,
 }
 
 #[derive(Debug)]
 pub(super) struct TraitFact {
-    pub(super) krate: String,
+    pub(super) place: Place,
     pub(super) name: String,
+    pub(super) params: Vec<String>,
+    pub(super) bounds: BTreeMap<String, Vec<syn::Path>>,
 }
 
 #[derive(Debug)]
 pub(super) struct AliasFact {
-    pub(super) krate: String,
+    pub(super) place: Place,
     pub(super) name: String,
-    pub(super) ty: Vec<String>,
+    pub(super) ty: Type,
+    pub(super) params: Vec<String>,
+    pub(super) bounds: BTreeMap<String, Vec<syn::Path>>,
+}
+
+#[derive(Debug)]
+pub(super) struct ImplFact {
+    pub(super) place: Place,
+    pub(super) owner: Type,
+    pub(super) trait_name: Option<syn::Path>,
+    pub(super) target: Option<Type>,
+    pub(super) bounds: BTreeMap<String, Vec<syn::Path>>,
 }
 
 #[derive(Debug, Default)]
 pub(super) struct Facts {
     pub(super) aliases: Vec<AliasFact>,
-    /// `impl Deref for Name { type Target = Ty; }`, in the shape of an alias.
-    pub(super) derefs: Vec<AliasFact>,
+    pub(super) impls: Vec<ImplFact>,
     pub(super) enums: Vec<EnumFact>,
     pub(super) fns: Vec<FnFact>,
     pub(super) structs: Vec<StructFact>,
@@ -310,56 +321,11 @@ pub(super) fn path_segs(path: &syn::Path) -> Vec<String> {
     path.segments.iter().map(|s| s.ident.to_string()).collect()
 }
 
-fn type_idents(ty: &Type, out: &mut Vec<String>) {
-    match ty {
-        Type::Path(path) => {
-            if let Some(qself) = &path.qself {
-                type_idents(&qself.ty, out);
-            }
-            for segment in &path.path.segments {
-                out.push(segment.ident.to_string());
-                if let PathArguments::AngleBracketed(args) = &segment.arguments {
-                    for arg in &args.args {
-                        if let GenericArgument::Type(ty) = arg {
-                            type_idents(ty, out);
-                        }
-                    }
-                }
-            }
-        }
-        Type::Reference(reference) => type_idents(&reference.elem, out),
-        Type::Slice(slice) => type_idents(&slice.elem, out),
-        Type::Array(array) => type_idents(&array.elem, out),
-        Type::Ptr(ptr) => type_idents(&ptr.elem, out),
-        Type::Paren(paren) => type_idents(&paren.elem, out),
-        Type::Group(group) => type_idents(&group.elem, out),
-        Type::Tuple(tuple) => {
-            for elem in &tuple.elems {
-                type_idents(elem, out);
-            }
-        }
-        Type::TraitObject(object) => bounds_idents(object.bounds.iter(), out),
-        Type::ImplTrait(object) => bounds_idents(object.bounds.iter(), out),
-        _ => {}
-    }
-}
-
-fn bounds_idents<'a>(bounds: impl Iterator<Item = &'a TypeParamBound>, out: &mut Vec<String>) {
-    for bound in bounds {
-        if let TypeParamBound::Trait(tr) = bound
-            && let Some(segment) = tr.path.segments.last()
-        {
-            out.push(segment.ident.to_string());
-        }
-    }
-}
-
-/// Every identifier named in a type, outermost first: `Mutex<Inner>` gives
-/// `[Mutex, Inner]`.
-pub(super) fn idents_of(ty: &Type) -> Vec<String> {
-    let mut out = Vec::new();
-    type_idents(ty, &mut out);
-    out
+fn bounds_idents<'a>(bounds: impl Iterator<Item = &'a TypeParamBound>, out: &mut Vec<syn::Path>) {
+    out.extend(bounds.filter_map(|bound| match bound {
+        TypeParamBound::Trait(tr) => Some(tr.path.clone()),
+        _ => None,
+    }));
 }
 
 pub(super) fn last_ident(ty: &Type) -> Option<String> {
@@ -370,7 +336,7 @@ pub(super) fn last_ident(ty: &Type) -> Option<String> {
     }
 }
 
-fn generics_map(generics: &syn::Generics, into: &mut BTreeMap<String, Vec<String>>) {
+fn generics_map(generics: &syn::Generics, into: &mut BTreeMap<String, Vec<syn::Path>>) {
     for param in &generics.params {
         if let GenericParam::Type(ty) = param {
             bounds_idents(
@@ -413,7 +379,11 @@ pub(super) fn use_tree(tree: &UseTree, prefix: &mut Vec<String>, out: &mut Vec<I
                 path.push(name.clone());
                 name
             };
-            out.push(Import { alias, path });
+            out.push(Import {
+                alias,
+                path,
+                absolute: false,
+            });
         }
         UseTree::Rename(rename) => {
             let mut path = prefix.clone();
@@ -423,11 +393,13 @@ pub(super) fn use_tree(tree: &UseTree, prefix: &mut Vec<String>, out: &mut Vec<I
             out.push(Import {
                 path,
                 alias: rename.rename.to_string(),
+                absolute: false,
             });
         }
         UseTree::Glob(_) => out.push(Import {
             alias: "*".to_string(),
             path: prefix.clone(),
+            absolute: false,
         }),
         UseTree::Group(group) => {
             for item in &group.items {
@@ -435,25 +407,6 @@ pub(super) fn use_tree(tree: &UseTree, prefix: &mut Vec<String>, out: &mut Vec<I
             }
         }
     }
-}
-
-fn self_type_args(ty: &Type) -> Vec<Vec<String>> {
-    let Type::Path(path) = ty else {
-        return Vec::new();
-    };
-    let Some(segment) = path.path.segments.last() else {
-        return Vec::new();
-    };
-    let PathArguments::AngleBracketed(args) = &segment.arguments else {
-        return Vec::new();
-    };
-    args.args
-        .iter()
-        .filter_map(|arg| match arg {
-            GenericArgument::Type(ty) => Some(idents_of(ty)),
-            _ => None,
-        })
-        .collect()
 }
 
 type DelegateItem = (Vec<Attribute>, bool, syn::Signature);
@@ -477,10 +430,9 @@ fn parse_delegate_items(input: ParseStream<'_>) -> syn::Result<Vec<DelegateItem>
 /// The impl or trait an item visitor is inside.
 #[derive(Default)]
 struct ImplScope {
-    generics: BTreeMap<String, Vec<String>>,
-    owner: Option<String>,
-    trait_name: Option<String>,
-    self_args: Vec<Vec<String>>,
+    generics: BTreeMap<String, Vec<syn::Path>>,
+    owner: Option<Type>,
+    trait_name: Option<syn::Path>,
 }
 
 struct ItemVisitor<'f> {
@@ -516,14 +468,17 @@ impl ItemVisitor<'_> {
         let fact = FnFact {
             place: self.place(line, line),
             name: consts::DERIVE_FN.to_string(),
-            owner: Some(owner.to_string()),
-            trait_name: Some(consts::DERIVE_FN.to_string()),
+            owner: Some(Type::Path(syn::TypePath {
+                attrs: Vec::new(),
+                qself: None,
+                path: owner.clone().into(),
+            })),
+            trait_name: None,
             public: true,
             default: false,
             cfg: self.cfg.clone(),
             generics: BTreeMap::new(),
-            self_args: Vec::new(),
-            ret: Vec::new(),
+            ret: None,
             tokens: Vec::new(),
             body: body.finish(),
         };
@@ -596,23 +551,6 @@ impl ItemVisitor<'_> {
         self.add_fn(&keep, sig, &block, public, false);
     }
 
-    /// The target of a `Deref` impl, without the impl's own type parameters:
-    /// they name no workspace type.
-    fn add_deref(&mut self, target: &syn::ImplItemType) {
-        let Some(owner) = self.scope.owner.clone() else {
-            return;
-        };
-        let ty = idents_of(&target.ty)
-            .into_iter()
-            .filter(|ident| !self.scope.generics.contains_key(ident))
-            .collect();
-        self.facts.derefs.push(AliasFact {
-            ty,
-            krate: self.krate.clone(),
-            name: owner,
-        });
-    }
-
     fn add_fn(
         &mut self,
         attrs: &[Attribute],
@@ -629,15 +567,15 @@ impl ItemVisitor<'_> {
         let mut body = Body::default();
         for input in &sig.inputs {
             if let FnArg::Typed(typed) = input {
-                body.bind_param(&typed.pat, idents_of(&typed.ty));
+                body.bind_param(&typed.pat, (*typed.ty).clone());
             }
         }
         body.visit_block(block);
         let line = sig.ident.span().start().line;
         let end = block.span().end().line.max(line);
         let ret = match &sig.output {
-            ReturnType::Default => Vec::new(),
-            ReturnType::Type(_, ty) => idents_of(ty),
+            ReturnType::Default => None,
+            ReturnType::Type(_, ty) => Some((**ty).clone()),
         };
         let mut cfg = self.cfg.clone();
         cfg.extend(cfgs_of(attrs));
@@ -651,7 +589,6 @@ impl ItemVisitor<'_> {
             name: sig.ident.to_string(),
             owner: self.scope.owner.clone(),
             trait_name: self.scope.trait_name.clone(),
-            self_args: self.scope.self_args.clone(),
             tokens: norm_tokens(block.to_token_stream()),
             body: body.finish(),
         };
@@ -696,7 +633,7 @@ impl<'ast> Visit<'ast> for ItemVisitor<'_> {
                             .ident
                             .as_ref()
                             .map_or_else(|| index.to_string(), ToString::to_string);
-                        (name, idents_of(&field.ty))
+                        (name, field.ty.clone())
                     })
                     .collect();
                 (variant.ident.to_string(), fields)
@@ -704,9 +641,19 @@ impl<'ast> Visit<'ast> for ItemVisitor<'_> {
             .collect();
         self.facts.enums.push(EnumFact {
             payload,
-            krate: self.krate.clone(),
+            place: self.place(item.ident.span().start().line, item.span().end().line),
             name: item.ident.to_string(),
             variants: item.variants.iter().map(|v| v.ident.to_string()).collect(),
+            params: item
+                .generics
+                .type_params()
+                .map(|param| param.ident.to_string())
+                .collect(),
+            bounds: {
+                let mut bounds = BTreeMap::new();
+                generics_map(&item.generics, &mut bounds);
+                bounds
+            },
         });
     }
 
@@ -721,14 +668,24 @@ impl<'ast> Visit<'ast> for ItemVisitor<'_> {
         }
         let mut generics = BTreeMap::new();
         generics_map(&item.generics, &mut generics);
+        let trait_name = item.trait_.as_ref().map(|(path, _)| path.clone());
+        let target = item.items.iter().find_map(|member| match member {
+            ImplItem::Type(target) if target.ident == consts::DEREF_TARGET => {
+                Some(target.ty.clone())
+            }
+            _ => None,
+        });
+        self.facts.impls.push(ImplFact {
+            owner: (*item.self_ty).clone(),
+            trait_name: trait_name.clone(),
+            target,
+            bounds: generics.clone(),
+            place: self.place(item.span().start().line, item.span().end().line),
+        });
         let scope = ImplScope {
             generics,
-            owner: Some(last_ident(&item.self_ty).unwrap_or_else(|| "?".to_string())),
-            trait_name: item
-                .trait_
-                .as_ref()
-                .and_then(|(path, _)| path.segments.last().map(|s| s.ident.to_string())),
-            self_args: self_type_args(&item.self_ty),
+            owner: Some((*item.self_ty).clone()),
+            trait_name,
         };
         let outer = std::mem::replace(&mut self.scope, scope);
         self.with_cfg(&item.attrs, |visitor| {
@@ -746,12 +703,6 @@ impl<'ast> Visit<'ast> for ItemVisitor<'_> {
                             .is_some_and(|s| s.ident == "delegate") =>
                     {
                         visitor.add_delegate(&m.mac);
-                    }
-                    ImplItem::Type(target)
-                        if visitor.scope.trait_name.as_deref() == Some(consts::DEREF)
-                            && target.ident == consts::DEREF_TARGET =>
-                    {
-                        visitor.add_deref(target);
                     }
                     _ => {}
                 }
@@ -785,7 +736,7 @@ impl<'ast> Visit<'ast> for ItemVisitor<'_> {
                     .ident
                     .as_ref()
                     .map_or_else(|| index.to_string(), ToString::to_string);
-                (name, idents_of(&field.ty))
+                (name, field.ty.clone())
             })
             .collect();
         let mut bounds = BTreeMap::new();
@@ -793,7 +744,7 @@ impl<'ast> Visit<'ast> for ItemVisitor<'_> {
         self.facts.structs.push(StructFact {
             fields,
             bounds,
-            krate: self.krate.clone(),
+            place: self.place(item.ident.span().start().line, item.span().end().line),
             name: item.ident.to_string(),
             params: item
                 .generics
@@ -809,17 +760,28 @@ impl<'ast> Visit<'ast> for ItemVisitor<'_> {
         }
         let name = item.ident.to_string();
         self.facts.traits.push(TraitFact {
-            krate: self.krate.clone(),
+            place: self.place(item.ident.span().start().line, item.span().end().line),
             name: name.clone(),
+            params: item
+                .generics
+                .type_params()
+                .map(|param| param.ident.to_string())
+                .collect(),
+            bounds: {
+                let mut bounds = BTreeMap::new();
+                generics_map(&item.generics, &mut bounds);
+                bounds
+            },
         });
         let mut generics = BTreeMap::new();
         generics_map(&item.generics, &mut generics);
-        generics.insert("Self".to_string(), vec![name.clone()]);
+        generics.insert("Self".to_string(), vec![item.ident.clone().into()]);
+        let ident = &item.ident;
+        let (_, arguments, _) = item.generics.split_for_impl();
         let scope = ImplScope {
             generics,
-            owner: Some(name.clone()),
-            trait_name: Some(name),
-            self_args: Vec::new(),
+            owner: Some(syn::parse_quote!(#ident #arguments)),
+            trait_name: Some(item.ident.clone().into()),
         };
         let outer = std::mem::replace(&mut self.scope, scope);
         self.with_cfg(&item.attrs, |visitor| {
@@ -836,18 +798,29 @@ impl<'ast> Visit<'ast> for ItemVisitor<'_> {
 
     fn visit_item_type(&mut self, item: &'ast syn::ItemType) {
         self.facts.aliases.push(AliasFact {
-            krate: self.krate.clone(),
+            place: self.place(item.ident.span().start().line, item.span().end().line),
             name: item.ident.to_string(),
-            ty: idents_of(&item.ty),
+            ty: (*item.ty).clone(),
+            params: item
+                .generics
+                .type_params()
+                .map(|param| param.ident.to_string())
+                .collect(),
+            bounds: {
+                let mut bounds = BTreeMap::new();
+                generics_map(&item.generics, &mut bounds);
+                bounds
+            },
         });
     }
 
     fn visit_item_use(&mut self, import: &'ast syn::ItemUse) {
         let mut out = Vec::new();
         use_tree(&import.tree, &mut Vec::new(), &mut out);
-        for import in out {
+        for mut binding in out {
+            binding.absolute = import.leading_colon.is_some();
             self.facts.uses.push(UseFact {
-                import,
+                import: binding,
                 krate: self.krate.clone(),
                 module: self.module.clone(),
             });
