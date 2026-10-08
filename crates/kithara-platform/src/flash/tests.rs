@@ -2452,6 +2452,7 @@ fn blocking_join_drop_unwind_delivers_released_waiters() {
         .as_mut()
         .poll(&mut Context::from_waker(&waiter))
         .is_ready();
+    let settled = super::system::FLASH.active_count();
     publish.send(()).expect("finish detached native work");
     while !native_finished.is_finished() {
         thread::yield_now();
@@ -2463,10 +2464,11 @@ fn blocking_join_drop_unwind_delivers_released_waiters() {
         "released engine waiters must be delivered before receiver drop"
     );
     assert_eq!(
-        active, 0,
-        "unwinding receiver destruction must settle completion credit"
+        active, 1,
+        "unwinding receiver destruction must settle completion credit, leaving only the released waiter's grant"
     );
     assert!(ready, "the released waiter's grant must reach its future");
+    assert_eq!(settled, 0, "the consumed grant returns the last credit");
     assert_eq!(super::system::FLASH.timed_count(), 0);
     assert_eq!(forward::async_active_count(), 0);
 }
@@ -2521,8 +2523,8 @@ fn blocking_join_replacement_drop_unwind_settles_new_registration() {
         );
         assert_eq!(
             super::system::FLASH.active_count(),
-            0,
-            "a borrowed handle must not strand its newer registration after replacement unwinds"
+            1,
+            "a borrowed handle must not strand its newer registration after replacement unwinds; only the released waiter's grant remains"
         );
         assert_eq!(
             calls.load(Ordering::Acquire),
@@ -2534,6 +2536,11 @@ fn blocking_join_replacement_drop_unwind_settles_new_registration() {
                 .as_mut()
                 .poll(&mut Context::from_waker(&waiter))
                 .is_ready()
+        );
+        assert_eq!(
+            super::system::FLASH.active_count(),
+            0,
+            "the consumed grant returns the last credit"
         );
     });
     assert_eq!(
