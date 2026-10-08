@@ -7,7 +7,7 @@ use super::{
     event::TransportEvent,
     process::converge_transport_restart,
 };
-use crate::session::{SessionError, queue::settle_receipts, state::SessionState};
+use crate::session::{SessionError, state::SessionState};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RouteRestartStatus {
@@ -20,6 +20,7 @@ pub(crate) enum RouteRestartStatus {
 pub(crate) fn prepare_route_restart<T, S>(
     state: &mut SessionState<T, S>,
 ) -> Result<RouteRestartStatus, SessionError> {
+    state.iteration_clock = None;
     let was_running = state
         .ctx
         .as_ref()
@@ -89,9 +90,8 @@ pub(crate) fn prepare_route_restart<T, S>(
     finish_route_restart(state, target)
 }
 
-/// Once the stopped stream's processor is back, settles every receipt it
-/// returned and seeds the transport with the settings the Host reads, so the
-/// next stream renders from them; the batches still queued apply on top.
+/// Once the stopped stream's processor is back, converges its grid while
+/// retaining its applied settings and every level of its channel.
 fn finish_route_restart<T, S>(
     state: &mut SessionState<T, S>,
     target: SessionGridGeneration,
@@ -105,8 +105,6 @@ fn finish_route_restart<T, S>(
     {
         return Ok(RouteRestartStatus::Pending);
     }
-    settle_receipts(state);
-    let settings = *state.settings.config();
     let Some(store) = state
         .ctx
         .as_mut()
@@ -114,7 +112,7 @@ fn finish_route_restart<T, S>(
     else {
         return Ok(RouteRestartStatus::Pending);
     };
-    let actual = converge_transport_restart(store, target, settings)
+    let actual = converge_transport_restart(store, target)
         .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
     let promoted = target
         .promote(actual)
@@ -175,8 +173,8 @@ fn publish_committed<T, S>(state: &mut SessionState<T, S>, observation: &Transpo
     }
 }
 
-pub(crate) fn publish_transport_event<T, S>(_state: &SessionState<T, S>, _event: &TransportEvent) {
-    todo!(
-        "Publish transport events through the canonical owner snapshot or deck control endpoints; HostedDeck has no event-publication seam, and the separate graph deck registry is gone (spec §4.1, §5.3)"
-    )
+pub(crate) fn publish_transport_event<T, S>(state: &SessionState<T, S>, event: &TransportEvent) {
+    if state.root_view.transport_event().as_ref() != Some(event) {
+        state.root_view.publish_transport_event(event);
+    }
 }

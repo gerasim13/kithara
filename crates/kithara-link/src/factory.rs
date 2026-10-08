@@ -27,6 +27,12 @@ impl<F> LinkedFactory<F> {
         self.synced = synced;
     }
 
+    /// Whether subsequent tracks inherit synchronization.
+    #[must_use]
+    pub fn synced(&self) -> bool {
+        self.synced
+    }
+
     /// Sets the planned trajectory inherited by subsequent tracks.
     pub fn set_trajectory(&mut self, trajectory: &TempoTrajectory) {
         self.host = trajectory.clone();

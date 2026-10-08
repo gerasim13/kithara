@@ -13,7 +13,6 @@ mod view;
 pub(crate) use command::QueuePostbox;
 #[cfg(test)]
 pub(crate) use state::tests::test_session;
-pub(crate) use view::QueueView;
 
 pub use self::{
     command::QueueCommand,

@@ -1,5 +1,6 @@
 use std::{
     fmt::{self, Debug, Formatter},
+    marker::PhantomData,
     num::NonZeroU32,
     pin::pin,
 };
@@ -7,65 +8,32 @@ use std::{
 use delegate::delegate;
 use futures::future::{Either, select};
 use kithara_audio::{
-    AudioObserver, AudioReader, ChunkOutcome, ConsumerWakeMode, ReadOutcome, ResamplerBackend,
-    SeekOutcome,
+    AudioObserver, AudioReader, ChunkOutcome, ReadOutcome, ResamplerBackend, SeekOutcome,
 };
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
-use kithara_command::Sender;
-use kithara_decode::{DecodeError, DecodeResult, TrackMetadata};
+use kithara_command::{Inbox, Sender};
+use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::{EventBus, EventReceiver, EventSet};
-use kithara_platform::{maybe_send::MaybeSendFuture, sync::Arc, time::Duration};
-use kithara_render::{
-    LaneProtocol, LoadRefusal, Open,
-    rt::track::{PcmConsumer, PlaybackRate, PlayerResource},
+use kithara_platform::{
+    maybe_send::{BoxFuture, MaybeSendFuture},
+    sync::Arc,
+    time::Duration,
 };
-use kithara_signal::AudioSpec;
-use kithara_stream::{Stream, StreamType};
+use kithara_render::{
+    LaneProtocol, LaneStart, LoadRefusal, Open, PcmReceiver,
+    rt::{
+        DeckMixerConfig,
+        track::{PcmConsumer, PlayerResource},
+    },
+};
+use kithara_signal::{AudioSpec, FrameCount};
+use num_traits::ToPrimitive;
 use tracing::warn;
 
-use super::{PlaybackResamplerBackend, ResourceConfig, SourceType};
-use crate::{PlayWorker, TrackConfig, player::TrackSettings};
+use super::{PlaybackResamplerBackend, ResourceConfig, ResourceLane, SourceType};
+use crate::PlayError;
 
-/// Type-erased audio resource wrapping any `AudioReader`.
-///
-/// Provides a unified interface for reading decoded audio
-/// regardless of the underlying source (file, HLS, custom).
-///
-/// # Example
-///
-/// ```ignore
-/// use kithara_assets::AssetStore;
-/// use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
-/// use kithara_play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc};
-///
-/// pool_schema! {
-///     pub AppPools {
-///         bytes: u8,
-///         samples: f32,
-///     }
-/// }
-/// let config = || PoolConfig::builder().max_buffers(128).build();
-/// let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
-///     .bytes(config())
-///     .samples(config())
-///     .build()?;
-/// let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-///
-/// // Auto-detect: .m3u8 -> HLS, everything else -> progressive file
-/// let config: ResourceConfig<AppPools> = ResourceConfig::for_src(ResourceSrc::parse(
-///     "https://example.com/song.mp3",
-/// )?)
-/// .store(AssetStore::builder(pools).build())
-/// .worker(worker)
-/// .build();
-/// let mut resource = Resource::new(config).await?;
-///
-/// let spec = resource.spec();
-/// let meta = resource.metadata();
-///
-/// let mut buf = [0.0f32; 1024];
-/// resource.read(&mut buf);
-/// ```
+/// A directly owned decoded reader used outside the deck's packet-ring path.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct Resource {
@@ -73,287 +41,245 @@ pub struct Resource {
     src: Arc<str>,
     #[field(get = event_bus)]
     bus: EventBus,
-    /// Player end of the render lane of a reader opened on a play worker.
-    lane: Option<Sender<LaneProtocol>>,
-    /// What the deck slot reads; dropped last.
-    consumer: PcmConsumer,
+    reader: Box<dyn AudioReader>,
 }
 
 impl Resource {
-    /// Create a resource from a `ResourceConfig`.
-    ///
-    /// Auto-detects the stream type from the URL:
-    /// - URLs ending with `.m3u8` -> HLS stream
-    /// - All other URLs -> progressive file download
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if source type detection fails, or if the underlying
-    /// audio stream cannot be created (network failure, invalid format, etc.).
-    pub async fn new<S, B>(config: ResourceConfig<S, B>) -> DecodeResult<Self>
-    where
-        B: Default + ResamplerBackend,
-        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    {
-        Ok(Self::open(config, None).await?)
-    }
-
-    /// Create a resource from any `AudioReader`.
-    ///
-    /// Custom sources are fixed-rate. Stream-backed resources reuse this
-    /// construction path and attach their resident Warp controls before return.
-    ///
-    /// The resource shares the reader's event bus directly.
-    ///
-    /// `src` rides along on `PlayerEvent::ItemDidPlayToEnd` and is what
-    /// the queue uses to tell which track ended. `None` defaults to
-    /// `"unknown"`.
+    /// Wraps a directly owned reader and prepares its first input off-RT.
     #[must_use]
-    pub fn from_reader<R: AudioReader + 'static>(reader: R, src: Option<Arc<str>>) -> Self {
-        let preload = reader.preload_gate().is_none();
+    pub fn from_reader<R: AudioReader + 'static>(mut reader: R, src: Option<Arc<str>>) -> Self {
         let bus = reader.event_bus().clone();
         let src = src.unwrap_or_else(|| Arc::from("unknown"));
-        let mut resource = Self {
+        if let Err(error) = reader.preload() {
+            warn!(%src, %error, "resource preload failed");
+        }
+        Self {
             src,
             bus,
-            lane: None,
-            consumer: PcmConsumer::new(Box::new(reader)),
-        };
-        if preload && let Err(error) = resource.consumer.reader_mut().preload() {
-            warn!(src = %resource.src, %error, "resource preload failed");
+            reader: Box::new(reader),
         }
-        resource
     }
 
-    /// Create a resource from a concrete stream-backed audio config.
-    ///
-    /// Generic over any [`StreamType`] whose config carries an optional
-    /// `kithara_events::EventBus`. Callers wanting fine-grained control
-    /// over `FileConfig` / `HlsConfig` (ABR, keys, etc.) use this path.
-    pub(crate) async fn from_stream_audio<T, B, S>(
-        config: TrackConfig<T, B>,
-        src: Arc<str>,
-        worker: &PlayWorker<S>,
-    ) -> Result<Self, LoadRefusal>
-    where
-        T: StreamType<Events = EventBus> + 'static,
-        B: Default + ResamplerBackend,
-        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-        crate::RegisteredAudio<Stream<T>, S>: AudioReader + 'static,
-    {
-        let speed = config.warp().speed();
-        let mut audio = worker.load(config).await?;
-        let priority = audio.priority();
-        let render_publisher = audio.take_publisher().ok_or(DecodeError::InvalidData {
-            detail: "registered Warp publisher was already taken",
-        })?;
-        let lane = audio.take_lane().ok_or(DecodeError::InvalidData {
-            detail: "registered render lane was already taken",
-        })?;
-        let mut resource = Self::from_reader(audio, Some(src));
-        if let Err(error) = resource.preload().await {
-            warn!(src = %resource.src, %error, "resource preload failed");
-        }
-        resource.lane = Some(lane);
-        resource.consumer = resource
-            .consumer
-            .with_playback_rate(PlaybackRate::for_warp(speed))
-            .with_priority(priority)
-            .with_render_publisher(render_publisher);
-        Ok(resource)
-    }
-
-    /// Captures the per-track cancel token before `build_*_config` consumes `config`; the same
-    /// token is cloned by identity into both the inner stream and the audio path.
-    async fn open<S, B>(
-        config: ResourceConfig<S, B>,
-        observer: Option<Box<dyn AudioObserver>>,
-    ) -> Result<Self, LoadRefusal>
-    where
-        B: Default + ResamplerBackend,
-        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-    {
-        let src: Arc<str> = Arc::from(config.src.to_string());
-        let source_type = SourceType::detect(&config.src)?;
-        let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
-            detail: "ResourceConfig requires an explicit PlayWorker",
-        })?;
-        let warp = config.warp.clone();
-        let engine_load = config.engine_load.clone();
-        let cancel = config.cancel.clone();
-        let mut resource = match source_type {
-            SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
-                let audio_config = config.build_file_config(&worker, observer);
-                let track = TrackConfig::for_audio(audio_config)
-                    .maybe_engine_load(engine_load)
-                    .warp(warp.clone())
-                    .build();
-                Self::from_stream_audio(track, src, &worker).await?
-            }
-            SourceType::HlsStream(_) => {
-                let audio_config = config.build_hls_config(&worker, observer)?;
-                let track = TrackConfig::for_audio(audio_config)
-                    .maybe_engine_load(engine_load)
-                    .warp(warp)
-                    .build();
-                Self::from_stream_audio(track, src, &worker).await?
-            }
-        };
-        resource.consumer.cancel_on_drop(cancel);
-        Ok(resource)
-    }
-
-    /// Wait for first decoded chunk to be available, then move it to internal buffer.
-    ///
-    /// After preload completes, the first `read()` returns data without blocking.
-    /// Safe to call multiple times (no-op if already preloaded).
+    /// Prepares input on the reader's owning thread without a producer gate.
     ///
     /// # Errors
-    /// Propagated from the underlying [`kithara_audio::AudioControl::preload`] if the
-    /// producer channel closed or the initial fill hit a decoder
-    /// failure.
+    /// Returns the reader's source or decoder failure.
     pub async fn preload(&mut self) -> Result<(), DecodeError> {
-        let reader = self.consumer.reader_mut();
-        if let Some(gate) = reader.preload_gate() {
-            gate.wait_for_epoch(reader.preload_epoch()).await;
-        }
-        reader.preload()
+        self.reader.preload()
     }
 
-    pub(crate) fn take_lane(&mut self) -> Option<Sender<LaneProtocol>> {
-        self.lane.take()
-    }
-
-    /// Subscribe to unified events.
-    ///
-    /// Returns a receiver for all events published to the bus,
-    /// including audio, file, and HLS events.
+    /// Subscribe to unified source and decoder events.
     #[must_use]
     pub fn subscribe<E: EventSet>(&self) -> EventReceiver<E> {
         self.bus.subscribe()
     }
 
     delegate! {
-        to self.consumer.reader() {
-            /// Runtime ABR handle for adaptive sources (HLS). `None` for files.
+        to self.reader {
+            /// Adaptive bitrate control, when the source has one.
             #[must_use]
             pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
-            /// Cached span of the underlying reader: how much of the source is on disk.
+            /// Source span already cached on disk.
             #[must_use]
             pub fn cached_span(&self) -> Duration;
-            /// Decoded-ahead frontier of the underlying reader (always `>=` position).
+            /// Source position through which input has been decoded.
             #[must_use]
             pub fn decoded_frontier(&self) -> Duration;
-            /// Get total duration (if known).
+            /// Total source duration, when known.
             #[must_use]
             pub fn duration(&self) -> Option<Duration>;
-            /// Get track metadata.
+            /// Tags captured from the source.
             #[must_use]
             pub fn metadata(&self) -> &TrackMetadata;
-            /// Get current playback position.
+            /// Current committed source position.
             #[must_use]
             pub fn position(&self) -> Duration;
-            /// Control-plane handle that begins a seek without touching the reader. `None` for
-            /// readers with no worker-backed seek.
-            #[must_use]
-            pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>>;
-            /// Set the target sample rate of the audio host.
-            pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
-            /// Get the current decoded-audio specification.
+            /// Current decoded-audio format.
             #[must_use]
             pub fn spec(&self) -> AudioSpec;
-        }
-        to self.consumer.reader_mut() {
-            /// Read the next decoded chunk with full metadata.
+            /// Read one decoded chunk with its metadata.
             pub fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError>;
-            /// Read interleaved samples.
+            /// Read interleaved decoded samples.
             pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError>;
-            /// Read deinterleaved (planar) samples.
+            /// Read deinterleaved decoded samples.
             pub fn read_planar<'a>(
                 &mut self,
                 output: &'a mut [&'a mut [f32]],
             ) -> Result<ReadOutcome, DecodeError>;
-            /// Seek to position. Begins and applies in one call, so it takes locks — off the audio
-            /// thread only. Audio-thread callers begin through [`seek_handle`](Self::seek_handle)
-            /// instead.
+            /// Seek synchronously on the source's owning thread.
             pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
-            /// Adopt the wake capability of the consumer that will read this
-            /// resource.
-            pub fn set_consumer_wake_mode(&mut self, mode: ConsumerWakeMode);
-            /// Adopt a seek epoch begun through `seek_handle`. Lock-free.
-            pub fn sync_seek(&mut self);
+            /// Rebuild decoder resampling on the source's owning thread.
+            pub fn set_host_sample_rate(&mut self, sample_rate: NonZeroU32);
         }
     }
 }
 
 impl Debug for Resource {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Resource")
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Resource")
             .field("src", &self.src)
             .finish_non_exhaustive()
     }
 }
 
-/// A track's open as a dispatcher runs it: the resource's config and the
-/// observer of the audio it decodes.
-pub struct ResourceLoad<S, B: Default = PlaybackResamplerBackend>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    config: ResourceConfig<S, B>,
-    observer: Box<dyn AudioObserver>,
+type ResourceOpen = Result<(OpenedTrack, ResourceLane, FrameCount), LoadRefusal>;
+type LaneChannel = (Sender<LaneProtocol>, Inbox<LaneProtocol>);
+
+/// A single-use source open and its preparation-owned lane wiring.
+pub struct ResourceLoad<S, B = PlaybackResamplerBackend> {
+    opener: Box<
+        dyn FnOnce(Duration, LaneStart, Inbox<LaneProtocol>) -> BoxFuture<'static, ResourceOpen>
+            + Send,
+    >,
+    channel: Option<Box<dyn Fn() -> LaneChannel + Send>>,
+    geometry: Result<(Option<FrameCount>, FrameCount), PlayError>,
+    marker: PhantomData<fn() -> (S, B)>,
 }
 
-impl<S, B> ResourceLoad<S, B>
-where
-    B: Default,
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    /// Opens `config` with `observer` attached to its decoder.
-    #[must_use]
-    pub fn new(config: ResourceConfig<S, B>, observer: Box<dyn AudioObserver>) -> Self {
-        Self { config, observer }
-    }
-}
-
-impl<S, B> Debug for ResourceLoad<S, B>
-where
-    B: Default,
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ResourceLoad")
-            .field("src", &self.config.src)
+impl<S, B> Debug for ResourceLoad<S, B> {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ResourceLoad")
             .finish_non_exhaustive()
     }
 }
 
-impl<S, B> ResourceLoad<S, B>
-where
-    B: Default,
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    /// The track opens with its renderer where `settings` stand.
-    pub(crate) fn start_at(&mut self, settings: TrackSettings) {
-        self.config.warp = settings.warp(&self.config.warp);
+impl<S, B> ResourceLoad<S, B> {
+    /// Allocates the owner's lane sender before transferring the inbox in Load.
+    pub(crate) fn lane_channel(
+        &self,
+    ) -> Result<(Sender<LaneProtocol>, Inbox<LaneProtocol>), PlayError> {
+        let channel = self.channel.as_ref().ok_or_else(|| {
+            PlayError::Internal("ResourceConfig requires an explicit PlayWorker".into())
+        })?;
+        Ok(channel())
+    }
+
+    /// Maximum rendered lead, including the held packet, and the lane's Jump ramp.
+    pub(crate) fn lane_geometry(&self) -> Result<(FrameCount, FrameCount), PlayError> {
+        let (ring_depth, declick) = self.geometry.clone()?;
+        let ring_depth = match ring_depth {
+            Some(ring_depth) => ring_depth,
+            None => todo!(
+                "kithara-warp::WarpRenderer uncapped output-packet frame bound (contract §2 lane lead)"
+            ),
+        };
+        Ok((ring_depth, declick))
     }
 }
 
-/// What an open hands the track that asked for it: the consumer its deck slot
-/// reads, the sender of its render lane, and what the track shows of its
-/// source.
+impl<S, B> ResourceLoad<S, B>
+where
+    B: Default + ResamplerBackend,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    /// Captures the configured source and decoder observer for one open.
+    #[must_use]
+    pub fn new(config: ResourceConfig<S, B>, observer: Box<dyn AudioObserver>) -> Self {
+        let geometry = Self::geometry(&config);
+        let channel = config.worker.clone().map(|worker| {
+            Box::new(move || worker.lane_channel()) as Box<dyn Fn() -> LaneChannel + Send>
+        });
+        let cancel = config.cancel.clone();
+        Self {
+            opener: Box::new(move |position, start, inbox| {
+                Box::pin(async move {
+                    let open = Self::load(config, observer, position, start, inbox);
+                    match cancel {
+                        None => open.await,
+                        Some(cancel) => match select(pin!(cancel.cancelled()), pin!(open)).await {
+                            Either::Left(((), _open)) => Err(LoadRefusal::Cancelled),
+                            Either::Right((opened, _cancel)) => opened,
+                        },
+                    }
+                })
+            }),
+            channel,
+            geometry,
+            marker: PhantomData,
+        }
+    }
+
+    fn geometry(
+        config: &ResourceConfig<S, B>,
+    ) -> Result<(Option<FrameCount>, FrameCount), PlayError> {
+        let worker = config.worker.as_ref().ok_or_else(|| {
+            PlayError::Internal("ResourceConfig requires an explicit PlayWorker".into())
+        })?;
+        let audio = config.clone().build_file_config(worker, None);
+        let track = config.build_track_config(audio);
+        let ring_depth = track
+            .warp()
+            .render_quantum_frames()
+            .map(|quantum| {
+                track
+                    .audio_buffer_chunks()
+                    .get()
+                    .checked_add(1)
+                    .and_then(|packets| packets.checked_mul(quantum.get()))
+                    .and_then(|frames| frames.checked_sub(1))
+                    .map(FrameCount::new)
+                    .ok_or_else(|| PlayError::Internal("lane ring frame depth overflow".into()))
+            })
+            .transpose()?;
+        let rate = config.host_sample_rate.ok_or_else(|| {
+            PlayError::Internal("lane geometry requires the prepared host sample rate".into())
+        })?;
+        let declick = (f64::from(rate.get())
+            * f64::from(DeckMixerConfig::default().declick().smooth_seconds))
+        .to_usize()
+        .ok_or_else(|| PlayError::Internal("lane Jump ramp frame count overflow".into()))?
+        .max(1);
+        Ok((ring_depth, FrameCount::new(declick)))
+    }
+
+    async fn load(
+        config: ResourceConfig<S, B>,
+        observer: Box<dyn AudioObserver>,
+        position: Duration,
+        start: LaneStart,
+        inbox: Inbox<LaneProtocol>,
+    ) -> ResourceOpen {
+        let src: Arc<str> = Arc::from(config.src.to_string());
+        let source_type = SourceType::detect(&config.src)?;
+        let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
+            detail: "ResourceConfig requires an explicit PlayWorker",
+        })?;
+        let (receiver, lane, latency) = match source_type {
+            SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
+                let audio = config.clone().build_file_config(&worker, Some(observer));
+                let track = config.build_track_config(audio);
+                let (receiver, lane, latency) = worker.load(track, position, start, inbox).await?;
+                (receiver, ResourceLane::new(lane), latency)
+            }
+            SourceType::HlsStream(_) => {
+                let audio = config.clone().build_hls_config(&worker, Some(observer))?;
+                let track = config.build_track_config(audio);
+                let (receiver, lane, latency) = worker.load(track, position, start, inbox).await?;
+                (receiver, ResourceLane::new(lane), latency)
+            }
+        };
+        Ok((
+            OpenedTrack::new(receiver, src, worker.pools())?,
+            lane,
+            latency,
+        ))
+    }
+}
+
+/// The owner-facing receiver and source facts returned by a dispatcher load.
 pub struct OpenedTrack {
     pub pcm: Box<PlayerResource>,
-    pub lane: Option<Sender<LaneProtocol>>,
     pub duration: Option<Duration>,
     pub abr: Option<kithara_abr::AbrHandle>,
-    /// What the decoder read of the source's tags.
     pub metadata: TrackMetadata,
 }
 
 impl Debug for OpenedTrack {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("OpenedTrack")
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OpenedTrack")
             .field("src", self.pcm.src())
             .field("duration", &self.duration)
             .finish_non_exhaustive()
@@ -361,32 +287,20 @@ impl Debug for OpenedTrack {
 }
 
 impl OpenedTrack {
-    /// Splits `resource` into what its track holds, its consumer waking the
-    /// worker as `wake` says and drawing on `pools`.
-    ///
-    /// # Errors
-    ///
-    /// Returns the pool's refusal of the consumer's buffers.
     fn new<S>(
-        mut resource: Resource,
-        wake: Option<ConsumerWakeMode>,
+        receiver: PcmReceiver,
+        src: Arc<str>,
         pools: &PoolRegion<S>,
     ) -> Result<Self, PoolError>
     where
         S: HasPool<f32>,
     {
-        let lane = resource.take_lane();
-        let duration = resource.duration();
-        let abr = resource.abr_handle();
-        let metadata = resource.metadata().clone();
-        if let Some(wake) = wake {
-            resource.set_consumer_wake_mode(wake);
-        }
-        let src = Arc::clone(&resource.src);
-        let pcm = Box::new(PlayerResource::new(resource.into(), src, pools)?);
+        let duration = receiver.duration();
+        let abr = receiver.abr_handle();
+        let metadata = receiver.metadata().clone();
+        let pcm = Box::new(PlayerResource::new(PcmConsumer::new(receiver), src, pools)?);
         Ok(Self {
             pcm,
-            lane,
             duration,
             abr,
             metadata,
@@ -394,54 +308,26 @@ impl OpenedTrack {
     }
 }
 
-impl<S, B> Open for ResourceLoad<S, B>
-where
-    B: Default + ResamplerBackend,
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
-{
+impl<S, B> Open for ResourceLoad<S, B> {
     type Opened = OpenedTrack;
+    type Lane = ResourceLane;
 
-    /// Ends the moment the track's cancel fires: a cancelled track's open is
-    /// never polled, and one in flight drops only after its token reads
-    /// cancelled.
-    fn open(self) -> impl MaybeSendFuture<Output = Result<OpenedTrack, LoadRefusal>> {
-        let cancel = self.config.cancel.clone();
-        let wake = self.config.consumer_wake_mode;
-        let worker = self.config.worker.clone();
-        let open = Resource::open(self.config, Some(self.observer));
-        async move {
-            let resource = match cancel {
-                None => open.await?,
-                Some(cancel) => match select(pin!(cancel.cancelled()), pin!(open)).await {
-                    Either::Left(((), _open)) => return Err(LoadRefusal::Cancelled),
-                    Either::Right((opened, _cancel)) => opened?,
-                },
-            };
-            let worker = worker.ok_or(DecodeError::InvalidData {
-                detail: "ResourceConfig requires an explicit PlayWorker",
-            })?;
-            Ok(OpenedTrack::new(resource, wake, worker.pools())?)
-        }
+    /// Opens once with cancellation and concrete pool ownership captured at construction.
+    fn open(
+        self,
+        position: Duration,
+        start: LaneStart,
+        inbox: Inbox<LaneProtocol>,
+    ) -> impl MaybeSendFuture<Output = Result<(OpenedTrack, ResourceLane, FrameCount), LoadRefusal>>
+    {
+        (self.opener)(position, start, inbox)
     }
 }
 
-/// Unwrap a `Resource` into its underlying reader, e.g. to hand the opened
-/// source to the shared `kithara-analysis` worker.
-///
-/// Disarms the per-track cancel before moving the reader out: the live reader
-/// outlives this wrapper, so freeing the wrapper must not tear down its fetch
-/// loops. Teardown then rides the analysis run-scope cancel.
+/// Transfer the directly owned reader to another off-RT consumer.
 impl From<Resource> for Box<dyn AudioReader> {
     fn from(resource: Resource) -> Self {
-        resource.consumer.into()
-    }
-}
-
-/// The half of a load the deck slot reads. The rest — the lane, the staging
-/// recipe, the prepared grid — stays with whoever took it before.
-impl From<Resource> for PcmConsumer {
-    fn from(resource: Resource) -> Self {
-        resource.consumer
+        resource.reader
     }
 }
 

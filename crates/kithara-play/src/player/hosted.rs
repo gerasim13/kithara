@@ -5,13 +5,24 @@ use kithara_render::{bridge::DeckSnapshot, rt::DeckMixerConfig};
 use kithara_signal::{FrameCount, SessionFrame};
 
 use super::{Outbox, TrackReceipt};
-use crate::PlayError;
+use crate::{PlayError, PlayWorker};
+
+/// A deck's public control endpoint before the owner registers it.
+pub trait DeckControl {
+    /// The handle retained while the owner holds the deck.
+    type Control;
+    /// Hands out a control handle without binding or seating the deck.
+    fn control(&self) -> Self::Control;
+}
 
 /// A deck as the engine owner holds it: the owner builds the deck's mixer from
 /// [`HostedDeck::mixer_config`], lends the deck an [`Outbox`] over that mixer
 /// and the dispatcher for each pass, and hands it every receipt and event of
 /// its slots.
 pub trait HostedDeck<S>: MaybeSend + 'static {
+    /// The worker and typed pools shared by the deck's resource loads.
+    fn worker(&self) -> Option<&PlayWorker<S>>;
+
     /// The mixer the owner builds for this deck when it registers it.
     fn mixer_config(&self) -> DeckMixerConfig;
 

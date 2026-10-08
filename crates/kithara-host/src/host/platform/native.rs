@@ -1,5 +1,5 @@
 use kithara_bufpool::HasPool;
-use kithara_command::Live;
+use kithara_command::{Live, ScopedConfig};
 use kithara_platform::{maybe_send::MaybeSend, sync::Arc};
 use kithara_play::PlayError;
 use std::{marker::PhantomData, num::NonZeroU32};
@@ -56,6 +56,7 @@ impl<S, O: HostOwner<S>> Platform<S, O> {
         root: HostRoot,
         view: RootView,
         output_block_frames: Option<NonZeroU32>,
+        channel_config: ScopedConfig,
         output: SessionOutput,
         settings: Live<HostSettings, HostProtocol>,
         layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
@@ -67,6 +68,7 @@ impl<S, O: HostOwner<S>> Platform<S, O> {
             root,
             view,
             output_block_frames,
+            channel_config,
             output,
             settings,
             layer,

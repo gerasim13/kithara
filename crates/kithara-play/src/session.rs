@@ -69,14 +69,12 @@ mod wire {
             }
         }
     }
-
 }
 
 mod binding {
     use std::num::NonZeroU32;
 
     use arc_swap::ArcSwap;
-    use kithara_audio::ConsumerWakeMode;
     use kithara_platform::sync::Arc;
     use kithara_render::rt::StreamShape;
 
@@ -91,9 +89,6 @@ mod binding {
         pub sample_rate: SessionSampleRate,
         /// The measured stream once one runs, the requested block before.
         pub stream_shape: Option<StreamShape>,
-        /// How the consumers the session's render callback reads wake their
-        /// workers.
-        pub consumer_wake_mode: ConsumerWakeMode,
     }
 
     /// Where a session publishes its output for the decks it holds to read.
@@ -102,25 +97,21 @@ mod binding {
 
     impl SessionOutputView {
         /// A session that has published no output yet: nothing measured, no
-        /// shape, the rate its settings ask for; its render callback wakes the
-        /// workers of the consumers it reads as `consumer_wake_mode` says.
+        /// shape, and the rate its settings ask for.
         #[must_use]
-        pub fn new(requested_sample_rate: NonZeroU32, consumer_wake_mode: ConsumerWakeMode) -> Self {
+        pub fn new(requested_sample_rate: NonZeroU32) -> Self {
             Self(Arc::new(ArcSwap::from_pointee(OutputSnapshot {
                 sample_rate: SessionSampleRate::new(None, requested_sample_rate.get()),
                 stream_shape: None,
-                consumer_wake_mode,
             })))
         }
 
         /// The session's output changed: every deck it holds reads this from
         /// now on.
         pub fn publish(&self, sample_rate: SessionSampleRate, stream_shape: Option<StreamShape>) {
-            let consumer_wake_mode = self.get().consumer_wake_mode;
             self.0.store(Arc::new(OutputSnapshot {
                 sample_rate,
                 stream_shape,
-                consumer_wake_mode,
             }));
         }
 
@@ -131,7 +122,6 @@ mod binding {
             **self.0.load()
         }
     }
-
 }
 
 pub use binding::{OutputSnapshot, SessionOutputView};

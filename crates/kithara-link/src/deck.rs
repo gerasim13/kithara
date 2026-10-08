@@ -18,9 +18,15 @@ pub trait LinkedDeck<S>: HostedDeck<S> {
     /// Whether this deck follows the Host's tempo.
     fn synced(&self) -> bool;
     /// Maximum lane lead among sounding synchronized tracks.
-    fn lead(&self) -> Option<FrameCount>;
+    fn lead(&self, delivery: FrameCount) -> Option<FrameCount>;
     /// Minimum available room among lanes that would receive a retime.
     fn lane_room(&self) -> usize;
+    /// Scope batches needed to reopen silent tracks during a retime.
+    fn scope_parts(&self) -> usize;
+    /// Whether any lane applied the speed batch of this retime.
+    fn retime_applied(&mut self, at: SessionFrame) -> Option<bool>;
+    /// Closes phase against the new trajectory without a commanded speed step.
+    fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>);
 }
 
 impl<S, D: HostedDeck<S> + LinkedPlayer<S>> LinkedDeck<S> for D {
@@ -40,11 +46,23 @@ impl<S, D: HostedDeck<S> + LinkedPlayer<S>> LinkedDeck<S> for D {
         LinkedPlayer::synced(self)
     }
 
-    fn lead(&self) -> Option<FrameCount> {
-        LinkedPlayer::lead(self)
+    fn lead(&self, delivery: FrameCount) -> Option<FrameCount> {
+        LinkedPlayer::lead(self, delivery)
     }
 
     fn lane_room(&self) -> usize {
         LinkedPlayer::lane_room(self)
+    }
+
+    fn scope_parts(&self) -> usize {
+        LinkedPlayer::scope_parts(self)
+    }
+
+    fn retime_applied(&mut self, at: SessionFrame) -> Option<bool> {
+        LinkedPlayer::retime_applied(self, at)
+    }
+
+    fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>) {
+        LinkedPlayer::realign(self, trajectory, at, out);
     }
 }

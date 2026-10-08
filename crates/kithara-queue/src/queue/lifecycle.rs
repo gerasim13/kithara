@@ -2,7 +2,7 @@ use kithara_bufpool::HasPool;
 use kithara_command::{Seq, When};
 use kithara_events::TrackId;
 use kithara_play::{
-    Outbox, PlayError, Player, PlayerConfig, Position, Track, TrackCommand, TrackFactory,
+    Outbox, PlayError, Player, PlayerConfig, Position, Slot, Track, TrackCommand, TrackFactory,
     TrackStatus as PlayingStatus,
 };
 
@@ -140,6 +140,25 @@ where
             Some(slot) => slot,
             None => return self.evict_for(id, role, out),
         };
+        let active = self.prepare_track(id, slot, role, out)?;
+        let seq = active.load;
+        self.active.push(active);
+        Ok(seq)
+    }
+
+    fn prepare_track(
+        &mut self,
+        id: TrackId,
+        slot: Slot,
+        role: Role,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Active<F::Track>, QueueError> {
+        if out.deck_available() == 0 {
+            return Err(PlayError::Full("deck").into());
+        }
+        if out.dispatcher_available() == 0 {
+            return Err(PlayError::Full("dispatcher").into());
+        }
         let source = self
             .tracks
             .source(id)
@@ -158,7 +177,7 @@ where
         })?;
         let Some(loader) = &self.loader else {
             todo!(
-                "Build the loader from the owner-injected preparation and store after the queue construction/registration decision; do not invent a second worker or store"
+                "Inject ResourcePrep and the store at queue registration without changing the infallible facade constructor (contract §8.3; skeleton queue construction ruling)"
             )
         };
         let (item, load) = loader.start(id, source, observer)?;
@@ -170,22 +189,28 @@ where
             out,
         )?;
         self.tracks.begin_load(id, load);
-        self.active.push(Active {
+        Ok(Active {
             item: id,
             slot,
             track,
             role,
             load: seq,
-        });
-        Ok(seq)
+        })
     }
 
     fn evict_for(
         &mut self,
         id: TrackId,
-        _role: Role,
-        _out: &mut Outbox<'_, S>,
+        role: Role,
+        out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, QueueError> {
+        if let Some(index) = self.active.replacement_index() {
+            self.release_track(index, out)?;
+            self.reap_released();
+            if self.active.replacement_index().is_some() {
+                return Err(QueueError::NotReady(id));
+            }
+        }
         let victim =
             self.active
                 .quietest(&self.deck, |_| true)
@@ -197,9 +222,13 @@ where
             .get(victim)
             .ok_or(QueueError::NotReady(id))?
             .slot;
-        todo!(
-            "Load {id:?} for slot {slot:?}, retain victim {victim} until the Replace receipt, issue TrackCommand::Evict at the target entry and start with the incoming crossfade envelope; the Track/Slots seam must expose replacement ownership (spec 4.4 fast-next, including slots = 1)"
-        )
+        let mut replacement = self.prepare_track(id, slot, role, out)?;
+        replacement
+            .track
+            .apply(TrackCommand::Evict { at: When::Next }, out)?;
+        let seq = replacement.load;
+        self.active.stage(replacement);
+        Ok(seq)
     }
 
     pub(super) fn release_track(
@@ -207,24 +236,64 @@ where
         index: usize,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
+        self.check_release(index)?;
+        let replacement = self.active.is_replacement(index);
         let active = self.active.get_mut(index).ok_or(PlayError::NoActiveSlot)?;
         let sent = active.track.apply(TrackCommand::Release, out)?;
         let slot = active.slot;
         active.role = Role::Leaving;
-        self.active.clear_fade(slot);
+        if !replacement {
+            self.active.clear_fade(slot);
+        }
         Ok(sent)
+    }
+
+    fn check_release(&self, index: usize) -> Result<(), PlayError> {
+        let active = self.active.get(index).ok_or(PlayError::NoActiveSlot)?;
+        if self.active.is_replacement(index)
+            && matches!(active.role, Role::Incoming { batch: Some(_) })
+        {
+            todo!(
+                "kithara-render::DeckProtocol cancellation of a pending unattached Replace before releasing its incoming lane, without Detach of the incumbent (contract §8.6 fast-next)"
+            );
+        }
+        Ok(())
     }
 
     pub(super) fn release_all(
         &mut self,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
-        let (_, sent) = out.together(When::Next, |out| {
+        let mut detach = false;
+        let mut dispatcher = 0;
+        for active in self.active.iter() {
+            if active.track.snapshot().as_ref().attached {
+                detach = true;
+            } else {
+                dispatcher += 1;
+            }
+        }
+        if detach && out.deck_available() == 0 {
+            return Err(PlayError::Full("deck"));
+        }
+        if out.dispatcher_available() < dispatcher {
+            return Err(PlayError::Full("dispatcher"));
+        }
+        for index in 0..self.active.len() {
+            self.check_release(index)?;
+        }
+        let mut release = |out: &mut Outbox<'_, S>| {
             for active in self.active.iter_mut() {
                 active.track.apply(TrackCommand::Release, out)?;
             }
-            Ok(())
-        })?;
+            Ok::<(), PlayError>(())
+        };
+        let sent = if detach {
+            out.together(When::Next, release)?.1
+        } else {
+            release(out)?;
+            None
+        };
         self.cancel_target_answers();
         for active in self.active.iter_mut() {
             active.role = Role::Leaving;
@@ -274,7 +343,9 @@ where
                 .and_then(|active| match active.role {
                     Role::Incoming { batch } => batch.or(active.load),
                     _ => None,
-                });
+                })
+                .or(target.retry)
+                .or(target.repeat);
             if let Some(seq) = seq {
                 self.finish_answers(seq, Err(PlayError::NotReady));
             }
@@ -321,7 +392,6 @@ where
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use kithara_platform::sync::Arc;

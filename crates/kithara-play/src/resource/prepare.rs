@@ -7,7 +7,9 @@ use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_warp::WarpConfig;
 
-use crate::{EngineLoad, PlayError, PlayWorker, resource::ResourceConfig, session::SessionOutputView};
+use crate::{
+    EngineLoad, PlayError, PlayWorker, resource::ResourceConfig, session::SessionOutputView,
+};
 
 /// What every track a deck loads opens with: the worker it renders on, the
 /// session output it plays into, and the deck's own playback policy.
@@ -41,7 +43,10 @@ where
     /// # Errors
     ///
     /// Returns the session output's refusal of the buffer geometry.
-    pub fn prepare<B>(&self, config: ResourceConfig<S, B>) -> Result<ResourceConfig<S, B>, PlayError>
+    pub fn prepare<B>(
+        &self,
+        config: ResourceConfig<S, B>,
+    ) -> Result<ResourceConfig<S, B>, PlayError>
     where
         B: Clone + Default,
     {
@@ -51,14 +56,15 @@ where
             .cancel
             .or_else(|| self.cancel.clone())
             .map(|parent| parent.child());
-        let mut audio = config.audio;
-        if let (Some(quantum), Some(shape)) =
-            (self.warp.render_quantum_frames(), output.stream_shape)
-        {
-            let (preload, ring) = shape.playback_buffers(quantum, self.response_budget_frames)?;
-            audio.preload_chunks = Some(preload);
-            audio.audio_buffer_chunks = Some(ring.get());
-        }
+        let (preload_chunks, audio_buffer_chunks) =
+            match (self.warp.render_quantum_frames(), output.stream_shape) {
+                (Some(quantum), Some(shape)) => {
+                    let (preload, ring) =
+                        shape.playback_buffers(quantum, self.response_budget_frames)?;
+                    (Some(preload), Some(ring))
+                }
+                _ => (config.preload_chunks, config.audio_buffer_chunks),
+            };
         let resampler = match config.decoder.resampler().cloned() {
             Some(settings) => Some(settings),
             None => output
@@ -87,9 +93,9 @@ where
             cancel,
             worker: Some(self.worker.clone()),
             block_on_underrun: self.block_on_underrun,
-            audio,
+            preload_chunks,
+            audio_buffer_chunks,
             host_sample_rate: NonZeroU32::new(output.sample_rate.output()),
-            consumer_wake_mode: Some(output.consumer_wake_mode),
             decoder,
             warp: self.warp.clone(),
             engine_load: Some(Arc::clone(&self.engine_load)),

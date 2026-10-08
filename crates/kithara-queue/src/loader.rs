@@ -30,7 +30,7 @@ use crate::{
 /// dispatcher of the deck's owner.
 pub(crate) struct Loader<S>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     prep: ResourcePrep<S>,
     store: AssetStore<S>,
@@ -42,7 +42,7 @@ where
 
 impl<S> Loader<S>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     pub(crate) fn new(
         prep: ResourcePrep<S>,
@@ -57,7 +57,12 @@ where
             postbox,
         }
     }
+}
 
+impl<S> Loader<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     /// Build a [`ResourceConfig`] for the given [`TrackSource`].
     ///
     /// - [`TrackSource::Uri`] uses the queue store; other resource options
@@ -110,11 +115,6 @@ where
         Ok((ResourceLoad::new(config, observer), load))
     }
 
-    /// The shared bus every track's events and the queue's own go to.
-    pub(crate) fn bus(&self) -> &kithara_events::EventBus {
-        &self.prep.bus
-    }
-
     /// Read the track's cover beside its audio, over the load's transport and
     /// the track's token, and report it to the queue, which places it while
     /// that token lives. The audio never waits for the cover, and a cover
@@ -163,7 +163,12 @@ where
         };
         drop(spawn_on(
             runtime,
-            slow_transfer(id, load.watch().clone(), bus.subscribe(), self.postbox.clone()),
+            slow_transfer(
+                id,
+                load.watch().clone(),
+                bus.subscribe(),
+                self.postbox.clone(),
+            ),
         ));
     }
 }
@@ -172,7 +177,7 @@ where
 /// report on.
 fn report<S>(postbox: &QueuePostbox<S>, report: LoadReport)
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     if postbox.post(QueueCommand::Load(report)).is_err() {
         debug!("the queue is gone: dropping a load's report");
@@ -189,7 +194,7 @@ async fn slow_transfer<S>(
     mut events: EventReceiver<DownloaderEvent>,
     postbox: QueuePostbox<S>,
 ) where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     let slow = async {
         loop {
@@ -260,7 +265,6 @@ fn net_cause<'e>(error: &'e (dyn StdError + 'static)) -> Option<&'e NetError> {
     }
     None
 }
-
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU16;

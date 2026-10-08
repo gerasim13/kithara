@@ -31,11 +31,11 @@ pub(super) struct Active<T> {
     pub(super) load: Option<Seq>,
 }
 
-/// The active tracks, never more than the mixer has slots; the queue assigns
-/// each its slot.
+/// The slot owners and one prepared replacement waiting off-slot for its receipt.
 pub(super) struct Slots<T> {
     capacity: usize,
     active: Vec<Active<T>>,
+    replacement: Option<Active<T>>,
     fades: Vec<Option<SessionFrame>>,
 }
 
@@ -44,6 +44,7 @@ impl<T> Slots<T> {
         Self {
             capacity,
             active: Vec::with_capacity(capacity),
+            replacement: None,
             fades: vec![None; capacity],
         }
     }
@@ -52,8 +53,7 @@ impl<T> Slots<T> {
     pub(super) fn free_slot(&self) -> Option<Slot> {
         (0..self.capacity)
             .find(|index| {
-                self.active
-                    .iter()
+                self.iter()
                     .all(|active| usize::from(active.slot.get()) != *index)
             })
             .and_then(|index| u16::try_from(index).ok())
@@ -86,7 +86,43 @@ impl<T> Slots<T> {
         self.active.push(active);
     }
 
+    pub(super) fn stage(&mut self, replacement: Active<T>) {
+        debug_assert!(self.replacement.is_none());
+        self.replacement = Some(replacement);
+    }
+
+    pub(super) fn is_replacement(&self, index: usize) -> bool {
+        index == self.active.len() && self.replacement.is_some()
+    }
+
+    pub(super) fn replacement_index(&self) -> Option<usize> {
+        self.replacement.as_ref().map(|_| self.active.len())
+    }
+
+    pub(super) fn activate_replacement(&mut self, index: usize) {
+        if !self.is_replacement(index) {
+            return;
+        }
+        if let Some(replacement) = self.replacement.take() {
+            self.fades[usize::from(replacement.slot.get())] = None;
+            if let Some(victim) = self
+                .active
+                .iter_mut()
+                .find(|active| active.slot == replacement.slot)
+            {
+                *victim = replacement;
+            } else {
+                self.active.push(replacement);
+            }
+        }
+    }
+
     pub(super) fn remove(&mut self, index: usize) -> Active<T> {
+        if index == self.active.len()
+            && let Some(replacement) = self.replacement.take()
+        {
+            return replacement;
+        }
         let active = self.active.remove(index);
         self.fades[usize::from(active.slot.get())] = None;
         active
@@ -105,29 +141,36 @@ impl<T> Slots<T> {
     }
 
     pub(super) fn position(&self, find: impl Fn(&Active<T>) -> bool) -> Option<usize> {
-        self.active.iter().position(find)
+        self.iter().position(find)
     }
 
     pub(super) fn get(&self, index: usize) -> Option<&Active<T>> {
-        self.active.get(index)
+        if index == self.active.len() {
+            self.replacement.as_ref()
+        } else {
+            self.active.get(index)
+        }
     }
 
     pub(super) fn get_mut(&mut self, index: usize) -> Option<&mut Active<T>> {
-        self.active.get_mut(index)
+        if index == self.active.len() {
+            self.replacement.as_mut()
+        } else {
+            self.active.get_mut(index)
+        }
     }
 
     pub(super) fn iter(&self) -> impl Iterator<Item = &Active<T>> {
-        self.active.iter()
+        self.active.iter().chain(self.replacement.iter())
     }
 
     pub(super) fn iter_mut(&mut self) -> impl Iterator<Item = &mut Active<T>> {
-        self.active.iter_mut()
+        self.active.iter_mut().chain(self.replacement.iter_mut())
     }
 
     /// Indices of the tracks `find` picks, in slot-assignment order.
     pub(super) fn indices(&self, find: impl Fn(&Active<T>) -> bool) -> Vec<usize> {
-        self.active
-            .iter()
+        self.iter()
             .enumerate()
             .filter(|(_, active)| find(active))
             .map(|(index, _)| index)
@@ -135,7 +178,7 @@ impl<T> Slots<T> {
     }
 
     pub(super) fn len(&self) -> usize {
-        self.active.len()
+        self.active.len() + usize::from(self.replacement.is_some())
     }
 }
 
@@ -145,7 +188,6 @@ fn gain(deck: &DeckSnapshot, slot: Slot) -> f32 {
         .get(usize::from(slot.get()))
         .map_or(0.0, |slot| slot.gain)
 }
-
 #[cfg(test)]
 mod tests {
     use kithara_play::SlotSnapshot;

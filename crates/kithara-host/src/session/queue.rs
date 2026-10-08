@@ -51,7 +51,7 @@ impl<T, S> HostSettingsExec<()> for SessionState<T, S> {
     /// never sees it, so no frame can carry a rate change. A restart that
     /// fails keeps the rate, and the next restart starts the output at it.
     fn exec_sample_rate(&mut self, value: NonZeroU32, at: Self::At, _cx: &mut ()) -> Self::Output {
-        if let When::At(_) = at {
+        if at != When::Next {
             return Err(PlayError::Untimed);
         }
         self.settings.apply(HostSettingsChange::SampleRate(value))?;
@@ -79,18 +79,14 @@ impl<T, S> HostSettingsExec<()> for SessionState<T, S> {
         at: Self::At,
         _cx: &mut (),
     ) -> Self::Output {
-        if let When::At(frame) = at
-            && frame < self.earliest_frame().ok_or(PlayError::Untimed)?
-        {
-            return Err(PlayError::Late);
-        }
-        let Some(queue) = self.transport_queue.as_mut() else {
+        self.check_when(at)?;
+        let Some(channel) = self.channel.as_mut() else {
             self.settings.apply(change)?;
             self.publish_root();
             return Ok(None);
         };
         self.settings
-            .send(queue, at, change, HostPart::Settings)
+            .send(channel, at, change, HostPart::Settings)
             .map(Some)
             .map_err(|error| match error {
                 LiveError::Invalid(error) => error,
@@ -103,88 +99,71 @@ impl<T, S> HostSettingsExec<()> for SessionState<T, S> {
     }
 }
 
-impl<T, S> SessionState<T, S> {
-    /// The first frame a change can still reach: the transport applies a
-    /// change no earlier than the block after the one rendering now.
-    fn earliest_frame(&self) -> Option<SessionFrame> {
-        let ctx = self.ctx.as_ref()?;
-        let block = ctx.stream_info()?.max_block_frames.get();
-        ctx.audio_clock()
-            .samples
-            .0
-            .checked_add(i64::from(block))
-            .map(SessionFrame::new)
-    }
-}
-
-/// Settles every receipt the transport returned. An applied change moves
+/// Settles one root receipt the owner routed here. An applied change moves
 /// into the settings the Host reads; a tempo it changed is announced. A
 /// change for the next block the transport refused goes out again; any other
 /// rejected change is dropped and reported.
-pub(crate) fn settle_receipts<T, S>(state: &mut SessionState<T, S>) {
-    let mut applied = false;
-    while let Some(receipt) = state
-        .transport_queue
-        .as_mut()
-        .and_then(|queue| queue.receipts().next())
+pub(crate) fn settle_receipt<T, S>(state: &mut SessionState<T, S>, receipt: &Receipt<HostProtocol>) {
+    let before = *state.settings.config();
+    let Some(settled) = state.settings.settle(receipt) else {
+        return;
+    };
+    if matches!(receipt.outcome(), Outcome::Rejected(Rejection::Refused(_)))
+        && settled.when == When::Next
+        && let Some(to) = send_again(state, receipt, settled.change)
     {
-        let before = *state.settings.config();
-        let Some(settled) = state.settings.settle(&receipt) else {
-            continue;
-        };
-        let outcome = match receipt.outcome() {
-            Outcome::Applied { at, .. } => Ok(*at),
-            Outcome::Rejected(Rejection::Late) => Err(Rejection::Late),
-            Outcome::Rejected(Rejection::Stale) => Err(Rejection::Stale),
-            Outcome::Rejected(Rejection::Unanswered) => Err(Rejection::Unanswered),
-            Outcome::Rejected(Rejection::Refused(reason)) => {
-                Err(Rejection::Refused(PlayError::Internal(reason.to_string())))
-            }
-        };
-        state.settled.push(crate::HostSettled::Settings {
-            seq: receipt.seq(),
-            change: settled.change,
-            outcome,
+        state.settled.push(crate::HostSettled::Replanned {
+            from: receipt.seq(),
+            to,
         });
-        match receipt.outcome() {
-            Outcome::Applied { data, .. } => {
-                applied = true;
-                let HostSettingsChange::Tempo(tempo) = settled.change else {
-                    continue;
-                };
-                if tempo == before.tempo() {
-                    continue;
-                }
+        return;
+    }
+    let outcome = match receipt.outcome() {
+        Outcome::Applied { at, .. } => Ok(*at),
+        Outcome::Rejected(Rejection::Late) => Err(Rejection::Late),
+        Outcome::Rejected(Rejection::Stale) => Err(Rejection::Stale),
+        Outcome::Rejected(Rejection::Unanswered) => Err(Rejection::Unanswered),
+        Outcome::Rejected(Rejection::Refused(reason)) => {
+            Err(Rejection::Refused(PlayError::Internal(reason.to_string())))
+        }
+    };
+    state.settled.push(crate::HostSettled::Settings {
+        seq: receipt.seq(),
+        change: settled.change,
+        outcome,
+    });
+    match receipt.outcome() {
+        Outcome::Applied { data, .. } => {
+            state.publish_root();
+            let HostSettingsChange::Tempo(tempo) = settled.change else {
+                return;
+            };
+            if tempo == before.tempo() {
+                return;
+            }
+            publish_transport_event(
+                state,
+                &TransportEvent::TempoCommitted {
+                    revision: u64::from(*data),
+                    beats_per_minute: tempo.beats_per_minute(),
+                },
+            );
+        }
+        Outcome::Rejected(Rejection::Unanswered) => {
+            error!(change = ?settled.change, "the transport dropped a host settings change unanswered");
+        }
+        Outcome::Rejected(rejection) => {
+            warn!(?rejection, change = ?settled.change, "host settings change was not applied");
+            if let When::At(_) = settled.when {
                 publish_transport_event(
                     state,
-                    &TransportEvent::TempoCommitted {
-                        revision: u64::from(*data),
-                        beats_per_minute: tempo.beats_per_minute(),
+                    &TransportEvent::Failed {
+                        revision: None,
+                        reason: format!("host settings change was not applied: {rejection:?}"),
                     },
                 );
             }
-            Outcome::Rejected(Rejection::Unanswered) => {
-                error!(change = ?settled.change, "the transport dropped a host settings change unanswered");
-            }
-            Outcome::Rejected(Rejection::Refused(_)) if settled.when == When::Next => {
-                send_again(state, &receipt, settled.change);
-            }
-            Outcome::Rejected(rejection) => {
-                warn!(?rejection, change = ?settled.change, "host settings change was not applied");
-                if let When::At(_) = settled.when {
-                    publish_transport_event(
-                        state,
-                        &TransportEvent::Failed {
-                            revision: None,
-                            reason: format!("host settings change was not applied: {rejection:?}"),
-                        },
-                    );
-                }
-            }
         }
-    }
-    if applied {
-        state.publish_root();
     }
 }
 
@@ -195,16 +174,20 @@ fn send_again<T, S>(
     state: &mut SessionState<T, S>,
     receipt: &Receipt<HostProtocol>,
     change: HostSettingsChange,
-) {
+) -> Option<Seq> {
     let superseded = state.settings.pending().any(|(seq, when, pending)| {
         seq > receipt.seq()
             && when == When::Next
             && mem::discriminant(&pending) == mem::discriminant(&change)
     });
     if superseded {
-        return;
+        return None;
     }
-    if let Err(error) = state.exec(change, When::Next, &mut ()) {
-        warn!(%error, ?change, "a refused host settings change could not be sent again");
+    match state.exec(change, When::Next, &mut ()) {
+        Ok(sequence) => sequence,
+        Err(error) => {
+            warn!(%error, ?change, "a refused host settings change could not be sent again");
+            None
+        }
     }
 }

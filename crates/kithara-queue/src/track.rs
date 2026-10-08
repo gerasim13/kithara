@@ -51,10 +51,10 @@ pub struct TrackEntry {
 /// reconstructing anything.
 #[derive(derive_more::From)]
 #[non_exhaustive]
-#[derive_where::derive_where(Clone; S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static)]
+#[derive_where::derive_where(Clone; S: HasPool<u8> + Send + Sync + 'static)]
 pub enum TrackSource<S>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     /// Load from URL / path. Queue fills in defaults from `QueueConfig`.
     #[from]
@@ -67,7 +67,7 @@ where
 
 impl<S> TrackSource<S>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     /// Canonical source location: the string for [`TrackSource::Uri`], the
     /// config's URL or file path for [`TrackSource::Config`]. `None` only
@@ -93,7 +93,7 @@ where
 
 impl<S> From<&str> for TrackSource<S>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     fn from(s: &str) -> Self {
         Self::Uri(s.to_string())
@@ -102,7 +102,7 @@ where
 
 impl<S> From<ResourceConfig<S>> for TrackSource<S>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     fn from(c: ResourceConfig<S>) -> Self {
         Self::Config(Box::new(c))
@@ -113,7 +113,7 @@ where
 /// record aborts its load via [`TrackLoad`].
 pub(crate) struct TrackRecord<S>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     pub(crate) load: Option<TrackLoad>,
     pub(crate) url: Option<String>,
@@ -128,7 +128,7 @@ where
 
 impl<S> TrackRecord<S>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     pub(crate) fn new(id: TrackId, name: String, source: TrackSource<S>) -> Self {
         Self {
@@ -165,7 +165,7 @@ where
 /// source to rebuild it from, and the slot that reaches its decoder.
 pub(crate) struct TrackRow<S>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     pub(crate) entry: TrackEntry,
     pub(crate) source: TrackSource<S>,
@@ -187,7 +187,7 @@ where
 #[fieldwork(opt_in, get)]
 pub(crate) struct Tracks<S>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     /// Moves with every edit; equal revisions mean equal rows.
     #[field(get, vis = "pub(crate)", copy)]
@@ -201,7 +201,7 @@ where
 
 impl<S> Tracks<S>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     /// Apply what a task beside a track's load reported.
     pub(crate) fn apply_report(&mut self, report: LoadReport) {
@@ -217,6 +217,7 @@ where
 
     /// Attach decoded-audio observation to this track's decoder, or retain it
     /// for the next load when loading has not started yet.
+    #[cfg(test)]
     pub(crate) fn attach_observer(&self, id: TrackId, observer: Box<dyn AudioObserver>) {
         if let Some(record) = self.find(id) {
             record.observer.attach(observer);
@@ -384,7 +385,6 @@ where
         self.find(id).map(|record| record.source.clone())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use kithara_assets::AssetStore;

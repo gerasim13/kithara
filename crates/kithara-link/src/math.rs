@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara_beat::BeatGridModel;
 use kithara_play::{Bound, Position};
 use kithara_signal::SessionFrame;
@@ -40,9 +42,52 @@ pub struct CorrectionPlan {
 
 impl CorrectionPlan {
     /// The renderer curve that replaces the remaining correction in one command.
+    /// Residence times are rounded on the output rate; every adjacent step keeps
+    /// a distinct frame, including a zero-duration step between bounded speeds.
+    ///
+    /// # Panics
+    /// Panics for a non-finite or unplayable speed, a non-finite or negative
+    /// residence, or a cumulative duration or distinct frame offset that is
+    /// not representable.
     #[must_use]
-    pub fn curve(&self) -> SpeedCurve {
-        todo!("SpeedCurve::Steps in kithara-warp")
+    pub fn curve(&self, sample_rate: NonZeroU32) -> SpeedCurve {
+        match self.checked_curve(sample_rate) {
+            Some((curve, _frames)) => curve,
+            None => panic!("correction plan is not representable in output frames"),
+        }
+    }
+
+    pub(crate) fn checked_curve(&self, sample_rate: NonZeroU32) -> Option<(SpeedCurve, u64)> {
+        let steps = self.frame_steps(sample_rate).collect::<Option<Vec<_>>>()?;
+        let frames = steps.last().map_or(0, |(frame, _speed)| *frame);
+        Some((SpeedCurve::Steps(steps.into()), frames))
+    }
+
+    fn frame_steps(&self, sample_rate: NonZeroU32) -> impl Iterator<Item = Option<(u64, f32)>> + '_ {
+        let mut seconds = 0.0;
+        let mut previous: Option<u64> = None;
+        self.steps.iter().map(move |step| {
+            if !step.speed.is_finite() || step.speed < MIN_SPEED
+                || !step.seconds.is_finite() || step.seconds < 0.0
+            {
+                return None;
+            }
+            let next_seconds = seconds + step.seconds;
+            let duration = next_seconds * f64::from(sample_rate.get());
+            let rounded = (seconds * f64::from(sample_rate.get())).round();
+            if !duration.is_finite() || duration >= u64::MAX as f64
+                || !rounded.is_finite() || rounded < 0.0 || rounded >= u64::MAX as f64
+            {
+                return None;
+            }
+            let frame = match previous {
+                Some(frame) => (rounded as u64).max(frame.checked_add(1)?),
+                None => rounded as u64,
+            };
+            previous = Some(frame);
+            seconds = next_seconds;
+            Some((frame, step.speed))
+        })
     }
 }
 
@@ -184,17 +229,28 @@ pub fn jump_target(position: Position, error: PhaseError) -> Position {
 /// correcting speed exists within epsilon and the renderer's speed range.
 #[must_use]
 pub fn correction(from: f32, to: f32, error: PhaseError, epsilon: f32) -> CorrectionPlan {
-    assert!(from.is_finite() && from >= MIN_SPEED && to.is_finite() && to >= MIN_SPEED);
-    assert!(epsilon.is_finite() && epsilon > 0.0);
-    assert!(error.seconds.is_finite() && error.period.is_finite() && error.period > 0.0);
-    assert!(error.beat_seconds.is_finite() && error.beat_seconds > 0.0);
+    match checked_correction(from, to, error, epsilon) {
+        Some(plan) => plan,
+        None => panic!("correction requires finite inputs and representable bounded speed steps"),
+    }
+}
+
+pub(crate) fn checked_correction(from: f32, to: f32, error: PhaseError, epsilon: f32) -> Option<CorrectionPlan> {
+    if !from.is_finite() || from < MIN_SPEED || !to.is_finite() || to < MIN_SPEED
+        || !epsilon.is_finite() || epsilon <= 0.0
+        || !error.seconds.is_finite() || !error.period.is_finite() || error.period <= 0.0
+        || !error.beat_seconds.is_finite() || error.beat_seconds <= 0.0
+    {
+        return None;
+    }
     let mut steps = Vec::new();
     let mut current = from;
     let mut remaining = error.shortest();
     while current != to {
-        current = step_towards(current, to, epsilon);
+        current = step_towards(current, to, epsilon)?;
         let seconds = if current == to { 0.0 } else { 1.0 };
         remaining += (f64::from(current) - f64::from(to)) * seconds;
+        if !remaining.is_finite() { return None; }
         steps.push(CorrectionStep {
             speed: current,
             seconds,
@@ -202,24 +258,23 @@ pub fn correction(from: f32, to: f32, error: PhaseError, epsilon: f32) -> Correc
     }
     if remaining != 0.0 {
         let target = to - remaining.signum() as f32 * epsilon;
-        assert!(
-            target.is_finite() && target >= MIN_SPEED,
-            "correction needs a playable excursion"
-        );
-        let adjusted = step_towards(to, target, epsilon);
+        if !target.is_finite() || target < MIN_SPEED { return None; }
+        let adjusted = step_towards(to, target, epsilon)?;
+        let seconds = -remaining / (f64::from(adjusted) - f64::from(to));
+        if !seconds.is_finite() || seconds < 0.0 { return None; }
         steps.push(CorrectionStep {
             speed: adjusted,
-            seconds: -remaining / (f64::from(adjusted) - f64::from(to)),
+            seconds,
         });
     }
     steps.push(CorrectionStep {
         speed: to,
         seconds: 0.0,
     });
-    CorrectionPlan { steps }
+    Some(CorrectionPlan { steps })
 }
 
-fn step_towards(from: f32, to: f32, epsilon: f32) -> f32 {
+fn step_towards(from: f32, to: f32, epsilon: f32) -> Option<f32> {
     let shift = (to - from).clamp(-epsilon, epsilon);
     let mut next = from + shift;
     if (next - from).abs() > epsilon {
@@ -229,11 +284,7 @@ fn step_towards(from: f32, to: f32, epsilon: f32) -> f32 {
             next.next_up()
         };
     }
-    assert!(
-        next != from,
-        "epsilon must permit a representable speed step"
-    );
-    next
+    (next.is_finite() && next >= MIN_SPEED && next != from && (next - from).abs() <= epsilon).then_some(next)
 }
 
 #[cfg(test)]

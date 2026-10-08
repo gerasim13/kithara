@@ -1,8 +1,8 @@
 use kithara_bufpool::HasPool;
-use kithara_command::{Answer, Live, Seq, mailbox};
+use kithara_command::{Answer, Seq, mailbox};
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::{CancelScope, CancelToken, tokio::runtime::Handle as RuntimeHandle};
-use kithara_play::{DeckPass, DeckSnapshot, PlayError, Player, PlayerFactory, TrackFactory};
+use kithara_play::{DeckSnapshot, PlayError, PlayerFactory, TrackFactory};
 use kithara_signal::{FrameCount, SessionFrame};
 
 use super::{
@@ -12,15 +12,14 @@ use super::{
     view::QueueView,
 };
 use crate::{
-    QueueConfig, QueueError, QueueEvent, QueueSettings, loader::Loader,
-    navigation::NavigationState, track::Tracks,
+    QueueConfig, QueueError, QueueEvent, loader::Loader, navigation::NavigationState, track::Tracks,
 };
 
 /// Cloneable command capability and the queue's published state.
 #[derive_where::derive_where(Clone)]
 pub struct QueueControl<S>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     pub(super) postbox: QueuePostbox<S>,
     pub(super) view: QueueView<S>,
@@ -30,7 +29,7 @@ where
 /// A deck whose track list, navigation and active tracks have one owner.
 pub struct Queue<S, F = PlayerFactory>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
     F: TrackFactory<S>,
 {
     pub(super) config: QueueConfig<S, F>,
@@ -39,7 +38,6 @@ where
     pub(super) current: Option<TrackId>,
     pub(super) target: Option<Target>,
     pub(super) active: Slots<F::Track>,
-    pub(super) settings: Live<QueueSettings, ()>,
     pub(super) postbox: QueuePostbox<S>,
     pub(super) mailbox: QueueMailbox<S>,
     pub(super) view: QueueView<S>,
@@ -54,7 +52,7 @@ where
 
 impl<S, F> Queue<S, F>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
     F: TrackFactory<S>,
 {
     /// Builds the owner; its host checks registration before driving it.
@@ -91,10 +89,6 @@ where
             config.track,
             config.action_at_item_end,
         );
-        let settings = match Live::new(config.settings) {
-            Ok(settings) => settings,
-            Err(never) => match never {},
-        };
         Self {
             active: Slots::new(config.mixer.slots().get()),
             config,
@@ -102,7 +96,6 @@ where
             navigation,
             current: None,
             target: None,
-            settings,
             postbox,
             mailbox,
             view,
@@ -131,9 +124,20 @@ where
         self.active.iter_mut().map(|active| &mut active.track)
     }
 
+    /// Every active track, including both sides of an unfinished transition.
+    pub fn tracks_active(&self) -> impl Iterator<Item = &F::Track> {
+        self.active.iter().map(|active| &active.track)
+    }
+
     /// The factory a track decorator configures for subsequent loads.
     pub fn factory_mut(&mut self) -> &mut F {
         &mut self.config.factory
+    }
+
+    /// The factory whose configuration subsequent tracks inherit.
+    #[must_use]
+    pub fn factory(&self) -> &F {
+        &self.config.factory
     }
 
     /// The sounding track, chosen only when its transition applies.
@@ -147,11 +151,6 @@ where
 
     pub(super) fn active_current_index(&self) -> Option<usize> {
         self.active.position(|active| active.role == Role::Current)
-    }
-
-    pub(super) fn accept_pass(&mut self, pass: DeckPass<'_>) {
-        self.clock = Some((pass.now, pass.delivery));
-        self.deck.clone_from(pass.deck);
     }
 
     pub(super) fn earliest(&self) -> Result<SessionFrame, PlayError> {
@@ -177,7 +176,7 @@ where
     /// Publishes before announcing, so an event's reader sees its state.
     pub(super) fn publish(&mut self) {
         self.events.extend(self.tracks.drain_events());
-        let snapshot = self.snapshot();
+        let snapshot = self.queue_snapshot();
         self.view.publish(snapshot);
         for event in self.events.drain(..) {
             self.bus.publish(event);
@@ -195,7 +194,7 @@ where
 
 impl<S, F> Drop for Queue<S, F>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
     F: TrackFactory<S>,
 {
     fn drop(&mut self) {
@@ -203,7 +202,6 @@ where
         self.tracks.cancel_loads();
     }
 }
-
 #[cfg(test)]
 pub(crate) mod tests {
     use std::{

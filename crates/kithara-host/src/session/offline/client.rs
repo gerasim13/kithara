@@ -1,10 +1,16 @@
 use kithara_bufpool::SampleBuffer;
 use kithara_command::Ticket;
-use kithara_platform::sync::{Mutex, mpsc};
+use kithara_platform::{
+    maybe_send::MaybeSend,
+    sync::{Mutex, mpsc},
+};
 use kithara_play::PlayError;
 use kithara_worker::TaskControl;
 
-use super::{OfflineSessionError, task::OfflineMsg};
+use super::{
+    OfflineSessionError,
+    task::{OfflineMsg, OfflineRequest},
+};
 use crate::session::{
     decks::{DeckInbox, DeckMsg},
     protocol::{HostDispatchError, HostDispatcher, HostPostbox, not_taken},
@@ -29,16 +35,24 @@ impl<C> OfflineSessionClient<C> {
         }
     }
     pub(crate) fn position(&self) -> Result<u64, OfflineSessionError> {
-        todo!("Read the rendered cursor from the offline owner's published snapshot (spec §4.1)")
+        let (answer, receipt) = mpsc::channel();
+        self.send(OfflineMsg::Request(OfflineRequest::Position(answer)))
+            .map_err(|_| OfflineSessionError::SessionGone)?;
+        receipt.recv().map_err(|_| OfflineSessionError::SessionGone)
     }
     pub(crate) fn render(
         &self,
-        _position: u64,
-        _frames: u32,
+        position: u64,
+        frames: u32,
     ) -> Result<SampleBuffer, OfflineSessionError> {
-        todo!(
-            "Post one finite render request and wait for its output receipt off the owner thread; the generic owner has no render receipt payload yet (spec §4.1)"
-        )
+        let (answer, receipt) = mpsc::channel();
+        self.send(OfflineMsg::Request(OfflineRequest::Render {
+            position,
+            frames,
+            answer,
+        }))
+        .map_err(|_| OfflineSessionError::SessionGone)?;
+        receipt.recv().map_err(|_| OfflineSessionError::SessionGone)?
     }
     fn send(&self, message: OfflineMsg) -> Result<(), PlayError> {
         self.cmd_tx
@@ -52,7 +66,7 @@ impl<C> OfflineSessionClient<C> {
     }
 }
 
-impl<C: Send + 'static> HostDispatcher<C> for OfflineSessionClient<C> {
+impl<C: MaybeSend + 'static> HostDispatcher<C> for OfflineSessionClient<C> {
     fn dispatch(&self, command: C) -> Result<Ticket<PlayError>, HostDispatchError> {
         let ticket = self.postbox.post(command).map_err(not_taken)?;
         self.send(OfflineMsg::Posted)
@@ -64,8 +78,31 @@ impl<C: Send + 'static> HostDispatcher<C> for OfflineSessionClient<C> {
     }
 }
 
-impl<C: Send + 'static> DeckInbox for OfflineSessionClient<C> {
+impl<C: MaybeSend + 'static> DeckInbox for OfflineSessionClient<C> {
     fn post(&self, message: DeckMsg) -> Result<(), PlayError> {
         self.send(OfflineMsg::Deck(message))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn waker(&self, _id: crate::DeckId) -> std::task::Waker {
+        std::task::Waker::from(kithara_platform::sync::Arc::new(OfflineDeckWake {
+            control: self.control.clone(),
+        }))
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+struct OfflineDeckWake {
+    control: TaskControl,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl std::task::Wake for OfflineDeckWake {
+    fn wake(self: kithara_platform::sync::Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &kithara_platform::sync::Arc<Self>) {
+        self.control.defer();
     }
 }

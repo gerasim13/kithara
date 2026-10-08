@@ -1,3 +1,4 @@
+use kithara_bufpool::HasPool;
 use kithara_command::Seq;
 use kithara_play::{Outbox, PlayError, TrackFactory};
 use kithara_queue::Queue;
@@ -5,7 +6,11 @@ use kithara_signal::{FrameCount, SessionFrame};
 
 use crate::{GridAnswer, LinkedFactory, LinkedPlayer, TempoTrajectory};
 
-impl<S, F: TrackFactory<S>> LinkedPlayer<S> for Queue<S, LinkedFactory<F>> {
+impl<S, F> LinkedPlayer<S> for Queue<S, LinkedFactory<F>>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    F: TrackFactory<S>,
+{
     fn sync(&mut self, on: bool, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
         self.factory_mut().set_synced(on);
         let mut sent = None;
@@ -34,21 +39,36 @@ impl<S, F: TrackFactory<S>> LinkedPlayer<S> for Queue<S, LinkedFactory<F>> {
     fn synced(&self) -> bool {
         match self.current_track() {
             Some(track) => track.synced(),
-            None => todo!(
-                "Read the empty deck's mode from LinkedFactory through the queue owner seam (spec §4.6)"
-            ),
+            None => self.factory().synced(),
         }
     }
 
-    fn lead(&self) -> Option<FrameCount> {
-        todo!(
-            "Maximum lead over every sounding SYNC track, including both sides of a crossfade; the contract provides only tracks_mut and current_track (spec §3.4/§4.6)"
-        )
+    fn lead(&self, delivery: FrameCount) -> Option<FrameCount> {
+        self.tracks_active().filter_map(|track| track.lead(delivery)).max()
     }
 
     fn lane_room(&self) -> usize {
-        todo!(
-            "Minimum Sender::available over every lane a retime sends to; immutable active-track access is needed here (spec §4.6 step 2)"
-        )
+        self.tracks_active().filter(|track| track.synced()).map(LinkedPlayer::lane_room).min().unwrap_or(usize::MAX)
+    }
+
+    fn scope_parts(&self) -> usize {
+        self.tracks_active().map(LinkedPlayer::scope_parts).sum()
+    }
+
+    fn retime_applied(&mut self, at: SessionFrame) -> Option<bool> {
+        let mut awaiting = false;
+        for track in self.tracks_mut() {
+            match track.retime_applied(at) {
+                Some(true) => return Some(true),
+                None => awaiting = true,
+                Some(false) => {}
+            }
+        }
+        (!awaiting).then_some(false)
+    }
+
+    fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>) {
+        self.factory_mut().set_trajectory(trajectory);
+        for track in self.tracks_mut() { track.realign(trajectory, at, out); }
     }
 }

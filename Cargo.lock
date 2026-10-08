@@ -5555,6 +5555,7 @@ name = "kithara-link"
 version = "0.0.1-alpha5"
 dependencies = [
  "kithara-beat",
+ "kithara-bufpool",
  "kithara-command",
  "kithara-config",
  "kithara-events",
@@ -5726,6 +5727,7 @@ dependencies = [
  "kithara-test-utils",
  "kithara-warp",
  "kithara-waveform",
+ "kithara-worker",
  "kithara-workspace-hack",
  "num-traits",
  "ringbuf",

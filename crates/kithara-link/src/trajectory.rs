@@ -120,12 +120,33 @@ impl TempoTrajectory {
 
     /// Reanchors a restarted route while continuing the beat count at its stop.
     pub fn reaxis(&mut self, stopped: SessionFrame, start: SessionFrame) {
-        let _ = (stopped, start);
-        todo!("Reanchor the new route axis and reconcile pending tempo steps (spec §4.8)")
+        let beat = self.beat_at(stopped);
+        let tempo = self.tempo_at(stopped);
+        self.steps.clear();
+        self.steps.push(TempoStep { frame: start, beat, tempo });
+    }
+
+    pub(crate) fn reaxis_observed(&mut self, anchor: SessionAnchor, tempo: Tempo) {
+        self.sample_rate = anchor.sample_rate();
+        self.steps.clear();
+        self.steps.push(TempoStep {
+            frame: anchor.frame(),
+            beat: anchor.beat(),
+            tempo,
+        });
     }
 
     pub(crate) fn beats_per_bar(&self) -> f64 {
         f64::from(self.beats_per_bar.get())
+    }
+
+    pub(crate) fn sample_rate(&self) -> NonZeroU32 {
+        self.sample_rate
+    }
+
+    pub(crate) fn initial_tempo(&mut self, tempo: Tempo) {
+        self.steps[0].tempo = tempo;
+        self.reanchor(1);
     }
 
     fn anchor(&self, step: TempoStep) -> SessionAnchor {

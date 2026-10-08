@@ -7,11 +7,10 @@ use tracing::{debug, trace, warn};
 
 use super::{
     protocol::{HostMailbox, SessionError, SessionSampleRate},
-    queue::settle_receipts,
     state::SessionState,
     transport::{self, RouteRestartStatus},
 };
-use crate::{HostOwner, HostSettled};
+use crate::{DeckId, HostOwner, HostSettled};
 
 pub(crate) fn run_host_cmd<S, O: HostOwner<S>>(
     owner: &mut O,
@@ -23,12 +22,14 @@ pub(crate) fn run_host_cmd<S, O: HostOwner<S>>(
 /// Pending ticket answers belong to the owner, not to a second deck dispatcher.
 pub(crate) struct OwnerPosts {
     pending: Vec<(Seq, Answer<PlayError>)>,
+    closing: Vec<(DeckId, Answer<PlayError>)>,
 }
 
 impl OwnerPosts {
     pub(crate) fn new() -> Self {
         Self {
             pending: Vec::new(),
+            closing: Vec::new(),
         }
     }
     pub(crate) fn drain<S, O: HostOwner<S>>(
@@ -36,31 +37,66 @@ impl OwnerPosts {
         owner: &mut O,
         mailbox: &mut HostMailbox<O::Command>,
     ) {
-        for Post { command, answer } in Self::take_posts(mailbox) {
+        let mut posts = Self::take_posts(mailbox).into_iter().peekable();
+        while let Some(Post { command, answer }) = posts.next() {
+            if O::is_next_tempo(&command)
+                && posts.peek().is_some_and(|post| O::is_next_tempo(&post.command))
+            {
+                answer.answer(Err(PlayError::Superseded));
+                continue;
+            }
+            let releasing = O::release_id(&command);
             match run_host_cmd(owner, command) {
+                Ok(_) if releasing.is_some() => {
+                    if let Some(id) = releasing { self.closing.push((id, answer)); }
+                }
                 Ok(Some(seq)) => self.pending.push((seq, answer)),
                 outcome => answer.answer(outcome.map(|_| ())),
             }
         }
     }
 
-    fn take_posts<C>(_mailbox: &mut HostMailbox<C>) -> Vec<Post<C, PlayError>> {
-        todo!(
-            "Drain handle posts in order, coalesce only consecutive Configure(Tempo, Next) through decorator commands, and answer replaced posts with Superseded; HostOwner::Command has no classification seam yet (spec §5.3)"
-        )
+    fn take_posts<C>(mailbox: &mut HostMailbox<C>) -> Vec<Post<C, PlayError>> {
+        mailbox.drain().collect()
     }
 
     pub(crate) fn pass<S, O: HostOwner<S>>(&mut self, owner: &mut O) {
         let settled = owner.pass();
-        if !self.pending.is_empty() {
+        if !self.pending.is_empty() || !self.closing.is_empty() {
             self.settle(settled);
         }
     }
 
-    fn settle(&mut self, _settled: Vec<HostSettled>) {
-        todo!(
-            "Correlate each handle post with its executor ring and final receipt, including Mix/Eq and refused Next resends; Post exposes no handle Seq and HostSettled exposes only Settings, so a bare executor Seq is ambiguous; publish the contiguous applied fence before answering (spec §4.1, §4.2, §5.3)"
-        )
+    fn settle(&mut self, settled: Vec<HostSettled>) {
+        for settled in settled {
+            match settled {
+                HostSettled::Replanned { from, to } => {
+                    if let Some((seq, _)) = self.pending.iter_mut().find(|(seq, _)| *seq == from) {
+                        *seq = to;
+                    }
+                }
+                HostSettled::Settings { seq, outcome, .. } | HostSettled::Batch { seq, outcome } => {
+                    if let Some(index) = self.pending.iter().position(|(held, _)| *held == seq) {
+                        let (_, answer) = self.pending.remove(index);
+                        answer.answer(outcome.map(|_| ()).map_err(|reason| match reason {
+                            kithara_command::Rejection::Late => PlayError::Late,
+                            kithara_command::Rejection::Stale => PlayError::Internal("owner batch basis is stale".into()),
+                            kithara_command::Rejection::Unanswered => PlayError::Closed,
+                            kithara_command::Rejection::Refused(error) => error,
+                        }));
+                    }
+                }
+                HostSettled::Closed { deck } => {
+                    let mut index = 0;
+                    while index < self.closing.len() {
+                        if self.closing[index].0 == deck {
+                            let (_, answer) = self.closing.remove(index);
+                            answer.answer(Ok(()));
+                        } else { index += 1; }
+                    }
+                }
+            }
+        }
     }
 }
 fn measured_stream_shape<T, S>(state: &SessionState<T, S>) -> Option<StreamShape> {
@@ -91,7 +127,7 @@ pub(super) fn stream_shape<T, S>(state: &SessionState<T, S>) -> Option<StreamSha
 /// One pump of the session on its own interval: a deferred or dead stream
 /// restarts, the graph updates, and the transport's commits and receipts
 /// settle.
-pub(super) fn tick_session<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
+pub(crate) fn tick_session<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
     if state.stream_needs_restart {
         if let Err(err) = restart_stream(state) {
             warn!(?err, "[KITHARA-ROUTE] deferred stream restart failed");
@@ -113,7 +149,6 @@ pub(super) fn tick_session<T, S>(state: &mut SessionState<T, S>) -> Result<(), S
         return restart_dead_stream(state);
     }
     transport::observe_commits(state);
-    settle_receipts(state);
     Ok(())
 }
 
@@ -127,7 +162,9 @@ fn update_failed(err: &UpdateError) -> SessionError {
 /// and since 0.14 that is the only place the death shows up — it is no longer
 /// reported as an update error.
 pub(super) fn stream_died<T, S>(state: &SessionState<T, S>) -> bool {
-    !state.stream_needs_restart && state.ctx.as_ref().is_some_and(|ctx| !ctx.is_active())
+    state.stream.is_some()
+        && !state.stream_needs_restart
+        && state.ctx.as_ref().is_some_and(|ctx| !ctx.is_active())
 }
 
 fn restart_dead_stream<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
@@ -144,7 +181,7 @@ fn restart_dead_stream<T, S>(state: &mut SessionState<T, S>) -> Result<(), Sessi
     })
 }
 
-pub(super) fn invalidate_audio_route<T, S>(
+pub(crate) fn invalidate_audio_route<T, S>(
     state: &mut SessionState<T, S>,
     reason: &str,
 ) -> Result<(), SessionError> {

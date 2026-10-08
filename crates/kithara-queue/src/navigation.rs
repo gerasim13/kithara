@@ -51,6 +51,7 @@ impl NavigationState {
         Self::with_rng(history_limit, StdRng::from_rng(&mut rand::rng()))
     }
 
+    #[cfg(test)]
     pub(crate) fn finish(&mut self) {
         if let Some(current) = self.current.take() {
             self.push_history(current);
@@ -78,10 +79,6 @@ impl NavigationState {
             self.bag.push(id);
             self.bag.shuffle(&mut self.rng);
         }
-    }
-
-    pub(crate) fn last_selected(&self) -> Option<TrackId> {
-        self.current.or_else(|| self.history.back().copied())
     }
 
     /// Choose the successor without moving the cursor onto it. A caller reads

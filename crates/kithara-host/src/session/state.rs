@@ -6,12 +6,13 @@ use firewheel::{
     channel_config::ChannelCount,
     node::{AudioNode, NodeID},
 };
-use kithara_command::{Live, Sender, Seq};
+use kithara_command::{Live, ScopedConfig, ScopedSender, Seq, When};
 use kithara_config::ConfigOwner;
 use kithara_output::OutputGroup;
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_play::{SessionOutputView, SessionSampleRate, StreamShape};
-use kithara_signal::SessionEpoch;
+use kithara_play::{PlayError, SessionOutputView, SessionSampleRate, StreamShape};
+use kithara_render::bridge::DeckProtocol;
+use kithara_signal::{FrameCount, SessionEpoch, SessionFrame};
 use kithara_warp::{
     BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridStamp, MapAxis, SessionAxis,
 };
@@ -23,10 +24,12 @@ use super::{
     graph::tap,
     protocol::{SessionError, StartStreamFn},
     queue::HostProtocol,
-    transport::{SessionGridGeneration, TransportObservation, install},
+    transport::{SessionGridGeneration, TransportEvent, TransportObservation, install},
 };
 use crate::{
+    DeckId,
     api::Tap,
+    consts,
     host::HostSettings,
     rt::{MasterNode, SessionOutput},
 };
@@ -100,10 +103,12 @@ impl HostRoot {
 }
 
 struct RootSnapshot {
-    applied: Seq,
+    /// Completion fence unavailable until mailbox posts expose their ticket sequence.
+    applied: Option<Seq>,
     decks: Box<[BeatGridId]>,
     grid: BeatGridSnapshot,
     settings: HostSettings,
+    transport_event: Option<TransportEvent>,
 }
 
 /// What the session last published: its decks, grid and settings, and the
@@ -118,17 +123,13 @@ impl RootView {
     pub(crate) fn new(root: &HostRoot, settings: HostSettings) -> Self {
         Self {
             root: Arc::new(ArcSwap::from_pointee(RootSnapshot {
-                applied: todo!(
-                    "Represent the fence before the first handle receipt; Seq is currently non-zero and Post omits its handle number (spec §4.1)"
-                ),
+                applied: None,
                 settings,
                 decks: Box::default(),
                 grid: root.grid.clone(),
+                transport_event: None,
             })),
-            output: SessionOutputView::new(
-                settings.sample_rate(),
-                kithara_audio::ConsumerWakeMode::RealtimeDeferred,
-            ),
+            output: SessionOutputView::new(settings.sample_rate()),
         }
     }
 
@@ -139,11 +140,13 @@ impl RootView {
         stream_shape: Option<StreamShape>,
         sample_rate: SessionSampleRate,
     ) {
+        let snapshot = self.root.load();
         self.root.store(Arc::new(RootSnapshot {
-            applied: self.root.load().applied,
+            applied: snapshot.applied,
             settings,
-            decks: self.root.load().decks.clone(),
+            decks: snapshot.decks.clone(),
             grid: root.grid.clone(),
+            transport_event: snapshot.transport_event.clone(),
         }));
         self.output.publish(sample_rate, stream_shape);
     }
@@ -155,6 +158,19 @@ impl RootView {
             decks,
             grid: snapshot.grid.clone(),
             settings: snapshot.settings,
+            transport_event: snapshot.transport_event.clone(),
+        }));
+    }
+
+    /// Publishes the latest transport fact in the shared root snapshot.
+    pub(crate) fn publish_transport_event(&self, event: &TransportEvent) {
+        let snapshot = self.root.load();
+        self.root.store(Arc::new(RootSnapshot {
+            applied: snapshot.applied,
+            decks: snapshot.decks.clone(),
+            grid: snapshot.grid.clone(),
+            settings: snapshot.settings,
+            transport_event: Some(event.clone()),
         }));
     }
 
@@ -176,6 +192,9 @@ impl RootView {
             #[call(load)]
             #[expr($.settings)]
             pub(crate) fn settings(&self) -> HostSettings;
+            #[call(load)]
+            #[expr($.transport_event.clone())]
+            pub(crate) fn transport_event(&self) -> Option<TransportEvent>;
         }
         to self.output {
             #[call(get)]
@@ -187,15 +206,22 @@ impl RootView {
 
 pub(crate) enum SessionStream {
     #[cfg(not(target_arch = "wasm32"))]
-    Realtime(firewheel::cpal::CpalStream),
+    Realtime { _backend: firewheel::cpal::CpalStream },
     #[cfg(target_arch = "wasm32")]
-    Realtime(firewheel_web_audio::WebAudioBackend),
+    Realtime { _backend: firewheel_web_audio::WebAudioBackend },
     #[cfg(feature = "offline")]
     Offline(crate::session::offline::backend::OfflineStream),
 }
 
 pub(crate) struct SessionState<T, S> {
     pub(crate) settled: Vec<crate::HostSettled>,
+    /// The single clock read and delivery lead for the current owner pass.
+    pub(crate) iteration_clock: Option<(SessionFrame, FrameCount)>,
+    /// The configured scheduler wake allowance included in the delivery lead.
+    pub(crate) worker_wake_allowance: Duration,
+    /// Graph node identities; deck state remains with the deck's owner.
+    pub(crate) deck_nodes: Vec<(DeckId, NodeID)>,
+    pub(crate) channel_config: ScopedConfig,
     marker: std::marker::PhantomData<fn() -> S>,
     pub(crate) root: HostRoot,
     pub(crate) output: SessionOutput,
@@ -210,8 +236,8 @@ pub(crate) struct SessionState<T, S> {
     pub(crate) session_limiter_node_id: Option<NodeID>,
     pub(crate) session_output_node_id: Option<NodeID>,
     pub(crate) stream: Option<T>,
-    /// The queue Host changes reach the running transport through.
-    pub(crate) transport_queue: Option<Sender<HostProtocol>>,
+    /// The root and deck scopes of the session's command channel.
+    pub(crate) channel: Option<ScopedSender<HostProtocol, DeckProtocol>>,
     /// What the running transport last committed.
     pub(crate) transport_observation: Option<Output<TransportObservation>>,
     pub(crate) root_view: RootView,
@@ -252,6 +278,7 @@ impl<T, S> SessionState<T, S> {
         requested_declick_frames: Option<NonZeroU32>,
         output: SessionOutput,
         settings: Live<HostSettings, HostProtocol>,
+        channel_config: ScopedConfig,
         start_stream_fn: F,
     ) -> Self
     where
@@ -262,6 +289,7 @@ impl<T, S> SessionState<T, S> {
         generation.commit_revision(BeatGridRevision::first());
         let state = Self {
             settings,
+            channel_config,
             requested_max_block_frames,
             requested_declick_frames,
             output,
@@ -271,7 +299,7 @@ impl<T, S> SessionState<T, S> {
             start_stream_fn: Box::new(start_stream_fn),
             ctx: None,
             stream: None,
-            transport_queue: None,
+            channel: None,
             transport_observation: None,
             taps: Taps::default(),
             session_output_node_id: None,
@@ -280,10 +308,44 @@ impl<T, S> SessionState<T, S> {
             stream_needs_restart: false,
             reserved_session_grid: Some(generation),
             settled: Vec::new(),
+            iteration_clock: None,
+            worker_wake_allowance: Duration::ZERO,
+            deck_nodes: Vec::new(),
             marker: std::marker::PhantomData,
         };
         state.publish_root();
         state
+    }
+
+    /// Rejects a timed change that cannot reach the render executor in this pass.
+    pub(crate) fn check_when(&self, when: When<SessionFrame>) -> Result<(), PlayError> {
+        match when {
+            When::Next => Ok(()),
+            When::At(frame) => {
+                let (now, delivery) = self.iteration_clock.ok_or(PlayError::Untimed)?;
+                if frame < now + delivery {
+                    Err(PlayError::Late)
+                } else {
+                    Ok(())
+                }
+            }
+            When::Deferred => Err(PlayError::Internal(
+                "this owner change cannot be deferred".to_owned(),
+            )),
+        }
+    }
+
+    /// The configured owner pump and worker wake allowances, plus one output block.
+    pub(crate) fn delivery(&self) -> FrameCount {
+        let duration = consts::SESSION_PUMP_INTERVAL.saturating_add(self.worker_wake_allowance);
+        let publication_frames = duration
+            .as_nanos()
+            .saturating_mul(u128::from(sample_rate(self).output()))
+            .div_ceil(1_000_000_000);
+        let publication_frames = usize::try_from(publication_frames).unwrap_or(usize::MAX);
+        let block_frames =
+            stream_shape(self).map_or(0, |shape| shape.max_block_frames.get() as usize);
+        FrameCount::new(publication_frames.saturating_add(block_frames))
     }
 
     pub(crate) fn publish_root(&self) {
@@ -317,7 +379,7 @@ fn ensure_stream_ready<T, S>(state: &mut SessionState<T, S>) -> Result<(), Sessi
         return create_firewheel_context(state);
     }
 
-    if state.stream_needs_restart {
+    if state.stream_needs_restart || state.stream.is_none() {
         debug!("[KITHARA-ROUTE] ensuring stopped stream is restarted");
         restart_stream(state)?;
     }
@@ -344,14 +406,18 @@ fn create_firewheel_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), 
         .reserved_session_grid
         .take()
         .ok_or_else(|| SessionError::Graph("session grid generation is missing".to_owned()))?;
-    let (transport_queue, transport_observation) =
-        match install(&mut ctx, session_grid, *state.settings.config()) {
-            Ok(transport) => transport,
-            Err(error) => {
-                state.reserved_session_grid = Some(session_grid);
-                return Err(SessionError::Graph(error.into()));
-            }
-        };
+    let (channel, transport_observation) = match install(
+        &mut ctx,
+        session_grid,
+        *state.settings.config(),
+        state.channel_config,
+    ) {
+        Ok(transport) => transport,
+        Err(error) => {
+            state.reserved_session_grid = Some(session_grid);
+            return Err(SessionError::Graph(error.into()));
+        }
+    };
     let stream = match (state.start_stream_fn)(&mut ctx, sample_rate) {
         Ok(stream) => stream,
         Err(error) => {
@@ -361,7 +427,7 @@ fn create_firewheel_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), 
     };
     state.ctx = Some(ctx);
     state.stream = Some(stream);
-    state.transport_queue = Some(transport_queue);
+    state.channel = Some(channel);
     state.transport_observation = Some(transport_observation);
     state.stream_needs_restart = false;
     state.publish_root();

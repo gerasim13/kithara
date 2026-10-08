@@ -15,7 +15,7 @@ use kithara_platform::{
     thread::spawn_named,
     time::Instant,
 };
-use tracing::{debug, warn};
+use tracing::debug;
 
 use super::{
     decks::{DeckInbox, DeckMsg},
@@ -95,22 +95,28 @@ fn engine_thread<S, O: HostOwner<S>>(
     let mut posts = OwnerPosts::new();
     let mut deadline = Instant::now() + consts::SESSION_PUMP_INTERVAL;
     loop {
-        let Ok(message) = receive_message(&cmd_rx, owner.clock().is_some(), deadline) else {
+        let Ok(message) = receive_message(&cmd_rx, true, deadline) else {
             break;
         };
-        match message {
-            Some(EngineMsg::Posted) => {
-                posts.drain(&mut owner, &mut mailbox);
-                posts.pass(&mut owner);
+        owner.begin_pass();
+        let mut next = message;
+        let mut shutdown = false;
+        loop {
+            match next {
+                Some(EngineMsg::Posted) => posts.drain(&mut owner, &mut mailbox),
+                Some(EngineMsg::Deck(message)) => message.run(&mut owner),
+                Some(EngineMsg::Shutdown) => { shutdown = true; break; }
+                None => {}
             }
-            Some(EngineMsg::Deck(message)) => message.run(&mut owner),
-            Some(EngineMsg::Shutdown) => break,
-            None => {}
+            match cmd_rx.try_recv() {
+                Ok(message) => next = Some(message),
+                Err(_) => break,
+            }
         }
-        if Instant::now() >= deadline {
-            posts.pass(&mut owner);
-            deadline = Instant::now() + consts::SESSION_PUMP_INTERVAL;
-        }
+        posts.drain(&mut owner, &mut mailbox);
+        posts.pass(&mut owner);
+        if shutdown { break; }
+        deadline = Instant::now() + consts::SESSION_PUMP_INTERVAL;
     }
 }
 
@@ -118,6 +124,7 @@ pub(crate) fn spawn<S, O>(
     root: HostRoot,
     view: RootView,
     output_block_frames: Option<NonZeroU32>,
+    channel_config: kithara_command::ScopedConfig,
     output: SessionOutput,
     settings: Live<HostSettings, HostProtocol>,
     layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
@@ -136,9 +143,10 @@ where
         cmd_tx: Mutex::new(cmd_tx),
     });
     let inbox: Arc<dyn DeckInbox> = client.clone();
-    spawn_named(consts::DECK_SESSION, move || {
+    spawn_named("host-deck-session", move || {
         let start = move |ctx: &mut FirewheelContext, rate| {
-            start_stream_cpal(ctx, rate, output_block_frames).map(SessionStream::Realtime)
+            start_stream_cpal(ctx, rate, output_block_frames)
+                .map(|backend| SessionStream::Realtime { _backend: backend })
         };
         let state = SessionState::new(
             root,
@@ -147,6 +155,7 @@ where
             None,
             output,
             settings,
+            channel_config,
             start,
         );
         engine_thread(cmd_rx, mailbox, layer(HostCore::new(state, inbox)));

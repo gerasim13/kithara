@@ -1,17 +1,30 @@
-use std::task::Waker;
+use std::{num::NonZeroU32, task::Waker};
 
 use kithara_bufpool::HasPool;
 use kithara_command::{Outcome, Rejection, Seq};
 use kithara_platform::maybe_send::MaybeSend;
 use kithara_play::{
-    Bound, DeckEvent, DeckMixerConfig, DeckPass, HostedDeck, LoadRefusal, Outbox, PlayError,
-    Player, Settled, TrackFactory, TrackReceipt,
+    Bound, DeckControl, DeckEvent, DeckMixerConfig, DeckPass, HostedDeck, LoadRefusal, Outbox,
+    PlayError, PlayWorker, Player, Settled, TrackCommand, TrackFactory, TrackReceipt,
+    TrackStatus as PlayingStatus,
 };
 use kithara_signal::SessionFrame;
 use tracing::warn;
 
-use super::{Queue, QueueCommand, QueueSnapshot, command::play_error, slots::Role};
+use super::{Queue, QueueCommand, QueueControl, QueueSnapshot, command::play_error, slots::Role};
 use crate::{ActionAtItemEnd, QueueError, QueueEvent, TrackStatus, loader};
+
+impl<S, F> DeckControl for Queue<S, F>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+    F: TrackFactory<S>,
+{
+    type Control = QueueControl<S>;
+
+    fn control(&self) -> Self::Control {
+        Queue::control(self)
+    }
+}
 
 impl<S, F> Player<S> for Queue<S, F>
 where
@@ -21,13 +34,8 @@ where
     type Command = QueueCommand<S>;
     type Snapshot = QueueSnapshot<S>;
 
-    fn entry(&self, bound: Bound) -> SessionFrame {
-        self.current_track().map_or_else(
-            || match bound {
-                Bound::AtOrAfter(frame) | Bound::AtOrBefore(frame) => frame,
-            },
-            |track| track.entry(bound),
-        )
+    fn entry(&self, bound: Bound) -> Option<SessionFrame> {
+        self.current_track().and_then(|track| track.entry(bound))
     }
 
     fn apply(
@@ -43,12 +51,27 @@ where
     fn settle(&mut self, receipt: TrackReceipt<'_, S>, out: &mut Outbox<'_, S>) -> Settled {
         let mut outcomes = Vec::new();
         match receipt {
-            TrackReceipt::Deck(receipt) => {
-                let named: TrackReceipt<'_, S> = TrackReceipt::Deck(receipt);
-                for index in self.active.indices(|active| named.names(active.slot)) {
+            TrackReceipt::Deck {
+                seq,
+                outcome,
+                batch,
+            } => {
+                for index in self
+                    .active
+                    .indices(|active| batch.basis.iter().any(|&(slot, _)| slot == active.slot))
+                {
                     if let Some(active) = self.active.get_mut(index) {
-                        outcomes
-                            .push((index, active.track.settle(TrackReceipt::Deck(receipt), out)));
+                        outcomes.push((
+                            index,
+                            active.track.settle(
+                                TrackReceipt::Deck {
+                                    seq,
+                                    outcome,
+                                    batch: &mut *batch,
+                                },
+                                out,
+                            ),
+                        ));
                     }
                 }
             }
@@ -114,7 +137,10 @@ where
                     }
                 }
                 Settled::Rejected { seq, reason } => {
-                    if rescheduling != Some(*seq) || !matches!(reason, Rejection::Stale) {
+                    let retrying = self.target.is_some_and(|target| target.retry == Some(*seq));
+                    if !retrying
+                        && (rescheduling != Some(*seq) || !matches!(reason, Rejection::Stale))
+                    {
                         self.finish_answers(*seq, Err(refusal(reason)));
                         result = settled;
                     }
@@ -161,8 +187,12 @@ where
         self.config.mixer
     }
 
+    fn worker(&self) -> Option<&PlayWorker<S>> {
+        self.config.prep.as_ref().map(|prep| &prep.worker)
+    }
+
     fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
-        self.accept_pass(pass);
+        self.accept_host_pass(pass, out);
         for post in self.mailbox.drain() {
             if let Err(error) = self.validate_command(&post.command) {
                 self.publish();
@@ -183,12 +213,12 @@ where
         pass: DeckPass<'_>,
         out: &mut Outbox<'_, S>,
     ) {
-        self.accept_pass(pass);
+        self.accept_host_pass(pass, out);
         Player::settle(self, receipt, out);
     }
 
     fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
-        self.accept_pass(pass);
+        self.accept_host_pass(pass, out);
         Player::tick(self, pass.now, out);
     }
 
@@ -212,6 +242,56 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     F: TrackFactory<S>,
 {
+    fn accept_host_pass(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
+        self.clock = out.pass().map(|pass| (pass.now, pass.delivery));
+        if self.clock.is_none() {
+            return;
+        }
+        if self.deck.sample_rate != 0
+            && self.deck.sample_rate != pass.deck.sample_rate
+            && let Some(rate) = NonZeroU32::new(pass.deck.sample_rate)
+            && let Err(error) = self.set_host_rate(rate, out)
+        {
+            warn!(%error, "queue tracks could not adopt the output rate");
+            return;
+        }
+        self.deck.clone_from(pass.deck);
+    }
+
+    fn set_host_rate(
+        &mut self,
+        rate: NonZeroU32,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<(), PlayError> {
+        let loaded = self.active.indices(|active| {
+            matches!(
+                active.track.snapshot().as_ref().status,
+                PlayingStatus::Loaded
+                    | PlayingStatus::Playing { .. }
+                    | PlayingStatus::Paused { .. }
+                    | PlayingStatus::Faded { .. }
+                    | PlayingStatus::Ended { .. }
+            )
+        });
+        if out.deck_available() < loaded.len() {
+            return Err(PlayError::Full("deck"));
+        }
+        for index in &loaded {
+            let active = self.active.get(*index).ok_or(PlayError::NoActiveSlot)?;
+            if active.track.snapshot().as_ref().lane_room == 0 {
+                return Err(PlayError::Full("lane"));
+            }
+        }
+        for index in loaded {
+            self.active
+                .get_mut(index)
+                .ok_or(PlayError::NoActiveSlot)?
+                .track
+                .apply(TrackCommand::SetHostRate { rate }, out)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn retarget_answers(&mut self, previous: Seq, next: Seq) {
         for (seq, _) in &mut self.answers {
             if *seq == previous {

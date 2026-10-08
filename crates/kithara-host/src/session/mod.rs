@@ -8,7 +8,7 @@ pub(crate) mod queue;
 pub(crate) mod state;
 #[cfg(test)]
 pub(crate) mod tests;
-mod transport;
+pub(crate) mod transport;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod native;
