@@ -47,10 +47,13 @@ fn decoder_config_custom_apple_backend_preserves_fields() {
     let mut config: TestDecoderConfig = TestDecoderConfig::builder().pools(pools()).build();
     config.backend = DecoderBackend::Apple;
     config.byte_len_handle = Some(Arc::clone(&handle));
-    config.hint = Some("mp3".to_string());
+    #[cfg(feature = "symphonia")]
+    {
+        config.hint = Some("mp3".to_string());
+        assert_eq!(config.hint, Some("mp3".to_string()));
+    }
     assert_eq!(config.backend, DecoderBackend::Apple);
     assert!(config.byte_len_handle.is_some());
-    assert_eq!(config.hint, Some("mp3".to_string()));
 }
 
 #[kithara::test]

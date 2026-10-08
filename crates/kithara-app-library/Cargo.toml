@@ -9,6 +9,7 @@ description = "The library-source contract between the application's library she
 [dependencies]
 kithara-platform = { workspace = true }
 kithara-ui = { workspace = true, default-features = false, features = ["render"] }
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 serde = { workspace = true }
 serde_yaml_ng = { workspace = true }

@@ -19,6 +19,7 @@ kithara-app-library = { workspace = true }
 kithara-net = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-ui = { workspace = true, default-features = false, features = ["render"] }
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 bytes = { workspace = true }
 delegate = { workspace = true }
@@ -28,12 +29,19 @@ thiserror = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-kithara-net = { workspace = true, features = ["client-reqwest", "mock", "tls-rustls"] }
+kithara-net = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
+kithara-test-utils = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+kithara-net = { workspace = true, features = ["mock"] }
 kithara-test-utils = { workspace = true, features = ["http-server"] }
 
 async-trait = { workspace = true }
 axum = { workspace = true }
 unimock = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = { workspace = true }
 
 [lints]
 workspace = true

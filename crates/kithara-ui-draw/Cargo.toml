@@ -13,7 +13,7 @@ autotests = false
 [package.metadata.cargo-machete]
 # `serde` is reached only through `#[derive(Patch)]`, whose expansion names
 # `::serde::Deserialize`; no source line in this crate spells the crate out.
-ignored = ["kithara-workspace-hack", "serde"]
+ignored = ["serde"]
 
 [features]
 default = ["list"]
@@ -52,10 +52,6 @@ roxmltree = { workspace = true, optional = true }
 serde = { workspace = true }
 thiserror = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
-
-# The same desktop-only gate `kithara-ui` carries.
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
-kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
 kithara-platform = { workspace = true }

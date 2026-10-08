@@ -123,6 +123,7 @@ pub struct DecoderConfig<B, S> {
     #[config(skip = "transferred to the decoder")]
     pub byte_map: Option<Arc<dyn ByteMap>>,
     /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
+    #[cfg(feature = "symphonia")]
     #[config(skip = "consumed by the decoder probe", builder(into))]
     pub hint: Option<String>,
     /// Reader-side observer hooks. Single-owner; moved into

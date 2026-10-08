@@ -13,6 +13,7 @@ pub use config::{
 };
 pub use dispatcher::{Dispatcher, PendingTask, TaskError, TaskHandle};
 use humantime_serde as _;
+use kithara_workspace_hack as _;
 pub use observer::{Event, Observer, PassOutcome, PassReport};
 pub use task::{Priority, Task, TaskContext, TaskControl, TaskId, TickResult};
 pub use wake::Wake;

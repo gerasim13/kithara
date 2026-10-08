@@ -20,6 +20,7 @@ idioms *ARGS:
     just _xtask lint idioms "$@"
 
 _shared:
+    just deps hakari-check
     just fmt check
     just check clippy
     just lint ast-grep
