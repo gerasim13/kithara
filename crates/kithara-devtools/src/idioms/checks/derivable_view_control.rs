@@ -1,11 +1,11 @@
 use std::fs;
 
 use anyhow::Result;
-use syn::{Expr, ImplItem, ItemImpl, Stmt, visit, visit::Visit};
+use syn::{Expr, ImplItem, ItemImpl, Stmt};
 
-use super::{Check, Context};
+use super::{Check, Context, derivable_support::check_impls};
 use crate::{
-    common::{parse::self_ty_name, violation::Violation, walker::relative_to},
+    common::{violation::Violation, walker::relative_to},
     idioms::config::DerivableSeverity,
 };
 
@@ -42,36 +42,9 @@ impl Check for DerivableViewControl {
 }
 
 fn check_source(source: &str) -> Vec<(String, usize)> {
-    let Ok(file) = syn::parse_file(source) else {
-        return Vec::new();
-    };
-    let mut visitor = ViewControlVisitor::default();
-    visitor.visit_file(&file);
-    visitor.findings
-}
-
-#[derive(Default)]
-struct ViewControlVisitor {
-    findings: Vec<(String, usize)>,
-}
-
-impl<'ast> Visit<'ast> for ViewControlVisitor {
-    fn visit_item_impl(&mut self, implementation: &'ast ItemImpl) {
-        let is_view_control = implementation
-            .trait_
-            .as_ref()
-            .and_then(|(path, _)| path.segments.last())
-            .is_some_and(|segment| segment.ident == "ViewControl");
-        if is_view_control
-            && implementation.attrs.is_empty()
-            && painted_view(implementation)
-            && let Some(name) = self_ty_name(&implementation.self_ty)
-        {
-            self.findings
-                .push((name, implementation.impl_token.span.start().line));
-        }
-        visit::visit_item_impl(self, implementation);
-    }
+    check_impls(source, "ViewControl", |implementation| {
+        implementation.attrs.is_empty() && painted_view(implementation)
+    })
 }
 
 fn painted_view(implementation: &ItemImpl) -> bool {

@@ -26,11 +26,11 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) accumulator_loops: AccumulatorLoopsConfig,
     #[serde(default)]
-    pub(crate) arc_mutex_collection: ArcMutexCollectionConfig,
+    pub(crate) arc_mutex_collection: ExemptFilesConfig,
     #[serde(default)]
-    pub(crate) await_under_guard: AwaitUnderGuardConfig,
+    pub(crate) await_under_guard: ExemptFilesConfig,
     #[serde(default)]
-    pub(crate) box_concrete_type: BoxConcreteTypeConfig,
+    pub(crate) box_concrete_type: ExemptFilesConfig,
     #[serde(default)]
     pub(crate) branch_chains: BranchChainsConfig,
     #[serde(default)]
@@ -92,11 +92,11 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) guard_cascade: GuardCascadeConfig,
     #[serde(default)]
-    pub(crate) loop_allocation: LoopAllocationConfig,
+    pub(crate) loop_allocation: ExemptFilesConfig,
     #[serde(default)]
-    pub(crate) loop_flag_accumulator: LoopFlagAccumulatorConfig,
+    pub(crate) loop_flag_accumulator: ExemptFilesConfig,
     #[serde(default)]
-    pub(crate) manual_question_mark: ManualQuestionMarkConfig,
+    pub(crate) manual_question_mark: ExemptFilesConfig,
     #[serde(default)]
     pub(crate) multi_accumulator_loop: MultiAccumulatorLoopConfig,
     #[serde(default)]
@@ -104,9 +104,9 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) no_passthrough_builder: NoPassthroughBuilderConfig,
     #[serde(default)]
-    pub(crate) parallel_loops: ParallelLoopsConfig,
+    pub(crate) parallel_loops: ExemptFilesConfig,
     #[serde(default)]
-    pub(crate) pointwise_loop: PointwiseLoopConfig,
+    pub(crate) pointwise_loop: ExemptFilesConfig,
     #[serde(default)]
     pub(crate) retry_fallback: RetryFallbackConfig,
     #[serde(default)]
@@ -269,12 +269,12 @@ impl Default for DerivableDelegationConfig {
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
 #[config(builder(none), fields(value))]
-pub(crate) struct PointwiseLoopConfig {
+pub(crate) struct ExemptFilesConfig {
     #[serde(default = "default_exempt_files")]
     pub(crate) exempt_files: Vec<String>,
 }
 
-impl Default for PointwiseLoopConfig {
+impl Default for ExemptFilesConfig {
     fn default() -> Self {
         Self {
             exempt_files: default_exempt_files(),
@@ -318,22 +318,6 @@ impl Default for FatLoopBodyConfig {
             while_stmt_threshold: default_while_stmt_threshold(),
             loop_stmt_threshold: default_loop_stmt_threshold(),
             nested_ctrl_threshold: default_nested_ctrl_threshold(),
-            exempt_files: default_exempt_files(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
-#[serde(deny_unknown_fields)]
-#[config(builder(none), fields(value))]
-pub(crate) struct LoopFlagAccumulatorConfig {
-    #[serde(default = "default_exempt_files")]
-    pub(crate) exempt_files: Vec<String>,
-}
-
-impl Default for LoopFlagAccumulatorConfig {
-    fn default() -> Self {
-        Self {
             exempt_files: default_exempt_files(),
         }
     }
@@ -625,102 +609,6 @@ impl Default for MultiAccumulatorLoopConfig {
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
 #[config(builder(none), fields(value))]
-pub(crate) struct ParallelLoopsConfig {
-    #[serde(default = "default_exempt_files")]
-    pub(crate) exempt_files: Vec<String>,
-}
-
-impl Default for ParallelLoopsConfig {
-    fn default() -> Self {
-        Self {
-            exempt_files: default_exempt_files(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
-#[serde(deny_unknown_fields)]
-#[config(builder(none), fields(value))]
-pub(crate) struct ManualQuestionMarkConfig {
-    #[serde(default = "default_exempt_files")]
-    pub(crate) exempt_files: Vec<String>,
-}
-
-impl Default for ManualQuestionMarkConfig {
-    fn default() -> Self {
-        Self {
-            exempt_files: default_exempt_files(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
-#[serde(deny_unknown_fields)]
-#[config(builder(none), fields(value))]
-pub(crate) struct LoopAllocationConfig {
-    #[serde(default = "default_exempt_files")]
-    pub(crate) exempt_files: Vec<String>,
-}
-
-impl Default for LoopAllocationConfig {
-    fn default() -> Self {
-        Self {
-            exempt_files: default_exempt_files(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
-#[serde(deny_unknown_fields)]
-#[config(builder(none), fields(value))]
-pub(crate) struct BoxConcreteTypeConfig {
-    #[serde(default = "default_exempt_files")]
-    pub(crate) exempt_files: Vec<String>,
-}
-
-impl Default for BoxConcreteTypeConfig {
-    fn default() -> Self {
-        Self {
-            exempt_files: default_exempt_files(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
-#[serde(deny_unknown_fields)]
-#[config(builder(none), fields(value))]
-pub(crate) struct ArcMutexCollectionConfig {
-    #[serde(default = "default_exempt_files")]
-    pub(crate) exempt_files: Vec<String>,
-}
-
-impl Default for ArcMutexCollectionConfig {
-    fn default() -> Self {
-        Self {
-            exempt_files: default_exempt_files(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
-#[serde(deny_unknown_fields)]
-#[config(builder(none), fields(value))]
-pub(crate) struct AwaitUnderGuardConfig {
-    #[serde(default = "default_exempt_files")]
-    pub(crate) exempt_files: Vec<String>,
-}
-
-impl Default for AwaitUnderGuardConfig {
-    fn default() -> Self {
-        Self {
-            exempt_files: default_exempt_files(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
-#[serde(deny_unknown_fields)]
-#[config(builder(none), fields(value))]
 pub(crate) struct RetryFallbackConfig {
     #[serde(default)]
     pub(crate) allowed_idents: Vec<String>,
@@ -784,6 +672,66 @@ fn default_retry_forbidden_substrings() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exemption_only_config_preserves_defaults_and_strict_fields() -> Result<()> {
+        let config: ExemptFilesConfig = toml::from_str("")?;
+        assert_eq!(config.exempt_files, ["**/tests/**", "**/benches/**"]);
+        assert_eq!(
+            config.exempt_files,
+            ExemptFilesConfig::default().exempt_files
+        );
+
+        let config: ExemptFilesConfig = toml::from_str("exempt_files = []")?;
+        assert!(config.exempt_files.is_empty());
+        assert!(toml::from_str::<ExemptFilesConfig>("unknown = []").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn exemption_only_sections_keep_their_toml_names() -> Result<()> {
+        let sections = [
+            "pointwise_loop",
+            "loop_flag_accumulator",
+            "parallel_loops",
+            "manual_question_mark",
+            "loop_allocation",
+            "box_concrete_type",
+            "arc_mutex_collection",
+            "await_under_guard",
+        ];
+        for configured in [false, true] {
+            let source = sections
+                .iter()
+                .map(|section| {
+                    if configured {
+                        format!("[{section}]\nexempt_files = ['custom.rs']\n")
+                    } else {
+                        format!("[{section}]\n")
+                    }
+                })
+                .collect::<String>();
+            let config: ThresholdsConfig = toml::from_str(&source)?;
+            let expected = if configured {
+                vec!["custom.rs".to_owned()]
+            } else {
+                default_exempt_files()
+            };
+            for section in [
+                config.pointwise_loop,
+                config.loop_flag_accumulator,
+                config.parallel_loops,
+                config.manual_question_mark,
+                config.loop_allocation,
+                config.box_concrete_type,
+                config.arc_mutex_collection,
+                config.await_under_guard,
+            ] {
+                assert_eq!(section.exempt_files, expected);
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn keep_manual_method_attrs_defaults_to_empty() -> Result<()> {

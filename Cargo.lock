@@ -5834,6 +5834,7 @@ name = "kithara-signal"
 version = "0.0.1-alpha5"
 dependencies = [
  "delegate",
+ "derive-where",
  "derive_more",
  "fieldwork",
  "kithara-blob",

@@ -1,7 +1,6 @@
-use std::{
-    num::{NonZeroU32, NonZeroU64},
-    ops::Range,
-};
+use std::{num::NonZeroU32, ops::Range};
+
+use crate::Revision;
 
 /// A frame on the session clock, counted from the master ring's origin.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, derive_more::Into)]
@@ -53,43 +52,11 @@ impl SessionEpoch {
     }
 }
 
+/// The revision domain for committed session transport state.
+pub enum TransportRevisionTag {}
+
 /// Monotonic revision of committed session transport state.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    derive_more::Display,
-    derive_more::From,
-    derive_more::Into,
-)]
-#[display("{_0}")]
-#[from(NonZeroU64)]
-#[into(u64)]
-#[repr(transparent)]
-pub struct TransportRevision(NonZeroU64);
-
-impl TransportRevision {
-    /// Returns the next committed revision, or `None` on exhaustion.
-    #[must_use]
-    pub fn checked_next(self) -> Option<Self> {
-        self.0
-            .get()
-            .checked_add(1)
-            .and_then(NonZeroU64::new)
-            .map(Self)
-    }
-
-    /// Returns the first committed transport revision.
-    #[must_use]
-    pub const fn first() -> Self {
-        Self(NonZeroU64::MIN)
-    }
-}
+pub type TransportRevision = Revision<TransportRevisionTag>;
 
 /// The physical output axis covered by one render pass.
 ///
