@@ -269,7 +269,7 @@ fn pending_span_uses_earliest_start_and_latest_frontier(
     first.meta.end_timestamp = Duration::from_millis(20);
     first.meta.segment_index = Some(1);
     first.meta.variant_index = Some(1);
-    first.meta.epoch = 1;
+    first.meta.segment = kithara_signal::SegmentId::FIRST.next();
     first.meta.source_byte_offset = Some(10);
     first.meta.source_bytes = 20;
     let first_output = render_serviced(&mut fx, first).expect("first frame renders");
@@ -280,7 +280,7 @@ fn pending_span_uses_earliest_start_and_latest_frontier(
     second.meta.end_timestamp = Duration::from_millis(30);
     second.meta.segment_index = Some(2);
     second.meta.variant_index = Some(2);
-    second.meta.epoch = 2;
+    second.meta.segment = first_output.meta.segment.next();
     second.meta.source_byte_offset = Some(30);
     second.meta.source_bytes = 10;
     let second_output =
@@ -295,7 +295,7 @@ fn pending_span_uses_earliest_start_and_latest_frontier(
     assert_eq!(second_output.meta.end_timestamp, Duration::from_millis(30));
     assert_eq!(second_output.meta.segment_index, Some(2));
     assert_eq!(second_output.meta.variant_index, Some(2));
-    assert_eq!(second_output.meta.epoch, 2);
+    assert_eq!(second_output.meta.segment.get(), 2);
     assert_eq!(second_output.meta.source_byte_offset, None);
     assert_eq!(second_output.meta.source_bytes, 0);
 }

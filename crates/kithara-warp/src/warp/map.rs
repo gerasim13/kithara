@@ -135,8 +135,17 @@ mod tests {
     fn projected_map_uses_absolute_source_endpoints() {
         use std::num::NonZeroU32;
 
-        use crate::{BeatGridQuery, mock};
-        let plan = mock::projected_plan(120.0, 180.0, NonZeroU32::new(48_000).expect("rate"));
+        use crate::{Beat, BeatGridQuery, mock};
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let source = mock::asset_grid(120.0, rate);
+        let target = mock::session_grid(180.0, rate);
+        let cue = Beat::new(0.0).expect("finite cue");
+        let alignment = BeatAlignment::new(
+            MapPoint::new(source.stamp(), cue),
+            MapPoint::new(target.stamp(), cue),
+        );
+        let plan = WarpMap::projected(source, target, alignment, WarpMapRevision::first())
+            .expect("compatible axes");
         let BeatGridQuery::Resolved(source) = plan.source_at(SessionFrame::new(128)) else {
             panic!("projected source resolves");
         };

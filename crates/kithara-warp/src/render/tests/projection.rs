@@ -1,3 +1,7 @@
+use std::num::{NonZero, NonZeroU64};
+
+use kithara_platform::sync::Arc;
+use kithara_signal::{AudioChunkInfo, OutputContext, SessionEpoch, SessionFrame};
 use kithara_test_fixtures::unit_fixtures::warp_pair;
 #[cfg(any(
     feature = "stretch-signalsmith",
@@ -5,9 +9,11 @@ use kithara_test_fixtures::unit_fixtures::warp_pair;
     feature = "stretch-glide"
 ))]
 use kithara_test_fixtures::unit_fixtures::warp_sine;
+use kithara_test_utils::kithara;
 
 use super::*;
-use crate::{RenderSnapshot, SpeedCurve, consts};
+use crate::test_pools::pools;
+use crate::{PresentationFrontier, RenderContext, RenderSnapshot, SpeedCurve, Warp, consts};
 
 #[cfg(any(
     feature = "stretch-signalsmith",
@@ -16,18 +22,14 @@ use crate::{RenderSnapshot, SpeedCurve, consts};
 ))]
 #[kithara::test]
 fn a_projected_quantum_uses_the_map_instead_of_manual_speed() {
-    use crate::mock;
-
     let config = WarpConfig::builder()
         .speed(2.0)
         .render_quantum_frames(NonZero::new(128).expect("quantum"))
         .build();
-    config.plan().install(Some(Arc::new(mock::projected_plan(
-        120.0,
-        180.0,
-        spec().sample_rate,
-    ))));
     let mut renderer = Warp::new((), &config).renderer(spec(), pools());
+    renderer
+        .set_speed(SpeedCurve::Constant(1.5), 1)
+        .expect("projected trajectory");
     let meta = AudioChunkInfo {
         spec: spec(),
         ..Default::default()
@@ -63,7 +65,7 @@ fn a_projected_quantum_uses_the_map_instead_of_manual_speed() {
 ))]
 #[kithara::test]
 fn projected_pcm_keeps_its_producer_revision_with_a_stale_callback() {
-    use crate::{Beat, BeatAlignment, MapPoint, WarpMap, WarpMapRevision, WarpPlan, mock};
+    use crate::WarpMapRevision;
 
     let config = WarpConfig::builder()
         .speed(2.0)
@@ -72,17 +74,6 @@ fn projected_pcm_keeps_its_producer_revision_with_a_stale_callback() {
     let revision = WarpMapRevision::first()
         .checked_next()
         .expect("next revision");
-    let source = mock::asset_grid(120.0, spec().sample_rate);
-    let target = mock::session_grid(180.0, spec().sample_rate);
-    let beat = Beat::new(0.0).expect("cue");
-    let alignment = BeatAlignment::new(
-        MapPoint::new(source.stamp(), beat),
-        MapPoint::new(target.stamp(), beat),
-    );
-    let map = WarpMap::projected(source, target, alignment, revision).expect("projection");
-    config.plan().install(Some(Arc::new(
-        WarpPlan::new(map, SessionFrame::new(0)).expect("activation"),
-    )));
     let mut warp = Warp::new((), &config);
     let publisher = warp.take_publisher().expect("publisher");
     let output = OutputContext::new(
@@ -101,6 +92,9 @@ fn projected_pcm_keeps_its_producer_revision_with_a_stale_callback() {
             .build(),
     );
     let mut renderer = warp.renderer(spec(), pools());
+    renderer
+        .set_speed(SpeedCurve::Constant(1.5), u64::from(revision))
+        .expect("projected trajectory");
     for source_start in [0, 192, 384] {
         renderer.prepare(spec());
         let mut input = chunk(&renderer.pools, &vec![0.25; 192 * usize::from(consts::CH)]);
@@ -115,10 +109,17 @@ fn projected_pcm_keeps_its_producer_revision_with_a_stale_callback() {
             .expect("PCM");
         let committed = renderer.committed.as_ref().expect("committed PCM");
         assert_eq!(
-            output.meta.mapping_revision.map(std::num::NonZeroU64::get),
-            Some(u64::from(revision))
+            output.meta.render_revision,
+            u64::from(revision)
         );
-        assert_eq!(committed.frontier().warp_map(), Some(revision));
+        assert_eq!(
+            output
+                .meta
+                .source_span
+                .expect("producer mapping")
+                .render_revision(),
+            u64::from(revision)
+        );
         assert_eq!(committed.context(), &context);
         assert_eq!(
             committed.frontier().output(),
@@ -134,27 +135,20 @@ fn projected_pcm_keeps_its_producer_revision_with_a_stale_callback() {
 ))]
 #[kithara::test]
 fn projected_source_endpoints_do_not_drift_across_sample_rate_partitions() {
-    use crate::{Beat, BeatAlignment, MapPoint, WarpMap, WarpMapRevision, WarpPlan, mock};
-
     let mut frontiers = Vec::new();
     for quantum in [64, 128, 256] {
         let config = WarpConfig::builder()
             .render_quantum_frames(NonZero::new(quantum).expect("quantum"))
             .build();
-        let source = mock::asset_grid(120.0, spec().sample_rate);
-        let target = mock::session_grid(180.0, NonZero::new(48_000).expect("session sample rate"));
-        let beat = Beat::new(0.0).expect("cue");
-        let alignment = BeatAlignment::new(
-            MapPoint::new(source.stamp(), beat),
-            MapPoint::new(target.stamp(), beat),
-        );
-        let map = WarpMap::projected(source, target, alignment, WarpMapRevision::first())
-            .expect("projection");
-        config.plan().install(Some(Arc::new(
-            WarpPlan::new(map, SessionFrame::new(0)).expect("activation"),
-        )));
         let mut renderer = Warp::new((), &config).renderer(spec(), pools());
+        renderer
+            .set_speed(
+                SpeedCurve::Constant(1.5 * consts::SR as f32 / 48_000.0),
+                1,
+            )
+            .expect("sample-rate-adjusted trajectory");
         let mut source_start = 0;
+        let mut frontier = None;
         for _ in 0..1024 / quantum {
             renderer.prepare(spec());
             let meta = AudioChunkInfo {
@@ -177,9 +171,11 @@ fn projected_source_endpoints_do_not_drift_across_sample_rate_partitions() {
                 .expect("prepared source shape")
                 .expect("PCM");
             assert_eq!(output.frames(), quantum);
+            let span = output.meta.source_span.expect("projected source positions");
+            frontier = span.source_ratio_at(span.output_frames());
             source_start += u64::try_from(frames).expect("frames");
         }
-        frontiers.push(renderer.projection.cursor.expect("projected frontier"));
+        frontiers.push(frontier.expect("projected frontier"));
     }
     assert_eq!(frontiers[0], frontiers[1]);
     assert_eq!(frontiers[1], frontiers[2]);
@@ -192,32 +188,24 @@ fn projected_source_endpoints_do_not_drift_across_sample_rate_partitions() {
 ))]
 #[kithara::test]
 fn projected_tail_keeps_sample_rate_rounding_across_partitions() {
-    use crate::{Beat, BeatAlignment, MapPoint, WarpMap, WarpMapRevision, WarpPlan, mock};
-
-    let source = mock::asset_grid(120.0, spec().sample_rate);
-    let target = mock::session_grid(120.0, NonZero::new(48_000).expect("session rate"));
-    let beat = Beat::new(0.0).expect("cue");
-    let alignment = BeatAlignment::new(
-        MapPoint::new(source.stamp(), beat),
-        MapPoint::new(target.stamp(), beat),
-    );
-    let map = WarpMap::projected(source, target, alignment, WarpMapRevision::first())
-        .expect("projection");
-    let plan = Arc::new(WarpPlan::new(map, SessionFrame::new(0)).expect("activation"));
     let mut frontiers = Vec::new();
-    for partitions in [vec![441], vec![1; 441], vec![147; 3]] {
-        let mut renderer = renderer(&WarpConfig::builder().speed(1.0).build());
-        renderer.projection.active = Some(Arc::clone(&plan));
-        renderer.projection.cursor = Some(plan.activation());
+    for partitions in [vec![480], vec![1; 480], vec![160; 3]] {
+        let mut renderer = planned_renderer(&WarpConfig::builder().speed(1.0).build());
         renderer.rendered_source_end = Some((100, spec().sample_rate));
         for frames in partitions {
             let output = chunk(
                 &renderer.pools,
                 &vec![0.25; frames * usize::from(consts::CH)],
             );
-            renderer.commit_render(None, &output);
+            renderer.commit_render(renderer.context.load(), &output);
         }
-        frontiers.push(renderer.projection.cursor.expect("tail frontier"));
+        frontiers.push(
+            renderer
+                .committed
+                .as_ref()
+                .expect("tail frontier")
+                .frontier(),
+        );
     }
     assert_eq!(frontiers[0].output(), SessionFrame::new(480));
     assert_eq!(frontiers[0].source(), 100);
@@ -232,38 +220,36 @@ fn projected_tail_keeps_sample_rate_rounding_across_partitions() {
 ))]
 #[kithara::test]
 fn a_future_projection_retains_the_active_producer_until_activation() {
-    use crate::{WarpPlan, mock};
-
     let config = WarpConfig::builder()
         .render_quantum_frames(NonZero::new(128).expect("quantum"))
         .build();
-    let first = Arc::new(mock::projected_plan(120.0, 180.0, spec().sample_rate));
-    config.plan().install(Some(Arc::clone(&first)));
     let mut renderer = Warp::new((), &config).renderer(spec(), pools());
+    renderer
+        .set_speed(SpeedCurve::Constant(1.5), 1)
+        .expect("initial trajectory");
+    renderer
+        .set_speed(SpeedCurve::Steps(Arc::from([(256, 2.0)])), 2)
+        .expect("future speed boundary");
     for source_start in [0, 192, 384] {
         renderer.prepare(spec());
-        let mut input = chunk(&renderer.pools, &vec![0.25; 192 * usize::from(consts::CH)]);
+        let frames = if source_start < 384 { 192 } else { 256 };
+        let mut input = chunk(&renderer.pools, &vec![0.25; frames * usize::from(consts::CH)]);
         input.meta.frame_offset = source_start;
         renderer
             .prepare_quantum(input.meta, input.frames(), usize::MAX)
             .expect("prepared");
-        if source_start == 0 {
-            let future = WarpPlan::new(first.map().clone(), SessionFrame::new(256))
-                .expect("future activation");
-            config.plan().install(Some(Arc::new(future)));
-            renderer.prepare(spec());
-        }
         let output = renderer
             .render_quantum(input)
             .continue_value()
             .expect("prepared source shape")
             .expect("PCM");
         assert_eq!(output.frames(), 128);
-        let active = renderer.projection.active.as_ref().expect("resident plan");
+        let span = output.meta.source_span.expect("active producer mapping");
         if source_start < 384 {
-            assert!(Arc::ptr_eq(active, &first));
+            assert_eq!(span.end() - span.start(), 192);
         } else {
-            assert_eq!(active.activation().output(), SessionFrame::new(256));
+            assert_eq!(span.start(), 384);
+            assert_eq!(span.end() - span.start(), 256);
         }
     }
 }
@@ -312,11 +298,7 @@ fn commit_keeps_callback_context_separate_from_output_identity() {
 
 fn planned_renderer_with_publisher(
     config: &WarpConfig,
-) -> (
-    WarpRenderer,
-    Arc<crate::WarpPlanSlot>,
-    crate::RenderPublisher,
-) {
+) -> (WarpRenderer, crate::RenderPublisher) {
     let mut warp = Warp::new((), config);
     let publisher = warp.take_publisher().expect("fixture owns publisher");
     let output = OutputContext::new(
@@ -341,21 +323,16 @@ fn planned_renderer_with_publisher(
             .output(SessionFrame::new(0))
             .build(),
     );
-    (
-        warp.renderer(spec(), pools()),
-        Arc::clone(config.plan()),
-        publisher,
-    )
+    (warp.renderer(spec(), pools()), publisher)
 }
 
-pub(super) fn planned_renderer(config: &WarpConfig) -> (WarpRenderer, Arc<crate::WarpPlanSlot>) {
-    let (renderer, slot, _) = planned_renderer_with_publisher(config);
-    (renderer, slot)
+fn planned_renderer(config: &WarpConfig) -> WarpRenderer {
+    planned_renderer_with_publisher(config).0
 }
 
 #[kithara::test]
 fn adoption_frontier_reports_only_committed_pcm() {
-    let (mut renderer, _) = planned_renderer(&WarpConfig::builder().speed(1.0).build());
+    let mut renderer = planned_renderer(&WarpConfig::builder().speed(1.0).build());
     let pools = renderer.pools.clone();
     let input = chunk(&pools, &[0.0; 256]);
 
@@ -392,12 +369,10 @@ fn adoption_frontier_reports_only_committed_pcm() {
 #[case::one_worker_quantum(120)]
 #[case::multiple_worker_quanta(384)]
 fn an_unapplied_activation_splits_every_crossing_source_quantum(#[case] input_frames: usize) {
-    let (mut renderer, slot) = planned_renderer(&WarpConfig::builder().speed(1.0).build());
-    let map = crate::mock::projected_plan(60.0, 60.0, spec().sample_rate)
-        .map()
-        .clone();
-    let plan = crate::WarpPlan::new(map, SessionFrame::new(16)).expect("activation resolves");
-    slot.install(Some(Arc::new(plan)));
+    let mut renderer = planned_renderer(&WarpConfig::builder().speed(1.0).build());
+    renderer
+        .set_speed(SpeedCurve::Steps(Arc::from([(16, 1.5)])), 1)
+        .expect("activation resolves");
     renderer.prepare(spec());
     let meta = AudioChunkInfo {
         spec: spec(),
@@ -419,7 +394,7 @@ fn an_unapplied_activation_splits_every_crossing_source_quantum(#[case] input_fr
 ))]
 #[kithara::test]
 fn servicing_a_new_plan_preserves_an_already_prepared_quantum() {
-    let (mut renderer, slot) =
+    let mut renderer =
         planned_renderer(&WarpConfig::builder().speed(1.0).keylock(false).build());
     renderer.prepare(spec());
     let pools = renderer.pools.clone();
@@ -429,12 +404,14 @@ fn servicing_a_new_plan_preserves_an_already_prepared_quantum() {
     renderer
         .prepare_quantum(input.meta, input.frames(), usize::MAX)
         .expect("current plan accepts the source quantum");
-    slot.install(Some(Arc::new(crate::mock::projected_plan(
-        60.0,
-        60.0,
-        spec().sample_rate,
-    ))));
+    renderer
+        .set_speed(SpeedCurve::Constant(1.0), 1)
+        .expect("replacement trajectory");
+    assert!(renderer.prepared_quantum.is_none());
     renderer.prepare(spec());
+    renderer
+        .prepare_quantum(input.meta, input.frames(), usize::MAX)
+        .expect("replacement replans the unconsumed source quantum");
 
     let output = renderer
         .render_quantum(input)
@@ -456,19 +433,9 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
     let publisher = warp.take_publisher().expect("fixture owns publisher");
     let mut renderer = warp.renderer(spec(), pools());
     let revision = crate::WarpMapRevision::from(NonZero::new(3).expect("fixture revision"));
-    let source = crate::mock::asset_grid(60.0, spec().sample_rate);
-    let target = crate::mock::session_grid(60.0, spec().sample_rate);
-    let beat = crate::Beat::new(0.0).expect("fixture beat");
-    let alignment = crate::BeatAlignment::new(
-        crate::MapPoint::new(source.stamp(), beat),
-        crate::MapPoint::new(target.stamp(), beat),
-    );
-    let plan = |revision, activation| {
-        let map = crate::WarpMap::projected(source.clone(), target.clone(), alignment, revision)
-            .expect("fixture projection");
-        crate::WarpPlan::new(map, SessionFrame::new(activation)).expect("fixture activation")
-    };
-    config.plan().install(Some(Arc::new(plan(revision, 16))));
+    renderer
+        .set_speed(SpeedCurve::Steps(Arc::from([(16, 1.0)])), 0)
+        .expect("scheduled boundary");
     let publish = |source| {
         let frame = SessionFrame::new(i64::try_from(source).expect("fixture frame fits"));
         let output =
@@ -501,20 +468,22 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
         .expect("prefix renders");
     assert_eq!(first.frames(), 16);
     assert_eq!(
-        first.meta.mapping_revision.map_or(0, NonZero::get),
+        first.meta.render_revision,
         0,
         "the callback snapshot still carries the map-0 frontier before activation"
     );
     assert_eq!(
-        renderer
-            .committed
-            .as_ref()
-            .expect("prefix PCM commits presentation")
-            .frontier()
-            .warp_map(),
-        None
+        first
+            .meta
+            .source_span
+            .expect("prefix PCM source mapping")
+            .render_revision(),
+        0
     );
     publish(16);
+    renderer
+        .set_speed(SpeedCurve::Constant(1.0), u64::from(revision))
+        .expect("activation command");
     renderer.prepare(spec());
     let mut second = chunk(&pools, &[0.0; 64]);
     second.meta.frame_offset = 16;
@@ -528,23 +497,26 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
         .expect("activated span renders");
     assert_eq!(second.meta.frame_offset, 16);
     assert_eq!(
-        second.meta.mapping_revision.map_or(0, NonZero::get),
+        second.meta.render_revision,
         u64::from(revision)
     );
     assert_eq!(
-        renderer
-            .committed
-            .as_ref()
-            .expect("activated PCM commits presentation")
-            .frontier()
-            .warp_map(),
-        Some(revision)
+        second
+            .meta
+            .source_span
+            .expect("activated PCM source mapping")
+            .render_revision(),
+        u64::from(revision)
     );
 
     let future_revision = revision.checked_next().expect("fixture revision advances");
-    config
-        .plan()
-        .install(Some(Arc::new(plan(future_revision, 96))));
+    renderer
+        .set_speed(
+            SpeedCurve::Steps(Arc::from([(48, 1.0)])),
+            u64::from(revision),
+        )
+        .expect("future boundary retains the active command revision");
+    assert!(future_revision > revision);
     publish(48);
     renderer.prepare(spec());
     let mut bridge = chunk(&pools, &[0.0; 64]);
@@ -563,7 +535,7 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
         .expect("bridge PCM");
     assert_eq!(bridge.frames(), 32);
     assert_eq!(
-        bridge.meta.mapping_revision.map_or(0, NonZero::get),
+        bridge.meta.render_revision,
         u64::from(revision)
     );
     publish(80);
@@ -585,19 +557,17 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
     assert_eq!(
         before_future_activation
             .meta
-            .mapping_revision
-            .map_or(0, NonZero::get),
+            .render_revision,
         u64::from(revision),
         "a future map must not mark an earlier quantum"
     );
     assert_eq!(
-        renderer
-            .committed
-            .as_ref()
-            .expect("pre-activation PCM commits presentation")
-            .frontier()
-            .warp_map(),
-        Some(revision)
+        before_future_activation
+            .meta
+            .source_span
+            .expect("pre-activation PCM source mapping")
+            .render_revision(),
+        u64::from(revision)
     );
 }
 
@@ -608,12 +578,10 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
 ))]
 #[kithara::test]
 fn prepared_projection_refuses_another_source_origin_without_consuming_pcm() {
-    let (mut renderer, slot) = planned_renderer(&WarpConfig::builder().speed(1.0).build());
-    slot.install(Some(Arc::new(crate::mock::projected_plan(
-        120.0,
-        180.0,
-        spec().sample_rate,
-    ))));
+    let mut renderer = planned_renderer(&WarpConfig::builder().speed(1.0).build());
+    renderer
+        .set_speed(SpeedCurve::Constant(1.5), 1)
+        .expect("projected trajectory");
     renderer.prepare(spec());
     let input = chunk(&renderer.pools, &vec![0.25; 192 * usize::from(consts::CH)]);
     let count = renderer
@@ -670,7 +638,7 @@ fn entering_a_unity_grid_preserves_the_next_source_samples(
     #[case] backend: kithara_stretch::StretchKind,
     warp_sine: Vec<f32>,
 ) {
-    let (mut renderer, slot) = planned_renderer(
+    let mut renderer = planned_renderer(
         &WarpConfig::builder()
             .speed(1.0)
             .keylock(false)
@@ -683,11 +651,9 @@ fn entering_a_unity_grid_preserves_the_next_source_samples(
     let first = render_serviced(&mut renderer, chunk(&pools, &warp_sine[..first_frames * 2]))
         .expect("initial passthrough renders");
     assert_eq!(&first.samples[..], &warp_sine[..first_frames * 2]);
-    slot.install(Some(Arc::new(crate::mock::projected_plan(
-        60.0,
-        60.0,
-        spec().sample_rate,
-    ))));
+    renderer
+        .set_speed(SpeedCurve::Constant(1.0), 1)
+        .expect("unity trajectory");
     renderer.prepare(spec());
     let mut meta = AudioChunkInfo {
         spec: spec(),
@@ -734,7 +700,7 @@ fn distant_reanchor_keeps_each_source_quantum_bounded(
     #[case] backend: kithara_stretch::StretchKind,
     warp_sine: Vec<f32>,
 ) {
-    let (mut renderer, slot) = planned_renderer(
+    let mut renderer = planned_renderer(
         &WarpConfig::builder()
             .speed(1.0)
             .keylock(false)
@@ -749,13 +715,9 @@ fn distant_reanchor_keeps_each_source_quantum_bounded(
         chunk(&pools, &warp_sine[..initial_frames * 2]),
     )
     .expect("initial unity PCM renders");
-    slot.install(Some(Arc::new(crate::mock::plan_over_at(
-        crate::mock::asset_grid(60.0, spec().sample_rate),
-        crate::mock::session_grid(60.0, spec().sample_rate),
-        4_864.0 / f64::from(consts::SR),
-        40_128.0 / f64::from(consts::SR),
-        SessionFrame::new(40_128),
-    ))));
+    renderer
+        .set_speed(SpeedCurve::Steps(Arc::from([(40_128 - 4_096, 1.0)])), 1)
+        .expect("distant output-frame boundary");
     renderer.prepare(spec());
     let meta = AudioChunkInfo {
         frame_offset: initial_frames as u64,
@@ -789,18 +751,16 @@ fn distant_reanchor_keeps_each_source_quantum_bounded(
 #[kithara::test]
 #[cfg(feature = "stretch-signalsmith")]
 fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
-    let (mut renderer, slot) = planned_renderer(
+    let mut renderer = planned_renderer(
         &WarpConfig::builder()
             .speed(1.0)
             .keylock(true)
             .backend(kithara_stretch::StretchKind::Signalsmith)
             .build(),
     );
-    slot.install(Some(Arc::new(crate::mock::projected_plan(
-        120.0,
-        180.0,
-        spec().sample_rate,
-    ))));
+    renderer
+        .set_speed(SpeedCurve::Constant(1.5), 1)
+        .expect("projected trajectory");
     let mut source = 0;
     for _ in 0..16 {
         renderer.prepare(spec());
@@ -824,12 +784,18 @@ fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
             .expect("prepared source shape");
         source += u64::try_from(frames).expect("source count");
     }
-    let output_frontier = renderer.projection.cursor.expect("mapped output frontier");
+    let output_frontier = renderer
+        .committed
+        .as_ref()
+        .expect("mapped output frontier")
+        .frontier();
     renderer.set_keylock(false);
     renderer.prepare(spec());
-    while flush_serviced(&mut renderer).is_some() {}
+    renderer
+        .prepare_engine_latency(spec())
+        .expect("backend retirement");
     assert_eq!(
-        renderer.projection.cursor,
+        renderer.committed.as_ref().map(RenderSnapshot::frontier),
         Some(output_frontier),
         "backend retirement must not append another musical interval"
     );
@@ -857,9 +823,10 @@ fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
         renderer.rendered_source_end(),
         Some((
             renderer
-                .projection
-                .cursor
+                .committed
+                .as_ref()
                 .expect("mapped output frontier")
+                .frontier()
                 .source(),
             spec().sample_rate
         ))
@@ -873,22 +840,17 @@ fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
 ))]
 #[kithara::test]
 fn projected_activation_refuses_uncommitted_manual_source_before_consumption() {
-    let (mut renderer, slot) =
+    let mut renderer =
         planned_renderer(&WarpConfig::builder().speed(4.0).keylock(false).build());
     let input = chunk(&renderer.pools, &[0.25, 0.25]);
     assert!(render_serviced(&mut renderer, input).is_none());
     assert_eq!(renderer.pending_frames(2), 1);
-    slot.install(Some(Arc::new(crate::mock::projected_plan(
-        120.0,
-        120.0,
-        spec().sample_rate,
-    ))));
     renderer.prepare(spec());
     let mut input = chunk(&renderer.pools, &[0.5, 0.5]);
     input.meta.frame_offset = 1;
     assert!(
         renderer
-            .prepare_quantum(input.meta, input.frames(), usize::MAX)
+            .set_speed(SpeedCurve::Steps(Arc::from([])), 1)
             .is_err()
     );
     let pointer = input.samples.as_ptr();
@@ -898,7 +860,9 @@ fn projected_activation_refuses_uncommitted_manual_source_before_consumption() {
         .expect("source is not admitted");
     assert_eq!(retained.samples.as_ptr(), pointer);
     assert_eq!(renderer.pending_frames(2), 1);
-    assert!(renderer.projection.active.is_none());
+    assert!(renderer.prepared_quantum.is_none());
+    assert_eq!(renderer.rate.speed(), 4.0);
+    assert_eq!(renderer.rate.revision(), 0);
 }
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
@@ -956,18 +920,28 @@ fn a_finite_projected_recording_shorter_than_backend_latency_renders_its_covered
             .backend(backend)
             .render_quantum_frames(NonZero::new(quantum).expect("quantum"))
             .build();
-        let plan = crate::mock::plan_over(
-            crate::mock::asset_grid_over(&[(0.0, 128.0, 1)], Some(128), spec().sample_rate),
-            crate::BeatGridSnapshot::session(
-                crate::BeatGridId::allocate().expect("grid id"),
-                crate::BeatGridRevision::first(),
-                SessionEpoch::new(0),
-                anchor,
-                None,
-            ),
-        );
-        config.plan().install(Some(Arc::new(plan)));
         let mut renderer = Warp::new((), &config).renderer(spec(), pools());
+        let mut previous = 0.0;
+        let steps: Vec<_> = (0..expected_frames)
+            .map(|frame| {
+                let position = if frame + 1 == expected_frames {
+                    128.0
+                } else {
+                    let beat = anchor
+                        .beat_at(SessionFrame::new(
+                            i64::try_from(frame + 1).expect("output frame"),
+                        ))
+                        .expect("host trajectory");
+                    (f64::from(beat) * 128.0 * 65_536.0).round() / 65_536.0
+                };
+                let speed = (position - previous) as f32;
+                previous = position;
+                (u64::try_from(frame).expect("curve offset"), speed)
+            })
+            .collect();
+        renderer
+            .set_speed(SpeedCurve::Steps(Arc::from(steps)), 1)
+            .expect("host source trajectory");
         let mut source = 0;
         let mut pcm = Vec::new();
         while source < 128 {
@@ -977,10 +951,16 @@ fn a_finite_projected_recording_shorter_than_backend_latency_renders_its_covered
                 spec: spec(),
                 ..AudioChunkInfo::default()
             };
-            let frames = renderer
+            let requested = renderer
                 .prepare_quantum(meta, 128 - source, usize::MAX)
                 .expect("covered short recording is renderable without invented geometry")
                 .get();
+            let frames = requested.min(128 - source);
+            if frames < requested {
+                renderer
+                    .prepare_terminal_quantum(frames)
+                    .expect("decoded EOF");
+            }
             let mut input = chunk(
                 &renderer.pools,
                 &warp_sine[source * 2..(source + frames) * 2],
@@ -1031,17 +1011,33 @@ fn repeated_terminal_padding_keeps_the_decoded_eof_and_resident_extent() {
     resident
         .append(meta, &[0.25; 64])
         .expect("decoded source admission");
-    resident.pad_to(64, 2).expect("terminal lookahead");
     let padded_length = resident.samples.len();
-    resident.pad_to(64, 2).expect("same terminal lookahead");
+    renderer.terminal_source_end = Some(32);
+    let span = kithara_signal::SourceSpan::from_rational(
+        32,
+        1,
+        NonZeroU64::MIN,
+        spec().sample_rate,
+        32,
+    )
+    .expect("terminal lookahead mapping");
+    renderer.render_projected(span).expect("terminal lookahead");
+    renderer.render_projected(span).expect("same terminal lookahead");
+    let resident = renderer.residency.as_ref().expect("resident source window");
     assert_eq!(resident.samples.len(), padded_length);
     assert_eq!(
         resident.end,
         Some(32),
         "DSP padding never advances the decoded EOF"
     );
-    let padded = resident.range(32, 64, 2).expect("padded source range");
-    assert!(resident.samples[padded].iter().all(|sample| *sample == 0.0));
+    assert!(
+        renderer
+            .scratch
+            .as_ref()
+            .expect("virtual padded output")
+            .iter()
+            .all(|sample| *sample == 0.0)
+    );
 }
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
@@ -1063,14 +1059,10 @@ fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
         .backend(backend)
         .render_quantum_frames(NonZero::new(128).expect("quantum"))
         .build();
-    config
-        .plan()
-        .install(Some(Arc::new(crate::mock::projected_plan(
-            120.0,
-            180.0,
-            spec().sample_rate,
-        ))));
     let mut renderer = Warp::new((), &config).renderer(spec(), pools());
+    renderer
+        .set_speed(SpeedCurve::Constant(1.5), 1)
+        .expect("projected trajectory");
     let mut admitted = 0_u64;
     for _ in 0..16 {
         renderer.prepare(spec());
@@ -1096,21 +1088,13 @@ fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
         .expect("mapped PCM frontier")
         .0;
     assert!(previous < admitted, "native lookahead remains admitted");
-    let revision = renderer
-        .projection
-        .cursor
-        .expect("mapped cursor")
-        .revision();
-    config.plan().install(None);
+    let revision = renderer.rate.revision();
     renderer.prepare(spec());
     let mut tail_frames = 0;
     while let Some(output) = flush_serviced(&mut renderer) {
         assert_eq!(
-            output
-                .meta
-                .mapping_revision
-                .map(crate::WarpMapRevision::from),
-            Some(revision)
+            output.meta.render_revision,
+            revision
         );
         assert_eq!(
             output.meta.frame_offset, previous,
@@ -1131,6 +1115,9 @@ fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
         previous, admitted,
         "manual resumes after all admitted projected source"
     );
+    renderer
+        .set_speed(SpeedCurve::Constant(1.0), 0)
+        .expect("manual trajectory");
     renderer.prepare(spec());
     let mut input = chunk(&renderer.pools, &[0.5; 128]);
     input.meta.frame_offset = admitted;
@@ -1143,7 +1130,7 @@ fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
         .expect("manual source is prepared")
         .expect("manual PCM");
     assert_eq!(&*output.samples, &[0.5; 128]);
-    assert_eq!(output.meta.mapping_revision, None);
+    assert_eq!(output.meta.render_revision, 0);
     assert_eq!(output.meta.frame_offset, admitted);
 }
 
@@ -1306,14 +1293,10 @@ fn a_one_frame_decoder_chunk_keeps_the_slowed_projection_presenting(
         .backend(backend)
         .keylock(true)
         .build();
-    config
-        .plan()
-        .install(Some(Arc::new(crate::mock::projected_plan(
-            120.0,
-            100.0,
-            spec().sample_rate,
-        ))));
     let mut renderer = Warp::new((), &config).renderer(spec(), pools());
+    renderer
+        .set_speed(SpeedCurve::Constant(100.0 / 120.0), 1)
+        .expect("slowed trajectory");
 
     let mut position = 0;
     let mut audible = None;
