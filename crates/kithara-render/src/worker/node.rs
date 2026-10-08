@@ -70,7 +70,7 @@ where
             if let Some(error) = self.load_error.take() {
                 return Poll::Ready(Err(error));
             }
-            if self.source.is_preloaded() || self.terminal.is_some() {
+            if self.source.is_preloaded() {
                 return Poll::Ready(Ok(()));
             }
             if result == TickResult::Progress {
@@ -159,6 +159,7 @@ where
                     }
                 }
                 if let Some(terminal) = terminal {
+                    self.source.finish_preload();
                     self.terminal = Some(terminal);
                 }
                 self.port.signal();
@@ -250,6 +251,9 @@ where
         if self.pending.is_some() {
             return self.admit();
         }
+        if self.terminal == Some(Ok(self.source.cursor().segment)) {
+            return TickResult::Waiting;
+        }
         if matches!(self.terminal, Some(Err(_))) || self.port.forward.is_full() {
             return TickResult::Backpressured;
         }
@@ -270,30 +274,24 @@ where
                 });
             }
             TrackStep::Produced(Fetch::NaturalEof) | TrackStep::Eof => {
-                if self.terminal == Some(Ok(self.source.cursor().segment)) {
-                    return TickResult::Backpressured;
-                }
                 self.eof();
             }
             TrackStep::Produced(Fetch::Failure { failure }) => {
-                if self.terminal == Some(Ok(self.source.cursor().segment)) {
-                    return TickResult::Backpressured;
-                }
                 self.fail(failure);
             }
             TrackStep::Failed(error) => {
-                if self.terminal == Some(Ok(self.source.cursor().segment)) {
-                    return TickResult::Backpressured;
-                }
                 self.fail(error);
             }
             TrackStep::StateChanged => {
                 self.terminal = None;
                 return TickResult::Progress;
             }
-            TrackStep::Blocked(WaitingReason::WaitingDemand) => return TickResult::UpstreamPending,
-            TrackStep::Blocked(WaitingReason::Waiting | WaitingReason::WaitingMetadata) => {
-                return TickResult::Waiting;
+            TrackStep::Blocked(reason) => {
+                self.source.upstream_parked();
+                return match reason {
+                    WaitingReason::WaitingDemand => TickResult::UpstreamPending,
+                    WaitingReason::Waiting | WaitingReason::WaitingMetadata => TickResult::Waiting,
+                };
             }
         }
         self.admit()
@@ -335,8 +333,14 @@ mod scheduler_tests {
         worker::PcmPacket,
     };
 
-    fn empty_chunk(pools: &Pools) -> AudioChunk {
-        tests::empty_chunk(pools)
+    fn empty_chunk(pools: &Pools, frame: u64) -> AudioChunk {
+        let mut chunk = tests::empty_chunk(pools);
+        chunk.meta.frame_offset = frame;
+        chunk.meta.source_span =
+            kithara_signal::SourceSpan::new(frame, frame + 1, chunk.spec().sample_rate, 1);
+        chunk.meta.timestamp = chunk.spec().duration_for(frame).expect("timestamp");
+        chunk.meta.end_timestamp = chunk.spec().duration_for(frame + 1).expect("end timestamp");
+        chunk
     }
 
     struct MockSource {
@@ -383,8 +387,9 @@ mod scheduler_tests {
             if self.cursor >= self.chunks_to_produce {
                 return TrackStep::Eof;
             }
+            let frame = u64::try_from(self.cursor).expect("source cursor fits");
             self.cursor += 1;
-            TrackStep::Produced(Fetch::data(empty_chunk(&self.pools)))
+            TrackStep::Produced(Fetch::data(empty_chunk(&self.pools, frame)))
         }
     }
 
@@ -566,6 +571,7 @@ mod scheduler_tests {
             /// Time each step holds the shared worker thread before producing.
             step: Duration,
             pools: Pools,
+            cursor: u64,
         }
 
         impl AudioSource for EndlessSource {
@@ -574,6 +580,7 @@ mod scheduler_tests {
                 &mut self,
                 target: Duration,
             ) -> Result<SeekOutcome, kithara_audio::AudioReadError> {
+                self.cursor = 0;
                 Ok(SeekOutcome::Landed {
                     target,
                     landed_at: target,
@@ -586,7 +593,9 @@ mod scheduler_tests {
 
             fn step_track(&mut self) -> TrackStep<AudioChunk> {
                 thread::sleep(self.step);
-                TrackStep::Produced(Fetch::data(empty_chunk(&self.pools)))
+                let chunk = empty_chunk(&self.pools, self.cursor);
+                self.cursor += 1;
+                TrackStep::Produced(Fetch::data(chunk))
             }
         }
 
@@ -864,6 +873,7 @@ mod scheduler_tests {
                 EndlessSource {
                     step,
                     pools: pools.clone(),
+                    cursor: 0,
                 },
                 32,
                 0,
@@ -925,16 +935,19 @@ mod tests {
         let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
         let (lane, inbox) = channel(ChannelConfig::builder().build());
+        let config = kithara_warp::WarpConfig::builder()
+            .source_block_frames(NonZeroUsize::new(65_536).expect("source block"))
+            .build();
         let source = WarpSource::new(
             source,
-            kithara_warp::Warp::new((), &kithara_warp::WarpConfig::builder().build())
-                .renderer(spec, pools.clone()),
+            kithara_warp::Warp::new((), &config).renderer(spec, pools.clone()),
             Vec::new(),
             EffectDrain::new(0, &pools).expect("drain"),
             spec,
             pools.clone(),
             inbox,
             NonZeroUsize::new(preload).expect("preload"),
+            crate::consts::DEFAULT_DECLICK,
         );
         let (receiver, producer) =
             PacketRing::new(spec, Duration::from_secs(1), capacity).into_ends();
@@ -1222,7 +1235,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn decoded_frontier_advances_only_after_final_port_admission() {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
-        let packet = chunk(spec, SegmentId::FIRST, 1, 0, &vec![0.0; 66_150]);
+        let packet = chunk(spec, SegmentId::FIRST, 1, 1, &vec![0.0; 66_148]);
         let source = ScriptedSource::new([produced(), TrackStep::Produced(Fetch::data(packet))]);
         let (mut node, mut receiver, _lane) = prepared_node(source, 1, 1).await;
         let initial = spec.duration_for(1).expect("initial frame");
@@ -1237,12 +1250,15 @@ mod tests {
     #[kithara::test(tokio)]
     async fn source_end_commits_only_after_final_port_admission() {
         let end = SourceEnd::new(12_345, NonZeroU32::new(44_100).expect("rate"));
-        let source = ScriptedSource::new([
-            produced(),
-            TrackStep::Produced(Fetch::rendered(empty_chunk(&pools()), end)),
-        ]);
+        let spec = AudioSpec::new(2, end.sample_rate());
+        let packet = chunk(spec, SegmentId::FIRST, 0, 12_344, &[0.0; 2]);
+        let source = ScriptedSource::new([TrackStep::Produced(Fetch::rendered(packet, end))]);
         let commits = Arc::clone(&source.commits);
         let (mut node, mut receiver, _lane) = prepared_node(source, 1, 1).await;
+        node.pending = Some(PendingPacket {
+            packet: PcmPacket::Chunk(empty_chunk(&pools())),
+            source_end: None,
+        });
         assert_eq!(node.tick(), TickResult::Progress);
         assert_eq!(node.tick(), TickResult::Backpressured);
         assert!(commits.lock().is_empty());
@@ -1262,14 +1278,14 @@ mod tests {
     #[case(WaitingReason::Waiting)]
     #[case(WaitingReason::WaitingDemand)]
     #[case(WaitingReason::WaitingMetadata)]
-    async fn decoder_node_upstream_park_after_audio_waits_for_the_preload_quota(
+    async fn decoder_node_downstream_park_after_audio_waits_for_the_preload_quota(
         #[case] reason: WaitingReason,
     ) {
         let source = ScriptedSource::new([produced(), TrackStep::Blocked(reason)]);
-        let (mut node, _receiver, _lane) = prepared_node(source, 4, 2).await;
+        let (mut node, _receiver, _lane) = prepared_node(source, 1, 2).await;
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(!node.source.is_preloaded(), "one chunk is below quota");
-        let _ = node.tick();
+        assert_eq!(node.tick(), TickResult::Backpressured);
         assert!(
             !node.source.is_preloaded(),
             "a park cannot replace the quota"

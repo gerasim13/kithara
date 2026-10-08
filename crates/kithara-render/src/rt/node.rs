@@ -127,7 +127,11 @@ mod tests {
         let config = DeckMixerConfig::default();
         let (mut sender, inbox) = scoped_channel(
             ScopedConfig::builder()
-                .scope(ChannelConfig::builder().build())
+                .scope(
+                    ChannelConfig::builder()
+                        .targets(config.slots().get())
+                        .build(),
+                )
                 .build(),
         );
         let scope = sender.open(config.slots().get()).expect("deck scope");

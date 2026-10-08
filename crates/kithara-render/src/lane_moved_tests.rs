@@ -53,7 +53,7 @@ impl LaneFixture {
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
         let warp = Warp::new((), &WarpConfig::builder().build());
         Self {
-            lane: Lane::new(inbox, NonZeroUsize::new(2).expect("preload threshold")),
+            lane: Lane::new(inbox, NonZeroUsize::new(2).expect("preload threshold"), crate::consts::DEFAULT_DECLICK),
             sender,
             source: ReadySource {
                 position: Duration::ZERO,

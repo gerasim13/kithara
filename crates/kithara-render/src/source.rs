@@ -10,6 +10,7 @@ use kithara_audio::{
 };
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_command::Inbox;
+use kithara_dsp::param::SmootherConfig;
 use kithara_effects::{AudioEffect, EffectDrain, EffectDrainStep, apply_effects, reset_effects};
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount};
@@ -71,6 +72,7 @@ where
         pools: PoolRegion<S>,
         inbox: Inbox<LaneProtocol>,
         preload_chunks: NonZeroUsize,
+        declick: SmootherConfig,
     ) -> Self {
         let discontinuity = source.discontinuity();
         Self {
@@ -81,7 +83,7 @@ where
             discontinuity,
             spec,
             pools,
-            lane: Lane::new(inbox, preload_chunks),
+            lane: Lane::new(inbox, preload_chunks, declick),
             drain_state: DrainState::Open,
             pending_input: None,
             staged_meta: None,
@@ -111,12 +113,26 @@ where
         self.warp.engine_latency()
     }
 
+    /// Output frames of this lane's Jump ramp at its current sample rate.
+    #[must_use]
+    pub fn declick_frames(&self) -> FrameCount {
+        self.lane.declick_frames(self.spec.sample_rate)
+    }
+
     /// Records successful admission of the current segment's chunk.
     pub fn admitted(&mut self) {
         self.lane.admitted();
     }
 
-    /// Whether the current segment's preload quota is in the PCM ring.
+    pub(crate) fn upstream_parked(&mut self) {
+        self.lane.upstream_parked();
+    }
+
+    pub(crate) fn finish_preload(&mut self) {
+        self.lane.finish_preload();
+    }
+
+    /// Whether admission has made the current segment ready for playback.
     #[must_use]
     pub fn is_preloaded(&self) -> bool {
         self.lane.is_preloaded()
@@ -128,10 +144,11 @@ where
     }
 
     /// Executes commands at the output cursor before producing more samples.
+    /// Returns whether a command reset the decoded source.
     ///
     /// # Errors
     /// Returns the source's seek classification or a render failure.
-    pub fn service_commands(&mut self) -> Result<(), TrackFailureKind> {
+    pub fn service_commands(&mut self) -> Result<bool, TrackFailureKind> {
         let changed = self
             .lane
             .execute_due(&mut self.source, &mut self.warp, self.spec)?;
@@ -146,7 +163,7 @@ where
             self.prepared_frames = None;
         }
         self.prepare_renderers(self.spec);
-        Ok(())
+        Ok(changed == LaneChange::Source)
     }
 
     fn fail(&mut self, failure: TrackFailureKind) -> TrackStep<AudioChunk> {
@@ -168,7 +185,7 @@ where
     }
 
     fn prepare_staging(&mut self) {
-        if self.quantum_failed {
+        if self.quantum_failed || self.lane.output_limit() == 0 {
             return;
         }
         let pending_span = self.pending_input.as_ref().and_then(|pending| {
@@ -469,9 +486,14 @@ where
     fn prepare_renderers(&mut self, spec: AudioSpec) {
         self.spec = spec;
         self.warp.prepare(spec);
-        if self.warp.transition_pending() && self.warp.prepare_engine_latency(spec).is_err() {
-            self.quantum_failed = true;
-            return;
+        if self.warp.transition_pending() {
+            match self.warp.prepare_engine_latency(spec) {
+                Ok(_) | Err(WarpRenderError::NeedsService) => {}
+                Err(_) => {
+                    self.quantum_failed = true;
+                    return;
+                }
+            }
         }
         if self.warp.transition_pending() && matches!(self.drain_state, DrainState::Open) {
             self.drain_state = DrainState::LiveWarp;
@@ -587,7 +609,7 @@ where
         reset_effects(&mut self.effects);
     }
 
-    fn sync_discontinuity(&mut self) {
+    fn sync_discontinuity(&mut self) -> bool {
         let next = self.source.discontinuity();
         let revision_changed = next.as_ref().map(SourceDiscontinuity::revision)
             != self
@@ -599,12 +621,13 @@ where
         }
         self.discontinuity = next;
         if !revision_changed {
-            return;
+            return false;
         }
         self.discard_staged_input();
         self.reset_renderers();
         self.drain.reset();
         self.drain_state = DrainState::Open;
+        true
     }
 }
 
@@ -633,10 +656,14 @@ where
         if let Some(failure) = self.terminal_failure {
             return TrackStep::Failed(failure);
         }
-        if let Err(error) = self.service_commands() {
-            return self.fail(error);
+        match self.service_commands() {
+            Ok(true) => return TrackStep::StateChanged,
+            Ok(false) => {}
+            Err(error) => return self.fail(error),
         }
-        self.sync_discontinuity();
+        if self.sync_discontinuity() {
+            return TrackStep::StateChanged;
+        }
         if self.quantum_failed {
             return self.fail(TrackFailureKind::Render);
         }
@@ -835,6 +862,7 @@ mod tests {
             pools.clone(),
             idle_inbox(),
             NonZeroUsize::new(1).expect("preload"),
+            consts::DEFAULT_DECLICK,
         )
     }
 
@@ -960,6 +988,7 @@ mod tests {
             pools.clone(),
             idle_inbox(),
             NonZeroUsize::MIN,
+            consts::DEFAULT_DECLICK,
         );
         flush_deferred(&mut source);
         assert_eq!(source.warp.requires_staging(), staged);
@@ -1018,6 +1047,7 @@ mod tests {
             pools.clone(),
             idle_inbox(),
             NonZeroUsize::MIN,
+            consts::DEFAULT_DECLICK,
         );
         let mut staged_prefix_seen = false;
         let mut produced_nonzero_pcm = false;
@@ -1290,6 +1320,7 @@ mod tests {
     struct SeekApplyingSource {
         spec: AudioSpec,
         revision: u64,
+        pending: bool,
     }
 
     impl AudioSource for SeekApplyingSource {
@@ -1297,6 +1328,7 @@ mod tests {
 
         fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
             self.revision = self.revision.wrapping_add(1);
+            self.pending = true;
             Ok(SeekOutcome::Landed {
                 target,
                 landed_at: target,
@@ -1314,7 +1346,11 @@ mod tests {
         }
 
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
-            TrackStep::Eof
+            if std::mem::take(&mut self.pending) {
+                TrackStep::StateChanged
+            } else {
+                TrackStep::Eof
+            }
         }
     }
 
@@ -1627,6 +1663,26 @@ mod tests {
         quarter: Vec<f32>,
         three_quarter: Vec<f32>,
     ) {
+        fn feed_whole_chunk(
+            source: &mut WarpSource<RawSource, TestPools>,
+        ) -> TrackStep<AudioChunk> {
+            let TrackStep::Produced(Fetch::Data { data, .. }) = source.source.step_track() else {
+                panic!("fixture provides a whole decoded chunk");
+            };
+            source.warp.prepare(source.spec);
+            let output = source
+                .warp
+                .render(data)
+                .continue_value()
+                .expect("whole source span");
+            if source.warp.transition_pending() {
+                source.drain_state = DrainState::LiveWarp;
+            }
+            output
+                .and_then(|data| source.emit_output(data, None))
+                .map_or(TrackStep::StateChanged, TrackStep::Produced)
+        }
+
         for backend in keylock_backends() {
             const ACTIVE_FRAMES: u32 = 4096;
             const UNITY_FRAMES: u32 = 4096;
@@ -1682,9 +1738,10 @@ mod tests {
                 pools.clone(),
                 inbox,
                 NonZeroUsize::new(1).expect("preload"),
+                consts::DEFAULT_DECLICK,
             );
 
-            let initial = source.step_track();
+            let initial = feed_whole_chunk(&mut source);
             assert!(matches!(
                 &initial,
                 TrackStep::Produced(_) | TrackStep::StateChanged
@@ -1698,9 +1755,11 @@ mod tests {
                 flush_deferred(&mut source);
             }
 
-            lane.send(When::Next, speed_batch(1.0))
-                .expect("the lane channel has room");
-            let transition = source.step_track();
+            source
+                .warp
+                .set_speed(SpeedCurve::Constant(1.0), 1)
+                .expect("unity command");
+            let transition = feed_whole_chunk(&mut source);
             assert!(matches!(
                 &transition,
                 TrackStep::Produced(_) | TrackStep::StateChanged
@@ -1844,6 +1903,7 @@ mod tests {
             pools.clone(),
             idle_inbox(),
             NonZeroUsize::new(1).expect("preload"),
+            consts::DEFAULT_DECLICK,
         );
         let mut produced = 0;
         for _ in 0..128 {
@@ -1971,6 +2031,7 @@ mod tests {
                 target_pools.clone(),
                 idle_inbox(),
                 NonZeroUsize::new(1).expect("preload"),
+                consts::DEFAULT_DECLICK,
             );
 
             for _ in 0..3 {
@@ -1986,7 +2047,11 @@ mod tests {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
         let pools = pools();
         let resets = Arc::new(AtomicU64::new(0));
-        let source = SeekApplyingSource { spec, revision: 0 };
+        let source = SeekApplyingSource {
+            spec,
+            revision: 0,
+            pending: false,
+        };
         let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(ResettingTail {
             resets: Arc::clone(&resets),
             tail: Some(chunk(&pools, spec, 128, &quarter)),
@@ -2082,14 +2147,23 @@ mod tests {
         assert!(matches!(source.step_track(), TrackStep::Eof));
         assert_eq!(steps.load(Ordering::Acquire), 2);
         assert_eq!(flushes.load(Ordering::Acquire), 2);
+        assert_eq!(resets.load(Ordering::Acquire), 1);
 
         *discontinuity.lock() = Some(SourceDiscontinuity::new(1, spec));
+        assert!(matches!(source.step_track(), TrackStep::Eof));
+        assert!(matches!(source.step_track(), TrackStep::Eof));
+        assert_eq!(steps.load(Ordering::Acquire), 2);
+        assert_eq!(flushes.load(Ordering::Acquire), 2);
+        assert_eq!(resets.load(Ordering::Acquire), 1);
+
+        *discontinuity.lock() = Some(SourceDiscontinuity::new(2, spec));
+        flush_deferred(&mut source);
         assert!(matches!(source.step_track(), TrackStep::StateChanged));
         assert!(matches!(source.step_track(), TrackStep::Eof));
         assert!(matches!(source.step_track(), TrackStep::Eof));
         assert_eq!(steps.load(Ordering::Acquire), 3);
         assert_eq!(flushes.load(Ordering::Acquire), 3);
-        assert_eq!(resets.load(Ordering::Acquire), 1);
+        assert_eq!(resets.load(Ordering::Acquire), 2);
     }
 
     /// One emitted chunk on the lane axis and the source span it renders.
@@ -2183,6 +2257,7 @@ mod tests {
             pools.clone(),
             inbox,
             NonZeroUsize::new(1).expect("preload"),
+            consts::DEFAULT_DECLICK,
         );
         (source, lane)
     }
@@ -2540,24 +2615,51 @@ mod tests {
             .expect("the lane has room for the change");
             let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
             let cue = ENGAGE + (AT - ENGAGE) * 4 / 5;
+            assert_eq!(
+                emitted
+                    .iter()
+                    .find(|chunk| chunk.lane_start == AT)
+                    .map(|chunk| chunk.source_start),
+                Some(cue),
+                "the speed change starts on its exact lane and source frame",
+            );
 
-            let (mut started, mut fresh) = stretch_lane(&pools, (backend, true), &signal);
+            let (mut started, mut fresh) = stretch_lane(&pools, (backend, false), &signal);
             fresh
                 .send(
                     When::At(LaneFrame {
                         segment: SegmentId::FIRST,
-                        frame: cue,
+                        frame: ENGAGE,
                     }),
-                    speed_batch(1.25),
+                    speed_batch(0.8),
+                )
+                .expect("the lane has room for the reference history");
+            let mut start = speed_batch(1.25);
+            start.commands.push(LaneCommand::SetKeylock(true));
+            fresh
+                .send(
+                    When::At(LaneFrame {
+                        segment: SegmentId::FIRST,
+                        frame: AT,
+                    }),
+                    start,
                 )
                 .expect("the lane has room for the start");
-            let reference = emit(&mut started, 0, cue + SETTLE + (WINDOW + REACH) as u64);
+            let reference = emit(&mut started, 0, AT + SETTLE + (WINDOW + REACH) as u64);
+            assert_eq!(
+                reference
+                    .iter()
+                    .find(|chunk| chunk.lane_start == AT)
+                    .map(|chunk| chunk.source_start),
+                Some(cue),
+                "the fresh engine starts on the same lane and source frame",
+            );
 
             let rendered = &lane_pcm(&emitted)[pcm_index(AT + SETTLE)..][..WINDOW];
             let (offset, correlation) = alignment(
                 rendered,
                 &lane_pcm(&reference),
-                pcm_index(cue + SETTLE),
+                pcm_index(AT + SETTLE),
                 REACH,
             );
             assert!(
@@ -2611,24 +2713,51 @@ mod tests {
                     .expect("the lane has room for the change");
                 let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
                 let cue = ENGAGE + (AT - ENGAGE) * 5 / 4;
+                assert_eq!(
+                    emitted
+                        .iter()
+                        .find(|chunk| chunk.lane_start == AT)
+                        .map(|chunk| chunk.source_start),
+                    Some(cue),
+                    "the engine change starts on its exact lane and source frame",
+                );
 
-                let (mut started, mut fresh) = stretch_lane(&pools, to, &signal);
+                let (mut started, mut fresh) = stretch_lane(&pools, (next, false), &signal);
                 fresh
                     .send(
                         When::At(LaneFrame {
                             segment: SegmentId::FIRST,
-                            frame: cue,
+                            frame: ENGAGE,
                         }),
                         speed_batch(1.25),
                     )
+                    .expect("the lane has room for the reference history");
+                let mut start = speed_batch(1.25);
+                start.commands.push(LaneCommand::SetKeylock(true));
+                fresh
+                    .send(
+                        When::At(LaneFrame {
+                            segment: SegmentId::FIRST,
+                            frame: AT,
+                        }),
+                        start,
+                    )
                     .expect("the lane has room for the start");
-                let reference = emit(&mut started, 0, cue + SETTLE + (WINDOW + REACH) as u64);
+                let reference = emit(&mut started, 0, AT + SETTLE + (WINDOW + REACH) as u64);
+                assert_eq!(
+                    reference
+                        .iter()
+                        .find(|chunk| chunk.lane_start == AT)
+                        .map(|chunk| chunk.source_start),
+                    Some(cue),
+                    "the fresh engine starts on the same lane and source frame",
+                );
 
                 let rendered = &lane_pcm(&emitted)[pcm_index(AT + SETTLE)..][..WINDOW];
                 let (offset, correlation) = alignment(
                     rendered,
                     &lane_pcm(&reference),
-                    pcm_index(cue + SETTLE),
+                    pcm_index(AT + SETTLE),
                     REACH,
                 );
                 assert!(
@@ -2744,6 +2873,7 @@ mod tests {
             pools.clone(),
             inbox,
             NonZeroUsize::new(1).expect("preload"),
+            consts::DEFAULT_DECLICK,
         );
         for (index, pointer) in pointers.into_iter().enumerate() {
             if index == 1 {

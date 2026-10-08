@@ -172,7 +172,7 @@ impl FakeReader {
             .map(|part| {
                 let at = frame_offset;
                 frame_offset += u64::try_from(part.len() / usize::from(consts::CH)).unwrap_or(0);
-                Ok(ChunkOutcome::Chunk(chunk(pools, part, at)))
+                Ok(ChunkOutcome::Chunk(Box::new(chunk(pools, part, at))))
             })
             .collect();
         outcomes.push_back(Ok(eof()));
@@ -272,7 +272,7 @@ impl AudioRead for FakeReader {
 }
 
 impl AudioControl for FakeReader {
-    fn seek(&mut self, _position: Duration) -> Result<SeekOutcome, DecodeError> {
+    fn seek(&mut self, _position: Duration) -> Result<SeekOutcome, AudioReadError> {
         unreachable!("analysis never seeks")
     }
 }

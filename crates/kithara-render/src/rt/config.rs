@@ -33,7 +33,9 @@ pub struct DeckMixerConfig {
 }
 
 impl DeckMixerConfig {
-    pub(crate) fn declick_frames(self, sample_rate: std::num::NonZeroU32) -> FrameCount {
+    /// Output frames in the configured declick, rounded to the nearest frame.
+    #[must_use]
+    pub fn declick_frames(self, sample_rate: std::num::NonZeroU32) -> FrameCount {
         declick_frame_count(self.declick, sample_rate)
     }
 }

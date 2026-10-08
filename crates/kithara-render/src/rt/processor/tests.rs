@@ -111,6 +111,25 @@ fn mixer() -> (TestMixer, TestEnds) {
     mixer_with_config(DeckMixerConfig::default(), 64)
 }
 
+fn mixer_without_declick() -> (TestMixer, TestEnds) {
+    mixer_with_config(
+        DeckMixerConfig::builder()
+            .declick(SmootherConfig {
+                smooth_seconds: 0.0,
+                ..SmootherConfig::default()
+            })
+            .build(),
+        64,
+    )
+}
+
+fn apply_initial_batch(mixer: &mut TestMixer) {
+    mixer.inbox.0.drain();
+    let mut level = mixer.inbox.scope(mixer.mixer.scope).expect("live scope");
+    let due = level.next_due(frame_at(0), 1).expect("initial batch");
+    mixer.mixer.deck.take_due(due, true);
+}
+
 fn mixer_with_config(config: DeckMixerConfig, capacity: usize) -> (TestMixer, TestEnds) {
     let (mut ring, inbox) = scoped_channel(
         ScopedConfig::builder()
@@ -826,7 +845,7 @@ async fn a_fade_to_silence_stops_the_slot_and_reports_faded(constant_half: &'sta
 #[kithara::test(tokio)]
 async fn a_replace_plays_the_old_consumer_out_of_the_tail(constant_half: &'static [u8]) {
     const REPLACE_AT: usize = BLOCK + 100;
-    let (mut mixer, mut ends) = mixer();
+    let (mut mixer, mut ends) = mixer_without_declick();
     send(
         &mut ends,
         When::Next,
@@ -883,10 +902,11 @@ async fn a_replace_plays_the_old_consumer_out_of_the_tail(constant_half: &'stati
 /// applies on that frame.
 #[kithara::test(tokio)]
 async fn a_chain_starts_its_slot_on_the_frame_after_the_end(constant_half: &'static [u8]) {
-    let (mut mixer, mut ends) = mixer();
-    send(
+    let (mut mixer, mut ends) = mixer_without_declick();
+    let attached = send_on(
         &mut ends,
         When::Next,
+        &[(A, None), (B, None)],
         vec![
             DeckPart::Attach {
                 slot: A,
@@ -904,10 +924,11 @@ async fn a_chain_starts_its_slot_on_the_frame_after_the_end(constant_half: &'sta
             },
         ],
     );
+    apply_initial_batch(&mut mixer);
     let chain = send_on(
         &mut ends,
         When::Deferred,
-        &[(B, None)],
+        &[(B, Some(attached))],
         vec![DeckPart::Chain { from: A, to: B }],
     );
 
@@ -937,7 +958,7 @@ async fn a_chain_starts_its_slot_on_the_frame_after_the_end(constant_half: &'sta
 #[kithara::test(tokio)]
 async fn a_chain_whose_slot_shifted_comes_back_stale(constant_half: &'static [u8]) {
     let (mut mixer, mut ends) = mixer();
-    send(
+    let attached = send(
         &mut ends,
         When::Next,
         vec![
@@ -957,16 +978,17 @@ async fn a_chain_whose_slot_shifted_comes_back_stale(constant_half: &'static [u8
             },
         ],
     );
+    apply_initial_batch(&mut mixer);
     let chain = send_on(
         &mut ends,
         When::Deferred,
-        &[(B, None)],
+        &[(B, Some(attached))],
         vec![DeckPart::Chain { from: A, to: B }],
     );
     send_on(
         &mut ends,
         at(10),
-        &[(B, None)],
+        &[(B, Some(attached))],
         vec![DeckPart::Adopt {
             slot: B,
             segment: SegmentId::FIRST.next(),
@@ -1006,6 +1028,7 @@ async fn a_detached_slot_refuses_the_chain_behind_it(constant_half: &'static [u8
             },
         ],
     );
+    apply_initial_batch(&mut mixer);
     let chain = send(
         &mut ends,
         When::Deferred,

@@ -36,6 +36,7 @@ impl NodeFixture {
             pools.clone(),
             inbox,
             NonZeroUsize::new(1).expect("preload"),
+            crate::consts::DEFAULT_DECLICK,
         );
         Self {
             node: DecoderNode::new(
