@@ -415,12 +415,12 @@ kithara-events = { workspace = true, optional = true }
 kithara-file = { workspace = true, optional = true, default-features = false }
 kithara-hls = { workspace = true, optional = true, default-features = false }
 kithara-host = { workspace = true, optional = true, default-features = false }
+kithara-link = { workspace = true, optional = true, default-features = false }
 kithara-net = { workspace = true, optional = true, default-features = false }
 kithara-output = { workspace = true, optional = true }
 kithara-platform = { workspace = true, optional = true }
 kithara-play = { workspace = true, optional = true, default-features = false }
 kithara-queue = { workspace = true, optional = true, default-features = false }
-kithara-link = { workspace = true, optional = true, default-features = false }
 kithara-record = { workspace = true, optional = true }
 kithara-resampler = { workspace = true, optional = true, default-features = false }
 kithara-signal = { workspace = true, optional = true }

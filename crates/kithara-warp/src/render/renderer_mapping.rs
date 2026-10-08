@@ -156,7 +156,9 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             let whole = endpoint.numerator / endpoint.denominator.get();
             if whole < u128::from(region.end())
                 || (whole == u128::from(region.end())
-                    && endpoint.numerator.is_multiple_of(endpoint.denominator.get()))
+                    && endpoint
+                        .numerator
+                        .is_multiple_of(endpoint.denominator.get()))
             {
                 lower = middle;
             } else {
@@ -185,9 +187,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 .common(next)
             })
             .ok_or(ElasticError::SampleCountOverflow)?;
-        let step = first
-            .at(common)
-            .ok_or(ElasticError::SampleCountOverflow)?;
+        let step = first.at(common).ok_or(ElasticError::SampleCountOverflow)?;
         let change = next
             .at(common)
             .and_then(|next| i128::try_from(next).ok())

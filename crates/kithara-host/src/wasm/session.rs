@@ -1,3 +1,12 @@
+use std::task::{Wake, Waker};
+
+use kithara_bufpool::HasPool;
+use kithara_platform::{
+    sync::{Arc, Mutex, Notify},
+    thread::{assert_main_thread, assert_not_main_thread},
+};
+use kithara_play::HostedDeck;
+
 use crate::{
     Host, HostCommand, HostCore, HostOwner, PlayError,
     session::{
@@ -8,13 +17,6 @@ use crate::{
         web::WebSessionState,
     },
 };
-use kithara_bufpool::HasPool;
-use kithara_platform::{
-    sync::{Arc, Mutex, Notify},
-    thread::{assert_main_thread, assert_not_main_thread},
-};
-use kithara_play::HostedDeck;
-use std::task::{Wake, Waker};
 
 /// A Worker endpoint to the canonical owner's existing command queue.
 #[derive_where::derive_where(Clone)]
@@ -88,7 +90,10 @@ impl<C> HostRoute<C> {
         self.wake.notify.notify_one();
     }
 
-    pub(crate) fn drain<S, O: HostOwner<S, Command = C>>(&self, state: &WebSessionState<O>) -> bool {
+    pub(crate) fn drain<S, O: HostOwner<S, Command = C>>(
+        &self,
+        state: &WebSessionState<O>,
+    ) -> bool {
         assert_main_thread("host web pass");
         let mut state = state.lock();
         let Some(owner) = state.as_mut() else {
@@ -122,7 +127,9 @@ pub fn remote_host<S: HasPool<f32> + Send + Sync + 'static>(sender: HostSender<S
 }
 
 /// Warms the local browser backend through its owner.
-pub fn warm_up_audio<S: HasPool<f32> + Send + Sync + 'static>(host: &Host<S>) -> Result<(), PlayError> {
+pub fn warm_up_audio<S: HasPool<f32> + Send + Sync + 'static>(
+    host: &Host<S>,
+) -> Result<(), PlayError> {
     assert_main_thread("warm_up_audio");
     host.browser_warm_up()
 }

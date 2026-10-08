@@ -87,10 +87,7 @@ fn replacement_rounds_half_a_phase_unit_toward_the_next_source_frame() {
 #[case::below_half(0.25, 0)]
 #[case::half(0.5, 1)]
 #[case::above_half(0.75, 1)]
-fn identity_snap_rounds_to_the_nearest_source_frame(
-    #[case] speed: f32,
-    #[case] rounded: u64,
-) {
+fn identity_snap_rounds_to_the_nearest_source_frame(#[case] speed: f32, #[case] rounded: u64) {
     let mut trajectory = Trajectory::new(speed);
     let span = trajectory
         .span(0, NonZeroU32::MIN, 1)

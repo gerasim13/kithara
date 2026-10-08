@@ -395,11 +395,7 @@ impl TransportState {
                         staged
                             .anchor
                             .ok_or(TransportProcessError::InvalidBeatRange)?
-                            .retarget(
-                                due.at(),
-                                tempo.beats_per_second(),
-                                0.0,
-                            )
+                            .retarget(due.at(), tempo.beats_per_second(), 0.0)
                             .map_err(|_| TransportProcessError::InvalidBeatRange)?,
                     );
                     staged.retargeted = true;

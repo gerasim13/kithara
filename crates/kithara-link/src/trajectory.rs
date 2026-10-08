@@ -123,7 +123,11 @@ impl TempoTrajectory {
         let beat = self.beat_at(stopped);
         let tempo = self.tempo_at(stopped);
         self.steps.clear();
-        self.steps.push(TempoStep { frame: start, beat, tempo });
+        self.steps.push(TempoStep {
+            frame: start,
+            beat,
+            tempo,
+        });
     }
 
     pub(crate) fn reaxis_observed(&mut self, anchor: SessionAnchor, tempo: Tempo) {

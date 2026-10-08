@@ -1,3 +1,9 @@
+use std::{marker::PhantomData, num::NonZeroU32};
+
+use kithara_bufpool::HasPool;
+use kithara_command::{Live, ScopedConfig};
+use kithara_platform::{maybe_send::MaybeSend, sync::Arc};
+
 #[cfg(feature = "offline")]
 use crate::host::{
     HostConfig,
@@ -9,10 +15,6 @@ use crate::{
     session::{HostDispatcher, HostProtocol, HostRoot, RootView, web::WebSessionState},
     wasm::{HostReceiver, HostRoute, HostSender},
 };
-use kithara_bufpool::HasPool;
-use kithara_command::{Live, ScopedConfig};
-use kithara_platform::{maybe_send::MaybeSend, sync::Arc};
-use std::{marker::PhantomData, num::NonZeroU32};
 
 pub(in crate::host) struct Platform<S, O: HostOwner<S>> {
     pub(in crate::host) web_state: Option<WebSessionState<O>>,
@@ -38,8 +40,14 @@ impl<S, O: HostOwner<S>> Platform<S, O> {
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
-        let (dispatcher, state, route) =
-            crate::session::web::spawn::<S, O>(root, view, channel_config, output, settings, layer)?;
+        let (dispatcher, state, route) = crate::session::web::spawn::<S, O>(
+            root,
+            view,
+            channel_config,
+            output,
+            settings,
+            layer,
+        )?;
         Ok((
             dispatcher,
             Self {
@@ -112,9 +120,10 @@ where
     }
 
     pub(crate) fn browser_warm_up(&self) -> Result<(), PlayError> {
-        let state = self._session.platform().web_state.as_ref().ok_or_else(|| {
-            PlayError::Internal("audio warm-up requires a local host".to_owned())
-        })?;
+        let state =
+            self._session.platform().web_state.as_ref().ok_or_else(|| {
+                PlayError::Internal("audio warm-up requires a local host".to_owned())
+            })?;
         crate::session::warm_up_audio::<S, HostCore<S>>(state).map_err(Into::into)
     }
 }

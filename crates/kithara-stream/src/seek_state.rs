@@ -1,8 +1,9 @@
 #[cfg(test)]
 mod tests {
-    use crate::ActivityWriter;
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
+
+    use crate::ActivityWriter;
 
     #[kithara::test]
     fn playing_defaults_to_false() {

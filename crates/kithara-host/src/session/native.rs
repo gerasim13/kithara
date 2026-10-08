@@ -105,7 +105,10 @@ fn engine_thread<S, O: HostOwner<S>>(
             match next {
                 Some(EngineMsg::Posted) => posts.drain(&mut owner, &mut mailbox),
                 Some(EngineMsg::Deck(message)) => message.run(&mut owner),
-                Some(EngineMsg::Shutdown) => { shutdown = true; break; }
+                Some(EngineMsg::Shutdown) => {
+                    shutdown = true;
+                    break;
+                }
                 None => {}
             }
             match cmd_rx.try_recv() {
@@ -115,7 +118,9 @@ fn engine_thread<S, O: HostOwner<S>>(
         }
         posts.drain(&mut owner, &mut mailbox);
         posts.pass(&mut owner);
-        if shutdown { break; }
+        if shutdown {
+            break;
+        }
         deadline = Instant::now() + consts::SESSION_PUMP_INTERVAL;
     }
 }

@@ -4,7 +4,9 @@ use kithara_command::Seq;
 use kithara_render::bridge::DeckPart;
 use kithara_signal::SessionFrame;
 
-use super::{Player, PlayerConfig, PlayerImpl, Position, Settled, TrackCommand, TrackSettings, TrackSnapshot};
+use super::{
+    Player, PlayerConfig, PlayerImpl, Position, Settled, TrackCommand, TrackSettings, TrackSnapshot,
+};
 use crate::PlayError;
 
 /// A player of one track: what a queue drives and builds the next track from.
@@ -16,7 +18,11 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
     ///
     /// # Errors
     /// Returns when no uninterrupted slot mark or effective lane clock is known.
-    fn planned(&self, at: SessionFrame, sample_rate: NonZeroU32) -> Result<(Position, f32), PlayError>;
+    fn planned(
+        &self,
+        at: SessionFrame,
+        sample_rate: NonZeroU32,
+    ) -> Result<(Position, f32), PlayError>;
 
     /// Projects the first media end through accepted speed and jump history.
     ///
@@ -37,7 +43,12 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
     ///
     /// # Errors
     /// Returns a checked speed or an admission refusal before either send.
-    fn cue(&mut self, position: Position, speed: f32, out: &mut super::Outbox<'_, S>) -> Result<Option<Seq>, PlayError>;
+    fn cue(
+        &mut self,
+        position: Position,
+        speed: f32,
+        out: &mut super::Outbox<'_, S>,
+    ) -> Result<Option<Seq>, PlayError>;
 }
 
 /// How a queue builds the track that plays one item.

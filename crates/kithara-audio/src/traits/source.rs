@@ -1,9 +1,11 @@
-use crate::{AudioReadError, SeekOutcome, SourceEnd, TrackStep};
+use std::num::NonZeroU32;
+
 use kithara_platform::time::Duration;
 #[cfg(any(test, feature = "mock"))]
 use kithara_signal::AudioChunk;
 use kithara_signal::AudioSpec;
-use std::num::NonZeroU32;
+
+use crate::{AudioReadError, SeekOutcome, SourceEnd, TrackStep};
 
 mod kithara {
     pub(crate) use kithara_test_macros::mock;

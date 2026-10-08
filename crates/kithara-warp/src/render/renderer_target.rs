@@ -10,7 +10,8 @@ use num_traits::ToPrimitive;
 use tracing::warn;
 
 use super::{
-    renderer::WarpRenderer, renderer_residency::SourceResidency, renderer_transition::RetiringTarget,
+    renderer::WarpRenderer, renderer_residency::SourceResidency,
+    renderer_transition::RetiringTarget,
 };
 
 #[derive(Default)]

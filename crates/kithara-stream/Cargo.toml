@@ -27,12 +27,13 @@ tls-rustls = ["kithara-net/tls-rustls", "kithara-abr/tls-rustls"]
 tls-native = ["kithara-net/tls-native", "kithara-abr/tls-native"]
 
 [dependencies]
-arc-swap = { workspace = true }
 kithara-abr = { workspace = true, default-features = false }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-test-utils = { workspace = true }
+
+arc-swap = { workspace = true }
 
 bitflags = { workspace = true }
 bon = { workspace = true }

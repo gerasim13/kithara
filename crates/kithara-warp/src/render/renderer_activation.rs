@@ -233,7 +233,9 @@ where
             || remaining.min(capabilities.max_output_frames()),
             |limit| limit.get().min(capabilities.max_output_frames()),
         );
-        let outputs = output_limit.min(quantum).min(self.source_block_frames.get());
+        let outputs = output_limit
+            .min(quantum)
+            .min(self.source_block_frames.get());
         if outputs == 0 {
             return Err(ElasticError::EmptyOutput);
         }

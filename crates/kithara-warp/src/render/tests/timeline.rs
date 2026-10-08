@@ -14,14 +14,14 @@ use kithara_signal::AudioChunk;
     feature = "stretch-glide"
 ))]
 use kithara_stretch::StretchKind;
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+use kithara_test_fixtures::unit_fixtures::warp_constant;
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
     feature = "stretch-glide"
 ))]
 use kithara_test_fixtures::unit_fixtures::warp_sine;
-#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-use kithara_test_fixtures::unit_fixtures::warp_constant;
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
@@ -57,7 +57,10 @@ fn finish_unity_transition(
         }
         assert!(
             renderer.rendered_source_end().expect("tail frontier").0
-                <= renderer.pending_unity_meta.expect("queued unity").frame_offset,
+                <= renderer
+                    .pending_unity_meta
+                    .expect("queued unity")
+                    .frame_offset,
             "the source frontier excludes queued unity throughout the tail drain"
         );
         assert!(output.frames() > 0, "a tail quantum contains real samples");
@@ -120,8 +123,8 @@ fn assert_queued_unity_tail(backend: StretchKind, source: &[f32]) {
         .expect("unity command");
     let mut reference_unity = chunk(&pools, &source[split..]);
     reference_unity.meta.frame_offset = ACTIVE_FRAMES as u64;
-    let reference_unity = render_serviced(&mut reference, reference_unity)
-        .expect("unity follows the drained tail");
+    let reference_unity =
+        render_serviced(&mut reference, reference_unity).expect("unity follows the drained tail");
     assert_eq!(&reference_unity.samples[..], &source[split..]);
 
     let mut live = Warp::new((), &config).renderer(spec(), pools.clone());
@@ -256,7 +259,10 @@ fn assert_identity_quantum(
         *source
     );
     *source += 128;
-    assert_eq!(renderer.rendered_source_end(), Some((*source, spec().sample_rate)));
+    assert_eq!(
+        renderer.rendered_source_end(),
+        Some((*source, spec().sample_rate))
+    );
 }
 
 #[kithara::test]
@@ -931,7 +937,12 @@ fn keylocked_unity_reenters_the_engine_without_a_source_jump_or_starvation(
             Some((span.end(), spec().sample_rate))
         );
         assert!(output.samples.iter().all(|sample| sample.is_finite()));
-        assert!(output.samples.iter().any(|sample| sample.abs() > f32::EPSILON));
+        assert!(
+            output
+                .samples
+                .iter()
+                .any(|sample| sample.abs() > f32::EPSILON)
+        );
         assert!(fx.active, "non-unity invokes the engine again");
     }
 }

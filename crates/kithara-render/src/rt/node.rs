@@ -97,28 +97,47 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_command::{Batch, Port, When, ChannelConfig, ScopedConfig, ScopedInbox, ScopedSender, LevelInbox, ScopeId, scoped_channel};
+    use kithara_command::{
+        Batch, ChannelConfig, LevelInbox, Port, ScopeId, ScopedConfig, ScopedInbox, ScopedSender,
+        When, scoped_channel,
+    };
     use kithara_signal::SessionFrame;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
-        bridge::{DeckProtocol, DeckEnds, DeckPart, Fade, Slot, SlotState, scope_channels},
+        bridge::{DeckEnds, DeckPart, DeckProtocol, Fade, Slot, SlotState, scope_channels},
         rt::DeckMixerConfig,
         test_pools::{TestPools, pools},
     };
 
     struct TestInbox(ScopedInbox<DeckProtocol, DeckProtocol>);
     impl SessionInbox for TestInbox {
-        fn scope(&mut self, id: ScopeId) -> Option<LevelInbox<'_ , DeckProtocol>> { self.0.scope(id) }
+        fn scope(&mut self, id: ScopeId) -> Option<LevelInbox<'_, DeckProtocol>> {
+            self.0.scope(id)
+        }
     }
 
-    fn make_node() -> (PlayerNode<TestPools, TestInbox>, DeckEnds, ScopedSender<DeckProtocol, DeckProtocol>, TestInbox) {
+    fn make_node() -> (
+        PlayerNode<TestPools, TestInbox>,
+        DeckEnds,
+        ScopedSender<DeckProtocol, DeckProtocol>,
+        TestInbox,
+    ) {
         let config = DeckMixerConfig::default();
-        let (mut sender, inbox) = scoped_channel(ScopedConfig::builder().scope(ChannelConfig::builder().build()).build());
+        let (mut sender, inbox) = scoped_channel(
+            ScopedConfig::builder()
+                .scope(ChannelConfig::builder().build())
+                .build(),
+        );
         let scope = sender.open(config.slots().get()).expect("deck scope");
         let (ends, inputs) = scope_channels(scope, config);
-        (PlayerNode::new(inputs, pools()), ends, sender, TestInbox(inbox))
+        (
+            PlayerNode::new(inputs, pools()),
+            ends,
+            sender,
+            TestInbox(inbox),
+        )
     }
 
     #[kithara::test]
@@ -142,7 +161,9 @@ mod tests {
         let (node, ends, mut sender, mut inbox) = make_node();
         assert!(node.active);
 
-        sender.scope(ends.scope).expect("deck level")
+        sender
+            .scope(ends.scope)
+            .expect("deck level")
             .send(
                 When::Next,
                 Batch {
@@ -158,11 +179,15 @@ mod tests {
             .lock()
             .as_mut()
             .map(|inputs| {
-                inbox.scope(inputs.scope).expect("deck level").next_due(SessionFrame::default(), 1).map(|due| {
-                    let parts = due.commands().len();
-                    due.apply(());
-                    parts
-                })
+                inbox
+                    .scope(inputs.scope)
+                    .expect("deck level")
+                    .next_due(SessionFrame::default(), 1)
+                    .map(|due| {
+                        let parts = due.commands().len();
+                        due.apply(());
+                        parts
+                    })
             })
             .expect("inputs not yet taken");
         assert_eq!(received, Some(1));
@@ -172,7 +197,10 @@ mod tests {
     fn player_node_snapshot_starts_with_empty_slots() {
         let (_node, mut ends, _sender, _inbox) = make_node();
         let snapshot = ends.snapshot.read();
-        assert_eq!(snapshot.slots.len(), DeckMixerConfig::default().slots().get());
+        assert_eq!(
+            snapshot.slots.len(),
+            DeckMixerConfig::default().slots().get()
+        );
         assert!(
             snapshot
                 .slots

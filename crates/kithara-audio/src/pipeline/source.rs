@@ -1,3 +1,19 @@
+use std::{
+    io::SeekFrom,
+    num::NonZeroU32,
+    panic::{AssertUnwindSafe, catch_unwind},
+};
+
+use kithara_decode::{DecodeError, DecoderSeekOutcome};
+use kithara_events::DeferredBus;
+use kithara_platform::{sync::Arc, time::Duration};
+use kithara_signal::AudioChunk;
+use kithara_stream::{
+    MediaInfo, OpenedReader, OpenedVariantReader, OutgoingDisposition, PlayheadWrite, StreamType,
+    VariantControl, VariantPromotion, VariantReaderTake, VariantTransition, WorkerWake,
+};
+use tracing::{debug, trace, warn};
+
 use crate::{
     AudioEvent, AudioLaneEvent, AudioSource, DecoderChangeCause, SeekOutcome, TrackFailureKind,
     TrackStep, WaitingReason,
@@ -16,20 +32,6 @@ use crate::{
         stream::shared::SharedStream,
     },
 };
-use kithara_decode::{DecodeError, DecoderSeekOutcome};
-use kithara_events::DeferredBus;
-use kithara_platform::{sync::Arc, time::Duration};
-use kithara_signal::AudioChunk;
-use kithara_stream::{
-    MediaInfo, OpenedReader, OpenedVariantReader, OutgoingDisposition, PlayheadWrite, StreamType,
-    VariantControl, VariantPromotion, VariantReaderTake, VariantTransition, WorkerWake,
-};
-use std::{
-    io::SeekFrom,
-    num::NonZeroU32,
-    panic::{AssertUnwindSafe, catch_unwind},
-};
-use tracing::{debug, trace, warn};
 
 enum OwnerPhase {
     Decoding,
@@ -324,11 +326,13 @@ impl<T: StreamType> StreamAudioSource<T> {
             detect(&self.shared_stream, self.decode.active())
         {
             let offset = recreate.offset;
-            self.install_replacement(recreate, None).map_err(|_| crate::AudioReadError::Stream {
-                what: "seek decoder recreation",
-                source: crate::FailureSource::Producer {
-                    failure: TrackFailureKind::RecreateFailed { offset },
-                },
+            self.install_replacement(recreate, None).map_err(|_| {
+                crate::AudioReadError::Stream {
+                    what: "seek decoder recreation",
+                    source: crate::FailureSource::Producer {
+                        failure: TrackFailureKind::RecreateFailed { offset },
+                    },
+                }
             })?;
         }
         if let Some(len) = self.shared_stream.len() {

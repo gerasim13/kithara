@@ -44,9 +44,9 @@ pub use kithara_render::{
 };
 pub use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot, MIN_SPEED};
 pub use player::{
-    Bound, DeckControl, DeckPass, HostedDeck, Outbox, Player, PlayerConfig, PlayerFactory, PlayerImpl, Position,
-    Settled, Track, TrackCommand, TrackFactory, TrackReceipt, TrackSettings, TrackSettingsChange,
-    TrackSnapshot, TrackStatus,
+    Bound, DeckControl, DeckPass, HostedDeck, Outbox, Player, PlayerConfig, PlayerFactory,
+    PlayerImpl, Position, Settled, Track, TrackCommand, TrackFactory, TrackReceipt, TrackSettings,
+    TrackSettingsChange, TrackSnapshot, TrackStatus,
 };
 pub use resource::{
     ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, Cover, MAX_ARTIFACT_BYTES,

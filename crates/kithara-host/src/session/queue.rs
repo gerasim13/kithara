@@ -103,7 +103,10 @@ impl<T, S> HostSettingsExec<()> for SessionState<T, S> {
 /// into the settings the Host reads; a tempo it changed is announced. A
 /// change for the next block the transport refused goes out again; any other
 /// rejected change is dropped and reported.
-pub(crate) fn settle_receipt<T, S>(state: &mut SessionState<T, S>, receipt: &Receipt<HostProtocol>) {
+pub(crate) fn settle_receipt<T, S>(
+    state: &mut SessionState<T, S>,
+    receipt: &Receipt<HostProtocol>,
+) {
     let before = *state.settings.config();
     let Some(settled) = state.settings.settle(receipt) else {
         return;

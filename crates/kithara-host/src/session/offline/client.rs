@@ -52,7 +52,9 @@ impl<C> OfflineSessionClient<C> {
             answer,
         }))
         .map_err(|_| OfflineSessionError::SessionGone)?;
-        receipt.recv().map_err(|_| OfflineSessionError::SessionGone)?
+        receipt
+            .recv()
+            .map_err(|_| OfflineSessionError::SessionGone)?
     }
     fn send(&self, message: OfflineMsg) -> Result<(), PlayError> {
         self.cmd_tx

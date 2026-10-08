@@ -29,11 +29,13 @@ where
         return Err(SessionError::DeckAttached(id));
     }
     ensure_ctx(state)?;
-    let master = state.session_output_node_id.ok_or(SessionError::NoContext)?;
+    let master = state
+        .session_output_node_id
+        .ok_or(SessionError::NoContext)?;
     let ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
     let node = add_graph_node(ctx, PlayerNode::<S, TransportState>::new(inputs, pools))?;
-    let installed = connect_stereo(ctx, node, master, "connect deck mixer to master")
-        .and_then(|()| {
+    let installed =
+        connect_stereo(ctx, node, master, "connect deck mixer to master").and_then(|()| {
             ctx.update()
                 .map_err(|error| SessionError::Graph(format!("{error:?}")))
         });

@@ -732,12 +732,7 @@ where
         self.prepared_quantum = None;
         let snapshot = self.context.load();
         chunk.meta.render_revision = prepared.rate.revision();
-        ControlFlow::Continue(self.render_at(
-            chunk,
-            prepared.speed,
-            snapshot,
-            Some(prepared),
-        ))
+        ControlFlow::Continue(self.render_at(chunk, prepared.speed, snapshot, Some(prepared)))
     }
 
     /// Discard renderer state after a source discontinuity.

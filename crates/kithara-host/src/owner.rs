@@ -3,18 +3,20 @@
 use std::{marker::PhantomData, num::NonZeroU32};
 
 use kithara_bufpool::HasPool;
-use kithara_command::{Batch, ChannelConfig, LiveError, Outcome, Port, Rejection, ScopedReceipt, SendError, Sender, Seq, When, channel};
+use kithara_command::{
+    Batch, ChannelConfig, LiveError, Outcome, Port, Rejection, ScopedReceipt, SendError, Sender,
+    Seq, When, channel,
+};
 use kithara_platform::maybe_send::MaybeSend;
+pub use kithara_play::DeckControl;
 use kithara_play::{DeckPass, HostedDeck, Outbox, PlayError, ResourceLoad, TrackReceipt};
+pub use kithara_render::bridge::DeckEqChange as EqPart;
 use kithara_render::{
     DispatcherProtocol,
     bridge::{DeckMixSettingsChange, DeckPart},
 };
-use kithara_worker::TaskHandle;
 use kithara_signal::{FrameCount, SessionFrame};
-
-pub use kithara_render::bridge::DeckEqChange as EqPart;
-pub use kithara_play::DeckControl;
+use kithara_worker::TaskHandle;
 
 use crate::{
     HostSettingsChange, HostSettingsExec,
@@ -33,8 +35,7 @@ pub type DeckId = kithara_warp::BeatGridId;
 
 /// What the session thread drives, including decorators over its base owner.
 pub trait HostOwner<S>:
-    HostSettingsExec<(), At = When<SessionFrame>, Output = Result<Option<Seq>, PlayError>>
-    + 'static
+    HostSettingsExec<(), At = When<SessionFrame>, Output = Result<Option<Seq>, PlayError>> + 'static
 {
     /// Commands posted by the Host handle.
     type Command: From<HostCommand<S, Self::Deck>> + MaybeSend;
@@ -100,8 +101,13 @@ pub enum HostCommand<S, D: ?Sized> {
     },
     Close(DeckId),
     Release(DeckId),
-    AttachOutputs { tap: crate::api::Tap, outputs: kithara_output::OutputGroup },
-    DetachOutputs { tap: crate::api::Tap },
+    AttachOutputs {
+        tap: crate::api::Tap,
+        outputs: kithara_output::OutputGroup,
+    },
+    DetachOutputs {
+        tap: crate::api::Tap,
+    },
     Restart,
     Idle,
     #[doc(hidden)]
@@ -119,8 +125,13 @@ pub enum HostSettled {
         seq: Seq,
         outcome: Result<SessionFrame, Rejection<PlayError>>,
     },
-    Replanned { from: Seq, to: Seq },
-    Closed { deck: DeckId },
+    Replanned {
+        from: Seq,
+        to: Seq,
+    },
+    Closed {
+        deck: DeckId,
+    },
 }
 
 /// The base owner of a session, its deck records and its single load dispatcher.
@@ -136,7 +147,8 @@ pub struct HostCore<S, D: ?Sized + HostedDeck<S> = dyn HostedDeck<S>> {
 }
 
 impl<S, D: ?Sized + HostedDeck<S>> HostCore<S, D>
-where S: HasPool<f32> + Send + Sync + 'static,
+where
+    S: HasPool<f32> + Send + Sync + 'static,
 {
     pub(crate) fn new(
         session: SessionState<SessionStream, S>,
@@ -157,13 +169,21 @@ where S: HasPool<f32> + Send + Sync + 'static,
 
     fn close(&mut self, id: DeckId) -> Result<(), PlayError> {
         let index = self.decks.index(id)?;
-        if self.decks.0[index].1.releasing { return Ok(()); }
+        if self.decks.0[index].1.releasing {
+            return Ok(());
+        }
         let mut result = Ok(());
-        self.with_deck(id, &mut |deck, out, _pass| { result = deck.close(out); })?;
+        self.with_deck(id, &mut |deck, out, _pass| {
+            result = deck.close(out);
+        })?;
         result?;
         let record = &mut self.decks.0[index].1;
-        self.session.channel.as_mut().ok_or(PlayError::Closed)?
-            .close(record.scope).map_err(|error| PlayError::Internal(error.to_string()))?;
+        self.session
+            .channel
+            .as_mut()
+            .ok_or(PlayError::Closed)?
+            .close(record.scope)
+            .map_err(|error| PlayError::Internal(error.to_string()))?;
         record.releasing = true;
         Ok(())
     }
@@ -173,12 +193,18 @@ where S: HasPool<f32> + Send + Sync + 'static,
     }
 
     fn idle(&mut self) -> Result<(), PlayError> {
-        if self.decks.0.is_empty() { graph::idle(&mut self.session).map_err(Into::into) }
-        else { crate::session::transport::prepare_route_restart(&mut self.session).map(|_| ()).map_err(Into::into) }
+        if self.decks.0.is_empty() {
+            graph::idle(&mut self.session).map_err(Into::into)
+        } else {
+            crate::session::transport::prepare_route_restart(&mut self.session)
+                .map(|_| ())
+                .map_err(Into::into)
+        }
     }
 
     fn restart(&mut self) -> Result<(), PlayError> {
-        crate::session::dispatch::invalidate_audio_route(&mut self.session, "host restart").map_err(Into::into)
+        crate::session::dispatch::invalidate_audio_route(&mut self.session, "host restart")
+            .map_err(Into::into)
     }
 
     fn publish_root(&self) {
@@ -224,8 +250,13 @@ where
                 self.session.check_when(at)?;
                 let index = self.decks.index(deck)?;
                 let record = &mut self.decks.0[index].1;
-                let mut port = self.session.channel.as_mut().ok_or(PlayError::Closed)?
-                    .scope(record.scope).ok_or(PlayError::Closed)?;
+                let mut port = self
+                    .session
+                    .channel
+                    .as_mut()
+                    .ok_or(PlayError::Closed)?
+                    .scope(record.scope)
+                    .ok_or(PlayError::Closed)?;
                 record
                     .mix
                     .send(&mut port, at, change, DeckPart::Mix)
@@ -243,19 +274,33 @@ where
                 self.session.check_when(at)?;
                 let index = self.decks.index(deck)?;
                 let record = &self.decks.0[index].1;
-                let mut port = self.session.channel.as_mut().ok_or(PlayError::Closed)?
-                    .scope(record.scope).ok_or(PlayError::Closed)?;
-                port.send(at, Batch { basis: Vec::new(), commands: vec![DeckPart::Eq(part)] })
-                    .map(Some).map_err(|error| match error {
-                        SendError::Full(_) => PlayError::Full("deck"),
-                        SendError::Closed(_) => PlayError::Closed,
-                        SendError::Target(_) => PlayError::Internal("EQ names a slot".into()),
-                    })
+                let mut port = self
+                    .session
+                    .channel
+                    .as_mut()
+                    .ok_or(PlayError::Closed)?
+                    .scope(record.scope)
+                    .ok_or(PlayError::Closed)?;
+                port.send(
+                    at,
+                    Batch {
+                        basis: Vec::new(),
+                        commands: vec![DeckPart::Eq(part)],
+                    },
+                )
+                .map(Some)
+                .map_err(|error| match error {
+                    SendError::Full(_) => PlayError::Full("deck"),
+                    SendError::Closed(_) => PlayError::Closed,
+                    SendError::Target(_) => PlayError::Internal("EQ names a slot".into()),
+                })
             }
             HostCommand::Close(id) => self.close(id).map(|()| None),
             HostCommand::Release(id) => self.release(id).map(|()| None),
             HostCommand::AttachOutputs { tap, outputs } => {
-                graph::tap::attach(&mut self.session, tap, outputs).map(|()| None).map_err(Into::into)
+                graph::tap::attach(&mut self.session, tap, outputs)
+                    .map(|()| None)
+                    .map_err(Into::into)
             }
             HostCommand::DetachOutputs { tap } => {
                 graph::tap::detach(&mut self.session, tap);
@@ -274,21 +319,33 @@ where
             return Err(SessionError::DeckAttached(id).into());
         }
         crate::session::state::ensure_ctx(&mut self.session)?;
-        let worker = deck.worker().ok_or_else(|| PlayError::Internal("a hosted deck requires its resource worker".into()))?;
+        let worker = deck.worker().ok_or_else(|| {
+            PlayError::Internal("a hosted deck requires its resource worker".into())
+        })?;
         #[cfg(not(target_arch = "wasm32"))]
         if self.session.worker_wake_allowance.is_zero() {
             self.session.worker_wake_allowance = worker_wake_allowance(worker);
         }
         let pools = worker.pools().clone();
         if let Some(inbox) = self.dispatcher_inbox.take() {
-            self.dispatcher_task = Some(worker.start_dispatcher(inbox)
-                .map_err(|error| PlayError::Internal(error.to_string()))?);
+            self.dispatcher_task = Some(
+                worker
+                    .start_dispatcher(inbox)
+                    .map_err(|error| PlayError::Internal(error.to_string()))?,
+            );
         }
-        let scope = self.session.channel.as_mut().ok_or(PlayError::Closed)?
-            .open(deck.mixer_config().slots().get()).map_err(|error| PlayError::Internal(error.to_string()))?;
+        let scope = self
+            .session
+            .channel
+            .as_mut()
+            .ok_or(PlayError::Closed)?
+            .open(deck.mixer_config().slots().get())
+            .map_err(|error| PlayError::Internal(error.to_string()))?;
         let (mut record, inputs) = Deck::new(deck, scope)?;
         if let Err(error) = graph::install_deck(&mut self.session, id, inputs, pools) {
-            if let Some(channel) = &mut self.session.channel { let _ = channel.close(scope); }
+            if let Some(channel) = &mut self.session.channel {
+                let _ = channel.close(scope);
+            }
             record.releasing = true;
             self.decks.0.push((id, record));
             return Err(error.into());
@@ -296,7 +353,9 @@ where
         let waker = DeckWake::waker(&self.inbox, id);
         record.deck.hold(waker.clone());
         self.dispatcher.hold(waker.clone());
-        if let Some(channel) = &mut self.session.channel { channel.hold(waker); }
+        if let Some(channel) = &mut self.session.channel {
+            channel.hold(waker);
+        }
         self.decks.0.push((id, record));
         self.with_deck(id, &mut |deck, out, pass| deck.drain(pass, out))?;
         Ok(())
@@ -308,17 +367,23 @@ where
     ) {
         let clock = self.clock();
         let (now, delivery) = clock.unwrap_or((SessionFrame::new(0), FrameCount::new(0)));
-        let Some(channel) = &mut self.session.channel else { return; };
+        let Some(channel) = &mut self.session.channel else {
+            return;
+        };
         for (id, record) in &mut self.decks.0 {
             let pass = DeckPass {
                 now,
                 delivery,
                 deck: record.snapshot.read(),
             };
-            let Some(mut port) = channel.scope(record.scope) else { continue; };
+            let Some(mut port) = channel.scope(record.scope) else {
+                continue;
+            };
             let mut out = Outbox::new(&mut port, &mut self.dispatcher)
                 .track_dispatches(&mut record.dispatches);
-            if clock.is_some() { out = out.in_pass(pass); }
+            if clock.is_some() {
+                out = out.in_pass(pass);
+            }
             visit(*id, &mut record.deck, &mut out, pass);
         }
     }
@@ -337,11 +402,18 @@ where
             delivery,
             deck: record.snapshot.read(),
         };
-        let mut port = self.session.channel.as_mut().ok_or(PlayError::Closed)?
-            .scope(record.scope).ok_or(PlayError::Closed)?;
-        let mut out = Outbox::new(&mut port, &mut self.dispatcher)
-            .track_dispatches(&mut record.dispatches);
-        if clock.is_some() { out = out.in_pass(pass); }
+        let mut port = self
+            .session
+            .channel
+            .as_mut()
+            .ok_or(PlayError::Closed)?
+            .scope(record.scope)
+            .ok_or(PlayError::Closed)?;
+        let mut out =
+            Outbox::new(&mut port, &mut self.dispatcher).track_dispatches(&mut record.dispatches);
+        if clock.is_some() {
+            out = out.in_pass(pass);
+        }
         visit(&mut record.deck, &mut out, pass);
         Ok(())
     }
@@ -356,13 +428,17 @@ where
         if matches!(self.session.stream, Some(SessionStream::Offline(_))) {
             Ok(())
         } else {
-            Err(PlayError::Internal("host is not configured for offline rendering".to_owned()))
+            Err(PlayError::Internal(
+                "host is not configured for offline rendering".to_owned(),
+            ))
         }
     }
 
     #[cfg(not(feature = "offline"))]
     fn prepare_offline(&mut self) -> Result<(), PlayError> {
-        Err(PlayError::Internal("offline rendering requires the offline feature".to_owned()))
+        Err(PlayError::Internal(
+            "offline rendering requires the offline feature".to_owned(),
+        ))
     }
 
     #[cfg(feature = "offline")]
@@ -373,9 +449,12 @@ where
         output: &mut [f32],
     ) -> Result<(), PlayError> {
         let Some(SessionStream::Offline(stream)) = &mut self.session.stream else {
-            return Err(PlayError::Internal("offline stream is not prepared".to_owned()));
+            return Err(PlayError::Internal(
+                "offline stream is not prepared".to_owned(),
+            ));
         };
-        stream.render(position, frames, output)
+        stream
+            .render(position, frames, output)
             .map_err(|error| PlayError::Internal(error.to_string()))
     }
 
@@ -386,45 +465,74 @@ where
         _frames: usize,
         _output: &mut [f32],
     ) -> Result<(), PlayError> {
-        Err(PlayError::Internal("offline rendering requires the offline feature".to_owned()))
+        Err(PlayError::Internal(
+            "offline rendering requires the offline feature".to_owned(),
+        ))
     }
 
     fn transport(&mut self) -> Option<crate::api::SessionTransportSnapshot> {
-        self.session.transport_observation.as_mut()?.read().snapshot()
+        self.session
+            .transport_observation
+            .as_mut()?
+            .read()
+            .snapshot()
     }
 
     fn host_room(&self) -> usize {
-        self.session
-            .channel
-            .as_ref()
-            .map_or(0, Port::available)
+        self.session.channel.as_ref().map_or(0, Port::available)
     }
 
     fn release_id(command: &Self::Command) -> Option<DeckId> {
-        if let HostCommand::Release(id) = command { Some(*id) } else { None }
+        if let HostCommand::Release(id) = command {
+            Some(*id)
+        } else {
+            None
+        }
     }
 
     fn is_next_tempo(command: &Self::Command) -> bool {
-        matches!(command, HostCommand::Configure(HostSettingsChange::Tempo(_), When::Next))
+        matches!(
+            command,
+            HostCommand::Configure(HostSettingsChange::Tempo(_), When::Next)
+        )
     }
 
     fn begin_pass(&mut self) {
         self.session.iteration_clock = self.session.ctx.as_ref().and_then(|ctx| {
             let _ = ctx.stream_info()?;
-            Some((SessionFrame::new(ctx.audio_clock().samples.0), self.session.delivery()))
+            Some((
+                SessionFrame::new(ctx.audio_clock().samples.0),
+                self.session.delivery(),
+            ))
         });
-        let (now, delivery) = self.clock().unwrap_or((SessionFrame::new(0), FrameCount::new(0)));
+        let (now, delivery) = self
+            .clock()
+            .unwrap_or((SessionFrame::new(0), FrameCount::new(0)));
         loop {
             let receipt = {
                 let mut receipts = self.dispatcher.receipts();
                 receipts.next()
             };
-            let Some(receipt) = receipt else { break; };
-            let owner = self.decks.0.iter().position(|(_, record)| record.dispatches.contains(&receipt.seq()));
+            let Some(receipt) = receipt else {
+                break;
+            };
+            let owner = self
+                .decks
+                .0
+                .iter()
+                .position(|(_, record)| record.dispatches.contains(&receipt.seq()));
             let Some(index) = owner else {
-                if let Some(index) = self.retired_dispatches.iter().position(|seq| *seq == receipt.seq()) {
+                if let Some(index) = self
+                    .retired_dispatches
+                    .iter()
+                    .position(|seq| *seq == receipt.seq())
+                {
                     self.retired_dispatches.remove(index);
-                    if let Outcome::Applied { data: kithara_render::Dispatched::Loaded(loaded), .. } = receipt.outcome() {
+                    if let Outcome::Applied {
+                        data: kithara_render::Dispatched::Loaded(loaded),
+                        ..
+                    } = receipt.outcome()
+                    {
                         self.retired_lanes.push(loaded.lane);
                     }
                     continue;
@@ -434,19 +542,38 @@ where
             };
             let record = &mut self.decks.0[index].1;
             record.dispatches.retain(|seq| *seq != receipt.seq());
-            let pass = DeckPass { now, delivery, deck: record.snapshot.read() };
-            if let Some(mut port) = self.session.channel.as_mut().and_then(|channel| channel.scope(record.scope)) {
-                let mut out = Outbox::new(&mut port, &mut self.dispatcher).track_dispatches(&mut record.dispatches);
-                if self.session.iteration_clock.is_some() { out = out.in_pass(pass); }
-                record.deck.settle(TrackReceipt::Loaded(receipt), pass, &mut out);
+            let pass = DeckPass {
+                now,
+                delivery,
+                deck: record.snapshot.read(),
+            };
+            if let Some(mut port) = self
+                .session
+                .channel
+                .as_mut()
+                .and_then(|channel| channel.scope(record.scope))
+            {
+                let mut out = Outbox::new(&mut port, &mut self.dispatcher)
+                    .track_dispatches(&mut record.dispatches);
+                if self.session.iteration_clock.is_some() {
+                    out = out.in_pass(pass);
+                }
+                record
+                    .deck
+                    .settle(TrackReceipt::Loaded(receipt), pass, &mut out);
             }
         }
         while self.dispatcher.available() != 0 {
-            let Some(lane) = self.retired_lanes.last().copied() else { break; };
-            match self.dispatcher.send(When::Next, Batch {
-                basis: Vec::new(),
-                commands: vec![kithara_render::DispatcherCommand::Release(lane)],
-            }) {
+            let Some(lane) = self.retired_lanes.last().copied() else {
+                break;
+            };
+            match self.dispatcher.send(
+                When::Next,
+                Batch {
+                    basis: Vec::new(),
+                    commands: vec![kithara_render::DispatcherCommand::Release(lane)],
+                },
+            ) {
                 Ok(seq) => {
                     self.retired_lanes.pop();
                     self.retired_dispatches.push(seq);
@@ -462,7 +589,9 @@ where
     }
 
     fn pass(&mut self) -> Vec<HostSettled> {
-        if let Err(error) = tick_session(&mut self.session) { tracing::warn!(%error, "host graph pass failed"); }
+        if let Err(error) = tick_session(&mut self.session) {
+            tracing::warn!(%error, "host graph pass failed");
+        }
         if self.clock().is_some() {
             self.poll_events();
             self.each_deck(&mut |_, deck, out, pass| {
@@ -473,7 +602,9 @@ where
         self.publish_root();
         if let Some(channel) = &mut self.session.channel
             && let Err(error) = channel.publish()
-        { tracing::warn!(%error, "host publication gate closed"); }
+        {
+            tracing::warn!(%error, "host publication gate closed");
+        }
         if self.session.stream.is_none() {
             self.retire_stopped_scopes();
             if self.decks.0.is_empty()
@@ -487,49 +618,111 @@ where
 }
 
 impl<S, D> HostCore<S, D>
-where D: ?Sized + HostedDeck<S>,
+where
+    D: ?Sized + HostedDeck<S>,
 {
     fn retire_stopped_scopes(&mut self) {
-        if self.session.stream.is_some() { return; }
-        if let Some(store) = self.session.ctx.as_mut().and_then(|ctx| ctx.proc_store_mut())
+        if self.session.stream.is_some() {
+            return;
+        }
+        if let Some(store) = self
+            .session
+            .ctx
+            .as_mut()
+            .and_then(|ctx| ctx.proc_store_mut())
             && let Some(transport) = store.try_get_mut::<TransportState>()
-        { transport.inbox.retire_closing(); }
+        {
+            transport.inbox.retire_closing();
+        }
     }
 
     fn route_receipts(&mut self, now: SessionFrame, delivery: FrameCount) {
         loop {
-            let Some(receipt) = self.session.channel.as_mut().and_then(|channel| channel.receipt()) else { break; };
+            let Some(receipt) = self
+                .session
+                .channel
+                .as_mut()
+                .and_then(|channel| channel.receipt())
+            else {
+                break;
+            };
             match receipt {
-                ScopedReceipt::Root(receipt) => crate::session::queue::settle_receipt(&mut self.session, &receipt),
+                ScopedReceipt::Root(receipt) => {
+                    crate::session::queue::settle_receipt(&mut self.session, &receipt)
+                }
                 ScopedReceipt::Scope(scope, receipt) => {
-                    let Some(index) = self.decks.0.iter().position(|(_, record)| record.scope == scope) else {
+                    let Some(index) = self
+                        .decks
+                        .0
+                        .iter()
+                        .position(|(_, record)| record.scope == scope)
+                    else {
                         tracing::error!(?scope, "scope receipt has no owning deck");
                         continue;
                     };
                     let record = &mut self.decks.0[index].1;
                     let mix = record.mix.settle(&receipt).is_some();
-                    let eq = receipt.batch().commands.iter().any(|part| matches!(part, DeckPart::Eq(_) | DeckPart::Returned(kithara_render::bridge::Returned::Eq(_))));
+                    let eq = receipt.batch().commands.iter().any(|part| {
+                        matches!(
+                            part,
+                            DeckPart::Eq(_)
+                                | DeckPart::Returned(kithara_render::bridge::Returned::Eq(_))
+                        )
+                    });
                     if mix || eq {
                         let outcome = match receipt.outcome() {
                             Outcome::Applied { at, .. } => Ok(*at),
                             Outcome::Rejected(reason) => Err(map_deck_rejection(reason)),
                         };
-                        self.session.settled.push(HostSettled::Batch { seq: receipt.seq(), outcome });
-                    } else if let Some(mut port) = self.session.channel.as_mut().and_then(|channel| channel.scope(scope)) {
+                        self.session.settled.push(HostSettled::Batch {
+                            seq: receipt.seq(),
+                            outcome,
+                        });
+                    } else if let Some(mut port) = self
+                        .session
+                        .channel
+                        .as_mut()
+                        .and_then(|channel| channel.scope(scope))
+                    {
                         let seq = receipt.seq();
                         let (outcome, mut batch) = receipt.into();
-                        let pass = DeckPass { now, delivery, deck: record.snapshot.read() };
-                        let mut out = Outbox::new(&mut port, &mut self.dispatcher).track_dispatches(&mut record.dispatches);
-                        if self.session.iteration_clock.is_some() { out = out.in_pass(pass); }
-                        record.deck.settle(TrackReceipt::Deck { seq, outcome: &outcome, batch: &mut batch }, pass, &mut out);
+                        let pass = DeckPass {
+                            now,
+                            delivery,
+                            deck: record.snapshot.read(),
+                        };
+                        let mut out = Outbox::new(&mut port, &mut self.dispatcher)
+                            .track_dispatches(&mut record.dispatches);
+                        if self.session.iteration_clock.is_some() {
+                            out = out.in_pass(pass);
+                        }
+                        record.deck.settle(
+                            TrackReceipt::Deck {
+                                seq,
+                                outcome: &outcome,
+                                batch: &mut batch,
+                            },
+                            pass,
+                            &mut out,
+                        );
                     }
                 }
                 ScopedReceipt::Closed(scope) => {
-                    let Some(index) = self.decks.0.iter().position(|(_, record)| record.scope == scope) else { continue; };
+                    let Some(index) = self
+                        .decks
+                        .0
+                        .iter()
+                        .position(|(_, record)| record.scope == scope)
+                    else {
+                        continue;
+                    };
                     let id = self.decks.0[index].0;
                     if self.session.deck_nodes.iter().any(|(deck, _)| *deck == id)
                         && let Err(error) = graph::remove_deck(&mut self.session, id)
-                    { tracing::error!(%error, ?id, "closed deck node could not be reclaimed"); continue; }
+                    {
+                        tracing::error!(%error, ?id, "closed deck node could not be reclaimed");
+                        continue;
+                    }
                     let (_, mut record) = self.decks.0.remove(index);
                     self.retired_dispatches.append(&mut record.dispatches);
                     record.deck.release();
@@ -544,16 +737,30 @@ where D: ?Sized + HostedDeck<S>,
             && let Some(channel) = &mut self.session.channel
         {
             for (_, record) in &mut self.decks.0 {
-                let pass = DeckPass { now, delivery, deck: record.snapshot.read() };
-                let Some(mut port) = channel.scope(record.scope) else { continue; };
-                let mut out = Outbox::new(&mut port, &mut self.dispatcher).in_pass(pass).track_dispatches(&mut record.dispatches);
-                for event in record.receipts.drain() { record.deck.settle(TrackReceipt::Event(event), pass, &mut out); }
+                let pass = DeckPass {
+                    now,
+                    delivery,
+                    deck: record.snapshot.read(),
+                };
+                let Some(mut port) = channel.scope(record.scope) else {
+                    continue;
+                };
+                let mut out = Outbox::new(&mut port, &mut self.dispatcher)
+                    .in_pass(pass)
+                    .track_dispatches(&mut record.dispatches);
+                for event in record.receipts.drain() {
+                    record
+                        .deck
+                        .settle(TrackReceipt::Event(event), pass, &mut out);
+                }
             }
         }
     }
 }
 
-fn map_deck_rejection(reason: &Rejection<kithara_render::bridge::DeckRefusal>) -> Rejection<PlayError> {
+fn map_deck_rejection(
+    reason: &Rejection<kithara_render::bridge::DeckRefusal>,
+) -> Rejection<PlayError> {
     match reason {
         Rejection::Late => Rejection::Late,
         Rejection::Stale => Rejection::Stale,
@@ -563,7 +770,9 @@ fn map_deck_rejection(reason: &Rejection<kithara_render::bridge::DeckRefusal>) -
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn worker_wake_allowance<S>(_worker: &kithara_play::PlayWorker<S>) -> kithara_platform::time::Duration {
+fn worker_wake_allowance<S>(
+    _worker: &kithara_play::PlayWorker<S>,
+) -> kithara_platform::time::Duration {
     todo!("missing below (kithara-render, PlayWorker::wake_allowance(&self) -> Duration)")
 }
 
@@ -573,12 +782,18 @@ impl<S, D: ?Sized + HostedDeck<S>> Drop for HostCore<S, D> {
             if let Some(channel) = &mut self.session.channel {
                 if let Some(mut port) = channel.scope(record.scope) {
                     let mut out = Outbox::new(&mut port, &mut self.dispatcher);
-                    if let Err(error) = record.deck.close(&mut out) { tracing::warn!(%error, "host deck close failed during shutdown"); }
+                    if let Err(error) = record.deck.close(&mut out) {
+                        tracing::warn!(%error, "host deck close failed during shutdown");
+                    }
                 }
-                if !record.releasing { let _ = channel.close(record.scope); }
+                if !record.releasing {
+                    let _ = channel.close(record.scope);
+                }
             }
         }
-        if let Some(channel) = &mut self.session.channel { let _ = channel.publish(); }
+        if let Some(channel) = &mut self.session.channel {
+            let _ = channel.publish();
+        }
         self.session.stream = None;
         if let Some(ctx) = &mut self.session.ctx {
             #[cfg(not(target_arch = "wasm32"))]
@@ -630,7 +845,8 @@ impl<S, D: ?Sized + HostedDeck<S>> Drop for HostCore<S, D> {
                             if retired && decks.is_empty() {
                                 break;
                             }
-                            kithara_platform::time::sleep(crate::consts::SESSION_PUMP_INTERVAL).await;
+                            kithara_platform::time::sleep(crate::consts::SESSION_PUMP_INTERVAL)
+                                .await;
                         }
                         root_view.publish_decks(Box::default());
                         drop(dispatcher_task);

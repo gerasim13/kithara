@@ -1,8 +1,3 @@
-use crate::{
-    AudioEvent, AudioReadError, FailureSource, TrackFailureKind, DecodeErrorClass, DecodeErrorKind, DecoderBackend as EventDecoderBackend,
-    DecoderChangeCause, DecoderEvent, FrameDomain, GaplessSpan, PlaybackResamplerKind,
-    ResamplerKind,
-};
 use kithara_decode::{
     DecodeError, DecoderBackend as DecodeBackend, DecoderResamplerConfig, ErrorClass,
 };
@@ -10,6 +5,12 @@ use kithara_platform::time::Duration;
 use kithara_resampler::ResamplerBackend;
 use kithara_signal::AudioSpec;
 use kithara_stream::MediaInfo;
+
+use crate::{
+    AudioEvent, AudioReadError, DecodeErrorClass, DecodeErrorKind,
+    DecoderBackend as EventDecoderBackend, DecoderChangeCause, DecoderEvent, FailureSource,
+    FrameDomain, GaplessSpan, PlaybackResamplerKind, ResamplerKind, TrackFailureKind,
+};
 
 pub(crate) const fn map_decoder_backend(backend: DecodeBackend) -> EventDecoderBackend {
     match backend {
@@ -68,7 +69,9 @@ pub const fn map_decode_error_kind(error: &DecodeError) -> DecodeErrorKind {
 impl From<FailureSource> for TrackFailureKind {
     fn from(source: FailureSource) -> Self {
         match source {
-            FailureSource::Producer { failure } | FailureSource::ProducerAfterSeek { failure } => failure,
+            FailureSource::Producer { failure } | FailureSource::ProducerAfterSeek { failure } => {
+                failure
+            }
             FailureSource::ChannelClosed => Self::ChannelClosed,
         }
     }

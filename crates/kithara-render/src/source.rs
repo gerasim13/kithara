@@ -5,8 +5,8 @@ use std::{
 };
 
 use kithara_audio::{
-    AudioReadError, AudioSource, Fetch, SeekOutcome, SourceDiscontinuity, SourceEnd, TrackFailureKind,
-    TrackStep, WaitingReason,
+    AudioReadError, AudioSource, Fetch, SeekOutcome, SourceDiscontinuity, SourceEnd,
+    TrackFailureKind, TrackStep, WaitingReason,
 };
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_command::Inbox;
@@ -731,8 +731,8 @@ mod tests {
 
     use kithara_audio::{Fetch, TrackStep, WaitingReason};
     use kithara_bufpool::PoolRegion;
-    use kithara_effects::held_source_frames;
     use kithara_command::{Batch, ChannelConfig, Outcome, Rejection, Sender, When, channel};
+    use kithara_effects::held_source_frames;
     use kithara_platform::sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -833,7 +833,9 @@ mod tests {
             drain,
             spec,
             pools.clone(),
-            idle_inbox(), NonZeroUsize::new(1).expect("preload"))
+            idle_inbox(),
+            NonZeroUsize::new(1).expect("preload"),
+        )
     }
 
     struct RawSource {
@@ -845,12 +847,17 @@ mod tests {
         type Chunk = AudioChunk;
 
         fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
-            Ok(SeekOutcome::Landed { target, landed_at: target })
+            Ok(SeekOutcome::Landed {
+                target,
+                landed_at: target,
+            })
         }
 
         fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
 
-        fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
+        fn host_sample_rate(&self) -> Option<NonZeroU32> {
+            None
+        }
 
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
             let Some(chunk) = self.chunks.pop_front() else {
@@ -894,7 +901,10 @@ mod tests {
         }
 
         fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
-            Ok(SeekOutcome::Landed { target: position, landed_at: position })
+            Ok(SeekOutcome::Landed {
+                target: position,
+                landed_at: position,
+            })
         }
 
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
@@ -1105,12 +1115,17 @@ mod tests {
         type Chunk = AudioChunk;
 
         fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
-            Ok(SeekOutcome::Landed { target, landed_at: target })
+            Ok(SeekOutcome::Landed {
+                target,
+                landed_at: target,
+            })
         }
 
         fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
 
-        fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
+        fn host_sample_rate(&self) -> Option<NonZeroU32> {
+            None
+        }
 
         fn finish_deferred(&mut self) {
             self.log.lock().push("source.finish");
@@ -1161,12 +1176,17 @@ mod tests {
         type Chunk = AudioChunk;
 
         fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
-            Ok(SeekOutcome::Landed { target, landed_at: target })
+            Ok(SeekOutcome::Landed {
+                target,
+                landed_at: target,
+            })
         }
 
         fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
 
-        fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
+        fn host_sample_rate(&self) -> Option<NonZeroU32> {
+            None
+        }
 
         fn discontinuity(&self) -> Option<SourceDiscontinuity> {
             Some(*self.discontinuity.lock())
@@ -1212,14 +1232,26 @@ mod tests {
         type Chunk = AudioChunk;
 
         fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
-            let revision = self.discontinuity.lock().map_or(0, |stamp| stamp.revision()) + 1;
-            *self.discontinuity.lock() = Some(SourceDiscontinuity::new(revision, AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"))));
-            Ok(SeekOutcome::Landed { target, landed_at: target })
+            let revision = self
+                .discontinuity
+                .lock()
+                .map_or(0, |stamp| stamp.revision())
+                + 1;
+            *self.discontinuity.lock() = Some(SourceDiscontinuity::new(
+                revision,
+                AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate")),
+            ));
+            Ok(SeekOutcome::Landed {
+                target,
+                landed_at: target,
+            })
         }
 
         fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
 
-        fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
+        fn host_sample_rate(&self) -> Option<NonZeroU32> {
+            None
+        }
 
         fn discontinuity(&self) -> Option<SourceDiscontinuity> {
             *self.discontinuity.lock()
@@ -1265,12 +1297,17 @@ mod tests {
 
         fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
             self.revision = self.revision.wrapping_add(1);
-            Ok(SeekOutcome::Landed { target, landed_at: target })
+            Ok(SeekOutcome::Landed {
+                target,
+                landed_at: target,
+            })
         }
 
         fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
 
-        fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
+        fn host_sample_rate(&self) -> Option<NonZeroU32> {
+            None
+        }
 
         fn discontinuity(&self) -> Option<SourceDiscontinuity> {
             Some(SourceDiscontinuity::new(self.revision, self.spec))
@@ -1636,8 +1673,16 @@ mod tests {
             let drain = EffectDrain::new(effects.len(), &pools)
                 .unwrap_or_else(|error| panic!("test effect drain: {error}"));
             let (mut lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
-            let mut source =
-                WarpSource::new(raw, renderer, effects, drain, spec, pools.clone(), inbox, NonZeroUsize::new(1).expect("preload"));
+            let mut source = WarpSource::new(
+                raw,
+                renderer,
+                effects,
+                drain,
+                spec,
+                pools.clone(),
+                inbox,
+                NonZeroUsize::new(1).expect("preload"),
+            );
 
             let initial = source.step_track();
             assert!(matches!(
@@ -1670,10 +1715,15 @@ mod tests {
             assert_eq!(head.load(Ordering::Acquire), first_unity_end);
             assert!(source.warp.transition_pending());
 
-            lane.send(When::Next, command_batch(LaneCommand::Segment {
-                id: SegmentId::FIRST.next(),
-                from: Duration::from_secs(1), speed: SpeedCurve::Constant(1.0),
-            })).expect("segment batch");
+            lane.send(
+                When::Next,
+                command_batch(LaneCommand::Segment {
+                    id: SegmentId::FIRST.next(),
+                    from: Duration::from_secs(1),
+                    speed: SpeedCurve::Constant(1.0),
+                }),
+            )
+            .expect("segment batch");
             assert!(matches!(source.step_track(), TrackStep::StateChanged));
             assert_eq!(source.cursor().segment, SegmentId::FIRST.next());
             assert_eq!(head.load(Ordering::Acquire), first_unity_end);
@@ -1716,7 +1766,7 @@ mod tests {
             let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("sample rate"));
             let raw = RawSource {
                 head: Arc::new(AtomicU64::new(0)),
-                    chunks: VecDeque::new(),
+                chunks: VecDeque::new(),
             };
             let decoded = chunk_with_frames(&pools, spec, 0, 64, quarter);
             let decoded_pointer = decoded.samples.as_ptr();
@@ -1768,9 +1818,13 @@ mod tests {
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("sample rate"));
         let pools = pools();
         let config = kithara_warp::WarpConfig::builder()
-            .speed(1.0).keylock(true).backend(StretchKind::Signalsmith)
+            .speed(1.0)
+            .keylock(true)
+            .backend(StretchKind::Signalsmith)
             .render_quantum_frames(NonZeroUsize::new(128).expect("quantum"))
-            .region_plan(Arc::new(RegionPlan::new(vec![GridSegment::new(0, 480_000, 1.5)]).expect("region geometry")))
+            .region_plan(Arc::new(
+                RegionPlan::new(vec![GridSegment::new(0, 480_000, 1.5)]).expect("region geometry"),
+            ))
             .build();
         let head = Arc::new(AtomicU64::new(0));
         let raw = RawSource {
@@ -1788,7 +1842,9 @@ mod tests {
             drain,
             spec,
             pools.clone(),
-            idle_inbox(), NonZeroUsize::new(1).expect("preload"));
+            idle_inbox(),
+            NonZeroUsize::new(1).expect("preload"),
+        );
         let mut produced = 0;
         for _ in 0..128 {
             flush_deferred(&mut source);
@@ -1894,7 +1950,7 @@ mod tests {
             let raw = RawSource {
                 chunks: VecDeque::from([chunk(&source_pools, spec, 0, &quarter)]),
                 head: Arc::clone(&head),
-                };
+            };
             let config = kithara_warp::WarpConfig::builder()
                 .speed(0.5)
                 .keylock(true)
@@ -1913,7 +1969,9 @@ mod tests {
                 drain,
                 spec,
                 target_pools.clone(),
-                idle_inbox(), NonZeroUsize::new(1).expect("preload"));
+                idle_inbox(),
+                NonZeroUsize::new(1).expect("preload"),
+            );
 
             for _ in 0..3 {
                 flush_deferred(&mut source);
@@ -1928,10 +1986,7 @@ mod tests {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
         let pools = pools();
         let resets = Arc::new(AtomicU64::new(0));
-        let source = SeekApplyingSource {
-            spec,
-            revision: 0,
-        };
+        let source = SeekApplyingSource { spec, revision: 0 };
         let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(ResettingTail {
             resets: Arc::clone(&resets),
             tail: Some(chunk(&pools, spec, 128, &quarter)),
@@ -1939,7 +1994,10 @@ mod tests {
         let mut source = source_stage(&pools, source, effects, spec);
 
         assert!(matches!(source.step_track(), TrackStep::StateChanged));
-        assert!(matches!(source.source.seek(Duration::from_secs(1)), Ok(SeekOutcome::Landed { .. })));
+        assert!(matches!(
+            source.source.seek(Duration::from_secs(1)),
+            Ok(SeekOutcome::Landed { .. })
+        ));
         assert!(matches!(source.step_track(), TrackStep::StateChanged));
         assert_eq!(
             resets.load(Ordering::Acquire),
@@ -2014,7 +2072,10 @@ mod tests {
         assert_eq!(steps.load(Ordering::Acquire), 1);
         assert_eq!(flushes.load(Ordering::Acquire), 1);
 
-        assert!(matches!(source.source.seek(Duration::from_secs(1)), Ok(SeekOutcome::Landed { .. })));
+        assert!(matches!(
+            source.source.seek(Duration::from_secs(1)),
+            Ok(SeekOutcome::Landed { .. })
+        ));
         assert!(matches!(source.step_track(), TrackStep::StateChanged));
         assert!(matches!(source.step_track(), TrackStep::StateChanged));
         assert!(matches!(source.step_track(), TrackStep::Eof));
@@ -2113,7 +2174,16 @@ mod tests {
         let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
         let drain =
             EffectDrain::new(0, pools).unwrap_or_else(|error| panic!("test effect drain: {error}"));
-        let source = WarpSource::new(raw, renderer, Vec::new(), drain, spec, pools.clone(), inbox, NonZeroUsize::new(1).expect("preload"));
+        let source = WarpSource::new(
+            raw,
+            renderer,
+            Vec::new(),
+            drain,
+            spec,
+            pools.clone(),
+            inbox,
+            NonZeroUsize::new(1).expect("preload"),
+        );
         (source, lane)
     }
 
@@ -2150,7 +2220,13 @@ mod tests {
         let pools = pools();
         let (mut source, mut lane) = speed_lane(&pools, &quarter);
         let seq = lane
-            .send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: AT }), speed_batch(1.25))
+            .send(
+                When::At(LaneFrame {
+                    segment: SegmentId::FIRST,
+                    frame: AT,
+                }),
+                speed_batch(1.25),
+            )
             .expect("the lane has room for one batch");
 
         let emitted = emit(&mut source, 0, AT + 2_000);
@@ -2198,8 +2274,14 @@ mod tests {
         let (mut source, mut lane) = speed_lane(&pools, &quarter);
         let _ = emit(&mut source, 0, 1_000);
 
-        lane.send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: 500 }), speed_batch(1.25))
-            .expect("the lane has room for one batch");
+        lane.send(
+            When::At(LaneFrame {
+                segment: SegmentId::FIRST,
+                frame: 500,
+            }),
+            speed_batch(1.25),
+        )
+        .expect("the lane has room for one batch");
         let emitted = emit(&mut source, 1_000, 2_000);
 
         assert!(
@@ -2227,8 +2309,14 @@ mod tests {
         const SPEED: f64 = 1.25;
         let pools = pools();
         let (mut source, mut lane) = speed_lane(&pools, &quarter);
-        lane.send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: AT }), speed_batch(1.25))
-            .expect("the lane has room for one batch");
+        lane.send(
+            When::At(LaneFrame {
+                segment: SegmentId::FIRST,
+                frame: AT,
+            }),
+            speed_batch(1.25),
+        )
+        .expect("the lane has room for one batch");
 
         let emitted = emit(&mut source, 0, AT + 4_000);
 
@@ -2268,8 +2356,14 @@ mod tests {
             0.8,
             (StretchKind::default(), false),
         );
-        lane.send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: AT }), speed_batch(1.25))
-            .expect("the lane has room for one batch");
+        lane.send(
+            When::At(LaneFrame {
+                segment: SegmentId::FIRST,
+                frame: AT,
+            }),
+            speed_batch(1.25),
+        )
+        .expect("the lane has room for one batch");
 
         let emitted = emit(&mut source, 0, AT + 1_000);
 
@@ -2379,8 +2473,14 @@ mod tests {
             let pools = pools();
             let (mut source, mut lane) = stretch_lane(&pools, (backend, true), &signal);
             for (at, speed) in [(ENGAGE, 0.8), (FIRST, 1.25), (SECOND, 0.94)] {
-                lane.send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: at }), speed_batch(speed))
-                    .expect("the lane has room for each change");
+                lane.send(
+                    When::At(LaneFrame {
+                        segment: SegmentId::FIRST,
+                        frame: at,
+                    }),
+                    speed_batch(speed),
+                )
+                .expect("the lane has room for each change");
             }
 
             let pcm = lane_pcm(&emit(&mut source, 0, SECOND + SETTLE));
@@ -2422,16 +2522,34 @@ mod tests {
             let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
             let pools = pools();
             let (mut changed, mut lane) = stretch_lane(&pools, (backend, true), &signal);
-            lane.send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: ENGAGE }), speed_batch(0.8))
-                .expect("the lane has room for the engaging batch");
-            lane.send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: AT }), speed_batch(1.25))
-                .expect("the lane has room for the change");
+            lane.send(
+                When::At(LaneFrame {
+                    segment: SegmentId::FIRST,
+                    frame: ENGAGE,
+                }),
+                speed_batch(0.8),
+            )
+            .expect("the lane has room for the engaging batch");
+            lane.send(
+                When::At(LaneFrame {
+                    segment: SegmentId::FIRST,
+                    frame: AT,
+                }),
+                speed_batch(1.25),
+            )
+            .expect("the lane has room for the change");
             let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
             let cue = ENGAGE + (AT - ENGAGE) * 4 / 5;
 
             let (mut started, mut fresh) = stretch_lane(&pools, (backend, true), &signal);
             fresh
-                .send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: cue }), speed_batch(1.25))
+                .send(
+                    When::At(LaneFrame {
+                        segment: SegmentId::FIRST,
+                        frame: cue,
+                    }),
+                    speed_batch(1.25),
+                )
                 .expect("the lane has room for the start");
             let reference = emit(&mut started, 0, cue + SETTLE + (WINDOW + REACH) as u64);
 
@@ -2474,17 +2592,35 @@ mod tests {
                 let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
                 let pools = pools();
                 let (mut changed, mut lane) = stretch_lane(&pools, from, &signal);
-                lane.send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: ENGAGE }), speed_batch(1.25))
-                    .expect("the lane has room for the engaging batch");
+                lane.send(
+                    When::At(LaneFrame {
+                        segment: SegmentId::FIRST,
+                        frame: ENGAGE,
+                    }),
+                    speed_batch(1.25),
+                )
+                .expect("the lane has room for the engaging batch");
                 let seq = lane
-                    .send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: AT }), command_batch(command.clone()))
+                    .send(
+                        When::At(LaneFrame {
+                            segment: SegmentId::FIRST,
+                            frame: AT,
+                        }),
+                        command_batch(command.clone()),
+                    )
                     .expect("the lane has room for the change");
                 let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
                 let cue = ENGAGE + (AT - ENGAGE) * 5 / 4;
 
                 let (mut started, mut fresh) = stretch_lane(&pools, to, &signal);
                 fresh
-                    .send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: cue }), speed_batch(1.25))
+                    .send(
+                        When::At(LaneFrame {
+                            segment: SegmentId::FIRST,
+                            frame: cue,
+                        }),
+                        speed_batch(1.25),
+                    )
                     .expect("the lane has room for the start");
                 let reference = emit(&mut started, 0, cue + SETTLE + (WINDOW + REACH) as u64);
 
@@ -2505,7 +2641,10 @@ mod tests {
                         && matches!(
                             receipt.outcome(),
                             Outcome::Applied {
-                                at: LaneFrame { segment: SegmentId::FIRST, frame: AT },
+                                at: LaneFrame {
+                                    segment: SegmentId::FIRST,
+                                    frame: AT
+                                },
                                 ..
                             }
                         )),
@@ -2530,17 +2669,32 @@ mod tests {
             let pools = pools();
             let (mut changed, mut lane) = stretch_lane(&pools, (backend, false), &signal);
             lane.send(
-                When::At(LaneFrame { segment: SegmentId::FIRST, frame: AT }),
+                When::At(LaneFrame {
+                    segment: SegmentId::FIRST,
+                    frame: AT,
+                }),
                 command_batch(LaneCommand::SetKeylock(true)),
             )
             .expect("the lane has room for the engine change");
-            lane.send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: AT }), speed_batch(1.25))
-                .expect("the lane has room for the speed change");
+            lane.send(
+                When::At(LaneFrame {
+                    segment: SegmentId::FIRST,
+                    frame: AT,
+                }),
+                speed_batch(1.25),
+            )
+            .expect("the lane has room for the speed change");
             let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
 
             let (mut started, mut fresh) = stretch_lane(&pools, (backend, true), &signal);
             fresh
-                .send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: AT }), speed_batch(1.25))
+                .send(
+                    When::At(LaneFrame {
+                        segment: SegmentId::FIRST,
+                        frame: AT,
+                    }),
+                    speed_batch(1.25),
+                )
                 .expect("the lane has room for the start");
             let reference = emit(&mut started, 0, AT + SETTLE + (WINDOW + REACH) as u64);
 
@@ -2581,8 +2735,16 @@ mod tests {
         let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
         let drain = EffectDrain::new(0, &pools).expect("empty effect drain");
         let (mut lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
-        let mut source =
-            WarpSource::new(raw, renderer, Vec::new(), drain, spec, pools.clone(), inbox, NonZeroUsize::new(1).expect("preload"));
+        let mut source = WarpSource::new(
+            raw,
+            renderer,
+            Vec::new(),
+            drain,
+            spec,
+            pools.clone(),
+            inbox,
+            NonZeroUsize::new(1).expect("preload"),
+        );
         for (index, pointer) in pointers.into_iter().enumerate() {
             if index == 1 {
                 lane.send(
@@ -2663,13 +2825,19 @@ mod tests {
             lane_over(&pools, 3, |_| &quarter, 2.0, (StretchKind::Identity, false));
         let first = lane
             .send(
-                When::At(LaneFrame { segment: SegmentId::FIRST, frame: ENGAGE }),
+                When::At(LaneFrame {
+                    segment: SegmentId::FIRST,
+                    frame: ENGAGE,
+                }),
                 command_batch(LaneCommand::SetBackend(backend)),
             )
             .expect("the lane has room");
         let second = lane
             .send(
-                When::At(LaneFrame { segment: SegmentId::FIRST, frame: RETURN }),
+                When::At(LaneFrame {
+                    segment: SegmentId::FIRST,
+                    frame: RETURN,
+                }),
                 command_batch(LaneCommand::SetBackend(StretchKind::Identity)),
             )
             .expect("the lane has room");

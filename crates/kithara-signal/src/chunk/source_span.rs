@@ -63,10 +63,8 @@ impl SourceSpan {
         let rate = u128::from(self.sample_rate.get());
         let seconds = u64::try_from(frames / rate).ok()?;
         let fraction = fractional_nanos(numerator % denominator.get(), denominator.get());
-        let nanos = u32::try_from(
-            ((frames % rate) * 1_000_000_000 + u128::from(fraction)) / rate,
-        )
-        .ok()?;
+        let nanos =
+            u32::try_from(((frames % rate) * 1_000_000_000 + u128::from(fraction)) / rate).ok()?;
         Some(Duration::new(seconds, nanos))
     }
 
@@ -139,7 +137,10 @@ impl SourceSpan {
     }
 
     fn step_at(self, frame: u64) -> Option<u128> {
-        let change = self.step_change.unsigned_abs().checked_mul(u128::from(frame))?;
+        let change = self
+            .step_change
+            .unsigned_abs()
+            .checked_mul(u128::from(frame))?;
         if self.step_change < 0 {
             self.step.checked_sub(change)
         } else {
@@ -183,9 +184,10 @@ impl SourceSpan {
     /// Panics if the private validated mapping invariant is violated.
     #[must_use]
     pub fn end(self) -> u64 {
-        let Some(end) = self.numerator_at(self.output_frames).and_then(|numerator| {
-            u64::try_from(numerator / self.denominator.get()).ok()
-        }) else {
+        let Some(end) = self
+            .numerator_at(self.output_frames)
+            .and_then(|numerator| u64::try_from(numerator / self.denominator.get()).ok())
+        else {
             unreachable!("validated source mapping endpoint");
         };
         end
@@ -206,8 +208,7 @@ impl SourceSpan {
             return None;
         }
         let output_frames = self.output_frames.checked_add(next.output_frames)?;
-        u64::try_from(self.numerator_at(output_frames)? / self.denominator.get())
-            .ok()?;
+        u64::try_from(self.numerator_at(output_frames)? / self.denominator.get()).ok()?;
         if output_frames > 0 {
             self.step_at(output_frames - 1)?;
         }

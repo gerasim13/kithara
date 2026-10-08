@@ -1,6 +1,6 @@
-use std::task::Waker;
 #[cfg(not(target_arch = "wasm32"))]
 use std::task::Wake;
+use std::task::Waker;
 
 use kithara_platform::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]

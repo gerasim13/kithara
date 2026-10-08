@@ -1,3 +1,5 @@
+use std::{marker::PhantomData, num::NonZeroU32};
+
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_command::{Live, ScopedConfig, mailbox};
 use kithara_config::Config;
@@ -8,7 +10,6 @@ use kithara_platform::{
 };
 use kithara_play::{HostedDeck, PlayError};
 use kithara_worker::{Dispatcher, Task, TaskConfig, TaskHandle, TickResult};
-use std::{marker::PhantomData, num::NonZeroU32};
 use thiserror::Error;
 
 use super::{
@@ -112,7 +113,8 @@ where
         }
         self.posts.drain(&mut self.owner, &mut self.mailbox);
         if self.owner.clock().is_none() {
-            self.owner.each_deck(&mut |_, deck, out, pass| deck.drain(pass, out));
+            self.owner
+                .each_deck(&mut |_, deck, out, pass| deck.drain(pass, out));
         }
         let mut published = false;
         for request in requests {
@@ -177,8 +179,11 @@ where
             .checked_mul(consts::CHANNELS)
             .ok_or(OfflineSessionError::SampleCountOverflow)?;
         let mut output = self.pools.get::<f32>();
-        output.ensure_len(samples).map_err(OfflineSessionError::Pool)?;
-        self.owner.render_offline(position, frames, &mut output)
+        output
+            .ensure_len(samples)
+            .map_err(OfflineSessionError::Pool)?;
+        self.owner
+            .render_offline(position, frames, &mut output)
             .map_err(OfflineSessionError::Owner)?;
         self.position = next;
         Ok(output)

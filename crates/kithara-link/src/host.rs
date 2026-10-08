@@ -83,7 +83,8 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
         if self.epoch == Some(epoch) {
             return;
         }
-        self.trajectory.reaxis_observed(transport.anchor(), transport.tempo());
+        self.trajectory
+            .reaxis_observed(transport.anchor(), transport.tempo());
         self.epoch = Some(epoch);
         if let Some((now, delivery)) = self.inner.clock() {
             let at = now + self.lead(delivery);
@@ -121,14 +122,20 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
     fn lane_applied(&mut self, pending: &PendingTempo) -> Option<bool> {
         let mut applied = false;
         let mut awaiting = false;
-        self.inner.each_deck(&mut |_id, deck, _out, _pass| {
-            match deck.retime_applied(pending.frame) {
+        self.inner.each_deck(
+            &mut |_id, deck, _out, _pass| match deck.retime_applied(pending.frame) {
                 Some(true) => applied = true,
                 None => awaiting = true,
                 Some(false) => {}
-            }
-        });
-        if applied { Some(true) } else if awaiting { None } else { Some(false) }
+            },
+        );
+        if applied {
+            Some(true)
+        } else if awaiting {
+            None
+        } else {
+            Some(false)
+        }
     }
 
     fn retry_tempo(&mut self, operation: &mut TempoOperation) -> Result<bool, PlayError> {
@@ -140,9 +147,13 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
         }
         let mut full = false;
         self.inner.each_deck(&mut |_id, deck, _out, _pass| {
-            if deck.synced() && deck.lane_room() == 0 { full = true; }
+            if deck.synced() && deck.lane_room() == 0 {
+                full = true;
+            }
         });
-        if full { return Ok(false); }
+        if full {
+            return Ok(false);
+        }
         let frame = now + delivery;
         let mut trajectory = self.trajectory.clone();
         if operation.epoch == self.epoch {
@@ -167,7 +178,9 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
         let correction_at = now + self.lead(delivery);
         let trajectory = &self.trajectory;
         self.inner.each_deck(&mut |_id, deck, out, _pass| {
-            if deck.synced() { deck.realign(trajectory, correction_at, out); }
+            if deck.synced() {
+                deck.realign(trajectory, correction_at, out);
+            }
         });
         Ok(true)
     }
@@ -213,7 +226,11 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
                         }
                         None => {
                             self.tempo.push(operation);
-                            self.settled.push(HostSettled::Settings { seq, change: HostSettingsChange::Tempo(value), outcome });
+                            self.settled.push(HostSettled::Settings {
+                                seq,
+                                change: HostSettingsChange::Tempo(value),
+                                outcome,
+                            });
                             continue;
                         }
                         Some(false) => {}
@@ -363,14 +380,18 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> HostOwner<S> for Lin
         let mut answers = std::mem::take(&mut self.answers);
         for answer in settled {
             if let HostSettled::Replanned { from, to } = &answer
-                && let Some(operation) = self.tempo.iter_mut().find(|operation| operation.pending.seq == *from)
+                && let Some(operation) = self
+                    .tempo
+                    .iter_mut()
+                    .find(|operation| operation.pending.seq == *from)
             {
                 operation.pending.seq = *to;
                 continue;
             }
             if matches!(&answer, HostSettled::Settings {
                 seq, change: HostSettingsChange::Tempo(_), ..
-            } if self.tempo.iter().any(|operation| operation.pending.seq == *seq && !operation.retry)) {
+            } if self.tempo.iter().any(|operation| operation.pending.seq == *seq && !operation.retry))
+            {
                 self.settled.push(answer);
             } else {
                 answers.push(answer);
@@ -392,7 +413,9 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> HostSettingsExec<()>
 
     fn exec_tempo(&mut self, value: Tempo, at: Self::At, cx: &mut ()) -> Self::Output {
         if at == When::Deferred {
-            return Err(PlayError::Internal("a tempo has no deferred executor moment".into()));
+            return Err(PlayError::Internal(
+                "a tempo has no deferred executor moment".into(),
+            ));
         }
         let Some((now, delivery)) = self.inner.clock() else {
             if matches!(at, When::At(_)) {
@@ -418,23 +441,35 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> HostSettingsExec<()>
             if deck.synced() && deck.lane_room() == 0 {
                 lanes_full = true;
             }
-            if out.deck_available() < deck.scope_parts() { scopes_full = true; }
+            if out.deck_available() < deck.scope_parts() {
+                scopes_full = true;
+            }
         });
         if lanes_full {
             return Err(PlayError::Full("lane"));
         }
-        if scopes_full { return Err(PlayError::Full("deck")); }
+        if scopes_full {
+            return Err(PlayError::Full("deck"));
+        }
         let mut trajectory = self.trajectory.clone();
         trajectory
             .push(frame, value)
             .map_err(|error| PlayError::Internal(error.to_string()))?;
-        let seq = self.inner.exec_tempo(value, When::At(frame), cx)?.ok_or_else(||
-            PlayError::Internal("a timed tempo did not produce an executor receipt".into())
-        )?;
+        let seq = self
+            .inner
+            .exec_tempo(value, When::At(frame), cx)?
+            .ok_or_else(|| {
+                PlayError::Internal("a timed tempo did not produce an executor receipt".into())
+            })?;
         self.trajectory = trajectory;
         let lanes = self.retime(frame);
         self.tempo.push(TempoOperation {
-            pending: PendingTempo { seq, frame, value, at },
+            pending: PendingTempo {
+                seq,
+                frame,
+                value,
+                at,
+            },
             caller: seq,
             epoch: self.epoch,
             lanes,
