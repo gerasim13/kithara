@@ -628,12 +628,14 @@ fn live_unity_transition_drains_active_backend_tail(
         let mut source = 0;
         for _ in 0..32 {
             let output = super::exact::mapped_signal(&mut fx, &mut source, 128, |frame| {
-                warp_sine[frame as usize * 2 % warp_sine.len()]
+                let frame = usize::try_from(frame).expect("test source frame fits usize");
+                warp_sine[frame * 2 % warp_sine.len()]
             });
             assert_eq!(output.frames(), 128);
         }
         let half_frame = super::exact::mapped_signal(&mut fx, &mut source, 1, |frame| {
-            warp_sine[frame as usize * 2 % warp_sine.len()]
+            let frame = usize::try_from(frame).expect("test source frame fits usize");
+            warp_sine[frame * 2 % warp_sine.len()]
         });
         assert_eq!(half_frame.frames(), 1);
         let before = fx
@@ -652,7 +654,7 @@ fn live_unity_transition_drains_active_backend_tail(
             usize::try_from(u128::from(source) - snapped).expect("admitted identity lookahead"),
         );
         assert!(
-            before.0 < u128::from(source) * u128::from(before.1.get()),
+            before.0 < u128::from(source) * before.1.get(),
             "the active engine retains decoded lookahead"
         );
         fx.set_speed(SpeedCurve::Constant(1.0), 1)
@@ -680,7 +682,8 @@ fn live_unity_transition_drains_active_backend_tail(
         let mut quanta = Vec::new();
         for index in 0..64 {
             let output = super::exact::mapped_signal(&mut fx, &mut source, 128, |frame| {
-                warp_sine[frame as usize * 2 % warp_sine.len()]
+                let frame = usize::try_from(frame).expect("test source frame fits usize");
+                warp_sine[frame * 2 % warp_sine.len()]
             });
             assert_eq!(
                 output.frames(),
@@ -736,7 +739,8 @@ fn live_unity_transition_drains_active_backend_tail(
                 assert!(peak <= 1.0, "crossfaded tail remains normalized: {peak}");
                 for _ in 0..3 {
                     assert_identity_quantum(&mut fx, &mut source, |frame| {
-                        warp_sine[frame as usize * 2 % warp_sine.len()]
+                        let frame = usize::try_from(frame).expect("test source frame fits usize");
+                        warp_sine[frame * 2 % warp_sine.len()]
                     });
                 }
                 assert!(
@@ -782,7 +786,8 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
         );
         let mut source = 0;
         let first = super::exact::mapped_signal(&mut fx, &mut source, 2, |frame| {
-            warp_sine[frame as usize * 2 % warp_sine.len()]
+            let frame = usize::try_from(frame).expect("test source frame fits usize");
+            warp_sine[frame * 2 % warp_sine.len()]
         });
         assert_eq!(first.frames(), 2);
         let before = first
@@ -816,7 +821,8 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
         let mut samples = first.samples.to_vec();
         for index in 0..64 {
             let unity = super::exact::mapped_signal(&mut fx, &mut source, 128, |frame| {
-                warp_sine[frame as usize * 2 % warp_sine.len()]
+                let frame = usize::try_from(frame).expect("test source frame fits usize");
+                warp_sine[frame * 2 % warp_sine.len()]
             });
             assert_eq!(unity.frames(), 128, "negative debt adds no frame");
             if index == 0 {
@@ -878,7 +884,8 @@ fn keylocked_unity_reenters_the_engine_without_a_source_jump_or_starvation(
     let mut source = 0;
     for _ in 0..32 {
         assert_identity_quantum(&mut fx, &mut source, |frame| {
-            warp_sine[frame as usize * 2 % warp_sine.len()]
+            let frame = usize::try_from(frame).expect("test source frame fits usize");
+            warp_sine[frame * 2 % warp_sine.len()]
         });
     }
     let before = fx
@@ -904,7 +911,8 @@ fn keylocked_unity_reenters_the_engine_without_a_source_jump_or_starvation(
     let mut expected = Some(before);
     for _ in 0..16 {
         let output = super::exact::mapped_signal(&mut fx, &mut source, 128, |frame| {
-            warp_sine[frame as usize * 2 % warp_sine.len()]
+            let frame = usize::try_from(frame).expect("test source frame fits usize");
+            warp_sine[frame * 2 % warp_sine.len()]
         });
         assert_eq!(
             output.frames(),
@@ -1002,8 +1010,10 @@ fn moving_target_advance(blocks: usize, frames: usize) -> f64 {
             .expect("curve span");
         let first = span.source_ratio_at(0).expect("start");
         let last = span.source_ratio_at(span.output_frames()).expect("end");
-        total +=
-            last.0 as f64 / last.1.get() as f64 - first.0 as f64 / first.1.get() as f64;
+        total += last.0.to_f64().expect("end numerator fits f64")
+            / last.1.get().to_f64().expect("end denominator fits f64")
+            - first.0.to_f64().expect("start numerator fits f64")
+                / first.1.get().to_f64().expect("start denominator fits f64");
         fx.trajectory.advance(span).expect("advance");
     }
     total

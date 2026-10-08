@@ -10,6 +10,7 @@ use kithara_test_fixtures::unit_fixtures::warp_pair;
 ))]
 use kithara_test_fixtures::unit_fixtures::warp_sine;
 use kithara_test_utils::kithara;
+use num_traits::ToPrimitive;
 
 use super::*;
 use crate::test_pools::pools;
@@ -122,7 +123,10 @@ fn projected_source_endpoints_do_not_drift_across_sample_rate_partitions() {
         let mut renderer = Warp::new((), &config).renderer(spec(), pools());
         renderer
             .set_speed(
-                SpeedCurve::Constant(1.5 * consts::SR as f32 / 48_000.0),
+                SpeedCurve::Constant(
+                    1.5 * f32::from(u16::try_from(consts::SR).expect("test sample rate fits u16"))
+                        / 48_000.0,
+                ),
                 1,
             )
             .expect("sample-rate-adjusted trajectory");
@@ -948,7 +952,9 @@ fn a_finite_projected_recording_shorter_than_backend_latency_renders_its_covered
                         .expect("host trajectory");
                     (f64::from(beat) * 128.0 * 65_536.0).round() / 65_536.0
                 };
-                let speed = (position - previous) as f32;
+                let speed = (position - previous)
+                    .to_f32()
+                    .expect("reference speed fits f32");
                 previous = position;
                 (u64::try_from(frame).expect("curve offset"), speed)
             })

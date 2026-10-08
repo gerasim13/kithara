@@ -4,6 +4,7 @@ use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo};
 use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
+use num_traits::ToPrimitive;
 
 use super::{WarpRenderer, chunk, renderer, spec};
 use crate::{GridSegment, RegionPlan, SpeedCurve, WarpConfig};
@@ -81,7 +82,7 @@ fn fractional_region_crossing_is_an_exact_single_frame_run(#[case] backend: Stre
         Some((13, NonZeroU128::new(4).expect("denominator")))
     );
     let after = mapped_render(&mut renderer, &mut source, 7);
-    assert_positions(&after, 0, |frame| 3.25 + frame as f64);
+    assert_positions(&after, 0, |frame| 3.25 + frame_f64(frame));
 }
 
 #[kithara::test]
@@ -204,12 +205,14 @@ fn interrupted_backend_crossfades_keep_the_current_curve_and_phase() {
             let identity = frame >= 19;
             assert_positions(&output, frame, |frame| {
                 if identity {
-                    12.0 + (frame - 19) as f64
+                    12.0 + frame_f64(frame - 19)
                 } else if frame <= 11 {
-                    frame as f64 * 0.5
+                    frame_f64(frame) * 0.5
                 } else {
-                    let ramp = (frame - 11).min(8) as f64;
-                    5.5 + ramp * 0.5 + ramp * ramp / 32.0 + (frame - 11).saturating_sub(8) as f64
+                    let ramp = frame_f64((frame - 11).min(8));
+                    5.5 + ramp * 0.5
+                        + ramp * ramp / 32.0
+                        + frame_f64((frame - 11).saturating_sub(8))
                 }
             });
             frame += output.frames();
@@ -220,14 +223,23 @@ fn interrupted_backend_crossfades_keep_the_current_curve_and_phase() {
     assert_eq!(render(&[64]), render(&[1, 3, 7, 2, 11]));
 }
 
+fn frame_f64(frame: usize) -> f64 {
+    f64::from(u32::try_from(frame).expect("test frame count fits u32"))
+}
+
 fn duration(source: f64) -> Duration {
     Duration::from_nanos(
-        (source * 1_000_000_000.0 / f64::from(spec().sample_rate.get())).floor() as u64,
+        (source * 1_000_000_000.0 / f64::from(spec().sample_rate.get()))
+            .floor()
+            .to_u64()
+            .expect("reference timestamp fits u64"),
     )
 }
 
 fn mapped_render(renderer: &mut WarpRenderer, source: &mut u64, budget: usize) -> AudioChunk {
-    mapped_signal(renderer, source, budget, |frame| frame as f32 / 4096.0)
+    mapped_signal(renderer, source, budget, |frame| {
+        frame.to_f32().expect("test source frame fits f32") / 4096.0
+    })
 }
 
 #[kithara::test]
@@ -311,7 +323,7 @@ fn long_interrupted_ramps_in_non_dyadic_regions_keep_exact_positions(#[case] cor
             .expect("replacement curve");
         let frames = (length / 2) | 1;
         let span = renderer
-            .mapping_span(0, rate, frames as usize)
+            .mapping_span(0, rate, usize::try_from(frames).expect("test frame count fits usize"))
             .expect("corrected ramp");
         assert_eq!(span.output_frames(), frames);
         assert_eq!(
@@ -506,7 +518,9 @@ fn unity_after_a_fractional_phase_reads_the_final_interpolation_sample() {
             .build(),
     );
     let mut source = 0;
-    let first = mapped_signal(&mut renderer, &mut source, 1, |frame| frame as f32 / 64.0);
+    let first = mapped_signal(&mut renderer, &mut source, 1, |frame| {
+        frame.to_f32().expect("test source frame fits f32") / 64.0
+    });
     let phase = first
         .meta
         .source_span
@@ -520,7 +534,9 @@ fn unity_after_a_fractional_phase_reads_the_final_interpolation_sample() {
     renderer
         .set_speed(SpeedCurve::Constant(1.0), 1)
         .expect("instant unity");
-    let output = mapped_signal(&mut renderer, &mut source, 32, |frame| frame as f32 / 64.0);
+    let output = mapped_signal(&mut renderer, &mut source, 32, |frame| {
+        frame.to_f32().expect("test source frame fits f32") / 64.0
+    });
     assert_eq!(output.frames(), 32);
     assert_eq!(
         output
@@ -531,7 +547,10 @@ fn unity_after_a_fractional_phase_reads_the_final_interpolation_sample() {
         Some(phase)
     );
     for (frame, samples) in output.samples.chunks_exact(2).enumerate() {
-        assert_eq!(samples, &[(frame as f32 + 0.5) / 64.0; 2]);
+        assert_eq!(
+            samples,
+            &[(frame.to_f32().expect("test frame count fits f32") + 0.5) / 64.0; 2]
+        );
     }
 }
 
@@ -548,7 +567,7 @@ pub(super) fn mapped_signal(
     let meta = AudioChunkInfo {
         spec: spec(),
         frame_offset: *source,
-        timestamp: duration(*source as f64),
+        timestamp: duration(f64::from(u32::try_from(*source).expect("test source frame fits u32"))),
         ..AudioChunkInfo::default()
     };
     let frames = renderer
@@ -589,7 +608,7 @@ fn mapped_varispeed_filters_above_the_output_nyquist() {
             .iter()
             .all(|sample| sample.abs() < 0.05)
     );
-    assert_positions(&output, 0, |frame| frame as f64 * 4.0);
+    assert_positions(&output, 0, |frame| frame_f64(frame) * 4.0);
 }
 
 #[kithara::test]
@@ -617,7 +636,7 @@ fn primed_native_unity_keeps_the_physical_impulse_at_its_source_frame(
         .map(|(frame, _)| frame)
         .expect("impulse output");
     assert_eq!(peak, 512);
-    assert_positions(&output, 0, |frame| frame as f64);
+    assert_positions(&output, 0, frame_f64);
 }
 
 fn assert_positions(output: &AudioChunk, at: usize, expected: impl Fn(usize) -> f64) {
@@ -653,7 +672,7 @@ fn every_engine_publishes_its_output_source_mapping(#[case] backend: StretchKind
     for budget in [3, 7, 11, 1, 29] {
         let output = mapped_render(&mut renderer, &mut source, budget);
         assert!(output.frames() <= budget);
-        assert_positions(&output, output_frame, |frame| frame as f64);
+        assert_positions(&output, output_frame, frame_f64);
         output_frame += output.frames();
     }
 }
@@ -709,7 +728,7 @@ fn a_tighter_budget_replans_a_cached_quantum_before_rendering() {
         .expect("prepared")
         .expect("output");
     assert_eq!(output.frames(), 3);
-    assert_positions(&output, 0, |frame| frame as f64 * 0.5);
+    assert_positions(&output, 0, |frame| frame_f64(frame) * 0.5);
 }
 
 #[kithara::test]
@@ -744,10 +763,13 @@ fn switching_to_keylock_retains_the_full_reprime_history(#[case] backend: Stretc
     let (numerator, denominator) = resident
         .history_position(needed as u64)
         .expect("mapped history");
-    assert!(numerator / denominator.get() >= resident.start as u128);
+    assert!(
+        numerator / denominator.get()
+            >= u128::try_from(resident.start).expect("resident source start is nonnegative")
+    );
     let output = mapped_render(&mut renderer, &mut source, 7);
     assert_positions(&output, 0, |frame| {
-        131_072.0 + frame as f64 * f64::from(0.05f32)
+        131_072.0 + frame_f64(frame) * f64::from(0.05f32)
     });
     assert!(output.samples.iter().all(|sample| sample.is_finite()));
 }
@@ -777,7 +799,7 @@ fn native_replacement_is_source_aligned_and_quantum_independent() {
                 &mut source,
                 budgets[frame % budgets.len()].min(257 - frame),
             );
-            assert_positions(&output, 0, |offset| 15.5 + (frame + offset) as f64 * 0.5);
+            assert_positions(&output, 0, |offset| 15.5 + frame_f64(frame + offset) * 0.5);
             frame += output.frames();
             samples.extend_from_slice(&output.samples);
         }
@@ -800,7 +822,7 @@ fn fractional_mapping_continues_through_speed_and_backend_changes(#[case] backen
     let mut source = 0;
     let first = mapped_render(&mut renderer, &mut source, 7);
     assert_eq!(first.frames(), 7);
-    assert_positions(&first, 0, |frame| frame as f64 * 0.5);
+    assert_positions(&first, 0, |frame| frame_f64(frame) * 0.5);
     renderer
         .set_speed(SpeedCurve::Constant(1.0), 1)
         .expect("speed");
@@ -808,7 +830,7 @@ fn fractional_mapping_continues_through_speed_and_backend_changes(#[case] backen
     renderer.set_keylock(false);
     let second = mapped_render(&mut renderer, &mut source, 5);
     assert_eq!(second.frames(), 5);
-    assert_positions(&second, 0, |frame| 3.5 + frame as f64);
+    assert_positions(&second, 0, |frame| 3.5 + frame_f64(frame));
 }
 
 fn steps() -> SpeedCurve {
@@ -816,15 +838,15 @@ fn steps() -> SpeedCurve {
 }
 
 fn steps_integral(frame: usize) -> f64 {
-    let first = frame.min(7) as f64 * 0.5;
-    let second = frame.saturating_sub(7).min(12) as f64 * 1.25;
-    let third = frame.saturating_sub(19).min(12) as f64 * 0.75;
-    first + second + third + frame.saturating_sub(31) as f64
+    let first = frame_f64(frame.min(7)) * 0.5;
+    let second = frame_f64(frame.saturating_sub(7).min(12)) * 1.25;
+    let third = frame_f64(frame.saturating_sub(19).min(12)) * 0.75;
+    first + second + third + frame_f64(frame.saturating_sub(31))
 }
 
 fn ramp_integral(frame: usize) -> f64 {
-    let ramp = frame.min(32) as f64;
-    0.5 * ramp + ramp * ramp / 64.0 + frame.saturating_sub(32) as f64 * 1.5
+    let ramp = frame_f64(frame.min(32));
+    0.5 * ramp + ramp * ramp / 64.0 + frame_f64(frame.saturating_sub(32)) * 1.5
 }
 
 fn curve_output_for(
@@ -913,7 +935,7 @@ fn native_minimum_speed_keeps_exact_positions(#[case] backend: StretchKind) {
     let mut at = 0;
     for budget in [3, 7, 11, 1, 29] {
         let output = mapped_render(&mut renderer, &mut source, budget);
-        assert_positions(&output, at, |frame| frame as f64 * f64::from(0.05_f32));
+        assert_positions(&output, at, |frame| frame_f64(frame) * f64::from(0.05_f32));
         assert!(output.samples.iter().all(|sample| sample.is_finite()));
         at += output.frames();
     }
@@ -961,7 +983,7 @@ fn replacing_a_curve_during_drain_applies_at_the_next_frame(#[case] backend: Str
     assert_eq!(first.frames(), 7);
     renderer.prepare(spec());
     let tail = renderer.drain(3).expect("drain").expect("retained source");
-    assert_positions(&tail, 7, |frame| frame as f64 * 0.5);
+    assert_positions(&tail, 7, |frame| frame_f64(frame) * 0.5);
     renderer
         .set_speed(SpeedCurve::Constant(1.0), 2)
         .expect("replacement");
@@ -970,7 +992,7 @@ fn replacing_a_curve_during_drain_applies_at_the_next_frame(#[case] backend: Str
     assert_eq!(next.frames(), 2);
     assert_eq!(next.meta.render_revision, 2);
     assert_eq!(next.meta.source_span.expect("mapping").render_revision(), 2);
-    assert_positions(&next, 0, |frame| 5.0 + frame as f64);
+    assert_positions(&next, 0, |frame| 5.0 + frame_f64(frame));
 }
 
 #[kithara::test]
@@ -1064,11 +1086,11 @@ fn replacing_a_ramp_preserves_its_exact_current_speed_and_position() {
     while frame < 12 {
         let output = mapped_render(&mut renderer, &mut source, (12 - frame).min(3));
         assert_positions(&output, frame, |offset| {
-            let ramp = offset.min(8) as f64;
+            let ramp = frame_f64(offset.min(8));
             4.265_625
                 + 0.718_75 * ramp
                 + 0.281_25 * ramp * ramp / 16.0
-                + offset.saturating_sub(8) as f64
+                + frame_f64(offset.saturating_sub(8))
         });
         frame += output.frames();
     }
@@ -1087,7 +1109,7 @@ fn eof_drain_obeys_each_output_budget_and_keeps_mapping(#[case] backend: Stretch
     let mut source = 0;
     let output = mapped_render(&mut renderer, &mut source, 31);
     assert_eq!(output.frames(), 31);
-    assert_positions(&output, 0, |frame| frame as f64 * 0.5);
+    assert_positions(&output, 0, |frame| frame_f64(frame) * 0.5);
     renderer.prepare(spec());
     assert!(renderer.drain(0).expect("zero budget").is_none());
     let mut frame = 31;
@@ -1097,7 +1119,7 @@ fn eof_drain_obeys_each_output_budget_and_keeps_mapping(#[case] backend: Stretch
             break;
         };
         assert!(output.frames() <= budget);
-        assert_positions(&output, frame, |frame| frame as f64 * 0.5);
+        assert_positions(&output, frame, |frame| frame_f64(frame) * 0.5);
         frame += output.frames();
     }
     renderer.prepare(spec());
@@ -1118,10 +1140,17 @@ fn resampled_pcm_uses_the_published_fractional_phase() {
         let span = output.meta.source_span.expect("mapping");
         for (frame, samples) in output.samples.chunks_exact(2).enumerate() {
             let (numerator, denominator) = span.source_ratio_at(frame as u64).expect("position");
-            let position = numerator as f64 / denominator.get() as f64;
-            let first = position.floor() as f32 / 4096.0;
-            let second = (position.floor() as f32 + 1.0) / 4096.0;
-            let expected = (second - first).mul_add(position.fract() as f32, first);
+            let numerator = u32::try_from(numerator).expect("test phase numerator fits u32");
+            let denominator =
+                u32::try_from(denominator.get()).expect("test phase denominator fits u32");
+            let position = f64::from(numerator) / f64::from(denominator);
+            let floor = position.floor().to_f32().expect("reference sample fits f32");
+            let first = floor / 4096.0;
+            let second = (floor + 1.0) / 4096.0;
+            let expected = (second - first).mul_add(
+                position.fract().to_f32().expect("reference fraction fits f32"),
+                first,
+            );
             assert_eq!(samples, [expected, expected]);
         }
     }
@@ -1147,9 +1176,9 @@ fn backend_retirement_does_not_blend_old_control_pcm_into_mapped_output(
     renderer.set_backend(StretchKind::Glide);
     renderer.set_keylock(false);
     let output = mapped_render(&mut renderer, &mut source, 5);
-    assert_positions(&output, 0, |frame| 3.5 + frame as f64);
+    assert_positions(&output, 0, |frame| 3.5 + frame_f64(frame));
     for (frame, samples) in output.samples.chunks_exact(2).enumerate() {
-        let position = 3.5 + frame as f32;
+        let position = 3.5 + frame.to_f32().expect("test frame count fits f32");
         let first = position.floor() / 4096.0;
         let second = (position.floor() + 1.0) / 4096.0;
         assert_eq!(samples, [(second - first).mul_add(0.5, first); 2]);
@@ -1186,7 +1215,7 @@ fn terminal_quantum_and_drain_do_not_map_padding_as_source(#[case] backend: Stre
         .expect("input");
     let mut frames = 0;
     if let Some(output) = first {
-        assert_positions(&output, frames, |frame| frame as f64 * 0.5);
+        assert_positions(&output, frames, |frame| frame_f64(frame) * 0.5);
         frames += output.frames();
     }
     for _ in 0..8 {
@@ -1195,7 +1224,7 @@ fn terminal_quantum_and_drain_do_not_map_padding_as_source(#[case] backend: Stre
             break;
         };
         assert_eq!(output.frames(), 1);
-        assert_positions(&output, frames, |frame| frame as f64 * 0.5);
+        assert_positions(&output, frames, |frame| frame_f64(frame) * 0.5);
         frames += output.frames();
     }
     assert_eq!(frames, 6);
