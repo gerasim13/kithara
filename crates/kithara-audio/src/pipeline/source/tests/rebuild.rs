@@ -39,7 +39,7 @@ use crate::{
         },
         fetch::{Fetch, SourceEnd},
         rebuild::{RecreateCause, RecreateState},
-        source::StreamAudioSource,
+        source::{SourceDecoderConfig, StreamAudioSource},
         stream::shared::SharedStream,
         track::{TrackStep, WaitingReason},
     },
@@ -357,7 +357,7 @@ impl Decoder for RouteSignalDecoder {
         let start = self.next_frame;
         let end = start.saturating_add(u64::from(frame_count));
         self.next_frame = end;
-        Ok(DecoderChunkOutcome::Chunk(AudioChunk::new(
+        Ok(DecoderChunkOutcome::Chunk(Box::new(AudioChunk::new(
             AudioChunkInfo {
                 spec,
                 timestamp: spec
@@ -371,7 +371,7 @@ impl Decoder for RouteSignalDecoder {
                 ..Default::default()
             },
             sample_buffer(&self.pools, samples),
-        )))
+        ))))
     }
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
@@ -1001,10 +1001,12 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
     let source = StreamAudioSource::new(
         shared_stream,
         decode,
-        decoder_factory,
-        NonZeroU32::new(consts::SAMPLE_RATE),
-        kithara_decode::DecoderBackend::default(),
-        "none",
+        SourceDecoderConfig {
+            factory: decoder_factory,
+            host_rate: NonZeroU32::new(consts::SAMPLE_RATE),
+            backend: kithara_decode::DecoderBackend::default(),
+            playback_resampler_backend: "none",
+        },
         Arc::new(DeferredBus::new(EventBus::default(), 16)),
         Arc::new(NoopWorkerWake),
     );
@@ -1235,10 +1237,12 @@ async fn route_source(route_pcm: &RoutePcm, params: RouteParams) -> RouteFixture
     let source = StreamAudioSource::new(
         shared_stream,
         decode,
-        decoder_factory,
-        NonZeroU32::new(params.initial_host_rate),
-        kithara_decode::DecoderBackend::default(),
-        "none",
+        SourceDecoderConfig {
+            factory: decoder_factory,
+            host_rate: NonZeroU32::new(params.initial_host_rate),
+            backend: kithara_decode::DecoderBackend::default(),
+            playback_resampler_backend: "none",
+        },
         Arc::new(DeferredBus::new(EventBus::default(), 16)),
         Arc::new(NoopWorkerWake),
     );
@@ -2233,7 +2237,7 @@ fn a_seek_releases_its_buffered_chunks_off_rt(route_pcm: RoutePcm) {
         else {
             panic!("the route-signal fixture produces chunks");
         };
-        generation.stage(chunk);
+        generation.stage(*chunk);
     }
     assert!(generation.has_output(), "fixture staged nothing to flush");
 

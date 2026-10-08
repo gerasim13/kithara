@@ -7,7 +7,7 @@ use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stream::{ActivityWriter, PlayheadState, PlayheadWrite};
 use kithara_test_utils::kithara;
 
-use super::Audio;
+use super::{Audio, core::AudioContext};
 use crate::{
     AudioSource, ChunkOutcome, DecodeError, Fetch, SeekOutcome, TrackStep,
     test_pools::{pools, sample_buffer},
@@ -56,7 +56,7 @@ impl AudioSource for LandingSource {
                 end_timestamp: self.target + Duration::from_millis(4),
                 ..AudioChunkInfo::default()
             },
-            sample_buffer(&pools(), &[self.target.as_secs() as f32; 4]),
+            sample_buffer(&pools(), &[self.target.as_secs_f32(); 4]),
         )))
     }
 }
@@ -72,20 +72,22 @@ fn audio() -> Audio<()> {
             target: Duration::ZERO,
             delivered: false,
         }),
-        playhead,
-        EventBus::default(),
-        TrackMetadata::default(),
-        None,
-        writer.reader(),
-        Some(writer),
-        CancelScope::new(None).token(),
+        AudioContext {
+            playhead,
+            bus: EventBus::default(),
+            metadata: TrackMetadata::default(),
+            abr: None,
+            activity: writer.reader(),
+            activity_writer: Some(writer),
+            cancel: CancelScope::new(None).token(),
+        },
         spec,
     )
 }
 
 fn landing(audio: &mut Audio<()>) -> AudioChunk {
     match audio.next_chunk().expect("landing read") {
-        ChunkOutcome::Chunk(chunk) => chunk,
+        ChunkOutcome::Chunk(chunk) => *chunk,
         outcome => panic!("expected landing PCM, got {outcome:?}"),
     }
 }

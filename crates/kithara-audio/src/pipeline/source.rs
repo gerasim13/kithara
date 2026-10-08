@@ -55,6 +55,13 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     wake: Arc<dyn WorkerWake>,
 }
 
+pub(crate) struct SourceDecoderConfig {
+    pub(crate) factory: DecoderFactory,
+    pub(crate) host_rate: Option<NonZeroU32>,
+    pub(crate) backend: kithara_decode::DecoderBackend,
+    pub(crate) playback_resampler_backend: &'static str,
+}
+
 fn promotion_frontier_for(
     transition: VariantTransition,
     frontier: OutgoingFrontier,
@@ -77,10 +84,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     pub(crate) fn new(
         shared_stream: SharedStream<T>,
         decode: ActiveDecode,
-        factory: DecoderFactory,
-        host_rate: Option<NonZeroU32>,
-        decoder_backend: kithara_decode::DecoderBackend,
-        playback_resampler_backend: &'static str,
+        config: SourceDecoderConfig,
         emit: Arc<DeferredBus<AudioLaneEvent>>,
         wake: Arc<dyn WorkerWake>,
     ) -> Self {
@@ -90,10 +94,10 @@ impl<T: StreamType> StreamAudioSource<T> {
             shared_stream,
             wake,
             decode,
-            factory,
-            host_rate,
-            decoder_backend,
-            playback_resampler_backend,
+            factory: config.factory,
+            host_rate: config.host_rate,
+            decoder_backend: config.backend,
+            playback_resampler_backend: config.playback_resampler_backend,
             playhead,
             emit,
             variant_control,
@@ -544,16 +548,15 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
             location: crate::SegmentLocation::default(),
         });
         let result = self.seek_owned(position);
-        match &result {
-            Ok(_) => self.emit.enqueue(AudioEvent::SeekLifecycle {
+        if result.is_ok() {
+            self.emit.enqueue(AudioEvent::SeekLifecycle {
                 stage: crate::SeekLifecycleStage::SeekApplied,
                 location: crate::SegmentLocation::default(),
-            }),
-            Err(_) => {
-                self.phase = OwnerPhase::Failed(None);
-                self.emit
-                    .enqueue(AudioEvent::SeekRejected { target: position });
-            }
+            });
+        } else {
+            self.phase = OwnerPhase::Failed(None);
+            self.emit
+                .enqueue(AudioEvent::SeekRejected { target: position });
         }
         self.finish_deferred();
         result
@@ -638,7 +641,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
             },
         );
         match action {
-            DecodeAction::Produced(fetch) => TrackStep::Produced(fetch),
+            DecodeAction::Produced(fetch) => TrackStep::Produced(*fetch),
             DecodeAction::Progress => {
                 self.wake.wake();
                 TrackStep::StateChanged

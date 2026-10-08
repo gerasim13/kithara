@@ -84,7 +84,7 @@ pub enum DecoderSeekOutcome {
 #[derive(Debug)]
 pub enum DecoderChunkOutcome {
     /// Decoded PCM chunk.
-    Chunk(AudioChunk),
+    Chunk(Box<AudioChunk>),
     /// Decoder is alive but produced no chunk this call. See
     /// [`PendingReason`] for the precise cause.
     Pending(PendingReason),
@@ -97,7 +97,7 @@ impl TryFrom<DecoderChunkOutcome> for AudioChunk {
 
     fn try_from(outcome: DecoderChunkOutcome) -> Result<Self, Self::Error> {
         match outcome {
-            DecoderChunkOutcome::Chunk(chunk) => Ok(chunk),
+            DecoderChunkOutcome::Chunk(chunk) => Ok(*chunk),
             other => Err(other),
         }
     }

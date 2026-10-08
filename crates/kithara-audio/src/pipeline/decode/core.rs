@@ -112,7 +112,7 @@ pub(crate) struct DecodeCtx<'a, T: StreamType> {
 
 pub(crate) enum DecodeAction {
     Progress,
-    Produced(Fetch<AudioChunk>),
+    Produced(Box<Fetch<AudioChunk>>),
     Pending(WaitingReason),
     TransitionPending,
     StartRecreate(RecreateState),
@@ -191,7 +191,7 @@ impl ActiveDecode {
         let next = if holdback {
             match self.active.next_with_holdback() {
                 StageOutput::Output(chunk) => chunk,
-                StageOutput::Invalid(failure) => return Err(self.reject_stage(failure)),
+                StageOutput::Invalid(failure) => return Err(Self::reject_stage(failure)),
             }
         } else {
             self.active.next()
@@ -239,7 +239,7 @@ impl ActiveDecode {
             .active
             .prepare_holdback(profile.spec(), self.blender.join_frame_count());
         if let StageResult::Invalid(failure) = result {
-            let error = self.reject_stage(*failure);
+            let error = Self::reject_stage(*failure);
             self.stage_error = Some(error);
         }
     }
@@ -257,11 +257,11 @@ impl ActiveDecode {
         }
         match self.active.push_holdback(chunk) {
             StageResult::Ready | StageResult::NeedMore => Ok(()),
-            StageResult::Invalid(failure) => Err(self.reject_stage(*failure)),
+            StageResult::Invalid(failure) => Err(Self::reject_stage(*failure)),
         }
     }
 
-    fn reject_stage(&mut self, failure: StageFailure) -> DecodeError {
+    fn reject_stage(failure: StageFailure) -> DecodeError {
         let StageFailure { chunk, error } = failure;
         drop(chunk);
         error

@@ -1,4 +1,4 @@
-use super::Audio;
+use super::{Audio, AudioContext};
 use crate::{
     AudioSource, DecodeError, Fetch, ReadOutcome, SeekOutcome, SourceSpan, TrackStep,
     WaitingReason,
@@ -46,13 +46,15 @@ fn fixture(spec: AudioSpec, chunks: Vec<AudioChunk>) -> Audio<()> {
             chunks: chunks.into(),
             spec,
         }),
-        Arc::new(PlayheadState::new()),
-        EventBus::default(),
-        TrackMetadata::default(),
-        None,
-        activity.reader(),
-        Some(activity),
-        CancelScope::new(None).token(),
+        AudioContext {
+            playhead: Arc::new(PlayheadState::new()),
+            bus: EventBus::default(),
+            metadata: TrackMetadata::default(),
+            abr: None,
+            activity: activity.reader(),
+            activity_writer: Some(activity),
+            cancel: CancelScope::new(None).token(),
+        },
         spec,
     )
 }

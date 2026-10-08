@@ -32,27 +32,31 @@ pub struct Audio<S> {
     marker: PhantomData<fn() -> S>,
 }
 
+pub(super) struct AudioContext {
+    pub(super) playhead: Arc<dyn PlayheadWrite>,
+    pub(super) bus: EventBus,
+    pub(super) metadata: TrackMetadata,
+    pub(super) abr: Option<kithara_abr::AbrHandle>,
+    pub(super) activity: Activity,
+    pub(super) activity_writer: Option<ActivityWriter>,
+    pub(super) cancel: CancelToken,
+}
+
 impl<S> Audio<S> {
     pub(super) fn new(
         source: Box<dyn AudioSource<Chunk = AudioChunk>>,
-        playhead: Arc<dyn PlayheadWrite>,
-        bus: EventBus,
-        metadata: TrackMetadata,
-        abr: Option<kithara_abr::AbrHandle>,
-        activity: Activity,
-        activity_writer: Option<ActivityWriter>,
-        cancel: CancelToken,
+        context: AudioContext,
         spec: AudioSpec,
     ) -> Self {
         Self {
             source,
-            playhead,
-            bus,
-            metadata,
-            abr,
-            activity,
-            activity_writer,
-            cancel,
+            playhead: context.playhead,
+            bus: context.bus,
+            metadata: context.metadata,
+            abr: context.abr,
+            activity: context.activity,
+            activity_writer: context.activity_writer,
+            cancel: context.cancel,
             cursor: ChunkCursor::new(spec),
             current_chunk: None,
             preloaded: false,
@@ -109,11 +113,11 @@ impl<S> Audio<S> {
     /// Returns a source or decoder failure.
     pub fn preload(&mut self) -> Result<(), DecodeError> {
         self.preloaded = true;
-        if self.current_chunk.is_none() {
-            if let ChunkOutcome::Chunk(chunk) = self.pull_chunk()? {
-                self.cursor.begin_chunk(&chunk);
-                self.current_chunk = Some(chunk);
-            }
+        if self.current_chunk.is_none()
+            && let ChunkOutcome::Chunk(chunk) = self.pull_chunk()?
+        {
+            self.cursor.begin_chunk(&chunk);
+            self.current_chunk = Some(*chunk);
         }
         Ok(())
     }
@@ -152,7 +156,9 @@ impl<S> Audio<S> {
         let step = self.source.step_track();
         self.source.finish_deferred();
         match step {
-            TrackStep::Produced(Fetch::Data { data, .. }) => Ok(ChunkOutcome::Chunk(data)),
+            TrackStep::Produced(Fetch::Data { data, .. }) => {
+                Ok(ChunkOutcome::Chunk(Box::new(data)))
+            }
             TrackStep::Produced(Fetch::NaturalEof) | TrackStep::Eof => Ok(ChunkOutcome::Eof {
                 position: self.position(),
             }),
@@ -178,7 +184,7 @@ impl<S> Audio<S> {
             None
         };
         let outcome = match chunk {
-            Some(chunk) => ChunkOutcome::Chunk(chunk),
+            Some(chunk) => ChunkOutcome::Chunk(Box::new(chunk)),
             None => self.pull_chunk()?,
         };
         if let ChunkOutcome::Chunk(chunk) = &outcome {
@@ -217,7 +223,7 @@ impl<S> Audio<S> {
                 match self.pull_chunk()? {
                     ChunkOutcome::Chunk(chunk) => {
                         self.cursor.begin_chunk(&chunk);
-                        self.current_chunk = Some(chunk);
+                        self.current_chunk = Some(*chunk);
                     }
                     ChunkOutcome::Eof { .. } => {
                         eof = true;
@@ -229,22 +235,24 @@ impl<S> Audio<S> {
             let Some(chunk) = self.current_chunk.as_ref() else {
                 break;
             };
-            let span = match chunk.meta.source_span {
-                Some(span) => Some(span),
-                None => SourceSpan::new(
-                    chunk.meta.frame_offset,
-                    chunk
-                        .meta
-                        .frame_offset
-                        .saturating_add(u64::from(chunk.meta.frames)),
-                    chunk.spec().sample_rate,
-                    u64::from(chunk.meta.frames),
-                )
-                .map(|span| {
-                    span.with_render_revision(chunk.meta.render_revision)
-                        .with_mapping_revision(chunk.meta.mapping_revision)
-                }),
-            };
+            let span = chunk.meta.source_span.map_or_else(
+                || {
+                    SourceSpan::new(
+                        chunk.meta.frame_offset,
+                        chunk
+                            .meta
+                            .frame_offset
+                            .saturating_add(u64::from(chunk.meta.frames)),
+                        chunk.spec().sample_rate,
+                        u64::from(chunk.meta.frames),
+                    )
+                    .map(|span| {
+                        span.with_render_revision(chunk.meta.render_revision)
+                            .with_mapping_revision(chunk.meta.mapping_revision)
+                    })
+                },
+                Some,
+            );
             if written > 0
                 && !source_spans_coalesce(
                     source_span,

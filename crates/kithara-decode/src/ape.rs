@@ -101,7 +101,7 @@ where
         self.pcm_offset += samples * 2;
         let start = self.frame_offset;
         self.frame_offset += u64::try_from(frames)?;
-        Ok(DecoderChunkOutcome::Chunk(AudioChunk::new(
+        Ok(DecoderChunkOutcome::Chunk(Box::new(AudioChunk::new(
             AudioChunkInfo {
                 spec: self.spec,
                 timestamp: self.spec.duration_for(start)?,
@@ -111,7 +111,7 @@ where
                 ..AudioChunkInfo::default()
             },
             output,
-        )))
+        ))))
     }
 }
 

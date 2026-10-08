@@ -215,7 +215,7 @@ where
             return Ok(DecoderChunkOutcome::Eof);
         }
         let chunk = self.build_chunk(buf, frames, timestamp, 0);
-        Ok(DecoderChunkOutcome::Chunk(chunk))
+        Ok(DecoderChunkOutcome::Chunk(Box::new(chunk)))
     }
 
     fn emit_chunk_signal(&mut self, outcome: &DecoderChunkOutcome) {
@@ -364,7 +364,7 @@ where
                 continue;
             }
             let chunk = self.build_chunk(buf, frames, chunk_pts, source_bytes);
-            return Ok(DecoderChunkOutcome::Chunk(chunk));
+            return Ok(DecoderChunkOutcome::Chunk(Box::new(chunk)));
         }
     }
 

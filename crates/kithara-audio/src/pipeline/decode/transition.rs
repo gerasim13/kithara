@@ -342,7 +342,7 @@ impl super::core::ActiveDecode {
             generation.decoder_mut().prepare_next_chunk();
             outcome = match generation.next_chunk() {
                 Ok(DecoderChunkOutcome::Chunk(chunk)) => {
-                    let chunk = match apply_skip(chunk, generation.pending_head_skip_mut()) {
+                    let chunk = match apply_skip(*chunk, generation.pending_head_skip_mut()) {
                         Ok(Some(chunk)) => chunk,
                         Ok(None) => continue,
                         Err(error) => {

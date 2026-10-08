@@ -146,17 +146,16 @@ fn trim_start(chunk: &mut AudioChunk, drop_frames: usize) -> DecodeResult<()> {
                 .ok_or_else(mapping_error)
         })
         .transpose()?;
-    let timestamp = match source_span {
-        Some(span) => span.position_at(0).ok_or_else(mapping_error)?,
-        None => {
-            let origin = chunk
-                .meta
-                .timestamp
-                .saturating_sub(spec.duration_for(chunk.meta.frame_offset)?);
-            origin
-                .checked_add(spec.duration_for(frame_offset)?)
-                .ok_or_else(mapping_error)?
-        }
+    let timestamp = if let Some(span) = source_span {
+        span.position_at(0).ok_or_else(mapping_error)?
+    } else {
+        let origin = chunk
+            .meta
+            .timestamp
+            .saturating_sub(spec.duration_for(chunk.meta.frame_offset)?);
+        origin
+            .checked_add(spec.duration_for(frame_offset)?)
+            .ok_or_else(mapping_error)?
     };
     let channels = usize::from(spec.channels.max(1));
     let drop_samples = drop_frames.saturating_mul(channels);

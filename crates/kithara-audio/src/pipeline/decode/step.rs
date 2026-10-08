@@ -38,7 +38,7 @@ pub(crate) fn tick<T: StreamType>(core: &mut ActiveDecode, ctx: DecodeCtx<'_, T>
             return decode_failed(core, error, &ctx);
         }
         match core.next_output(&mut *ctx.cursor) {
-            Ok(Some(chunk)) => return DecodeAction::Produced(Fetch::data(chunk)),
+            Ok(Some(chunk)) => return DecodeAction::Produced(Box::new(Fetch::data(chunk))),
             Ok(None) => {}
             Err(error) => return decode_failed(core, error, &ctx),
         }
@@ -55,7 +55,7 @@ pub(crate) fn tick<T: StreamType>(core: &mut ActiveDecode, ctx: DecodeCtx<'_, T>
             }
             core.finish_active();
             match core.next_output_unheld(&mut *ctx.cursor) {
-                Ok(Some(chunk)) => return DecodeAction::Produced(Fetch::data(chunk)),
+                Ok(Some(chunk)) => return DecodeAction::Produced(Box::new(Fetch::data(chunk))),
                 Ok(None) => {}
                 Err(error) => return decode_failed(core, error, &ctx),
             }
@@ -84,7 +84,7 @@ pub(crate) fn tick<T: StreamType>(core: &mut ActiveDecode, ctx: DecodeCtx<'_, T>
                 return DecodeAction::Pending(reason);
             }
             Ok(DecoderChunkOutcome::Chunk(chunk)) => {
-                let chunk = match apply_skip(chunk, core.active.pending_head_skip_mut()) {
+                let chunk = match apply_skip(*chunk, core.active.pending_head_skip_mut()) {
                     Ok(Some(chunk)) => chunk,
                     Ok(None) => continue,
                     Err(error) => return decode_failed(core, error, &ctx),

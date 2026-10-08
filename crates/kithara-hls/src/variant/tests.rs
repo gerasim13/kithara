@@ -1615,10 +1615,10 @@ fn exact_seek_probe_urls(
         Some(make_placeholder_init(EXACT_SEEK_INIT_BYTES, &ctx.scope))
     };
     let v = VariantParts {
-        segments,
-        init,
         codec,
         container,
+        init,
+        segments,
     }
     .into_variant(0, &ctx);
     let anchor = EXACT_SEEK_SEGMENT_BYTES * u64::from(consts::EXACT_SEEK_LANDING);

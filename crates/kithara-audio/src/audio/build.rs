@@ -1,5 +1,5 @@
 use super::{
-    core::Audio,
+    core::{Audio, AudioContext},
     event::{
         DecoderChangedEventData, decoder_changed_event, decoder_gapless_event,
         decoder_resampler_event, playback_resampler_event,
@@ -13,7 +13,7 @@ use crate::{
             core::{ActiveDecode, DecoderFactory as StreamDecoderFactory},
         },
         gapless::visible_duration,
-        source::StreamAudioSource,
+        source::{SourceDecoderConfig, StreamAudioSource},
         stream::shared::SharedStream,
     },
 };
@@ -159,22 +159,26 @@ impl<T: StreamType<Events = EventBus>> Audio<Stream<T>> {
         let source = StreamAudioSource::new(
             shared,
             decode,
-            factory,
-            rate,
-            deps.decoder.backend(),
-            deps.decoder.resampler_backend_name(),
+            SourceDecoderConfig {
+                factory,
+                host_rate: rate,
+                backend: deps.decoder.backend(),
+                playback_resampler_backend: deps.decoder.resampler_backend_name(),
+            },
             emit,
             wake,
         );
         Ok(Self::new(
             Box::new(source),
-            playhead,
-            bus,
-            metadata,
-            abr,
-            activity,
-            writer,
-            cancel,
+            AudioContext {
+                playhead,
+                bus,
+                metadata,
+                abr,
+                activity,
+                activity_writer: writer,
+                cancel,
+            },
             spec,
         ))
     }

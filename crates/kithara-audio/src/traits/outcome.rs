@@ -86,7 +86,7 @@ pub enum SeekOutcome {
 #[derive(Debug)]
 pub enum ChunkOutcome {
     /// Next decoded chunk.
-    Chunk(AudioChunk),
+    Chunk(Box<AudioChunk>),
     /// Reader is alive but has no chunk ready this tick. See
     /// [`PendingReason`] for the precise cause; callers may sleep,
     /// yield, or retry depending on the reason.

@@ -32,7 +32,7 @@ use crate::{
         },
         fetch::Fetch,
         rebuild::{RecreateCause, RecreateState},
-        source::StreamAudioSource,
+        source::{SourceDecoderConfig, StreamAudioSource},
         stream::shared::SharedStream,
         track::TrackStep,
     },
@@ -520,10 +520,12 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
     let source = StreamAudioSource::new(
         shared_stream,
         decode,
-        decoder_factory,
-        NonZeroU32::new(consts::SAMPLE_RATE),
-        backend,
-        "none",
+        SourceDecoderConfig {
+            factory: decoder_factory,
+            host_rate: NonZeroU32::new(consts::SAMPLE_RATE),
+            backend,
+            playback_resampler_backend: "none",
+        },
         Arc::new(kithara_events::DeferredBus::new(
             kithara_events::EventBus::default(),
             16,

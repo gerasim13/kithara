@@ -206,7 +206,7 @@ pub(super) fn refresh_priorities(slots: &mut [Slot], needs_reorder: &mut bool) {
         let priority = slot
             .task
             .priority()
-            .unwrap_or(slot.control.config().values().priority);
+            .unwrap_or_else(|| slot.control.config().values().priority);
         if priority != slot.priority {
             slot.priority = priority;
             *needs_reorder = true;
