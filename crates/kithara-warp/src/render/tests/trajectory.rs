@@ -82,3 +82,27 @@ fn replacement_rounds_half_a_phase_unit_toward_the_next_source_frame() {
     assert_eq!(rounded.numerator, 1);
     assert_eq!(rounded.denominator.get(), 1u128 << 32);
 }
+
+#[kithara::test]
+#[case::below_half(0.25, 0)]
+#[case::half(0.5, 1)]
+#[case::above_half(0.75, 1)]
+fn identity_snap_rounds_to_the_nearest_source_frame(
+    #[case] speed: f32,
+    #[case] rounded: u64,
+) {
+    let mut trajectory = Trajectory::new(speed);
+    let span = trajectory
+        .span(0, NonZeroU32::MIN, 1)
+        .expect("fractional source");
+    trajectory.advance(span).expect("advance");
+    trajectory.snap_to_frame().expect("whole-frame snap");
+    assert_eq!(
+        trajectory
+            .span(0, NonZeroU32::MIN, 1)
+            .expect("identity origin")
+            .source_ratio_at(0),
+        Some((u128::from(rounded), NonZeroU128::MIN)),
+        "nearest whole frame; exact ties advance to the next frame"
+    );
+}

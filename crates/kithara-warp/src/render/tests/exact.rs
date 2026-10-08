@@ -432,6 +432,7 @@ fn a_large_drain_limit_is_only_an_upper_bound(#[case] backend: StretchKind) {
         .render(input)
         .continue_value()
         .expect("complete source");
+    renderer.prepare(spec());
     let capability = renderer
         .engine
         .as_ref()
@@ -794,6 +795,13 @@ fn curve_output_for(
     budgets: &[usize],
     expected: impl Fn(usize) -> f64,
 ) -> (Vec<Duration>, Vec<f32>) {
+    let identity = match &curve {
+        SpeedCurve::Steps(steps) if backend != StretchKind::Glide => steps
+            .last()
+            .filter(|(_, speed)| *speed == 1.0)
+            .map(|(frame, _)| usize::try_from(*frame).expect("identity step")),
+        _ => None,
+    };
     let config = WarpConfig::builder()
         .backend(backend)
         .keylock(backend != StretchKind::Glide)
@@ -809,7 +817,10 @@ fn curve_output_for(
         let budget = budgets[frame % budgets.len()].min(64 - frame);
         let output = mapped_render(&mut renderer, &mut source, budget);
         assert!(output.frames() <= budget);
-        assert_positions(&output, frame, &expected);
+        let snap = identity
+            .filter(|identity| frame >= *identity)
+            .map_or(0.0, |identity| expected(identity).round() - expected(identity));
+        assert_positions(&output, frame, |boundary| expected(boundary) + snap);
         let mapping = output.meta.source_span.expect("mapping");
         positions.extend(
             (0..output.frames())
@@ -874,10 +885,16 @@ fn native_minimum_speed_keeps_exact_positions(#[case] backend: StretchKind) {
 #[case::signalsmith(StretchKind::Signalsmith)]
 #[case::bungee(StretchKind::Bungee)]
 fn native_pitch_cascade_reports_its_full_latency(#[case] backend: StretchKind) {
-    let mut unity = renderer(&WarpConfig::builder().backend(backend).keylock(true).build());
-    let baseline = unity
+    let mut single = renderer(
+        &WarpConfig::builder()
+            .backend(backend)
+            .keylock(true)
+            .speed(0.5)
+            .build(),
+    );
+    let baseline = single
         .prepare_engine_latency(spec())
-        .expect("unity latency")
+        .expect("single-stage latency")
         .get();
     let mut slow = renderer(
         &WarpConfig::builder()

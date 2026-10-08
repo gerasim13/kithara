@@ -488,7 +488,14 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(
     );
 
     let mut frontiers = Vec::new();
-    while let Some(tail) = flush_serviced(&mut renderer) {
+    loop {
+        renderer.prepare(spec());
+        let Some(tail) = renderer
+            .drain((source_latency / 2).max(1))
+            .expect("bounded terminal drain")
+        else {
+            break;
+        };
         assert!(tail.frames() > 0, "terminal chunk carries real samples");
         frontiers.push(renderer.rendered_source_end());
         assert!(frontiers.len() < 64, "terminal drain must converge");

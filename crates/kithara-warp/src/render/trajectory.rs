@@ -217,12 +217,32 @@ impl Trajectory {
         Ok(())
     }
 
+    pub(super) fn snap_to_frame(&mut self) -> Result<(), ElasticError> {
+        if let Some(position) = self.position {
+            let position = position.ratio().ok_or(ElasticError::SampleCountOverflow)?;
+            let denominator = position.denominator.get();
+            let remainder = position.numerator % denominator;
+            let frames = position.numerator / denominator
+                + u128::from(remainder >= denominator - remainder);
+            self.position = Some(Phase::Origin {
+                frames: u64::try_from(frames).map_err(|_| ElasticError::SampleCountOverflow)?,
+                fraction: 0,
+            });
+        }
+        Ok(())
+    }
+
     pub(super) fn requires_quanta(&self) -> bool {
         !matches!(self.curve, SpeedCurve::Constant(_))
     }
 
     pub(super) fn constant_unity(&self) -> bool {
         !matches!(&self.curve, SpeedCurve::Ramp { frames, .. } if self.elapsed < frames.get())
+            && !matches!(
+                &self.curve,
+                SpeedCurve::Steps(steps)
+                    if steps.last().is_some_and(|(frame, _)| *frame > self.elapsed)
+            )
             && self.speed().is_ok_and(|speed| speed == 1.0)
     }
 

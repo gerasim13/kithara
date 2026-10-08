@@ -20,6 +20,8 @@ use kithara_stretch::StretchKind;
     feature = "stretch-glide"
 ))]
 use kithara_test_fixtures::unit_fixtures::warp_sine;
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+use kithara_test_fixtures::unit_fixtures::warp_constant;
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
@@ -53,6 +55,11 @@ fn finish_unity_transition(
         if !renderer.transition_pending() {
             return (tail, output, quanta);
         }
+        assert!(
+            renderer.rendered_source_end().expect("tail frontier").0
+                <= renderer.pending_unity_meta.expect("queued unity").frame_offset,
+            "the source frontier excludes queued unity throughout the tail drain"
+        );
         assert!(output.frames() > 0, "a tail quantum contains real samples");
         quanta.push(output.frames());
         tail.extend_from_slice(&output.samples);
@@ -63,6 +70,193 @@ fn finish_unity_transition(
         output = flush_serviced(renderer).expect("the next transition quantum emits samples");
     }
     panic!("active-to-unity transition must converge");
+}
+
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+fn assert_queued_unity_tail(backend: StretchKind, source: &[f32]) {
+    const ACTIVE_FRAMES: usize = 4096;
+    const UNITY_FRAMES: usize = 1024;
+
+    let source = &source[..(ACTIVE_FRAMES + UNITY_FRAMES) * usize::from(consts::CH)];
+    let split = ACTIVE_FRAMES * usize::from(consts::CH);
+    let config = WarpConfig::builder()
+        .speed(0.5)
+        .keylock(true)
+        .backend(backend)
+        .build();
+    let mut reference = renderer(&config);
+    let pools = reference.pools.clone();
+    let reference_active = render_serviced(&mut reference, chunk(&pools, &source[..split]))
+        .expect("non-unity span emits samples");
+    let held_frontier = reference
+        .rendered_source_end()
+        .expect("active source frontier");
+    assert!(
+        held_frontier.0 < ACTIVE_FRAMES as u64,
+        "active backend retains declared source latency"
+    );
+    let mut reference_tail = Vec::new();
+    let mut reference_quanta = Vec::new();
+    while let Some(tail) = flush_serviced(&mut reference) {
+        reference_quanta.push(tail.frames());
+        reference_tail.extend_from_slice(&tail.samples);
+        assert!(reference_quanta.len() < 64, "terminal drain must converge");
+    }
+    assert!(
+        !reference_quanta.is_empty(),
+        "active backend exposes a terminal tail"
+    );
+    assert!(
+        !reference_tail.is_empty(),
+        "active backend tail contains samples"
+    );
+    assert_eq!(
+        reference.rendered_source_end(),
+        Some((ACTIVE_FRAMES as u64, spec().sample_rate)),
+        "completed tail releases the held source frontier"
+    );
+    reference
+        .set_speed(SpeedCurve::Constant(1.0), 1)
+        .expect("unity command");
+    let mut reference_unity = chunk(&pools, &source[split..]);
+    reference_unity.meta.frame_offset = ACTIVE_FRAMES as u64;
+    let reference_unity = render_serviced(&mut reference, reference_unity)
+        .expect("unity follows the drained tail");
+    assert_eq!(&reference_unity.samples[..], &source[split..]);
+
+    let mut live = Warp::new((), &config).renderer(spec(), pools.clone());
+    let live_active = render_serviced(&mut live, chunk(&pools, &source[..split]))
+        .expect("non-unity span emits samples");
+    assert_eq!(live_active.frames(), reference_active.frames());
+    assert_eq!(live.rendered_source_end(), Some(held_frontier));
+    live.set_speed(SpeedCurve::Constant(1.0), 1)
+        .expect("unity command");
+    let mut live_unity = chunk(&pools, &source[split..]);
+    live_unity.meta.frame_offset = ACTIVE_FRAMES as u64;
+    let unity_ptr = live_unity.samples.as_ptr();
+    let first_tail = render_serviced(&mut live, live_unity)
+        .expect("live transition emits its first retained tail quantum");
+    assert!(
+        live.transition_pending(),
+        "unity remains queued after the first tail quantum"
+    );
+    assert!(
+        live.rendered_source_end().expect("tail frontier").0 <= ACTIVE_FRAMES as u64,
+        "queued unity does not advance the source frontier"
+    );
+    let (live_tail, live_unity, tail_quanta) = finish_unity_transition(&mut live, first_tail);
+    assert_eq!(
+        tail_quanta, reference_quanta,
+        "live transition preserves explicit per-quantum progression"
+    );
+    assert!(
+        live_tail.iter().any(|sample| sample.abs() > f32::EPSILON),
+        "the retained backend tail contains audible samples"
+    );
+    assert!(
+        live_tail.iter().all(|sample| sample.is_finite()),
+        "the retained backend tail contains only finite samples"
+    );
+    assert_eq!(live_tail.len(), reference_tail.len());
+    #[cfg(feature = "stretch-bungee")]
+    if backend == StretchKind::Bungee {
+        assert_eq!(
+            live_tail, reference_tail,
+            "Bungee incremental live drain equals an explicit drain exactly"
+        );
+    }
+    let peak = live_tail
+        .iter()
+        .map(|sample| sample.abs())
+        .fold(0.0_f32, f32::max);
+    let energy = live_tail
+        .iter()
+        .map(|sample| f64::from(*sample).powi(2))
+        .sum::<f64>()
+        / f64_of(live_tail.len());
+    assert!(
+        energy > 0.0 && energy <= 1.0,
+        "live tail energy stays finite and normalized: {energy}"
+    );
+    assert!(peak <= 1.0, "live tail remains normalized: {peak}");
+    assert_eq!(
+        &live_unity.samples[..],
+        &source[split..],
+        "unity samples follow the retained tail byte-for-byte"
+    );
+    assert_eq!(
+        live_unity.samples.as_ptr(),
+        unity_ptr,
+        "queued unity samples return without copying"
+    );
+    assert_eq!(
+        live.rendered_source_end(),
+        Some(((ACTIVE_FRAMES + UNITY_FRAMES) as u64, spec().sample_rate)),
+        "the source frontier advances only after tail and unity samples are emitted"
+    );
+    assert!(flush_serviced(&mut live).is_none());
+}
+
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+fn assert_identity_quantum(
+    renderer: &mut WarpRenderer,
+    source: &mut u64,
+    signal: impl Fn(u64) -> f32,
+) {
+    let frontier = renderer.rendered_source_end();
+    renderer.prepare(spec());
+    assert_eq!(
+        renderer
+            .prepare_engine_latency(spec())
+            .expect("identity latency")
+            .get(),
+        0
+    );
+    let samples: Vec<_> = (0..128)
+        .flat_map(|offset| [signal(*source + offset); 2])
+        .collect();
+    let mut input = chunk(&renderer.pools, &samples);
+    input.meta.frame_offset = *source;
+    let pointer = input.samples.as_ptr();
+    assert_eq!(
+        renderer
+            .prepare_quantum(input.meta, 128, 128)
+            .expect("identity quantum")
+            .get(),
+        128,
+        "converged identity consumes the exact source quantum"
+    );
+    assert_eq!(
+        renderer.rendered_source_end(),
+        frontier,
+        "preparation does not publish unrendered unity"
+    );
+    let output = renderer
+        .render_quantum(input)
+        .continue_value()
+        .expect("prepared identity")
+        .expect("unity PCM");
+    assert_eq!(output.frames(), 128);
+    assert_eq!(
+        &*output.samples, samples,
+        "settled keylocked unity is source PCM bit-exact"
+    );
+    assert_eq!(
+        output.samples.as_ptr(),
+        pointer,
+        "identity returns the input buffer without copying"
+    );
+    assert!(!renderer.active, "no engine processes identity samples");
+    assert!(
+        renderer.applied_pitch.is_nan(),
+        "identity does not invoke the prepared engine"
+    );
+    assert_eq!(
+        output.meta.source_span.expect("identity mapping").start(),
+        *source
+    );
+    *source += 128;
+    assert_eq!(renderer.rendered_source_end(), Some((*source, spec().sample_rate)));
 }
 
 #[kithara::test]
@@ -421,7 +615,9 @@ fn pending_span_is_committed_before_live_unity_passthrough(
 fn live_unity_transition_drains_active_backend_tail(
     #[case] backend: StretchKind,
     warp_sine: Vec<f32>,
+    warp_constant: Vec<f32>,
 ) {
+    assert_queued_unity_tail(backend, &warp_constant);
     let config = WarpConfig::builder()
         .speed(0.5)
         .keylock(true)
@@ -436,12 +632,22 @@ fn live_unity_transition_drains_active_backend_tail(
             });
             assert_eq!(output.frames(), 128);
         }
+        let half_frame = super::exact::mapped_signal(&mut fx, &mut source, 1, |frame| {
+            warp_sine[frame as usize * 2 % warp_sine.len()]
+        });
+        assert_eq!(half_frame.frames(), 1);
         let before = fx
             .trajectory
             .span(0, spec().sample_rate, 1)
             .expect("old phase")
             .source_ratio_at(0)
             .expect("source position");
+        assert_eq!(
+            before.0 % before.1.get() * 2,
+            before.1.get(),
+            "the fixture exercises an exact half-frame tie"
+        );
+        let snapped = before.0 / before.1.get() + 1;
         assert!(
             before.0 < u128::from(source) * u128::from(before.1.get()),
             "the active engine retains decoded lookahead"
@@ -453,6 +659,19 @@ fn live_unity_transition_drains_active_backend_tail(
         assert!(
             fx.retiring_target.is_some(),
             "active backend tail is crossfaded"
+        );
+        assert_eq!(
+            fx.retiring_target
+                .as_ref()
+                .expect("retiring target")
+                .trajectory
+                .as_ref()
+                .expect("outgoing trajectory")
+                .span(0, spec().sample_rate, 1)
+                .expect("tail phase")
+                .source_ratio_at(0),
+            Some(before),
+            "R6 keeps the retiring engine tail at the exact unsnapped phase"
         );
         let mut samples = Vec::new();
         let mut quanta = Vec::new();
@@ -469,11 +688,23 @@ fn live_unity_transition_drains_active_backend_tail(
             if index == 0 {
                 assert_eq!(
                     span.source_ratio_at(0),
-                    Some(before),
-                    "speed changes do not jump source"
+                    Some((snapped, std::num::NonZeroU128::MIN)),
+                    "R6 identity starts at the nearest frame, ties forward; only the crossfade hides this half-frame snap"
+                );
+                assert!(
+                    (snapped * before.1.get()).abs_diff(before.0) * 2 <= before.1.get(),
+                    "R6 identity snap is at most half a source frame; the retiring tail remains exact"
                 );
             }
             assert_eq!(span.end() - span.start(), 128);
+            assert_eq!(
+                fx.rendered_source_end(),
+                Some((span.end(), spec().sample_rate))
+            );
+            assert!(
+                span.end() <= source,
+                "the frontier never advances beyond emitted source"
+            );
             quanta.push(output.frames());
             samples.extend_from_slice(&output.samples);
             fx.prepare(spec());
@@ -495,20 +726,29 @@ fn live_unity_transition_drains_active_backend_tail(
                     "live tail energy stays finite and normalized: {energy}"
                 );
                 assert!(peak <= 1.0, "crossfaded tail remains normalized: {peak}");
+                for _ in 0..3 {
+                    assert_identity_quantum(&mut fx, &mut source, |frame| {
+                        warp_sine[frame as usize * 2 % warp_sine.len()]
+                    });
+                }
+                assert!(
+                    flush_serviced(&mut fx).is_none(),
+                    "completed unity has no tail to flush"
+                );
                 return (samples, quanta);
             }
         }
         panic!("active-to-unity crossfade must converge");
     };
-    let reference = render();
-    let live = render();
+    let first_run = render();
+    let second_run = render();
     assert_eq!(
-        live.1, reference.1,
-        "transition preserves per-quantum progression"
+        second_run.1, first_run.1,
+        "repeated live runs have deterministic per-quantum progression"
     );
-    assert_eq!(live.0.len(), reference.0.len());
+    assert_eq!(second_run.0.len(), first_run.0.len());
     assert_eq!(
-        live.0, reference.0,
+        second_run.0, first_run.0,
         "source-aligned reinitialisation is deterministic"
     );
 }
@@ -546,6 +786,21 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
         fx.output_remainder = debt;
         fx.set_speed(SpeedCurve::Constant(1.0), 1)
             .expect("unity command");
+        fx.prepare_engine_latency(spec())
+            .expect("identity transition");
+        assert_eq!(
+            fx.retiring_target
+                .as_ref()
+                .expect("retiring target")
+                .trajectory
+                .as_ref()
+                .expect("exact outgoing trajectory")
+                .span(0, spec().sample_rate, 1)
+                .expect("tail phase")
+                .source_ratio_at(0),
+            Some(before),
+            "R6 leaves the retiring tail at the exact fractional phase"
+        );
         let mut samples = first.samples.to_vec();
         for index in 0..64 {
             let unity = super::exact::mapped_signal(&mut fx, &mut source, 128, |frame| {
@@ -559,7 +814,8 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
                         .source_span
                         .expect("unity mapping")
                         .source_ratio_at(0),
-                    Some(before)
+                    Some((1, std::num::NonZeroU128::MIN)),
+                    "R6 rounds the 1.25-frame identity phase to frame 1 under the tail crossfade"
                 );
             }
             samples.extend_from_slice(&unity.samples);
@@ -582,6 +838,77 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
         actual_samples, reference_samples,
         "negative rounding debt adds no samples to the complete transition"
     );
+}
+
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn keylocked_unity_reenters_the_engine_without_a_source_jump_or_starvation(
+    #[case] backend: StretchKind,
+    warp_sine: Vec<f32>,
+) {
+    let mut fx = renderer(
+        &WarpConfig::builder()
+            .speed(1.0)
+            .keylock(true)
+            .backend(backend)
+            .build(),
+    );
+    let mut source = 0;
+    for _ in 0..32 {
+        assert_identity_quantum(&mut fx, &mut source, |frame| {
+            warp_sine[frame as usize * 2 % warp_sine.len()]
+        });
+    }
+    let before = fx
+        .trajectory
+        .span(0, spec().sample_rate, 1)
+        .expect("identity phase")
+        .source_ratio_at(0)
+        .expect("exact identity endpoint");
+    let frontier = fx.rendered_source_end();
+    fx.set_speed(SpeedCurve::Constant(0.5), 1)
+        .expect("leave unity");
+    assert!(
+        fx.prepare_engine_latency(spec())
+            .expect("engine re-entry")
+            .get()
+            > 0
+    );
+    assert_eq!(
+        fx.rendered_source_end(),
+        frontier,
+        "re-entry preparation never jumps source"
+    );
+    let mut expected = Some(before);
+    for _ in 0..16 {
+        let output = super::exact::mapped_signal(&mut fx, &mut source, 128, |frame| {
+            warp_sine[frame as usize * 2 % warp_sine.len()]
+        });
+        assert_eq!(
+            output.frames(),
+            128,
+            "engine re-entry does not starve a quantum"
+        );
+        let span = output.meta.source_span.expect("re-entry mapping");
+        assert_eq!(
+            span.source_ratio_at(0),
+            expected,
+            "non-unity re-entry keeps the exact source phase"
+        );
+        expected = span.source_ratio_at(span.output_frames());
+        assert_eq!(
+            fx.rendered_source_end(),
+            Some((span.end(), spec().sample_rate))
+        );
+        assert!(output.samples.iter().all(|sample| sample.is_finite()));
+        assert!(output.samples.iter().any(|sample| sample.abs() > f32::EPSILON));
+        assert!(fx.active, "non-unity invokes the engine again");
+    }
 }
 
 #[cfg(any(

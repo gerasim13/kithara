@@ -264,6 +264,9 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     /// the requested engine's after-state.
     #[must_use]
     pub fn engine_latency(&self) -> FrameCount {
+        if self.keylocked_unity() && !self.active {
+            return FrameCount::new(0);
+        }
         FrameCount::new(self.engine.as_ref().map_or(0, |engine| {
             let stages = self
                 .projection
@@ -686,6 +689,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     pub fn set_speed(&mut self, curve: SpeedCurve, revision: u64) -> Result<(), WarpRenderError> {
         let target = RateTarget::new(self.trajectory.replace(curve)?, revision);
         self.reprime_pending |= self.active
+            && (self.mapped_render || !self.unity_passthrough(target.speed()))
             && self
                 .stretch_target()
                 .0
@@ -722,6 +726,10 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
 
     pub(super) fn unity_passthrough(&self, speed: f32) -> bool {
         !self.requires_staging() || (self.plan.is_none() && (speed - 1.0).abs() <= f32::EPSILON)
+    }
+
+    pub(super) fn keylocked_unity(&self) -> bool {
+        self.current_keylock && self.plan.is_none() && self.trajectory.constant_unity()
     }
 }
 

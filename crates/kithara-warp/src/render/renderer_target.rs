@@ -10,8 +10,7 @@ use num_traits::ToPrimitive;
 use tracing::warn;
 
 use super::{
-    renderer::WarpRenderer, renderer_residency::SourceResidency,
-    renderer_transition::RetiringTarget,
+    renderer::WarpRenderer, renderer_residency::SourceResidency, renderer_transition::RetiringTarget,
 };
 
 #[derive(Default)]
@@ -201,7 +200,7 @@ where
         )
     }
 
-    fn prepare_buffer(
+    pub(super) fn prepare_buffer(
         pools: &PoolRegion<S>,
         reusable: Option<SampleBuffer>,
         samples: usize,
@@ -210,6 +209,8 @@ where
         buffer
             .ensure_len(samples)
             .map_err(|_| ElasticError::PoolCapacity)?;
+        buffer.truncate(samples);
+        buffer.shrink_to_fit();
         buffer.clear();
         Ok(buffer)
     }
@@ -253,8 +254,8 @@ where
         let samples = projection_frames
             .checked_mul(usize::from(spec.channels.max(1)))
             .ok_or(ElasticError::SampleCountOverflow)?;
-        let mut first_buffer = pools.get::<f32>();
-        let mut second_buffer = pools.get::<f32>();
+        let mut first_buffer = Self::prepare_buffer(pools, None, samples)?;
+        let mut second_buffer = Self::prepare_buffer(pools, None, samples)?;
         first_buffer
             .ensure_len(samples)
             .map_err(|_| ElasticError::PoolCapacity)?;
@@ -323,6 +324,7 @@ where
         {
             self.retiring_target = None;
         }
+        self.reprime_pending |= self.active && self.mapped_render && self.keylocked_unity();
         drop(self.retired_engine.take());
         if (self.transition_pending() || self.prepared_quantum.is_some()) && spec == self.spec {
             self.service_scratch();
@@ -353,23 +355,6 @@ where
                 self.clear_render_state();
             }
             self.rebuild_pending = false;
-            if spec != self.spec {
-                for buffer in [&mut self.pending_source, &mut self.activation_scratch] {
-                    if let Some(buffer) = buffer.as_mut() {
-                        buffer.shrink_to_fit();
-                    }
-                }
-                if spec.channels != self.spec.channels
-                    && let Some(scratch) = self.scratch.as_mut()
-                {
-                    scratch.shrink_to_fit();
-                }
-                if let Some(resident) = self.residency.as_mut() {
-                    resident.samples.shrink_to_fit();
-                    resident.replacement.shrink_to_fit();
-                    resident.next_replacement.shrink_to_fit();
-                }
-            }
             let mut reusable = PreparedTarget {
                 projection: self.projection.take(),
                 residency: self.residency.take(),

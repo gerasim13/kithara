@@ -83,7 +83,11 @@ where
         self.queue_unity(meta, samples)
     }
 
-    fn drain_tail(&mut self, channels: usize, output_limit: usize) -> Result<bool, ElasticError> {
+    pub(super) fn drain_tail(
+        &mut self,
+        channels: usize,
+        output_limit: usize,
+    ) -> Result<bool, ElasticError> {
         if !self.active {
             return Ok(true);
         }
@@ -412,6 +416,9 @@ where
     S: HasPool<f32>,
 {
     fn drain_mapped(&mut self, output_limit: usize) -> Result<Option<AudioChunk>, ElasticError> {
+        if !self.active && self.retiring_target.is_none() {
+            return Ok(None);
+        }
         let Some(meta) = self.last_input_meta else {
             return Ok(None);
         };
@@ -447,6 +454,8 @@ where
             self.active = false;
             self.reset_pending = true;
             self.prepared_quantum = None;
+            self.clear_pending_source();
+            self.trajectory.reset();
             return Ok(None);
         }
         let span = span
@@ -650,6 +659,21 @@ where
                 self.last_input_meta = Some(chunk.meta);
                 self.defer_scratch(Some(chunk.samples));
                 return None;
+            }
+            if self.plan.is_none()
+                && self.trajectory.constant_unity()
+                && self.retiring_target.is_none()
+                && span.source_ratio_at(0)
+                    == Some((
+                        u128::from(chunk.meta.frame_offset),
+                        std::num::NonZeroU128::MIN,
+                    ))
+                && usize::try_from(span.output_frames()).ok() == Some(chunk.frames())
+            {
+                self.last_input_meta = Some(chunk.meta);
+                let mut output = self.process_unity(chunk)?;
+                output.meta.source_span = Some(span);
+                return Some(output);
             }
             let result = self.render_mapped(span).and_then(|()| {
                 let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;

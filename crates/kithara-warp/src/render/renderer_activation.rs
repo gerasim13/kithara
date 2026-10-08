@@ -165,11 +165,7 @@ where
             return Err(crate::WarpRenderError::UnsupportedRegionPlan);
         }
         self.terminal_source_end = None;
-        if !self.requires_staging()
-            || (self.plan.is_none()
-                && self.trajectory.constant_unity()
-                && !self.current_keylock)
-        {
+        if !self.requires_staging() || (self.plan.is_none() && self.trajectory.constant_unity()) {
             let prepared = self.prepare_unity_quantum(meta, remaining, output_limit)?;
             let frames = prepared.frames;
             self.prepared_quantum = Some(prepared);
