@@ -19,6 +19,7 @@ use syn::{
 
 use super::{super::config::DeadExportsThreshold, Check, Context};
 use crate::common::{
+    exclude::{attrs_have_test_marker, item_attrs},
     fix::{FixOutcome, SourceRewriter, expand_blocks},
     parse::{is_pub_visibility, parse_file},
     violation::Violation,
@@ -696,36 +697,18 @@ const fn head<'a>(vis: &'a Visibility, attrs: &'a [Attribute], ident: &'a Ident)
     Head { ident, vis, attrs }
 }
 
-fn item_attrs(it: &Item) -> &[Attribute] {
-    match it {
-        Item::Fn(x) => &x.attrs,
-        Item::Const(x) => &x.attrs,
-        Item::Static(x) => &x.attrs,
-        Item::Struct(x) => &x.attrs,
-        Item::Enum(x) => &x.attrs,
-        Item::Trait(x) => &x.attrs,
-        Item::Type(x) => &x.attrs,
-        Item::Impl(x) => &x.attrs,
-        Item::Mod(x) => &x.attrs,
-        _ => &[],
-    }
-}
-
 /// `#[test]`, `#[kithara::test]`/`#[tokio::test]` (last segment `test`), or a
 /// `#[cfg(...)]` that holds only in a test build.
 fn attrs_mark_test(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        let p = a.path();
-        if p.segments.last().is_some_and(|s| s.ident == "test") {
-            return true;
-        }
-        if p.is_ident("cfg")
-            && let Meta::List(list) = &a.meta
-        {
-            return cfg_marks_test(list.tokens.clone());
-        }
-        false
-    })
+    attrs_have_test_marker(attrs)
+        || attrs.iter().any(|a| {
+            if a.path().is_ident("cfg")
+                && let Meta::List(list) = &a.meta
+            {
+                return cfg_marks_test(list.tokens.clone());
+            }
+            false
+        })
 }
 
 /// Whether a `cfg` predicate names `test` on the side that holds in a test
@@ -1204,6 +1187,15 @@ mod tests {
 
     use super::{RefCollector, Refs, mod_chain_gate, target_files};
     use crate::consts;
+
+    #[test]
+    fn namespaced_test_markers_are_not_production_exports() {
+        for marker in ["#[test]", "#[fixture::test]"] {
+            let function: syn::ItemFn = syn::parse_str(&format!("{marker} pub fn contract() {{}}"))
+                .expect("attributed function");
+            assert!(super::attrs_mark_test(&function.attrs), "{marker}");
+        }
+    }
 
     fn collect_refs(src: &str, qualified_only: bool) -> Refs {
         let file = syn::parse_file(src).unwrap();

@@ -1,7 +1,9 @@
-use std::{fs, path::Path};
+use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Deserialize;
+
+use crate::common::project::load_optional_config;
 
 #[derive(Debug, Default, Clone, kithara_config::Config)]
 #[config(builder(none), fields(nested))]
@@ -12,7 +14,7 @@ pub(crate) struct StyleConfig {
 impl StyleConfig {
     pub(crate) fn load(dir: &Path) -> Result<Self> {
         Ok(Self {
-            thresholds: load_optional(&dir.join("thresholds.toml"))?,
+            thresholds: load_optional_config(&dir.join("thresholds.toml"), "style config")?,
         })
     }
 }
@@ -491,18 +493,6 @@ fn default_tracked_text_exclude_paths() -> Vec<String> {
     .iter()
     .map(|s| (*s).to_string())
     .collect()
-}
-
-fn load_optional<T>(path: &Path) -> Result<T>
-where
-    T: Default + for<'de> Deserialize<'de>,
-{
-    if !path.exists() {
-        return Ok(T::default());
-    }
-    let text = fs::read_to_string(path)
-        .with_context(|| format!("read style config: {}", path.display()))?;
-    toml::from_str(&text).with_context(|| format!("parse style config: {}", path.display()))
 }
 
 #[cfg(test)]

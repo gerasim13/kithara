@@ -16,6 +16,17 @@ shear:
 
 hack:
     just _xtask powerset --no-dev-deps
+    just deps _hack-context
+
+hack-workspace:
+    just _xtask powerset --no-dev-deps --part workspace
+
+hack-invariants:
+    just _xtask powerset --no-dev-deps --part invariants
+    just deps _hack-context
+
+[private]
+_hack-context:
     cargo check -p kithara-warp --lib --no-default-features --features stretch-identity
     cargo check -p kithara-warp --lib --no-default-features --features stretch-signalsmith
     cargo check -p kithara-warp --lib --no-default-features --features stretch-bungee

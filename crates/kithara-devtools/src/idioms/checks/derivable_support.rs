@@ -18,6 +18,7 @@ use syn::{
 use super::Context;
 use crate::{
     common::{
+        exclude::item_attrs,
         fix::{FixOutcome, SourceRewriter, block::BlockRange, expand_blocks, line_start},
         parse::{collect_scopes, self_ty_name},
         violation::Violation,
@@ -311,14 +312,6 @@ fn find_type_in_scope<'a>(mut items: &'a [Item], scope: &[String], name: &str) -
         Item::Enum(value) => value.ident == name,
         _ => false,
     })
-}
-
-fn item_attrs(item: &Item) -> &[Attribute] {
-    match item {
-        Item::Struct(value) => &value.attrs,
-        Item::Enum(value) => &value.attrs,
-        _ => &[],
-    }
 }
 
 fn item_generics(item: &Item) -> &syn::Generics {

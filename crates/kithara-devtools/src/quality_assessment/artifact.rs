@@ -331,8 +331,10 @@ fn append_findings(output: &mut String, assessment: &Assessment, budgets: &Quali
 fn verdict_guidance(assessment: &Assessment) -> &'static str {
     match assessment.verdict.as_str() {
         "refactor" => {
-            "The debt threshold or regression policy is exceeded. Start a bounded refactor from \
-             the highest-debt findings and use the baseline comparison to prove improvement.\n\n"
+            "Inspect hard-invariant findings, the debt baseline comparison, and source locations \
+             corroborated by multiple tools to identify why refactoring is indicated. Choose a \
+             bounded refactor from that evidence and use the baseline comparison to measure \
+             improvement.\n\n"
         }
         "investigate" => {
             "Signals need corroboration. Inspect the strongest source locations before choosing a \

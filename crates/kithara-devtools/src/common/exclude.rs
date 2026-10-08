@@ -93,6 +93,16 @@ fn collect_declared_test_modules(
     }
 }
 
+/// Whether an item carries `#[test]` or a namespaced test attribute.
+pub(crate) fn attrs_have_test_marker(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path()
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "test")
+    })
+}
+
 /// Whether the attributes carry a cfg that holds in no build but a test one.
 pub(crate) fn attrs_are_test_only(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|a| match &a.meta {

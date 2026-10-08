@@ -5,10 +5,22 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use glob::Pattern;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use toml::Table;
 
 use crate::consts;
+
+pub(crate) fn load_optional_config<T: Default + DeserializeOwned>(
+    path: &Path,
+    label: &str,
+) -> Result<T> {
+    if !path.exists() {
+        return Ok(T::default());
+    }
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("read {label}: {}", path.display()))?;
+    toml::from_str(&text).with_context(|| format!("parse {label}: {}", path.display()))
+}
 
 /// Project-specific identity and per-tool settings for the otherwise
 /// project-agnostic xtask. Loaded from `.config/xtask.toml`; every field
@@ -1303,6 +1315,48 @@ mod architecture_tests {
         fs::create_dir(temp.path().join(".config")).expect("config dir");
         fs::write(temp.path().join(consts::PROJECT_CONFIG_REL), text).expect("config");
         ProjectConfig::load(temp.path())
+    }
+
+    #[test]
+    fn optional_configs_preserve_missing_and_partial_defaults() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("thresholds.toml");
+        let defaults = ProjectConfig::default();
+        let missing: ProjectConfig =
+            load_optional_config(&path, "style config").expect("missing config uses defaults");
+        assert_eq!(
+            missing.orphans.max_parallelism,
+            defaults.orphans.max_parallelism
+        );
+
+        fs::write(&path, "[orphans]\nmax_parallelism = 3\n").expect("write partial config");
+        let partial: ProjectConfig =
+            load_optional_config(&path, "style config").expect("load partial config");
+        assert_eq!(partial.orphans.max_parallelism, 3);
+        assert_eq!(
+            partial.workspace_scan.top_level_dirs,
+            defaults.workspace_scan.top_level_dirs
+        );
+    }
+
+    #[test]
+    fn present_invalid_configs_keep_read_and_parse_errors() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("thresholds.toml");
+        fs::write(&path, "[orphans").expect("write invalid config");
+        let parse_error = load_optional_config::<ProjectConfig>(&path, "style config")
+            .expect_err("invalid syntax is an error");
+        assert_eq!(
+            parse_error.to_string(),
+            format!("parse style config: {}", path.display())
+        );
+
+        let read_error = load_optional_config::<ProjectConfig>(temp.path(), "idioms config")
+            .expect_err("a directory is not a config file");
+        assert_eq!(
+            read_error.to_string(),
+            format!("read idioms config: {}", temp.path().display())
+        );
     }
 
     /// `workers` clamps into `1..=max_parallelism`, and `usize::clamp` panics

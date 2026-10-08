@@ -2,6 +2,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, ensure};
 
+use crate::common::timestamp::epoch_days_to_date;
+
 pub(super) fn format_timestamp(time: SystemTime) -> Result<String> {
     let elapsed = time
         .duration_since(UNIX_EPOCH)
@@ -22,25 +24,6 @@ pub(super) fn format_timestamp(time: SystemTime) -> Result<String> {
     ))
 }
 
-const fn epoch_days_to_date(days: u64) -> (u64, u64, u64) {
-    let shifted = days + 719_468;
-    let era = shifted / 146_097;
-    let day_of_era = shifted - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_index = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
-    let month = if month_index < 10 {
-        month_index + 3
-    } else {
-        month_index - 9
-    };
-    let year = if month <= 2 { year + 1 } else { year };
-    (year, month, day)
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -57,6 +40,28 @@ mod tests {
             format_timestamp(UNIX_EPOCH + Duration::from_secs(1_704_067_200))
                 .expect("format known time"),
             "2024-01-01T00:00:00Z"
+        );
+    }
+
+    #[test]
+    fn formatter_rejects_times_before_the_unix_epoch() {
+        let error = format_timestamp(UNIX_EPOCH - Duration::from_secs(1))
+            .expect_err("pre-epoch timestamp is not valid evidence");
+        assert_eq!(error.to_string(), "system clock is before the Unix epoch");
+    }
+
+    #[test]
+    fn formatter_preserves_the_rfc3339_year_limit() {
+        let last_second = UNIX_EPOCH + Duration::from_secs(253_402_300_799);
+        assert_eq!(
+            format_timestamp(last_second).expect("last RFC 3339 second"),
+            "9999-12-31T23:59:59Z"
+        );
+        let error = format_timestamp(last_second + Duration::from_secs(1))
+            .expect_err("five-digit years are not valid evidence");
+        assert_eq!(
+            error.to_string(),
+            "system timestamp year exceeds RFC 3339 range"
         );
     }
 }

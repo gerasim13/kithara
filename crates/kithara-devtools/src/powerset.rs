@@ -1,7 +1,7 @@
 use std::process::Command;
 
 use anyhow::{Result, bail};
-use clap::Args;
+use clap::{Args, ValueEnum};
 
 use crate::{Ctx, common::project::FeatureInvariant, consts};
 
@@ -12,10 +12,20 @@ pub struct PowersetArgs {
     /// feature set is wrong.
     #[arg(long)]
     pub no_dev_deps: bool,
+    /// Select one complete part of the canonical feature-check plan.
+    #[arg(long, value_enum, default_value_t = Part::Full)]
+    part: Part,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum Part {
+    Full,
+    Workspace,
+    Invariants,
 }
 
 pub(crate) fn run(args: &PowersetArgs, ctx: &Ctx) -> Result<()> {
-    for command in plan(ctx, args.no_dev_deps)? {
+    for command in plan(ctx, args.no_dev_deps, args.part)? {
         let status = Command::new("cargo")
             .args(&command)
             .status()
@@ -27,14 +37,14 @@ pub(crate) fn run(args: &PowersetArgs, ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
-/// Every `cargo hack` invocation this workspace needs, in order.
+/// The selected complete part of the workspace feature-check plan, in order.
 ///
 /// One pass covers the workspace. Crates that declare a backend invariant are
 /// held out of it and checked on their own with that invariant applied, because
 /// `--at-least-one-of` silently drops combinations from a crate that has none
 /// of the named features — applied workspace-wide it would quietly narrow the
 /// coverage of every other crate.
-fn plan(ctx: &Ctx, no_dev_deps: bool) -> Result<Vec<Vec<String>>> {
+fn plan(ctx: &Ctx, no_dev_deps: bool, part: Part) -> Result<Vec<Vec<String>>> {
     let health = &ctx.config.health;
     let declared = declaring_crates(ctx)?;
 
@@ -71,7 +81,11 @@ fn plan(ctx: &Ctx, no_dev_deps: bool) -> Result<Vec<Vec<String>>> {
         }
         plan.push(args);
     }
-    Ok(plan)
+    Ok(match part {
+        Part::Full => plan,
+        Part::Workspace => plan.into_iter().take(1).collect(),
+        Part::Invariants => plan.into_iter().skip(1).collect(),
+    })
 }
 
 /// Which crates carry which invariants, read from their manifests.
@@ -103,7 +117,13 @@ fn declaring_crates(ctx: &Ctx) -> Result<Vec<(String, Vec<&FeatureInvariant>)>> 
 
 #[cfg(test)]
 mod tests {
-    use crate::common::project::FeatureInvariant;
+    use std::{collections::BTreeSet, fs};
+
+    use anyhow::Result;
+    use clap::Parser;
+
+    use super::{Part, PowersetArgs, plan};
+    use crate::{Ctx, common::project::FeatureInvariant};
 
     fn invariant(when: &str, groups: &[&[&str]], always: &[&str]) -> FeatureInvariant {
         FeatureInvariant {
@@ -170,5 +190,114 @@ mod tests {
             "{args:?}"
         );
         assert!(args.contains(&"symphonia".to_owned()), "{args:?}");
+    }
+
+    fn workspace() -> Result<(tempfile::TempDir, Ctx)> {
+        let root = tempfile::tempdir()?;
+        fs::write(
+            root.path().join("Cargo.toml"),
+            r#"[workspace]
+members = ["plain", "alpha", "dual", "excluded"]
+resolver = "2"
+"#,
+        )?;
+        for (name, features) in [
+            ("plain", "extra = []\n"),
+            (
+                "alpha",
+                "transport = []\ntransport-other = []\nsecure = []\nsecure-other = []\n",
+            ),
+            (
+                "dual",
+                "transport = []\ntransport-other = []\nsecure = []\nsecure-other = []\ncodec = []\n",
+            ),
+            ("excluded", "transport = []\n"),
+        ] {
+            let package = root.path().join(name);
+            fs::create_dir_all(package.join("src"))?;
+            fs::write(package.join("src/lib.rs"), "")?;
+            fs::write(
+                package.join("Cargo.toml"),
+                format!(
+                    "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\n{features}"
+                ),
+            )?;
+        }
+        fs::create_dir_all(root.path().join(".config"))?;
+        fs::write(
+            root.path().join(".config/xtask.toml"),
+            r#"[health]
+feature_powerset_exclude = ["excluded"]
+
+[[health.feature_invariants]]
+when_feature = "transport"
+at_least_one_of = [
+    ["transport", "transport-other"],
+    ["secure", "secure-other"],
+]
+
+[[health.feature_invariants]]
+when_feature = "codec"
+always = ["codec"]
+"#,
+        )?;
+        let ctx = Ctx::load_from_manifest(&root.path().join("Cargo.toml"))?;
+        Ok((root, ctx))
+    }
+
+    #[test]
+    fn parts_preserve_every_ordered_check_and_invariant_in_both_dev_modes() -> Result<()> {
+        let (_root, ctx) = workspace()?;
+        let expected = [
+            "hack check --feature-powerset --depth 2 --workspace --exclude excluded --exclude alpha --exclude dual",
+            "hack check --feature-powerset --depth 2 -p alpha --at-least-one-of transport,transport-other --at-least-one-of secure,secure-other",
+            "hack check --feature-powerset --depth 2 -p dual --at-least-one-of transport,transport-other --at-least-one-of secure,secure-other --features codec",
+        ]
+        .map(|command| {
+            command
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        });
+        for no_dev_deps in [false, true] {
+            let mut expected = expected.to_vec();
+            if no_dev_deps {
+                for command in &mut expected {
+                    command.insert(5, "--no-dev-deps".to_owned());
+                }
+            }
+            let full = plan(&ctx, no_dev_deps, Part::Full)?;
+            let workspace = plan(&ctx, no_dev_deps, Part::Workspace)?;
+            let invariants = plan(&ctx, no_dev_deps, Part::Invariants)?;
+            assert_eq!(full, expected);
+            assert_eq!(workspace, full[..1]);
+            assert_eq!(invariants, full[1..]);
+            assert_eq!(
+                workspace.iter().chain(&invariants).collect::<Vec<_>>(),
+                full.iter().collect::<Vec<_>>(),
+            );
+            let workspace = workspace.iter().collect::<BTreeSet<_>>();
+            let invariants = invariants.iter().collect::<BTreeSet<_>>();
+            assert!(workspace.is_disjoint(&invariants));
+            assert_eq!(workspace.len() + invariants.len(), full.len());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn omitted_part_preserves_the_complete_health_cli_contract() -> Result<()> {
+        #[derive(Parser)]
+        struct Cli {
+            #[command(flatten)]
+            powerset: PowersetArgs,
+        }
+
+        let health = Cli::try_parse_from(["powerset"])?;
+        assert!(matches!(health.powerset.part, Part::Full));
+        assert!(!health.powerset.no_dev_deps);
+        let dependency = Cli::try_parse_from(["powerset", "--no-dev-deps"])?;
+        assert!(matches!(dependency.powerset.part, Part::Full));
+        assert!(dependency.powerset.no_dev_deps);
+        Ok(())
     }
 }
