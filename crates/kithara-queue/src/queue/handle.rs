@@ -227,6 +227,12 @@ where
         let _ = self.call(QueueCommand::NotifyInterruption(kind));
     }
 
+    /// Whether the queue is gone, so no command reaches it.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.postbox.is_closed()
+    }
+
     fn call(&self, command: QueueCommand<S>) -> Result<(), QueueError> {
         let ticket = self.postbox.post(command).map_err(|_| PlayError::Closed)?;
         ticket.wait().map_err(|refused| match refused {

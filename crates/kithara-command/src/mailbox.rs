@@ -92,6 +92,12 @@ impl<C, R> Postbox<C, R> {
         }
         Ok(Ticket { seq, answered })
     }
+
+    /// Whether the owner dropped its mailbox, so a post reaches no one.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        matches!(self.state.lock().holder, Holder::Gone)
+    }
 }
 
 /// Where a post's answer comes. Dropping it gives the answer up; the owner
@@ -292,6 +298,19 @@ mod tests {
 
         assert_eq!(ticket.wait(), Err(Refused::Unanswered));
         assert_eq!(postbox.post(2).err(), Some(PostError));
+    }
+
+    #[kithara::test]
+    fn a_postbox_reads_closed_only_once_the_owner_drops_its_mailbox() {
+        let (postbox, mut mailbox) = mailbox::<u32, ()>();
+        assert!(!postbox.is_closed(), "nobody holds it yet, but it is open");
+        mailbox.hold(waker().0);
+        mailbox.release();
+        assert!(!postbox.is_closed(), "a released mailbox stays open");
+
+        drop(mailbox);
+
+        assert!(postbox.is_closed());
     }
 
     /// Drains `mailbox` and gives back the commands, unanswered.

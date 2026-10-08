@@ -23,13 +23,13 @@ use crate::{
 pub struct HostSender<S> {
     pub(crate) id: crate::DeckId,
     pub(crate) root_view: RootView,
-    pub(crate) postbox: HostPostbox<HostCommand<S, dyn kithara_play::HostedDeck<S>>>,
+    pub(crate) postbox: HostPostbox<HostCommand<S, dyn HostedDeck<S>>>,
 }
 
 /// The main-thread endpoint driving the same canonical owner.
-pub struct HostReceiver<S> {
+pub struct HostReceiver<S: 'static> {
     pub(crate) state: WebSessionState<HostCore<S>>,
-    pub(crate) route: Arc<HostRoute<HostCommand<S, dyn kithara_play::HostedDeck<S>>>>,
+    pub(crate) route: Arc<HostRoute<HostCommand<S, dyn HostedDeck<S>>>>,
 }
 
 pub(crate) struct HostRoute<C> {

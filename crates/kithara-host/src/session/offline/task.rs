@@ -9,11 +9,11 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_play::{HostedDeck, PlayError};
-use kithara_worker::{Dispatcher, Task, TaskConfig, TaskHandle, TickResult};
+use kithara_worker::{Dispatcher, Task, TaskConfig, TickResult};
 use thiserror::Error;
 
 use super::{
-    OfflineSessionClient,
+    OfflineSessionClient, OfflineTaskHandle, OfflineTaskRoute,
     backend::{BackendConfig, OfflineStream},
 };
 use crate::{
@@ -197,7 +197,7 @@ pub(crate) fn spawn<S, O>(
     root_view: RootView,
     config: OfflineTaskConfig<S>,
     layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
-) -> Result<(Arc<OfflineSessionClient<O::Command>>, TaskHandle), PlayError>
+) -> Result<(Arc<OfflineSessionClient<O::Command>>, OfflineTaskHandle), PlayError>
 where
     S: HasPool<f32> + Send + Sync + 'static,
     O: HostOwner<S>,
@@ -217,14 +217,11 @@ where
     let pending = dispatcher.reserve(task_config).map_err(|error| {
         PlayError::Internal(format!("offline session task reservation: {error}"))
     })?;
-    let client = Arc::new(OfflineSessionClient::new(
-        postbox,
-        cmd_tx,
-        pending.context().control(),
-    ));
+    let route = OfflineTaskRoute::new(&pending);
+    let client = Arc::new(OfflineSessionClient::new(postbox, cmd_tx, route.clone()));
     let inbox: Arc<dyn DeckInbox> = client.clone();
-    let task = pending
-        .start_local(move |_| {
+    let task = route
+        .start(pending, move |_| {
             let start = move |ctx: &mut firewheel::FirewheelContext, rate: u32| {
                 let rate = NonZeroU32::new(rate)
                     .ok_or_else(|| "offline sample rate must be non-zero".to_owned())?;
@@ -314,7 +311,7 @@ mod tests {
     struct DeckSession {
         client: Arc<OfflineSessionClient<TestPools>>,
         decks: SessionDecks,
-        _task: TaskHandle,
+        _task: OfflineTaskHandle,
         _dispatcher: Dispatcher,
         _worker: Worker,
     }

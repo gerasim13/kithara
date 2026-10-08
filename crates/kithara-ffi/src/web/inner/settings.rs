@@ -1,6 +1,6 @@
 use kithara::{
     platform::{atomic::RelaxedAtomicF32, sync::Mutex},
-    play::{CrossfadeSettings, DEFAULT_CROSSFADE_DURATION},
+    play::CrossfadeSettings,
     queue::{ActionAtItemEnd, PlaybackOrder, RepeatMode},
 };
 
@@ -31,12 +31,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             volume: RelaxedAtomicF32::new(Self::DEFAULT_VOLUME),
-            crossfade_settings: Mutex::new(FfiCrossfadeSettings {
-                duration: Self::DEFAULT_CROSSFADE_SECONDS,
-                curve: crate::types::FfiCrossfadeCurve::EqualPower,
-                depth: 1.0,
-                position: 0.5,
-            }),
+            crossfade_settings: Mutex::new(CrossfadeSettings::default().into()),
             playing_rate: RelaxedAtomicF32::new(Self::DEFAULT_PLAYING_RATE),
             repeat_mode: Mutex::new(FfiRepeatMode::Off),
             playback_order: Mutex::new(FfiPlaybackOrder::Sequential),
@@ -48,7 +43,6 @@ impl Default for Settings {
 }
 
 impl Settings {
-    const DEFAULT_CROSSFADE_SECONDS: f32 = DEFAULT_CROSSFADE_DURATION;
     const DEFAULT_PLAYING_RATE: f32 = 1.0;
     const DEFAULT_VOLUME: f32 = 0.5;
 

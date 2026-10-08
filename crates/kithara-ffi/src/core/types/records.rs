@@ -1014,14 +1014,6 @@ mod tests {
                 FfiDecoderChangeCause::FormatBoundary,
             ),
             (
-                DecoderChangeCause::SeekRecreate,
-                FfiDecoderChangeCause::SeekRecreate,
-            ),
-            (
-                DecoderChangeCause::Recovery,
-                FfiDecoderChangeCause::Recovery,
-            ),
-            (
                 DecoderChangeCause::HostRateChange,
                 FfiDecoderChangeCause::HostRateChange,
             ),

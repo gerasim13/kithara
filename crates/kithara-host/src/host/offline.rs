@@ -22,7 +22,7 @@ use crate::{
     rt::SessionOutput,
     session::{
         HostDispatcher, HostRoot, RootView,
-        offline::{OfflineSessionClient, OfflineTaskConfig},
+        offline::{OfflineSessionClient, OfflineTaskConfig, OfflineTaskHandle},
     },
 };
 
@@ -98,7 +98,7 @@ pub(super) struct OfflineRuntime<S, O: HostOwner<S>> {
     client: Arc<OfflineSessionClient<O::Command>>,
     _dispatcher: kithara_worker::Dispatcher,
     max_block_frames: NonZeroU32,
-    _task: kithara_worker::TaskHandle,
+    _task: OfflineTaskHandle,
     _worker: Worker,
 }
 

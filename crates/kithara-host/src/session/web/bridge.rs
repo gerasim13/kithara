@@ -4,10 +4,7 @@ use firewheel::FirewheelContext;
 use firewheel_web_audio::WebAudioBackend;
 
 use super::client::WebSessionState;
-use crate::{
-    HostOwner,
-    session::{dispatch::OwnerPosts, protocol::HostMailbox},
-};
+use crate::HostOwner;
 
 pub(super) fn init_bridge_state() {
     todo!(
@@ -16,19 +13,6 @@ pub(super) fn init_bridge_state() {
 }
 pub(super) fn reset_bridge_state() {
     todo!("Retire the browser owner snapshot on shutdown (spec §4.1)")
-}
-
-pub(crate) fn tick_and_poll_remote<S, O: HostOwner<S>>(
-    state: &WebSessionState<O>,
-    mailbox: &mut HostMailbox<O::Command>,
-    posts: &mut OwnerPosts,
-) {
-    let mut state = state.lock();
-    if let Some(owner) = state.as_mut() {
-        owner.begin_pass();
-        posts.drain(owner, mailbox);
-        posts.pass(owner);
-    }
 }
 
 pub(crate) fn bridge_position_secs() -> f64 {

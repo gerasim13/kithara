@@ -59,7 +59,6 @@ pub(crate) fn encode_item_event(event: &FfiItemEvent) -> JsValue {
             channels,
             bit_depth,
             bitrate,
-            epoch,
             cause,
             variant,
             base_offset,
@@ -76,7 +75,6 @@ pub(crate) fn encode_item_event(event: &FfiItemEvent) -> JsValue {
             set_f64(&obj, "channels", f64::from(*channels));
             set_opt_f64(&obj, "bit_depth", bit_depth.map(f64::from));
             set_opt_f64(&obj, "bitrate", bitrate.map(f64::from));
-            set_f64(&obj, "epoch", num_traits::cast(*epoch).unwrap_or(0.0));
             set_str(&obj, "cause", decoder_change_cause_str(*cause));
             set_opt_f64(&obj, "variant", variant.map(f64::from));
             set_f64(
@@ -167,18 +165,14 @@ pub(crate) fn encode_item_event(event: &FfiItemEvent) -> JsValue {
         }
         FfiItemEvent::SeekComplete {
             position_seconds,
-            epoch,
         } => {
             set_str(&obj, KIND, "SeekComplete");
             set_f64(&obj, "position_seconds", *position_seconds);
-            set_f64(&obj, "epoch", num_traits::cast(*epoch).unwrap_or(0.0));
         }
         FfiItemEvent::SeekRejected {
-            epoch,
             target_seconds,
         } => {
             set_str(&obj, KIND, "SeekRejected");
-            set_f64(&obj, "epoch", num_traits::cast(*epoch).unwrap_or(0.0));
             set_f64(&obj, "target_seconds", *target_seconds);
         }
         FfiItemEvent::DecoderReady {
@@ -193,7 +187,7 @@ pub(crate) fn encode_item_event(event: &FfiItemEvent) -> JsValue {
             );
             set_opt_f64(&obj, "variant", variant.map(f64::from));
         }
-        FfiItemEvent::TrackFailed { reason, epoch } => {
+        FfiItemEvent::TrackFailed { reason } => {
             set_str(&obj, KIND, "TrackFailed");
             set_str(&obj, "reason", track_failure_kind_str(reason));
             match reason {
@@ -208,30 +202,26 @@ pub(crate) fn encode_item_event(event: &FfiItemEvent) -> JsValue {
                 | FfiTrackFailureKind::Render
                 | FfiTrackFailureKind::Unknown => {}
             }
-            set_f64(&obj, "epoch", num_traits::cast(*epoch).unwrap_or(0.0));
         }
-        FfiItemEvent::UnderrunStarted { position_ms, epoch } => {
+        FfiItemEvent::UnderrunStarted { position_ms } => {
             set_str(&obj, KIND, "UnderrunStarted");
             set_f64(
                 &obj,
                 "position_ms",
                 num_traits::cast(*position_ms).unwrap_or(0.0),
             );
-            set_f64(&obj, "epoch", num_traits::cast(*epoch).unwrap_or(0.0));
         }
-        FfiItemEvent::UnderrunEnded { position_ms, epoch } => {
+        FfiItemEvent::UnderrunEnded { position_ms } => {
             set_str(&obj, KIND, "UnderrunEnded");
             set_f64(
                 &obj,
                 "position_ms",
                 num_traits::cast(*position_ms).unwrap_or(0.0),
             );
-            set_f64(&obj, "epoch", num_traits::cast(*epoch).unwrap_or(0.0));
         }
         FfiItemEvent::BufferHealth {
             buffered_ms,
             decoded_frontier_ms,
-            epoch,
         } => {
             set_str(&obj, KIND, "BufferHealth");
             set_f64(
@@ -244,7 +234,6 @@ pub(crate) fn encode_item_event(event: &FfiItemEvent) -> JsValue {
                 "decoded_frontier_ms",
                 num_traits::cast(*decoded_frontier_ms).unwrap_or(0.0),
             );
-            set_f64(&obj, "epoch", num_traits::cast(*epoch).unwrap_or(0.0));
         }
         FfiItemEvent::EngineLoad {
             load,
@@ -584,8 +573,6 @@ fn decoder_change_cause_str(cause: FfiDecoderChangeCause) -> &'static str {
         FfiDecoderChangeCause::Initial => "Initial",
         FfiDecoderChangeCause::VariantSwitch => "VariantSwitch",
         FfiDecoderChangeCause::FormatBoundary => "FormatBoundary",
-        FfiDecoderChangeCause::SeekRecreate => "SeekRecreate",
-        FfiDecoderChangeCause::Recovery => "Recovery",
         FfiDecoderChangeCause::HostRateChange => "HostRateChange",
         FfiDecoderChangeCause::Unknown => "Unknown",
     }

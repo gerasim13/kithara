@@ -301,6 +301,17 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
+    fn a_control_reads_closed_once_its_queue_is_dropped() {
+        let (queue, _audio_thread) = make_queue();
+        let control = queue.control();
+        assert!(!control.is_closed(), "the queue still owns its mailbox");
+
+        drop(queue);
+
+        assert!(control.is_closed());
+    }
+
+    #[kithara::test]
     fn queue_registers_its_resident_players_deck_with_the_session() {
         let grid_id = BeatGridId::allocate().expect("fixture grid id");
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());

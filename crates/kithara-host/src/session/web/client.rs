@@ -123,10 +123,10 @@ where
     Ok((dispatcher, state, route))
 }
 
-pub(crate) fn remote<S, O: HostOwner<S>>(
+pub(crate) fn remote<S: 'static, O: HostOwner<S>>(
     postbox: HostPostbox<O::Command>,
 ) -> Arc<dyn HostDispatcher<O::Command>> {
-    Arc::new(SessionClient {
+    Arc::new(SessionClient::<S, O> {
         postbox,
         host: SessionHost::Remote,
         marker: PhantomData,
