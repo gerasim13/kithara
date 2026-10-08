@@ -12,7 +12,7 @@ use kithara_platform::{
 use kithara_signal::AudioSpec;
 
 use super::pcm_reader::prepared_sample;
-use crate::{AudioControl, AudioRead, AudioSession, PendingReason, ReadOutcome, SeekOutcome};
+use crate::{AudioControl, AudioRead, AudioReadError, AudioSession, PendingReason, ReadOutcome, SeekOutcome};
 
 mod consts {
     use std::num::NonZeroU32;
@@ -128,14 +128,15 @@ impl MockReader {
         (reader, counts)
     }
 
-    fn fixed_outcome(&self) -> Result<ReadOutcome, DecodeError> {
+    fn fixed_outcome(&self) -> Result<ReadOutcome, AudioReadError> {
         match &self.behavior {
             MockBehavior::LiveFrontier { .. } => Ok(ReadOutcome::Eof {
                 position: Duration::ZERO,
             }),
             MockBehavior::Faulty(Fault::DecodeError) => Err(DecodeError::Io {
                 source: std::io::Error::other("mock decode failure"),
-            }),
+            }
+            .into()),
             MockBehavior::Faulty(Fault::Stall | Fault::RefuseSeek)
             | MockBehavior::AdoptionTracking { .. }
             | MockBehavior::SeekTracking { .. }
@@ -192,7 +193,7 @@ impl AudioRead for MockReader {
         }
     }
 
-    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
         let MockBehavior::MisreportedDuration {
             position_frames,
             remaining_frames,
@@ -226,7 +227,7 @@ impl AudioRead for MockReader {
     fn read_planar<'a>(
         &mut self,
         output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
+    ) -> Result<ReadOutcome, AudioReadError> {
         let MockBehavior::MisreportedDuration {
             position_frames,
             remaining_frames,
@@ -266,7 +267,7 @@ impl AudioRead for MockReader {
 }
 
 impl AudioControl for MockReader {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
         match &mut self.behavior {
             MockBehavior::SeekTracking { seek_log } => {
                 let ms = u64::try_from(position.as_millis()).expect("test seek fits in u64");
@@ -275,7 +276,7 @@ impl AudioControl for MockReader {
             MockBehavior::Faulty(Fault::RefuseSeek) => {
                 return Err(DecodeError::Io {
                     source: std::io::Error::other("mock seek refusal"),
-                });
+                }.into());
             }
             MockBehavior::SeekSplit(counts) => {
                 counts.blocking_seeks.fetch_add(1, Ordering::Relaxed);

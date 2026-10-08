@@ -40,6 +40,12 @@ on:
           each.
         default: ''
         type: string
+      narrow:
+        description: >-
+          Nextest filterset every lane's test suite is narrowed to. Empty
+          narrows nothing.
+        default: ''
+        type: string
 
 # Not inherited from the caller: a called workflow gets its own environment.
 env:
@@ -120,6 +126,7 @@ jobs:
       artifact-when: ${{ matrix.artifact.when || 'always' }}
       runner: ${{ matrix.runner || '' }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
+      narrow: ${{ inputs.narrow }}
 
   # A lane that reads what the matrix produced. It runs under `always()` so a
   # report still describes a night in which one measurement failed - a report
@@ -146,3 +153,4 @@ jobs:
       artifact-when: ${{ matrix.artifact.when || 'always' }}
       runner: ${{ matrix.runner || '' }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
+      narrow: ${{ inputs.narrow }}

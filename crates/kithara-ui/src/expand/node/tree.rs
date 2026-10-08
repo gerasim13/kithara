@@ -132,9 +132,11 @@ pub enum ExpandedNode {
         size: Option<SizeSpec>,
         children: Vec<Self>,
     },
+    /// Selection reserves the largest child size; a list stacks children vertically.
     Slot {
         id: InternId,
         size: Option<SizeSpec>,
+        select: bool,
         children: Vec<Self>,
     },
     Control {
@@ -305,7 +307,7 @@ pub enum ControlSpec {
 }
 
 /// Which side of the host contract a [`Binding`] addresses.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BindingKind {
     Command,
@@ -324,6 +326,11 @@ pub enum BindingKind {
     /// here.
     Page {
         name: InternId,
+    },
+    /// Tests whether a text read matches `keys`; `invert` negates the result.
+    Selects {
+        keys: Box<[InternId]>,
+        invert: bool,
     },
 }
 

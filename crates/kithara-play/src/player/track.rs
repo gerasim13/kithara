@@ -11,7 +11,7 @@ use kithara_platform::time::Duration;
 use kithara_render::{
     CrossfadeSettings, Dispatched, DispatcherProtocol, LaneCommand, LaneFrame, LaneId,
     LaneProtocol, LoadRequest,
-    bridge::{DeckEvent, DeckPart, DeckProtocol, DeckRefusal, Fade, FadeDir, Returned, Slot, SlotMark, SlotState},
+    bridge::{PlaybackFault, DeckEvent, DeckPart, DeckProtocol, DeckRefusal, Fade, FadeDir, Returned, Slot, SlotMark, SlotState},
 };
 use kithara_signal::{FrameCount, SegmentId, SessionFrame};
 use kithara_warp::SpeedCurve;
@@ -55,6 +55,7 @@ pub enum TrackStatus {
     Paused { at: Position },
     Faded { at: SessionFrame },
     Ended { at: SessionFrame },
+    Failed { at: SessionFrame, fault: PlaybackFault },
     Released,
 }
 
@@ -724,7 +725,17 @@ impl<S> Player<S> for PlayerImpl<S> {
             TrackReceipt::Deck { seq, outcome, batch } if batch.basis.iter().any(|&(slot, _)| slot == self.slot) => self.applied(seq, outcome, batch, out),
             TrackReceipt::Deck { .. } => Settled::Pending,
             TrackReceipt::Event(event) => {
+                if !self.attached() || matches!(self.status, TrackStatus::Failed { .. }) {
+                    return Settled::Pending;
+                }
                 match event {
+                    DeckEvent::Failed { slot, at, fault } if slot == self.slot => {
+                        if let TrackStatus::Playing { since } = self.status
+                            && at.frames_since(since).is_some()
+                        {
+                            self.status = TrackStatus::Failed { at, fault };
+                        }
+                    }
                     DeckEvent::Ended { slot, at } if slot == self.slot && !self.repeat => self.status = TrackStatus::Ended { at },
                     DeckEvent::Faded { slot, at } if slot == self.slot => self.status = TrackStatus::Faded { at },
                     DeckEvent::Underrun { slot, .. } if slot == self.slot && self.loading.is_none() => {

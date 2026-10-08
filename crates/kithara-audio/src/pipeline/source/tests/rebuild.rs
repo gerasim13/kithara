@@ -921,9 +921,9 @@ fn recreate_state(variant: u32) -> RecreateState {
 }
 
 pub(super) struct RebuildFixture {
-    control: Arc<TestControl>,
-    drops: Arc<Mutex<Vec<u64>>>,
-    pools: Pools,
+    pub(super) control: Arc<TestControl>,
+    pub(super) drops: Arc<Mutex<Vec<u64>>>,
+    pub(super) pools: Pools,
     pub(super) source: StreamAudioSource<TestStream>,
 }
 
@@ -970,14 +970,8 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
     let pools = pools();
     let control = Arc::new(TestControl::new(media_info(variant)));
     let drops = Arc::new(Mutex::new(Vec::new()));
-    let stream = match Stream::<TestStream>::new(TestConfig {
-        source: TestSource::new(control.clone()),
-    })
-    .await
-    {
-        Ok(stream) => stream,
-        Err(err) => panic!("test stream construction failed: {err}"),
-    };
+    let stream = Stream::<TestStream>::new(TestConfig { source: TestSource::new(control.clone()) })
+        .await.expect("test stream");
     let shared_stream = SharedStream::new(stream);
     let factory_drops = drops.clone();
     let decoder_factory = DecoderFactory::new(
@@ -1769,7 +1763,7 @@ async fn decode_error_precedes_track_failure_on_event_bus() {
     assert!(matches!(
         events.try_recv().map(|envelope| envelope.event),
         Ok(AudioLaneEvent::Audio(AudioEvent::TrackFailed {
-            failure: TrackFailureKind::Decode,
+            failure: TrackFailureKind::Decode { kind: crate::DecodeErrorKind::InvalidData },
         }))
     ));
 }
@@ -2195,19 +2189,19 @@ async fn rebuild_factory_panic_fails_track_without_hang() {
     source.set_host_sample_rate(NonZeroU32::new(consts::ROUTE_SAMPLE_RATE).expect("host rate"));
     assert!(matches!(
         source.phase,
-        super::super::OwnerPhase::Failed(Some(DecodeError::InvalidData {
-            detail: "decoder factory panicked"
-        }))
+        super::super::OwnerPhase::Failed {
+            failure: TrackFailureKind::RecreateFailed { offset: 0 },
+            error: Some(DecodeError::InvalidData { detail: "decoder factory panicked" })
+        }
     ));
     assert!(matches!(
         source.step_track(),
-        TrackStep::Failed(DecodeError::InvalidData {
-            detail: "decoder factory panicked"
-        })
+        TrackStep::Failed(TrackFailureKind::RecreateFailed { offset: 0 })
     ));
+    source.finish_deferred();
     assert!(matches!(
         source.phase,
-        super::super::OwnerPhase::Failed(None)
+        super::super::OwnerPhase::Failed { failure: TrackFailureKind::RecreateFailed { offset: 0 }, error: None }
     ));
 }
 

@@ -367,6 +367,7 @@ impl<S> TrackReceipt<'_, S> {
             Self::Deck { batch, .. } => batch.basis.iter().any(|&(named, _)| named == slot),
             Self::Event(
                 DeckEvent::Ended { slot: named, .. }
+                | DeckEvent::Failed { slot: named, .. }
                 | DeckEvent::Faded { slot: named, .. }
                 | DeckEvent::Underrun { slot: named, .. },
             ) => *named == slot,

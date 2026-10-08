@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use kithara_audio::{Audio, ResamplerBackend, SeekOutcome};
+use kithara_audio::{Audio, AudioReadError, ResamplerBackend, SeekOutcome, TrackFailureKind};
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_command::{ChannelConfig, Inbox, Sender, channel};
 use kithara_decode::DecodeError;
@@ -39,6 +39,8 @@ pub enum LoadRefusal {
     #[error(transparent)]
     Open(#[from] DecodeError),
     #[error(transparent)]
+    Source(TrackFailureKind),
+    #[error(transparent)]
     Pool(#[from] PoolError),
 }
 
@@ -48,7 +50,8 @@ impl From<LoadRefusal> for DecodeError {
             LoadRefusal::Open(error) => error,
             refusal @ (LoadRefusal::Capacity { .. }
             | LoadRefusal::Cancelled
-            | LoadRefusal::Pool(_)) => Self::audio_stream("play worker load", refusal),
+            | LoadRefusal::Pool(_)
+            | LoadRefusal::Source(_)) => Self::audio_stream("play worker load", refusal),
         }
     }
 }
@@ -202,7 +205,10 @@ where
         {
             return Err(LoadRefusal::Cancelled);
         }
-        let position = match audio.seek(position).map_err(decode_refusal)? {
+        let position = match audio.seek(position).map_err(|error| match error {
+            AudioReadError::Decode(error) => decode_refusal(error),
+            error => LoadRefusal::Source(TrackFailureKind::from(&error)),
+        })? {
             SeekOutcome::Landed { landed_at, .. } => landed_at,
             SeekOutcome::PastEof { duration, .. } => duration,
         };
@@ -259,7 +265,7 @@ where
         {
             return Err(LoadRefusal::Cancelled);
         }
-        preloaded.map_err(decode_refusal)?;
+        preloaded.map_err(LoadRefusal::Source)?;
         let latency = lane.engine_latency();
         Ok((receiver, lane, latency))
     }

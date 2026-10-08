@@ -1,6 +1,6 @@
 use super::{Audio, AudioContext};
 use crate::{
-    AudioSource, DecodeError, Fetch, ReadOutcome, SeekOutcome, SourceSpan, TrackStep,
+    AudioSource, Fetch, ReadOutcome, SeekOutcome, SourceSpan, TrackStep,
     WaitingReason,
     test_pools::{Pools, pools, sample_buffer},
 };
@@ -18,7 +18,7 @@ struct StagedSource {
 }
 impl AudioSource for StagedSource {
     type Chunk = AudioChunk;
-    fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
+    fn seek(&mut self, target: Duration) -> Result<SeekOutcome, crate::AudioReadError> {
         self.chunks.clear();
         Ok(SeekOutcome::Landed {
             target,

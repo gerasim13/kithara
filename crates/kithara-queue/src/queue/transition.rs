@@ -736,7 +736,7 @@ where
         let track = self.current_track()?;
         let snapshot = track.snapshot();
         let snapshot = snapshot.as_ref();
-        if let PlayingStatus::Ended { at } = snapshot.status {
+        if let PlayingStatus::Ended { at } | PlayingStatus::Failed { at, .. } = snapshot.status {
             return Some(at);
         }
         if !matches!(snapshot.status, PlayingStatus::Playing { .. }) {

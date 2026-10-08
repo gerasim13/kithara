@@ -4,10 +4,9 @@ use std::{
 };
 
 use kithara_audio::{
-    AudioSource, Fetch, SourceEnd, TrackStep, WaitingReason, map_decode_error_kind,
+    AudioSource, Fetch, SourceEnd, TrackStep, WaitingReason, TrackFailureKind,
 };
 use kithara_bufpool::{HasPool, PoolRegion};
-use kithara_decode::DecodeError;
 use kithara_platform::{sync::Arc, time::WallInstant};
 use kithara_signal::{AudioChunk, AudioChunkInfo, FrameCount, SegmentId};
 use kithara_stream::ActivityWriter;
@@ -30,8 +29,8 @@ pub struct DecoderNode<T, S> {
     activity: Option<ActivityWriter>,
     priority: ServiceClass,
     pending: Option<PendingPacket>,
-    terminal: Option<SegmentId>,
-    load_error: Option<DecodeError>,
+    terminal: Option<Result<SegmentId, TrackFailureKind>>,
+    load_error: Option<TrackFailureKind>,
     last_output: AudioChunkInfo,
     engine_load: Option<Arc<EngineLoad>>,
     pools: PoolRegion<S>,
@@ -64,7 +63,7 @@ where
         }
     }
 
-    pub(super) async fn preload(&mut self) -> Result<(), DecodeError> {
+    pub(super) async fn preload(&mut self) -> Result<(), TrackFailureKind> {
         self.warm_up();
         poll_fn(|cx| {
             let _ = self.source.poll_commands(cx);
@@ -88,10 +87,10 @@ where
         self.source.engine_latency()
     }
 
-    fn synchronize(&mut self) -> Result<(), DecodeError> {
+    fn synchronize(&mut self) -> Result<(), TrackFailureKind> {
         self.source.service_commands()?;
         let segment = self.source.cursor().segment;
-        if self.terminal.is_some_and(|terminal| terminal != segment) {
+        if self.terminal.is_some_and(|terminal| matches!(terminal, Ok(ended) if ended != segment)) {
             self.terminal = None;
         }
         if self
@@ -99,10 +98,7 @@ where
             .as_ref()
             .is_some_and(|pending| match &pending.packet {
                 PcmPacket::Chunk(chunk) => chunk.meta.segment != segment,
-                PcmPacket::Failed {
-                    segment: pending_segment,
-                    ..
-                } => *pending_segment != segment,
+                PcmPacket::Failed { .. } => false,
             })
             && let Some(pending) = self.pending.take()
         {
@@ -117,13 +113,17 @@ where
         }
     }
 
-    fn fail(&mut self, error: DecodeError) {
-        let kind = map_decode_error_kind(&error);
-        self.load_error = Some(error);
+    fn fail(&mut self, failure: TrackFailureKind) {
+        if matches!(self.terminal, Some(Err(_)))
+            || self.pending.as_ref().is_some_and(|pending| matches!(pending.packet, PcmPacket::Failed { .. }))
+        {
+            return;
+        }
+        self.load_error = Some(failure);
         self.pending = Some(PendingPacket {
             packet: PcmPacket::Failed {
                 segment: self.source.cursor().segment,
-                kind,
+                failure,
             },
             source_end: None,
         });
@@ -134,8 +134,8 @@ where
             return TickResult::Waiting;
         };
         let (meta, terminal) = match &pending.packet {
-            PcmPacket::Chunk(chunk) => (Some(chunk.meta), chunk.meta.end_of_track),
-            PcmPacket::Failed { .. } => (None, true),
+            PcmPacket::Chunk(chunk) => (Some(chunk.meta), chunk.meta.end_of_track.then_some(Ok(chunk.meta.segment))),
+            PcmPacket::Failed { failure, .. } => (None, Some(Err(*failure))),
         };
         match self.port.forward.try_push(pending.packet) {
             Ok(()) => {
@@ -151,8 +151,8 @@ where
                         kithara::probe_event!(chunk_admitted, segment = meta.segment.get());
                     }
                 }
-                if terminal {
-                    self.terminal = Some(self.source.cursor().segment);
+                if let Some(terminal) = terminal {
+                    self.terminal = Some(terminal);
                 }
                 self.port.signal();
                 TickResult::Progress
@@ -243,7 +243,7 @@ where
         if self.pending.is_some() {
             return self.admit();
         }
-        if self.port.forward.is_full() {
+        if matches!(self.terminal, Some(Err(_))) || self.port.forward.is_full() {
             return TickResult::Backpressured;
         }
         let start = WallInstant::now();
@@ -263,21 +263,19 @@ where
                 });
             }
             TrackStep::Produced(Fetch::NaturalEof) | TrackStep::Eof => {
-                if self.terminal == Some(self.source.cursor().segment) {
+                if self.terminal == Some(Ok(self.source.cursor().segment)) {
                     return TickResult::Backpressured;
                 }
                 self.eof();
             }
-            TrackStep::Produced(Fetch::Failure) => {
-                if self.terminal == Some(self.source.cursor().segment) {
+            TrackStep::Produced(Fetch::Failure { failure }) => {
+                if self.terminal == Some(Ok(self.source.cursor().segment)) {
                     return TickResult::Backpressured;
                 }
-                self.fail(DecodeError::InvalidData {
-                    detail: "lane source failed",
-                });
+                self.fail(failure);
             }
             TrackStep::Failed(error) => {
-                if self.terminal == Some(self.source.cursor().segment) {
+                if self.terminal == Some(Ok(self.source.cursor().segment)) {
                     return TickResult::Backpressured;
                 }
                 self.fail(error);
@@ -358,7 +356,7 @@ mod scheduler_tests {
 
     impl AudioSource for MockSource {
         type Chunk = AudioChunk;
-        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
+        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, kithara_audio::AudioReadError> {
             self.cursor = 0;
             Ok(SeekOutcome::Landed { target, landed_at: target })
         }
@@ -385,14 +383,14 @@ mod scheduler_tests {
 
     impl AudioSource for FailingSource {
         type Chunk = AudioChunk;
-        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
+        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, kithara_audio::AudioReadError> {
             Ok(SeekOutcome::Landed { target, landed_at: target })
         }
         fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
         fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
 
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
-            TrackStep::Failed(DecodeError::InvalidData { detail: "fixture failure" })
+            TrackStep::Failed(TrackFailureKind::Decode { kind: kithara_audio::DecodeErrorKind::InvalidData })
         }
     }
 
@@ -531,7 +529,7 @@ mod scheduler_tests {
 
         impl AudioSource for EndlessSource {
             type Chunk = AudioChunk;
-            fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
+            fn seek(&mut self, target: Duration) -> Result<SeekOutcome, kithara_audio::AudioReadError> {
                 Ok(SeekOutcome::Landed { target, landed_at: target })
             }
             fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
@@ -551,7 +549,7 @@ mod scheduler_tests {
 
         impl AudioSource for WaitingSource {
             type Chunk = AudioChunk;
-            fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
+            fn seek(&mut self, target: Duration) -> Result<SeekOutcome, kithara_audio::AudioReadError> {
                 Ok(SeekOutcome::Landed { target, landed_at: target })
             }
             fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
@@ -879,7 +877,7 @@ mod tests {
 
     impl AudioSource for ScriptedSource {
         type Chunk = AudioChunk;
-        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> { Ok(SeekOutcome::Landed { target, landed_at: target }) }
+        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, kithara_audio::AudioReadError> { Ok(SeekOutcome::Landed { target, landed_at: target }) }
         fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
         fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
         fn commit_source_end(&mut self, end: SourceEnd) { self.commits.lock().push(end); }
@@ -891,6 +889,66 @@ mod tests {
         let id = SegmentId::FIRST.next();
         lane.send(When::Next, Batch { basis: Vec::new(), commands: vec![LaneCommand::Segment { id, from: Duration::from_secs(1), speed: kithara_warp::SpeedCurve::Constant(1.0) }] }).expect("segment batch");
         id
+    }
+
+    #[kithara::test(tokio)]
+    async fn worker_preload_gate_fires_on_failure() {
+        let failure = TrackFailureKind::Decode { kind: kithara_audio::DecodeErrorKind::InvalidData };
+        let (mut node, _receiver, _lane) = prepared_node(ScriptedSource::new([TrackStep::Failed(failure)]), 32, 8).await;
+        let result = kithara_platform::time::timeout(Duration::from_secs(1), node.preload())
+            .await.expect("decoder failure must complete the preload wait");
+        assert_eq!(result, Err(failure));
+        assert_eq!(node.terminal, Some(Err(failure)));
+    }
+
+    #[kithara::test(tokio)]
+    async fn worker_telemetry_throttles_immediate_repeats() {
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
+        let packet = chunk(spec, SegmentId::FIRST, 0, 0, &vec![0.0; 30_870]);
+        let (mut node, mut receiver, _lane) = prepared_node(ScriptedSource::new([TrackStep::Produced(Fetch::data(packet))]), 4, 1).await;
+        let meter = Arc::new(EngineLoad::default());
+        meter.record(Duration::from_millis(5), 4_410, 44_100);
+        node.engine_load = Some(Arc::clone(&meter));
+        receiver.set_position(Duration::from_millis(100));
+        assert_eq!(node.tick(), TickResult::Progress);
+        let first = meter.snapshot();
+        for _ in 0..2 {
+            assert_eq!(receiver.cached_span(), Duration::from_millis(250));
+            assert_eq!(receiver.decoded_frontier(), Duration::from_millis(350));
+            assert!(meter.snapshot().is_active());
+            assert_eq!(meter.snapshot().load(), first.load());
+            assert_eq!(meter.snapshot().ms(), first.ms());
+        }
+        assert!(receiver.pop().is_some());
+        assert!(receiver.pop().is_none(), "second immediate observation does not republish");
+    }
+
+    #[kithara::test(tokio)]
+    async fn deferred_eof_event_keeps_the_decode_epoch() {
+        let (mut node, mut receiver, mut lane) = prepared_node(ScriptedSource::new([]), 1, 1).await;
+        assert_eq!(node.tick(), TickResult::Progress);
+        assert_eq!(node.tick(), TickResult::Progress);
+        let live_segment = segment(&mut lane);
+        assert_eq!(live_segment, SegmentId::FIRST.next(), "seek overtakes the deferred EOF read");
+        let mut eof_segments = std::iter::from_fn(|| receiver.pop()).filter_map(|packet| match packet {
+            PcmPacket::Chunk(chunk) if chunk.meta.end_of_track => Some(chunk.meta.segment),
+            _ => None,
+        });
+        assert_eq!(eof_segments.next(), Some(SegmentId::FIRST));
+        assert_eq!(eof_segments.next(), None);
+    }
+
+    #[kithara::test(tokio)]
+    #[case(WaitingReason::Waiting)]
+    #[case(WaitingReason::WaitingDemand)]
+    #[case(WaitingReason::WaitingMetadata)]
+    async fn decoder_node_upstream_park_after_audio_opens_the_preload_gate(#[case] reason: WaitingReason) {
+        let source = ScriptedSource::new([produced(), TrackStep::Blocked(reason)]);
+        let (mut node, _receiver, _lane) = prepared_node(source, 4, 2).await;
+        let _ = node.tick();
+        assert!(!node.source.is_preloaded(), "the chunk quota is not met after one chunk");
+        let _ = node.tick();
+        assert!(node.source.is_preloaded(), "a producer parked on {reason:?} with audio behind it must not strand the construction wait");
     }
 
     #[kithara::test(tokio)]
@@ -956,7 +1014,7 @@ mod tests {
         assert_eq!(eof_node.tick(), TickResult::Progress);
         assert_eq!(eof_node.tick(), TickResult::Progress);
         let eof_marker = eof_receiver.pop();
-        let failed = TrackStep::Failed(DecodeError::InvalidData { detail: "fixture failure" });
+        let failed = TrackStep::Failed(TrackFailureKind::Decode { kind: kithara_audio::DecodeErrorKind::InvalidData });
         let (mut failed_node, mut failed_receiver, _lane) = prepared_node(ScriptedSource::new([failed]), 1, 1).await;
         assert_eq!(failed_node.tick(), TickResult::Progress);
         let failed_marker = failed_receiver.pop();

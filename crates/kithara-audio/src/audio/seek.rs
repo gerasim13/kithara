@@ -9,7 +9,7 @@ use kithara_test_utils::kithara;
 
 use super::{Audio, core::AudioContext};
 use crate::{
-    AudioSource, ChunkOutcome, DecodeError, Fetch, SeekOutcome, TrackStep,
+    AudioSource, ChunkOutcome, Fetch, SeekOutcome, TrackStep,
     test_pools::{pools, sample_buffer},
 };
 
@@ -23,7 +23,7 @@ struct LandingSource {
 impl AudioSource for LandingSource {
     type Chunk = AudioChunk;
 
-    fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
+    fn seek(&mut self, target: Duration) -> Result<SeekOutcome, crate::AudioReadError> {
         self.target = target;
         self.delivered = false;
         self.playhead.set_position(target);

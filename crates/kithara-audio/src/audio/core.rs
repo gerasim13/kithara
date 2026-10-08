@@ -3,10 +3,10 @@ use super::{
     cursor::{ChunkCursor, ReadBuffer, source_spans_coalesce},
 };
 use crate::{
-    AudioControl, AudioRead, AudioSession, AudioSource, ChunkOutcome, DecodeError, Fetch,
+    AudioControl, AudioRead, AudioReadError, FailureSource, AudioSession, AudioSource, ChunkOutcome, Fetch,
     PendingReason, ReadOutcome, SeekOutcome, SourceEnd, SourceSpan, TrackStep,
 };
-use kithara_decode::TrackMetadata;
+use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
@@ -29,6 +29,7 @@ pub struct Audio<S> {
     cursor: ChunkCursor,
     current_chunk: Option<AudioChunk>,
     preloaded: bool,
+    failure: Option<crate::TrackFailureKind>,
     marker: PhantomData<fn() -> S>,
 }
 
@@ -60,6 +61,7 @@ impl<S> Audio<S> {
             cursor: ChunkCursor::new(spec),
             current_chunk: None,
             preloaded: false,
+            failure: None,
             marker: PhantomData,
         }
     }
@@ -111,7 +113,7 @@ impl<S> Audio<S> {
     ///
     /// # Errors
     /// Returns a source or decoder failure.
-    pub fn preload(&mut self) -> Result<(), DecodeError> {
+    pub fn preload(&mut self) -> Result<(), AudioReadError> {
         self.preloaded = true;
         if self.current_chunk.is_none()
             && let ChunkOutcome::Chunk(chunk) = self.pull_chunk()?
@@ -125,10 +127,19 @@ impl<S> Audio<S> {
     ///
     /// # Errors
     /// Returns a source or decoder failure without rebuilding for a seek failure.
-    pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+    pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
+        if let Some(failure) = self.failure {
+            return Err(AudioReadError::Stream {
+                what: "seek decoded source",
+                source: FailureSource::ProducerAfterSeek { failure },
+            });
+        }
         self.current_chunk = None;
         self.cursor.clear();
         let result = self.source.seek(position);
+        if let Err(error) = &result {
+            self.failure = Some(crate::TrackFailureKind::from(error));
+        }
         if let Some(spec) = self.source.prepare_deferred() {
             self.cursor.set_spec(spec);
         }
@@ -149,7 +160,13 @@ impl<S> Audio<S> {
         }
         self.source.finish_deferred();
     }
-    fn pull_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+    fn pull_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError> {
+        if let Some(failure) = self.failure {
+            return Err(AudioReadError::Stream {
+                what: "read decoded source",
+                source: FailureSource::Producer { failure },
+            });
+        }
         if let Some(spec) = self.source.prepare_deferred() {
             self.cursor.set_spec(spec);
         }
@@ -162,10 +179,13 @@ impl<S> Audio<S> {
             TrackStep::Produced(Fetch::NaturalEof) | TrackStep::Eof => Ok(ChunkOutcome::Eof {
                 position: self.position(),
             }),
-            TrackStep::Produced(Fetch::Failure) => Err(DecodeError::InvalidData {
-                detail: "source failed",
-            }),
-            TrackStep::Failed(error) => Err(error),
+            TrackStep::Produced(Fetch::Failure { failure }) | TrackStep::Failed(failure) => {
+                self.failure = Some(failure);
+                Err(AudioReadError::Stream {
+                    what: "read decoded source",
+                    source: FailureSource::Producer { failure },
+                })
+            }
             TrackStep::Blocked(_) | TrackStep::StateChanged => Ok(ChunkOutcome::Pending {
                 reason: PendingReason::StreamBackpressure,
                 position: self.position(),
@@ -176,7 +196,7 @@ impl<S> Audio<S> {
     ///
     /// # Errors
     /// Returns a source or decoder failure.
-    pub fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+    pub fn next_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError> {
         let chunk = if let Some(chunk) = self.current_chunk.take() {
             let mut consumed = self.cursor.consumed_frames();
             crate::pipeline::seek::skip::apply_frames(chunk, &mut consumed)?
@@ -199,7 +219,7 @@ impl<S> Audio<S> {
     ///
     /// # Errors
     /// Returns invalid buffer geometry or a source failure.
-    pub fn read(&mut self, output: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+    pub fn read(&mut self, output: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
         self.read_into(ReadBuffer::Interleaved(output))
     }
     /// Copy samples into equal-length channel planes.
@@ -209,10 +229,10 @@ impl<S> Audio<S> {
     pub fn read_planar<'a>(
         &mut self,
         output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
+    ) -> Result<ReadOutcome, AudioReadError> {
         self.read_into(ReadBuffer::Planar(output))
     }
-    fn read_into(&mut self, mut output: ReadBuffer<'_, '_>) -> Result<ReadOutcome, DecodeError> {
+    fn read_into(&mut self, mut output: ReadBuffer<'_, '_>) -> Result<ReadOutcome, AudioReadError> {
         let capacity = output.capacity()?;
         let mut written = 0usize;
         let mut source_span: Option<SourceSpan> = None;
@@ -220,7 +240,10 @@ impl<S> Audio<S> {
         let mut eof = false;
         while written < capacity {
             if self.current_chunk.is_none() {
-                match self.pull_chunk()? {
+                match self.pull_chunk() {
+                    Err(_) if written > 0 => break,
+                    Err(error) => return Err(error),
+                    Ok(outcome) => match outcome {
                     ChunkOutcome::Chunk(chunk) => {
                         self.cursor.begin_chunk(&chunk);
                         self.current_chunk = Some(*chunk);
@@ -230,6 +253,7 @@ impl<S> Audio<S> {
                         break;
                     }
                     ChunkOutcome::Pending { .. } => break,
+                    },
                 }
             }
             let Some(chunk) = self.current_chunk.as_ref() else {
@@ -332,19 +356,19 @@ impl<S> AudioRead for Audio<S> {
     fn spec(&self) -> AudioSpec {
         self.spec()
     }
-    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+    fn next_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError> {
         self.next_chunk()
     }
     fn position(&self) -> Duration {
         self.position()
     }
-    fn read(&mut self, output: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+    fn read(&mut self, output: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
         self.read(output)
     }
     fn read_planar<'a>(
         &mut self,
         output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
+    ) -> Result<ReadOutcome, AudioReadError> {
         self.read_planar(output)
     }
 }
@@ -366,10 +390,10 @@ impl<S> AudioSession for Audio<S> {
     }
 }
 impl<S> AudioControl for Audio<S> {
-    fn preload(&mut self) -> Result<(), DecodeError> {
+    fn preload(&mut self) -> Result<(), AudioReadError> {
         self.preload()
     }
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
         self.seek(position)
     }
     fn set_host_sample_rate(&mut self, rate: NonZeroU32) {
@@ -378,7 +402,7 @@ impl<S> AudioControl for Audio<S> {
 }
 impl<S: 'static> AudioSource for Audio<S> {
     type Chunk = AudioChunk;
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
         self.seek(position)
     }
     fn set_host_sample_rate(&mut self, rate: NonZeroU32) {
@@ -400,16 +424,31 @@ impl<S: 'static> AudioSource for Audio<S> {
         self.source.prepare_deferred()
     }
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
+        if let Some(failure) = self.failure {
+            return TrackStep::Failed(failure);
+        }
         if let Some(chunk) = self.current_chunk.take() {
             let mut consumed = self.cursor.consumed_frames();
             let chunk = match crate::pipeline::seek::skip::apply_frames(chunk, &mut consumed) {
                 Ok(chunk) => chunk,
-                Err(error) => return TrackStep::Failed(error),
+                Err(error) => {
+                    let failure = crate::TrackFailureKind::Decode {
+                        kind: crate::map_decode_error_kind(&error),
+                    };
+                    self.failure = Some(failure);
+                    return TrackStep::Failed(failure);
+                }
             };
             if let Some(chunk) = chunk {
                 let end = match source_end(&chunk.meta, u64::from(chunk.meta.frames)) {
                     Ok(end) => end,
-                    Err(error) => return TrackStep::Failed(error),
+                    Err(error) => {
+                        let failure = crate::TrackFailureKind::Decode {
+                            kind: crate::map_decode_error_kind(&error),
+                        };
+                        self.failure = Some(failure);
+                        return TrackStep::Failed(failure);
+                    }
                 };
                 self.cursor.begin_chunk(&chunk);
                 return TrackStep::Produced(Fetch::rendered(chunk, end));

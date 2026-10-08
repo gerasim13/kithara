@@ -2,8 +2,8 @@
 
 use kithara::{
     audio::{
-        AudioControl, AudioRead, AudioReader, AudioSession, ChunkOutcome, DecodeError,
-        PendingReason, ReadOutcome, SeekOutcome,
+        AudioControl, AudioRead, AudioReadError, AudioReader, AudioSession, ChunkOutcome,
+        DecodeError, PendingReason, ReadOutcome, SeekOutcome,
     },
     decode::TrackMetadata,
     events::EventBus,
@@ -44,7 +44,7 @@ impl AudioSession for Stalled {
 }
 
 impl AudioRead for Stalled {
-    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+    fn next_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError> {
         Ok(ChunkOutcome::Pending {
             reason: PendingReason::Buffering,
             position: Duration::ZERO,
@@ -55,14 +55,14 @@ impl AudioRead for Stalled {
         Duration::ZERO
     }
 
-    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
         unreachable!("analysis pulls chunks")
     }
 
     fn read_planar<'a>(
         &mut self,
         _output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
+    ) -> Result<ReadOutcome, AudioReadError> {
         unreachable!("analysis pulls chunks")
     }
 

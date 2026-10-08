@@ -1,7 +1,7 @@
 use std::{fmt, num::NonZeroUsize};
 
 use kithara_abr::AbrHandle;
-use kithara_audio::{Audio, DecodeErrorKind};
+use kithara_audio::{Audio, TrackFailureKind};
 use kithara_decode::TrackMetadata;
 use kithara_platform::{
     sync::{Arc, ThreadGate, WaitGate},
@@ -51,7 +51,7 @@ pub(crate) mod tests {
                     forward: forward_tx,
                     reverse: reverse_rx,
                     playing: playing_rx,
-                    ready: None,
+                    ready: FinalWake(None),
                 },
             }
         }
@@ -102,7 +102,7 @@ pub enum PcmPacket {
     Chunk(AudioChunk),
     Failed {
         segment: SegmentId,
-        kind: DecodeErrorKind,
+        failure: TrackFailureKind,
     },
 }
 
@@ -110,20 +110,24 @@ pub(super) struct PcmProducer {
     pub(super) forward: HeapProd<PcmPacket>,
     pub(super) reverse: HeapCons<PcmPacket>,
     pub(super) playing: Output<bool>,
-    ready: Option<Arc<ThreadGate>>,
+    ready: FinalWake,
 }
 
-impl PcmProducer {
-    pub(super) fn signal(&self) {
-        if let Some(ready) = &self.ready {
+struct FinalWake(Option<Arc<ThreadGate>>);
+
+impl Drop for FinalWake {
+    fn drop(&mut self) {
+        if let Some(ready) = &self.0 {
             ready.signal();
         }
     }
 }
 
-impl Drop for PcmProducer {
-    fn drop(&mut self) {
-        self.signal();
+impl PcmProducer {
+    pub(super) fn signal(&self) {
+        if let Some(ready) = &self.ready.0 {
+            ready.signal();
+        }
     }
 }
 
@@ -172,7 +176,7 @@ impl PcmReceiver {
                 forward: forward_tx,
                 reverse: reverse_rx,
                 playing: playing_rx,
-                ready,
+                ready: FinalWake(ready),
             },
         )
     }
@@ -270,11 +274,16 @@ impl PcmReceiver {
                 return None;
             };
             if !self.forward.write_is_held() {
-                return None;
+                return self.pop();
             }
             self.wake.wake();
             ready.wait_timeout(since, crate::consts::ACTIVE_WAIT_TIMEOUT);
         }
+    }
+
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        !self.forward.write_is_held() && self.forward.try_peek().is_none()
     }
 
     /// Return a packet for off-RT reclamation, retaining it on a full ring.
@@ -301,4 +310,70 @@ impl fmt::Debug for PcmReceiver {
             .field("position", &self.position)
             .finish_non_exhaustive()
     }
+}
+
+#[cfg(test)]
+pub(super) fn packet_fixture(blocking: bool, spec: AudioSpec) -> (PcmReceiver, PcmProducer) {
+    let (forward, received) = HeapRb::new(8).split();
+    let (returned, reverse) = HeapRb::new(8).split();
+    let (playing, activity) = triple_buffer(&false);
+    let ready = blocking.then(|| Arc::new(ThreadGate::default()));
+    let worker = kithara_worker::Worker::new(kithara_worker::WorkerConfig::new());
+    let dispatcher = worker.dispatcher(kithara_worker::DispatcherConfig::builder().name("terminal-fixture").build());
+    (PcmReceiver {
+        forward: received, reverse: returned, playing, ready: ready.clone(),
+        wake: Wake::new(dispatcher.wake_handle()), spec, duration: None,
+        position: Duration::ZERO, frontier: Duration::ZERO, metadata: TrackMetadata::default(), abr: None,
+    }, PcmProducer { forward, reverse, playing: activity, ready: FinalWake(ready) })
+}
+
+#[cfg(test)]
+mod terminal_tests {
+    use super::*;
+    use kithara_test_utils::kithara;
+
+    #[kithara::test]
+    fn producer_drop_releases_ownership_before_the_final_deferred_wake() {
+        let (receiver, producer) = packet_fixture(true, AudioSpec::new(2, std::num::NonZeroU32::new(44_100).expect("test sample rate")));
+        let ready = receiver.ready.as_ref().expect("blocking wake");
+        let since = ready.current();
+        assert!(receiver.forward.write_is_held());
+        drop(producer);
+        assert!(!receiver.forward.write_is_held());
+        assert_eq!(ready.current().wrapping_sub(since), 1);
+        assert!(ready.wait_timeout(since, Duration::ZERO), "closure between a snapshot and a wait must leave an observable wake edge");
+        assert!(!ready.wait_timeout(ready.current(), Duration::ZERO));
+    }
+
+    struct RecreateFailureSource;
+
+    impl kithara_audio::AudioSource for RecreateFailureSource {
+        type Chunk = AudioChunk;
+        fn step_track(&mut self) -> kithara_audio::TrackStep<AudioChunk> {
+            kithara_audio::TrackStep::Failed(TrackFailureKind::RecreateFailed { offset: 0 })
+        }
+        fn seek(&mut self, position: Duration) -> Result<kithara_audio::SeekOutcome, kithara_audio::AudioReadError> {
+            Ok(kithara_audio::SeekOutcome::Landed { target: position, landed_at: position })
+        }
+        fn host_sample_rate(&self) -> Option<std::num::NonZeroU32> { None }
+        fn set_host_sample_rate(&mut self, _rate: std::num::NonZeroU32) {}
+    }
+
+    #[kithara::test]
+    fn terminal_recreate_failure_wakes_the_reader_once() {
+        use kithara_worker::{Task, TickResult};
+        let (mut node, receiver, _lane) = super::super::terminal_node(
+            RecreateFailureSource, AudioSpec::new(2, std::num::NonZeroU32::new(44_100).expect("test sample rate")), true,
+        );
+        let ready = receiver.ready.as_ref().expect("blocking reader gate");
+        let since = ready.current();
+        assert_eq!(node.tick(), TickResult::Progress);
+        assert_eq!(ready.current().wrapping_sub(since), 1, "factory panic must wake the reader");
+        assert!(matches!(receiver.peek(), Some(PcmPacket::Failed {
+            failure: TrackFailureKind::RecreateFailed { offset: 0 }, ..
+        })));
+        assert_eq!(node.tick(), TickResult::Backpressured);
+        assert_eq!(ready.current().wrapping_sub(since), 1);
+    }
+
 }

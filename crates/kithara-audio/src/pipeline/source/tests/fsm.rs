@@ -14,7 +14,12 @@ async fn is_terminal_for_each_phase() {
             "expected recoverable phase"
         );
     }
-    fixture.source.phase = OwnerPhase::Failed(Some(crate::DecodeError::Interrupted));
+    fixture.source.phase = OwnerPhase::Failed {
+        failure: crate::TrackFailureKind::Decode {
+            kind: crate::DecodeErrorKind::Interrupted,
+        },
+        error: Some(crate::DecodeError::Interrupted),
+    };
     assert!(matches!(fixture.source.step_track(), TrackStep::Failed(_)));
 }
 #[kithara::test(tokio)]
@@ -41,7 +46,12 @@ async fn map_source_phase_table(route_pcm: RoutePcm) {
         assert_eq!(reason, expected);
     }
     let mut fixture = test_source(0).await;
-    fixture.source.phase = OwnerPhase::Failed(Some(crate::DecodeError::Interrupted));
+    fixture.source.phase = OwnerPhase::Failed {
+        failure: crate::TrackFailureKind::Decode {
+            kind: crate::DecodeErrorKind::Interrupted,
+        },
+        error: Some(crate::DecodeError::Interrupted),
+    };
     assert!(matches!(fixture.source.step_track(), TrackStep::Failed(_)));
 }
 #[kithara::test]

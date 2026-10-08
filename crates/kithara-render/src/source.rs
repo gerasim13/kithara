@@ -5,8 +5,8 @@ use std::{
 };
 
 use kithara_audio::{
-    AudioSource, DecodeError, Fetch, SeekOutcome, SourceDiscontinuity, SourceEnd, TrackStep,
-    WaitingReason,
+    AudioReadError, AudioSource, Fetch, SeekOutcome, SourceDiscontinuity, SourceEnd, TrackFailureKind,
+    TrackStep, WaitingReason,
 };
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_command::Inbox;
@@ -51,6 +51,7 @@ pub struct WarpSource<T, S> {
     effects: Vec<Box<dyn AudioEffect>>,
     warp: kithara_warp::WarpRenderer<S>,
     quantum_failed: bool,
+    terminal_failure: Option<TrackFailureKind>,
 }
 
 impl<T, S> WarpSource<T, S>
@@ -88,6 +89,7 @@ where
             render_input: None,
             retired_input: None,
             quantum_failed: false,
+            terminal_failure: None,
         }
     }
 
@@ -128,8 +130,8 @@ where
     /// Executes commands at the output cursor before producing more samples.
     ///
     /// # Errors
-    /// Returns the open source's synchronous seek error.
-    pub fn service_commands(&mut self) -> Result<(), DecodeError> {
+    /// Returns the source's seek classification or a render failure.
+    pub fn service_commands(&mut self) -> Result<(), TrackFailureKind> {
         let changed = self
             .lane
             .execute_due(&mut self.source, &mut self.warp, self.spec)?;
@@ -147,10 +149,8 @@ where
         Ok(())
     }
 
-    fn failed_quantum() -> TrackStep<AudioChunk> {
-        TrackStep::Failed(DecodeError::InvalidData {
-            detail: "invalid lane render quantum",
-        })
+    fn fail(&mut self, failure: TrackFailureKind) -> TrackStep<AudioChunk> {
+        TrackStep::Failed(*self.terminal_failure.get_or_insert(failure))
     }
 
     fn clear_staging(&mut self) {
@@ -515,20 +515,20 @@ where
 
     fn render_staged(&mut self, frames: usize) -> TrackStep<AudioChunk> {
         if self.quantum_failed {
-            return Self::failed_quantum();
+            return self.fail(TrackFailureKind::Render);
         }
         let channels = usize::from(self.spec.channels.max(1));
         let Some(samples) = frames.checked_mul(channels) else {
             self.quantum_failed = true;
-            return Self::failed_quantum();
+            return self.fail(TrackFailureKind::Render);
         };
         let Some(staged_meta) = self.staged_meta else {
             self.quantum_failed = true;
-            return Self::failed_quantum();
+            return self.fail(TrackFailureKind::Render);
         };
         let Some(meta) = Self::span_meta(staged_meta, 0, frames) else {
             self.quantum_failed = true;
-            return Self::failed_quantum();
+            return self.fail(TrackFailureKind::Render);
         };
         let Some(mut input) = self.render_input.take() else {
             return TrackStep::StateChanged;
@@ -536,7 +536,7 @@ where
         if input.len() < samples {
             self.render_input = Some(input);
             self.quantum_failed = true;
-            return Self::failed_quantum();
+            return self.fail(TrackFailureKind::Render);
         }
         self.staged_meta = None;
         self.prepared_frames = None;
@@ -545,7 +545,7 @@ where
             if prefix.ensure_len(samples).is_err() {
                 self.render_input = Some(input);
                 self.quantum_failed = true;
-                return Self::failed_quantum();
+                return self.fail(TrackFailureKind::Render);
             }
             prefix.copy_from_slice(&input[..samples]);
             drop(input.drain(..samples));
@@ -560,7 +560,7 @@ where
             ControlFlow::Break(input) => {
                 self.render_input = Some(input.samples);
                 self.quantum_failed = true;
-                Self::failed_quantum()
+                self.fail(TrackFailureKind::Render)
             }
         }
     }
@@ -630,12 +630,15 @@ where
     }
 
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
+        if let Some(failure) = self.terminal_failure {
+            return TrackStep::Failed(failure);
+        }
         if let Err(error) = self.service_commands() {
-            return TrackStep::Failed(error);
+            return self.fail(error);
         }
         self.sync_discontinuity();
         if self.quantum_failed {
-            return Self::failed_quantum();
+            return self.fail(TrackFailureKind::Render);
         }
 
         if matches!(self.drain_state, DrainState::Exhausted) {
@@ -660,7 +663,7 @@ where
                 .unwrap_or(TrackStep::StateChanged);
         }
         if !self.warp.accepts_input() {
-            return Self::failed_quantum();
+            return self.fail(TrackFailureKind::Render);
         }
 
         match self.source.step_track() {
@@ -681,6 +684,7 @@ where
                 });
                 TrackStep::StateChanged
             }
+            TrackStep::Produced(Fetch::Failure { failure }) => self.fail(failure),
             TrackStep::Produced(fetch) => TrackStep::Produced(fetch),
             TrackStep::Eof => {
                 self.begin_drain();
@@ -690,7 +694,7 @@ where
                 } else {
                     let Some(frames) = self.warp.prepare_terminal_quantum(frames) else {
                         self.quantum_failed = true;
-                        return Self::failed_quantum();
+                        return self.fail(TrackFailureKind::Render);
                     };
                     self.prepared_frames = Some(frames.get());
                     self.render_staged(frames.get())
@@ -701,14 +705,14 @@ where
                 TrackStep::StateChanged
             }
             TrackStep::Blocked(reason) => TrackStep::Blocked(reason),
-            TrackStep::Failed(error) => TrackStep::Failed(error),
+            TrackStep::Failed(failure) => self.fail(failure),
         }
     }
 
     delegate::delegate! {
         to self.source {
             fn commit_source_end(&mut self, source_end: SourceEnd);
-            fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
+            fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError>;
             fn set_host_sample_rate(&mut self, rate: NonZeroU32);
             fn host_sample_rate(&self) -> Option<NonZeroU32>;
             fn retire_chunk(&self, chunk: AudioChunk);
@@ -727,6 +731,7 @@ mod tests {
 
     use kithara_audio::{Fetch, TrackStep, WaitingReason};
     use kithara_bufpool::PoolRegion;
+    use kithara_effects::held_source_frames;
     use kithara_command::{Batch, ChannelConfig, Outcome, Rejection, Sender, When, channel};
     use kithara_platform::sync::{
         Arc, Mutex,
@@ -839,7 +844,7 @@ mod tests {
     impl AudioSource for RawSource {
         type Chunk = AudioChunk;
 
-        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
+        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
             Ok(SeekOutcome::Landed { target, landed_at: target })
         }
 
@@ -859,6 +864,192 @@ mod tests {
                 Ordering::Release,
             );
             TrackStep::Produced(Fetch::data(chunk))
+        }
+    }
+
+    #[cfg(any(
+        feature = "stretch-identity",
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
+    struct FailedSource {
+        failure: TrackFailureKind,
+        chunks: VecDeque<AudioChunk>,
+    }
+
+    #[cfg(any(
+        feature = "stretch-identity",
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
+    impl AudioSource for FailedSource {
+        type Chunk = AudioChunk;
+
+        fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
+
+        fn host_sample_rate(&self) -> Option<NonZeroU32> {
+            None
+        }
+
+        fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
+            Ok(SeekOutcome::Landed { target: position, landed_at: position })
+        }
+
+        fn step_track(&mut self) -> TrackStep<AudioChunk> {
+            self.chunks
+                .pop_front()
+                .map_or(TrackStep::Failed(self.failure), |chunk| {
+                    TrackStep::Produced(Fetch::data(chunk))
+                })
+        }
+    }
+
+    #[cfg(any(
+        feature = "stretch-identity",
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
+    #[kithara::test(native)]
+    #[cfg_attr(
+        feature = "stretch-identity",
+        case::identity(StretchKind::Identity, false)
+    )]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith(StretchKind::Signalsmith, true)
+    )]
+    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee, true))]
+    #[cfg_attr(feature = "stretch-glide", case::glide(StretchKind::Glide, true))]
+    fn upstream_terminal_failure_keeps_its_classification(
+        #[case] backend: StretchKind,
+        #[case] staged: bool,
+    ) {
+        let pools = pools();
+        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test sample rate"));
+        let failure = TrackFailureKind::RecreateFailed { offset: 91 };
+        let raw = FailedSource {
+            failure,
+            chunks: VecDeque::new(),
+        };
+        let config = kithara_warp::WarpConfig::builder()
+            .backend(backend)
+            .speed(0.5)
+            .keylock(true)
+            .build();
+        let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
+        let drain = EffectDrain::new(0, &pools).expect("empty effect drain");
+        let mut source = WarpSource::new(
+            raw,
+            renderer,
+            Vec::new(),
+            drain,
+            spec,
+            pools.clone(),
+            idle_inbox(),
+            NonZeroUsize::MIN,
+        );
+        flush_deferred(&mut source);
+        assert_eq!(source.warp.requires_staging(), staged);
+        let step = source.step_track();
+        assert!(matches!(step, TrackStep::Failed(actual) if actual == failure));
+        assert!(!source.quantum_failed);
+    }
+
+    #[cfg(any(
+        feature = "stretch-identity",
+        feature = "stretch-signalsmith",
+        feature = "stretch-bungee",
+        feature = "stretch-glide"
+    ))]
+    #[kithara::test(native)]
+    #[cfg_attr(
+        feature = "stretch-identity",
+        case::identity(StretchKind::Identity, false)
+    )]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith(StretchKind::Signalsmith, true)
+    )]
+    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee, true))]
+    #[cfg_attr(feature = "stretch-glide", case::glide(StretchKind::Glide, true))]
+    fn upstream_terminal_failure_keeps_its_classification_after_buffered_pcm(
+        #[case] backend: StretchKind,
+        #[case] staged: bool,
+        quarter: Vec<f32>,
+    ) {
+        let pools = pools();
+        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test sample rate"));
+        let failure = TrackFailureKind::RecreateFailed { offset: 91 };
+        let raw = FailedSource {
+            failure,
+            chunks: VecDeque::from([
+                chunk_with_frames(&pools, spec, 0, 4096, &quarter),
+                chunk_with_frames(&pools, spec, 4096, 17, &quarter),
+            ]),
+        };
+        let config = kithara_warp::WarpConfig::builder()
+            .backend(backend)
+            .speed(0.5)
+            .keylock(true)
+            .render_quantum_frames(NonZeroUsize::new(128).expect("test quantum"))
+            .build();
+        let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
+        let effects: Vec<Box<dyn AudioEffect>> = vec![Box::<BufferThenHalveFrames>::default()];
+        let drain = EffectDrain::new(effects.len(), &pools).expect("buffered effect drain");
+        let mut source = WarpSource::new(
+            raw,
+            renderer,
+            effects,
+            drain,
+            spec,
+            pools.clone(),
+            idle_inbox(),
+            NonZeroUsize::MIN,
+        );
+        let mut staged_prefix_seen = false;
+        let mut produced_nonzero_pcm = false;
+        let mut terminal_seen = false;
+        for _ in 0..128 {
+            flush_deferred(&mut source);
+            assert_eq!(source.warp.requires_staging(), staged);
+            let step = source.step_track();
+            staged_prefix_seen |= source.pending_input.as_ref().is_some_and(|pending| {
+                pending.consumed_frames > 0 && pending.consumed_frames < pending.chunk.frames()
+            });
+            match step {
+                TrackStep::Produced(Fetch::Data { data, .. }) => {
+                    assert_eq!(data.meta.segment, SegmentId::FIRST);
+                    assert!(data.frames() > 0);
+                    assert_eq!(data.samples.len(), data.frames() * 2);
+                    assert!(data.samples.iter().all(|sample| sample.is_finite()));
+                    produced_nonzero_pcm |= data.samples.iter().any(|sample| *sample != 0.0);
+                }
+                TrackStep::StateChanged => {}
+                TrackStep::Failed(actual) => {
+                    assert_eq!(actual, failure);
+                    assert!(source.source.chunks.is_empty());
+                    assert!(held_source_frames(&source.effects) > 0);
+                    assert!(matches!(source.drain_state, DrainState::Open));
+                    assert!(!source.quantum_failed);
+                    terminal_seen = true;
+                    break;
+                }
+                _ => panic!("buffered PCM must produce or preserve the upstream failure"),
+            }
+        }
+        assert!(
+            produced_nonzero_pcm,
+            "the configured backend must render PCM before failure"
+        );
+        assert!(terminal_seen, "the upstream failure must remain terminal");
+        assert_eq!(staged_prefix_seen, staged);
+        for _ in 0..3 {
+            flush_deferred(&mut source);
+            assert!(matches!(source.step_track(), TrackStep::Failed(actual) if actual == failure));
+            assert!(held_source_frames(&source.effects) > 0);
         }
     }
 
@@ -913,7 +1104,7 @@ mod tests {
     impl AudioSource for DeferredSource {
         type Chunk = AudioChunk;
 
-        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
+        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
             Ok(SeekOutcome::Landed { target, landed_at: target })
         }
 
@@ -969,7 +1160,7 @@ mod tests {
     impl AudioSource for RevisionSource {
         type Chunk = AudioChunk;
 
-        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
+        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
             Ok(SeekOutcome::Landed { target, landed_at: target })
         }
 
@@ -1020,7 +1211,7 @@ mod tests {
     impl AudioSource for CountingEofSource {
         type Chunk = AudioChunk;
 
-        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
+        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
             let revision = self.discontinuity.lock().map_or(0, |stamp| stamp.revision()) + 1;
             *self.discontinuity.lock() = Some(SourceDiscontinuity::new(revision, AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"))));
             Ok(SeekOutcome::Landed { target, landed_at: target })
@@ -1072,7 +1263,7 @@ mod tests {
     impl AudioSource for SeekApplyingSource {
         type Chunk = AudioChunk;
 
-        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
+        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
             self.revision = self.revision.wrapping_add(1);
             Ok(SeekOutcome::Landed { target, landed_at: target })
         }

@@ -860,6 +860,7 @@ runner.nextest.ignore_default_filter = true
 
 [test.lanes.ui]
 owns = [
+  ".github/workflows/ui.yml",
   "crates/kithara-ui/",
   "crates/kithara-ui-gallery/",
   "crates/kithara-ui-input/",
@@ -2187,7 +2188,8 @@ timeout_minutes = 120
 # sources does not wait for `main`. The clock lanes run the workspace build
 # only, so a branch reaches these suites here and nowhere else. The UI suite is
 # not one of them: only `ui.yml` judges it, on a graphics device, and a branch
-# run gets it by naming `deep-ui` among its required lanes.
+# run gets it by touching a UI-owned path or naming `deep-ui` among its required
+# lanes.
 [ext.ci.lanes.linux-support]
 cache_group = "linux"
 label = "Linux"

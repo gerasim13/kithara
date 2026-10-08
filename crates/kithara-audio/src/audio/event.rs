@@ -1,5 +1,5 @@
 use crate::{
-    AudioEvent, DecodeErrorClass, DecodeErrorKind, DecoderBackend as EventDecoderBackend,
+    AudioEvent, AudioReadError, FailureSource, TrackFailureKind, DecodeErrorClass, DecodeErrorKind, DecoderBackend as EventDecoderBackend,
     DecoderChangeCause, DecoderEvent, FrameDomain, GaplessSpan, PlaybackResamplerKind,
     ResamplerKind,
 };
@@ -62,6 +62,30 @@ pub const fn map_decode_error_kind(error: &DecodeError) -> DecodeErrorKind {
         DecodeError::BackendStatus { .. } => DecodeErrorKind::BackendStatus,
         DecodeError::Interrupted => DecodeErrorKind::Interrupted,
         _ => DecodeErrorKind::Backend,
+    }
+}
+
+impl From<FailureSource> for TrackFailureKind {
+    fn from(source: FailureSource) -> Self {
+        match source {
+            FailureSource::Producer { failure } | FailureSource::ProducerAfterSeek { failure } => failure,
+            FailureSource::ChannelClosed => Self::ChannelClosed,
+        }
+    }
+}
+
+impl From<&AudioReadError> for TrackFailureKind {
+    fn from(error: &AudioReadError) -> Self {
+        match error {
+            AudioReadError::Decode(error) => Self::Decode {
+                kind: map_decode_error_kind(error),
+            },
+            AudioReadError::Stream { source, .. } => match source {
+                FailureSource::Producer { failure }
+                | FailureSource::ProducerAfterSeek { failure } => *failure,
+                FailureSource::ChannelClosed => Self::ChannelClosed,
+            },
+        }
     }
 }
 

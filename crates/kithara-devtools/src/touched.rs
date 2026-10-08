@@ -69,28 +69,49 @@ pub(crate) fn lanes(
     root: &Path,
     scope: &[String],
 ) -> Result<Vec<Touched>> {
-    if let Some(unknown) = scope.iter().find(|name| !test.lanes.contains_key(*name)) {
-        bail!("test lane `{unknown}` is not configured");
-    }
-    let scope = &scoped(scope, &test.default_lane);
+    let scope = &scoped(test, scope)?;
+    let Some(changed) = changed_paths(root)? else {
+        return Ok(everything(scope));
+    };
+    let changed: Vec<&str> = changed.lines().collect();
+    Ok(select(
+        &test.lanes,
+        &test.shared_paths,
+        Some(&test.default_lane),
+        scope,
+        &changed,
+    ))
+}
+
+/// Whether a branch changes a path explicitly owned by a lane in `scope`.
+///
+/// Shared paths do not select lanes here. An empty scope names the default
+/// lane; the base commit selects the whole scope, like the test command.
+///
+/// # Errors
+///
+/// Returns an error for an unknown scoped lane or unreadable Git history.
+pub fn touches(test: &TestCommandConfig, root: &Path, scope: &[String]) -> Result<bool> {
+    let scope = &scoped(test, scope)?;
+    let Some(changed) = changed_paths(root)? else {
+        return Ok(!scope.is_empty());
+    };
+    let changed: Vec<&str> = changed.lines().collect();
+    Ok(!select(&test.lanes, &[], None, scope, &changed).is_empty())
+}
+
+/// The branch's committed paths, or no comparison on its base commit.
+fn changed_paths(root: &Path) -> Result<Option<String>> {
     let _ = Command::new("git")
         .current_dir(root)
         .args(FETCH_MAIN)
         .status();
     let base = git(root, &["merge-base", "origin/main", "HEAD"])?;
     if base == git(root, &["rev-parse", "HEAD"])? {
-        return Ok(everything(scope));
+        return Ok(None);
     }
     let range = format!("{base}...HEAD");
-    let changed = git(root, &["diff", "--name-only", &range])?;
-    let changed: Vec<&str> = changed.lines().collect();
-    Ok(select(
-        &test.lanes,
-        &test.shared_paths,
-        &test.default_lane,
-        scope,
-        &changed,
-    ))
+    git(root, &["diff", "--name-only", &range]).map(Some)
 }
 
 /// What the touched paths select from `scope`.
@@ -106,11 +127,11 @@ pub(crate) fn lanes(
 ///
 /// A shared path runs the whole scope: the routing itself moved. A branch that
 /// touched none of the scope runs nothing here; the lanes that carry the rest
-/// run it.
+/// run it. Without a default lane, selection uses only explicit ownership.
 fn select(
     lanes: &BTreeMap<String, TestLaneConfig>,
     shared: &[String],
-    default: &str,
+    default: Option<&str>,
     scope: &[String],
     changed: &[&str],
 ) -> Vec<Touched> {
@@ -125,7 +146,7 @@ fn select(
         .iter()
         .filter_map(|name| {
             let lane = lanes.get(name)?;
-            if name != default {
+            if Some(name.as_str()) != default {
                 return touched(lane).then(|| Touched::Whole(name.clone()));
             }
             if changed
@@ -164,12 +185,16 @@ fn builds(outer: &TestCargoOptions, inner: &TestCargoOptions) -> bool {
 }
 
 /// The lanes a run names, or the default lane when it names none.
-fn scoped(scope: &[String], default: &str) -> Vec<String> {
-    if scope.is_empty() {
-        vec![default.to_owned()]
+fn scoped(test: &TestCommandConfig, scope: &[String]) -> Result<Vec<String>> {
+    let scope = if scope.is_empty() {
+        vec![test.default_lane.clone()]
     } else {
         scope.to_vec()
+    };
+    if let Some(unknown) = scope.iter().find(|name| !test.lanes.contains_key(*name)) {
+        bail!("test lane `{unknown}` is not configured");
     }
+    Ok(scope)
 }
 
 /// Every lane of the scope, whole.
@@ -270,7 +295,7 @@ mod tests {
         let selected = select(
             &product(),
             &[],
-            WORKSPACE,
+            Some(WORKSPACE),
             &scope(&[WORKSPACE]),
             &["crates/host/src/lib.rs", "crates/play/src/lib.rs"],
         );
@@ -286,7 +311,7 @@ mod tests {
         let selected = select(
             &product(),
             &[],
-            WORKSPACE,
+            Some(WORKSPACE),
             &scope(&[WORKSPACE]),
             &["crates/host/src/lib.rs", "xtask/src/main.rs"],
         );
@@ -299,7 +324,7 @@ mod tests {
         let selected = select(
             &product(),
             &[],
-            WORKSPACE,
+            Some(WORKSPACE),
             &scope(&[WORKSPACE]),
             &["xtask/src/main.rs"],
         );
@@ -312,7 +337,7 @@ mod tests {
         let selected = select(
             &product(),
             &[],
-            WORKSPACE,
+            Some(WORKSPACE),
             &scope(&[WORKSPACE]),
             &["crates/host/src/lib.rs", "crates/other/src/lib.rs"],
         );
@@ -325,7 +350,7 @@ mod tests {
         let selected = select(
             &config(&[]),
             &[],
-            WORKSPACE,
+            Some(WORKSPACE),
             &scope(&[WORKSPACE]),
             &["crates/other/src/lib.rs"],
         );
@@ -338,7 +363,7 @@ mod tests {
         let selected = select(
             &product(),
             &[],
-            WORKSPACE,
+            Some(WORKSPACE),
             &scope(&[WORKSPACE, "net-host", "tooling"]),
             &["crates/net/src/host/client.rs", "xtask/src/main.rs"],
         );
@@ -354,7 +379,7 @@ mod tests {
         let selected = select(
             &product(),
             &[],
-            WORKSPACE,
+            Some(WORKSPACE),
             &scope(&["tooling", "net-host", "play"]),
             &[
                 "xtask/src/main.rs",
@@ -371,7 +396,7 @@ mod tests {
         let selected = select(
             &product(),
             &[],
-            WORKSPACE,
+            Some(WORKSPACE),
             &scope(&["tooling"]),
             &["crates/host/src/lib.rs", "crates/other/src/lib.rs"],
         );
@@ -386,7 +411,7 @@ mod tests {
         let selected = select(
             &product(),
             &shared,
-            WORKSPACE,
+            Some(WORKSPACE),
             &scope(&["tooling", WORKSPACE]),
             &[".config/xtask.toml"],
         );
@@ -405,7 +430,7 @@ mod tests {
         let selected = select(
             &lanes,
             &[],
-            WORKSPACE,
+            Some(WORKSPACE),
             &scope(&["harness"]),
             &["crates/kithara-platform/tests/flash_lexical.rs"],
         );
@@ -414,11 +439,75 @@ mod tests {
     }
 
     #[test]
-    fn a_run_that_names_no_lane_is_scoped_to_the_default_lane() {
+    fn a_run_that_names_no_lane_is_scoped_to_the_default_lane() -> Result<()> {
         let named = scope(&["tooling"]);
+        let test = TestCommandConfig {
+            lanes: product(),
+            default_lane: WORKSPACE.to_owned(),
+            ..TestCommandConfig::default()
+        };
 
-        assert_eq!(scoped(&[], WORKSPACE), scope(&[WORKSPACE]));
-        assert_eq!(scoped(&named, WORKSPACE), named);
+        assert_eq!(scoped(&test, &[])?, scope(&[WORKSPACE]));
+        assert_eq!(scoped(&test, &named)?, named);
+        Ok(())
+    }
+
+    #[test]
+    fn an_owned_path_requires_its_scoped_lane() -> Result<()> {
+        let (dir, test) = ownership_branch("owned/view.rs")?;
+
+        assert!(touches(
+            &test,
+            &dir.path().join("work"),
+            &scope(&["owned"])
+        )?);
+        Ok(())
+    }
+
+    #[test]
+    fn a_shared_path_does_not_require_an_ownership_scoped_lane() -> Result<()> {
+        let (dir, test) = ownership_branch("shared.toml")?;
+
+        assert!(!touches(
+            &test,
+            &dir.path().join("work"),
+            &scope(&["owned"])
+        )?);
+        Ok(())
+    }
+
+    #[test]
+    fn an_unowned_path_does_not_require_the_default_lane() -> Result<()> {
+        let (dir, test) = ownership_branch("unowned.txt")?;
+
+        assert!(!touches(&test, &dir.path().join("work"), &[])?);
+        Ok(())
+    }
+
+    #[test]
+    fn ownership_selection_rejects_an_unknown_scoped_lane() -> Result<()> {
+        let (dir, test) = ownership_branch("owned/view.rs")?;
+
+        assert!(touches(&test, &dir.path().join("work"), &scope(&["missing"])).is_err());
+        Ok(())
+    }
+
+    fn ownership_branch(path: &str) -> Result<(tempfile::TempDir, TestCommandConfig)> {
+        let dir = tempfile::tempdir()?;
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(work.join("owned"))?;
+        commit_file(&work, "base.txt", None)?;
+        run_git(dir.path(), &["clone", "-q", "--bare", "work", "origin.git"])?;
+        let url = format!("file://{}", dir.path().join("origin.git").display());
+        run_git(&work, &["remote", "add", "origin", &url])?;
+        commit_file(&work, path, Some("feature"))?;
+        let test = TestCommandConfig {
+            lanes: config(&[("owned", &["owned/"], &["widget"])]),
+            default_lane: WORKSPACE.to_owned(),
+            shared_paths: vec!["shared.toml".to_owned()],
+            ..TestCommandConfig::default()
+        };
+        Ok((dir, test))
     }
 
     /// A CI checkout carries the branch tip alone. Where the branch left

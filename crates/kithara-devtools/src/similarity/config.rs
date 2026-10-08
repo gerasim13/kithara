@@ -7,14 +7,14 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use cargo_metadata::Metadata;
+use cargo_metadata::{Metadata, MetadataCommand};
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
 
 use super::{
     analysis,
     chains::{self, ChainConfig},
-    report,
+    dependencies, report,
 };
 use crate::{
     Ctx,
@@ -112,13 +112,15 @@ impl SimilarityConfig {
     }
 }
 
-fn activate_dependencies(config: &mut SimilarityConfig, metadata: &Metadata) {
+fn activate_dependencies(config: &mut SimilarityConfig, metadata: &Metadata) -> Result<()> {
     config.active_dependencies = metadata
         .workspace_packages()
         .iter()
         .flat_map(|package| package.dependencies.iter())
         .map(|dependency| dependency.name.clone())
         .collect();
+    config.chains.dependency_roots = dependencies::roots(metadata)?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, Serialize, ValueEnum)]
@@ -162,9 +164,12 @@ pub(crate) fn run(args: &SimilarityArgs, ctx: &Ctx) -> Result<()> {
         Profile::Strict => ("0.80", "8", false, false),
     };
 
-    let metadata = ctx.metadata()?;
+    let metadata = MetadataCommand::new()
+        .manifest_path(ctx.root.join("Cargo.toml"))
+        .exec()
+        .context("loading resolved dependency metadata for similarity")?;
     let mut config = ctx.similarity.clone();
-    activate_dependencies(&mut config, metadata);
+    activate_dependencies(&mut config, &metadata)?;
     let no_exclusions = Vec::new();
     let excluded = if args.include_default_excluded {
         &no_exclusions
@@ -174,7 +179,7 @@ pub(crate) fn run(args: &SimilarityArgs, ctx: &Ctx) -> Result<()> {
     let include_tests = matches!(args.profile, Profile::Strict);
 
     let roots = if args.paths.is_empty() {
-        default_roots(metadata, excluded, include_tests)
+        default_roots(&metadata, excluded, include_tests)
     } else {
         args.paths
             .iter()

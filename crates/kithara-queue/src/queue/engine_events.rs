@@ -125,7 +125,7 @@ where
         if !self.end_of_item_is_actionable(item, pos, dur) {
             return;
         }
-        let reason = format!("mid-stream engine failure: {fault}");
+        let reason = fault.to_string();
         self.tracks
             .set_status(track.id, TrackStatus::Failed(reason.clone()));
         let action = self.action_at_item_end();
@@ -198,7 +198,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_audio::{DecodeErrorKind, mock::TestPcmReader};
+    use kithara_audio::{DecodeErrorKind, TrackFailureKind, mock::TestPcmReader};
     use kithara_events::{DEFAULT_EVENT_BUS_CAPACITY, SlotId, TrackId};
     use kithara_platform::{sync::Arc, time::Duration};
     use kithara_play::{
@@ -207,6 +207,7 @@ mod tests {
     use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
 
+    use super::PlayerBusEvent;
     use crate::{
         ActionAtItemEnd, Queue,
         consts::TEST_SAMPLE_RATE,
@@ -246,7 +247,9 @@ mod tests {
                 SlotId::new(0),
                 Arc::from("https://example.com/repeated.mp3"),
             )),
-            PlaybackFault::Decode(DecodeErrorKind::InvalidData),
+            PlaybackFault::Source(TrackFailureKind::Decode {
+                kind: DecodeErrorKind::InvalidData,
+            }),
         );
 
         assert!(
@@ -273,26 +276,101 @@ mod tests {
     /// with, and a range it could not supply were one message. Nothing in a
     /// report could then say which defect ended the track.
     #[kithara::test(tokio)]
-    async fn a_leading_failure_records_the_fault_the_player_reported() {
+    #[case::invalid_data(PlaybackFault::Source(TrackFailureKind::Decode { kind: DecodeErrorKind::InvalidData }))]
+    #[case::unsupported_codec(PlaybackFault::Source(TrackFailureKind::Decode { kind: DecodeErrorKind::UnsupportedCodec }))]
+    #[case::direct_io(PlaybackFault::Source(TrackFailureKind::Decode { kind: DecodeErrorKind::Io }))]
+    #[case::output_rate(PlaybackFault::OutputRateMismatch)]
+    #[case::output_range(PlaybackFault::OutputRangeUnavailable)]
+    async fn a_leading_failure_records_the_fault_the_player_reported(#[case] fault: PlaybackFault) {
         let (mut queue, _audio_thread) = make_queue();
-        let (_first, second) = selected_second(&mut queue);
+        let (first, second) = selected_second(&mut queue);
+        queue.set_action_at_item_end(ActionAtItemEnd::None);
+        let mut events = queue.subscribe::<QueueEvent>();
 
-        queue.handle_item_did_fail(
-            &ItemRole::Leading(TrackRef::new(
+        queue.process_player_event(&PlayerBusEvent::Player(PlayerEvent::ItemDidFail {
+            item: ItemRole::Leading(TrackRef::new(
                 second,
                 SlotId::new(0),
                 Arc::from("https://example.com/repeated.mp3"),
             )),
-            PlaybackFault::OutputRateMismatch,
-        );
+            fault,
+        }));
 
         let Some(TrackStatus::Failed(reason)) = queue.track(second).map(|entry| entry.status)
         else {
             panic!("the entry named by the player event must be failed");
         };
+        let published = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|envelope| match envelope.event {
+                QueueEvent::TrackLoadFailed {
+                    id,
+                    reason,
+                    auto_skipped,
+                } => Some((id, reason, auto_skipped)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(published, [(second, reason.clone(), false)]);
+        assert_eq!(
+            reason,
+            fault.to_string(),
+            "status and event must report the real cause without fabricating an engine failure"
+        );
         assert!(
-            reason.contains("output sample-rate mismatch"),
-            "the failure text must name the fault, got {reason:?}"
+            !matches!(
+                queue.track(first).map(|entry| entry.status),
+                Some(TrackStatus::Failed(_))
+            ),
+            "a repeated URI does not make the first entry the failed item"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    #[case::stale(false)]
+    #[case::paused(true)]
+    async fn a_stale_or_paused_failure_cannot_change_status_or_publish_a_failure(
+        #[case] paused: bool,
+    ) {
+        let (mut queue, _audio_thread) = make_queue();
+        let (first, second) = selected_second(&mut queue);
+        let reported = if paused { second } else { first };
+        if paused {
+            queue.resident.play();
+            assert!(
+                queue.resident.playback_snapshot().is_some(),
+                "setup must allocate a player slot"
+            );
+            queue.pause();
+            assert!(
+                queue.resident.is_paused(),
+                "setup must pause the active player"
+            );
+            assert_eq!(queue.current().map(|entry| entry.id), Some(second));
+        }
+        let before = queue
+            .track(reported)
+            .expect("the reported entry exists")
+            .status;
+        let mut events = queue.subscribe::<QueueEvent>();
+        queue.process_player_event(&PlayerBusEvent::Player(PlayerEvent::ItemDidFail {
+            item: ItemRole::Leading(TrackRef::new(
+                reported,
+                SlotId::new(0),
+                Arc::from("https://example.com/repeated.mp3"),
+            )),
+            fault: PlaybackFault::Source(TrackFailureKind::Decode {
+                kind: DecodeErrorKind::InvalidData,
+            }),
+        }));
+        assert_eq!(queue.current().map(|entry| entry.id), Some(second));
+        assert_eq!(
+            queue.track(reported).expect("the entry survives").status,
+            before
+        );
+        assert!(
+            std::iter::from_fn(|| events.try_recv().ok())
+                .all(|envelope| !matches!(envelope.event, QueueEvent::TrackLoadFailed { .. })),
+            "an ignored item failure must not publish a queue failure"
         );
     }
 
@@ -307,7 +385,12 @@ mod tests {
         ));
 
         queue.handle_item_did_play_to_end(&item);
-        queue.handle_item_did_fail(&item, PlaybackFault::Decode(DecodeErrorKind::InvalidData));
+        queue.handle_item_did_fail(
+            &item,
+            PlaybackFault::Source(TrackFailureKind::Decode {
+                kind: DecodeErrorKind::InvalidData,
+            }),
+        );
 
         assert_eq!(queue.current().map(|entry| entry.id), Some(current));
         assert!(

@@ -223,7 +223,10 @@ async fn slow_transfer<S>(
 pub(crate) fn asks_again(refusal: &LoadRefusal) -> bool {
     match refusal {
         LoadRefusal::Open(error) => can_answer_later(error),
-        LoadRefusal::Capacity { .. } | LoadRefusal::Cancelled | LoadRefusal::Pool(_) => false,
+        LoadRefusal::Capacity { .. }
+        | LoadRefusal::Cancelled
+        | LoadRefusal::Pool(_)
+        | LoadRefusal::Source(_) => false,
     }
 }
 
@@ -333,5 +336,22 @@ mod tests {
     #[kithara::test]
     fn a_cancelled_open_is_not_asked_again() {
         assert!(!asks_again(&LoadRefusal::Cancelled));
+    }
+
+    #[kithara::test]
+    fn a_terminal_source_failure_is_not_asked_again() {
+        use kithara_audio::{DecodeErrorKind, TrackFailureKind};
+
+        for failure in [
+            TrackFailureKind::Decode {
+                kind: DecodeErrorKind::Io,
+            },
+            TrackFailureKind::RecreateFailed { offset: 91 },
+            TrackFailureKind::SourceCancelled,
+            TrackFailureKind::ChannelClosed,
+            TrackFailureKind::Render,
+        ] {
+            assert!(!asks_again(&LoadRefusal::Source(failure)));
+        }
     }
 }

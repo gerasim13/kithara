@@ -812,6 +812,97 @@ fn descriptor_at_time_clamps_to_last() {
 }
 
 #[kithara::test]
+#[case::unknown_size(0)]
+#[case::sized(256)]
+fn failed_init_prevents_loaded_media_from_satisfying_the_read(#[case] init_size: u64) {
+    let ctx = test_ctx(3);
+    let init = if init_size == 0 {
+        Some(make_placeholder_init(0, &ctx.scope))
+    } else {
+        make_init(init_size, &ctx.scope)
+    };
+    let v = VariantParts {
+        init,
+        segments: vec![make_seg(0, 64, &ctx.scope)],
+        codec: None,
+        container: None,
+    }
+    .into_variant(0, &ctx);
+    write_seg_bytes(&v, &ctx, 0, 64);
+    settle_seg(&v, &ctx, 0, 64);
+    assert!(v.segment_loaded(0));
+    assert!(v.segment_contains(0, 0..64));
+    let claim = v
+        .init()
+        .expect("declared init")
+        .state()
+        .try_claim(
+            PlannedFetch::Init,
+            v.flow.queue.revision(),
+            Arc::downgrade(&v),
+            ctx.signal.clone(),
+        )
+        .expect("init claim");
+    claim.into_failed();
+    assert!(v.init_failed());
+
+    let range = 0..16;
+    let mut buf = [0xa5; 16];
+    assert!(matches!(
+        v.read_at(0, &mut buf).expect("read"),
+        ReadOutcome::Pending(_)
+    ));
+    assert_eq!(buf, [0xa5; 16]);
+    assert!(!v.range_ready(&range));
+    assert!(matches!(
+        v.wait_range(range.clone(), Some(Duration::ZERO)),
+        Err(StreamError::Source(SourceError::SegmentUnavailable))
+    ));
+    assert!(matches!(
+        v.poll_range(range),
+        Err(StreamError::Source(SourceError::SegmentUnavailable))
+    ));
+}
+
+#[kithara::test]
+fn an_unsized_init_keeps_its_own_reader_demand() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: Some(make_placeholder_init(0, &ctx.scope)),
+        segments: vec![make_seg(0, 64, &ctx.scope)],
+        codec: None,
+        container: None,
+    }
+    .into_variant(0, &ctx);
+    write_seg_bytes(&v, &ctx, 0, 64);
+    settle_seg(&v, &ctx, 0, 64);
+    assert!(v.segment_contains(0, 0..64));
+    let init = v.init().expect("declared init");
+    let _claim = init
+        .state()
+        .try_claim(
+            PlannedFetch::Init,
+            v.flow.queue.revision(),
+            Arc::downgrade(&v),
+            ctx.signal.clone(),
+        )
+        .expect("init claim");
+
+    assert_eq!(v.phase_at(0..16), SourcePhase::WaitingDemand);
+    assert!(!init.state().is_reader_demanded());
+    assert!(matches!(
+        v.poll_range(0..16),
+        Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+    ));
+    assert!(!init.state().is_reader_demanded());
+    assert!(matches!(
+        v.wait_range(0..16, Some(Duration::ZERO)),
+        Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+    ));
+    assert!(init.state().is_reader_demanded());
+}
+
+#[kithara::test]
 fn seek_point_at_time_returns_bounds_and_clamps() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100, 100], &ctx);

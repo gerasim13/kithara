@@ -8,7 +8,7 @@ use std::{
 use delegate::delegate;
 use futures::future::{Either, select};
 use kithara_audio::{
-    AudioObserver, AudioReader, ChunkOutcome, ReadOutcome, ResamplerBackend, SeekOutcome,
+    AudioObserver, AudioReadError, AudioReader, ChunkOutcome, ReadOutcome, ResamplerBackend, SeekOutcome,
 };
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_command::{Inbox, Sender};
@@ -64,7 +64,7 @@ impl Resource {
     ///
     /// # Errors
     /// Returns the reader's source or decoder failure.
-    pub async fn preload(&mut self) -> Result<(), DecodeError> {
+    pub async fn preload(&mut self) -> Result<(), AudioReadError> {
         self.reader.preload()
     }
 
@@ -98,16 +98,16 @@ impl Resource {
             #[must_use]
             pub fn spec(&self) -> AudioSpec;
             /// Read one decoded chunk with its metadata.
-            pub fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError>;
+            pub fn next_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError>;
             /// Read interleaved decoded samples.
-            pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError>;
+            pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError>;
             /// Read deinterleaved decoded samples.
             pub fn read_planar<'a>(
                 &mut self,
                 output: &'a mut [&'a mut [f32]],
-            ) -> Result<ReadOutcome, DecodeError>;
+            ) -> Result<ReadOutcome, AudioReadError>;
             /// Seek synchronously on the source's owning thread.
-            pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
+            pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError>;
             /// Rebuild decoder resampling on the source's owning thread.
             pub fn set_host_sample_rate(&mut self, sample_rate: NonZeroU32);
         }
@@ -471,7 +471,7 @@ mod tests {
         fn position(&self) -> Duration {
             self.position_duration()
         }
-        fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+        fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
             let Some(frames) = self.take_frames(buf.len() / 2) else {
                 return Ok(self.eof());
             };
@@ -487,7 +487,7 @@ mod tests {
         fn read_planar<'a>(
             &mut self,
             output: &'a mut [&'a mut [f32]],
-        ) -> Result<ReadOutcome, DecodeError> {
+        ) -> Result<ReadOutcome, AudioReadError> {
             let capacity = output.first().map_or(0, |channel| channel.len());
             let Some(frames) = self.take_frames(capacity) else {
                 return Ok(self.eof());
@@ -511,7 +511,7 @@ mod tests {
     }
 
     impl AudioControl for EofReader {
-        fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+        fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
             Ok(SeekOutcome::Landed {
                 target: position,
                 landed_at: position,

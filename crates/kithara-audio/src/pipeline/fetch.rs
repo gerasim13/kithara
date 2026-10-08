@@ -1,5 +1,7 @@
 use std::num::{NonZeroU32, NonZeroU64};
 
+use crate::TrackFailureKind;
+
 /// Exclusive decoded-source boundary represented by rendered PCM.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
@@ -40,7 +42,7 @@ pub enum Fetch<C> {
     /// Natural end-of-stream from the open source.
     NaturalEof,
     /// Decoder or source failure from the open source.
-    Failure,
+    Failure { failure: TrackFailureKind },
 }
 
 impl<C> Fetch<C> {
@@ -61,8 +63,8 @@ impl<C> Fetch<C> {
 
     /// Create a failure marker distinct from natural end-of-stream.
     #[must_use]
-    pub const fn failure() -> Self {
-        Self::Failure
+    pub const fn failure(failure: TrackFailureKind) -> Self {
+        Self::Failure { failure }
     }
 
     /// Create rendered data with its exact decoded-source boundary.

@@ -70,6 +70,9 @@ where
 
     /// Returns whether a resource covering `range` settled terminally.
     pub(in crate::variant) fn range_has_failed(&self, range: &Range<u64>) -> bool {
+        if self.init_prefix_is_unsized() && self.init_failed() {
+            return true;
+        }
         let total = self.total_bytes();
         let uses_seek_alias = self.seek_alias_at(range.start).is_some();
         let end = if !uses_seek_alias && total > 0 {
@@ -120,6 +123,9 @@ where
         };
         if range.start >= end {
             return true;
+        }
+        if self.init_prefix_is_unsized() {
+            return false;
         }
 
         let mut cursor = range.start;
@@ -196,6 +202,14 @@ where
         };
         if range.start >= end {
             return SourcePhase::Waiting;
+        }
+        if self.init_prefix_is_unsized() {
+            return if self.init_has_demand() {
+                on_demand(PlannedFetch::Init);
+                SourcePhase::WaitingDemand
+            } else {
+                SourcePhase::Waiting
+            };
         }
         let mut waiting_on_demand = false;
         let mut cursor = range.start;

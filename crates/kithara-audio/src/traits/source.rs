@@ -1,4 +1,4 @@
-use crate::{DecodeError, SeekOutcome, SourceEnd, TrackStep};
+use crate::{AudioReadError, SeekOutcome, SourceEnd, TrackStep};
 use kithara_platform::time::Duration;
 #[cfg(any(test, feature = "mock"))]
 use kithara_signal::AudioChunk;
@@ -16,7 +16,7 @@ pub trait AudioSource: Send + 'static {
     /// Commit the decoded-source boundary represented by admitted output.
     fn commit_source_end(&mut self, _source_end: SourceEnd) {}
     /// Seek within the open source on the owning thread.
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError>;
     /// Rebuild for a host-rate change on the owning thread.
     fn set_host_sample_rate(&mut self, rate: NonZeroU32);
     /// Current host-rate value owned by the open source.

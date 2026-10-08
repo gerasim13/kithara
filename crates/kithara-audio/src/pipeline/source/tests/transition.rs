@@ -26,6 +26,15 @@ use crate::{
     traits::AudioSource,
 };
 
+
+
+
+
+
+
+
+
+
 fn incoming_plan() -> VariantReaderPlan {
     let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     request_incoming_plan(&abr)
@@ -250,7 +259,7 @@ async fn failed_source_removal_retires_staged_incoming_and_aborts_variant(route_
     assert_eq!(fixture.control.aborted_transition(), None);
     assert!(fixture.drops.lock().is_empty());
 
-    fixture.source.phase = OwnerPhase::Failed(None);
+    fixture.source.phase = OwnerPhase::Failed { failure: crate::TrackFailureKind::SourceCancelled, error: None };
     let control = fixture.control.clone();
     let drops = fixture.drops.clone();
     drop(fixture.source);
@@ -1344,6 +1353,6 @@ async fn failed_seek_commits_its_epoch_for_the_terminal_marker(route_pcm: RouteP
         GaplessMode::Disabled,
     )));
     let result = fixture.source.seek(Duration::from_secs(2));
-    assert!(matches!(result, Err(DecodeError::Interrupted)));
+    assert!(matches!(result, Err(crate::AudioReadError::Decode(DecodeError::Interrupted))));
     assert!(matches!(fixture.source.step_track(), TrackStep::Failed(_)));
 }

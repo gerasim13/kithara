@@ -1269,3 +1269,93 @@ fn a_cargo_test_lane_refuses_a_narrowed_run() {
         "{error:#}"
     );
 }
+
+fn request_of(args: &[&str]) -> Result<TestRequest> {
+    TestRequest::parse(&args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
+}
+
+fn filtersets(args: &[String]) -> Vec<&str> {
+    args.windows(2)
+        .filter(|pair| pair[0] == "-E")
+        .map(|pair| pair[1].as_str())
+        .collect()
+}
+
+/// A narrowed request only takes tests away: its filterset is intersected
+/// with the lane's own and with the caller's, whose filtersets nextest would
+/// otherwise union with it.
+#[test]
+fn a_narrowed_request_runs_only_what_every_filterset_selects() {
+    let project = synthetic_project();
+    let request = request_of(&["--narrow=test(seek)", "-E", "test(a)", "-E", "test(b)"])
+        .expect("parse request");
+
+    let filtered = args_of(&lane_command(&project.test, "loom", &request).expect("command"));
+    let unfiltered = args_of(&lane_command(&project.test, "workspace", &request).expect("command"));
+
+    assert_eq!(
+        filtersets(&filtered),
+        ["((test(loom_model_)) & ((test(seek)))) & ((test(a)) | (test(b)))"],
+        "{filtered:?}"
+    );
+    assert_eq!(
+        filtersets(&unfiltered),
+        ["(test(seek)) & ((test(a)) | (test(b)))"],
+        "{unfiltered:?}"
+    );
+    assert!(
+        !filtered
+            .iter()
+            .chain(&unfiltered)
+            .any(|arg| arg.contains("--narrow")),
+        "the harness consumes its own flag"
+    );
+}
+
+/// A touched run narrowed to packages is narrowed by the request as well.
+#[test]
+fn a_narrowed_request_narrows_a_touched_run() {
+    let project = synthetic_project();
+    let request = request_of(&["--narrow", "test(seek)"]).expect("parse request");
+    let touched = Touched::Narrowed {
+        lane: "workspace".to_owned(),
+        packages: BTreeSet::from(["demo".to_owned()]),
+    };
+
+    let args = args_of(&touched_command(&project.test, &touched, &request).expect("command"));
+
+    assert_eq!(
+        filtersets(&args),
+        ["(test(seek)) & ((package(demo)))"],
+        "{args:?}"
+    );
+}
+
+/// A `cargo test` lane has no filterset, so a narrowed request cannot be
+/// honoured there and is refused rather than run whole.
+#[test]
+fn a_cargo_test_lane_refuses_a_narrowed_request() {
+    let project = synthetic_project();
+    let request = request_of(&["--narrow=test(seek)"]).expect("parse request");
+
+    let error = lane_command(&project.test, "browser", &request)
+        .expect_err("a cargo test lane asked to narrow");
+
+    assert!(
+        format!("{error:#}").contains("a filterset cannot narrow"),
+        "{error:#}"
+    );
+}
+
+/// A narrowing flag without a filterset is a mistyped request, not a request
+/// for the whole lane.
+#[test]
+fn a_narrowing_flag_without_a_filterset_is_refused() {
+    for args in [&["--narrow"][..], &["--narrow="], &["--narrow", " "]] {
+        let error = request_of(args).expect_err("a narrowing flag without a filterset");
+        assert!(
+            format!("{error:#}").contains("--narrow needs a filterset"),
+            "{args:?}: {error:#}"
+        );
+    }
+}

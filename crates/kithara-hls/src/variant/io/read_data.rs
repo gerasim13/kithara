@@ -84,11 +84,7 @@ where
             }
         }
 
-        if self.has_init()
-            && self.init_size() == 0
-            && self.served_from() == 0
-            && !self.init_failed()
-        {
+        if self.init_prefix_is_unsized() {
             return Ok(Self::wrap(written));
         }
 
