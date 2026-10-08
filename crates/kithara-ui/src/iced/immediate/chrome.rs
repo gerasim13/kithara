@@ -333,7 +333,7 @@ impl From<&Skin> for CornerTicks {
 
 impl CornerTicks {
     fn marks(self, bounds: Rectangle) -> [(Point, Size); 4] {
-        crate::hosts::layer::tick_marks(
+        crate::hosts::layer::modal::tick_marks(
             crate::hosts::solve::Size::new(bounds.width, bounds.height),
             self.size,
             self.width,

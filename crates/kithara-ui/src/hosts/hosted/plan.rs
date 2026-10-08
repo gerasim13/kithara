@@ -20,12 +20,12 @@ use crate::{
     draw::{Pt, Rect},
     engine::{Descriptor, ScrollConfig, Target},
     expand::{Binding, ControlSpec, drop_path},
-    hosts::{hosted::SearchPlan, picker::picker_selected_index},
+    hosts::{hosted::SearchPlan, model::derived, picker::picker_selected_index},
     ids::InternId,
     interact::{CursorShape, Hit, Hover, ScrollAxis, recognizers::WheelStep},
     module::{FaderStyle, TableColumn, WaveStyle},
     mount::panel::{table::host::Table as TableControl, tree::host::Tree as TreeControl},
-    render::{ReadValue, Skin, TableRow, TreeRow, Zoom, document::Ctx, model::derived},
+    render::{ReadValue, Skin, TableRow, TreeRow, Zoom, document::Ctx},
     shaping::TextContext,
 };
 /// What a control plan is resolved against: the compiled document that names

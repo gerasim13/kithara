@@ -16,8 +16,11 @@ pub(crate) mod host {
 
     use crate::{
         atoms::deck::summary::{Loaded, Summary as Face},
-        hosts::controls::{Draws, Reading},
-        render::{ReadValue, Reads, Skin, model::derived},
+        hosts::{
+            controls::{Draws, Reading},
+            model::derived,
+        },
+        render::{ReadValue, Reads, Skin},
     };
 
     /// What stands in for a source nobody reported.

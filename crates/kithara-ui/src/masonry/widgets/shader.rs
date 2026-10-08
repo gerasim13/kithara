@@ -6,7 +6,7 @@ use masonry::vello::{
 use crate::{
     backends::VelloImageBackend,
     draw::{DrawListBuilder, Image, Rect, replay},
-    hosts::shader::{ShaderFrame, ShaderFrameError, logical_extent},
+    hosts::shader::{ShaderFrame, frame::ShaderFrameError, logical_extent},
     masonry::shader::ShaderDeclaration,
     render::document::Ctx,
     shader::ShaderSpec,

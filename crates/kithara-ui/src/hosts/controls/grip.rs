@@ -1,5 +1,3 @@
-#[cfg(feature = "masonry")]
-use crate::interact::recognizers::Edge;
 use crate::{
     atoms::painter::IndexedVisual,
     engine::scalar_value,
@@ -37,36 +35,11 @@ pub(crate) enum Grip {
 /// the new interval through [`Self::at`].
 #[derive(Clone, Copy, bon::Builder)]
 pub(crate) struct Span {
-    cursor: CursorShape,
-    value: ScalarRange,
+    pub(crate) cursor: CursorShape,
+    pub(crate) value: ScalarRange,
 }
 
 impl Span {
-    /// The same drag measured against the interval the control now draws.
-    #[cfg(feature = "masonry")]
-    pub(crate) const fn at(self, value: ScalarRange) -> Self {
-        Self { value, ..self }
-    }
-
-    /// The interval that results from moving one of its ends.
-    ///
-    /// The other end is left exactly where it was, and the two are not ordered:
-    /// snapping and the minimum gap between them belong to the host, and a
-    /// control that closed the gap itself would fight the answer coming back.
-    #[cfg(feature = "masonry")]
-    pub(crate) const fn moved(self, edge: Edge, value: f32) -> ScalarRange {
-        match edge {
-            Edge::Min => ScalarRange {
-                min: value,
-                max: self.value.max,
-            },
-            Edge::Max => ScalarRange {
-                min: self.value.min,
-                max: value,
-            },
-        }
-    }
-
     pub(crate) const fn recognizer(self) -> recognizers::Span {
         recognizers::Span::new(Hover::new(self.cursor), self.value.min, self.value.max)
     }
@@ -80,29 +53,17 @@ impl Span {
 /// recognizer from it — which it can only do from the description.
 #[derive(Clone, Copy, bon::Builder)]
 pub(crate) struct Drag {
-    cursor: CursorShape,
-    reset: Option<f32>,
+    pub(crate) cursor: CursorShape,
+    pub(crate) reset: Option<f32>,
     /// What the published value is rounded to while the hand is on it. A fader
     /// walks in steps the skin names; every other control publishes what the
     /// pointer says.
-    step: Option<f64>,
-    wheel: Option<WheelStep>,
-    track: Track,
+    pub(crate) step: Option<f64>,
+    pub(crate) wheel: Option<WheelStep>,
+    pub(crate) track: Track,
 }
 
 impl Drag {
-    /// The same drag counting from the value the control now draws. Only a
-    /// host that keeps its widgets needs this; the other builds a fresh drag
-    /// with every frame.
-    #[cfg(feature = "masonry")]
-    pub(crate) fn at(self, value: f32) -> Self {
-        Self {
-            track: self.track.at(value),
-            wheel: self.wheel.map(|wheel| WheelStep { value, ..wheel }),
-            ..self
-        }
-    }
-
     /// What this drag publishes for a value the recognizer produced.
     pub(crate) fn published(self, input: Input<'_>, value: f32) -> f64 {
         scalar_value(input, value, self.step)
@@ -158,7 +119,7 @@ impl<'a, Data> Indexing<'a, Data> {
 
 #[derive(Default)]
 pub(crate) struct IndexPress {
-    hovered: Option<usize>,
+    pub(crate) hovered: Option<usize>,
     pressed_origin: Option<usize>,
 }
 
@@ -238,15 +199,6 @@ impl IndexPress {
             | PointerPhase::MoveLongPress => Outcome::IGNORED,
         };
         (changed, selected)
-    }
-
-    #[cfg(feature = "masonry")]
-    pub(crate) fn hover(&mut self, hovered: bool) -> bool {
-        if hovered || self.hovered.is_none() {
-            return false;
-        }
-        self.hovered = None;
-        true
     }
 
     pub(crate) const fn visual(&self) -> IndexedVisual {

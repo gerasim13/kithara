@@ -1,26 +1,18 @@
 use std::sync::OnceLock;
 
-#[cfg(feature = "iced")]
-use iced::{
-    Color, Element, Length,
-    widget::{
-        svg::{self, Handle as SvgHandle, Svg},
-        text,
-    },
-};
 use lucide_icons::Icon;
 
 use crate::{draw::Outline, module::IconName};
 
-enum IconSource {
+pub(crate) enum IconSource {
     Lucide(Icon),
     Svg(&'static Art),
 }
 
 /// One icon's authored art, read into an outline the first time it is asked
 /// for and kept, because a control asks for it once a frame.
-struct Art {
-    document: &'static str,
+pub(crate) struct Art {
+    pub(crate) document: &'static str,
     outline: OnceLock<Option<Outline>>,
 }
 
@@ -81,27 +73,9 @@ impl IconName {
             IconSource::Svg(art) => art.outline().map(Mark::Outline),
         }
     }
-
-    /// Renders this icon with the given size and color.
-    #[must_use]
-    #[cfg(feature = "iced")]
-    pub fn view<'a, M: 'a>(self, size: f32, color: Color) -> Element<'a, M> {
-        match source(self) {
-            IconSource::Lucide(icon) => text(char::from(icon).to_string())
-                .font(crate::iced::fonts::LUCIDE)
-                .size(size)
-                .color(color)
-                .into(),
-            IconSource::Svg(art) => Svg::new(SvgHandle::from_memory(art.document.as_bytes()))
-                .width(Length::Fixed(size))
-                .height(Length::Fixed(size))
-                .style(move |_theme, _status| svg::Style { color: Some(color) })
-                .into(),
-        }
-    }
 }
 
-fn source(icon: IconName) -> IconSource {
+pub(crate) fn source(icon: IconName) -> IconSource {
     match icon {
         IconName::Activity => IconSource::Lucide(Icon::Activity),
         IconName::Bell => IconSource::Lucide(Icon::Bell),

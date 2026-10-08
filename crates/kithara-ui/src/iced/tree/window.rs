@@ -3,8 +3,10 @@ use iced::Element;
 use super::{drag::drag_root, node::IcedHost};
 use crate::{
     compile::{CompiledNode, CompiledUi},
-    hosts::window::{TitleBar, WindowControls},
-    iced::tree::Widget,
+    iced::{
+        tree::Widget,
+        window::{TitleBar, WindowControls},
+    },
     ids::InternId,
     module::WindowControlsStyle,
     render::{

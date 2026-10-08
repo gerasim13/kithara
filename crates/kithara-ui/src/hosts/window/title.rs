@@ -1,37 +1,18 @@
 use std::cell::RefCell;
 
-#[cfg(feature = "iced")]
-use iced::Element;
-
 use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform},
-    hosts::{
-        layer::{HostLayer, LayerHit, WindowLayerProgram},
-        solve::{Length, Size},
-    },
+    hosts::layer::{HostLayer, LayerHit, WindowLayerProgram},
     interact::CursorShape,
     render::{Skin, WindowCommand},
     shaping::{TextContext, TextResources},
     skin::TextRoleSkin,
 };
 
-#[derive(bon::Builder)]
-pub(crate) struct TitleBar<'label, 'skin> {
-    skin: &'skin Skin,
-    label: &'label str,
-}
-
-#[cfg(feature = "iced")]
-impl<'a> crate::iced::tree::Widget<'a> for TitleBar<'_, '_> {
-    fn view(self) -> Element<'a, crate::render::Published> {
-        crate::iced::layer::window_layer(TitleProgram::new(self.label, self.skin))
-    }
-}
-
 pub(crate) struct TitleProgram {
     color: Rgba,
     label: String,
-    resources: TextResources,
+    pub(crate) resources: TextResources,
     role: TextRoleSkin,
     padding_x: f32,
 }
@@ -114,14 +95,6 @@ impl WindowLayerProgram for TitleProgram {
                 WindowCommand::Drag,
             )],
         )
-    }
-
-    fn resources(&self) -> Option<&TextResources> {
-        Some(&self.resources)
-    }
-
-    fn size(&self) -> Size<Length> {
-        Size::new(Length::Fill, Length::Fill)
     }
 }
 

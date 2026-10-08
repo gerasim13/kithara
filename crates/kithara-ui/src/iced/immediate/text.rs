@@ -14,10 +14,10 @@ use iced::{
 use kithara_test_macros as kithara;
 
 use crate::{
-    atoms::text::Text as TextAtom,
     draw::{DrawList, DrawListBuilder, Rect, Rgba},
     iced::{
         controls::{PaintState, Probe},
+        paint::text::Text as TextAtom,
         tree::Widget,
     },
     module::TextStyle,

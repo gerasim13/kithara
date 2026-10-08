@@ -7,7 +7,7 @@ use crate::{
         Outcome,
         recognizers::{DragEvent, StepEvent},
     },
-    render::{Carry, ControlAction, Published, WindowCommand, event::CarryStep},
+    render::{Carry, ControlAction, Published, WindowCommand},
 };
 
 /// Shared view contract: a built control renders itself into the event tree.
@@ -81,7 +81,7 @@ pub(crate) fn engine(
         ),
         Some(EngineEvent::Activate) => activate(path, typed_outcome((), captured)),
         Some(EngineEvent::Crossing(over)) => {
-            carry(path, typed_outcome(Carry(CarryStep::Over(over)), captured))
+            carry(path, typed_outcome(Carry::Over(over), captured))
         }
         Some(EngineEvent::Index(selected)) => index(path, typed_outcome(selected, captured)),
         Some(EngineEvent::Drag { event, index }) => {
@@ -115,11 +115,9 @@ pub(crate) fn drag(
 ) -> Option<Action<Published>> {
     carry(
         path,
-        outcome.map(|event| {
-            Carry(match event {
-                DragEvent::Started => CarryStep::Start(index),
-                DragEvent::Dropped => CarryStep::Drop,
-            })
+        outcome.map(|event| match event {
+            DragEvent::Started => Carry::Start(index),
+            DragEvent::Dropped => Carry::Drop,
         }),
     )
 }
@@ -183,7 +181,7 @@ mod tests {
             action.into_inner().0,
             Some(Published::Carry {
                 path: "library/tracks".to_owned(),
-                step: Carry(CarryStep::Start(3)),
+                step: Carry::Start(3),
             })
         );
     }
@@ -203,7 +201,7 @@ mod tests {
                 (
                     Some(Published::Carry {
                         path: "deck-a/drop".to_owned(),
-                        step: Carry(CarryStep::Over(over)),
+                        step: Carry::Over(over),
                     }),
                     RedrawRequest::Wait,
                     event::Status::Ignored,

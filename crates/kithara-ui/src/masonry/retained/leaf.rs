@@ -15,11 +15,8 @@ use num_traits::cast::AsPrimitive;
 use tracing::{Span, trace_span};
 
 use super::{
-    MasonryControl, MasonryNode, Repaint, Size2, SizeLimits, TextMeasurer,
-    custom::{HostAction, MountedCustom},
-    mount::NodeLayout,
-    shader::ShaderLeaf,
-    vis::VisLeaf,
+    MasonryControl, MasonryNode, Repaint, Size2, SizeLimits, TextMeasurer, custom::HostAction,
+    mount::NodeLayout, shader::ShaderLeaf, vis::VisLeaf,
 };
 use crate::{
     backends::VelloBackend,
@@ -34,8 +31,10 @@ use crate::{
     },
     masonry::shader::ShaderDeclaration,
     module::TextAlign,
-    render::{CustomSkin, Published, ReadValue, WindowCommand, document::Ctx},
-    shaping::{TextContext, TextResources},
+    render::{
+        CustomSkin, Published, ReadValue, WindowCommand, custom::CustomWidget, document::Ctx,
+    },
+    shaping::TextContext,
     skin::TextRoleSkin,
 };
 
@@ -54,7 +53,7 @@ pub(crate) enum Leaf {
         text: Box<TextContext>,
     },
     Custom {
-        widget: Box<dyn MountedCustom<HostAction>>,
+        widget: Box<dyn CustomWidget<Action = HostAction>>,
         /// What the skin this leaf was mounted under dresses its kind in.
         skin: CustomSkin,
         text: Box<TextContext>,
@@ -570,14 +569,6 @@ impl WindowLayerProgram for DragProgram {
                 WindowCommand::Drag,
             )],
         )
-    }
-
-    fn resources(&self) -> Option<&TextResources> {
-        None
-    }
-
-    fn size(&self) -> Size<Length> {
-        Size::new(Length::Fill, Length::Fill)
     }
 }
 

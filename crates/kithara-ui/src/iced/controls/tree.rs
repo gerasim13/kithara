@@ -14,7 +14,10 @@ use crate::{
     atoms::tree::Tree,
     backends::replay_ordered,
     draw::Rect,
-    engine::{Component, ItemComponent, ScrollConfig, ScrollState},
+    engine::{
+        ScrollConfig,
+        component::{item::ItemComponent, retained::Component, scroll::ScrollState},
+    },
     iced::tree::index,
     interact::{Hit, ScrollAxis, iced as iced_interact},
     render::{InputOwner, Published},
@@ -101,7 +104,7 @@ impl canvas::Program<Published> for TreeProgram {
         if hovered_row(
             self.picture.row_count(),
             self.picture.skin().tree.row_height,
-            state.scroll.offset(),
+            state.scroll.offset,
             bounds,
             cursor,
         )
@@ -144,7 +147,7 @@ impl canvas::Program<Published> for TreeProgram {
             };
             let under = self
                 .picture
-                .toggle_regions(viewport, state.scroll.offset())
+                .toggle_regions(viewport, state.scroll.offset)
                 .into_iter()
                 .find(|(_, rect)| Hit::new(point, *rect).over());
             let (row, hit) = under.map_or_else(
@@ -159,11 +162,11 @@ impl canvas::Program<Published> for TreeProgram {
                 }
             }
         }
-        let before = state.scroll.offset();
+        let before = state.scroll.offset;
         let outcome = state
             .scroll
             .handle(input, &iced_interact::hit(bounds, cursor));
-        if outcome.is_captured() && outcome.value().is_none() && state.scroll.offset() != before {
+        if outcome.is_captured() && outcome.value().is_none() && state.scroll.offset != before {
             Some(Action::request_redraw().and_capture())
         } else {
             index(&self.path, outcome)
@@ -211,11 +214,11 @@ fn geometry(
     let hovered = hovered_row(
         picture.row_count(),
         picture.skin().tree.row_height,
-        state.scroll.offset(),
+        state.scroll.offset,
         bounds,
         cursor,
     );
-    let list = picture.row_commands(text, viewport, state.scroll.offset(), hovered);
+    let list = picture.row_commands(text, viewport, state.scroll.offset, hovered);
     replay_ordered(&list, &mut frame, picture.skin().text_resources.as_ref());
     vec![frame.into_geometry()]
 }
@@ -426,7 +429,7 @@ mod tests {
         assert_eq!(message, None);
         assert_eq!(redraw, iced::window::RedrawRequest::NextFrame);
         assert_eq!(status, iced::event::Status::Captured);
-        assert_eq!(state.scroll.offset(), 24.0);
+        assert_eq!(state.scroll.offset, 24.0);
     }
 
     #[kithara::test]
@@ -456,7 +459,7 @@ mod tests {
                 .handle(Input::Pointer(mouse_input(PointerPhase::Up, None)), &hit,),
             Outcome::IGNORED
         );
-        assert_eq!(state.scroll.offset(), 0.0);
+        assert_eq!(state.scroll.offset, 0.0);
     }
 
     #[kithara::test]
@@ -473,10 +476,10 @@ mod tests {
 
         let mut matching = sync_tree_scroll("tree/browser", skin.tree.row_height);
         matching.custom(None, Rectangle::default(), &mut state);
-        assert_eq!(state.scroll.offset(), skin.tree.row_height);
+        assert_eq!(state.scroll.offset, skin.tree.row_height);
 
         let mut other = sync_tree_scroll("tree/other", 0.0);
         other.custom(None, Rectangle::default(), &mut state);
-        assert_eq!(state.scroll.offset(), skin.tree.row_height);
+        assert_eq!(state.scroll.offset, skin.tree.row_height);
     }
 }

@@ -24,10 +24,11 @@ use crate::{
         masonry::{pointer_button, portable_scroll},
     },
     masonry::{
+        event::engine_value,
         hosted::{MasonryHostedState, SearchProjection, TableProjection, TreeProjection},
         paint::tree::Drawn as TreeDrawn,
     },
-    render::{Published, document::Ctx, event::engine_value},
+    render::{Published, document::Ctx},
 };
 
 /// One control an engine drives: what it is and where it sits.

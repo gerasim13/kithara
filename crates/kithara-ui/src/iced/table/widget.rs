@@ -112,7 +112,7 @@ impl canvas::Program<Published> for TableProgram {
         let dividers = table_dividers(
             bounds,
             self.paint.face.columns(),
-            state.horizontal.offset(),
+            state.horizontal.offset,
             self.paint.face.metrics(),
         );
         for divider in &dividers {
@@ -138,8 +138,8 @@ impl canvas::Program<Published> for TableProgram {
             point,
             bounds,
             self.paint.face.rows().len(),
-            state.horizontal.offset(),
-            state.vertical.offset(),
+            state.horizontal.offset,
+            state.vertical.offset,
             &self.paint.face,
         )
         .is_some()
@@ -184,17 +184,17 @@ impl canvas::Program<Published> for TableProgram {
 
         let body = table_body(bounds, self.paint.face.metrics());
         let vertical_hit = Hit::new(point, body);
-        let before = state.vertical.offset();
+        let before = state.vertical.offset;
         let outcome = state.vertical.handle(input, &vertical_hit);
-        let after = state.vertical.offset();
+        let after = state.vertical.offset;
         if outcome.is_captured() || outcome.value().is_some() {
             return scroll_action(&self.paint.path, outcome, before, after);
         }
 
         let horizontal_hit = Hit::new(point, bounds);
-        let before = state.horizontal.offset();
+        let before = state.horizontal.offset;
         let outcome = state.horizontal.handle(input, &horizontal_hit);
-        let after = state.horizontal.offset();
+        let after = state.horizontal.offset;
         scroll_action(
             &format!("{}/scroll-x", self.paint.path),
             outcome,
@@ -213,7 +213,7 @@ impl TableProgram {
         point: Option<Pt>,
     ) -> Option<Action<Published>> {
         let face = &self.paint.face;
-        let offsets = (state.horizontal.offset(), state.vertical.offset());
+        let offsets = (state.horizontal.offset, state.vertical.offset);
         let (_, column, _, action) = face
             .actions_under(point, bounds, offsets, face.columns())
             .find(|(_, _, cell, _)| {
@@ -241,7 +241,7 @@ impl TableProgram {
         let dividers = table_dividers(
             bounds,
             self.paint.face.columns(),
-            state.horizontal.offset(),
+            state.horizontal.offset,
             self.paint.face.metrics(),
         );
         for divider in &dividers {
@@ -283,8 +283,8 @@ impl TableProgram {
                 point,
                 bounds,
                 self.paint.face.rows().len(),
-                state.horizontal.offset(),
-                state.vertical.offset(),
+                state.horizontal.offset,
+                state.vertical.offset,
                 &self.paint.face,
             );
             state.pressed_index = state.drag_index;
@@ -295,8 +295,8 @@ impl TableProgram {
             self.paint.face.columns(),
             self.paint.face.rows().len(),
             row_index,
-            state.horizontal.offset(),
-            state.vertical.offset(),
+            state.horizontal.offset,
+            state.vertical.offset,
             self.paint.face.metrics(),
         );
         let row = visible.unwrap_or(Rect {

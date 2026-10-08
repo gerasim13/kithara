@@ -1,10 +1,11 @@
 use crate::{
-    atoms::{search::paint::paint, table::face::TableFace, tree::Tree as TreeFace},
+    atoms::{table::face::TableFace, tree::Tree as TreeFace},
     draw::{DrawList, Rect, Transform},
     hosts::hosted::{SearchPlan, TablePlan, TreePlan},
     interact::{Hit, Input, Outcome},
     masonry::{
         hosted::MasonryHostedState,
+        paint::search::paint,
         retained::{controls::MasonryControl, custom::HostAction},
     },
     render::{Skin, document::Ctx},

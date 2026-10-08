@@ -8,8 +8,9 @@ use super::{
 };
 use crate::{
     draw::{DrawListBuilder, Rect, Rgba},
+    hosts::model::derived,
     module::WaveStyle,
-    render::{ReadValue, Reads, Skin, WaveformView, Zoom, model::derived},
+    render::{ReadValue, Reads, Skin, WaveformView, Zoom},
     shaping::TextContext,
     skin::WaveSkin,
 };

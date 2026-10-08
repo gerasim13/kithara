@@ -1,10 +1,11 @@
 use crate::{
     atoms::design::quad::border,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
+    hosts::skin::tone_color,
     module::Tone,
     render::Skin,
     shaping::TextContext,
-    skin::{ReadoutSkin, TextRoleSkin, tone_color},
+    skin::{ReadoutSkin, TextRoleSkin},
 };
 
 /// A caption stacked over the value it names, framed or bare.

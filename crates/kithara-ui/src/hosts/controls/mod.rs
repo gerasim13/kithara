@@ -1,5 +1,5 @@
 mod contract;
-mod grip;
+pub(crate) mod grip;
 mod press;
 
 pub(crate) use contract::{Draws, Reading};

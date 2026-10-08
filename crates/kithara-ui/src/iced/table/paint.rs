@@ -16,7 +16,7 @@ use crate::{
     },
     backends::replay_ordered,
     draw::{DrawList, Pt, Rect},
-    engine::{ScrollConfig, ScrollState},
+    engine::{ScrollConfig, component::scroll::ScrollState},
     hosts::drag::Carried,
     iced::controls::{Marked, Marks, Probe},
     interact::{
@@ -232,7 +232,7 @@ impl TableState {
     }
 
     fn paint_offsets(&self) -> (f32, f32) {
-        (self.horizontal.offset(), self.vertical.offset())
+        (self.horizontal.offset, self.vertical.offset)
     }
 
     pub(super) fn rebind(&mut self, path: &str) {

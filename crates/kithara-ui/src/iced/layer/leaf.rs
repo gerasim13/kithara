@@ -14,13 +14,24 @@ use iced::{
 
 use crate::{
     draw::Rect,
-    hosts::{layer::WindowLayerProgram, solve::Length as SolveLength},
+    hosts::{
+        layer::WindowLayerProgram as SharedWindowLayerProgram,
+        solve::{Length as SolveLength, Size as SolveSize},
+    },
     iced::{layer::draw_host_layer, tree::window as window_event},
     interact::{Input, Outcome, PointerId, PointerOwnership, PointerPhase, iced as iced_interact},
     render::Published,
+    shaping::TextResources,
 };
 
-pub(crate) fn window_layer<'a>(program: impl WindowLayerProgram + 'a) -> Element<'a, Published> {
+pub(crate) trait IcedWindowLayerProgram: SharedWindowLayerProgram {
+    fn resources(&self) -> Option<&TextResources>;
+    fn size(&self) -> SolveSize<SolveLength>;
+}
+
+pub(crate) fn window_layer<'a>(
+    program: impl IcedWindowLayerProgram + 'a,
+) -> Element<'a, Published> {
     Element::new(WindowLayerLeaf { program })
 }
 
@@ -30,7 +41,7 @@ struct WindowLayerLeaf<P> {
 
 impl<P> IcedWidget<Published, Theme, Renderer> for WindowLayerLeaf<P>
 where
-    P: WindowLayerProgram,
+    P: IcedWindowLayerProgram,
 {
     fn draw(
         &self,
@@ -92,7 +103,7 @@ const fn iced_length(length: SolveLength) -> Length {
 
 struct WindowLayerOverlay<'a, P>
 where
-    P: WindowLayerProgram,
+    P: IcedWindowLayerProgram,
 {
     pointer_owner: &'a mut Option<PointerId>,
     program: &'a P,
@@ -102,7 +113,7 @@ where
 
 impl<P> overlay::Overlay<Published, Theme, Renderer> for WindowLayerOverlay<'_, P>
 where
-    P: WindowLayerProgram,
+    P: IcedWindowLayerProgram,
 {
     fn draw(
         &self,
@@ -236,7 +247,17 @@ mod tests {
         resources: TextResources,
     }
 
-    impl WindowLayerProgram for TestProgram {
+    impl IcedWindowLayerProgram for TestProgram {
+        fn resources(&self) -> Option<&TextResources> {
+            Some(&self.resources)
+        }
+
+        fn size(&self) -> SolveSize<SolveLength> {
+            SolveSize::new(SolveLength::Fixed(20.0), SolveLength::Fixed(10.0))
+        }
+    }
+
+    impl SharedWindowLayerProgram for TestProgram {
         type State = ();
 
         fn layer(
@@ -255,9 +276,13 @@ mod tests {
                 )],
             )
         }
+    }
 
+    struct CaptureProgram;
+
+    impl IcedWindowLayerProgram for CaptureProgram {
         fn resources(&self) -> Option<&TextResources> {
-            Some(&self.resources)
+            None
         }
 
         fn size(&self) -> SolveSize<SolveLength> {
@@ -265,9 +290,7 @@ mod tests {
         }
     }
 
-    struct CaptureProgram;
-
-    impl WindowLayerProgram for CaptureProgram {
+    impl SharedWindowLayerProgram for CaptureProgram {
         type State = ();
 
         fn layer(
@@ -277,14 +300,6 @@ mod tests {
             _pointer: Option<Pt>,
         ) -> HostLayer<WindowCommand> {
             HostLayer::new(bounds, DrawList::default(), Vec::new())
-        }
-
-        fn resources(&self) -> Option<&TextResources> {
-            None
-        }
-
-        fn size(&self) -> SolveSize<SolveLength> {
-            SolveSize::new(SolveLength::Fixed(20.0), SolveLength::Fixed(10.0))
         }
 
         fn update(

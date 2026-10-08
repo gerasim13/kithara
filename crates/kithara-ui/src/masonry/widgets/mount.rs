@@ -8,7 +8,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::built::StageSize;
 use crate::{
-    atoms::{button::declared_width, painter::ControlPainter, tab::TabLarge},
+    atoms::{painter::ControlPainter, tab::TabLarge},
     draw::{DrawListBuilder, Rect as DrawRect},
     expand::{Binding, BindingKind, ControlSpec},
     hosts::{
@@ -16,16 +16,17 @@ use crate::{
         hosted::HostedControlPlan,
         scroll::{Bar, Window},
         solve::{self, Alignment, Length, Limits, Size},
-        window::{ControlsProgram, TitleProgram},
+        window::{controls::ControlsProgram, title::TitleProgram},
     },
     interact::Input,
     masonry::{
+        custom::Respoken,
         hosted::MasonryHostedState,
+        paint::button::declared_width,
         refresh::{DataRefresh, Refresh},
         retained::{
             MasonryHost, MasonryNode, Painted,
             controls::{Retained, SearchLeaf, TableLeaf, TreeLeaf},
-            custom::Respoken,
             flex::{Flex, box_constraints, normalized},
             leaf::{DragProgram, Leaf},
             node::Node,

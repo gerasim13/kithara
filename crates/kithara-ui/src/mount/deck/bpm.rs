@@ -16,8 +16,11 @@ pub(crate) mod host {
 
     use crate::{
         atoms::deck::tempo::{Reading as Beat, Tempo as Face},
-        hosts::controls::{Draws, Reading},
-        render::{ReadValue, Skin, WaveformView, model::derived},
+        hosts::{
+            controls::{Draws, Reading},
+            model::derived,
+        },
+        render::{ReadValue, Skin, WaveformView},
     };
 
     mod consts {

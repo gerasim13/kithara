@@ -37,7 +37,7 @@ use crate::{
     ids::SourceUri,
     interact::recognizers::Track,
     module::{TableColumn, TableColumnStyle, TableFrame},
-    render::{Carry, ControlAction, Published, Skin, event::CarryStep},
+    render::{Carry, ControlAction, Published, Skin},
     shaping::TextContext,
     skin::parse_skin_over,
 };
@@ -583,7 +583,7 @@ fn leaf_row_drag_keeps_the_start_index_binder() {
         (
             Some(Published::Carry {
                 path: "library/tracks".to_owned(),
-                step: Carry(CarryStep::Start(3)),
+                step: Carry::Start(3),
             }),
             RedrawRequest::Wait,
             event::Status::Ignored,
@@ -696,8 +696,8 @@ fn horizontal_wheel_passes_the_movable_vertical_state() {
     )
     .expect("the horizontal scroll must consume its matching wheel");
 
-    assert_eq!(state.vertical.offset(), 0.0);
-    assert!(state.horizontal.offset() > 0.0);
+    assert_eq!(state.vertical.offset, 0.0);
+    assert!(state.horizontal.offset > 0.0);
     assert_eq!(action.into_inner().2, event::Status::Captured);
 }
 
@@ -761,10 +761,7 @@ fn hosted_canvas_forwards_projection_and_rebinds_before_paint() {
         &mut other,
     );
     let state = tree.state.downcast_ref::<TableState>();
-    assert_eq!(
-        (state.horizontal.offset(), state.vertical.offset()),
-        (0.0, 0.0)
-    );
+    assert_eq!((state.horizontal.offset, state.vertical.offset), (0.0, 0.0));
 
     let mut matching = sync_table_scroll("library/tracks", 14.0, Some(2), 26.0);
     IcedWidget::operate(
@@ -776,7 +773,7 @@ fn hosted_canvas_forwards_projection_and_rebinds_before_paint() {
     );
     let state = tree.state.downcast_ref::<TableState>();
     assert_eq!(
-        (state.horizontal.offset(), state.vertical.offset()),
+        (state.horizontal.offset, state.vertical.offset),
         (14.0, 26.0)
     );
     assert_eq!(state.pressed_index, Some(2));
@@ -794,10 +791,7 @@ fn hosted_canvas_forwards_projection_and_rebinds_before_paint() {
     let next = RetainedCanvas::new(next_paint, "library/history", next_config);
     IcedWidget::diff(&next, &mut tree);
     let state = tree.state.downcast_ref::<TableState>();
-    assert_eq!(
-        (state.horizontal.offset(), state.vertical.offset()),
-        (0.0, 0.0)
-    );
+    assert_eq!((state.horizontal.offset, state.vertical.offset), (0.0, 0.0));
 }
 
 #[kithara::test]
@@ -825,8 +819,8 @@ fn leaf_layout_clamps_offsets_after_rows_shrink_and_viewport_widens() {
         let state = tree.state.downcast_mut::<TableState>();
         state.horizontal.sync_offset(500.0);
         state.vertical.sync_offset(500.0);
-        assert!(state.horizontal.offset() > 0.0);
-        assert!(state.vertical.offset() > 0.0);
+        assert!(state.horizontal.offset > 0.0);
+        assert!(state.vertical.offset > 0.0);
     }
 
     let next_paint = TablePaint::new(
@@ -853,8 +847,5 @@ fn leaf_layout_clamps_offsets_after_rows_shrink_and_viewport_widens() {
     IcedWidget::layout(&mut widget, &mut tree, &renderer, &Limits::new(wide, wide));
 
     let state = tree.state.downcast_ref::<TableState>();
-    assert_eq!(
-        (state.horizontal.offset(), state.vertical.offset()),
-        (0.0, 0.0)
-    );
+    assert_eq!((state.horizontal.offset, state.vertical.offset), (0.0, 0.0));
 }

@@ -1,10 +1,11 @@
 use crate::{
     atoms::design::quad::center_y,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
+    hosts::skin::tone_color,
     module::Tone,
     render::Skin,
     shaping::TextContext,
-    skin::{StatusDotSkin, TextRoleSkin, tone_color},
+    skin::{StatusDotSkin, TextRoleSkin},
 };
 
 /// A coloured dot with a word beside it.

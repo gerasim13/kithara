@@ -26,7 +26,7 @@ impl Tree {
         let mut list = DrawListBuilder::default();
         list.fill_rect(panel, self.skin().rgba(self.skin().tree.panel_background));
         if let Some(query) = self.query() {
-            crate::atoms::search::paint::paint(
+            crate::masonry::paint::search::paint(
                 &mut list,
                 text,
                 bounds,

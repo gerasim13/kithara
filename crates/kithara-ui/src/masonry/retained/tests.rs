@@ -54,7 +54,6 @@ use crate::{
         WaveformView, WindowCommand, WindowEdge,
         custom::CustomKinds,
         document::{self, Clock, Ctx},
-        event::CarryStep,
     },
     shaping::{FontPolicy, TextContext},
     source::{MemResolver, UiConfig},
@@ -4587,11 +4586,11 @@ fn drag_a_track_onto_the_deck(root: &mut MasonryRoot<TestAction>) -> Vec<TestAct
 }
 
 /// Whether the published events carry this one, on a path under `instance`.
-fn published_drag(published: &[TestAction], instance: &str, step: CarryStep) -> bool {
+fn published_drag(published: &[TestAction], instance: &str, step: Carry) -> bool {
     published.iter().any(|action| {
         matches!(
             action,
-            TestAction::Document(Published::Carry { step: Carry(carried), path })
+            TestAction::Document(Published::Carry { step: carried, path })
                 if *carried == step && path.starts_with(instance)
         )
     })
@@ -4603,7 +4602,7 @@ fn a_track_pulled_out_of_the_list_reports_its_drag() {
     let published = drag_a_track_onto_the_deck(&mut dragging_library_root());
 
     assert!(
-        published_drag(&published, "library", CarryStep::Start(1)),
+        published_drag(&published, "library", Carry::Start(1)),
         "the list a track is pulled out of must report the drag, published {published:?}"
     );
 }
@@ -4614,7 +4613,7 @@ fn a_module_that_takes_drops_reports_the_hand_crossing_it() {
     let published = drag_a_track_onto_the_deck(&mut dragging_library_root());
 
     assert!(
-        published_drag(&published, "deck", CarryStep::Over(true)),
+        published_drag(&published, "deck", Carry::Over(true)),
         "a module that takes drops must report the hand above it, published {published:?}"
     );
 }
@@ -4732,7 +4731,7 @@ fn a_track_released_away_from_its_list_still_reports_the_drop() {
     let published = drag_a_track_onto_the_deck(&mut dragging_library_root());
 
     assert!(
-        published_drag(&published, "library", CarryStep::Drop),
+        published_drag(&published, "library", Carry::Drop),
         "a track released away from its list must still report the drop, published {published:?}"
     );
 }

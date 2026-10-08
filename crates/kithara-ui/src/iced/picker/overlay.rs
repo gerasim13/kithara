@@ -16,8 +16,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::{program::targets, widget::PickerState};
 use crate::{
-    hosts::picker::PickerPaint,
-    iced::{layer::draw_host_layer, tree::engine as engine_event},
+    iced::{layer::draw_host_layer, picker::paint::PickerPaint, tree::engine as engine_event},
     interact::iced as iced_interact,
     render::{InputOwner, Published},
 };

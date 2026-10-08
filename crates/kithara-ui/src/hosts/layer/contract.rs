@@ -1,12 +1,8 @@
 use crate::{
     draw::{Pt, Rect},
-    hosts::{
-        layer::HostLayer,
-        solve::{Length, Size},
-    },
+    hosts::layer::HostLayer,
     interact::{Input, Outcome},
     render::WindowCommand,
-    shaping::TextResources,
 };
 
 pub(crate) trait WindowLayerProgram {
@@ -22,10 +18,6 @@ pub(crate) trait WindowLayerProgram {
         bounds: Rect,
         pointer: Option<Pt>,
     ) -> HostLayer<WindowCommand>;
-
-    fn resources(&self) -> Option<&TextResources>;
-
-    fn size(&self) -> Size<Length>;
 
     fn update(
         &self,

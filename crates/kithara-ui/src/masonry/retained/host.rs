@@ -12,7 +12,7 @@ use super::{
     CustomWidget, MasonryNode,
     built::{BlockState, LayerParts},
     controls::Retained,
-    custom::{HostAction, MappedCustom, MountedCustom},
+    custom::{HostAction, MappedCustom},
     flex::{ChildLayout, Flex},
     leaf::{Leaf, TextFace, TextFaces, WindowLeafLayer},
     modal::ModalLayer,
@@ -63,7 +63,7 @@ pub struct MasonryHost<'a, Action = Published> {
     pub(crate) skin: &'a Skin,
     pub(crate) ctx: Ctx<'a, 'a>,
     pub(crate) map_event: Rc<dyn Fn(Published) -> HostAction>,
-    custom: BTreeMap<String, Box<dyn MountedCustom<HostAction>>>,
+    custom: BTreeMap<String, Box<dyn CustomWidget<Action = HostAction>>>,
     #[field(with)]
     state: MasonryState,
     action: std::marker::PhantomData<fn() -> Action>,
@@ -199,7 +199,7 @@ where
     /// dress and is dressed in nothing.
     pub(crate) fn custom_leaf(
         &self,
-        widget: Box<dyn MountedCustom<HostAction>>,
+        widget: Box<dyn CustomWidget<Action = HostAction>>,
         kind: Option<&str>,
         declared: Size<Length>,
     ) -> MasonryNode<Action> {

@@ -24,7 +24,6 @@ use super::{
     spot::Spot,
 };
 use crate::{
-    atoms::design::corner::{corner_frame, corner_path},
     backends::VelloBackend,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform, replay},
     hosts::{
@@ -40,7 +39,10 @@ use crate::{
         recognizers::{StepEvent, Stepper},
     },
     layout::{FrameCorners, FrameSides},
-    masonry::shader::ShaderDeclaration,
+    masonry::{
+        paint::corner::{corner_frame, corner_path},
+        shader::ShaderDeclaration,
+    },
     render::{ControlAction, Published, ReadValue, document::Ctx},
 };
 

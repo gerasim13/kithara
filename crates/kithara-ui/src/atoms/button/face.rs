@@ -154,7 +154,7 @@ impl Button {
 }
 
 impl Width {
-    fn new(style: ButtonStyle, skin: &Skin) -> Self {
+    pub(crate) fn new(style: ButtonStyle, skin: &Skin) -> Self {
         match style {
             ButtonStyle::Default => Self::Fill,
             ButtonStyle::MicroPrimary => Self::Fixed(skin.button.micro_size),
@@ -171,20 +171,6 @@ impl Width {
             Self::Portion(factor) => Length::FillPortion(factor),
         }
     }
-}
-
-/// What a parent has to be told about a button's width before the button
-/// exists.
-///
-/// A retained host settles a row's shares while it is still walking the
-/// document, which is earlier than it holds a painter — so this reads the same
-/// table the painter reads rather than restating it.
-///
-/// Only the retained host asks: the immediate one reads the box off the built
-/// widget, which by then holds the painter.
-#[cfg(feature = "masonry")]
-pub(crate) fn declared_width(style: ButtonStyle, skin: &Skin) -> Length {
-    Width::new(style, skin).length()
 }
 
 impl Face {

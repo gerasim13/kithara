@@ -19,8 +19,8 @@ use super::{overlay::PickerPortal, program::targets};
 use crate::{
     draw::Rect,
     engine::{Descriptor, Engine, PickerSnapshot},
-    hosts::picker::{PickerPaint, picker_selected_index},
-    iced::tree::engine as engine_event,
+    hosts::picker::picker_selected_index,
+    iced::{picker::paint::PickerPaint, tree::engine as engine_event},
     interact::iced as iced_interact,
     render::{InputOwner, Published, ReadValue, Skin},
     shaping::TextContext,
@@ -402,8 +402,7 @@ mod tests {
     use crate::{
         builtin,
         engine::PickerSnapshot,
-        hosts::window::WindowSurface,
-        iced::{fonts::SANS, tree::Widget},
+        iced::{fonts::SANS, tree::Widget, window::WindowSurface},
         render::{ControlAction, WindowCommand},
     };
 

@@ -7,16 +7,14 @@ use super::{
 };
 use crate::{
     draw::Transform,
-    hosts::{
-        controls::{Draws, Reading},
-        window::WindowSurface,
-    },
+    hosts::controls::{Draws, Reading},
     iced::{
         controls::{Gesture, Paint},
         immediate::{Custom, MiniWave, Text},
         paint::PainterLength,
         shader,
         tree::Widget,
+        window::WindowSurface,
     },
     module::TextAlign,
     mount,

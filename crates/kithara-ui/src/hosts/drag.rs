@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::{
     hosts::event::control_event,
-    render::{Carry, ControlAction, Published, event::CarryStep},
+    render::{Carry, ControlAction, Published},
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -23,29 +23,25 @@ impl DragSession {
         event: &Published,
         carried: impl FnOnce(&str, usize) -> Option<Carried>,
     ) -> Option<Published> {
-        let Published::Carry {
-            path,
-            step: Carry(step),
-        } = event
-        else {
+        let Published::Carry { path, step } = event else {
             return None;
         };
         match step {
-            CarryStep::Start(index) => {
+            Carry::Start(index) => {
                 self.carried = carried(path, *index);
                 None
             }
-            CarryStep::Over(true) => {
+            Carry::Over(true) => {
                 self.over = Some(path.clone());
                 None
             }
-            CarryStep::Over(false) => {
+            Carry::Over(false) => {
                 if self.over.as_ref() == Some(path) {
                     self.over = None;
                 }
                 None
             }
-            CarryStep::Drop => {
+            Carry::Drop => {
                 let carried = self.carried.take()?;
                 let zone = self.over.as_deref()?;
                 Some(control_event(zone, ControlAction::Record(carried.data)))

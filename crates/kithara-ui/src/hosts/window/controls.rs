@@ -1,31 +1,11 @@
-#[cfg(feature = "iced")]
-use iced::Element;
-
 use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba},
-    hosts::{
-        layer::{HostLayer, LayerHit, WindowLayerProgram},
-        solve::{Length, Size},
-    },
+    hosts::layer::{HostLayer, LayerHit, WindowLayerProgram},
     interact::{CursorShape, Hit, Input, Outcome, PointerPhase},
     module::WindowControlsStyle,
     render::{Skin, WindowCommand},
-    shaping::TextResources,
     skin::{FrameSkin, WindowControlSkin},
 };
-
-#[derive(bon::Builder)]
-pub(crate) struct WindowControls<'skin> {
-    skin: &'skin Skin,
-    style: WindowControlsStyle,
-}
-
-#[cfg(feature = "iced")]
-impl<'a> crate::iced::tree::Widget<'a> for WindowControls<'_> {
-    fn view(self) -> Element<'a, crate::render::Published> {
-        crate::iced::layer::window_layer(ControlsProgram::new(self.style, self.skin))
-    }
-}
 
 #[derive(Clone, Copy)]
 enum Glyph {
@@ -35,10 +15,10 @@ enum Glyph {
 }
 
 #[derive(Clone, Copy)]
-struct ControlRegion {
+pub(crate) struct ControlRegion {
     glyph: Glyph,
-    bounds: Rect,
-    command: WindowCommand,
+    pub(crate) bounds: Rect,
+    pub(crate) command: WindowCommand,
     icon_size: f32,
 }
 
@@ -47,15 +27,14 @@ pub(crate) struct ControlsProgram {
     frame_color: Option<Rgba>,
     color: Rgba,
     hover_color: Rgba,
-    resources: TextResources,
-    controls: WindowControlSkin,
+    pub(crate) controls: WindowControlSkin,
     stroke_width: f32,
 }
 
 #[derive(Default)]
 pub(crate) struct ControlsState {
-    armed: Option<WindowCommand>,
-    hovered: Option<WindowCommand>,
+    pub(crate) armed: Option<WindowCommand>,
+    pub(crate) hovered: Option<WindowCommand>,
 }
 
 impl ControlsProgram {
@@ -80,23 +59,11 @@ impl ControlsProgram {
             frame_color,
             color: skin.rgba(skin.window.icon_color),
             hover_color: skin.rgba(skin.window.icon_hover_color),
-            resources: skin.text_resources.as_ref().clone(),
             stroke_width: skin.window.icon_stroke_width,
         }
     }
 
-    fn height(&self) -> Length {
-        match self.controls {
-            WindowControlSkin::Close {
-                cell_size,
-                divider: Some(_),
-                ..
-            } => Length::Fixed(cell_size),
-            WindowControlSkin::Buttons { .. } | WindowControlSkin::Close { .. } => Length::Fill,
-        }
-    }
-
-    fn hits(&self, bounds: Rect) -> Vec<LayerHit<WindowCommand>> {
+    pub(crate) fn hits(&self, bounds: Rect) -> Vec<LayerHit<WindowCommand>> {
         let (regions, count) = self.regions(bounds);
         regions
             .into_iter()
@@ -105,7 +72,7 @@ impl ControlsProgram {
             .collect()
     }
 
-    fn paint(&self, bounds: Rect, at: Option<Pt>) -> DrawList {
+    pub(crate) fn paint(&self, bounds: Rect, at: Option<Pt>) -> DrawList {
         let mut builder = DrawListBuilder::default();
         if let (
             WindowControlSkin::Close {
@@ -152,7 +119,7 @@ impl ControlsProgram {
         builder.finish()
     }
 
-    fn regions(&self, bounds: Rect) -> ([ControlRegion; 3], usize) {
+    pub(crate) fn regions(&self, bounds: Rect) -> ([ControlRegion; 3], usize) {
         match self.controls {
             WindowControlSkin::Buttons {
                 minus_icon_size,
@@ -221,19 +188,6 @@ impl ControlsProgram {
                 };
                 ([close; 3], 1)
             }
-        }
-    }
-
-    fn width(&self) -> f32 {
-        match self.controls {
-            WindowControlSkin::Buttons {
-                minus_icon_size,
-                maximize_icon_size,
-                close_icon_size,
-                gap,
-                padding,
-            } => minus_icon_size + maximize_icon_size + close_icon_size + gap * 2.0 + padding * 2.0,
-            WindowControlSkin::Close { cell_size, .. } => cell_size,
         }
     }
 }
@@ -351,14 +305,6 @@ impl WindowLayerProgram for ControlsProgram {
         )
     }
 
-    fn resources(&self) -> Option<&TextResources> {
-        Some(&self.resources)
-    }
-
-    fn size(&self) -> Size<Length> {
-        Size::new(Length::Fixed(self.width()), self.height())
-    }
-
     fn update(
         &self,
         state: &mut ControlsState,
@@ -413,479 +359,5 @@ impl WindowLayerProgram for ControlsProgram {
         let redraw = state.hovered != hovered;
         state.hovered = hovered;
         (outcome, redraw)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::*;
-    use crate::{
-        builtin,
-        draw::{DrawCmd, Geom, Paint},
-        interact::mouse as mouse_input,
-    };
-
-    fn pointer_input(phase: PointerPhase, at: Option<Pt>) -> Input<'static> {
-        Input::Pointer(mouse_input(phase, at))
-    }
-
-    #[kithara::test]
-    fn styles_select_their_skin_metrics() {
-        let window = builtin::skin_doc().window;
-
-        assert!(matches!(
-            window.controls(WindowControlsStyle::Standard),
-            WindowControlSkin::Buttons {
-                minus_icon_size: 11.0,
-                maximize_icon_size: 10.0,
-                close_icon_size: 11.0,
-                gap: 12.0,
-                padding: 12.0,
-            }
-        ));
-        assert!(matches!(
-            window.controls(WindowControlsStyle::Compact),
-            WindowControlSkin::Buttons {
-                minus_icon_size: 10.0,
-                maximize_icon_size: 9.0,
-                close_icon_size: 10.0,
-                gap: 10.0,
-                padding: 10.0,
-            }
-        ));
-        assert!(matches!(
-            window.controls(WindowControlsStyle::CloseWide),
-            WindowControlSkin::Close {
-                cell_size: 32.0,
-                icon_size: 11.0,
-                divider: Some((1.0, _)),
-                ..
-            }
-        ));
-        assert!(matches!(
-            window.controls(WindowControlsStyle::CloseMicro),
-            WindowControlSkin::Close {
-                cell_size: 28.0,
-                icon_size: 10.0,
-                frame: None,
-                divider: None,
-            }
-        ));
-        assert!(matches!(
-            window.controls(WindowControlsStyle::CloseFramed),
-            WindowControlSkin::Close {
-                cell_size: 22.0,
-                icon_size: 10.0,
-                frame: Some(_),
-                divider: None,
-            }
-        ));
-    }
-
-    fn region_table(style: WindowControlsStyle) -> Vec<(WindowCommand, Rect)> {
-        let program = ControlsProgram::new(style, builtin::skin());
-        let (regions, count) = program.regions(Rect {
-            h: 32.0,
-            w: program.width(),
-            x: 0.0,
-            y: 0.0,
-        });
-        regions[..count]
-            .iter()
-            .map(|region| (region.command, region.bounds))
-            .collect()
-    }
-
-    #[kithara::test]
-    fn every_style_keeps_its_exact_interactive_regions() {
-        assert_eq!(
-            region_table(WindowControlsStyle::Standard),
-            [
-                (
-                    WindowCommand::Minimize,
-                    Rect {
-                        h: 32.0,
-                        w: 11.0,
-                        x: 12.0,
-                        y: 0.0,
-                    },
-                ),
-                (
-                    WindowCommand::ToggleMaximize,
-                    Rect {
-                        h: 32.0,
-                        w: 10.0,
-                        x: 35.0,
-                        y: 0.0,
-                    },
-                ),
-                (
-                    WindowCommand::Close,
-                    Rect {
-                        h: 32.0,
-                        w: 11.0,
-                        x: 57.0,
-                        y: 0.0,
-                    },
-                ),
-            ]
-        );
-        assert_eq!(
-            region_table(WindowControlsStyle::Compact),
-            [
-                (
-                    WindowCommand::Minimize,
-                    Rect {
-                        h: 32.0,
-                        w: 10.0,
-                        x: 10.0,
-                        y: 0.0,
-                    },
-                ),
-                (
-                    WindowCommand::ToggleMaximize,
-                    Rect {
-                        h: 32.0,
-                        w: 9.0,
-                        x: 30.0,
-                        y: 0.0,
-                    },
-                ),
-                (
-                    WindowCommand::Close,
-                    Rect {
-                        h: 32.0,
-                        w: 10.0,
-                        x: 49.0,
-                        y: 0.0,
-                    },
-                ),
-            ]
-        );
-        for (style, size) in [
-            (WindowControlsStyle::CloseWide, 32.0),
-            (WindowControlsStyle::CloseMicro, 28.0),
-            (WindowControlsStyle::CloseFramed, 22.0),
-        ] {
-            assert_eq!(
-                region_table(style),
-                [(
-                    WindowCommand::Close,
-                    Rect {
-                        h: 32.0,
-                        w: size,
-                        x: 0.0,
-                        y: 0.0,
-                    },
-                )],
-                "{style:?}"
-            );
-        }
-    }
-
-    #[kithara::test]
-    fn every_style_keeps_its_existing_layout_lengths() {
-        for (style, width, height) in [
-            (WindowControlsStyle::Standard, 80.0, Length::Fill),
-            (WindowControlsStyle::Compact, 69.0, Length::Fill),
-            (WindowControlsStyle::CloseWide, 32.0, Length::Fixed(32.0)),
-            (WindowControlsStyle::CloseMicro, 28.0, Length::Fill),
-            (WindowControlsStyle::CloseFramed, 22.0, Length::Fill),
-        ] {
-            let program = ControlsProgram::new(style, builtin::skin());
-            assert_eq!(program.width(), width, "{style:?} width");
-            assert_eq!(program.height(), height, "{style:?} height");
-            assert_eq!(
-                program.size(),
-                Size::new(Length::Fixed(width), height),
-                "{style:?} layer size"
-            );
-        }
-    }
-
-    #[kithara::test]
-    fn hover_changes_only_the_glyph_under_the_pointer() {
-        let skin = builtin::skin();
-        let program = ControlsProgram::new(WindowControlsStyle::Standard, skin);
-        let list = program.paint(
-            Rect {
-                h: 32.0,
-                w: program.width(),
-                x: 0.0,
-                y: 0.0,
-            },
-            Some(Pt { x: 17.5, y: 16.0 }),
-        );
-        let colors = list
-            .commands()
-            .iter()
-            .filter_map(|command| match command {
-                DrawCmd::Stroke { color, .. } => Some(*color),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-
-        assert_eq!(colors.len(), 4);
-        assert_eq!(colors[0], skin.rgba(skin.window.icon_hover_color));
-        assert!(
-            colors[1..]
-                .iter()
-                .all(|color| *color == skin.rgba(skin.window.icon_color))
-        );
-    }
-
-    #[kithara::test]
-    fn close_styles_retain_their_frame_and_divider_commands() {
-        let skin = builtin::skin();
-        let framed = ControlsProgram::new(WindowControlsStyle::CloseFramed, skin);
-        let framed_list = framed.paint(
-            Rect {
-                h: 22.0,
-                w: framed.width(),
-                x: 0.0,
-                y: 0.0,
-            },
-            None,
-        );
-        let WindowControlSkin::Close {
-            frame: Some(frame), ..
-        } = skin.window.controls(WindowControlsStyle::CloseFramed)
-        else {
-            panic!("the close-framed style must carry a frame");
-        };
-        assert!(matches!(
-            framed_list.commands().first(),
-            Some(DrawCmd::Stroke {
-                geom: Geom::Rect(_),
-                color,
-                pen,
-            }) if *color == skin.rgba(frame.border) && pen.width == frame.border_width
-        ));
-
-        let wide = ControlsProgram::new(WindowControlsStyle::CloseWide, skin);
-        let wide_list = wide.paint(
-            Rect {
-                h: 32.0,
-                w: wide.width(),
-                x: 0.0,
-                y: 0.0,
-            },
-            None,
-        );
-        let WindowControlSkin::Close {
-            divider: Some((divider_width, divider_role)),
-            ..
-        } = skin.window.controls(WindowControlsStyle::CloseWide)
-        else {
-            panic!("the close-wide style must carry a divider");
-        };
-        assert!(matches!(
-            wide_list.commands().last(),
-            Some(DrawCmd::Fill {
-                geom: Geom::Rect(Rect { h: 32.0, w, x: 0.0, y: 0.0 }),
-                paint: Paint::Solid(color),
-            }) if *w == divider_width && *color == skin.rgba(divider_role)
-        ));
-    }
-
-    #[kithara::test]
-    fn layer_keeps_paint_local_and_hits_absolute() {
-        let program = ControlsProgram::new(WindowControlsStyle::Standard, builtin::skin());
-        let bounds = Rect {
-            h: 32.0,
-            w: program.width(),
-            x: 100.0,
-            y: 40.0,
-        };
-        let state = ControlsState::default();
-        let pointer = Pt { x: 117.5, y: 56.0 };
-        let layer = program.layer(&state, bounds, Some(pointer));
-
-        assert_eq!(
-            layer.draw(),
-            &program.paint(
-                Rect {
-                    h: 32.0,
-                    w: program.width(),
-                    x: 0.0,
-                    y: 0.0,
-                },
-                Some(Pt { x: 17.5, y: 16.0 }),
-            )
-        );
-        assert_eq!(
-            layer.hits()[0].area(),
-            Rect {
-                h: 32.0,
-                w: 11.0,
-                x: 112.0,
-                y: 40.0,
-            }
-        );
-        assert_eq!(layer.cursor_at(Some(pointer)), CursorShape::Pointer);
-        assert_eq!(
-            layer.cursor_at(Some(Pt { x: 129.0, y: 56.0 })),
-            CursorShape::None,
-            "the gap between buttons must not claim the pointer",
-        );
-
-        let hit_layer = program.hit_layer(&state, bounds);
-        assert!(hit_layer.draw().commands().is_empty());
-        assert_eq!(hit_layer.hits(), layer.hits());
-    }
-
-    #[kithara::test]
-    fn a_gap_does_not_arm_or_capture() {
-        let program = ControlsProgram::new(WindowControlsStyle::Standard, builtin::skin());
-        let bounds = control_bounds(&program);
-        let mut state = ControlsState::default();
-        let pointer = absolute(bounds, Pt { x: 29.0, y: 16.0 });
-        let layer = program.hit_layer(&state, bounds);
-        let (outcome, redraw) = program.update(
-            &mut state,
-            pointer_input(PointerPhase::Down, None),
-            &layer,
-            Some(pointer),
-        );
-
-        assert_eq!(outcome, Outcome::IGNORED);
-        assert!(!redraw);
-        assert_eq!(state.armed, None);
-    }
-
-    fn control_bounds(program: &ControlsProgram) -> Rect {
-        Rect {
-            h: 32.0,
-            w: program.width(),
-            x: 100.0,
-            y: 40.0,
-        }
-    }
-
-    fn absolute(bounds: Rect, local: Pt) -> Pt {
-        Pt {
-            x: bounds.x + local.x,
-            y: bounds.y + local.y,
-        }
-    }
-
-    fn assert_release(program: &ControlsProgram, local: Pt, command: WindowCommand) {
-        let bounds = control_bounds(program);
-        let pointer = absolute(bounds, local);
-        let mut state = ControlsState::default();
-        let layer = program.hit_layer(&state, bounds);
-        let (pressed, redraw) = program.update(
-            &mut state,
-            pointer_input(PointerPhase::Down, None),
-            &layer,
-            Some(pointer),
-        );
-        assert_eq!(
-            pressed,
-            Outcome::captured().with_ownership(crate::interact::PointerOwnership::Claim)
-        );
-        assert!(!redraw);
-        assert_eq!(state.armed, Some(command));
-
-        let (released, redraw) = program.update(
-            &mut state,
-            pointer_input(PointerPhase::Up, None),
-            &layer,
-            Some(pointer),
-        );
-
-        assert_eq!(
-            released,
-            Outcome::set(command).with_ownership(crate::interact::PointerOwnership::Release)
-        );
-        assert!(!redraw);
-        assert_eq!(state.armed, None);
-    }
-
-    #[kithara::test]
-    fn standard_buttons_and_close_only_controls_emit_their_own_commands() {
-        let standard = ControlsProgram::new(WindowControlsStyle::Standard, builtin::skin());
-        assert_release(&standard, Pt { x: 17.5, y: 16.0 }, WindowCommand::Minimize);
-        assert_release(
-            &standard,
-            Pt { x: 40.0, y: 16.0 },
-            WindowCommand::ToggleMaximize,
-        );
-        assert_release(&standard, Pt { x: 62.5, y: 16.0 }, WindowCommand::Close);
-
-        let close = ControlsProgram::new(WindowControlsStyle::CloseFramed, builtin::skin());
-        assert_release(&close, Pt { x: 11.0, y: 16.0 }, WindowCommand::Close);
-    }
-
-    #[kithara::test]
-    fn leaving_a_window_button_before_release_cancels_its_command() {
-        let program = ControlsProgram::new(WindowControlsStyle::Standard, builtin::skin());
-        let bounds = control_bounds(&program);
-        let mut state = ControlsState::default();
-        let layer = program.hit_layer(&state, bounds);
-        let pointer = absolute(bounds, Pt { x: 17.5, y: 16.0 });
-        let (pressed, _) = program.update(
-            &mut state,
-            pointer_input(PointerPhase::Down, None),
-            &layer,
-            Some(pointer),
-        );
-        assert_eq!(
-            pressed,
-            Outcome::captured().with_ownership(crate::interact::PointerOwnership::Claim)
-        );
-
-        let outside = absolute(bounds, Pt { x: 90.0, y: 16.0 });
-        let (released, redraw) = program.update(
-            &mut state,
-            pointer_input(PointerPhase::Up, None),
-            &layer,
-            Some(outside),
-        );
-
-        assert_eq!(
-            released,
-            Outcome::captured().with_ownership(crate::interact::PointerOwnership::Release)
-        );
-        assert!(!redraw);
-        assert_eq!(state.armed, None);
-    }
-
-    #[kithara::test]
-    fn hover_transitions_request_only_the_needed_repaints() {
-        let program = ControlsProgram::new(WindowControlsStyle::Standard, builtin::skin());
-        let bounds = control_bounds(&program);
-        let mut state = ControlsState::default();
-        let layer = program.hit_layer(&state, bounds);
-        let minimize = absolute(bounds, Pt { x: 17.5, y: 16.0 });
-
-        let (outcome, redraw) = program.update(
-            &mut state,
-            pointer_input(PointerPhase::Move, Some(minimize)),
-            &layer,
-            Some(minimize),
-        );
-        assert_eq!(outcome, Outcome::IGNORED);
-        assert!(redraw);
-        assert_eq!(state.hovered, Some(WindowCommand::Minimize));
-
-        let (_, redraw) = program.update(
-            &mut state,
-            pointer_input(PointerPhase::Move, Some(minimize)),
-            &layer,
-            Some(minimize),
-        );
-        assert!(!redraw);
-
-        let (_, redraw) = program.update(
-            &mut state,
-            pointer_input(PointerPhase::Leave, None),
-            &layer,
-            None,
-        );
-        assert!(redraw);
-        assert_eq!(state.hovered, None);
     }
 }

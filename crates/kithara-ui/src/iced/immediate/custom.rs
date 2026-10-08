@@ -18,12 +18,11 @@ use iced::{
 
 use crate::{
     draw::{DrawList, DrawListBuilder, Rect},
-    hosts::custom::MountedCustom,
     iced::controls::{PaintState, Probe, snapped},
     interact::iced as iced_interact,
     render::{
         Published, Skin,
-        custom::{CustomKinds, Repaint, Size2, SizeLimits, TextMeasurer},
+        custom::{CustomKinds, CustomWidget, Repaint, Size2, SizeLimits, TextMeasurer},
     },
 };
 
@@ -65,7 +64,7 @@ impl Probe for Redrawn {
 struct CustomState {
     drawn: Option<IcedInstant>,
     paint: PaintState<()>,
-    widget: RefCell<Option<Box<dyn MountedCustom<Published>>>>,
+    widget: RefCell<Option<Box<dyn CustomWidget<Action = Published>>>>,
     kind: String,
 }
 
@@ -86,8 +85,8 @@ impl CustomState {
     fn repaint(&self) -> Repaint {
         self.widget
             .borrow()
-            .as_ref()
-            .map_or(Repaint::None, MountedCustom::repaint)
+            .as_deref()
+            .map_or(Repaint::None, CustomWidget::repaint)
     }
 }
 

@@ -16,10 +16,7 @@ use tracing::{Span, trace_span};
 use crate::{
     backends::VelloBackend,
     draw::{Pt, Rect, replay},
-    hosts::{
-        layer::HostLayer,
-        window::{DragGhost, WindowSurface},
-    },
+    hosts::{layer::HostLayer, window::DragGhost},
     interact::{CursorShape, masonry::cursor_icon},
     masonry::retained::custom::HostAction,
     render::{Published, Skin, WindowCommand, WindowEdge},
@@ -77,7 +74,7 @@ impl WindowLayer {
 
     fn resize_layer(&self, size: Size) -> Option<HostLayer<WindowCommand>> {
         self.resize_edges
-            .then(|| WindowSurface::frame(Self::bounds(size), self.resize_edge))
+            .then(|| crate::hosts::window::surface::frame(Self::bounds(size), self.resize_edge))
     }
 }
 

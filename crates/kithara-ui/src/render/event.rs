@@ -1,33 +1,6 @@
 use std::collections::BTreeMap;
 
 use crate::{draw::Pt, validate::Gesture};
-#[cfg(feature = "masonry")]
-use crate::{
-    engine::EngineEvent,
-    hosts::event::{carry_event, control_event},
-    interact::recognizers::DragEvent,
-};
-
-#[cfg(feature = "masonry")]
-pub(crate) fn engine_value(path: &str, child: Option<&str>, event: EngineEvent) -> Published {
-    match event {
-        EngineEvent::Scalar(value) => {
-            let path = child.map_or_else(|| path.to_owned(), |child| format!("{path}/{child}"));
-            control_event(&path, ControlAction::SetScalar(value))
-        }
-        EngineEvent::Activate => control_event(path, ControlAction::Activate),
-        EngineEvent::Crossing(over) => carry_event(path, Carry(CarryStep::Over(over))),
-        EngineEvent::Index(selected) => control_event(path, ControlAction::SelectIndex(selected)),
-        EngineEvent::Drag { event, index } => carry_event(
-            path,
-            Carry(match event {
-                DragEvent::Started => CarryStep::Start(index),
-                DragEvent::Dropped => CarryStep::Drop,
-            }),
-        ),
-        EngineEvent::Text(query) => control_event(path, ControlAction::Text(query)),
-    }
-}
 
 /// Action emitted by an interactive control.
 #[derive(Clone, Debug, PartialEq)]
@@ -77,10 +50,8 @@ pub enum WriteValue {
 /// One step of a row carried from the table it was picked up in to the drop
 /// zone it is let go over, which the toolkit follows for itself.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Carry(pub(crate) CarryStep);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CarryStep {
+#[non_exhaustive]
+pub enum Carry {
     /// The row at this index is now being carried out of the table.
     Start(usize),
     /// The pointer crossed into (`true`) or out of (`false`) a drop zone.

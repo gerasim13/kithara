@@ -17,12 +17,10 @@ use iced::{
 
 use crate::{
     backends::replay_ordered,
-    hosts::{
-        layer::{HostLayer, cursor, handle},
-        window::WindowSurface,
-    },
+    draw::Pt,
+    hosts::layer::HostLayer,
     iced::tree::window as window_event,
-    interact::{Outcome, iced as iced_interact},
+    interact::{CursorShape, Input, Outcome, iced as iced_interact},
     render::{Published, Skin, WindowCommand},
     shaping::TextResources,
 };
@@ -93,8 +91,9 @@ impl WindowOverlay<'_> {
     }
 
     fn resize_layer(&self) -> Option<HostLayer<WindowCommand>> {
-        self.resize_edges
-            .then(|| WindowSurface::frame(self.bounds.into(), self.skin.window.resize_edge))
+        self.resize_edges.then(|| {
+            crate::hosts::window::surface::frame(self.bounds.into(), self.skin.window.resize_edge)
+        })
     }
 
     fn update_layers(
@@ -597,5 +596,115 @@ mod tests {
 
         assert_eq!(node.size(), viewport);
         assert_eq!(node.children()[0].size(), Size::new(20.0, 10.0));
+    }
+}
+pub(crate) fn handle<A: Copy>(
+    layers: &[HostLayer<A>],
+    input: Input<'_>,
+    pointer: Option<Pt>,
+) -> Outcome<A> {
+    layers
+        .iter()
+        .rev()
+        .map(|layer| layer.handle(input, pointer))
+        .find(Outcome::is_captured)
+        .unwrap_or(Outcome::IGNORED)
+}
+
+pub(crate) fn cursor<A>(layers: &[HostLayer<A>], pointer: Option<Pt>) -> CursorShape {
+    layers
+        .iter()
+        .rev()
+        .map(|layer| layer.cursor_at(pointer))
+        .find(|shape| *shape != CursorShape::None)
+        .unwrap_or(CursorShape::None)
+}
+
+#[cfg(test)]
+mod model_tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        draw::{DrawList, Pt, Rect},
+        hosts::layer::LayerHit,
+        interact::{CursorShape, Input, Outcome, PointerPhase, mouse as mouse_input},
+    };
+
+    fn pointer_input(phase: PointerPhase, at: Option<Pt>) -> Input<'static> {
+        Input::Pointer(mouse_input(phase, at))
+    }
+
+    fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
+        Rect { h, w, x, y }
+    }
+
+    #[kithara::test]
+    fn the_last_layer_is_topmost_for_input_and_cursor() {
+        let lower = HostLayer::new(
+            rect(0.0, 0.0, 100.0, 60.0),
+            DrawList::default(),
+            vec![LayerHit::new(
+                rect(0.0, 0.0, 8.0, 60.0),
+                CursorShape::ResizeH,
+                1_u8,
+            )],
+        );
+        let upper = HostLayer::new(
+            rect(0.0, 0.0, 100.0, 60.0),
+            DrawList::default(),
+            vec![LayerHit::new(
+                rect(0.0, 0.0, 8.0, 60.0),
+                CursorShape::Pointer,
+                2_u8,
+            )],
+        );
+        let layers = [lower, upper];
+        let pointer = Some(Pt { x: 3.0, y: 30.0 });
+
+        assert_eq!(
+            handle(&layers, pointer_input(PointerPhase::Down, None), pointer),
+            Outcome::set(2)
+        );
+        assert_eq!(cursor(&layers, pointer), CursorShape::Pointer);
+    }
+
+    #[kithara::test]
+    fn a_hit_is_half_open_and_a_non_press_is_ignored() {
+        let layer = HostLayer::new(
+            rect(0.0, 0.0, 100.0, 60.0),
+            DrawList::default(),
+            vec![LayerHit::new(
+                rect(0.0, 0.0, 4.0, 60.0),
+                CursorShape::ResizeH,
+                7_u8,
+            )],
+        );
+        let layers = [layer];
+
+        assert_eq!(
+            handle(
+                &layers,
+                pointer_input(PointerPhase::Down, None),
+                Some(Pt { x: 3.0, y: 30.0 })
+            ),
+            Outcome::set(7)
+        );
+        assert_eq!(
+            handle(
+                &layers,
+                pointer_input(PointerPhase::Down, None),
+                Some(Pt { x: 4.0, y: 30.0 })
+            ),
+            Outcome::IGNORED
+        );
+        assert_eq!(
+            handle(
+                &layers,
+                pointer_input(PointerPhase::Move, Some(Pt { x: 3.0, y: 30.0 })),
+                Some(Pt { x: 3.0, y: 30.0 })
+            ),
+            Outcome::IGNORED
+        );
     }
 }

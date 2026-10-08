@@ -5,7 +5,8 @@ use crate::{
         face::{Drawn, cached_extent, read_art, read_text},
         snapshot::{OverlayData, WaveformData},
     },
-    render::{ReadValue, Reads, WaveformView, Zoom, model::derived},
+    hosts::model::derived,
+    render::{ReadValue, Reads, WaveformView, Zoom},
 };
 
 impl Drawn {

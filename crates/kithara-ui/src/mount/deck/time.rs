@@ -8,8 +8,11 @@ mod host {
     use super::Time;
     use crate::{
         atoms::deck::clock::{Clock as Face, Elapsed},
-        hosts::controls::{Draws, Reading},
-        render::{ReadValue, Skin, model::derived},
+        hosts::{
+            controls::{Draws, Reading},
+            model::derived,
+        },
+        render::{ReadValue, Skin},
     };
 
     impl Draws for Time {

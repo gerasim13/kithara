@@ -652,7 +652,6 @@ mod tests {
             Badge, Carry, ControlAction, InputOwner, ReadValue, Reads, StereoLevels, TableCell,
             TableRow, TreeRow, WaveBucket, WaveformView, WindowCommand,
             document::{Clock, Ctx},
-            event::CarryStep,
         },
         shaping::TextResources,
         source::{MemResolver, UiConfig},
@@ -839,11 +838,12 @@ mod tests {
                 )],
             )
         }
+    }
 
+    impl crate::iced::layer::IcedWindowLayerProgram for OverlapWindowProgram {
         fn resources(&self) -> Option<&TextResources> {
             None
         }
-
         fn size(&self) -> SolveSize<SolveLength> {
             SolveSize::new(SolveLength::Fill, SolveLength::Fill)
         }
@@ -1955,7 +1955,7 @@ mod tests {
             [
                 Published::Carry {
                     path: "deck-a/drop".to_owned(),
-                    step: Carry(CarryStep::Over(true)),
+                    step: Carry::Over(true),
                 },
                 Published::window(WindowCommand::Minimize),
             ],
@@ -1983,7 +1983,7 @@ mod tests {
             [
                 Published::Carry {
                     path: "deck-a/drop".to_owned(),
-                    step: Carry(CarryStep::Over(true)),
+                    step: Carry::Over(true),
                 },
                 Published::window(WindowCommand::Minimize),
                 Published::window(WindowCommand::Minimize),
@@ -2009,13 +2009,13 @@ mod tests {
             [
                 Published::Carry {
                     path: "deck-a/drop".to_owned(),
-                    step: Carry(CarryStep::Over(true)),
+                    step: Carry::Over(true),
                 },
                 Published::window(WindowCommand::Minimize),
                 Published::window(WindowCommand::Minimize),
                 Published::Carry {
                     path: "deck-a/drop".to_owned(),
-                    step: Carry(CarryStep::Over(false)),
+                    step: Carry::Over(false),
                 },
                 Published::window(WindowCommand::Minimize),
             ],

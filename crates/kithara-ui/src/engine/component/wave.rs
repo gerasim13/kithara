@@ -30,7 +30,7 @@ impl Endpoint {
     }
 }
 
-pub(in crate::engine) struct HeroWaveComponent {
+pub(crate) struct HeroWaveComponent {
     modifiers: Modifiers,
     visible: Range<f32>,
     drag: Scalar,

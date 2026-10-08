@@ -1,11 +1,11 @@
-use crate::{
-    hosts::custom::{MappedCustom, MountedCustom},
-    render::{Published, UiEvent, custom::CustomWidget},
+use crate::render::{
+    Published, UiEvent,
+    custom::{CustomWidget, widget::MappedCustom},
 };
 
 /// What the application registers under one extension kind: how to build a
 /// fresh widget, already speaking the document's own event vocabulary.
-type Factory = Box<dyn Fn() -> Box<dyn MountedCustom<Published>>>;
+type Factory = Box<dyn Fn() -> Box<dyn CustomWidget<Action = Published>>>;
 
 /// The extensions an application offers its hosts, named by kind.
 ///
@@ -14,14 +14,10 @@ type Factory = Box<dyn Fn() -> Box<dyn MountedCustom<Published>>>;
 /// refused while it compiles, by [`crate::UiConfig::custom_kinds`].
 #[derive(Default)]
 pub struct CustomKinds {
-    kinds: std::collections::BTreeMap<String, Factory>,
+    pub(crate) kinds: std::collections::BTreeMap<String, Factory>,
 }
 
 impl CustomKinds {
-    pub(crate) fn make(&self, kind: &str) -> Option<Box<dyn MountedCustom<Published>>> {
-        self.kinds.get(kind).map(|make| make())
-    }
-
     /// The names this registry answers for, which is what a document may name.
     #[must_use]
     pub fn names(&self) -> std::collections::BTreeSet<String> {

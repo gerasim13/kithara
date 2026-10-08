@@ -17,13 +17,10 @@ use iced::{
 };
 
 use crate::{
-    atoms::{
-        chrome::{ChromeChevron, ChromeLabel, footer_role},
-        text::Text,
-    },
+    atoms::chrome::{ChromeChevron, ChromeLabel, footer_role},
     backends::replay_ordered,
     draw::{DrawListBuilder, Rect},
-    iced::{controls::snapped, tree::activate},
+    iced::{controls::snapped, paint::text::Text, tree::activate},
     interact::{CursorShape, Hover, iced as iced_interact, recognizers::click},
     render::{InputOwner, Published, Skin},
     shaping::TextContext,

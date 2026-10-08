@@ -4,7 +4,7 @@ use vello::{
     peniko::{ImageBrush, ImageData},
 };
 
-use super::vello::has_system_text;
+use super::vello::backend::has_system_text;
 use crate::{
     backends::VelloBackend,
     draw::{

@@ -2400,7 +2400,7 @@ mod lengths {
     #[cfg(feature = "masonry")]
     mod masonry_host {
         use super::*;
-        use crate::atoms::button::declared_width;
+        use crate::masonry::paint::button::declared_width;
 
         /// The retained host settles a row's shares while it is still walking the
         /// document, which is before it holds a painter. It reads the same table
