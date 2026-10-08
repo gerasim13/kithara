@@ -16,7 +16,6 @@ pub use bon;
 /// ```
 pub use kithara_derive::Config;
 pub use kithara_derive::{ConfigOwner, Patch};
-use kithara_workspace_hack as _;
 
 mod config;
 mod live;

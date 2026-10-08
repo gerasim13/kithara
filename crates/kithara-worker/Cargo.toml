@@ -23,8 +23,6 @@ kithara-platform = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 
-kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
-
 delegate = { workspace = true }
 fieldwork = { workspace = true }
 hotpath = { workspace = true, optional = true }
@@ -33,6 +31,9 @@ humantime-serde = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true, optional = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }

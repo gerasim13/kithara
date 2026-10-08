@@ -9,12 +9,14 @@ description = "The library-source contract between the application's library she
 [dependencies]
 kithara-platform = { workspace = true }
 kithara-ui = { workspace = true, default-features = false, features = ["render"] }
-kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 serde = { workspace = true }
 serde_yaml_ng = { workspace = true }
 thiserror = { workspace = true }
 url = { workspace = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
 kithara-test-utils = { workspace = true }
