@@ -15,8 +15,8 @@ use super::{AudioLaneEvent, ReadOutcome, ThreadWake, WakeSignal};
 use crate::{
     AudioEvent, AudioReadError, ConsumerWakeMode, DecodeErrorClass, DecodeErrorKind,
     DecoderBackend as EventDecoderBackend, DecoderChangeCause, DecoderEvent, FailureSource,
-    FrameDomain, GaplessSpan, PlaybackResamplerKind, ResamplerKind, SeekLifecycleStage,
-    SegmentLocation, TrackFailureKind, consts,
+    FrameDomain, PlaybackResamplerKind, ResamplerKind, SeekLifecycleStage, SegmentLocation,
+    TrackFailureKind, consts,
 };
 
 /// Reader-side event sink.
@@ -323,12 +323,6 @@ pub(crate) const fn decode_error_detail(error: &DecodeError) -> &'static str {
     }
 }
 
-fn gapless_span(track_info: &kithara_decode::DecoderTrackInfo) -> Option<GaplessSpan> {
-    track_info
-        .gapless
-        .map(|gapless| GaplessSpan::new(gapless.leading_frames, gapless.trailing_frames))
-}
-
 #[derive(Clone, Copy)]
 pub(crate) struct DecoderChangedEventData<'a> {
     pub(crate) track_info: &'a kithara_decode::DecoderTrackInfo,
@@ -355,7 +349,7 @@ pub(crate) fn decoder_changed_event(data: DecoderChangedEventData<'_>) -> Decode
         variant: data.media_info.and_then(|info| info.variant_index),
         base_offset: data.base_offset,
         duration: data.duration,
-        gapless: gapless_span(data.track_info),
+        gapless: data.track_info.gapless,
     }
 }
 

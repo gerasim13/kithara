@@ -5,7 +5,7 @@ use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
     error::UiDocError,
-    mock::TestRegistry,
+    mock::MapEndpoints,
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     source::{MemResolver, UiConfig},
     view,
@@ -15,8 +15,8 @@ const LAYOUT: &str = "validate.klayout.ron";
 const MODULE: &str = "m.ron";
 
 /// The endpoints the documents below bind, and nothing else.
-fn registry() -> TestRegistry {
-    let mut registry = TestRegistry::default();
+fn registry() -> MapEndpoints {
+    let mut registry = MapEndpoints::default();
     for (category, id, description) in [
         (
             EndpointCategory::Command,

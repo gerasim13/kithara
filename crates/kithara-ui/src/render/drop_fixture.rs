@@ -10,7 +10,7 @@ use crate::{
     builtin,
     compile::{CompiledUi, compile},
     draw::Rect,
-    mock::TestRegistry,
+    mock::MapEndpoints,
     module::{IconName, TableFrame},
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     render::{
@@ -395,7 +395,7 @@ pub(crate) fn compiled_with_column_widths() -> CompiledUi {
 }
 
 fn compiled_with(library: &str) -> CompiledUi {
-    let mut registry = TestRegistry::default();
+    let mut registry = MapEndpoints::default();
     registry.insert(
         EndpointCategory::Model,
         "library.visible_tracks",

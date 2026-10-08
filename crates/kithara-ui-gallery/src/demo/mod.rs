@@ -12,5 +12,6 @@ mod pages;
 pub mod quality;
 pub mod reads;
 
-pub use endpoints::{DemoRegistry, registry};
+pub use endpoints::registry;
+pub use kithara_ui::registry::MapEndpoints;
 pub use reads::DemoReads;

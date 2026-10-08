@@ -1,6 +1,7 @@
 use std::{
     collections::VecDeque,
     future::Future,
+    marker::PhantomData,
     panic::Location,
     pin::Pin,
     task::{Context, Poll, Waker},
@@ -148,6 +149,7 @@ pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
         Receiver {
             shared,
             pending: None,
+            marker: PhantomData,
         },
     )
 }
@@ -164,6 +166,7 @@ pub fn unbounded_channel<T>() -> (UnboundedSender<T>, UnboundedReceiver<T>) {
         UnboundedReceiver {
             shared,
             pending: None,
+            marker: PhantomData,
         },
     )
 }
@@ -422,13 +425,22 @@ impl<T> Drop for Send<'_, T> {
     }
 }
 
+pub enum Bounded {}
+
+pub enum Unbounded {}
+
 /// Bounded receiver (single consumer).
-pub struct Receiver<T> {
+pub type Receiver<T> = ChannelReceiver<T, Bounded>;
+
+pub type UnboundedReceiver<T> = ChannelReceiver<T, Unbounded>;
+
+pub struct ChannelReceiver<T, Kind> {
     shared: Arc<Shared<T>>,
     pending: Option<Parked>,
+    marker: PhantomData<fn() -> Kind>,
 }
 
-impl<T> Receiver<T> {
+impl<T, Kind> ChannelReceiver<T, Kind> {
     /// Poll for the next value; `Ready(None)` once the channel is closed and drained.
     pub fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<T>> {
         poll_recv_inner(&self.shared, &mut self.pending, cx)
@@ -452,43 +464,7 @@ impl<T> Receiver<T> {
     }
 }
 
-impl<T> Drop for Receiver<T> {
-    fn drop(&mut self) {
-        close_receiver(&self.shared, &mut self.pending);
-    }
-}
-
-/// Unbounded receiver (single consumer).
-pub struct UnboundedReceiver<T> {
-    shared: Arc<Shared<T>>,
-    pending: Option<Parked>,
-}
-
-impl<T> UnboundedReceiver<T> {
-    /// Poll for the next value; `Ready(None)` once the channel is closed and drained.
-    pub fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<T>> {
-        poll_recv_inner(&self.shared, &mut self.pending, cx)
-    }
-
-    /// Receive the next value, awaiting one while the channel is open and empty.
-    pub fn recv(&mut self) -> Recv<'_, T> {
-        Recv {
-            shared: &self.shared,
-            pending: &mut self.pending,
-        }
-    }
-
-    /// Try to receive without blocking.
-    ///
-    /// # Errors
-    /// [`TryRecvError::Empty`] when open but empty, [`TryRecvError::Disconnected`]
-    /// once all senders dropped and the queue is drained.
-    pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
-        try_recv_inner(&self.shared)
-    }
-}
-
-impl<T> Drop for UnboundedReceiver<T> {
+impl<T, Kind> Drop for ChannelReceiver<T, Kind> {
     fn drop(&mut self) {
         close_receiver(&self.shared, &mut self.pending);
     }

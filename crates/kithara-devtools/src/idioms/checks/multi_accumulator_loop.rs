@@ -2,12 +2,12 @@ use std::collections::BTreeSet;
 
 use anyhow::Result;
 use syn::{
-    BinOp, Block, Expr, ExprBinary, ExprForLoop, ExprMethodCall, Stmt,
+    BinOp, Expr, ExprBinary, ExprForLoop, ExprMethodCall, Stmt,
     spanned::Spanned,
     visit::{self, Visit},
 };
 
-use super::{Check, Context};
+use super::{Check, Context, jump::body_has_jump};
 use crate::{
     common::{
         parse::canonical_subject,
@@ -121,30 +121,4 @@ fn stmt_accumulator_target(s: &Stmt) -> Option<String> {
         return canonical_subject(left);
     }
     None
-}
-
-fn body_has_jump(b: &Block) -> bool {
-    let mut v = JumpFinder { found: false };
-    v.visit_block(b);
-    v.found
-}
-
-struct JumpFinder {
-    found: bool,
-}
-
-impl<'ast> Visit<'ast> for JumpFinder {
-    fn visit_expr_break(&mut self, _: &'ast syn::ExprBreak) {
-        self.found = true;
-    }
-    fn visit_expr_closure(&mut self, _: &'ast syn::ExprClosure) {}
-    fn visit_expr_continue(&mut self, _: &'ast syn::ExprContinue) {
-        self.found = true;
-    }
-    fn visit_expr_for_loop(&mut self, _: &'ast ExprForLoop) {}
-    fn visit_expr_loop(&mut self, _: &'ast syn::ExprLoop) {}
-    fn visit_expr_return(&mut self, _: &'ast syn::ExprReturn) {
-        self.found = true;
-    }
-    fn visit_expr_while(&mut self, _: &'ast syn::ExprWhile) {}
 }

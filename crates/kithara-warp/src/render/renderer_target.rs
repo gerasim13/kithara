@@ -99,22 +99,22 @@ where
                         .map(|engine| engine.capabilities())?;
                 {
                     let latency = capabilities.latency();
-                    history_frames = history_frames.max(latency.source_frames());
-                    let source_tail = (latency.source_frames().to_f64().unwrap_or(f64::MAX)
+                    history_frames = history_frames.max(latency.first());
+                    let source_tail = (latency.first().to_f64().unwrap_or(f64::MAX)
                         / capabilities.rate_envelope().min_source_frames_per_output())
                     .ceil()
                     .to_usize()
                     .unwrap_or(usize::MAX);
                     replacement_frames =
-                        replacement_frames.max(latency.output_frames().saturating_add(source_tail));
-                    let warm = (latency.output_frames().to_f64().unwrap_or(f64::MAX)
+                        replacement_frames.max(latency.second().saturating_add(source_tail));
+                    let warm = (latency.second().to_f64().unwrap_or(f64::MAX)
                         * capabilities.rate_envelope().max_source_frames_per_output())
                     .ceil()
                     .to_usize()
                     .unwrap_or(usize::MAX);
                     resident_frames = resident_frames.max(
                         latency
-                            .source_frames()
+                            .first()
                             .saturating_mul(2)
                             .saturating_add(warm)
                             .saturating_add(source_block_frames.get().saturating_mul(2)),
@@ -137,7 +137,7 @@ where
                 let pending_samples = SampleCount::new(
                     source_block_frames
                         .get()
-                        .max(engine.capabilities().latency().source_frames())
+                        .max(engine.capabilities().latency().first())
                         .checked_mul(channels)
                         .ok_or(ElasticError::SampleCountOverflow)?,
                 );
@@ -155,7 +155,7 @@ where
                 let activation_samples = engine
                     .capabilities()
                     .latency()
-                    .output_frames()
+                    .second()
                     .checked_mul(channels)
                     .ok_or(ElasticError::SampleCountOverflow)?;
                 let mut activation_scratch =

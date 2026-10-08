@@ -162,14 +162,14 @@ fn lane_toggles(
             flash,
             lane.default_flash,
             lane,
-            config.flash.default,
+            config.flash.enabled,
         ),
         no_block: toggle(
             consts::NO_BLOCK_TOGGLE,
             no_block,
             lane.default_no_block,
             lane,
-            config.no_block.default,
+            config.no_block.enabled,
         ),
     }
 }
@@ -184,10 +184,10 @@ pub(super) fn lane_features(
     features.extend(config.features.iter().cloned());
     features.extend(lane.default_features.iter().cloned());
     if toggles.flash {
-        features.extend(config.flash.features.iter().cloned());
+        features.extend(config.flash.items.iter().cloned());
     }
     if toggles.no_block {
-        features.extend(config.no_block.features.iter().cloned());
+        features.extend(config.no_block.items.iter().cloned());
     }
     let Some(backend) = config.net_backends.get(backend_name) else {
         let valid = config

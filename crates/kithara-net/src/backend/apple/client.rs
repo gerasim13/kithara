@@ -16,12 +16,12 @@ use super::{
 use crate::{
     ByteStream,
     backend::common::{normalize_head_headers, status_error},
-    error::{NetError, NetResult},
+    error::NetError,
     metrics::ConnectionMetrics,
     observe::Observer,
     range_response::{accepts_response_status, validate_range_response},
     resumable::{Refetch, Resumed, resumable_body},
-    retry::RetryNet,
+    retry::{RetryClient, RetryNet},
     traits::Net,
     types::{AcceptEncodingPolicy, Headers, NetOptions, RangeSpec, RetryPolicy},
 };
@@ -31,7 +31,7 @@ mod kithara {
 }
 
 #[derive(Clone)]
-struct RawAppleNet {
+pub struct RawAppleNet {
     session: AppleSession,
     cancel: CancelToken,
     options: NetOptions,
@@ -174,13 +174,9 @@ impl RawAppleNet {
     }
 }
 
-#[derive(Clone)]
-pub struct AppleNet {
-    net: Arc<RetryNet<RawAppleNet>>,
-    connection_metrics: ConnectionMetrics,
-}
+pub type HttpClient = RetryClient<RawAppleNet>;
 
-impl std::fmt::Debug for AppleNet {
+impl std::fmt::Debug for RetryClient<RawAppleNet> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AppleNet")
             .field("options", self.options())
@@ -188,7 +184,7 @@ impl std::fmt::Debug for AppleNet {
     }
 }
 
-impl AppleNet {
+impl RetryClient<RawAppleNet> {
     #[must_use]
     pub fn new<S>(options: NetOptions, pools: PoolRegion<S>, cancel: CancelToken) -> Self
     where
@@ -208,11 +204,6 @@ impl AppleNet {
             net,
             connection_metrics,
         }
-    }
-
-    #[must_use]
-    pub fn connection_count(&self) -> usize {
-        self.connection_metrics.connection_count()
     }
 
     #[must_use]
@@ -255,71 +246,6 @@ impl AppleNet {
             #[field(&options)]
             pub fn options(&self) -> &NetOptions;
         }
-        to self.net {
-            /// # Errors
-            ///
-            /// Returns [`NetError`] on HTTP failure, timeout, cancellation, or network error.
-            pub async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> NetResult<Bytes>;
-            /// # Errors
-            ///
-            /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
-            pub async fn get_range(
-                &self,
-                url: Url,
-                range: RangeSpec,
-                headers: Option<Headers>,
-            ) -> NetResult<ByteStream>;
-            /// # Errors
-            ///
-            /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
-            pub async fn head(&self, url: Url, headers: Option<Headers>) -> NetResult<Headers>;
-            /// # Errors
-            ///
-            /// Returns [`NetError`] on HTTP failure, timeout, cancellation, or network error.
-            pub async fn post_bytes(
-                &self,
-                url: Url,
-                body: Bytes,
-                headers: Option<Headers>,
-            ) -> NetResult<Bytes>;
-            /// # Errors
-            ///
-            /// Returns [`NetError`] on HTTP failure, cancellation, or network error.
-            pub async fn stream(&self, url: Url, headers: Option<Headers>) -> NetResult<ByteStream>;
-        }
-    }
-}
-
-#[async_trait]
-impl Net for AppleNet {
-    async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
-        self.net.get_bytes(url, headers).await
-    }
-
-    async fn get_range(
-        &self,
-        url: Url,
-        range: RangeSpec,
-        headers: Option<Headers>,
-    ) -> Result<ByteStream, NetError> {
-        self.net.get_range(url, range, headers).await
-    }
-
-    async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
-        self.net.head(url, headers).await
-    }
-
-    async fn post_bytes(
-        &self,
-        url: Url,
-        body: Bytes,
-        headers: Option<Headers>,
-    ) -> Result<Bytes, NetError> {
-        self.net.post_bytes(url, body, headers).await
-    }
-
-    async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {
-        self.net.stream(url, headers).await
     }
 }
 

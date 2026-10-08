@@ -330,11 +330,11 @@ fn terminal_flush_drains_through_caller_sized_quantums(
 
     let latency = capabilities.latency();
     let expected_frames = latency
-        .source_frames()
+        .first()
         .to_f64()
         .map(|frames| (frames / rate).ceil())
         .and_then(|frames| frames.to_usize())
-        .and_then(|frames| frames.checked_add(latency.output_frames()))
+        .and_then(|frames| frames.checked_add(latency.second()))
         .expect("the terminal span fits in usize");
     let mut quantum = [0.0; CONTROL_QUANTUM * CHANNELS];
     let mut terminal = Vec::with_capacity(expected_frames * CHANNELS);
@@ -404,7 +404,7 @@ fn terminal_flush_reaches_each_new_rate_within_declared_latency(
             source_position += initial.source_frames();
         }
 
-        let settled_output_frames = capabilities.latency().output_frames();
+        let settled_output_frames = capabilities.latency().second();
         let settled = edge_request(capabilities, settled_output_frames, settled_is_minimum);
         let settled_source = short_marker_signal(stretch_pcm, settled.source_frames());
         let mut settled_output = vec![0.0; settled.output_frames() * CHANNELS];
@@ -455,7 +455,7 @@ fn terminal_flush_reaches_practical_rate_edges_after_declared_latency(
             source_position += initial.source_frames();
         }
 
-        let settled_output_frames = capabilities.latency().output_frames();
+        let settled_output_frames = capabilities.latency().second();
         let settled = edge_request(capabilities, settled_output_frames, settled_is_minimum);
         let source = continuous_tone(stretch_pcm, settled.source_frames(), source_position);
         let mut output = vec![0.0; settled.output_frames() * CHANNELS];
@@ -512,10 +512,10 @@ fn transitional_eof_preserves_every_indexed_marker(
                 .expect("the indexed initial block renders");
             rendered.extend_from_slice(&output);
         }
-        let transition_output_frames = capabilities.latency().output_frames() / 4;
+        let transition_output_frames = capabilities.latency().second() / 4;
         assert!(
             transition_output_frames > 0
-                && transition_output_frames < capabilities.latency().output_frames(),
+                && transition_output_frames < capabilities.latency().second(),
             "the transition fixture must stop before convergence"
         );
         let transition_source_frames = if initial_is_slow {

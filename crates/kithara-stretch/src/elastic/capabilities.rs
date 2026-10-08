@@ -89,13 +89,13 @@ impl ElasticCapabilities {
         output_samples: usize,
     ) -> Result<(), ElasticError> {
         let latency = self.latency();
-        if request.output_frames() != latency.output_frames() {
+        if request.output_frames() != latency.second() {
             return Err(ElasticError::WarmupOutputFrameCount {
                 actual: request.output_frames(),
-                expected: latency.output_frames(),
+                expected: latency.second(),
             });
         }
-        let expected_history_samples = self.samples(latency.source_frames())?;
+        let expected_history_samples = self.samples(latency.first())?;
         if history_samples != expected_history_samples {
             return Err(ElasticError::HistorySampleCount {
                 actual: history_samples,
@@ -150,8 +150,8 @@ impl ElasticCapabilities {
         output_samples: usize,
     ) -> Result<(), ElasticError> {
         self.validate_samples(request, source_samples, output_samples)?;
-        if self.latency.source_frames() == 0
-            && self.latency.output_frames() == 0
+        if self.latency.first() == 0
+            && self.latency.second() == 0
             && request.source_frames() != request.output_source_frames()
         {
             return Err(ElasticError::EnginePreparation(

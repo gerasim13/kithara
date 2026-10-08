@@ -21,8 +21,8 @@ fn missing_config_file_yields_defaults() {
 
     assert!(config.workspace_scan.exclude.is_empty());
     assert_eq!(config.perf.nextest_profile, "perf");
-    assert!(!config.test.no_block.default);
-    assert!(config.test.no_block.features.is_empty());
+    assert!(!config.test.no_block.enabled);
+    assert!(config.test.no_block.items.is_empty());
 }
 
 #[test]
@@ -153,9 +153,9 @@ features = ["no-block-detector"]
     let config = ProjectConfig::load(temp.path()).expect("load test config");
 
     assert_eq!(config.test.features, ["always-on"]);
-    assert_eq!(config.test.flash.features, ["virtual-time"]);
-    assert!(!config.test.no_block.default);
-    assert_eq!(config.test.no_block.features, ["no-block-detector"]);
+    assert_eq!(config.test.flash.items, ["virtual-time"]);
+    assert!(!config.test.no_block.enabled);
+    assert_eq!(config.test.no_block.items, ["no-block-detector"]);
 }
 
 #[test]

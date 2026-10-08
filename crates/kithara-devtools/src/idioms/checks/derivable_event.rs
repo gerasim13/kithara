@@ -79,7 +79,7 @@ impl Check for DerivableEvent {
             }
         }
         for name in declared.difference(&forwarded) {
-            if !config.unforwarded.contains(name) {
+            if !config.items.contains(name) {
                 out.push(
                     Violation::deny(
                         consts::ID,

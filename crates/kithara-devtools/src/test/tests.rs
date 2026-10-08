@@ -246,14 +246,12 @@ fn synthetic_project() -> ProjectConfig {
             nextest_config: ".config/nextest.toml".to_owned(),
             known_flakes: Vec::new(),
             features: vec!["base-feature".to_owned()],
-            flash: TestFlashConfig {
-                features: vec!["virtual-time".to_owned()],
-                default: true,
-            },
-            no_block: TestNoBlockConfig {
-                features: vec!["nb-detect".to_owned()],
-                default: false,
-            },
+            flash: toml::from_str::<TestFlashConfig>("features = ['virtual-time']\ndefault = true")
+                .expect("flash config"),
+            no_block: toml::from_str::<TestNoBlockConfig>(
+                "features = ['nb-detect']\ndefault = false",
+            )
+            .expect("no-block config"),
             loom_lane: "loom".to_owned(),
         },
         lint_exclude: LintExcludeConfig::default(),

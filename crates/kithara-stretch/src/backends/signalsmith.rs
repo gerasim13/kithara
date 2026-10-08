@@ -67,7 +67,7 @@ impl SignalsmithElastic {
         capacity: usize,
         cursor: usize,
     ) -> Result<ElasticDrain, ElasticError> {
-        let total = self.capabilities.latency().output_frames();
+        let total = self.capabilities.latency().second();
         let frames = total.saturating_sub(cursor).min(capacity);
         let next = cursor
             .checked_add(frames)
@@ -113,7 +113,7 @@ impl SignalsmithElastic {
         );
 
         if next_output == output_frames {
-            let native_frames = self.capabilities.latency().output_frames();
+            let native_frames = self.capabilities.latency().second();
             let native_samples = self.capabilities.samples(native_frames)?;
             self.inner.flush(&mut self.prime_input[..native_samples]);
             self.terminal = TerminalState::Native { cursor: 0 };
@@ -139,7 +139,7 @@ impl SignalsmithElastic {
     fn terminal_output_frames(&self, request: ElasticRequest) -> Result<usize, ElasticError> {
         self.capabilities
             .latency()
-            .source_frames()
+            .first()
             .checked_mul(request.output_frames())
             .map(|frames| frames.div_ceil(request.source_frames()))
             .ok_or(ElasticError::SampleCountOverflow)
@@ -154,7 +154,7 @@ impl SignalsmithElastic {
             .checked_mul(request.source_frames())
             .and_then(|frames| frames.checked_add(request.output_frames() / 2))
             .map(|frames| frames / request.output_frames())
-            .map(|frames| frames.min(self.capabilities.latency().source_frames()))
+            .map(|frames| frames.min(self.capabilities.latency().first()))
             .ok_or(ElasticError::SampleCountOverflow)
     }
 }
@@ -213,11 +213,11 @@ impl ElasticEngine for SignalsmithElastic {
             latency,
             crate::BackendCapabilities::RATE.union(crate::BackendCapabilities::KEYLOCK),
         );
-        let prime_window_samples = capabilities.samples(latency.source_frames())?;
+        let prime_window_samples = capabilities.samples(latency.first())?;
         let prime_samples = prime_window_samples
             .checked_add(prime_window_samples)
             .ok_or(ElasticError::SampleCountOverflow)?;
-        let native_tail_samples = capabilities.samples(latency.output_frames())?;
+        let native_tail_samples = capabilities.samples(latency.second())?;
         let mut prime_input = config.pools().get::<f32>();
         prime_input
             .ensure_len(prime_samples.max(native_tail_samples))

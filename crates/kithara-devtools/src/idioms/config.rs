@@ -3,7 +3,10 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Deserialize;
 
-use crate::common::project::load_optional_config;
+use crate::common::{
+    project::load_optional_config,
+    toggle::{ToggleConfig, ToggleSchema},
+};
 
 #[derive(Debug, Default, Clone, kithara_config::Config)]
 #[config(builder(none), fields(nested))]
@@ -127,24 +130,14 @@ impl Default for DerivableConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
-#[serde(deny_unknown_fields)]
-#[config(builder(none), fields(value))]
-pub(crate) struct DerivableEventConfig {
-    #[serde(default)]
-    pub(crate) unforwarded: Vec<String>,
-    #[serde(default = "default_true")]
-    pub(crate) enabled: bool,
+pub(crate) enum DerivableEventSchema {}
+
+impl ToggleSchema for DerivableEventSchema {
+    const FIELDS: &'static [&'static str; 2] = &["unforwarded", "enabled"];
+    const DEFAULT: bool = true;
 }
 
-impl Default for DerivableEventConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            unforwarded: Vec::new(),
-        }
-    }
-}
+pub(crate) type DerivableEventConfig = ToggleConfig<DerivableEventSchema>;
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]

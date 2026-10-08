@@ -10,6 +10,7 @@ mod observe;
 mod range_response;
 mod resumable;
 mod retry;
+#[cfg(not(feature = "client-host"))]
 #[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
 mod timeout;

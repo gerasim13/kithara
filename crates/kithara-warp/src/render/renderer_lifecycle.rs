@@ -93,7 +93,7 @@ where
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
             .capabilities()
             .latency()
-            .output_frames();
+            .second();
         let sample_limit = frame_limit
             .checked_mul(channels)
             .ok_or(ElasticError::SampleCountOverflow)?;
@@ -682,7 +682,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             ))?
             .capabilities()
             .latency()
-            .output_frames()
+            .second()
             .max(1);
         for _ in 0..=capacity.div_ceil(quantum) {
             self.scratch

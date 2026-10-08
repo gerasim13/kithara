@@ -2,7 +2,6 @@ use std::{
     env, fs,
     path::{Path as FsPath, PathBuf},
     process::{Command, Stdio},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail};
@@ -94,34 +93,6 @@ pub(crate) fn copy_dir_all(src: &FsPath, dst: &FsPath) -> Result<()> {
         }
     }
     Ok(())
-}
-
-#[derive(fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
-struct TempWorkDir {
-    #[field(get)]
-    path: PathBuf,
-}
-
-impl TempWorkDir {
-    fn create(prefix: &str) -> Result<Self> {
-        let epoch = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .context("system clock is before UNIX_EPOCH")?;
-        let path = env::temp_dir().join(format!(
-            "{prefix}-{}-{}",
-            std::process::id(),
-            epoch.as_nanos()
-        ));
-        fs::create_dir_all(&path).with_context(|| format!("create {}", path.display()))?;
-        Ok(Self { path })
-    }
-}
-
-impl Drop for TempWorkDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
-    }
 }
 
 struct HakariDisableGuard {
@@ -873,10 +844,12 @@ fn run_single(profile: crate::BuildProfile, tools: &ToolsConfig) -> Result<()> {
     let rx_src = resolve_rxswift(&root, tools)?;
     println!("==> RxSwift source: {}", rx_src.display());
 
-    let temp = TempWorkDir::create(&format!(
-        "{}-apple-single",
-        kithara_devtools::util::project_name()
-    ))?;
+    let temp = tempfile::Builder::new()
+        .prefix(&format!(
+            "{}-apple-single",
+            kithara_devtools::util::project_name()
+        ))
+        .tempdir()?;
     let work = temp.path().to_path_buf();
     let merged = work.join("merged");
     fs::create_dir_all(&merged)?;

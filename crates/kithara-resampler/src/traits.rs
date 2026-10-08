@@ -2,22 +2,9 @@ use std::num::NonZeroUsize;
 
 use crate::{RatioGlide, ResamplerCapabilities, ResamplerError, ResamplerMode};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct ResamplerProcess {
-    pub input_frames: usize,
-    pub output_frames: usize,
-}
+pub enum ResamplerProcessTag {}
 
-impl ResamplerProcess {
-    #[must_use]
-    pub const fn new(input_frames: usize, output_frames: usize) -> Self {
-        Self {
-            input_frames,
-            output_frames,
-        }
-    }
-}
+pub type ResamplerProcess = kithara_signal::FramePair<ResamplerProcessTag>;
 
 /// Standalone planar audio resampler.
 pub trait Resampler: Send + 'static {

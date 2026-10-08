@@ -146,8 +146,8 @@ where
             return None;
         }
         let latency = self.engine.as_ref()?.capabilities().latency();
-        let history_frames = latency.source_frames();
-        let output_frames = latency.output_frames();
+        let history_frames = latency.first();
+        let output_frames = latency.second();
         if history_frames == 0 || output_frames == 0 || self.residency.as_ref()?.end.is_none() {
             return None;
         }
