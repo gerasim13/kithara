@@ -196,9 +196,13 @@ impl ActiveDecode {
         } else {
             self.active.next()
         };
-        let Some(chunk) = next else {
+        let Some(mut chunk) = next else {
             return Ok(None);
         };
+        crate::pipeline::seek::skip::rebase_source(
+            &mut chunk,
+            self.active.pending_head_skip_mut().as_deref(),
+        )?;
         cursor.record(&chunk);
         if let Some(observer) = &mut self.observer {
             let _observation = observer.try_observe(&chunk);
@@ -299,7 +303,8 @@ impl ActiveDecode {
         if let Ok(ref outcome) = outcome {
             commit_outcome(&self.active, stream, playhead, outcome);
             if matches!(outcome, DecoderSeekOutcome::Landed { .. }) {
-                self.active.trim_to(position);
+                self.active
+                    .trim_to(crate::pipeline::seek::ResumeTarget::Position(position));
             }
         }
         debug!(
@@ -498,7 +503,7 @@ mod tests {
     #[kithara::test]
     fn invalid_holdback_pcm_is_retained_for_shell_retirement(decode_quarter: Vec<f32>) {
         let config = kithara_bufpool::PoolConfig::builder()
-            .max_buffers(8)
+            .max_buffers(32)
             .max_retained_capacity(1)
             .build();
         let pools = crate::test_pools::pools_with(1024 * 1024, config, config);
@@ -537,9 +542,14 @@ mod tests {
             .push(make_chunk(0))
             .expect("first holdback chunk is valid");
 
-        let returned_before = pools.pool_stats::<f32>().put_drops;
-        assert!(decode.push(make_chunk(5)).is_err());
-        assert_eq!(pools.pool_stats::<f32>().put_drops, returned_before + 1);
+        let rejected = make_chunk(5);
+        let rejected_bytes = rejected.samples.capacity() * size_of::<f32>();
+        let allocated_before = pools.stats().allocated_bytes;
+        assert!(decode.push(rejected).is_err());
+        assert_eq!(
+            pools.stats().allocated_bytes,
+            allocated_before - rejected_bytes
+        );
         assert_eq!(
             decode.active().staged_span().map(|(_, end, _)| end),
             Some(4)
@@ -602,7 +612,7 @@ mod tests {
         cursor_half: Vec<f32>,
     ) {
         let config = kithara_bufpool::PoolConfig::builder()
-            .max_buffers(8)
+            .max_buffers(32)
             .max_retained_capacity(1)
             .build();
         let pools = crate::test_pools::pools_with(1024 * 1024, config, config);
@@ -625,7 +635,7 @@ mod tests {
             },
             sample_buffer(&pools, &cursor_half[..4 * usize::from(spec.channels)]),
         );
-        let returned_before = pools.pool_stats::<f32>().put_drops;
+        let rejected_bytes = rejected.samples.capacity() * size_of::<f32>();
         active.stage(rejected);
 
         let incoming = generation(spec);
@@ -646,6 +656,8 @@ mod tests {
             frontier: OutgoingFrontier::Awaiting,
         });
 
+        decode.prepare_replacement_profile(BlenderProfile::new(spec));
+        let allocated_before = pools.stats().allocated_bytes;
         decode.prepare_incoming_profile(BlenderProfile::new(spec));
         assert!(
             decode.stage_error.is_some(),
@@ -658,13 +670,19 @@ mod tests {
             decode.take_stage_error().is_none(),
             "reset must not leak the invalidated transition error into the next lifecycle"
         );
-        assert_eq!(pools.pool_stats::<f32>().put_drops, returned_before + 1);
+        assert_eq!(
+            pools.stats().allocated_bytes,
+            allocated_before - rejected_bytes
+        );
         assert_eq!(
             decode.active().staged_span().map(|(_, end, _)| end),
             Some(4)
         );
         decode.reset();
-        assert_eq!(pools.pool_stats::<f32>().put_drops, returned_before + 1);
+        assert_eq!(
+            pools.stats().allocated_bytes,
+            allocated_before - rejected_bytes
+        );
     }
 
     #[kithara::test]

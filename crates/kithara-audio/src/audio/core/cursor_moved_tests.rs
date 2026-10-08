@@ -165,7 +165,7 @@ fn reads_preserve_consecutive_rendered_source_spans_and_revisions(cursor_half: V
 #[kithara::test]
 fn planar_read_crosses_chunks_but_preserves_mapping_boundaries() {
     let config = kithara_bufpool::PoolConfig::builder()
-        .max_buffers(8)
+        .max_buffers(32)
         .max_retained_capacity(1)
         .build();
     let pools = crate::test_pools::pools_with(1024 * 1024, config, config);
@@ -193,8 +193,10 @@ fn planar_read_crosses_chunks_but_preserves_mapping_boundaries() {
             .map(|span| span.with_mapping_revision(mapping));
         chunks.push(chunk);
     }
+    let first_bytes = chunks[0].samples.capacity() * size_of::<f32>();
+    let second_bytes = chunks[1].samples.capacity() * size_of::<f32>();
     let mut audio = fixture(spec, chunks);
-    let dropped_before = pools.pool_stats::<f32>().put_drops;
+    let allocated_before = pools.stats().allocated_bytes;
     let mut left = [-1.0; 5];
     let mut right = [-1.0; 5];
     let read = audio
@@ -213,9 +215,12 @@ fn planar_read_crosses_chunks_but_preserves_mapping_boundaries() {
         source_span,
         SourceSpan::new(0, 4, rate, 4).map(|span| span.with_mapping_revision(first_map))
     );
-    assert!(pools.pool_stats::<f32>().put_drops >= dropped_before + 1);
-    assert!(pools.pool_stats::<f32>().put_drops >= dropped_before + 2);
-    assert_eq!(pools.pool_stats::<f32>().put_drops, dropped_before + 2);
+    assert!(pools.stats().allocated_bytes <= allocated_before - first_bytes);
+    assert!(pools.stats().allocated_bytes <= allocated_before - first_bytes - second_bytes);
+    assert_eq!(
+        pools.stats().allocated_bytes,
+        allocated_before - first_bytes - second_bytes
+    );
     assert_eq!(
         audio
             .current_chunk
@@ -236,4 +241,58 @@ fn preload_returns_when_the_producer_has_delivered_nothing() {
         .preload()
         .expect("preload primes whatever the producer delivered");
     assert!(audio.is_preloaded());
+}
+
+#[kithara::test]
+fn partial_reads_keep_resumed_source_frames_and_rational_mapping(cursor_half: Vec<f32>) {
+    let pools = pools();
+    let output_rate = NonZeroU32::new(48_000).expect("output rate");
+    let source_rate = NonZeroU32::new(44_100).expect("source rate");
+    let spec = AudioSpec::new(2, output_rate);
+    let span = SourceSpan::from_rational(
+        128 * u128::from(output_rate.get()),
+        u128::from(source_rate.get()),
+        output_rate.into(),
+        source_rate,
+        5,
+    )
+    .expect("exact resumed mapping")
+    .with_mapping_revision(std::num::NonZeroU64::new(4))
+    .with_render_revision(7);
+    let mut chunk = timed_chunk(
+        &pools,
+        &cursor_half,
+        spec,
+        5,
+        span.position_at(0).expect("mapped start"),
+        span.position_at(5).expect("mapped end"),
+    );
+    chunk.meta.frame_offset = 139;
+    chunk.meta.source_span = Some(span);
+    chunk.meta.mapping_revision = span.mapping_revision();
+    chunk.meta.render_revision = span.render_revision();
+    let mut audio = fixture(spec, vec![chunk]);
+    let read = audio.read(&mut [0.0; 4]).expect("partial mapped read");
+    let ReadOutcome::Frames {
+        count, source_span, ..
+    } = read
+    else {
+        panic!("expected partial mapped frames");
+    };
+    assert_eq!(count.get(), 4);
+    assert_eq!(source_span, span.for_output_range(0..2));
+    let current = audio.current_chunk.as_ref().expect("partially read chunk");
+    assert_eq!(
+        super::source_end(&current.meta, audio.cursor.consumed_frames())
+            .expect("rendered source boundary"),
+        crate::SourceEnd::new(129, source_rate).with_mapping_revision(span.mapping_revision()),
+    );
+    let crate::ChunkOutcome::Chunk(remaining) = audio.next_chunk().expect("remaining mapped PCM")
+    else {
+        panic!("expected remaining mapped chunk");
+    };
+    assert_eq!(remaining.meta.frames, 3);
+    assert_eq!(remaining.meta.source_span, span.for_output_range(2..5));
+    assert_eq!(Some(remaining.meta.timestamp), span.position_at(2));
+    assert_eq!(Some(remaining.meta.end_timestamp), span.position_at(5));
 }

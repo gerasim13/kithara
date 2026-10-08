@@ -12,7 +12,7 @@ use crate::{
             transition::{IncomingPrime, OutgoingFrontier},
         },
         rebuild::{RecreateCause, RecreateState},
-        seek::emit::commit_outcome,
+        seek::{ResumeTarget, emit::commit_outcome},
         stream::shared::SharedStream,
     },
 };
@@ -132,7 +132,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         reader: OpenedVariantReader,
     ) {
         let (plan, reader) = reader.split();
-        let landing = Some(plan.landing_time());
+        let landing = Some(ResumeTarget::Position(plan.landing_time()));
         let info = Some(plan.media_info().clone());
         match self.build_generation(reader, info, 0, landing) {
             Ok(generation) => {
@@ -151,7 +151,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         reader: OpenedReader,
         info: Option<MediaInfo>,
         offset: u64,
-        landing: Option<Duration>,
+        landing: Option<ResumeTarget>,
     ) -> Result<DecoderGeneration, DecodeError> {
         let gate = reader.construction_gate();
         if let Some(gate) = &gate {
@@ -169,7 +169,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             );
             if let Some(target) = landing {
                 generation.notify_seek();
-                match generation.seek(target)? {
+                match generation.seek(target.position()?)? {
                     DecoderSeekOutcome::Landed { .. } => generation.trim_to(target),
                     DecoderSeekOutcome::PastEof { .. } => generation.finish(),
                 }
@@ -190,15 +190,19 @@ impl<T: StreamType> StreamAudioSource<T> {
     fn install_replacement(
         &mut self,
         recreate: RecreateState,
-        landing: Option<Duration>,
+        landing: Option<crate::SourceEnd>,
     ) -> Result<(), DecodeError> {
         self.abandon_incoming();
         self.shared_stream
             .probe_seek(SeekFrom::Start(recreate.offset))
             .map_err(|source| DecodeError::Io { source })?;
         let reader = self.shared_stream.open_rebuild_reader(recreate.offset);
-        let generation =
-            self.build_generation(reader, recreate.media_info, recreate.offset, landing)?;
+        let generation = self.build_generation(
+            reader,
+            recreate.media_info,
+            recreate.offset,
+            landing.map(ResumeTarget::Source),
+        )?;
         let old_spec = self.decode.output_spec();
         self.decode
             .prepare_replacement_profile(generation.blender_profile());
@@ -208,6 +212,9 @@ impl<T: StreamType> StreamAudioSource<T> {
         drop(self.decode.replace_active(generation));
         self.decode.reset();
         self.resume.clear();
+        if let Some(landing) = landing {
+            self.resume.rebase(landing);
+        }
         self.phase = if self.decode.active().is_finished() {
             OwnerPhase::AtEof
         } else {
@@ -563,30 +570,36 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
         if initial_binding && self.decode.output_spec().sample_rate == rate {
             return;
         }
-        let landing = self
-            .resume
-            .position()
-            .unwrap_or_else(|| self.playhead.position());
-        let result = self
-            .shared_stream
-            .seek_time_anchor(landing)
-            .map_err(|source| DecodeError::Io { source })
-            .and_then(|_| {
-                let media_info = self
-                    .decode
-                    .active()
-                    .media_info()
-                    .cloned()
-                    .or_else(|| self.shared_stream.media_info());
-                self.install_replacement(
-                    RecreateState {
-                        media_info,
-                        offset: self.decode.active().base_offset(),
-                        cause: RecreateCause::HostRateChange,
-                    },
-                    Some(landing),
-                )
-            });
+        let landing = self.resume.source_end().map_or_else(
+            || {
+                let spec = self.decode.output_spec();
+                spec.frame_at(self.playhead.position())
+                    .map(|frame| crate::SourceEnd::new(frame, spec.sample_rate))
+                    .map_err(DecodeError::from)
+            },
+            Ok,
+        );
+        let result = landing.and_then(|landing| {
+            self.shared_stream
+                .seek_time_anchor(ResumeTarget::Source(landing).position()?)
+                .map_err(|source| DecodeError::Io { source })
+                .and_then(|_| {
+                    let media_info = self
+                        .decode
+                        .active()
+                        .media_info()
+                        .cloned()
+                        .or_else(|| self.shared_stream.media_info());
+                    self.install_replacement(
+                        RecreateState {
+                            media_info,
+                            offset: self.decode.active().base_offset(),
+                            cause: RecreateCause::HostRateChange,
+                        },
+                        Some(landing),
+                    )
+                })
+        });
         if let Err(error) = result {
             self.phase = OwnerPhase::Failed(Some(error));
         }
@@ -632,17 +645,18 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
             }
             DecodeAction::Pending(reason) => TrackStep::Blocked(reason),
             DecodeAction::TransitionPending => TrackStep::Blocked(self.transition_wait_reason()),
-            DecodeAction::StartRecreate(recreate) => match self.install_replacement(recreate, None)
-            {
-                Ok(()) => {
-                    self.wake.wake();
-                    TrackStep::StateChanged
+            DecodeAction::StartRecreate(recreate) => {
+                match self.install_replacement(recreate, self.resume.source_end()) {
+                    Ok(()) => {
+                        self.wake.wake();
+                        TrackStep::StateChanged
+                    }
+                    Err(error) => {
+                        self.phase = OwnerPhase::Failed(None);
+                        TrackStep::Failed(error)
+                    }
                 }
-                Err(error) => {
-                    self.phase = OwnerPhase::Failed(None);
-                    TrackStep::Failed(error)
-                }
-            },
+            }
             DecodeAction::Eof => {
                 self.phase = OwnerPhase::AtEof;
                 self.emit.enqueue(AudioEvent::EndOfStream);

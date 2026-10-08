@@ -9,7 +9,7 @@ use crate::{
 use kithara_decode::TrackMetadata;
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
-use kithara_signal::{AudioChunk, AudioSpec};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stream::{Activity, ActivityWriter, PlayheadWrite};
 use std::{
     marker::PhantomData,
@@ -137,15 +137,6 @@ impl<S> Audio<S> {
         if self.source.host_sample_rate() == Some(rate) {
             return;
         }
-        if let Some(chunk) = &self.current_chunk {
-            self.source.commit_source_end(SourceEnd::new(
-                chunk
-                    .meta
-                    .frame_offset
-                    .saturating_add(self.cursor.consumed_frames()),
-                chunk.spec().sample_rate,
-            ));
-        }
         self.current_chunk = None;
         self.cursor.clear();
         self.source.set_host_sample_rate(rate);
@@ -182,7 +173,7 @@ impl<S> Audio<S> {
     pub fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
         let chunk = if let Some(chunk) = self.current_chunk.take() {
             let mut consumed = self.cursor.consumed_frames();
-            crate::pipeline::seek::skip::apply_frames(chunk, &mut consumed)
+            crate::pipeline::seek::skip::apply_frames(chunk, &mut consumed)?
         } else {
             None
         };
@@ -193,13 +184,8 @@ impl<S> Audio<S> {
         if let ChunkOutcome::Chunk(chunk) = &outcome {
             self.cursor.begin_chunk(chunk);
             self.playhead.advance(&chunk_position(&chunk.meta));
-            self.source.commit_source_end(SourceEnd::new(
-                chunk
-                    .meta
-                    .frame_offset
-                    .saturating_add(u64::from(chunk.meta.frames)),
-                chunk.spec().sample_rate,
-            ));
+            self.source
+                .commit_source_end(source_end(&chunk.meta, u64::from(chunk.meta.frames))?);
         }
         Ok(outcome)
     }
@@ -272,13 +258,8 @@ impl<S> Audio<S> {
             let copied =
                 self.cursor
                     .copy_into(chunk, span, &mut output, written, self.playhead.as_ref())?;
-            self.source.commit_source_end(SourceEnd::new(
-                chunk
-                    .meta
-                    .frame_offset
-                    .saturating_add(self.cursor.consumed_frames()),
-                chunk.spec().sample_rate,
-            ));
+            self.source
+                .commit_source_end(source_end(&chunk.meta, self.cursor.consumed_frames())?);
             written += copied.count;
             output_frames = output_frames.saturating_add(copied.output_frames);
             source_span = match (source_span, copied.source_span) {
@@ -310,6 +291,23 @@ impl<S> Audio<S> {
             })
         }
     }
+}
+
+fn source_end(meta: &AudioChunkInfo, consumed: u64) -> Result<SourceEnd, DecodeError> {
+    if let Some(span) = meta.source_span {
+        let span = span
+            .for_output_range(0..consumed)
+            .ok_or(DecodeError::InvalidData {
+                detail: "rendered source mapping does not cover PCM",
+            })?;
+        return Ok(SourceEnd::new(span.end(), span.sample_rate())
+            .with_mapping_revision(span.mapping_revision()));
+    }
+    Ok(SourceEnd::new(
+        meta.frame_offset.saturating_add(consumed),
+        meta.spec.sample_rate,
+    )
+    .with_mapping_revision(meta.mapping_revision))
 }
 
 impl<S> Drop for Audio<S> {
@@ -396,14 +394,15 @@ impl<S: 'static> AudioSource for Audio<S> {
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
         if let Some(chunk) = self.current_chunk.take() {
             let mut consumed = self.cursor.consumed_frames();
-            if let Some(chunk) = crate::pipeline::seek::skip::apply_frames(chunk, &mut consumed) {
-                let end = SourceEnd::new(
-                    chunk
-                        .meta
-                        .frame_offset
-                        .saturating_add(u64::from(chunk.meta.frames)),
-                    chunk.spec().sample_rate,
-                );
+            let chunk = match crate::pipeline::seek::skip::apply_frames(chunk, &mut consumed) {
+                Ok(chunk) => chunk,
+                Err(error) => return TrackStep::Failed(error),
+            };
+            if let Some(chunk) = chunk {
+                let end = match source_end(&chunk.meta, u64::from(chunk.meta.frames)) {
+                    Ok(end) => end,
+                    Err(error) => return TrackStep::Failed(error),
+                };
                 self.cursor.begin_chunk(&chunk);
                 return TrackStep::Produced(Fetch::rendered(chunk, end));
             }

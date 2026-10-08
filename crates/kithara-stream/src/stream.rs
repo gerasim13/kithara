@@ -409,6 +409,15 @@ impl<T: StreamType> Stream<T> {
                         NotReadyCause::WaitBudgetExhausted,
                     )));
                 }
+                Err(StreamError::Source(SourceError::Io(error))) => {
+                    if let Some(reason) = error
+                        .get_ref()
+                        .and_then(|inner| inner.downcast_ref::<PendingReason>())
+                    {
+                        return Ok(StreamReadOutcome::Pending(*reason));
+                    }
+                    return Err(StreamReadError::Source(error));
+                }
                 Err(e) => {
                     return Err(StreamReadError::Source(IoError::other(e.to_string())));
                 }
@@ -778,7 +787,7 @@ mod tests {
         data: Vec<u8>,
         segments: Vec<Range<u64>>,
         reads: VecDeque<ScriptRead>,
-        waits: VecDeque<WaitOutcome>,
+        waits: VecDeque<StreamResult<WaitOutcome>>,
         waited: Vec<Range<u64>>,
     }
 
@@ -799,7 +808,7 @@ mod tests {
                 reads: reads.into_iter().collect(),
                 ready_end: None,
                 segments: Vec::new(),
-                waits: waits.into_iter().collect(),
+                waits: waits.into_iter().map(Ok).collect(),
                 waited: Vec::new(),
                 peer_wake: None,
             }
@@ -905,7 +914,7 @@ mod tests {
             {
                 return Err(SourceError::WaitBudgetExceeded.into());
             }
-            Ok(self.waits.pop_front().unwrap_or(WaitOutcome::Ready))
+            self.waits.pop_front().unwrap_or(Ok(WaitOutcome::Ready))
         }
     }
 
@@ -1051,7 +1060,11 @@ mod tests {
             _range: Range<u64>,
             _timeout: Option<Duration>,
         ) -> StreamResult<WaitOutcome> {
-            Ok(WaitOutcome::Interrupted)
+            Err(SourceError::Io(IoError::new(
+                ErrorKind::Interrupted,
+                PendingReason::SessionRetired,
+            ))
+            .into())
         }
     }
 
@@ -1284,12 +1297,12 @@ mod tests {
 
     #[kithara::test]
     fn try_read_returns_seek_pending_when_flushing() {
-        let source = ScriptSource::new(
-            ActivityWriter::new(),
-            [WaitOutcome::Interrupted],
-            [],
-            vec![],
-        );
+        let mut source = ScriptSource::new(ActivityWriter::new(), [], [], vec![]);
+        source.waits.push_back(Err(SourceError::Io(IoError::new(
+            ErrorKind::Interrupted,
+            PendingReason::SessionRetired,
+        ))
+        .into()));
         let mut stream = Stream::<DummyType> { source };
         let mut buf = [0u8; 4];
 

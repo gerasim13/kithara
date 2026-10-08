@@ -14,7 +14,11 @@ use kithara_stream::{ConstructionGate, MediaInfo};
 use kithara_test_utils::kithara;
 use tracing::warn;
 
-use crate::pipeline::{decode::core::panic_message, gapless::GaplessStage, seek::ResumeState};
+use crate::pipeline::{
+    decode::core::panic_message,
+    gapless::GaplessStage,
+    seek::{ResumeState, ResumeTarget},
+};
 
 #[derive(Clone, Copy)]
 pub(super) struct Holdback {
@@ -272,7 +276,7 @@ impl DecoderGeneration {
         }
     }
 
-    pub(crate) fn trim_to(&mut self, target: kithara_platform::time::Duration) {
+    pub(crate) fn trim_to(&mut self, target: ResumeTarget) {
         self.pending_head_skip = Some(ResumeState {
             target,
             trim_head: true,

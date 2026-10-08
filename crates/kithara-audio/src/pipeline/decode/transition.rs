@@ -342,8 +342,14 @@ impl super::core::ActiveDecode {
             generation.decoder_mut().prepare_next_chunk();
             outcome = match generation.next_chunk() {
                 Ok(DecoderChunkOutcome::Chunk(chunk)) => {
-                    let Some(chunk) = apply_skip(chunk, generation.pending_head_skip_mut()) else {
-                        continue;
+                    let chunk = match apply_skip(chunk, generation.pending_head_skip_mut()) {
+                        Ok(Some(chunk)) => chunk,
+                        Ok(None) => continue,
+                        Err(error) => {
+                            tracing::warn!(?error, "incoming source mapping failed");
+                            outcome = IncomingPrime::Failed;
+                            break;
+                        }
                     };
                     if !chunk.samples.is_empty() {
                         generation.stage(chunk);
@@ -749,20 +755,23 @@ fn timeline_spec(sample_rate: u32) -> Option<AudioSpec> {
     NonZeroU32::new(sample_rate).map(|sample_rate| AudioSpec::new(1, sample_rate))
 }
 
-pub(super) fn trim_staged_head(generation: &mut DecoderGeneration, overlap: OverlapSpan) -> bool {
+pub(super) fn trim_staged_head(
+    generation: &mut DecoderGeneration,
+    overlap: OverlapSpan,
+) -> kithara_decode::DecodeResult<bool> {
     let mut remaining = overlap.incoming_next.saturating_sub(overlap.incoming_first);
     if remaining == 0 {
-        return generation.has_output();
+        return Ok(generation.has_output());
     }
     while remaining != 0 {
         let Some(chunk) = generation.pop_staged() else {
-            return false;
+            return Ok(false);
         };
-        if let Some(chunk) = apply_frames(chunk, &mut remaining) {
+        if let Some(chunk) = apply_frames(chunk, &mut remaining)? {
             generation.push_staged_front(chunk);
         }
     }
-    generation.has_output()
+    Ok(generation.has_output())
 }
 
 pub(super) fn incoming_origin(

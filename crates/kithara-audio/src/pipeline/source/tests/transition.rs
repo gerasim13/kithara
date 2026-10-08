@@ -300,7 +300,11 @@ async fn exact_incoming_build_pending_keeps_outgoing_pcm_running(route_pcm: Rout
     fixture.source.finish_deferred();
 
     assert!(fixture.source.decode.incoming_is_priming(transition));
-    let TrackStep::Produced(fetch) = fixture.source.step_track() else {
+    let step = (0..64).find_map(|_| match fixture.source.step_track() {
+        TrackStep::StateChanged => None,
+        step => Some(step),
+    });
+    let Some(TrackStep::Produced(fetch)) = step else {
         panic!("outgoing must keep producing while the incoming decoder is building");
     };
     let chunk = produced_data(fetch);
@@ -925,7 +929,10 @@ async fn incoming_lands_on_the_outgoing_frontier_not_ahead_of_it(route_pcm: Rout
         if landing.is_some() {
             break;
         }
-        if !matches!(fixture.source.step_track(), TrackStep::Produced(_)) {
+        if !matches!(
+            fixture.source.step_track(),
+            TrackStep::Produced(_) | TrackStep::StateChanged
+        ) {
             break;
         }
     }

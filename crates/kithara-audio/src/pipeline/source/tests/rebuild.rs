@@ -126,9 +126,17 @@ impl Decoder for TestDecoder {
 
 #[kithara::test(tokio)]
 async fn retired_generations_are_all_reclaimed_after_a_burst() {
-    let RebuildFixture {
-        drops, mut source, ..
-    } = test_source(0).await;
+    let RebuildFixture { mut source, .. } = test_source(0).await;
+    let drops = Arc::new(Mutex::new(Vec::new()));
+    let initial = DecoderGeneration::new(
+        Box::new(TestDecoder::new(0, Arc::clone(&drops))),
+        None,
+        0,
+        None,
+        None,
+        GaplessMode::Disabled,
+    );
+    drop(source.decode.replace_active(initial));
     assert!(
         drops.lock().is_empty(),
         "the active generation is still owned"
@@ -1675,12 +1683,13 @@ async fn format_boundary_rebuild_rebases_decode_head_to_rendered_source(route_pc
     control.set_media_info(media_info(1));
     install_route_factory(&route_pcm, &pools, &mut source, 2, drops);
     source
-        .install_replacement(recreate_state(1), Some(landing))
+        .install_replacement(
+            recreate_state(1),
+            Some(SourceEnd::new(rendered_frame, chunk.meta.spec.sample_rate)),
+        )
         .expect("replacement at rendered frontier");
     assert!(matches!(source.phase, super::super::OwnerPhase::Decoding));
-    let mut rebuilt = false;
-    let chunk = next_decoded_chunk(&mut source, &mut rebuilt);
-    assert_eq!(chunk.meta.timestamp, landing);
+    assert_eq!(source.resume.decode_head(), Some(rendered));
     assert_eq!(
         source
             .decode
@@ -1689,11 +1698,6 @@ async fn format_boundary_rebuild_rebases_decode_head_to_rendered_source(route_pc
             .and_then(|info| info.variant_index),
         Some(1)
     );
-    source.commit_source_end(SourceEnd::new(
-        rendered.0,
-        NonZeroU32::new(rendered.1).expect("rendered rate"),
-    ));
-
     control.set_exact_plan(exact_incoming_plan());
     source.prepare_deferred();
     source.finish_deferred();
@@ -1706,6 +1710,9 @@ async fn format_boundary_rebuild_rebases_decode_head_to_rendered_source(route_pc
         ),
         "the next ABR plan must start from the rebuilt rendered frontier"
     );
+    let mut rebuilt = false;
+    let chunk = next_decoded_chunk(&mut source, &mut rebuilt);
+    assert_eq!(chunk.meta.timestamp, landing);
 }
 
 #[kithara::test(tokio)]
@@ -1826,6 +1833,20 @@ async fn route_change_resumes_from_the_rendered_source_frontier(route_pcm: Route
     assert_eq!(
         chunk.meta.timestamp, rendered,
         "route recreation resumes at rendered source progress"
+    );
+    let span = chunk
+        .meta
+        .source_span
+        .expect("rebuilt chunk source mapping");
+    assert_eq!(span.start(), rendered_frame);
+    assert_eq!(span.sample_rate().get(), consts::SAMPLE_RATE);
+    assert_eq!(span.output_frames(), u64::from(chunk.meta.frames));
+    let next = next_decoded_chunk(&mut source, &mut route_recreated);
+    let next_span = next.meta.source_span.expect("next chunk source mapping");
+    assert_eq!(next.meta.timestamp, chunk.meta.end_timestamp);
+    assert_eq!(
+        next_span.source_ratio_at(0),
+        span.source_ratio_at(span.output_frames())
     );
 }
 

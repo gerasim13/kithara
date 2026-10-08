@@ -875,6 +875,8 @@ fn segment_aware_rebuild_at_time_prefetches_seek_preroll_segment() {
         .segment_index
         .expect("target segment index");
 
+    v.rebuild(&ctx, v.seek_readahead_start_segment(target));
+
     assert_eq!(target, 2, "time seek still lands on the target segment");
     assert_eq!(
         queue_seg_indices(&v),
@@ -959,6 +961,8 @@ fn exact_size_rebuild_at_time_starts_at_target_segment() {
         .expect("target segment index");
 
     assert_eq!(target, 2);
+    v.rebuild(&ctx, v.seek_readahead_start_segment(target));
+
     assert_eq!(queue_seg_indices(&v), vec![2, 3, 4]);
     assert_eq!(
         v.prefetch_anchor(),
@@ -1406,6 +1410,7 @@ fn a_seek_supersedes_claims_from_the_previous_plan() {
         .expect("target segment")
         .segment_index
         .expect("target segment index");
+    v.rebuild(&ctx, v.seek_readahead_start_segment(target));
     drop(claim);
 
     assert_eq!(target, 2);

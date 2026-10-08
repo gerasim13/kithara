@@ -333,9 +333,15 @@ where
         range: Range<u64>,
         timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome> {
+        if self.cancel.root.is_cancelled() {
+            return Ok(WaitOutcome::Interrupted);
+        }
         match timeout {
             Some(_) => self.variant.wait_range(range, timeout),
             None => HlsCoord::<S>::wait_range_blocking(&self.signal, &self.cancel.root, || {
+                if self.cancel.root.is_cancelled() {
+                    return Ok(WaitOutcome::Interrupted);
+                }
                 let outcome = self.variant.wait_range(range.clone(), Some(Duration::ZERO));
                 if matches!(
                     outcome,

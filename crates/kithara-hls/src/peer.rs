@@ -535,7 +535,8 @@ where
         if aligned_rescue {
             coord.active().rebuild_with_decoder_probe(ctx, resolved);
         } else if discontinuous_advance {
-            coord.active().rebuild(ctx, resolved);
+            let active = coord.active();
+            active.rebuild(ctx, active.seek_readahead_start_segment(resolved));
         }
         resolved
     }
