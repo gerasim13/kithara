@@ -17,7 +17,6 @@ mod consts {
     data = Reading,
     draw = self.paint(list, text, data, bounds)
 )]
-#[derive(kithara_derive::Retained)]
 pub(crate) struct Tempo {
     metrics: DeckSkin,
     caption: Rgba,

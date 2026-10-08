@@ -6,8 +6,7 @@ use crate::{
     skin::{TabLargeSkin, TextRoleSkin},
 };
 
-#[derive(Clone, PartialEq, kithara_derive::Retained)]
-#[retained(setter = set_labelled)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct TabLarge {
     active_color: Rgba,
     idle_color: Rgba,

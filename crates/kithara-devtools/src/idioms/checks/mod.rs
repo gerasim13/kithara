@@ -31,7 +31,6 @@ pub(crate) mod derivable_node_control;
 pub(crate) mod derivable_patch;
 pub(crate) mod derivable_phase;
 pub(crate) mod derivable_ranged;
-pub(crate) mod derivable_retained;
 pub(crate) mod derivable_serialize;
 pub(crate) mod derivable_skin_walk;
 mod derivable_support;

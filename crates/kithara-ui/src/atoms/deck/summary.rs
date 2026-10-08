@@ -10,11 +10,9 @@ use crate::{
 ///
 /// Both looks stack the two words; the compact one leads with the source and
 /// takes its type straight from the skin's roles.
-#[derive(Clone, PartialEq, fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct Summary {
-    #[field(get, vis = "pub(crate)", copy)]
-    metrics: DeckSkin,
+    pub(crate) metrics: DeckSkin,
     style: DeckSummaryStyle,
     panel: Rgba,
     source: Rgba,

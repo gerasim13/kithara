@@ -7,13 +7,29 @@ pub(crate) use super::{
 };
 use crate::{
     atoms::{
-        bar::context::Context,
-        deck::{clock::Clock, summary::Summary},
-        design::segmented::Segmented,
+        bar::{
+            brand::Brand, context::Context, divider::Divider, preset::Preset, settings::Settings,
+            spacer::Spacer,
+        },
+        button::Button,
+        chip::Chip,
+        chrome::{chevron::ChromeChevron, label::ChromeLabel},
+        deck::{clock::Clock, summary::Summary, tempo::Tempo},
+        design::{
+            cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter, segmented::Segmented,
+            select::Select, status_dot::StatusDot, swatch::Swatch,
+        },
+        icon::glyph::Glyph,
+        knob::Knob,
         label::Telemetry,
+        nav_item::NavItem,
         painter::{ControlPainter, Labelled},
+        picture::{lottie::Lottie, sprite::Sprite},
         pivot::{map::PortalMap, range::Range},
         readout::Readout,
+        tab::TabLarge,
+        toggle::Binary,
+        vu::{StereoMeter, VerticalVu},
         wave::face::Wave,
     },
     draw::{DrawList, Rect, Transform},
@@ -475,6 +491,106 @@ pub(crate) trait Retained: ControlPainter {
     /// says whether that changed the picture.
     fn set_read(_data: &mut Self::Data, _value: &ReadValue<'_>) -> bool {
         false
+    }
+}
+
+impl Retained for Brand {}
+
+impl Retained for Divider {}
+
+impl Retained for Preset {}
+
+impl Retained for Settings {}
+
+impl Retained for Spacer {}
+
+impl Retained for Button {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        set_bool(&mut data.active, value)
+    }
+}
+
+impl Retained for Chip {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        set_labelled(data, value)
+    }
+}
+
+impl Retained for ChromeChevron {}
+
+impl Retained for ChromeLabel {}
+
+impl Retained for Tempo {}
+
+impl Retained for Cell {}
+
+impl Retained for Crossfader {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        set_scalar(data, value)
+    }
+}
+
+impl Retained for Fader {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        set_scalar(&mut data.value, value)
+    }
+}
+
+impl Retained for Meter {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        set_scalar(data, value)
+    }
+}
+
+impl Retained for Select {}
+
+impl Retained for StatusDot {}
+
+impl Retained for Swatch {}
+
+impl Retained for Glyph {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        set_bool(&mut data.active, value)
+    }
+}
+
+impl Retained for Knob {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        set_scalar(&mut data.value, value)
+    }
+}
+
+impl Retained for NavItem {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        set_bool(&mut data.active, value)
+    }
+}
+
+impl Retained for Lottie {}
+
+impl Retained for Sprite {}
+
+impl Retained for TabLarge {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        set_labelled(data, value)
+    }
+}
+
+impl Retained for Binary {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        set_bool(data, value)
+    }
+}
+
+impl Retained for StereoMeter {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        set_levels(data, value)
+    }
+}
+
+impl Retained for VerticalVu {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        set_levels(data, value)
     }
 }
 

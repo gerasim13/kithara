@@ -15,8 +15,6 @@ use crate::{
     data = GlyphData,
     draw = self.paint(list, text, data, bounds)
 )]
-#[derive(kithara_derive::Retained)]
-#[retained(setter = set_bool, field = active)]
 pub(crate) struct Glyph {
     active_color: Rgba,
     color: Rgba,

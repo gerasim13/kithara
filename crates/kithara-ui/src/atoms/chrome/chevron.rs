@@ -14,7 +14,6 @@ use crate::{
     data = bool,
     draw = self.paint(list, bounds, *data)
 )]
-#[derive(kithara_derive::Retained)]
 pub(crate) struct ChromeChevron {
     color: Rgba,
     line_color: Rgba,

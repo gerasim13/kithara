@@ -8,7 +8,7 @@ use crate::{
 };
 
 /// A coloured dot with a word beside it.
-#[derive(Clone, PartialEq, kithara_derive::Retained)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct StatusDot {
     active_dot: Option<Rgba>,
     dot: Rgba,

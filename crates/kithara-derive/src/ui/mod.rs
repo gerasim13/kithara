@@ -4,8 +4,6 @@ pub(crate) mod control;
 pub(crate) mod node;
 #[cfg(feature = "control-painter")]
 pub(crate) mod painter;
-#[cfg(feature = "retained")]
-pub(crate) mod retained;
 #[cfg(feature = "skin-walk")]
 pub(crate) mod skin;
 #[cfg(feature = "view-control")]

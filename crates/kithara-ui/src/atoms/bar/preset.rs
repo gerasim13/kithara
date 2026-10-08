@@ -7,7 +7,6 @@ use crate::{
         painter::IndexedVisual,
     },
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
-    hosts::solve::{Length, Size},
     render::Skin,
     shaping::TextContext,
     skin::{GlobalBarSkin, TextRoleSkin},
@@ -25,9 +24,9 @@ pub(crate) struct PresetData {
     pub(crate) active: Option<usize>,
 }
 
-#[derive(Clone, PartialEq, kithara_derive::Retained)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct Preset {
-    metrics: GlobalBarSkin,
+    pub(crate) metrics: GlobalBarSkin,
     active: Rgba,
     active_hovered: Rgba,
     active_pressed: Rgba,
@@ -83,13 +82,6 @@ impl Preset {
         let count = count.to_f32()?;
         let gaps = self.metrics.chip_gap * (count - 1.0).max(0.0);
         (count > 0.0 && width > gaps).then_some((width - gaps) / count)
-    }
-
-    pub(crate) fn declared(&self) -> Size<Length> {
-        Size::new(
-            Length::Fixed(self.metrics.selector_width),
-            Length::Fixed(self.metrics.height),
-        )
     }
 
     /// The chip a point selects: the selector split into equal cells, not the
@@ -222,7 +214,6 @@ mod tests {
     use crate::{
         builtin,
         draw::{DrawCmd, DrawList, DrawListBuilder, Geom, Paint, Pt, Rect},
-        hosts::solve::{Length, Size},
         mount,
         render::{ReadValue, Reads, document::probe},
         shaping::TextContext,
@@ -294,13 +285,6 @@ mod tests {
         let fills = fills(&list);
         let chip_width = (selector.w - skin.global_bar.chip_gap) / 2.0;
 
-        assert_eq!(
-            painter.declared(),
-            Size::new(
-                Length::Fixed(skin.global_bar.selector_width),
-                Length::Fixed(skin.global_bar.height),
-            )
-        );
         assert_eq!(
             selector,
             Rect {

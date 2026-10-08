@@ -9,8 +9,6 @@ use crate::{
     data = f32,
     draw = self.paint(list, *data, bounds)
 )]
-#[derive(kithara_derive::Retained)]
-#[retained(setter = set_scalar)]
 pub(crate) struct Meter {
     background: Rgba,
     border: Rgba,

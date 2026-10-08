@@ -14,7 +14,6 @@ use crate::{
     draw = self.paint(list, text, *data, bounds, state),
     reads_pointer = true
 )]
-#[derive(kithara_derive::Retained)]
 pub(crate) struct Settings {
     frame: FrameSkin,
     hovered: Rgba,

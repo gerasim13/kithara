@@ -21,13 +21,6 @@ macro_rules! ui_derives {
             ui::painter::expand(input)
         }
 
-        /// Implements retained-host updates through the existing structural setters.
-        #[cfg(feature = "retained")]
-        #[proc_macro_derive(Retained, attributes(retained))]
-        pub fn retained(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-            ui::retained::expand(input)
-        }
-
         /// Implements the retained UI host path shared by painted controls.
         #[cfg(feature = "node-control")]
         #[proc_macro_derive(NodeControl)]

@@ -21,7 +21,7 @@ implementations while their product types remain in the owning crates.
 The crate has no default features. Enable each derive explicitly with its
 matching feature. The available features are `built-default`, `control`,
 `control-painter`, `enum-str`, `event`, `mirror`, `node-control`, `patch`,
-`phase`, `ranged`, `retained`, `skin-walk`, `variants`, and `view-control`.
+`phase`, `ranged`, `skin-walk`, `variants`, and `view-control`.
 The `event` feature exports both `Event` and `EventSet` because they form one
 event contract.
 
@@ -117,7 +117,6 @@ Derive macros:
 - `#[derive(Patch)]` — generates `<Struct>Patch` and `<Struct>::apply`
 - `#[derive(Phase)]` — implements a closed typestate phase trait
 - `#[derive(Ranged)]` — generates bounded scalar construction and deserialization
-- `#[derive(Retained)]` — implements retained UI data updates
 - `#[derive(SkinWalk)]` — traverses skin frame and text-role fields
 - `#[derive(Variants)]` — exposes unit enum variants in declaration order
 - `#[derive(ViewControl)]` — implements the immediate UI host path

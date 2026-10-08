@@ -33,6 +33,7 @@ use crate::{
     },
     iced::{
         controls::{Marked, Marks, Probe, snapped},
+        paint::PainterLength,
         tree::{activate, publish, scalar},
     },
     interact::{
@@ -50,7 +51,7 @@ use crate::{
 /// neither host gets an opinion about it.
 pub(crate) struct Paint<'skin, Painter>
 where
-    Painter: ControlPainter,
+    Painter: PainterLength,
 {
     text_resources: &'skin TextResources,
     data: Painter::Data,
@@ -200,7 +201,7 @@ where
 
 impl<'skin, Painter> Paint<'skin, Painter>
 where
-    Painter: ControlPainter + 'static,
+    Painter: PainterLength + 'static,
     Painter::Data: 'static,
 {
     fn build_draw_list(
@@ -271,9 +272,8 @@ where
     /// it reached this adapter, and only the painters that measure their word
     /// pay it at all.
     fn length(&self) -> (Length, Length) {
-        let size = self
-            .painter
-            .length(&mut self.text_resources.into(), &self.data);
+        let size =
+            PainterLength::length(&self.painter, &mut self.text_resources.into(), &self.data);
         (iced_length(size.width), iced_length(size.height))
     }
 
@@ -448,7 +448,7 @@ fn iced_length(length: solve::Length) -> Length {
 
 impl<Painter> IcedWidget<Published, Theme, Renderer> for Paint<'_, Painter>
 where
-    Painter: ControlPainter + 'static,
+    Painter: PainterLength + 'static,
     Painter::Data: 'static,
 {
     fn draw(
@@ -493,7 +493,7 @@ where
 
 impl<'skin, Painter> From<Paint<'skin, Painter>> for Element<'skin, Published>
 where
-    Painter: ControlPainter + 'static,
+    Painter: PainterLength + 'static,
     Painter::Data: 'static,
 {
     fn from(paint: Paint<'skin, Painter>) -> Self {
@@ -507,7 +507,7 @@ where
 /// carries both rather than two near-identical canvases.
 pub(crate) struct Gesture<'skin, Painter>
 where
-    Painter: ControlPainter,
+    Painter: PainterLength,
 {
     paint: Paint<'skin, Painter>,
     recognize: Recognize<Painter::Data>,
@@ -540,7 +540,7 @@ struct Dragging {
 #[derive_where::derive_where(Default)]
 pub(crate) struct GestureState<Painter>
 where
-    Painter: ControlPainter,
+    Painter: PainterLength,
 {
     crossing: Crossing,
     index: IndexPress,
@@ -552,7 +552,7 @@ where
 
 impl<'skin, Painter> Gesture<'skin, Painter>
 where
-    Painter: ControlPainter + 'static,
+    Painter: PainterLength + 'static,
     Painter::Data: 'static,
 {
     pub(crate) fn drag(path: &str, paint: Paint<'skin, Painter>, drag: Drag) -> Self {
@@ -681,7 +681,7 @@ where
 
 impl<Painter> IcedWidget<Published, Theme, Renderer> for Gesture<'_, Painter>
 where
-    Painter: ControlPainter + 'static,
+    Painter: PainterLength + 'static,
     Painter::Data: 'static,
 {
     fn draw(
@@ -773,7 +773,7 @@ where
 
 impl<'skin, Painter> From<Gesture<'skin, Painter>> for Element<'skin, Published>
 where
-    Painter: ControlPainter + 'static,
+    Painter: PainterLength + 'static,
     Painter::Data: 'static,
 {
     fn from(gesture: Gesture<'skin, Painter>) -> Self {
@@ -783,7 +783,7 @@ where
 
 impl<Painter> GestureState<Painter>
 where
-    Painter: ControlPainter,
+    Painter: PainterLength,
 {
     /// Follows the pointer over and onto the control, answering whether the
     /// painter now draws something else. Crossing and pressing are recognised
@@ -1590,7 +1590,7 @@ mod indexed {
         point: Option<Point>,
     ) -> (Option<Published>, Status)
     where
-        Painter: ControlPainter + 'static,
+        Painter: PainterLength + 'static,
         Painter::Data: 'static,
     {
         gesture
@@ -2503,7 +2503,7 @@ mod cached {
         bounds: Rect,
     ) -> Marked
     where
-        Painter: ControlPainter + 'static,
+        Painter: PainterLength + 'static,
         Painter::Data: 'static,
     {
         let paint = Paint::pooled(painter, data, builtin::skin(), &DrawBuffers::default());

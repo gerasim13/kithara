@@ -136,10 +136,6 @@ severity = "deny"
 enabled = true
 severity = "deny"
 
-[derivable_retained]
-enabled = true
-severity = "deny"
-
 [derivable_node_control]
 enabled = true
 severity = "deny"

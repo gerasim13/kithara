@@ -16,6 +16,7 @@ use crate::{
         controls::Draws,
         hosted::{HostedControlPlan, Resolving},
     },
+    iced::paint::PainterLength,
     ids::InternId,
     interact::{Hit, iced as iced_interact},
     mount,
@@ -65,7 +66,7 @@ impl<'a> Mount<'_, 'a, '_, '_> {
     fn painted<C>(self, control: &C) -> Rendered<'a>
     where
         C: Draws,
-        C::Painter: 'static,
+        C::Painter: PainterLength + 'static,
     {
         painted(control, self.cx)
     }

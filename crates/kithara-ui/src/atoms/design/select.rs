@@ -17,7 +17,6 @@ mod consts {
     data = String,
     draw = self.paint(list, text, data, bounds)
 )]
-#[derive(kithara_derive::Retained)]
 pub(crate) struct Select {
     background: Rgba,
     chevron: Rgba,

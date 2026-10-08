@@ -1,10 +1,7 @@
 use crate::{
     atoms::icon::mark::Marked,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
-    hosts::{
-        icons::Mark,
-        solve::{Length, Size},
-    },
+    hosts::{icons::Mark, solve::Length},
     layout::FrameSides,
     module::ButtonStyle,
     render::Skin,
@@ -29,18 +26,17 @@ pub(crate) struct ButtonLabel<Words> {
     pub(crate) label: Words,
 }
 
-#[derive(Clone, PartialEq, kithara_derive::Retained)]
-#[retained(setter = set_bool, field = active)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct Button {
     active: Face,
     idle: Face,
-    width: Width,
+    pub(crate) width: Width,
 }
 
 /// What settles a button's width: the box the row hands it, a number the skin
 /// fixes, or a share of the row it sits in.
 #[derive(Clone, Copy, PartialEq)]
-enum Width {
+pub(crate) enum Width {
     Fill,
     Fixed(f32),
     Portion(u16),
@@ -138,12 +134,6 @@ impl Button {
         }
     }
 
-    /// The box it asks for. Only the width is its own: every button fills the
-    /// height of the row it sits in.
-    pub(crate) fn declared(&self) -> Size<Length> {
-        Size::new(self.width.length(), Length::Fill)
-    }
-
     const fn face(&self, active: bool) -> &Face {
         if active { &self.active } else { &self.idle }
     }
@@ -174,7 +164,7 @@ impl Width {
         }
     }
 
-    const fn length(self) -> Length {
+    pub(crate) const fn length(self) -> Length {
         match self {
             Self::Fill => Length::Fill,
             Self::Fixed(value) => Length::Fixed(value),

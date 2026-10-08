@@ -14,6 +14,7 @@ use crate::{
     iced::{
         controls::{Gesture, Paint},
         immediate::{Custom, MiniWave, Text},
+        paint::PainterLength,
         shader,
         tree::Widget,
     },
@@ -167,7 +168,7 @@ impl ViewControl for mount::ContextBar<'_> {
 pub(crate) fn painted<'a, Control>(control: &Control, cx: &Cx<'a, '_, '_>) -> Rendered<'a>
 where
     Control: Draws,
-    Control::Painter: 'static,
+    Control::Painter: PainterLength + 'static,
 {
     let Some(data) = control.data(reading(cx)) else {
         return Rendered::leading(Space::new().into());

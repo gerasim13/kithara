@@ -74,8 +74,6 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) derivable_ranged: DerivableRangedConfig,
     #[serde(default)]
-    pub(crate) derivable_retained: DerivableRangedConfig,
-    #[serde(default)]
     pub(crate) derivable_serialize: DerivableRangedConfig,
     #[serde(default)]
     pub(crate) derivable_skin_walk: DerivableRangedConfig,

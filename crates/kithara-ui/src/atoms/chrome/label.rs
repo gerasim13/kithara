@@ -5,7 +5,7 @@ use crate::{
         painter::ControlPainter,
     },
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
-    hosts::solve::{Length, Size},
+    hosts::solve::Size,
     render::Skin,
     shaping::TextContext,
     skin::{ColorRole, FrameSkin, TextRoleSkin},
@@ -21,7 +21,7 @@ pub(crate) fn footer_role(skin: &Skin) -> TextRoleSkin {
 /// Every number the skin settles is resolved when the label is built, so the
 /// two hosts draw the same box from the same figures instead of each reading
 /// the skin its own way.
-#[derive(Clone, PartialEq, kithara_derive::Retained)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct ChromeLabel {
     frame: FrameSkin,
     background: Rgba,
@@ -111,10 +111,6 @@ impl ControlPainter for ChromeLabel {
         _state: VisualState,
     ) {
         self.paint(list, text, data, bounds);
-    }
-
-    fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
-        Size::new(Length::Shrink, Length::Fill)
     }
 
     fn measure(&self, text: &mut TextContext, data: &Self::Data) -> Size {

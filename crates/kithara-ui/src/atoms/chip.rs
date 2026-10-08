@@ -12,8 +12,6 @@ use crate::{
     data = crate::atoms::painter::Labelled,
     draw = self.paint(list, text, &data.label, data.active, bounds)
 )]
-#[derive(kithara_derive::Retained)]
-#[retained(setter = set_labelled)]
 pub(crate) struct Chip {
     active: Face,
     idle: Face,

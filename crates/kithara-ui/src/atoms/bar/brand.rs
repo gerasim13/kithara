@@ -19,7 +19,6 @@ mod consts {
     data = (),
     draw = self.paint(list, text, bounds)
 )]
-#[derive(kithara_derive::Retained)]
 pub(crate) struct Brand {
     metrics: GlobalBarSkin,
     panel: Rgba,

@@ -10,11 +10,11 @@ use super::{
     derivable_default, derivable_delegation, derivable_deref, derivable_display,
     derivable_enum_str, derivable_error, derivable_event, derivable_from, derivable_getter,
     derivable_into_probe_arg, derivable_mirror, derivable_node_control, derivable_patch,
-    derivable_phase, derivable_ranged, derivable_retained, derivable_serialize,
-    derivable_skin_walk, derivable_variants, derivable_view_control, fat_loop_body,
-    function_branch_density, guard_cascade, loop_allocation, loop_flag_accumulator,
-    manual_question_mark, multi_accumulator_loop, nested_if_let_pyramid, no_passthrough_builder,
-    parallel_loops, pointwise_loop, retry_fallback, thin_wrapper_economy,
+    derivable_phase, derivable_ranged, derivable_serialize, derivable_skin_walk,
+    derivable_variants, derivable_view_control, fat_loop_body, function_branch_density,
+    guard_cascade, loop_allocation, loop_flag_accumulator, manual_question_mark,
+    multi_accumulator_loop, nested_if_let_pyramid, no_passthrough_builder, parallel_loops,
+    pointwise_loop, retry_fallback, thin_wrapper_economy,
 };
 use crate::common::{fix::FixOutcome, scan::Scan, scope::Scope, violation::Violation};
 
@@ -90,7 +90,6 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(derivable_default::DerivableDefault),
         Box::new(derivable_from::DerivableFrom),
         Box::new(derivable_ranged::DerivableRanged),
-        Box::new(derivable_retained::DerivableRetained),
         Box::new(derivable_serialize::DerivableSerialize),
         Box::new(derivable_skin_walk::DerivableSkinWalk),
         Box::new(derivable_patch::DerivablePatch),
