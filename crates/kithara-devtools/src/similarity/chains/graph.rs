@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, btree_map::Entry};
 use super::{
     body::DecisionKind,
     facts::Facts,
-    resolve::{Resolver, Targets, dedup},
+    resolve::{Resolver, Targets, Variant, dedup},
 };
 
 /// A function, or a match arm that handles a variant built elsewhere: state
@@ -35,7 +35,7 @@ impl Node {
 pub(super) struct Graph {
     arm_sites: BTreeMap<Node, Vec<usize>>,
     calls: HashMap<Node, Vec<usize>>,
-    handlers: HashMap<(String, String), BTreeSet<Node>>,
+    handlers: HashMap<Variant, BTreeSet<Node>>,
     pred: HashMap<Node, BTreeSet<Node>>,
     succ: HashMap<Node, Vec<Node>>,
     cfg: Vec<Vec<String>>,
@@ -85,7 +85,7 @@ impl Graph {
             })
             .collect();
         let mut arm_sites: BTreeMap<Node, Vec<usize>> = BTreeMap::new();
-        let mut handlers: HashMap<(String, String), BTreeSet<Node>> = HashMap::new();
+        let mut handlers: HashMap<Variant, BTreeSet<Node>> = HashMap::new();
         for (fid, f) in facts.fns.iter().enumerate() {
             for (index, site) in f.body.sites.iter().enumerate() {
                 for &frame in &site.frames {
@@ -103,7 +103,7 @@ impl Graph {
                         for key in arm
                             .variants
                             .iter()
-                            .filter_map(|path| resolver.variant(fid, path))
+                            .flat_map(|path| resolver.variants(fid, path))
                         {
                             handlers.entry(key).or_default().insert(node);
                         }
@@ -327,6 +327,13 @@ impl Graph {
             .map_or(&[], |targets| targets.fns.as_slice())
     }
 
+    pub(super) fn built(&self, fid: usize, site: usize) -> &[super::ty::ItemPath] {
+        self.targets
+            .get(fid)
+            .and_then(|sites| sites.get(site))
+            .map_or(&[], |targets| targets.built.as_slice())
+    }
+
     /// Functions a site calls and the match arms that handle the variant it builds.
     pub(super) fn site_nodes(&self, fid: usize, site: usize) -> impl Iterator<Item = Node> + '_ {
         let targets = self.targets.get(fid).and_then(|sites| sites.get(site));
@@ -334,9 +341,9 @@ impl Graph {
             .into_iter()
             .flat_map(|targets| targets.fns.iter().copied().map(Node::Fn));
         let handled = targets
-            .and_then(|targets| targets.variant.as_ref())
-            .and_then(|variant| self.handlers.get(variant))
             .into_iter()
+            .flat_map(|targets| targets.variants.iter())
+            .filter_map(|variant| self.handlers.get(variant))
             .flatten()
             .copied();
         calls.chain(handled)

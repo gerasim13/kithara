@@ -1,5 +1,7 @@
 //! Thresholds of the chain stage.
 
+use std::{collections::BTreeSet, path::PathBuf};
+
 use serde::Deserialize;
 
 mod consts {
@@ -47,11 +49,14 @@ pub(crate) struct ChainConfig {
     pub(super) min_units: usize,
     /// Tokens per shingle.
     pub(super) shingle: usize,
+    #[serde(skip)]
+    pub(in crate::similarity) dependency_roots: BTreeSet<(String, PathBuf)>,
 }
 
 impl Default for ChainConfig {
     fn default() -> Self {
         Self {
+            dependency_roots: BTreeSet::new(),
             min_units: consts::MIN_UNITS,
             min_side_lines: consts::MIN_SIDE_LINES,
             similarity: consts::SIMILARITY,

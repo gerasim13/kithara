@@ -6,9 +6,8 @@ use kithara_ui::{
     text::TextDoc,
 };
 
-/// The module the shell mounts every source's page in; a source label the
-/// catalog does not word is reported against it.
-pub const PAGES: &str = "library-pages.kmodule.ron";
+/// Library page collection and origin for source caption errors.
+pub const PAGES: &str = "app-library/pages";
 
 /// One branch of the library tree and the page its nodes show.
 pub trait LibrarySource {

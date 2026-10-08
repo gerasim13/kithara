@@ -8,8 +8,10 @@ use kithara_ui::{
     builtin,
     ids::ScreenRole,
     package::load_package,
-    source::{FileResolver, MemResolver, OverlayResolver},
+    source::{FileResolver, FillDocument, MemResolver, OverlayResolver},
 };
+
+use crate::custom;
 
 pub mod consts {
     pub const HEIGHT: f32 = 720.0;
@@ -21,6 +23,9 @@ pub mod consts {
     pub const SCALE: f32 = 1.0;
     pub const STRESS_TICK_MS: u64 = 16;
     pub const WIDTH: f32 = 1300.0;
+    /// Collection used by the fill demo.
+    pub const FILLED: &str = "gallery-fill/items";
+    pub const FILL: &str = "modules/tabs/fill/caption.kmodule.ron";
 }
 
 /// The gallery's documents on disk, laid over the ones this build embeds.
@@ -33,21 +38,22 @@ pub fn package_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("assets")
 }
 
-/// The gallery reads its pages from the folder it ships them in, over the
-/// built-in library.
-///
-/// Nothing about a page is embedded: the folder is part of this checkout, so
-/// editing a document and opening the gallery again shows the edit, and a
-/// folder that cannot be read is a broken checkout rather than a runtime
-/// condition. The library underneath is embedded, because a consumer of the
-/// toolkit has no checkout to read it from.
+/// Gallery documents from disk over the embedded library, with two demo fills.
 ///
 /// # Panics
 /// Panics when the folder the gallery ships its documents in cannot be read.
 #[must_use]
 pub fn resolver() -> Resolver {
     let files = FileResolver::new(package_root()).expect("the gallery ships its own documents");
-    OverlayResolver::new(files, builtin::resolver())
+    let mut library = builtin::resolver();
+    for key in ["first", "second"] {
+        library.fill(
+            consts::FILLED,
+            key,
+            FillDocument::Path(consts::FILL.to_owned()),
+        );
+    }
+    OverlayResolver::new(files, library)
 }
 
 /// The file the gallery's package puts behind `role`.
@@ -78,8 +84,8 @@ pub fn document(role: &str) -> &'static str {
 pub fn pages() -> &'static BTreeMap<ScreenRole, String> {
     static PAGES: LazyLock<BTreeMap<ScreenRole, String>> = LazyLock::new(|| {
         let resolver = resolver();
-        let package = load_package(&resolver, "package.kpackage.ron")
-            .unwrap_or_else(|error| panic!("the gallery ships a package manifest: {error}"));
+        let package = load_package(&resolver, "package.kpackage.ron", &custom::config().limits)
+            .unwrap_or_else(|error| panic!("the gallery ships a package it fills: {error}"));
         package
             .screens
             .keys()

@@ -5,11 +5,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use super::{
-    body::{BodyFacts, SiteKind},
+    body::BodyFacts,
     chain::{Chain, Fork, Origin, Split},
     facts::FnFact,
     graph::Node,
-    resolve::{is_upper, own},
     search::{Ctx, Region},
 };
 
@@ -184,11 +183,11 @@ fn dyn_chains(ctx: &Ctx, methods: &[TraitMethod], chains: &mut Vec<Chain>) {
                     location: ctx.location(*x, None),
                 };
                 let sites = [*x, *y].map(|fid| {
-                    let owner = ctx.facts.fns.get(fid).and_then(|f| f.owner.as_deref());
-                    owner
-                        .and_then(|owner| built.get(owner))
-                        .map(|at| at.iter().cloned().collect())
-                        .unwrap_or_default()
+                    ctx.resolver
+                        .owner_keys(fid)
+                        .iter()
+                        .flat_map(|owner| built.get(owner).into_iter().flatten().cloned())
+                        .collect()
                 });
                 let platform = ctx.graph.cfg_split(*x, *y);
                 if let Some(chain) = emit(
@@ -208,18 +207,13 @@ fn dyn_chains(ctx: &Ctx, methods: &[TraitMethod], chains: &mut Vec<Chain>) {
 }
 
 /// Functions that build a value of each type: `Type { .. }` or `Type::new(..)`.
-fn built_at(ctx: &Ctx) -> BTreeMap<String, BTreeSet<String>> {
-    let mut built: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+fn built_at(ctx: &Ctx) -> BTreeMap<super::ty::ItemPath, BTreeSet<String>> {
+    let mut built: BTreeMap<super::ty::ItemPath, BTreeSet<String>> = BTreeMap::new();
     for (fid, f) in ctx.facts.fns.iter().enumerate() {
-        for site in &f.body.sites {
-            let ty = match (site.kind, site.path.as_slice()) {
-                (SiteKind::New, [.., ty]) => ty,
-                (SiteKind::Call, [.., ty, _]) if is_upper(ty) => ty,
-                _ => continue,
-            };
-            if let Some(ty) = own(f, ty) {
+        for (index, _) in f.body.sites.iter().enumerate() {
+            for key in ctx.graph.built(fid, index) {
                 built
-                    .entry(ty.to_string())
+                    .entry(key.clone())
                     .or_default()
                     .insert(ctx.label(Node::Fn(fid)));
             }

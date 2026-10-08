@@ -244,13 +244,10 @@ impl BlockNode for CompiledNode {
     }
 }
 
-/// Compiles a layout and its module graph into renderer-ready UI data.
+/// Compiles a layout and its module graph, adding built-in endpoints to the host registry.
 ///
 /// # Errors
-/// Returns [`UiDocError`] when loading, parsing, expansion, or validation fails.
-///
-/// Layers over the application's own declarations, so a document may bind to what the host answers
-/// for itself without every application registering it.
+/// Returns [`UiDocError`] when loading, parsing, expansion, or fill validation fails.
 pub fn compile(
     entry: &str,
     resolver: &dyn SourceResolver,
@@ -260,6 +257,7 @@ pub fn compile(
     config: &UiConfig,
     view: &ViewState,
 ) -> Result<CompiledUi, UiDocError> {
+    validate::check_fill_set(resolver)?;
     let endpoints = &BuiltinEndpoints::new(endpoints);
     let loaded = resolver.load(None, entry)?;
     let bytes = loaded.text.len();
@@ -512,13 +510,7 @@ impl Compiler<'_> {
             states.note_site(site, origin);
             validate::check_controls(site, origin, endpoints, kinds)
         };
-        let document = set
-            .defs
-            .get(&module_uri)
-            .ok_or_else(|| UiDocError::NotFound {
-                origin: module_uri.clone(),
-                rel: module_uri.0.clone(),
-            })?;
+        let document = set.def(&module_uri)?;
         validate::check_module_bindings(document, &module_uri, self.endpoints)?;
         let mut expanded = Expander::new(
             self.config.limits.max_depth,
