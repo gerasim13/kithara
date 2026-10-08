@@ -34,25 +34,25 @@ where
 
     /// Max concurrent background prefetch loads. Default: 3.
     #[config(sdk, builder(default = consts::DEFAULT_MAX_CONCURRENT_LOADS))]
-    pub max_concurrent_loads: NonZeroUsize,
+    pub(crate) max_concurrent_loads: NonZeroUsize,
 
     /// Master cancel for the queue. `Some` threads the app master so the
     /// queue subtree cascades from one app-wide owner; `None` falls back
     /// to a fresh standalone token (test / library use). Must never be
     /// `None` on the production app path.
     #[config(skip = "injected cancellation resource", patch(skip), debug(skip))]
-    pub cancel: Option<CancelToken>,
+    pub(crate) cancel: Option<CancelToken>,
 
     /// Shared store used for bare URI track sources.
     #[config(skip = "injected asset store", patch(skip), debug(skip))]
-    pub store: Option<AssetStore<S>>,
+    pub(crate) store: Option<AssetStore<S>>,
 
     /// Runtime the queue runs its loads and load completions on. `None`
     /// takes the runtime current where the queue is built; an embedding
     /// that drives the queue from threads without one (FFI hosts) passes
     /// its own.
     #[config(skip = "injected runtime", patch(skip), debug(skip))]
-    pub runtime: Option<RuntimeHandle>,
+    pub(crate) runtime: Option<RuntimeHandle>,
 
     /// Player owned and decorated by this queue.
     #[config(skip = "player moves to the queue owner", builder(required, with = Some), patch(skip), debug(skip))]
@@ -65,24 +65,24 @@ where
     /// `f32`, and converting the type would only churn those for a
     /// formatting preference.
     #[config(sdk, builder(default = consts::DEFAULT_PREFETCH_DURATION))]
-    pub prefetch_duration: f32,
+    pub(crate) prefetch_duration: f32,
 
     /// Whether the queue starts playback by itself once the first track
     /// appended to a queue with nothing selected finishes loading. Off by
     /// default: the embedding decides when playback starts. A document cannot
     /// name it, because starting playback is the embedding's choice.
     #[config(sdk, builder(default = false), patch(skip))]
-    pub should_autoplay: bool,
+    pub(crate) should_autoplay: bool,
 
     /// Entries the navigation history keeps. Only explicit selections and
     /// auto-advances land there, so the default is a listening session's
     /// worth of back-steps; the queue's own track list is unbounded.
     #[config(sdk, builder(default = 100))]
-    pub max_history_size: usize,
+    pub(crate) max_history_size: usize,
 
     /// Initial queue traversal order; subsequent changes belong to navigation.
     #[config(value(PlaybackOrder, self.live_playback_order()), sdk, builder(default))]
-    pub playback_order: PlaybackOrder,
+    pub(crate) playback_order: PlaybackOrder,
 
     /// Initial action when the current item ends.
     #[config(

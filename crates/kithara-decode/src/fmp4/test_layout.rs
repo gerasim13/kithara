@@ -99,13 +99,17 @@ pub(crate) fn build_test_layout(
         let start = byte_cursor;
         let end = start + len;
         let seg_index = u32::try_from(i - 1).expect("BUG: segment index fits u32");
-        descs.push(SegmentDescriptor::new(
-            start..end,
-            Duration::from_secs(u64::from(seg_index) * segment_duration_secs),
-            Duration::from_secs(segment_duration_secs),
-            seg_index,
-            0,
-        ));
+        descs.push(
+            SegmentDescriptor::builder()
+                .byte_range(start..end)
+                .decode_time(Duration::from_secs(
+                    u64::from(seg_index) * segment_duration_secs,
+                ))
+                .duration(Duration::from_secs(segment_duration_secs))
+                .segment_index(seg_index)
+                .variant_index(0)
+                .build(),
+        );
         blob.extend_from_slice(&seg_bytes);
         byte_cursor = end;
     }

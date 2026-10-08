@@ -36,12 +36,19 @@ where
     F::Output: Send + 'static,
 {
     let on = crate::flash::ambient_snapshot();
+    let active = crate::flash::flash_enabled();
     let loc = Location::caller();
-    let join = Join::new();
+    let join = Join::new(true);
     let task = task::spawn(crate::flash::with_ambient(
         on,
-        crate::flash::participate(crate::no_block::watch_blanket_at("spawn", loc, future), loc)
-            .joined(Arc::clone(&join)),
+        crate::flash::participate(
+            crate::flash::dynamic(
+                active,
+                crate::no_block::watch_blanket_at("spawn", loc, future),
+            ),
+            loc,
+        )
+        .joined(Arc::clone(&join)),
     ));
     JoinHandle::new(task, join)
 }
@@ -59,12 +66,19 @@ where
     F::Output: Send + 'static,
 {
     let on = crate::flash::ambient_snapshot();
+    let active = crate::flash::flash_enabled();
     let loc = Location::caller();
-    let join = Join::new();
+    let join = Join::new(true);
     let task = handle.spawn(crate::flash::with_ambient(
         on,
-        crate::flash::participate(crate::no_block::watch_blanket_at("spawn", loc, future), loc)
-            .joined(Arc::clone(&join)),
+        crate::flash::participate(
+            crate::flash::dynamic(
+                active,
+                crate::no_block::watch_blanket_at("spawn", loc, future),
+            ),
+            loc,
+        )
+        .joined(Arc::clone(&join)),
     ));
     JoinHandle::new(task, join)
 }
@@ -93,7 +107,7 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    let join = Join::new();
+    let join = Join::new(crate::flash::ambient_snapshot());
     let task = native_task::spawn_blocking(crate::flash::thread::joined_pool_task(
         f,
         Some(Arc::clone(&join)),
@@ -124,7 +138,7 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    let join = Join::new();
+    let join = Join::new(crate::flash::ambient_snapshot());
     let task = handle.spawn_blocking(crate::flash::thread::joined_pool_task(
         f,
         Some(Arc::clone(&join)),

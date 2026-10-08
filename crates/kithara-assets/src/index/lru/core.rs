@@ -122,13 +122,7 @@ impl LruIndex {
 
     /// Return total bytes across all assets (best-effort).
     pub(crate) fn total_bytes_best_effort(&self) -> u64 {
-        self.inner
-            .state
-            .lock()
-            .by_root
-            .values()
-            .filter_map(|e| e.bytes)
-            .sum()
+        self.inner.state.lock().total_bytes()
     }
 
     /// Touch (mark as most-recent) an asset. Returns `true` if a new
@@ -209,6 +203,10 @@ pub(crate) struct LruState {
 }
 
 impl LruState {
+    fn total_bytes(&self) -> u64 {
+        self.by_root.values().filter_map(|e| e.bytes).sum()
+    }
+
     pub(crate) fn eviction_candidates(
         &self,
         cfg: &EvictConfig,
@@ -222,7 +220,7 @@ impl LruState {
         }
 
         let total_assets = self.len();
-        let total_bytes: u64 = self.by_root.values().filter_map(|e| e.bytes).sum();
+        let total_bytes = self.total_bytes();
 
         if max_assets.is_none_or(|max| total_assets <= max)
             && max_bytes.is_none_or(|max| total_bytes <= max)

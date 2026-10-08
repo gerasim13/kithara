@@ -256,13 +256,13 @@ mod tests {
 
     impl FixedLayout {
         fn desc(&self, idx: usize) -> SegmentDescriptor {
-            SegmentDescriptor::new(
-                self.segments[idx].clone(),
-                Duration::ZERO,
-                Duration::from_secs(1),
-                u32::try_from(idx).unwrap_or(0),
-                0,
-            )
+            SegmentDescriptor::builder()
+                .byte_range(self.segments[idx].clone())
+                .decode_time(Duration::ZERO)
+                .duration(Duration::from_secs(1))
+                .segment_index(u32::try_from(idx).unwrap_or(0))
+                .variant_index(0)
+                .build()
         }
     }
 
@@ -371,7 +371,13 @@ mod tests {
 
     impl ShrinkingLayout {
         fn desc(range: Range<u64>) -> SegmentDescriptor {
-            SegmentDescriptor::new(range, Duration::ZERO, Duration::from_secs(1), 0, 0)
+            SegmentDescriptor::builder()
+                .byte_range(range)
+                .decode_time(Duration::ZERO)
+                .duration(Duration::from_secs(1))
+                .segment_index(0)
+                .variant_index(0)
+                .build()
         }
 
         fn range(&self) -> Range<u64> {

@@ -115,7 +115,7 @@ pub(crate) fn evaluate(state: &AbrState, view: &AbrView<'_>, now: Instant) -> Ab
 /// The anti-oscillation interval must not hold a rescue: waiting it out
 /// starves the reader instead of settling the choice.
 fn is_rescue(decision: &AbrDecision) -> bool {
-    super::core::is_rescue(decision.reason())
+    super::pending::is_rescue(decision.reason())
 }
 
 /// Phase 1: parallel computes. None of the `let X = expr` lines branches —

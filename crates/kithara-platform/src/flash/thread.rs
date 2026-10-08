@@ -117,19 +117,20 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    use crate::flash::system::credit::{self, DedicatedSlot, Participant};
+    use crate::flash::system::credit::{self, DedicatedSlot, PoolParticipant};
 
     let origin = Location::caller();
     let ambient = crate::flash::ambient_snapshot();
-    let slot = ambient.then(|| DedicatedSlot::reserve(origin));
+    let slot = ambient.then(|| DedicatedSlot::reserve(origin).joined(join.clone()));
     move || {
         let _ambient = crate::flash::set_ambient_for_spawn(ambient);
+        let _flash = crate::flash::enter_dynamic(false);
         credit::reset_credit();
         if let Some(slot) = slot {
-            let _pacer = slot.claim_pooled(join);
+            let _pacer = slot.claim_pooled();
             f()
         } else {
-            let _exit = Participant::unreserved();
+            let _exit = PoolParticipant::unreserved(join);
             f()
         }
     }

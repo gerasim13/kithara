@@ -65,12 +65,12 @@ fn measure_leading_silence(
     backend: DecoderBackend,
     gapless: bool,
 ) -> (usize, f32, usize) {
-    let mut config = DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+    let config = DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
         .pools(pools())
+        .backend(backend)
+        .gapless(gapless)
+        .hint("mp3")
         .build();
-    config.backend = backend;
-    config.gapless = gapless;
-    config.hint = Some("mp3".to_owned());
     let mut decoder =
         DecoderFactory::create_with_probe(Cursor::new(mp3_bytes), Some("mp3"), config)
             .expect("probe MP3 decoder");

@@ -403,6 +403,7 @@ mod tests {
         platform::{CancelToken, time::Duration, tokio::runtime::Handle},
         worker::ComputePool,
     };
+    use kithara_config::Config as _;
     use tempfile::TempDir;
 
     use super::{Config, LoadError, StorageBackend, consts::BAKED_PATH};
@@ -518,7 +519,7 @@ mod tests {
         net.apply(config.net());
 
         assert_eq!(
-            net.compression,
+            net.values().compression,
             Compression::ZSTD,
             "the document's `net.compression` reaches the options the app builds"
         );

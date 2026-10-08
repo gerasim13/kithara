@@ -46,21 +46,20 @@ where
             ),
         };
         let named_extension = self.hint.clone().or(derived_hint);
+        let mut file_patch = self.file;
+        let configured_extension = file_patch.extension.take();
+        let extension = named_extension.or(configured_extension);
         let mut file_config = FileConfig::for_src(file_src)
             .store(self.store.clone())
             .maybe_downloader(self.downloader.clone())
             .maybe_headers(self.headers.clone())
             .maybe_discriminator(self.discriminator.clone())
+            .maybe_extension(extension.clone())
             .pools(pools)
             .maybe_events(self.bus.clone())
             .maybe_cancel(self.cancel.clone())
             .build();
-        file_config.apply(self.file.clone());
-        // The hint the caller passed and the one derived from the source both
-        // describe this very track, so either outranks a document's blanket
-        // `file.extension`.
-        let extension = named_extension.or_else(|| file_config.extension.clone());
-        file_config.extension = extension.clone();
+        file_config.apply(file_patch);
         let mut audio_config = AudioConfig::<kithara_file::File<S>, B>::for_stream(file_config)
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(extension)
@@ -118,10 +117,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroUsize;
+    use std::{io::Read, num::NonZeroUsize};
 
-    use kithara_assets::AssetStore;
+    use kithara_assets::{AcquisitionResult, AssetResource, AssetStore, StorageBackend, WriteSide};
     use kithara_audio::AudioConfigPatch;
+    use kithara_config::Config as _;
     use kithara_test_utils::kithara;
 
     use crate::{
@@ -154,7 +154,7 @@ mod tests {
             .build_hls_config(&worker(), None)
             .expect("valid HLS config");
 
-        assert_eq!(built.stream().download_batch_size, 6);
+        assert_eq!(built.stream().values().download_batch_size, 6);
     }
 
     /// The same for the file branch: `reader_event_capacity` is a
@@ -166,7 +166,7 @@ mod tests {
 
         let built = config.build_file_config(&worker(), None);
 
-        assert_eq!(built.stream().reader_event_capacity, 512);
+        assert_eq!(built.stream().values().reader_event_capacity, 512);
     }
 
     /// The per-call `hint` still lands as the file source's extension: it is
@@ -179,7 +179,6 @@ mod tests {
 
         let built = config.build_file_config(&worker(), None);
 
-        assert_eq!(built.stream().extension.as_deref(), Some("flac"));
         assert_eq!(built.hint(), Some("flac"));
     }
 
@@ -193,7 +192,6 @@ mod tests {
 
         let built = config.build_file_config(&worker(), None);
 
-        assert_eq!(built.stream().extension.as_deref(), Some("wav"));
         assert_eq!(built.hint(), Some("wav"));
     }
 
@@ -208,8 +206,69 @@ mod tests {
 
         let built = config.build_file_config(&worker(), None);
 
-        assert_eq!(built.stream().extension.as_deref(), Some("flac"));
         assert_eq!(built.hint(), Some("flac"));
+    }
+
+    #[kithara::test]
+    fn the_source_extension_outranks_a_document_extension() {
+        let mut config = config("https://example.com/song.mp3");
+        config.file.extension = Some("wav".to_owned());
+
+        let built = config.build_file_config(&worker(), None);
+
+        assert_eq!(built.hint(), Some("mp3"));
+    }
+
+    #[kithara::test(tokio)]
+    #[case("https://example.invalid/stream", Some("flac"), None, "flac")]
+    #[case("https://example.invalid/stream", None, Some("wav"), "wav")]
+    #[case("https://example.invalid/stream", Some("flac"), Some("wav"), "flac")]
+    #[case("https://example.invalid/song.mp3", None, Some("wav"), "mp3")]
+    async fn effective_extension_selects_the_cached_file_resource(
+        #[case] source: &str,
+        #[case] hint: Option<&str>,
+        #[case] document: Option<&str>,
+        #[case] extension: &str,
+    ) {
+        let mut config = ResourceConfig::<TestPools>::for_src(
+            ResourceSrc::parse(source).expect("valid test source"),
+        )
+        .store(
+            AssetStore::builder(pools())
+                .backend(StorageBackend::Memory)
+                .build(),
+        )
+        .build();
+        config.hint = hint.map(str::to_owned);
+        config.file.extension = document.map(str::to_owned);
+        let key = config
+            .asset_key(&AssetResource::Source {
+                extension: extension.to_owned(),
+            })
+            .expect("file layout key");
+        let AcquisitionResult::Pending(writer) = config
+            .store()
+            .acquire_resource(&key, None)
+            .expect("cache acquisition")
+        else {
+            panic!("new cache must yield a writer");
+        };
+        let bytes = [1, 2, 3, 4];
+        writer.write_at(0, &bytes).expect("seed cached file bytes");
+        writer.commit(Some(4)).expect("commit cached file bytes");
+
+        let built = config.build_file_config(&worker(), None);
+        let mut stream =
+            kithara_stream::Stream::<kithara_file::File<TestPools>>::new(built.stream().clone())
+                .await
+                .expect("open the cached source");
+
+        assert_eq!(stream.len(), Some(4));
+        let mut read = [0; 4];
+        stream
+            .read_exact(&mut read)
+            .expect("read cached source bytes");
+        assert_eq!(read, bytes);
     }
 
     fn preload_chunks(count: usize) -> AudioConfigPatch {

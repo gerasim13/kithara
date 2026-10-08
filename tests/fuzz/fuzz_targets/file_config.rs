@@ -51,12 +51,13 @@ fuzz_target!(|input: Input| {
     };
 
     let name = String::from_utf8_lossy(&input.name);
-    let cfg = FileConfig::for_src(src)
+    let cfg = FileConfig::for_src(src.clone())
         .store(STORE.clone())
         .pools(POOLS.clone())
         .discriminator(name.as_ref())
         .build();
 
+    assert_eq!(cfg.src(), &src);
     if let Some(stored) = cfg.discriminator.as_ref() {
         assert!(stored.len() <= name.len());
     }

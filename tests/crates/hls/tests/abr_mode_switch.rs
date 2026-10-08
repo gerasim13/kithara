@@ -16,7 +16,6 @@ use kithara::{
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
-        thread::paced_backoff,
         time::{Duration, Instant},
         tokio::task::{spawn, spawn_blocking},
     },
@@ -35,7 +34,7 @@ use kithara_integration_tests::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::{hls_saw_6, hls_saw_8, hls_saw_15, hls_saw_30};
-use kithara_test_utils::{TestTempDir, wait_until};
+use kithara_test_utils::{TestTempDir, pace, wait_until};
 use num_traits::AsPrimitive;
 use tracing::info;
 use url::Url;
@@ -457,7 +456,7 @@ fn read_phase_until<S: StreamType>(
                 count, position, ..
             }) => {
                 if stats.samples >= target_samples {
-                    paced_backoff(position.saturating_sub(consumed));
+                    pace(position.saturating_sub(consumed));
                 }
                 consumed = position;
                 let n = count.get();

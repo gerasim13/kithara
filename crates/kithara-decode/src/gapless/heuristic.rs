@@ -41,20 +41,20 @@ pub struct SilenceTrimParams {
     /// threshold. Disabled by default because tail content is more
     /// often intentional (decay, reverb).
     #[config(builder(default = false))]
-    pub trim_trailing: bool,
+    pub(crate) trim_trailing: bool,
     /// Silence floor in dB below full scale. Default `45.0` ≈ -45 dB ≈ `5.6e-3`.
     #[config(builder(default = 45.0))]
-    pub threshold_db: f32,
+    pub(crate) threshold_db: f32,
     /// Minimum number of contiguous silent leading frames before any
     /// trim is applied. Below this threshold we leave the audio alone
     /// to avoid clipping intentional micro-pauses.
     #[config(builder(default = 256))]
-    pub min_trim_frames: u64,
+    pub(crate) min_trim_frames: u64,
     /// Maximum frames the leading scan looks at before giving up. If
     /// the whole window is silent (very long fade-in) we keep the
     /// audio as-is — better safe than sorry.
     #[config(builder(default = 4096))]
-    pub scan_window_frames: u64,
+    pub(crate) scan_window_frames: u64,
 }
 
 impl SilenceTrimParams {

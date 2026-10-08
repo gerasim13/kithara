@@ -1,20 +1,33 @@
 #![forbid(unsafe_code)]
 #![cfg(not(target_arch = "wasm32"))]
 
+#[cfg(feature = "flash")]
+use std::sync::{atomic::AtomicBool, mpsc};
 use std::{
     fs,
+    ops::Range,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 mod kithara {
     pub(crate) use kithara_test_macros::test;
 }
 
-use kithara_platform::{CancelToken, time::Duration};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Mutex, Weak},
+    time::Duration,
+};
+#[cfg(feature = "flash")]
+use kithara_platform::{flash, thread, tokio::sync::oneshot};
 use tempfile::TempDir;
 
 use super::core::{AtomicChunked, OpenIntent, make_tmp_path};
-use crate::{MmapDriver, MmapOptions, OpenMode, Resource, ResourceRead, StorageResult, consts};
+use crate::{
+    AvailabilityObserver, MmapDriver, MmapOptions, OpenMode, Resource, ResourceRead,
+    ResourceStatus, StorageError, StorageResult, consts,
+};
 
 fn open_chunked(dir: &TempDir, name: &str) -> (AtomicChunked<MmapDriver>, PathBuf, PathBuf) {
     let canonical = dir.path().join(name);
@@ -210,7 +223,7 @@ fn concurrent_open_atomic_claim_returns_tmp_claimed() {
     let err = AtomicChunked::<MmapDriver>::open(canonical, factory)
         .expect_err("second concurrent open must be rejected");
     assert!(
-        matches!(err, crate::StorageError::TmpClaimed(_)),
+        matches!(err, StorageError::TmpClaimed(_)),
         "expected TmpClaimed, got {err:?}"
     );
 }
@@ -232,6 +245,178 @@ fn read_after_commit_returns_payload_via_decorator() {
     let n = res.read_at(15, &mut tail).unwrap();
     assert_eq!(n, 1);
     assert_eq!(tail[0], b'!');
+}
+
+#[derive(Default)]
+struct CommitCount(AtomicUsize);
+
+impl AvailabilityObserver for CommitCount {
+    fn on_commit(&self, _final_len: u64) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn on_write(&self, _range: Range<u64>) {}
+}
+
+#[derive(Default)]
+struct CommitReadback {
+    resource: Mutex<Weak<AtomicChunked<MmapDriver>>>,
+    calls: AtomicUsize,
+}
+
+impl AvailabilityObserver for CommitReadback {
+    fn on_commit(&self, _final_len: u64) {
+        let resource = self.resource.lock().upgrade().unwrap();
+        assert_eq!(resource.status(), ResourceStatus::Active);
+        assert_eq!(resource.len(), None);
+        let mut bytes = [0u8; 7];
+        assert_eq!(resource.read_at(0, &mut bytes).unwrap(), bytes.len());
+        assert_eq!(&bytes, b"payload");
+        self.calls.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn on_write(&self, _range: Range<u64>) {}
+}
+
+#[kithara::test(timeout(Duration::from_secs(5)))]
+fn a_commit_observer_reads_the_canonical_resource_before_readiness_is_published() {
+    let dir = TempDir::new().unwrap();
+    let observer = Arc::new(CommitReadback::default());
+    let reopened = Arc::new(CommitCount::default());
+    let fresh_observer = Arc::clone(&observer);
+    let reopened_observer = Arc::clone(&reopened);
+    let resource = Arc::new(
+        AtomicChunked::<MmapDriver>::open_deferred(
+            dir.path().join("reentrant.bin"),
+            move |target, intent| {
+                let (mode, observer): (OpenMode, Arc<dyn AvailabilityObserver>) = match intent {
+                    OpenIntent::Fresh => (OpenMode::ReadWrite, Arc::clone(&fresh_observer) as _),
+                    OpenIntent::Reopen => (OpenMode::ReadOnly, Arc::clone(&reopened_observer) as _),
+                };
+                Resource::open_with_observer(
+                    CancelToken::never(),
+                    MmapOptions::for_path(target.to_path_buf())
+                        .mode(mode)
+                        .build(),
+                    Some(observer),
+                )
+            },
+        )
+        .unwrap(),
+    );
+    *observer.resource.lock() = Arc::downgrade(&resource);
+    resource.write_at(0, b"payload").unwrap();
+
+    resource.commit(Some(7)).unwrap();
+
+    assert_eq!(observer.calls.load(Ordering::Relaxed), 1);
+    assert_eq!(reopened.0.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        resource.status(),
+        ResourceStatus::Committed { final_len: Some(7) }
+    );
+}
+
+#[kithara::test(timeout(Duration::from_secs(2)))]
+#[case::rename(false)]
+#[case::reopen(true)]
+fn a_failed_atomic_publication_notifies_waiters_without_recording_a_commit(
+    #[case] fail_reopen: bool,
+) {
+    let dir = TempDir::new().unwrap();
+    let canonical = dir.path().join("failed-publication.bin");
+    let commits = Arc::new(CommitCount::default());
+    let observer = Arc::clone(&commits);
+    let resource =
+        AtomicChunked::<MmapDriver>::open_deferred(canonical.clone(), move |target, intent| {
+            if fail_reopen && intent == OpenIntent::Reopen {
+                return Err(StorageError::Failed("reopen refused".to_string()));
+            }
+            let mode = match intent {
+                OpenIntent::Fresh => OpenMode::ReadWrite,
+                OpenIntent::Reopen => OpenMode::ReadOnly,
+            };
+            Resource::open_with_observer(
+                CancelToken::never(),
+                MmapOptions::for_path(target.to_path_buf())
+                    .mode(mode)
+                    .build(),
+                Some(Arc::clone(&observer) as Arc<dyn AvailabilityObserver>),
+            )
+        })
+        .unwrap();
+    resource.write_at(0, b"payload").unwrap();
+    if !fail_reopen {
+        fs::create_dir(&canonical).unwrap();
+    }
+
+    assert!(resource.commit(Some(7)).is_err());
+
+    assert_eq!(commits.0.load(Ordering::Relaxed), 0);
+    assert!(matches!(resource.status(), ResourceStatus::Failed(_)));
+    assert!(matches!(
+        resource.wait_range(7..8),
+        Err(StorageError::Failed(_))
+    ));
+}
+
+/// A Flash yield resolves only after spawned platform participants quiesce.
+/// The captured fresh reader's only blocking operation is this range wait,
+/// so an unfinished waiter after that yield is parked on the original core.
+#[cfg(feature = "flash")]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[case::committed(false)]
+#[case::failed(true)]
+async fn atomic_publication_wakes_a_waiter_already_parked_on_the_original_core(
+    #[case] fail_rename: bool,
+) {
+    let dir = TempDir::new().unwrap();
+    let canonical = dir.path().join("parked-reader.bin");
+    let (opened_tx, opened_rx) = mpsc::channel();
+    let resource =
+        AtomicChunked::<MmapDriver>::open_deferred(canonical.clone(), move |target, intent| {
+            let mode = match intent {
+                OpenIntent::Fresh => OpenMode::ReadWrite,
+                OpenIntent::Reopen => OpenMode::ReadOnly,
+            };
+            let writer = Resource::open(
+                CancelToken::never(),
+                MmapOptions::for_path(target.to_path_buf())
+                    .mode(mode)
+                    .build(),
+            )?;
+            if intent == OpenIntent::Fresh {
+                opened_tx.send(writer.reader()).unwrap();
+            }
+            Ok(writer)
+        })
+        .unwrap();
+    let old_reader = opened_rx.try_recv().unwrap();
+    assert_eq!(old_reader.status(), ResourceStatus::Active);
+    resource.write_at(0, b"payload").unwrap();
+    let returned = Arc::new(AtomicBool::new(false));
+    let completed = Arc::clone(&returned);
+    let (done_tx, done_rx) = oneshot::channel();
+    let waiter = thread::spawn(move || {
+        let result = old_reader.wait_range(7..8);
+        completed.store(true, Ordering::Relaxed);
+        done_tx.send(result).unwrap();
+    });
+
+    flash::yield_now().await;
+    assert!(!returned.load(Ordering::Relaxed));
+    if fail_rename {
+        fs::create_dir(&canonical).unwrap();
+    }
+    assert_eq!(resource.commit(Some(7)).is_err(), fail_rename);
+
+    let outcome = done_rx.await.unwrap();
+    if fail_rename {
+        assert!(matches!(outcome, Err(StorageError::Failed(_))));
+    } else {
+        assert_eq!(outcome.unwrap(), crate::WaitOutcome::Eof);
+    }
+    waiter.join().unwrap();
 }
 
 #[kithara::test(timeout(Duration::from_secs(2)))]

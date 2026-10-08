@@ -1,14 +1,10 @@
 use std::io::Cursor;
 #[cfg(feature = "apple-codec-embedded-resampler")]
 use std::num::NonZeroU32;
-#[cfg(feature = "apple")]
-use std::sync::atomic::AtomicU64;
 
 #[cfg(feature = "apple-codec-embedded-resampler")]
-use kithara_decode::{DecodeResult, Decoder, DecoderResamplerConfig};
-use kithara_decode::{DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory};
-#[cfg(feature = "apple")]
-use kithara_platform::sync::Arc;
+use kithara_decode::{DecodeResult, Decoder, DecoderBackend, DecoderResamplerConfig};
+use kithara_decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory};
 use kithara_resampler::NoResamplerBackend;
 #[cfg(feature = "apple-codec-embedded-resampler")]
 use kithara_resampler::{ResamplerOptions, ResamplerQuality};
@@ -20,38 +16,6 @@ use kithara_test_utils::{
 };
 
 type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
-
-#[kithara::test]
-fn decoder_config_selects_the_expected_backend() {
-    let config: TestDecoderConfig = TestDecoderConfig::builder().pools(pools()).build();
-    #[cfg(android_backend)]
-    let expected = DecoderBackend::Android;
-    #[cfg(apple_backend)]
-    let expected = DecoderBackend::Apple;
-    #[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
-    let expected = DecoderBackend::WebCodecs;
-    #[cfg(not(any(
-        apple_backend,
-        android_backend,
-        all(target_arch = "wasm32", feature = "webcodecs")
-    )))]
-    let expected = DecoderBackend::Symphonia;
-    assert_eq!(config.backend, expected);
-    assert!(config.byte_len_handle.is_none());
-}
-
-#[cfg(feature = "apple")]
-#[kithara::test]
-fn decoder_config_custom_apple_backend_preserves_fields() {
-    let handle = Arc::new(AtomicU64::new(1000));
-    let mut config: TestDecoderConfig = TestDecoderConfig::builder().pools(pools()).build();
-    config.backend = DecoderBackend::Apple;
-    config.byte_len_handle = Some(Arc::clone(&handle));
-    config.hint = Some("mp3".to_string());
-    assert_eq!(config.backend, DecoderBackend::Apple);
-    assert!(config.byte_len_handle.is_some());
-    assert_eq!(config.hint, Some("mp3".to_string()));
-}
 
 #[kithara::test]
 #[case::without_hint(None)]
