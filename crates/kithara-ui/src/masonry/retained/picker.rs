@@ -24,7 +24,7 @@ use crate::{
         masonry::{pointer_button, portable_scroll},
     },
     masonry::{
-        hosted::{SearchProjection, TableProjection, TreeProjection},
+        hosted::{MasonryHostedState, SearchProjection, TableProjection, TreeProjection},
         paint::tree::Drawn as TreeDrawn,
     },
     render::{Published, document::Ctx, event::engine_value},
@@ -35,7 +35,7 @@ use crate::{
 /// The box is a carrier, not a truth of its own: the tree owns where a node
 /// stands, and the root fills this cell out of the tree after every event.
 pub(crate) struct EngineTarget {
-    pub(crate) plan: HostedControlPlan,
+    pub(crate) plan: HostedControlPlan<MasonryHostedState>,
     pub(crate) area: Rc<Cell<MasonryRect>>,
     /// The widget that draws this control. It is the engine's own node only
     /// when the control hosts its engine itself; a module handed to an engine
@@ -48,7 +48,7 @@ impl EngineTarget {
     pub(crate) fn new(
         node: WidgetId,
         area: Rc<Cell<MasonryRect>>,
-        plan: HostedControlPlan,
+        plan: HostedControlPlan<MasonryHostedState>,
     ) -> Option<Self> {
         (!plan.descriptors().is_empty()).then_some(Self { plan, area, node })
     }
@@ -379,7 +379,7 @@ struct EngineProjection {
 }
 
 impl TableProjection for EngineProjection {
-    fn project(&self, plan: &TablePlan) -> Option<Drawn> {
+    fn project(&self, plan: &TablePlan<MasonryHostedState>) -> Option<Drawn> {
         let engine = self.engine.borrow();
         plan.view(&engine, self.pointer.get(), bounds(self.area.get()))
     }
@@ -390,7 +390,7 @@ impl TableProjection for EngineProjection {
 }
 
 impl SearchProjection for EngineProjection {
-    fn project(&self, plan: &SearchPlan) -> Option<TextInputSnapshot> {
+    fn project(&self, plan: &SearchPlan<MasonryHostedState>) -> Option<TextInputSnapshot> {
         self.engine.borrow().text_input_snapshot(&plan.path)
     }
     fn reconcile(&self) {
@@ -399,7 +399,7 @@ impl SearchProjection for EngineProjection {
 }
 
 impl TreeProjection for EngineProjection {
-    fn project(&self, plan: &TreePlan) -> Option<TreeDrawn> {
+    fn project(&self, plan: &TreePlan<MasonryHostedState>) -> Option<TreeDrawn> {
         let engine = self.engine.borrow();
         plan.view(&engine, self.pointer.get(), bounds(self.area.get()))
     }

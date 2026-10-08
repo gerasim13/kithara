@@ -6,8 +6,6 @@ use std::{
 
 use num_traits::cast::AsPrimitive;
 
-#[cfg(feature = "masonry")]
-use crate::masonry::hosted::{TableSource, TableState, TreeSource, TreeState};
 use crate::{
     atoms::{
         bar::context::Context,
@@ -22,11 +20,11 @@ use crate::{
     draw::{Pt, Rect},
     engine::{Descriptor, ScrollConfig, Target},
     expand::{Binding, ControlSpec, drop_path},
-    hosts::{hosted::search::SearchPlan, picker::picker_selected_index},
+    hosts::{hosted::SearchPlan, picker::picker_selected_index},
     ids::InternId,
     interact::{CursorShape, Hit, Hover, ScrollAxis, recognizers::WheelStep},
     module::{FaderStyle, TableColumn, WaveStyle},
-    mount,
+    mount::panel::{table::host::Table as TableControl, tree::host::Tree as TreeControl},
     render::{ReadValue, Skin, TableRow, TreeRow, Zoom, document::Ctx, model::derived},
     shaping::TextContext,
 };
@@ -38,8 +36,30 @@ pub(crate) struct Resolving<'a> {
     pub(crate) ctx: Ctx<'a, 'a>,
 }
 
+pub(crate) trait HostedState: Clone {
+    type Tree: Clone + Default;
+    type Table: Clone + Default;
+    type Search: Clone + Default;
+
+    fn bind_tree(
+        state: &Self::Tree,
+        tree: &TreeControl<'_>,
+        read: Option<&Binding>,
+        cx: Resolving<'_>,
+    );
+
+    fn bind_table(
+        state: &Self::Table,
+        table: &TableControl<'_>,
+        read: Option<&Binding>,
+        cx: Resolving<'_>,
+    );
+
+    fn bind_search(state: &Self::Search, read: Option<&Binding>, cx: Resolving<'_>);
+}
+
 #[derive(Clone)]
-pub(crate) enum HostedControlPlan {
+pub(crate) enum HostedControlPlan<S: HostedState> {
     Activation {
         path: String,
     },
@@ -67,9 +87,9 @@ pub(crate) enum HostedControlPlan {
         /// the painter drew, rather than measuring the same parts again.
         face: Rect,
     },
-    Search(Box<SearchPlan>),
-    Tree(Box<TreePlan>),
-    Table(Box<TablePlan>),
+    Search(Box<SearchPlan<S>>),
+    Tree(Box<TreePlan<S>>),
+    Table(Box<TablePlan<S>>),
     Fader {
         path: String,
         style: FaderStyle,
@@ -149,17 +169,16 @@ impl HeroWindow {
 }
 
 #[derive(Clone)]
-pub(crate) struct TreePlan {
+pub(crate) struct TreePlan<S: HostedState> {
     pub(crate) path: String,
     pub(crate) picture: Rc<RefCell<Tree>>,
     pub(crate) search_path: Option<String>,
     pub(crate) toggle_path: Option<String>,
-    #[cfg(feature = "masonry")]
-    pub(crate) state: TreeState,
+    pub(crate) state: S::Tree,
 }
 
 #[derive(Clone)]
-pub(crate) struct TablePlan {
+pub(crate) struct TablePlan<S: HostedState> {
     divider_paths: DividerPaths,
     action_paths: Vec<(String, String)>,
     pub(crate) horizontal_path: String,
@@ -167,8 +186,7 @@ pub(crate) struct TablePlan {
     pub(crate) row_target: String,
     pub(crate) viewport_width: Rc<Cell<f32>>,
     pub(crate) picture: Rc<RefCell<TableFace>>,
-    #[cfg(feature = "masonry")]
-    pub(crate) state: TableState,
+    pub(crate) state: S::Table,
 }
 
 #[derive(Clone)]
@@ -198,7 +216,7 @@ impl DividerPaths {
     }
 }
 
-impl HostedControlPlan {
+impl<S: HostedState> HostedControlPlan<S> {
     fn append_descriptors(&self, descriptors: &mut Vec<Descriptor>) {
         match self {
             Self::Activation { path } => descriptors.push(Descriptor::activation(path.clone())),
@@ -262,14 +280,6 @@ impl HostedControlPlan {
                     window.wheel_non_positive,
                 ));
             }
-        }
-    }
-
-    #[cfg(feature = "masonry")]
-    pub(crate) fn carried(&self, path: &str, index: usize) -> Option<crate::hosts::drag::Carried> {
-        match self {
-            Self::Table(plan) if plan.path == path => plan.carried(index),
-            _ => None,
         }
     }
 
@@ -394,7 +404,7 @@ impl HostedControlPlan {
                     Some(ReadValue::Tree(rows)) => rows,
                     _ => &[],
                 };
-                let tree = mount::panel::tree::host::Tree {
+                let tree = TreeControl {
                     query: query.as_ref(),
                     search: *search,
                     toggle: *toggle,
@@ -411,7 +421,7 @@ impl HostedControlPlan {
                 },
                 value,
             ) => {
-                let table = mount::panel::table::host::Table {
+                let table = TableControl {
                     columns,
                     columns_state: columns_state.as_ref(),
                     status: status.as_ref(),
@@ -473,13 +483,13 @@ impl HostedControlPlan {
     }
 }
 
-fn tree_plan(
+fn tree_plan<S: HostedState>(
     path: &str,
-    tree: &mount::panel::tree::host::Tree<'_>,
-    _read: Option<&Binding>,
+    tree: &TreeControl<'_>,
+    read: Option<&Binding>,
     rows: &[TreeRow<'_>],
     cx: Resolving<'_>,
-) -> TreePlan {
+) -> TreePlan<S> {
     let Resolving { ctx, skin } = cx;
     let query_text = tree.search.then(|| {
         tree.query
@@ -495,26 +505,19 @@ fn tree_plan(
         picture: Rc::new(RefCell::new(Tree::new(rows, query_text, skin))),
         search_path: tree.search.then(|| format!("{path}/search")),
         toggle_path: tree.toggle.then(|| format!("{path}/toggle")),
-        #[cfg(feature = "masonry")]
-        state: TreeState::default(),
+        state: S::Tree::default(),
     };
-    #[cfg(feature = "masonry")]
-    plan.bind_source(TreeSource::new(
-        _read.map(|binding| ctx.ui.resolve(binding.key).to_owned()),
-        tree.search,
-        tree.query
-            .map(|binding| ctx.ui.resolve(binding.key).to_owned()),
-    ));
+    S::bind_tree(&plan.state, tree, read, cx);
     plan
 }
 
-fn context_bar_plan(
+fn context_bar_plan<S: HostedState>(
     path: &str,
     scope_items: &[InternId],
     scope: Option<&Binding>,
     ctx: Ctx<'_, '_>,
     skin: &Skin,
-) -> HostedControlPlan {
+) -> HostedControlPlan<S> {
     let scope_value = scope.and_then(|binding| ctx.read(binding));
     let selected = picker_selected_index(scope_value.as_ref(), scope_items.len());
     let mut text = TextContext::from(skin.text_resources.as_ref());
@@ -532,13 +535,13 @@ fn context_bar_plan(
     }
 }
 
-fn wave_plan(
+fn wave_plan<S: HostedState>(
     path: &str,
     style: WaveStyle,
     zoom: Option<&Binding>,
     scope: &str,
     ctx: Ctx<'_, '_>,
-) -> HostedControlPlan {
+) -> HostedControlPlan<S> {
     if style != WaveStyle::Hero {
         return HostedControlPlan::Wave {
             path: path.to_owned(),
@@ -554,7 +557,7 @@ fn wave_plan(
     plan
 }
 
-impl TreePlan {
+impl<S: HostedState> TreePlan<S> {
     pub(crate) fn picture(&self) -> Ref<'_, Tree> {
         self.picture.borrow()
     }
@@ -612,7 +615,7 @@ impl TreePlan {
     }
 }
 
-impl TablePlan {
+impl<S: HostedState> TablePlan<S> {
     pub(crate) fn new(path: &str, picture: TableFace) -> Self {
         Self {
             action_paths: picture
@@ -632,8 +635,7 @@ impl TablePlan {
             row_target: format!("{path}/rows"),
             viewport_width: Rc::new(Cell::new(0.0)),
             picture: Rc::new(RefCell::new(picture)),
-            #[cfg(feature = "masonry")]
-            state: TableState::default(),
+            state: S::Table::default(),
         }
     }
 
@@ -702,10 +704,6 @@ impl TablePlan {
         }
     }
 
-    pub(crate) fn columns(&self) -> Vec<ColumnLayout> {
-        self.picture.borrow().columns().to_vec()
-    }
-
     fn descriptor_count(&self) -> usize {
         let picture = self.picture.borrow();
         picture
@@ -728,8 +726,8 @@ impl TablePlan {
 
     fn resolved(
         path: &str,
-        table: &mount::panel::table::host::Table<'_>,
-        _read: Option<&Binding>,
+        table: &TableControl<'_>,
+        read: Option<&Binding>,
         rows: &[TableRow<'_>],
         cx: Resolving<'_>,
     ) -> Self {
@@ -747,18 +745,8 @@ impl TablePlan {
         let picture = TableFace::new(rows, columns, skin, table.frame)
             .with_status(table.status.and_then(|binding| ctx.read(binding)));
         let plan = Self::new(path, picture);
-        #[cfg(feature = "masonry")]
-        plan.bind_source(TableSource::new(table, ctx, _read));
+        S::bind_table(&plan.state, table, read, cx);
 
         plan
-    }
-
-    pub(crate) fn row_count(&self) -> usize {
-        self.picture.borrow().rows().len()
-    }
-
-    #[cfg(feature = "masonry")]
-    fn carried(&self, index: usize) -> Option<crate::hosts::drag::Carried> {
-        self.picture.borrow().carried(index)
     }
 }

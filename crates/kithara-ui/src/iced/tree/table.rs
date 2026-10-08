@@ -65,7 +65,7 @@ impl TableHost {
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         engine: Option<&Engine>,
-        actions: Option<&'a TablePlan>,
+        actions: Option<&'a TablePlan<()>>,
         targets: &mut Vec<Target<'a>>,
     ) {
         let bounds: Rect = layout.bounds().into();

@@ -106,7 +106,7 @@ mod table_projection {
         engine::Engine,
         expand::ControlSpec,
         hosts::hosted::{HostedControlPlan, Resolving, TablePlan},
-        masonry::hosted::TableProjection,
+        masonry::hosted::{MasonryHostedState, TableProjection},
         module::{TableColumn, TableColumnStyle},
         render::{ReadValue, Reads, document::probe},
     };
@@ -125,7 +125,7 @@ mod table_projection {
     }
 
     impl TableProjection for MissingEngineProjection {
-        fn project(&self, plan: &TablePlan) -> Option<Drawn> {
+        fn project(&self, plan: &TablePlan<MasonryHostedState>) -> Option<Drawn> {
             plan.view(&self.engine, None, self.bounds)
         }
 
@@ -156,7 +156,14 @@ mod table_projection {
             ctx: probe(&Silent),
         };
         let Some(HostedControlPlan::Table(plan)) =
-            HostedControlPlan::resolved("library/tracks", &spec, None, None, "", cx)
+            HostedControlPlan::<MasonryHostedState>::resolved(
+                "library/tracks",
+                &spec,
+                None,
+                None,
+                "",
+                cx,
+            )
         else {
             panic!("a table spec must resolve to a table plan");
         };

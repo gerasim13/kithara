@@ -16,12 +16,15 @@ use crate::{
     hosts::{hosted::HostedControlPlan, solve},
     ids::InternId,
     layout::{FrameCorners, FrameSides},
-    masonry::retained::{
-        custom::HostAction,
-        menu::PickerLayer,
-        node::{Detent, Face, Faces, Node},
-        picker::{EngineTarget, HostedEngine},
-        popover::PopoverState,
+    masonry::{
+        hosted::MasonryHostedState,
+        retained::{
+            custom::HostAction,
+            menu::PickerLayer,
+            node::{Detent, Face, Faces, Node},
+            picker::{EngineTarget, HostedEngine},
+            popover::PopoverState,
+        },
     },
     render::{Published, Skin},
     size::SizeSpec,
@@ -331,7 +334,11 @@ pub struct MasonryNode<Action> {
 }
 
 impl<Action> MasonryNode<Action> {
-    pub(crate) fn add_engine_control(&mut self, plan: HostedControlPlan, prepend: bool) {
+    pub(crate) fn add_engine_control(
+        &mut self,
+        plan: HostedControlPlan<MasonryHostedState>,
+        prepend: bool,
+    ) {
         let node = self.widget.id();
         let Some(target) = EngineTarget::new(node, self.geometry(), plan) else {
             return;

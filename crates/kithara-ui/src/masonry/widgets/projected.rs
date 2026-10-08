@@ -3,14 +3,17 @@ use crate::{
     draw::{DrawList, Rect, Transform},
     hosts::hosted::{SearchPlan, TablePlan, TreePlan},
     interact::{Hit, Input, Outcome},
-    masonry::retained::{controls::MasonryControl, custom::HostAction},
+    masonry::{
+        hosted::MasonryHostedState,
+        retained::{controls::MasonryControl, custom::HostAction},
+    },
     render::{Skin, document::Ctx},
     shaping::TextContext,
 };
 
-pub(crate) type TableLeaf = ProjectedLeaf<TablePlan>;
-pub(crate) type SearchLeaf = ProjectedLeaf<SearchPlan>;
-pub(crate) type TreeLeaf = ProjectedLeaf<TreePlan>;
+pub(crate) type TableLeaf = ProjectedLeaf<TablePlan<MasonryHostedState>>;
+pub(crate) type SearchLeaf = ProjectedLeaf<SearchPlan<MasonryHostedState>>;
+pub(crate) type TreeLeaf = ProjectedLeaf<TreePlan<MasonryHostedState>>;
 
 pub(crate) struct ProjectedLeaf<P> {
     plan: P,
@@ -58,7 +61,7 @@ where
     }
 }
 
-impl Projected for TablePlan {
+impl Projected for TablePlan<MasonryHostedState> {
     fn draw_list(&self, text: &mut TextContext, bounds: Rect) -> DrawList {
         let Some(drawn) = self.drawn() else {
             return DrawList::default();
@@ -71,7 +74,7 @@ impl Projected for TablePlan {
     }
 }
 
-impl Projected for TreePlan {
+impl Projected for TreePlan<MasonryHostedState> {
     fn draw_list(&self, text: &mut TextContext, bounds: Rect) -> DrawList {
         let Some(drawn) = self.drawn() else {
             return DrawList::default();
@@ -84,7 +87,7 @@ impl Projected for TreePlan {
     }
 }
 
-impl Projected for SearchPlan {
+impl Projected for SearchPlan<MasonryHostedState> {
     fn draw_list(&self, text: &mut TextContext, bounds: Rect) -> DrawList {
         let Some(snapshot) = self.drawn() else {
             return DrawList::default();

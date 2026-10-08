@@ -129,7 +129,7 @@ pub(super) const fn length_for(dim: Dim, intrinsic: Length) -> Length {
 pub(super) enum HostedLayout {
     Chrome {
         /// What the module's `drop:` mounts, when it declares one.
-        drop: Option<HostedControlPlan>,
+        drop: Option<HostedControlPlan<()>>,
         header: Option<String>,
         collapsed: bool,
     },

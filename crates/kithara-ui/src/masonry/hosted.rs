@@ -21,7 +21,7 @@ use crate::{
     engine::{Engine, Target, TextInputSnapshot},
     expand::{Binding, ControlSpec},
     hosts::{
-        hosted::{HostedControlPlan, Resolving, SearchPlan, TablePlan, TreePlan},
+        hosted::{HostedControlPlan, HostedState, Resolving, SearchPlan, TablePlan, TreePlan},
         picker::picker_hits,
     },
     ids::InternId,
@@ -32,13 +32,53 @@ use crate::{
     render::{ReadValue, Skin, document::Ctx},
 };
 
+#[derive(Clone)]
+pub(crate) struct MasonryHostedState;
+
+impl HostedState for MasonryHostedState {
+    type Tree = TreeState;
+    type Table = TableState;
+    type Search = SearchState;
+
+    fn bind_tree(
+        state: &Self::Tree,
+        tree: &mount::panel::tree::host::Tree<'_>,
+        read: Option<&Binding>,
+        cx: Resolving<'_>,
+    ) {
+        let Resolving { ctx, .. } = cx;
+        let source = TreeSource::new(
+            read.map(|binding| ctx.ui.resolve(binding.key).to_owned()),
+            tree.search,
+            tree.query
+                .map(|binding| ctx.ui.resolve(binding.key).to_owned()),
+        );
+        let _ = state.source.get_or_init(|| source);
+    }
+
+    fn bind_table(
+        state: &Self::Table,
+        table: &mount::panel::table::host::Table<'_>,
+        read: Option<&Binding>,
+        cx: Resolving<'_>,
+    ) {
+        let source = TableSource::new(table, cx.ctx, read);
+        let _ = state.source.get_or_init(|| source);
+    }
+
+    fn bind_search(state: &Self::Search, read: Option<&Binding>, cx: Resolving<'_>) {
+        let endpoint = read.map(|binding| cx.ctx.ui.resolve(binding.key).to_owned());
+        let _ = state.source.get_or_init(|| endpoint);
+    }
+}
+
 pub(crate) fn hosted_control_plan(
     path: InternId,
     spec: &ControlSpec,
     read: Option<&Binding>,
     ctx: Ctx<'_, '_>,
     skin: &Skin,
-) -> Option<HostedControlPlan> {
+) -> Option<HostedControlPlan<MasonryHostedState>> {
     HostedControlPlan::resolved(
         ctx.ui.resolve(path),
         spec,
@@ -50,17 +90,17 @@ pub(crate) fn hosted_control_plan(
 }
 
 pub(crate) trait TableProjection {
-    fn project(&self, plan: &TablePlan) -> Option<Drawn>;
+    fn project(&self, plan: &TablePlan<MasonryHostedState>) -> Option<Drawn>;
     fn reconcile(&self);
 }
 
 pub(crate) trait TreeProjection {
-    fn project(&self, plan: &TreePlan) -> Option<TreeDrawn>;
+    fn project(&self, plan: &TreePlan<MasonryHostedState>) -> Option<TreeDrawn>;
     fn reconcile(&self);
 }
 
 pub(crate) trait SearchProjection {
-    fn project(&self, plan: &SearchPlan) -> Option<TextInputSnapshot>;
+    fn project(&self, plan: &SearchPlan<MasonryHostedState>) -> Option<TextInputSnapshot>;
     fn reconcile(&self);
 }
 
@@ -70,11 +110,7 @@ pub(crate) struct SearchState {
     source: Rc<OnceCell<Option<String>>>,
 }
 
-impl SearchPlan {
-    pub(crate) fn bind_source(&self, endpoint: Option<String>) {
-        let _ = self.state.source.get_or_init(|| endpoint);
-    }
-
+impl SearchPlan<MasonryHostedState> {
     pub(crate) fn bind_projection(&self, projection: Weak<dyn SearchProjection>) {
         let _ = self.state.projection.get_or_init(|| projection);
     }
@@ -140,7 +176,14 @@ pub(crate) struct TreeSource {
     rows: Option<String>,
 }
 
-impl HostedControlPlan {
+impl HostedControlPlan<MasonryHostedState> {
+    pub(crate) fn carried(&self, path: &str, index: usize) -> Option<crate::hosts::drag::Carried> {
+        match self {
+            Self::Table(plan) if plan.path == path => plan.carried(index),
+            _ => None,
+        }
+    }
+
     pub(crate) fn append_targets<'a>(
         &'a self,
         bounds: Rect,
@@ -217,7 +260,7 @@ impl HostedControlPlan {
     }
 }
 
-impl TreePlan {
+impl TreePlan<MasonryHostedState> {
     fn append_targets<'a>(
         &'a self,
         bounds: Rect,
@@ -242,10 +285,6 @@ impl TreePlan {
 
     pub(crate) fn bind_projection(&self, projection: Weak<dyn TreeProjection>) {
         let _ = self.state.projection.get_or_init(|| projection);
-    }
-
-    pub(crate) fn bind_source(&self, source: TreeSource) {
-        let _ = self.state.source.get_or_init(|| source);
     }
 
     fn complete_view<'a>(
@@ -335,7 +374,11 @@ impl TreePlan {
     }
 }
 
-impl TablePlan {
+impl TablePlan<MasonryHostedState> {
+    fn carried(&self, index: usize) -> Option<crate::hosts::drag::Carried> {
+        self.picture.borrow().carried(index)
+    }
+
     fn append_targets<'a>(
         &'a self,
         bounds: Rect,
@@ -403,10 +446,6 @@ impl TablePlan {
 
     pub(crate) fn bind_projection(&self, projection: Weak<dyn TableProjection>) {
         let _ = self.state.projection.get_or_init(|| projection);
-    }
-
-    pub(crate) fn bind_source(&self, source: TableSource) {
-        let _ = self.state.source.get_or_init(|| source);
     }
 
     fn complete_view<'a>(
@@ -626,7 +665,7 @@ mod tests {
     #[kithara::test]
     fn tree_targets_keep_search_and_rows_disjoint() {
         let skin = builtin::skin();
-        let plan = HostedControlPlan::Tree(Box::new(TreePlan {
+        let plan = HostedControlPlan::<MasonryHostedState>::Tree(Box::new(TreePlan {
             path: "tree".to_owned(),
             picture: Rc::new(RefCell::new(Tree::new(&[], Some(""), skin))),
             search_path: Some("tree/search".to_owned()),
@@ -659,7 +698,7 @@ mod tests {
     #[kithara::test]
     fn picker_plan_adds_typed_option_targets_only_while_open() {
         let skin = builtin::skin();
-        let plan = HostedControlPlan::Picker {
+        let plan = HostedControlPlan::<MasonryHostedState>::Picker {
             path: "scope".to_owned(),
             items: vec!["ZVUK".to_owned(), "LOCAL".to_owned()],
             item_height: 18.0,
@@ -859,14 +898,14 @@ mod tests {
         rows: Vec<TableRowData>,
         columns: Vec<ColumnLayout>,
         skin: &Skin,
-    ) -> TablePlan {
+    ) -> TablePlan<MasonryHostedState> {
         let declared: Vec<TableColumn> =
             columns.iter().map(|column| column.column.clone()).collect();
-        let plan = TablePlan::new(
+        let plan = TablePlan::<MasonryHostedState>::new(
             path,
             TableFace::new(rows, columns, skin, TableFrame::new(0.0, 0.0, true)),
         );
-        plan.bind_source(TableSource {
+        let _ = plan.state.source.get_or_init(|| TableSource {
             columns: declared,
             columns_state: None,
             status: None,

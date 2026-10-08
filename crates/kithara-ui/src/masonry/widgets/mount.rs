@@ -20,6 +20,7 @@ use crate::{
     },
     interact::Input,
     masonry::{
+        hosted::MasonryHostedState,
         refresh::{DataRefresh, Refresh},
         retained::{
             MasonryHost, MasonryNode, Painted,
@@ -69,7 +70,7 @@ pub(crate) struct Cx<'a> {
     pub(crate) skin: &'a Skin,
     pub(crate) path: &'a str,
     pub(crate) owner: InputOwner,
-    pub(crate) plan: Option<&'a HostedControlPlan>,
+    pub(crate) plan: Option<&'a HostedControlPlan<MasonryHostedState>>,
     pub(crate) read: Option<&'a Binding>,
     pub(crate) declared: Size<Length>,
 }

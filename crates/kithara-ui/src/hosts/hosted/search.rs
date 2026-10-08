@@ -1,33 +1,28 @@
 use std::{cell::RefCell, rc::Rc};
 
-#[cfg(feature = "masonry")]
-use crate::masonry::hosted::SearchState;
 use crate::{
     atoms::{search::Search, text_input::text_input_layout},
     engine::Descriptor,
     expand::Binding,
-    hosts::hosted::Resolving,
+    hosts::hosted::{HostedState, Resolving},
 };
 
 /// The shared search face and the text-input descriptor that drives it.
 #[derive(Clone)]
-pub(crate) struct SearchPlan {
+pub(crate) struct SearchPlan<S: HostedState> {
     pub(crate) path: String,
     pub(crate) picture: Rc<RefCell<Search>>,
-    #[cfg(feature = "masonry")]
-    pub(crate) state: SearchState,
+    pub(crate) state: S::Search,
 }
 
-impl SearchPlan {
-    pub(super) fn new(path: &str, query: &str, _read: Option<&Binding>, cx: Resolving<'_>) -> Self {
+impl<S: HostedState> SearchPlan<S> {
+    pub(super) fn new(path: &str, query: &str, read: Option<&Binding>, cx: Resolving<'_>) -> Self {
         let plan = Self {
             path: path.to_owned(),
             picture: Rc::new(RefCell::new(Search::new(query, cx.skin))),
-            #[cfg(feature = "masonry")]
-            state: SearchState::default(),
+            state: S::Search::default(),
         };
-        #[cfg(feature = "masonry")]
-        plan.bind_source(_read.map(|binding| cx.ctx.ui.resolve(binding.key).to_owned()));
+        S::bind_search(&plan.state, read, cx);
         plan
     }
 

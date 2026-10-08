@@ -8,13 +8,13 @@ use super::{
     table::TableHost,
 };
 use crate::{
-    atoms::{bar::context::Context, design::fader::rail_bounds},
+    atoms::{bar::context::Context, design::fader::rail_bounds, table::ColumnLayout},
     draw::{Rect, Transform},
     engine::{Descriptor, Engine, Target},
     expand::{Binding, ControlSpec},
     hosts::{
         controls::Draws,
-        hosted::{HostedControlPlan, Resolving},
+        hosted::{HostedControlPlan, HostedState, Resolving, TablePlan, TreePlan},
     },
     iced::paint::PainterLength,
     ids::InternId,
@@ -73,8 +73,42 @@ impl<'a> Mount<'_, 'a, '_, '_> {
 }
 
 pub(super) struct HostedControl {
-    plan: HostedControlPlan,
+    plan: HostedControlPlan<()>,
     table: Option<Box<TableHost>>,
+}
+
+impl HostedState for () {
+    type Tree = ();
+    type Table = ();
+    type Search = ();
+
+    fn bind_tree(
+        _state: &Self::Tree,
+        _tree: &mount::panel::tree::host::Tree<'_>,
+        _read: Option<&Binding>,
+        _cx: Resolving<'_>,
+    ) {
+    }
+
+    fn bind_table(
+        _state: &Self::Table,
+        _table: &mount::panel::table::host::Table<'_>,
+        _read: Option<&Binding>,
+        _cx: Resolving<'_>,
+    ) {
+    }
+
+    fn bind_search(_state: &Self::Search, _read: Option<&Binding>, _cx: Resolving<'_>) {}
+}
+
+impl TablePlan<()> {
+    pub(crate) fn columns(&self) -> Vec<ColumnLayout> {
+        self.picture.borrow().columns().to_vec()
+    }
+
+    pub(crate) fn row_count(&self) -> usize {
+        self.picture.borrow().rows().len()
+    }
 }
 
 impl HostedControl {
@@ -107,7 +141,7 @@ impl HostedControl {
         }
     }
 
-    pub(super) fn mounted(plan: HostedControlPlan) -> Self {
+    pub(super) fn mounted(plan: HostedControlPlan<()>) -> Self {
         let table = match &plan {
             HostedControlPlan::Table(plan) => Some(Box::new(TableHost::new(
                 &plan.path,
@@ -148,6 +182,7 @@ pub(super) fn append_control_targets<'a>(
     targets: &mut Vec<Target<'a>>,
 ) {
     if let HostedControlPlan::Tree(plan) = &control.plan {
+        let plan: &TreePlan<()> = plan;
         let (search, rows) = tree_input_layouts(layout, plan.search_path.is_some());
         if let Some((path, layout)) = plan.search_path.as_ref().zip(search) {
             let input =
