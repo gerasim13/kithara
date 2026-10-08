@@ -1,4 +1,5 @@
 use kithara_config::Config;
+use kithara_derive::Patch;
 use kithara_dsp::fade::FadeCurve;
 
 /// A crossfade setting out of its range: the field and the value refused.
@@ -19,8 +20,8 @@ pub enum CrossfadeCurve {
     EqualPower,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize, Config)]
-#[config(builder(existing), fields(value))]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize, Config, Patch)]
+#[config(builder(existing), fields(value), patch(validate = Self::validate, error = InvalidCrossfade))]
 pub struct CrossfadeSettings {
     pub curve: CrossfadeCurve,
     pub depth: f32,

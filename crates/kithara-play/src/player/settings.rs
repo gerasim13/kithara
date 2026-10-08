@@ -1,4 +1,5 @@
 use kithara_config::Config;
+use kithara_derive::Patch;
 use kithara_events::TrackId;
 use kithara_render::{LaneCommand, LaneStart, bridge::Slot};
 use kithara_warp::{MIN_SPEED, SpeedCurve, StretchKind, WarpConfig};
@@ -10,7 +11,7 @@ use crate::PlayError;
 /// A change of one field goes to the track's render lane as one lane command;
 /// the lane's receipt moves it into the settings the track's owner reads. The
 /// track executes its speed itself: it alone knows where its lane stands.
-#[derive(Clone, Copy, Debug, PartialEq, Config)]
+#[derive(Clone, Copy, Debug, PartialEq, Config, Patch)]
 #[config(default, check(error = PlayError), fields(value, get(copy)))]
 pub struct TrackSettings {
     /// How fast the track plays, 1.0 at its own tempo.

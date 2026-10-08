@@ -197,5 +197,5 @@ async fn open_reader(
     _cancel: &CancelToken,
     _rate: NonZeroU32,
 ) -> Option<Box<dyn AudioReader>> {
-    todo!("spec §3.1 and §5.4: obtain the analysis reader through the source-owning dispatcher")
+    todo!("spec §3.1 and §5.4: analysis needs a decoded pull constructor independent of PlayWorker wake")
 }

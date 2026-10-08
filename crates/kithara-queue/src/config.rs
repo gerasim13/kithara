@@ -4,7 +4,9 @@ use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_platform::{CancelToken, time::Duration, tokio::runtime::Handle as RuntimeHandle};
 use kithara_play::{
-    CrossfadeSettings, DeckMixerConfig, PlayerFactory, ResourcePrep, TrackFactory, TrackSettings,
+    CrossfadeSettings, CrossfadeSettingsPatch, CrossfadeSettingsPatchError, DeckMixerConfig,
+    DeckMixerConfigPatch, DeckMixerConfigPatchError, PlayerFactory, ResourcePrep, TrackFactory,
+    TrackSettings, TrackSettingsPatch, TrackSettingsPatchError,
 };
 
 use crate::{ActionAtItemEnd, PlaybackOrder, consts};
@@ -12,11 +14,11 @@ use crate::{ActionAtItemEnd, PlaybackOrder, consts};
 /// What a [`Queue`](crate::Queue) runs with that changes while it runs. The
 /// queue executes both fields itself; a change at a session frame is refused
 /// as untimed.
-#[derive(Clone, Copy, Debug, PartialEq, Config)]
-#[config(default, fields(value, get(copy)))]
+#[derive(Clone, Copy, Debug, PartialEq, Config, Patch)]
+#[config(default, fields(value, get(copy)), patch(fallible))]
 pub struct QueueSettings {
     /// How one track hands over to the next.
-    #[config(live, builder(default))]
+    #[config(live, builder(default), patch(nested, fallible))]
     crossfade: CrossfadeSettings,
     /// Whether the next track starts on the frame after the current one ends
     /// instead of crossfading into it.
@@ -31,6 +33,7 @@ pub struct QueueSettings {
 /// retains its own store.
 #[derive(Patch, Config)]
 #[config(debug, builder(start_fn(name = with_factory), state_mod(vis = "pub")), fields(value))]
+#[patch(fallible)]
 #[non_exhaustive]
 pub struct QueueConfig<S, F = PlayerFactory>
 where
@@ -48,11 +51,11 @@ where
 
     /// The deck's mixer: its owner builds it from this when it registers the
     /// queue; the queue reads its slot count and fade lengths here.
-    #[config(builder(default), patch(skip), debug(skip))]
+    #[config(builder(default), patch(nested, fallible), debug(skip))]
     pub(crate) mixer: DeckMixerConfig,
 
     /// The live fields the queue executes itself.
-    #[config(builder(default), patch(skip), debug(skip))]
+    #[config(builder(default), patch(nested, fallible), debug(skip))]
     pub(crate) settings: QueueSettings,
 
     /// Session time before the current track ends at which the queue loads
@@ -61,11 +64,10 @@ where
     pub(crate) preload_lead: Duration,
 
     /// The settings a new track starts with; a track change moves them.
-    #[config(builder(default), patch(skip), debug(skip))]
+    #[config(builder(default), patch(nested, fallible), debug(skip))]
     pub(crate) track: TrackSettings,
 
-    /// What every track the queue loads opens with: the worker, the session
-    /// output and the playback policy.
+    /// What every track the queue loads opens with: the worker and playback policy.
     #[config(skip = "injected by the deck's owner", builder(required, with = Some), patch(skip), debug(skip))]
     pub(crate) prep: Option<ResourcePrep<S>>,
 

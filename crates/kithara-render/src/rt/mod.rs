@@ -8,7 +8,7 @@ mod slots;
 mod tail;
 pub mod track;
 
-pub use config::DeckMixerConfig;
+pub use config::{DeckMixerConfig, DeckMixerConfigPatch, DeckMixerConfigPatchError};
 pub(crate) use config::declick_frame_count;
 pub use context::{
     install_render_context, invalidate_render_context, publish_render_context, read_render_context,

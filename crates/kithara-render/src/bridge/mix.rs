@@ -1,4 +1,5 @@
 use kithara_config::Config;
+use kithara_derive::Patch;
 use kithara_signal::FaderValue;
 
 /// A deck's mix level outside `0.0..=1.0`, or not a number.
@@ -12,7 +13,7 @@ pub struct InvalidMixLevel {
 ///
 /// A change of one field goes to the deck as one [`DeckPart::Mix`](super::DeckPart::Mix); the
 /// deck applies it on its frame and ramps its output gain to [`DeckMixSettings::gain`].
-#[derive(Clone, Copy, Debug, PartialEq, Config)]
+#[derive(Clone, Copy, Debug, PartialEq, Config, Patch)]
 #[config(default, check(error = InvalidMixLevel), fields(value, get(copy)))]
 pub struct DeckMixSettings {
     /// The deck's fader, at unity unless changed.

@@ -2,32 +2,37 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_audio::{AudioDecoderConfig, DecoderResamplerSettings, ResamplerOptions};
 use kithara_bufpool::HasPool;
+use kithara_config::bon::Builder;
 use kithara_decode::GaplessMode;
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_warp::WarpConfig;
 
-use crate::{
-    EngineLoad, PlayError, PlayWorker, resource::ResourceConfig, session::SessionOutputView,
-};
+use crate::{EngineLoad, OutputSnapshot, PlayError, PlayWorker, resource::ResourceConfig};
 
 /// What every track a deck loads opens with: the worker it renders on, the
-/// session output it plays into, and the deck's own playback policy.
+/// deck's own playback policy.
 ///
 /// The deck holds one and prepares each track's config with it just before
-/// the track loads, so the track reads the session's output as it stands then.
+/// the track loads, using the output snapshot lent by that owner pass.
+#[derive(Builder)]
+#[builder(crate = ::kithara_config::bon)]
 #[derive_where::derive_where(Clone)]
 pub struct ResourcePrep<S> {
     pub worker: PlayWorker<S>,
-    pub output: SessionOutputView,
+    #[builder(default)]
     pub bus: EventBus,
     pub cancel: Option<CancelToken>,
     /// The renderer every track starts from; a track starts it at its own
     /// settings.
+    #[builder(default = WarpConfig::builder().build())]
     pub warp: WarpConfig,
     pub response_budget_frames: Option<NonZeroUsize>,
+    #[builder(default)]
     pub gapless_mode: GaplessMode,
+    #[builder(default)]
     pub block_on_underrun: bool,
+    #[builder(default)]
     pub engine_load: Arc<EngineLoad>,
 }
 
@@ -46,11 +51,11 @@ where
     pub fn prepare<B>(
         &self,
         config: ResourceConfig<S, B>,
+        output: &OutputSnapshot,
     ) -> Result<ResourceConfig<S, B>, PlayError>
     where
         B: Clone + Default,
     {
-        let output = self.output.get();
         let bus = config.bus.or_else(|| Some(self.bus.scoped()));
         let cancel = config
             .cancel

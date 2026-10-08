@@ -11,7 +11,7 @@ use kithara::{
     hls::HlsConfigPatch,
     net::{Headers, HttpClient},
     platform::{CancelToken, sync::Arc},
-    play::{PlayerConfigPatch, policy::DomainKeyPolicy},
+    play::policy::DomainKeyPolicy,
     prelude::PlaybackResamplerBackend,
     queue::QueueConfigPatch,
     worker::{DispatcherConfigPatch, Worker},
@@ -153,11 +153,6 @@ pub struct AppConfig {
     /// Accept invalid TLS certificates. Test servers only.
     #[config(builder(default = false), patch(skip))]
     pub should_accept_invalid_certs: bool,
-    /// What the document's `player:` section says about every deck's player,
-    /// carried as a patch because no `PlayerConfig` exists until a deck does.
-    /// Reached through `player`, not through [`AppConfigPatch`].
-    #[config(builder(default), patch(skip))]
-    pub player: PlayerConfigPatch,
     /// Complete live-broadcast construction config for this app session. The
     /// document's `broadcast:` section is applied to it in `main`, where the
     /// worker and pools it is built from exist; nothing here carries a second
@@ -223,7 +218,6 @@ impl fmt::Debug for AppConfig {
                 "should_accept_invalid_certs",
                 &self.should_accept_invalid_certs,
             )
-            .field("player", &self.player)
             .field("broadcast", &self.broadcast)
             .field("waveform_max_buckets", &self.waveform_max_buckets)
             .field("eq_bands", &self.eq_bands)

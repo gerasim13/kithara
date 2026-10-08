@@ -13,6 +13,7 @@ use kithara_platform::{
     tokio::{runtime::Handle as RuntimeHandle, task::spawn_on},
 };
 use kithara_play::{
+    OutputSnapshot,
     ArtifactLoadError, Cover, LoadRefusal, ResourceConfig, ResourceLoad, ResourcePrep, ResourceSrc,
 };
 use tracing::{debug, warn};
@@ -78,6 +79,7 @@ where
         &self,
         id: TrackId,
         source: TrackSource<S>,
+        output: &OutputSnapshot,
     ) -> Result<ResourceConfig<S>, QueueError> {
         let mut config = match source {
             TrackSource::Uri(url) => {
@@ -95,7 +97,7 @@ where
                 ..ScopeLabel::default()
             }));
         }
-        self.prep.prepare(config).map_err(QueueError::from)
+        self.prep.prepare(config, output).map_err(QueueError::from)
     }
 
     /// The open of `id` from `source`, its decoder reaching `observer`, and
@@ -106,8 +108,9 @@ where
         id: TrackId,
         source: TrackSource<S>,
         observer: Box<dyn AudioObserver>,
+        output: &OutputSnapshot,
     ) -> Result<(ResourceLoad<S>, TrackLoad), QueueError> {
-        let config = self.build_config(id, source)?;
+        let config = self.build_config(id, source, output)?;
         let load = TrackLoad::new(&config)?;
         let runtime = self.runtime.as_ref().ok_or(QueueError::NoRuntime)?;
         self.read_cover(runtime, id, &config, &load);

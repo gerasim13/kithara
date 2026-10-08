@@ -15,7 +15,7 @@ mod priority;
 pub mod rt;
 mod source;
 mod worker;
-pub use crossfade::{CrossfadeCurve, CrossfadeSettings, InvalidCrossfade};
+pub use crossfade::{CrossfadeCurve, CrossfadeSettings, CrossfadeSettingsPatch, CrossfadeSettingsPatchError, InvalidCrossfade};
 pub use dispatcher::{
     Dispatched, DispatcherCommand, DispatcherProtocol, LaneId, LaneStart, LaneTask, LoadRequest,
     Loaded, Open, dispatch,

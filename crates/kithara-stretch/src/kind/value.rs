@@ -14,7 +14,7 @@ bitflags::bitflags! {
 /// feature). Selecting an absent backend is
 /// un-representable rather than a runtime error.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, derive_more::Display, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, derive_more::Display, PartialEq, Eq, serde::Deserialize)]
 #[display("{self:?}")]
 pub enum StretchKind {
     /// `signalsmith-stretch` (C++). Feature `stretch-signalsmith`.

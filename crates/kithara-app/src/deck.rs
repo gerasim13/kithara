@@ -2,9 +2,9 @@
 use kithara::effects::{GainDb, eq::EqBandConfig};
 use kithara::{
     effects::eq::generate_log_spaced_bands,
-    host::{HostOwned, HostSettingsControl},
+    host::HostOwned,
     platform::CancelToken,
-    play::{PlayError, PlayerConfig, PlayerImpl},
+    play::{PlayError, ResourcePrep},
     queue::{QueueConfig, QueueError},
 };
 
@@ -90,7 +90,7 @@ fn midpoint(low: GainDb, high: GainDb) -> GainDb {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DeckId(pub usize);
 
-/// One app deck: its own cancellation subtree, player and queue.
+/// One app deck: its own cancellation subtree and hosted queue.
 pub struct Deck {
     pub id: DeckId,
     pub queue: HostOwned<AppQueue>,
@@ -98,33 +98,37 @@ pub struct Deck {
 }
 
 impl Deck {
-    /// Build a deck with its own player and queue, both hanging off the app's shutdown token. Every deck joins `session`: the
-    /// mix batch only accepts players of one shared audio session.
+    /// Builds a queue under the app's shutdown token and registers it with the Host.
     ///
     /// # Errors
     /// Returns [`PlayError`] when the Host rejects the new deck.
     pub fn build(id: DeckId, config: &AppConfig, host: &mut AppHost) -> Result<Self, PlayError> {
         let cancel = config.shutdown.child();
-        let mut player_config = PlayerConfig::builder()
-            .cancel(cancel.clone())
-            .eq_layout(generate_log_spaced_bands(config.eq_bands))
-            .sample_rate(host.sample_rate())
+        let prep = ResourcePrep::builder()
             .worker(config.worker.clone())
+            .cancel(cancel.child())
             .build();
-        player_config
-            .apply(config.player.clone())
-            .map_err(|error| PlayError::InvalidConfiguration {
-                reason: error.to_string(),
-            })?;
-        let player = PlayerImpl::new(player_config);
         let mut queue_config = QueueConfig::builder()
-            .player(player)
+            .prep(prep)
             .store(config.store.clone())
             .cancel(cancel.clone())
             .build();
-        queue_config.apply(config.queue.clone());
+        queue_config
+            .apply(config.queue.clone())
+            .map_err(|error| PlayError::InvalidConfiguration {
+                reason: error.to_string(),
+            })?;
         let queue = AppQueue::new(queue_config);
         let queue = host.insert(queue)?;
+        if let Err(error) = queue
+            .control()
+            .set_eq_layout(generate_log_spaced_bands(config.eq_bands))
+        {
+            host.remove(&queue)?;
+            return Err(PlayError::InvalidConfiguration {
+                reason: error.to_string(),
+            });
+        }
 
         Ok(Self { id, queue, cancel })
     }
@@ -291,7 +295,11 @@ impl Drop for DeckSet {
 
 #[cfg(test)]
 mod tests {
-    use kithara::{host::HostConfig, play::PlayWorkerConfig, queue::QueueConfig};
+    use kithara::{
+        host::{HostConfig, HostSettingsControl},
+        play::PlayWorkerConfig,
+        queue::QueueConfig,
+    };
 
     use super::*;
     use crate::pools::{self, AppWorker};

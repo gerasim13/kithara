@@ -42,7 +42,7 @@ mod wire {
     }
 
     /// What the session knows about its output rate.
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug)]
     #[non_exhaustive]
     pub struct SessionSampleRate {
         /// The current Firewheel output rate; `None` means no output is measured.
@@ -82,7 +82,7 @@ mod binding {
 
     /// One publish of a session's output: the rate and the shape a deck
     /// reads together.
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug)]
     pub struct OutputSnapshot {
         /// The rate the running backend settled on, beside the one the
         /// settings ask for.

@@ -5,7 +5,7 @@ use kithara_command::{Rejection, Seq, When};
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_play::{
-    Bound, FadeDir, Outbox, PlayError, Player, Settled, Track, TrackCommand, TrackFactory,
+    Bound, FadeDir, Outbox, OutputSnapshot, PlayError, Player, Settled, Track, TrackCommand, TrackFactory,
     TrackStatus as PlayingStatus,
 };
 use kithara_signal::{AudioSpec, FrameCount, SessionFrame};
@@ -23,12 +23,13 @@ where
         transition: Transition,
         reason: AdvanceReason,
         auto: bool,
+        output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, QueueError> {
         let ids = self.track_ids();
         let wrap = self.navigation.repeat_mode() == RepeatMode::All;
         match self.navigation.next(&ids, auto, wrap) {
-            Some(id) => self.request_transition(id, transition, reason, auto, out),
+            Some(id) => self.request_transition(id, transition, reason, auto, output, out),
             None => Ok(None),
         }
     }
@@ -39,6 +40,7 @@ where
         transition: Transition,
         reason: AdvanceReason,
         auto: bool,
+        output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, QueueError> {
         let settings = transition
@@ -73,7 +75,7 @@ where
         if !auto {
             self.navigation.select(id, &self.track_ids());
         }
-        match self.load_track(id, Role::Incoming { batch: None }, out) {
+        match self.load_track(id, Role::Incoming { batch: None }, output, out) {
             Ok(load) => match self.transition_loaded(out) {
                 Ok(sent) => Ok(sent.or(load)),
                 Err(error) => {
@@ -579,6 +581,7 @@ where
     pub(super) fn tick_deadlines(
         &mut self,
         now: SessionFrame,
+        output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) -> Result<(), QueueError> {
         if self.shutdown.is_cancelled() {
@@ -621,7 +624,7 @@ where
                 self.repeat_one(end, out)?;
                 return Ok(());
             }
-            self.load_track(id, Role::Preloaded, out)?;
+            self.load_track(id, Role::Preloaded, output, out)?;
         }
         let duration = if self.config.settings.gapless() {
             FrameCount::new(0)
@@ -637,6 +640,7 @@ where
                 Transition::Crossfade,
                 AdvanceReason::NaturalEof,
                 true,
+                output,
                 out,
             )?;
         }

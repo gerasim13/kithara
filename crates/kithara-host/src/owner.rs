@@ -367,6 +367,7 @@ where
     ) {
         let clock = self.clock();
         let (now, delivery) = clock.unwrap_or((SessionFrame::new(0), FrameCount::new(0)));
+        let output = self.session.root_view.output.get();
         let Some(channel) = &mut self.session.channel else {
             return;
         };
@@ -374,6 +375,7 @@ where
             let pass = DeckPass {
                 now,
                 delivery,
+                output: &output,
                 deck: record.snapshot.read(),
             };
             let Some(mut port) = channel.scope(record.scope) else {
@@ -396,10 +398,12 @@ where
         let index = self.decks.index(id)?;
         let clock = self.clock();
         let (now, delivery) = clock.unwrap_or((SessionFrame::new(0), FrameCount::new(0)));
+        let output = self.session.root_view.output.get();
         let record = &mut self.decks.0[index].1;
         let pass = DeckPass {
             now,
             delivery,
+            output: &output,
             deck: record.snapshot.read(),
         };
         let mut port = self
@@ -508,6 +512,7 @@ where
         let (now, delivery) = self
             .clock()
             .unwrap_or((SessionFrame::new(0), FrameCount::new(0)));
+        let output = self.session.root_view.output.get();
         loop {
             let receipt = {
                 let mut receipts = self.dispatcher.receipts();
@@ -545,6 +550,7 @@ where
             let pass = DeckPass {
                 now,
                 delivery,
+                output: &output,
                 deck: record.snapshot.read(),
             };
             if let Some(mut port) = self
@@ -637,6 +643,7 @@ where
     }
 
     fn route_receipts(&mut self, now: SessionFrame, delivery: FrameCount) {
+        let output = self.session.root_view.output.get();
         loop {
             let Some(receipt) = self
                 .session
@@ -689,6 +696,7 @@ where
                         let pass = DeckPass {
                             now,
                             delivery,
+                            output: &output,
                             deck: record.snapshot.read(),
                         };
                         let mut out = Outbox::new(&mut port, &mut self.dispatcher)
@@ -733,6 +741,7 @@ where
     }
 
     fn poll_events(&mut self) {
+        let output = self.session.root_view.output.get();
         if let Some((now, delivery)) = self.session.iteration_clock
             && let Some(channel) = &mut self.session.channel
         {
@@ -740,6 +749,7 @@ where
                 let pass = DeckPass {
                     now,
                     delivery,
+                    output: &output,
                     deck: record.snapshot.read(),
                 };
                 let Some(mut port) = channel.scope(record.scope) else {

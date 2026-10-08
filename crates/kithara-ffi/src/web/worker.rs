@@ -5,17 +5,17 @@ use kithara::{
     assets::StorageBackend,
     drm::{KeyRequest, KeyRequestFactory},
     hls::KeyOptions,
-    host::{HostSettingsControl, wasm},
+    host::wasm,
     platform::{
         sync::{Arc, mpsc},
         thread::{assert_not_main_thread, keep_worker_alive},
         tokio::task::spawn as task_spawn,
     },
     play::{
-        CrossfadeSettings, PlayError, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceSrc,
+        CrossfadeSettings, PlayError, PlayWorkerConfig, ResourcePrep, ResourceSrc,
         policy::{DomainKeyPolicy, DomainKeyRule},
     },
-    queue::{QueueConfig, TrackId, Transition},
+    queue::{QueueConfig, QueueSettings, TrackId, Transition},
 };
 
 use crate::{
@@ -98,15 +98,18 @@ pub(crate) fn worker_main(
         let mut host = wasm::remote_host(host_sender);
         let state = BuildState::new(pools);
         let queue_store = state.store.clone();
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(host.sample_rate())
-                .worker(state.worker.clone())
-                .build(),
-        );
+        let prep = ResourcePrep::builder().worker(state.worker.clone()).build();
         let queue = FfiQueue::new(
             QueueConfig::builder()
-                .player(player)
+                .prep(prep)
+                .settings(
+                    QueueSettings::builder()
+                        .crossfade(CrossfadeSettings {
+                            duration: CROSSFADE_SECONDS,
+                            ..Default::default()
+                        })
+                        .build(),
+                )
                 .store(queue_store)
                 .build(),
         );
@@ -118,11 +121,6 @@ pub(crate) fn worker_main(
             }
         };
         let queue = owner.control().clone();
-        let _ = queue.set_crossfade_settings(CrossfadeSettings {
-            duration: CROSSFADE_SECONDS,
-            ..Default::default()
-        });
-
         let analysis = Rc::new(RefCell::new(AnalysisRuns::new(state.pools.clone())));
         let build_state = Rc::new(RefCell::new(state));
         crate::web::observer::source::spawn(&queue);

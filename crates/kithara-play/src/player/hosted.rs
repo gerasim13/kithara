@@ -5,7 +5,7 @@ use kithara_render::{bridge::DeckSnapshot, rt::DeckMixerConfig};
 use kithara_signal::{FrameCount, SessionFrame};
 
 use super::{Outbox, TrackReceipt};
-use crate::{PlayError, PlayWorker};
+use crate::{OutputSnapshot, PlayError, PlayWorker};
 
 /// A deck's public control endpoint before the owner registers it.
 pub trait DeckControl {
@@ -59,6 +59,8 @@ pub struct DeckPass<'a> {
     /// the worker's wake and one block. The earliest frame a press lands on is
     /// `now + delivery`.
     pub delivery: FrameCount,
+    /// The session output observed by the owner for this pass.
+    pub output: &'a OutputSnapshot,
     /// What the mixer last published of the deck's slots.
     pub deck: &'a DeckSnapshot,
 }

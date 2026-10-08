@@ -12,7 +12,7 @@ use kithara::{
     file::FileConfigPatch,
     hls::HlsConfigPatch,
     net::NetOptionsPatch,
-    play::{PlayWorkerConfigPatch, PlayerConfigPatch},
+    play::PlayWorkerConfigPatch,
     queue::QueueConfigPatch,
     worker::{DispatcherConfigPatch, WorkerConfigPatch},
 };
@@ -57,7 +57,6 @@ pub(crate) struct Document {
     pub(crate) net: NetOptionsPatch,
     /// Thread budgets of the one playback worker every deck shares.
     pub(crate) play_worker: PlayWorkerConfigPatch,
-    pub(crate) player: PlayerConfigPatch,
     pub(crate) playlist: Playlist,
     pub(crate) pools: PoolsSection,
     pub(crate) queue: QueueConfigPatch,

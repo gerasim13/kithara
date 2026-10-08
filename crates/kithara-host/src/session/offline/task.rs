@@ -120,7 +120,7 @@ where
         for request in requests {
             match request {
                 OfflineRequest::Position(answer) => {
-                    drop(answer.send(self.position));
+                    let _ = answer.send(self.position);
                 }
                 OfflineRequest::Render {
                     position,

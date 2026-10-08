@@ -21,9 +21,7 @@ use kithara::{
     file::FileConfigPatch,
     hls::HlsConfigPatch,
     net::NetOptionsPatch,
-    play::{
-        PlayWorkerConfigPatch, PlaybackResamplerBackend, PlayerConfigPatch, policy::DomainKeyPolicy,
-    },
+    play::{PlayWorkerConfigPatch, PlaybackResamplerBackend, policy::DomainKeyPolicy},
     queue::QueueConfigPatch,
     worker::{DispatcherConfigPatch, WorkerConfigPatch},
 };
@@ -294,13 +292,6 @@ impl Config {
     #[must_use]
     pub fn play_worker(&self) -> PlayWorkerConfigPatch {
         self.document.play_worker.clone()
-    }
-
-    /// Knobs the document sets on the player, threaded into every deck's
-    /// `PlayerConfig`.
-    #[must_use]
-    pub fn player(&self) -> PlayerConfigPatch {
-        self.document.player.clone()
     }
 
     /// Knobs the document sets on the application's buffer pools.

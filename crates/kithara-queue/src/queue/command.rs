@@ -3,7 +3,7 @@ use kithara_command::{Mailbox, Postbox, Seq, When};
 use kithara_config::LiveConfig;
 use kithara_events::TrackId;
 use kithara_play::{
-    EqBandConfig, InterruptionKind, Outbox, PlayError, Player, Position, TrackCommand,
+    EqBandConfig, InterruptionKind, Outbox, OutputSnapshot, PlayError, Player, Position, TrackCommand,
     TrackFactory, TrackSettings, TrackSettingsChange,
 };
 use kithara_signal::SessionFrame;
@@ -101,13 +101,14 @@ where
     pub(super) fn apply_command(
         &mut self,
         command: QueueCommand<S>,
+        output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, QueueError> {
         self.validate_command(&command)?;
         match command {
             QueueCommand::Append { id, source } => {
                 self.insert_entry(id, source, Placement::Append);
-                self.autoplay(out)?;
+                self.autoplay(output, out)?;
                 Ok(None)
             }
             QueueCommand::Insert { id, source, after } => {
@@ -123,30 +124,30 @@ where
                     None => 0,
                 };
                 self.insert_entry(id, source, Placement::At(index));
-                self.autoplay(out)?;
+                self.autoplay(output, out)?;
                 Ok(None)
             }
-            QueueCommand::Remove(id) => self.remove_entry(id, out),
+            QueueCommand::Remove(id) => self.remove_entry(id, output, out),
             QueueCommand::RemoveAll => self.clear_entries(out),
             QueueCommand::SetTracks(sources) => {
                 self.clear_entries(out)?;
                 for source in sources {
                     self.insert_entry(TrackId::allocate(), source, Placement::Append);
                 }
-                self.autoplay(out)?;
+                self.autoplay(output, out)?;
                 Ok(None)
             }
             QueueCommand::Select { id, transition } => {
-                self.request_transition(id, transition, AdvanceReason::UserSelect, false, out)
+                self.request_transition(id, transition, AdvanceReason::UserSelect, false, output, out)
             }
             QueueCommand::Next(transition) => {
-                self.next_target(transition, AdvanceReason::UserNext, false, out)
+                self.next_target(transition, AdvanceReason::UserNext, false, output, out)
             }
             QueueCommand::Previous(transition) => {
                 let ids = self.track_ids();
                 match self.navigation.prev(&ids) {
                     Some(id) => {
-                        self.request_transition(id, transition, AdvanceReason::UserPrev, false, out)
+                        self.request_transition(id, transition, AdvanceReason::UserPrev, false, output, out)
                     }
                     None => Ok(None),
                 }
@@ -156,7 +157,7 @@ where
                     self.transport(TrackCommand::Play { at }, out)
                         .map_err(Into::into)
                 } else {
-                    self.next_target(Transition::None, AdvanceReason::InitialLoad, false, out)
+                    self.next_target(Transition::None, AdvanceReason::InitialLoad, false, output, out)
                 }
             }
             QueueCommand::Pause { at } => {

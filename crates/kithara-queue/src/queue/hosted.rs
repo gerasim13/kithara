@@ -5,7 +5,7 @@ use kithara_command::{Outcome, Rejection, Seq};
 use kithara_platform::maybe_send::MaybeSend;
 use kithara_play::{
     Bound, DeckControl, DeckEvent, DeckMixerConfig, DeckPass, HostedDeck, LoadRefusal, Outbox,
-    PlayError, PlayWorker, Player, Settled, TrackCommand, TrackFactory, TrackReceipt,
+    OutputSnapshot, PlayError, PlayWorker, Player, Settled, TrackCommand, TrackFactory, TrackReceipt,
     TrackStatus as PlayingStatus,
 };
 use kithara_signal::SessionFrame;
@@ -43,12 +43,47 @@ where
         command: Self::Command,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
-        let result = self.apply_command(command, out).map_err(play_error);
+        let output = out.pass().map(|pass| *pass.output);
+        self.apply_with_output(command, output.as_ref(), out)
+    }
+
+    fn settle(&mut self, receipt: TrackReceipt<'_, S>, out: &mut Outbox<'_, S>) -> Settled {
+        let output = out.pass().map(|pass| *pass.output);
+        self.settle_with_output(receipt, output.as_ref(), out)
+    }
+
+    fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, S>) {
+        let output = out.pass().map(|pass| *pass.output);
+        self.tick_with_output(now, output.as_ref(), out);
+    }
+
+    fn snapshot(&self) -> Self::Snapshot {
+        self.queue_snapshot()
+    }
+}
+
+impl<S, F> Queue<S, F>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    F: TrackFactory<S>,
+{
+    fn apply_with_output(
+        &mut self,
+        command: QueueCommand<S>,
+        output: Option<&OutputSnapshot>,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, PlayError> {
+        let result = self.apply_command(command, output, out).map_err(play_error);
         self.publish();
         result
     }
 
-    fn settle(&mut self, receipt: TrackReceipt<'_, S>, out: &mut Outbox<'_, S>) -> Settled {
+    fn settle_with_output(
+        &mut self,
+        receipt: TrackReceipt<'_, S>,
+        output: Option<&OutputSnapshot>,
+        out: &mut Outbox<'_, S>,
+    ) -> Settled {
         let mut outcomes = Vec::new();
         match receipt {
             TrackReceipt::Deck {
@@ -83,7 +118,7 @@ where
                             .push((index, active.track.settle(TrackReceipt::Event(event), out)));
                     }
                 }
-                self.item_event(event, out);
+                self.item_event(event, output, out);
             }
             TrackReceipt::Loaded(receipt) => {
                 let seq = receipt.seq();
@@ -92,7 +127,7 @@ where
                     if let Some(active) = self.active.get_mut(index) {
                         let settled = active.track.settle(TrackReceipt::Loaded(receipt), out);
                         if retry {
-                            if let Err(error) = self.retry_load(index, seq, out) {
+                            if let Err(error) = self.retry_load(index, seq, output, out) {
                                 let error = play_error(error);
                                 outcomes.push((
                                     index,
@@ -156,14 +191,19 @@ where
         result
     }
 
-    fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, S>) {
+    fn tick_with_output(
+        &mut self,
+        now: SessionFrame,
+        output: Option<&OutputSnapshot>,
+        out: &mut Outbox<'_, S>,
+    ) {
         if let Some((_, delivery)) = self.clock {
             self.clock = Some((now, delivery));
         }
         for active in self.active.iter_mut() {
             active.track.tick(now, out);
         }
-        if let Err(error) = self.tick_deadlines(now, out) {
+        if let Err(error) = self.tick_deadlines(now, output, out) {
             warn!(%error, "queue deadline could not advance");
         }
         if let Err(error) = self.transition_loaded(out) {
@@ -172,9 +212,6 @@ where
         self.publish();
     }
 
-    fn snapshot(&self) -> Self::Snapshot {
-        self.queue_snapshot()
-    }
 }
 
 impl<S, F> HostedDeck<S> for Queue<S, F>
@@ -188,7 +225,7 @@ where
     }
 
     fn worker(&self) -> Option<&PlayWorker<S>> {
-        self.config.prep.as_ref().map(|prep| &prep.worker)
+        self.config.prep.as_ref().filter(|_| self.loader.is_some()).map(|prep| &prep.worker)
     }
 
     fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
@@ -199,7 +236,7 @@ where
                 post.answer.answer(Err(error));
                 continue;
             }
-            match Player::apply(self, post.command, out) {
+            match self.apply_with_output(post.command, Some(pass.output), out) {
                 Ok(Some(seq)) => self.answers.push((seq, post.answer)),
                 Ok(None) => post.answer.answer(Ok(())),
                 Err(error) => post.answer.answer(Err(error.into())),
@@ -214,12 +251,12 @@ where
         out: &mut Outbox<'_, S>,
     ) {
         self.accept_host_pass(pass, out);
-        Player::settle(self, receipt, out);
+        self.settle_with_output(receipt, Some(pass.output), out);
     }
 
     fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
         self.accept_host_pass(pass, out);
-        Player::tick(self, pass.now, out);
+        self.tick_with_output(pass.now, Some(pass.output), out);
     }
 
     fn close(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError> {
@@ -362,7 +399,7 @@ where
         retry
     }
 
-    fn item_event(&mut self, event: DeckEvent, out: &mut Outbox<'_, S>) {
+    fn item_event(&mut self, event: DeckEvent, output: Option<&OutputSnapshot>, out: &mut Outbox<'_, S>) {
         if let DeckEvent::Failed { slot, at, fault } = event {
             let Some(active) = self
                 .active
@@ -396,6 +433,7 @@ where
                     super::Transition::None,
                     crate::AdvanceReason::TrackFailed,
                     true,
+                    output,
                     out,
                 ) {
                     Ok(Some(_)) => {}

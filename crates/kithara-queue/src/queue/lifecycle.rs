@@ -2,7 +2,7 @@ use kithara_bufpool::HasPool;
 use kithara_command::{Seq, When};
 use kithara_events::TrackId;
 use kithara_play::{
-    Outbox, PlayError, Player, PlayerConfig, Position, Slot, Track, TrackCommand, TrackFactory,
+    Outbox, OutputSnapshot, PlayError, Player, PlayerConfig, Position, Slot, Track, TrackCommand, TrackFactory,
     TrackStatus as PlayingStatus,
 };
 
@@ -42,13 +42,13 @@ where
         self.announce(QueueEvent::TrackAdded { id, index });
     }
 
-    pub(super) fn autoplay(&mut self, out: &mut Outbox<'_, S>) -> Result<(), QueueError> {
+    pub(super) fn autoplay(&mut self, output: Option<&OutputSnapshot>, out: &mut Outbox<'_, S>) -> Result<(), QueueError> {
         if self.config.should_autoplay
             && self.current.is_none()
             && self.target.is_none()
             && self.navigation.current().is_none()
         {
-            self.next_target(Transition::None, AdvanceReason::InitialLoad, false, out)?;
+            self.next_target(Transition::None, AdvanceReason::InitialLoad, false, output, out)?;
         }
         Ok(())
     }
@@ -56,6 +56,7 @@ where
     pub(super) fn remove_entry(
         &mut self,
         id: TrackId,
+        output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, QueueError> {
         let index = self
@@ -95,6 +96,7 @@ where
                 Transition::None,
                 AdvanceReason::RemovedCurrent,
                 false,
+                output,
                 out,
             );
         }
@@ -127,6 +129,7 @@ where
         &mut self,
         id: TrackId,
         role: Role,
+        output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, QueueError> {
         if let Some(index) = self.active.position(|active| {
@@ -138,9 +141,9 @@ where
         }
         let slot = match self.active.free_slot() {
             Some(slot) => slot,
-            None => return self.evict_for(id, role, out),
+            None => return self.evict_for(id, role, output, out),
         };
-        let active = self.prepare_track(id, slot, role, out)?;
+        let active = self.prepare_track(id, slot, role, output, out)?;
         let seq = active.load;
         self.active.push(active);
         Ok(seq)
@@ -151,6 +154,7 @@ where
         id: TrackId,
         slot: Slot,
         role: Role,
+        output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Active<F::Track>, QueueError> {
         if out.deck_available() == 0 {
@@ -175,12 +179,11 @@ where
             slot,
             settings,
         })?;
-        let Some(loader) = &self.loader else {
-            todo!(
-                "Inject ResourcePrep and the store at queue registration without changing the infallible facade constructor (contract §8.3; skeleton queue construction ruling)"
-            )
-        };
-        let (item, load) = loader.start(id, source, observer)?;
+        let loader = self.loader.as_ref().ok_or_else(|| PlayError::InvalidConfiguration {
+            reason: "a hosted queue requires resource preparation and an asset store".into(),
+        })?;
+        let output = output.ok_or(PlayError::NotReady)?;
+        let (item, load) = loader.start(id, source, observer, output)?;
         let seq = track.apply(
             TrackCommand::Load {
                 item,
@@ -202,6 +205,7 @@ where
         &mut self,
         id: TrackId,
         role: Role,
+        output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, QueueError> {
         if let Some(index) = self.active.replacement_index() {
@@ -222,7 +226,7 @@ where
             .get(victim)
             .ok_or(QueueError::NotReady(id))?
             .slot;
-        let mut replacement = self.prepare_track(id, slot, role, out)?;
+        let mut replacement = self.prepare_track(id, slot, role, output, out)?;
         replacement
             .track
             .apply(TrackCommand::Evict { at: When::Next }, out)?;
@@ -356,6 +360,7 @@ where
         &mut self,
         index: usize,
         previous: Seq,
+        output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) -> Result<(), QueueError> {
         let id = self.active.get(index).ok_or(PlayError::NoActiveSlot)?.item;
@@ -368,7 +373,8 @@ where
             .observer(id)
             .ok_or(QueueError::UnknownTrackId(id))?;
         let loader = self.loader.as_ref().ok_or(PlayError::NotReady)?;
-        let (item, load) = loader.start(id, source, observer)?;
+        let output = output.ok_or(PlayError::NotReady)?;
+        let (item, load) = loader.start(id, source, observer, output)?;
         let seq = self
             .active
             .get_mut(index)

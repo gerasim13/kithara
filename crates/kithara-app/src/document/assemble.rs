@@ -105,7 +105,6 @@ impl AppConfig {
             .store(store)
             .queue(document.queue())
             .dispatcher(document.dispatcher())
-            .player(document.player())
             .audio(document.audio())
             .hls(document.hls())
             .file(document.file());
