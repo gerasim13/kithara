@@ -77,7 +77,6 @@ impl TryFrom<&DecoderEvent> for FfiItemEvent {
                 channels,
                 bit_depth,
                 bitrate,
-                epoch,
                 cause,
                 variant,
                 base_offset,
@@ -99,7 +98,6 @@ impl TryFrom<&DecoderEvent> for FfiItemEvent {
                     channels: *channels,
                     bit_depth: *bit_depth,
                     bitrate: *bitrate,
-                    epoch: *epoch,
                     cause: (*cause).into(),
                     variant: *variant,
                     base_offset: *base_offset,
@@ -163,15 +161,10 @@ impl TryFrom<&AudioEvent> for FfiItemEvent {
                 new_channels: new.channels,
                 new_sample_rate: new.sample_rate.get(),
             }),
-            AudioEvent::SeekComplete {
-                position,
-                seek_epoch,
-            } => Ok(Self::SeekComplete {
+            AudioEvent::SeekComplete { position } => Ok(Self::SeekComplete {
                 position_seconds: duration_to_seconds(*position),
-                epoch: *seek_epoch,
             }),
-            AudioEvent::SeekRejected { epoch, target } => Ok(Self::SeekRejected {
-                epoch: *epoch,
+            AudioEvent::SeekRejected { target } => Ok(Self::SeekRejected {
                 target_seconds: duration_to_seconds(*target),
             }),
             AudioEvent::DecoderReady {
@@ -181,35 +174,21 @@ impl TryFrom<&AudioEvent> for FfiItemEvent {
                 base_offset: *base_offset,
                 variant: *variant,
             }),
-            AudioEvent::TrackFailed {
-                failure,
-                seek_epoch,
-            } => Ok(Self::TrackFailed {
+            AudioEvent::TrackFailed { failure } => Ok(Self::TrackFailed {
                 reason: (*failure).into(),
-                epoch: *seek_epoch,
             }),
-            AudioEvent::UnderrunStarted {
-                position_ms,
-                seek_epoch,
-            } => Ok(Self::UnderrunStarted {
+            AudioEvent::UnderrunStarted { position_ms } => Ok(Self::UnderrunStarted {
                 position_ms: *position_ms,
-                epoch: *seek_epoch,
             }),
-            AudioEvent::UnderrunEnded {
-                position_ms,
-                seek_epoch,
-            } => Ok(Self::UnderrunEnded {
+            AudioEvent::UnderrunEnded { position_ms } => Ok(Self::UnderrunEnded {
                 position_ms: *position_ms,
-                epoch: *seek_epoch,
             }),
             AudioEvent::BufferHealth {
                 buffered_ms,
                 decoded_frontier_ms,
-                seek_epoch,
             } => Ok(Self::BufferHealth {
                 buffered_ms: *buffered_ms,
                 decoded_frontier_ms: *decoded_frontier_ms,
-                epoch: *seek_epoch,
             }),
             AudioEvent::EngineLoad {
                 load,
@@ -251,8 +230,6 @@ impl TryFrom<&HlsEvent> for FfiItemEvent {
             | HlsEvent::SegmentReadComplete { .. }
             | HlsEvent::ReadProgress { .. }
             | HlsEvent::ReaderSeek { .. }
-            | HlsEvent::StaleRequestDropped { .. }
-            | HlsEvent::StaleFetchDropped { .. }
             | HlsEvent::Seek { .. }
             | HlsEvent::Error { .. }
             | HlsEvent::EndOfStream => Err(NotForwarded),

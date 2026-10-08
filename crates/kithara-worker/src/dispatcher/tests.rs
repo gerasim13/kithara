@@ -579,6 +579,24 @@ fn a_pass_reports_its_outcome_to_the_observer() {
     );
 }
 
+#[kithara::test(native, browser)]
+fn wake_allowance_uses_the_largest_park_budget() {
+    let worker = crate::Worker::new(crate::WorkerConfig::new());
+    for (wait, idle, backpressure) in [(3, 7, 11), (11, 3, 7), (7, 11, 3)] {
+        let dispatcher = worker.dispatcher(
+            DispatcherConfig::builder()
+                .name("wake-allowance-test")
+                .wait_timeout(Duration::from_millis(wait))
+                .idle_timeout(Duration::from_millis(idle))
+                .backpressure_poll_interval(Duration::from_millis(backpressure))
+                .build(),
+        );
+
+        assert_eq!(dispatcher.wake_allowance(), Duration::from_millis(11));
+        dispatcher.shutdown();
+    }
+}
+
 #[kithara::test(native, browser, flash(false))]
 fn configured_capacity_rejects_a_second_reservation() {
     let worker = crate::Worker::new(crate::WorkerConfig::new());

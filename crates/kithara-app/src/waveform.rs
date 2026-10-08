@@ -17,10 +17,9 @@ use kithara::{
             task::{self, JoinHandle},
         },
     },
-    prelude::{PlaybackResamplerBackend, Resource},
+    prelude::PlaybackResamplerBackend,
     worker::Worker,
 };
-use tracing::warn;
 
 use crate::pools::{AppPools, AppResourceConfig, Pools};
 
@@ -194,25 +193,9 @@ async fn run_analysis(
 }
 
 async fn open_reader(
-    mut config: AppResourceConfig,
-    cancel: &CancelToken,
-    rate: NonZeroU32,
+    _config: AppResourceConfig,
+    _cancel: &CancelToken,
+    _rate: NonZeroU32,
 ) -> Option<Box<dyn AudioReader>> {
-    if cancel.is_cancelled() {
-        return None;
-    }
-    config.set_cancel(cancel.child());
-    config.set_host_sample_rate(rate);
-    let mut resource = match Resource::new(config).await {
-        Ok(r) => r,
-        Err(e) => {
-            warn!(?e, "analysis: resource open failed");
-            return None;
-        }
-    };
-    if let Err(e) = resource.preload().await {
-        warn!(?e, "analysis: preload failed");
-        return None;
-    }
-    Some(resource.into())
+    todo!("spec §3.1 and §5.4: obtain the analysis reader through the source-owning dispatcher")
 }

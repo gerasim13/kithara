@@ -12,6 +12,7 @@ use kithara_platform::{
         mpsc::{self},
     },
     thread::spawn_named,
+    time::Duration,
     tokio::runtime::Handle,
 };
 
@@ -46,6 +47,16 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
+    /// Longest park duration before the dispatcher checks for new work.
+    #[must_use]
+    pub fn wake_allowance(&self) -> Duration {
+        let config = &self.inner.config;
+        config
+            .wait_timeout
+            .max(config.idle_timeout)
+            .max(config.backpressure_poll_interval)
+    }
+
     /// Return whether this dispatcher subtree has been cancelled.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {

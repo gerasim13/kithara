@@ -636,8 +636,6 @@ pub enum FfiDecoderChangeCause {
     Initial,
     VariantSwitch,
     FormatBoundary,
-    SeekRecreate,
-    Recovery,
     HostRateChange,
     #[mirror(skip)]
     Unknown,
@@ -826,7 +824,6 @@ pub enum FfiItemEvent {
         channels: u16,
         bit_depth: Option<u16>,
         bitrate: Option<u32>,
-        epoch: u64,
         cause: FfiDecoderChangeCause,
         variant: Option<u32>,
         base_offset: u64,
@@ -870,10 +867,8 @@ pub enum FfiItemEvent {
     },
     SeekComplete {
         position_seconds: f64,
-        epoch: u64,
     },
     SeekRejected {
-        epoch: u64,
         target_seconds: f64,
     },
     DecoderReady {
@@ -882,20 +877,16 @@ pub enum FfiItemEvent {
     },
     TrackFailed {
         reason: FfiTrackFailureKind,
-        epoch: u64,
     },
     UnderrunStarted {
         position_ms: u64,
-        epoch: u64,
     },
     UnderrunEnded {
         position_ms: u64,
-        epoch: u64,
     },
     BufferHealth {
         buffered_ms: u64,
         decoded_frontier_ms: u64,
-        epoch: u64,
     },
     EngineLoad {
         load: f32,

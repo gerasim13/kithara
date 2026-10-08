@@ -324,7 +324,7 @@ where
         })?;
         #[cfg(not(target_arch = "wasm32"))]
         if self.session.worker_wake_allowance.is_zero() {
-            self.session.worker_wake_allowance = worker_wake_allowance(worker);
+            self.session.worker_wake_allowance = worker.wake_allowance();
         }
         let pools = worker.pools().clone();
         if let Some(inbox) = self.dispatcher_inbox.take() {
@@ -767,13 +767,6 @@ fn map_deck_rejection(
         Rejection::Unanswered => Rejection::Unanswered,
         Rejection::Refused(reason) => Rejection::Refused(PlayError::Deck(reason.clone())),
     }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn worker_wake_allowance<S>(
-    _worker: &kithara_play::PlayWorker<S>,
-) -> kithara_platform::time::Duration {
-    todo!("missing below (kithara-render, PlayWorker::wake_allowance(&self) -> Duration)")
 }
 
 impl<S, D: ?Sized + HostedDeck<S>> Drop for HostCore<S, D> {

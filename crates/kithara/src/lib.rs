@@ -227,7 +227,7 @@ pub mod prelude {
     pub use kithara_host::{Host, HostConfig, TransportEvent};
     #[cfg(feature = "play")]
     pub use kithara_play::{
-        ArtifactSource, EngineConfig, EngineImpl, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig,
+        ArtifactSource, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig,
         PlaybackResamplerBackend, PlayerConfig, PlayerImpl, Resource, ResourceConfig, ResourceSrc,
         ServiceClass, SourceType,
     };

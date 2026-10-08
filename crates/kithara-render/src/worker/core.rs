@@ -121,6 +121,12 @@ impl<S> PlayWorker<S> {
         &self.0.pools
     }
 
+    /// Longest park duration before the render dispatcher checks for new work.
+    #[must_use]
+    pub fn wake_allowance(&self) -> Duration {
+        self.0.dispatcher.wake_allowance()
+    }
+
     pub fn wake(&self) {
         self.0.dispatcher.wake_handle().wake();
     }

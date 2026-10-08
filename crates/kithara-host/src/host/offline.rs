@@ -2,7 +2,6 @@ use std::num::{NonZeroU16, NonZeroU32, NonZeroUsize};
 
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_command::Live;
-use kithara_config::Config;
 use kithara_effects::LimiterConfig;
 use kithara_output::{
     OfflineRenderError, OfflineRenderReport, OfflineRenderRequest, OfflineRenderer, RenderSink,
@@ -141,13 +140,9 @@ where
             unreachable!("offline runtime requires offline Host config");
         };
         let settings = Live::new(settings)?;
-        let budgets = dispatcher.values();
-        let worker_wake_allowance = budgets
-            .wait_timeout
-            .max(budgets.idle_timeout)
-            .max(budgets.backpressure_poll_interval);
         let worker = Worker::new(worker);
         let dispatcher = worker.dispatcher(*dispatcher);
+        let worker_wake_allowance = dispatcher.wake_allowance();
         let (client, task_handle) = crate::session::offline::spawn(
             &dispatcher,
             task,

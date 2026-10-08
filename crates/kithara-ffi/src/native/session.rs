@@ -3,7 +3,7 @@ use std::{num::NonZeroU32, sync::OnceLock};
 use kithara::{
     host::{HostConfig, HostOwned, HostSettingsControl},
     platform::sync::Mutex,
-    play::{PlayError, player::PlayerControlSource},
+    play::{DeckControl, HostedDeck, PlayError},
 };
 
 use crate::{
@@ -18,18 +18,18 @@ fn host() -> &'static Mutex<Option<FfiHost>> {
     HOST.get_or_init(|| Mutex::new(None))
 }
 
-fn active_host(slot: &mut Option<FfiHost>) -> &mut FfiHost {
-    slot.get_or_insert_with(|| {
-        FfiHost::new(HostConfig::builder().build())
-            .expect("INVARIANT: the process audio Host must allocate its root identity")
-    })
+fn active_host(slot: &mut Option<FfiHost>) -> Result<&mut FfiHost, PlayError> {
+    match slot {
+        Some(host) => Ok(host),
+        None => Ok(slot.insert(FfiHost::new(HostConfig::builder().build())?)),
+    }
 }
 
 pub(crate) fn insert<P>(player: P) -> Result<HostOwned<P>, PlayError>
 where
-    P: PlayerControlSource<Schema = FfiPools>,
+    P: HostedDeck<FfiPools> + DeckControl,
 {
-    active_host(&mut host().lock()).insert(player)
+    active_host(&mut host().lock())?.insert(player)
 }
 
 pub(crate) fn requested_sample_rate() -> NonZeroU32 {
@@ -55,7 +55,7 @@ fn with_active<R>(apply: impl FnOnce(&FfiHost) -> Result<R, PlayError>) -> Resul
 
 pub(crate) fn remove<P>(player: &HostOwned<P>) -> Result<(), PlayError>
 where
-    P: PlayerControlSource<Schema = FfiPools>,
+    P: DeckControl,
 {
     let mut slot = host().lock();
     let active = slot.as_mut().ok_or(PlayError::SessionGone {
