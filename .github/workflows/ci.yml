@@ -130,7 +130,7 @@ jobs:
           fi
           echo "kind=$kind" >> "$GITHUB_OUTPUT"
 
-  # The single self-hosted gate every substantive job depends on. The runner
+  # The self-hosted gate every lane job depends on. The runner
   # labels remain repository configuration rather than naming an owner or a
   # machine in this workflow.
   gate:
@@ -143,6 +143,23 @@ jobs:
     steps:
       - name: Confirm the runner is reachable
         run: just --version
+
+  ui-select:
+    name: Select UI ownership
+    needs: authorize
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 10
+    outputs:
+      ui_required: ${{ steps.ui.outputs.ui_required }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Select UI ownership
+        id: ui
+        run: |
+          ui_required=$(just ci touched --lane ui)
+          echo "ui_required=$ui_required" >> "$GITHUB_OUTPUT"
 
   # Every gate lane, from the one catalog. What each of them runs, how long it
   # may take, how much history it reads and what it leaves behind is declared in
@@ -219,12 +236,13 @@ jobs:
 
   ui:
     name: UI
-    needs: gate
+    needs: [gate, ui-select]
     if: >-
       vars.KITHARA_GPU_RUNNER_LABELS != ''
       && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
       || contains(format(' {0} ', inputs.required_lanes), ' all ')
-      || contains(format(' {0} ', inputs.required_lanes), ' deep-ui '))
+      || contains(format(' {0} ', inputs.required_lanes), ' deep-ui ')
+      || needs.ui-select.outputs.ui_required == 'true')
     uses: ./.github/workflows/ui.yml
 
   # The Android baseline needs an emulator, which only the KVM runner pool
@@ -252,6 +270,7 @@ jobs:
     needs:
       - authorize
       - gate
+      - ui-select
       - lanes
       - deep
       - platforms
@@ -265,6 +284,7 @@ jobs:
         env:
           RESULTS: ${{ toJSON(needs) }}
           REQUIRED_LANES: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'all' || inputs.required_lanes || '' }}
+          TOUCHED_UI_REQUIRED: ${{ vars.KITHARA_GPU_RUNNER_LABELS != '' && needs.ui-select.outputs.ui_required == 'true' }}
         run: |
           python3 - <<'PY'
           import json
@@ -274,7 +294,7 @@ jobs:
           results = json.loads(os.environ["RESULTS"])
           required_lanes = set(os.environ["REQUIRED_LANES"].split())
           optional_required = bool(required_lanes)
-          ui_required = "all" in required_lanes or "deep-ui" in required_lanes
+          ui_required = "all" in required_lanes or "deep-ui" in required_lanes or os.environ["TOUCHED_UI_REQUIRED"] == "true"
           android_required = "all" in required_lanes or "android-test" in required_lanes
           incomplete = {
               name: job["result"]

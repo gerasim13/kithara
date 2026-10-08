@@ -18,7 +18,8 @@ use super::{
 
 /// Finds the long parallel chains among `(path, text)` sources.
 pub(crate) fn detect(sources: &[(String, String)], config: &ChainConfig) -> Result<ChainReport> {
-    let facts = facts::collect(sources)?;
+    let mut facts = facts::collect(sources)?;
+    facts.add_dependency_aliases(&config.dependency_roots);
     let mut resolver = Resolver::new(&facts, config.max_dyn_targets);
     let graph = Graph::build(
         &facts,
@@ -37,6 +38,7 @@ pub(crate) fn detect(sources: &[(String, String)], config: &ChainConfig) -> Resu
         shingles,
         facts: &facts,
         graph: &graph,
+        resolver: &resolver,
     };
     let mut chains = arms::decision_chains(&ctx, &methods);
     chains.extend(pairs::pair_chains(&ctx));
@@ -58,6 +60,7 @@ pub(super) struct Ctx<'a> {
     pub(super) config: &'a ChainConfig,
     pub(super) facts: &'a Facts,
     pub(super) graph: &'a Graph,
+    pub(super) resolver: &'a Resolver<'a>,
     shingles: Vec<BTreeSet<u64>>,
 }
 
@@ -114,6 +117,7 @@ impl Ctx<'_> {
         let name = f
             .owner
             .as_ref()
+            .and_then(facts::last_ident)
             .map_or_else(|| f.name.clone(), |owner| format!("{owner}::{}", f.name));
         match node {
             Node::Fn(_) => name,

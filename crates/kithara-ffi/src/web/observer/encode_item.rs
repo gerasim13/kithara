@@ -196,8 +196,17 @@ pub(crate) fn encode_item_event(event: &FfiItemEvent) -> JsValue {
         FfiItemEvent::TrackFailed { reason, epoch } => {
             set_str(&obj, KIND, "TrackFailed");
             set_str(&obj, "reason", track_failure_kind_str(reason));
-            if let FfiTrackFailureKind::RecreateFailed { offset } = reason {
-                set_f64(&obj, "offset", num_traits::cast(*offset).unwrap_or(0.0));
+            match reason {
+                FfiTrackFailureKind::Decode { kind } => {
+                    set_str(&obj, "decode_kind", decode_error_kind_str(*kind));
+                }
+                FfiTrackFailureKind::RecreateFailed { offset } => {
+                    set_f64(&obj, "offset", num_traits::cast(*offset).unwrap_or(0.0));
+                }
+                FfiTrackFailureKind::SourceCancelled
+                | FfiTrackFailureKind::ChannelClosed
+                | FfiTrackFailureKind::Render
+                | FfiTrackFailureKind::Unknown => {}
             }
             set_f64(&obj, "epoch", num_traits::cast(*epoch).unwrap_or(0.0));
         }
@@ -630,9 +639,11 @@ fn resampler_kind_str(kind: FfiResamplerKind) -> &'static str {
 
 fn track_failure_kind_str(kind: &FfiTrackFailureKind) -> &'static str {
     match kind {
-        FfiTrackFailureKind::Decode => "Decode",
+        FfiTrackFailureKind::Decode { .. } => "Decode",
         FfiTrackFailureKind::RecreateFailed { .. } => "RecreateFailed",
         FfiTrackFailureKind::SourceCancelled => "SourceCancelled",
+        FfiTrackFailureKind::ChannelClosed => "ChannelClosed",
+        FfiTrackFailureKind::Render => "Render",
         FfiTrackFailureKind::Unknown => "Unknown",
     }
 }

@@ -1,8 +1,8 @@
 use std::num::NonZeroU32;
 
 use kithara_audio::{
-    Audio, AudioControl, AudioRead, AudioSession, ChunkOutcome, ConsumerWakeMode, PreloadGate,
-    ReadOutcome, SeekBegin, SeekOutcome,
+    Audio, AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome, ConsumerWakeMode,
+    PreloadGate, ReadOutcome, SeekBegin, SeekOutcome,
 };
 use kithara_command::Sender;
 use kithara_decode::{DecodeError, TrackMetadata};
@@ -93,12 +93,12 @@ impl<T: MaybeSend, S> AudioRead for RegisteredAudio<T, S> {
             fn spec(&self) -> AudioSpec;
         }
         to self.warp.source_mut() {
-            fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError>;
-            fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError>;
+            fn next_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError>;
+            fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError>;
             fn read_planar<'a>(
                 &mut self,
                 output: &'a mut [&'a mut [f32]],
-            ) -> Result<ReadOutcome, DecodeError>;
+            ) -> Result<ReadOutcome, AudioReadError>;
         }
     }
 }

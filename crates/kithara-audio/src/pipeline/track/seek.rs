@@ -3,7 +3,7 @@ use kithara_stream::{SourcePhase, StreamType};
 use tracing::trace;
 
 use super::{
-    CurrentFsm, Decoding, Failed, RecreatingDecoder, TrackFailure, TrackStep,
+    CurrentFsm, Decoding, RecreatingDecoder, TrackFailure, TrackStep,
     decode::{DecodeStep, decode_step},
     fsm::apply_seek_transition,
     phase::{Track, TrackPhase, sealed},
@@ -124,8 +124,7 @@ impl Track<ApplyingSeek> {
                 return TrackStep::Blocked(reason);
             }
             if phase == SourcePhase::Cancelled {
-                src.update_state(Track::<Failed>::new(TrackFailure::SourceCancelled).erase());
-                return TrackStep::Failed;
+                return TrackStep::Failed(src.fail(TrackFailure::SourceCancelled));
             }
             src.update_state(Self::new(applying).erase());
             super::waiting_branch!("applying_seek_not_ready_unparked");
@@ -199,7 +198,7 @@ impl Track<AwaitingResume> {
             }
             DecodeStep::NotReady(reason) => TrackStep::Blocked(reason),
             DecodeStep::Eof => TrackStep::Eof,
-            DecodeStep::Failed => TrackStep::Failed,
+            DecodeStep::Failed(failure) => TrackStep::Failed(failure),
         }
     }
 }
@@ -287,8 +286,7 @@ impl Track<WaitingForSource> {
         }
 
         if phase == SourcePhase::Cancelled {
-            src.update_state(Track::<Failed>::new(TrackFailure::SourceCancelled).erase());
-            return TrackStep::Failed;
+            return TrackStep::Failed(src.fail(TrackFailure::SourceCancelled));
         }
 
         match context {

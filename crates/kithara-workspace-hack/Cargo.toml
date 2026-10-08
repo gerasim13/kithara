@@ -627,6 +627,7 @@ zstd-sys = { version = "2", default-features = false, features = ["legacy", "std
 [target.wasm32-unknown-unknown.dependencies]
 arrayvec = { version = "0.7" }
 bevy_platform = { version = "0.19", default-features = false, features = ["std", "web"] }
+bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "min_const_generics", "wasm_simd"] }
 firewheel = { version = "0.14", default-features = false, features = ["wasm-bindgen"] }
 firewheel-graph = { version = "0.14", default-features = false, features = ["scheduled_events", "tracing", "wasm-bindgen"] }
@@ -634,6 +635,7 @@ futures-channel = { version = "0.3" }
 futures-util = { version = "0.3" }
 half = { version = "2" }
 js-sys = { version = "0.3" }
+libc = { version = "0.2" }
 num-complex = { version = "0.4", features = ["bytemuck", "libm"] }
 parking_lot = { version = "0.12" }
 parking_lot_core = { version = "0.9", default-features = false, features = ["nightly"] }
@@ -646,6 +648,7 @@ web-sys = { version = "0.3", features = ["AbortController", "AbortSignal", "Audi
 [target.wasm32-unknown-unknown.build-dependencies]
 arrayvec = { version = "0.7" }
 bevy_platform = { version = "0.19", default-features = false, features = ["std", "web"] }
+bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["aarch64_simd", "derive", "min_const_generics", "wasm_simd"] }
 firewheel = { version = "0.14", default-features = false, features = ["wasm-bindgen"] }
 firewheel-graph = { version = "0.14", default-features = false, features = ["scheduled_events", "tracing", "wasm-bindgen"] }
@@ -653,6 +656,7 @@ futures-channel = { version = "0.3" }
 futures-util = { version = "0.3" }
 half = { version = "2" }
 js-sys = { version = "0.3" }
+libc = { version = "0.2" }
 num-complex = { version = "0.4", features = ["bytemuck", "libm"] }
 parking_lot = { version = "0.12" }
 parking_lot_core = { version = "0.9", default-features = false, features = ["nightly"] }

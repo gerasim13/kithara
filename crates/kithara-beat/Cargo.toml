@@ -46,6 +46,7 @@ unimock = { workspace = true, optional = true }
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 [build-dependencies]
+fs4 = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
 

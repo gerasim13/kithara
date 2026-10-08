@@ -10,7 +10,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara_audio::{
-    AudioControl, AudioRead, AudioSession, DecodeError, DecodeErrorKind, ReadOutcome, SeekOutcome,
+    AudioControl, AudioRead, AudioReadError, AudioSession, DecodeError, DecodeErrorKind,
+    ReadOutcome, SeekOutcome, TrackFailureKind,
     mock::{Fault, MockReader, TestPcmReader},
 };
 use kithara_decode::TrackMetadata;
@@ -73,7 +74,7 @@ impl ChunkReader {
 }
 
 impl AudioRead for ChunkReader {
-    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
         let frames = Self::CHUNK_FRAMES.min(buf.len() / usize::from(self.spec.channels));
         buf[..frames * usize::from(self.spec.channels)].fill(0.5);
         Ok(self.emit(frames))
@@ -82,7 +83,7 @@ impl AudioRead for ChunkReader {
     fn read_planar<'a>(
         &mut self,
         output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
+    ) -> Result<ReadOutcome, AudioReadError> {
         let frames = Self::CHUNK_FRAMES.min(output[0].len());
         fill_planar(output, frames, |_| 0.5);
         Ok(self.emit(frames))
@@ -163,7 +164,7 @@ impl PositionReader {
 }
 
 impl AudioRead for PositionReader {
-    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
         let channels = usize::from(self.spec.channels);
         let frames = buf.len() / channels;
         Ok(self.read_with(frames, |start, avail| {
@@ -176,7 +177,7 @@ impl AudioRead for PositionReader {
     fn read_planar<'a>(
         &mut self,
         output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
+    ) -> Result<ReadOutcome, AudioReadError> {
         let frames = output[0].len();
         Ok(self.read_with(frames, |start, avail| {
             fill_planar(output, avail, |frame| (start + frame as u64) as f32);
@@ -402,7 +403,9 @@ async fn read_returns_failed_not_eof_on_decoder_error() {
     match result {
         BlockReadOutcome::Failed(kind) => assert_eq!(
             kind,
-            DecodeErrorKind::Io,
+            TrackFailureKind::Decode {
+                kind: DecodeErrorKind::Io,
+            },
             "the decoder's own error kind must survive the read that returned it"
         ),
         BlockReadOutcome::Eof | BlockReadOutcome::Partial { .. } => panic!(

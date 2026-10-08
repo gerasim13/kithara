@@ -2,8 +2,8 @@ use std::num::NonZeroU32;
 
 use delegate::delegate;
 use kithara_audio::{
-    AudioObserver, AudioReader, ChunkOutcome, ConsumerWakeMode, ReadOutcome, ResamplerBackend,
-    SeekOutcome,
+    AudioObserver, AudioReadError, AudioReader, ChunkOutcome, ConsumerWakeMode, ReadOutcome,
+    ResamplerBackend, SeekOutcome,
 };
 use kithara_bufpool::HasPool;
 use kithara_command::Sender;
@@ -255,12 +255,19 @@ impl Resource {
         resource
     }
 
-    /// Create a resource from a concrete stream-backed audio config.
+    /// Create a registered resource from a concrete stream-backed audio config.
     ///
-    /// Generic over any [`StreamType`] whose config carries an optional
-    /// `kithara_events::EventBus`. Callers wanting fine-grained control
-    /// over `FileConfig` / `HlsConfig` (ABR, keys, etc.) use this path.
-    pub(crate) async fn from_stream_audio<T, B, S>(
+    /// Preserves the worker's priority, resident render lane and Warp rate.
+    /// The config controls source and decoded-audio cancellation independently.
+    /// This low-level path omits resource cancellation, staging and prepared
+    /// beat grids. Preload failures are logged; call [`Self::preload`] to
+    /// require success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if loading fails or the registered render controls
+    /// have already been taken.
+    pub async fn from_stream_audio<T, B, S>(
         config: TrackConfig<T, B>,
         src: Arc<str>,
         worker: &PlayWorker<S>,
@@ -418,17 +425,17 @@ impl Resource {
             #[must_use]
             pub fn metadata(&self) -> &TrackMetadata;
             /// Read the next decoded chunk with full metadata.
-            pub fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError>;
+            pub fn next_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError>;
             /// Get current playback position.
             #[must_use]
             pub fn position(&self) -> Duration;
             /// Read interleaved samples.
-            pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError>;
+            pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError>;
             /// Read deinterleaved (planar) samples.
             pub fn read_planar<'a>(
                 &mut self,
                 output: &'a mut [&'a mut [f32]],
-            ) -> Result<ReadOutcome, DecodeError>;
+            ) -> Result<ReadOutcome, AudioReadError>;
             /// Seek to position. Begins and applies in one call, so it takes locks — off the audio
             /// thread only. Audio-thread callers begin through [`seek_handle`](Self::seek_handle)
             /// instead.
@@ -599,7 +606,7 @@ mod tests {
         fn position(&self) -> Duration {
             self.position_duration()
         }
-        fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+        fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
             let Some(frames) = self.take_frames(buf.len() / 2) else {
                 return Ok(self.eof());
             };
@@ -615,7 +622,7 @@ mod tests {
         fn read_planar<'a>(
             &mut self,
             output: &'a mut [&'a mut [f32]],
-        ) -> Result<ReadOutcome, DecodeError> {
+        ) -> Result<ReadOutcome, AudioReadError> {
             let capacity = output.first().map_or(0, |channel| channel.len());
             let Some(frames) = self.take_frames(capacity) else {
                 return Ok(self.eof());

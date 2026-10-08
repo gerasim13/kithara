@@ -4713,6 +4713,7 @@ version = "0.0.1-alpha5"
 dependencies = [
  "bon",
  "criterion",
+ "fs4",
  "hex",
  "kithara-bufpool",
  "kithara-config",

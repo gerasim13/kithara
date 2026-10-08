@@ -33,7 +33,19 @@ pub(crate) trait WakeSignal: Send + Sync + 'static {
 pub(crate) struct Outlet<T> {
     producer: HeapProd<T>,
     overflow: Option<T>,
-    wake: Option<Arc<dyn WakeSignal>>,
+    /// Dropped after the producer and overflow to signal completed teardown.
+    wake: OutletWake,
+}
+
+struct OutletWake(Option<Arc<dyn WakeSignal>>);
+
+impl Drop for OutletWake {
+    fn drop(&mut self) {
+        if let Some(wake) = &self.0 {
+            wake.wake();
+            wake.flush_deferred();
+        }
+    }
 }
 
 impl<T> Outlet<T> {
@@ -57,13 +69,13 @@ impl<T> Outlet<T> {
 
     /// Flush any deferred work owned by the wake signal.
     pub(crate) fn flush_wake_signals(&self) {
-        if let Some(wake) = &self.wake {
+        if let Some(wake) = &self.wake.0 {
             wake.flush_deferred();
         }
     }
 
     fn notify(&self) {
-        if let Some(wake) = &self.wake {
+        if let Some(wake) = &self.wake.0 {
             wake.wake();
         }
     }
@@ -142,6 +154,8 @@ impl<T> Inlet<T> {
         to self.consumer {
             /// Pop an item from the inlet. Returns `None` if empty.
             pub(crate) fn try_pop(&mut self) -> Option<T>;
+            /// Whether the ring's sole producer still holds its write end.
+            pub(crate) fn write_is_held(&self) -> bool;
         }
     }
 }
@@ -157,7 +171,7 @@ pub(crate) fn connect<T>(
     (
         Outlet {
             producer,
-            wake,
+            wake: OutletWake(wake),
             overflow: None,
         },
         Inlet { consumer },
@@ -169,8 +183,10 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use kithara_test_utils::kithara;
+    use ringbuf::wrap::Wrap;
 
     use super::*;
+    use crate::runtime::wake::ThreadWake;
 
     struct TestWake {
         woken: AtomicBool,
@@ -186,10 +202,58 @@ mod tests {
         count: AtomicUsize,
     }
 
+    struct ClosureWake {
+        observer: ringbuf::Arc<HeapRb<i32>>,
+        thread: ThreadWake,
+        wakes: AtomicUsize,
+        flushes: AtomicUsize,
+    }
+
+    impl WakeSignal for ClosureWake {
+        fn wake(&self) {
+            assert!(
+                !self.observer.write_is_held(),
+                "the final wake must follow the canonical producer release"
+            );
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn flush_deferred(&self) {
+            assert_eq!(self.wakes.load(Ordering::SeqCst), 1);
+            self.flushes.fetch_add(1, Ordering::SeqCst);
+            self.thread.wake();
+        }
+    }
+
     impl WakeSignal for CountingWake {
         fn wake(&self) {
             self.count.fetch_add(1, Ordering::SeqCst);
         }
+    }
+
+    #[kithara::test]
+    fn producer_drop_releases_ownership_before_the_final_deferred_wake() {
+        let (mut out, inl) = connect::<i32>(1, None);
+        let wake = Arc::new(ClosureWake {
+            observer: inl.consumer.rb_ref().clone(),
+            thread: ThreadWake::default(),
+            wakes: AtomicUsize::new(0),
+            flushes: AtomicUsize::new(0),
+        });
+        out.wake.0 = Some(wake.clone());
+        let since = wake.thread.current();
+        assert!(inl.consumer.write_is_held());
+
+        drop(out);
+
+        assert!(!inl.consumer.write_is_held());
+        assert_eq!(wake.wakes.load(Ordering::SeqCst), 1);
+        assert_eq!(wake.flushes.load(Ordering::SeqCst), 1);
+        assert!(
+            wake.thread
+                .wait_timeout(since, kithara_platform::time::Duration::ZERO),
+            "closure between a snapshot and a wait must leave an observable wake edge"
+        );
     }
 
     #[kithara::test]

@@ -10,7 +10,8 @@ use kithara_analysis::{
     BeatArtifact,
 };
 use kithara_audio::{
-    AudioControl, AudioRead, AudioSession, ChunkOutcome, DecodeError, ReadOutcome, SeekOutcome,
+    AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome, DecodeError, ReadOutcome,
+    SeekOutcome,
 };
 use kithara_decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory, TrackMetadata};
 use kithara_events::EventBus;
@@ -161,7 +162,7 @@ impl AudioSession for PcmReader {
 }
 
 impl AudioRead for PcmReader {
-    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+    fn next_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError> {
         if self.cursor >= self.total_frames() {
             return Ok(ChunkOutcome::Eof {
                 position: self.position_at(self.cursor),
@@ -174,7 +175,10 @@ impl AudioRead for PcmReader {
         let channels = usize::from(self.spec.channels);
         let sample_start = start * channels;
         let sample_end = end * channels;
-        let mut samples = self.pools.get_with_len::<f32>(sample_end - sample_start)?;
+        let mut samples = self
+            .pools
+            .get_with_len::<f32>(sample_end - sample_start)
+            .map_err(DecodeError::from)?;
         samples.copy_from_slice(&self.samples[sample_start..sample_end]);
         self.cursor = end;
         Ok(ChunkOutcome::Chunk(AudioChunk::new(
@@ -198,19 +202,21 @@ impl AudioRead for PcmReader {
         self.position_at(self.cursor)
     }
 
-    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
         Err(DecodeError::InvalidData {
             detail: "rhythm analysis reads whole chunks",
-        })
+        }
+        .into())
     }
 
     fn read_planar<'a>(
         &mut self,
         _output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
+    ) -> Result<ReadOutcome, AudioReadError> {
         Err(DecodeError::InvalidData {
             detail: "rhythm analysis reads whole chunks",
-        })
+        }
+        .into())
     }
 
     fn spec(&self) -> AudioSpec {

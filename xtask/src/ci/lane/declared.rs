@@ -2,12 +2,15 @@ use std::{
     collections::BTreeMap,
     env,
     ffi::{OsStr, OsString},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::Instant,
 };
 
 use anyhow::{Context, Result, bail};
-use kithara_devtools::common::tools::ToolsConfig;
+use kithara_devtools::{
+    common::{project::ProjectConfig, tools::ToolsConfig},
+    test::selects_any_lane,
+};
 use toml::Value;
 use tracing::warn;
 
@@ -33,11 +36,10 @@ pub(crate) fn run(
     pins: &CiPins,
     tools: &ToolsConfig,
     kind: PipelineKind,
+    narrow: Option<&str>,
 ) -> Result<()> {
     let kind = kind_name(kind);
-    if let Some(reason) = lane.kinds_refused.get(&kind) {
-        bail!("{reason}");
-    }
+    admit(lane, &kind, narrow)?;
     if !lane.os.is_empty() {
         process.require_os(&lane.os, &lane.label)?;
     }
@@ -71,13 +73,19 @@ pub(crate) fn run(
         } else {
             OsString::from(tools.program(role))
         };
-        let args = step
-            .args_by_kind
-            .get(&kind)
-            .unwrap_or(&step.args)
+        let declared = step.args_in(&kind);
+        let mut args = declared
             .iter()
             .map(|arg| resolve(arg, process, pins))
             .collect::<Result<Vec<_>>>()?;
+        if let Some(filterset) = narrow
+            && let Some(request) = step.suite_request(lane, declared)
+        {
+            args.insert(
+                declared.len() - request.len(),
+                format!("--narrow={filterset}"),
+            );
+        }
         let vars = step_vars(step, process, pins)?;
         process.run_command(
             process.command(&program).args(&args).envs(&vars),
@@ -106,6 +114,48 @@ pub(crate) fn run(
                 warn!(%error, %fingerprint, "could not publish optional target snapshot");
             }
         }
+    }
+    Ok(())
+}
+
+/// Whether the lane has anything to run in `kind`: any step but a suite that
+/// selects no test lane on this branch. A lane with nothing to run has nothing
+/// to build either.
+pub(crate) fn runs_anything(
+    lane: &CiLaneConfig,
+    kind: PipelineKind,
+    narrow: Option<&str>,
+    root: &Path,
+    project: &ProjectConfig,
+) -> Result<bool> {
+    let kind = kind_name(kind);
+    admit(lane, &kind, narrow)?;
+    for step in &lane.steps {
+        let Some(request) = step.suite_request(lane, step.args_in(&kind)) else {
+            return Ok(true);
+        };
+        if selects_any_lane(root, project, request)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Refuses what the lane declines before anything runs: a pipeline kind it
+/// declines, or a filterset it has no test suite to narrow.
+fn admit(lane: &CiLaneConfig, kind: &str, narrow: Option<&str>) -> Result<()> {
+    if let Some(reason) = lane.kinds_refused.get(kind) {
+        bail!("{reason}");
+    }
+    let has_suite = lane
+        .steps
+        .iter()
+        .any(|step| step.suite_request(lane, step.args_in(kind)).is_some());
+    if narrow.is_some() && !has_suite {
+        bail!(
+            "lane `{}` runs no test suite a filterset could narrow",
+            lane.label
+        );
     }
     Ok(())
 }
@@ -363,8 +413,6 @@ fn pin(pins: &CiPins, key: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::*;
     use crate::ci::{
         config::fixture,
@@ -392,6 +440,11 @@ mod tests {
 
     /// The steps a lane asks for, recorded against a checkout at `/checkout`.
     fn recorded(lane: &CiLaneConfig) -> Vec<Step> {
+        recorded_narrowed(lane, None).unwrap()
+    }
+
+    /// The steps a lane asks for when its suite is narrowed to `narrow`.
+    fn recorded_narrowed(lane: &CiLaneConfig, narrow: Option<&str>) -> Result<Vec<Step>> {
         let process = Process::recording(Path::new("/checkout"), Recording::default());
         run(
             &process,
@@ -399,9 +452,61 @@ mod tests {
             &fixture().pins,
             &ToolsConfig::default(),
             PipelineKind::Branch,
-        )
-        .unwrap();
-        process.recorded().unwrap().steps().to_vec()
+            narrow,
+        )?;
+        Ok(process.recorded().unwrap().steps().to_vec())
+    }
+
+    /// A step that is not the suite, run beside it.
+    fn formatting_step() -> CiLaneStep {
+        CiLaneStep {
+            args: vec!["fmt".to_owned()],
+            label: "fmt".to_owned(),
+            program: Some("cargo".to_owned()),
+            ..CiLaneStep::default()
+        }
+    }
+
+    /// A narrowed lane hands the filterset to the test command, which owns how
+    /// it composes with the lane's own, and its rebuild check asks about the
+    /// same build. A step that runs no suite is not narrowed.
+    #[test]
+    fn a_narrowed_lane_hands_the_filterset_to_its_suite() {
+        let mut lane = suite_lane();
+        lane.steps[0].args.push("--timings".to_owned());
+        lane.steps[0].rebuild_check = true;
+        lane.steps.push(formatting_step());
+
+        let steps = recorded_narrowed(&lane, Some("test(seek)")).unwrap();
+
+        let args: Vec<_> = steps.iter().map(|step| step.args.join(" ")).collect();
+        assert_eq!(
+            args,
+            [
+                "test run --narrow=test(seek) --timings",
+                "test run --narrow=test(seek) --no-run --cargo-verbose --color never",
+                "fmt",
+            ]
+        );
+    }
+
+    /// A lane with no suite to narrow refuses the filterset before it runs
+    /// anything, rather than run whole what was asked to run narrowed.
+    #[test]
+    fn a_lane_without_a_suite_refuses_a_filterset() {
+        let lane = CiLaneConfig {
+            label: "fixture".to_owned(),
+            program: "just".to_owned(),
+            steps: vec![formatting_step()],
+            ..CiLaneConfig::default()
+        };
+
+        let error = recorded_narrowed(&lane, Some("test(seek)")).expect_err("nothing to narrow");
+
+        assert!(
+            error.to_string().contains("runs no test suite"),
+            "{error:#}"
+        );
     }
 
     /// A lane's build follows one checkout, so cargo judges it by mtime on

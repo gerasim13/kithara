@@ -95,6 +95,9 @@ impl RingConsumer {
         self.recycle_current();
         self.rendered_source_head = None;
         cursor.clear();
+        if matches!(self.phase, ConsumerPhase::Failed { .. }) {
+            return false;
+        }
         self.phase = ConsumerPhase::SeekPending { epoch };
 
         let mut popped = false;
@@ -165,9 +168,9 @@ impl RingConsumer {
                 self.phase = ConsumerPhase::AtEof;
                 ControlFlow::Break(None)
             }
-            Fetch::Failure { .. } => {
+            Fetch::Failure { failure, .. } => {
                 self.phase = ConsumerPhase::Failed {
-                    source: FailureSource::Producer,
+                    source: FailureSource::Producer { failure },
                 };
                 ControlFlow::Break(None)
             }
@@ -193,10 +196,8 @@ impl RingConsumer {
         if matches!(wait, Wait::Never)
             || receive_is_nonblocking(self.preloaded, self.block_on_underrun)
         {
-            if let Some(fetch) =
-                try_pop_and_wake(&mut self.audio_rx, ctx.worker, self.consumer_wake_mode)
-            {
-                return RecvOutcome::Item(fetch);
+            if let Some(outcome) = self.try_recv_outcome(ctx) {
+                return outcome;
             }
             // An empty ring is the consumer's demand for the next chunk. The
             // producer parks itself as soon as it reports backpressure and is
@@ -210,16 +211,31 @@ impl RingConsumer {
         self.recv_outcome_blocking(ctx)
     }
 
+    fn try_recv_outcome(&mut self, ctx: RecvCtx<'_>) -> Option<RecvOutcome> {
+        if let Some(fetch) =
+            try_pop_and_wake(&mut self.audio_rx, ctx.worker, self.consumer_wake_mode)
+        {
+            return Some(RecvOutcome::Item(fetch));
+        }
+        if self.audio_rx.write_is_held() {
+            return None;
+        }
+        // The last push can race the first empty pop. Observing producer release
+        // publishes that push, so drain its terminal marker before reporting closure.
+        Some(
+            try_pop_and_wake(&mut self.audio_rx, ctx.worker, self.consumer_wake_mode)
+                .map_or(RecvOutcome::Closed, RecvOutcome::Item),
+        )
+    }
+
     #[kithara::flash(true)]
     #[kithara::measure(label = "audio.ring.wait")]
     #[kithara::hang_watchdog(ctx = ConsumerHangCtx)]
     fn recv_outcome_blocking(&mut self, ctx: RecvCtx<'_>) -> RecvOutcome {
         loop {
-            if let Some(fetch) =
-                try_pop_and_wake(&mut self.audio_rx, ctx.worker, self.consumer_wake_mode)
-            {
+            if let Some(outcome) = self.try_recv_outcome(ctx) {
                 hang_reset!();
-                return RecvOutcome::Item(fetch);
+                return outcome;
             }
             if ctx.cancel.is_some_and(CancelToken::is_cancelled) {
                 hang_reset!();
@@ -227,11 +243,9 @@ impl RingConsumer {
             }
             wake_worker(ctx.worker, self.consumer_wake_mode);
             let since = self.reader_wake.current();
-            if let Some(fetch) =
-                try_pop_and_wake(&mut self.audio_rx, ctx.worker, self.consumer_wake_mode)
-            {
+            if let Some(outcome) = self.try_recv_outcome(ctx) {
                 hang_reset!();
-                return RecvOutcome::Item(fetch);
+                return outcome;
             }
             if ctx.cancel.is_some_and(CancelToken::is_cancelled) {
                 hang_reset!();
@@ -346,10 +360,10 @@ impl RingConsumer {
                 self.current_source_span = None;
                 self.phase = ConsumerPhase::AtEof;
             }
-            Fetch::Failure { .. } => {
+            Fetch::Failure { failure, .. } => {
                 self.current_source_span = None;
                 self.phase = ConsumerPhase::Failed {
-                    source: FailureSource::ProducerAfterSeek,
+                    source: FailureSource::ProducerAfterSeek { failure },
                 };
             }
         }
@@ -440,7 +454,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        ConsumerWakeMode,
+        ConsumerWakeMode, TrackFailureKind,
         audio::ReadOutcome,
         test_pools::{Pools, pools, sample_buffer},
     };
@@ -525,6 +539,73 @@ mod tests {
         fn wake(&self) {
             self.stated.fetch_add(1, Ordering::Release);
         }
+    }
+
+    #[kithara::test]
+    #[case::nonblocking(true)]
+    #[case::blocking(false)]
+    fn a_committed_failure_marker_wins_over_producer_closure(#[case] preloaded: bool) {
+        let fixture = RingFixture::new(preloaded);
+        let RingFixture {
+            mut data_tx,
+            mut ring,
+            ..
+        } = fixture;
+        let failure = TrackFailureKind::RecreateFailed { offset: 91 };
+        assert!(data_tx.try_push(Fetch::failure(0, failure)).is_ok());
+        drop(data_tx);
+
+        assert!(
+            ring.recv_valid_chunk(empty_ctx(), Wait::ForProducer)
+                .is_none()
+        );
+        assert!(matches!(
+            ring.phase,
+            ConsumerPhase::Failed {
+                source: FailureSource::Producer { failure: actual },
+            } if actual == failure
+        ));
+        assert!(
+            ring.recv_valid_chunk(empty_ctx(), Wait::ForProducer)
+                .is_none()
+        );
+        assert!(matches!(
+            ring.phase,
+            ConsumerPhase::Failed {
+                source: FailureSource::Producer { failure: actual },
+            } if actual == failure
+        ));
+    }
+
+    #[kithara::test]
+    #[case::nonblocking(true)]
+    #[case::blocking(false)]
+    fn committed_pcm_is_drained_before_an_unmarked_producer_closure(#[case] preloaded: bool) {
+        let fixture = RingFixture::new(preloaded);
+        let chunk = fixture.chunk(&[0.25, 0.5]);
+        let RingFixture {
+            mut data_tx,
+            mut ring,
+            ..
+        } = fixture;
+        assert!(data_tx.try_push(Fetch::data(chunk, 0)).is_ok());
+        drop(data_tx);
+
+        assert!(
+            ring.recv_valid_chunk(empty_ctx(), Wait::ForProducer)
+                .is_some()
+        );
+        assert_eq!(ring.phase, ConsumerPhase::Buffering);
+        assert!(
+            ring.recv_valid_chunk(empty_ctx(), Wait::ForProducer)
+                .is_none()
+        );
+        assert!(matches!(
+            ring.phase,
+            ConsumerPhase::Failed {
+                source: FailureSource::ChannelClosed,
+            }
+        ));
     }
 
     #[kithara::test]
@@ -861,14 +942,16 @@ mod tests {
         let mut failed = RingFixture::new(true);
         failed
             .data_tx
-            .try_push(Fetch::failure(0))
+            .try_push(Fetch::failure(0, TrackFailureKind::SourceCancelled))
             .expect("failure reaches ring");
         let _chunk = failed.recv();
         assert_ne!(failed.ring.phase, ConsumerPhase::AtEof);
         assert_eq!(
             failed.ring.phase,
             ConsumerPhase::Failed {
-                source: FailureSource::Producer
+                source: FailureSource::Producer {
+                    failure: TrackFailureKind::SourceCancelled,
+                }
             }
         );
     }
@@ -878,7 +961,7 @@ mod tests {
         let mut fixture = RingFixture::new(true);
         fixture
             .data_tx
-            .try_push(Fetch::failure(0))
+            .try_push(Fetch::failure(0, TrackFailureKind::SourceCancelled))
             .expect("failure reaches ring");
 
         let _ = fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
@@ -886,7 +969,9 @@ mod tests {
         assert_eq!(
             fixture.ring.phase,
             ConsumerPhase::Failed {
-                source: FailureSource::ProducerAfterSeek
+                source: FailureSource::ProducerAfterSeek {
+                    failure: TrackFailureKind::SourceCancelled,
+                }
             }
         );
     }
@@ -910,7 +995,7 @@ mod tests {
         fixture.ring.validator.epoch = 3;
         fixture
             .data_tx
-            .try_push(Fetch::failure(0))
+            .try_push(Fetch::failure(0, TrackFailureKind::SourceCancelled))
             .expect("failure reaches ring");
 
         let _chunk = fixture.recv();
@@ -918,7 +1003,9 @@ mod tests {
         assert_eq!(
             fixture.ring.phase,
             ConsumerPhase::Failed {
-                source: FailureSource::Producer
+                source: FailureSource::Producer {
+                    failure: TrackFailureKind::SourceCancelled,
+                }
             }
         );
     }

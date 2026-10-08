@@ -2,7 +2,8 @@
 //! pass-level tests drive, over silence or over real PCM.
 
 use kithara_audio::{
-    AudioControl, AudioRead, AudioSession, ChunkOutcome, DecodeError, ReadOutcome, SeekOutcome,
+    AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome, DecodeError, ReadOutcome,
+    SeekOutcome,
 };
 use kithara_decode::TrackMetadata;
 use kithara_events::EventBus;
@@ -108,7 +109,7 @@ impl AudioSession for Track {
 }
 
 impl AudioRead for Track {
-    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+    fn next_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError> {
         if self.at >= self.frames {
             return Ok(ChunkOutcome::Eof {
                 position: self.position(),
@@ -135,14 +136,14 @@ impl AudioRead for Track {
         self.duration_for(self.at)
     }
 
-    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
         unreachable!("analysis pulls chunks")
     }
 
     fn read_planar<'a>(
         &mut self,
         _output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
+    ) -> Result<ReadOutcome, AudioReadError> {
         unreachable!("analysis pulls chunks")
     }
 

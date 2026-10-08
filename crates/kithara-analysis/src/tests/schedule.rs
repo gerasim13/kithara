@@ -1,7 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_audio::{
-    AudioControl, AudioRead, AudioSession, ChunkOutcome, ReadOutcome, SeekOutcome,
+    AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome, ReadOutcome, SeekOutcome,
 };
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
@@ -163,7 +163,7 @@ impl AudioSession for Source {
 }
 
 impl AudioRead for Source {
-    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+    fn next_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError> {
         if self.stalls {
             return Ok(ChunkOutcome::Pending {
                 reason: kithara_audio::PendingReason::Buffering,
@@ -173,7 +173,8 @@ impl AudioRead for Source {
         if self.fails_after.is_some_and(|after| self.chunks >= after) {
             return Err(DecodeError::InvalidData {
                 detail: "scripted decode failure",
-            });
+            }
+            .into());
         }
         if self.at >= self.frames {
             self.push(Call::Eof);
@@ -195,14 +196,14 @@ impl AudioRead for Source {
         duration_for_frames(consts::FIXTURES_SR, self.at)
     }
 
-    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+    fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
         unreachable!("analysis uses next_chunk")
     }
 
     fn read_planar<'a>(
         &mut self,
         _output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
+    ) -> Result<ReadOutcome, AudioReadError> {
         unreachable!("analysis uses next_chunk")
     }
 
