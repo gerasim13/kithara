@@ -185,7 +185,7 @@ impl TryFrom<&AudioEvent> for FfiItemEvent {
                 failure,
                 seek_epoch,
             } => Ok(Self::TrackFailed {
-                reason: failure.clone().into(),
+                reason: (*failure).into(),
                 epoch: *seek_epoch,
             }),
             AudioEvent::UnderrunStarted {
@@ -1035,6 +1035,53 @@ mod tests {
     }
 
     #[kithara::test]
+    fn audio_track_failure_preserves_kind_and_epoch() {
+        let cases = [
+            (
+                TrackFailureKind::Decode {
+                    kind: DecodeErrorKind::Io,
+                },
+                FfiTrackFailureKind::Decode {
+                    kind: FfiDecodeErrorKind::Io,
+                },
+            ),
+            (
+                TrackFailureKind::Decode {
+                    kind: DecodeErrorKind::InvalidData,
+                },
+                FfiTrackFailureKind::Decode {
+                    kind: FfiDecodeErrorKind::InvalidData,
+                },
+            ),
+            (
+                TrackFailureKind::RecreateFailed { offset: 4096 },
+                FfiTrackFailureKind::RecreateFailed { offset: 4096 },
+            ),
+            (
+                TrackFailureKind::SourceCancelled,
+                FfiTrackFailureKind::SourceCancelled,
+            ),
+            (
+                TrackFailureKind::ChannelClosed,
+                FfiTrackFailureKind::ChannelClosed,
+            ),
+            (TrackFailureKind::Render, FfiTrackFailureKind::Render),
+        ];
+
+        for (failure, expected) in cases {
+            let source = AudioEvent::TrackFailed {
+                failure,
+                seek_epoch: 37,
+            };
+            let event = FfiItemEvent::try_from(&source).expect("event must be forwarded");
+            assert!(matches!(
+                event,
+                FfiItemEvent::TrackFailed { reason, epoch: 37 } if reason == expected
+            ));
+        }
+    }
+
+    #[kithara::test]
     fn downloader_events_preserve_every_forwarded_contract() {
         let network_error = || kithara::net::NetError::Network("offline".into());
         let cases: [ItemEventCase<DownloaderEvent>; 9] = [
@@ -1236,7 +1283,9 @@ mod tests {
             (
                 PlayerEvent::ItemDidFail {
                     item: item_role(11),
-                    fault: PlaybackFault::Decode(DecodeErrorKind::InvalidData),
+                    fault: PlaybackFault::Source(TrackFailureKind::Decode {
+                        kind: DecodeErrorKind::InvalidData,
+                    }),
                 },
                 |event| matches!(event, FfiPlayerEvent::ItemDidFail { item_id: Some(id) } if *id == TrackId::from(11_u64)),
             ),
@@ -1597,7 +1646,9 @@ mod tests {
                 SlotId::new(0),
                 "src".into(),
             )),
-            fault: PlaybackFault::Decode(DecodeErrorKind::InvalidData),
+            fault: PlaybackFault::Source(TrackFailureKind::Decode {
+                kind: DecodeErrorKind::InvalidData,
+            }),
         };
 
         assert!(matches!(

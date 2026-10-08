@@ -170,7 +170,9 @@ impl ItemQueue {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_audio::{AudioControl, AudioRead, AudioSession, ReadOutcome, SeekOutcome};
+    use kithara_audio::{
+        AudioControl, AudioRead, AudioReadError, AudioSession, ReadOutcome, SeekOutcome,
+    };
     use kithara_decode::{DecodeError, TrackMetadata};
     use kithara_events::Envelope;
     use kithara_platform::time::Duration;
@@ -215,7 +217,7 @@ mod tests {
             Duration::ZERO
         }
 
-        fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+        fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
             Ok(ReadOutcome::Eof {
                 position: Duration::ZERO,
             })
@@ -224,7 +226,7 @@ mod tests {
         fn read_planar<'a>(
             &mut self,
             _output: &'a mut [&'a mut [f32]],
-        ) -> Result<ReadOutcome, DecodeError> {
+        ) -> Result<ReadOutcome, AudioReadError> {
             Ok(ReadOutcome::Eof {
                 position: Duration::ZERO,
             })

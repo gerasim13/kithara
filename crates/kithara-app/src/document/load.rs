@@ -339,20 +339,13 @@ impl Config {
         &self.document.playlist.tracks
     }
 
-    /// Knobs the document sets on the compiled UI: the crate default, then
-    /// the document's `ui:` section, with `draw_buffers` built from the
-    /// document's `draw_pool:` section rather than patched on afterwards.
-    /// `DrawPoolLimits` only reaches a `DrawBuffers` through
-    /// `DrawBuffers::try_new`, so the document's draw-pool limits must be read
-    /// before that value is constructed -- see `UiConfig::draw_buffers` and
-    /// `DrawPoolLimits` in `kithara-ui`. The composition lives here rather
-    /// than at the construction site so a test can reach the same code the
-    /// binary runs.
+    /// Builds UI settings from crate defaults and the document's `ui:` section.
+    /// The `draw_pool:` limits are applied before `DrawBuffers::try_new` constructs
+    /// `draw_buffers`; the binary and tests use this same composition.
     ///
     /// # Errors
-    /// Returns the [`PoolError`] the document's `draw_pool:` section failed
-    /// the generated draw-buffer schema with, rather than aborting the
-    /// process on a value a configuration document can now name.
+    /// Returns [`PoolError`] when the document's draw-pool limits fail the generated
+    /// schema, without aborting on document-provided values.
     #[cfg(feature = "gui")]
     pub fn ui(&self) -> Result<UiConfig, PoolError> {
         let mut draw_pool = DrawPoolLimits::default();
@@ -644,21 +637,9 @@ mod tests {
         );
     }
 
-    /// `ui` and `draw_pool` are separate document sections because
-    /// `UiConfig.draw_buffers` is a *built* value: `DrawPoolLimits` only
-    /// reaches it through `DrawBuffers::try_new`, so `Config::ui`
-    /// reads `draw_pool` before building it rather than patching `ui` onto
-    /// the result afterwards. This test proves that both sections reach one
-    /// `UiConfig` through that same code -- the code the binary runs --
-    /// using `131072`, `4`, and `7`, values no crate default produces
-    /// (`max_arena_bytes` defaults to 65536, `max_buffers` to 64,
-    /// `command_capacity` to 512). It does not prove that an unnamed field
-    /// keeps a *merge-seeded* value rather than a whole-struct reset: the
-    /// base `Config::ui` applies onto is `DrawPoolLimits::default`
-    /// itself, so a reset and a real merge are indistinguishable at this
-    /// site. That property is proved separately, by the seeded unit tests in
-    /// `kithara-ui`'s `source::config` module, which apply a patch onto a
-    /// value they seeded themselves.
+    /// Both sections must compose one built `UiConfig`. This default-based fixture
+    /// pins composition; only a separately seeded owner test can distinguish a
+    /// whole-struct reset from retention of a pre-existing unnamed value.
     #[cfg(feature = "gui")]
     #[kithara::test(native, flash(false))]
     fn the_ui_and_draw_pool_sections_compose_one_ui_config() {

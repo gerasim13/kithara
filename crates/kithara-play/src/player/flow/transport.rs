@@ -124,24 +124,9 @@ where
         debug!(rate, phase = ?self.phase_kind(), "play");
     }
 
-    /// Seek active tracks to position in seconds.
-    ///
-    /// Returns the typed [`SeekOutcome`] — either `Landed` with the requested
-    /// target (the actual landed position is committed asynchronously by the
-    /// worker thread; this call returns the optimistic outcome) or `PastEof`
-    /// when the target is past the current track's known duration.
-    ///
-    /// The outcome is classified against the duration observed *before*
-    /// `begin_slot_seek` rebases the source. Reading it afterwards judges the
-    /// request against a duration the request itself perturbed: the audio
-    /// thread can render a block off the rebased source in that window and
-    /// republish a shorter `PlaybackShared::duration`, turning an in-range
-    /// target into a spurious `PastEof`.
-    ///
-    /// A seek that arrives before the player holds a slot is kept as the
-    /// current item's start position and applied by the load that starts it,
-    /// so a position handed over at queue-seeding time is where playback
-    /// begins.
+    /// Seek active tracks, or retain the target as the current item's start position before load.
+    /// Returns an optimistic `Landed` target; the worker commits the actual landing asynchronously.
+    /// Classify `PastEof` against duration before rebasing: rendered progress can shorten it during a seek.
     pub fn seek_seconds(&self, seconds: f64) -> Result<SeekOutcome, PlayError> {
         let target_secs = seconds.max(0.0);
         let target = Duration::from_secs_f64(target_secs);

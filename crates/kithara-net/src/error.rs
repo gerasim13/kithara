@@ -74,25 +74,10 @@ impl NetError {
     /// HTTP 429 Too Many Requests.
     const HTTP_TOO_MANY_REQUESTS: u16 = 429;
 
-    /// Whether asking again later can answer differently.
-    ///
-    /// [`Self::retryability`] answers whether *this request* may be retried
-    /// now, which is why a spent budget is [`Retryability::Fatal`] there. This
-    /// is the other question, asked by callers that hold a resource and can
-    /// come back to it: a track waiting to be played, a segment slot a reader
-    /// will want again. A spent budget is classified by what it was retrying.
-    ///
-    /// True when nothing of the resource was delivered and the obstacle was
-    /// reachability, which changes on its own: a host that refused with a
-    /// transient status, or one that was not there at all.
-    ///
-    /// False for a timeout. A transfer that established and then stopped
-    /// delivering has already been retried and resumed by the resilient body,
-    /// so its exhaustion is a verdict about a server that answers without
-    /// delivering — and the layers that own giving up (the segment slot, and
-    /// through it every blocking read above it) have nothing else to hear it
-    /// from. Also false for everything a later ask cannot change: a missing
-    /// resource, a body that will not decode, a cancel.
+    /// Whether a later resource request can answer differently, distinct from retrying this request now.
+    /// Classifies spent budgets by their underlying cause: transient status/reachability with no delivered
+    /// resource may recover. Timeout means the resumed transfer stalled and is terminal for blocking reads;
+    /// missing, undecodable or cancelled resources cannot answer differently.
     #[must_use]
     pub fn can_answer_later(&self) -> bool {
         let cause = self.cause();

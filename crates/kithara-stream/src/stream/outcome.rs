@@ -42,19 +42,9 @@ pub enum StreamReadOutcome {
     Eof { byte_position: u64 },
 }
 
-/// Typed payload of an `io::Error` (kind [`std::io::ErrorKind::Interrupted`])
-/// emitted by `impl Read for Stream` when the underlying source could
-/// not satisfy the read this call. Both `SeekPending` and
-/// `NotReady`/`Retry` surface as `Interrupted` so demuxers (notably
-/// Symphonia's fragmented MP4 reader) treat the pause as a transient
-/// cooperative interruption and let `kithara-decode::is_seek_pending_io`
-/// classify the failure correctly — the previous `WouldBlock` mapping
-/// was treated as a hard "would block" by Symphonia's seek path and
-/// corrupted the demuxer cursor on partial reads. Carries the
-/// [`PendingReason`] verbatim plus a snapshot of source/timeline state
-/// at the wrap site, so callers downcasting from `io::Error` recover
-/// both *what* stalled and *why* without having to instrument their
-/// own decoder.
+/// Typed [`std::io::ErrorKind::Interrupted`] payload carrying [`PendingReason`] and a source/timeline snapshot.
+/// `SeekPending` and `NotReady`/`Retry` use `Interrupted` so fragmented-MP4 treats partial reads
+/// as cooperative pauses; callers downcast the payload instead of matching error messages.
 #[derive(Debug, Clone, Copy, derive_more::Display)]
 #[display(
     "{reason}: pos={pos} want={want} len={len:?} phase={phase:?} epoch={epoch} flushing={flushing}"

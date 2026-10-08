@@ -14,8 +14,9 @@ use kithara_stream::{
 use kithara_test_utils::kithara;
 
 use super::{
-    AudioControl, AudioLaneEvent, AudioRead, AudioSession, ChunkOutcome, DecodeError,
-    PendingReason, PreloadGate, PreparedAudioLane, ReadOutcome, SeekOutcome, chunk_position,
+    AudioControl, AudioLaneEvent, AudioRead, AudioReadError, AudioSession, ChunkOutcome,
+    DecodeError, PendingReason, PreloadGate, PreparedAudioLane, ReadOutcome, SeekOutcome,
+    chunk_position,
     cursor::ChunkCursor,
     event::AudioEvents,
     ring::{RecvCtx, RingConsumer, Wait},
@@ -189,9 +190,9 @@ impl<S> Audio<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`DecodeError`] when the producer reports a failure or closes early.
+    /// Returns [`AudioReadError`] when the producer reports a failure or closes early.
     #[kithara::measure(label = "audio.read")]
-    pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+    pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
         self.sync_seek();
         let recv = recv_ctx(&self.session, &self.runtime);
         let read = self.cursor.read(
@@ -279,7 +280,7 @@ impl<S> Audio<S> {
 }
 
 impl<S> AudioRead for Audio<S> {
-    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+    fn next_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError> {
         self.sync_seek();
         self.ring.preloaded = true;
         let chunk = if let Some(chunk) = self.ring.current_chunk.take() {
@@ -319,7 +320,7 @@ impl<S> AudioRead for Audio<S> {
         self.position()
     }
 
-    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
         Self::read(self, buf)
     }
 
@@ -327,7 +328,7 @@ impl<S> AudioRead for Audio<S> {
     fn read_planar<'a>(
         &mut self,
         output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
+    ) -> Result<ReadOutcome, AudioReadError> {
         self.sync_seek();
         let read = self.cursor.read_planar(
             &mut self.ring,
@@ -423,12 +424,13 @@ fn recv_ctx<'a>(session: &'a Session, runtime: &'a AudioRuntime) -> RecvCtx<'a> 
 fn chunk_outcome(
     phase: super::ConsumerPhase,
     position: Duration,
-) -> Result<ChunkOutcome, DecodeError> {
+) -> Result<ChunkOutcome, AudioReadError> {
     match phase {
         super::ConsumerPhase::AtEof => Ok(ChunkOutcome::Eof { position }),
-        super::ConsumerPhase::Failed { source: failure } => {
-            Err(DecodeError::audio_stream("chunk read", failure))
-        }
+        super::ConsumerPhase::Failed { source: failure } => Err(AudioReadError::Stream {
+            what: "chunk read",
+            source: failure,
+        }),
         super::ConsumerPhase::SeekPending { .. } => Ok(ChunkOutcome::Pending {
             position,
             reason: PendingReason::SeekInProgress,

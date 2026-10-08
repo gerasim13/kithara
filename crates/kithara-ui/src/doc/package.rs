@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -7,7 +7,10 @@ use crate::{
     envelope::{self, DocKind},
     error::UiDocError,
     ids::{DocId, ScreenRole, SourceUri},
-    source::SourceResolver,
+    layout::{LayoutNode, parse_layout},
+    resolve::{load_module_graph, load_source},
+    source::{Limits, SourceResolver},
+    validate,
 };
 
 /// The ui contract this build offers a package.
@@ -39,19 +42,13 @@ pub struct PackageDoc {
 }
 
 impl PackageDoc {
-    /// The file this package puts behind `role`, once that file agrees it is
-    /// that screen.
-    ///
-    /// The manifest says which file stands for a role and the document says
-    /// which screen it is; a package whose two answers disagree has a typo in
-    /// one of them, and reading only the manifest would compile the wrong
-    /// screen without a word. Only the envelope is parsed here, and the
-    /// resolver has already read the text the compile will parse in full.
+    /// Resolves the file for `role` and checks its screen envelope agrees with the
+    /// manifest, preventing a manifest typo from silently compiling another screen.
+    /// Only the envelope is parsed; the resolver has already read the text later
+    /// compiled in full.
     ///
     /// # Errors
-    /// Returns [`UiDocError`] when the package answers for no such screen, when
-    /// the file behind it cannot be read, or when that file names another
-    /// screen.
+    /// Returns [`UiDocError`] for an absent role, unreadable file or mismatched screen.
     pub fn screen(
         &self,
         resolver: &dyn SourceResolver,
@@ -77,16 +74,70 @@ impl PackageDoc {
     }
 }
 
-/// Reads the manifest at `rel` and checks it before anything else is parsed.
-///
-/// The contract check comes first: a package written for another build is
-/// refused here, while its documents are still unread, so the message names the
-/// mismatch rather than whatever the first stale document happened to trip on.
+fn check_fills(
+    package: &PackageDoc,
+    resolver: &dyn SourceResolver,
+    limits: &Limits,
+) -> Result<(), UiDocError> {
+    let fills = resolver.fills();
+    if fills.is_empty() {
+        return Ok(());
+    }
+    validate::check_fill_set(resolver)?;
+    let mut shown = BTreeSet::new();
+    for file in package.screens.values() {
+        let loaded = load_source(resolver, None, file, limits)?;
+        let layout = parse_layout(&loaded.text, &loaded.uri)?;
+        let mut sources = Vec::new();
+        modules(&layout.root, &mut sources);
+        for source in sources {
+            let (_, set) = load_module_graph(resolver, Some(&loaded.uri), source, limits)?;
+            shown.extend(set.collections.into_keys());
+        }
+    }
+    fills
+        .into_iter()
+        .find(|fill| !shown.contains(&fill.address))
+        .map_or(Ok(()), |fill| {
+            Err(UiDocError::UnknownFill {
+                address: fill.address.clone(),
+                key: fill.key.clone(),
+            })
+        })
+}
+
+fn modules<'a>(node: &'a LayoutNode, into: &mut Vec<&'a str>) {
+    match node {
+        LayoutNode::Split { children, .. } => {
+            for child in children {
+                modules(&child.node, into);
+            }
+        }
+        LayoutNode::Optional { node, .. } => modules(node, into),
+        LayoutNode::Adaptive { base, steps, .. } => {
+            modules(base, into);
+            for step in steps {
+                modules(&step.node, into);
+            }
+        }
+        LayoutNode::Module { source, .. } => into.push(source),
+        LayoutNode::Tabs { pages, .. } => {
+            for page in pages.values() {
+                modules(page, into);
+            }
+        }
+    }
+}
+
+/// Loads the manifest, checking its contract before screen documents and fills.
 ///
 /// # Errors
-/// Returns [`UiDocError`] when the manifest is unavailable, malformed, written
-/// against another contract, or declares nothing to answer with.
-pub fn load_package(resolver: &dyn SourceResolver, rel: &str) -> Result<PackageDoc, UiDocError> {
+/// Returns [`UiDocError`] for an invalid manifest, unreadable screen graph, or invalid fill.
+pub fn load_package(
+    resolver: &dyn SourceResolver,
+    rel: &str,
+    limits: &Limits,
+) -> Result<PackageDoc, UiDocError> {
     let loaded = resolver.load(None, rel)?;
     let doc = parse_package(&loaded.text, &loaded.uri)?;
     if doc.contract != UI_CONTRACT {
@@ -107,6 +158,7 @@ pub fn load_package(resolver: &dyn SourceResolver, rel: &str) -> Result<PackageD
             });
         }
     }
+    check_fills(&doc, resolver, limits)?;
     Ok(doc)
 }
 

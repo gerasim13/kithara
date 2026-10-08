@@ -1336,7 +1336,7 @@ fn next_decoded_chunk(
             }
             TrackStep::Blocked(_) => {}
             TrackStep::Eof => panic!("route test source reached EOF"),
-            TrackStep::Failed => panic!("route test source failed"),
+            TrackStep::Failed(_) => panic!("route test source failed"),
         }
     }
 }
@@ -1822,7 +1822,7 @@ async fn decode_error_precedes_track_failure_on_event_bus() {
     let old = source.decode.replace_active(replacement);
     source.retired.push(old);
 
-    assert!(matches!(source.step_track(), TrackStep::Failed));
+    assert!(matches!(source.step_track(), TrackStep::Failed(_)));
     assert!(events.try_recv().is_err());
     source.flush_deferred();
 
@@ -1836,7 +1836,9 @@ async fn decode_error_precedes_track_failure_on_event_bus() {
     assert!(matches!(
         events.try_recv().map(|envelope| envelope.event),
         Ok(AudioLaneEvent::Audio(AudioEvent::TrackFailed {
-            failure: TrackFailureKind::Decode,
+            failure: TrackFailureKind::Decode {
+                kind: crate::DecodeErrorKind::InvalidData,
+            },
             seek_epoch: 0,
         }))
     ));
@@ -2373,7 +2375,7 @@ async fn rebuild_factory_panic_fails_track_without_hang() {
 
     // The worker's next step must reach the terminal recreate failure,
     // not loop on `Blocked(Waiting)`.
-    assert!(matches!(source.step_track(), TrackStep::Failed));
+    assert!(matches!(source.step_track(), TrackStep::Failed(_)));
     match &source.state {
         CurrentFsm::Failed(handle) => {
             assert!(matches!(handle.data(), TrackFailure::RecreateFailed { .. }));

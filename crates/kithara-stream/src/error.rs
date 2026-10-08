@@ -65,19 +65,9 @@ pub enum SourceError {
     #[error("segment data not ready")]
     SegmentUnavailable,
 
-    /// `format_change_segment_range` not applicable in the current
-    /// state. Reasons (all expected steady states, not bugs):
-    /// - source has no init-bearing format-change concept (file
-    ///   source — default `Source` trait impl returns this);
-    /// - active HLS variant was activated by same-codec ABR with
-    ///   `served_from > 0`: init bytes live at natural `[0..init_size)`
-    ///   while virtual space starts at `byte_shift`, so init is
-    ///   unreachable via Stream reads. Same-codec post-switch
-    ///   playback continues through `byte_shift`; recovery via
-    ///   init probe is by design not applicable.
-    ///
-    /// Callers must treat this as "no recovery possible at this
-    /// site" (steady-state) — not an error to surface to the user.
+    /// Expected when no init-bearing format change applies, including a shifted same-codec HLS
+    /// variant whose init cannot be reached through Stream reads. Treat as no recovery at this site,
+    /// not a user-visible failure.
     #[error("format change not applicable to this source kind/state")]
     FormatChangeNotApplicable,
 

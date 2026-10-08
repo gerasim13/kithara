@@ -5,7 +5,9 @@ use kithara_events::EventBus;
 use kithara_platform::time::Duration;
 use kithara_signal::AudioSpec;
 
-use crate::{AudioControl, AudioRead, AudioSession, PendingReason, ReadOutcome, SeekOutcome};
+use crate::{
+    AudioControl, AudioRead, AudioReadError, AudioSession, PendingReason, ReadOutcome, SeekOutcome,
+};
 
 /// Expected amplitude of the default prepared PCM fixture.
 pub const TEST_PCM_DEFAULT_VALUE: f32 = 0.5;
@@ -174,7 +176,7 @@ impl AudioRead for TestPcmReader {
         self.frames_to_duration(self.position_frames)
     }
 
-    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
         if self.at_natural_end() {
             return Ok(self.eof_outcome());
         }
@@ -194,7 +196,7 @@ impl AudioRead for TestPcmReader {
     fn read_planar<'a>(
         &mut self,
         output: &'a mut [&'a mut [f32]],
-    ) -> Result<ReadOutcome, DecodeError> {
+    ) -> Result<ReadOutcome, AudioReadError> {
         if self.at_natural_end() {
             return Ok(self.eof_outcome());
         }

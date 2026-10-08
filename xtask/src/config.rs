@@ -175,6 +175,29 @@ pub(crate) struct CiLaneStep {
     pub(crate) rebuild_check: bool,
 }
 
+impl CiLaneStep {
+    /// The arguments the step runs with in pipeline `kind`.
+    pub(crate) fn args_in(&self, kind: &str) -> &[String] {
+        self.args_by_kind.get(kind).unwrap_or(&self.args)
+    }
+
+    /// What the step asks of the test suite when `lane` runs it with `args`
+    /// through `just test run`; any other step asks nothing of it.
+    pub(crate) fn suite_request<'a>(
+        &self,
+        lane: &CiLaneConfig,
+        args: &'a [String],
+    ) -> Option<&'a [String]> {
+        let program = self.program.as_deref().unwrap_or(lane.program.as_str());
+        match args {
+            [test, run, request @ ..] if program == "just" && test == "test" && run == "run" => {
+                Some(request)
+            }
+            _ => None,
+        }
+    }
+}
+
 /// What a lane leaves for a human or a later lane to read.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -376,13 +399,10 @@ fn validate_step(name: &str, lane: &CiLaneConfig, step: &CiLaneStep) -> Result<(
         );
     }
     if step.rebuild_check {
-        let program = step.program.as_deref().unwrap_or(lane.program.as_str());
         let runs_the_suite = iter::once(&step.args)
             .chain(step.args_by_kind.values())
-            .all(
-                |args| matches!(args.as_slice(), [test, run, ..] if test == "test" && run == "run"),
-            );
-        if program != "just" || !runs_the_suite {
+            .all(|args| step.suite_request(lane, args).is_some());
+        if !runs_the_suite {
             bail!("ext.ci.lanes.{name}: a rebuild_check repeats a `just test run` step");
         }
     }

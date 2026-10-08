@@ -235,22 +235,9 @@ where
         })
     }
 
-    /// Whether the construction window this session was prepared for is
-    /// readable.
-    ///
-    /// A pure question. It used to wake the peer on a negative answer, and that
-    /// wake deadlocked the stream: this is called under the transition lock,
-    /// while `wake_peer` takes the peer's state lock — and the peer takes those
-    /// two in the opposite order, `poll_state_phase` holding its state lock
-    /// across `prepare_for_seek` -> `cancel_incoming_for_seek`, which locks the
-    /// transition. A seek epoch landing while an incoming session was being
-    /// polled for readiness stopped the stream dead, with the queue full and
-    /// nothing in flight.
-    ///
-    /// The wake is still owed — the variant plans nothing by itself, so without
-    /// it an incoming session is only serviced when the *active* session happens
-    /// to ask for bytes. It belongs to the caller, which knows when it has let
-    /// the transition lock go. See [`wake_peer_for_readiness`].
+    /// Pure query of the prepared construction window's readability.
+    /// Never wake the peer under the transition lock: the peer state lock has the opposite order.
+    /// The caller owes [`wake_peer_for_readiness`] after releasing the transition lock.
     pub(crate) fn is_ready(&self) -> StreamResult<bool> {
         match &self.readiness {
             SessionReadiness::Active => Ok(true),

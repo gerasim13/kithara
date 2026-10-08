@@ -22,8 +22,9 @@ pub enum ThreadClass {
 ///
 /// `AudioFeed` is nice -16 on Linux and Android (Android's
 /// `THREAD_PRIORITY_AUDIO`), the user-interactive quality-of-service class on
-/// Apple platforms and the MMCSS "Audio" task on Windows. Browsers expose no
-/// thread scheduling, so on wasm it requests nothing.
+/// Apple platforms and the MMCSS "Audio" task on Windows. Browsers and the Miri
+/// interpreter expose no thread scheduling, so on wasm and under Miri it requests
+/// nothing.
 ///
 /// # Errors
 ///
@@ -37,7 +38,7 @@ pub fn set_current_class(class: ThreadClass) -> io::Result<()> {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(all(not(miri), any(target_os = "linux", target_os = "android")))]
 mod os {
     use std::io;
 
@@ -59,7 +60,7 @@ mod os {
     }
 }
 
-#[cfg(target_vendor = "apple")]
+#[cfg(all(not(miri), target_vendor = "apple"))]
 mod os {
     use std::io;
 
@@ -76,7 +77,7 @@ mod os {
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(not(miri), windows))]
 mod os {
     use std::io;
 
@@ -98,7 +99,7 @@ mod os {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(miri, target_arch = "wasm32"))]
 mod os {
     use std::io;
 
@@ -107,7 +108,7 @@ mod os {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(all(test, not(miri), not(target_arch = "wasm32")))]
 mod tests {
     use std::io;
 

@@ -148,19 +148,10 @@ fn mount(args: &Args) -> (Gallery, Task<Message>) {
     (gallery, open.discard().chain(start))
 }
 
-/// Time runs on the pages that move, which the gallery answers for itself.
-/// Naming the pages here instead is a second account of the same fact, and it
-/// drifts: a page that gained something moving kept its picture frozen until an
-/// unrelated event redrew it, and one that lost it went on waking the host
-/// every tick for nothing.
-///
-/// A capture never ticks: the offscreen host photographs one frame of a freshly
-/// mounted page, so a clock running here would put the two hosts at different
-/// moments and the comparison would measure the difference between them.
-///
-/// A close request arrives as the window command the title bar's own button
-/// sends, so the two ways to shut the gallery meet in one arm rather than
-/// ending the program from two places.
+/// Ticks only pages the gallery reports as moving, avoiding a duplicate page
+/// list that freezes new motion or keeps static pages waking. Captures never tick:
+/// both hosts photograph the same newly mounted moment. Title-bar and host close
+/// requests meet in the same window-command arm.
 fn subscription(state: &Gallery) -> Subscription<Message> {
     let close =
         window::close_requests().map(|_| Message::Ui(Published::window(WindowCommand::Close)));

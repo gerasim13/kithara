@@ -1,13 +1,12 @@
 use super::{
-    ChainConfig, ChainReport,
-    chain::{Chain, Origin, Split},
-    corpus::{self, Case, Expect},
-    detect,
+    super::{
+        ChainConfig, ChainReport,
+        chain::{Chain, Origin, Split},
+        corpus::{self, Case, Expect},
+        detect,
+    },
+    consts,
 };
-
-mod consts {
-    pub(super) const ROOT: &str = "crates/kithara-synth/src";
-}
 
 fn synth_crate(cases: &[Case]) -> Vec<(String, String)> {
     let root = consts::ROOT;
@@ -23,7 +22,7 @@ fn synth_crate(cases: &[Case]) -> Vec<(String, String)> {
         .collect()
 }
 
-fn report(sources: &[(String, String)], min_side_lines: usize) -> ChainReport {
+pub(super) fn report(sources: &[(String, String)], min_side_lines: usize) -> ChainReport {
     let config = ChainConfig {
         min_side_lines,
         ..ChainConfig::default()
@@ -60,13 +59,13 @@ fn rows<'r>(report: &'r ChainReport, case: &Case) -> Vec<&'r Chain> {
 }
 
 /// Private functions of a one-file crate that no resolved call reaches.
-fn unreached(source: &str) -> Vec<String> {
+pub(super) fn unreached(source: &str) -> Vec<String> {
     let sources = [(format!("{}/lib.rs", consts::ROOT), source.to_owned())];
     report(&sources, 0).coverage.unreached_private
 }
 
 /// The coverage list names the function `label`.
-fn lists(unreached: &[String], label: &str) -> bool {
+pub(super) fn lists(unreached: &[String], label: &str) -> bool {
     unreached
         .iter()
         .any(|entry| entry.ends_with(&format!(" {label}")))

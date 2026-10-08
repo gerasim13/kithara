@@ -195,26 +195,9 @@ impl Downloader {
         )
     }
 
-    /// Download loop.
-    ///
-    /// Drives the [`Registry`] which owns peers, routes commands through
-    /// a 2×2 priority slot map, and executes batches via [`BatchGroup`].
-    ///
-    /// Registrations are polled inside `tick()` so that `process()` is
-    /// never dropped mid-batch by a competing `select!` arm (cancellation-
-    /// safety: dropping `process()` loses unspawned `FetchCmd`s whose
-    /// `on_complete` callbacks will never fire).
-    ///
-    /// # Deadlock detection
-    ///
-    /// `tick` reports a [`FetchProgress`](super::registry::FetchProgress):
-    /// - `Advanced` — something moved (cmd drained, peer yielded a batch,
-    ///   urgent/demand batch processed, or inflight changed). Reset.
-    /// - `Idle` — nothing to do: no queued cmds, no in-flight, peers
-    ///   pending. Watchdog left as-is; legitimate quiet period.
-    /// - `Stalled` — work exists (queued cmds or inflight > 0) but no
-    ///   forward motion this tick. Tick the watchdog; N consecutive
-    ///   stalls across the timeout window → panic.
+    /// Drive registry priorities and batches without dropping `process()` at a competing select arm:
+    /// unspawned commands own completion callbacks that must settle their claims.
+    /// Watchdog progress resets on `Advanced`, ignores legitimate `Idle`, and counts only `Stalled`.
     #[kithara::hang_watchdog(timeout = Self::HANG_TIMEOUT)]
     async fn run(
         inner: Arc<DownloaderInner>,

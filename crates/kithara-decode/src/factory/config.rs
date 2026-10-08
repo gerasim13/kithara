@@ -43,6 +43,7 @@ pub struct DecoderConfig<B, S> {
     #[config(skip = "transferred to the decoder")]
     pub(crate) byte_map: Option<Arc<dyn ByteMap>>,
     /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
+    #[cfg(feature = "symphonia")]
     #[config(skip = "consumed by the decoder probe", builder(into))]
     pub(crate) hint: Option<String>,
     /// Reader-side observer hooks. Single-owner; moved into
@@ -99,14 +100,16 @@ mod tests {
     #[kithara::test]
     fn decoder_config_custom_apple_backend_preserves_fields() {
         let handle = Arc::new(AtomicU64::new(1000));
-        let config: TestDecoderConfig = TestDecoderConfig::builder()
+        let builder = TestDecoderConfig::builder()
             .pools(pools())
             .backend(DecoderBackend::Apple)
-            .byte_len_handle(Arc::clone(&handle))
-            .hint("mp3")
-            .build();
+            .byte_len_handle(Arc::clone(&handle));
+        #[cfg(feature = "symphonia")]
+        let builder = builder.hint("mp3");
+        let config: TestDecoderConfig = builder.build();
         assert_eq!(config.backend, DecoderBackend::Apple);
         assert!(config.byte_len_handle.is_some());
+        #[cfg(feature = "symphonia")]
         assert_eq!(config.hint, Some("mp3".to_string()));
     }
 }

@@ -10,6 +10,10 @@ pub(super) struct TestRequest {
     /// they name the lanes the touched paths may run, the default lane when
     /// none is named.
     pub(super) lanes: Vec<String>,
+    /// A filterset every lane the request runs is narrowed to. A
+    /// passed-through `-E` is a union member, so it could widen a selection;
+    /// this one only takes tests away.
+    pub(super) narrow: Option<String>,
     pub(super) passthrough: Vec<String>,
     pub(super) touched: bool,
 }
@@ -21,6 +25,7 @@ impl TestRequest {
             net_backend: None,
             no_block: None,
             loom: None,
+            narrow: None,
             passthrough: Vec::new(),
             flash: None,
             touched: false,
@@ -59,6 +64,9 @@ impl TestRequest {
                         .ok_or_else(|| anyhow::anyhow!("--lane requires a value"))?;
                     request.lanes.push(value.clone());
                 }
+                "--narrow" => {
+                    request.narrow = Some(filterset(iter.next().map(String::as_str))?);
+                }
                 "--net-backend" => {
                     let value = iter
                         .next()
@@ -81,6 +89,9 @@ impl TestRequest {
                     let value = arg.trim_start_matches("--lane=");
                     request.lanes.push(value.to_owned());
                 }
+                _ if arg.starts_with("--narrow=") => {
+                    request.narrow = Some(filterset(arg.strip_prefix("--narrow="))?);
+                }
                 _ if arg.starts_with("--net-backend=") => {
                     let value = arg.trim_start_matches("--net-backend=");
                     request.net_backend = Some(value.to_owned());
@@ -89,6 +100,13 @@ impl TestRequest {
             }
         }
         Ok(request)
+    }
+}
+
+fn filterset(value: Option<&str>) -> Result<String> {
+    match value {
+        Some(filterset) if !filterset.trim().is_empty() => Ok(filterset.to_owned()),
+        _ => bail!("--narrow needs a filterset"),
     }
 }
 

@@ -348,8 +348,6 @@ mod tests {
 
     #[test]
     fn fields_alone_do_not_flag_a_struct() {
-        // 30 fields, only 2 substantial methods: a config/state struct, not a
-        // behaviour god — owned by `pub_struct_open_fields`, not god_struct.
         let scans = vec![scan("crates/x/src/cfg.rs", &[("Cfg", 30)], &[("Cfg", 2)])];
         assert!(aggregate(scans, 15).is_empty());
     }

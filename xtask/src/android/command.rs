@@ -351,11 +351,7 @@ pub(crate) fn run_build(
         "uniffi-bindgen",
         "--no-default-features",
         "--features",
-        // symphonia gives the host bindgen build a DecoderBackend
-        // variant (the android MediaCodec variant is target_os-gated
-        // and absent when compiling the bindgen bin for the host);
-        // kithara-net refuses to build without one HTTP client.
-        "uniffi-bindgen-cli,symphonia,client-reqwest,tls-rustls,stretch-identity",
+        "uniffi-bindgen-cli",
     ]);
     if matches!(profile, BuildProfile::Release) {
         cmd.arg("--release");

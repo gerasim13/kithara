@@ -304,7 +304,7 @@ impl PlayerTrack {
                 duration: resource.duration(),
             },
             ReadOutcome::Eof => TrackReadOutcome::Eof,
-            ReadOutcome::Failed(kind) => TrackReadOutcome::Failed(PlaybackFault::Decode(kind)),
+            ReadOutcome::Failed(kind) => TrackReadOutcome::Failed(PlaybackFault::Source(kind)),
         }
     }
 

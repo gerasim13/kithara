@@ -132,9 +132,11 @@ pub enum ExpandedNode {
         size: Option<SizeSpec>,
         children: Vec<Self>,
     },
+    /// Selection reserves the largest child size; a list stacks children vertically.
     Slot {
         id: InternId,
         size: Option<SizeSpec>,
+        select: bool,
         children: Vec<Self>,
     },
     Control {
@@ -305,7 +307,7 @@ pub enum ControlSpec {
 }
 
 /// Which side of the host contract a [`Binding`] addresses.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BindingKind {
     Command,
@@ -324,6 +326,11 @@ pub enum BindingKind {
     /// here.
     Page {
         name: InternId,
+    },
+    /// Tests whether a text read matches `keys`; `invert` negates the result.
+    Selects {
+        keys: Box<[InternId]>,
+        invert: bool,
     },
 }
 
@@ -440,22 +447,11 @@ impl BlockNode for ExpandedNode {
 }
 
 impl ControlSpec {
-    /// Whether this control draws a new picture every frame of its own accord,
-    /// with no endpoint and no input involved.
-    ///
-    /// A visualisation is a picture of a moment rather than of a value: it keeps
-    /// its own decay between frames, so a host that stops drawing it stops it.
-    /// Everything else changes only when what it reads changes, and is drawn
-    /// again then.
-    ///
-    /// A shader belongs with everything else, not with the visualisation beside
-    /// it. It draws exactly what its uniforms say, and every uniform is an
-    /// endpoint — so a shader bound to the host's own clock moves by itself and
-    /// is caught as a clock reader, and one bound to endpoints that hold still
-    /// draws the same picture however often it is asked.
-    ///
-    /// Spelled out rather than defaulted, so a control added tomorrow stops
-    /// compiling here instead of quietly joining the majority.
+    /// Whether the control needs a new frame without endpoint changes or input.
+    /// Visualisation retains temporal decay, so stopping frames stops it. Other
+    /// controls redraw when their reads change. Shader uniforms are endpoints:
+    /// a clock uniform is found as a clock reader, and stationary uniforms stay still.
+    /// The exhaustive match makes each new control choose its frame policy.
     pub(crate) const fn paints_every_frame(&self) -> bool {
         match self {
             Self::Vis => true,

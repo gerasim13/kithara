@@ -1,6 +1,10 @@
 use kithara_platform::sync::Arc;
 
-use crate::{error::UiDocError, ids::SourceUri, module::ModuleDoc};
+use crate::{
+    error::UiDocError,
+    ids::SourceUri,
+    module::{ModuleDoc, parse_module},
+};
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -33,7 +37,46 @@ pub struct LoadedModule {
     pub source: ModuleSource,
 }
 
+/// Fill supplied as a parsed module or a path resolved through the package.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum FillDocument {
+    /// Parsed module. Its origin must identify one document and differ from package paths.
+    Parsed {
+        document: Box<ModuleDoc>,
+        origin: SourceUri,
+    },
+    /// Package-relative path; package overlays apply.
+    Path(String),
+}
+
+impl FillDocument {
+    /// Parses a fill module with the given diagnostic and relative-path origin.
+    ///
+    /// # Errors
+    /// Returns [`UiDocError`] when `text` does not parse as a module.
+    pub fn parse(text: &str, origin: SourceUri) -> Result<Self, UiDocError> {
+        let document = parse_module(text, &origin)?;
+        Ok(Self::Parsed {
+            document: Box::new(document),
+            origin,
+        })
+    }
+}
+
+/// Document registered under a unique key in `<module id>/<collection>`.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct Fill {
+    pub address: String,
+    pub key: String,
+    pub document: FillDocument,
+}
+
 pub trait SourceResolver {
+    /// Registered fills in insertion order.
+    fn fills(&self) -> Vec<&Fill>;
+
     /// Loads a module's text or a ready document at the same resolved path.
     ///
     /// # Errors

@@ -33,24 +33,18 @@ pub struct FfiCacheIdentityRule {
     pub query_parameters: Vec<String>,
 }
 
-/// Foreign cache layout callback.
-///
-/// Implementations must be pure and deterministic, fast, non-blocking,
-/// non-throwing, and safe to call from arbitrary background threads. Returned
-/// values must not contain query text, credentials, or other secrets.
-/// `root` is called once for each store scope being created. `path` is called
-/// once for each resource key being minted. Cache operations using that key do
-/// not invoke either callback again.
-/// Invalid output fails scope or key creation and never falls back to the
-/// default layout.
-///
-/// `root` must return exactly one non-empty component and cannot equal
-/// `_index`. `path` must return a non-empty relative path of components
-/// separated by `/`; no component may end in `.tmp`. Components are ASCII,
-/// at most 96 bytes, never `.` or `..`, do not end in a dot or space, are not
-/// Windows device names, and contain neither control bytes nor
-/// `< > : " / \ | ? *`. Comparisons for `_index`, `.tmp`, and device names are
-/// case-insensitive. The store rejects invalid output instead of rewriting it.
+/// Pure, deterministic cache-layout callbacks, fast, non-blocking, non-throwing
+/// and safe on arbitrary background threads. Output must contain no query text,
+/// credentials or other secrets.
+/// `root` runs once per new store scope, `path` once per new resource key;
+/// operations on that key do not repeat either callback. Invalid output fails
+/// creation without rewriting it or falling back to the default layout.
+/// `root` is one non-empty component other than `_index`; `path` is a non-empty
+/// relative `/`-separated path with no component ending in `.tmp`.
+/// Components are ASCII, at most 96 bytes, never `.` or `..`, never end in dot
+/// or space, and contain no controls or `< > : " / \ | ? *`.
+/// Windows device names are refused; `_index`, `.tmp` and device-name checks
+/// are case-insensitive.
 #[kithara::mock(api = FfiAssetLayoutMock)]
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 pub trait FfiAssetLayout: Send + Sync {

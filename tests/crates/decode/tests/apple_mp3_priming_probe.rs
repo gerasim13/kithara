@@ -69,7 +69,6 @@ fn measure_leading_silence(
         .pools(pools())
         .backend(backend)
         .gapless(gapless)
-        .hint("mp3")
         .build();
     let mut decoder =
         DecoderFactory::create_with_probe(Cursor::new(mp3_bytes), Some("mp3"), config)

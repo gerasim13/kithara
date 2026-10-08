@@ -279,7 +279,7 @@ fn publish_notification<S>(
 
 #[cfg(test)]
 mod tests {
-    use kithara_audio::DecodeErrorKind;
+    use kithara_audio::{DecodeErrorKind, TrackFailureKind};
     use kithara_events::{Envelope, EventReceiver, TrackId};
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
@@ -389,9 +389,9 @@ mod tests {
             &stop_notification(
                 consts::OUTGOING,
                 "leading.mp3",
-                TrackPlaybackStopReason::Failed(PlaybackFault::Decode(
-                    DecodeErrorKind::InvalidData,
-                )),
+                TrackPlaybackStopReason::Failed(PlaybackFault::Source(TrackFailureKind::Decode {
+                    kind: DecodeErrorKind::InvalidData,
+                })),
             ),
             ItemRole::Background(track(consts::OUTGOING, SlotId::new(0), "leading.mp3")),
         );
@@ -399,7 +399,9 @@ mod tests {
             event,
             Some(PlayerEvent::ItemDidFail {
                 item: ItemRole::Background(_),
-                fault: PlaybackFault::Decode(DecodeErrorKind::InvalidData)
+                fault: PlaybackFault::Source(TrackFailureKind::Decode {
+                    kind: DecodeErrorKind::InvalidData
+                })
             })
         ));
     }

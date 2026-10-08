@@ -271,8 +271,8 @@ impl AppleCodec {
 }
 
 impl FrameCodec for AppleCodec {
+    /// Equal-rate AAC already emits complete packets; conversion and other codecs need a tail drain.
     fn needs_eof_drain(&self, _source_rate: u32) -> bool {
-        // Equal-rate AAC already emits full packets; only conversion has a tail to drain.
         self.spec.sample_rate.get() != self.source_sample_rate
             || !matches!(
                 self.codec,

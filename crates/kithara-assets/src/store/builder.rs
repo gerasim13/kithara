@@ -259,7 +259,6 @@ where
         }
 
         let cancel = CancelScope::new(cancel).token();
-        // The disk branch returns above; these indices belong to the memory store.
         let pins = crate::index::PinsIndex::ephemeral();
         let lru = crate::index::LruIndex::ephemeral();
         let active_resources = Arc::new(DashMap::new());

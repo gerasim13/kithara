@@ -312,12 +312,11 @@ impl<P: StagePort> Shared<P> {
     /// queues its cancellation behind the refusal, so an owner that kept the
     /// preparation pending hears that its lane is gone. A successor that
     /// replaced the lane meanwhile is left alone.
+    /// This drainer takes the queued cancellation itself, preventing a second drainer.
     fn retire_refused(&self, stamp: SyncExecutionStamp) {
         let mut state = self.state.lock();
         let refused = state.held.take_if(|held| held.stamp == stamp);
         if let Some(held) = &refused {
-            // The drainer running this is the one that takes the
-            // cancellation, so no second one starts.
             let _ = state.retire(held);
         }
         drop(state);

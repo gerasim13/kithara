@@ -192,22 +192,9 @@ pub struct NetOptions {
     /// Defaults to all four; byte-addressed requests always use `identity`.
     #[config(builder(default = Compression::all()), patch(attribute(serde(default))))]
     pub(crate) compression: Compression,
-    /// Maximum allowed inactivity between consecutive read operations.
-    /// Maps to [`reqwest::ClientBuilder::read_timeout`] (documented as
-    /// "The timeout applies to each read operation, and resets after a
-    /// successful read") and also drives the Downloader-layer
-    /// `BodyStream` chunk-inactivity guard for the same semantics one
-    /// layer down.
-    ///
-    /// Protects against zombie connections that send headers but then
-    /// stop streaming bytes. Does **not** cap the total request
-    /// lifetime; a legitimately slow stream that keeps delivering
-    /// chunks (even one byte every few seconds) is not aborted.
-    /// Default 30s is sized to absorb realistic mobile-network stalls
-    /// (TCP retransmits, captive-portal warm-up, server-side TTFB
-    /// spikes) without aborting valid slow streams — the player's
-    /// contract is "wait for the segment, regardless of connection
-    /// speed", and a 10s cap raced real fixtures.
+    /// Maximum wait for response headers or inactivity between body chunks.
+    /// Progress resets the runtime streaming layer's timer; it never caps a live transfer's total duration.
+    /// Defaults to 30 seconds to tolerate mobile-network stalls.
     #[config(builder(default = Duration::from_secs(30)), patch(humantime))]
     pub(crate) inactivity_timeout: Duration,
     /// How long a pooled connection may sit idle before it is dropped.

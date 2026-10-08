@@ -51,6 +51,8 @@ fn resolve(defs: &[&'static AssetDef]) -> Vec<(String, String, &'static AssetDef
 /// The accessor names this build must produce again, with every asset built
 /// from one of them. A derived asset holds bytes of its dependency, so
 /// refreshing a source without its dependents would leave the two disagreeing.
+/// Unknown selections are nonfatal because enabled families register different
+/// subsets. The small acyclic graph makes repeated dependency closure finite.
 fn refreshed(resolved: &[(String, String, &'static AssetDef)]) -> HashSet<String> {
     let selection = store::Refresh::requested();
     let mut names: HashSet<String> = resolved
@@ -58,9 +60,6 @@ fn refreshed(resolved: &[(String, String, &'static AssetDef)]) -> HashSet<String
         .filter(|(name, _, def)| selection.selects(def.func, name))
         .map(|(name, _, _)| name.clone())
         .collect();
-    // A name this build does not register is reported, not fatal: the asset set
-    // is gated by the enabled families, so one selection is read by builds that
-    // register different halves of it.
     if let store::Refresh::Named(requested) = &selection {
         for requested in requested {
             if !resolved
@@ -74,8 +73,6 @@ fn refreshed(resolved: &[(String, String, &'static AssetDef)]) -> HashSet<String
             }
         }
     }
-    // Dependencies are acyclic, so one pass per level suffices; the graph is
-    // small enough that repeating until nothing is added stays trivial.
     loop {
         let grown: Vec<String> = resolved
             .iter()
@@ -140,6 +137,9 @@ fn materialize(
     unavailable
 }
 
+/// Only optional sources without dependencies fetch remotely; optional derived
+/// assets are produced locally whenever their dependencies exist. Without hydration,
+/// fetching families cannot regenerate, so refresh retains their cached entries.
 fn materialize_one(
     namespace: &Path,
     resolved: &[(String, String, &'static AssetDef)],
@@ -148,12 +148,7 @@ fn materialize_one(
     refresh: &HashSet<String>,
 ) -> Option<(String, String)> {
     let (name, id, def) = &resolved[index];
-    // Only an optional source fetches. An optional asset built from
-    // dependencies derives its bytes locally, so it is produced whenever its
-    // dependencies are: every fetched track reaches its analysis at build time.
     let fetches = def.optional && def.dependencies.is_empty();
-    // A fetching family cannot be produced again without hydration, so a
-    // refresh never reaches one: the store keeps what it already holds.
     let hydration_off = fetches
         && std::env::var_os(DISABLE_REMOTE_FIXTURES_ENV).is_some_and(|value| !value.is_empty());
     let reuse = hydration_off || !refresh.contains(name);
@@ -237,6 +232,8 @@ fn materialize_one(
     None
 }
 
+/// Filesystem-free WASM accessors embed bytes at compile time; native accessors
+/// retain store metadata and read entries at runtime.
 fn codegen(
     namespace: &Path,
     resolved: &[(String, String, &'static AssetDef)],
@@ -257,8 +254,6 @@ fn codegen(
         let unavailable = unavailable
             .get(name)
             .map_or_else(|| "None".to_owned(), |reason| format!("Some({reason:?})"));
-        // Filesystem-free wasm accessors need compile-time bytes. Native
-        // accessors keep only store metadata and read the entry at run time.
         let (cfg, body) = if def.embed && embed_assets {
             (
                 "",
@@ -307,6 +302,9 @@ fn codegen(
 /// Materialize every registered asset into the shared store and write one
 /// accessor per case into `OUT_DIR/assets.rs`. Called from the build script of
 /// the crate the accessors compile into.
+/// Only available entries are watched: Cargo treats absent watched files as changed
+/// on every build, while hydration environment changes rerun this script. The stamp
+/// detects namespace removal; individual watches detect changed entries.
 ///
 /// # Panics
 ///
@@ -333,8 +331,6 @@ pub fn generate() {
         store::root_from_env().unwrap_or_else(|error| panic!("kithara-test-fixtures: {error}"));
     let namespace = store::namespace(&root, fingerprint);
     let unavailable = materialize(&namespace, &resolved, &refreshed(&resolved));
-    // Cargo reads an absent watched path as changed on every build, so an
-    // unavailable entry is not watched: its hydration env reruns this script.
     for (_, id, def) in resolved
         .iter()
         .filter(|(name, _, _)| !unavailable.contains_key(name))
@@ -345,7 +341,6 @@ pub fn generate() {
         );
     }
 
-    // The stamp tracks namespace removal; the declarations above track entries.
     let stamp = store::write_stamp(&namespace, fingerprint)
         .unwrap_or_else(|error| panic!("kithara-test-fixtures: write stamp: {error}"));
     println!("cargo:rerun-if-changed={}", stamp.display());

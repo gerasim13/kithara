@@ -145,15 +145,12 @@ where
     crate::backend::thread::spawn(propagated(f, Location::caller()))
 }
 
-/// Under `flash`, a cooperative yield must relinquish the quiescence engine:
-/// a busy-poll loop spinning on `std::thread::yield_now` keeps the thread counted
-/// as running, so the virtual clock can never advance past it — and a loop bounded
-/// by a virtual-time deadline then livelocks (it waits for time its own spinning
-/// prevents). The sim path parks the thread as a yield-waiter so the clock can
-/// advance, then wakes it on the next advance to re-check. Off the sim path
-/// (real-time scope) it stays a plain OS yield, so the real-time / RT worker
-/// behaviour is unchanged. See `crate::flash::system::yield_until_advance`.
-/// A dedicated participant takes the sim path too (see `yields_to_engine`).
+/// Cooperatively yields by engine-parking flash or dedicated participants until
+/// the next clock advance; real-time scopes otherwise use an OS yield.
+/// OS yielding leaves running credit held, so virtual-deadline busy loops would
+/// freeze the clock they need to advance. Dedicated pooled closures hold that
+/// credit even without an active flash region; `flash_enabled()` alone would
+/// select the OS path for the thread capable of freezing the engine.
 #[inline]
 pub fn yield_now() {
     if yields_to_engine() {
@@ -246,20 +243,14 @@ pub fn sleep(duration: Duration) {
     }
 }
 
-/// Back off a synchronous poll loop whose data is produced by another
-/// engine-visible thread. A bare `sleep` here would register a free virtual
-/// `Timed` deadline (deadline = virtual now + `duration`) that the engine
-/// services in isolation: each wake re-polls and re-sleeps, racing the virtual
-/// clock far ahead of the real producer (the analysis decode loop vs the audio
-/// worker fed by a real download). A deadline-less cooperative yield instead
-/// relinquishes the engine and is re-woken on the next clock advance —
-/// advancing in lockstep with the engine-visible producer (paced by its real
-/// I/O), never inflating the clock on its own. Off the sim path it is a real
-/// `sleep(duration)` throttle (no busy-spin), via the native arm.
-///
-/// A dedicated participant takes the sim path as [`yield_now`] does. Async
-/// code backs off through a pooled `spawn_blocking` closure, and a real sleep
-/// there would hold the clock for the whole backoff.
+/// Back off a synchronous poll loop fed by another engine-visible thread.
+/// A virtual timed sleep would repeatedly advance the clock ahead of that
+/// producer. Cooperative yield instead relinquishes the engine until its next
+/// advance, paced by real I/O, without adding a deadline.
+/// Dedicated participants take this simulated path as [`yield_now`] does.
+/// Async code backs off inside a pooled `spawn_blocking` closure; sleeping
+/// there would hold the clock throughout the backoff.
+/// The native arm uses `sleep(duration)` to throttle without spinning.
 #[inline]
 #[track_caller]
 pub fn paced_backoff(duration: Duration) {

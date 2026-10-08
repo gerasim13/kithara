@@ -26,21 +26,9 @@ pub(crate) struct EvictConfig {
     pub(crate) max_bytes: Option<u64>,
 }
 
-/// In-memory + best-effort disk-backed LRU index over `asset_root`.
-///
-/// Architecturally symmetric to [`AvailabilityIndex`](super::AvailabilityIndex)
-/// and [`PinsIndex`](super::PinsIndex): the `Arc` is encapsulated
-/// **inside** the type, [`Clone`] is cheap (atomic refcount bump),
-/// every mutation flushes the optional disk-backed index file.
-///
-/// Persistence is **lazy**: the disk file is materialised only on the
-/// first [`Self::flush`]. A pre-existing on-disk file from a previous
-/// run is read eagerly during `Self::with_persist_at` (native only)
-/// for hydration. On wasm32 the index is always ephemeral.
-///
-/// Two call-sites share a single instance per `cache_dir`:
-///   * `EvictAssets` (touch/remove during open and eviction),
-///   * `DiskAssetDeleter` (drop entry when an `asset_root` is fully removed).
+/// Cloneable shared LRU index over asset roots, with optional best-effort disk persistence.
+/// Hydrates an existing file eagerly; mutations flush it, but creation waits for the first flush.
+/// The evictor and disk deleter share one instance per cache directory; wasm stays ephemeral.
 #[derive(Clone)]
 pub(crate) struct LruIndex {
     pub(super) inner: Arc<LruInner>,

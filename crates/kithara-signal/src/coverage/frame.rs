@@ -171,9 +171,7 @@ mod tests {
 
     #[kithara::test]
     fn nothing_is_reported_beyond_the_horizon() {
-        // Covered to 400, but only 200 is known to exist.
         assert!(gaps(&coverage(&[(0, 400)]), 200).is_empty());
-        // A run wholly past the horizon cannot open a gap behind it.
         assert_eq!(
             gaps(&coverage(&[(0, 50), (300, 100)]), 200),
             [Range {
@@ -185,8 +183,6 @@ mod tests {
 
     #[kithara::test]
     fn a_run_straddling_the_horizon_closes_the_gap_before_it() {
-        // The run starts below the horizon and ends past it, so the gap in
-        // front of it stops where the run does, not at the horizon.
         assert_eq!(
             gaps(&coverage(&[(0, 50), (100, 200)]), 200),
             [Range {
@@ -194,7 +190,6 @@ mod tests {
                 end: 100
             }]
         );
-        // The same run with nothing before it leaves only the head missing.
         assert_eq!(
             gaps(&coverage(&[(150, 100)]), 200),
             [Range { start: 0, end: 150 }]

@@ -333,24 +333,9 @@ impl DiskAssetStore {
         )
     }
 
-    /// Like [`DiskAssetStore::new`] but shares the given aggregate
-    /// availability handle. Observer callbacks fired by this store's
-    /// resources mutate the shared handle, so queries through the
-    /// owning [`crate::AssetStore`] see the updates immediately.
-    ///
-    /// Disk persistence (load + later flush) is driven by
-    /// [`AvailabilityIndex::enable_persistence`], which the production
-    /// builder calls before constructing the store. Without it, the
-    /// aggregate stays in-memory only.
-    ///
-    /// The `deleter` parameter is the canonical removal channel —
-    /// every path that physically deletes a resource (own or foreign)
-    /// goes through it, see [`crate::backend::AssetDeleter`]. Production callers
-    /// share one [`Arc<dyn AssetDeleter>`] between the store and the
-    /// LRU evictor; tests construct a fresh deleter via
-    /// [`Self::new`].
-    /// `segment_reservation` defaults to one mebibyte, which covers a typical
-    /// media segment in a single mapping.
+    /// Share aggregate availability and the canonical deleter with the owning store and evictor.
+    /// Resource observers update this same availability handle; enable its persistence before
+    /// construction to retain it on disk. Segment reservation defaults to one mebibyte.
     #[builder]
     pub(crate) fn with_availability_and_deleter<P: Into<PathBuf>>(
         root_dir: P,

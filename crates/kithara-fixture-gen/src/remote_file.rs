@@ -43,6 +43,8 @@ pub(crate) enum RemoteFileError {
 /// A request or transfer silent for `stall` is asked again from the byte it
 /// reached: a CDN edge can hold a request or a response open without sending
 /// anything, and one such stall must not spend the whole `timeout`.
+/// The blocking-client timeout bounds each response/read wait rather than the whole
+/// transfer. Interrupted bodies retain received bytes for the next resumed request.
 pub(crate) fn fetch_verified(
     url: &Url,
     sha256_hex: &str,
@@ -50,8 +52,6 @@ pub(crate) fn fetch_verified(
     timeout: Duration,
     stall: Duration,
 ) -> Result<Vec<u8>, RemoteFileError> {
-    // A blocking client's own timeout bounds each wait, the response and every
-    // read, so it measures silence rather than the whole transfer.
     let client =
         Client::builder()
             .timeout(stall)
@@ -66,8 +66,6 @@ pub(crate) fn fetch_verified(
         let Some(mut response) = request(&client, url, bytes.len() as u64, deadline)? else {
             continue;
         };
-        // An interrupted body keeps what arrived: the next request resumes
-        // after it.
         if response.read_to_end(&mut bytes).is_ok() {
             break;
         }

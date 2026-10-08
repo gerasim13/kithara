@@ -92,20 +92,11 @@ pub trait DriverIo: Send + Sync + 'static {
         Ok(())
     }
 
-    /// Finalize the written bytes without publishing a committed snapshot.
-    ///
-    /// For a caller that is about to replace this resource anyway — the
-    /// atomic-chunked commit renames the file and reopens on the canonical
-    /// path — publishing here would map a file that is discarded a moment
-    /// later. Sealing flushes the bytes and leaves the active mapping in
-    /// place, so readers that already hold a view keep serving from it until
-    /// the replacement lands.
-    ///
-    /// Drivers that cannot separate the two fall back to [`Self::commit`].
+    /// Flush bytes without publishing a snapshot that an imminent rename/reopen would discard.
+    /// Existing views keep their active mapping until replacement; the default delegates to [`Self::commit`].
     ///
     /// # Errors
-    ///
-    /// Returns error if the written bytes cannot be flushed.
+    /// Returns an error if written bytes cannot be flushed.
     fn seal(&self, final_len: Option<u64>) -> StorageResult<()> {
         self.commit(final_len)
     }
@@ -159,20 +150,9 @@ pub struct DriverState {
     pub is_committed: bool,
 }
 
-/// Driver factory + I/O contract.
-///
-/// `Driver` adds backend creation on top of the runtime [`DriverIo`]
-/// operations. Public on purpose: the generic
-/// `Resource::<D>::open(cancel, opts: D::Options)` constructor uses
-/// `D::Options` as the call-site type-driver disambiguation knob — every
-/// `Resource::open(token, MmapOptions { .. })` callsite resolves to
-/// `Resource<MmapDriver>::open` because `MmapOptions = <MmapDriver as Driver>::Options`.
-///
-/// The `redundant_reexport` audit lint flags the dual surface (`pub use
-/// mmap::MmapOptions` AND `<MmapDriver as Driver>::Options = MmapOptions`) — the
-/// duplication is intentional: `MmapOptions` is the canonical constructor type users
-/// reach via `kithara_storage::MmapOptions`, while the trait associated type is the
-/// bound that lets `Resource::open` stay generic.
+/// Backend factory plus [`DriverIo`] operations.
+/// Public associated Options selects the driver for generic `Resource::open`; named option re-exports
+/// remain the canonical constructor types callers use.
 pub trait Driver: DriverIo {
     /// Configuration needed to open/create a driver instance.
     type Options: Send;

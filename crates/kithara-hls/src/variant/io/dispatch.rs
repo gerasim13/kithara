@@ -30,19 +30,10 @@ enum AcquireSettle {
     Fail,
 }
 
-/// Decide how an acquire failure settles, given how many the slot has already
-/// taken (this one included).
-///
-/// A live sibling writer holding the tmp is the one obstruction the system
-/// itself promises to clear: that holder always settles and releases, so the
-/// retry is guaranteed to resolve and needs no budget. Nothing promises as
-/// much for any other error — but a momentary one, a descriptor the host was
-/// briefly short of or a parent directory a concurrent eviction was removing,
-/// must not cost the whole segment either. Those retry against `budget`
-/// ([`crate::HlsConfig::acquire_attempt_budget`]) and settle `Fail` once it is spent,
-/// because a requeue that never resolves is invisible: the slot stays planned,
-/// so `range_wait_phase` answers `WaitingDemand` and `range_has_failed` stays
-/// false while the decode gate parks for good.
+/// Settle an acquisition error after `failures` attempts, including this one.
+/// A live tmp claimant owns release, so `TmpClaimed` requeues without spending the budget.
+/// Other errors spend [`crate::HlsConfig::acquire_attempt_budget`] then fail; endless requeues
+/// would leave a planned slot permanently `WaitingDemand` without a visible terminal error.
 const fn settle_for(err: &AssetsError, failures: u8, budget: u8) -> AcquireSettle {
     if matches!(err, AssetsError::Storage(StorageError::TmpClaimed(_))) {
         return AcquireSettle::Requeue;
@@ -155,74 +146,53 @@ where
             let Some((planned, plan_revision)) = planned else {
                 break;
             };
-            match planned {
-                PlannedFetch::Init => {
-                    let Some(init) = self.init() else {
-                        continue;
-                    };
-                    let Some(handle) = init.state().try_claim(
-                        PlannedFetch::Init,
-                        plan_revision,
-                        Arc::downgrade(self),
-                        ctx.signal.clone(),
-                    ) else {
-                        if !init.state().is_loaded() && !init.state().is_failed() {
-                            deferred.push((planned, plan_revision));
-                        }
-                        continue;
-                    };
-                    if let Some(actual) = self.init_committed_final_len() {
-                        handle.into_loaded(actual);
-                        ctx.signal.fire();
-                        continue;
-                    }
-                    let Some(mut cmd) = self.build_init_cmd(ctx, handle, cancel.clone()) else {
-                        if self
-                            .init()
-                            .is_some_and(|i| !i.state().is_loaded() && !i.state().is_failed())
-                        {
-                            deferred.push((planned, plan_revision));
-                        }
-                        continue;
-                    };
-                    cmd.set_priority(RequestPriority::High);
-                    out.push(cmd);
+            let entry = match planned {
+                PlannedFetch::Init => self.init(),
+                PlannedFetch::Segment(seg_idx) => self.segments.get(seg_idx as usize),
+            };
+            let Some(entry) = entry else {
+                continue;
+            };
+            let Some(handle) = entry.state().try_claim(
+                planned,
+                plan_revision,
+                Arc::downgrade(self),
+                ctx.signal.clone(),
+            ) else {
+                if !entry.state().is_loaded() && !entry.state().is_failed() {
+                    deferred.push((planned, plan_revision));
                 }
+                continue;
+            };
+            if let Some(actual) = entry.committed_len(&self.segments.scope) {
+                handle.into_loaded(actual);
+                ctx.signal.fire();
+                continue;
+            }
+            let cmd = match planned {
+                PlannedFetch::Init => self.build_fetch_cmd(ctx, entry, handle, cancel.clone()),
                 PlannedFetch::Segment(seg_idx) => {
-                    let Some(entry) = self.segments.get(seg_idx as usize) else {
-                        continue;
-                    };
-                    let Some(handle) = entry.state().try_claim(
-                        PlannedFetch::Segment(seg_idx),
-                        plan_revision,
-                        Arc::downgrade(self),
-                        ctx.signal.clone(),
-                    ) else {
-                        if !entry.state().is_loaded() && !entry.state().is_failed() {
-                            deferred.push((planned, plan_revision));
-                        }
-                        continue;
-                    };
-                    if let Some(actual) = self.committed_final_len(seg_idx) {
-                        handle.into_loaded(actual);
-                        ctx.signal.fire();
-                        continue;
-                    }
                     let token = if beyond_owed(seg_idx) {
                         lookahead.clone()
                     } else {
                         cancel.clone()
                     };
-                    let Some(mut cmd) = self.emit_fetch_cmd(ctx, seg_idx, handle, token) else {
-                        deferred.push((planned, plan_revision));
-                        continue;
-                    };
-                    if owed(seg_idx) {
-                        cmd.set_priority(RequestPriority::High);
-                    }
-                    out.push(cmd);
+                    self.emit_fetch_cmd(ctx, seg_idx, handle, token)
                 }
+            };
+            let Some(mut cmd) = cmd else {
+                if !entry.state().is_loaded() && !entry.state().is_failed() {
+                    deferred.push((planned, plan_revision));
+                }
+                continue;
+            };
+            if match planned {
+                PlannedFetch::Init => true,
+                PlannedFetch::Segment(seg_idx) => owed(seg_idx),
+            } {
+                cmd.set_priority(RequestPriority::High);
             }
+            out.push(cmd);
             remaining -= 1;
         }
         if !deferred.is_empty() {
@@ -248,17 +218,24 @@ where
         cancel: CancelToken,
     ) -> Option<FetchCmd> {
         let entry = &self.segments[seg_idx as usize];
-        let Some(resource_handle) = self.segment_handle(seg_idx) else {
-            let _ = handle.into_missing();
-            return None;
-        };
+        self.build_fetch_cmd(ctx, entry, handle, cancel)
+    }
+
+    fn build_fetch_cmd(
+        self: &Arc<Self>,
+        ctx: &PlanCtx<S>,
+        entry: &Segment,
+        handle: FetchClaim<Downloading, S>,
+        cancel: CancelToken,
+    ) -> Option<FetchCmd> {
+        let resource_handle = entry.resource(&self.segments.scope);
         let resource = match resource_handle.acquire(entry.content()) {
             Ok(r) => {
                 entry.state().clear_acquire_failures();
                 r
             }
             Err(err) => {
-                self.settle_unacquirable(ctx, entry, seg_idx, handle, &err);
+                self.settle_unacquirable(ctx, entry, handle, &err);
                 return None;
             }
         };
@@ -288,7 +265,6 @@ where
         &self,
         ctx: &PlanCtx<S>,
         entry: &Segment,
-        seg_idx: u32,
         handle: FetchClaim<Downloading, S>,
         err: &AssetsError,
     ) {
@@ -297,22 +273,23 @@ where
             AcquireSettle::Requeue => {
                 debug!(
                     variant = self.variant,
-                    seg_idx,
+                    planned = ?handle.planned(),
                     failures,
                     error = %err,
-                    "emit_fetch_cmd: segment resource not acquirable yet; requeued"
+                    "resource not acquirable yet; requeued"
                 );
                 let _ = handle.into_missing();
             }
             AcquireSettle::Fail => {
                 warn!(
                     variant = self.variant,
-                    seg_idx,
+                    planned = ?handle.planned(),
                     failures,
                     error = %err,
-                    "emit_fetch_cmd: segment resource cannot be acquired; settling as failed"
+                    "resource cannot be acquired; settling as failed"
                 );
                 let _ = handle.into_failed();
+                ctx.signal.fire();
             }
         }
     }

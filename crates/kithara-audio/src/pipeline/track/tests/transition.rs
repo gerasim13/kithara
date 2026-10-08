@@ -4,11 +4,11 @@ use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{sync::Arc, time::Duration, tokio::task::yield_now};
 use kithara_signal::AudioChunk;
 use kithara_stream::{
-    AudioCodec, ContainerFormat, MediaInfo, OutgoingDisposition, VariantPromotion,
+    AudioCodec, ContainerFormat, MediaInfo, OutgoingDisposition, SourcePhase, VariantPromotion,
     VariantReaderPlan, VariantTransition, VariantTransitionId,
 };
 use kithara_test_fixtures::unit_fixtures::{RoutePcm, route_pcm};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{flight, kithara};
 
 use super::rebuild::{
     RouteFixture, TestDecoder, media_info, produced_data, route_signal_source,
@@ -20,14 +20,240 @@ use crate::{
     DecoderChangeCause, DecoderEvent, consts,
     pipeline::{
         decode::{DecoderGeneration, transition::OutgoingFrontier},
-        rebuild::{DecoderBuildComplete, DecoderBuildPurpose, state::BuildId},
+        rebuild::{
+            DecoderBuildComplete, DecoderBuildPurpose, RecreateCause, RecreateNext,
+            RecreateOutcome, RecreateState, state::BuildId,
+        },
         seek::{ResumeState, SeekContext, SeekRequest, engine::SeekTransition},
         track::{
             AtEof, CurrentFsm, Failed, Track, TrackFailure, TrackStep, fsm::apply_seek_transition,
+            recreate::finish_recreate_outcome,
         },
     },
     traits::{AudioSource, AudioSourceExt},
 };
+
+#[kithara::test(native, tokio, tracing("warn"))]
+#[case::decode_shell(
+    TrackFailure::Decode(DecodeError::InvalidData { detail: "terminal-log-contract" }),
+    "terminal-log-contract",
+    false
+)]
+#[case::decode_drop(
+    TrackFailure::Decode(DecodeError::InvalidData { detail: "terminal-log-contract" }),
+    "terminal-log-contract",
+    true
+)]
+#[case::recreate_shell(TrackFailure::RecreateFailed { offset: 8193 }, "8193", false)]
+#[case::recreate_drop(TrackFailure::RecreateFailed { offset: 8193 }, "8193", true)]
+#[case::cancel_shell(TrackFailure::SourceCancelled, "source cancelled", false)]
+#[case::cancel_drop(TrackFailure::SourceCancelled, "source cancelled", true)]
+async fn terminal_failure_is_logged_once_without_dispatch_reentry(
+    route_pcm: RoutePcm,
+    #[case] failure: TrackFailure,
+    #[case] detail: &str,
+    #[case] teardown_only: bool,
+) {
+    let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+    assert!(
+        failure_log_output().is_empty(),
+        "the fixture must start without a track failure"
+    );
+    fixture
+        .source
+        .update_state(Track::<Failed>::new(failure).erase());
+    assert!(
+        failure_log_output().is_empty(),
+        "the produce core must not format diagnostics"
+    );
+    if teardown_only {
+        drop(fixture.source);
+    } else {
+        fixture.source.finish_deferred();
+        let first = failure_log_output();
+        assert_eq!(
+            first.len(),
+            1,
+            "a shell pass must record the terminal failure: {first:?}"
+        );
+        fixture.source.finish_deferred();
+        assert_eq!(
+            failure_log_output(),
+            first,
+            "a second shell pass must not repeat the failure"
+        );
+        drop(fixture.source);
+        assert_eq!(
+            failure_log_output(),
+            first,
+            "teardown must not repeat the shell's failure log"
+        );
+    }
+
+    let logged = failure_log_output();
+    assert_eq!(logged.len(), 1, "the failure is recorded once: {logged:?}");
+    assert!(
+        logged[0].contains(detail),
+        "the original failure detail must survive: {logged:?}"
+    );
+    assert!(
+        !logged[0].contains(" (x"),
+        "the failure must not carry a folded repeat count: {logged:?}"
+    );
+}
+
+fn failure_log_output() -> Vec<String> {
+    flight::tail()
+        .into_iter()
+        .filter(|line| line.contains("track failed:"))
+        .collect()
+}
+
+#[kithara::test(native, tokio, tracing("warn"))]
+#[case::decode_invalid(
+    TrackFailure::Decode(DecodeError::InvalidData { detail: "terminal-reentry-invalid" }),
+    "terminal-reentry-invalid"
+)]
+#[case::decode_unsupported(
+    TrackFailure::Decode(DecodeError::UnsupportedCodec { codec: AudioCodec::Mp3 }),
+    "Mp3"
+)]
+#[case::recreate(TrackFailure::RecreateFailed { offset: 8193 }, "8193")]
+#[case::cancel(TrackFailure::SourceCancelled, "source cancelled")]
+async fn terminal_failure_reentry_defers_one_full_diagnostic(
+    route_pcm: RoutePcm,
+    #[case] failure: TrackFailure,
+    #[case] detail: &str,
+) {
+    let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+    fixture
+        .source
+        .update_state(Track::<Failed>::new(failure).erase());
+    for _ in 0..2 {
+        assert!(matches!(fixture.source.step_track(), TrackStep::Failed(_)));
+        assert!(
+            failure_log_output().is_empty(),
+            "Failed reentry must not format a terminal diagnostic on the produce core"
+        );
+    }
+
+    fixture.source.finish_deferred();
+    let first = failure_log_output();
+    assert_eq!(
+        first.len(),
+        1,
+        "the shell must drain the failure once: {first:?}"
+    );
+    assert!(
+        first[0].contains(detail),
+        "the full cause must survive: {first:?}"
+    );
+    assert!(matches!(fixture.source.step_track(), TrackStep::Failed(_)));
+    fixture.source.finish_deferred();
+    drop(fixture.source);
+    assert_eq!(
+        failure_log_output(),
+        first,
+        "later produce, shell, and teardown passes must not repeat the diagnostic"
+    );
+}
+
+enum TerminalTransition {
+    Cancel,
+    Recreate,
+    Seek,
+}
+
+#[kithara::test(native, tokio, tracing("warn"))]
+#[case::cancel(TerminalTransition::Cancel, "source cancelled")]
+#[case::recreate(TerminalTransition::Recreate, "8193")]
+#[case::failed_seek(TerminalTransition::Seek, "terminal-seek-failure")]
+async fn real_terminal_transitions_wait_for_the_diagnostic_shell(
+    route_pcm: RoutePcm,
+    #[case] transition: TerminalTransition,
+    #[case] detail: &str,
+) {
+    let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
+    assert!(failure_log_output().is_empty());
+    match transition {
+        TerminalTransition::Cancel => {
+            *fixture.phase.lock() = SourcePhase::Cancelled;
+            assert!(matches!(fixture.source.step_track(), TrackStep::Failed(_)));
+            let CurrentFsm::Failed(handle) = &fixture.source.state else {
+                panic!("the cancelled source must install Failed");
+            };
+            assert!(matches!(handle.data(), TrackFailure::SourceCancelled));
+        }
+        TerminalTransition::Recreate => {
+            let step = finish_recreate_outcome(
+                &mut fixture.source,
+                RecreateState {
+                    cause: RecreateCause::FormatBoundary,
+                    media_info: media_info(0),
+                    next: RecreateNext::Decode,
+                    offset: 8193,
+                },
+                RecreateOutcome::SoftFailed,
+            );
+            assert!(matches!(step, TrackStep::Failed(_)));
+            let CurrentFsm::Failed(handle) = &fixture.source.state else {
+                panic!("the failed recreate must install Failed");
+            };
+            assert!(matches!(
+                handle.data(),
+                TrackFailure::RecreateFailed { offset: 8193 }
+            ));
+        }
+        TerminalTransition::Seek => {
+            let epoch = fixture.source.seek.begin(Duration::from_millis(20));
+            apply_seek_transition(
+                &mut fixture.source,
+                SeekTransition::Failed {
+                    request: SeekRequest {
+                        seek: SeekContext {
+                            target: Duration::from_millis(20),
+                            epoch,
+                        },
+                        emit_request: false,
+                    },
+                    error: DecodeError::SeekFailed {
+                        detail: "terminal-seek-failure",
+                    },
+                    context: "test failed seek",
+                },
+            );
+            let CurrentFsm::Failed(handle) = &fixture.source.state else {
+                panic!("the failed seek transition must install Failed before reentry");
+            };
+            assert!(matches!(
+                handle.data(),
+                TrackFailure::Decode(DecodeError::SeekFailed {
+                    detail: "terminal-seek-failure"
+                })
+            ));
+        }
+    }
+    assert!(
+        failure_log_output().is_empty(),
+        "the transition must not emit the terminal log"
+    );
+    assert!(matches!(fixture.source.step_track(), TrackStep::Failed(_)));
+    assert!(
+        failure_log_output().is_empty(),
+        "the later Failed step must not emit the terminal log"
+    );
+    fixture.source.finish_deferred();
+    let first = failure_log_output();
+    assert_eq!(
+        first.len(),
+        1,
+        "the shell must report the actual terminal transition"
+    );
+    assert!(first[0].contains(detail), "{first:?}");
+    fixture.source.finish_deferred();
+    drop(fixture.source);
+    assert_eq!(failure_log_output(), first);
+}
 
 fn incoming_plan() -> VariantReaderPlan {
     let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
@@ -1105,7 +1331,7 @@ async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks(
             }
             TrackStep::StateChanged | TrackStep::Blocked(_) => {}
             TrackStep::Eof => panic!("EOF must stay held while a transition is in flight"),
-            TrackStep::Failed => panic!("finite gapless fixture must reach EOF cleanly"),
+            TrackStep::Failed(_) => panic!("finite gapless fixture must reach EOF cleanly"),
         }
         fixture.source.flush_deferred();
     }
@@ -1124,7 +1350,7 @@ async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks(
             }
             TrackStep::StateChanged | TrackStep::Blocked(_) => {}
             TrackStep::Eof => break,
-            TrackStep::Failed => panic!("finite gapless fixture must reach EOF cleanly"),
+            TrackStep::Failed(_) => panic!("finite gapless fixture must reach EOF cleanly"),
         }
         fixture.source.flush_deferred();
     }
@@ -1338,5 +1564,5 @@ async fn failed_seek_commits_its_epoch_for_the_terminal_marker(route_pcm: RouteP
     // is stamped with `decode_epoch`, so the epoch must be committed here or
     // the marker is discarded as stale and a blocking reader hangs forever.
     assert_eq!(fixture.source.decode_epoch(), request.seek.epoch);
-    assert!(matches!(fixture.source.step_track(), TrackStep::Failed));
+    assert!(matches!(fixture.source.step_track(), TrackStep::Failed(_)));
 }

@@ -30,24 +30,13 @@ pub enum ExpansionError {
     OverlappingBlocks { a: Range<usize>, b: Range<usize> },
 }
 
-/// Compute block ranges for a sequence of sibling items inside a single
-/// container (a struct's named fields, a trait's associated items, an
-/// impl's items, a struct-init expression's fields).
-///
-/// `scope_bytes` is the byte range of the *content* of the container —
-/// e.g. for `struct S { a: u32, b: u32 }` it is the slice between the
-/// outer braces, not including them. Trivia expansion is clamped to this
-/// range so leading/trailing comments outside the container never leak
-/// into a block.
-///
-/// `item_spans` must be in source order and must each lie entirely inside
-/// `scope_bytes`.
+/// Expands source-ordered sibling item spans into blocks inside `scope_bytes`.
+/// The scope covers container contents without braces; trivia stays inside it
+/// so outside comments cannot leak into a block. Every item must fit the scope.
 ///
 /// # Errors
-///
-/// Returns an error when a span is out of range, item spans are out of source
-/// order, adjacent expanded blocks overlap, or a floating comment would be
-/// detached from its item.
+/// Returns an error for out-of-range or unordered spans, overlapping expanded
+/// blocks, or a floating comment that would be detached from its item.
 pub fn expand_blocks(
     src: &str,
     scope_bytes: Range<usize>,

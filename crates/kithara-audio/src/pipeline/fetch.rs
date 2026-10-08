@@ -1,5 +1,7 @@
 use std::num::{NonZeroU32, NonZeroU64};
 
+use crate::TrackFailureKind;
+
 /// Exclusive decoded-source boundary represented by rendered PCM.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
@@ -41,7 +43,10 @@ pub enum Fetch<C> {
     /// Natural end-of-stream for an epoch.
     NaturalEof { epoch: u64 },
     /// Decoder or source failure for an epoch.
-    Failure { epoch: u64 },
+    Failure {
+        epoch: u64,
+        failure: TrackFailureKind,
+    },
 }
 
 impl<C> Fetch<C> {
@@ -64,7 +69,7 @@ impl<C> Fetch<C> {
     /// Return the seek-invalidation epoch.
     pub const fn epoch(&self) -> u64 {
         match self {
-            Self::Data { epoch, .. } | Self::NaturalEof { epoch } | Self::Failure { epoch } => {
+            Self::Data { epoch, .. } | Self::NaturalEof { epoch } | Self::Failure { epoch, .. } => {
                 *epoch
             }
         }
@@ -72,8 +77,8 @@ impl<C> Fetch<C> {
 
     /// Create a failure marker distinct from natural end-of-stream.
     #[must_use]
-    pub const fn failure(epoch: u64) -> Self {
-        Self::Failure { epoch }
+    pub const fn failure(epoch: u64, failure: TrackFailureKind) -> Self {
+        Self::Failure { epoch, failure }
     }
 
     /// Create rendered data with its exact decoded-source boundary.

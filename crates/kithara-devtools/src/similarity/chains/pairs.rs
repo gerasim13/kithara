@@ -87,7 +87,10 @@ fn finding(ctx: &Ctx, x: usize, y: usize, similarity: f64, origin: Origin) -> Op
         return None;
     }
     let (fx, fy) = (ctx.facts.fns.get(x)?, ctx.facts.fns.get(y)?);
-    if fx.trait_name.is_some() && fx.trait_name == fy.trait_name && fx.name == fy.name {
+    if !ctx.resolver.trait_keys(x).is_empty()
+        && ctx.resolver.trait_keys(x) == ctx.resolver.trait_keys(y)
+        && fx.name == fy.name
+    {
         return None;
     }
     let owned = [

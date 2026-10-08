@@ -1249,6 +1249,28 @@ fn ambient_on_yield_now_is_engine_backed() {
     assert!(task.as_mut().poll(&mut cx).is_ready());
 }
 
+#[kithara::test(native, flash(false))]
+fn a_granted_yield_keeps_credit_until_consumed_or_cancelled() {
+    let _guard = guard();
+    reset();
+    let _ambient = ambient_scope(true);
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut context = Context::from_waker(&waker);
+
+    for cancelled in [true, false] {
+        let hold = super::system::FLASH.test_hold();
+        let mut yielded = Box::pin(yield_now());
+        assert!(yielded.as_mut().poll(&mut context).is_pending());
+        drop(hold);
+        assert_eq!(super::system::FLASH.active_count(), 1);
+        if !cancelled {
+            assert!(yielded.as_mut().poll(&mut context).is_ready());
+        }
+        drop(yielded);
+        assert_eq!(super::system::FLASH.active_count(), 0);
+    }
+}
+
 /// A yielder is a RUNNABLE participant, so every turn it asks for is handed to
 /// it. Rationing them — one per virtual instant, say — strands any task that
 /// yields more than once before its first deadline, and sends the clock to the

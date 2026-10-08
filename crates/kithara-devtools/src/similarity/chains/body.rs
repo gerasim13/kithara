@@ -6,50 +6,15 @@ use proc_macro2::{Delimiter, Span, TokenStream, TokenTree};
 use quote::ToTokens;
 use serde::Serialize;
 use syn::{
-    Expr, Item, Member, Pat, Stmt, Token,
+    Expr, Item, Member, Pat, Stmt, Token, Type,
     punctuated::Punctuated,
     spanned::Spanned,
     visit::{self, Visit},
 };
 
-use super::facts::{Import, cfgs_of, idents_of, last_ident, path_segs, use_tree};
+use super::facts::{Import, cfgs_of, path_segs, use_tree};
 
 mod consts {
-    /// Methods that hand their receiver's type through unchanged.
-    pub(super) const TRANSPARENT: &[&str] = &[
-        "lock",
-        "read",
-        "write",
-        "borrow",
-        "borrow_mut",
-        "as_ref",
-        "as_mut",
-        "as_deref",
-        "as_deref_mut",
-        "unwrap",
-        "expect",
-        "clone",
-        "get_mut",
-        "deref",
-        "deref_mut",
-        "load",
-        "load_full",
-        "upgrade",
-        "iter",
-        "iter_mut",
-        "into_iter",
-        "blocking_lock",
-        "try_lock",
-        "get",
-        "first",
-        "last",
-        "values",
-        "values_mut",
-        "as_slice",
-        "take",
-        "lock_sync",
-        "unwrap_or_default",
-    ];
     /// Methods whose arguments run only when the receiver holds no value.
     pub(super) const ALTERNATIVE: &[&str] = &[
         "or_else",
@@ -116,7 +81,7 @@ pub(super) enum Desc {
     SelfValue,
     /// A local binding: an index into the body's locals.
     Var(usize),
-    Path(Vec<String>),
+    Path(syn::Path),
     Field {
         of: Box<Self>,
         field: String,
@@ -124,27 +89,42 @@ pub(super) enum Desc {
     Ret {
         of: Box<Self>,
         method: String,
+        arg: Option<Box<Self>>,
     },
     CallRet {
-        path: Vec<String>,
+        path: syn::Path,
+        owner: Option<Type>,
         arg: Option<Box<Self>>,
     },
     Tuple(Vec<Self>),
-    Ty(Vec<String>),
+    Ty(Type),
+    Try(Box<Self>),
+    Index {
+        of: Box<Self>,
+        index: Box<Self>,
+    },
+    Integer(String),
+    Item(Box<Self>),
+    Closure {
+        of: Box<Self>,
+        method: String,
+        arg: usize,
+        input: usize,
+    },
     Payload {
         of: Box<Self>,
-        variant: Vec<String>,
+        variant: syn::Path,
         index: String,
     },
     Unknown,
 }
 
 impl Desc {
-    fn payload(of: &Self, variant: &[String], index: String) -> Self {
+    fn payload(of: &Self, variant: &syn::Path, index: String) -> Self {
         Self::Payload {
             index,
             of: Box::new(of.clone()),
-            variant: variant.to_vec(),
+            variant: variant.clone(),
         }
     }
 }
@@ -152,7 +132,7 @@ impl Desc {
 /// What a local binding's type is known from.
 #[derive(Debug)]
 pub(super) enum Local {
-    Ty(Vec<String>),
+    Ty(Type),
     From(Desc),
 }
 
@@ -172,7 +152,7 @@ pub(super) struct Site {
     pub(super) kind: SiteKind,
     /// Indices into the body's arms, outermost first.
     pub(super) frames: Vec<usize>,
-    pub(super) path: Vec<String>,
+    pub(super) path: syn::Path,
     pub(super) line: usize,
 }
 
@@ -184,7 +164,7 @@ pub(super) struct Arm {
     pub(super) tokens: Option<Vec<String>>,
     pub(super) label: String,
     pub(super) cfg: Vec<String>,
-    pub(super) variants: Vec<Vec<String>>,
+    pub(super) variants: Vec<syn::Path>,
     pub(super) fail: bool,
     pub(super) decision: u32,
 }
@@ -231,7 +211,7 @@ impl Body {
                 !primary,
                 lines_of(arg.span()),
             );
-            self.visit_arg(arg, recv);
+            self.visit_arg(arg, recv, name, index);
             self.stack.pop();
         }
     }
@@ -251,7 +231,7 @@ impl Body {
     }
 
     /// A parameter's pattern takes its declared type.
-    pub(super) fn bind_param(&mut self, pat: &Pat, ty: Vec<String>) {
+    pub(super) fn bind_param(&mut self, pat: &Pat, ty: Type) {
         match pat {
             Pat::Ident(ident) => self.bind(ident.ident.to_string(), Local::Ty(ty)),
             _ => self.bind_pat(pat, &Desc::Ty(ty)),
@@ -270,15 +250,14 @@ impl Body {
             }
             Pat::Type(typed) => {
                 if let Pat::Ident(ident) = typed.pat.as_ref() {
-                    self.bind(ident.ident.to_string(), Local::Ty(idents_of(&typed.ty)));
+                    self.bind(ident.ident.to_string(), Local::Ty((*typed.ty).clone()));
                 } else {
                     self.bind_pat(&typed.pat, from);
                 }
             }
             Pat::TupleStruct(tuple) => {
-                let variant = path_segs(&tuple.path);
                 for (index, elem) in tuple.elems.iter().enumerate() {
-                    self.bind_pat(elem, &Desc::payload(from, &variant, index.to_string()));
+                    self.bind_pat(elem, &Desc::payload(from, &tuple.path, index.to_string()));
                 }
             }
             Pat::Tuple(tuple) => {
@@ -292,10 +271,9 @@ impl Body {
                 }
             }
             Pat::Struct(strukt) => {
-                let variant = path_segs(&strukt.path);
                 for field in &strukt.fields {
                     let member = member_name(&field.member);
-                    self.bind_pat(&field.pat, &Desc::payload(from, &variant, member));
+                    self.bind_pat(&field.pat, &Desc::payload(from, &strukt.path, member));
                 }
             }
             Pat::Reference(reference) => self.bind_pat(&reference.pat, from),
@@ -315,8 +293,8 @@ impl Body {
         }
     }
 
-    /// A closure's parameters bind in its own scope; a closure handed to a
-    /// method takes the receiver's type for them.
+    /// A closure's parameters bind in its own scope. Method arguments retain
+    /// their position so the resolver can apply the receiver's signature.
     fn closure(&mut self, closure: &syn::ExprClosure, from: &Desc) {
         let mark = self.scope.len();
         for input in &closure.inputs {
@@ -339,28 +317,24 @@ impl Body {
                 if name == "self" {
                     Desc::SelfValue
                 } else {
-                    self.local(&name).map_or(Desc::Unknown, Desc::Var)
+                    self.local(&name)
+                        .map_or_else(|| Desc::Path(path.path.clone()), Desc::Var)
                 }
             }
-            Expr::Path(path) => Desc::Path(path_segs(&path.path)),
+            Expr::Path(path) if path.qself.is_none() => Desc::Path(path.path.clone()),
             Expr::Field(field) => Desc::Field {
                 of: Box::new(self.describe(&field.base)),
                 field: member_name(&field.member),
             },
-            Expr::MethodCall(call) => {
-                let method = call.method.to_string();
-                if consts::TRANSPARENT.contains(&method.as_str()) {
-                    self.describe(&call.receiver)
-                } else {
-                    Desc::Ret {
-                        method,
-                        of: Box::new(self.describe(&call.receiver)),
-                    }
-                }
-            }
+            Expr::MethodCall(call) => Desc::Ret {
+                method: call.method.to_string(),
+                of: Box::new(self.describe(&call.receiver)),
+                arg: call.args.first().map(|arg| Box::new(self.describe(arg))),
+            },
             Expr::Call(call) => match call.func.as_ref() {
                 Expr::Path(path) => Desc::CallRet {
-                    path: path_segs(&path.path),
+                    path: path.path.clone(),
+                    owner: path.qself.as_ref().map(|qself| (*qself.ty).clone()),
                     arg: call.args.first().map(|arg| Box::new(self.describe(arg))),
                 },
                 _ => Desc::Unknown,
@@ -369,17 +343,25 @@ impl Body {
                 Desc::Tuple(tuple.elems.iter().map(|elem| self.describe(elem)).collect())
             }
             Expr::Struct(strukt) => Desc::CallRet {
-                path: path_segs(&strukt.path),
+                path: strukt.path.clone(),
+                owner: None,
                 arg: None,
             },
             Expr::Paren(paren) => self.describe(&paren.expr),
             Expr::Group(group) => self.describe(&group.expr),
             Expr::Reference(reference) => self.describe(&reference.expr),
             Expr::Unary(unary) => self.describe(&unary.expr),
-            Expr::Try(tried) => self.describe(&tried.expr),
+            Expr::Try(tried) => Desc::Try(Box::new(self.describe(&tried.expr))),
             Expr::Await(awaited) => self.describe(&awaited.base),
-            Expr::Index(index) => self.describe(&index.expr),
-            Expr::Cast(cast) => Desc::Ty(idents_of(&cast.ty)),
+            Expr::Index(index) => Desc::Index {
+                of: Box::new(self.describe(&index.expr)),
+                index: Box::new(self.describe(&index.index)),
+            },
+            Expr::Lit(lit) => match &lit.lit {
+                syn::Lit::Int(integer) => Desc::Integer(integer.suffix().to_owned()),
+                _ => Desc::Unknown,
+            },
+            Expr::Cast(cast) => Desc::Ty((*cast.ty).clone()),
             _ => Desc::Unknown,
         }
     }
@@ -481,7 +463,7 @@ impl Body {
                         path.push(segment.to_string());
                         next += 3;
                     }
-                    self.scanned_path(&trees, index, next, path, line);
+                    self.scanned_path(&trees, index, next, &path, line);
                     index = next;
                     continue;
                 }
@@ -496,7 +478,7 @@ impl Body {
         trees: &[TokenTree],
         start: usize,
         end: usize,
-        path: Vec<String>,
+        path: &[String],
         line: usize,
     ) {
         let called = matches!(
@@ -508,10 +490,17 @@ impl Body {
             let recv = start
                 .checked_sub(2)
                 .map(|at| self.scanned_receiver(trees, at));
-            self.site(SiteKind::Method, path, recv, line);
+            if let Some(path) = syntax_path(path) {
+                self.site(SiteKind::Method, path, recv, line);
+            }
         } else if called {
-            self.site(SiteKind::Call, path, None, line);
-        } else if path.len() >= 2 && path.last().is_some_and(|last| is_upper(last)) {
+            if let Some(path) = syntax_path(path) {
+                self.site(SiteKind::Call, path, None, line);
+            }
+        } else if path.len() >= 2
+            && path.last().is_some_and(|last| is_upper(last))
+            && let Some(path) = syntax_path(path)
+        {
             self.site(SiteKind::Variant, path, None, line);
         }
     }
@@ -561,7 +550,7 @@ impl Body {
         }
     }
 
-    fn site(&mut self, kind: SiteKind, path: Vec<String>, recv: Option<Desc>, line: usize) {
+    fn site(&mut self, kind: SiteKind, path: syn::Path, recv: Option<Desc>, line: usize) {
         self.facts.sites.push(Site {
             kind,
             path,
@@ -571,9 +560,23 @@ impl Body {
         });
     }
 
-    fn visit_arg(&mut self, arg: &Expr, recv: &Desc) {
+    fn visit_arg(&mut self, arg: &Expr, recv: &Desc, method: &str, argument: usize) {
         if let Expr::Closure(closure) = arg {
-            self.closure(closure, recv);
+            let mark = self.scope.len();
+            for (input, pat) in closure.inputs.iter().enumerate() {
+                self.visit_pat(pat);
+                self.bind_pat(
+                    pat,
+                    &Desc::Closure {
+                        of: Box::new(recv.clone()),
+                        method: method.to_string(),
+                        arg: argument,
+                        input,
+                    },
+                );
+            }
+            self.visit_expr(&closure.body);
+            self.scope.truncate(mark);
         } else {
             self.visit_expr(arg);
         }
@@ -685,11 +688,16 @@ impl<'ast> Visit<'ast> for Body {
 
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
         if let Expr::Path(path) = call.func.as_ref() {
-            let mut segs = path_segs(&path.path);
-            if let Some(ty) = path.qself.as_ref().and_then(|q| last_ident(&q.ty)) {
-                segs.insert(0, ty);
-            }
-            self.site(SiteKind::Call, segs, None, path.path.span().start().line);
+            let recv = path
+                .qself
+                .as_ref()
+                .map(|qself| Desc::Ty((*qself.ty).clone()));
+            self.site(
+                SiteKind::Call,
+                path.path.clone(),
+                recv,
+                path.path.span().start().line,
+            );
         } else {
             self.visit_expr(&call.func);
         }
@@ -703,7 +711,7 @@ impl<'ast> Visit<'ast> for Body {
     }
 
     fn visit_expr_for_loop(&mut self, looped: &'ast syn::ExprForLoop) {
-        let from = self.describe(&looped.expr);
+        let from = Desc::Item(Box::new(self.describe(&looped.expr)));
         self.visit_expr(&looped.expr);
         let mark = self.scope.len();
         self.visit_pat(&looped.pat);
@@ -779,9 +787,11 @@ impl<'ast> Visit<'ast> for Body {
             self.bind_pat(&arm.pat, &scrutinee);
             let mut variants = Vec::new();
             pat_variants(&arm.pat, &mut variants);
-            let fail = variants
-                .iter()
-                .any(|v| matches!(v.last().map(String::as_str), Some("Err" | "None")));
+            let fail = variants.iter().any(|v| {
+                v.segments
+                    .last()
+                    .is_some_and(|last| last.ident == "Err" || last.ident == "None")
+            });
             let at = self.push(
                 decision,
                 DecisionKind::Match,
@@ -807,7 +817,7 @@ impl<'ast> Visit<'ast> for Body {
         let line = call.method.span().start().line;
         self.site(
             SiteKind::Method,
-            vec![name.clone()],
+            call.method.clone().into(),
             Some(recv.clone()),
             line,
         );
@@ -815,8 +825,8 @@ impl<'ast> Visit<'ast> for Body {
             self.alternative(call, &name, &recv);
         } else {
             self.visit_expr(&call.receiver);
-            for arg in &call.args {
-                self.visit_arg(arg, &recv);
+            for (index, arg) in call.args.iter().enumerate() {
+                self.visit_arg(arg, &recv, &name, index);
             }
         }
     }
@@ -828,12 +838,12 @@ impl<'ast> Visit<'ast> for Body {
         let upper = is_upper(&last);
         if segs.len() == 1 {
             if !upper && self.local(&last).is_none() && last != "self" {
-                self.site(SiteKind::Ref, segs, None, line);
+                self.site(SiteKind::Ref, path.path.clone(), None, line);
             }
         } else if upper {
-            self.site(SiteKind::Variant, segs, None, line);
+            self.site(SiteKind::Variant, path.path.clone(), None, line);
         } else {
-            self.site(SiteKind::Ref, segs, None, line);
+            self.site(SiteKind::Ref, path.path.clone(), None, line);
         }
     }
 
@@ -845,7 +855,12 @@ impl<'ast> Visit<'ast> for Body {
         } else {
             SiteKind::New
         };
-        self.site(kind, segs, None, strukt.path.span().start().line);
+        self.site(
+            kind,
+            strukt.path.clone(),
+            None,
+            strukt.path.span().start().line,
+        );
         for field in &strukt.fields {
             self.visit_expr(&field.expr);
         }
@@ -856,7 +871,11 @@ impl<'ast> Visit<'ast> for Body {
 
     fn visit_item(&mut self, item: &'ast Item) {
         if let Item::Use(import) = item {
+            let mark = self.facts.uses.len();
             use_tree(&import.tree, &mut Vec::new(), &mut self.facts.uses);
+            for binding in self.facts.uses.iter_mut().skip(mark) {
+                binding.absolute = import.leading_colon.is_some();
+            }
         }
     }
 
@@ -920,21 +939,21 @@ fn member_name(member: &Member) -> String {
     }
 }
 
-fn pat_variants(pat: &Pat, out: &mut Vec<Vec<String>>) {
+fn pat_variants(pat: &Pat, out: &mut Vec<syn::Path>) {
     match pat {
         Pat::TupleStruct(tuple) => {
-            out.push(path_segs(&tuple.path));
+            out.push(tuple.path.clone());
             for elem in &tuple.elems {
                 pat_variants(elem, out);
             }
         }
         Pat::Struct(strukt) => {
-            out.push(path_segs(&strukt.path));
+            out.push(strukt.path.clone());
             for field in &strukt.fields {
                 pat_variants(&field.pat, out);
             }
         }
-        Pat::Path(path) => out.push(path_segs(&path.path)),
+        Pat::Path(path) => out.push(path.path.clone()),
         Pat::Or(or) => {
             for case in &or.cases {
                 pat_variants(case, out);
@@ -944,7 +963,8 @@ fn pat_variants(pat: &Pat, out: &mut Vec<Vec<String>>) {
             if let Some((_, sub)) = &ident.subpat {
                 pat_variants(sub, out);
             } else if is_upper(&ident.ident.to_string()) {
-                out.push(vec![ident.ident.to_string()]);
+                let name = &ident.ident;
+                out.push(syn::parse_quote!(#name));
             }
         }
         Pat::Reference(reference) => pat_variants(&reference.pat, out),
@@ -1030,4 +1050,8 @@ fn push_tokens(tokens: TokenStream, out: &mut Vec<String>) {
             }
         }
     }
+}
+
+fn syntax_path(segs: &[String]) -> Option<syn::Path> {
+    syn::parse_str(&segs.join("::")).ok()
 }

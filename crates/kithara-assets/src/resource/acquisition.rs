@@ -59,21 +59,7 @@ impl<A, R> AcquisitionResult<A, R> {
     }
 }
 
-/// Read capability of a resource handle — the `Ready` phase.
-///
-/// Cheap to clone (a shared read view). Decorator wrappers
-/// ([`CachedReader`](crate::CachedReader), [`LeaseReader`](crate::LeaseReader))
-/// delegate through this trait to stay generic over the inner reader.
-///
-/// A reader is already committed, so it has **no write/commit methods** — the
-/// typestate makes that a compile error rather than a runtime panic:
-///
-/// ```compile_fail
-/// use kithara_assets::ReadSide;
-/// fn reader_cannot_commit<R: ReadSide>(reader: R) {
-///     reader.commit(None); // ERROR: `commit` lives on WriteSide, not ReadSide
-/// }
-/// ```
+/// Cloneable committed read view; writing or committing requires [`WriteSide`].
 pub trait ReadSide: Clone + Send + Sync + Debug + 'static {
     /// The writer phase produced by [`reactivate`](Self::reactivate).
     type Writer: WriteSide<Reader = Self>;
@@ -171,19 +157,7 @@ pub trait ReadSide: Clone + Send + Sync + Debug + 'static {
     ) -> StorageResult<WaitOutcome>;
 }
 
-/// Write capability of a resource handle — the `Pending` phase.
-///
-/// **Not `Clone`**: a single writer owns it and consumes it on
-/// [`commit`](Self::commit) / [`fail`](Self::fail). Has **no read methods**, so
-/// reading a not-yet-committed handle is a compile error, not a runtime
-/// `NotReadable`:
-///
-/// ```compile_fail
-/// use kithara_assets::WriteSide;
-/// fn writer_cannot_read<W: WriteSide>(writer: &W, buf: &mut [u8]) {
-///     writer.read_at(0, buf); // ERROR: `read_at` lives on ReadSide, not WriteSide
-/// }
-/// ```
+/// Exclusive non-`Clone` writer consumed by commit or failure; it exposes no read methods.
 pub trait WriteSide: Send + Sync + Debug + 'static {
     /// The reader phase produced by [`commit`](Self::commit).
     type Reader: ReadSide;
@@ -224,4 +198,27 @@ pub trait WriteSide: Send + Sync + Debug + 'static {
     /// # Errors
     /// Propagates the backing write error.
     fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
+}
+
+#[cfg(doctest)]
+mod contracts {
+    /// A committed reader cannot commit a resource.
+    ///
+    /// ```compile_fail
+    /// use kithara_assets::ReadSide;
+    /// fn reader_cannot_commit<R: ReadSide>(reader: R) {
+    ///     reader.commit(None); // ERROR: `commit` lives on WriteSide, not ReadSide
+    /// }
+    /// ```
+    mod reader_cannot_commit {}
+
+    /// A pending writer cannot read committed bytes.
+    ///
+    /// ```compile_fail
+    /// use kithara_assets::WriteSide;
+    /// fn writer_cannot_read<W: WriteSide>(writer: &W, buf: &mut [u8]) {
+    ///     writer.read_at(0, buf); // ERROR: `read_at` lives on ReadSide, not WriteSide
+    /// }
+    /// ```
+    mod writer_cannot_read {}
 }

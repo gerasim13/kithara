@@ -450,9 +450,10 @@ where
         .pools(deps.pools.clone())
         .maybe_byte_map(reader.byte_map())
         .maybe_hooks(reader.take_event_sink())
-        .maybe_hint(hint.clone())
-        .maybe_resampler(deps.resampler_config())
-        .build();
+        .maybe_resampler(deps.resampler_config());
+    #[cfg(feature = "symphonia")]
+    let config = config.maybe_hint(hint.clone());
+    let config = config.build();
     let source = reader.into_inner();
     if let Some(gate) = &construction_gate {
         gate.arm();

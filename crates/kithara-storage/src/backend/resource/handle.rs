@@ -133,22 +133,9 @@ impl<D: DriverIo> Resource<Active, D> {
             /// has recorded the successfully published backing resource.
             #[call(publish_commit_inner)]
             pub(crate) fn publish_commit_in_place(&self, final_len: Option<u64>);
-            /// Release the writer without marking the resource failed.
-            ///
-            /// Dropping an uncommitted writer stamps the resource `Failed` so a
-            /// reader blocked on bytes that will never arrive gets an error
-            /// instead of a hang. That stamp lives on the shared core, not on
-            /// this handle, and it outlives the writer: every later `write_at`
-            /// on the same resource fails with it, including a successor's. So
-            /// a caller that is itself re-dispatching the write — an epoch
-            /// rebuild that cancelled this fetch and owns the next one — must
-            /// release without stamping, or it poisons the resource it just
-            /// promised to refill. Same reasoning `should_fail_on_drop` already
-            /// applies to a cancelled core, extended to a cancelled caller.
-            ///
-            /// Readers are deliberately left waiting: the caller's re-dispatch
-            /// is what wakes them, and failing them here would be the very
-            /// error this avoids.
+            /// Release this writer without failing the shared core or poisoning a successor's writes.
+            /// Use when the caller owns re-dispatch after cancellation; ordinary uncommitted drop fails the core.
+            /// Readers remain waiting until that replacement supplies bytes.
             #[call(abandon_inner)]
             pub fn abandon(&self);
             /// Mark the resource as failed, consuming the writer.

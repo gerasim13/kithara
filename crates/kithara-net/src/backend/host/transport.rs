@@ -11,19 +11,11 @@ use crate::{
     error::NetError,
 };
 
-/// The HTTP transport a host application runs every request through.
-///
-/// A transport:
-/// - returns at once from every method Kithara calls;
-/// - reports [`HostEvents::response`] once per call, for any status, before
-///   the first read completes, after following redirects;
-/// - answers each [`HostCall::read`] with [`HostEvents::read`] or
-///   [`HostEvents::end`];
-/// - ends each call with exactly one [`HostEvents::end`] or
-///   [`HostEvents::fail`] with [`HostFailure::Transport`] or
-///   [`HostFailure::Permanent`], a cancelled call included, and writes no
-///   lent buffer after it;
-/// - owns trust, proxies, cookies, timeouts, pooling and content coding.
+/// Host-owned non-blocking HTTP transport; owns trust, proxies, cookies, timeouts, pools and coding.
+/// Reports [`HostEvents::response`] once for any status, after redirects and before a read completes.
+/// Answers every [`HostCall::read`] with [`HostEvents::read`] or [`HostEvents::end`].
+/// Every call, including cancellation, ends once with end or fail (Transport/Permanent),
+/// and no lent buffer may be written after that terminal event.
 pub trait HostTransport: fmt::Debug + Send + Sync {
     /// Start `request` without blocking; its progress goes to `events`.
     ///
