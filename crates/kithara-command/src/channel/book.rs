@@ -87,7 +87,7 @@ impl<P: Protocol> Book<P> {
         self.pending.retain(|pending| pending.seq != receipt.seq());
         if matches!(receipt.outcome(), Outcome::Applied { .. }) {
             for &(target, _) in &receipt.batch().basis {
-                self.applied[target.index()] = Some(receipt.seq());
+                self.applied[target.index()] = self.applied[target.index()].max(Some(receipt.seq()));
             }
         }
     }

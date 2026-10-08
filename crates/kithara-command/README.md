@@ -110,6 +110,13 @@ executor event names its moment. `resume(seq, start, at)` judges it and computes
 the offset from the firing block's start. Applying a batch eagerly returns all
 outdated scheduled, arrived and parked batches of that level as Stale.
 
+`Due::commit()` records the ledger and eagerly invalidates outdated batches at
+the due moment, but leaves its batch and credit in the inbox. The executor can
+fill result commands through `committed_mut(seq)` and later call
+`complete(seq, data)` on `Inbox` or `LevelInbox`. Completion uses the original
+moment and never judges the basis again. An unfinished committed batch returns
+whole through the existing retirement or inbox-drop path as Unanswered.
+
 ## Key Types
 
 <table>

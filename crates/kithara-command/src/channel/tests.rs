@@ -1010,6 +1010,139 @@ fn deferred_resume_uses_its_firing_block_and_judges_its_basis() {
     );
 }
 
+#[kithara::test]
+fn commit_records_basis_and_eager_stales_before_answer() {
+    let (mut sender, mut inbox) = pair(6, 2);
+    let parked = send(&mut sender, When::Next, batch(1, &[(Slot(0), None)]));
+    let committed = send(
+        &mut sender,
+        When::At(Frame(80)),
+        batch(2, &[(Slot(0), None)]),
+    );
+    let scheduled = send(
+        &mut sender,
+        When::At(Frame(96)),
+        batch(3, &[(Slot(0), None)]),
+    );
+    let deferred = send(&mut sender, When::Deferred, batch(4, &[(Slot(0), None)]));
+    let current = send(
+        &mut sender,
+        When::At(Frame(100)),
+        batch(5, &[(Slot(0), Some(committed))]),
+    );
+    let independent = send(
+        &mut sender,
+        When::At(Frame(100)),
+        batch(6, &[(Slot(1), None)]),
+    );
+    inbox.drain();
+    inbox
+        .next_due(Frame(64), BLOCK)
+        .expect("parked due")
+        .defer();
+    assert_eq!(
+        inbox.next_due(Frame(64), BLOCK).expect("commit").commit(),
+        committed
+    );
+    assert_eq!(sender.available(), 0, "commit does not return its credit");
+    let stale = outcomes(&mut sender);
+    for seq in [parked, scheduled, deferred] {
+        assert!(stale.contains(&(seq, Outcome::Rejected(Rejection::Stale))));
+    }
+    assert_eq!(stale.len(), 3);
+    assert_eq!(sender.available(), 3);
+    assert_eq!(run_block(&mut inbox, 96, BLOCK), [(4, 5), (4, 6)]);
+    assert_eq!(
+        outcomes(&mut sender),
+        [(current, applied(100)), (independent, applied(100))]
+    );
+    assert_eq!(inbox.committed_mut(committed), Some([2].as_mut_slice()));
+    assert_eq!(sender.available(), 5, "the committed credit is still held");
+}
+
+#[kithara::test]
+fn completion_keeps_original_moment_after_later_ledger_shift() {
+    let (mut sender, mut inbox) = pair(2, 1);
+    let committed = send(
+        &mut sender,
+        When::At(Frame(80)),
+        batch(1, &[(Slot(0), None)]),
+    );
+    let later = send(
+        &mut sender,
+        When::At(Frame(100)),
+        batch(2, &[(Slot(0), Some(committed))]),
+    );
+    inbox.drain();
+    inbox.next_due(Frame(64), BLOCK).expect("commit").commit();
+    inbox
+        .next_due(Frame(64), BLOCK)
+        .expect("later shift")
+        .apply(());
+    assert_eq!(outcomes(&mut sender), [(later, applied(100))]);
+    assert!(!inbox.is_parked(committed));
+    assert!(inbox.resume(committed, Frame(256), Frame(270)).is_none());
+    assert!(inbox.next_due(Frame(256), BLOCK).is_none());
+    inbox.committed_mut(committed).expect("held commands")[0] = 99;
+    assert!(inbox.complete(committed, ()));
+    let receipt = sender.receipts().next().expect("completed");
+    assert_eq!(receipt.seq(), committed);
+    assert_eq!(receipt.outcome(), &applied(80));
+    assert_eq!(receipt.batch().commands, [99]);
+    assert_eq!(receipt.batch().basis, [(Slot(0), None)]);
+    assert!(!inbox.complete(committed, ()));
+    assert!(inbox.committed_mut(committed).is_none());
+    assert_eq!(sender.available(), 2);
+}
+
+#[kithara::test]
+fn unfinished_commits_remain_owned_until_inbox_drop() {
+    let (mut sender, mut inbox) = pair(2, 1);
+    let committed = send(&mut sender, When::Next, batch(1, &[(Slot(0), None)]));
+    inbox.drain();
+    inbox.next_due(Frame(64), BLOCK).expect("commit").commit();
+    inbox.committed_mut(committed).expect("held commands")[0] = 99;
+    inbox.refuse_timed("axis changed");
+    assert!(sender.receipts().next().is_none());
+    assert!(inbox.next_due(Frame(1024), BLOCK).is_none());
+    assert_eq!(sender.available(), 1);
+    drop(inbox);
+    let receipt = sender.receipts().next().expect("leftover");
+    assert_eq!(receipt.seq(), committed);
+    assert_eq!(receipt.outcome(), &Outcome::Rejected(Rejection::Unanswered));
+    assert_eq!(receipt.batch().commands, [99]);
+    assert_eq!(sender.available(), 2);
+}
+
+#[kithara::test]
+fn delayed_applied_receipt_does_not_roll_back_sender_basis() {
+    let (mut sender, mut inbox) = pair(2, 1);
+    let committed = send(&mut sender, When::Next, batch(1, &[(Slot(0), None)]));
+    let later = send(
+        &mut sender,
+        When::At(Frame(100)),
+        batch(2, &[(Slot(0), Some(committed))]),
+    );
+    inbox.drain();
+    inbox.next_due(Frame(64), BLOCK).expect("commit").commit();
+    inbox
+        .next_due(Frame(64), BLOCK)
+        .expect("later shift")
+        .apply(());
+    assert_eq!(outcomes(&mut sender), [(later, applied(100))]);
+    assert_eq!(sender.basis(Slot(0), When::Next), Some(later));
+    assert!(inbox.complete(committed, ()));
+    assert_eq!(outcomes(&mut sender), [(committed, applied(64))]);
+    assert_eq!(sender.basis(Slot(0), When::Next), Some(later));
+    let following = send(
+        &mut sender,
+        When::Next,
+        batch(3, &[(Slot(0), Some(later))]),
+    );
+    assert_eq!(run_block(&mut inbox, 256, BLOCK), [(0, 3)]);
+    assert_eq!(outcomes(&mut sender), [(following, applied(256))]);
+}
+
 struct BasisAt(Sender<Test>);
 
 impl BasisAt {

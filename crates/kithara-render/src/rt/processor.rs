@@ -225,12 +225,12 @@ impl<E: SessionInbox> DeckMixer<E> {
                 self.deck.resolve_armed(level, start, at);
             }
             self.deck.maintain();
-            self.deck.finish_stops(level, start, at);
+            self.deck.finish_stops(level);
             if context.is_some() {
                 self.deck.observe_ends(cursor, start);
             }
             self.deck.fire_ended(level, start, at, context.is_some());
-            self.deck.finish_stops(level, start, at);
+            self.deck.finish_stops(level);
             sounded |= self.deck.render_frame(
                 context,
                 buffers,
@@ -239,14 +239,10 @@ impl<E: SessionInbox> DeckMixer<E> {
                 cursor,
                 start,
             );
-            let after = SessionFrame::new(i64::from(at).saturating_add(1));
-            self.deck.finish_stops(level, start, after);
+            self.deck.finish_stops(level);
         }
         self.deck.maintain();
-        let end = SessionFrame::new(
-            i64::from(start).saturating_add(i64::try_from(frames).unwrap_or(i64::MAX)),
-        );
-        self.deck.finish_stops(level, start, end);
+        self.deck.finish_stops(level);
         sounded
     }
 

@@ -116,9 +116,6 @@ impl PlayerTrack {
             self.fade.mix_range(scratch, bus, written, frames);
             if self.fade.settled() && self.fade.gain() == 0.0 {
                 let at = sink.at(range.start.saturating_add(frames));
-                if self.stop_at.is_some() {
-                    self.stop_at = Some(at);
-                }
                 self.settle_stop();
                 self.gap = 0;
                 sink.report(DeckEvent::Faded {

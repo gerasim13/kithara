@@ -5,6 +5,7 @@ pub(super) struct Docket<P: Protocol> {
     pub(super) schedule: Schedule<P>,
     pub(super) ledger: Ledger,
     pub(super) parked: Vec<Sent<P>>,
+    pub(super) committed: Vec<(P::Clock, Sent<P>)>,
     pub(super) arrived: Vec<Sent<P>>,
 }
 
@@ -15,6 +16,7 @@ impl<P: Protocol> Docket<P> {
             schedule: Schedule::new(capacity),
             ledger: Ledger::new(config.targets),
             parked: Vec::with_capacity(capacity),
+            committed: Vec::with_capacity(capacity),
             arrived: Vec::with_capacity(capacity),
         }
     }
@@ -49,6 +51,12 @@ impl<P: Protocol> Docket<P> {
 
     pub(super) fn is_parked(&self, seq: Seq) -> bool {
         self.parked.iter().any(|sent| sent.seq == seq)
+    }
+
+    pub(super) fn committed_mut(&mut self, seq: Seq) -> Option<&mut [P::Command]> {
+        self.committed
+            .iter_mut()
+            .find_map(|(_, sent)| (sent.seq == seq).then_some(sent.batch.commands.as_mut_slice()))
     }
 
     pub(super) fn take_outdated(&mut self) -> Option<Sent<P>> {

@@ -24,7 +24,7 @@ pub struct LevelInbox<'inbox, P: Protocol> {
 /// ```
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get, get_mut)]
-#[must_use = "answer through Due::apply, Due::refuse or Due::defer"]
+#[must_use = "answer through Due::apply, Due::refuse, Due::defer or Due::commit"]
 pub struct Due<'inbox, P: Protocol> {
     inbox: LevelInbox<'inbox, P>,
     #[field(get(copy))]
@@ -161,6 +161,31 @@ impl<'inbox, P: Protocol> LevelInbox<'inbox, P> {
         self.docket.is_parked(seq)
     }
 
+    /// Edits a committed batch in place without taking it out of this level.
+    pub fn committed_mut(&mut self, seq: Seq) -> Option<&mut [P::Command]> {
+        self.docket.committed_mut(seq)
+    }
+
+    /// Answers a committed batch at its original moment, without judging its basis again.
+    /// Returns false if this level no longer holds the committed batch.
+    pub fn complete(&mut self, seq: Seq, data: P::Applied) -> bool {
+        let Some(index) = self
+            .docket
+            .committed
+            .iter()
+            .position(|(_, sent)| sent.seq == seq)
+        else {
+            return false;
+        };
+        let (at, sent) = self.docket.committed.swap_remove(index);
+        self.reply(Receipt {
+            seq: sent.seq,
+            batch: sent.batch,
+            outcome: Outcome::Applied { at, data },
+        });
+        true
+    }
+
     /// Whether this scope's Close has been drained; always false for the root.
     #[must_use]
     pub fn is_closing(&self) -> bool {
@@ -197,6 +222,9 @@ impl<'inbox, P: Protocol> LevelInbox<'inbox, P> {
     }
 
     pub(super) fn unanswered(&mut self) {
+        while let Some((_, sent)) = self.docket.committed.pop() {
+            self.reject(sent, Rejection::Unanswered);
+        }
         while let Some(sent) = self.docket.arrived.pop() {
             self.reject(sent, Rejection::Unanswered);
         }
@@ -228,6 +256,30 @@ impl<'inbox, P: Protocol> LevelInbox<'inbox, P> {
 }
 
 impl<P: Protocol> Due<'_, P> {
+    /// Records the batch and eagerly answers outdated batches now, retaining this batch
+    /// and its credit until the executor completes it or the level returns its leftovers.
+    pub fn commit(mut self) -> Seq {
+        self.inbox.docket.ledger.record(&self.basis, self.seq);
+        debug_assert!(
+            self.inbox.docket.committed.len() < self.inbox.docket.committed.capacity(),
+            "credits bound committed batches"
+        );
+        self.outcome = None;
+        self.inbox.docket.committed.push((
+            self.at,
+            Sent {
+                seq: self.seq,
+                when: When::At(self.at),
+                batch: Batch {
+                    basis: mem::take(&mut self.basis),
+                    commands: mem::take(&mut self.commands),
+                },
+            },
+        ));
+        self.inbox.reject_outdated();
+        self.seq
+    }
+
     /// Records every basis target and eagerly answers outdated batches of this level.
     /// ```compile_fail
     /// # use kithara_command::{Due, Protocol};

@@ -77,6 +77,130 @@ fn walk(level: &mut kithara_command::LevelInbox<'_, Test>, start: u64) -> Vec<(S
 }
 
 #[kithara::test]
+fn scoped_commit_eager_stales_and_completion_keeps_original_moment() {
+    let (mut sender, mut inbox) = pair(3, 1);
+    let id = sender.open(1).expect("scope");
+    let mut port = sender.scope(id).expect("scope");
+    let committed = port
+        .send(
+            When::At(80),
+            Batch {
+                basis: vec![(Slot(0), None)],
+                commands: vec![1],
+            },
+        )
+        .expect("room");
+    let stale = port
+        .send(
+            When::At(96),
+            Batch {
+                basis: vec![(Slot(0), None)],
+                commands: vec![2],
+            },
+        )
+        .expect("room");
+    let later = port
+        .send(
+            When::At(100),
+            Batch {
+                basis: vec![(Slot(0), Some(committed))],
+                commands: vec![3],
+            },
+        )
+        .expect("room");
+    sender.publish().expect("live");
+    inbox.drain();
+    inbox
+        .scope(id)
+        .expect("scope")
+        .next_due(64, 64)
+        .expect("commit")
+        .commit();
+    assert_eq!(sender.scope(id).expect("scope").available(), 0);
+    let Some(ScopedReceipt::Scope(received_id, receipt)) = sender.receipt() else {
+        panic!("eager stale receipt");
+    };
+    assert_eq!(received_id, id);
+    assert_eq!(receipt.seq(), stale);
+    assert_eq!(receipt.outcome(), &Outcome::Rejected(Rejection::Stale));
+    assert!(sender.receipt().is_none());
+    assert_eq!(sender.scope(id).expect("scope").available(), 1);
+    inbox
+        .scope(id)
+        .expect("scope")
+        .next_due(64, 64)
+        .expect("later shift")
+        .apply(());
+    let Some(ScopedReceipt::Scope(_, receipt)) = sender.receipt() else {
+        panic!("later receipt");
+    };
+    assert_eq!(receipt.seq(), later);
+    assert_eq!(receipt.outcome(), &Outcome::Applied { at: 100, data: () });
+    let mut level = inbox.scope(id).expect("scope");
+    assert!(level.next_due(256, 64).is_none());
+    level.committed_mut(committed).expect("held commands")[0] = 99;
+    assert!(level.complete(committed, ()));
+    assert!(!level.complete(committed, ()));
+    let Some(ScopedReceipt::Scope(_, receipt)) = sender.receipt() else {
+        panic!("completed receipt");
+    };
+    assert_eq!(receipt.seq(), committed);
+    assert_eq!(receipt.outcome(), &Outcome::Applied { at: 80, data: () });
+    assert_eq!(receipt.batch().commands, [99]);
+    assert_eq!(sender.scope(id).expect("scope").available(), 3);
+}
+
+#[kithara::test]
+fn unfinished_scoped_commits_return_whole_on_retire_or_drop() {
+    for retire in [false, true] {
+        let (mut sender, mut inbox) = pair(1, 1);
+        let id = sender.open(1).expect("scope");
+        let root = sender.send(When::Next, batch(1)).expect("root room");
+        let scope = scope_send(&mut sender, id, When::Next, 2);
+        sender.close(id).expect("reserved");
+        sender.publish().expect("live");
+        inbox.drain();
+        inbox.root().next_due(64, 64).expect("root").commit();
+        inbox
+            .scope(id)
+            .expect("scope")
+            .next_due(64, 64)
+            .expect("due")
+            .commit();
+        inbox
+            .scope(id)
+            .expect("scope")
+            .committed_mut(scope)
+            .expect("held")[0] = 99;
+        assert!(sender.receipt().is_none());
+        assert_eq!(sender.scope(id).expect("scope").available(), 0);
+        if retire {
+            inbox.scope(id).expect("closing").retire();
+        } else {
+            drop(inbox);
+            let Some(ScopedReceipt::Root(receipt)) = sender.receipt() else {
+                panic!("root leftover");
+            };
+            assert_eq!(receipt.seq(), root);
+            assert_eq!(receipt.outcome(), &Outcome::Rejected(Rejection::Unanswered));
+        }
+        let Some(ScopedReceipt::Scope(received_id, receipt)) = sender.receipt() else {
+            panic!("scope leftover");
+        };
+        assert_eq!(received_id, id);
+        assert_eq!(receipt.seq(), scope);
+        assert_eq!(receipt.outcome(), &Outcome::Rejected(Rejection::Unanswered));
+        assert_eq!(receipt.batch().commands, [99]);
+        if retire {
+            assert!(
+                matches!(sender.receipt(), Some(ScopedReceipt::Closed(closed)) if closed == id)
+            );
+        }
+        assert!(sender.receipt().is_none());
+    }
+}
+
+#[kithara::test]
 fn publish_is_one_arrival_cut_for_root_and_all_scopes() {
     let (mut sender, mut inbox) = pair(2, 2);
     let first = sender.open(2).expect("slot");

@@ -117,6 +117,17 @@ impl<P: Protocol> Inbox<P> {
         self.docket.is_parked(seq)
     }
 
+    /// Edits a committed batch in place while the inbox retains it and its credit.
+    pub fn committed_mut(&mut self, seq: Seq) -> Option<&mut [P::Command]> {
+        self.docket.committed_mut(seq)
+    }
+
+    /// Answers a committed batch at its original moment, without judging its basis again.
+    /// Returns false if the inbox no longer holds the committed batch.
+    pub fn complete(&mut self, seq: Seq, data: P::Applied) -> bool {
+        self.level().complete(seq, data)
+    }
+
     /// Drains and walks one block, handing each uninterrupted stretch and due batch to `step`.
     pub fn run_block<F: FnMut(Step<'_, P>)>(
         &mut self,

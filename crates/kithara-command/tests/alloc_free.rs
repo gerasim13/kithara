@@ -51,6 +51,121 @@ fn batch(command: u32, basis: &[(Slot, Option<Seq>)]) -> Batch<Test> {
 }
 
 #[kithara::test(native)]
+fn plain_commit_edit_and_complete_never_allocate_or_drop_batches() {
+    let (mut sender, mut inbox) = channel::<Test>(
+        ChannelConfig::builder()
+            .capacity(CAPACITY)
+            .targets(1)
+            .build(),
+    );
+    let mut sequences = [None; CAPACITY.get()];
+    for sequence in &mut sequences {
+        *sequence = Some(
+            sender
+                .send(When::At(Frame(80)), batch(1, &[]))
+                .expect("room"),
+        );
+    }
+    assert_no_alloc(|| {
+        inbox.drain();
+        for seq in sequences.into_iter().flatten() {
+            assert_eq!(
+                inbox.next_due(Frame(64), BLOCK).expect("due").commit(),
+                seq
+            );
+        }
+        for seq in sequences.into_iter().flatten().rev() {
+            inbox.committed_mut(seq).expect("held commands")[0] = 99;
+            assert!(inbox.complete(seq, ()));
+        }
+    });
+    for receipt in sender.receipts() {
+        assert_eq!(
+            receipt.outcome(),
+            &Outcome::Applied {
+                at: Frame(80),
+                data: ()
+            }
+        );
+        assert_eq!(receipt.batch().commands, [99]);
+    }
+    assert_eq!(sender.available(), CAPACITY.get());
+}
+
+#[kithara::test(native)]
+fn scoped_commit_edit_complete_and_retire_never_allocate_or_drop_batches() {
+    use kithara_command::{Port, ScopedConfig, ScopedReceipt, scoped_channel};
+
+    let config = ChannelConfig::builder()
+        .capacity(CAPACITY)
+        .targets(1)
+        .build();
+    let (mut sender, mut inbox) = scoped_channel::<Test, Test>(
+        ScopedConfig::builder()
+            .root(config)
+            .scope(config)
+            .scopes(std::num::NonZeroU16::MIN)
+            .build(),
+    );
+    let id = sender.open(1).expect("scope");
+    let root = sender.send(When::Next, batch(1, &[])).expect("root room");
+    let mut sequences = [None; CAPACITY.get()];
+    for sequence in &mut sequences {
+        *sequence = Some(
+            sender
+                .scope(id)
+                .expect("scope")
+                .send(When::At(Frame(80)), batch(1, &[]))
+                .expect("room"),
+        );
+    }
+    sender.close(id).expect("reserved");
+    sender.publish().expect("live");
+    assert_no_alloc(|| {
+        inbox.drain();
+        let mut level = inbox.root();
+        assert_eq!(
+            level.next_due(Frame(64), BLOCK).expect("root").commit(),
+            root
+        );
+        level.committed_mut(root).expect("root commands")[0] = 99;
+        assert!(level.complete(root, ()));
+        let mut level = inbox.scope(id).expect("scope");
+        for seq in sequences.into_iter().flatten() {
+            assert_eq!(
+                level.next_due(Frame(64), BLOCK).expect("due").commit(),
+                seq
+            );
+            level.committed_mut(seq).expect("held commands")[0] = 99;
+        }
+        for seq in sequences
+            .into_iter()
+            .flatten()
+            .rev()
+            .take(CAPACITY.get() / 2)
+        {
+            assert!(level.complete(seq, ()));
+        }
+        level.retire();
+    });
+    let receipts: Vec<_> = std::iter::from_fn(|| sender.receipt()).collect();
+    assert_eq!(receipts.len(), CAPACITY.get() + 2);
+    for receipt in &receipts {
+        match receipt {
+            ScopedReceipt::Root(receipt) | ScopedReceipt::Scope(_, receipt) => {
+                assert_eq!(receipt.batch().commands, [99]);
+                assert!(matches!(
+                    receipt.outcome(),
+                    Outcome::Applied { .. } | Outcome::Rejected(Rejection::Unanswered)
+                ));
+            }
+            ScopedReceipt::Closed(closed) => assert_eq!(*closed, id),
+        }
+    }
+    assert!(matches!(receipts.last(), Some(ScopedReceipt::Closed(_))));
+}
+
+#[kithara::test(native)]
 fn draining_judging_and_answering_never_allocate() {
     const START: Frame = Frame(64);
     const REFUSED: u32 = 4;
