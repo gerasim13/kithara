@@ -33,7 +33,7 @@ use kithara::{
     assets::{AssetResource, AssetSource, AssetStore, StorageBackend},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
-    stream::Stream,
+    stream::{SourceError, Stream, StreamError},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
@@ -53,8 +53,8 @@ mod consts {
 
 #[kithara::test(tokio, serial, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
 async fn stale_tmp_from_a_dead_writer_does_not_brick_a_segment() {
-    let fixture = Fixture::new().await;
-    let orphan = fixture.tmp_path_of_stale_segment();
+    let fixture = Fixture::new(false).await;
+    let orphan = fixture.tmp_path();
     fs::create_dir_all(orphan.parent().expect("orphan parent")).expect("create segment directory");
     fs::write(&orphan, []).expect("plant orphan tmp");
 
@@ -92,8 +92,8 @@ async fn stale_tmp_from_a_dead_writer_does_not_brick_a_segment() {
 /// needs no fault injection: the claim's `open` can never succeed on it.
 #[kithara::test(tokio, serial, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
 async fn a_segment_that_can_never_be_acquired_fails_the_read() {
-    let fixture = Fixture::new().await;
-    let blocked = fixture.tmp_path_of_stale_segment();
+    let fixture = Fixture::new(false).await;
+    let blocked = fixture.tmp_path();
     fs::create_dir_all(&blocked).expect("block the tmp path with a directory");
 
     let err = fixture
@@ -109,7 +109,7 @@ async fn a_segment_that_can_never_be_acquired_fails_the_read() {
 
 #[kithara::test(tokio, serial, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
 async fn an_init_that_can_never_be_acquired_fails_the_read() {
-    let fixture = Fixture::new_with_init(true).await;
+    let fixture = Fixture::new(true).await;
     assert_eq!(fixture.server.init_bytes(0), consts::INIT_DATA);
     let blocked = fixture.tmp_path();
     fs::create_dir_all(&blocked).expect("block the init tmp path with a directory");
@@ -121,9 +121,10 @@ async fn an_init_that_can_never_be_acquired_fails_the_read() {
         .await
         .expect_err("an unacquirable init must fail the read, not park it");
 
-    assert!(
-        err.to_string().contains("segment data not ready"),
-        "expected the terminal SegmentUnavailable, got: {err}"
+    assert_eq!(err.kind(), io::ErrorKind::Other);
+    assert_eq!(
+        err.to_string(),
+        StreamError::Source(SourceError::SegmentUnavailable).to_string()
     );
 }
 
@@ -139,11 +140,7 @@ struct Fixture {
 }
 
 impl Fixture {
-    async fn new() -> Self {
-        Self::new_with_init(false).await
-    }
-
-    async fn new_with_init(has_init: bool) -> Self {
+    async fn new(has_init: bool) -> Self {
         let temp_dir = TestTempDir::new();
         let builder = HlsFixtureBuilder::new()
             .segment_size(consts::SEGMENT_SIZE)
@@ -217,13 +214,7 @@ impl Fixture {
         .expect("blocking read task")
     }
 
-    /// The temp-file companion path `AtomicChunked` claims for the stale
-    /// segment: the canonical file *name* plus `.tmp`, sibling in the same
-    /// directory.
-    fn tmp_path_of_stale_segment(&self) -> PathBuf {
-        self.tmp_path()
-    }
-
+    /// The resource's canonical file name plus `.tmp` in the same directory.
     fn tmp_path(&self) -> PathBuf {
         let name = self
             .canonical

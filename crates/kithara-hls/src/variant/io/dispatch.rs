@@ -155,74 +155,53 @@ where
             let Some((planned, plan_revision)) = planned else {
                 break;
             };
-            match planned {
-                PlannedFetch::Init => {
-                    let Some(init) = self.init() else {
-                        continue;
-                    };
-                    let Some(handle) = init.state().try_claim(
-                        PlannedFetch::Init,
-                        plan_revision,
-                        Arc::downgrade(self),
-                        ctx.signal.clone(),
-                    ) else {
-                        if !init.state().is_loaded() && !init.state().is_failed() {
-                            deferred.push((planned, plan_revision));
-                        }
-                        continue;
-                    };
-                    if let Some(actual) = self.init_committed_final_len() {
-                        handle.into_loaded(actual);
-                        ctx.signal.fire();
-                        continue;
-                    }
-                    let Some(mut cmd) = self.build_fetch_cmd(ctx, init, handle, cancel.clone())
-                    else {
-                        if !init.state().is_loaded() && !init.state().is_failed() {
-                            deferred.push((planned, plan_revision));
-                        }
-                        continue;
-                    };
-                    cmd.set_priority(RequestPriority::High);
-                    out.push(cmd);
+            let entry = match planned {
+                PlannedFetch::Init => self.init(),
+                PlannedFetch::Segment(seg_idx) => self.segments.get(seg_idx as usize),
+            };
+            let Some(entry) = entry else {
+                continue;
+            };
+            let Some(handle) = entry.state().try_claim(
+                planned,
+                plan_revision,
+                Arc::downgrade(self),
+                ctx.signal.clone(),
+            ) else {
+                if !entry.state().is_loaded() && !entry.state().is_failed() {
+                    deferred.push((planned, plan_revision));
                 }
+                continue;
+            };
+            if let Some(actual) = entry.committed_len(&self.segments.scope) {
+                handle.into_loaded(actual);
+                ctx.signal.fire();
+                continue;
+            }
+            let cmd = match planned {
+                PlannedFetch::Init => self.build_fetch_cmd(ctx, entry, handle, cancel.clone()),
                 PlannedFetch::Segment(seg_idx) => {
-                    let Some(entry) = self.segments.get(seg_idx as usize) else {
-                        continue;
-                    };
-                    let Some(handle) = entry.state().try_claim(
-                        PlannedFetch::Segment(seg_idx),
-                        plan_revision,
-                        Arc::downgrade(self),
-                        ctx.signal.clone(),
-                    ) else {
-                        if !entry.state().is_loaded() && !entry.state().is_failed() {
-                            deferred.push((planned, plan_revision));
-                        }
-                        continue;
-                    };
-                    if let Some(actual) = self.committed_final_len(seg_idx) {
-                        handle.into_loaded(actual);
-                        ctx.signal.fire();
-                        continue;
-                    }
                     let token = if beyond_owed(seg_idx) {
                         lookahead.clone()
                     } else {
                         cancel.clone()
                     };
-                    let Some(mut cmd) = self.emit_fetch_cmd(ctx, seg_idx, handle, token) else {
-                        if !entry.state().is_loaded() && !entry.state().is_failed() {
-                            deferred.push((planned, plan_revision));
-                        }
-                        continue;
-                    };
-                    if owed(seg_idx) {
-                        cmd.set_priority(RequestPriority::High);
-                    }
-                    out.push(cmd);
+                    self.emit_fetch_cmd(ctx, seg_idx, handle, token)
                 }
+            };
+            let Some(mut cmd) = cmd else {
+                if !entry.state().is_loaded() && !entry.state().is_failed() {
+                    deferred.push((planned, plan_revision));
+                }
+                continue;
+            };
+            if match planned {
+                PlannedFetch::Init => true,
+                PlannedFetch::Segment(seg_idx) => owed(seg_idx),
+            } {
+                cmd.set_priority(RequestPriority::High);
             }
+            out.push(cmd);
             remaining -= 1;
         }
         if !deferred.is_empty() {
