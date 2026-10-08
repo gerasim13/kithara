@@ -147,16 +147,20 @@ mod tests {
     fn a_target_carries_its_transition_and_reason() {
         let bound = Bound::AtOrAfter(kithara_signal::SessionFrame::new(64));
         let target = Target {
-            transition: Transition {
-                to: TrackId(5),
-                bound,
-            },
+            to: TrackId(5),
+            bound,
+            settings: CrossfadeSettings::default(),
+            transition: Transition::Crossfade,
             reason: AdvanceReason::UserSelect,
             auto: false,
+            stale: None,
+            retry: None,
+            repeat: None,
+            chained: false,
         };
 
-        assert_eq!(target.transition.to, TrackId(5));
-        assert_eq!(target.transition.bound, bound);
+        assert_eq!(target.to, TrackId(5));
+        assert_eq!(target.bound, bound);
         assert_eq!(target.reason, AdvanceReason::UserSelect);
         assert!(!target.auto);
     }

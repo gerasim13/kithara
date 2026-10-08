@@ -12,7 +12,7 @@ use kithara::{
     assets::StorageBackend,
     download::{Downloader, DownloaderConfig},
     events::TrackId,
-    host::{HostConfig, HostSettingsControl},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -24,7 +24,7 @@ use kithara::{
             task,
         },
     },
-    play::{PlayWorkerConfig, PlayerConfig, PlayerImpl, policy::DomainKeyPolicy},
+    play::{PlayWorkerConfig, ResourcePrep, policy::DomainKeyPolicy},
     prelude::{ArtifactSource, ResourceSrc},
     queue::QueueConfig,
     worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig},
@@ -157,13 +157,8 @@ pub(crate) fn queue() -> (AppHost, AppQueueControl) {
     let worker = AppWorker::new(PlayWorkerConfig::builder(test_pools()).build());
     let mut host =
         AppHost::new(HostConfig::offline(worker.pools().clone()).build()).expect("test host");
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .worker(worker)
-            .sample_rate(host.sample_rate())
-            .build(),
-    );
-    let queue = AppQueue::new(QueueConfig::builder().player(player).build());
+    let prep = ResourcePrep::builder().worker(worker).build();
+    let queue = AppQueue::new(QueueConfig::builder().prep(prep).build());
     let queue = host.insert(queue).expect("host accepts queue");
     let control = queue.control().clone();
     (host, control)

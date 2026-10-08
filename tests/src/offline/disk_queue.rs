@@ -6,8 +6,8 @@ use kithara::{
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
-    play::{CrossfadeSettings, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
-    queue::{Queue, QueueConfig},
+    play::{CrossfadeSettings, PlayWorker, PlayWorkerConfig, ResourcePrep},
+    queue::{Queue, QueueConfig, QueueSettings},
 };
 
 use super::{OfflineQueue, QueueTicker, RENDER_PACE, audio_clock_pace};
@@ -62,25 +62,23 @@ impl DiskQueue {
         let store = disk_asset_store(cache);
         let pools = pools();
         let session = HostConfig::offline(pools.clone()).build();
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(session.settings().sample_rate())
-                .worker(PlayWorker::new(
-                    PlayWorkerConfig::builder(pools.clone()).build(),
-                ))
-                .maybe_crossfade_duration(crossfade_seconds)
-                .block_on_underrun(block_on_underrun)
-                .build(),
-        );
-        let crossfade_settings = crossfade_seconds.map(|duration| CrossfadeSettings {
-            duration,
-            ..CrossfadeSettings::default()
-        });
+        let prep = ResourcePrep::builder()
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
+            .block_on_underrun(block_on_underrun)
+            .build();
+        let crossfade_settings = crossfade_seconds
+            .map(|duration| CrossfadeSettings {
+                duration,
+                ..CrossfadeSettings::default()
+            })
+            .unwrap_or_default();
         let facade = Queue::new(
             QueueConfig::builder()
-                .player(player)
+                .prep(prep)
                 .store(store.clone())
-                .maybe_crossfade_settings(crossfade_settings)
+                .settings(QueueSettings::builder().crossfade(crossfade_settings).build())
                 .maybe_max_concurrent_loads(max_concurrent_loads)
                 .build(),
         );

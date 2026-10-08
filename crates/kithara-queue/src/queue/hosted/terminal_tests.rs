@@ -1,13 +1,15 @@
 use kithara_audio::{DecodeErrorKind, TrackFailureKind};
+use std::num::NonZeroU32;
+
 use kithara_command::{ChannelConfig, Seq, channel};
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_play::{
-    Bound, DeckEvent, Outbox, PlayError, Player, PlayerConfig, Settled, Slot, Track, TrackCommand,
-    TrackFactory, TrackReceipt, TrackSettings, TrackSnapshot, TrackStatus as PlayerTrackStatus,
+    Bound, DeckEvent, DeckPart, Outbox, PlayError, PlaybackFault, Player, PlayerConfig, Settled, Slot,
+    Track, TrackCommand, TrackFactory, TrackReceipt, TrackSettings, TrackSnapshot,
+    TrackStatus as PlayerTrackStatus,
 };
-use kithara_render::bridge::PlaybackFault;
-use kithara_signal::SessionFrame;
+use kithara_signal::{FrameCount, SessionFrame};
 use kithara_test_utils::kithara;
 
 use super::*;
@@ -31,6 +33,13 @@ impl TrackFactory<TestPools> for SnapshotFactory {
             duration: None,
             abr: None,
             metadata: Default::default(),
+            mark: None,
+            engine_latency: FrameCount::new(0),
+            ring_depth: FrameCount::new(0),
+            lane_room: 0,
+            pending_lane: false,
+            attached: true,
+            declick: FrameCount::new(0),
         }))
     }
 }
@@ -38,10 +47,10 @@ impl TrackFactory<TestPools> for SnapshotFactory {
 impl Player<TestPools> for SnapshotTrack {
     type Command = TrackCommand<TestPools>;
     type Snapshot = TrackSnapshot;
-    fn entry(&self, bound: Bound) -> SessionFrame {
-        match bound {
+    fn entry(&self, bound: Bound) -> Option<SessionFrame> {
+        Some(match bound {
             Bound::AtOrAfter(at) | Bound::AtOrBefore(at) => at,
-        }
+        })
     }
     fn apply(
         &mut self,
@@ -66,6 +75,39 @@ impl Player<TestPools> for SnapshotTrack {
 impl Track<TestPools> for SnapshotTrack {
     fn projected(&self) -> TrackSettings {
         TrackSettings::default()
+    }
+
+    fn planned(
+        &self,
+        _at: SessionFrame,
+        _sample_rate: NonZeroU32,
+    ) -> Result<(Duration, f32), PlayError> {
+        panic!("terminal-event fixture does not project a render lane")
+    }
+
+    fn planned_end(&self, _sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError> {
+        panic!("terminal-event fixture does not project a render lane")
+    }
+
+    fn speed_receipt(&mut self) -> Option<Settled> {
+        panic!("terminal-event fixture does not send speed commands")
+    }
+
+    fn speed_applied(&mut self, _seq: Seq) -> Option<bool> {
+        panic!("terminal-event fixture does not send speed commands")
+    }
+
+    fn finish_group(&mut self, _result: Result<Seq, &mut Vec<DeckPart>>) {
+        panic!("terminal-event fixture does not stage attachments")
+    }
+
+    fn cue(
+        &mut self,
+        _position: Duration,
+        _speed: f32,
+        _out: &mut Outbox<'_, TestPools>,
+    ) -> Result<Option<Seq>, PlayError> {
+        panic!("terminal-event fixture does not send cue commands")
     }
 }
 
@@ -128,7 +170,7 @@ fn selected_second() -> (TestQueue, TrackId, TrackId) {
 fn report(queue: &mut TestQueue, event: DeckEvent) {
     let (mut deck, _deck_inbox) = channel(ChannelConfig::builder().build());
     let (mut dispatcher, _dispatcher_inbox) = channel(ChannelConfig::builder().build());
-    queue.item_event(event, &mut Outbox::new(&mut deck, &mut dispatcher));
+    queue.item_event(event, None, &mut Outbox::new(&mut deck, &mut dispatcher));
     queue.publish();
 }
 

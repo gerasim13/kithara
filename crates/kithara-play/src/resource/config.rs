@@ -166,7 +166,7 @@ mod tests {
 
     use kithara_assets::AssetStore;
     use kithara_audio::{
-        AudioConfigPatch, ConsumerWakeMode, DecoderResamplerSettings, ResamplerBackend,
+        ConsumerWakeMode, DecoderResamplerSettings, ResamplerBackend,
         ResamplerOptions,
     };
     use kithara_decode::DecodeError;
@@ -178,12 +178,6 @@ mod tests {
         PlayWorkerConfig,
         test_pools::{TestPools, pools},
     };
-
-    fn preload_chunks(count: usize) -> AudioConfigPatch {
-        let mut patch = AudioConfigPatch::default();
-        patch.preload_chunks = NonZeroUsize::new(count);
-        patch
-    }
 
     fn store() -> AssetStore<TestPools> {
         AssetStore::builder(pools()).build()
@@ -396,12 +390,12 @@ mod tests {
                 .events(EventBus::new(32))
                 .hint("mp3")
                 .discriminator("test")
-                .audio(preload_chunks(5))
+                .maybe_preload_chunks(NonZeroUsize::new(5))
                 .build();
         assert!(config.bus.is_some());
         assert_eq!(config.hint.as_deref(), Some("mp3"));
         assert_eq!(config.discriminator.as_deref(), Some("test"));
-        assert_eq!(config.audio.preload_chunks, NonZeroUsize::new(5));
+        assert_eq!(config.preload_chunks, NonZeroUsize::new(5));
     }
 
     #[kithara::test]
@@ -465,11 +459,11 @@ mod tests {
             "an unnamed file key must leave kithara-file's own default standing"
         );
         assert!(
-            config.audio.preload_chunks.is_none(),
+            config.preload_chunks.is_none(),
             "an unnamed audio key must leave kithara-audio's own default standing"
         );
         assert!(
-            config.audio.audio_buffer_chunks.is_none(),
+            config.audio_buffer_chunks.is_none(),
             "a direct resource names no output-ring depth, so the platform default stands"
         );
     }

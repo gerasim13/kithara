@@ -296,7 +296,7 @@ impl Drop for DeckSet {
 #[cfg(test)]
 mod tests {
     use kithara::{
-        host::{HostConfig, HostSettingsControl},
+        host::HostConfig,
         play::PlayWorkerConfig,
         queue::QueueConfig,
     };
@@ -315,16 +315,13 @@ mod tests {
         parent: &CancelToken,
     ) -> Deck {
         let cancel = parent.child();
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .cancel(cancel.clone())
-                .sample_rate(host.sample_rate())
-                .worker(worker.clone())
-                .build(),
-        );
+        let prep = ResourcePrep::builder()
+            .cancel(cancel.clone())
+            .worker(worker.clone())
+            .build();
         let queue = AppQueue::new(
             QueueConfig::builder()
-                .player(player)
+                .prep(prep)
                 .cancel(cancel.clone())
                 .build(),
         );

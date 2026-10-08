@@ -135,25 +135,19 @@ mod tests {
             .build()
     }
 
-    fn prep(shape: Option<StreamShape>, warp: WarpConfig) -> ResourcePrep<TestPools> {
-        ResourcePrep {
-            worker: PlayWorker::new(PlayWorkerConfig::builder(pools()).build()),
-            output: mock::output(shape),
-            bus: EventBus::new(16),
-            cancel: None,
-            warp,
-            response_budget_frames: None,
-            gapless_mode: GaplessMode::default(),
-            block_on_underrun: false,
-            engine_load: Arc::new(EngineLoad::default()),
-        }
+    fn prep(warp: WarpConfig) -> ResourcePrep<TestPools> {
+        ResourcePrep::builder()
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+            .bus(EventBus::new(16))
+            .warp(warp)
+            .build()
     }
 
     fn prep_with_geometry(
         quantum: usize,
         output_buffer: u32,
         response_budget: usize,
-    ) -> ResourcePrep<TestPools> {
+    ) -> (ResourcePrep<TestPools>, OutputSnapshot) {
         let shape = StreamShape::new(
             NonZeroU32::new(output_buffer).expect("fixture output block is non-zero"),
             mock::SAMPLE_RATE,
@@ -161,12 +155,13 @@ mod tests {
         let warp = WarpConfig::builder()
             .render_quantum_frames(NonZeroUsize::new(quantum).expect("fixture quantum is non-zero"))
             .build();
-        ResourcePrep {
+        let prep = ResourcePrep {
             response_budget_frames: Some(
                 NonZeroUsize::new(response_budget).expect("fixture budget is non-zero"),
             ),
-            ..prep(Some(shape), warp)
-        }
+            ..prep(warp)
+        };
+        (prep, mock::output(Some(shape)).get())
     }
 
     #[kithara::test]
@@ -175,8 +170,11 @@ mod tests {
             NonZeroU32::new(128).expect("test block is non-zero"),
             mock::SAMPLE_RATE,
         );
-        let prepared = prep(Some(shape), WarpConfig::builder().build())
-            .prepare(resource_config("https://example.com/song.mp3"))
+        let prepared = prep(WarpConfig::builder().build())
+            .prepare(
+                resource_config("https://example.com/song.mp3"),
+                &mock::output(Some(shape)).get(),
+            )
             .expect("test session answers stream-shape queries");
 
         assert_eq!(
@@ -192,8 +190,11 @@ mod tests {
 
     #[kithara::test]
     fn prepare_config_without_a_measured_output_keeps_default_resampling_work() {
-        let prepared = prep(None, WarpConfig::builder().build())
-            .prepare(resource_config("https://example.com/song.mp3"))
+        let prepared = prep(WarpConfig::builder().build())
+            .prepare(
+                resource_config("https://example.com/song.mp3"),
+                &mock::output(None).get(),
+            )
             .expect("resources may be prepared before the session measures its output");
 
         assert!(prepared.decoder.resampler().is_none());
@@ -207,24 +208,25 @@ mod tests {
         #[case] expected: Option<usize>,
     ) {
         let prep = prep(
-            None,
             WarpConfig::builder()
                 .maybe_render_quantum_frames(configured.and_then(NonZeroUsize::new))
                 .build(),
         );
         let mut config = resource_config("https://example.com/song.mp3");
-        config.audio.preload_chunks = NonZeroUsize::new(7);
-        config.audio.audio_buffer_chunks = Some(11);
-        let prepared = prep.prepare(config).expect("unmeasured preparation");
+        config.preload_chunks = NonZeroUsize::new(7);
+        config.audio_buffer_chunks = NonZeroUsize::new(11);
+        let prepared = prep
+            .prepare(config, &mock::output(None).get())
+            .expect("unmeasured preparation");
         assert_eq!(
             prepared.warp.render_quantum_frames().map(NonZeroUsize::get),
             expected
         );
         assert_eq!(
-            prepared.audio.preload_chunks.map(NonZeroUsize::get),
+            prepared.preload_chunks.map(NonZeroUsize::get),
             Some(7)
         );
-        assert_eq!(prepared.audio.audio_buffer_chunks, Some(11));
+        assert_eq!(prepared.audio_buffer_chunks.map(NonZeroUsize::get), Some(11));
         assert!(prepared.decoder.resampler().is_none());
     }
 
@@ -241,8 +243,8 @@ mod tests {
             mock::SAMPLE_RATE,
         );
 
-        let prepared = prep(Some(shape), WarpConfig::builder().build())
-            .prepare(config)
+        let prepared = prep(WarpConfig::builder().build())
+            .prepare(config, &mock::output(Some(shape)).get())
             .expect("test session answers stream-shape queries");
 
         assert_eq!(
@@ -282,15 +284,16 @@ mod tests {
         #[case] expected_preload: usize,
         #[case] expected_ring: usize,
     ) {
-        let prepared = prep_with_geometry(quantum, output_buffer, response_budget)
-            .prepare(resource_config("https://example.com/song.mp3"))
+        let (prep, output) = prep_with_geometry(quantum, output_buffer, response_budget);
+        let prepared = prep
+            .prepare(resource_config("https://example.com/song.mp3"), &output)
             .expect("fixture geometry fits the response budget");
 
         assert_eq!(
-            prepared.audio.preload_chunks.map(NonZeroUsize::get),
+            prepared.preload_chunks.map(NonZeroUsize::get),
             Some(expected_preload)
         );
-        assert_eq!(prepared.audio.audio_buffer_chunks, Some(expected_ring));
+        assert_eq!(prepared.audio_buffer_chunks.map(NonZeroUsize::get), Some(expected_ring));
     }
 
     #[kithara::test]
@@ -302,10 +305,10 @@ mod tests {
         #[case] response_budget: usize,
         #[case] required_frames: usize,
     ) {
-        let prep = prep_with_geometry(quantum, output_buffer, response_budget);
+        let (prep, output) = prep_with_geometry(quantum, output_buffer, response_budget);
 
         assert!(matches!(
-            prep.prepare(resource_config("https://example.com/song.mp3")),
+            prep.prepare(resource_config("https://example.com/song.mp3"), &output),
             Err(PlayError::Session(SessionError::BufferGeometry(
                 BufferGeometryError::BudgetExceeded {
                     max_block_frames,

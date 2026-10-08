@@ -127,10 +127,14 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::queue::tests::prep;
+    use kithara_play::{PlayWorker, PlayWorkerConfig};
+    use crate::test_pools::pools;
 
     pub(super) fn config() -> QueueConfig<crate::test_pools::TestPools> {
-        QueueConfig::builder().prep(prep()).build()
+        let prep = ResourcePrep::builder()
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+            .build();
+        QueueConfig::builder().prep(prep).build()
     }
 
     #[kithara::test]

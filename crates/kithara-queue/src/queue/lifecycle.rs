@@ -400,37 +400,82 @@ where
 }
 #[cfg(test)]
 mod tests {
+    use kithara_assets::{AssetStore, StorageBackend};
+    use kithara_host::{Host, HostConfig, HostOwned};
     use kithara_platform::sync::Arc;
-    use kithara_play::{ItemRole, PlayerEvent, SlotId, TrackRef};
+    use kithara_platform::tokio::task::spawn_blocking;
+    use kithara_play::{
+        ItemRole, PlayWorker, PlayWorkerConfig, PlayerEvent, ResourcePrep, SlotId, TrackRef,
+    };
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
+        QueueConfig, QueueControl,
         event::QueueEvent,
         queue::state::tests::{make_queue, wait_for_queue_event},
+        test_pools::{TestPools, pools},
     };
 
-    fn append(queue: &mut Queue<crate::test_pools::TestPools>, source: &str) -> TrackId {
-        queue
-            .append(source)
-            .expect("BUG: open queue must accept a track")
+    async fn hosted_queue() -> (HostOwned<Queue<TestPools>>, Host<TestPools>) {
+        spawn_blocking(|| {
+            let prep = ResourcePrep::builder()
+                .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+                .build();
+            let config = QueueConfig::builder()
+                .prep(prep)
+                .store(
+                    AssetStore::builder(pools())
+                        .backend(StorageBackend::Memory)
+                        .build(),
+                )
+                .build();
+            let mut host = Host::new(HostConfig::offline(pools()).build())
+                .expect("fixture offline Host");
+            let queue = host
+                .insert(Queue::new(config))
+                .expect("insert fixture queue");
+            (queue, host)
+        })
+        .await
+        .expect("create queue on the blocking test worker")
+    }
+
+    async fn command<R: Send + 'static>(
+        queue: &QueueControl<TestPools>,
+        run: impl FnOnce(QueueControl<TestPools>) -> R + Send + 'static,
+    ) -> R {
+        let control = queue.clone();
+        spawn_blocking(move || run(control))
+            .await
+            .expect("queue command worker must not panic")
+    }
+
+    async fn append(queue: &QueueControl<TestPools>, source: &str) -> TrackId {
+        let source = source.to_owned();
+        command(queue, move |control| {
+            control
+                .append(source)
+                .expect("BUG: open queue must accept a track")
+        })
+        .await
     }
 
     #[kithara::test(tokio)]
     async fn len_is_empty_reflect_append() {
-        let (mut queue, _audio_thread) = make_queue();
+        let (queue, _host) = hosted_queue().await;
         assert!(queue.is_empty());
-        let _ = append(&mut queue, "https://example.com/a.mp3");
-        let _ = append(&mut queue, "https://example.com/b.mp3");
+        let _ = append(&queue, "https://example.com/a.mp3").await;
+        let _ = append(&queue, "https://example.com/b.mp3").await;
         assert_eq!(queue.len(), 2);
     }
 
     #[kithara::test(tokio)]
     async fn append_returns_monotonic_ids_and_emits_track_added() {
-        let (mut queue, _audio_thread) = make_queue();
+        let (queue, _host) = hosted_queue().await;
         let mut rx = queue.subscribe();
-        let a = append(&mut queue, "https://example.com/a.mp3");
-        let b = append(&mut queue, "https://example.com/b.mp3");
+        let a = append(&queue, "https://example.com/a.mp3").await;
+        let b = append(&queue, "https://example.com/b.mp3").await;
         assert_ne!(a, b);
         assert!(a.as_u64() < b.as_u64());
 
@@ -452,13 +497,13 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn remove_drops_from_queue_and_emits() {
-        let (mut queue, _audio_thread) = make_queue();
-        let a = append(&mut queue, "https://example.com/a.mp3");
-        let _b = append(&mut queue, "https://example.com/b.mp3");
+        let (queue, _host) = hosted_queue().await;
+        let a = append(&queue, "https://example.com/a.mp3").await;
+        let _b = append(&queue, "https://example.com/b.mp3").await;
         let mut rx = queue.subscribe();
 
-        queue
-            .remove(a)
+        command(&queue, move |control| control.remove(a))
+            .await
             .expect("BUG: just-appended track must be removable");
         assert_eq!(queue.len(), 1);
         let saw_removed = wait_for_queue_event(
@@ -472,11 +517,13 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn clear_empties_queue() {
-        let (mut queue, _audio_thread) = make_queue();
-        let _a = append(&mut queue, "https://example.com/a.mp3");
-        let _b = append(&mut queue, "https://example.com/b.mp3");
+        let (queue, _host) = hosted_queue().await;
+        let _a = append(&queue, "https://example.com/a.mp3").await;
+        let _b = append(&queue, "https://example.com/b.mp3").await;
         assert_eq!(queue.len(), 2);
-        queue.clear().expect("the idle deck takes the clear");
+        command(&queue, |control| control.clear())
+            .await
+            .expect("the idle deck takes the clear");
         assert_eq!(queue.len(), 0);
     }
 
@@ -518,30 +565,33 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn set_tracks_replaces_queue() {
-        let (mut queue, _audio_thread) = make_queue();
-        let _a = append(&mut queue, "https://example.com/a.mp3");
-        queue
-            .set_tracks(
+        let (queue, _host) = hosted_queue().await;
+        let _a = append(&queue, "https://example.com/a.mp3").await;
+        command(&queue, |control| {
+            control.set_tracks(
                 [
                     "https://example.com/1.mp3",
                     "https://example.com/2.mp3",
                     "https://example.com/3.mp3",
                 ]
-                .map(TrackSource::from)
-                .into(),
+                .map(TrackSource::from),
             )
-            .expect("the idle deck takes the clear");
+        })
+        .await
+        .expect("the idle deck takes the clear");
         assert_eq!(queue.len(), 3);
     }
 
     #[kithara::test(tokio)]
     async fn insert_after_id_places_next() {
-        let (mut queue, _audio_thread) = make_queue();
-        let a = append(&mut queue, "https://example.com/a.mp3");
-        let b = append(&mut queue, "https://example.com/b.mp3");
-        let mid = queue
-            .insert("https://example.com/mid.mp3", Some(a))
-            .expect("BUG: insert relative to existing track");
+        let (queue, _host) = hosted_queue().await;
+        let a = append(&queue, "https://example.com/a.mp3").await;
+        let b = append(&queue, "https://example.com/b.mp3").await;
+        let mid = command(&queue, move |control| {
+            control.insert("https://example.com/mid.mp3", Some(a))
+        })
+        .await
+        .expect("BUG: insert relative to existing track");
         let snapshot = queue.tracks();
         let ids: Vec<TrackId> = snapshot.iter().map(|e| e.id).collect();
         assert_eq!(ids, vec![a, mid, b]);
@@ -549,9 +599,9 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn track_source_is_keyed_by_id_across_removal() {
-        let (mut queue, _audio_thread) = make_queue();
-        let a = append(&mut queue, "https://example.com/a.mp3");
-        let b = append(&mut queue, "https://example.com/b.mp3");
+        let (queue, _host) = hosted_queue().await;
+        let a = append(&queue, "https://example.com/a.mp3").await;
+        let b = append(&queue, "https://example.com/b.mp3").await;
 
         assert_eq!(
             queue
@@ -563,7 +613,9 @@ mod tests {
 
         // Removing an earlier track must not shift which source `b` resolves
         // to, and the removed id must no longer have a source.
-        queue.remove(a).expect("BUG: remove existing track");
+        command(&queue, move |control| control.remove(a))
+            .await
+            .expect("BUG: remove existing track");
         assert!(
             queue.track_source(a).is_none(),
             "removed track has no source"

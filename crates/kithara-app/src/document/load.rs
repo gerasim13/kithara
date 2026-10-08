@@ -432,8 +432,10 @@ mod tests {
         assert!(!config.tracks().is_empty());
 
         let crossfade = config
-            .player()
-            .crossfade_duration
+            .queue()
+            .settings
+            .crossfade
+            .duration
             .expect("the shipped document names a crossfade");
         assert!(
             (crossfade - 5.0).abs() < f32::EPSILON,

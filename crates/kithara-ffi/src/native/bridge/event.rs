@@ -290,7 +290,7 @@ mod tests {
             sync::{Arc, Mutex},
             tokio::task::spawn_blocking,
         },
-        play::{ItemRole, PlayWorkerConfig, PlaybackFault, PlayerConfig, PlayerImpl, TrackRef},
+        play::{ItemRole, PlayWorkerConfig, PlaybackFault, ResourcePrep, TrackRef},
         queue::{AdvanceReason, QueueConfig, QueueEvent, QueueRepeatMode, TrackStatus, Transition},
     };
     use kithara_file::{FileError, FileEvent};
@@ -952,13 +952,8 @@ mod tests {
         let worker = FfiWorker::new(
             PlayWorkerConfig::builder(pools::build().expect("valid FFI pool policy")).build(),
         );
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(crate::native::session::requested_sample_rate())
-                .worker(worker)
-                .build(),
-        );
-        let queue = FfiQueue::new(QueueConfig::builder().player(player).build());
+        let prep = ResourcePrep::builder().worker(worker).build();
+        let queue = FfiQueue::new(QueueConfig::builder().prep(prep).build());
         // The FFI surface calls the session from the caller's thread, never
         // from a runtime worker.
         let owner = spawn_blocking(move || crate::native::session::insert(queue))

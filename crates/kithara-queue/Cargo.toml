@@ -72,6 +72,7 @@ getrandom = { workspace = true, features = ["wasm_js"] }
 [dev-dependencies]
 kithara-audio = { workspace = true, features = ["mock"] }
 kithara-bufpool = { workspace = true }
+kithara-host = { workspace = true, features = ["offline"] }
 kithara-platform = { workspace = true, features = ["tokio-rt-multi-thread"] }
 kithara-play = { workspace = true, default-features = false, features = ["mock"] }
 kithara-queue = { path = ".", default-features = false, features = ["usdt"] }

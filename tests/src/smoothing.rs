@@ -13,8 +13,7 @@ use kithara::{
     host::{HostConfig, HostSettings},
     platform::time::{self, Duration},
     play::{
-        EqBandConfig, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
-        ResourceSrc,
+        EqBandConfig, PlayWorker, PlayWorkerConfig, ResourceConfig, ResourcePrep, ResourceSrc,
     },
     queue::{Queue, QueueConfig, TrackSource, Transition},
 };
@@ -118,18 +117,20 @@ pub async fn sine_queue(case: SmoothingCase) -> (OfflineQueue<TestPools>, u64) {
         )
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(sample_rate)
-            .worker(worker)
-            .maybe_eq_layout(case.eq_layout.map(layout))
-            .block_on_underrun(true)
-            .build(),
-    );
-    let queue = Queue::new(QueueConfig::builder().player(player).build());
+    let prep = ResourcePrep::builder()
+        .worker(worker)
+        .block_on_underrun(true)
+        .build();
+    let queue = Queue::new(QueueConfig::builder().prep(prep).build());
     let harness = OfflineQueue::new(session, queue)
         .await
         .expect("create offline queue");
+    if let Some(eq_layout) = case.eq_layout {
+        harness
+            .run(move |deck| deck.set_eq_layout(layout(eq_layout)))
+            .await
+            .expect("configure sine queue EQ");
+    }
     let server = TestServerHelper::new().await;
     let url = server.signal(SignalAsset::WAV_SINE440_60S);
     let src = ResourceSrc::parse(url.as_str()).expect("valid signal fixture URL");

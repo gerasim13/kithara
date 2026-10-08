@@ -366,13 +366,14 @@ mod tests {
     use kithara_test_fixtures::play_fixtures::half;
     use kithara_test_utils::kithara;
     use kithara_warp::{
-        PresentationFrontier, RenderContext, Warp, WarpConfig, supports_playback_rate,
+        PresentationFrontier, RenderContext, SpeedCurve, StretchKind, Warp, WarpConfig,
+        supports_playback_rate,
     };
     use ringbuf::traits::Consumer;
 
     use super::*;
     use crate::{
-        PlayWorkerConfig, ResourceSrc, consts,
+        PlayWorker, PlayWorkerConfig, ResourceSrc, consts,
         test_pools::{TestPools, pools},
     };
 
@@ -719,9 +720,20 @@ mod tests {
         track.cancel();
         config.cancel = Some(track);
 
-        let refused = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()))
-            .open()
-            .await;
+        let load = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
+        let (_sender, inbox) = load.lane_channel().expect("configured worker lane channel");
+        let refused = load
+            .open(
+                Duration::ZERO,
+                LaneStart {
+                    speed: SpeedCurve::Constant(1.0),
+                    keylock: false,
+                    backend: StretchKind::default(),
+                },
+                inbox,
+            )
+            .await
+            .map(|(opened, _, _)| opened);
 
         assert!(
             matches!(refused, Err(LoadRefusal::Cancelled)),
@@ -764,7 +776,21 @@ mod tests {
                 .worker(worker.clone())
                 .build();
             config.cancel = Some(track);
-            ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay())).open()
+            let load = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
+            let (sender, inbox) = load.lane_channel().expect("configured worker lane channel");
+            async move {
+                let opened = load.open(
+                    Duration::ZERO,
+                    LaneStart {
+                        speed: SpeedCurve::Constant(1.0),
+                        keylock: false,
+                        backend: StretchKind::default(),
+                    },
+                    inbox,
+                ).await.map(|(opened, _, _)| opened);
+                drop(sender);
+                opened
+            }
         };
         let track = CancelToken::never().child();
         let stalled = load(

@@ -5739,6 +5739,7 @@ dependencies = [
  "kithara-derive",
  "kithara-download",
  "kithara-events",
+ "kithara-host",
  "kithara-net",
  "kithara-platform",
  "kithara-play",

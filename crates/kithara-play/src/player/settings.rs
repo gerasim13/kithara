@@ -86,7 +86,8 @@ mod tests {
 
     use kithara_command::{ChannelConfig, Inbox, Live, LiveError, Sender, When, channel};
     use kithara_config::ConfigOwner;
-    use kithara_render::{LaneCommand, LaneFrame, LaneProtocol};
+    use kithara_render::{LaneApplied, LaneCommand, LaneFrame, LaneProtocol};
+    use kithara_signal::{FrameCount, SegmentId};
     use kithara_test_utils::kithara;
     use kithara_warp::{SpeedCurve, StretchKind, WarpConfig};
 
@@ -113,16 +114,25 @@ mod tests {
     fn execute(inbox: &mut Inbox<LaneProtocol>, frame: u64) -> Vec<LaneCommand> {
         inbox.drain();
         let mut commands = Vec::new();
-        while let Some(due) = inbox.next_due(LaneFrame(frame), 1) {
-            commands.extend(due.commands().iter().copied());
-            due.apply(());
+        while let Some(due) = inbox.next_due(
+            LaneFrame {
+                segment: SegmentId::FIRST,
+                frame,
+            },
+            1,
+        ) {
+            commands.extend(due.commands().iter().cloned());
+            due.apply(LaneApplied {
+                engine_latency: FrameCount::new(0),
+                ready: None,
+            });
         }
         commands
     }
 
     #[kithara::test]
     #[case::next(When::Next, 0)]
-    #[case::at_frame(When::At(LaneFrame(4_096)), 4_096)]
+    #[case::at_frame(When::At(LaneFrame { segment: SegmentId::FIRST, frame: 4_096 }), 4_096)]
     fn a_change_shows_once_the_lane_applied_it(#[case] when: When<LaneFrame>, #[case] frame: u64) {
         let (mut sender, mut inbox) = lane();
         let mut live = settings();
