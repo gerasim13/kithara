@@ -170,8 +170,8 @@ enum CacheCommand {
     Snapshot(SnapshotArgs),
 }
 
-/// Compose against the host's environment file, which also goes to
-/// `initialize` whole as `CACHE_ENV_FILE`: it reads a quota under a name built
+/// Compose against the host's environment file, which also goes to the stack
+/// whole as `CACHE_ENV_FILE`: the evictor reads a quota under a name built
 /// from each scope the host serves, which the Compose file cannot list.
 /// Compose resolves that path beside the Compose file, so it is made absolute.
 fn compose(env_file: &Path) -> Result<Command> {

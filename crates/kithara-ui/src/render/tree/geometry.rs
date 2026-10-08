@@ -242,6 +242,7 @@ impl HostedLayout {
                 sized: effective_size(node, skin, snapshot).is_some(),
                 child: Box::new(Self::new(anchor, ctx, skin)),
             },
+            ExpandedNode::Modal { .. } => Self::Control(None),
             ExpandedNode::Pressable { child, .. } => Self::Wrapper {
                 sized: effective_size(node, skin, snapshot).is_some(),
                 child: Box::new(Self::new(child, ctx, skin)),

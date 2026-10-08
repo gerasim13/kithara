@@ -149,13 +149,26 @@ pub(super) fn enrolment_token(host: &LinuxHost, guest: &WindowsGuest) -> Result<
 /// the only answer that distinguishes a guest that enrolled from one that
 /// booted and did nothing.
 pub(super) fn is_online(host: &LinuxHost, guest: &WindowsGuest) -> Result<bool> {
+    Ok(registered(host, guest)?.is_some_and(|runner| runner.status == "online"))
+}
+
+/// Whether the guest is running a job right now. One that is not registered,
+/// or not connected, runs nothing.
+pub(super) fn is_busy(host: &LinuxHost, guest: &WindowsGuest) -> Result<bool> {
+    Ok(registered(host, guest)?.is_some_and(|runner| runner.busy))
+}
+
+/// What GitHub holds under the guest's name, if anything. Asked by name: the
+/// listing comes a page at a time, and the fleet's ephemeral runners alone can
+/// fill the first one.
+fn registered(host: &LinuxHost, guest: &WindowsGuest) -> Result<Option<Registration>> {
     let credential = host.credential(&guest.repository)?;
     let token = read_token(&credential.token_file)?;
     let client = client(&token)?;
     let response = client
         .get(format!(
-            "https://api.github.com/repos/{}/actions/runners",
-            credential.name
+            "https://api.github.com/repos/{}/actions/runners?name={}",
+            credential.name, guest.name
         ))
         .send()
         .context("listing the repository's runners")?;
@@ -165,8 +178,8 @@ pub(super) fn is_online(host: &LinuxHost, guest: &WindowsGuest) -> Result<bool> 
     let listing: Listing = response.json().context("reading the runner listing")?;
     Ok(listing
         .runners
-        .iter()
-        .any(|runner| runner.name == guest.name && runner.status == "online"))
+        .into_iter()
+        .find(|runner| runner.name == guest.name))
 }
 
 /// Drop registrations left behind by runners that never got a job. An ephemeral

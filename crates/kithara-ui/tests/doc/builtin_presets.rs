@@ -376,6 +376,7 @@ fn each_control<'a>(node: &'a ExpandedNode, visit: &mut impl FnMut(&'a ExpandedN
             each_control(anchor, visit);
             each_control(content, visit);
         }
+        ExpandedNode::Modal { content, .. } => each_control(content, visit),
         ExpandedNode::Control { .. } => visit(node),
         _ => {}
     }

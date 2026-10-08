@@ -9,8 +9,14 @@
 use std::borrow::Cow;
 
 use iced::{
-    Event, Point, Size,
-    advanced::{clipboard, graphics::text::font_system, mouse::Cursor},
+    Background, Color, Event, Point, Rectangle, Size, Theme,
+    advanced::{
+        clipboard,
+        graphics::text::font_system,
+        input_method,
+        mouse::Cursor,
+        renderer::{Quad, Style},
+    },
     event,
     keyboard::{
         self, Location, Modifiers,
@@ -18,8 +24,10 @@ use iced::{
     },
     mouse::{self, Button, Interaction, ScrollDelta},
     time::Instant,
+    touch,
     window::{self, RedrawRequest},
 };
+use iced_renderer::fallback::Renderer as FallbackRenderer;
 use iced_runtime::{
     UserInterface,
     user_interface::{Cache, State},
@@ -148,6 +156,53 @@ impl<'a, A: App> Immediate<'a, A> {
         (published, captured)
     }
 
+    /// The quads the tree and its overlay hand the software renderer for one
+    /// frame, each with the bounds of the layer it was drawn into.
+    pub(crate) fn quads(&mut self) -> Vec<(Rectangle, Quad, Background)> {
+        let Self {
+            app,
+            cache,
+            renderer,
+            size,
+            skin,
+            ui,
+            view,
+            ..
+        } = self;
+        let element = app
+            .reads(|reads| tree::render(&ui.root, ui, reads, view, skin, Clock::default(), None));
+        let mut interface = UserInterface::build(element, *size, std::mem::take(cache), renderer);
+        drop(interface.update(
+            &[],
+            Cursor::Unavailable,
+            renderer,
+            &mut clipboard::Null,
+            &mut Vec::<Published>::new(),
+        ));
+        interface.draw(
+            renderer,
+            &Theme::Dark,
+            &Style {
+                text_color: Color::WHITE,
+            },
+            Cursor::Unavailable,
+        );
+        *cache = interface.into_cache();
+        let FallbackRenderer::Secondary(software) = renderer else {
+            panic!("the parity harness draws through the software renderer");
+        };
+        software
+            .layers()
+            .iter()
+            .flat_map(|layer| {
+                layer
+                    .quads
+                    .iter()
+                    .map(move |(quad, background)| (layer.bounds, *quad, *background))
+            })
+            .collect()
+    }
+
     /// The pointer arrives at one point and stops there, pressing nothing.
     pub(crate) fn hover_at(&mut self, at: Pt) -> bool {
         let cursor = Point::new(at.x, at.y);
@@ -179,6 +234,40 @@ impl<'a, A: App> Immediate<'a, A> {
                 physical_key: Physical::Code(code),
                 location: Location::Standard,
                 modifiers: Modifiers::empty(),
+            }),
+        ]
+        .into_iter()
+        .fold(false, |took, event| self.play(cursor, &event) || took)
+    }
+
+    /// The held modifiers change, the pointer resting at one point of the
+    /// window.
+    pub(crate) fn modifiers_at(&mut self, at: Pt, modifiers: Modifiers) -> bool {
+        let cursor = Point::new(at.x, at.y);
+        let changed = Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers));
+        self.play(cursor, &changed)
+    }
+
+    /// An input method commits text, the pointer resting at one point of the
+    /// window: the way a window hands over a paste into a field.
+    pub(crate) fn commit_at(&mut self, at: Pt, text: &str) -> bool {
+        let cursor = Point::new(at.x, at.y);
+        let commit = Event::InputMethod(input_method::Event::Commit(text.to_owned()));
+        self.play(cursor, &commit)
+    }
+
+    /// A finger touches one point of the window and lifts there.
+    pub(crate) fn touch_at(&mut self, at: Pt) -> bool {
+        let cursor = Point::new(at.x, at.y);
+        let finger = touch::Finger(0);
+        [
+            Event::Touch(touch::Event::FingerPressed {
+                id: finger,
+                position: cursor,
+            }),
+            Event::Touch(touch::Event::FingerLifted {
+                id: finger,
+                position: cursor,
             }),
         ]
         .into_iter()
@@ -230,6 +319,13 @@ impl<'a, A: App> Immediate<'a, A> {
         ]
         .into_iter()
         .fold(false, |took, event| self.play(cursor, &event) || took)
+    }
+
+    /// The pointer lets go where it stands, ending whatever a press began.
+    pub(crate) fn release_at(&mut self, at: Pt) -> bool {
+        let cursor = Point::new(at.x, at.y);
+        let released = Event::Mouse(mouse::Event::ButtonReleased(Button::Left));
+        self.play(cursor, &released)
     }
 
     /// Settles what the tree published the way the retained host does.

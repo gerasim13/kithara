@@ -4,8 +4,8 @@ use crate::consts;
 ///
 /// sccache writes `<prefix>/<h0>/<h1>/<h2>/<hash>`, the first three characters
 /// of the hash repeated as directories. Everything else in a scope's bucket -
-/// the startup probe, the snapshot layers, the evictor's own marker - is not
-/// an entry, so it is counted against the budget and never evicted.
+/// the startup probe, the snapshot layers - is not an entry, so it is counted
+/// against the budget and never evicted.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, derive_more::From, derive_more::Into,
 )]
@@ -76,7 +76,6 @@ mod tests {
             format!("sccache/a/b/c/{}", &ENTRY_HASH[..63]),
             format!("elsewhere/a/b/c/{ENTRY_HASH}"),
             format!("target-snapshots/{ENTRY_HASH}/{ENTRY_HASH}.tar"),
-            ".evict/recount".to_owned(),
         ] {
             assert_eq!(Entry::parse(&object), None, "{object}");
         }

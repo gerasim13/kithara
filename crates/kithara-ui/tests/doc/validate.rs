@@ -63,6 +63,11 @@ fn registry() -> TestRegistry {
             "ui.press",
             EndpointDesc::new(ValueKind::Trigger),
         ),
+        (
+            EndpointCategory::Command,
+            "library.select_scope",
+            EndpointDesc::new(ValueKind::Index),
+        ),
     ] {
         registry.insert(category, id, description);
     }
@@ -818,4 +823,87 @@ fn model_binding_on_write_side_is_direction_error() {
         matches!(error, UiDocError::BindingDirection { .. }),
         "{error:?}"
     );
+}
+
+/// A modal over a quiet surface, opening and shutting on state the view
+/// keeps; `close` is what Escape and a press on the scrim write.
+fn modal(id: &str, close: &str, content: &str) -> String {
+    format!(
+        r#"Modal(id: "{id}", open: View(id: "settings"), close: {close},
+            content: {content})"#
+    )
+}
+
+const SHUT: &str = r#"View(id: "settings", set: Off)"#;
+const QUIET: &str = r#"Spacer(id: "quiet", size: Some((w: Fixed(100.0), h: Fixed(60.0))))"#;
+
+#[kithara::test]
+fn a_modal_that_shuts_its_own_flag_compiles() {
+    accepted(module_root(&modal("settings", SHUT, QUIET)));
+}
+
+#[kithara::test]
+fn a_modal_must_close_through_a_binding_it_can_write() {
+    let error = refused(module_root(&modal(
+        "settings",
+        r#"Model(id: "library.breadcrumb")"#,
+        QUIET,
+    )));
+
+    assert!(
+        matches!(&error, UiDocError::BindingDirection { path, .. } if path == "demo/settings"),
+        "{error:?}"
+    );
+}
+
+/// A popover opening on the same view flag the modal reads.
+fn popover(id: &str, content: &str) -> String {
+    format!(
+        r#"Popover(id: "{id}", open: View(id: "settings"),
+            anchor: Row(id: "{id}-anchor", children: []),
+            content: {content})"#
+    )
+}
+
+/// A modal or a popover nested in a modal, or a modal nested in a popover, is
+/// refused at the inner one.
+#[kithara::test]
+fn a_surface_nested_in_a_modal_or_a_modal_in_a_popover_is_refused() {
+    for (inner_id, outer) in [
+        ("inner", modal("outer", SHUT, &modal("inner", SHUT, QUIET))),
+        ("menu", modal("settings", SHUT, &popover("menu", QUIET))),
+        ("settings", popover("menu", &modal("settings", SHUT, QUIET))),
+    ] {
+        let error = refused(module_root(&outer));
+
+        assert!(
+            matches!(&error, UiDocError::InvalidId { id, .. } if *id == format!("demo/{inner_id}")),
+            "{inner_id}: {error:?}"
+        );
+    }
+}
+
+#[kithara::test]
+fn a_node_the_hosts_draw_outside_the_flow_is_refused_inside_a_modal() {
+    for (id, node) in [
+        ("drag", r#"WindowDrag(id: "drag")"#),
+        ("title", r#"TitleBar(id: "title", label: "SETTINGS")"#),
+        ("controls", r#"WindowControls(id: "controls")"#),
+        (
+            "scope",
+            r#"ContextBar(id: "scope",
+                read: Model(id: "library.breadcrumb"),
+                write: Command(id: "library.select_scope"),
+                scope_items: ["ZVUK", "LOCAL"],
+                scope: Model(id: "ui.measure"))"#,
+        ),
+    ] {
+        accepted(module_root(node));
+        let error = refused(module_root(&modal("settings", SHUT, node)));
+
+        assert!(
+            matches!(&error, UiDocError::InvalidId { id: path, .. } if *path == format!("demo/{id}")),
+            "{id}: {error:?}"
+        );
+    }
 }

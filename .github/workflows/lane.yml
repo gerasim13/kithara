@@ -12,44 +12,8 @@ name: Lane
 # lane cannot carry, `continue-on-error` - stays a job of its own. This is the
 # uniform case, not every case.
 on:
-  workflow_dispatch:
-    inputs:
-      resolve:
-        description: Resolve the named lane through the canonical CI catalog.
-        type: boolean
-        default: true
-      lane:
-        description: One Linux CI lane from the canonical catalog.
-        required: true
-        type: string
-      role:
-        description: The catalog role that owns the lane.
-        required: true
-        type: string
-        default: gate
-      kind:
-        description: Pipeline kind the lane runs under.
-        required: true
-        type: string
-        default: nightly
-      test-filter:
-        description: Nextest expression that narrows the selected test steps.
-        type: string
-        default: ''
   workflow_call:
     inputs:
-      resolve:
-        description: Resolve metadata for a direct lane request rather than a rendered call.
-        default: false
-        type: boolean
-      role:
-        description: Catalog role, needed only when resolving a direct request.
-        default: ''
-        type: string
-      test-filter:
-        description: Nextest expression that narrows the selected test steps.
-        default: ''
-        type: string
       lane:
         description: Name of the declared CI lane to run.
         required: true
@@ -108,133 +72,34 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # The store the build-time audio assets are read from. A job that finds it
-  # empty regenerates every asset it needs, which is encode work no test should
-  # pay for. The path is the one the Linux executor already mounts, and a
-  # called workflow inherits nothing from its caller, so every workflow that
-  # runs a lane on that fleet says it for itself.
-  KITHARA_FIXTURE_CACHE: /cache/fixtures
   # What this run produces again rather than reads from the store; empty unless
   # the pipeline was dispatched to refill it.
   KITHARA_FIXTURE_REFRESH: ${{ inputs.fixture-refresh }}
-  # Bootstrap xtask under the build root every runner mounts. Without this,
-  # every fresh Actions checkout recompiles xtask before the lane can start;
-  # kept per runner, each runner held its own bootstrap build and Cargo home
-  # and compiled xtask again for a commit another runner had already built.
-  KITHARA_CI_CACHE_ROOT: /cache/lanes/.kithara-ci
-  # No build directory here. `ci lane` takes the first free slot of the
-  # lane's pool under `KITHARA_CI_TARGET_ROOT`, so jobs of one lane build side
-  # by side instead of queueing for one directory, and exports the slot as
-  # `KITHARA_LANE_TARGET` for the steps after it.
-
-permissions:
-  contents: read
+  # No cache paths here: the runner's container names the fixture store,
+  # Cargo's home, the xtask build and the build directory. `ci lane` points
+  # that build directory at the lane's own under the runner's build root and
+  # exports it as `KITHARA_LANE_TARGET` for the steps after it.
 
 jobs:
-  authorize:
-    name: Lane authorization
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Validate repository owner and request
-        env:
-          ACTOR: ${{ github.actor }}
-          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-          OWNER: ${{ github.repository_owner }}
-          REF: ${{ github.ref }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          SHA: ${{ github.sha }}
-          LANE: ${{ inputs.lane }}
-          KIND: ${{ inputs.kind }}
-          RESOLVE: ${{ inputs.resolve }}
-          TIMEOUT: ${{ inputs.timeout-minutes }}
-          RUNNER_LABELS: ${{ vars.KITHARA_RUNNER_LABELS }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$ACTOR" == "$OWNER" ]] || { echo "only the repository owner may start a lane"; exit 1; }
-          [[ "$TRIGGERING_ACTOR" == "$OWNER" ]] || { echo "only the repository owner may re-run a lane"; exit 1; }
-          [[ "$REF" == refs/heads/* && "$SHA" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "a lane needs the current branch SHA"; exit 1; }
-          [[ "$LANE" =~ ^[a-zA-Z0-9_-]+$ && "$KIND" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo "name one lane and one pipeline kind"; exit 1; }
-          [[ "$LANE" != all ]] || { echo "name one lane rather than the full catalog"; exit 1; }
-          if [[ "$KIND" == main && "$REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
-            echo "main lanes require the repository default branch"
-            exit 1
-          fi
-          [[ "$RESOLVE" == true || "$RESOLVE" == false ]] || { echo "choose a declared resolution route"; exit 1; }
-          if [[ "$RESOLVE" != true ]]; then
-            [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]] || { echo "an unresolved call needs rendered lane metadata"; exit 1; }
-          fi
-          python3 - <<'PY_LABELS'
-          import json
-          import os
-          import sys
-
-          try:
-              labels = json.loads(os.environ["RUNNER_LABELS"])
-          except json.JSONDecodeError as error:
-              print(f"KITHARA_RUNNER_LABELS is not valid JSON: {error}")
-              sys.exit(1)
-          if not isinstance(labels, list) or not labels or not all(
-              isinstance(label, str) and label for label in labels
-          ):
-              print("KITHARA_RUNNER_LABELS must be a non-empty JSON array of non-empty strings")
-              sys.exit(1)
-          PY_LABELS
-
-  select:
-    name: Resolve the requested lane
-    needs: authorize
-    if: ${{ inputs.resolve && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner }}
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
-    timeout-minutes: 10
-    outputs:
-      matrix: ${{ steps.render.outputs.matrix }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-      - name: Resolve one catalog entry
-        id: render
-        env:
-          ROLE: ${{ inputs.role }}
-          KIND: ${{ inputs.kind }}
-          LANE: ${{ inputs.lane }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          matrix=$(just ci lanes --role "$ROLE" --kind "$KIND" --only "$LANE" --field matrix)
-          [[ "$matrix" != '[]' ]] || { echo "the requested lane has no independent entry on this fleet"; exit 1; }
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
-
   # Named after the lane, not after this file. A caller reaches this workflow
   # through `uses:`, and GitHub renders the callee's job name in the run tree,
   # not the caller's - so without this every lane in a fan-out reads `run` and
   # the tree says which lanes ran only through the API.
   run:
     name: ${{ inputs.lane }}
-    needs: [authorize, select]
-    if: ${{ !cancelled() && needs.authorize.result == 'success' && (needs.select.result == 'success' || needs.select.result == 'skipped') && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner }}
-    runs-on: ${{ fromJSON(needs.select.outputs.matrix || '[]')[0].runner || inputs.runner || fromJSON(vars.KITHARA_RUNNER_LABELS) }}
-    timeout-minutes: ${{ fromJSON(needs.select.outputs.matrix || '[]')[0].timeout || inputs.timeout-minutes }}
-    env:
-      LANE_ARTIFACT_NAME: ${{ fromJSON(needs.select.outputs.matrix || '[]')[0].artifact.name || inputs.artifact-name }}
-      LANE_ARTIFACT_PATH: ${{ fromJSON(needs.select.outputs.matrix || '[]')[0].artifact.path || inputs.artifact-path }}
-      LANE_ARTIFACT_WHEN: ${{ fromJSON(needs.select.outputs.matrix || '[]')[0].artifact.when || inputs.artifact-when }}
+    runs-on: ${{ inputs.runner || fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
 
     steps:
       # The runner image carries the toolchain, so a lane installs no packages.
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
 
       # Not checkout's `fetch-depth: 0`: that fetches every branch and tag, and
       # the runner keeps its checkout, with garbage collection off, for every
       # job after this one.
       - name: Fetch the history of the checked-out commit
-        if: ${{ (inputs.resolve && fromJSON(needs.select.outputs.matrix || '[]')[0].history) || (!inputs.resolve && inputs.history) }}
+        if: ${{ inputs.history }}
         run: git fetch --no-tags --quiet --depth=2147483647 origin "$(git rev-parse HEAD)"
 
       # Checkout sets `gc.auto` to zero, so every fetch into the checkout the
@@ -257,12 +122,7 @@ jobs:
       - name: Run the lane
         env:
           GITHUB_FETCH_TOKEN: ${{ github.token }}
-          LANE: ${{ inputs.lane }}
-          KIND: ${{ inputs.kind }}
-          TEST_FILTER: ${{ inputs.test-filter }}
-        shell: bash
         run: |
-          set -euo pipefail
           # Cargo fetches into a cache outside checkout's credential scope.
           # Scope the header to the pinned dependency and RustSec database.
           auth=$(printf 'x-access-token:%s' "$GITHUB_FETCH_TOKEN" | base64 | tr -d '\n')
@@ -271,19 +131,7 @@ jobs:
           export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
           export GIT_CONFIG_KEY_1=http.https://github.com/RustSec/advisory-db.extraheader
           export GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $auth"
-          args=("$LANE" --kind "$KIND")
-          if [[ -n "$TEST_FILTER" ]]; then
-            args+=(--test-filter "$TEST_FILTER")
-          fi
-          mkdir -p .ci-artifacts
-          git rev-parse HEAD | tee .ci-artifacts/lane-sha.txt
-          printf 'lane=%s\nkind=%s\ntest-filter=%s\n' "$LANE" "$KIND" "$TEST_FILTER" > .ci-artifacts/lane-request.txt
-          set +e
-          just ci lane "${args[@]}" 2>&1 | tee .ci-artifacts/lane.log
-          status=${PIPESTATUS[0]}
-          set -e
-          printf '%s\n' "$status" > .ci-artifacts/lane-exit-status.txt
-          exit "$status"
+          just ci lane "${{ inputs.lane }}" --kind "${{ inputs.kind }}"
 
       # The report is in the slot the lane built in. A lane that stopped before
       # it took one built nothing, so there is nothing to upload.
@@ -305,22 +153,9 @@ jobs:
       # will produce that file, and an upload that finds nothing is that
       # claim broken, not a reason to warn and move on.
       - name: Upload the lane's report
-        if: ${{ always() && env.LANE_ARTIFACT_PATH != '' && (env.LANE_ARTIFACT_WHEN == 'always' || failure()) }}
+        if: ${{ always() && inputs.artifact-path != '' && (inputs.artifact-when == 'always' || failure()) }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ env.LANE_ARTIFACT_NAME }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.LANE_ARTIFACT_PATH }}
-          if-no-files-found: error
-
-      - name: Upload focused test evidence
-        if: ${{ always() && inputs.test-filter != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: focused-${{ inputs.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            .ci-artifacts/lane-sha.txt
-            .ci-artifacts/lane-request.txt
-            .ci-artifacts/lane.log
-            .ci-artifacts/lane-exit-status.txt
-            target/nextest/**/junit.xml
+          name: ${{ inputs.artifact-name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ inputs.artifact-path }}
           if-no-files-found: error

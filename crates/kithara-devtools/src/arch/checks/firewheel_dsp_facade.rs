@@ -53,7 +53,7 @@ impl Check for FirewheelDspFacade {
                         format!("{rel}:{line}"),
                         "firewheel DSP item imported past the `kithara_dsp` facade",
                     )
-                    .with_explanation(consts::EXPLANATION),
+                    .with_explanation(consts::EXPLANATION.into()),
                 );
             }
         }

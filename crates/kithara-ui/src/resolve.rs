@@ -140,7 +140,8 @@ fn walk_includes(
         | ControlNode::Placed { child, .. }
         | ControlNode::Pressable { child, .. }
         | ControlNode::Reveal { child, .. }
-        | ControlNode::Scroll { child, .. } => {
+        | ControlNode::Scroll { child, .. }
+        | ControlNode::Modal { content: child, .. } => {
             walk_includes(resolver, origin, child, limits, set, stack, depth)
         }
         ControlNode::Popover {

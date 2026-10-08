@@ -17,5 +17,5 @@ pub use host::{MasonryHost, MasonryState};
 pub use root::{MasonryRoot, MasonryRootError};
 
 pub(crate) use super::masonry_widgets::mount;
-use super::masonry_widgets::{built, painted, projected, shader, spot, vis, window_layer};
+use super::masonry_widgets::{built, modal, painted, projected, shader, spot, vis, window_layer};
 pub use crate::render::custom::{CustomWidget, Repaint, Size2, SizeLimits, TextMeasurer};
