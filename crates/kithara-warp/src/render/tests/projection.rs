@@ -13,8 +13,10 @@ use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::*;
-use crate::test_pools::pools;
-use crate::{PresentationFrontier, RenderContext, RenderSnapshot, SpeedCurve, Warp, consts};
+use crate::{
+    PresentationFrontier, RenderContext, RenderSnapshot, SpeedCurve, Warp, consts,
+    test_pools::pools,
+};
 
 #[cfg(any(
     feature = "stretch-signalsmith",
@@ -88,10 +90,7 @@ fn projected_pcm_keeps_its_producer_revision_with_a_stale_callback() {
     for index in 0..3 {
         let output = exact::mapped_signal(&mut renderer, &mut source, 128, |_| 0.25);
         let committed = renderer.committed.as_ref().expect("committed PCM");
-        assert_eq!(
-            output.meta.render_revision,
-            u64::from(revision)
-        );
+        assert_eq!(output.meta.render_revision, u64::from(revision));
         assert_eq!(
             output
                 .meta
@@ -269,9 +268,7 @@ fn commit_keeps_callback_context_separate_from_output_identity() {
     assert_eq!(committed.frontier().warp_map(), Some(output_map));
 }
 
-fn planned_renderer_with_publisher(
-    config: &WarpConfig,
-) -> (WarpRenderer, crate::RenderPublisher) {
+fn planned_renderer_with_publisher(config: &WarpConfig) -> (WarpRenderer, crate::RenderPublisher) {
     let mut warp = Warp::new((), config);
     let publisher = warp.take_publisher().expect("fixture owns publisher");
     let output = OutputContext::new(
@@ -360,10 +357,7 @@ fn an_unapplied_activation_splits_every_crossing_source_quantum(#[case] input_fr
     assert_eq!(frames.get(), 16);
 
     let mut input = chunk(&renderer.pools, &[0.25; 32]);
-    input.meta = AudioChunkInfo {
-        frames: 16,
-        ..meta
-    };
+    input.meta = AudioChunkInfo { frames: 16, ..meta };
     let pointer = input.samples.as_ptr();
     let output = renderer
         .render_quantum(input)
@@ -405,8 +399,7 @@ fn an_unapplied_activation_splits_every_crossing_source_quantum(#[case] input_fr
 ))]
 #[kithara::test]
 fn servicing_a_new_plan_preserves_an_already_prepared_quantum() {
-    let mut renderer =
-        planned_renderer(&WarpConfig::builder().speed(1.0).keylock(false).build());
+    let mut renderer = planned_renderer(&WarpConfig::builder().speed(1.0).keylock(false).build());
     renderer.prepare(spec());
     let pools = renderer.pools.clone();
     let samples = vec![0.25; 128 * usize::from(consts::CH)];
@@ -479,8 +472,7 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
         .expect("prefix renders");
     assert_eq!(first.frames(), 16);
     assert_eq!(
-        first.meta.render_revision,
-        0,
+        first.meta.render_revision, 0,
         "the callback snapshot still carries the map-0 frontier before activation"
     );
     assert_eq!(
@@ -507,10 +499,7 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
         .expect("prepared source shape")
         .expect("activated span renders");
     assert_eq!(second.meta.frame_offset, 16);
-    assert_eq!(
-        second.meta.render_revision,
-        u64::from(revision)
-    );
+    assert_eq!(second.meta.render_revision, u64::from(revision));
     assert_eq!(
         second
             .meta
@@ -545,10 +534,7 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
         .expect("prepared bridge")
         .expect("bridge PCM");
     assert_eq!(bridge.frames(), 32);
-    assert_eq!(
-        bridge.meta.render_revision,
-        u64::from(revision)
-    );
+    assert_eq!(bridge.meta.render_revision, u64::from(revision));
     publish(80);
     renderer.prepare(spec());
     let mut before_future_activation = chunk(&pools, &[0.0; 32]);
@@ -566,9 +552,7 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
         .expect("prepared source shape")
         .expect("quantum before future activation renders");
     assert_eq!(
-        before_future_activation
-            .meta
-            .render_revision,
+        before_future_activation.meta.render_revision,
         u64::from(revision),
         "a future map must not mark an earlier quantum"
     );
@@ -606,7 +590,10 @@ fn prepared_projection_refuses_another_source_origin_without_consuming_pcm() {
     let count = renderer
         .prepare_quantum(meta, 4096, usize::MAX)
         .expect("projected span");
-    let input = chunk(&renderer.pools, &vec![0.25; count.get() * usize::from(consts::CH)]);
+    let input = chunk(
+        &renderer.pools,
+        &vec![0.25; count.get() * usize::from(consts::CH)],
+    );
     assert_eq!(count.get(), input.frames());
     let original = input.samples.as_ptr();
     let mut wrong = input;
@@ -858,8 +845,7 @@ fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
 ))]
 #[kithara::test]
 fn projected_activation_refuses_uncommitted_manual_source_before_consumption() {
-    let mut renderer =
-        planned_renderer(&WarpConfig::builder().speed(4.0).keylock(false).build());
+    let mut renderer = planned_renderer(&WarpConfig::builder().speed(4.0).keylock(false).build());
     let input = chunk(&renderer.pools, &[0.25, 0.25]);
     assert!(render_serviced(&mut renderer, input).is_none());
     assert_eq!(renderer.pending_frames(2), 1);
@@ -1042,7 +1028,9 @@ fn repeated_terminal_padding_keeps_the_decoded_eof_and_resident_extent() {
     )
     .expect("terminal lookahead mapping");
     renderer.render_projected(span).expect("terminal lookahead");
-    renderer.render_projected(span).expect("same terminal lookahead");
+    renderer
+        .render_projected(span)
+        .expect("same terminal lookahead");
     let resident = renderer.residency.as_ref().expect("resident source window");
     assert_eq!(resident.samples.len(), padded_length);
     assert_eq!(
@@ -1112,10 +1100,7 @@ fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
     renderer.prepare(spec());
     let mut tail_frames = 0;
     while let Some(output) = flush_serviced(&mut renderer) {
-        assert_eq!(
-            output.meta.render_revision,
-            revision
-        );
+        assert_eq!(output.meta.render_revision, revision);
         assert_eq!(
             output.meta.frame_offset, previous,
             "tail PCM starts at the last audible source endpoint"

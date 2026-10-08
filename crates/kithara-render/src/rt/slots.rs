@@ -92,7 +92,12 @@ mod tests {
     fn track(src: Arc<str>) -> PlayerTrack {
         let sample_rate = NonZeroU32::new(44_100).expect("static sample rate");
         let mut ring = PacketRing::new(AudioSpec::new(2, sample_rate), Duration::from_secs(1), 2);
-        let resource = PlayerResource::new(PcmConsumer::new(ring.receiver.take().expect("receiver")), src, &pools()).map_or_else(|error| panic!("test player resource: {error}"), Box::new);
+        let resource = PlayerResource::new(
+            PcmConsumer::new(ring.receiver.take().expect("receiver")),
+            src,
+            &pools(),
+        )
+        .map_or_else(|error| panic!("test player resource: {error}"), Box::new);
 
         PlayerTrack::builder()
             .sample_rate(sample_rate)

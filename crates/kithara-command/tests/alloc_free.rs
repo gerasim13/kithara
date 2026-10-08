@@ -69,10 +69,7 @@ fn plain_commit_edit_and_complete_never_allocate_or_drop_batches() {
     assert_no_alloc(|| {
         inbox.drain();
         for seq in sequences.into_iter().flatten() {
-            assert_eq!(
-                inbox.next_due(Frame(64), BLOCK).expect("due").commit(),
-                seq
-            );
+            assert_eq!(inbox.next_due(Frame(64), BLOCK).expect("due").commit(), seq);
         }
         for seq in sequences.into_iter().flatten().rev() {
             inbox.committed_mut(seq).expect("held commands")[0] = 99;
@@ -132,10 +129,7 @@ fn scoped_commit_edit_complete_and_retire_never_allocate_or_drop_batches() {
         assert!(level.complete(root, ()));
         let mut level = inbox.scope(id).expect("scope");
         for seq in sequences.into_iter().flatten() {
-            assert_eq!(
-                level.next_due(Frame(64), BLOCK).expect("due").commit(),
-                seq
-            );
+            assert_eq!(level.next_due(Frame(64), BLOCK).expect("due").commit(), seq);
             level.committed_mut(seq).expect("held commands")[0] = 99;
         }
         for seq in sequences

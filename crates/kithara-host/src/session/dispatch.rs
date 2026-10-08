@@ -1,8 +1,9 @@
+use std::num::NonZeroU32;
+
 use firewheel::{FirewheelContext, error::UpdateError};
 use kithara_command::{Answer, Post, Seq};
 use kithara_config::ConfigOwner;
 use kithara_play::{PlayError, StreamShape};
-use std::num::NonZeroU32;
 use tracing::{debug, trace, warn};
 
 use super::{
@@ -40,7 +41,9 @@ impl OwnerPosts {
         let mut posts = Self::take_posts(mailbox).into_iter().peekable();
         while let Some(Post { command, answer }) = posts.next() {
             if O::is_next_tempo(&command)
-                && posts.peek().is_some_and(|post| O::is_next_tempo(&post.command))
+                && posts
+                    .peek()
+                    .is_some_and(|post| O::is_next_tempo(&post.command))
             {
                 answer.answer(Err(PlayError::Superseded));
                 continue;
@@ -48,7 +51,9 @@ impl OwnerPosts {
             let releasing = O::release_id(&command);
             match run_host_cmd(owner, command) {
                 Ok(_) if releasing.is_some() => {
-                    if let Some(id) = releasing { self.closing.push((id, answer)); }
+                    if let Some(id) = releasing {
+                        self.closing.push((id, answer));
+                    }
                 }
                 Ok(Some(seq)) => self.pending.push((seq, answer)),
                 outcome => answer.answer(outcome.map(|_| ())),
@@ -75,12 +80,15 @@ impl OwnerPosts {
                         *seq = to;
                     }
                 }
-                HostSettled::Settings { seq, outcome, .. } | HostSettled::Batch { seq, outcome } => {
+                HostSettled::Settings { seq, outcome, .. }
+                | HostSettled::Batch { seq, outcome } => {
                     if let Some(index) = self.pending.iter().position(|(held, _)| *held == seq) {
                         let (_, answer) = self.pending.remove(index);
                         answer.answer(outcome.map(|_| ()).map_err(|reason| match reason {
                             kithara_command::Rejection::Late => PlayError::Late,
-                            kithara_command::Rejection::Stale => PlayError::Internal("owner batch basis is stale".into()),
+                            kithara_command::Rejection::Stale => {
+                                PlayError::Internal("owner batch basis is stale".into())
+                            }
                             kithara_command::Rejection::Unanswered => PlayError::Closed,
                             kithara_command::Rejection::Refused(error) => error,
                         }));
@@ -92,7 +100,9 @@ impl OwnerPosts {
                         if self.closing[index].0 == deck {
                             let (_, answer) = self.closing.remove(index);
                             answer.answer(Ok(()));
-                        } else { index += 1; }
+                        } else {
+                            index += 1;
+                        }
                     }
                 }
             }

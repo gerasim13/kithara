@@ -1,7 +1,10 @@
 use std::num::NonZeroU32;
 
 use kithara_abr::AbrState;
-use kithara_decode::{DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessInfo, GaplessMode};
+use kithara_decode::{
+    DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessInfo,
+    GaplessMode,
+};
 use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
@@ -9,24 +12,46 @@ use kithara_stream::{AudioCodec, PrerollHint, SourcePhase, VariantPromotion, Var
 use kithara_test_fixtures::unit_fixtures::{RoutePcm, route_pcm};
 use kithara_test_utils::{flight, kithara};
 
-use crate::pipeline::source::{OwnerPhase, AudioEvent, AudioLaneEvent, AudioSource, TrackFailureKind, TrackStep, WaitingReason, DecoderGeneration, DecoderFactory, RecreateCause, RecreateState};
-use crate::{DecodeErrorKind, DecoderEvent, consts, pipeline::source::tests::rebuild::{media_info, produced_data, route_signal_source, route_signal_source_with_gapless_eof, test_source}};
+use crate::{
+    DecodeErrorKind, DecoderEvent, consts,
+    pipeline::source::{
+        AudioEvent, AudioLaneEvent, AudioSource, DecoderFactory, DecoderGeneration, OwnerPhase,
+        RecreateCause, RecreateState, TrackFailureKind, TrackStep, WaitingReason,
+        tests::rebuild::{
+            media_info, produced_data, route_signal_source, route_signal_source_with_gapless_eof,
+            test_source,
+        },
+    },
+};
 
 fn decode_failure(error: DecodeError) -> (TrackFailureKind, Option<DecodeError>) {
-    (TrackFailureKind::Decode { kind: crate::map_decode_error_kind(&error) }, Some(error))
+    (
+        TrackFailureKind::Decode {
+            kind: crate::map_decode_error_kind(&error),
+        },
+        Some(error),
+    )
 }
 
-struct FailedDecoder { seek_error: Option<DecodeError> }
+struct FailedDecoder {
+    seek_error: Option<DecodeError>,
+}
 
 impl Decoder for FailedDecoder {
-    fn duration(&self) -> Option<Duration> { Some(Duration::from_secs(60)) }
+    fn duration(&self) -> Option<Duration> {
+        Some(Duration::from_secs(60))
+    }
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
-        Err(DecodeError::InvalidData { detail: "fixture decode failure" })
+        Err(DecodeError::InvalidData {
+            detail: "fixture decode failure",
+        })
     }
     fn seek(&mut self, _position: Duration) -> DecodeResult<DecoderSeekOutcome> {
         Err(self.seek_error.take().expect("one scripted seek"))
     }
-    fn spec(&self) -> AudioSpec { AudioSpec::new(2, NonZeroU32::MIN) }
+    fn spec(&self) -> AudioSpec {
+        AudioSpec::new(2, NonZeroU32::MIN)
+    }
     fn update_byte_len(&self, _len: u64) {}
 }
 
@@ -151,7 +176,11 @@ fn failure_log_output() -> Vec<String> {
         .collect()
 }
 
-enum TerminalTransition { Cancel, Recreate, Seek }
+enum TerminalTransition {
+    Cancel,
+    Recreate,
+    Seek,
+}
 
 #[kithara::test(native, tokio, tracing("warn"))]
 #[case::cancel(TerminalTransition::Cancel, "source cancelled")]
@@ -167,35 +196,93 @@ async fn real_terminal_transitions_wait_for_the_diagnostic_shell(
     let expected = match transition {
         TerminalTransition::Cancel => {
             *fixture.phase.lock() = SourcePhase::Cancelled;
-            assert!(matches!(fixture.source.step_track(), TrackStep::Failed(TrackFailureKind::SourceCancelled)));
-            assert!(matches!(fixture.source.phase, OwnerPhase::Failed { failure: TrackFailureKind::SourceCancelled, .. }));
+            assert!(matches!(
+                fixture.source.step_track(),
+                TrackStep::Failed(TrackFailureKind::SourceCancelled)
+            ));
+            assert!(matches!(
+                fixture.source.phase,
+                OwnerPhase::Failed {
+                    failure: TrackFailureKind::SourceCancelled,
+                    ..
+                }
+            ));
             TrackFailureKind::SourceCancelled
         }
         TerminalTransition::Recreate => {
-            fixture.source.factory = DecoderFactory::new(|_, _, _| Err(DecodeError::InvalidData { detail: "recreate failure" }), None);
-            let error = fixture.source.install_replacement(RecreateState { cause: RecreateCause::FormatBoundary, media_info: Some(media_info(0)), offset: 8193 }, None).expect_err("failed real reconstruction");
-            let failure = fixture.source.fail(TrackFailureKind::RecreateFailed { offset: 8193 }, Some(error));
+            fixture.source.factory = DecoderFactory::new(
+                |_, _, _| {
+                    Err(DecodeError::InvalidData {
+                        detail: "recreate failure",
+                    })
+                },
+                None,
+            );
+            let error = fixture
+                .source
+                .install_replacement(
+                    RecreateState {
+                        cause: RecreateCause::FormatBoundary,
+                        media_info: Some(media_info(0)),
+                        offset: 8193,
+                    },
+                    None,
+                )
+                .expect_err("failed real reconstruction");
+            let failure = fixture.source.fail(
+                TrackFailureKind::RecreateFailed { offset: 8193 },
+                Some(error),
+            );
             assert_eq!(failure, TrackFailureKind::RecreateFailed { offset: 8193 });
-            assert!(matches!(fixture.source.phase, OwnerPhase::Failed { failure: TrackFailureKind::RecreateFailed { offset: 8193 }, .. }));
+            assert!(matches!(
+                fixture.source.phase,
+                OwnerPhase::Failed {
+                    failure: TrackFailureKind::RecreateFailed { offset: 8193 },
+                    ..
+                }
+            ));
             TrackFailureKind::RecreateFailed { offset: 8193 }
         }
         TerminalTransition::Seek => {
-            let replacement = DecoderGeneration::new(Box::new(FailedDecoder { seek_error: Some(DecodeError::SeekFailed { detail: "terminal-seek-failure" }) }), Some(media_info(0)), 0, None, None, GaplessMode::Disabled);
+            let replacement = DecoderGeneration::new(
+                Box::new(FailedDecoder {
+                    seek_error: Some(DecodeError::SeekFailed {
+                        detail: "terminal-seek-failure",
+                    }),
+                }),
+                Some(media_info(0)),
+                0,
+                None,
+                None,
+                GaplessMode::Disabled,
+            );
             drop(fixture.source.decode.replace_active(replacement));
-            let error = fixture.source.seek_owned(Duration::from_millis(20)).expect_err("real failed seek");
+            let error = fixture
+                .source
+                .seek_owned(Duration::from_millis(20))
+                .expect_err("real failed seek");
             let crate::AudioReadError::Decode(error) = error else {
                 panic!("decoder seek must preserve its direct decode error");
             };
             let failure = decode_failure(error);
             fixture.source.fail(failure.0, failure.1);
-            assert!(matches!(fixture.source.phase, OwnerPhase::Failed {
-                error: Some(DecodeError::SeekFailed { detail: "terminal-seek-failure" }),
-                ..
-            }));
-            TrackFailureKind::Decode { kind: DecodeErrorKind::SeekFailed }
+            assert!(matches!(
+                fixture.source.phase,
+                OwnerPhase::Failed {
+                    error: Some(DecodeError::SeekFailed {
+                        detail: "terminal-seek-failure"
+                    }),
+                    ..
+                }
+            ));
+            TrackFailureKind::Decode {
+                kind: DecodeErrorKind::SeekFailed,
+            }
         }
     };
-    assert!(matches!(fixture.source.phase, OwnerPhase::Failed { failure, .. } if failure == expected));
+    assert!(
+        matches!(fixture.source.phase, OwnerPhase::Failed { failure, .. } if failure == expected)
+    );
     assert!(
         failure_log_output().is_empty(),
         "the transition must not emit the terminal log"
@@ -225,7 +312,9 @@ async fn decode_error_precedes_track_failure_on_event_bus() {
     let mut events = bus.subscribe();
     source.emit = Arc::new(DeferredBus::new(bus, 16));
     let replacement = DecoderGeneration::new(
-        Box::new(FailedDecoder { seek_error: Some(DecodeError::Interrupted) }),
+        Box::new(FailedDecoder {
+            seek_error: Some(DecodeError::Interrupted),
+        }),
         Some(media_info(0)),
         0,
         None,
@@ -260,10 +349,22 @@ async fn rebuild_factory_panic_fails_track_without_hang() {
     let mut source = test_source(1).await.source;
     source.factory = DecoderFactory::new(|_, _, _| panic!("decoder construction blew up"), None);
     source.set_host_sample_rate(NonZeroU32::new(96_000).expect("host rate"));
-    assert!(matches!(source.step_track(), TrackStep::Failed(TrackFailureKind::RecreateFailed { offset: 0 })));
-    assert!(matches!(source.phase, OwnerPhase::Failed { failure: TrackFailureKind::RecreateFailed { offset: 0 }, .. }));
+    assert!(matches!(
+        source.step_track(),
+        TrackStep::Failed(TrackFailureKind::RecreateFailed { offset: 0 })
+    ));
+    assert!(matches!(
+        source.phase,
+        OwnerPhase::Failed {
+            failure: TrackFailureKind::RecreateFailed { offset: 0 },
+            ..
+        }
+    ));
     source.finish_deferred();
-    assert!(matches!(source.step_track(), TrackStep::Failed(TrackFailureKind::RecreateFailed { offset: 0 })));
+    assert!(matches!(
+        source.step_track(),
+        TrackStep::Failed(TrackFailureKind::RecreateFailed { offset: 0 })
+    ));
 }
 
 struct ByteEofDecoder {
@@ -271,12 +372,16 @@ struct ByteEofDecoder {
 }
 
 impl Decoder for ByteEofDecoder {
-    fn duration(&self) -> Option<Duration> { None }
+    fn duration(&self) -> Option<Duration> {
+        None
+    }
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         if *self.phase.lock() == SourcePhase::Waiting {
-            Ok(DecoderChunkOutcome::Pending(kithara_stream::PendingReason::NotReady(
-                kithara_stream::NotReadyCause::SourcePending,
-            )))
+            Ok(DecoderChunkOutcome::Pending(
+                kithara_stream::PendingReason::NotReady(
+                    kithara_stream::NotReadyCause::SourcePending,
+                ),
+            ))
         } else {
             Ok(DecoderChunkOutcome::Eof)
         }
@@ -289,7 +394,9 @@ impl Decoder for ByteEofDecoder {
             preroll: PrerollHint::NotNeeded,
         })
     }
-    fn spec(&self) -> AudioSpec { AudioSpec::new(2, NonZeroU32::MIN) }
+    fn spec(&self) -> AudioSpec {
+        AudioSpec::new(2, NonZeroU32::MIN)
+    }
     fn update_byte_len(&self, _len: u64) {}
 }
 
@@ -297,13 +404,22 @@ impl Decoder for ByteEofDecoder {
 async fn byte_eof_still_ends_a_drained_decoder_through_the_decode_path(route_pcm: RoutePcm) {
     let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
     let generation = DecoderGeneration::new(
-        Box::new(ByteEofDecoder { phase: fixture.phase.clone() }),
-        Some(media_info(0)), 0, None, None, GaplessMode::Disabled,
+        Box::new(ByteEofDecoder {
+            phase: fixture.phase.clone(),
+        }),
+        Some(media_info(0)),
+        0,
+        None,
+        None,
+        GaplessMode::Disabled,
     );
     drop(fixture.source.decode.replace_active(generation));
     *fixture.phase.lock() = SourcePhase::Waiting;
     assert!(
-        matches!(fixture.source.step_track(), TrackStep::Blocked(WaitingReason::Waiting)),
+        matches!(
+            fixture.source.step_track(),
+            TrackStep::Blocked(WaitingReason::Waiting)
+        ),
         "a waiting source must park the decoding track"
     );
     *fixture.phase.lock() = SourcePhase::Eof;
@@ -332,7 +448,9 @@ async fn seek_after_terminal_failure_returns_the_first_cause() {
     let failure = TrackFailureKind::RecreateFailed { offset: 8193 };
     source.fail(failure, None);
     source.factory = DecoderFactory::new(|_, _, _| panic!("failed source must not rebuild"), None);
-    let error = source.seek(Duration::from_secs(1)).expect_err("terminal source");
+    let error = source
+        .seek(Duration::from_secs(1))
+        .expect_err("terminal source");
     assert_eq!(TrackFailureKind::from(&error), failure);
     assert!(matches!(source.step_track(), TrackStep::Failed(actual) if actual == failure));
 }
@@ -351,9 +469,15 @@ async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks(
         RAW_CHUNKS,
     )
     .await;
-    let abr = AbrState::new(kithara_abr::AbrMode::Auto(Some(kithara_abr::VariantIndex::new(0))));
-    abr.request_target(kithara_abr::VariantIndex::new(1), kithara_abr::AbrReason::ManualOverride);
-    let claim = abr.claim_pending_decision(kithara_abr::VariantIndex::new(0))
+    let abr = AbrState::new(kithara_abr::AbrMode::Auto(Some(
+        kithara_abr::VariantIndex::new(0),
+    )));
+    abr.request_target(
+        kithara_abr::VariantIndex::new(1),
+        kithara_abr::AbrReason::ManualOverride,
+    );
+    let claim = abr
+        .claim_pending_decision(kithara_abr::VariantIndex::new(0))
         .expect("exact transition fixture requires a pending ABR claim");
     let transition = VariantTransition::new(
         kithara_stream::VariantTransitionId::new(claim.ticket()),

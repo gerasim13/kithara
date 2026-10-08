@@ -12,7 +12,9 @@ use kithara_platform::{
 use kithara_signal::AudioSpec;
 
 use super::pcm_reader::prepared_sample;
-use crate::{AudioControl, AudioRead, AudioReadError, AudioSession, PendingReason, ReadOutcome, SeekOutcome};
+use crate::{
+    AudioControl, AudioRead, AudioReadError, AudioSession, PendingReason, ReadOutcome, SeekOutcome,
+};
 
 mod consts {
     use std::num::NonZeroU32;
@@ -276,7 +278,8 @@ impl AudioControl for MockReader {
             MockBehavior::Faulty(Fault::RefuseSeek) => {
                 return Err(DecodeError::Io {
                     source: std::io::Error::other("mock seek refusal"),
-                }.into());
+                }
+                .into());
             }
             MockBehavior::SeekSplit(counts) => {
                 counts.blocking_seeks.fetch_add(1, Ordering::Relaxed);

@@ -188,6 +188,10 @@ mod tests {
             2
         );
         let markdown = fs::read_to_string(output.join("assessment.md")).expect("Markdown");
+        assert!(markdown.contains("hard-invariant findings"));
+        assert!(markdown.contains("debt baseline comparison"));
+        assert!(markdown.contains("corroborated by multiple tools"));
+        assert!(!markdown.contains("The debt threshold or regression policy is exceeded"));
         assert!(markdown.contains("Type cohesion (LCOM4)"));
         assert!(markdown.contains("demo::Demo"));
     }

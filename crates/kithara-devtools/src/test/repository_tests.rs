@@ -193,8 +193,8 @@ fn flag_groups<S: AsRef<str>>(args: &[S]) -> Vec<(String, Option<String>)> {
 /// runner of the lane gets and the build the planner reads.
 ///
 /// Each nextest lane lists through the pinned nextest with `CARGO` pointed at
-/// a script that answers `cargo metadata` with the real cargo and records any
-/// other call instead of running it.
+/// a script that captures the first lane's real metadata and records its
+/// calls. Every other lane must request the same graph to reuse that input.
 #[cfg(unix)]
 #[test]
 fn the_pinned_nextest_builds_exactly_the_cargo_arguments_a_lane_derives() {
@@ -218,16 +218,23 @@ fn the_pinned_nextest_builds_exactly_the_cargo_arguments_a_lane_derives() {
          `cargo install cargo-nextest --version {pin} --locked`"
     );
     let temp = TempDir::new().expect("temp dir");
+    let real_cargo = std::env::var_os("CARGO").expect("the test runner names the cargo it uses");
+    let graph = temp.path().join("metadata.json");
     let shim = temp.path().join("cargo");
     fs::write(
         &shim,
         "#!/bin/sh\n\
-         if [ \"$1\" = metadata ] || [ \"$2\" = metadata ]; then exec \"$REAL_CARGO\" \"$@\"; fi\n\
+         if [ \"$1\" = metadata ] || [ \"$2\" = metadata ]; then\n\
+           printf '%s\\n' \"$@\" > \"$SHIM_METADATA_LOG\"\n\
+           if [ \"$SHIM_CAPTURE_METADATA\" = 1 ]; then\n\
+             \"$REAL_CARGO\" \"$@\" > \"$SHIM_METADATA\" || exit \"$?\"\n\
+           fi\n\
+           exec cat \"$SHIM_METADATA\"\n\
+         fi\n\
          printf '%s\\n' \"$@\" > \"$SHIM_LOG\"\n",
     )
     .expect("write the cargo shim");
     fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("make the shim runnable");
-    let real_cargo = std::env::var_os("CARGO").expect("the test runner names the cargo it uses");
     let project = ProjectConfig::load(&root).expect("load repository config");
     let test = &project.test;
     let lanes = test
@@ -238,7 +245,7 @@ fn the_pinned_nextest_builds_exactly_the_cargo_arguments_a_lane_derives() {
         .collect::<Vec<_>>();
     assert!(!lanes.is_empty(), "the repository configures nextest lanes");
 
-    let mismatch = |lane: &str| {
+    let mismatch = |lane: &str, capture: bool| {
         let resolved = resolve(test, &requested(test, lane, None).expect("lane")).expect("resolve");
         let command = resolved
             .command(NextestAction::List, &[])
@@ -253,6 +260,12 @@ fn the_pinned_nextest_builds_exactly_the_cargo_arguments_a_lane_derives() {
             )
             .env("CARGO", &shim)
             .env("REAL_CARGO", &real_cargo)
+            .env("SHIM_METADATA", &graph)
+            .env("SHIM_CAPTURE_METADATA", if capture { "1" } else { "0" })
+            .env(
+                "SHIM_METADATA_LOG",
+                temp.path().join(format!("{lane}.metadata-args")),
+            )
             .env("SHIM_LOG", &log)
             .current_dir(&root)
             .output()
@@ -283,16 +296,21 @@ fn the_pinned_nextest_builds_exactly_the_cargo_arguments_a_lane_derives() {
             )
         })
     };
+    assert_eq!(
+        mismatch(lanes[0], true),
+        None,
+        "the first lane must capture the real metadata and match its build arguments"
+    );
     let mismatch = &mismatch;
     let failures = std::thread::scope(|scope| {
-        let workers = lanes
+        let workers = lanes[1..]
             .chunks(lanes.len().div_ceil(4))
             .map(|chunk| {
                 scope.spawn(move || {
                     chunk
                         .iter()
                         .copied()
-                        .filter_map(mismatch)
+                        .filter_map(|lane| mismatch(lane, false))
                         .collect::<Vec<_>>()
                 })
             })
@@ -304,4 +322,22 @@ fn the_pinned_nextest_builds_exactly_the_cargo_arguments_a_lane_derives() {
     });
 
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+    let metadata_calls = lanes
+        .iter()
+        .map(|lane| {
+            fs::read_to_string(temp.path().join(format!("{lane}.metadata-args")))
+                .expect("every lane called cargo metadata")
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        metadata_calls.len(),
+        1,
+        "every lane must request the same metadata graph"
+    );
+    assert!(
+        metadata_calls
+            .iter()
+            .all(|args| args.lines().any(|arg| arg == "--all-features")),
+        "the pinned nextest must request the all-feature workspace graph"
+    );
 }

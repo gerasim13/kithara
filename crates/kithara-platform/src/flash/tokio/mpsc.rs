@@ -275,7 +275,7 @@ fn close_receiver<T>(shared: &Shared<T>, pending: &mut Option<Parked>) {
     drop(inner);
     shared.wake_space(true, wakers);
     if let Some(Parked::Engine(handle)) = pending.take() {
-        system::cancel_async_wait(&handle);
+        drop(handle);
     }
 }
 
@@ -416,7 +416,7 @@ impl<T> Drop for Send<'_, T> {
                 let mut inner = self.shared.inner.lock();
                 inner.space_wakers.retain(|w| !w.will_wake(&waker));
             }
-            Some(Parked::Engine(handle)) => system::cancel_async_wait(&handle),
+            Some(Parked::Engine(handle)) => drop(handle),
             None => {}
         }
     }

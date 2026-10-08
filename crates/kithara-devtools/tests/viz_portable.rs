@@ -761,7 +761,16 @@ fn configured_runtime_scenario_enriches_the_same_graph() {
     )
     .expect("runtime metrics JSON");
     assert!(document.contains("classDef observed"));
-    assert_eq!(manifest["status"], "runtime-enriched");
+    assert_eq!(
+        manifest["status"],
+        "runtime-enriched",
+        "runtime scenario stderr: {:?}",
+        fs::read_to_string(
+            output
+                .with_file_name("logs")
+                .join("flow-runtime.stderr.log")
+        )
+    );
     assert_eq!(manifest["runtime"]["scenarios"][0]["state"], "complete");
     assert_eq!(runtime_metrics["confirmed"], static_metrics["confirmed"]);
     assert_eq!(

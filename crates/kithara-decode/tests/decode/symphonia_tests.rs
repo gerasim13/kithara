@@ -23,14 +23,10 @@ fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>, decoder_w
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(container)
         .build();
-    let decoder = DecoderFactory::create_from_media_info(
-        cursor,
-        &media_info,
-        TestDecoderConfig::builder()
-            .pools(pools())
-            .hint("wav")
-            .build(),
-    );
+    let config = TestDecoderConfig::builder().pools(pools());
+    #[cfg(feature = "symphonia")]
+    let config = config.hint("wav");
+    let decoder = DecoderFactory::create_from_media_info(cursor, &media_info, config.build());
     assert!(decoder.is_ok(), "decoder creation should succeed");
 
     let decoder = decoder.unwrap();

@@ -970,8 +970,11 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
     let pools = pools();
     let control = Arc::new(TestControl::new(media_info(variant)));
     let drops = Arc::new(Mutex::new(Vec::new()));
-    let stream = Stream::<TestStream>::new(TestConfig { source: TestSource::new(control.clone()) })
-        .await.expect("test stream");
+    let stream = Stream::<TestStream>::new(TestConfig {
+        source: TestSource::new(control.clone()),
+    })
+    .await
+    .expect("test stream");
     let shared_stream = SharedStream::new(stream);
     let factory_drops = drops.clone();
     let decoder_factory = DecoderFactory::new(
@@ -1763,7 +1766,9 @@ async fn decode_error_precedes_track_failure_on_event_bus() {
     assert!(matches!(
         events.try_recv().map(|envelope| envelope.event),
         Ok(AudioLaneEvent::Audio(AudioEvent::TrackFailed {
-            failure: TrackFailureKind::Decode { kind: crate::DecodeErrorKind::InvalidData },
+            failure: TrackFailureKind::Decode {
+                kind: crate::DecodeErrorKind::InvalidData
+            },
         }))
     ));
 }
@@ -2191,7 +2196,9 @@ async fn rebuild_factory_panic_fails_track_without_hang() {
         source.phase,
         super::super::OwnerPhase::Failed {
             failure: TrackFailureKind::RecreateFailed { offset: 0 },
-            error: Some(DecodeError::InvalidData { detail: "decoder factory panicked" })
+            error: Some(DecodeError::InvalidData {
+                detail: "decoder factory panicked"
+            })
         }
     ));
     assert!(matches!(
@@ -2201,7 +2208,10 @@ async fn rebuild_factory_panic_fails_track_without_hang() {
     source.finish_deferred();
     assert!(matches!(
         source.phase,
-        super::super::OwnerPhase::Failed { failure: TrackFailureKind::RecreateFailed { offset: 0 }, error: None }
+        super::super::OwnerPhase::Failed {
+            failure: TrackFailureKind::RecreateFailed { offset: 0 },
+            error: None
+        }
     ));
 }
 

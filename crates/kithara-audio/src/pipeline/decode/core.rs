@@ -1,3 +1,18 @@
+use std::{any::Any, mem, num::NonZeroU32};
+
+use kithara_bufpool::{HasPool, PoolError, PoolRegion};
+use kithara_decode::{
+    BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
+    DecoderFactory as BackendDecoderFactory, DecoderSeekOutcome, GaplessMode,
+};
+use kithara_events::DeferredBus;
+use kithara_platform::{sync::Arc, time::Duration};
+use kithara_signal::AudioChunk;
+use kithara_stream::{
+    ByteMap, MediaInfo, OpenedReader, PlayheadWrite, ReaderProfile, StreamType, VariantTransition,
+};
+use tracing::debug;
+
 use crate::{
     AudioLaneEvent, AudioObserver,
     pipeline::{
@@ -15,19 +30,6 @@ use crate::{
         track::WaitingReason,
     },
 };
-use kithara_bufpool::{HasPool, PoolError, PoolRegion};
-use kithara_decode::{
-    BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
-    DecoderFactory as BackendDecoderFactory, DecoderSeekOutcome, GaplessMode,
-};
-use kithara_events::DeferredBus;
-use kithara_platform::{sync::Arc, time::Duration};
-use kithara_signal::AudioChunk;
-use kithara_stream::{
-    ByteMap, MediaInfo, OpenedReader, PlayheadWrite, ReaderProfile, StreamType, VariantTransition,
-};
-use std::{any::Any, mem, num::NonZeroU32};
-use tracing::debug;
 
 type DecoderBuilder = dyn Fn(OpenedReader, Option<MediaInfo>, Option<NonZeroU32>) -> Result<Box<dyn Decoder>, DecodeError>
     + Send

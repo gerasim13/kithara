@@ -230,17 +230,9 @@ pub(crate) fn asks_again(refusal: &LoadRefusal) -> bool {
     }
 }
 
-/// Whether a failed load is worth asking for again as it stands.
-///
-/// That is [`NetError::can_answer_later`]'s question — the same one an HLS segment
-/// slot asks about its own re-dispatch. It is read off the typed `NetError`
-/// the load carries down its source chain: never a message match, and never a
-/// verdict read back off the bus, which another task publishes and so is not
-/// there yet when the load returns. A failure with no network cause at all
-/// (an unparseable container, a codec the build does not carry) is never
-/// asked again — connectivity does not change that answer — and neither is a
-/// transfer that stopped delivering, which is the verdict
-/// `stalled_master_playlist_fails_load` pins.
+/// Retry only when the error's typed network cause can answer later.
+/// Error chains, not messages or asynchronous bus events, provide the verdict.
+/// Parser/codec failures and stalled transfers are never connectivity retries.
 fn can_answer_later(error: &(dyn StdError + 'static)) -> bool {
     net_cause(error).is_some_and(NetError::can_answer_later)
 }

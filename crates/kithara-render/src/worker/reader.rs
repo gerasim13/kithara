@@ -19,9 +19,10 @@ use super::scheduler::Wake;
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use kithara_signal::{AudioChunkInfo, SourceSpan};
+
     use super::*;
     use crate::test_pools::{pools, sample_buffer};
-    use kithara_signal::{AudioChunkInfo, SourceSpan};
 
     pub(crate) struct PacketRing {
         pub(crate) receiver: Option<PcmReceiver>,
@@ -60,10 +61,15 @@ pub(crate) mod tests {
             (self.receiver.take().expect("receiver"), self.producer)
         }
 
-        pub(crate) fn playing(&mut self) -> bool { *self.producer.playing.read() }
+        pub(crate) fn playing(&mut self) -> bool {
+            *self.producer.playing.read()
+        }
 
         pub(crate) fn push(&mut self, packet: PcmPacket) {
-            self.producer.forward.try_push(packet).expect("packet ring space");
+            self.producer
+                .forward
+                .try_push(packet)
+                .expect("packet ring space");
         }
 
         pub(crate) fn returned(&mut self) -> Option<PcmPacket> {
@@ -87,8 +93,15 @@ pub(crate) mod tests {
                 lane_frame,
                 frame_offset: source_frame,
                 timestamp: spec.duration_for(source_frame).expect("timestamp"),
-                end_timestamp: spec.duration_for(source_frame + frames).expect("end timestamp"),
-                source_span: SourceSpan::new(source_frame, source_frame + frames, spec.sample_rate, frames),
+                end_timestamp: spec
+                    .duration_for(source_frame + frames)
+                    .expect("end timestamp"),
+                source_span: SourceSpan::new(
+                    source_frame,
+                    source_frame + frames,
+                    spec.sample_rate,
+                    frames,
+                ),
                 ..AudioChunkInfo::default()
             },
             sample_buffer(&pools(), samples),
@@ -319,29 +332,59 @@ pub(super) fn packet_fixture(blocking: bool, spec: AudioSpec) -> (PcmReceiver, P
     let (playing, activity) = triple_buffer(&false);
     let ready = blocking.then(|| Arc::new(ThreadGate::default()));
     let worker = kithara_worker::Worker::new(kithara_worker::WorkerConfig::new());
-    let dispatcher = worker.dispatcher(kithara_worker::DispatcherConfig::builder().name("terminal-fixture").build());
-    (PcmReceiver {
-        forward: received, reverse: returned, playing, ready: ready.clone(),
-        wake: Wake::new(dispatcher.wake_handle()), spec, duration: None,
-        position: Duration::ZERO, frontier: Duration::ZERO, metadata: TrackMetadata::default(), abr: None,
-    }, PcmProducer { forward, reverse, playing: activity, ready: FinalWake(ready) })
+    let dispatcher = worker.dispatcher(
+        kithara_worker::DispatcherConfig::builder()
+            .name("terminal-fixture")
+            .build(),
+    );
+    (
+        PcmReceiver {
+            forward: received,
+            reverse: returned,
+            playing,
+            ready: ready.clone(),
+            wake: Wake::new(dispatcher.wake_handle()),
+            spec,
+            duration: None,
+            position: Duration::ZERO,
+            frontier: Duration::ZERO,
+            metadata: TrackMetadata::default(),
+            abr: None,
+        },
+        PcmProducer {
+            forward,
+            reverse,
+            playing: activity,
+            ready: FinalWake(ready),
+        },
+    )
 }
 
 #[cfg(test)]
 mod terminal_tests {
-    use super::*;
     use kithara_test_utils::kithara;
+
+    use super::*;
 
     #[kithara::test]
     fn producer_drop_releases_ownership_before_the_final_deferred_wake() {
-        let (receiver, producer) = packet_fixture(true, AudioSpec::new(2, std::num::NonZeroU32::new(44_100).expect("test sample rate")));
+        let (receiver, producer) = packet_fixture(
+            true,
+            AudioSpec::new(
+                2,
+                std::num::NonZeroU32::new(44_100).expect("test sample rate"),
+            ),
+        );
         let ready = receiver.ready.as_ref().expect("blocking wake");
         let since = ready.current();
         assert!(receiver.forward.write_is_held());
         drop(producer);
         assert!(!receiver.forward.write_is_held());
         assert_eq!(ready.current().wrapping_sub(since), 1);
-        assert!(ready.wait_timeout(since, Duration::ZERO), "closure between a snapshot and a wait must leave an observable wake edge");
+        assert!(
+            ready.wait_timeout(since, Duration::ZERO),
+            "closure between a snapshot and a wait must leave an observable wake edge"
+        );
         assert!(!ready.wait_timeout(ready.current(), Duration::ZERO));
     }
 
@@ -352,10 +395,18 @@ mod terminal_tests {
         fn step_track(&mut self) -> kithara_audio::TrackStep<AudioChunk> {
             kithara_audio::TrackStep::Failed(TrackFailureKind::RecreateFailed { offset: 0 })
         }
-        fn seek(&mut self, position: Duration) -> Result<kithara_audio::SeekOutcome, kithara_audio::AudioReadError> {
-            Ok(kithara_audio::SeekOutcome::Landed { target: position, landed_at: position })
+        fn seek(
+            &mut self,
+            position: Duration,
+        ) -> Result<kithara_audio::SeekOutcome, kithara_audio::AudioReadError> {
+            Ok(kithara_audio::SeekOutcome::Landed {
+                target: position,
+                landed_at: position,
+            })
         }
-        fn host_sample_rate(&self) -> Option<std::num::NonZeroU32> { None }
+        fn host_sample_rate(&self) -> Option<std::num::NonZeroU32> {
+            None
+        }
         fn set_host_sample_rate(&mut self, _rate: std::num::NonZeroU32) {}
     }
 
@@ -363,17 +414,29 @@ mod terminal_tests {
     fn terminal_recreate_failure_wakes_the_reader_once() {
         use kithara_worker::{Task, TickResult};
         let (mut node, receiver, _lane) = super::super::terminal_node(
-            RecreateFailureSource, AudioSpec::new(2, std::num::NonZeroU32::new(44_100).expect("test sample rate")), true,
+            RecreateFailureSource,
+            AudioSpec::new(
+                2,
+                std::num::NonZeroU32::new(44_100).expect("test sample rate"),
+            ),
+            true,
         );
         let ready = receiver.ready.as_ref().expect("blocking reader gate");
         let since = ready.current();
         assert_eq!(node.tick(), TickResult::Progress);
-        assert_eq!(ready.current().wrapping_sub(since), 1, "factory panic must wake the reader");
-        assert!(matches!(receiver.peek(), Some(PcmPacket::Failed {
-            failure: TrackFailureKind::RecreateFailed { offset: 0 }, ..
-        })));
+        assert_eq!(
+            ready.current().wrapping_sub(since),
+            1,
+            "factory panic must wake the reader"
+        );
+        assert!(matches!(
+            receiver.peek(),
+            Some(PcmPacket::Failed {
+                failure: TrackFailureKind::RecreateFailed { offset: 0 },
+                ..
+            })
+        ));
         assert_eq!(node.tick(), TickResult::Backpressured);
         assert_eq!(ready.current().wrapping_sub(since), 1);
     }
-
 }

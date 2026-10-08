@@ -343,7 +343,7 @@ perf = [
 ]
 # Apple HW decoder. Does NOT include `fdk-aac` — Apple AudioToolbox
 # decodes HE-AAC v1/v2 natively via kAudioFormatMPEG4AAC_HE / _HE_V2
-# (see crates/kithara-decode/src/apple/codec.rs). fdk-aac stays
+# (handled by AppleCodec). fdk-aac stays
 # coupled to symphonia for desktop/WASM software fallback builds only. HTTP
 # backend selection is separate so macOS desktop/tests can use the decoder
 # without pulling the real-clock NSURLSession backend.
@@ -415,12 +415,12 @@ kithara-events = { workspace = true, optional = true }
 kithara-file = { workspace = true, optional = true, default-features = false }
 kithara-hls = { workspace = true, optional = true, default-features = false }
 kithara-host = { workspace = true, optional = true, default-features = false }
+kithara-link = { workspace = true, optional = true, default-features = false }
 kithara-net = { workspace = true, optional = true, default-features = false }
 kithara-output = { workspace = true, optional = true }
 kithara-platform = { workspace = true, optional = true }
 kithara-play = { workspace = true, optional = true, default-features = false }
 kithara-queue = { workspace = true, optional = true, default-features = false }
-kithara-link = { workspace = true, optional = true, default-features = false }
 kithara-record = { workspace = true, optional = true }
 kithara-resampler = { workspace = true, optional = true, default-features = false }
 kithara-signal = { workspace = true, optional = true }
@@ -439,9 +439,6 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 
 [dev-dependencies]
 kithara = { path = ".", default-features = false }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-url = { workspace = true }
 
 [lints]
 workspace = true

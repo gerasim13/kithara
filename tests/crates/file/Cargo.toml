@@ -8,7 +8,7 @@ publish = false
 autotests = false
 
 [package.metadata.cargo-machete]
-ignored = ["kithara-test-utils", "serial_test"]
+ignored = ["kithara-test-utils"]
 
 [features]
 default = ["client-reqwest", "tls-rustls"]
@@ -29,13 +29,11 @@ kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "te
 axum = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
-serial_test = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 kithara = { workspace = true, features = ["full", "symphonia"] }
-kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
 
 [lints]
 workspace = true

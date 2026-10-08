@@ -235,9 +235,14 @@ impl Lane {
                             segment: *id,
                             frame: 0,
                         };
-                        self.position = Some(landing_position(source.seek(*from).map_err(|error| TrackFailureKind::from(&error))?));
+                        self.position = Some(landing_position(
+                            source
+                                .seek(*from)
+                                .map_err(|error| TrackFailureKind::from(&error))?,
+                        ));
                         warp.reset();
-                        warp.set_speed(speed.clone(), revision).map_err(|_| TrackFailureKind::Render)?;
+                        warp.set_speed(speed.clone(), revision)
+                            .map_err(|_| TrackFailureKind::Render)?;
                         self.jump = None;
                         segment = Some(*id);
                         changed = LaneChange::Source;
@@ -274,7 +279,11 @@ impl Lane {
         if let Some(Jump::Down { to, start, frames, .. }) = self.jump {
             let frames = u64::try_from(frames).map_or(u64::MAX, |frames| frames);
             if self.cursor.frame.saturating_sub(start) >= frames {
-                self.position = Some(landing_position(source.seek(to).map_err(|error| TrackFailureKind::from(&error))?));
+                self.position = Some(landing_position(
+                    source
+                        .seek(to)
+                        .map_err(|error| TrackFailureKind::from(&error))?,
+                ));
                 warp.reset();
                 let next_spec = source.prepare_deferred().unwrap_or(spec);
                 warp.prepare_engine_latency(next_spec)
@@ -348,8 +357,8 @@ mod tests {
     use kithara_audio::{AudioReadError, SeekOutcome, TrackStep, WaitingReason};
     use kithara_command::{Batch, ChannelConfig, Sender, When, channel};
     use kithara_dsp::param::SmootherConfig;
-    use kithara_warp::{Warp, WarpConfig};
     use kithara_test_utils::kithara;
+    use kithara_warp::{Warp, WarpConfig};
 
     use super::*;
 
@@ -359,12 +368,17 @@ mod tests {
         type Chunk = AudioChunk;
 
         fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
-            Ok(SeekOutcome::Landed { target, landed_at: target })
+            Ok(SeekOutcome::Landed {
+                target,
+                landed_at: target,
+            })
         }
 
         fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
 
-        fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
+        fn host_sample_rate(&self) -> Option<NonZeroU32> {
+            None
+        }
 
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
             TrackStep::Blocked(WaitingReason::Waiting)
@@ -372,10 +386,17 @@ mod tests {
     }
 
     fn jump(sender: &mut Sender<LaneProtocol>) {
-        sender.send(When::Next, Batch {
-            basis: Vec::new(),
-            commands: vec![LaneCommand::Jump { to: Duration::from_secs(1) }],
-        }).expect("jump credit");
+        sender
+            .send(
+                When::Next,
+                Batch {
+                    basis: Vec::new(),
+                    commands: vec![LaneCommand::Jump {
+                        to: Duration::from_secs(1),
+                    }],
+                },
+            )
+            .expect("jump credit");
     }
 
     #[kithara::test]
@@ -386,18 +407,25 @@ mod tests {
         #[case] expected: usize,
     ) {
         let spec = AudioSpec::new(1, NonZeroU32::new(44_100).expect("rate"));
-        let config = crate::rt::DeckMixerConfig::builder().declick(SmootherConfig {
-            smooth_seconds: seconds,
-            ..SmootherConfig::default()
-        }).build();
+        let config = crate::rt::DeckMixerConfig::builder()
+            .declick(SmootherConfig {
+                smooth_seconds: seconds,
+                ..SmootherConfig::default()
+            })
+            .build();
         assert_eq!(config.declick_frames(spec.sample_rate).get(), expected);
         let pools = crate::test_pools::pools();
         let (mut sender, inbox) = channel(ChannelConfig::builder().build());
         let mut lane = Lane::new(inbox, NonZeroUsize::new(1).expect("preload"), config.declick());
         let mut warp = Warp::new((), &WarpConfig::builder().build()).renderer(spec, pools);
         jump(&mut sender);
-        lane.execute_due(&mut JumpSource, &mut warp, spec).expect("jump accepted");
-        assert_eq!(lane.output_limit(), expected, "Jump and mixer must share the configured, rounded declick length");
+        lane.execute_due(&mut JumpSource, &mut warp, spec)
+            .expect("jump accepted");
+        assert_eq!(
+            lane.output_limit(),
+            expected,
+            "Jump and mixer must share the configured, rounded declick length"
+        );
     }
 
     #[kithara::test]
@@ -410,22 +438,46 @@ mod tests {
         let mut lane = Lane::new(inbox, NonZeroUsize::new(1).expect("preload"), crate::consts::DEFAULT_DECLICK);
         let mut warp = Warp::new((), &WarpConfig::builder().build()).renderer(spec, pools);
         jump(&mut sender);
-        lane.execute_due(&mut JumpSource, &mut warp, spec).expect("first jump");
+        lane.execute_due(&mut JumpSource, &mut warp, spec)
+            .expect("first jump");
         if during_up {
             let frames = lane.output_limit();
-            let mut down = crate::worker::packet_tests::chunk(spec, SegmentId::FIRST, 0, 0, &vec![1.0; frames]);
+            let mut down = crate::worker::packet_tests::chunk(
+                spec,
+                SegmentId::FIRST,
+                0,
+                0,
+                &vec![1.0; frames],
+            );
             lane.stamp(&mut down);
-            lane.execute_due(&mut JumpSource, &mut warp, spec).expect("landing");
+            lane.execute_due(&mut JumpSource, &mut warp, spec)
+                .expect("landing");
         }
-        let mut before = crate::worker::packet_tests::chunk(spec, SegmentId::FIRST, lane.cursor().frame, 0, &[1.0; 100]);
+        let mut before = crate::worker::packet_tests::chunk(
+            spec,
+            SegmentId::FIRST,
+            lane.cursor().frame,
+            0,
+            &[1.0; 100],
+        );
         lane.stamp(&mut before);
         let previous = before.samples[99];
         jump(&mut sender);
-        lane.execute_due(&mut JumpSource, &mut warp, spec).expect("second jump");
-        let mut after = crate::worker::packet_tests::chunk(spec, SegmentId::FIRST, lane.cursor().frame, 0, &[1.0]);
+        lane.execute_due(&mut JumpSource, &mut warp, spec)
+            .expect("second jump");
+        let mut after = crate::worker::packet_tests::chunk(
+            spec,
+            SegmentId::FIRST,
+            lane.cursor().frame,
+            0,
+            &[1.0],
+        );
         lane.stamp(&mut after);
-        assert!((after.samples[0] - previous).abs() < 0.02,
-            "retriggering Jump must not reset gain to unity: {previous} -> {}", after.samples[0]);
+        assert!(
+            (after.samples[0] - previous).abs() < 0.02,
+            "retriggering Jump must not reset gain to unity: {previous} -> {}",
+            after.samples[0]
+        );
     }
 
     #[kithara::test]

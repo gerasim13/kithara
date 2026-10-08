@@ -2,7 +2,7 @@
 //! pass-level tests drive, over silence or over real PCM.
 
 use kithara_audio::{
-    AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome, DecodeError, ReadOutcome,
+    AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome, ReadOutcome,
     SeekOutcome,
 };
 use kithara_decode::TrackMetadata;
@@ -153,7 +153,7 @@ impl AudioRead for Track {
 }
 
 impl AudioControl for Track {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
         let target = self.spec.frame_at(position).unwrap_or(0);
         if target >= self.frames {
             return Ok(SeekOutcome::PastEof {

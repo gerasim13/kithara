@@ -40,10 +40,7 @@ fn region_boundaries_publish_exact_phase_under_every_output_budget(#[case] backe
                     (boundary - 2) * 5
                 };
                 let (numerator, denominator) = span.source_ratio_at(offset as u64).expect("phase");
-                assert_eq!(
-                    numerator * 5,
-                    expected as u128 * denominator.get()
-                );
+                assert_eq!(numerator * 5, expected as u128 * denominator.get());
             }
             frame += output.frames();
             samples.extend_from_slice(&output.samples);
@@ -323,7 +320,11 @@ fn long_interrupted_ramps_in_non_dyadic_regions_keep_exact_positions(#[case] cor
             .expect("replacement curve");
         let frames = (length / 2) | 1;
         let span = renderer
-            .mapping_span(0, rate, usize::try_from(frames).expect("test frame count fits usize"))
+            .mapping_span(
+                0,
+                rate,
+                usize::try_from(frames).expect("test frame count fits usize"),
+            )
             .expect("corrected ramp");
         assert_eq!(span.output_frames(), frames);
         assert_eq!(
@@ -426,14 +427,8 @@ fn a_failed_large_mapping_cannot_leak_scratch_into_a_smaller_quantum(#[case] bac
         .get();
     let prepared = renderer.prepared_quantum.as_mut().expect("cached quantum");
     prepared.source_span = Some(
-        kithara_signal::SourceSpan::from_rational(
-            0,
-            1,
-            NonZeroU128::MIN,
-            spec().sample_rate,
-            1024,
-        )
-        .expect("large mapping"),
+        kithara_signal::SourceSpan::from_rational(0, 1, NonZeroU128::MIN, spec().sample_rate, 1024)
+            .expect("large mapping"),
     );
     let mut input = chunk(&renderer.pools, &vec![0.25; count * 2]);
     input.meta.frame_offset = source;
@@ -567,7 +562,9 @@ pub(super) fn mapped_signal(
     let meta = AudioChunkInfo {
         spec: spec(),
         frame_offset: *source,
-        timestamp: duration(f64::from(u32::try_from(*source).expect("test source frame fits u32"))),
+        timestamp: duration(f64::from(
+            u32::try_from(*source).expect("test source frame fits u32"),
+        )),
         ..AudioChunkInfo::default()
     };
     let frames = renderer
@@ -879,7 +876,9 @@ fn curve_output_for(
         assert!(output.frames() <= budget);
         let snap = identity
             .filter(|identity| frame >= *identity)
-            .map_or(0.0, |identity| expected(identity).round() - expected(identity));
+            .map_or(0.0, |identity| {
+                expected(identity).round() - expected(identity)
+            });
         assert_positions(&output, frame, |boundary| expected(boundary) + snap);
         let mapping = output.meta.source_span.expect("mapping");
         positions.extend(
@@ -1144,11 +1143,17 @@ fn resampled_pcm_uses_the_published_fractional_phase() {
             let denominator =
                 u32::try_from(denominator.get()).expect("test phase denominator fits u32");
             let position = f64::from(numerator) / f64::from(denominator);
-            let floor = position.floor().to_f32().expect("reference sample fits f32");
+            let floor = position
+                .floor()
+                .to_f32()
+                .expect("reference sample fits f32");
             let first = floor / 4096.0;
             let second = (floor + 1.0) / 4096.0;
             let expected = (second - first).mul_add(
-                position.fract().to_f32().expect("reference fraction fits f32"),
+                position
+                    .fract()
+                    .to_f32()
+                    .expect("reference fraction fits f32"),
                 first,
             );
             assert_eq!(samples, [expected, expected]);

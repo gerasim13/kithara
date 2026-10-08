@@ -88,23 +88,16 @@ impl TrackAnalysisRunner {
         }
     }
 
-    /// Cancel any prior run and queue `config` for analysis on the `rate`
-    /// axis: the reader is opened onto it and the pass is measured in it, so
-    /// a producer feeding the same pass later shares one axis with it.
-    /// `revision` is the one the caller holds for `token`; every publication
-    /// outranks it. Staged results arrive on the returned receiver, which
-    /// closes when the run ends; nothing arrives on failure/cancel.
-    /// `deliver` receives the producer half synchronously, before the fallback
-    /// reader is opened. The runner does not know what the handle is for;
-    /// attaching it to the track's playback path is the caller's business.
-    /// `demand` names the artifacts this pass is opened for: a track that
-    /// already has one of them asks for the rest, and the pass reports the
-    /// fingerprint of what it actually produced.
+    /// Cancels the prior run and opens analysis on `rate`, shared by its reader
+    /// and playback producer. Publications outrank the caller's `revision` for
+    /// `token`; the result receiver closes at completion, failure or cancellation,
+    /// with no value published on failure or cancellation.
+    /// `deliver` receives the producer synchronously before the reader opens;
+    /// attaching it to playback belongs to the caller. `demand` selects the missing
+    /// artifacts, and the result fingerprints what this pass actually produced.
     ///
     /// # Errors
-    ///
-    /// Returns an error when the pass's playback ingress cannot be acquired
-    /// under the pool budget.
+    /// Returns an error if playback ingress does not fit the pool budget.
     pub fn analyze<D>(
         &mut self,
         config: AppResourceConfig,

@@ -27,8 +27,9 @@ mod receipt;
 #[cfg(test)]
 mod wakes;
 
-pub use channel::scoped;
-pub use channel::{Deferred, Due, Inbox, LevelInbox, Port, SendError, Sender, Step, channel};
+pub use channel::{
+    Deferred, Due, Inbox, LevelInbox, Port, SendError, Sender, Step, channel, scoped,
+};
 pub use config::ChannelConfig;
 pub use live::{Live, LiveError, SettledChange};
 pub use mailbox::{Answer, Mailbox, Post, PostError, Postbox, Refused, Ticket, mailbox};

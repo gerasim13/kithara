@@ -1,6 +1,14 @@
-use std::{marker::PhantomData, mem, panic::Location, sync::atomic::Ordering};
+use std::{
+    marker::PhantomData,
+    mem,
+    panic::Location,
+    sync::{
+        Weak,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
-use super::{Core, FLASH, FlashInner, SyncHolder};
+use super::{Core, FLASH, FlashInner, SyncHolder, WaiterId};
 use crate::{
     backend::thread::current,
     common::thread_id::ACTIVE_NAMED_THREADS,
@@ -52,20 +60,13 @@ pub(crate) fn mark_dedicated(origin: &'static Location<'static>) {
     FLASH.sync_holder_running(origin);
 }
 
-/// A DEDICATED pacer's reservation, minted on the PARENT thread BEFORE the
-/// child is spawned/queued and moved into the child to be claimed. A pacer
-/// runs a warm-up burst (decode the first chunks, fill the ring) before it
-/// ever parks; counting it only once the child runs [`mark_dedicated`] leaves
-/// a window — between `spawn` returning and the OS scheduling the child — in
-/// which a sibling consumer can park, see `active == 0`, and let the virtual
-/// clock jump to its watchdog deadline before the pacer has produced
-/// anything. Reserving synchronously at spawn closes that window; the claim
-/// then only marks the child's credit `Running`.
-///
-/// The slot OWNS its reservation: dropping it unconsumed (a failed spawn, an
-/// unwind before the claim, a closure the pool never ran) returns every
-/// reserved resource — the `active` slot, and for the `spawn_named` variant
-/// the named-thread count — instead of wedging the engine.
+/// Dedicated-pacer credit reserved on the parent before spawning or queueing,
+/// then moved to the child and claimed as `Running`. Reserving only after the
+/// child starts lets a sibling observe `active == 0` and advance its watchdog
+/// before the pacer's initial decode/ring-fill burst runs.
+/// An unclaimed slot returns all reservations on drop, including `active` and,
+/// for `spawn_named`, the named-thread count, so failed or discarded work cannot
+/// wedge the engine.
 #[must_use]
 pub(crate) struct DedicatedSlot {
     /// True for the `spawn_named` variant, which owns the
@@ -235,6 +236,39 @@ impl Drop for HeldSlot {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum AsyncKey {
+    Timed((u64, WaiterId)),
+    Indef(WaiterId),
+    Yield(WaiterId),
+}
+
+/// Unique receipt retaining one grant credit through wake and poll latency.
+/// Drop removes an ungranted entry or settles that credit on the creating
+/// engine, whose weak identity does not keep a stopped engine alive.
+pub(crate) struct AsyncHandle {
+    pub(super) owner: Weak<FlashInner>,
+    pub(super) granted: Arc<AtomicBool>,
+    pub(super) key: AsyncKey,
+    pub(super) task: Option<u64>,
+}
+
+impl AsyncHandle {
+    /// Observe an engine grant only while its owner is alive. A different
+    /// clock advance cannot resolve this waiter; only its firer sets the flag.
+    pub(crate) fn granted(&self) -> bool {
+        self.granted.load(Ordering::Acquire) && self.owner.strong_count() != 0
+    }
+}
+
+impl Drop for AsyncHandle {
+    fn drop(&mut self) {
+        if let Some(owner) = self.owner.upgrade() {
+            owner.release_async_wait(self);
+        }
+    }
+}
+
 impl Core {
     /// Move a finished task's `active_async` slot into a [`HeldSlot`]. Adding
     /// to `active` cannot enable an advance, so this runs no advance rule.
@@ -282,19 +316,12 @@ impl Drop for AsyncPollGuard {
     }
 }
 
-/// Obligation to settle ONE wrapped engine wait, minted by
-/// [`FlashInner::enter_wait_locked`] in the same `core` hold that inserts the
-/// entry, consumed exactly once after `token.wait()` returns:
-///
-/// - [`WaitGuard::resume`] — every production wait (parks, sleeps, yields,
-///   condvar brackets): the firer's `active` bump is settled per the thread's
-///   credit class.
-/// - [`WaitGuard::mark_running`] — the harness `park_for` ONLY (see its
-///   asymmetry note).
-///
-/// Carries the engine instance the wait was entered on, so the settle always
-/// lands on the same `Core`. Dropping the guard unconsumed is a broken wait
-/// bracket (the firer's bump would leak) — `debug_assert` in Drop.
+/// Obligation minted with one engine wait under the same `core` lock.
+/// After `token.wait()`, consume it exactly once: production waits use
+/// [`WaitGuard::resume`] to settle the firer's active bump by credit class;
+/// only harness `park_for` uses [`WaitGuard::mark_running`] for its asymmetric
+/// bracket. The guard retains the entering engine so settlement reaches the
+/// same `Core`. Dropping it unconsumed leaks the bump and triggers a debug assert.
 #[must_use]
 pub(crate) struct WaitGuard<'a> {
     flash: &'a FlashInner,
@@ -344,19 +371,47 @@ pub(crate) fn reset_credit() {
 }
 
 impl FlashInner {
-    /// Account this thread as it ENTERS a wrapped wait, under the engine's
-    /// `core` lock. Called at the start of EACH wrapped wait (park/condvar)
-    /// right where the entry is inserted, replacing the old explicit
-    /// `active -= 1`. Returns the [`WaitGuard`] obligation the caller consumes
-    /// once `token.wait()` returns.
-    ///
-    /// - `None` (first ever wait): the thread was running uncounted. Bootstrap it
-    ///   by transitioning to `Parked` WITHOUT decrementing `active` — it was never
-    ///   added, so there is nothing to remove. Its eventual wake will `active += 1`
-    ///   (by the firer) and `mark_running` it, balancing the books.
-    /// - `Running` (woke from a prior wait, now parking again): it IS counted, so
-    ///   `active -= 1` and move to `Parked`.
-    /// - `Parked`: unreachable — a thread waits on one thing at a time.
+    /// Settle one unique async receipt after consume or cancellation. The
+    /// grant and entry removal share this lock with the firer, so either the
+    /// entry is removed before grant or its retained credit is returned once.
+    fn release_async_wait(&self, handle: &AsyncHandle) {
+        let mut s = self.core.lock();
+        match handle.key {
+            AsyncKey::Timed(key) => {
+                s.sched.timed.remove(&key);
+            }
+            AsyncKey::Indef(id) => {
+                s.sched.indef.remove(&id);
+            }
+            AsyncKey::Yield(id) => {
+                s.sched.yielders.remove(&id);
+            }
+        }
+        if handle.granted.load(Ordering::Acquire) {
+            match handle.task.and_then(|id| s.registry.task_diag.get_mut(&id)) {
+                Some(task) => {
+                    debug_assert!(task.grants > 0, "async grant without task credit");
+                    task.grants -= 1;
+                }
+                None => {
+                    debug_assert!(s.registry.active > 0, "async grant without retained credit");
+                    s.registry.active -= 1;
+                }
+            }
+            if let Some(id) = handle.task {
+                s.registry.remove_settled_task(id);
+            }
+        }
+        let adv = s.try_advance(&self.clock);
+        drop(s);
+        adv.fire();
+    }
+
+    /// Enters one wrapped wait under `core` and returns the [`WaitGuard`] to consume
+    /// once `token.wait()` returns. First-wait uncounted threads become `Parked`
+    /// without decrementing `active`; their first wake adds the credit and marks
+    /// them running. A counted `Running` thread decrements `active` before parking.
+    /// Already `Parked` is unreachable: a thread waits on only one thing at a time.
     pub(super) fn enter_wait_locked(&self, s: &mut Core) -> WaitGuard<'_> {
         if in_async_poll() {
             crate::no_block::forbid_bridged(ctx::cur_async().map(|(_, loc)| loc));

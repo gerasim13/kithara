@@ -73,7 +73,6 @@ mod hls_timeline {
             .build();
         let decoder_config = DecoderConfig::<NoResamplerBackend, TestPools>::builder()
             .pools(pools)
-            .hint("wav")
             .maybe_byte_map(stream.byte_map())
             .build();
 

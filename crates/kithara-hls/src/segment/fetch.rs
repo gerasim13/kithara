@@ -23,23 +23,9 @@ use crate::{
     variant::{HlsVariant, PlanRevision},
 };
 
-/// Whether a fetch error is terminal for the slot — whether this segment is
-/// unobtainable, not whether this download failed.
-///
-/// The net layer spends its budget on one download in well under a second,
-/// while the slot it parks may not be read for another half a minute, so the
-/// question is [`NetError::can_answer_later`]: a host that refused or was not
-/// there returns the slot to the pool and the next dispatch asks again, which
-/// is what carries playback through an outage.
-///
-/// Everything else parks the slot, and a stalled transfer deliberately among
-/// them: this is where give-up authority lives for every blocking read above
-/// (`impl Read for Stream` waits on the source precisely because this layer can
-/// tell a slow-but-live transfer from one that stopped), so a segment whose body
-/// never arrives has to end here rather than wait forever.
-///
-/// `Cancelled` is the exception in the other direction: a cancel marks an epoch
-/// rebuild, which owns the re-dispatch.
+/// Whether the slot is unobtainable, rather than whether this download failed.
+/// Reachability failures may answer later; exhausted stalled transfers must end blocking reads.
+/// Cancellation belongs to an epoch rebuild, which owns re-dispatch instead of a terminal failure.
 fn is_terminal_fetch_error(e: &NetError) -> bool {
     !matches!(e, NetError::Cancelled) && !e.can_answer_later()
 }

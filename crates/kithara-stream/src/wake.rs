@@ -7,23 +7,10 @@ use std::{
 
 use kithara_platform::sync::Notify;
 
-/// Reader→peer wake split into an off-core *arm* and an off-core *flush*, so a
-/// cross-thread `tokio::Notify` wake never fires on the real-time audio produce
-/// core.
-///
-/// The produce core (the `#[rtsan_forbid_blocking]` region) must not call
-/// `Notify::notify_one`: scheduling the downloader's parked task cross-thread is
-/// a `kevent` syscall on macOS, illegal on the RT path. A reader-blocked probe
-/// or changed reader demand reached on the core therefore [`arm`](Self::arm)s a
-/// lock-free flag; the audio scheduler shell [`flush`](Self::flush)es it once
-/// per pass, off the forbid path, where the `notify_one` is allowed.
-///
-/// Off the core (an off-worker `Stream::seek` priming a range, the ABR
-/// controller) the caller [`notify_now`](Self::notify_now)s directly — no defer,
-/// so a synchronous seek is never stalled waiting for the worker's next pass.
-///
-/// The caller picks `arm` vs `notify_now` from its own statically-known context;
-/// this type holds no global state and makes no context decision itself.
+/// Reader-to-peer wake armed lock-free on the core and flushed by the off-core scheduler shell.
+/// `Notify::notify_one` can issue a macOS kevent syscall, so the real-time core must not call it.
+/// Off-core callers use [`notify_now`](Self::notify_now) directly, avoiding a seek delayed until
+/// another worker pass. The caller chooses the path from its own statically known context.
 #[derive(Default)]
 pub struct DeferredWake {
     pending: AtomicBool,
@@ -64,21 +51,9 @@ impl DeferredWake {
     }
 }
 
-/// Data-arrival → audio-worker wake. The inverse direction of
-/// [`DeferredWake`]: where `DeferredWake` is the reader→peer nudge (the audio
-/// produce core asking the downloader for more), this is the producer→worker
-/// nudge — the downloader, having just written/committed segment bytes,
-/// re-ticks an underran audio worker the instant its data lands instead of
-/// leaving it to rediscover the bytes on its next wall-clock poll.
-///
-/// The implementor (the audio worker's scheduler wake) MUST make [`wake`] a
-/// wait-free, syscall-bounded signal (an atomic bump + `thread::unpark`), since
-/// it is called cross-thread from the downloader's write/settle path. It is
-/// NOT called from the real-time produce core, so it carries no
-/// forbid-blocking constraint — but it must not block the downloader either.
-///
-/// Segmented sources (HLS) hold an optional handle and fire it from their
-/// off-RT write/commit sites only; non-segmented sources never set one.
+/// Off-RT data-arrival wake to re-tick an underran audio worker immediately, opposite [`DeferredWake`].
+/// [`wake`](Self::wake) must be wait-free and syscall-bounded (atomic bump plus thread unpark),
+/// never blocking the downloader. Sources fire optional handles only from off-RT write/commit sites.
 pub trait WorkerWake: Send + Sync {
     /// Coalesce a future worker pass without unparking from the real-time path.
     fn defer(&self);

@@ -11,6 +11,9 @@ use toml::Value;
 
 use crate::{Ctx, util::ensure_clean_tree};
 
+const HAKARI_SECTION_START: &str = "### BEGIN HAKARI SECTION";
+const HAKARI_SECTION_END: &str = "### END HAKARI SECTION";
+
 #[derive(Debug, Args)]
 pub struct ManifestArgs {
     #[command(subcommand)]
@@ -125,6 +128,29 @@ fn workspace_manifests() -> Result<ManifestSet> {
     })
 }
 
+pub(crate) fn handwritten_workspace_manifest_dirs() -> Result<Vec<PathBuf>> {
+    handwritten_manifest_dirs(&workspace_manifests()?.manifests)
+}
+
+fn handwritten_manifest_dirs(manifests: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut directories = Vec::new();
+    for manifest in manifests {
+        let source =
+            fs::read_to_string(manifest).with_context(|| format!("read {}", manifest.display()))?;
+        if source
+            .lines()
+            .any(|line| line.trim() == HAKARI_SECTION_START)
+        {
+            continue;
+        }
+        let directory = manifest
+            .parent()
+            .with_context(|| format!("manifest {} has no directory", manifest.display()))?;
+        directories.push(directory.to_path_buf());
+    }
+    Ok(directories)
+}
+
 fn display_path(workspace_root: &Path, path: &Path) -> String {
     path.strip_prefix(workspace_root)
         .unwrap_or(path)
@@ -137,8 +163,19 @@ fn rewrite_manifest(source: &str) -> RewriteResult {
     let mut output = String::with_capacity(source.len());
     let mut changed_sections = Vec::new();
     let mut index = 0;
+    let mut generated = false;
 
     while index < lines.len() {
+        match lines[index].trim() {
+            HAKARI_SECTION_START => generated = true,
+            HAKARI_SECTION_END => generated = false,
+            _ => {}
+        }
+        if generated {
+            output.push_str(lines[index]);
+            index += 1;
+            continue;
+        }
         let Some(header) = table_header(lines[index]) else {
             output.push_str(lines[index]);
             index += 1;
@@ -204,7 +241,10 @@ pub(crate) fn add_workspace_dependency(source: &str, dependency: &str) -> Result
 fn section_body_end(lines: &[&str], body_start: usize) -> usize {
     lines[body_start..]
         .iter()
-        .position(|line| table_header(line).is_some())
+        .position(|line| {
+            table_header(line).is_some()
+                || matches!(line.trim(), HAKARI_SECTION_START | HAKARI_SECTION_END)
+        })
         .map_or(lines.len(), |offset| body_start + offset)
 }
 
@@ -454,7 +494,59 @@ fn push_blank_separator(output: &mut String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{add_workspace_dependency, rewrite_manifest, table_header};
+    use std::fs;
+
+    use super::{
+        add_workspace_dependency, handwritten_manifest_dirs, rewrite_manifest, table_header,
+    };
+
+    #[test]
+    fn excludes_hakari_manifests_from_cargo_sort() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let handwritten = root.path().join("handwritten");
+        let generated = root.path().join("generated");
+        fs::create_dir_all(&handwritten)?;
+        fs::create_dir_all(&generated)?;
+        let handwritten_manifest = handwritten.join("Cargo.toml");
+        let generated_manifest = generated.join("Cargo.toml");
+        fs::write(&handwritten_manifest, "[dependencies]\nserde = \"1\"\n")?;
+        fs::write(
+            &generated_manifest,
+            "[package]\nname = \"generated\"\n### BEGIN HAKARI SECTION\n[dependencies]\nserde = \"1\"\n### END HAKARI SECTION\n",
+        )?;
+
+        assert_eq!(
+            handwritten_manifest_dirs(&[handwritten_manifest, generated_manifest])?,
+            [handwritten]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_hakari_bytes_and_orders_handwritten_sections() {
+        let generated = "### BEGIN HAKARI SECTION\n[dependencies]\nzstd = { version = \"0.13\", features = [\"zstdmt\", \"arrays\"] }\nanyhow = \"1\"\n\n[build-dependencies]\nserde = \"1\"\nanyhow = \"1\"\n### END HAKARI SECTION\n";
+        let input = format!(
+            "[dev-dependencies]\nserde = \"1\"\nanyhow = \"1\"\n{generated}[target.'cfg(unix)'.dev-dependencies]\nserde = \"1\"\nanyhow = \"1\"\n"
+        );
+
+        let rewritten = rewrite_manifest(&input);
+
+        assert_eq!(
+            rewritten.content,
+            format!(
+                "[dev-dependencies]\nanyhow = \"1\"\nserde = \"1\"\n{generated}[target.'cfg(unix)'.dev-dependencies]\nanyhow = \"1\"\nserde = \"1\"\n"
+            )
+        );
+        assert_eq!(
+            rewritten.changed_sections,
+            ["dev-dependencies", "target.'cfg(unix)'.dev-dependencies"]
+        );
+        assert!(
+            rewrite_manifest(&rewritten.content)
+                .changed_sections
+                .is_empty()
+        );
+    }
 
     #[test]
     fn adds_workspace_dependency_in_canonical_order() -> anyhow::Result<()> {

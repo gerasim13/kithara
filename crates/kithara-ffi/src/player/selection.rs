@@ -2,19 +2,14 @@ use crate::{item::AudioPlayerItem, player::AudioPlayer, types::FfiError};
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 impl AudioPlayer {
-    /// Select `item` in the queue with the given transition.
-    ///
-    /// `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
-    /// user-initiated-selection idiom: tap a track in a list).
-    /// `FfiTransition::Crossfade` uses the player's configured duration
-    /// (typical for Next/Prev buttons). Play state is not changed here:
-    /// the engine continues playing if it was, pauses if it was.
+    /// Selects `item` with an immediate cut for `FfiTransition::None`, or the
+    /// configured crossfade duration for `FfiTransition::Crossfade`.
+    /// The current playing or paused state is preserved.
     ///
     /// # Errors
-    ///
-    /// Returns [`FfiError::InvalidArgument`] if `item` is not in the
-    /// queue, [`FfiError::NotReady`] if its resource is not yet loaded,
-    /// or [`FfiError::Internal`] if the underlying Queue fails to select.
+    /// Returns [`FfiError::InvalidArgument`] for an absent item,
+    /// [`FfiError::NotReady`] for an unloaded resource, or [`FfiError::Internal`]
+    /// when the underlying Queue cannot select it.
     pub fn select(
         &self,
         item: &AudioPlayerItem,

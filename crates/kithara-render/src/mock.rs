@@ -15,7 +15,10 @@ use crate::{
 /// Take the batches the deck's inbox holds, each as its parts, and apply them on `at`, as the
 /// mixer does at its next block.
 #[must_use]
-pub fn take_batches(level: &mut LevelInbox<'_, DeckProtocol>, at: SessionFrame) -> Vec<Vec<DeckPart>> {
+pub fn take_batches(
+    level: &mut LevelInbox<'_, DeckProtocol>,
+    at: SessionFrame,
+) -> Vec<Vec<DeckPart>> {
     let mut batches: Vec<Vec<DeckPart>> = Vec::new();
     while let Some(mut due) = level.next_due(at, 1) {
         batches.push(std::mem::take(due.commands_mut()));
@@ -145,7 +148,9 @@ fn hold(
 mod tests {
     use std::num::{NonZeroU32, NonZeroUsize};
 
-    use kithara_command::{Batch, ChannelConfig, Outcome, Port, ScopedConfig, ScopedReceipt, When, scoped_channel};
+    use kithara_command::{
+        Batch, ChannelConfig, Outcome, Port, ScopedConfig, ScopedReceipt, When, scoped_channel,
+    };
     use kithara_platform::sync::Arc;
     use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
@@ -161,11 +166,14 @@ mod tests {
     fn pcm(src: &str) -> Box<PlayerResource> {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
         let mut packets = PacketRing::new(spec, Duration::from_secs(1), 1);
-        Box::new(PlayerResource::new(
-            PcmConsumer::new(packets.receiver.take().expect("receiver")),
-            Arc::from(src),
-            &pools(),
-        ).expect("resource"))
+        Box::new(
+            PlayerResource::new(
+                PcmConsumer::new(packets.receiver.take().expect("receiver")),
+                Arc::from(src),
+                &pools(),
+            )
+            .expect("resource"),
+        )
     }
 
     #[kithara::test]
@@ -180,10 +188,14 @@ mod tests {
     ) {
         let config = DeckMixerConfig::default();
         let (mut sender, mut inbox) = scoped_channel::<DeckProtocol, DeckProtocol>(
-            ScopedConfig::builder().scope(ChannelConfig::builder()
-                .targets(config.slots().get())
-                .capacity(NonZeroUsize::new(2).expect("capacity"))
-                .build()).build(),
+            ScopedConfig::builder()
+                .scope(
+                    ChannelConfig::builder()
+                        .targets(config.slots().get())
+                        .capacity(NonZeroUsize::new(2).expect("capacity"))
+                        .build(),
+                )
+                .build(),
         );
         let scope = sender.open(config.slots().get()).expect("scope");
         let (_ends, inputs) = scope_channels(scope, config);
@@ -191,44 +203,87 @@ mod tests {
         let slot = Slot::new(0);
         let segment = SegmentId::FIRST.next();
         for (frame, commands) in [
-            (0, vec![DeckPart::Attach { slot, pcm: pcm("first"), segment: SegmentId::FIRST }]),
-            (1, vec![DeckPart::Adopt { slot, segment }, DeckPart::Stop { slot, fade: Fade::Declick }]),
-            (2, vec![DeckPart::Replace { slot, pcm: pcm("second"), segment }]),
+            (
+                0,
+                vec![DeckPart::Attach {
+                    slot,
+                    pcm: pcm("first"),
+                    segment: SegmentId::FIRST,
+                }],
+            ),
+            (
+                1,
+                vec![
+                    DeckPart::Adopt { slot, segment },
+                    DeckPart::Stop {
+                        slot,
+                        fade: Fade::Declick,
+                    },
+                ],
+            ),
+            (
+                2,
+                vec![DeckPart::Replace {
+                    slot,
+                    pcm: pcm("second"),
+                    segment,
+                }],
+            ),
             (3, vec![DeckPart::Detach { slot }]),
         ] {
             let at = SessionFrame::new(frame);
-            let seq = sender.scope(scope).expect("scope").send(
-                When::At(at), Batch { basis: Vec::new(), commands },
-            ).expect("batch credit is returned after each block");
+            let seq = sender
+                .scope(scope)
+                .expect("scope")
+                .send(
+                    When::At(at),
+                    Batch {
+                        basis: Vec::new(),
+                        commands,
+                    },
+                )
+                .expect("batch credit is returned after each block");
             sender.publish().expect("publish");
             inbox.drain();
-            deck.block(&mut inbox.scope(scope).expect("borrowed level"), at, stopped_at);
+            deck.block(
+                &mut inbox.scope(scope).expect("borrowed level"),
+                at,
+                stopped_at,
+            );
             let Some(ScopedReceipt::Scope(answered_scope, receipt)) = sender.receipt() else {
                 panic!("one scope receipt");
             };
             assert_eq!(answered_scope, scope);
             assert_eq!(receipt.seq(), seq);
-            assert!(matches!(receipt.outcome(), Outcome::Applied { at: applied, data: () } if *applied == at));
+            assert!(
+                matches!(receipt.outcome(), Outcome::Applied { at: applied, data: () } if *applied == at)
+            );
             let (_, batch): (Outcome<DeckProtocol>, Batch<DeckProtocol>) = receipt.into();
             match frame {
                 0 => assert_eq!(deck.held(slot), Some("first")),
                 1 => {
-                    assert!(matches!(batch.commands.as_slice(), [DeckPart::Adopt { .. }, DeckPart::Returned(Returned::Stopped { slot: stopped, resume })]
+                    assert!(
+                        matches!(batch.commands.as_slice(), [DeckPart::Adopt { .. }, DeckPart::Returned(Returned::Stopped { slot: stopped, resume })]
                         if *stopped == slot && *resume == SlotMark {
                             session: at,
                             lane: LaneFrame { segment, frame: lane_frame },
                             position,
-                        }));
+                        })
+                    );
                     assert_eq!(deck.held(slot), Some("first"));
                 }
                 2 => {
-                    assert!(matches!(batch.commands.as_slice(), [DeckPart::Returned(Returned::Pcm { slot: returned, pcm })]
-                        if *returned == slot && &**pcm.src() == "first"));
+                    assert!(
+                        matches!(batch.commands.as_slice(), [DeckPart::Returned(Returned::Pcm { slot: returned, pcm })]
+                        if *returned == slot && &**pcm.src() == "first")
+                    );
                     assert_eq!(deck.held(slot), Some("second"));
                 }
                 3 => {
-                    assert!(matches!(batch.commands.as_slice(), [DeckPart::Returned(Returned::Pcm { slot: returned, pcm })]
-                        if *returned == slot && &**pcm.src() == "second"));
+                    assert!(
+                        matches!(batch.commands.as_slice(), [DeckPart::Returned(Returned::Pcm { slot: returned, pcm })]
+                        if *returned == slot && &**pcm.src() == "second")
+                    );
                     assert_eq!(deck.held(slot), None);
                 }
                 _ => unreachable!(),

@@ -28,19 +28,15 @@ struct Runtime {
     root: PathBuf,
 }
 
-/// Local path of one store-relative record.
-///
-/// With no origin, this is the disk store path and does not require the file
-/// to exist. With [`ORIGIN_ENV`], this is the cache replica: a hit returns the
-/// cached file, a miss fetches from the origin once and then reads the replica.
+/// Returns a store-relative path, without requiring existence when no origin is
+/// set. With [`ORIGIN_ENV`], returns a cache hit or fetches the miss once into
+/// the replica before reading it.
 ///
 /// # Errors
-///
-/// Returns [`io::ErrorKind::InvalidInput`] for a relative path that escapes
-/// the store, a non-loopback origin, or an HTTP origin without
-/// [`STORE_ENV`]. Returns [`io::ErrorKind::NotFound`] when the origin
-/// answers 404. An unreachable origin fails immediately with the origin URL
-/// and the reverse-mapping requirement in the message.
+/// Returns [`io::ErrorKind::InvalidInput`] for store escapes, non-loopback origins,
+/// or HTTP origins without [`STORE_ENV`]; [`io::ErrorKind::NotFound`] for HTTP 404.
+/// An unreachable origin fails immediately with its URL and the reverse-mapping
+/// requirement in the message.
 pub fn file(relative: &Path) -> io::Result<PathBuf> {
     let relative = relative_path(relative)?;
     let runtime = runtime()?;

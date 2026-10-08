@@ -35,20 +35,9 @@ pub struct TrackEntry {
     pub status: TrackStatus,
 }
 
-/// Input to [`Queue::append`](crate::Queue::append) /
-/// [`Queue::insert`](crate::Queue::insert) describing how to load a track.
-///
-/// Two shapes:
-/// - [`TrackSource::Uri`] — the queue builds a default
-///   [`ResourceConfig`] from the [`QueueConfig`](crate::QueueConfig) templates
-///   (`net`, `store`). Convenient for simple use.
-/// - [`TrackSource::Config`] — the caller pre-builds a [`ResourceConfig`]
-///   (useful for DRM keys, custom headers, format hints). The queue leaves
-///   caller-set fields intact.
-///
-/// `TrackSource` is `Clone` so the queue can load a track again each time it
-/// plays — re-tapping a track in the playlist must work without the caller
-/// reconstructing anything.
+/// Cloneable input to [`QueueControl::append`](crate::QueueControl::append) and [`QueueControl::insert`](crate::QueueControl::insert).
+/// Uri builds from queue templates; Config preserves caller fields such as DRM, headers and format hints.
+/// Cloning lets the queue load a track again each time it plays, without caller reconstruction.
 #[derive(derive_more::From)]
 #[non_exhaustive]
 #[derive_where::derive_where(Clone; S: HasPool<u8> + Send + Sync + 'static)]

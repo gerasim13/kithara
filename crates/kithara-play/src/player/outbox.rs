@@ -141,7 +141,8 @@ impl<'a, S> Outbox<'a, S> {
         at: When<SessionFrame>,
         send: impl FnOnce(&mut Self) -> Result<R, PlayError>,
     ) -> Result<(R, Option<Seq>), PlayError> {
-        self.together_owned(at, send).map_err(|(error, _parts)| error)
+        self.together_owned(at, send)
+            .map_err(|(error, _parts)| error)
     }
 
     /// Collects one batch and returns its original parts if staging or sending fails.
@@ -267,7 +268,8 @@ impl<'a, S> Outbox<'a, S> {
             basis: Vec::new(),
             commands: vec![command],
         };
-        let seq = self.dispatcher
+        let seq = self
+            .dispatcher
             .send(When::Next, batch)
             .map_err(|error| match error {
                 SendError::Full(_) => PlayError::Full("dispatcher"),
@@ -285,7 +287,9 @@ impl<'a, S> Outbox<'a, S> {
 
     pub(crate) fn deferred(&mut self, parts: Vec<DeckPart>) -> Result<Seq, PlayError> {
         if self.group.is_some() {
-            return Err(PlayError::Internal("an end-marker operation cannot join a timed batch".into()));
+            return Err(PlayError::Internal(
+                "an end-marker operation cannot join a timed batch".into(),
+            ));
         }
         let mut basis = Vec::new();
         for slot in parts.iter().flat_map(slots) {
@@ -293,7 +297,13 @@ impl<'a, S> Outbox<'a, S> {
                 basis.push((slot, self.deck.basis(slot, When::Deferred)));
             }
         }
-        deck_sent(self.deck.send(When::Deferred, Batch { basis, commands: parts }))
+        deck_sent(self.deck.send(
+            When::Deferred,
+            Batch {
+                basis,
+                commands: parts,
+            },
+        ))
     }
 }
 
@@ -341,8 +351,14 @@ fn deck_sent_owned(
 pub enum Settled {
     /// The receipt is not about this player, or its outcome has not come yet.
     Pending,
-    Applied { seq: Seq, at: SessionFrame },
-    Rejected { seq: Seq, reason: Rejection<PlayError> },
+    Applied {
+        seq: Seq,
+        at: SessionFrame,
+    },
+    Rejected {
+        seq: Seq,
+        reason: Rejection<PlayError>,
+    },
 }
 
 /// What comes back to a player: a receipt of its deck's mixer, shared by every

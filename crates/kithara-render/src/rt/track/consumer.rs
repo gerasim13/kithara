@@ -14,11 +14,20 @@ impl PcmConsumer {
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
+
     use kithara_platform::{sync::Arc, time::Duration};
-    use kithara_signal::{AudioSpec, SegmentId, SourceSpan, SessionFrame};
+    use kithara_signal::{AudioSpec, SegmentId, SessionFrame, SourceSpan};
     use kithara_test_utils::kithara;
-    use crate::{test_pools::pools, rt::track::PlayerResource, worker::{PcmPacket, packet_tests::{PacketRing, chunk}}};
+
     use super::*;
+    use crate::{
+        rt::track::PlayerResource,
+        test_pools::pools,
+        worker::{
+            PcmPacket,
+            packet_tests::{PacketRing, chunk},
+        },
+    };
 
     #[kithara::test(native)]
     fn pcm_consumption_preserves_the_lanes_source_rate() {
@@ -30,16 +39,36 @@ mod tests {
                 packet.meta.source_span = SourceSpan::new(from, until, spec.sample_rate, 4);
                 ring.push(PcmPacket::Chunk(packet));
             }
-            let mut resource = PlayerResource::new(PcmConsumer::new(ring.receiver.take().expect("receiver")), Arc::from("rate"), &pools()).expect("resource");
+            let mut resource = PlayerResource::new(
+                PcmConsumer::new(ring.receiver.take().expect("receiver")),
+                Arc::from("rate"),
+                &pools(),
+            )
+            .expect("resource");
             let mut left = [0.0; 4];
             let mut right = [0.0; 4];
             let mut budget = 8;
-            assert_eq!(resource.read(&mut [&mut left, &mut right], 0..4, &mut budget), crate::rt::track::ReadOutcome::Full { frames: 4 });
-            assert_eq!(resource.mark(SessionFrame::new(4)).expect("first mark").position, spec.duration_for(first).expect("position"));
+            assert_eq!(
+                resource.read(&mut [&mut left, &mut right], 0..4, &mut budget),
+                crate::rt::track::ReadOutcome::Full { frames: 4 }
+            );
+            assert_eq!(
+                resource
+                    .mark(SessionFrame::new(4))
+                    .expect("first mark")
+                    .position,
+                spec.duration_for(first).expect("position")
+            );
             assert_eq!(left, [0.5; 4]);
-            assert_eq!(resource.read(&mut [&mut left, &mut right], 0..4, &mut budget), crate::rt::track::ReadOutcome::Full { frames: 4 });
+            assert_eq!(
+                resource.read(&mut [&mut left, &mut right], 0..4, &mut budget),
+                crate::rt::track::ReadOutcome::Full { frames: 4 }
+            );
             let mark = resource.mark(SessionFrame::new(8)).expect("second mark");
-            assert_eq!(mark.position, spec.duration_for(first + second).expect("position"));
+            assert_eq!(
+                mark.position,
+                spec.duration_for(first + second).expect("position")
+            );
             assert_eq!(mark.lane.frame, 8);
             assert_eq!(left, [0.5; 4]);
             assert_eq!(right, [0.5; 4]);

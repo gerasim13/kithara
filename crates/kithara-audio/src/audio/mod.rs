@@ -6,4 +6,5 @@ mod position;
 #[cfg(test)]
 mod seek;
 pub use core::Audio;
+
 pub(crate) use position::chunk_position;

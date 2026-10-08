@@ -8,7 +8,8 @@ use std::{
 use delegate::delegate;
 use futures::future::{Either, select};
 use kithara_audio::{
-    AudioObserver, AudioReadError, AudioReader, ChunkOutcome, ReadOutcome, ResamplerBackend, SeekOutcome,
+    AudioObserver, AudioReadError, AudioReader, ChunkOutcome, ReadOutcome, ResamplerBackend,
+    SeekOutcome,
 };
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_command::{Inbox, Sender};

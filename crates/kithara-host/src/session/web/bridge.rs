@@ -1,11 +1,13 @@
+use std::num::NonZeroU32;
+
+use firewheel::FirewheelContext;
+use firewheel_web_audio::WebAudioBackend;
+
 use super::client::WebSessionState;
 use crate::{
     HostOwner,
     session::{dispatch::OwnerPosts, protocol::HostMailbox},
 };
-use firewheel::FirewheelContext;
-use firewheel_web_audio::WebAudioBackend;
-use std::num::NonZeroU32;
 
 pub(super) fn init_bridge_state() {
     todo!(

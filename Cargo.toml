@@ -33,6 +33,7 @@ members = [
     "crates/kithara-fixture-media",
     "crates/kithara-hls",
     "crates/kithara-host",
+    "crates/kithara-link",
     "crates/kithara-mp4",
     "crates/kithara-mpa",
     "crates/kithara-net",
@@ -40,7 +41,6 @@ members = [
     "crates/kithara-platform",
     "crates/kithara-play",
     "crates/kithara-queue",
-    "crates/kithara-link",
     "crates/kithara-record",
     "crates/kithara-render",
     "crates/kithara-resampler",
@@ -313,6 +313,7 @@ kithara-fixture-media = { path = "crates/kithara-fixture-media", version = "0.0.
 kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha5", default-features = false }
 kithara-host = { path = "crates/kithara-host", version = "0.0.1-alpha5", default-features = false }
 kithara-integration-tests = { path = "tests", default-features = false }
+kithara-link = { path = "crates/kithara-link", version = "0.0.1-alpha5", default-features = false }
 kithara-mp4 = { path = "crates/kithara-mp4", version = "0.0.1-alpha5" }
 kithara-mpa = { path = "crates/kithara-mpa", version = "0.0.1-alpha5" }
 kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha5", default-features = false }
@@ -320,7 +321,6 @@ kithara-output = { path = "crates/kithara-output", version = "0.0.1-alpha5" }
 kithara-platform = { path = "crates/kithara-platform", version = "0.0.1-alpha5" }
 kithara-play = { path = "crates/kithara-play", version = "0.0.1-alpha5", default-features = false }
 kithara-queue = { path = "crates/kithara-queue", version = "0.0.1-alpha5", default-features = false }
-kithara-link = { path = "crates/kithara-link", version = "0.0.1-alpha5", default-features = false }
 kithara-record = { path = "crates/kithara-record", version = "0.0.1-alpha5", default-features = false }
 kithara-render = { path = "crates/kithara-render", version = "0.0.1-alpha5", default-features = false }
 kithara-resampler = { path = "crates/kithara-resampler", version = "0.0.1-alpha5", default-features = false }
@@ -345,7 +345,7 @@ kithara-worker = { path = "crates/kithara-worker", version = "0.0.1-alpha5" }
 kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.0.1-alpha5" }
 
 # misc
-aes = "0.9.1"
+aes = "0.9.3"
 
 # xtask tooling
 anyhow = "1"
@@ -362,13 +362,12 @@ arc-swap = "1.9"
 assert_no_alloc = "1.1"
 
 # async traits
-async-trait = "0.1.89"
+async-trait = "0.1.92"
 
 # fast interleave/deinterleave
-audioadapter-buffers = { version = "5.0", default-features = false, features = ["std"] }
+audioadapter-buffers = { version = "5.2", default-features = false, features = ["std"] }
 axum = "0.8.9"
-backtrace = "0.3"
-base64 = "0.22.1"
+base64 = "0.23.1"
 
 # performance monitoring
 bevy_platform = { version = "0.19", default-features = false, features = ["std"] }
@@ -381,15 +380,15 @@ bitflags = "2.13"
 block2 = "0.6.2"
 
 # storage (range maps + mmap)
-bon = "3.9"
+bon = "3.10"
 bungee-sys = "0.1.1"
-bytes = "1.12.0"
+bytes = "1.12.1"
 cargo_metadata = "0.23"
 cbc = "0.2.1"
 
 # CLI
 clap = { version = "4.6", features = ["derive", "env"] }
-cochlea-features = "0.1.0"
+cochlea-features = "0.7.0"
 cochlea-render = "0.7.0"
 cochlea-score = "0.7.0"
 core-foundation = "0.10"
@@ -398,7 +397,6 @@ cpal = { version = "0.18", default-features = false }
 cpu-time = "1"
 
 # crypto/obfuscation
-crabtime = "1.1.4"
 criterion = "0.8.2"
 crossbeam-queue = "0.3"
 dashmap = "6.2.1"
@@ -416,18 +414,19 @@ firewheel = { version = "0.14.0", default-features = false, features = ["schedul
 firewheel-core = { version = "0.14.0", default-features = false, features = ["std", "serde"] }
 firewheel-web-audio = { version = "0.6.0", default-features = false }
 fs4 = "1.1.0"
-futures = "0.3.32"
+futures = "0.3.34"
 
 # proc macros
 futures-lite = "2"
-getrandom = "0.4.2"
+getrandom = "0.4.3"
 glob = "0.3"
 gloo-timers = { version = "0.4", features = ["futures"] }
 
 # hex encoding
 hex = "0.4"
 hls_m3u8 = "0.7.0"
-hotpath = "0.19.1"
+# 0.23.2 introduced an Android thread-profiler compilation regression.
+hotpath = "=0.23.1"
 humantime = "2.4.0"
 humantime-serde = "1.1.1"
 # Optional: unify lint settings later via workspace.metadata or deny.toml.
@@ -436,7 +435,7 @@ humantime-serde = "1.1.1"
 iced = { version = "0.14", default-features = false, features = ["tokio", "svg", "canvas", "image", "advanced", "wgpu", "crisp", "web-colors", "x11", "wayland"] }
 iced_renderer = "0.14.0"
 iced_runtime = "0.14.0"
-iced_tiny_skia = "0.14.0"
+iced_tiny_skia = "0.14.1"
 iced_wgpu = "0.14.0"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 
@@ -454,16 +453,15 @@ libc = "0.2"
 libfuzzer-sys = "0.4"
 loom = { version = "0.7.2", features = ["checkpoint"] }
 lru = "0.18"
-lucide-icons = { version = "1.25", default-features = false }
+lucide-icons = { version = "1.52", default-features = false }
 masonry = "0.4"
 memory-stats = "1.2"
 mmap-io = { version = "1.0", default-features = false }
-moka = { version = "0.12", features = ["sync"] }
-naga = { version = "26", features = ["wgsl-in"] }
+naga = { version = "27", features = ["wgsl-in"] }
 ndk-context = "0.1.1"
-nix = { version = "0.29", features = ["resource", "signal"] }
+nix = { version = "0.31", features = ["resource", "signal"] }
 num-traits = { version = "0.2", default-features = false }
-obfstr = "0.4.5"
+obfstr = "0.4.6"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false }
 opus = "0.4.0"
@@ -472,27 +470,27 @@ parking_lot_core = "0.9"
 parley = { version = "0.6", default-features = false, features = ["std", "system"] }
 pin-project-lite = "0.2"
 plist = "1"
-png = "0.17"
-pollster = "0.4"
-portable-atomic = { version = "1.13.1", default-features = false, features = ["fallback", "float"] }
+png = "0.18"
+pollster = "1.0"
+portable-atomic = { version = "1.15.0", default-features = false, features = ["fallback", "float"] }
 proc-macro2 = "1"
 proptest = "1"
 quote = "1"
-rand = "0.10.2"
-rangemap = { version = "1.7.1", features = ["serde1"] }
+rand = "0.10.3"
+rangemap = { version = "1.8.0", features = ["serde1"] }
 rayon = "1.12.0"
-re_mp4 = "0.5.0"
+re_mp4 = "0.5.1"
 realfft = "3.5"
 regex = "1"
-reqwest = { version = "0.13.4", default-features = false }
+reqwest = { version = "0.13.5", default-features = false }
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
-ringbuf = "0.5.0"
+ringbuf = "0.5.2"
 rkyv = "0.8.18"
 ron = "0.12"
-roxmltree = "0.20"
+roxmltree = "0.21"
 # Beat detection NN inference (kithara-beat).
-rten = { version = "0.24", features = ["fft"] }
-rten-tensor = "0.24"
+rten = { version = "0.27", features = ["fft", "rten_format"] }
+rten-tensor = "0.27"
 # RealtimeSanitizer on stable. `prebuilt-libs` (its default) fetches the
 # runtime during the build, which suits a developer host; CI stages the library
 # into the image and names it through RTSAN_LIB_PATH, which takes priority over
@@ -509,26 +507,24 @@ serde_json = "1.0"
 # `serde_yml` is unsound and unmaintained (RUSTSEC-2025-0068). This is the
 # maintained continuation of `serde_yaml`, which `serde_yml` itself forked.
 serde_yaml_ng = "0.10.0"
-serial_test = "3.5.0"
+serial_test = "4.0.1"
 sha2 = "0.11"
-signal-hook = "0.3"
+signal-hook = "0.4"
 # Time-stretch backends: C++ FFI, native-only, behind `stretch-*` features.
 signalsmith-stretch = "0.1.3"
 skrifa = "0.37"
 smallvec = "1"
-symphonia = { version = "0.6.0", features = ["all", "opt-simd"] }
-symphonia-core = "0.6.0"
+symphonia = { version = "0.6.1", features = ["all", "opt-simd"] }
+symphonia-core = "0.6.1"
 syn = { version = "3", features = ["full"] }
 tempfile = "3.27.0"
-thirtyfour = { version = "0.37.1", features = ["bidi"] }
-thiserror = "2.0.18"
+thirtyfour = { version = "0.37.5", features = ["bidi"] }
+thiserror = "2.0.21"
 thunderdome = { version = "0.6.1", default-features = false }
 tiny_http = "0.12.0"
-tokio = { version = "1.52.3", default-features = false }
-tokio-stream = "0.1.18"
-tokio_with_wasm = { version = "0.9", features = ["full"] }
+tokio = { version = "1.53.2", default-features = false }
+tokio_with_wasm = { version = "0.10", features = ["full"] }
 toml = { version = "1.1", features = ["preserve_order"] }
-tower = "0.5.3"
 tower-http = { version = "0.7", features = ["cors", "fs", "set-header"] }
 tower-layer = "0.3.3"
 tower-service = "0.3.3"
@@ -537,8 +533,9 @@ tracing-android = "0.2.0"
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "registry"] }
 tracing-wasm = "0.2"
-triple_buffer = "8.1.1"
+triple_buffer = "9.0.0"
 unicode-segmentation = "1.13.3"
+# Apple bindings require the metadata format supported by cargo-swift.
 uniffi = { version = "0.31.2", default-features = false }
 unimock = { version = "0.6", features = ["std"] }
 url = { version = "2.5.8", features = ["serde"] }
@@ -569,7 +566,7 @@ windows-sys = "0.61"
 # Dev-only: the gallery example drives the Masonry host in a real window. iced
 # already builds this exact version, so it costs no extra compilation.
 winit = "0.30"
-wreq = "=6.0.0-rc.29"
+wreq = "=6.0.0-rc.31"
 wreq-util = "=3.0.0-rc.14"
 
 # Optimise CPU-heavy audio dependencies in debug builds so the audio

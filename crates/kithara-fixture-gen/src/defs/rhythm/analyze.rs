@@ -225,8 +225,8 @@ impl AudioRead for PcmReader {
 }
 
 impl AudioControl for PcmReader {
-    fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
-        let frame = usize::try_from(self.spec.frame_at(target)?).map_err(|_| {
+    fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
+        let frame = usize::try_from(self.spec.frame_at(target).map_err(DecodeError::from)?).map_err(|_| {
             DecodeError::SeekOutOfRange {
                 detail: "fixture seek does not fit usize",
             }

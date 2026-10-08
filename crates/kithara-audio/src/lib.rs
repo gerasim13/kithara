@@ -44,7 +44,7 @@ pub use pipeline::{
 pub use producer::AudioLaneEvent;
 pub use traits::{
     AudioControl, AudioObserveError, AudioObserver, AudioObserverRelay, AudioObserverSlot,
-    AudioRead, AudioReadError, AudioReader, FailureSource, AudioSession, AudioSource, ChunkOutcome, DecodeError, DecodeResult,
-    PendingReason, ReadOutcome, SeekOutcome, SourceDiscontinuity,
+    AudioRead, AudioReadError, AudioReader, AudioSession, AudioSource, ChunkOutcome, DecodeError,
+    DecodeResult, FailureSource, PendingReason, ReadOutcome, SeekOutcome, SourceDiscontinuity,
 };
 mod consts;

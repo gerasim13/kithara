@@ -2,6 +2,27 @@
 
 #![cfg(feature = "ranged")]
 
+#[cfg(doctest)]
+mod contracts {
+    /// Unchecked conversion requires an explicitly clamping declaration.
+    /// ```compile_fail
+    /// #[derive(kithara_derive::Ranged)]
+    /// #[ranged(min = 0, max = 100)]
+    /// struct Share(u8);
+    /// let share = Share::from(101u8);
+    /// ```
+    mod rejects_implicit_from {}
+
+    /// Default construction requires a declared default value.
+    /// ```compile_fail
+    /// #[derive(kithara_derive::Ranged)]
+    /// #[ranged(min = 1.0, max = 1000.0)]
+    /// struct Tempo(f64);
+    /// let tempo = Tempo::default();
+    /// ```
+    mod rejects_undeclared_default {}
+}
+
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};

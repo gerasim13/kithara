@@ -135,15 +135,16 @@ pub fn scoped_channel<R: Protocol, M: Protocol>(
 ) -> (ScopedSender<R, M>, ScopedInbox<R, M>) {
     let scopes = usize::from(config.scopes.get());
     let scope_capacity = scopes * (config.scope.capacity.get() + 1);
-    let (commands, pending) =
-        HeapRb::<Item<R, M>>::new(config.root.capacity.get() + scope_capacity).split();
+    let command_capacity = config.root.capacity.get() + scope_capacity;
+    let (commands, pending) = HeapRb::<Item<R, M>>::new(command_capacity).split();
     let (root_answers, root_receipts) =
         HeapRb::<Receipt<R>>::new(config.root.capacity.get()).split();
     let (scope_answers, scope_receipts) = HeapRb::<ScopeReply<M>>::new(scope_capacity).split();
     let gate = Arc::new(Gate::default());
     let answered = Arc::new(AtomicWaker::new());
     let sender = ScopedSender {
-        commands: commands.freeze(),
+        commands,
+        staged: Vec::with_capacity(command_capacity),
         root_receipts,
         scope_receipts,
         root: Book::new(config.root.capacity.get(), config.root.targets),

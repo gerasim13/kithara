@@ -1,6 +1,7 @@
-use super::{ActivityWriter, DeferredWake, DummyType, ScriptSource, Source, Stream, WaitOutcome};
 use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;
+
+use super::{ActivityWriter, DeferredWake, DummyType, ScriptSource, Source, Stream, WaitOutcome};
 const INIT_BYTES: u64 = 627;
 const SEGMENT_BYTES: u64 = 8_000;
 const READ_AHEAD_BYTES: usize = 32 * 1024;

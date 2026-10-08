@@ -31,7 +31,10 @@ pub(crate) fn install(
     settings: HostSettings,
     config: ScopedConfig,
 ) -> Result<
-    (ScopedSender<HostProtocol, DeckProtocol>, Output<TransportObservation>),
+    (
+        ScopedSender<HostProtocol, DeckProtocol>,
+        Output<TransportObservation>,
+    ),
     &'static str,
 > {
     let initial = TransportObservation::new(None, session_grid);

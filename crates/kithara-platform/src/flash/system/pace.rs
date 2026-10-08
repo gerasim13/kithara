@@ -22,6 +22,10 @@ impl Pacer {
             spawn: Once::new(),
         }
     }
+
+    pub(super) fn owner(&self) -> Weak<FlashInner> {
+        Weak::clone(&self.owner)
+    }
 }
 
 impl FlashInner {
@@ -189,6 +193,537 @@ mod tests {
             elapsed < Duration::from_secs(2),
             "paced deadline did not fire promptly for {target_ms}ms target: {elapsed:?}"
         );
+    }
+
+    fn pace_due(flash: &FlashInner, base: u64) {
+        let mut core = flash.core.lock();
+        core.sched.real_io = 1;
+        core.sched.pace_anchor = Some((RealInstant::now() - Duration::from_secs(1), base));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_paced_async_grant_holds_the_clock_through_poll_entry() {
+        let flash = FlashInner::new_arc();
+        let base = flash.clock.now_nanos();
+        let hold = flash.test_hold();
+        let gate = flash.async_acquire(std::panic::Location::caller());
+        let waker = std::task::Waker::noop().clone();
+        let (near, advance) = flash.register_sleep_async(ms(100), waker.clone());
+        advance.fire();
+        let (far, advance) = flash.register_sleep_async(ms(200), waker);
+        advance.fire();
+        pace_due(&flash, base);
+
+        drop(hold);
+        assert!(near.granted());
+        assert!(!far.granted());
+        assert_eq!(flash.active_count(), 1);
+        assert_eq!(flash.advance_log(), vec![base + ms(100)]);
+
+        assert!(gate.try_enter_poll());
+        assert!(!far.granted());
+        assert_eq!(flash.clock.now_nanos(), base + ms(100));
+
+        drop(near);
+        assert!(far.granted());
+        assert_eq!(flash.active_count(), 1);
+        assert_eq!(flash.advance_log(), vec![base + ms(100), base + ms(200)]);
+
+        drop(far);
+        assert_eq!(flash.active_count(), 0);
+        assert_eq!(flash.timed_count(), 0);
+        assert_eq!(flash.async_active_count(), 1);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn equal_async_deadlines_share_one_grant_batch() {
+        let flash = FlashInner::new_arc();
+        let base = flash.clock.now_nanos();
+        let hold = flash.test_hold();
+        let waker = std::task::Waker::noop().clone();
+        let (first, advance) = flash.register_sleep_async(ms(100), waker.clone());
+        advance.fire();
+        let (equal, advance) = flash.register_sleep_async(ms(100), waker.clone());
+        advance.fire();
+        let (later, advance) = flash.register_sleep_async(ms(200), waker);
+        advance.fire();
+        pace_due(&flash, base);
+
+        drop(hold);
+        assert!(first.granted());
+        assert!(equal.granted());
+        assert!(!later.granted());
+        assert_eq!(flash.active_count(), 2);
+        assert_eq!(flash.advance_log(), vec![base + ms(100)]);
+
+        drop(first);
+        assert!(!later.granted());
+        assert_eq!(flash.active_count(), 1);
+        assert_eq!(flash.advance_log(), vec![base + ms(100)]);
+
+        drop(equal);
+        assert!(later.granted());
+        assert_eq!(flash.active_count(), 1);
+        assert_eq!(flash.advance_log(), vec![base + ms(100), base + ms(200)]);
+
+        drop(later);
+        assert_eq!(flash.active_count(), 0);
+        assert_eq!(flash.timed_count(), 0);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn cancelling_an_ungranted_async_wait_preserves_other_credits() {
+        let flash = FlashInner::new_arc();
+        let base = flash.clock.now_nanos();
+        let hold = flash.test_hold();
+        let waker = std::task::Waker::noop().clone();
+        let (cancelled, advance) = flash.register_sleep_async(ms(100), waker.clone());
+        advance.fire();
+        let (later, advance) = flash.register_sleep_async(ms(200), waker);
+        advance.fire();
+
+        assert!(!cancelled.granted());
+        drop(cancelled);
+        assert_eq!(flash.active_count(), 1);
+        assert_eq!(flash.timed_count(), 1);
+        pace_due(&flash, base);
+
+        drop(hold);
+        assert!(later.granted());
+        assert_eq!(flash.active_count(), 1);
+        assert_eq!(flash.advance_log(), vec![base + ms(200)]);
+
+        drop(later);
+        assert_eq!(flash.active_count(), 0);
+        assert_eq!(flash.timed_count(), 0);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn cancelling_a_grant_before_its_wake_fires_returns_one_credit() {
+        let flash = FlashInner::new_arc();
+        let (receipt, advance) = flash.register_sleep_async(0, std::task::Waker::noop().clone());
+
+        assert!(receipt.granted());
+        assert_eq!(flash.active_count(), 1);
+        drop(receipt);
+        assert_eq!(flash.active_count(), 0);
+        assert_eq!(flash.timed_count(), 0);
+
+        advance.fire();
+        assert_eq!(flash.active_count(), 0);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn notify_and_channel_grants_share_receipt_settlement() {
+        let flash = FlashInner::new_arc();
+        let waker = std::task::Waker::noop().clone();
+        let notify_id = flash.next_condvar_id();
+        let (notify, advance) = flash.register_notify_async(notify_id, waker.clone());
+        advance.fire();
+        let notify = notify.expect("fresh notify has no stored permit");
+        assert!(!notify.granted());
+
+        flash.signal_notify(notify_id);
+        assert!(notify.granted());
+        assert_eq!(flash.active_count(), 1);
+        drop(notify);
+        assert_eq!(flash.active_count(), 0);
+        assert_eq!(flash.indef_count(), 0);
+
+        let channel_id = flash.next_condvar_id();
+        let (channel, advance) = flash.register_channel_async(channel_id, waker.clone());
+        advance.fire();
+        assert!(!channel.granted());
+        flash.signal_channel(channel_id, true);
+        flash.signal_channel(channel_id, true);
+        assert!(channel.granted());
+        assert_eq!(flash.active_count(), 1);
+        drop(channel);
+        assert_eq!(flash.active_count(), 0);
+        assert_eq!(flash.indef_count(), 0);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_receipt_cannot_publish_a_grant_after_its_engine_is_gone() {
+        let receipt = {
+            let flash = FlashInner::new_arc();
+            let (receipt, advance) =
+                flash.register_sleep_async(0, std::task::Waker::noop().clone());
+            advance.fire();
+            assert!(receipt.granted());
+            receipt
+        };
+
+        assert!(!receipt.granted());
+        drop(receipt);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn known_task_grants_keep_equal_deadlines_together_through_poll_entry() {
+        let flash = FlashInner::new_arc();
+        let base = flash.clock.now_nanos();
+        let hold = flash.test_hold();
+        let gate = flash.async_acquire(std::panic::Location::caller());
+        let diag = gate.diag();
+        assert!(gate.try_enter_poll());
+        let poll = credit::AsyncPollGuard::enter(gate.id(), gate.loc());
+        let waker = std::task::Waker::noop().clone();
+        let (first, advance) = flash.register_sleep_async(ms(100), waker.clone());
+        advance.fire();
+        let (equal, advance) = flash.register_sleep_async(ms(100), waker.clone());
+        advance.fire();
+        let (later, advance) = flash.register_sleep_async(ms(200), waker);
+        advance.fire();
+        drop(poll);
+        assert!(matches!(
+            flash.gate_park(&diag.state, gate.id()),
+            super::super::state::ParkOutcome::Parked
+        ));
+        pace_due(&flash, base);
+
+        drop(hold);
+        assert!(first.granted());
+        assert!(equal.granted());
+        assert!(!later.granted());
+        assert_eq!(flash.active_count(), 2);
+        assert_eq!(flash.core.lock().registry.active, 0);
+        assert_eq!(flash.advance_log(), vec![base + ms(100)]);
+        assert!(matches!(
+            flash.gate_wake_parked(&diag.state, gate.id(), gate.loc()),
+            super::super::state::WakeOutcome::Resumed
+        ));
+        assert!(gate.try_enter_poll());
+
+        drop(first);
+        assert!(!later.granted());
+        assert_eq!(flash.active_count(), 1);
+        drop(equal);
+        assert!(later.granted());
+        assert_eq!(flash.active_count(), 1);
+        assert_eq!(flash.core.lock().registry.active, 0);
+        assert_eq!(flash.advance_log(), vec![base + ms(100), base + ms(200)]);
+        drop(later);
+        assert_eq!(flash.active_count(), 0);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn grants_drain_to_a_sole_pollers_bridge_and_repin_when_it_resumes() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("build current-thread runtime");
+        let _runtime = runtime.enter();
+
+        for runnable in [false, true] {
+            let flash = FlashInner::new_arc();
+            let base = flash.clock.now_nanos();
+            let hold = flash.test_hold();
+            let gate = flash.async_acquire(std::panic::Location::caller());
+            let diag = gate.diag();
+            assert!(gate.try_enter_poll());
+            let poll = credit::AsyncPollGuard::enter(gate.id(), gate.loc());
+            let waker = std::task::Waker::noop().clone();
+            let (first, advance) = flash.register_sleep_async(ms(100), waker.clone());
+            advance.fire();
+            let (equal, advance) = flash.register_sleep_async(ms(100), waker.clone());
+            advance.fire();
+            let (later, advance) = flash.register_sleep_async(ms(200), waker.clone());
+            advance.fire();
+            drop(poll);
+            assert!(matches!(
+                flash.gate_park(&diag.state, gate.id()),
+                super::super::state::ParkOutcome::Parked
+            ));
+            if runnable {
+                assert!(matches!(
+                    flash.gate_wake_parked(&diag.state, gate.id(), gate.loc()),
+                    super::super::state::WakeOutcome::Resumed
+                ));
+            }
+
+            let driver = flash.async_acquire(std::panic::Location::caller());
+            assert!(driver.try_enter_poll());
+            let poll = credit::AsyncPollGuard::enter(driver.id(), driver.loc());
+            let bridge_id = flash.next_condvar_id();
+            let (token, advance, wait) = flash.register_condvar_timed(base + ms(300), bridge_id);
+            advance.fire();
+            pace_due(&flash, base);
+            drop(hold);
+
+            assert!(first.granted());
+            assert!(equal.granted());
+            assert!(later.granted());
+            assert_eq!(flash.clock.now_nanos(), base + ms(300));
+            assert_eq!(flash.active_count(), 4);
+            assert_eq!(flash.core.lock().registry.active, 1);
+            assert_eq!(
+                flash.advance_log(),
+                vec![base + ms(100), base + ms(200), base + ms(300)]
+            );
+            token.wait();
+            wait.resume();
+            assert_eq!(flash.active_count(), 3);
+            assert_eq!(flash.core.lock().registry.active, 0);
+
+            let (after_bridge, advance) = flash.register_sleep_async(ms(100), waker);
+            advance.fire();
+            pace_due(&flash, base);
+            assert!(!after_bridge.granted());
+            drop(first);
+            assert!(!after_bridge.granted());
+            drop(equal);
+            assert!(!after_bridge.granted());
+            drop(later);
+            assert!(after_bridge.granted());
+            assert_eq!(flash.clock.now_nanos(), base + ms(400));
+            assert_eq!(flash.active_count(), 1);
+            drop(after_bridge);
+            assert_eq!(flash.active_count(), 0);
+            drop(poll);
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_bridged_worker_does_not_exempt_grants_another_worker_can_consume() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .build()
+            .expect("build multithread runtime");
+        let _runtime = runtime.enter();
+
+        for runnable in [false, true] {
+            let flash = FlashInner::new_arc();
+            let base = flash.clock.now_nanos();
+            let hold = flash.test_hold();
+            let gate = flash.async_acquire(std::panic::Location::caller());
+            let diag = gate.diag();
+            assert!(gate.try_enter_poll());
+            let poll = credit::AsyncPollGuard::enter(gate.id(), gate.loc());
+            let (receipt, advance) =
+                flash.register_sleep_async(ms(100), std::task::Waker::noop().clone());
+            advance.fire();
+            drop(poll);
+            assert!(matches!(
+                flash.gate_park(&diag.state, gate.id()),
+                super::super::state::ParkOutcome::Parked
+            ));
+            if runnable {
+                assert!(matches!(
+                    flash.gate_wake_parked(&diag.state, gate.id(), gate.loc()),
+                    super::super::state::WakeOutcome::Resumed
+                ));
+            }
+
+            let driver = flash.async_acquire(std::panic::Location::caller());
+            assert!(driver.try_enter_poll());
+            let poll = credit::AsyncPollGuard::enter(driver.id(), driver.loc());
+            let bridge_id = flash.next_condvar_id();
+            let (token, advance, wait) = flash.register_condvar_timed(base + ms(300), bridge_id);
+            advance.fire();
+            pace_due(&flash, base);
+            drop(hold);
+
+            assert!(receipt.granted());
+            assert_eq!(flash.clock.now_nanos(), base + ms(100));
+            assert_eq!(flash.active_count(), 1);
+            assert_eq!(flash.timed_count(), 1);
+            drop(receipt);
+            assert_eq!(flash.clock.now_nanos(), base + ms(300));
+            token.wait();
+            wait.resume();
+            assert_eq!(flash.active_count(), 0);
+            drop(poll);
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_running_tasks_own_bridge_releases_grants_on_any_runtime() {
+        for sole_poller in [false, true] {
+            let mut builder = if sole_poller {
+                tokio::runtime::Builder::new_current_thread()
+            } else {
+                tokio::runtime::Builder::new_multi_thread()
+            };
+            let runtime = builder.worker_threads(1).build().expect("build runtime");
+            let _runtime = runtime.enter();
+
+            for notified in [false, true] {
+                let flash = FlashInner::new_arc();
+                let base = flash.clock.now_nanos();
+                let hold = flash.test_hold();
+                let gate = flash.async_acquire(std::panic::Location::caller());
+                assert!(gate.try_enter_poll());
+                let poll = credit::AsyncPollGuard::enter(gate.id(), gate.loc());
+                let notify_id = flash.next_condvar_id();
+                let (receipt, advance) =
+                    flash.register_notify_async(notify_id, std::task::Waker::noop().clone());
+                advance.fire();
+                let receipt = receipt.expect("fresh notify has no stored permit");
+                flash.signal_notify(notify_id);
+                assert!(receipt.granted());
+                if notified {
+                    std::task::Wake::wake_by_ref(&gate);
+                }
+
+                let bridge_id = flash.next_condvar_id();
+                let (token, advance, wait) =
+                    flash.register_condvar_timed(base + ms(100), bridge_id);
+                advance.fire();
+                assert_eq!(flash.clock.now_nanos(), base);
+                pace_due(&flash, base);
+                drop(hold);
+                assert_eq!(flash.clock.now_nanos(), base + ms(100));
+                assert_eq!(flash.active_count(), 2);
+                token.wait();
+                wait.resume();
+                assert_eq!(flash.active_count(), 1);
+
+                let (later, advance) =
+                    flash.register_sleep_async(ms(100), std::task::Waker::noop().clone());
+                advance.fire();
+                pace_due(&flash, base);
+                {
+                    let mut core = flash.core.lock();
+                    let advance = core.try_advance(&flash.clock);
+                    drop(core);
+                    advance.fire();
+                }
+                assert!(!later.granted());
+                assert_eq!(flash.clock.now_nanos(), base + ms(100));
+                drop(receipt);
+                assert!(later.granted());
+                assert_eq!(flash.clock.now_nanos(), base + ms(200));
+                drop(later);
+                assert_eq!(flash.active_count(), 0);
+                drop(poll);
+            }
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn an_executing_poll_keeps_its_grant_when_an_old_driver_is_bridged() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("build current-thread runtime");
+        let _runtime = runtime.enter();
+        let flash = FlashInner::new_arc();
+        let base = flash.clock.now_nanos();
+        let gate = flash.async_acquire(std::panic::Location::caller());
+        assert!(gate.try_enter_poll());
+        let poll = credit::AsyncPollGuard::enter(gate.id(), gate.loc());
+        let notify_id = flash.next_condvar_id();
+        let (receipt, advance) =
+            flash.register_notify_async(notify_id, std::task::Waker::noop().clone());
+        advance.fire();
+        let receipt = receipt.expect("fresh notify has no stored permit");
+        flash.signal_notify(notify_id);
+        flash
+            .core
+            .lock()
+            .registry
+            .bridged
+            .insert(credit::current_thread_key());
+        let (later, advance) =
+            flash.register_sleep_async(ms(100), std::task::Waker::noop().clone());
+        advance.fire();
+        pace_due(&flash, base);
+        {
+            let mut core = flash.core.lock();
+            let advance = core.try_advance(&flash.clock);
+            drop(core);
+            advance.fire();
+        }
+
+        assert!(receipt.granted());
+        assert!(!later.granted());
+        assert_eq!(flash.clock.now_nanos(), base);
+        assert_eq!(flash.active_count(), 1);
+        drop(receipt);
+        assert!(later.granted());
+        drop(later);
+        assert_eq!(flash.active_count(), 0);
+        drop(poll);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_completed_task_keeps_grant_credit_until_its_receipt_settles() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("build current-thread runtime");
+        let _runtime = runtime.enter();
+        let flash = FlashInner::new_arc();
+        let base = flash.clock.now_nanos();
+        let gate = flash.async_acquire(std::panic::Location::caller());
+        let diag = gate.diag();
+        assert!(gate.try_enter_poll());
+        let poll = credit::AsyncPollGuard::enter(gate.id(), gate.loc());
+        let notify_id = flash.next_condvar_id();
+        let (receipt, advance) =
+            flash.register_notify_async(notify_id, std::task::Waker::noop().clone());
+        advance.fire();
+        let receipt = receipt.expect("fresh notify has no stored permit");
+        drop(poll);
+        assert!(matches!(
+            flash.gate_park(&diag.state, gate.id()),
+            super::super::state::ParkOutcome::Parked
+        ));
+        flash.signal_notify(notify_id);
+        assert!(receipt.granted());
+        assert!(flash.gate_drop(&diag.state, gate.id()).is_none());
+        flash
+            .core
+            .lock()
+            .registry
+            .bridged
+            .insert(credit::current_thread_key());
+        let (later, advance) =
+            flash.register_sleep_async(ms(100), std::task::Waker::noop().clone());
+        advance.fire();
+        pace_due(&flash, base);
+        assert_eq!(flash.active_count(), 1);
+        assert_eq!(flash.core.lock().registry.active, 0);
+        assert!(!later.granted());
+        assert_eq!(flash.clock.now_nanos(), base);
+
+        drop(receipt);
+        assert!(later.granted());
+        drop(later);
+        assert_eq!(flash.active_count(), 0);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_late_grant_after_task_drop_is_retained_as_untracked_credit() {
+        let flash = FlashInner::new_arc();
+        let gate = flash.async_acquire(std::panic::Location::caller());
+        let diag = gate.diag();
+        assert!(gate.try_enter_poll());
+        let poll = credit::AsyncPollGuard::enter(gate.id(), gate.loc());
+        let notify_id = flash.next_condvar_id();
+        let (receipt, advance) =
+            flash.register_notify_async(notify_id, std::task::Waker::noop().clone());
+        advance.fire();
+        let receipt = receipt.expect("fresh notify has no stored permit");
+        drop(poll);
+        assert!(matches!(
+            flash.gate_park(&diag.state, gate.id()),
+            super::super::state::ParkOutcome::Parked
+        ));
+        assert!(flash.gate_drop(&diag.state, gate.id()).is_none());
+        assert!(
+            !flash
+                .core
+                .lock()
+                .registry
+                .task_diag
+                .contains_key(&gate.id())
+        );
+
+        flash.signal_notify(notify_id);
+        assert!(receipt.granted());
+        assert_eq!(flash.active_count(), 1);
+        assert_eq!(flash.core.lock().registry.active, 1);
+        drop(receipt);
+        assert_eq!(flash.active_count(), 0);
+        assert_eq!(flash.core.lock().registry.active, 0);
     }
 
     #[kithara::test(native, flash(false))]

@@ -50,7 +50,9 @@ pub struct Host<S, O: HostOwner<S> = HostCore<S>> {
 }
 
 pub(super) enum SessionRuntime<S, O: HostOwner<S>> {
-    Realtime { _platform: Platform<S, O> },
+    Realtime {
+        _platform: Platform<S, O>,
+    },
     #[cfg(feature = "offline")]
     Offline {
         platform: Platform<S, O>,
@@ -207,7 +209,9 @@ where
                     root.id,
                     root.view,
                     dispatcher,
-                    SessionRuntime::Realtime { _platform: platform },
+                    SessionRuntime::Realtime {
+                        _platform: platform,
+                    },
                 ))
             }
             #[cfg(feature = "offline")]

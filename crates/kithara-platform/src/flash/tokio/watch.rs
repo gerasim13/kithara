@@ -460,7 +460,7 @@ fn cancel_pending<T>(rx: &mut Receiver<T>) {
 fn cancel_wait<T>(shared: &Shared<T>, pending: &mut Option<Parked>) {
     match pending.take() {
         Some(Parked::Real(waker)) => shared.state.lock().wakers.retain(|w| !w.will_wake(&waker)),
-        Some(Parked::Engine(handle)) => system::cancel_async_wait(&handle),
+        Some(Parked::Engine(handle)) => drop(handle),
         None => {}
     }
 }

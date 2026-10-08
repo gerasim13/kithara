@@ -44,11 +44,17 @@ where
     }
 
     fn lead(&self, delivery: FrameCount) -> Option<FrameCount> {
-        self.tracks_active().filter_map(|track| track.lead(delivery)).max()
+        self.tracks_active()
+            .filter_map(|track| track.lead(delivery))
+            .max()
     }
 
     fn lane_room(&self) -> usize {
-        self.tracks_active().filter(|track| track.synced()).map(LinkedPlayer::lane_room).min().unwrap_or(usize::MAX)
+        self.tracks_active()
+            .filter(|track| track.synced())
+            .map(LinkedPlayer::lane_room)
+            .min()
+            .unwrap_or(usize::MAX)
     }
 
     fn scope_parts(&self) -> usize {
@@ -69,6 +75,8 @@ where
 
     fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>) {
         self.factory_mut().set_trajectory(trajectory);
-        for track in self.tracks_mut() { track.realign(trajectory, at, out); }
+        for track in self.tracks_mut() {
+            track.realign(trajectory, at, out);
+        }
     }
 }

@@ -1,3 +1,18 @@
+use std::{
+    io::{Error as IoError, Seek, SeekFrom},
+    num::NonZeroU32,
+    sync::atomic::AtomicU64,
+};
+
+use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_decode::{Decoder, DecoderConfig, DecoderFactory, DecoderResamplerConfig};
+use kithara_events::{DeferredBus, EventBus, EventReceiver, EventSet};
+use kithara_platform::{CancelScope, sync::Arc, time::Duration, tokio::task::spawn_blocking};
+use kithara_resampler::ResamplerBackend;
+use kithara_signal::AudioSpec;
+use kithara_stream::{MediaInfo, OpenedReader, Stream, StreamType, WorkerWake};
+use kithara_test_utils::kithara;
+
 use super::{
     core::{Audio, AudioContext},
     event::{
@@ -16,19 +31,6 @@ use crate::{
         source::{SourceDecoderConfig, StreamAudioSource},
         stream::shared::SharedStream,
     },
-};
-use kithara_bufpool::{HasPool, PoolRegion};
-use kithara_decode::{Decoder, DecoderConfig, DecoderFactory, DecoderResamplerConfig};
-use kithara_events::{DeferredBus, EventBus, EventReceiver, EventSet};
-use kithara_platform::{CancelScope, sync::Arc, time::Duration, tokio::task::spawn_blocking};
-use kithara_resampler::ResamplerBackend;
-use kithara_signal::AudioSpec;
-use kithara_stream::{MediaInfo, OpenedReader, Stream, StreamType, WorkerWake};
-use kithara_test_utils::kithara;
-use std::{
-    io::{Error as IoError, Seek, SeekFrom},
-    num::NonZeroU32,
-    sync::atomic::AtomicU64,
 };
 
 #[derive_where::derive_where(Clone; B: Clone)]

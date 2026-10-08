@@ -34,20 +34,11 @@ pub fn set_wasm_shim_name(name: impl Into<String>) {
     let _ = wasm_shim_name().set(name.into());
 }
 
-/// Keep the calling Worker's JS event loop running for the lifetime of the
-/// worker, so async tasks and timers spawned on it (via
-/// [`tokio::task::spawn`](crate::tokio::task) / `setTimeout`-backed
-/// [`time::sleep`](crate::time::sleep)) keep being driven.
-///
-/// `wasm_safe_thread` terminates a Worker once its spawn closure returns and
-/// no tracked tasks remain. A worker that hosts a long-lived async runtime
-/// (rather than a single blocking computation) returns from its closure
-/// immediately after spawning its tasks, so without this the Worker
-/// `close()`s after one microtask drain and every spawned future dies.
-///
-/// Call once, on the worker thread, at the top of such a worker entry point.
-/// The registration is intentionally never released: the engine worker lives
-/// for the page's lifetime.
+/// Keeps the calling Web Worker's event loop driving async tasks and timers.
+/// Call once at the start of a long-lived runtime worker: `wasm_safe_thread`
+/// otherwise closes it after its spawn closure returns and tracked tasks drain,
+/// killing spawned futures after one microtask drain. The registration is never
+/// released because the engine worker lives for the page's lifetime.
 pub fn keep_worker_alive() {
     wasm_safe_thread::task_begin();
 }

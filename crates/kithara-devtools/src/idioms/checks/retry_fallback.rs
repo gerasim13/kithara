@@ -8,6 +8,7 @@ use syn::{
 use super::{Check, Context};
 use crate::{
     common::{
+        exclude::attrs_have_test_marker,
         suppress::Suppressions,
         violation::Violation,
         walker::{compile_globs, matches_any, relative_to},
@@ -43,7 +44,8 @@ each fallback hides another underlying failure mode.
 Exact identifiers listed in `retry_fallback.allowed_idents` are excluded from \
 this lexical check. Borrowed configuration setters that only clone settings, \
 assign the supplied value, and construct a handle are not execution retries; \
-their bodies remain checked.
+their bodies remain checked. Test function names describe contracts; their \
+bodies remain checked too.
 
 Suppress with `// xtask-lint-ignore: retry_fallback` ONLY for a designed \
 fallback the owner's contract names: a user-facing default, optional \
@@ -274,7 +276,7 @@ impl<'ast> Visit<'ast> for IdentVisitor<'_> {
 
     fn visit_item_fn(&mut self, node: &'ast ItemFn) {
         let name = node.sig.ident.to_string();
-        if name_is_forbidden(&name, self.cfg) {
+        if name_is_forbidden(&name, self.cfg) && !attrs_have_test_marker(&node.attrs) {
             self.flag(node.sig.ident.span().start().line, &name, "fn");
         }
         visit::visit_item_fn(self, node);
@@ -369,6 +371,21 @@ mod tests {
     fn flags_fallback_fn() {
         let src = "fn read_or_fallback() {}\n";
         assert_eq!(count_violations(src), 1);
+    }
+
+    #[test]
+    fn test_function_names_preserve_body_checks() {
+        for marker in ["#[test]", "#[fixture::test]"] {
+            let source = format!("{marker} fn packet_retry_preserves_bytes() {{}}");
+            assert_eq!(count_violations(&source), 0, "{marker}");
+            let source =
+                format!("{marker} fn packet_retry_preserves_bytes() {{ let attempts = 0; }}");
+            assert_eq!(count_violations(&source), 1, "{marker}");
+        }
+        assert_eq!(
+            count_violations("fn packet_retry_preserves_bytes() { let attempts = 0; }"),
+            2
+        );
     }
 
     #[test]

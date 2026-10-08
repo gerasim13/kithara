@@ -321,21 +321,34 @@ mod tests {
     struct Gate(oneshot::Receiver<Result<u32, LoadRefusal>>);
 
     struct TestLane;
-    impl Task for TestLane { fn tick(&mut self) -> TickResult { TickResult::Waiting } }
+    impl Task for TestLane {
+        fn tick(&mut self) -> TickResult {
+            TickResult::Waiting
+        }
+    }
     impl LaneTask for TestLane {
         fn set_priority(&mut self, _class: ServiceClass) {}
-        fn poll_commands(&mut self, _cx: &mut Context<'_>) -> Poll<()> { Poll::Pending }
+        fn poll_commands(&mut self, _cx: &mut Context<'_>) -> Poll<()> {
+            Poll::Pending
+        }
     }
 
     impl Open for Gate {
         type Opened = u32;
         type Lane = TestLane;
 
-        fn open(self, _position: Duration, _start: LaneStart, _inbox: Inbox<LaneProtocol>) -> impl MaybeSendFuture<Output = Result<(u32, TestLane, FrameCount), LoadRefusal>> {
+        fn open(
+            self,
+            _position: Duration,
+            _start: LaneStart,
+            _inbox: Inbox<LaneProtocol>,
+        ) -> impl MaybeSendFuture<Output = Result<(u32, TestLane, FrameCount), LoadRefusal>>
+        {
             async move {
                 self.0
                     .await
-                    .expect("the test answers every open it lets run").map(|value| (value, TestLane, FrameCount::new(0)))
+                    .expect("the test answers every open it lets run")
+                    .map(|value| (value, TestLane, FrameCount::new(0)))
             }
         }
     }
@@ -361,7 +374,21 @@ mod tests {
                 When::Next,
                 Batch {
                     basis: Vec::new(),
-                    commands: items.into_iter().map(|item| DispatcherCommand::Load(LoadRequest { item, position: Duration::ZERO, start: LaneStart { speed: SpeedCurve::Constant(1.0), keylock: false, backend: StretchKind::default() }, inbox: channel(ChannelConfig::builder().build()).1 })).collect(),
+                    commands: items
+                        .into_iter()
+                        .map(|item| {
+                            DispatcherCommand::Load(LoadRequest {
+                                item,
+                                position: Duration::ZERO,
+                                start: LaneStart {
+                                    speed: SpeedCurve::Constant(1.0),
+                                    keylock: false,
+                                    backend: StretchKind::default(),
+                                },
+                                inbox: channel(ChannelConfig::builder().build()).1,
+                            })
+                        })
+                        .collect(),
                 },
             )
             .expect("the channel has room")

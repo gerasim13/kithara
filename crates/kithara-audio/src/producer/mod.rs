@@ -1,5 +1,6 @@
-use crate::{AudioEvent, DecoderEvent};
 use kithara_events::EventSet;
+
+use crate::{AudioEvent, DecoderEvent};
 
 /// Deferred diagnostics from the owner-thread decoder chain.
 #[derive(Clone, Debug, EventSet)]

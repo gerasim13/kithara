@@ -2,21 +2,11 @@ use std::fmt;
 
 use super::token::CancelToken;
 
-/// A cancellation scope owned by a subsystem.
-///
-/// [`new`](CancelScope::new) is the canonical replacement for the legacy
-/// `cancel.unwrap_or_default()` fallback — the `Option<CancelToken>` parent picks
-/// the branch:
-/// - **composed** (`Some(parent)`): the scope's token is a child of the parent,
-///   so a parent/master cancel reaches this subtree.
-/// - **standalone** (`None`): the scope's token is itself a fresh root
-///   ([`CancelToken::root`]); nothing above can cancel it.
-///
-/// Either way, the inner children handed out by [`token`](CancelScope::token)
-/// derive from one node, and [`cancel`](CancelScope::cancel) cancels exactly that
-/// subtree. `Drop` is **passive**: dropping a scope does not cancel its subtree;
-/// teardown is an explicit `cancel()` (so a composed scope never cancels a token
-/// it was handed from above).
+/// Subsystem-owned cancellation subtree. [`new`](CancelScope::new) derives
+/// one child from `Some(parent)` or creates a fresh root for `None`.
+/// [`token`](CancelScope::token) clones that node; explicit
+/// [`cancel`](CancelScope::cancel) cancels only this subtree, never the parent.
+/// Dropping the scope is passive and does not cancel it.
 pub struct CancelScope {
     token: CancelToken,
 }

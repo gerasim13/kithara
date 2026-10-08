@@ -134,7 +134,10 @@ fn a_load_opens_its_source_once_and_attaches_on_the_next_block() {
     let receipt = rig
         .open(Ok(opened("track", None)))
         .expect("the load reached the dispatcher");
-    assert!(rig.open(Ok(opened("track", None))).is_none(), "one open per load");
+    assert!(
+        rig.open(Ok(opened("track", None))).is_none(),
+        "one open per load"
+    );
     assert!(matches!(
         track.settle(TrackReceipt::Loaded(receipt), &mut rig.outbox()),
         Settled::Pending
@@ -190,7 +193,10 @@ fn a_refused_open_leaves_the_track_idle() {
         "{settled:?}"
     );
     assert_eq!(track.snapshot().status, TrackStatus::Idle);
-    assert!(rig.block(frame(0), 0.0).is_empty(), "nothing went to the deck");
+    assert!(
+        rig.block(frame(0), 0.0).is_empty(),
+        "nothing went to the deck"
+    );
 }
 
 #[kithara::test]
@@ -199,10 +205,18 @@ fn play_sounds_from_its_frame_and_pause_reports_where_it_stopped() {
     let (mut track, _lane) = loaded(&mut rig, A, "track");
 
     let play = track
-        .apply(TrackCommand::Play { at: When::At(frame(4_096)) }, &mut rig.outbox())
+        .apply(
+            TrackCommand::Play {
+                at: When::At(frame(4_096)),
+            },
+            &mut rig.outbox(),
+        )
         .expect("the deck has room")
         .expect("a play goes out on its own");
-    assert!(rig.block(frame(0), 0.0).is_empty(), "the start waits for its frame");
+    assert!(
+        rig.block(frame(0), 0.0).is_empty(),
+        "the start waits for its frame"
+    );
     let receipts = rig.block(frame(4_096), 0.0);
     let settled = settle(&mut track, &mut rig, &receipts);
     assert!(
@@ -211,17 +225,29 @@ fn play_sounds_from_its_frame_and_pause_reports_where_it_stopped() {
     );
     assert_eq!(
         track.snapshot().status,
-        TrackStatus::Playing { since: frame(4_096) }
+        TrackStatus::Playing {
+            since: frame(4_096)
+        }
     );
 
     track
-        .apply(TrackCommand::Pause { at: When::At(frame(8_192)) }, &mut rig.outbox())
+        .apply(
+            TrackCommand::Pause {
+                at: When::At(frame(8_192)),
+            },
+            &mut rig.outbox(),
+        )
         .expect("the deck has room");
     let receipts = rig.block(frame(8_192), 1.5);
     settle(&mut track, &mut rig, &receipts);
 
     let snapshot = track.snapshot();
-    assert_eq!(snapshot.status, TrackStatus::Paused { at: Position::from_secs_f64(1.5) });
+    assert_eq!(
+        snapshot.status,
+        TrackStatus::Paused {
+            at: Position::from_secs_f64(1.5)
+        }
+    );
     assert_eq!(snapshot.position, Position::from_secs_f64(1.5));
 }
 
@@ -245,7 +271,10 @@ fn a_track_played_after_another_chains_from_its_slot() {
             ) && receipt.batch().basis.iter().map(|&(slot, _)| slot).eq([A, B])
         ),
         "{:?}",
-        receipts.iter().map(|receipt| &receipt.batch().commands).collect::<Vec<_>>()
+        receipts
+            .iter()
+            .map(|receipt| &receipt.batch().commands)
+            .collect::<Vec<_>>()
     );
     settle(&mut leading, &mut rig, &receipts);
     settle(&mut following, &mut rig, &receipts);
@@ -292,7 +321,11 @@ fn every_part_a_track_sends_names_its_slot() {
         ),
         "{parts:?}"
     );
-    assert!(receipts.iter().all(|receipt| TrackReceipt::<TestPools>::Deck(receipt).names(B)));
+    assert!(
+        receipts
+            .iter()
+            .all(|receipt| TrackReceipt::<TestPools>::Deck(receipt).names(B))
+    );
 }
 
 #[kithara::test]
@@ -303,7 +336,11 @@ fn a_release_frees_the_track_once_the_mixer_let_its_consumer_go() {
     track
         .apply(TrackCommand::Release, &mut rig.outbox())
         .expect("the deck has room");
-    assert_ne!(track.snapshot().status, TrackStatus::Released, "the detach waits for its receipt");
+    assert_ne!(
+        track.snapshot().status,
+        TrackStatus::Released,
+        "the detach waits for its receipt"
+    );
     let receipts = rig.block(frame(0), 0.0);
     settle(&mut track, &mut rig, &receipts);
 
@@ -322,11 +359,20 @@ fn an_evicting_track_takes_the_slot_over_on_its_frame() {
 
     let mut new = track(A);
     let seq = load(&mut new, &mut rig, Position::ZERO);
-    new.apply(TrackCommand::Evict { at: When::At(frame(1_024)) }, &mut rig.outbox())
-        .expect("the load is in flight");
+    new.apply(
+        TrackCommand::Evict {
+            at: When::At(frame(1_024)),
+        },
+        &mut rig.outbox(),
+    )
+    .expect("the load is in flight");
     let receipt = rig.open(Ok(opened("new", None))).expect("one open");
     new.settle(TrackReceipt::Loaded(receipt), &mut rig.outbox());
-    assert_eq!(rig.mixer.held(A), Some("old"), "the replace waits for its frame");
+    assert_eq!(
+        rig.mixer.held(A),
+        Some("old"),
+        "the replace waits for its frame"
+    );
 
     let receipts = rig.block(frame(1_024), 0.0);
     settle(&mut old, &mut rig, &receipts);
@@ -351,7 +397,9 @@ fn an_evicting_track_takes_the_slot_over_on_its_frame() {
     assert_eq!(old.snapshot().status, TrackStatus::Released);
     assert_eq!(
         new.snapshot().status,
-        TrackStatus::Playing { since: frame(1_024) }
+        TrackStatus::Playing {
+            since: frame(1_024)
+        }
     );
 }
 
@@ -368,7 +416,10 @@ fn a_track_whose_slot_faded_out_reports_it() {
         &mut rig.outbox(),
     );
 
-    assert_eq!(track.snapshot().status, TrackStatus::Faded { at: frame(2_048) });
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Faded { at: frame(2_048) }
+    );
 }
 
 #[kithara::test]
@@ -388,7 +439,9 @@ fn a_load_the_deck_has_no_room_for_leaves_the_lane_untouched() {
     let (sender, mut inbox) = lane();
     let mut track = track(A);
     let seq = load(&mut track, &mut rig, Position::ZERO);
-    let receipt = rig.open(Ok(opened("track", Some(sender)))).expect("one open");
+    let receipt = rig
+        .open(Ok(opened("track", Some(sender))))
+        .expect("one open");
 
     let settled = track.settle(TrackReceipt::Loaded(receipt), &mut rig.outbox());
     track
@@ -477,25 +530,48 @@ fn a_change_before_the_load_applies_at_once_and_starts_the_lane_there() {
     assert!((track.snapshot().speed - 1.25).abs() < f32::EPSILON);
 }
 
-
 #[kithara::test]
 fn failed_deck_event_preserves_item_identity_and_the_first_terminal_cause() {
-    use kithara_render::bridge::PlaybackFault;
     use kithara_audio::TrackFailureKind;
+    use kithara_render::bridge::PlaybackFault;
     let mut rig = rig();
     let mut player = track(A);
     let item = player.snapshot().item;
     player.status = TrackStatus::Playing { since: frame(0) };
     let fault = PlaybackFault::Source(TrackFailureKind::SourceCancelled);
-    player.settle(TrackReceipt::Event(DeckEvent::Failed { slot: A, at: frame(7), fault }), &mut rig.outbox());
+    player.settle(
+        TrackReceipt::Event(DeckEvent::Failed {
+            slot: A,
+            at: frame(7),
+            fault,
+        }),
+        &mut rig.outbox(),
+    );
     let terminal = player.snapshot();
     assert_eq!(terminal.item, item);
     assert_eq!(terminal.slot, A);
-    assert_eq!(terminal.status, TrackStatus::Failed { at: frame(7), fault });
+    assert_eq!(
+        terminal.status,
+        TrackStatus::Failed {
+            at: frame(7),
+            fault
+        }
+    );
     for event in [
-        DeckEvent::Failed { slot: A, at: frame(8), fault: PlaybackFault::Source(TrackFailureKind::ChannelClosed) },
-        DeckEvent::Ended { slot: A, at: frame(9) },
-        DeckEvent::Failed { slot: B, at: frame(10), fault },
+        DeckEvent::Failed {
+            slot: A,
+            at: frame(8),
+            fault: PlaybackFault::Source(TrackFailureKind::ChannelClosed),
+        },
+        DeckEvent::Ended {
+            slot: A,
+            at: frame(9),
+        },
+        DeckEvent::Failed {
+            slot: B,
+            at: frame(10),
+            fault,
+        },
     ] {
         player.settle(TrackReceipt::Event(event), &mut rig.outbox());
         assert_eq!(player.snapshot().item, item);
@@ -508,15 +584,26 @@ fn failed_deck_event_preserves_item_identity_and_the_first_terminal_cause() {
 #[case::stale(false)]
 #[case::paused(true)]
 fn stale_or_paused_failure_does_not_change_the_scoped_player(#[case] paused: bool) {
-    use kithara_render::bridge::PlaybackFault;
     use kithara_audio::{DecodeErrorKind, TrackFailureKind};
+    use kithara_render::bridge::PlaybackFault;
     let mut rig = rig();
     let mut player = track(A);
-    player.status = if paused { TrackStatus::Paused { at: Position::ZERO } } else { TrackStatus::Playing { since: frame(8) } };
+    player.status = if paused {
+        TrackStatus::Paused { at: Position::ZERO }
+    } else {
+        TrackStatus::Playing { since: frame(8) }
+    };
     let before = player.snapshot();
-    player.settle(TrackReceipt::Event(DeckEvent::Failed {
-        slot: A, at: frame(7), fault: PlaybackFault::Source(TrackFailureKind::Decode { kind: DecodeErrorKind::InvalidData }),
-    }), &mut rig.outbox());
+    player.settle(
+        TrackReceipt::Event(DeckEvent::Failed {
+            slot: A,
+            at: frame(7),
+            fault: PlaybackFault::Source(TrackFailureKind::Decode {
+                kind: DecodeErrorKind::InvalidData,
+            }),
+        }),
+        &mut rig.outbox(),
+    );
     assert_eq!(player.snapshot().item, before.item);
     assert_eq!(player.snapshot().status, before.status);
 }

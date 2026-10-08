@@ -365,20 +365,11 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
         None
     }
 
-    /// Wait for data in range to be available.
-    ///
-    /// `timeout` is the maximum wait time before returning an
-    /// implementation-defined non-ready outcome (typically a typed
-    /// "budget exceeded" error). Pass `None` to wait until the range
-    /// is ready or the source's internal cancel signal fires — used
-    /// for [`Stream::seek`](crate::Stream::seek), where giving up on
-    /// a timer would silently drop the seek under slow connections.
-    /// `Some(WAIT_RANGE_TIMEOUT)` is the cooperative-yield path used
-    /// by the audio worker's read loop.
+    /// Wait for `range`; `None` waits for readiness or source cancellation without a wall-clock budget.
+    /// A supplied timeout permits an implementation-defined non-ready outcome and cooperative worker yield.
     ///
     /// # Errors
-    ///
-    /// Returns an error if the wait is cancelled or the underlying storage fails.
+    /// Returns cancellation or underlying storage failures.
     fn wait_range(
         &mut self,
         range: Range<u64>,

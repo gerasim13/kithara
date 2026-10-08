@@ -1,19 +1,22 @@
-use super::{
-    chunk_position,
-    cursor::{ChunkCursor, ReadBuffer, source_spans_coalesce},
+use std::{
+    marker::PhantomData,
+    num::{NonZeroU32, NonZeroUsize},
 };
-use crate::{
-    AudioControl, AudioRead, AudioReadError, FailureSource, AudioSession, AudioSource, ChunkOutcome, Fetch,
-    PendingReason, ReadOutcome, SeekOutcome, SourceEnd, SourceSpan, TrackStep,
-};
+
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stream::{Activity, ActivityWriter, PlayheadWrite};
-use std::{
-    marker::PhantomData,
-    num::{NonZeroU32, NonZeroUsize},
+
+use super::{
+    chunk_position,
+    cursor::{ChunkCursor, ReadBuffer, source_spans_coalesce},
+};
+use crate::{
+    AudioControl, AudioRead, AudioReadError, AudioSession, AudioSource, ChunkOutcome,
+    FailureSource, Fetch, PendingReason, ReadOutcome, SeekOutcome, SourceEnd, SourceSpan,
+    TrackStep,
 };
 
 /// Open decoded source owned and driven by one lane thread.
@@ -244,15 +247,15 @@ impl<S> Audio<S> {
                     Err(_) if written > 0 => break,
                     Err(error) => return Err(error),
                     Ok(outcome) => match outcome {
-                    ChunkOutcome::Chunk(chunk) => {
-                        self.cursor.begin_chunk(&chunk);
-                        self.current_chunk = Some(*chunk);
-                    }
-                    ChunkOutcome::Eof { .. } => {
-                        eof = true;
-                        break;
-                    }
-                    ChunkOutcome::Pending { .. } => break,
+                        ChunkOutcome::Chunk(chunk) => {
+                            self.cursor.begin_chunk(&chunk);
+                            self.current_chunk = Some(*chunk);
+                        }
+                        ChunkOutcome::Eof { .. } => {
+                            eof = true;
+                            break;
+                        }
+                        ChunkOutcome::Pending { .. } => break,
                     },
                 }
             }

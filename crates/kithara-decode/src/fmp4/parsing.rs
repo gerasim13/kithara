@@ -126,21 +126,9 @@ where
     })
 }
 
-/// Locate the `mp4a` sample entry inside the init bytes and pull the
-/// raw `DecoderSpecificInfo` (descriptor tag 0x05) bytes out of its
-/// `esds` box.
-///
-/// `re_mp4` exposes the descriptor only as three parsed fields
-/// (profile / `freq_index` / `chan_conf`) and discards the rest, so
-/// for HE-AAC v1/v2 with explicit AOT-29 signalling — which encodes
-/// extension-AOT, extension sample-rate index, and (for PS) a PS
-/// presence flag in bytes 3+ — a reconstruction from those three
-/// fields drops everything past byte 2 and ends with fdk-aac
-/// rejecting the config as "unexpected end of bitstream". This path
-/// walks the boxes manually, finds the `esds` payload, decodes the
-/// MPEG-4 `SLConfigDescriptor` / `ESDescriptor` / `DecoderConfigDescriptor`
-/// / `DecoderSpecificInfo` descriptor chain by tag, and returns the
-/// DSI body verbatim.
+/// Extract the raw `DecoderSpecificInfo` body from the `mp4a`/`esds` descriptor chain.
+/// `re_mp4` retains only profile/rate/channel fields, losing explicit HE-AAC extension bytes;
+/// returning the body verbatim preserves the complete configuration for fdk-aac.
 fn extract_aac_asc_raw(bytes: &[u8]) -> DecodeResult<Vec<u8>> {
     const FOURCC_MP4A: u32 = 0x6d70_3461;
     const FOURCC_ESDS: u32 = 0x6573_6473;

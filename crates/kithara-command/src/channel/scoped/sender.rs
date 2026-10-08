@@ -3,9 +3,8 @@ use std::task::Waker;
 use futures::task::AtomicWaker;
 use kithara_platform::sync::Arc;
 use ringbuf::{
-    HeapCons, HeapRb,
+    HeapCons, HeapProd,
     traits::{Consumer, Observer, Producer},
-    wrap::{FrozenProd, Wrap},
 };
 
 use super::{Closed, Item, OpenError, ScopeId, ScopeReply, ScopedReceipt, Slot, StaleScope, State};
@@ -14,11 +13,12 @@ use crate::{
     channel::{book::Book, gate::Gate, sender::Sent},
 };
 
-type Commands<R, M> = FrozenProd<ringbuf::Arc<HeapRb<Item<R, M>>>>;
+type Commands<R, M> = HeapProd<Item<R, M>>;
 
 /// The owner-thread producer, staging every level until one explicit publication.
 pub struct ScopedSender<R: Protocol, M: Protocol> {
     pub(super) commands: Commands<R, M>,
+    pub(super) staged: Vec<Item<R, M>>,
     pub(super) root_receipts: HeapCons<crate::Receipt<R>>,
     pub(super) scope_receipts: HeapCons<ScopeReply<M>>,
     pub(super) root: Book<R>,
@@ -84,11 +84,11 @@ impl<R: Protocol, M: Protocol> ScopedSender<R, M> {
         if slot.generation != id.generation || slot.state != State::Open {
             return Err(StaleScope);
         }
-        if self.commands.is_full() {
-            self.commands.fetch();
-        }
-        let pushed = self.commands.try_push(Item::Close(id));
-        debug_assert!(pushed.is_ok(), "each scope reserves one Close credit");
+        debug_assert!(
+            self.staged.len() < self.commands.vacant_len(),
+            "each scope reserves one Close credit"
+        );
+        self.staged.push(Item::Close(id));
         slot.state = State::Closing;
         Ok(())
     }
@@ -99,18 +99,20 @@ impl<R: Protocol, M: Protocol> ScopedSender<R, M> {
     /// On [`Closed`], discards unpublished batches on the owner thread.
     pub fn publish(&mut self) -> Result<(), Closed> {
         if self.gate.is_closed() {
-            self.commands.discard();
+            self.staged.clear();
             return Err(Closed);
         }
-        if self.commands.write_index() == self.commands.rb().write_index() {
+        if self.staged.is_empty() {
             return Ok(());
         }
         if !self.gate.enter() {
-            self.commands.discard();
+            self.staged.clear();
             return Err(Closed);
         }
-        self.commands.commit();
+        let staged = self.staged.len();
+        let published = self.commands.push_iter(self.staged.drain(..));
         self.gate.leave();
+        debug_assert_eq!(published, staged, "admitted pass fits in the command ring");
         Ok(())
     }
 
@@ -181,7 +183,8 @@ impl<R: Protocol, M: Protocol> Port<R> for ScopedSender<R, M> {
             return Err(SendError::Closed(batch));
         }
         push(
-            &mut self.commands,
+            &self.commands,
+            &mut self.staged,
             &mut self.next,
             &mut self.root,
             when,
@@ -207,7 +210,8 @@ impl<R: Protocol, M: Protocol> Port<M> for ScopeSender<'_, R, M> {
             return Err(SendError::Closed(batch));
         }
         push(
-            &mut self.sender.commands,
+            &self.sender.commands,
+            &mut self.sender.staged,
             &mut self.sender.next,
             &mut slot.book,
             when,
@@ -228,7 +232,8 @@ impl<R: Protocol, M: Protocol> Port<M> for ScopeSender<'_, R, M> {
 }
 
 fn push<R: Protocol, M: Protocol, P: Protocol>(
-    commands: &mut Commands<R, M>,
+    commands: &Commands<R, M>,
+    staged: &mut Vec<Item<R, M>>,
     next: &mut Seq,
     book: &mut Book<P>,
     when: When<P::Clock>,
@@ -238,21 +243,12 @@ fn push<R: Protocol, M: Protocol, P: Protocol>(
     if !book.admits(&batch) {
         return Err(SendError::Target(batch));
     }
-    if book.available() == 0 {
+    if book.available() == 0 || commands.vacant_len() <= staged.len() {
         return Err(SendError::Full(batch));
-    }
-    if commands.is_full() {
-        commands.fetch();
     }
     let seq = *next;
     let basis = batch.basis.clone();
-    if let Err(item) = commands.try_push(wrap(Sent { batch, seq, when })) {
-        match item {
-            Item::Root(_) | Item::Scope { .. } | Item::Close(_) => {
-                unreachable!("per-level credits bound the command ring")
-            }
-        }
-    }
+    staged.push(wrap(Sent { batch, seq, when }));
     book.spend(when, seq, &basis);
     *next = seq.next();
     Ok(seq)
@@ -260,6 +256,6 @@ fn push<R: Protocol, M: Protocol, P: Protocol>(
 
 impl<R: Protocol, M: Protocol> Drop for ScopedSender<R, M> {
     fn drop(&mut self) {
-        self.commands.discard();
+        self.staged.clear();
     }
 }

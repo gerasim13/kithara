@@ -1,8 +1,7 @@
 use std::{
     mem,
     num::NonZeroUsize,
-    ops::Range,
-    ops::{Deref, DerefMut},
+    ops::{Deref, DerefMut, Range},
     task::{Context, Poll},
 };
 
@@ -800,7 +799,11 @@ fn the_sender_bases_each_batch_on_the_last_one_that_shifts_its_target() {
     drop(outcomes(&mut sender));
 
     let basis = sender.basis(Slot(0));
-    let late = send(&mut sender, When::At(Frame(0)), batch(3, &[(Slot(0), basis)]));
+    let late = send(
+        &mut sender,
+        When::At(Frame(0)),
+        batch(3, &[(Slot(0), basis)]),
+    );
     assert_eq!(sender.basis(Slot(0)), Some(late));
     assert!(run_block(&mut inbox, BLOCK as u64, BLOCK).is_empty());
     assert_eq!(
@@ -1134,11 +1137,7 @@ fn delayed_applied_receipt_does_not_roll_back_sender_basis() {
     assert!(inbox.complete(committed, ()));
     assert_eq!(outcomes(&mut sender), [(committed, applied(64))]);
     assert_eq!(sender.basis(Slot(0), When::Next), Some(later));
-    let following = send(
-        &mut sender,
-        When::Next,
-        batch(3, &[(Slot(0), Some(later))]),
-    );
+    let following = send(&mut sender, When::Next, batch(3, &[(Slot(0), Some(later))]));
     assert_eq!(run_block(&mut inbox, 256, BLOCK), [(0, 3)]);
     assert_eq!(outcomes(&mut sender), [(following, applied(256))]);
 }

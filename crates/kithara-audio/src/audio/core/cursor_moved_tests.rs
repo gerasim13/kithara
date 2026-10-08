@@ -1,9 +1,5 @@
-use super::{Audio, AudioContext};
-use crate::{
-    AudioSource, Fetch, ReadOutcome, SeekOutcome, SourceSpan, TrackStep,
-    WaitingReason,
-    test_pools::{Pools, pools, sample_buffer},
-};
+use std::{collections::VecDeque, num::NonZeroU32};
+
 use kithara_decode::TrackMetadata;
 use kithara_events::EventBus;
 use kithara_platform::{CancelScope, sync::Arc, time::Duration};
@@ -11,7 +7,12 @@ use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stream::{ActivityWriter, PlayheadState};
 use kithara_test_fixtures::unit_fixtures::cursor_half;
 use kithara_test_utils::kithara;
-use std::{collections::VecDeque, num::NonZeroU32};
+
+use super::{Audio, AudioContext};
+use crate::{
+    AudioSource, Fetch, ReadOutcome, SeekOutcome, SourceSpan, TrackStep, WaitingReason,
+    test_pools::{Pools, pools, sample_buffer},
+};
 struct StagedSource {
     chunks: VecDeque<AudioChunk>,
     spec: AudioSpec,

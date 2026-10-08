@@ -63,20 +63,28 @@ impl CorrectionPlan {
         Some((SpeedCurve::Steps(steps.into()), frames))
     }
 
-    fn frame_steps(&self, sample_rate: NonZeroU32) -> impl Iterator<Item = Option<(u64, f32)>> + '_ {
+    fn frame_steps(
+        &self,
+        sample_rate: NonZeroU32,
+    ) -> impl Iterator<Item = Option<(u64, f32)>> + '_ {
         let mut seconds = 0.0;
         let mut previous: Option<u64> = None;
         self.steps.iter().map(move |step| {
-            if !step.speed.is_finite() || step.speed < MIN_SPEED
-                || !step.seconds.is_finite() || step.seconds < 0.0
+            if !step.speed.is_finite()
+                || step.speed < MIN_SPEED
+                || !step.seconds.is_finite()
+                || step.seconds < 0.0
             {
                 return None;
             }
             let next_seconds = seconds + step.seconds;
             let duration = next_seconds * f64::from(sample_rate.get());
             let rounded = (seconds * f64::from(sample_rate.get())).round();
-            if !duration.is_finite() || duration >= u64::MAX as f64
-                || !rounded.is_finite() || rounded < 0.0 || rounded >= u64::MAX as f64
+            if !duration.is_finite()
+                || duration >= u64::MAX as f64
+                || !rounded.is_finite()
+                || rounded < 0.0
+                || rounded >= u64::MAX as f64
             {
                 return None;
             }
@@ -235,11 +243,23 @@ pub fn correction(from: f32, to: f32, error: PhaseError, epsilon: f32) -> Correc
     }
 }
 
-pub(crate) fn checked_correction(from: f32, to: f32, error: PhaseError, epsilon: f32) -> Option<CorrectionPlan> {
-    if !from.is_finite() || from < MIN_SPEED || !to.is_finite() || to < MIN_SPEED
-        || !epsilon.is_finite() || epsilon <= 0.0
-        || !error.seconds.is_finite() || !error.period.is_finite() || error.period <= 0.0
-        || !error.beat_seconds.is_finite() || error.beat_seconds <= 0.0
+pub(crate) fn checked_correction(
+    from: f32,
+    to: f32,
+    error: PhaseError,
+    epsilon: f32,
+) -> Option<CorrectionPlan> {
+    if !from.is_finite()
+        || from < MIN_SPEED
+        || !to.is_finite()
+        || to < MIN_SPEED
+        || !epsilon.is_finite()
+        || epsilon <= 0.0
+        || !error.seconds.is_finite()
+        || !error.period.is_finite()
+        || error.period <= 0.0
+        || !error.beat_seconds.is_finite()
+        || error.beat_seconds <= 0.0
     {
         return None;
     }
@@ -250,7 +270,9 @@ pub(crate) fn checked_correction(from: f32, to: f32, error: PhaseError, epsilon:
         current = step_towards(current, to, epsilon)?;
         let seconds = if current == to { 0.0 } else { 1.0 };
         remaining += (f64::from(current) - f64::from(to)) * seconds;
-        if !remaining.is_finite() { return None; }
+        if !remaining.is_finite() {
+            return None;
+        }
         steps.push(CorrectionStep {
             speed: current,
             seconds,
@@ -258,10 +280,14 @@ pub(crate) fn checked_correction(from: f32, to: f32, error: PhaseError, epsilon:
     }
     if remaining != 0.0 {
         let target = to - remaining.signum() as f32 * epsilon;
-        if !target.is_finite() || target < MIN_SPEED { return None; }
+        if !target.is_finite() || target < MIN_SPEED {
+            return None;
+        }
         let adjusted = step_towards(to, target, epsilon)?;
         let seconds = -remaining / (f64::from(adjusted) - f64::from(to));
-        if !seconds.is_finite() || seconds < 0.0 { return None; }
+        if !seconds.is_finite() || seconds < 0.0 {
+            return None;
+        }
         steps.push(CorrectionStep {
             speed: adjusted,
             seconds,
@@ -284,7 +310,8 @@ fn step_towards(from: f32, to: f32, epsilon: f32) -> Option<f32> {
             next.next_up()
         };
     }
-    (next.is_finite() && next >= MIN_SPEED && next != from && (next - from).abs() <= epsilon).then_some(next)
+    (next.is_finite() && next >= MIN_SPEED && next != from && (next - from).abs() <= epsilon)
+        .then_some(next)
 }
 
 #[cfg(test)]

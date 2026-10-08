@@ -29,20 +29,11 @@ pub trait AudioRead {
         Duration::from_secs(0)
     }
 
-    /// Read the next decoded chunk with full metadata.
-    ///
-    /// Returns [`ChunkOutcome::Chunk`] or [`ChunkOutcome::Eof`].
-    /// Source / decoder failures surface as `Err(AudioReadError)`.
-    /// Returns the unread tail of any partially-consumed chunk from previous
-    /// [`AudioRead::read`] calls.
-    ///
-    /// Default implementation reports immediate natural EOF — readers
-    /// without chunk-level support shouldn't be polled this way.
+    /// Read a decoded chunk with metadata, yielding the unread tail of a partial [`AudioRead::read`].
+    /// Returns a chunk or natural EOF; the default reports immediate EOF without chunk-level support.
     ///
     /// # Errors
-    ///
-    /// Returns `Err(AudioReadError)` for terminal source failures, same
-    /// semantics as [`Self::read`].
+    /// Returns terminal source failures with the same semantics as [`Self::read`].
     fn next_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError> {
         Ok(ChunkOutcome::Eof {
             position: self.position(),
@@ -52,19 +43,11 @@ pub trait AudioRead {
     /// Get current playback position.
     fn position(&self) -> Duration;
 
-    /// Read interleaved audio samples.
-    ///
-    /// Drives the source on its owning thread and copies available PCM.
-    /// The returned [`ReadOutcome`] distinguishes a
-    /// productive read from natural EOF; `count` is interleaved
-    /// samples, so `count / channels` frames. Source / decoder
-    /// failures surface as `Err(AudioReadError)`.
+    /// Read interleaved samples, driving the source on its owning thread and copying available PCM.
+    /// [`ReadOutcome`] distinguishes data from natural EOF; count is samples, or count/channels frames.
     ///
     /// # Errors
-    ///
-    /// Returns `Err(AudioReadError)` for terminal source failures:
-    /// source I/O, decoder fault, or backend error. The error
-    /// is one-way — once returned, subsequent reads continue to fail.
+    /// Terminal source I/O, decoder or backend failures persist on subsequent reads.
     fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError>;
 
     /// Read deinterleaved (planar) audio samples.
@@ -120,7 +103,6 @@ pub trait AudioControl {
     /// Pending input and natural EOF do not constitute setup failures.
     ///
     /// # Errors
-    ///
     /// Returns a source or decoder failure.
     fn preload(&mut self) -> Result<(), AudioReadError> {
         Ok(())

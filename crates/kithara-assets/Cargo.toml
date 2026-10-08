@@ -70,7 +70,6 @@ kithara-test-utils = { path = "../kithara-test-utils", features = ["usdt", "mock
 aes = { workspace = true }
 bytes = { workspace = true }
 cbc = { workspace = true }
-serial_test = { workspace = true }
 tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 

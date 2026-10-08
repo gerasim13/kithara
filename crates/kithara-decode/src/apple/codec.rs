@@ -283,8 +283,8 @@ impl AppleCodec {
 }
 
 impl FrameCodec for AppleCodec {
+    /// Equal-rate AAC already emits complete packets; conversion and other codecs need a tail drain.
     fn needs_eof_drain(&self, _source_rate: u32) -> bool {
-        // Equal-rate AAC already emits full packets; only conversion has a tail to drain.
         self.spec.sample_rate.get() != self.source_sample_rate
             || !matches!(
                 self.codec,
@@ -508,26 +508,10 @@ fn parse_pcm_extra_data(extra: &[u8]) -> DecodeResult<AudioStreamBasicDescriptio
     })
 }
 
-/// Derive the input ASBD + ESDS-wrapped cookie for an AAC track using
-/// Apple's canonical `kAudioFormatProperty_FormatList` discovery path.
-///
-/// Why not manual ASBD construction?
-///
-/// For plain AAC-LC, `format_id = kAudioFormatMPEG4AAC` + raw ASC as
-/// `MagicCookie` works. For HE-AAC v1 (SBR, AOT=5) and HE-AAC v2 (PS,
-/// AOT=29) with **explicit** signalling in the ASC, `audio_converter_new`
-/// silently builds an LC pipeline and `SetProperty(MagicCookie)`
-/// returns `'!dat'`. The codec then emits `'bada'` (`kAudioCodecBadDataError`)
-/// on the first `FillComplexBuffer`. Apple's documented fix is to let
-/// `AudioFormat` parse the ESDS and hand back the correct ASBD via
-/// `kAudioFormatProperty_FormatList`, which enumerates every layer the
-/// cookie can produce (sorted MOST → LEAST rich), then use the richest
-/// entry's ASBD for `audio_converter_new`.
-///
-/// `AudioFormat` APIs reject raw ASC bytes (also `'!dat'`) — Apple expects
-/// an ESDS atom body (the same shape `audio_file_get_property_raw(MagicCookieData)`
-/// returns for m4a files), so we wrap the demuxer's raw ASC in the
-/// minimum ISO/IEC 14496-1 descriptor chain first.
+/// Build the AAC ASBD and ESDS cookie from Apple's richest `FormatList` entry.
+/// Manual HE-AAC ASBD construction selects an LC pipeline, rejecting the cookie as `'!dat'`
+/// and frames as `'bada'`. `FormatList` also rejects raw ASC, so wrap it in the minimum
+/// ISO/IEC 14496-1 descriptor chain before discovery.
 fn build_aac_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
     if track.extra_data.is_empty() {
         let asbd = AudioStreamBasicDescription {

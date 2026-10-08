@@ -1,7 +1,8 @@
-use crate::pipeline::{decode::DecoderGeneration, stream::shared::SharedStream};
 use kithara_decode::DecoderSeekOutcome;
 use kithara_stream::{PlayheadWrite, StreamType};
 use num_traits::cast::ToPrimitive;
+
+use crate::pipeline::{decode::DecoderGeneration, stream::shared::SharedStream};
 
 pub(crate) fn commit_outcome<T: StreamType>(
     active: &DecoderGeneration,

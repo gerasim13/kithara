@@ -222,8 +222,8 @@ impl Trajectory {
             let position = position.ratio().ok_or(ElasticError::SampleCountOverflow)?;
             let denominator = position.denominator.get();
             let remainder = position.numerator % denominator;
-            let frames = position.numerator / denominator
-                + u128::from(remainder >= denominator - remainder);
+            let frames =
+                position.numerator / denominator + u128::from(remainder >= denominator - remainder);
             self.position = Some(Phase::Origin {
                 frames: u64::try_from(frames).map_err(|_| ElasticError::SampleCountOverflow)?,
                 fraction: 0,

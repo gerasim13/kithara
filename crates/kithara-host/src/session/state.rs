@@ -206,9 +206,13 @@ impl RootView {
 
 pub(crate) enum SessionStream {
     #[cfg(not(target_arch = "wasm32"))]
-    Realtime { _backend: firewheel::cpal::CpalStream },
+    Realtime {
+        _backend: firewheel::cpal::CpalStream,
+    },
     #[cfg(target_arch = "wasm32")]
-    Realtime { _backend: firewheel_web_audio::WebAudioBackend },
+    Realtime {
+        _backend: firewheel_web_audio::WebAudioBackend,
+    },
     #[cfg(feature = "offline")]
     Offline(crate::session::offline::backend::OfflineStream),
 }

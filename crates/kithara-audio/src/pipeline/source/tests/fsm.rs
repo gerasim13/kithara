@@ -1,9 +1,10 @@
-use super::rebuild::{route_signal_source, test_source};
-use crate::{AudioSource, SeekOutcome, TrackStep, WaitingReason, pipeline::source::OwnerPhase};
 use kithara_platform::time::Duration;
 use kithara_stream::SourcePhase;
 use kithara_test_fixtures::unit_fixtures::{RoutePcm, route_pcm};
 use kithara_test_utils::kithara;
+
+use super::rebuild::{route_signal_source, test_source};
+use crate::{AudioSource, SeekOutcome, TrackStep, WaitingReason, pipeline::source::OwnerPhase};
 #[kithara::test(tokio)]
 async fn is_terminal_for_each_phase() {
     let mut fixture = test_source(0).await;
