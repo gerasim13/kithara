@@ -13,7 +13,7 @@ use kithara_events::EventBus;
 use kithara_platform::{sync::Arc, thread::ThreadClass, time::Duration};
 use kithara_signal::{AudioChunkInfo, FrameCount};
 use kithara_stream::{Stream, StreamType};
-use kithara_warp::{SpeedCurve, Warp};
+use kithara_warp::Warp;
 use kithara_worker::{
     Dispatcher, DispatcherConfig, TaskConfig, TaskError, TaskHandle, Worker, WorkerConfig,
 };
@@ -221,13 +221,15 @@ where
             position,
         );
         let activity = audio.take_activity_writer();
-        let SpeedCurve::Constant(speed) = start.speed else {
-            return Err(LoadRefusal::Open(DecodeError::InvalidData {
-                detail: "unsupported initial lane speed curve",
-            }));
-        };
-        let warp = Warp::new((), &warp.starting_at(speed, start.keylock, start.backend));
+        let warp = Warp::new(
+            (),
+            &warp.starting_at(warp.speed(), start.keylock, start.backend),
+        );
         let mut renderer = warp.renderer(spec, self.pools().clone());
+        renderer
+            .set_speed(start.speed, 0)
+            .map_err(|error| DecodeError::audio_stream("initial lane speed curve", error))
+            .map_err(decode_refusal)?;
         renderer
             .prepare_engine_latency(spec)
             .map_err(|error| DecodeError::audio_stream("lane engine preparation", error))

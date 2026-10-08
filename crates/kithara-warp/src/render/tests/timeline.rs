@@ -102,7 +102,8 @@ fn manual_ramp_to_the_rate_limit_keeps_quantized_requests_bounded() {
     let mut fx = Warp::new((), &config).renderer(spec(), crate::test_pools::pools());
     let pools = fx.pools.clone();
     fx.prepare(spec());
-    fx.set_speed(SpeedCurve::Constant(4.0), 1);
+    fx.set_speed(SpeedCurve::Constant(4.0), 1)
+        .expect("valid speed");
     let mut source_frame = 0_u64;
     let mut output_frames = 0;
     for _ in 0..400 {
@@ -373,7 +374,8 @@ fn pending_span_is_committed_before_live_unity_passthrough(
     pending.meta.end_timestamp = Duration::from_millis(10);
     assert!(render_serviced(&mut fx, pending).is_none());
 
-    fx.set_speed(SpeedCurve::Constant(1.0), 1);
+    fx.set_speed(SpeedCurve::Constant(1.0), 1)
+        .expect("valid speed");
     let mut unity = chunk(
         &pools,
         &source[usize::from(consts::CH)..2 * usize::from(consts::CH)],
@@ -470,7 +472,9 @@ fn live_unity_transition_drains_active_backend_tail(
         "completed tail releases the held source frontier"
     );
 
-    reference.set_speed(SpeedCurve::Constant(1.0), 1);
+    reference
+        .set_speed(SpeedCurve::Constant(1.0), 1)
+        .expect("valid speed");
     let mut reference_unity = chunk(&pools, &source[split..]);
     reference_unity.meta.frame_offset = u64::try_from(ACTIVE_FRAMES).expect("fixture fits u64");
     let reference_unity = render_serviced(&mut reference, reference_unity)
@@ -488,7 +492,8 @@ fn live_unity_transition_drains_active_backend_tail(
     assert_eq!(live_active.frames(), reference_active.frames());
     assert_eq!(live.rendered_source_end(), Some(held_frontier));
 
-    live.set_speed(SpeedCurve::Constant(1.0), 1);
+    live.set_speed(SpeedCurve::Constant(1.0), 1)
+        .expect("valid speed");
     let mut live_unity = chunk(&pools, &source[split..]);
     live_unity.meta.frame_offset = u64::try_from(ACTIVE_FRAMES).expect("fixture fits u64");
     let unity_ptr = live_unity.samples.as_ptr();
@@ -583,7 +588,9 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
     )
     .expect("the no-debt span emits two frames");
     assert_eq!(reference_first.frames(), 2);
-    reference.set_speed(SpeedCurve::Constant(1.0), 1);
+    reference
+        .set_speed(SpeedCurve::Constant(1.0), 1)
+        .expect("valid speed");
     let mut reference_unity = chunk(&pools, &source[2 * usize::from(consts::CH)..]);
     reference_unity.meta.frame_offset = 2;
     let reference_transition = render_serviced(&mut reference, reference_unity)
@@ -604,7 +611,8 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
         .expect("the first span rounds 1.6 frames up to two");
     assert_eq!(first.frames(), 2);
 
-    fx.set_speed(SpeedCurve::Constant(1.0), 1);
+    fx.set_speed(SpeedCurve::Constant(1.0), 1)
+        .expect("valid speed");
     let mut unity = chunk(&pools, &source[2 * usize::from(consts::CH)..]);
     unity.meta.frame_offset = 2;
     let transition = render_serviced(&mut fx, unity).expect("the debt transition starts its tail");
@@ -651,7 +659,8 @@ fn reset_discards_pending_span_before_new_timeline(
     assert!(render_serviced(&mut fx, chunk(&pools, &source[..usize::from(consts::CH)])).is_none());
 
     fx.reset();
-    fx.set_speed(SpeedCurve::Constant(1.0), 1);
+    fx.set_speed(SpeedCurve::Constant(1.0), 1)
+        .expect("valid speed");
     fx.prepare(spec());
     let mut landed = chunk(&pools, &source[usize::from(consts::CH)..]);
     landed.meta.frame_offset = 100;
@@ -740,7 +749,8 @@ fn a_settled_target_keeps_its_exact_multiplier() {
 fn a_prepared_smoothed_quantum_keeps_the_identity_of_its_request() {
     let mut fx = renderer(&WarpConfig::builder().speed(1.0).build());
     fx.applied_speed = moving_target_renderer().applied_speed;
-    fx.set_speed(SpeedCurve::Constant(1.25), 1);
+    fx.set_speed(SpeedCurve::Constant(1.25), 1)
+        .expect("valid speed");
     let target = fx.rate;
     let expected_speed = fx
         .preview_speed(target.speed(), 128)

@@ -24,17 +24,17 @@ pub struct SourceSpan {
     #[field(get, copy, with)]
     render_revision: u64,
     step: u64,
+    step_change: i64,
 }
 
 impl SourceSpan {
     /// Source position at an output boundary, retaining rational phase.
     #[must_use]
     pub fn position_at(self, output_frame: u64) -> Option<Duration> {
-        let point = self.for_output_range(output_frame..output_frame)?;
-        let denominator = u128::from(point.denominator.get()) * u128::from(point.sample_rate.get());
-        let seconds = u64::try_from(point.numerator / denominator).ok()?;
-        let nanos =
-            u32::try_from((point.numerator % denominator) * 1_000_000_000 / denominator).ok()?;
+        let (numerator, denominator) = self.source_ratio_at(output_frame)?;
+        let denominator = u128::from(denominator.get()) * u128::from(self.sample_rate.get());
+        let seconds = u64::try_from(numerator / denominator).ok()?;
+        let nanos = u32::try_from((numerator % denominator) * 1_000_000_000 / denominator).ok()?;
         Some(Duration::new(seconds, nanos))
     }
 
@@ -48,15 +48,100 @@ impl SourceSpan {
             (divisor, remainder) = (remainder, divisor % remainder);
         }
         let denominator = NonZeroU64::new(output_frames.checked_div(divisor)?)?;
-        Some(Self {
-            numerator: u128::from(start) * u128::from(denominator.get()),
-            step: source_frames / divisor,
+        Self::from_rational(
+            u128::from(start) * u128::from(denominator.get()),
+            source_frames / divisor,
+            denominator,
+            sample_rate,
+            output_frames,
+        )
+    }
+
+    /// Creates a checked affine mapping with a fractional source origin.
+    #[must_use]
+    pub fn from_rational(
+        start_numerator: u128,
+        step_numerator: u64,
+        denominator: NonZeroU64,
+        sample_rate: NonZeroU32,
+        output_frames: u64,
+    ) -> Option<Self> {
+        Self::from_ramp(
+            start_numerator,
+            step_numerator,
+            0,
+            denominator,
+            sample_rate,
+            output_frames,
+        )
+    }
+
+    /// Creates a checked mapping whose frame advances form an arithmetic progression.
+    /// Boundary `n` is `(start + step*n + step_change*n*(n-1)/2) / denominator`.
+    #[must_use]
+    pub fn from_ramp(
+        start_numerator: u128,
+        step_numerator: u64,
+        step_change: i64,
+        denominator: NonZeroU64,
+        sample_rate: NonZeroU32,
+        output_frames: u64,
+    ) -> Option<Self> {
+        if output_frames == 0 {
+            return None;
+        }
+        let span = Self {
+            numerator: start_numerator,
+            step: step_numerator,
+            step_change,
             denominator,
             output_frames,
             sample_rate,
             render_revision: 0,
             mapping_revision: None,
-        })
+        };
+        span.step_at(output_frames - 1)?;
+        let end = span.numerator_at(output_frames)?;
+        u64::try_from(end / u128::from(denominator.get())).ok()?;
+        Some(span)
+    }
+
+    fn step_at(self, frame: u64) -> Option<u64> {
+        u64::try_from(
+            i128::from(self.step)
+                .checked_add(i128::from(self.step_change).checked_mul(i128::from(frame))?)?,
+        )
+        .ok()
+    }
+
+    fn numerator_at(self, frame: u64) -> Option<u128> {
+        let linear = u128::from(self.step).checked_mul(u128::from(frame))?;
+        let pairs = u128::from(frame).checked_mul(u128::from(frame.saturating_sub(1)))? / 2;
+        let change = pairs.checked_mul(u128::from(self.step_change.unsigned_abs()))?;
+        let advance = if self.step_change < 0 {
+            linear.checked_sub(change)?
+        } else {
+            linear.checked_add(change)?
+        };
+        self.numerator.checked_add(advance)
+    }
+
+    /// Exact reduced decoded-source coordinate at an output boundary.
+    #[must_use]
+    pub fn source_ratio_at(self, output_frame: u64) -> Option<(u128, NonZeroU64)> {
+        if output_frame > self.output_frames {
+            return None;
+        }
+        let numerator = self.numerator_at(output_frame)?;
+        let mut divisor = u128::from(self.denominator.get());
+        let mut remainder = numerator;
+        while remainder != 0 {
+            (divisor, remainder) = (remainder, divisor % remainder);
+        }
+        Some((
+            numerator / divisor,
+            NonZeroU64::new(u64::try_from(u128::from(self.denominator.get()) / divisor).ok()?)?,
+        ))
     }
 
     /// Exclusive decoded-source frame, rounded down on the source lattice.
@@ -65,20 +150,20 @@ impl SourceSpan {
     /// Panics if the private validated mapping invariant is violated.
     #[must_use]
     pub fn end(self) -> u64 {
-        u64::try_from(
-            (self.numerator + u128::from(self.step) * u128::from(self.output_frames))
-                / u128::from(self.denominator.get()),
-        )
-        .expect("validated source mapping ends within u64")
+        let Some(end) = self.numerator_at(self.output_frames).and_then(|numerator| {
+            u64::try_from(numerator / u128::from(self.denominator.get())).ok()
+        }) else {
+            unreachable!("validated source mapping endpoint");
+        };
+        end
     }
 
     /// Joins adjacent output intervals only when their exact mappings agree.
     #[must_use]
     pub fn followed_by(self, next: Self) -> Option<Self> {
-        let boundary = self
-            .numerator
-            .checked_add(u128::from(self.step) * u128::from(self.output_frames))?;
-        if self.step != next.step
+        let boundary = self.numerator_at(self.output_frames)?;
+        if self.step_at(self.output_frames)? != next.step
+            || self.step_change != next.step_change
             || self.denominator != next.denominator
             || boundary != next.numerator
             || self.sample_rate != next.sample_rate
@@ -88,8 +173,11 @@ impl SourceSpan {
             return None;
         }
         let output_frames = self.output_frames.checked_add(next.output_frames)?;
-        self.numerator
-            .checked_add(u128::from(self.step) * u128::from(output_frames))?;
+        u64::try_from(self.numerator_at(output_frames)? / u128::from(self.denominator.get()))
+            .ok()?;
+        if output_frames > 0 {
+            self.step_at(output_frames - 1)?;
+        }
         Some(Self {
             output_frames,
             ..self
@@ -103,9 +191,12 @@ impl SourceSpan {
             return None;
         }
         Some(Self {
-            numerator: self
-                .numerator
-                .checked_add(u128::from(self.step) * u128::from(range.start))?,
+            numerator: self.numerator_at(range.start)?,
+            step: if range.start == range.end {
+                0
+            } else {
+                self.step_at(range.start)?
+            },
             output_frames: range.end - range.start,
             ..self
         })
@@ -121,8 +212,10 @@ impl SourceSpan {
     /// invariant this panics on.
     #[must_use]
     pub fn start(self) -> u64 {
-        u64::try_from(self.numerator / u128::from(self.denominator.get()))
-            .expect("validated source mapping starts within u64")
+        let Ok(start) = u64::try_from(self.numerator / u128::from(self.denominator.get())) else {
+            unreachable!("validated source mapping origin");
+        };
+        start
     }
 }
 
@@ -131,6 +224,73 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+
+    #[kithara::test]
+    fn empty_source_mapping_slices_join_without_underflow() {
+        let span = SourceSpan::from_rational(
+            1,
+            2,
+            NonZeroU64::new(2).expect("denominator"),
+            NonZeroU32::new(48_000).expect("rate"),
+            8,
+        )
+        .expect("span");
+        let empty = span.for_output_range(3..3).expect("empty slice");
+        assert_eq!(empty.followed_by(empty), Some(empty));
+        assert_eq!(empty.position_at(0), span.position_at(3));
+    }
+
+    #[kithara::test]
+    fn fractional_start_survives_a_change_to_an_integer_slope() {
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let span =
+            SourceSpan::from_rational(1, 2, NonZeroU64::new(2).expect("denominator"), rate, 8)
+                .expect("fractional source origin");
+        assert_eq!(span.position_at(0), Some(Duration::from_nanos(10_416)));
+        assert_eq!(span.position_at(3), Some(Duration::from_nanos(72_916)));
+        assert_eq!(
+            span.source_ratio_at(3),
+            Some((7, NonZeroU64::new(2).expect("denominator")))
+        );
+        assert_eq!(
+            span.for_output_range(3..8).expect("suffix").position_at(0),
+            span.position_at(3)
+        );
+    }
+
+    #[kithara::test]
+    fn rational_source_mapping_checks_its_entire_range() {
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        assert!(SourceSpan::from_rational(u128::MAX, 1, NonZeroU64::MIN, rate, 1).is_none());
+        assert!(
+            SourceSpan::from_rational(u128::from(u64::MAX), 1, NonZeroU64::MIN, rate, 1).is_none()
+        );
+        assert!(SourceSpan::from_rational(0, 1, NonZeroU64::MIN, rate, 0).is_none());
+        let standing =
+            SourceSpan::from_rational(1, 0, NonZeroU64::new(2).expect("denominator"), rate, 8)
+                .expect("standing fractional position");
+        assert_eq!(standing.position_at(8), standing.position_at(0));
+    }
+
+    #[kithara::test]
+    fn ramp_source_mapping_slices_the_analytic_integral() {
+        let rate = NonZeroU32::new(48_000).expect("rate");
+        let span = SourceSpan::from_ramp(
+            0,
+            33,
+            2,
+            NonZeroU64::new(64).expect("denominator"),
+            rate,
+            32,
+        )
+        .expect("positive ramp");
+        assert_eq!(span.source_ratio_at(32), Some((32, NonZeroU64::MIN)));
+        let first = span.for_output_range(0..7).expect("prefix");
+        let second = span.for_output_range(7..32).expect("suffix");
+        assert_eq!(second.position_at(0), span.position_at(7));
+        assert_eq!(first.followed_by(second), Some(span));
+        assert!(SourceSpan::from_ramp(0, 1, -2, NonZeroU64::MIN, rate, 2).is_none());
+    }
 
     #[kithara::test]
     fn output_positions_retain_fractional_source_phase() {

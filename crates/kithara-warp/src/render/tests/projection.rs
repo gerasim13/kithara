@@ -277,7 +277,9 @@ fn commit_keeps_callback_context_separate_from_output_identity() {
     let output_rate = renderer.rate;
     let output_map = crate::WarpMapRevision::first();
     let callback_map = output_map.checked_next().expect("fixture map advances");
-    renderer.set_speed(SpeedCurve::Constant(2.0), 1);
+    renderer
+        .set_speed(SpeedCurve::Constant(2.0), 1)
+        .expect("valid speed");
     let callback_context = RenderContext::new_linear(
         OutputContext::new(
             SessionFrame::new(1_000)..SessionFrame::new(2_000),
@@ -1191,7 +1193,9 @@ fn partial_manual_history_after_seek_keeps_the_reset_prime_contract(
                 .expect("pending storage")
                 .is_empty()
         );
-        renderer.set_speed(SpeedCurve::Constant(2.0), 1);
+        renderer
+            .set_speed(SpeedCurve::Constant(2.0), 1)
+            .expect("valid speed");
         let cue = origin + 34;
         let meta = AudioChunkInfo {
             spec: spec(),

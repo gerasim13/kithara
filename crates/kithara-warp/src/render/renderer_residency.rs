@@ -1,5 +1,7 @@
+use std::{collections::VecDeque, num::NonZeroU64};
+
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
-use kithara_signal::AudioChunkInfo;
+use kithara_signal::{AudioChunkInfo, SourceSpan};
 use kithara_stretch::ElasticError;
 use num_traits::ToPrimitive;
 
@@ -7,6 +9,7 @@ use num_traits::ToPrimitive;
 /// It contains history and lookahead, never independently scheduled output.
 pub(super) struct SourceResidency {
     pub(super) end: Option<u64>,
+    pub(super) origin: Option<u64>,
     pub(super) replacement: SampleBuffer,
     /// The tail a retiring engine drains into, with what still fades out of
     /// `replacement` blended in; it becomes `replacement` once complete.
@@ -14,6 +17,7 @@ pub(super) struct SourceResidency {
     pub(super) samples: SampleBuffer,
     pub(super) start: i64,
     pub(super) history_frames: usize,
+    mappings: VecDeque<SourceSpan>,
     pub(super) offset: usize,
     pub(super) replacement_offset: usize,
 }
@@ -31,6 +35,7 @@ impl SourceResidency {
             return Ok(());
         }
         if self.end.is_none() {
+            self.origin = Some(meta.frame_offset);
             let prefix = self
                 .history_frames
                 .min(usize::try_from(meta.frame_offset).unwrap_or(usize::MAX));
@@ -113,6 +118,49 @@ impl SourceResidency {
         self.start = 0;
         self.offset = 0;
         self.end = None;
+        self.origin = None;
+        self.mappings.clear();
+    }
+
+    pub(super) fn remember_mapping(&mut self, span: SourceSpan) -> Result<(), ElasticError> {
+        if let Some(previous) = self.mappings.back_mut()
+            && let Some(joined) = previous.followed_by(span)
+        {
+            *previous = joined;
+        } else {
+            if self.mappings.len() == self.mappings.capacity() {
+                return Err(ElasticError::PoolCapacity);
+            }
+            self.mappings.push_back(span);
+        }
+        let mut remaining =
+            u64::try_from(self.history_frames).map_err(|_| ElasticError::SampleCountOverflow)?;
+        let mut retained = 0;
+        for mapping in self.mappings.iter_mut().rev() {
+            if remaining == 0 {
+                break;
+            }
+            let frames = mapping.output_frames().min(remaining);
+            *mapping = mapping
+                .for_output_range(mapping.output_frames() - frames..mapping.output_frames())
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            remaining -= frames;
+            retained += 1;
+        }
+        while self.mappings.len() > retained {
+            self.mappings.pop_front();
+        }
+        Ok(())
+    }
+
+    pub(super) fn history_position(&self, mut before: u64) -> Option<(u128, NonZeroU64)> {
+        for span in self.mappings.iter().rev() {
+            if before <= span.output_frames() {
+                return span.source_ratio_at(span.output_frames() - before);
+            }
+            before -= span.output_frames();
+        }
+        None
     }
 
     fn make_room(&mut self, samples: usize) -> Result<(), ElasticError> {
@@ -137,6 +185,7 @@ impl SourceResidency {
     ) -> Result<Self, ElasticError> {
         let mut residency = reusable.unwrap_or_else(|| Self {
             history_frames,
+            mappings: VecDeque::new(),
             samples: pools.get::<f32>(),
             replacement: pools.get::<f32>(),
             next_replacement: pools.get::<f32>(),
@@ -144,7 +193,17 @@ impl SourceResidency {
             start: 0,
             offset: 0,
             end: None,
+            origin: None,
         });
+        let mapping_capacity = history_frames
+            .checked_add(1)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        if residency.mappings.capacity() < mapping_capacity {
+            residency
+                .mappings
+                .try_reserve(mapping_capacity - residency.mappings.len())
+                .map_err(|_| ElasticError::PoolCapacity)?;
+        }
         for (buffer, frames) in [
             (&mut residency.samples, resident_frames),
             (&mut residency.replacement, replacement_frames),

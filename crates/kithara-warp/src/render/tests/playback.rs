@@ -141,7 +141,9 @@ fn live_activation_primes_from_passthrough_history(
     assert_eq!(&unity.samples[..], &source);
 
     let revision = 1;
-    renderer.set_speed(SpeedCurve::Constant(2.0), revision);
+    renderer
+        .set_speed(SpeedCurve::Constant(2.0), revision)
+        .expect("valid speed");
     let mut meta = AudioChunkInfo {
         frame_offset: u64::try_from(cue).expect("cue fits u64"),
         spec: spec(),
@@ -195,7 +197,9 @@ fn a_speed_set_after_planning_replans_the_next_quantum(warp_sine: Vec<f32>) {
     renderer
         .prepare_quantum(input.meta, input.frames(), usize::MAX)
         .expect("test source span is plannable");
-    renderer.set_speed(SpeedCurve::Constant(1.0), 2);
+    renderer
+        .set_speed(SpeedCurve::Constant(1.0), 2)
+        .expect("valid speed");
     let input = renderer
         .render_quantum(input)
         .break_value()
@@ -634,7 +638,8 @@ fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind, warp
     let unity = render_serviced(&mut fx, chunk(&pools, &block)).expect("unity bypass emits");
     assert_eq!(&unity.samples[..], &block[..], "unity phase bypasses");
 
-    fx.set_speed(SpeedCurve::Constant(0.5), 1);
+    fx.set_speed(SpeedCurve::Constant(0.5), 1)
+        .expect("valid speed");
     let mut stretched: Vec<f32> = Vec::new();
     for _ in 0..24 {
         if let Some(c) = render_serviced(&mut fx, chunk(&pools, &block)) {

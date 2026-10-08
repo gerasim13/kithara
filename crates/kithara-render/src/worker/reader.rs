@@ -116,7 +116,11 @@ impl PcmReceiver {
     #[must_use]
     pub fn decoded_frontier(&self) -> Duration {
         match self.forward.last() {
-            Some(PcmPacket::Chunk(chunk)) => chunk.meta.end_timestamp,
+            Some(PcmPacket::Chunk(chunk)) => chunk
+                .meta
+                .source_span
+                .and_then(|span| span.position_at(span.output_frames()))
+                .unwrap_or(self.frontier),
             _ => self.frontier,
         }
     }
@@ -162,7 +166,13 @@ impl PcmReceiver {
         let packet = self.forward.try_pop();
         if let Some(PcmPacket::Chunk(chunk)) = &packet {
             self.spec = chunk.spec();
-            self.frontier = chunk.meta.end_timestamp;
+            if let Some(position) = chunk
+                .meta
+                .source_span
+                .and_then(|span| span.position_at(span.output_frames()))
+            {
+                self.frontier = position;
+            }
         }
         self.notify();
         packet

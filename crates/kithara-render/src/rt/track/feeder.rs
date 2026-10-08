@@ -198,8 +198,10 @@ impl PlayerResource {
                     && chunk.frames() == 0 =>
             {
                 self.lane.frame = chunk.meta.lane_frame;
-                self.position = chunk.meta.end_timestamp;
-                self.mapped = true;
+                if let Some(position) = chunk_position(chunk, 0..0) {
+                    self.position = position;
+                    self.mapped = true;
+                }
                 self.eof = true;
             }
             PcmPacket::Failed { segment, kind } if *segment == self.lane.segment => {
@@ -325,33 +327,12 @@ fn packet_segment(packet: &PcmPacket) -> SegmentId {
 }
 
 fn chunk_position(chunk: &AudioChunk, range: Range<usize>) -> Option<Duration> {
-    if let Some(source) = chunk.meta.source_span {
-        let start = u64::try_from(range.start).ok()?;
-        let end = u64::try_from(range.end).ok()?;
-        return source
-            .for_output_range(start..end)?
-            .position_at(end.checked_sub(start)?);
-    }
-    let offset = range.end;
-    let frames = chunk.frames();
-    if frames == 0 || offset == 0 {
-        return Some(chunk.meta.timestamp);
-    }
-    if offset >= frames {
-        return Some(chunk.meta.end_timestamp);
-    }
-    let start = chunk.meta.timestamp.as_nanos();
-    let end = chunk.meta.end_timestamp.as_nanos();
-    let delta = start.abs_diff(end).checked_mul(offset as u128)? / frames as u128;
-    let position = if end >= start {
-        start.saturating_add(delta)
-    } else {
-        start.saturating_sub(delta)
-    };
-    Some(Duration::new(
-        u64::try_from(position / 1_000_000_000).unwrap_or(u64::MAX),
-        u32::try_from(position % 1_000_000_000).unwrap_or(0),
-    ))
+    let source = chunk.meta.source_span?;
+    let start = u64::try_from(range.start).ok()?;
+    let end = u64::try_from(range.end).ok()?;
+    source
+        .for_output_range(start..end)?
+        .position_at(end.checked_sub(start)?)
 }
 
 #[cfg(test)]

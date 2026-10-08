@@ -23,11 +23,9 @@ where
             return Ok(());
         };
         let prefix_frames = activation.prefix_frames()?;
-        let (cue, sample_rate) =
-            self.rendered_source_end
-                .ok_or(ElasticError::EnginePreparation(
-                    "Warp renderer has no presented source frontier",
-                ))?;
+        let (cue, sample_rate) = self
+            .rendered_source_end
+            .unwrap_or((chunk.meta.frame_offset, chunk.meta.spec.sample_rate));
         if chunk.meta.spec.sample_rate != sample_rate {
             return Err(ElasticError::DiscontinuousSource {
                 expected: cue.to_f64().ok_or(ElasticError::SampleCountOverflow)?,
@@ -138,13 +136,13 @@ where
     }
 
     fn activation_latency_frames(&self) -> Option<(usize, usize)> {
-        if self.active || self.scratch.is_none() || self.rendered_source_end.is_none() {
+        if self.active || self.scratch.is_none() {
             return None;
         }
         let latency = self.engine.as_ref()?.capabilities().latency();
         let history_frames = latency.source_frames();
         let output_frames = latency.output_frames();
-        if history_frames == 0 || output_frames == 0 || self.residency.as_ref()?.end.is_none() {
+        if history_frames == 0 || output_frames == 0 {
             return None;
         }
         Some((history_frames, output_frames))
@@ -163,11 +161,15 @@ where
         output_limit: usize,
     ) -> Result<FrameCount, crate::WarpRenderError> {
         if let Some(prepared) = self.prepared_quantum {
-            return if prepared.source_start == meta.frame_offset {
-                Ok(FrameCount::new(prepared.frames))
-            } else {
-                Err(crate::WarpRenderError::OutstandingQuantum)
-            };
+            if prepared.source_start != meta.frame_offset {
+                return Err(crate::WarpRenderError::OutstandingQuantum);
+            }
+            if prepared.source_span.is_none_or(|span| {
+                usize::try_from(span.output_frames()).is_ok_and(|frames| frames <= output_limit)
+            }) {
+                return Ok(FrameCount::new(prepared.frames));
+            }
+            self.prepared_quantum = None;
         }
         if self.transition_pending() || self.engine_outdated() {
             return Err(crate::WarpRenderError::NeedsService);
@@ -175,60 +177,110 @@ where
         if !self.requires_staging() && self.plan.is_some() {
             return Err(crate::WarpRenderError::UnsupportedRegionPlan);
         }
+        if !self.requires_staging() {
+            let prepared = self.prepare_unity_quantum(meta, remaining, output_limit)?;
+            let frames = prepared.frames;
+            self.prepared_quantum = Some(prepared);
+            return Ok(FrameCount::new(frames));
+        }
+        if self.current_keylock {
+            let prepared = self.prepare_projected_quantum(meta, output_limit)?;
+            self.prepared_quantum = Some(prepared);
+            return Ok(FrameCount::new(prepared.frames));
+        }
+        let speed = self.trajectory.speed()?;
         let rate = self.rate;
-        let preview_frames = self
-            .render_quantum_frames
-            .map_or(remaining, NonZeroUsize::get)
-            .max(1);
-        let result = self
-            .preview_speed(rate.speed(), preview_frames)
-            .and_then(|speed| {
-                self.prepared_activation(speed)
-                    .map(|activation| (speed, activation))
+        let output_limit = self.trajectory.output_limit(output_limit);
+        if output_limit == 0 {
+            return Err(ElasticError::EmptyOutput.into());
+        }
+        let result = self.prepared_activation(speed).and_then(|activation| {
+            let prefix = activation.map_or(Ok(0), PreparedActivation::prefix_frames)?;
+            let active_start = match activation {
+                Some(_) => self
+                    .rendered_source_end
+                    .unwrap_or((meta.frame_offset, meta.spec.sample_rate))
+                    .0
+                    .checked_add(
+                        u64::try_from(prefix).map_err(|_| ElasticError::SampleCountOverflow)?,
+                    )
+                    .ok_or(ElasticError::SampleCountOverflow)?,
+                None => self.resident_feed.unwrap_or(meta.frame_offset),
+            };
+            let (active_frames, landing_frames) = self.source_frames_for_quantum(
+                Self::meta_at_frame(meta, active_start),
+                remaining,
+                speed,
+                output_limit,
+            )?;
+            let frames = usize::try_from(
+                active_start
+                    .checked_add(
+                        u64::try_from(active_frames)
+                            .map_err(|_| ElasticError::SampleCountOverflow)?,
+                    )
+                    .ok_or(ElasticError::SampleCountOverflow)?
+                    .saturating_sub(meta.frame_offset),
+            )
+            .map_err(|_| ElasticError::SampleCountOverflow)?;
+            Ok(PreparedQuantum {
+                source_span: None,
+                activation,
+                rate,
+                speed,
+                active_frames,
+                frames,
+                source_start: meta.frame_offset,
+                landing_frames,
             })
-            .and_then(|(speed, activation)| {
-                let prefix = activation.map_or(Ok(0), PreparedActivation::prefix_frames)?;
-                let active_start = match activation {
-                    Some(_) => self
-                        .rendered_source_end
-                        .ok_or(ElasticError::EnginePreparation(
-                            "Warp renderer has no presented source frontier",
-                        ))?
-                        .0
-                        .checked_add(
-                            u64::try_from(prefix).map_err(|_| ElasticError::SampleCountOverflow)?,
-                        )
-                        .ok_or(ElasticError::SampleCountOverflow)?,
-                    None => self.resident_feed.unwrap_or(meta.frame_offset),
-                };
-                let (active_frames, landing_frames) = self.source_frames_for_quantum(
-                    Self::meta_at_frame(meta, active_start),
-                    remaining,
-                    speed,
-                    output_limit,
-                )?;
-                let frames = usize::try_from(
-                    active_start
-                        .checked_add(
-                            u64::try_from(active_frames)
-                                .map_err(|_| ElasticError::SampleCountOverflow)?,
-                        )
-                        .ok_or(ElasticError::SampleCountOverflow)?
-                        .saturating_sub(meta.frame_offset),
-                )
-                .map_err(|_| ElasticError::SampleCountOverflow)?;
-                Ok(PreparedQuantum {
-                    activation,
-                    rate,
-                    speed,
-                    active_frames,
-                    frames,
-                    source_start: meta.frame_offset,
-                    landing_frames,
-                })
-            });
+        });
         match result {
-            Ok(prepared) => {
+            Ok(mut prepared) => {
+                if !self.current_keylock && self.requires_staging() {
+                    let capabilities = self
+                        .engine
+                        .as_ref()
+                        .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
+                        .capabilities();
+                    let quantum = self.render_quantum_frames.map_or_else(
+                        || capabilities.max_output_frames(),
+                        |limit| limit.get().min(capabilities.max_output_frames()),
+                    );
+                    let mut outputs = output_limit.min(quantum);
+                    if output_limit > quantum {
+                        let available_end = meta
+                            .frame_offset
+                            .checked_add(
+                                u64::try_from(prepared.frames)
+                                    .map_err(|_| ElasticError::SampleCountOverflow)?,
+                            )
+                            .ok_or(ElasticError::SampleCountOverflow)?;
+                        while outputs > 0 {
+                            let span = self.mapping_span(
+                                meta.frame_offset,
+                                meta.spec.sample_rate,
+                                outputs,
+                            )?;
+                            if Self::source_read_end(span)? <= available_end {
+                                break;
+                            }
+                            outputs -= 1;
+                        }
+                    }
+                    if outputs == 0 {
+                        return Err(ElasticError::EmptyOutput.into());
+                    }
+                    let span =
+                        self.mapping_span(meta.frame_offset, meta.spec.sample_rate, outputs)?;
+                    outputs = usize::try_from(span.output_frames())
+                        .map_err(|_| ElasticError::SampleCountOverflow)?;
+                    let read_end = Self::source_read_end(span)?;
+                    prepared.frames = usize::try_from(read_end.saturating_sub(meta.frame_offset))
+                        .map_err(|_| ElasticError::SampleCountOverflow)?;
+                    prepared.active_frames = prepared.frames;
+                    prepared.source_span = Some(span);
+                    prepared.landing_frames = Some(outputs);
+                }
                 self.prepared_quantum = Some(prepared);
                 Ok(FrameCount::new(prepared.frames))
             }
@@ -239,14 +291,118 @@ where
         }
     }
 
+    fn prepare_unity_quantum(
+        &self,
+        meta: AudioChunkInfo,
+        remaining: usize,
+        output_limit: usize,
+    ) -> Result<PreparedQuantum, ElasticError> {
+        let outputs = output_limit.min(
+            self.render_quantum_frames
+                .map_or(remaining, NonZeroUsize::get),
+        );
+        if outputs == 0 {
+            return Err(ElasticError::EmptyOutput);
+        }
+        let span = self.mapping_span(meta.frame_offset, meta.spec.sample_rate, outputs)?;
+        let end = span.end();
+        let frames = usize::try_from(end.saturating_sub(meta.frame_offset))
+            .map_err(|_| ElasticError::SampleCountOverflow)?;
+        Ok(PreparedQuantum {
+            source_span: Some(span),
+            activation: None,
+            rate: self.rate,
+            speed: 1.0,
+            source_start: meta.frame_offset,
+            active_frames: frames,
+            frames,
+            landing_frames: Some(outputs),
+        })
+    }
+
+    fn prepare_projected_quantum(
+        &self,
+        meta: AudioChunkInfo,
+        output_limit: usize,
+    ) -> Result<PreparedQuantum, ElasticError> {
+        let capabilities = self
+            .engine
+            .as_ref()
+            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
+            .capabilities();
+        let output_limit = self.trajectory.output_limit(output_limit);
+        let quantum = self.render_quantum_frames.map_or_else(
+            || capabilities.max_output_frames(),
+            |limit| limit.get().min(capabilities.max_output_frames()),
+        );
+        let outputs = output_limit
+            .min(quantum)
+            .min(self.source_block_frames.get());
+        if outputs == 0 {
+            return Err(ElasticError::EmptyOutput);
+        }
+        let span = self.mapping_span(meta.frame_offset, meta.spec.sample_rate, outputs)?;
+        let outputs =
+            usize::try_from(span.output_frames()).map_err(|_| ElasticError::SampleCountOverflow)?;
+        let lookahead = self.projection_lookahead()?;
+        let offset = lookahead
+            .checked_add(outputs - 1)
+            .and_then(|offset| u64::try_from(offset).ok())
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let (numerator, denominator) =
+            self.mapped_position(meta.frame_offset, meta.spec.sample_rate, offset)?;
+        let end = u64::try_from(numerator.div_ceil(u128::from(denominator.get())))
+            .ok()
+            .and_then(|frame| frame.checked_add(super::source_sample::SOURCE_RADIUS + 1))
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let frames = usize::try_from(end.saturating_sub(meta.frame_offset))
+            .map_err(|_| ElasticError::SampleCountOverflow)?;
+        Ok(PreparedQuantum {
+            source_span: Some(span),
+            activation: None,
+            rate: self.rate,
+            speed: self.trajectory.speed()?,
+            source_start: meta.frame_offset,
+            active_frames: frames,
+            frames,
+            landing_frames: Some(outputs),
+        })
+    }
+
+    fn source_read_end(span: kithara_signal::SourceSpan) -> Result<u64, ElasticError> {
+        let (numerator, denominator) = span
+            .source_ratio_at(span.output_frames() - 1)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        u64::try_from(numerator.div_ceil(u128::from(denominator.get())))
+            .ok()
+            .and_then(|frame| frame.checked_add(super::source_sample::SOURCE_RADIUS + 1))
+            .ok_or(ElasticError::SampleCountOverflow)
+    }
+
     /// Shrink a prepared source span at true EOF without sampling controls again.
     pub fn prepare_terminal_quantum(&mut self, frames: usize) -> Option<FrameCount> {
         let mut prepared = self.prepared_quantum.take()?;
         if frames == 0 || frames > prepared.frames {
             return None;
         }
+        let end = prepared
+            .source_start
+            .checked_add(u64::try_from(frames).ok()?)?;
+        self.terminal_source_end = Some(end);
+        if let Some(span) = prepared.source_span {
+            let mut outputs = span.output_frames();
+            while outputs > 0 {
+                let (numerator, denominator) = span.source_ratio_at(outputs - 1)?;
+                if numerator < u128::from(end) * u128::from(denominator.get()) {
+                    break;
+                }
+                outputs -= 1;
+            }
+            prepared.source_span = Some(span.for_output_range(0..outputs)?);
+            prepared.landing_frames = Some(usize::try_from(outputs).ok()?);
+        }
         let shrink = prepared.frames - frames;
-        if shrink > 0 {
+        if shrink > 0 && prepared.source_span.is_none() {
             prepared.landing_frames = None;
         }
         prepared.frames = frames;

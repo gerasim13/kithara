@@ -169,10 +169,13 @@ where
 
     fn eof(&mut self) {
         let cursor = self.source.cursor();
-        let position = self
-            .source
-            .position()
-            .unwrap_or(self.last_output.end_timestamp);
+        let source_span = (self.last_output.segment == cursor.segment)
+            .then_some(self.last_output.source_span)
+            .flatten()
+            .and_then(|span| span.for_output_range(span.output_frames()..span.output_frames()));
+        let position = source_span
+            .and_then(|span| span.position_at(0))
+            .unwrap_or_default();
         let mut samples = self.pools.get::<f32>();
         samples.clear();
         let meta = AudioChunkInfo {
@@ -182,7 +185,7 @@ where
             end_timestamp: position,
             frames: 0,
             end_of_track: true,
-            source_span: None,
+            source_span,
             ..self.last_output
         };
         self.pending = Some(PendingPacket {

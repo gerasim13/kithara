@@ -4,6 +4,7 @@
     feature = "stretch-glide"
 ))]
 mod backend;
+mod exact;
 mod fixtures;
 #[cfg(feature = "stretch-identity")]
 mod identity;

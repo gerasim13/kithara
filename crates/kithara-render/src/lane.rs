@@ -27,7 +27,7 @@ pub struct LaneFrame {
 }
 
 /// A change executed at the lane's output cursor.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum LaneCommand {
     SetSpeed(SpeedCurve),
@@ -169,42 +169,46 @@ impl Lane {
             let revision = due.seq().get();
             let mut segment = None;
             for command in due.commands() {
-                match *command {
-                    LaneCommand::SetSpeed(curve) => warp.set_speed(curve, revision),
-                    LaneCommand::SetKeylock(on) => warp.set_keylock(on),
-                    LaneCommand::SetBackend(kind) => warp.set_backend(kind),
+                match command {
+                    LaneCommand::SetSpeed(curve) => warp
+                        .set_speed(curve.clone(), revision)
+                        .map_err(|error| DecodeError::audio_stream("lane speed curve", error))?,
+                    LaneCommand::SetKeylock(on) => warp.set_keylock(*on),
+                    LaneCommand::SetBackend(kind) => warp.set_backend(*kind),
                     LaneCommand::Jump { to } => {
                         let frames = (f64::from(spec.sample_rate.get())
                             * f64::from(crate::consts::DEFAULT_DECLICK.smooth_seconds))
                         .to_usize()
                         .map_or(1, |frames| frames.max(1));
                         self.jump = Some(Jump::Down {
-                            to,
+                            to: *to,
                             start: self.cursor.frame,
                             frames,
                         });
                     }
                     LaneCommand::Segment { id, from, speed } => {
-                        self.position = Some(landing_position(source.seek(from)?));
+                        self.position = Some(landing_position(source.seek(*from)?));
                         warp.reset();
-                        warp.set_speed(speed, revision);
+                        warp.set_speed(speed.clone(), revision).map_err(|error| {
+                            DecodeError::audio_stream("lane segment speed curve", error)
+                        })?;
                         self.cursor = LaneFrame {
-                            segment: id,
+                            segment: *id,
                             frame: 0,
                         };
                         self.jump = None;
-                        segment = Some(id);
+                        segment = Some(*id);
                         changed = LaneChange::Source;
                     }
                     LaneCommand::SetHostRate { id, rate } => {
-                        source.set_host_sample_rate(rate);
+                        source.set_host_sample_rate(*rate);
                         warp.reset();
                         self.cursor = LaneFrame {
-                            segment: id,
+                            segment: *id,
                             frame: 0,
                         };
                         self.jump = None;
-                        segment = Some(id);
+                        segment = Some(*id);
                         changed = LaneChange::Source;
                     }
                 }
@@ -290,7 +294,13 @@ impl Lane {
         }
         let frames = u64::try_from(chunk.frames()).map_or(u64::MAX, |frames| frames);
         self.cursor.frame = self.cursor.frame.saturating_add(frames);
-        self.position = Some(chunk.meta.end_timestamp);
+        if let Some(position) = chunk
+            .meta
+            .source_span
+            .and_then(|span| span.position_at(span.output_frames()))
+        {
+            self.position = Some(position);
+        }
         if matches!(self.jump, Some(Jump::Up { start, frames })
             if self.cursor.frame.saturating_sub(start) >= u64::try_from(frames).map_or(u64::MAX, |frames| frames))
         {

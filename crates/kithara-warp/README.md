@@ -27,12 +27,26 @@ own `Player` / `PlayWorker` / Host/session state, access storage, or analyze
 samples.
 
 `WarpMap::projected` uses stamped source/session grid alignment; grid
-materialization stays outside rendering. The renderer follows the speed its
-render lane sets on a frame through the existing smoother. Worker-side backend
-preparation selects Signalsmith/Bungee for keylock and Glide varispeed when
-keylock is off. Engine selection checks backend capabilities at runtime.
+materialization stays outside rendering. The lane uses `prepare_quantum` and
+`render_quantum`, and retires EOF output with `drain(output_limit)`. These
+operations stop before the next accepted lane batch and publish the exact
+output-to-source mapping in every `AudioChunkInfo::source_span`. Fractional phase
+survives quantum boundaries, EOF draining and backend changes; region boundaries
+split mapped runs rather than interpolating source endpoints in consumers.
+
+`SpeedCurve::Constant`, `Ramp { to, frames }` and `Steps` count integer output
+frames from acceptance. A replacement starts at the current position and speed;
+ramps integrate linearly and the final speed holds. Engine latency is discarded
+during preparation/re-priming, not subtracted by the PCM consumer. Worker-side
+preparation selects Signalsmith/Bungee for keylock. Varispeed samples the mapped
+source coordinates with phase-preserving interpolation and anti-alias filtering.
+Engine selection checks backend capabilities at runtime.
 Identity preserves the original sample buffer at every requested speed and does
-not support region plans or keylock. DSP backends preserve decoded samples at unity. The `render` feature
-exposes the renderer; geometry and configuration remain available without it.
+not support region plans or keylock. DSP backends preserve decoded samples at
+unity. The complete-source-chunk `render` interface retains its unprimed engine
+contract for constant speeds; it returns the source unchanged for a curve that
+needs output-indexed quanta. Exact lane positions come only from prepared quanta.
+The `render` feature exposes the renderer; geometry and configuration remain
+available without it.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-warp) for ownership and dependency boundaries.

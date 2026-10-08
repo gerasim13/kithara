@@ -47,19 +47,11 @@ impl<I: Debug> Debug for LoadRequest<I> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LaneStart {
     pub speed: SpeedCurve,
     pub keylock: bool,
     pub backend: StretchKind,
-}
-
-impl PartialEq for LaneStart {
-    fn eq(&self, other: &Self) -> bool {
-        matches!((self.speed, other.speed), (SpeedCurve::Constant(left), SpeedCurve::Constant(right)) if left == right)
-            && self.keylock == other.keylock
-            && self.backend == other.backend
-    }
 }
 
 #[derive(Debug)]

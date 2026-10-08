@@ -3,7 +3,7 @@ use kithara_stretch::StretchKind;
 use kithara_test_fixtures::unit_fixtures::warp_sine;
 use kithara_test_utils::kithara;
 
-use super::{chunk, renderer, spec};
+use super::{chunk, fixtures::TerminalDrain, renderer, spec};
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use super::{flush_serviced, render_serviced};
 use crate::{GridSegment, RegionPlan, WarpConfig, WarpRenderError};

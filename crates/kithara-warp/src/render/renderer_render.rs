@@ -1,6 +1,6 @@
 use kithara_bufpool::HasPool;
 use kithara_dsp::param::SmoothedParam;
-use kithara_signal::{AudioChunkInfo, FrameCount, SampleCount};
+use kithara_signal::{AudioChunkInfo, FrameCount, SampleCount, SourceSpan};
 use kithara_stretch::{ElasticCapabilities, ElasticError, ElasticRequest};
 use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
@@ -11,6 +11,45 @@ impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
+    pub(super) fn render_varispeed(&mut self, span: SourceSpan) -> Result<(), ElasticError> {
+        let channels = usize::from(self.spec.channels);
+        let frames =
+            usize::try_from(span.output_frames()).map_err(|_| ElasticError::SampleCountOverflow)?;
+        let samples = frames
+            .checked_mul(channels)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let scratch = self.scratch.as_mut().ok_or(ElasticError::PoolCapacity)?;
+        if samples > scratch.capacity() {
+            return Err(ElasticError::PoolCapacity);
+        }
+        scratch
+            .ensure_len(samples)
+            .map_err(|_| ElasticError::PoolCapacity)?;
+        let resident = self.residency.as_ref().ok_or(ElasticError::PoolCapacity)?;
+        for frame in 0..frames {
+            let (numerator, denominator) = span
+                .source_ratio_at(
+                    u64::try_from(frame).map_err(|_| ElasticError::SampleCountOverflow)?,
+                )
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            let speed = super::renderer_mapping::span_speed(
+                span,
+                u64::try_from(frame).map_err(|_| ElasticError::SampleCountOverflow)?,
+            )?;
+            for channel in 0..channels {
+                scratch[frame * channels + channel] = super::source_sample::source_sample(
+                    resident,
+                    (numerator, denominator),
+                    speed,
+                    self.terminal_source_end,
+                    channels,
+                    channel,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn advance_speed(
         &mut self,
         target: f32,
@@ -551,7 +590,11 @@ where
         )
     }
 
-    pub(super) fn render_terminal_pending(&mut self, channels: usize) -> Result<(), ElasticError> {
+    pub(super) fn render_terminal_pending(
+        &mut self,
+        channels: usize,
+        output_limit: usize,
+    ) -> Result<(), ElasticError> {
         let source_frames = self.pending_frames(channels);
         if source_frames == 0 {
             self.output_remainder = 0.0;
@@ -569,8 +612,34 @@ where
             return Ok(());
         }
 
-        let output_frames = FrameCount::new(output_frames);
-        let request = ElasticRequest::new(source_frames, output_frames.get())?;
+        let total_output_frames = output_frames;
+        let output_frames = FrameCount::new(output_frames.min(output_limit));
+        let admitted_source_frames = if output_frames.get() == total_output_frames {
+            source_frames
+        } else {
+            source_frames
+                .checked_mul(output_frames.get())
+                .and_then(|frames| frames.checked_div(total_output_frames))
+                .filter(|frames| *frames > 0)
+                .ok_or(ElasticError::EmptySource)?
+        };
+        let request = ElasticRequest::new(admitted_source_frames, output_frames.get())?;
+        let admitted_samples = admitted_source_frames
+            .checked_mul(channels)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let next_meta = if admitted_source_frames == source_frames {
+            None
+        } else {
+            let meta = self.pending_meta.ok_or(ElasticError::EmptySource)?;
+            let next = meta
+                .frame_offset
+                .checked_add(
+                    u64::try_from(admitted_source_frames)
+                        .map_err(|_| ElasticError::SampleCountOverflow)?,
+                )
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            Some(Self::meta_at_frame(meta, next))
+        };
         let output_samples = output_frames
             .get()
             .checked_mul(channels)
@@ -603,17 +672,29 @@ where
             .engine
             .as_mut()
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
-        if let Err(error) = engine.process(request, source, &mut scratch[start..end]) {
+        if let Err(error) = engine.process(
+            request,
+            &source[..admitted_samples],
+            &mut scratch[start..end],
+        ) {
             scratch.truncate(start);
             return Err(error);
         }
         self.output_start_meta = self.pending_meta;
-        self.pending_source
-            .as_mut()
-            .ok_or(ElasticError::PoolCapacity)?
-            .clear();
-        self.pending_meta = None;
-        self.output_remainder = 0.0;
+        drop(
+            self.pending_source
+                .as_mut()
+                .ok_or(ElasticError::PoolCapacity)?
+                .drain(..admitted_samples),
+        );
+        self.pending_meta = next_meta;
+        self.output_remainder -= output_frames
+            .get()
+            .to_f64()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        if admitted_source_frames == source_frames {
+            self.output_remainder = 0.0;
+        }
         self.active = true;
         Ok(())
     }

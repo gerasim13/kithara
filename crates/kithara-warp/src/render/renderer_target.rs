@@ -9,10 +9,14 @@ use kithara_stretch::{
 use num_traits::ToPrimitive;
 use tracing::warn;
 
-use super::{renderer::WarpRenderer, renderer_residency::SourceResidency};
+use super::{
+    renderer::WarpRenderer, renderer_residency::SourceResidency,
+    renderer_transition::RetiringTarget,
+};
 
 #[derive(Default)]
 pub(super) struct PreparedTarget {
+    pub(super) projection: Option<super::renderer_projected::Projection>,
     pub(super) activation_scratch: Option<SampleBuffer>,
     pub(super) engine: Option<Box<dyn ElasticEngine>>,
     pub(super) pending_source: Option<SampleBuffer>,
@@ -24,7 +28,7 @@ impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
-    fn config_for(
+    pub(super) fn config_for(
         backend: StretchKind,
         backends: ElasticBackendConfig,
         source_block_frames: NonZeroUsize,
@@ -56,28 +60,21 @@ where
                 "selected backend does not support keylock",
             ));
         }
-        if !kind.capabilities().contains(BackendCapabilities::RATE) {
-            let residency = reusable.residency;
-            let engine = Self::config_for(kind, backends, source_block_frames, spec, pools)
-                .and_then(build_engine)?;
-            return Ok(PreparedTarget {
-                engine: Some(engine),
-                residency,
-                ..PreparedTarget::default()
-            });
-        }
         let PreparedTarget {
+            projection: reusable_projection,
             residency: reusable_residency,
             activation_scratch: reusable_activation_scratch,
             engine: reusable_engine,
             pending_source: reusable_pending,
             scratch: reusable_scratch,
         } = reusable;
+        drop(reusable_projection);
         drop(reusable_engine);
         let channels = usize::from(spec.channels.max(1));
         let mut history_frames = reusable_residency
             .as_ref()
-            .map_or(0, |resident| resident.history_frames);
+            .map_or(0, |resident| resident.history_frames)
+            .max(32);
         let mut resident_frames = reusable_residency.as_ref().map_or_else(
             || source_block_frames.get(),
             |resident| resident.samples.capacity() / channels,
@@ -87,12 +84,7 @@ where
             .map_or(0, |resident| resident.replacement.capacity() / channels);
         let measured = (|| -> Result<(), ElasticError> {
             for backend in StretchKind::all().iter().filter(|backend| {
-                measure_capabilities
-                    && backend.capabilities().contains(BackendCapabilities::RATE)
-                    && (!keylock
-                        || backend
-                            .capabilities()
-                            .contains(BackendCapabilities::KEYLOCK))
+                measure_capabilities && backend.capabilities().contains(BackendCapabilities::RATE)
             }) {
                 let capabilities =
                     Self::config_for(*backend, backends, source_block_frames, spec, pools)
@@ -100,25 +92,27 @@ where
                         .map(|engine| engine.capabilities())?;
                 {
                     let latency = capabilities.latency();
-                    history_frames = history_frames.max(latency.source_frames());
-                    let source_tail = (latency.source_frames().to_f64().unwrap_or(f64::MAX)
-                        / capabilities.rate_envelope().min_source_frames_per_output())
-                    .ceil()
-                    .to_usize()
-                    .unwrap_or(usize::MAX);
+                    history_frames = history_frames.max(latency.source_frames().saturating_mul(12));
+                    let source_tail = Self::latency_source_tail(capabilities);
                     replacement_frames =
                         replacement_frames.max(latency.output_frames().saturating_add(source_tail));
-                    let warm = (latency.output_frames().to_f64().unwrap_or(f64::MAX)
-                        * capabilities.rate_envelope().max_source_frames_per_output())
-                    .ceil()
-                    .to_usize()
-                    .unwrap_or(usize::MAX);
+                    let warm = Self::latency_warm_source(capabilities);
                     resident_frames = resident_frames.max(
                         latency
                             .source_frames()
                             .saturating_mul(2)
                             .saturating_add(warm)
                             .saturating_add(source_block_frames.get().saturating_mul(2)),
+                    );
+                    resident_frames = resident_frames.max(
+                        history_frames
+                            .saturating_add(
+                                latency
+                                    .source_frames()
+                                    .saturating_add(latency.output_frames())
+                                    .saturating_mul(12),
+                            )
+                            .saturating_add(source_block_frames.get().saturating_mul(4)),
                     );
                 }
             }
@@ -127,7 +121,7 @@ where
         let result = measured
             .and_then(|()| Self::config_for(kind, backends, source_block_frames, spec, pools))
             .and_then(|config| {
-                if keylock {
+                if keylock || !kind.capabilities().contains(BackendCapabilities::RATE) {
                     build_engine(config)
                 } else {
                     build_varispeed_engine(config)
@@ -135,36 +129,35 @@ where
             })
             .and_then(|engine| {
                 let channels = usize::from(spec.channels.max(1));
+                let latency = engine.capabilities().latency();
+                let projection_frames = latency
+                    .source_frames()
+                    .checked_mul(6)
+                    .and_then(|history| {
+                        latency
+                            .output_frames()
+                            .checked_mul(3)
+                            .and_then(|future| history.checked_add(future))
+                    })
+                    .ok_or(ElasticError::SampleCountOverflow)?;
                 let pending_samples = SampleCount::new(
                     source_block_frames
                         .get()
-                        .max(engine.capabilities().latency().source_frames())
+                        .max(projection_frames)
                         .checked_mul(channels)
                         .ok_or(ElasticError::SampleCountOverflow)?,
                 );
-                let mut pending = reusable_pending.unwrap_or_else(|| pools.get::<f32>());
-                pending
-                    .ensure_len(pending_samples.get())
-                    .map_err(|_| ElasticError::PoolCapacity)?;
-                pending.clear();
+                let pending = Self::prepare_buffer(pools, reusable_pending, pending_samples.get())?;
                 let scratch_samples = Self::scratch_samples(engine.as_ref(), spec)?;
-                let mut scratch = reusable_scratch.unwrap_or_else(|| pools.get::<f32>());
-                scratch
-                    .ensure_len(scratch_samples.get())
-                    .map_err(|_| ElasticError::PoolCapacity)?;
-                scratch.clear();
+                let scratch = Self::prepare_buffer(pools, reusable_scratch, scratch_samples.get())?;
                 let activation_samples = engine
                     .capabilities()
                     .latency()
                     .output_frames()
                     .checked_mul(channels)
                     .ok_or(ElasticError::SampleCountOverflow)?;
-                let mut activation_scratch =
-                    reusable_activation_scratch.unwrap_or_else(|| pools.get::<f32>());
-                activation_scratch
-                    .ensure_len(activation_samples)
-                    .map_err(|_| ElasticError::PoolCapacity)?;
-                activation_scratch.clear();
+                let activation_scratch =
+                    Self::prepare_buffer(pools, reusable_activation_scratch, activation_samples)?;
                 let residency = SourceResidency::prepare(
                     pools,
                     reusable_residency,
@@ -173,17 +166,106 @@ where
                     replacement_frames,
                     channels,
                 )?;
-                Ok((engine, pending, scratch, activation_scratch, residency))
+                let projection = keylock
+                    .then(|| {
+                        Self::prepare_projection(
+                            kind,
+                            backends,
+                            source_block_frames,
+                            spec,
+                            pools,
+                            projection_frames,
+                        )
+                    })
+                    .transpose()?;
+                Ok((
+                    engine,
+                    pending,
+                    scratch,
+                    activation_scratch,
+                    residency,
+                    projection,
+                ))
             });
         result.map(
-            |(engine, pending, scratch, activation_scratch, residency)| PreparedTarget {
-                residency: Some(residency),
-                activation_scratch: Some(activation_scratch),
-                engine: Some(engine),
-                pending_source: Some(pending),
-                scratch: Some(scratch),
+            |(engine, pending, scratch, activation_scratch, residency, projection)| {
+                PreparedTarget {
+                    projection,
+                    residency: Some(residency),
+                    activation_scratch: Some(activation_scratch),
+                    engine: Some(engine),
+                    pending_source: Some(pending),
+                    scratch: Some(scratch),
+                }
             },
         )
+    }
+
+    fn prepare_buffer(
+        pools: &PoolRegion<S>,
+        reusable: Option<SampleBuffer>,
+        samples: usize,
+    ) -> Result<SampleBuffer, ElasticError> {
+        let mut buffer = reusable.unwrap_or_else(|| pools.get::<f32>());
+        buffer
+            .ensure_len(samples)
+            .map_err(|_| ElasticError::PoolCapacity)?;
+        buffer.clear();
+        Ok(buffer)
+    }
+
+    fn latency_source_tail(capabilities: kithara_stretch::ElasticCapabilities) -> usize {
+        (capabilities
+            .latency()
+            .source_frames()
+            .to_f64()
+            .unwrap_or(f64::MAX)
+            / capabilities.rate_envelope().min_source_frames_per_output())
+        .ceil()
+        .to_usize()
+        .unwrap_or(usize::MAX)
+    }
+
+    fn latency_warm_source(capabilities: kithara_stretch::ElasticCapabilities) -> usize {
+        (capabilities
+            .latency()
+            .output_frames()
+            .to_f64()
+            .unwrap_or(f64::MAX)
+            * capabilities.rate_envelope().max_source_frames_per_output())
+        .ceil()
+        .to_usize()
+        .unwrap_or(usize::MAX)
+    }
+
+    fn prepare_projection(
+        kind: StretchKind,
+        backends: ElasticBackendConfig,
+        source_block_frames: NonZeroUsize,
+        spec: AudioSpec,
+        pools: &PoolRegion<S>,
+        projection_frames: usize,
+    ) -> Result<super::renderer_projected::Projection, ElasticError> {
+        let first = Self::config_for(kind, backends, source_block_frames, spec, pools)
+            .and_then(build_engine)?;
+        let second = Self::config_for(kind, backends, source_block_frames, spec, pools)
+            .and_then(build_engine)?;
+        let samples = projection_frames
+            .checked_mul(usize::from(spec.channels.max(1)))
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let mut first_buffer = pools.get::<f32>();
+        let mut second_buffer = pools.get::<f32>();
+        first_buffer
+            .ensure_len(samples)
+            .map_err(|_| ElasticError::PoolCapacity)?;
+        second_buffer
+            .ensure_len(samples)
+            .map_err(|_| ElasticError::PoolCapacity)?;
+        Ok(super::renderer_projected::Projection {
+            engines: [first, second],
+            buffers: [first_buffer, second_buffer],
+            stages: 1,
+        })
     }
 
     fn scratch_samples(
@@ -199,10 +281,6 @@ where
     }
 
     fn service_scratch(&mut self) {
-        if !self.requires_staging() {
-            drop(self.deferred_scratch.take());
-            return;
-        }
         if self.scratch.is_some() {
             drop(self.deferred_scratch.take());
             return;
@@ -234,6 +312,13 @@ where
     /// Service backend/spec changes and deferred destruction from the
     /// scheduler shell, never from the checked render core.
     pub(super) fn service_target(&mut self, spec: AudioSpec) {
+        if self
+            .retiring_target
+            .as_ref()
+            .is_some_and(RetiringTarget::complete)
+        {
+            self.retiring_target = None;
+        }
         drop(self.retired_engine.take());
         if (self.transition_pending() || self.prepared_quantum.is_some()) && spec == self.spec {
             self.service_scratch();
@@ -265,7 +350,7 @@ where
         }
         if backend_changed || spec != self.spec || self.rebuild_pending {
             drop(self.deferred_scratch.take());
-            if spec != self.spec || self.rebuild_pending {
+            if spec != self.spec || (self.rebuild_pending && self.retiring_target.is_none()) {
                 self.clear_render_state();
             }
             self.rebuild_pending = false;
@@ -287,6 +372,7 @@ where
                 }
             }
             let reusable = PreparedTarget {
+                projection: self.projection.take(),
                 residency: self.residency.take(),
                 activation_scratch: self.activation_scratch.take(),
                 engine: self.engine.take(),
@@ -307,6 +393,7 @@ where
                 PreparedTarget::default()
             });
             self.residency = target.residency;
+            self.projection = target.projection;
             self.activation_scratch = target.activation_scratch;
             self.engine = target.engine;
             self.pending_source = target.pending_source;
@@ -316,6 +403,10 @@ where
             self.applied_pitch = f64::NAN;
             self.spec = spec;
             self.reset_pending = false;
+            let latency = self.engine_latency().get();
+            if let Some(target) = self.retiring_target.as_mut() {
+                target.extend(latency);
+            }
             return;
         }
 

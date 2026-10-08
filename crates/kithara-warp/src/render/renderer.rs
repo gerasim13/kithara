@@ -3,16 +3,19 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_dsp::param::{MIN_SETTLE_RATIO, SmoothedParam, SmootherConfig};
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SourceSpan};
 use kithara_stretch::{
     BackendCapabilities, ElasticBackendConfig, ElasticEngine, ElasticError, ElasticRequest,
-    StretchKind,
+    StretchKind, build_engine,
 };
 use kithara_test_macros as kithara;
 use num_traits::cast::AsPrimitive;
 use tracing::warn;
 
-use super::renderer_target::PreparedTarget;
+use super::{
+    renderer_target::PreparedTarget,
+    trajectory::{Fraction, Trajectory},
+};
 use crate::{
     ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, SpeedCurve, WarpConfig,
     WarpRenderError, consts,
@@ -44,6 +47,7 @@ impl RateTarget {
 
 #[derive(Clone, Copy)]
 pub(super) struct PreparedQuantum {
+    pub(super) source_span: Option<SourceSpan>,
     pub(super) activation: Option<PreparedActivation>,
     pub(super) rate: RateTarget,
     pub(super) speed: f32,
@@ -72,13 +76,18 @@ impl PreparedActivation {
 /// Unity speed without a region plan is a byte-identical passthrough.
 #[non_exhaustive]
 pub struct WarpRenderer<S> {
+    pub(super) trajectory: Trajectory,
+    pub(super) mapped_render: bool,
+    pub(super) terminal_source_end: Option<u64>,
+    pub(super) projection: Option<super::renderer_projected::Projection>,
+    pub(super) retiring_target: Option<super::renderer_transition::RetiringTarget>,
     pub(super) spec: AudioSpec,
     pub(super) backends: ElasticBackendConfig,
     /// Maximum source frames admitted to one elastic render operation.
     pub(super) source_block_frames: NonZeroUsize,
     /// Latency-sized pooled output discarded while priming an inactive engine.
     pub(super) activation_scratch: Option<SampleBuffer>,
-    /// Renderer-owned applied speed, smoothed toward [`Self::rate`].
+    /// Raw source-chunk speed, smoothed toward [`Self::rate`].
     pub(super) applied_speed: Option<SmoothedParam>,
     /// Speed the last [`Self::set_speed`] set, with the revision stamped on
     /// every chunk rendered toward it.
@@ -159,9 +168,6 @@ where
 {
     pub(super) const MAX_OUTPUT_FRAMES: usize = 163_840;
     pub(super) const OUTPUT_ROUNDING_MARGIN: f64 = 0.5;
-    /// Re-apply pitch to the backend only when it moves this much.
-    pub(super) const RATIO_EPS: f64 = 1e-4;
-
     /// Build the slot at the source `spec` from the construction values of `config`.
     pub(crate) fn new(
         config: &WarpConfig,
@@ -176,20 +182,44 @@ where
         let speed = config.speed();
         let smooth_frames: f32 = config.rate_smooth_frames().get().as_();
         let sample_rate: f32 = spec.sample_rate.get().as_();
-        let target = Self::prepare_target(
-            (current_kind, current_keylock),
-            config.backends(),
-            config.source_block_frames(),
-            spec,
-            &pools,
-            PreparedTarget::default(),
-            true,
-        )
+        let target = if plan.is_some()
+            && !current_kind
+                .capabilities()
+                .contains(BackendCapabilities::RATE)
+        {
+            Self::config_for(
+                current_kind,
+                config.backends(),
+                config.source_block_frames(),
+                spec,
+                &pools,
+            )
+            .and_then(build_engine)
+            .map(|engine| PreparedTarget {
+                engine: Some(engine),
+                ..PreparedTarget::default()
+            })
+        } else {
+            Self::prepare_target(
+                (current_kind, current_keylock),
+                config.backends(),
+                config.source_block_frames(),
+                spec,
+                &pools,
+                PreparedTarget::default(),
+                true,
+            )
+        }
         .unwrap_or_else(|error| {
             warn!(%current_kind, %error, "time-stretch engine preparation failed");
             PreparedTarget::default()
         });
         Self {
+            trajectory: Trajectory::new(speed),
+            mapped_render: false,
+            terminal_source_end: None,
+            projection: target.projection,
+            retiring_target: None,
             context,
             residency: target.residency,
             committed: None,
@@ -250,19 +280,28 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     /// the requested engine's after-state.
     #[must_use]
     pub fn engine_latency(&self) -> FrameCount {
-        FrameCount::new(
-            self.engine
+        FrameCount::new(self.engine.as_ref().map_or(0, |engine| {
+            let stages = self
+                .projection
                 .as_ref()
-                .map_or(0, |engine| engine.capabilities().latency().output_frames()),
-        )
+                .map_or(1, |projection| projection.stages);
+            engine
+                .capabilities()
+                .latency()
+                .output_frames()
+                .saturating_mul(stages)
+        }))
     }
 
     /// Prepare the requested engine and report its output latency.
     ///
     /// Retires an outgoing engine into the crossfade without emitting PCM or
     /// advancing the rendered source frontier, then installs the target.
+    ///
+    /// # Errors
     /// Returns [`WarpRenderError::NeedsService`] if previously queued unity
-    /// output must be consumed before applying the next batch.
+    /// output must be consumed before applying the next batch, or the engine's
+    /// admission error if preparation fails.
     pub fn prepare_engine_latency(
         &mut self,
         spec: AudioSpec,
@@ -283,6 +322,12 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         if self.engine.is_none() {
             return Err(ElasticError::EnginePreparation("engine is unavailable").into());
         }
+        if !self.active && self.projection.is_some() {
+            let stages = self.projection_stages()?;
+            if let Some(projection) = self.projection.as_mut() {
+                projection.stages = stages;
+            }
+        }
         Ok(self.engine_latency())
     }
 
@@ -296,9 +341,9 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                     && self.scratch.is_some()))
     }
 
-    /// Push `pitch` to the backend when it moved beyond `RATIO_EPS`.
+    /// Push each distinct pitch to the backend without rounding curve steps.
     pub(super) fn apply_pitch(&mut self, pitch: f64) -> Result<(), ElasticError> {
-        if !self.applied_pitch.is_nan() && (pitch - self.applied_pitch).abs() <= Self::RATIO_EPS {
+        if pitch.to_bits() == self.applied_pitch.to_bits() {
             return Ok(());
         }
         let engine = self
@@ -341,6 +386,10 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.reprime_pending = false;
         self.resident_feed = None;
         self.region = None;
+        self.trajectory.reset();
+        self.mapped_render = false;
+        self.terminal_source_end = None;
+        self.retiring_target = None;
     }
 
     /// The single place a render becomes the committed one, so every committed
@@ -376,9 +425,33 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     ) {
         let output_frames = output.frames();
         let request_revision = output.meta.render_revision;
-        if let Err(error) = self.advance_speed(target_rate, output_frames) {
-            warn!(%error, "time-stretch speed smoothing failed");
-        }
+        let applied_rate: f32 = if let Some(span) = output.meta.source_span {
+            let rate = span
+                .source_ratio_at(0)
+                .zip(span.source_ratio_at(span.output_frames()))
+                .and_then(|(start, end)| {
+                    Fraction {
+                        numerator: end.0,
+                        denominator: end.1,
+                    }
+                    .sub(Fraction {
+                        numerator: start.0,
+                        denominator: start.1,
+                    })
+                })
+                .and_then(Fraction::as_f64);
+            let Some(rate) = rate else {
+                warn!("rendered source mapping rate is unrepresentable");
+                return;
+            };
+            let frames: f64 = span.output_frames().as_();
+            (rate / frames).as_()
+        } else {
+            if let Err(error) = self.advance_speed(target_rate, output_frames) {
+                warn!(%error, "time-stretch speed smoothing failed");
+            }
+            applied_rate
+        };
         let Some(snapshot) = snapshot else {
             return;
         };
@@ -525,6 +598,33 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         ));
     }
 
+    pub(super) fn map_output(&mut self, output: &mut AudioChunk) -> Result<(), ElasticError> {
+        let span = output
+            .meta
+            .source_span
+            .ok_or(ElasticError::EnginePreparation(
+                "rendered output has no exact source mapping",
+            ))?
+            .with_render_revision(output.meta.render_revision)
+            .with_mapping_revision(output.meta.mapping_revision);
+        output.meta.frame_offset = span.start();
+        output.meta.timestamp = span
+            .position_at(0)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        output.meta.end_timestamp = span
+            .position_at(span.output_frames())
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        output.meta.source_span = Some(span);
+        self.residency
+            .as_mut()
+            .ok_or(ElasticError::PoolCapacity)?
+            .remember_mapping(span)?;
+        self.trajectory.advance(span)?;
+        self.rendered_source_end = Some((span.end(), span.sample_rate()));
+        self.rate = RateTarget::new(self.trajectory.speed()?, self.rate.revision());
+        Ok(())
+    }
+
     /// Region covering `frame`, plus whether the playhead just crossed out
     /// of a previously resolved region (a plan boundary or a seek).
     pub(super) fn region_for(&mut self, frame: u64) -> ActiveRegion {
@@ -593,24 +693,26 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     /// Render from the next prepared quantum on at the speed `curve` holds,
     /// stamping `revision` on every chunk rendered toward it. A quantum
     /// prepared before is dropped, so the next one is planned at this speed.
-    pub fn set_speed(&mut self, curve: SpeedCurve, revision: u64) {
-        let target = match curve {
-            SpeedCurve::Constant(speed) => RateTarget::new(speed, revision),
-        };
+    /// Replaces the remaining curve at the next output frame, preserving phase.
+    ///
+    /// # Errors
+    /// Rejects nonfinite or unsupported speeds, unordered steps, and mappings
+    /// that exceed the checked rational representation. Rejection changes no state.
+    pub fn set_speed(&mut self, curve: SpeedCurve, revision: u64) -> Result<(), WarpRenderError> {
+        let target = RateTarget::new(self.trajectory.replace(curve)?, revision);
         self.reprime_pending |= self.active
             && self
                 .stretch_target()
                 .0
                 .capabilities()
                 .contains(BackendCapabilities::RATE)
-            && (target.speed() - self.rate.speed()).abs() > f32::EPSILON
-            && !self.unity_passthrough(target.speed())
             && self
                 .engine
                 .as_ref()
                 .is_some_and(|engine| engine.capabilities().latency().source_frames() > 0);
         self.rate = target;
         self.prepared_quantum = None;
+        Ok(())
     }
 
     pub(super) fn snap_speed(&mut self) {
