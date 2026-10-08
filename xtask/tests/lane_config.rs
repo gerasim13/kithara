@@ -365,19 +365,16 @@ fn every_declared_lane_names_a_known_role_and_known_kinds() {
 }
 
 /// The kinds a lane enters the GitHub fan-out under: its own `kinds_github`
-/// where it names any, the shared `kinds` otherwise, and none at all for a lane
+/// where it is declared, the shared `kinds` otherwise, and none at all for a lane
 /// that is not Linux-only, because that fan-out has only Linux machines.
 fn github_membership(lane: &toml::Value) -> Vec<&str> {
     let os = lane.get("os").map_or_else(Vec::new, strings);
     if os != ["linux"] {
         return Vec::new();
     }
-    let own = lane.get("kinds_github").map_or_else(Vec::new, strings);
-    if own.is_empty() {
-        lane.get("kinds").map_or_else(Vec::new, strings)
-    } else {
-        own
-    }
+    lane.get("kinds_github")
+        .or_else(|| lane.get("kinds"))
+        .map_or_else(Vec::new, strings)
 }
 
 fn strings(value: &toml::Value) -> Vec<&str> {
@@ -502,5 +499,23 @@ fn the_product_suite_lanes_differ_only_in_their_toggles_and_narrow_only_on_a_bra
             other, recipe,
             "lanes `{first}` and `{name}` build or run the product suite differently"
         );
+    }
+}
+
+#[test]
+fn github_membership_keeps_an_explicit_empty_list_distinct_from_absence() {
+    for (declaration, expected) in [
+        ("", vec!["weekly"]),
+        ("kinds_github = []", Vec::new()),
+        (
+            "kinds_github = [\"main\", \"nightly\"]",
+            vec!["main", "nightly"],
+        ),
+    ] {
+        let lane: toml::Value = toml::from_str(&format!(
+            "os = \"linux\"\nkinds = [\"weekly\"]\n{declaration}\n"
+        ))
+        .expect("the membership fixture parses");
+        assert_eq!(github_membership(&lane), expected);
     }
 }
