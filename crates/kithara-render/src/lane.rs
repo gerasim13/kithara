@@ -106,13 +106,18 @@ pub(crate) enum LaneChange {
     Source,
 }
 
+enum Preload {
+    Filling(usize),
+    Ready,
+}
+
 pub(crate) struct Lane {
     inbox: Inbox<LaneProtocol>,
     cursor: LaneFrame,
     position: Option<Duration>,
     preload_chunks: NonZeroUsize,
     declick: SmootherConfig,
-    admitted: usize,
+    preload: Preload,
     pending: Option<(Seq, FrameCount)>,
     jump: Option<Jump>,
 }
@@ -129,7 +134,7 @@ impl Lane {
             position: None,
             preload_chunks,
             declick,
-            admitted: 0,
+            preload: Preload::Filling(0),
             pending: None,
             jump: None,
         }
@@ -152,7 +157,7 @@ impl Lane {
     }
 
     pub(crate) fn is_preloaded(&self) -> bool {
-        self.admitted >= self.preload_chunks.get()
+        matches!(self.preload, Preload::Ready)
     }
 
     fn finish_pending(&mut self, ready: Option<SegmentId>) {
@@ -167,10 +172,23 @@ impl Lane {
     }
 
     pub(crate) fn admitted(&mut self) {
-        self.admitted = self.admitted.saturating_add(1);
-        if self.is_preloaded() {
-            self.finish_pending(Some(self.cursor.segment));
+        if let Preload::Filling(admitted) = &mut self.preload {
+            *admitted = admitted.saturating_add(1);
+            if *admitted >= self.preload_chunks.get() {
+                self.finish_preload();
+            }
         }
+    }
+
+    pub(crate) fn upstream_parked(&mut self) {
+        if matches!(self.preload, Preload::Filling(1..)) {
+            self.finish_preload();
+        }
+    }
+
+    pub(crate) fn finish_preload(&mut self) {
+        self.preload = Preload::Ready;
+        self.finish_pending(Some(self.cursor.segment));
     }
 
     pub(crate) fn execute_due<T, S>(
@@ -244,7 +262,7 @@ impl Lane {
             if segment.is_some() {
                 let seq = due.defer();
                 self.finish_pending(None);
-                self.admitted = 0;
+                self.preload = Preload::Filling(0);
                 self.pending = Some((seq, latency));
             } else {
                 due.apply(LaneApplied {

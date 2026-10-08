@@ -143,8 +143,8 @@ pub struct WarpRenderer<S> {
     /// after a prime; the residency holds every frame from it on.
     pub(super) resident_feed: Option<u64>,
     pub(super) current_keylock: bool,
-    /// One scheduler-shell rebuild requested after a checked engine failure.
-    /// The intent is consumed even when preparation fails.
+    /// One scheduler-shell rebuild requested for a re-prime or after a checked
+    /// engine failure. The intent is consumed even when preparation fails.
     pub(super) rebuild_pending: bool,
     /// Reset requested by seek or a return to unity passthrough. The scheduler
     /// shell performs it outside the checked render core.

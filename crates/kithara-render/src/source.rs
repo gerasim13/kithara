@@ -124,7 +124,15 @@ where
         self.lane.admitted();
     }
 
-    /// Whether the current segment's preload quota is in the PCM ring.
+    pub(crate) fn upstream_parked(&mut self) {
+        self.lane.upstream_parked();
+    }
+
+    pub(crate) fn finish_preload(&mut self) {
+        self.lane.finish_preload();
+    }
+
+    /// Whether admission has made the current segment ready for playback.
     #[must_use]
     pub fn is_preloaded(&self) -> bool {
         self.lane.is_preloaded()
@@ -1626,7 +1634,9 @@ mod tests {
             if source.warp.transition_pending() {
                 source.drain_state = DrainState::LiveWarp;
             }
-            output.and_then(|data| source.fetch(data)).map_or(TrackStep::StateChanged, TrackStep::Produced)
+            output
+                .and_then(|data| source.emit_output(data, None))
+                .map_or(TrackStep::StateChanged, TrackStep::Produced)
         }
 
         for backend in keylock_backends() {
@@ -2060,14 +2070,23 @@ mod tests {
         assert!(matches!(source.step_track(), TrackStep::Eof));
         assert_eq!(steps.load(Ordering::Acquire), 2);
         assert_eq!(flushes.load(Ordering::Acquire), 2);
+        assert_eq!(resets.load(Ordering::Acquire), 1);
 
         *discontinuity.lock() = Some(SourceDiscontinuity::new(1, spec));
+        assert!(matches!(source.step_track(), TrackStep::Eof));
+        assert!(matches!(source.step_track(), TrackStep::Eof));
+        assert_eq!(steps.load(Ordering::Acquire), 2);
+        assert_eq!(flushes.load(Ordering::Acquire), 2);
+        assert_eq!(resets.load(Ordering::Acquire), 1);
+
+        *discontinuity.lock() = Some(SourceDiscontinuity::new(2, spec));
+        flush_deferred(&mut source);
         assert!(matches!(source.step_track(), TrackStep::StateChanged));
         assert!(matches!(source.step_track(), TrackStep::Eof));
         assert!(matches!(source.step_track(), TrackStep::Eof));
         assert_eq!(steps.load(Ordering::Acquire), 3);
         assert_eq!(flushes.load(Ordering::Acquire), 3);
-        assert_eq!(resets.load(Ordering::Acquire), 1);
+        assert_eq!(resets.load(Ordering::Acquire), 2);
     }
 
     /// One emitted chunk on the lane axis and the source span it renders.
@@ -2467,18 +2486,45 @@ mod tests {
                 .expect("the lane has room for the change");
             let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
             let cue = ENGAGE + (AT - ENGAGE) * 4 / 5;
+            assert_eq!(
+                emitted
+                    .iter()
+                    .find(|chunk| chunk.lane_start == AT)
+                    .map(|chunk| chunk.source_start),
+                Some(cue),
+                "the speed change starts on its exact lane and source frame",
+            );
 
-            let (mut started, mut fresh) = stretch_lane(&pools, (backend, true), &signal);
+            let (mut started, mut fresh) = stretch_lane(&pools, (backend, false), &signal);
             fresh
-                .send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: cue }), speed_batch(1.25))
+                .send(
+                    When::At(LaneFrame { segment: SegmentId::FIRST, frame: ENGAGE }),
+                    speed_batch(0.8),
+                )
+                .expect("the lane has room for the reference history");
+            let mut start = speed_batch(1.25);
+            start.commands.push(LaneCommand::SetKeylock(true));
+            fresh
+                .send(
+                    When::At(LaneFrame { segment: SegmentId::FIRST, frame: AT }),
+                    start,
+                )
                 .expect("the lane has room for the start");
-            let reference = emit(&mut started, 0, cue + SETTLE + (WINDOW + REACH) as u64);
+            let reference = emit(&mut started, 0, AT + SETTLE + (WINDOW + REACH) as u64);
+            assert_eq!(
+                reference
+                    .iter()
+                    .find(|chunk| chunk.lane_start == AT)
+                    .map(|chunk| chunk.source_start),
+                Some(cue),
+                "the fresh engine starts on the same lane and source frame",
+            );
 
             let rendered = &lane_pcm(&emitted)[pcm_index(AT + SETTLE)..][..WINDOW];
             let (offset, correlation) = alignment(
                 rendered,
                 &lane_pcm(&reference),
-                pcm_index(cue + SETTLE),
+                pcm_index(AT + SETTLE),
                 REACH,
             );
             assert!(
@@ -2520,18 +2566,45 @@ mod tests {
                     .expect("the lane has room for the change");
                 let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
                 let cue = ENGAGE + (AT - ENGAGE) * 5 / 4;
+                assert_eq!(
+                    emitted
+                        .iter()
+                        .find(|chunk| chunk.lane_start == AT)
+                        .map(|chunk| chunk.source_start),
+                    Some(cue),
+                    "the engine change starts on its exact lane and source frame",
+                );
 
-                let (mut started, mut fresh) = stretch_lane(&pools, to, &signal);
+                let (mut started, mut fresh) = stretch_lane(&pools, (next, false), &signal);
                 fresh
-                    .send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: cue }), speed_batch(1.25))
+                    .send(
+                        When::At(LaneFrame { segment: SegmentId::FIRST, frame: ENGAGE }),
+                        speed_batch(1.25),
+                    )
+                    .expect("the lane has room for the reference history");
+                let mut start = speed_batch(1.25);
+                start.commands.push(LaneCommand::SetKeylock(true));
+                fresh
+                    .send(
+                        When::At(LaneFrame { segment: SegmentId::FIRST, frame: AT }),
+                        start,
+                    )
                     .expect("the lane has room for the start");
-                let reference = emit(&mut started, 0, cue + SETTLE + (WINDOW + REACH) as u64);
+                let reference = emit(&mut started, 0, AT + SETTLE + (WINDOW + REACH) as u64);
+                assert_eq!(
+                    reference
+                        .iter()
+                        .find(|chunk| chunk.lane_start == AT)
+                        .map(|chunk| chunk.source_start),
+                    Some(cue),
+                    "the fresh engine starts on the same lane and source frame",
+                );
 
                 let rendered = &lane_pcm(&emitted)[pcm_index(AT + SETTLE)..][..WINDOW];
                 let (offset, correlation) = alignment(
                     rendered,
                     &lane_pcm(&reference),
-                    pcm_index(cue + SETTLE),
+                    pcm_index(AT + SETTLE),
                     REACH,
                 );
                 assert!(

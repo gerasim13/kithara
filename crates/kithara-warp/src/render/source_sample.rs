@@ -1,4 +1,3 @@
-use kithara_dsp::interp::{Interpolation, interpolate};
 use kithara_stretch::ElasticError;
 use num_traits::ToPrimitive;
 
@@ -54,12 +53,10 @@ pub(super) fn source_sample(
                 current,
             ));
         }
-        let window = [sample(-1)?, current, next];
-        let position = [1.0 + fraction.to_f32().ok_or(ElasticError::SampleCountOverflow)?];
-        let mut output = [0.0];
-        interpolate(Interpolation::Quadratic, &window, &position, &mut output)
-            .map_err(|_| ElasticError::EnginePreparation("mapped interpolation failed"))?;
-        return Ok(output[0]);
+        return Ok(kithara_dsp::interp::quadratic(
+            [sample(-1)?, current, next],
+            fraction,
+        ));
     }
     let radius = i64::try_from(SOURCE_RADIUS).map_err(|_| ElasticError::SampleCountOverflow)?;
     let cutoff = speed.recip();
@@ -87,4 +84,53 @@ pub(super) fn source_sample(
     (total / weights)
         .to_f32()
         .ok_or(ElasticError::SampleCountOverflow)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::{NonZeroU32, NonZeroU128};
+
+    use kithara_signal::{AudioChunkInfo, AudioSpec};
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::test_pools::pools;
+
+    #[kithara::test]
+    fn quadratic_sampling_keeps_the_fraction_when_the_window_position_rounds_up() {
+        let pools = pools();
+        let mut resident = SourceResidency::prepare(&pools, None, 0, 3, 0, 1)
+            .expect("three resident frames");
+        resident
+            .append(
+                AudioChunkInfo {
+                    spec: AudioSpec::new(1, NonZeroU32::new(44_100).expect("sample rate")),
+                    frames: 3,
+                    ..AudioChunkInfo::default()
+                },
+                &[1.0, 1.0, -1.0],
+            )
+            .expect("source window");
+        let denominator = NonZeroU128::new(1 << 24).expect("fraction denominator");
+        let fraction = (denominator.get() - 1).to_f64().expect("numerator")
+            / denominator.get().to_f64().expect("denominator");
+        let rounded_fraction = fraction.to_f32().expect("fraction");
+        assert!(rounded_fraction < 1.0);
+        assert_eq!(1.0 + rounded_fraction, 2.0);
+
+        let actual = source_sample(
+            &resident,
+            (2 * denominator.get() - 1, denominator),
+            1.0,
+            None,
+            1,
+            0,
+        )
+        .expect("quadratic sample below the next source frame");
+        let expected = (1.0 - fraction - fraction * fraction)
+            .to_f32()
+            .expect("quadratic value");
+        assert_eq!(actual, expected);
+        assert!(actual > -1.0, "the fraction must not advance to the next sample");
+    }
 }

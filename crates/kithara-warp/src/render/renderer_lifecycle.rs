@@ -753,7 +753,12 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     /// Retire the running engine's tail into the replacement the re-primed
     /// engine fades from, leaving the held source in the residency.
     pub(super) fn retire_for_reprime(&mut self) -> Result<(), ElasticError> {
-        if self.mapped_render {
+        let speed_reprime = self.reprime_pending
+            && self.current_keylock
+            && !self.keylocked_unity()
+            && self.stretch_target() == (self.current_kind, self.current_keylock)
+            && self.retiring_target.is_none();
+        if self.mapped_render && !speed_reprime {
             self.retire_mapped_target()?;
             let resident = self.residency.as_mut().ok_or(ElasticError::PoolCapacity)?;
             resident.replacement.clear();
@@ -777,6 +782,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 self.pending_meta = None;
                 self.output_remainder = 0.0;
                 self.resident_feed = None;
+                self.rebuild_pending |= self.mapped_render && speed_reprime;
                 Ok(())
             }
             Err(error) => {

@@ -351,7 +351,11 @@ where
         }
         if backend_changed || spec != self.spec || self.rebuild_pending {
             drop(self.deferred_scratch.take());
-            if spec != self.spec || (self.rebuild_pending && self.retiring_target.is_none()) {
+            if spec != self.spec
+                || (self.rebuild_pending
+                    && self.retiring_target.is_none()
+                    && self.engine.is_none())
+            {
                 self.clear_render_state();
             }
             self.rebuild_pending = false;

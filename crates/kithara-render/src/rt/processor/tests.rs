@@ -663,9 +663,10 @@ async fn a_replace_plays_the_old_consumer_out_of_the_tail(constant_half: &'stati
 #[kithara::test(tokio)]
 async fn a_chain_starts_its_slot_on_the_frame_after_the_end(constant_half: &'static [u8]) {
     let (mut mixer, mut ends) = mixer_without_declick();
-    let attached = send(
+    let attached = send_on(
         &mut ends,
         When::Next,
+        &[(A, None), (B, None)],
         vec![
             DeckPart::Attach {
                 slot: A,

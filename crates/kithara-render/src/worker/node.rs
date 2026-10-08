@@ -72,7 +72,7 @@ where
             if let Some(error) = self.load_error.take() {
                 return Poll::Ready(Err(error));
             }
-            if self.source.is_preloaded() || self.terminal.is_some() {
+            if self.source.is_preloaded() {
                 return Poll::Ready(Ok(()));
             }
             if result == TickResult::Progress {
@@ -152,6 +152,7 @@ where
                     }
                 }
                 if let Some(terminal) = terminal {
+                    self.source.finish_preload();
                     self.terminal = Some(terminal);
                 }
                 self.port.signal();
@@ -278,9 +279,12 @@ where
                 self.terminal = None;
                 return TickResult::Progress;
             }
-            TrackStep::Blocked(WaitingReason::WaitingDemand) => return TickResult::UpstreamPending,
-            TrackStep::Blocked(WaitingReason::Waiting | WaitingReason::WaitingMetadata) => {
-                return TickResult::Waiting;
+            TrackStep::Blocked(reason) => {
+                self.source.upstream_parked();
+                return match reason {
+                    WaitingReason::WaitingDemand => TickResult::UpstreamPending,
+                    WaitingReason::Waiting | WaitingReason::WaitingMetadata => TickResult::Waiting,
+                };
             }
         }
         self.admit()
@@ -1091,12 +1095,12 @@ mod tests {
     #[case(WaitingReason::Waiting)]
     #[case(WaitingReason::WaitingDemand)]
     #[case(WaitingReason::WaitingMetadata)]
-    async fn decoder_node_upstream_park_after_audio_waits_for_the_preload_quota(#[case] reason: WaitingReason) {
+    async fn decoder_node_downstream_park_after_audio_waits_for_the_preload_quota(#[case] reason: WaitingReason) {
         let source = ScriptedSource::new([produced(), TrackStep::Blocked(reason)]);
-        let (mut node, _receiver, _lane) = prepared_node(source, 4, 2).await;
+        let (mut node, _receiver, _lane) = prepared_node(source, 1, 2).await;
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(!node.source.is_preloaded(), "one chunk is below quota");
-        let _ = node.tick();
+        assert_eq!(node.tick(), TickResult::Backpressured);
         assert!(!node.source.is_preloaded(), "a park cannot replace the quota");
     }
 
