@@ -13,7 +13,7 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use dashmap::DashSet;
+use dashmap::DashMap;
 use kithara_platform::sync::{Arc, Mutex, Retired};
 use kithara_storage::AvailabilityObserver;
 use rangemap::RangeSet;
@@ -50,15 +50,16 @@ impl Availability {
     }
 
     pub(super) fn mark_committed(&mut self, final_len: u64) -> bool {
-        let range = 0..final_len;
-        if self.committed && self.final_len == Some(final_len) && self.contains(&range) {
+        let mut ranges = RangeSet::new();
+        if final_len > 0 {
+            ranges.insert(0..final_len);
+        }
+        if self.committed && self.final_len == Some(final_len) && self.ranges == ranges {
             return false;
         }
         self.committed = true;
         self.final_len = Some(final_len);
-        if final_len > 0 {
-            self.ranges.insert(range);
-        }
+        self.ranges = ranges;
         true
     }
 }
@@ -107,7 +108,7 @@ pub(super) struct InnerIndex {
     /// Committed files still awaiting their durability barrier. The flush
     /// forces these down before writing the snapshot, so a resource is
     /// never named in the manifest ahead of its own bytes.
-    pub(super) pending_durability: DashSet<PathBuf>,
+    pub(super) pending_durability: DashMap<PathBuf, ResourceKey>,
     /// Disk-backed persist target. Set once via
     /// `AvailabilityIndex::enable_persistence`. Native only.
     #[cfg(not(target_arch = "wasm32"))]
@@ -251,18 +252,30 @@ impl AvailabilityIndex {
     }
 
     pub(crate) fn record_commit(&self, key: &ResourceKey, final_len: u64) {
-        let (root, path) = Self::resolve_refs(key);
-        let entry = self.insert_or_get_entry(root, path);
-        if self.update(&entry, |next| next.mark_committed(final_len)) {
+        if self.update_commit(key, final_len) {
             self.mark_dirty();
         }
     }
 
-    /// Enqueue a committed file for the durability barrier. The manifest
-    /// flush pays one barrier per queued file and only then names them, so
-    /// the resource-write path never waits on the medium itself.
-    pub(crate) fn record_pending_durability(&self, path: PathBuf) {
-        self.inner.pending_durability.insert(path);
+    fn update_commit(&self, key: &ResourceKey, final_len: u64) -> bool {
+        let (root, path) = Self::resolve_refs(key);
+        let entry = self.insert_or_get_entry(root, path);
+        self.update(&entry, |next| next.mark_committed(final_len))
+    }
+
+    /// Enqueue a published file before recording its committed availability.
+    /// The entry guard covers enqueue and availability publication. A flush
+    /// removes its cohort before any barrier, so later obligations for the
+    /// same path remain queued.
+    fn record_file_commit(&self, key: &ResourceKey, path: PathBuf, final_len: u64) {
+        let pending = self
+            .inner
+            .pending_durability
+            .entry(path)
+            .or_insert_with(|| key.clone());
+        self.update_commit(key, final_len);
+        drop(pending);
+        self.mark_dirty();
     }
 
     pub(crate) fn record_write(&self, key: &ResourceKey, range: Range<u64>) {
@@ -295,7 +308,7 @@ impl AvailabilityIndex {
         }
     }
 
-    fn resolve_refs(key: &ResourceKey) -> (&str, &str) {
+    pub(super) fn resolve_refs(key: &ResourceKey) -> (&str, &str) {
         match key.kind() {
             ResourceKeyKind::Relative {
                 asset_root,
@@ -377,7 +390,7 @@ impl Default for AvailabilityIndex {
                 persist: OnceLock::new(),
                 hub: OnceLock::new(),
                 dirty: AtomicBool::new(false),
-                pending_durability: DashSet::new(),
+                pending_durability: DashMap::new(),
                 retired_snapshots: Mutex::new(Retired::default()),
                 retired_trees: Mutex::new(Retired::default()),
             }),
@@ -425,10 +438,12 @@ impl ScopedAvailabilityObserver {
 
 impl AvailabilityObserver for ScopedAvailabilityObserver {
     fn on_commit(&self, final_len: u64) {
-        if let Some(path) = self.path.as_ref() {
-            self.index.record_pending_durability(path.clone());
+        match self.path.as_ref() {
+            Some(path) => self
+                .index
+                .record_file_commit(&self.key, path.clone(), final_len),
+            None => self.index.record_commit(&self.key, final_len),
         }
-        self.index.record_commit(&self.key, final_len);
     }
 
     fn on_write(&self, range: Range<u64>) {
@@ -499,6 +514,37 @@ mod tests {
         assert!(a.committed);
         assert_eq!(a.final_len, Some(0));
         assert!(a.ranges.is_empty());
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[case::empty(0)]
+    #[case::shorter(3)]
+    fn committed_ranges_match_final_length_after_shrink(#[case] final_len: u64) {
+        let mut availability = Availability::default();
+        availability.mark_committed(7);
+
+        assert!(availability.mark_committed(final_len));
+
+        assert_eq!(availability.final_len, Some(final_len));
+        assert!(availability.contains(&(0..final_len)));
+        assert!(!availability.contains(&(final_len..7)));
+        assert_eq!(availability.ranges.is_empty(), final_len == 0);
+        assert!(!availability.mark_committed(final_len));
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[case::empty(0)]
+    #[case::shorter(3)]
+    fn committing_the_same_length_removes_legacy_range_tails(#[case] final_len: u64) {
+        let mut availability = Availability::default();
+        availability.mark_committed(final_len);
+        availability.insert(final_len..7);
+
+        assert!(availability.mark_committed(final_len));
+
+        assert!(!availability.contains(&(final_len..7)));
+        assert_eq!(availability.ranges.is_empty(), final_len == 0);
+        assert!(!availability.mark_committed(final_len));
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]

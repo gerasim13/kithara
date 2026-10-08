@@ -33,9 +33,7 @@ pin_project! {
 
     impl<F> PinnedDrop for Participating<F> {
         fn drop(this: Pin<&mut Self>) {
-            if let Some(held) = this.gate.on_drop() {
-                hand_over(this.join.as_deref(), held);
-            }
+            hand_over(this.join.as_deref(), this.gate.on_drop());
         }
     }
 }
@@ -60,7 +58,7 @@ impl<F: Future> Future for Participating<F> {
         };
         match outcome {
             Poll::Ready(out) => {
-                hand_over(this.join.as_deref(), this.gate.complete());
+                hand_over(this.join.as_deref(), Some(this.gate.complete()));
                 Poll::Ready(out)
             }
             Poll::Pending => {

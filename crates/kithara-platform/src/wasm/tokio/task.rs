@@ -9,8 +9,7 @@ use ::futures::{
     future::{AbortHandle as FutureAbortHandle, Aborted, abortable},
 };
 
-/// The fairness yield of a task that still has work: on wasm it is the same
-/// scheduler yield as `yield_now`.
+/// Yield a scheduling opportunity to another runnable task.
 pub use super::backend::task::yield_now as yield_runnable;
 pub use super::backend::task::*;
 use super::{backend::task as tww_task, runtime::Handle};

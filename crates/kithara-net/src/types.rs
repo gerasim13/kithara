@@ -154,11 +154,11 @@ impl fmt::Display for RangeSpec {
 #[non_exhaustive]
 pub struct RetryPolicy {
     #[config(builder(default = Duration::from_millis(100)), patch(humantime))]
-    pub base_delay: Duration,
+    pub(crate) base_delay: Duration,
     #[config(builder(default = Duration::from_secs(5)), patch(humantime))]
-    pub max_delay: Duration,
+    pub(crate) max_delay: Duration,
     #[config(builder(default = 3))]
-    pub max_retries: u32,
+    pub(crate) max_retries: u32,
 }
 
 impl RetryPolicy {
@@ -191,12 +191,12 @@ pub struct NetOptions {
     /// Codings advertised and decoded for whole-body native requests.
     /// Defaults to all four; byte-addressed requests always use `identity`.
     #[config(builder(default = Compression::all()), patch(attribute(serde(default))))]
-    pub compression: Compression,
+    pub(crate) compression: Compression,
     /// Maximum wait for response headers or inactivity between body chunks.
     /// Progress resets the runtime streaming layer's timer; it never caps a live transfer's total duration.
     /// Defaults to 30 seconds to tolerate mobile-network stalls.
     #[config(builder(default = Duration::from_secs(30)), patch(humantime))]
-    pub inactivity_timeout: Duration,
+    pub(crate) inactivity_timeout: Duration,
     /// How long a pooled connection may sit idle before it is dropped.
     /// Governs the same pool as [`Self::pool_max_idle_per_host`]: the count
     /// caps how many idle connections survive, this caps how long. The
@@ -205,35 +205,35 @@ pub struct NetOptions {
     /// sockets open. Ignored by the Apple backend, whose `URLSession`
     /// configuration exposes no idle-pool timeout.
     #[config(builder(default = Duration::from_secs(5)), patch(humantime))]
-    pub pool_idle_timeout: Duration,
+    pub(crate) pool_idle_timeout: Duration,
     /// Browser TLS+HTTP2 fingerprint the native `client-wreq` backend
     /// impersonates. Defaults to `Safari`. Ignored by the `client-reqwest`
     /// backend and on wasm32 (no emulation there).
     #[config(builder(default))]
-    pub impersonate: ImpersonatePreset,
+    pub(crate) impersonate: ImpersonatePreset,
     #[config(skip = "injected request observer", patch(skip))]
-    pub observer: Option<Observer>,
+    pub(crate) observer: Option<Observer>,
     #[config(nested, builder(default), patch(nested))]
-    pub retry_policy: RetryPolicy,
+    pub(crate) retry_policy: RetryPolicy,
     /// Accept invalid TLS certificates (self-signed, expired, wrong hostname).
     /// **Security risk** — use only for local development and test servers.
     #[config(builder(default))]
-    pub is_insecure: bool,
+    pub(crate) is_insecure: bool,
     /// Apple `NSURLSession` streaming body queue capacity, measured in
     /// delivered data chunks waiting for Rust consumption. Set to 0 to disable
     /// `URLSession` task suspension for queued body chunks.
     #[config(builder(default = 32))]
-    pub body_queue_capacity: usize,
+    pub(crate) body_queue_capacity: usize,
     /// Queue length at or below which a suspended Apple streaming task resumes.
     /// Values greater than or equal to [`Self::body_queue_capacity`] are valid:
     /// they resume as soon as the consumer drains one chunk.
     #[config(builder(default = 16))]
-    pub body_queue_resume_at: usize,
+    pub(crate) body_queue_resume_at: usize,
     /// Max idle connections per host. Enables HTTP keep-alive connection
     /// reuse, reducing `TIME_WAIT` accumulation under high request volume.
     /// Set to 0 to disable pooling.
     #[config(builder(default = 8))]
-    pub pool_max_idle_per_host: usize,
+    pub(crate) pool_max_idle_per_host: usize,
 }
 
 impl NetOptions {
@@ -439,52 +439,19 @@ mod tests {
     }
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    #[case(
-        1,
-        Duration::from_millis(50),
-        Duration::from_millis(200),
-        0,
-        Duration::ZERO
-    )]
-    #[case(
-        1,
-        Duration::from_millis(50),
-        Duration::from_millis(200),
-        1,
-        Duration::from_millis(50)
-    )]
-    #[case(
-        1,
-        Duration::from_millis(50),
-        Duration::from_millis(200),
-        2,
-        Duration::from_millis(100)
-    )]
-    #[case(
-        1,
-        Duration::from_millis(50),
-        Duration::from_millis(200),
-        3,
-        Duration::from_millis(200)
-    )]
-    #[case(
-        1,
-        Duration::from_millis(50),
-        Duration::from_millis(200),
-        4,
-        Duration::from_millis(200)
-    )]
+    #[case(0, Duration::ZERO)]
+    #[case(1, Duration::from_millis(50))]
+    #[case(2, Duration::from_millis(100))]
+    #[case(3, Duration::from_millis(200))]
+    #[case(4, Duration::from_millis(200))]
     async fn test_retry_policy_delay_for_attempt_custom(
-        #[case] max_retries: u32,
-        #[case] base_delay: Duration,
-        #[case] max_delay: Duration,
         #[case] attempt: u32,
         #[case] expected_delay: Duration,
     ) {
         let policy = RetryPolicy::builder()
-            .max_retries(max_retries)
-            .base_delay(base_delay)
-            .max_delay(max_delay)
+            .max_retries(1)
+            .base_delay(Duration::from_millis(50))
+            .max_delay(Duration::from_millis(200))
             .build();
         let delay = policy.delay_for_attempt(attempt);
 

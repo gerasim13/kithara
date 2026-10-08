@@ -5,10 +5,17 @@
 //! `DecodeError::BackendUnavailable`, one that rejects the codec/container returns
 //! `DecodeError::UnsupportedCodec`, both terminal.
 
-#[cfg(all(test, apple_backend, feature = "symphonia"))]
-mod apple_mp3_tests;
+mod backend;
+mod build;
+mod config;
 mod inner;
+#[cfg(any(android_backend, apple_backend, feature = "symphonia"))]
+mod mpeg;
 mod probe;
-pub use inner::{DecoderBackend, DecoderConfig, DecoderFactory, DecoderResamplerConfig};
+mod segment;
+#[cfg(feature = "symphonia")]
+mod software;
+pub use config::{DecoderConfig, DecoderResamplerConfig};
+pub use inner::{DecoderBackend, DecoderFactory};
 #[cfg(feature = "symphonia")]
 pub(crate) use probe::skip_id3_tags;

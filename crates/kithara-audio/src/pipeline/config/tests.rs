@@ -63,12 +63,14 @@ mod native {
 
     #[kithara::test]
     #[case::codec_priming(GaplessMode::CodecPriming)]
-    #[case::silence_trim(GaplessMode::SilenceTrim(SilenceTrimParams {
-        threshold_db: 50.0,
-        min_trim_frames: 128,
-        scan_window_frames: 2_048,
-        trim_trailing: true,
-    }))]
+    #[case::silence_trim(GaplessMode::SilenceTrim(
+        SilenceTrimParams::builder()
+            .threshold_db(50.0)
+            .min_trim_frames(128)
+            .scan_window_frames(2_048)
+            .trim_trailing(true)
+            .build()
+    ))]
     fn audio_config_carries_the_decoder_gapless_mode(#[case] mode: GaplessMode) {
         let config = AudioConfig::<kithara_file::File<TestPools>, NoResamplerBackend>::for_stream(
             file_config(),

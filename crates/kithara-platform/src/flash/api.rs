@@ -149,17 +149,16 @@ pub fn yield_now() -> Yield {
     }
 }
 
-/// Ambient-gated cooperative yield future (see [`yield_now`]). Engine-backed under
-/// ambient, a plain scheduler yield otherwise. The mode is fixed at construction
-/// from the ambient gate, which is uniform per test.
+/// Cooperative yield future with its mode fixed at construction.
+/// [`yield_now`] selects engine quiescence under ambient eligibility and a scheduler
+/// yield otherwise; [`super::tokio::task::yield_runnable`] selects the scheduler mode.
 #[must_use = "a Yield future does nothing unless `.await`ed"]
 pub enum Yield {
     /// Engine-backed quiescence yield (ambient test).
     Flash(FlashYield),
-    /// Real cooperative yield (ambient off: flash(false) test / production):
-    /// returns `Pending` once after re-arming the waker, then `Ready` — the same
-    /// hand-back-to-the-scheduler semantics as `tokio::task::yield_now`, but
-    /// without naming `tokio`'s unnameable yield future.
+    /// Scheduler yield, selected by ambient-off `yield_now` or an explicit runnable yield.
+    /// Re-arms the waker and returns `Pending` once, then `Ready`; the immediate wake
+    /// keeps a participating task runnable across the pending poll.
     Real { yielded: bool },
 }
 

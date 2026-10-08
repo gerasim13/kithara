@@ -6,7 +6,7 @@ use std::{
 use kithara_test_utils::kithara;
 
 use super::{
-    ItunSmpb, Mp4EditListEntry, Mp4MediaTiming, Mp4MetadataError, Mp4Visitor,
+    ItunSmpb, Mp4EditListEntry, Mp4Event, Mp4MediaTiming, Mp4MetadataError,
     parse::{parse_data_box, parse_elst, parse_itunsmpb, parse_mdhd, parse_mvhd_timescale},
     scan_mp4, sniff_mp4_codec,
 };
@@ -94,40 +94,33 @@ struct RecordedTrack {
     edit_list: Vec<Mp4EditListEntry>,
 }
 
-impl Mp4Visitor for RecordingVisitor {
-    fn on_itunsmpb(&mut self, info: ItunSmpb) -> ControlFlow<()> {
-        self.itunsmpb = Some(info);
-        ControlFlow::Continue(())
-    }
-    fn on_movie_timescale(&mut self, timescale: u32) -> ControlFlow<()> {
-        self.movie_timescale = Some(timescale);
-        ControlFlow::Continue(())
-    }
-    fn on_track_begin(&mut self) -> ControlFlow<()> {
-        self.in_track = Some(RecordedTrack::default());
-        ControlFlow::Continue(())
-    }
-    fn on_track_edit_list(&mut self, entries: &[Mp4EditListEntry]) -> ControlFlow<()> {
-        if let Some(track) = &mut self.in_track {
-            track.edit_list = entries.to_vec();
-        }
-        ControlFlow::Continue(())
-    }
-    fn on_track_end(&mut self) -> ControlFlow<()> {
-        if let Some(track) = self.in_track.take() {
-            self.tracks.push(track);
-        }
-        ControlFlow::Continue(())
-    }
-    fn on_track_media_timing(&mut self, timing: Mp4MediaTiming) -> ControlFlow<()> {
-        if let Some(track) = &mut self.in_track {
-            track.timing = Some(timing);
-        }
-        ControlFlow::Continue(())
-    }
-    fn on_track_sample_rate(&mut self, sample_rate: u32) -> ControlFlow<()> {
-        if let Some(track) = &mut self.in_track {
-            track.sample_rate = Some(sample_rate);
+impl RecordingVisitor {
+    fn visit(&mut self, event: Mp4Event<'_>) -> ControlFlow<()> {
+        match event {
+            Mp4Event::ItunSmpb(info) => self.itunsmpb = Some(info),
+            Mp4Event::MovieTimescale(timescale) => self.movie_timescale = Some(timescale),
+            Mp4Event::TrackBegin => self.in_track = Some(RecordedTrack::default()),
+            Mp4Event::TrackEditList(entries) => {
+                if let Some(track) = &mut self.in_track {
+                    track.edit_list = entries.to_vec();
+                }
+            }
+            Mp4Event::TrackEnd => {
+                if let Some(track) = self.in_track.take() {
+                    self.tracks.push(track);
+                }
+            }
+            Mp4Event::TrackMediaTiming(timing) => {
+                if let Some(track) = &mut self.in_track {
+                    track.timing = Some(timing);
+                }
+            }
+            Mp4Event::TrackSampleRate(sample_rate) => {
+                if let Some(track) = &mut self.in_track {
+                    track.sample_rate = Some(sample_rate);
+                }
+            }
+            Mp4Event::TrackCodec(_) => {}
         }
         ControlFlow::Continue(())
     }
@@ -135,7 +128,7 @@ impl Mp4Visitor for RecordingVisitor {
 
 fn record(reader: &mut dyn DecoderInput) -> RecordingVisitor {
     let mut visitor = RecordingVisitor::default();
-    scan_mp4(reader, &mut visitor, &pools()).expect("BUG: scan");
+    scan_mp4(reader, &mut |event| visitor.visit(event), &pools()).expect("BUG: scan");
     visitor
 }
 
@@ -554,16 +547,20 @@ fn visitor_break_stops_scan_at_track_end() {
     struct BreakAfterFirstTrack {
         tracks_seen: u32,
     }
-    impl Mp4Visitor for BreakAfterFirstTrack {
-        fn on_track_end(&mut self) -> ControlFlow<()> {
-            self.tracks_seen += 1;
-            ControlFlow::Break(())
+    impl BreakAfterFirstTrack {
+        fn visit(&mut self, event: Mp4Event<'_>) -> ControlFlow<()> {
+            if matches!(event, Mp4Event::TrackEnd) {
+                self.tracks_seen += 1;
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
         }
     }
 
     let mut visitor = BreakAfterFirstTrack { tracks_seen: 0 };
     let mut reader = Cursor::new(bytes);
-    scan_mp4(&mut reader, &mut visitor, &pools()).expect("BUG: scan");
+    scan_mp4(&mut reader, &mut |event| visitor.visit(event), &pools()).expect("BUG: scan");
     assert_eq!(visitor.tracks_seen, 1);
 }
 
@@ -591,7 +588,7 @@ fn scan_restores_reader_position() {
         .expect("BUG: seek inside mp4");
 
     let mut visitor = RecordingVisitor::default();
-    scan_mp4(&mut reader, &mut visitor, &pools()).expect("BUG: scan");
+    scan_mp4(&mut reader, &mut |event| visitor.visit(event), &pools()).expect("BUG: scan");
 
     assert_eq!(reader.stream_position().expect("BUG: position"), 3);
 }
@@ -640,7 +637,8 @@ fn rejects_child_box_extending_past_parent() {
 
     let mut reader = Cursor::new(file);
     let mut visitor = RecordingVisitor::default();
-    let error = scan_mp4(&mut reader, &mut visitor, &pools()).expect_err("must fail");
+    let error =
+        scan_mp4(&mut reader, &mut |event| visitor.visit(event), &pools()).expect_err("must fail");
     assert!(matches!(error, Mp4MetadataError::InvalidData(_)));
 }
 
@@ -652,7 +650,8 @@ fn rejects_box_smaller_than_header() {
 
     let mut reader = Cursor::new(file);
     let mut visitor = RecordingVisitor::default();
-    let error = scan_mp4(&mut reader, &mut visitor, &pools()).expect_err("must fail");
+    let error =
+        scan_mp4(&mut reader, &mut |event| visitor.visit(event), &pools()).expect_err("must fail");
     assert!(matches!(error, Mp4MetadataError::InvalidData(_)));
 }
 

@@ -1,10 +1,15 @@
 use std::sync::OnceLock;
 
 use kithara_platform::{
+    CancelToken,
     sync::{Arc, ThreadGate, WaitGate},
     time::Duration,
 };
-use kithara_stream::{DeferredWake, WorkerWake};
+use kithara_storage::WaitOutcome;
+use kithara_stream::{DeferredWake, SourceError, StreamError, StreamResult, WorkerWake};
+use kithara_test_utils::kithara;
+
+use crate::consts;
 
 /// Late-bound audio-worker data-arrival wake, shared across the coord, every
 /// variant, and each `FetchCmd` it emits. Created empty in `Hls::create` and
@@ -37,6 +42,16 @@ pub(crate) struct SizeSignal {
 }
 
 impl SizeSignal {
+    /// Re-aim heartbeat for the off-RT blocking wait. The wait wakes immediately
+    /// on any readiness signal (the fact of a write/commit/fence/seek) —
+    /// event-driven. This interval bounds only the *quiet* case: if no signal
+    /// arrives within it, the peer may be mis-aimed after a seek (it fetched,
+    /// went idle, and the range the reader now wants is outside its prefetch
+    /// window), so the wait yields `WaitBudgetExceeded` to let the off-RT reader
+    /// re-assert the peer's aim (`notify_peer_wake`) and re-enter. It never polls
+    /// for data — readiness is always learned from a signal, never from a timer.
+    const READER_REAIM_INTERVAL: Duration = Duration::from_millis(25);
+
     /// Construct from a fresh readiness gate and an empty worker-wake cell. Built
     /// once in `Hls::create` and cloned down into every consumer.
     pub(crate) fn new(ready: Arc<ThreadGate>, worker_wake: WorkerWakeCell) -> Self {
@@ -100,6 +115,43 @@ impl SizeSignal {
     /// claiming that reader bytes or readiness changed.
     pub(crate) fn wake_worker(&self) {
         wake_worker(&self.worker_wake);
+    }
+
+    /// Off-RT blocking wait: park on the readiness gate until the caller's probe
+    /// resolves (`Ready`/`Eof`/`Interrupted`) or returns a terminal error.
+    /// Event-driven — every transition that can flip the probe (segment
+    /// write/commit/fail, seek reset, cancel) `signal`s the gate. The
+    /// pre-probe [`current`](WaitGate::current) snapshot + park-only-
+    /// if-unchanged is a seqlock guard closing the lost-wakeup window even
+    /// though the probe predicate and the gate sit under different locks
+    /// (mirrors `kithara-storage` `wait_range_inner`). A genuine wedge (no
+    /// signal at all) trips the hang watchdog rather than parking forever.
+    #[kithara::hang_watchdog(timeout = consts::WAIT_HANG_TIMEOUT)]
+    pub(crate) fn wait_range_blocking(
+        &self,
+        cancel: &CancelToken,
+        mut probe: impl FnMut() -> StreamResult<WaitOutcome>,
+    ) -> StreamResult<WaitOutcome> {
+        let _cancel_wake = {
+            let ready = self.ready_gate();
+            cancel.on_cancel(move || ready.signal())
+        };
+        loop {
+            hang_tick!();
+            let since = self.current();
+            match probe() {
+                Ok(WaitOutcome::Ready) => return Ok(WaitOutcome::Ready),
+                Ok(WaitOutcome::Eof) => return Ok(WaitOutcome::Eof),
+                Ok(WaitOutcome::Interrupted) => return Ok(WaitOutcome::Interrupted),
+                Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {}
+                Err(e) => return Err(e),
+            }
+            if self.wait_timeout(since, Self::READER_REAIM_INTERVAL) {
+                hang_reset!();
+            } else {
+                return Err(StreamError::Source(SourceError::WaitBudgetExceeded));
+            }
+        }
     }
 
     delegate::delegate! {

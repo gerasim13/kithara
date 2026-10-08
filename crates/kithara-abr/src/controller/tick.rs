@@ -1,70 +1,19 @@
 use std::sync::atomic::Ordering;
 
-use kithara_platform::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use kithara_platform::{sync::Arc, time::Instant};
 use kithara_test_utils::kithara;
 use tracing::debug;
 
 use super::{
     core::{AbrController, AbrPeerId},
     peer::PeerEntry,
-    throttle::{ThrottleSample, bytes_per_second},
 };
 use crate::{
-    AbrEvent, AbrReason, BandwidthSource, VariantIndex,
+    AbrEvent, AbrReason, VariantIndex,
     state::{AbrDecision, AbrView},
 };
 
 impl AbrController {
-    /// Record a bandwidth sample for `peer_id`. Called by the Downloader
-    /// when a fetch completes. Also evaluates the peer at the sample timestamp,
-    /// read on the clock the downloader ticks the controller with.
-    #[kithara::flash(true)]
-    pub fn record_bandwidth(
-        self: &Arc<Self>,
-        peer_id: AbrPeerId,
-        bytes: u64,
-        fetch_duration: Duration,
-        source: BandwidthSource,
-    ) {
-        if fetch_duration.is_zero() {
-            debug!(
-                ?peer_id,
-                bytes, "ABR: bandwidth sample dropped — zero fetch duration"
-            );
-            return;
-        }
-        self.estimator.push_sample(bytes, fetch_duration, source);
-
-        let Some(entry) = self.peer_entry(peer_id) else {
-            return;
-        };
-
-        entry.bytes_downloaded.fetch_add(bytes, Ordering::AcqRel);
-
-        let now = Instant::now();
-        let bus = entry.bus();
-        if let Some(ref bus) = bus {
-            let mut throttle = entry.throttle.lock();
-            let emit = throttle.last_throughput_sample_at.is_none_or(|t| {
-                now.duration_since(t) >= self.settings.throughput_sample_min_interval
-            });
-            if emit {
-                throttle.last_throughput_sample_at = Some(now);
-                drop(throttle);
-                let bps = bytes_per_second(bytes, fetch_duration);
-                bus.publish(AbrEvent::ThroughputSample {
-                    source,
-                    bytes_per_second: bps,
-                });
-            }
-        }
-
-        self.run_tick(peer_id, now);
-    }
-
     #[kithara::probe(peer_id)]
     pub(crate) fn run_tick(self: &Arc<Self>, peer_id: AbrPeerId, now: Instant) {
         let Some(ctx) = TickContext::resolve(self, peer_id) else {
@@ -101,26 +50,17 @@ impl AbrController {
                 .store(true, Ordering::Release);
         }
 
-        self.emit_throttled(
-            &ctx.entry,
-            &bus,
-            ThrottleSample {
-                now,
-                buffer_ahead,
-                estimate_bps,
-            },
-        );
-
-        let Some(state) = ctx.entry.state.as_ref() else {
-            return;
-        };
-
         let view = AbrView {
             buffer_ahead,
             estimate_bps,
             bytes_downloaded,
             settings: &self.settings,
             variants: &variants,
+        };
+        self.emit_throttled(&ctx.entry, &bus, now, &view);
+
+        let Some(state) = ctx.entry.state.as_ref() else {
+            return;
         };
         let decision = state.decide(&view, now);
 
@@ -172,11 +112,7 @@ impl AbrController {
     }
 }
 
-/// Resolved peer context for one tick — collapses the previous let-else
-/// cascade in `tick()` into one `?` chain. Returning `None` from any of the
-/// three lookups is "abort silently"; the lint distinguishes this from the
-/// heterogeneous cascade case in `decide()` and a single Option-resolver
-/// is the recommended fix.
+/// Live peer and registration resolved for one controller tick.
 struct TickContext {
     entry: Arc<PeerEntry>,
     peer: Arc<dyn crate::abr::Abr>,

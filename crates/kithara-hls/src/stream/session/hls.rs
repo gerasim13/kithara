@@ -18,7 +18,7 @@ use kithara_stream::{
 };
 use tracing::debug;
 
-use super::{super::coord::HlsCoord, cancel::SessionCancel};
+use super::cancel::SessionCancel;
 use crate::{
     signal::SizeSignal,
     variant::{HlsVariant, ResolvedSeekProjection, VariantReaderPreparation},
@@ -319,7 +319,7 @@ where
         self.variant.phase_at(byte..byte.saturating_add(1))
     }
 
-    /// Session-scoped twin of [`HlsCoord::wait_range`]: `Some(_)` is the
+    /// Session-scoped wait: `Some(_)` is the
     /// wake-free RT probe, `None` the off-RT construction wait that parks on the
     /// readiness gate. The variant plans nothing by itself — the reader driver
     /// wakes the peer for the range — so the blocking probe notifies the peer
@@ -334,7 +334,7 @@ where
         }
         match timeout {
             Some(_) => self.variant.wait_range(range, timeout),
-            None => HlsCoord::<S>::wait_range_blocking(&self.signal, &self.cancel.root, || {
+            None => self.signal.wait_range_blocking(&self.cancel.root, || {
                 if self.cancel.root.is_cancelled() {
                     return Ok(WaitOutcome::Interrupted);
                 }
