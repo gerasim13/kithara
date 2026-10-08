@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
 use kithara_devtools::{Ctx, common::tools::ToolsConfig};
-use plist::Value as PlistValue;
+use plist::{Dictionary as PlistDictionary, Value as PlistValue};
 use regex::Regex;
 
 use crate::{
@@ -447,6 +447,7 @@ fn run_build(
         )?;
         strip_xcframework(&xcf_dst, tools)?;
     }
+    link_like_a_consumer(&xcf_dst, tools)?;
 
     if let Some(parent) = swift_dst.parent() {
         fs::create_dir_all(parent)?;
@@ -720,6 +721,102 @@ fn strip_xcframework(xcframework: &FsPath, tools: &ToolsConfig) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Prove every internal slice autolinks its Rust dependencies without consumer
+/// flags. Force-load the archive at the SDK version so dead stripping and Swift
+/// compatibility libraries cannot hide missing system libraries.
+fn link_like_a_consumer(xcframework: &FsPath, tools: &ToolsConfig) -> Result<()> {
+    let plist = xcframework.join("Info.plist");
+    let root =
+        PlistValue::from_file(&plist).with_context(|| format!("read {}", plist.display()))?;
+    let libraries = root
+        .as_dictionary()
+        .and_then(|dict| dict.get("AvailableLibraries"))
+        .and_then(PlistValue::as_array)
+        .with_context(|| format!("invalid xcframework plist {}", plist.display()))?;
+    let temp = TempWorkDir::create("kithara-apple-consumer")?;
+    let source = temp.path().join("main.swift");
+    fs::write(&source, "import KitharaFFIInternal\n")
+        .with_context(|| format!("write {}", source.display()))?;
+
+    for library in libraries {
+        let dict = library
+            .as_dictionary()
+            .with_context(|| format!("invalid xcframework library entry: {library:?}"))?;
+        let identifier = dict
+            .get("LibraryIdentifier")
+            .and_then(PlistValue::as_string)
+            .with_context(|| format!("missing LibraryIdentifier in {library:?}"))?;
+        let headers = dict
+            .get("HeadersPath")
+            .and_then(PlistValue::as_string)
+            .with_context(|| format!("missing HeadersPath for {identifier}"))?;
+        let library_path = dict
+            .get("LibraryPath")
+            .and_then(PlistValue::as_string)
+            .with_context(|| format!("missing LibraryPath for {identifier}"))?;
+        let architectures = dict
+            .get("SupportedArchitectures")
+            .and_then(PlistValue::as_array)
+            .with_context(|| format!("missing SupportedArchitectures for {identifier}"))?;
+        let (sdk, os, suffix) = consumer_platform(dict)?;
+        let sdk_dir = sdk_path(sdk, tools)?;
+        let program = tools.program("xcrun");
+        let output = Command::new(program)
+            .args(["--sdk", sdk, "--show-sdk-version"])
+            .output()
+            .with_context(|| format!("{program} --show-sdk-version {sdk} for {identifier}"))?;
+        if !output.status.success() {
+            bail!(
+                "{program} --show-sdk-version {sdk} for {identifier} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let version = String::from_utf8_lossy(&output.stdout);
+        let slice = xcframework.join(identifier);
+        for architecture in architectures {
+            let arch = architecture.as_string().with_context(|| {
+                format!("invalid architecture for {identifier}: {architecture:?}")
+            })?;
+            let triple = format!("{arch}-apple-{os}{}{suffix}", version.trim());
+            let mut cmd = Command::new(tools.program("xcrun"));
+            cmd.args(["swiftc", "-sdk"])
+                .arg(&sdk_dir)
+                .arg("-target")
+                .arg(&triple)
+                .arg("-I")
+                .arg(slice.join(headers))
+                .arg(&source)
+                .args(["-Xlinker", "-force_load", "-Xlinker"])
+                .arg(slice.join(library_path))
+                .arg("-o")
+                .arg(temp.path().join(format!("{identifier}-{arch}")));
+            run_quiet(
+                &mut cmd,
+                &format!("link consumer for {identifier} ({arch})"),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Map one xcframework library entry to its SDK, target OS, and target suffix.
+fn consumer_platform(
+    library: &PlistDictionary,
+) -> Result<(&'static str, &'static str, &'static str)> {
+    let platform = library
+        .get("SupportedPlatform")
+        .and_then(PlistValue::as_string);
+    let variant = library.get("SupportedPlatformVariant");
+    match (platform, variant) {
+        (Some("ios"), None) => Ok(("iphoneos", "ios", "")),
+        (Some("ios"), Some(PlistValue::String(variant))) if variant == "simulator" => {
+            Ok(("iphonesimulator", "ios", "-simulator"))
+        }
+        (Some("macos"), None) => Ok(("macosx", "macos", "")),
+        _ => bail!("unsupported xcframework library entry: {library:?}"),
+    }
 }
 
 fn keep_arm64_ios_simulator_only(xcframework: &FsPath, tools: &ToolsConfig) -> Result<()> {
@@ -1091,6 +1188,40 @@ fn build_single_xcframework(
         &[&fw_ios.join(&framework), &fw_sim.join(&framework)],
         out,
         tools,
+    )?;
+    let [device, simulator] = &slices;
+    for (arch, framework_dir) in [(device, &fw_ios), (simulator, &fw_sim)] {
+        let binary = framework_dir.join(&framework).join(&spec.framework_name);
+        link_single_like_a_consumer(arch, &binary, tools)?;
+    }
+    Ok(())
+}
+
+/// Prove an assembled single-framework archive autolinks its Rust dependencies
+/// when force-loaded by an empty consumer alongside the matching `RxSwift` archive.
+fn link_single_like_a_consumer(
+    arch: &ArchBuild,
+    framework: &FsPath,
+    tools: &ToolsConfig,
+) -> Result<()> {
+    let source = arch.out.join("main.swift");
+    fs::write(&source, "").with_context(|| format!("write {}", source.display()))?;
+    // At the framework's 15.x target, Swift compatibility adds -lc++;
+    // only the internal xcframework probe can detect a lost libc++.
+    let mut cmd = Command::new(tools.program("xcrun"));
+    cmd.args(["swiftc", "-sdk"])
+        .arg(arch.sdk)
+        .arg("-target")
+        .arg(arch.triple)
+        .arg(&source)
+        .args(["-Xlinker", "-force_load", "-Xlinker"])
+        .arg(framework)
+        .arg(arch.rx_out.join("libRxSwift.a"))
+        .arg("-o")
+        .arg(arch.out.join("consumer"));
+    run_quiet(
+        &mut cmd,
+        &format!("link single-framework consumer for {}", arch.triple),
     )
 }
 
