@@ -196,9 +196,13 @@ impl ActiveDecode {
         } else {
             self.active.next()
         };
-        let Some(chunk) = next else {
+        let Some(mut chunk) = next else {
             return Ok(None);
         };
+        crate::pipeline::seek::skip::rebase_source(
+            &mut chunk,
+            self.active.pending_head_skip_mut().as_deref(),
+        )?;
         cursor.record(&chunk);
         if let Some(observer) = &mut self.observer {
             let _observation = observer.try_observe(&chunk);
@@ -299,7 +303,8 @@ impl ActiveDecode {
         if let Ok(ref outcome) = outcome {
             commit_outcome(&self.active, stream, playhead, outcome);
             if matches!(outcome, DecoderSeekOutcome::Landed { .. }) {
-                self.active.trim_to(position);
+                self.active
+                    .trim_to(crate::pipeline::seek::ResumeTarget::Position(position));
             }
         }
         debug!(
@@ -367,11 +372,12 @@ mod tests {
     use kithara_test_fixtures::unit_fixtures::{
         cursor_half, decode_negative_quarter, decode_quarter,
     };
+    use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};
 
     use super::*;
     use crate::{
-        pipeline::decode::transition::IncomingPrime,
+        pipeline::decode::transition::{IncomingPrime, OutgoingFrontier},
         test_pools::{Pools, pools, sample_buffer},
         traits::{AudioObserveError, AudioObserverMock},
     };
@@ -397,7 +403,7 @@ mod tests {
     #[kithara::test]
     fn configured_container_selects_the_incoming_reader_profile() {
         let factory = DecoderFactory::new(
-            |_reader, _media_info| -> Result<Box<dyn Decoder>, DecodeError> {
+            |_reader, _media_info, _rate| -> Result<Box<dyn Decoder>, DecodeError> {
                 panic!("reader-profile test must not construct a decoder")
             },
             Some(
@@ -423,11 +429,7 @@ mod tests {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
         let mut decode = active_decode(&pools, generation(spec), GaplessMode::Disabled);
         let initial_capacity = decode.active().staged_capacity();
-        let mut cursor = ResumeCursor::new(
-            Arc::new(AtomicU32::new(spec.sample_rate.get())),
-            false,
-            spec.sample_rate.get(),
-        );
+        let mut cursor = ResumeCursor::default();
         decode
             .push(AudioChunk::new(
                 AudioChunkInfo {
@@ -443,7 +445,7 @@ mod tests {
         assert!(decode.active().staged_span().is_none());
         assert!(
             decode
-                .next_output(&mut cursor, 0)
+                .next_output(&mut cursor)
                 .expect("steady output remains valid")
                 .is_some()
         );
@@ -487,14 +489,10 @@ mod tests {
                 sample_buffer(&pools, &decode_quarter[..64 * usize::from(spec.channels)]),
             ))
             .expect("fixture PCM is valid");
-        let mut cursor = ResumeCursor::new(
-            Arc::new(AtomicU32::new(spec.sample_rate.get())),
-            false,
-            spec.sample_rate.get(),
-        );
+        let mut cursor = ResumeCursor::default();
 
         let output = decode
-            .next_output(&mut cursor, 0)
+            .next_output(&mut cursor)
             .expect("observer saturation does not fail playback")
             .expect("observer saturation does not consume playback PCM");
 
@@ -504,7 +502,11 @@ mod tests {
 
     #[kithara::test]
     fn invalid_holdback_pcm_is_retained_for_shell_retirement(decode_quarter: Vec<f32>) {
-        let pools = pools();
+        let config = kithara_bufpool::PoolConfig::builder()
+            .max_buffers(32)
+            .max_retained_capacity(1)
+            .build();
+        let pools = crate::test_pools::pools_with(1024 * 1024, config, config);
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
         let active = generation(spec);
         let incoming = generation(spec);
@@ -514,7 +516,7 @@ mod tests {
             .claim_pending_decision(VariantIndex::new(0))
             .expect("test transition claim");
         let transition = VariantTransition::new(
-            VariantTransitionId::new(claim.ticket(), 0),
+            VariantTransitionId::new(claim.ticket()),
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
@@ -540,11 +542,14 @@ mod tests {
             .push(make_chunk(0))
             .expect("first holdback chunk is valid");
 
-        assert!(decode.push(make_chunk(5)).is_err());
-        let rejected = decode
-            .take_rejected_chunk()
-            .expect("invalid pooled PCM remains owned until the shell retires it");
-        assert_eq!(rejected.meta.frame_offset, 5);
+        let rejected = make_chunk(5);
+        let rejected_bytes = rejected.samples.capacity() * size_of::<f32>();
+        let allocated_before = pools.stats().allocated_bytes;
+        assert!(decode.push(rejected).is_err());
+        assert_eq!(
+            pools.stats().allocated_bytes,
+            allocated_before - rejected_bytes
+        );
         assert_eq!(
             decode.active().staged_span().map(|(_, end, _)| end),
             Some(4)
@@ -563,7 +568,7 @@ mod tests {
             .claim_pending_decision(VariantIndex::new(0))
             .expect("test transition claim");
         let transition = VariantTransition::new(
-            VariantTransitionId::new(claim.ticket(), 0),
+            VariantTransitionId::new(claim.ticket()),
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
@@ -606,7 +611,11 @@ mod tests {
         decode_quarter: Vec<f32>,
         cursor_half: Vec<f32>,
     ) {
-        let pools = pools();
+        let config = kithara_bufpool::PoolConfig::builder()
+            .max_buffers(32)
+            .max_retained_capacity(1)
+            .build();
+        let pools = crate::test_pools::pools_with(1024 * 1024, config, config);
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
         let mut active = generation(spec);
         active.stage(AudioChunk::new(
@@ -626,7 +635,7 @@ mod tests {
             },
             sample_buffer(&pools, &cursor_half[..4 * usize::from(spec.channels)]),
         );
-        let rejected_samples = rejected.samples.as_ptr();
+        let rejected_bytes = rejected.samples.capacity() * size_of::<f32>();
         active.stage(rejected);
 
         let incoming = generation(spec);
@@ -636,7 +645,7 @@ mod tests {
             .claim_pending_decision(VariantIndex::new(0))
             .expect("test transition claim");
         let transition = VariantTransition::new(
-            VariantTransitionId::new(claim.ticket(), 0),
+            VariantTransitionId::new(claim.ticket()),
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
@@ -647,6 +656,8 @@ mod tests {
             frontier: OutgoingFrontier::Awaiting,
         });
 
+        decode.prepare_replacement_profile(BlenderProfile::new(spec));
+        let allocated_before = pools.stats().allocated_bytes;
         decode.prepare_incoming_profile(BlenderProfile::new(spec));
         assert!(
             decode.stage_error.is_some(),
@@ -659,12 +670,19 @@ mod tests {
             decode.take_stage_error().is_none(),
             "reset must not leak the invalidated transition error into the next lifecycle"
         );
-        let rejected = decode
-            .take_rejected_chunk()
-            .expect("reset must retain rejected PCM for shell retirement");
-        assert_eq!(rejected.samples.as_ptr(), rejected_samples);
-        assert_eq!(rejected.meta.frame_offset, 5);
-        assert!(decode.take_rejected_chunk().is_none());
+        assert_eq!(
+            pools.stats().allocated_bytes,
+            allocated_before - rejected_bytes
+        );
+        assert_eq!(
+            decode.active().staged_span().map(|(_, end, _)| end),
+            Some(4)
+        );
+        decode.reset();
+        assert_eq!(
+            pools.stats().allocated_bytes,
+            allocated_before - rejected_bytes
+        );
     }
 
     #[kithara::test]
@@ -679,7 +697,7 @@ mod tests {
             .claim_pending_decision(VariantIndex::new(0))
             .expect("test transition claim");
         let transition = VariantTransition::new(
-            VariantTransitionId::new(claim.ticket(), 0),
+            VariantTransitionId::new(claim.ticket()),
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
@@ -701,26 +719,22 @@ mod tests {
                 sample_buffer(&pools, &samples),
             ))
             .expect("valid fixture PCM enters prepared holdback");
-        let mut cursor = ResumeCursor::new(
-            Arc::new(AtomicU32::new(spec.sample_rate.get())),
-            false,
-            spec.sample_rate.get(),
-        );
+        let mut cursor = ResumeCursor::default();
 
         assert!(
             decode
-                .next_output(&mut cursor, 0)
+                .next_output(&mut cursor)
                 .expect("held output remains valid")
                 .is_none()
         );
         let output = decode
-            .next_output_unheld(&mut cursor, 0)
+            .next_output_unheld(&mut cursor)
             .expect("unheld output remains valid")
             .expect("EOF drain must release the held outgoing tail");
         assert_eq!(output.meta.frames, 128);
         assert!(
             decode
-                .next_output_unheld(&mut cursor, 0)
+                .next_output_unheld(&mut cursor)
                 .expect("drained output remains valid")
                 .is_none()
         );
@@ -740,7 +754,7 @@ mod tests {
             .claim_pending_decision(VariantIndex::new(0))
             .expect("test transition claim");
         let transition = VariantTransition::new(
-            VariantTransitionId::new(claim.ticket(), 0),
+            VariantTransitionId::new(claim.ticket()),
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
@@ -811,7 +825,7 @@ mod tests {
             .claim_pending_decision(VariantIndex::new(0))
             .expect("test transition claim");
         let transition = VariantTransition::new(
-            VariantTransitionId::new(claim.ticket(), 0),
+            VariantTransitionId::new(claim.ticket()),
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
@@ -873,7 +887,7 @@ mod tests {
             .claim_pending_decision(VariantIndex::new(0))
             .expect("test transition claim");
         let transition = VariantTransition::new(
-            VariantTransitionId::new(claim.ticket(), 0),
+            VariantTransitionId::new(claim.ticket()),
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
@@ -881,7 +895,7 @@ mod tests {
             Box::new(TerminalDecoder::new(spec, TerminalOutcome::VariantChange)),
             None,
             0,
-            0,
+            None,
             None,
             GaplessMode::Disabled,
         );
@@ -919,7 +933,7 @@ mod tests {
             .claim_pending_decision(VariantIndex::new(0))
             .expect("test transition claim");
         let transition = VariantTransition::new(
-            VariantTransitionId::new(claim.ticket(), 0),
+            VariantTransitionId::new(claim.ticket()),
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
@@ -965,18 +979,14 @@ mod tests {
                 rate: spec.sample_rate.get(),
             },
         });
-        let mut cursor = ResumeCursor::new(
-            Arc::new(AtomicU32::new(spec.sample_rate.get())),
-            false,
-            spec.sample_rate.get(),
-        );
+        let mut cursor = ResumeCursor::default();
 
         assert!(
             !decode.transition_holds_output(),
             "the follow-up transition must not freeze an active join"
         );
         let output = decode
-            .next_output(&mut cursor, 0)
+            .next_output(&mut cursor)
             .expect("active join remains decodable");
 
         assert!(output.is_some(), "the prior join must keep consuming PCM");
@@ -993,7 +1003,7 @@ mod tests {
             .claim_pending_decision(VariantIndex::new(0))
             .expect("test transition claim");
         let transition = VariantTransition::new(
-            VariantTransitionId::new(claim.ticket(), 0),
+            VariantTransitionId::new(claim.ticket()),
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
@@ -1013,15 +1023,11 @@ mod tests {
                 rate: spec.sample_rate.get(),
             },
         });
-        let mut cursor = ResumeCursor::new(
-            Arc::new(AtomicU32::new(spec.sample_rate.get())),
-            false,
-            spec.sample_rate.get(),
-        );
+        let mut cursor = ResumeCursor::default();
 
         assert!(!decode.transition_holds_output());
         let output = decode
-            .next_output(&mut cursor, 0)
+            .next_output(&mut cursor)
             .expect("preparing transition keeps active output valid");
 
         assert!(
@@ -1082,7 +1088,7 @@ mod tests {
             Box::new(TerminalDecoder::new(spec, TerminalOutcome::Eof)),
             None,
             0,
-            0,
+            None,
             None,
             GaplessMode::Disabled,
         )

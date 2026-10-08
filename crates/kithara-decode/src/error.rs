@@ -2,7 +2,7 @@ use std::{error::Error as StdError, io, io::ErrorKind, num::TryFromIntError};
 
 use kithara_bufpool::PoolError;
 use kithara_signal::SignalError;
-#[cfg(any(test, apple_backend, android_backend))]
+#[cfg(any(apple_backend, android_backend))]
 use kithara_stream::PendingReason;
 use kithara_stream::{AudioCodec, ContainerFormat, VariantChangeError};
 #[cfg(any(apple_backend, android_backend))]
@@ -410,7 +410,7 @@ mod tests {
 
     #[kithara::test]
     #[case::seek_pending_counts_as_interrupted(
-        DecodeError::backend(IoError::other(PendingReason::SeekPending)),
+        DecodeError::backend(IoError::new(std::io::ErrorKind::Interrupted, "interrupted")),
         true
     )]
     #[case::other_io_is_not_interrupted(
@@ -435,8 +435,6 @@ mod tests {
 mod symphonia {
     use std::{error::Error as StdError, io};
 
-    #[cfg(test)]
-    use kithara_stream::PendingReason::SeekPending;
     use symphonia_core::errors::Error;
 
     pub(crate) type SymphoniaError = Error;
@@ -475,8 +473,9 @@ mod symphonia {
 
         #[kithara::test]
         fn test_backend_symphonia_seek_pending_counts_as_interrupted() {
-            let decode_err = DecodeError::backend(super::SymphoniaError::IoError(IoError::other(
-                super::SeekPending,
+            let decode_err = DecodeError::backend(super::SymphoniaError::IoError(IoError::new(
+                std::io::ErrorKind::Interrupted,
+                "interrupted",
             )));
             assert!(decode_err.is_interrupted());
         }

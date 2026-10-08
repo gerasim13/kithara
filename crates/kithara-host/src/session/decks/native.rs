@@ -1,7 +1,11 @@
-use std::task::{Wake, Waker};
+use std::task::Waker;
+#[cfg(not(target_arch = "wasm32"))]
+use std::task::Wake;
 
-use kithara_platform::sync::{Arc, Weak};
-use kithara_play::PlayError;
+use kithara_platform::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_platform::sync::Weak;
+use kithara_play::{HostedDeck, PlayError};
 
 use crate::{DeckId, HostOwner};
 
@@ -28,19 +32,23 @@ pub(crate) trait DeckInbox:
     kithara_platform::maybe_send::MaybeSend + kithara_platform::maybe_send::MaybeSync + 'static
 {
     fn post(&self, message: DeckMsg) -> Result<(), PlayError>;
+    #[cfg(target_arch = "wasm32")]
+    fn waker(&self, id: DeckId) -> Waker;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct DeckWake {
     id: DeckId,
     inbox: Weak<dyn DeckInbox>,
 }
 
+#[cfg(target_arch = "wasm32")]
+pub(crate) struct DeckWake;
+
 impl DeckWake {
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn waker(_inbox: &Arc<dyn DeckInbox>, _id: DeckId) -> Waker {
-        todo!(
-            "Create the owning browser thread wake for DeckMsg::Drain(id) without requiring a transferable HostedDeck (spec §5.3)"
-        )
+    pub(crate) fn waker(inbox: &Arc<dyn DeckInbox>, id: DeckId) -> Waker {
+        inbox.waker(id)
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn waker(inbox: &Arc<dyn DeckInbox>, id: DeckId) -> Waker {

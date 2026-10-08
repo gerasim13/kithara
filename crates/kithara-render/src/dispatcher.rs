@@ -320,14 +320,22 @@ mod tests {
     #[derive(Debug)]
     struct Gate(oneshot::Receiver<Result<u32, LoadRefusal>>);
 
+    struct TestLane;
+    impl Task for TestLane { fn tick(&mut self) -> TickResult { TickResult::Waiting } }
+    impl LaneTask for TestLane {
+        fn set_priority(&mut self, _class: ServiceClass) {}
+        fn poll_commands(&mut self, _cx: &mut Context<'_>) -> Poll<()> { Poll::Pending }
+    }
+
     impl Open for Gate {
         type Opened = u32;
+        type Lane = TestLane;
 
-        fn open(self) -> impl MaybeSendFuture<Output = Result<u32, LoadRefusal>> {
+        fn open(self, _position: Duration, _start: LaneStart, _inbox: Inbox<LaneProtocol>) -> impl MaybeSendFuture<Output = Result<(u32, TestLane, FrameCount), LoadRefusal>> {
             async move {
                 self.0
                     .await
-                    .expect("the test answers every open it lets run")
+                    .expect("the test answers every open it lets run").map(|value| (value, TestLane, FrameCount::new(0)))
             }
         }
     }
@@ -347,13 +355,13 @@ mod tests {
         )
     }
 
-    fn send(sender: &mut Sender<Protocol>, items: Vec<Gate>) -> kithara_command::Seq {
+    fn send(sender: &mut Sender<Protocol>, items: Vec<Gate>) -> Seq {
         sender
             .send(
                 When::Next,
                 Batch {
                     basis: Vec::new(),
-                    commands: items,
+                    commands: items.into_iter().map(|item| DispatcherCommand::Load(LoadRequest { item, position: Duration::ZERO, start: LaneStart { speed: SpeedCurve::Constant(1.0), keylock: false, backend: StretchKind::default() }, inbox: channel(ChannelConfig::builder().build()).1 })).collect(),
                 },
             )
             .expect("the channel has room")
@@ -382,7 +390,7 @@ mod tests {
             matches!(
                 answered.as_slice(),
                 [receipt] if receipt.seq() == second
-                    && matches!(receipt.outcome(), Outcome::Applied { data: 2, .. })
+                    && matches!(receipt.outcome(), Outcome::Applied { data: Dispatched::Loaded(Loaded { opened: 2, .. }), .. })
             ),
             "the second open ends first and answers its own batch: {answered:?}"
         );

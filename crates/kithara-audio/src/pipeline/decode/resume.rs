@@ -1,4 +1,3 @@
-use kithara_platform::time::Duration;
 use kithara_signal::AudioChunk;
 
 #[derive(Default)]
@@ -27,13 +26,14 @@ impl ResumeCursor {
             chunk.spec().sample_rate,
         ));
     }
-    pub(crate) fn position(&self) -> Option<Duration> {
-        let (frame, rate) = match self.rendered_source_head {
-            Some(end) => (end.frame(), end.sample_rate()),
-            None => self.decode_head?,
-        };
-        kithara_signal::AudioSpec::new(1, rate)
-            .duration_for(frame)
-            .ok()
+    pub(crate) fn source_end(&self) -> Option<crate::SourceEnd> {
+        self.rendered_source_head.or_else(|| {
+            self.decode_head
+                .map(|(frame, rate)| crate::SourceEnd::new(frame, rate))
+        })
+    }
+    pub(crate) fn rebase(&mut self, end: crate::SourceEnd) {
+        self.decode_head = Some((end.frame(), end.sample_rate()));
+        self.rendered_source_head = Some(end);
     }
 }

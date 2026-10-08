@@ -1,10 +1,23 @@
 use kithara_bufpool::HasPool;
 use kithara_command::Seq;
 use kithara_events::TrackId;
-pub use kithara_play::player::PlaybackView;
 use kithara_play::{Bound, CrossfadeSettings, ResourceSrc};
 
 use crate::{event::AdvanceReason, track::TrackSource};
+
+/// One coherent view of the current track's published playback state.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct PlaybackView {
+    /// Seconds playable without further network access.
+    pub buffered: Option<f64>,
+    /// Total media duration in seconds; `None` while unknown.
+    pub duration: Option<f64>,
+    /// Playback position in seconds; `None` until a stable value exists.
+    pub position: Option<f64>,
+    /// Whether playback is active.
+    pub playing: bool,
+}
 
 /// The profile a caller requests for a track switch.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -47,35 +60,9 @@ pub(super) struct Target {
     pub(super) auto: bool,
     /// The withdrawn transition whose stale receipt permits recomputation.
     pub(super) stale: Option<Seq>,
-}
-
-/// Cached monotonic playback position; "no value yet" is the explicit
-/// [`CachedPosition::Unknown`] variant.
-#[derive(Clone, Copy, Debug)]
-pub(super) enum CachedPosition {
-    Unknown,
-    Known { seconds: f64 },
-}
-
-impl CachedPosition {
-    /// Build a [`CachedPosition::Known`], canonicalising a `NaN` input to
-    /// [`CachedPosition::Unknown`] so the type never carries a `NaN`.
-    pub(super) const fn known(seconds: f64) -> Self {
-        if seconds.is_nan() {
-            Self::Unknown
-        } else {
-            Self::Known { seconds }
-        }
-    }
-}
-
-impl From<CachedPosition> for Option<f64> {
-    fn from(pos: CachedPosition) -> Self {
-        match pos {
-            CachedPosition::Known { seconds } => Some(seconds),
-            CachedPosition::Unknown => None,
-        }
-    }
+    pub(super) retry: Option<Seq>,
+    pub(super) repeat: Option<Seq>,
+    pub(super) chained: bool,
 }
 
 /// Where a new track should land in the queue's internal `Vec`.
@@ -88,29 +75,9 @@ pub(super) enum Placement {
     At(usize),
 }
 
-/// The current track's position and duration in media seconds and the rate
-/// it plays at, in media seconds per session second.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct PlaybackTime {
-    pub(crate) dur: f64,
-    pub(crate) pos: f64,
-    pub(crate) rate: f64,
-}
-
-impl PlaybackTime {
-    /// Whether the track advances and ends within `seconds` of session time:
-    /// the media time left, divided by the rate it plays at.
-    pub(crate) fn ends_within(self, seconds: f32) -> bool {
-        self.dur > 0.0
-            && self.pos > 0.0
-            && self.rate > 0.0
-            && (self.dur - self.pos) / self.rate <= f64::from(seconds)
-    }
-}
-
 pub(super) fn extract_track_name<S>(source: &TrackSource<S>) -> String
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     let raw = match source {
         TrackSource::Uri(s) => s.as_str(),
@@ -138,7 +105,6 @@ fn name_from_raw(s: &str) -> String {
         .unwrap_or("Unknown")
         .to_string()
 }
-
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;

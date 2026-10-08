@@ -176,7 +176,7 @@ mod tests {
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
     use kithara_events::EventBus;
     use kithara_platform::{CancelToken, sync::ThreadGate, time::Duration as PlatformDuration};
-    use kithara_stream::{AudioCodec, ContainerFormat, PlayheadState, SeekState};
+    use kithara_stream::{ActivityWriter, AudioCodec, ContainerFormat, PlayheadState};
     use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};
 
@@ -231,7 +231,6 @@ mod tests {
             let variant = VariantParts {
                 segments,
                 init: None,
-                seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
                 codec: playlist.variant_codec(0),
                 container: playlist.variant_container(0),
             }
@@ -257,7 +256,7 @@ mod tests {
                     signal: ctx.signal.clone(),
                 },
                 Arc::new(PlayheadState::new()),
-                Arc::new(SeekState::new()),
+                ActivityWriter::new(),
                 handle,
                 publisher,
                 Arc::from(vec![variant]),
@@ -281,7 +280,6 @@ mod tests {
                         discriminator: Some("source-test".to_owned()),
                     })
                     .expect("source asset scope"),
-                seek_epoch: 0,
                 look_ahead_segments: None,
                 signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
                 config: Arc::new(
@@ -328,7 +326,6 @@ mod tests {
                 CancelScope::new(Some(cancel.clone())),
             );
             let peer = Arc::new(HlsPeer::new(
-                coord.seek_observe(),
                 coord.activity(),
                 AbrMode::Auto(Some(VariantIndex::new(0))),
                 cancel.clone(),

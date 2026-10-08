@@ -1,13 +1,13 @@
 //! What a player sends through and what comes back to it.
 
-use kithara_command::{Batch, Receipt, Rejection, SendError, Sender, Seq, When};
+use kithara_command::{Batch, Outcome, Port, Receipt, Rejection, SendError, Sender, Seq, When};
 use kithara_render::{
-    DispatcherProtocol,
+    DispatcherCommand, DispatcherProtocol, LaneId, LoadRequest,
     bridge::{DeckEvent, DeckPart, DeckProtocol, Slot},
 };
 use kithara_signal::SessionFrame;
 
-use crate::{PlayError, ResourceLoad};
+use crate::{DeckPass, PlayError, ResourceLoad};
 
 /// One loaded track or a deck built of them: it changes its own state on the
 /// owner's thread and reaches the executors only through the [`Outbox`] it is
@@ -18,9 +18,8 @@ pub trait Player<S> {
     /// What the player shows of itself.
     type Snapshot;
 
-    /// The frame the player can enter on, nearest to `bound` from the side it
-    /// names.
-    fn entry(&self, bound: Bound) -> SessionFrame;
+    /// The proven entry nearest to `bound` on its requested side, if known.
+    fn entry(&self, bound: Bound) -> Option<SessionFrame>;
 
     /// Applies `command` and returns the number of the batch it became, if one
     /// went out on its own.
@@ -61,9 +60,11 @@ pub enum Bound {
 /// Inside [`Outbox::together`] every deck part goes into one batch, so the
 /// halves of a transition two players send apply on one frame or not at all.
 pub struct Outbox<'a, S> {
-    deck: &'a mut Sender<DeckProtocol>,
+    deck: &'a mut dyn Port<DeckProtocol>,
     dispatcher: &'a mut Sender<DispatcherProtocol<ResourceLoad<S>>>,
     group: Option<Group>,
+    pass: Option<DeckPass<'a>>,
+    dispatches: Option<&'a mut Vec<Seq>>,
 }
 
 /// The batch [`Outbox::together`] is collecting.
@@ -76,14 +77,55 @@ struct Group {
 impl<'a, S> Outbox<'a, S> {
     #[must_use]
     pub fn new(
-        deck: &'a mut Sender<DeckProtocol>,
+        deck: &'a mut dyn Port<DeckProtocol>,
         dispatcher: &'a mut Sender<DispatcherProtocol<ResourceLoad<S>>>,
     ) -> Self {
         Self {
             deck,
             dispatcher,
             group: None,
+            pass: None,
+            dispatches: None,
         }
+    }
+
+    /// Borrows the observations and clock of the owner's current iteration.
+    pub fn in_pass(mut self, pass: DeckPass<'a>) -> Self {
+        self.pass = Some(pass);
+        self
+    }
+
+    /// Records dispatcher batches in the deck record that owns their answers.
+    pub fn track_dispatches(mut self, dispatches: &'a mut Vec<Seq>) -> Self {
+        self.dispatches = Some(dispatches);
+        self
+    }
+
+    /// The current iteration's observations, when a host owns this outbox.
+    pub fn pass(&self) -> Option<DeckPass<'_>> {
+        self.pass
+    }
+
+    pub(crate) fn is_grouped(&self) -> bool {
+        self.group.is_some()
+    }
+
+    pub fn deck_available(&self) -> usize {
+        self.deck.available()
+    }
+
+    pub fn dispatcher_available(&self) -> usize {
+        self.dispatcher.available()
+    }
+
+    fn check_when(&self, at: When<SessionFrame>) -> Result<(), PlayError> {
+        if let When::At(frame) = at {
+            let pass = self.pass.ok_or(PlayError::Untimed)?;
+            if frame < pass.earliest() {
+                return Err(PlayError::Late);
+            }
+        }
+        Ok(())
     }
 
     /// Runs `send` with every deck part it sends collected into one batch
@@ -99,6 +141,25 @@ impl<'a, S> Outbox<'a, S> {
         at: When<SessionFrame>,
         send: impl FnOnce(&mut Self) -> Result<R, PlayError>,
     ) -> Result<(R, Option<Seq>), PlayError> {
+        self.together_owned(at, send).map_err(|(error, _parts)| error)
+    }
+
+    /// Collects one batch and returns its original parts if staging or sending fails.
+    pub fn together_owned<R>(
+        &mut self,
+        at: When<SessionFrame>,
+        send: impl FnOnce(&mut Self) -> Result<R, PlayError>,
+    ) -> Result<(R, Option<Seq>), (PlayError, Vec<DeckPart>)> {
+        if self.group.is_some() || matches!(at, When::Deferred) {
+            return Err((
+                PlayError::Internal("a deferred or nested group is not a timed batch".into()),
+                Vec::new(),
+            ));
+        }
+        self.check_when(at).map_err(|error| (error, Vec::new()))?;
+        if self.deck.available() == 0 {
+            return Err((PlayError::Full("deck"), Vec::new()));
+        }
         self.group = Some(Group {
             at,
             basis: Vec::new(),
@@ -106,11 +167,20 @@ impl<'a, S> Outbox<'a, S> {
         });
         let sent = send(self);
         let group = self.group.take();
-        let value = sent?;
+        let value = match sent {
+            Ok(value) => value,
+            Err(error) => return Err((error, group.map_or_else(Vec::new, |group| group.parts))),
+        };
         let Some(Group { at, basis, parts }) = group.filter(|group| !group.parts.is_empty()) else {
             return Ok((value, None));
         };
-        let seq = deck_sent(self.deck.send(at, Batch { basis, commands: parts }))?;
+        let seq = deck_sent_owned(self.deck.send(
+            at,
+            Batch {
+                basis,
+                commands: parts,
+            },
+        ))?;
         Ok((value, Some(seq)))
     }
 
@@ -127,17 +197,37 @@ impl<'a, S> Outbox<'a, S> {
         at: When<SessionFrame>,
         parts: Vec<DeckPart>,
     ) -> Result<Option<Seq>, PlayError> {
+        self.deck_owned(at, parts).map_err(|(error, _parts)| error)
+    }
+
+    pub(crate) fn deck_owned(
+        &mut self,
+        at: When<SessionFrame>,
+        parts: Vec<DeckPart>,
+    ) -> Result<Option<Seq>, (PlayError, Vec<DeckPart>)> {
+        if matches!(at, When::Deferred) {
+            return Err((
+                PlayError::Internal("deferred parts require an end-marker operation".into()),
+                parts,
+            ));
+        }
+        if let Err(error) = self.check_when(at) {
+            return Err((error, parts));
+        }
         let deck = &*self.deck;
         if let Some(group) = &mut self.group {
             if group.at != at {
-                return Err(PlayError::Internal(format!(
-                    "a part at {at:?} joined a batch at {:?}",
-                    group.at
-                )));
+                return Err((
+                    PlayError::Internal(format!(
+                        "a part at {at:?} joined a batch at {:?}",
+                        group.at
+                    )),
+                    parts,
+                ));
             }
             for slot in parts.iter().flat_map(slots) {
                 if !group.basis.iter().any(|&(named, _)| named == slot) {
-                    group.basis.push((slot, deck.basis(slot)));
+                    group.basis.push((slot, deck.basis(slot, at)));
                 }
             }
             group.parts.extend(parts);
@@ -146,10 +236,17 @@ impl<'a, S> Outbox<'a, S> {
         let mut basis: Vec<(Slot, Option<Seq>)> = Vec::new();
         for slot in parts.iter().flat_map(slots) {
             if !basis.iter().any(|&(named, _)| named == slot) {
-                basis.push((slot, deck.basis(slot)));
+                basis.push((slot, deck.basis(slot, at)));
             }
         }
-        deck_sent(self.deck.send(at, Batch { basis, commands: parts })).map(Some)
+        deck_sent_owned(self.deck.send(
+            at,
+            Batch {
+                basis,
+                commands: parts,
+            },
+        ))
+        .map(Some)
     }
 
     /// Asks the dispatcher to open `item`.
@@ -157,17 +254,46 @@ impl<'a, S> Outbox<'a, S> {
     /// # Errors
     ///
     /// Returns [`PlayError::Full`] when the dispatcher has no room.
-    pub(crate) fn load(&mut self, item: ResourceLoad<S>) -> Result<Seq, PlayError> {
+    pub(crate) fn load(&mut self, request: LoadRequest<ResourceLoad<S>>) -> Result<Seq, PlayError> {
+        self.dispatch(DispatcherCommand::Load(request))
+    }
+
+    pub(crate) fn release(&mut self, lane: LaneId) -> Result<Seq, PlayError> {
+        self.dispatch(DispatcherCommand::Release(lane))
+    }
+
+    fn dispatch(&mut self, command: DispatcherCommand<ResourceLoad<S>>) -> Result<Seq, PlayError> {
         let batch = Batch {
             basis: Vec::new(),
-            commands: vec![item],
+            commands: vec![command],
         };
-        self.dispatcher
+        let seq = self.dispatcher
             .send(When::Next, batch)
             .map_err(|error| match error {
                 SendError::Full(_) => PlayError::Full("dispatcher"),
                 SendError::Target(_) | SendError::Closed(_) => PlayError::Closed,
-            })
+            })?;
+        if let Some(dispatches) = &mut self.dispatches {
+            dispatches.push(seq);
+        }
+        Ok(seq)
+    }
+
+    pub fn chain(&mut self, from: Slot, to: Slot) -> Result<Seq, PlayError> {
+        self.deferred(vec![DeckPart::Chain { from, to }])
+    }
+
+    pub(crate) fn deferred(&mut self, parts: Vec<DeckPart>) -> Result<Seq, PlayError> {
+        if self.group.is_some() {
+            return Err(PlayError::Internal("an end-marker operation cannot join a timed batch".into()));
+        }
+        let mut basis = Vec::new();
+        for slot in parts.iter().flat_map(slots) {
+            if !basis.iter().any(|&(named, _)| named == slot) {
+                basis.push((slot, self.deck.basis(slot, When::Deferred)));
+            }
+        }
+        deck_sent(self.deck.send(When::Deferred, Batch { basis, commands: parts }))
     }
 }
 
@@ -179,23 +305,34 @@ fn slots(part: &DeckPart) -> impl Iterator<Item = Slot> {
         | DeckPart::Start { slot, .. }
         | DeckPart::Stop { slot, .. }
         | DeckPart::Fade { slot, .. }
-        | DeckPart::Seek { slot, .. }
-        | DeckPart::Rate { slot, .. }
+        | DeckPart::Adopt { slot, .. }
         | DeckPart::Replace { slot, .. } => (Some(slot), None),
         DeckPart::Chain { from, to } => (Some(from), Some(to)),
-        DeckPart::Mix(_) | DeckPart::Eq(_) | DeckPart::Released(_) => (None, None),
+        DeckPart::Mix(_) | DeckPart::Eq(_) | DeckPart::Returned(_) => (None, None),
     };
     first.into_iter().chain(second)
 }
 
 fn deck_sent(sent: Result<Seq, SendError<DeckProtocol>>) -> Result<Seq, PlayError> {
-    sent.map_err(|error| match error {
-        SendError::Full(_) => PlayError::Full("deck"),
-        SendError::Target(batch) => PlayError::Internal(format!(
-            "a deck batch names a slot outside the mixer: {:?}",
-            batch.basis
-        )),
-        SendError::Closed(_) => PlayError::Closed,
+    deck_sent_owned(sent).map_err(|(error, _parts)| error)
+}
+
+fn deck_sent_owned(
+    sent: Result<Seq, SendError<DeckProtocol>>,
+) -> Result<Seq, (PlayError, Vec<DeckPart>)> {
+    sent.map_err(|error| {
+        let (error, batch) = match error {
+            SendError::Full(batch) => (PlayError::Full("deck"), batch),
+            SendError::Target(batch) => (
+                PlayError::Internal(format!(
+                    "a deck batch names a slot outside the mixer: {:?}",
+                    batch.basis
+                )),
+                batch,
+            ),
+            SendError::Closed(batch) => (PlayError::Closed, batch),
+        };
+        (error, batch.commands)
     })
 }
 
@@ -212,7 +349,11 @@ pub enum Settled {
 /// player whose slot the batch names; a receipt of the dispatcher; or an event
 /// of its slot. Its own lane's receipts it reads itself.
 pub enum TrackReceipt<'r, S> {
-    Deck(&'r Receipt<DeckProtocol>),
+    Deck {
+        seq: Seq,
+        outcome: &'r Outcome<DeckProtocol>,
+        batch: &'r mut Batch<DeckProtocol>,
+    },
     Loaded(Receipt<DispatcherProtocol<ResourceLoad<S>>>),
     Event(DeckEvent),
 }
@@ -223,7 +364,7 @@ impl<S> TrackReceipt<'_, S> {
     #[must_use]
     pub fn names(&self, slot: Slot) -> bool {
         match self {
-            Self::Deck(receipt) => receipt.batch().basis.iter().any(|&(named, _)| named == slot),
+            Self::Deck { batch, .. } => batch.basis.iter().any(|&(named, _)| named == slot),
             Self::Event(
                 DeckEvent::Ended { slot: named, .. }
                 | DeckEvent::Failed { slot: named, .. }

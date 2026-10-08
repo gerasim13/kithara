@@ -1,9 +1,11 @@
-use std::{collections::VecDeque, num::NonZeroU64};
+use std::{collections::VecDeque, num::NonZeroU128};
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_signal::{AudioChunkInfo, SourceSpan};
 use kithara_stretch::ElasticError;
 use num_traits::ToPrimitive;
+
+use super::renderer::WarpRenderer;
 
 /// A bounded decoded-source window, shared by activation and backend replacement.
 /// It contains history and lookahead, never independently scheduled output.
@@ -153,7 +155,7 @@ impl SourceResidency {
         Ok(())
     }
 
-    pub(super) fn history_position(&self, mut before: u64) -> Option<(u128, NonZeroU64)> {
+    pub(super) fn history_position(&self, mut before: u64) -> Option<(u128, NonZeroU128)> {
         for span in self.mappings.iter().rev() {
             if before <= span.output_frames() {
                 return span.source_ratio_at(span.output_frames() - before);
@@ -183,18 +185,28 @@ impl SourceResidency {
         replacement_frames: usize,
         channels: usize,
     ) -> Result<Self, ElasticError> {
-        let mut residency = reusable.unwrap_or_else(|| Self {
-            history_frames,
-            mappings: VecDeque::new(),
-            samples: pools.get::<f32>(),
-            replacement: pools.get::<f32>(),
-            next_replacement: pools.get::<f32>(),
-            replacement_offset: 0,
-            start: 0,
-            offset: 0,
-            end: None,
-            origin: None,
-        });
+        let mut residency = if let Some(reusable) = reusable {
+            reusable
+        } else {
+            let samples = |frames: usize| {
+                frames
+                    .checked_mul(channels)
+                    .ok_or(ElasticError::SampleCountOverflow)
+                    .and_then(|samples| WarpRenderer::<S>::prepare_buffer(pools, None, samples))
+            };
+            Self {
+                history_frames,
+                mappings: VecDeque::new(),
+                samples: samples(resident_frames)?,
+                replacement: samples(replacement_frames)?,
+                next_replacement: samples(replacement_frames)?,
+                replacement_offset: 0,
+                start: 0,
+                offset: 0,
+                end: None,
+                origin: None,
+            }
+        };
         let mapping_capacity = history_frames
             .checked_add(1)
             .ok_or(ElasticError::SampleCountOverflow)?;
@@ -217,6 +229,7 @@ impl SourceResidency {
                         .ok_or(ElasticError::SampleCountOverflow)?,
                 )
                 .map_err(|_| ElasticError::PoolCapacity)?;
+            buffer.shrink_to_fit();
             buffer.truncate(length);
         }
         residency.history_frames = history_frames;

@@ -10,6 +10,7 @@ use kithara_test_fixtures::unit_fixtures::warp_pair;
 ))]
 use kithara_test_fixtures::unit_fixtures::warp_sine;
 use kithara_test_utils::kithara;
+use num_traits::ToPrimitive;
 
 use super::*;
 use crate::test_pools::pools;
@@ -30,31 +31,19 @@ fn a_projected_quantum_uses_the_map_instead_of_manual_speed() {
     renderer
         .set_speed(SpeedCurve::Constant(1.5), 1)
         .expect("projected trajectory");
-    let meta = AudioChunkInfo {
-        spec: spec(),
-        ..Default::default()
-    };
-    for source_start in [0, 192, 384] {
-        renderer.prepare(spec());
-        let meta = AudioChunkInfo {
-            frame_offset: source_start,
-            ..meta
-        };
+    let mut source = 0;
+    exact::mapped_signal(&mut renderer, &mut source, 128, |_| 0.25);
+    for _ in 0..3 {
+        let before = source;
+        let output = exact::mapped_signal(&mut renderer, &mut source, 128, |_| 0.25);
         assert_eq!(
-            renderer
-                .prepare_quantum(meta, 4096, usize::MAX)
-                .expect("covered quantum")
-                .get(),
-            192
+            source - before,
+            192,
+            "primed request consumes the mapped source span"
         );
-        let mut input = chunk(&renderer.pools, &vec![0.25; 192 * usize::from(consts::CH)]);
-        input.meta.frame_offset = source_start;
-        let output = renderer
-            .render_quantum(input)
-            .continue_value()
-            .expect("prepared source shape")
-            .expect("projected PCM");
         assert_eq!(output.frames(), 128);
+        let span = output.meta.source_span.expect("source mapping");
+        assert_eq!(span.end() - span.start(), 192);
     }
 }
 
@@ -95,18 +84,9 @@ fn projected_pcm_keeps_its_producer_revision_with_a_stale_callback() {
     renderer
         .set_speed(SpeedCurve::Constant(1.5), u64::from(revision))
         .expect("projected trajectory");
-    for source_start in [0, 192, 384] {
-        renderer.prepare(spec());
-        let mut input = chunk(&renderer.pools, &vec![0.25; 192 * usize::from(consts::CH)]);
-        input.meta.frame_offset = source_start;
-        renderer
-            .prepare_quantum(input.meta, input.frames(), usize::MAX)
-            .expect("prepared");
-        let output = renderer
-            .render_quantum(input)
-            .continue_value()
-            .expect("prepared source shape")
-            .expect("PCM");
+    let mut source = 0;
+    for index in 0..3 {
+        let output = exact::mapped_signal(&mut renderer, &mut source, 128, |_| 0.25);
         let committed = renderer.committed.as_ref().expect("committed PCM");
         assert_eq!(
             output.meta.render_revision,
@@ -123,7 +103,7 @@ fn projected_pcm_keeps_its_producer_revision_with_a_stale_callback() {
         assert_eq!(committed.context(), &context);
         assert_eq!(
             committed.frontier().output(),
-            SessionFrame::new(i64::try_from((source_start + 192) / 3 * 2).expect("frame"))
+            SessionFrame::new((index + 1) * 128)
         );
     }
 }
@@ -143,7 +123,10 @@ fn projected_source_endpoints_do_not_drift_across_sample_rate_partitions() {
         let mut renderer = Warp::new((), &config).renderer(spec(), pools());
         renderer
             .set_speed(
-                SpeedCurve::Constant(1.5 * consts::SR as f32 / 48_000.0),
+                SpeedCurve::Constant(
+                    1.5 * f32::from(u16::try_from(consts::SR).expect("test sample rate fits u16"))
+                        / 48_000.0,
+                ),
                 1,
             )
             .expect("sample-rate-adjusted trajectory");
@@ -230,22 +213,12 @@ fn a_future_projection_retains_the_active_producer_until_activation() {
     renderer
         .set_speed(SpeedCurve::Steps(Arc::from([(256, 2.0)])), 2)
         .expect("future speed boundary");
-    for source_start in [0, 192, 384] {
-        renderer.prepare(spec());
-        let frames = if source_start < 384 { 192 } else { 256 };
-        let mut input = chunk(&renderer.pools, &vec![0.25; frames * usize::from(consts::CH)]);
-        input.meta.frame_offset = source_start;
-        renderer
-            .prepare_quantum(input.meta, input.frames(), usize::MAX)
-            .expect("prepared");
-        let output = renderer
-            .render_quantum(input)
-            .continue_value()
-            .expect("prepared source shape")
-            .expect("PCM");
+    let mut source = 0;
+    for index in 0..3 {
+        let output = exact::mapped_signal(&mut renderer, &mut source, 128, |_| 0.25);
         assert_eq!(output.frames(), 128);
         let span = output.meta.source_span.expect("active producer mapping");
-        if source_start < 384 {
+        if index < 2 {
             assert_eq!(span.end() - span.start(), 192);
         } else {
             assert_eq!(span.start(), 384);
@@ -288,7 +261,7 @@ fn commit_keeps_callback_context_separate_from_output_identity() {
     renderer.rendered_source_end = Some((41, spec().sample_rate));
     let mut output = chunk(&renderer.pools, &[0.0; 64]);
     output.meta.render_revision = output_rate.revision();
-    output.meta.mapping_revision = std::num::NonZeroU64::new(u64::from(output_map));
+    output.meta.mapping_revision = NonZeroU64::new(u64::from(output_map));
     renderer.commit_render(renderer.context.load(), &output);
 
     let committed = renderer.committed.as_ref().expect("output is committed");
@@ -385,6 +358,44 @@ fn an_unapplied_activation_splits_every_crossing_source_quantum(#[case] input_fr
         .expect("crossing source quantum is split");
 
     assert_eq!(frames.get(), 16);
+
+    let mut input = chunk(&renderer.pools, &[0.25; 32]);
+    input.meta = AudioChunkInfo {
+        frames: 16,
+        ..meta
+    };
+    let pointer = input.samples.as_ptr();
+    let output = renderer
+        .render_quantum(input)
+        .continue_value()
+        .expect("prepared unity interval")
+        .expect("unity PCM");
+    assert_eq!(output.frames(), 16);
+    assert_eq!(output.samples.as_ptr(), pointer);
+    assert_eq!(&*output.samples, &[0.25; 32]);
+    let span = output.meta.source_span.expect("unity interval mapping");
+    assert_eq!(span.start(), 0);
+    assert_eq!(span.end(), 16);
+
+    renderer.prepare(spec());
+    renderer
+        .prepare_quantum(
+            AudioChunkInfo {
+                frame_offset: 16,
+                ..meta
+            },
+            4096,
+            8,
+        )
+        .expect("next interval activates at the boundary");
+    let span = renderer
+        .prepared_quantum
+        .expect("next interval")
+        .source_span
+        .expect("next interval mapping");
+    assert_eq!(span.output_frames(), 8);
+    assert_eq!(span.start(), 16);
+    assert_eq!(span.end(), 28);
 }
 
 #[cfg(any(
@@ -578,15 +589,24 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
 ))]
 #[kithara::test]
 fn prepared_projection_refuses_another_source_origin_without_consuming_pcm() {
-    let mut renderer = planned_renderer(&WarpConfig::builder().speed(1.0).build());
+    let mut renderer = planned_renderer(
+        &WarpConfig::builder()
+            .speed(1.0)
+            .render_quantum_frames(NonZero::new(128).expect("quantum"))
+            .build(),
+    );
     renderer
         .set_speed(SpeedCurve::Constant(1.5), 1)
         .expect("projected trajectory");
     renderer.prepare(spec());
-    let input = chunk(&renderer.pools, &vec![0.25; 192 * usize::from(consts::CH)]);
+    let meta = AudioChunkInfo {
+        spec: spec(),
+        ..Default::default()
+    };
     let count = renderer
-        .prepare_quantum(input.meta, input.frames(), usize::MAX)
+        .prepare_quantum(meta, 4096, usize::MAX)
         .expect("projected span");
+    let input = chunk(&renderer.pools, &vec![0.25; count.get() * usize::from(consts::CH)]);
     assert_eq!(count.get(), input.frames());
     let original = input.samples.as_ptr();
     let mut wrong = input;
@@ -615,9 +635,7 @@ fn prepared_projection_refuses_another_source_origin_without_consuming_pcm() {
 fn an_unprojected_renderer_starts_at_the_manual_target() {
     let target = 2.0;
     let renderer = renderer(&WarpConfig::builder().speed(target).build());
-    let speed = renderer
-        .preview_speed(target, 1)
-        .expect("initial manual speed");
+    let speed = renderer.trajectory.speed().expect("initial manual speed");
     assert!(
         (speed - target).abs() <= f32::EPSILON,
         "an unprojected item starts at {speed}, not at the manual target {target}"
@@ -934,7 +952,9 @@ fn a_finite_projected_recording_shorter_than_backend_latency_renders_its_covered
                         .expect("host trajectory");
                     (f64::from(beat) * 128.0 * 65_536.0).round() / 65_536.0
                 };
-                let speed = (position - previous) as f32;
+                let speed = (position - previous)
+                    .to_f32()
+                    .expect("reference speed fits f32");
                 previous = position;
                 (u64::try_from(frame).expect("curve offset"), speed)
             })
@@ -1016,7 +1036,7 @@ fn repeated_terminal_padding_keeps_the_decoded_eof_and_resident_extent() {
     let span = kithara_signal::SourceSpan::from_rational(
         32,
         1,
-        NonZeroU64::MIN,
+        std::num::NonZeroU128::MIN,
         spec().sample_rate,
         32,
     )
@@ -1121,9 +1141,10 @@ fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
     renderer.prepare(spec());
     let mut input = chunk(&renderer.pools, &[0.5; 128]);
     input.meta.frame_offset = admitted;
-    renderer
+    let frames = renderer
         .prepare_quantum(input.meta, input.frames(), usize::MAX)
         .expect("manual request");
+    assert_eq!(frames.get(), input.frames());
     let output = renderer
         .render_quantum(input)
         .continue_value()
@@ -1299,33 +1320,52 @@ fn a_one_frame_decoder_chunk_keeps_the_slowed_projection_presenting(
         .expect("slowed trajectory");
 
     let mut position = 0;
+    let mut decoded = 0;
+    let mut pending = Vec::new();
     let mut audible = None;
     for chunk_frames in ALTERNATING_CHUNKS
         .iter()
         .cycle()
         .take(ALTERNATING_CHUNKS.len() * CHUNK_PAIRS)
     {
-        let mut remaining = *chunk_frames;
-        while remaining > 0 {
+        let input = source_span(&renderer, decoded, *chunk_frames);
+        pending.extend_from_slice(&input.samples);
+        decoded += u64::try_from(*chunk_frames).expect("decoder chunk");
+        loop {
+            if pending.is_empty() {
+                break;
+            }
             renderer.prepare(spec());
-            let at = source_span(&renderer, position, remaining);
+            let meta = AudioChunkInfo {
+                spec: spec(),
+                frame_offset: position,
+                ..Default::default()
+            };
             let frames = renderer
-                .prepare_quantum(at.meta, remaining, usize::MAX)
+                .prepare_quantum(meta, pending.len() / 2, 128)
                 .expect("the projected source continues")
                 .get();
-            let mut input = source_span(&renderer, position, frames);
-            input.meta.frames = u32::try_from(frames).expect("span fits u32");
-            if let Some(output) = renderer
+            let count = frames * 2;
+            if pending.len() < count {
+                break;
+            }
+            let mut input = chunk(&renderer.pools, &pending[..count]);
+            input.meta.frame_offset = position;
+            let output = renderer
                 .render_quantum(input)
                 .continue_value()
                 .expect("prepared source shape")
-            {
-                audible = Some(output.meta.frame_offset);
-            }
+                .expect("a complete projected quantum presents PCM");
+            audible = Some(output.meta.frame_offset);
+            pending.drain(..count);
             position += u64::try_from(frames).expect("span fits u64");
-            remaining -= frames;
         }
     }
+    assert_eq!(
+        position + pending.len() as u64 / 2,
+        decoded,
+        "every decoder frame is accounted for"
+    );
     let audible = audible.expect("the slowed projection presents PCM");
     assert!(
         audible + LAG_FRAMES >= position,

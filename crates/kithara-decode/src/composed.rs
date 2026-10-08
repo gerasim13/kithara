@@ -517,7 +517,6 @@ impl DecoderRuntime<crate::test_pools::TestPools> {
     pub(crate) fn for_test() -> Self {
         Self {
             pools: crate::test_pools::pools(),
-            epoch: 0,
             byte_len_handle: None,
             hooks: None,
         }
@@ -2017,7 +2016,10 @@ mod hook_tests {
         },
         "chunk"
     )]
-    #[case::pending_signal(StubOutcome::Pending(PendingReason::SeekPending), "pending")]
+    #[case::pending_signal(
+        StubOutcome::Pending(PendingReason::NotReady(NotReadyCause::SourcePending)),
+        "pending"
+    )]
     fn next_chunk_emits_signal(
         #[case] outcome: StubOutcome,
         #[case] expected_signal: &str,

@@ -56,13 +56,3 @@ impl SourceDiscontinuity {
         Self { spec, revision }
     }
 }
-
-#[cfg(test)]
-pub(crate) trait AudioSourceExt: AudioSource {
-    fn flush_deferred(&mut self) {
-        let _ = self.prepare_deferred();
-        self.finish_deferred();
-    }
-}
-#[cfg(test)]
-impl<S> AudioSourceExt for S where S: AudioSource + ?Sized {}

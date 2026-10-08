@@ -19,7 +19,7 @@ use crate::{
 #[derive_where::derive_where(Clone)]
 pub struct QueueSnapshot<S>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     pub current: Option<TrackId>,
     pub track: Option<TrackSnapshot>,
@@ -38,11 +38,11 @@ where
 #[derive_where::derive_where(Clone)]
 pub(crate) struct QueueView<S>(Arc<ArcSwap<QueueSnapshot<S>>>)
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static;
+    S: HasPool<u8> + Send + Sync + 'static;
 
 impl<S> QueueView<S>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     pub(crate) fn new(
         tracks: &Tracks<S>,
@@ -83,7 +83,7 @@ where
 
 impl<S, F> Queue<S, F>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
     F: TrackFactory<S>,
 {
     pub(super) fn queue_snapshot(&self) -> QueueSnapshot<S> {
@@ -102,7 +102,7 @@ where
         QueueSnapshot {
             current: self.current,
             track,
-            settings: *self.settings.config(),
+            settings: self.config.settings,
             rows,
             revision: self.tracks.revision(),
             order: self.navigation.playback_order(),
@@ -154,7 +154,7 @@ where
 
 impl<S> QueueControl<S>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     #[must_use]
     pub fn current(&self) -> Option<TrackEntry> {
@@ -269,9 +269,7 @@ where
             .track
             .as_ref()
             .filter(|track| matches!(track.status, PlayingStatus::Playing { .. }))
-            .map_or(0.0, |track| {
-                snapshot.slot.map_or(track.speed, |slot| slot.rate)
-            })
+            .map_or(0.0, |track| track.speed)
     }
 
     #[must_use]
@@ -286,10 +284,10 @@ where
     #[must_use]
     pub fn position_seconds(&self) -> Option<f64> {
         let snapshot = self.view.read();
-        snapshot.track.as_ref()?;
-        todo!(
-            "Publish the canonical playback position with the track receipt and slot snapshot revisions: an acknowledged seek must override an older mixer position, and later slot snapshots advance it"
-        )
+        snapshot
+            .track
+            .as_ref()
+            .map(|track| track.position.as_secs_f64())
     }
 
     #[must_use]
@@ -339,35 +337,50 @@ where
 
     #[must_use]
     pub fn playback_view(&self) -> PlaybackView {
-        todo!(
-            "Restore the canonical play PlaybackView construction from the published queue/slot snapshot; no resident player"
-        )
+        let snapshot = self.view.read();
+        let Some(track) = &snapshot.track else {
+            return PlaybackView::default();
+        };
+        PlaybackView {
+            buffered: snapshot.slot.map(|slot| slot.frontier.max(slot.cached)),
+            duration: track.duration.map(|duration| duration.as_secs_f64()),
+            position: Some(track.position.as_secs_f64()),
+            playing: matches!(track.status, PlayingStatus::Playing { .. }),
+        }
     }
 
     #[must_use]
     pub fn engine_load(&self) -> EngineLoadSnapshot {
         todo!(
-            "Publish the Host-owned worker load meter through the queue snapshot; DeckSnapshot only carries RT counters"
+            "kithara-host DeckPass worker load observation for the published queue snapshot; DeckSnapshot only carries RT counters (contract §8.1; skeleton queue view)"
         )
     }
 
     #[must_use]
     pub fn volume(&self) -> f32 {
-        todo!("Read Host-owned deck mix volume from the published snapshot")
+        todo!(
+            "kithara-host DeckPass published applied deck mix volume (contract §8.4; skeleton queue view)"
+        )
     }
 
     #[must_use]
     pub fn is_muted(&self) -> bool {
-        todo!("Read Host-owned deck mute from the published snapshot")
+        todo!(
+            "kithara-host DeckPass published applied deck mute (contract §8.4; skeleton queue view)"
+        )
     }
 
     #[must_use]
     pub fn eq_band_count(&self) -> usize {
-        todo!("Read Host-owned EQ layout from the published snapshot")
+        todo!(
+            "kithara-host DeckPass published applied deck EQ layout (contract §8.4; skeleton queue view)"
+        )
     }
 
     #[must_use]
     pub fn eq_gain(&self, band: usize) -> Option<f32> {
-        todo!("Read Host-owned EQ band {band} from the published snapshot")
+        todo!(
+            "kithara-host DeckPass published applied deck EQ band {band} (contract §8.4; skeleton queue view)"
+        )
     }
 }

@@ -8,14 +8,14 @@ pub(super) const SOURCE_RADIUS: u64 = 16;
 
 pub(super) fn source_sample(
     resident: &SourceResidency,
-    position: (u128, std::num::NonZeroU64),
+    position: (u128, std::num::NonZeroU128),
     speed: f64,
     terminal: Option<u64>,
     channels: usize,
     channel: usize,
 ) -> Result<f32, ElasticError> {
     let (numerator, denominator) = position;
-    let denominator = u128::from(denominator.get());
+    let denominator = denominator.get();
     let source =
         i64::try_from(numerator / denominator).map_err(|_| ElasticError::SampleCountOverflow)?;
     let fraction = (numerator % denominator)

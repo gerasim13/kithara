@@ -23,6 +23,7 @@ pub(crate) fn tick_and_poll_remote<S, O: HostOwner<S>>(
 ) {
     let mut state = state.lock();
     if let Some(owner) = state.as_mut() {
+        owner.begin_pass();
         posts.drain(owner, mailbox);
         posts.pass(owner);
     }

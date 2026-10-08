@@ -1,16 +1,16 @@
 use std::num::NonZeroU32;
 
-use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
+use kithara_abr::AbrState;
 use kithara_decode::{DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessInfo, GaplessMode};
 use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
-use kithara_stream::{AudioCodec, PrerollHint, SourcePhase, VariantPromotion, VariantReaderPlan, VariantTransition, VariantTransitionId};
+use kithara_stream::{AudioCodec, PrerollHint, SourcePhase, VariantPromotion, VariantTransition};
 use kithara_test_fixtures::unit_fixtures::{RoutePcm, route_pcm};
 use kithara_test_utils::{flight, kithara};
 
-use super::*;
-use crate::{AudioSource, DecodeErrorKind, DecoderEvent, consts, pipeline::track::tests::rebuild::{media_info, produced_data, route_signal_source, route_signal_source_with_gapless_eof, test_source}};
+use crate::pipeline::source::{OwnerPhase, AudioEvent, AudioLaneEvent, AudioSource, TrackFailureKind, TrackStep, WaitingReason, DecoderGeneration, DecoderFactory, RecreateCause, RecreateState};
+use crate::{DecodeErrorKind, DecoderEvent, consts, pipeline::source::tests::rebuild::{media_info, produced_data, route_signal_source, route_signal_source_with_gapless_eof, test_source}};
 
 fn decode_failure(error: DecodeError) -> (TrackFailureKind, Option<DecodeError>) {
     (TrackFailureKind::Decode { kind: crate::map_decode_error_kind(&error) }, Some(error))
@@ -249,7 +249,7 @@ async fn decode_error_precedes_track_failure_on_event_bus() {
         events.try_recv().map(|envelope| envelope.event),
         Ok(AudioLaneEvent::Audio(AudioEvent::TrackFailed {
             failure: TrackFailureKind::Decode {
-                kind: crate::DecodeErrorKind::InvalidData,
+                kind: DecodeErrorKind::InvalidData,
             },
         }))
     ));
@@ -356,7 +356,7 @@ async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks(
     let claim = abr.claim_pending_decision(kithara_abr::VariantIndex::new(0))
         .expect("exact transition fixture requires a pending ABR claim");
     let transition = VariantTransition::new(
-        kithara_stream::VariantTransitionId::new(claim.ticket(), 0),
+        kithara_stream::VariantTransitionId::new(claim.ticket()),
         kithara_abr::VariantIndex::new(0),
         kithara_abr::VariantIndex::new(1),
     );

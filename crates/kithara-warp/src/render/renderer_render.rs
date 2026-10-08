@@ -1,8 +1,6 @@
 use kithara_bufpool::HasPool;
-use kithara_dsp::param::SmoothedParam;
 use kithara_signal::{AudioChunkInfo, FrameCount, SampleCount, SourceSpan};
 use kithara_stretch::{ElasticCapabilities, ElasticError, ElasticRequest};
-use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
 
 use super::renderer::WarpRenderer;
@@ -25,6 +23,7 @@ where
         scratch
             .ensure_len(samples)
             .map_err(|_| ElasticError::PoolCapacity)?;
+        scratch.truncate(samples);
         let resident = self.residency.as_ref().ok_or(ElasticError::PoolCapacity)?;
         for frame in 0..frames {
             let (numerator, denominator) = span
@@ -48,71 +47,6 @@ where
             }
         }
         Ok(())
-    }
-
-    pub(super) fn advance_speed(
-        &mut self,
-        target: f32,
-        output_frames: usize,
-    ) -> Result<(), ElasticError> {
-        if !self.requires_staging() {
-            return Ok(());
-        }
-        let Some(applied) = self.applied_speed else {
-            return Ok(());
-        };
-        let (_, next, endpoint) = Self::smoothed_speed(applied, target, output_frames)?;
-        self.applied_speed = Some(next);
-        kithara::probe_event!(
-            rate_smoothed,
-            frames = output_frames,
-            multiplier_bits = endpoint.to_bits(),
-            target_bits = target.to_bits()
-        );
-        Ok(())
-    }
-
-    pub(super) fn preview_speed(
-        &self,
-        target: f32,
-        output_frames: usize,
-    ) -> Result<f32, ElasticError> {
-        if !self.requires_staging() {
-            return Ok(1.0);
-        }
-        let Some(applied) = self.applied_speed else {
-            return Ok(target);
-        };
-        let (speed, _, _) = Self::smoothed_speed(applied, target, output_frames)?;
-        Ok(speed)
-    }
-
-    fn smoothed_speed(
-        mut applied: SmoothedParam,
-        target: f32,
-        output_frames: usize,
-    ) -> Result<(f32, SmoothedParam, f32), ElasticError> {
-        if output_frames == 0 {
-            return Err(ElasticError::EmptyOutput);
-        }
-        applied.set_value(target);
-        let mut total = 0.0_f64;
-        let mut endpoint = target;
-        for _ in 0..output_frames {
-            endpoint = applied.next_smoothed();
-            if applied.settle() {
-                endpoint = target;
-            }
-            total += f64::from(endpoint);
-        }
-        let frames = output_frames
-            .to_f64()
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let speed = (total / frames)
-            .to_f32()
-            .filter(|speed| speed.is_finite() && *speed > 0.0)
-            .ok_or(ElasticError::InvalidRate(total / frames))?;
-        Ok((speed, applied, endpoint))
     }
 }
 
@@ -308,110 +242,6 @@ where
             return Err(ElasticError::InvalidRate(1.0 / stretch));
         }
         Ok(source_limit)
-    }
-
-    /// Source frames for the next quantum and, when `output_limit` ends it on a
-    /// scheduled frame, the exact output it renders there.
-    pub(super) fn source_frames_for_quantum(
-        &mut self,
-        meta: AudioChunkInfo,
-        remaining: usize,
-        speed: f32,
-        output_limit: usize,
-    ) -> Result<(usize, Option<usize>), ElasticError> {
-        if remaining == 0 {
-            return Err(ElasticError::EmptySource);
-        }
-        if !self.active
-            && !self.transition_pending()
-            && self.pending_frames(usize::from(self.spec.channels.max(1))) == 0
-            && self.unity_passthrough(speed)
-        {
-            let frames = if self.requires_staging() {
-                self.render_quantum_frames
-                    .map_or(remaining, |frames| remaining.min(frames.get()))
-            } else {
-                remaining
-            };
-            return Ok((frames.min(output_limit), None));
-        }
-
-        let channels = usize::from(self.spec.channels.max(1));
-        let region = self.region_for(meta.frame_offset);
-        let region_frames = usize::try_from(
-            region
-                .end()
-                .checked_sub(meta.frame_offset)
-                .ok_or(ElasticError::SampleCountOverflow)?
-                .min(u64::try_from(remaining).map_err(|_| ElasticError::SampleCountOverflow)?),
-        )
-        .map_err(|_| ElasticError::SampleCountOverflow)?;
-        if region_frames == 0 {
-            return Err(ElasticError::StationarySourceSpan);
-        }
-        let stretch = (1.0 / f64::from(speed)) * region.correction();
-        let capabilities = self
-            .engine
-            .as_ref()
-            .map(|engine| engine.capabilities())
-            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
-        let quantum_limit = self.render_quantum_frames.map_or_else(
-            || capabilities.max_output_frames(),
-            |frames| capabilities.max_output_frames().min(frames.get()),
-        );
-        let pending_frames = self.pending_frames(channels);
-        if output_limit <= quantum_limit {
-            let source_room = capabilities
-                .max_source_frames()
-                .saturating_sub(pending_frames);
-            let landing = Self::landing_source_span(output_limit, stretch, self.output_remainder)?;
-            return Ok(if landing <= region_frames.min(source_room) {
-                (landing, Some(output_limit))
-            } else {
-                (region_frames.min(source_room).max(1), None)
-            });
-        }
-        let output_limit = quantum_limit;
-        let source_limit = Self::source_block_limit(stretch, capabilities, output_limit)?;
-        let available =
-            source_limit
-                .checked_sub(pending_frames)
-                .ok_or(ElasticError::SourceFrameLimit {
-                    frames: pending_frames,
-                    limit: source_limit,
-                })?;
-        if available == 0 {
-            return Err(ElasticError::InvalidRate(stretch.recip()));
-        }
-        let frames = region_frames.min(available);
-        Ok((
-            Self::quantized_source_span(
-                frames,
-                pending_frames,
-                stretch,
-                self.output_remainder,
-                capabilities,
-                output_limit,
-            )?
-            .unwrap_or(frames),
-            None,
-        ))
-    }
-
-    /// The fewest source frames whose exact output, after `remainder`, rounds
-    /// to at least `output` frames: rendered as exactly `output`, they end a
-    /// quantum on that frame and carry the rest as the remainder.
-    fn landing_source_span(
-        output: usize,
-        stretch: f64,
-        remainder: f64,
-    ) -> Result<usize, ElasticError> {
-        let output = output.to_f64().ok_or(ElasticError::SampleCountOverflow)?;
-        ((output - Self::OUTPUT_ROUNDING_MARGIN - remainder) / stretch)
-            .ceil()
-            .max(1.0)
-            .to_usize()
-            .ok_or(ElasticError::SampleCountOverflow)
     }
 }
 
@@ -613,7 +443,13 @@ where
         }
 
         let total_output_frames = output_frames;
-        let output_frames = FrameCount::new(output_frames.min(output_limit));
+        let capability = self
+            .engine
+            .as_ref()
+            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
+            .capabilities()
+            .max_output_frames();
+        let output_frames = FrameCount::new(output_frames.min(output_limit).min(capability));
         let admitted_source_frames = if output_frames.get() == total_output_frames {
             source_frames
         } else {

@@ -191,7 +191,13 @@ mod tests {
     use kithara_test_utils::kithara;
     use kithara_warp::RenderContext;
 
-    use super::presentation_frontier;
+    use crate::{
+        rt::track::{PcmConsumer, PlayerResource},
+        test_pools::pools,
+        worker::{PcmPacket, packet_tests::{PacketRing, chunk}},
+    };
+    use kithara_platform::{sync::Arc, time::Duration};
+    use kithara_signal::{AudioSpec, SegmentId};
 
     #[kithara::test]
     fn publication_uses_the_derived_subrange_start() {
@@ -207,9 +213,19 @@ mod tests {
             .for_output_range(40..80)
             .expect("fixture subrange is valid");
 
-        let frontier = presentation_frontier(&context, 8_000);
+        let spec = AudioSpec::new(2, context.output().sample_rate());
+        let mut ring = PacketRing::new(spec, Duration::from_secs(1), 1);
+        ring.push(PcmPacket::Chunk(chunk(spec, SegmentId::FIRST, 8_000, 8_000, &[0.5; 2])));
+        let mut resource = PlayerResource::new(
+            PcmConsumer::new(ring.receiver.take().expect("receiver")),
+            Arc::from("publication"),
+            &pools(),
+        ).expect("resource");
+        resource.refresh_mark(&mut 1);
+        let frontier = resource.mark(context.output().output_frames().start).expect("mapped mark");
 
-        assert_eq!(frontier.source(), 8_000);
-        assert_eq!(frontier.output(), SessionFrame::new(1_040));
+        assert_eq!(frontier.lane.frame, 8_000);
+        assert_eq!(frontier.session, SessionFrame::new(1_040));
+        assert_eq!(frontier.position, spec.duration_for(8_000).expect("source position"));
     }
 }

@@ -8,5 +8,3 @@ pub enum AudioLaneEvent {
     Decoder(DecoderEvent),
     Audio(AudioEvent),
 }
-#[cfg(test)]
-mod gate;

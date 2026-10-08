@@ -45,12 +45,12 @@ pub struct Host<S, O: HostOwner<S> = HostCore<S>> {
     pub(super) dispatcher: Arc<dyn HostDispatcher<O::Command>>,
     pub(super) id: BeatGridId,
     pub(super) root_view: RootView,
-    pub(super) session: SessionRuntime<S, O>,
+    pub(super) _session: SessionRuntime<S, O>,
     pub(super) owns_session: bool,
 }
 
 pub(super) enum SessionRuntime<S, O: HostOwner<S>> {
-    Realtime(Platform<S, O>),
+    Realtime { _platform: Platform<S, O> },
     #[cfg(feature = "offline")]
     Offline {
         platform: Platform<S, O>,
@@ -65,12 +65,13 @@ impl<S, O: HostOwner<S>> SessionRuntime<S, O> {
     ) -> Option<(&Platform<S, O>, &mut OfflineRuntime<S, O>)> {
         match self {
             Self::Offline { platform, runtime } => Some((platform, runtime)),
-            Self::Realtime(_) => None,
+            Self::Realtime { .. } => None,
         }
     }
+    #[cfg(target_arch = "wasm32")]
     pub(super) const fn platform(&self) -> &Platform<S, O> {
         match self {
-            Self::Realtime(platform) => platform,
+            Self::Realtime { _platform } => _platform,
             #[cfg(feature = "offline")]
             Self::Offline { platform, .. } => platform,
         }
@@ -119,18 +120,12 @@ impl<S, O: HostOwner<S>> Host<S, O> {
 
     /// Attaches one output group to a session tap.
     pub fn attach_outputs(&self, tap: Tap, outputs: OutputGroup) -> Result<(), PlayError> {
-        let _ = (tap, outputs);
-        todo!(
-            "Attach outputs on the same canonical owner route; HostCommand has no tap operation yet (spec §4.2)"
-        )
+        self.ask(HostCommand::AttachOutputs { tap, outputs })
     }
 
     /// Detaches the output group of a session tap.
     pub fn detach_outputs(&self, tap: Tap) -> Result<(), PlayError> {
-        let _ = tap;
-        todo!(
-            "Detach outputs on the canonical owner route without a parallel session dispatcher (spec §4.2)"
-        )
+        self.ask(HostCommand::DetachOutputs { tap })
     }
 
     /// Restarts the owner's route while retaining its held decks.
@@ -156,7 +151,7 @@ impl<S, O: HostOwner<S>> Host<S, O> {
             id,
             root_view,
             dispatcher,
-            session,
+            _session: session,
             owns_session: true,
         }
     }
@@ -174,7 +169,6 @@ impl<S, O: HostOwner<S>> Host<S, O> {
     /// Closes and releases a deck on the canonical owner thread.
     pub fn remove<D: DeckControl>(&mut self, deck: &HostOwned<D>) -> Result<(), PlayError> {
         self.validate_removal(deck)?;
-        self.ask(HostCommand::Close(deck.id()))?;
         self.ask(HostCommand::Release(deck.id()))
     }
 }
@@ -189,6 +183,7 @@ where
         config: HostConfig<S>,
         layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
     ) -> Result<Self, PlayError> {
+        let channel_config = config.channel_config();
         match config {
             HostConfig::Realtime {
                 output_block_frames,
@@ -202,6 +197,7 @@ where
                     root.root,
                     root.view.clone(),
                     output_block_frames,
+                    channel_config,
                     crate::rt::SessionOutput::new(limiter),
                     settings,
                     layer,
@@ -211,7 +207,7 @@ where
                     root.id,
                     root.view,
                     dispatcher,
-                    SessionRuntime::Realtime(platform),
+                    SessionRuntime::Realtime { _platform: platform },
                 ))
             }
             #[cfg(feature = "offline")]
@@ -244,7 +240,7 @@ where
     where
         D: HostedDeck<S> + DeckControl,
     {
-        let id = deck.id();
+        let id = DeckId::allocate().map_err(|error| PlayError::Internal(error.to_string()))?;
         let control = deck.control();
         self.ask(HostCommand::Register {
             id,

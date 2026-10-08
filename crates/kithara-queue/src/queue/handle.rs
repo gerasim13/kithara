@@ -12,7 +12,7 @@ use crate::{
 
 impl<S> QueueControl<S>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     /// Appends an item; only a transition target or automatic preload is opened.
     /// # Errors

@@ -1,8 +1,9 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::{NonZeroU16, NonZeroU32, NonZeroUsize};
 
 use crate::{HostCore, HostOwner};
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_command::Live;
+use kithara_config::Config;
 use kithara_effects::LimiterConfig;
 use kithara_output::{
     OfflineRenderError, OfflineRenderReport, OfflineRenderRequest, OfflineRenderer, RenderSink,
@@ -10,10 +11,15 @@ use kithara_output::{
 use kithara_platform::maybe_send::MaybeSend;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_play::PlayError;
+use kithara_render::rt::DeckMixerConfig;
 use kithara_signal::AudioSpec;
 use kithara_worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig};
 
-use super::{Host, HostConfig, platform::Platform};
+use super::{
+    Host, HostConfig,
+    config::{DECK_CAPACITY, MAX_DECKS},
+    platform::Platform,
+};
 use crate::{
     HostSettings,
     rt::SessionOutput,
@@ -65,6 +71,9 @@ impl<S> HostConfig<S> {
         #[builder(default = consts::BLOCK_FRAMES)] max_block_frames: NonZeroU32,
         #[builder(default = consts::BLOCK_FRAMES)] declick_frames: NonZeroU32,
         #[builder(default = Duration::ZERO)] declared_latency: Duration,
+        #[builder(default = MAX_DECKS)] max_decks: NonZeroU16,
+        #[builder(default = DECK_CAPACITY)] deck_capacity: NonZeroUsize,
+        #[builder(default = DeckMixerConfig::default().slots())] max_deck_slots: NonZeroUsize,
         #[builder(default)] limiter: LimiterConfig,
         #[builder(default)] settings: HostSettings,
         #[builder(default = WorkerConfig::new())] worker: WorkerConfig,
@@ -76,6 +85,9 @@ impl<S> HostConfig<S> {
             max_block_frames,
             declick_frames,
             declared_latency,
+            max_decks,
+            deck_capacity,
+            max_deck_slots,
             limiter,
             settings,
             worker,
@@ -114,6 +126,7 @@ where
         root_view: RootView,
         layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
     ) -> Result<StartedOfflineRuntime<S, O>, PlayError> {
+        let channel_config = config.channel_config();
         let HostConfig::Offline {
             pools,
             max_block_frames,
@@ -124,11 +137,17 @@ where
             worker,
             dispatcher,
             task,
+            ..
         } = config
         else {
             unreachable!("offline runtime requires offline Host config");
         };
         let settings = Live::new(settings)?;
+        let budgets = dispatcher.values();
+        let worker_wake_allowance = budgets
+            .wait_timeout
+            .max(budgets.idle_timeout)
+            .max(budgets.backpressure_poll_interval);
         let worker = Worker::new(worker);
         let dispatcher = worker.dispatcher(*dispatcher);
         let (client, task_handle) = crate::session::offline::spawn(
@@ -140,6 +159,8 @@ where
                 .declared_latency(declared_latency)
                 .output(SessionOutput::new(limiter))
                 .settings(settings)
+                .channel_config(channel_config)
+                .worker_wake_allowance(worker_wake_allowance)
                 .declick_frames(declick_frames)
                 .max_block_frames(max_block_frames)
                 .pools(pools)
@@ -268,7 +289,7 @@ where
         })?;
         let spec = AudioSpec::new(consts::CHANNELS, rate);
         let (_platform, runtime) = self
-            .session
+            ._session
             .offline_mut()
             .ok_or(OfflineRenderError::SessionModeUnavailable)?;
         runtime.render(request, spec, cancel, sink)

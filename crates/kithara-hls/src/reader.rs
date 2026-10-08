@@ -216,7 +216,7 @@ where
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::{OnceLock, atomic::AtomicU64};
+    use std::sync::OnceLock;
 
     use kithara_abr::{Abr, AbrController, AbrMock, AbrSettings, AbrState};
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
@@ -225,7 +225,7 @@ mod tests {
         CancelToken,
         sync::{Arc, ThreadGate},
     };
-    use kithara_stream::{AudioCodec, ContainerFormat, PlayheadState, SeekState};
+    use kithara_stream::{ActivityWriter, AudioCodec, ContainerFormat, PlayheadState};
     use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};
 
@@ -260,7 +260,6 @@ mod tests {
                     discriminator: Some("reader-test".to_owned()),
                 })
                 .expect("reader asset scope"),
-            seek_epoch: 0,
             look_ahead_segments: None,
             signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
             config: Arc::new(
@@ -329,7 +328,6 @@ mod tests {
         let variant = VariantParts {
             segments,
             init: None,
-            seek_obs: Arc::new(SeekState::new()) as Arc<dyn kithara_stream::SeekObserve>,
             codec: playlist.variant_codec(0),
             container: playlist.variant_container(0),
         }
@@ -356,7 +354,7 @@ mod tests {
                 signal: ctx.signal,
             },
             Arc::new(PlayheadState::new()),
-            Arc::new(SeekState::new()),
+            ActivityWriter::new(),
             handle,
             publisher,
             Arc::from(vec![variant]),
@@ -369,11 +367,7 @@ mod tests {
         let mut events = bus.subscribe();
         let coord = coord(&bus);
         coord.set_position(60);
-        let mut sink = HlsReaderEventSink::new(
-            Arc::new(DeferredBus::new(bus, 8)),
-            coord.clone(),
-            Arc::new(AtomicU64::new(0)),
-        );
+        let mut sink = HlsReaderEventSink::new(Arc::new(DeferredBus::new(bus, 8)), coord.clone());
 
         sink.on_chunk(ReaderChunkSignal::Chunk);
         coord.set_position(100);

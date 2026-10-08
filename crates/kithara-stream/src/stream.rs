@@ -409,6 +409,15 @@ impl<T: StreamType> Stream<T> {
                         NotReadyCause::WaitBudgetExhausted,
                     )));
                 }
+                Err(StreamError::Source(SourceError::Io(error))) => {
+                    if let Some(reason) = error
+                        .get_ref()
+                        .and_then(|inner| inner.downcast_ref::<PendingReason>())
+                    {
+                        return Ok(StreamReadOutcome::Pending(*reason));
+                    }
+                    return Err(StreamReadError::Source(error));
+                }
                 Err(e) => {
                     return Err(StreamReadError::Source(IoError::other(e.to_string())));
                 }
@@ -646,11 +655,11 @@ impl<T: StreamType> Stream<T> {
         let len = self.source.len();
         let phase = self.source.phase_at(pos..pos.saturating_add(want as u64));
         StreamPending {
+            len,
             reason,
+            phase,
             pos,
             want,
-            len,
-            phase,
         }
     }
 }
@@ -702,6 +711,7 @@ impl<T: StreamType> Seek for Stream<T> {
 }
 #[cfg(test)]
 mod tests {
+    mod gate_moved_tests;
     use std::{
         collections::VecDeque,
         sync::atomic::{AtomicU64, Ordering},
@@ -713,7 +723,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        PlayheadRead, PlayheadState, ReadOutcome, SeekState, Source, SourcePhase, SourceProbe,
+        ActivityWriter, PlayheadRead, PlayheadState, ReadOutcome, Source, SourcePhase, SourceProbe,
     };
 
     /// Test helper — script entry that maps to either `Bytes(N)` (with
@@ -768,7 +778,8 @@ mod tests {
     struct ScriptSource {
         playhead: Arc<PlayheadState>,
         position: Arc<AtomicU64>,
-        seek: Arc<SeekState>,
+        activity: Activity,
+        activity_writer: Option<ActivityWriter>,
         anchor: Option<SourceSeekAnchor>,
         #[field(with, option_set_some, vis = "")]
         peer_wake: Option<Arc<DeferredWake>>,
@@ -776,18 +787,20 @@ mod tests {
         data: Vec<u8>,
         segments: Vec<Range<u64>>,
         reads: VecDeque<ScriptRead>,
-        waits: VecDeque<WaitOutcome>,
+        waits: VecDeque<StreamResult<WaitOutcome>>,
+        waited: Vec<Range<u64>>,
     }
 
     impl ScriptSource {
         fn new(
-            seek: Arc<SeekState>,
+            activity: ActivityWriter,
             waits: impl IntoIterator<Item = WaitOutcome>,
             reads: impl IntoIterator<Item = ScriptRead>,
             data: Vec<u8>,
         ) -> Self {
             Self {
-                seek,
+                activity: activity.reader(),
+                activity_writer: Some(activity),
                 data,
                 playhead: Arc::new(PlayheadState::new()),
                 position: Arc::new(AtomicU64::new(0)),
@@ -795,7 +808,8 @@ mod tests {
                 reads: reads.into_iter().collect(),
                 ready_end: None,
                 segments: Vec::new(),
-                waits: waits.into_iter().collect(),
+                waits: waits.into_iter().map(Ok).collect(),
+                waited: Vec::new(),
                 peer_wake: None,
             }
         }
@@ -812,8 +826,12 @@ mod tests {
     }
 
     impl Source for ScriptSource {
-        fn activity(&self) -> Arc<dyn Activity> {
-            Arc::clone(&self.seek) as Arc<dyn Activity>
+        fn activity(&self) -> Activity {
+            self.activity.clone()
+        }
+
+        fn take_activity_writer(&mut self) -> Option<ActivityWriter> {
+            self.activity_writer.take()
         }
 
         fn advance(&self, n: u64) {
@@ -880,14 +898,6 @@ mod tests {
             }
         }
 
-        fn seek_control(&self) -> Arc<dyn SeekControl> {
-            Arc::clone(&self.seek) as Arc<dyn SeekControl>
-        }
-
-        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-            Arc::clone(&self.seek) as Arc<dyn SeekObserve>
-        }
-
         fn set_position(&self, pos: u64) {
             self.position.store(pos, Ordering::Release);
         }
@@ -897,13 +907,14 @@ mod tests {
             range: Range<u64>,
             _timeout: Option<Duration>,
         ) -> StreamResult<WaitOutcome> {
+            self.waited.push(range.clone());
             if self
                 .ready_end
                 .is_some_and(|ready_end| range.end > ready_end)
             {
                 return Err(SourceError::WaitBudgetExceeded.into());
             }
-            Ok(self.waits.pop_front().unwrap_or(WaitOutcome::Ready))
+            self.waits.pop_front().unwrap_or(Ok(WaitOutcome::Ready))
         }
     }
 
@@ -989,13 +1000,18 @@ mod tests {
     struct SeekDuringWaitSource {
         playhead: Arc<PlayheadState>,
         position: Arc<AtomicU64>,
-        seek: Arc<SeekState>,
+        activity: Activity,
+        activity_writer: Option<ActivityWriter>,
         read_calls: usize,
     }
 
     impl Source for SeekDuringWaitSource {
-        fn activity(&self) -> Arc<dyn Activity> {
-            Arc::clone(&self.seek) as Arc<dyn Activity>
+        fn activity(&self) -> Activity {
+            self.activity.clone()
+        }
+
+        fn take_activity_writer(&mut self) -> Option<ActivityWriter> {
+            self.activity_writer.take()
         }
 
         fn advance(&self, n: u64) {
@@ -1035,14 +1051,6 @@ mod tests {
             Ok(bytes(4))
         }
 
-        fn seek_control(&self) -> Arc<dyn SeekControl> {
-            Arc::clone(&self.seek) as Arc<dyn SeekControl>
-        }
-
-        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-            Arc::clone(&self.seek) as Arc<dyn SeekObserve>
-        }
-
         fn set_position(&self, pos: u64) {
             self.position.store(pos, Ordering::Release);
         }
@@ -1052,15 +1060,18 @@ mod tests {
             _range: Range<u64>,
             _timeout: Option<Duration>,
         ) -> StreamResult<WaitOutcome> {
-            let _ = SeekControl::begin(&*self.seek, Duration::from_millis(10));
-            Ok(WaitOutcome::Ready)
+            Err(SourceError::Io(IoError::new(
+                ErrorKind::Interrupted,
+                PendingReason::SessionRetired,
+            ))
+            .into())
         }
     }
 
     #[kithara::test]
     fn probe_read_yields_retry_before_consuming_more_source_steps() {
         let source = ScriptSource::new(
-            Arc::new(SeekState::new()),
+            ActivityWriter::new(),
             [WaitOutcome::Ready, WaitOutcome::Ready],
             [ScriptRead::Retry, ScriptRead::Data(4)],
             vec![1, 2, 3, 4],
@@ -1085,7 +1096,7 @@ mod tests {
         // The parked reader's demand channel: a single zero-budget
         // `Source::wait_range` probe — readiness without blocking, and the
         // cursor stays put so it can never masquerade as a read.
-        let source = ScriptSource::new(Arc::new(SeekState::new()), [], [], Vec::new())
+        let source = ScriptSource::new(ActivityWriter::new(), [], [], Vec::new())
             .with_segments([Range { start: 0, end: 8 }], 4);
         let mut stream = Stream::<DummyType> { source };
 
@@ -1117,7 +1128,7 @@ mod tests {
         // `kevent` the RT produce core must not make. The scheduler shell flushes
         let wake = Arc::new(DeferredWake::default());
         let source = ScriptSource::new(
-            Arc::new(SeekState::new()),
+            ActivityWriter::new(),
             [WaitOutcome::Interrupted],
             [],
             vec![0u8; 8],
@@ -1146,7 +1157,7 @@ mod tests {
         // armed — the distinguishing signal from the worker's deferred arm.
         let wake = Arc::new(DeferredWake::default());
         let source = ScriptSource::new(
-            Arc::new(SeekState::new()),
+            ActivityWriter::new(),
             [WaitOutcome::Interrupted, WaitOutcome::Ready],
             [ScriptRead::Data(4)],
             b"ABCD".to_vec(),
@@ -1169,7 +1180,7 @@ mod tests {
     #[kithara::test]
     fn try_read_yields_not_ready_on_interrupted_then_recovers_next_probe() {
         let source = ScriptSource::new(
-            Arc::new(SeekState::new()),
+            ActivityWriter::new(),
             [WaitOutcome::Interrupted, WaitOutcome::Ready],
             [ScriptRead::Data(4)],
             b"ABCD".to_vec(),
@@ -1195,7 +1206,7 @@ mod tests {
     #[kithara::test]
     fn try_read_stops_at_ready_segment_boundary() {
         let source = ScriptSource::new(
-            Arc::new(SeekState::new()),
+            ActivityWriter::new(),
             [],
             [ScriptRead::Data(8)],
             b"ABCDEFGH".to_vec(),
@@ -1234,7 +1245,7 @@ mod tests {
     #[kithara::test]
     fn blocking_read_stops_at_ready_segment_boundary() {
         let source = ScriptSource::new(
-            Arc::new(SeekState::new()),
+            ActivityWriter::new(),
             [],
             [ScriptRead::Data(8)],
             b"ABCDEFGH".to_vec(),
@@ -1263,7 +1274,7 @@ mod tests {
     #[kithara::test]
     fn blocking_read_reports_not_ready_when_its_own_segment_is_unready() {
         let source = ScriptSource::new(
-            Arc::new(SeekState::new()),
+            ActivityWriter::new(),
             [],
             [ScriptRead::Data(8)],
             b"ABCDEFGH".to_vec(),
@@ -1286,9 +1297,12 @@ mod tests {
 
     #[kithara::test]
     fn try_read_returns_seek_pending_when_flushing() {
-        let seek = Arc::new(SeekState::new());
-        let _ = SeekControl::begin(&*seek, Duration::from_millis(10));
-        let source = ScriptSource::new(Arc::clone(&seek), [WaitOutcome::Interrupted], [], vec![]);
+        let mut source = ScriptSource::new(ActivityWriter::new(), [], [], vec![]);
+        source.waits.push_back(Err(SourceError::Io(IoError::new(
+            ErrorKind::Interrupted,
+            PendingReason::SessionRetired,
+        ))
+        .into()));
         let mut stream = Stream::<DummyType> { source };
         let mut buf = [0u8; 4];
 
@@ -1297,14 +1311,16 @@ mod tests {
             .expect("BUG: seek-pending is a status return; not a hard error in this test");
         assert!(matches!(
             outcome,
-            StreamReadOutcome::Pending(PendingReason::SeekPending)
+            StreamReadOutcome::Pending(PendingReason::SessionRetired)
         ));
     }
 
     #[kithara::test]
     fn try_read_returns_seek_pending_when_epoch_changes_after_wait() {
+        let writer = ActivityWriter::new();
         let source = SeekDuringWaitSource {
-            seek: Arc::new(SeekState::new()),
+            activity: writer.reader(),
+            activity_writer: Some(writer),
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             read_calls: 0,
@@ -1318,7 +1334,7 @@ mod tests {
 
         assert!(matches!(
             outcome,
-            StreamReadOutcome::Pending(PendingReason::SeekPending)
+            StreamReadOutcome::Pending(PendingReason::SessionRetired)
         ));
         assert_eq!(stream.source.read_calls, 0);
         assert_eq!(stream.position(), 0);
@@ -1326,7 +1342,7 @@ mod tests {
 
     #[kithara::test]
     fn seek_updates_position() {
-        let source = ScriptSource::new(Arc::new(SeekState::new()), [], [], b"ABCDE".to_vec());
+        let source = ScriptSource::new(ActivityWriter::new(), [], [], b"ABCDE".to_vec());
         let mut stream = Stream::<DummyType> { source };
 
         let pos = stream
@@ -1339,7 +1355,7 @@ mod tests {
 
     #[kithara::test]
     fn seek_time_anchor_does_not_move_position() {
-        let mut source = ScriptSource::new(Arc::new(SeekState::new()), [], [], b"ABCDE".to_vec());
+        let mut source = ScriptSource::new(ActivityWriter::new(), [], [], b"ABCDE".to_vec());
         source.set_position(11);
         source.anchor = Some(SourceSeekAnchor {
             byte_offset: 3,

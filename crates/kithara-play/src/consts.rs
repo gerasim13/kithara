@@ -26,8 +26,6 @@ pub(crate) const DECK_SLOT: SlotId = SlotId::new(0);
 #[cfg(test)]
 pub(crate) const SAMPLE_RATE: u32 = 44_100;
 
-pub(crate) const DEFAULT_EQ_BAND_COUNT: usize = 10;
-
 #[cfg(test)]
 pub(crate) const DROPPED_AFTER_CANCEL: u8 = 2;
 

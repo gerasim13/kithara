@@ -2,6 +2,7 @@ mod access;
 mod artifact;
 mod build;
 mod config;
+mod lane;
 mod prepare;
 mod reader;
 mod resampler;
@@ -11,6 +12,7 @@ pub use artifact::{
     ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, Cover, MAX_ARTIFACT_BYTES,
 };
 pub use config::ResourceConfig;
+pub use lane::ResourceLane;
 pub use prepare::ResourcePrep;
 pub use reader::{OpenedTrack, Resource, ResourceLoad};
 pub use resampler::PlaybackResamplerBackend;

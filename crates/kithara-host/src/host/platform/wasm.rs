@@ -7,14 +7,16 @@ use crate::{
     HostCore, HostOwner, HostSettings, PlayError,
     rt::SessionOutput,
     session::{HostDispatcher, HostProtocol, HostRoot, RootView, web::WebSessionState},
+    wasm::{HostReceiver, HostRoute, HostSender},
 };
 use kithara_bufpool::HasPool;
-use kithara_command::Live;
+use kithara_command::{Live, ScopedConfig};
 use kithara_platform::{maybe_send::MaybeSend, sync::Arc};
 use std::{marker::PhantomData, num::NonZeroU32};
 
 pub(in crate::host) struct Platform<S, O: HostOwner<S>> {
     pub(in crate::host) web_state: Option<WebSessionState<O>>,
+    web_route: Option<Arc<HostRoute<O::Command>>>,
     marker: PhantomData<fn() -> S>,
 }
 
@@ -28,6 +30,7 @@ impl<S, O: HostOwner<S>> Platform<S, O> {
         root: HostRoot,
         view: RootView,
         _block: Option<NonZeroU32>,
+        channel_config: ScopedConfig,
         output: SessionOutput,
         settings: Live<HostSettings, HostProtocol>,
         layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
@@ -35,12 +38,13 @@ impl<S, O: HostOwner<S>> Platform<S, O> {
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
-        let (dispatcher, state) =
-            crate::session::web::spawn::<S, O>(root, view, output, settings, layer)?;
+        let (dispatcher, state, route) =
+            crate::session::web::spawn::<S, O>(root, view, channel_config, output, settings, layer)?;
         Ok((
             dispatcher,
             Self {
                 web_state: Some(state),
+                web_route: Some(route),
                 marker: PhantomData,
             },
         ))
@@ -60,10 +64,58 @@ impl<S, O: HostOwner<S>> Platform<S, O> {
             dispatcher,
             Self {
                 web_state: None,
+                web_route: None,
                 marker: PhantomData,
             },
             runtime,
         ))
+    }
+}
+
+impl<S> crate::Host<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    pub(crate) fn browser_channel(&self) -> Result<(HostSender<S>, HostReceiver<S>), PlayError> {
+        let platform = self._session.platform();
+        let state = platform.web_state.as_ref().ok_or_else(|| {
+            PlayError::Internal("worker routing requires a local browser host".to_owned())
+        })?;
+        let route = platform.web_route.as_ref().ok_or(PlayError::Closed)?;
+        Ok((
+            HostSender {
+                id: self.id,
+                root_view: self.root_view.clone(),
+                postbox: route.postbox.clone(),
+            },
+            HostReceiver {
+                state: state.clone(),
+                route: route.clone(),
+            },
+        ))
+    }
+
+    pub(crate) fn browser_remote(sender: HostSender<S>) -> Self {
+        Self {
+            dispatcher: crate::session::web::remote::<S, HostCore<S>>(sender.postbox),
+            id: sender.id,
+            root_view: sender.root_view,
+            _session: crate::host::owner::SessionRuntime::Realtime {
+                _platform: Platform {
+                    web_state: None,
+                    web_route: None,
+                    marker: PhantomData,
+                },
+            },
+            owns_session: false,
+        }
+    }
+
+    pub(crate) fn browser_warm_up(&self) -> Result<(), PlayError> {
+        let state = self._session.platform().web_state.as_ref().ok_or_else(|| {
+            PlayError::Internal("audio warm-up requires a local host".to_owned())
+        })?;
+        crate::session::warm_up_audio::<S, HostCore<S>>(state).map_err(Into::into)
     }
 }
 

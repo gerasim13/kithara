@@ -1,6 +1,6 @@
 use kithara_config::Config;
 use kithara_events::TrackId;
-use kithara_render::{LaneCommand, bridge::Slot};
+use kithara_render::{LaneCommand, LaneStart, bridge::Slot};
 use kithara_warp::{MIN_SPEED, SpeedCurve, StretchKind, WarpConfig};
 
 use crate::PlayError;
@@ -26,6 +26,16 @@ pub struct TrackSettings {
 }
 
 impl TrackSettings {
+    /// The applied settings a newly opened lane starts with.
+    #[must_use]
+    pub fn lane_start(self) -> LaneStart {
+        LaneStart {
+            speed: SpeedCurve::Constant(self.speed),
+            keylock: self.keylock,
+            backend: self.backend,
+        }
+    }
+
     /// `base` for the renderer of a track that starts where these settings
     /// stand.
     #[must_use]

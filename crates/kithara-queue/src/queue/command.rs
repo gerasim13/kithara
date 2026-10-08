@@ -20,7 +20,7 @@ pub(super) type QueueMailbox<S> = Mailbox<QueueCommand<S>, QueueError>;
 /// Commands addressed to stable queue item identities, not list positions.
 pub enum QueueCommand<S>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     Append {
         id: TrackId,
@@ -177,15 +177,12 @@ where
                     return Err(PlayError::Untimed.into());
                 }
                 let change = match change {
-                    QueueSettingsChange::Crossfade(settings) => {
-                        QueueSettingsChange::Crossfade(settings.validate()?)
-                    }
+                    QueueSettingsChange::Crossfade(settings) => QueueSettingsChange::Crossfade(
+                        settings.validate().map_err(PlayError::from)?,
+                    ),
                     change => change,
                 };
-                match self.settings.apply(change) {
-                    Ok(()) => {}
-                    Err(never) => match never {},
-                }
+                self.config.settings.apply_change(change);
                 if let QueueSettingsChange::Crossfade(settings) = change {
                     self.announce(QueueEvent::CrossfadeSettingsChanged { settings });
                 }
@@ -193,7 +190,7 @@ where
                 Ok(None)
             }
             QueueCommand::SetActionAtItemEnd(action) => {
-                self.config.set_action_at_item_end(action);
+                self.config.action_at_item_end = action;
                 self.announce(QueueEvent::ActionAtItemEndChanged { action });
                 self.cancel_auto(out)?;
                 Ok(None)
@@ -201,7 +198,7 @@ where
             QueueCommand::SetPlaybackOrder(order) => {
                 let ids = self.track_ids();
                 self.navigation.set_playback_order(order, &ids);
-                self.config.set_playback_order(order);
+                self.config.playback_order = order;
                 self.announce(QueueEvent::PlaybackOrderChanged { order });
                 self.cancel_auto(out)?;
                 Ok(None)
@@ -270,7 +267,8 @@ where
             let earliest = self
                 .current_track()
                 .ok_or(PlayError::Untimed)?
-                .entry(kithara_play::Bound::AtOrAfter(self.earliest()?));
+                .entry(kithara_play::Bound::AtOrAfter(self.earliest()?))
+                .ok_or(PlayError::Untimed)?;
             if frame < earliest {
                 return Err(PlayError::Late);
             }
@@ -286,7 +284,7 @@ where
 
     fn forward_host(&mut self, _command: QueueCommand<S>) -> Result<Option<Seq>, QueueError> {
         todo!(
-            "Forward the preserved mix/EQ/interruption facade command to the Host owner and join its receipt; the queue owns no mixer controls"
+            "kithara-host command postbox and published deck mix/EQ owner bridge for preserved queue facade forwarding and joined receipts (contract §8.4; skeleton queue)"
         )
     }
 }

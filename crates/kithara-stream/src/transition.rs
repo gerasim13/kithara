@@ -118,10 +118,21 @@ mod tests {
 
     #[kithara::test]
     fn transition_identity_includes_ticket_and_seek_epoch() {
-        let ticket = ticket_for(1);
-        let first = VariantTransitionId::new(ticket, 7);
-        let same = VariantTransitionId::new(ticket, 7);
-        let after_seek = VariantTransitionId::new(ticket, 8);
+        let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+        state.request_target(VariantIndex::new(1), AbrReason::UpSwitch);
+        let ticket = state
+            .claim_pending_decision(VariantIndex::new(0))
+            .expect("first target must have a ticket")
+            .ticket();
+        let first = VariantTransitionId::new(ticket);
+        let same = VariantTransitionId::new(ticket);
+        state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
+        let after_seek = VariantTransitionId::new(
+            state
+                .claim_pending_decision(VariantIndex::new(0))
+                .expect("superseding target must have a ticket")
+                .ticket(),
+        );
 
         assert_eq!(first, same);
         assert_ne!(first, after_seek);
@@ -129,21 +140,22 @@ mod tests {
 
     #[kithara::test]
     fn transition_keeps_active_and_incoming_roles_distinct() {
+        let ticket = ticket_for(1);
         let transition = VariantTransition::new(
-            VariantTransitionId::new(ticket_for(1), 3),
+            VariantTransitionId::new(ticket),
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
 
         assert_eq!(transition.active_variant(), VariantIndex::new(0));
         assert_eq!(transition.incoming_variant(), VariantIndex::new(1));
-        assert_eq!(transition.id().seek_epoch(), 3);
+        assert_eq!(transition.id().abr_ticket(), ticket);
     }
 
     #[kithara::test]
     fn outgoing_disposition_defaults_to_retained_and_changes_immutably() {
         let retained = VariantTransition::new(
-            VariantTransitionId::new(ticket_for(1), 3),
+            VariantTransitionId::new(ticket_for(1)),
             VariantIndex::new(0),
             VariantIndex::new(1),
         );

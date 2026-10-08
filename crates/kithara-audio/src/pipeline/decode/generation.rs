@@ -14,7 +14,11 @@ use kithara_stream::{ConstructionGate, MediaInfo};
 use kithara_test_utils::kithara;
 use tracing::warn;
 
-use crate::pipeline::{decode::core::panic_message, gapless::GaplessStage, seek::ResumeState};
+use crate::pipeline::{
+    decode::core::panic_message,
+    gapless::GaplessStage,
+    seek::{ResumeState, ResumeTarget},
+};
 
 #[derive(Clone, Copy)]
 pub(super) struct Holdback {
@@ -272,7 +276,7 @@ impl DecoderGeneration {
         }
     }
 
-    pub(crate) fn trim_to(&mut self, target: kithara_platform::time::Duration) {
+    pub(crate) fn trim_to(&mut self, target: ResumeTarget) {
         self.pending_head_skip = Some(ResumeState {
             target,
             trim_head: true,
@@ -472,7 +476,7 @@ mod tests {
             }),
             None,
             0,
-            0,
+            None,
             None,
             GaplessMode::Disabled,
         )
@@ -489,7 +493,7 @@ mod tests {
             }),
             None,
             0,
-            0,
+            None,
             None,
             GaplessMode::MediaOnly,
         )
@@ -508,7 +512,7 @@ mod tests {
             }),
             None,
             0,
-            0,
+            None,
             None,
             mode,
         )
@@ -566,7 +570,7 @@ mod tests {
             }),
             media_info,
             0,
-            0,
+            None,
             None,
             GaplessMode::MediaOnly,
         );
@@ -839,29 +843,34 @@ mod tests {
     #[kithara::test]
     fn deferred_seek_only_completes_the_current_epoch() {
         let mut generation = generation(spec(2, 44_100));
-        let first = SeekContext {
-            target: Duration::from_secs(1),
-            epoch: 1,
-        };
-        let second = SeekContext {
-            target: first.target,
-            epoch: 2,
-        };
-        assert!(generation.poll_seek(first).is_pending());
-        assert!(generation.seek_preparation.completed.is_none());
-        generation.prepare_deferred(first.epoch, false);
-        assert!(generation.poll_seek(second).is_pending());
-        generation.prepare_deferred(second.epoch, false);
+        let first = Duration::from_secs(1);
+        let second = Duration::from_secs(2);
+        generation.notify_seek();
         assert!(matches!(
-            generation.poll_seek(second),
-            Poll::Ready(Ok(DecoderSeekOutcome::Landed { .. }))
+            generation.seek(first),
+            Ok(DecoderSeekOutcome::Landed { landed_at, .. }) if landed_at == first
         ));
-        assert!(generation.seek_preparation.completed.is_none());
-
-        assert!(generation.poll_seek(first).is_pending());
-        generation.prepare_deferred(second.epoch, false);
-        assert!(generation.seek_preparation.requested.is_none());
-        assert!(generation.seek_preparation.completed.is_none());
+        assert!(!generation.has_output());
+        let pools = pools();
+        generation.stage(AudioChunk::new(
+            AudioChunkInfo::default(),
+            sample_buffer(&pools, &[0.25, 0.25]),
+        ));
+        assert!(generation.has_output());
+        generation.notify_seek();
+        assert!(matches!(
+            generation.seek(second),
+            Ok(DecoderSeekOutcome::Landed { landed_at, .. }) if landed_at == second
+        ));
+        assert!(!generation.has_output());
+        generation.prepare_deferred(false);
+        assert!(!generation.has_output());
+        assert!(!generation.is_finished());
+        assert!(matches!(
+            generation.next_chunk(),
+            Ok(DecoderChunkOutcome::Eof)
+        ));
+        assert!(!generation.has_output());
     }
 
     #[kithara::test]

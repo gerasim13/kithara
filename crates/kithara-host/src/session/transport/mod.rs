@@ -13,4 +13,4 @@ pub(crate) use control::{
 };
 pub use event::TransportEvent;
 pub(crate) use node::install;
-pub(crate) use process::{Span, applied_spans};
+pub(crate) use process::{Span, TransportState, applied_spans};

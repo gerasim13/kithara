@@ -23,9 +23,8 @@ pub use api::{
     BpmInfo, DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemRole, ItemStatus, MediaTime,
     PlaybackDirection, PlayerEvent, PlayerStatus, PortDescription, PortType, RouteChangeReason,
     RouteDescription, SelectionPlayback, SessionBeat, SessionDuckingMode, SessionEvent,
-    SessionTransportSnapshot, SlotId, StretchBackendKind, SyncUnavailable, Tempo,
-    TempoError, TimeControlStatus, TimeRange, TrackBinding, TrackRef, TransportRevision,
-    WaitingReason,
+    SessionTransportSnapshot, SlotId, StretchBackendKind, SyncUnavailable, Tempo, TempoError,
+    TimeControlStatus, TimeRange, TrackBinding, TrackRef, TransportRevision, WaitingReason,
 };
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
@@ -35,7 +34,7 @@ pub use kithara_net::Headers;
 pub use kithara_render::{
     CrossfadeCurve, CrossfadeSettings, DispatcherProtocol, EngineLoad, EngineLoadSnapshot,
     InvalidCrossfade, LoadRefusal, PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch,
-    RegisteredAudio, ServiceClass, TrackConfig,
+    ServiceClass, TrackConfig,
     bridge::{
         DeckEvent, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot, FadeDir, MixTapWriter,
         PlaybackFault, RtMetricsSnapshot, Slot, SlotSnapshot,
@@ -45,16 +44,14 @@ pub use kithara_render::{
 };
 pub use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot, MIN_SPEED};
 pub use player::{
-    Bound, DeckPass, HostedDeck, Outbox, Player, PlayerConfig, PlayerFactory, PlayerImpl, Position,
+    Bound, DeckControl, DeckPass, HostedDeck, Outbox, Player, PlayerConfig, PlayerFactory, PlayerImpl, Position,
     Settled, Track, TrackCommand, TrackFactory, TrackReceipt, TrackSettings, TrackSettingsChange,
     TrackSnapshot, TrackStatus,
 };
 pub use resource::{
     ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, Cover, MAX_ARTIFACT_BYTES,
-    OpenedTrack, PlaybackResamplerBackend, Resource, ResourceConfig, ResourceLoad, ResourcePrep,
-    ResourceSrc, SourceType,
+    OpenedTrack, PlaybackResamplerBackend, Resource, ResourceConfig, ResourceLane, ResourceLoad,
+    ResourcePrep, ResourceSrc, SourceType,
 };
-pub use session::{
-    OutputSnapshot, PlayerId, SessionError, SessionOutputView, SessionSampleRate,
-};
+pub use session::{OutputSnapshot, PlayerId, SessionError, SessionOutputView, SessionSampleRate};
 mod consts;

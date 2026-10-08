@@ -5,9 +5,10 @@ use kithara_signal::SourceSpan;
 use kithara_stretch::ElasticError;
 use num_traits::ToPrimitive;
 
-use super::{renderer::WarpRenderer, renderer_target::PreparedTarget};
+use super::{renderer::WarpRenderer, renderer_target::PreparedTarget, trajectory::Trajectory};
 
 pub(super) struct RetiringTarget {
+    pub(super) trajectory: Option<Trajectory>,
     target: PreparedTarget,
     keylock: bool,
     active: bool,
@@ -64,14 +65,29 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     }
 
     pub(super) fn retire_mapped_target(&mut self) -> Result<(), ElasticError> {
-        let frames = self
+        let mut frames = self
             .engine_latency()
             .get()
             .clamp(1, Self::MAX_OUTPUT_FRAMES);
         if self.engine.is_none() {
             return Err(ElasticError::EnginePreparation("engine is unavailable"));
         }
+        let unity = self.stretch_target().1 && self.keylocked_unity();
+        let trajectory = unity.then(|| self.trajectory.clone());
+        if unity {
+            let mut identity = self.trajectory.clone();
+            identity.snap_to_frame()?;
+            let start = identity.span(0, self.spec.sample_rate, 1)?.start();
+            if let Some(end) = self.residency.as_ref().and_then(|resident| resident.end) {
+                frames = frames.max(
+                    usize::try_from(end.saturating_sub(start))
+                        .map_err(|_| ElasticError::SampleCountOverflow)?,
+                );
+            }
+            self.trajectory = identity;
+        }
         self.retiring_target = Some(RetiringTarget {
+            trajectory,
             target: PreparedTarget {
                 engine: self.engine.take(),
                 projection: self.projection.take(),
@@ -81,7 +97,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 residency: None,
             },
             keylock: self.current_keylock,
-            active: false,
+            active: unity && self.active,
             pitch: f64::NAN,
             frames,
             rendered: 0,
@@ -108,7 +124,12 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     }
 
     pub(super) fn render_mapped(&mut self, span: SourceSpan) -> Result<(), ElasticError> {
-        self.render_mapping(span)?;
+        if self.keylocked_unity() {
+            self.render_varispeed(span)?;
+            self.active = false;
+        } else {
+            self.render_mapping(span)?;
+        }
         let Some(mut retiring) = self.retiring_target.take() else {
             return Ok(());
         };
@@ -133,12 +154,30 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 0..u64::try_from(frames).map_err(|_| ElasticError::SampleCountOverflow)?,
             )
             .ok_or(ElasticError::SampleCountOverflow)?;
+        let tail_span = retiring
+            .trajectory
+            .as_ref()
+            .map(|trajectory| trajectory.span(span.start(), self.spec.sample_rate, frames))
+            .transpose()?;
         self.swap_target(&mut retiring.target);
         let keylock = self.current_keylock;
-        self.current_keylock &= retiring.keylock;
+        self.current_keylock = retiring.keylock && (keylock || retiring.trajectory.is_some());
         mem::swap(&mut self.active, &mut retiring.active);
         mem::swap(&mut self.applied_pitch, &mut retiring.pitch);
-        let result = self.render_mapping(span);
+        let result = if let (Some(trajectory), Some(tail_span)) =
+            (retiring.trajectory.as_mut(), tail_span)
+        {
+            if let Some(scratch) = self.scratch.as_mut() {
+                scratch.clear();
+            }
+            self.drain_tail(usize::from(self.spec.channels), frames)
+                .and_then(|complete| {
+                    self.active = !complete;
+                    trajectory.advance(tail_span)
+                })
+        } else {
+            self.render_mapping(span)
+        };
         mem::swap(&mut self.applied_pitch, &mut retiring.pitch);
         mem::swap(&mut self.active, &mut retiring.active);
         self.current_keylock = keylock;

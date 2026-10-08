@@ -14,11 +14,11 @@ use kithara_platform::{
 use kithara_signal::AudioChunk;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    Activity, ActivityWriter, AudioCodec, ByteMap, ContainerFormat, MediaInfo, PlayheadRead, PlayheadState,
-    PlayheadWrite, ReadOutcome, ReaderProfile,
-    SegmentDescriptor, Source, SourceError, SourcePhase, SourceProbe, SourceSeekAnchor, Stream,
-    StreamError, StreamResult, StreamType, VariantControl, VariantPromotion, VariantReaderPlan,
-    VariantReaderTake, VariantTransition, mock::NoopWorkerWake,
+    Activity, ActivityWriter, AudioCodec, ByteMap, ContainerFormat, MediaInfo, PlayheadRead,
+    PlayheadState, PlayheadWrite, ReadOutcome, ReaderProfile, SegmentDescriptor, Source,
+    SourceError, SourcePhase, SourceProbe, SourceSeekAnchor, Stream, StreamError, StreamResult,
+    StreamType, VariantControl, VariantPromotion, VariantReaderPlan, VariantReaderTake,
+    VariantTransition, mock::NoopWorkerWake,
 };
 use kithara_test_utils::kithara;
 use url::Url;
@@ -26,7 +26,10 @@ use url::Url;
 use crate::{
     consts,
     pipeline::{
-        decode::{DecoderGeneration, core::{ActiveDecode, DecoderFactory}},
+        decode::{
+            DecoderGeneration,
+            core::{ActiveDecode, DecoderFactory},
+        },
         fetch::Fetch,
         rebuild::{RecreateCause, RecreateState},
         source::StreamAudioSource,
@@ -199,17 +202,20 @@ impl ByteMap for SpliceState {
 struct SpliceSource {
     playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
-    activity: ActivityWriter,
+    activity: Activity,
+    writer: Option<ActivityWriter>,
     state: Arc<SpliceState>,
 }
 
 impl SpliceSource {
     fn new(state: Arc<SpliceState>) -> Self {
+        let writer = ActivityWriter::new();
         Self {
+            activity: writer.reader(),
+            writer: Some(writer),
             state,
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
-            activity: ActivityWriter::new(),
         }
     }
 }
@@ -249,7 +255,11 @@ impl SourceProbe for ReadyProbe {
 
 impl Source for SpliceSource {
     fn activity(&self) -> Activity {
-        self.activity.reader()
+        self.activity.clone()
+    }
+
+    fn take_activity_writer(&mut self) -> Option<ActivityWriter> {
+        self.writer.take()
     }
 
     fn advance(&self, n: u64) {
@@ -303,10 +313,6 @@ impl Source for SpliceSource {
             NonZeroUsize::new(n).expect("non-empty read must produce nonzero bytes"),
         ))
     }
-
-
-
-
 
     fn set_position(&self, pos: u64) {
         self.position.store(pos, Ordering::Release);
@@ -490,22 +496,27 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
                     .gapless(false)
                     .build();
             let input = reader.into_inner();
-            let decoder = DecodeFactory::create_from_media_info(input, info.as_ref().expect("splice media info"), config)?;
+            let info = info.expect("splice reader carries media metadata");
+            let decoder = DecodeFactory::create_from_media_info(input, &info, config)?;
             decoder.update_byte_len(byte_len);
             Ok(decoder)
         },
         None,
     );
-    let generation = DecoderGeneration::new(
-        initial_decoder,
-        Some(media_info(consts::SLQ_VARIANT)),
-        0,
-        None,
-        None,
+    let decode = ActiveDecode::new(
+        DecoderGeneration::new(
+            initial_decoder,
+            Some(media_info(consts::SLQ_VARIANT)),
+            0,
+            None,
+            None,
+            GaplessMode::Disabled,
+        ),
         GaplessMode::Disabled,
-    );
-    let decode = ActiveDecode::new(generation, GaplessMode::Disabled, None, &pools)
-        .expect("decode scratch fits test pools");
+        None,
+        &pools,
+    )
+    .expect("decode scratch fits test pools");
     let source = StreamAudioSource::new(
         shared_stream,
         decode,
@@ -513,7 +524,10 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
         NonZeroU32::new(consts::SAMPLE_RATE),
         backend,
         "none",
-        Arc::new(kithara_events::DeferredBus::new(kithara_events::EventBus::new(16), 16)),
+        Arc::new(kithara_events::DeferredBus::new(
+            kithara_events::EventBus::default(),
+            16,
+        )),
         Arc::new(NoopWorkerWake),
     );
     SpliceFixture { state, source }
@@ -677,14 +691,19 @@ async fn hls_aac_lc_same_variant_recreate_continuity_metric(slq_layout: VariantL
                         consts::SLQ_VARIANT,
                         "same-variant recreate test must stay on the SLQ variant",
                     );
-                    source.install_replacement(
-                        RecreateState {
-                            cause: RecreateCause::VariantSwitch,
-                            media_info: Some(media_info(active)),
-                            offset: state.active_layout().init_range.start,
-                        },
-                        Some(chunk.meta.end_timestamp),
-                    ).expect("same-variant decoder recreation");
+                    source
+                        .install_replacement(
+                            RecreateState {
+                                cause: RecreateCause::VariantSwitch,
+                                media_info: Some(media_info(active)),
+                                offset: state.active_layout().init_range.start,
+                            },
+                            Some(crate::SourceEnd::new(
+                                chunk.meta.frame_offset + u64::from(chunk.meta.frames),
+                                chunk.meta.spec.sample_rate,
+                            )),
+                        )
+                        .expect("same-variant replacement");
                     recreated = true;
                     recreate_frame = Some(left.len());
                 }

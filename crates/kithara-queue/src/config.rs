@@ -34,7 +34,7 @@ pub struct QueueSettings {
 #[non_exhaustive]
 pub struct QueueConfig<S, F = PlayerFactory>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
     F: TrackFactory<S>,
 {
     /// Builds every track this queue plays.
@@ -112,7 +112,7 @@ where
 
 impl<S> QueueConfig<S, PlayerFactory>
 where
-    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
     /// Starts a queue configuration with the bare-track factory.
     #[must_use]
@@ -120,7 +120,6 @@ where
         Self::with_factory(PlayerFactory)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;

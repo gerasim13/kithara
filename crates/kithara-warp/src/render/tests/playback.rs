@@ -52,7 +52,7 @@ use crate::{Warp, consts, test_pools::pools};
 #[kithara::test]
 #[cfg_attr(
     feature = "stretch-glide",
-    case::glide_slow(StretchKind::Glide, 0.5, 15)
+    case::glide_slow(StretchKind::Glide, 0.5, 17)
 )]
 #[cfg_attr(
     feature = "stretch-glide",
@@ -60,11 +60,11 @@ use crate::{Warp, consts, test_pools::pools};
 )]
 #[cfg_attr(
     feature = "stretch-glide",
-    case::glide_fast(StretchKind::Glide, 2.0, 63)
+    case::glide_fast(StretchKind::Glide, 2.0, 79)
 )]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith_slow(StretchKind::Signalsmith, 0.5, 15)
+    case::signalsmith_slow(StretchKind::Signalsmith, 0.5, 17)
 )]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -72,11 +72,11 @@ use crate::{Warp, consts, test_pools::pools};
 )]
 #[cfg_attr(
     feature = "stretch-signalsmith",
-    case::signalsmith_fast(StretchKind::Signalsmith, 2.0, 63)
+    case::signalsmith_fast(StretchKind::Signalsmith, 2.0, 79)
 )]
 #[cfg_attr(
     feature = "stretch-bungee",
-    case::bungee_slow(StretchKind::Bungee, 0.5, 15)
+    case::bungee_slow(StretchKind::Bungee, 0.5, 17)
 )]
 #[cfg_attr(
     feature = "stretch-bungee",
@@ -84,7 +84,7 @@ use crate::{Warp, consts, test_pools::pools};
 )]
 #[cfg_attr(
     feature = "stretch-bungee",
-    case::bungee_fast(StretchKind::Bungee, 2.0, 63)
+    case::bungee_fast(StretchKind::Bungee, 2.0, 79)
 )]
 fn source_span_is_planned_from_the_output_quantum(
     #[case] backend: StretchKind,
@@ -100,10 +100,26 @@ fn source_span_is_planned_from_the_output_quantum(
     renderer.prepare(spec());
 
     let frames = renderer
-        .prepare_quantum(AudioChunkInfo::default(), 128, usize::MAX)
+        .prepare_quantum(
+            AudioChunkInfo {
+                spec: spec(),
+                ..Default::default()
+            },
+            128,
+            usize::MAX,
+        )
         .expect("test source span is plannable");
 
     assert_eq!(frames.get(), expected_source_frames);
+    assert_eq!(
+        renderer
+            .prepared_quantum
+            .expect("prepared output quantum")
+            .source_span
+            .expect("exact source mapping")
+            .output_frames(),
+        32
+    );
 }
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
@@ -472,7 +488,14 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(
     );
 
     let mut frontiers = Vec::new();
-    while let Some(tail) = flush_serviced(&mut renderer) {
+    loop {
+        renderer.prepare(spec());
+        let Some(tail) = renderer
+            .drain((source_latency / 2).max(1))
+            .expect("bounded terminal drain")
+        else {
+            break;
+        };
         assert!(tail.frames() > 0, "terminal chunk carries real samples");
         frontiers.push(renderer.rendered_source_end());
         assert!(frontiers.len() < 64, "terminal drain must converge");

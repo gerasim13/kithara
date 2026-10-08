@@ -1,38 +1,128 @@
 use firewheel::{FirewheelContext, node::NodeID};
+use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_command::Port;
+use kithara_config::Config;
 use kithara_output::OutputGroup;
 use kithara_render::bridge::MixerInputs;
 use tracing::{debug, warn};
 
 use super::{
     SessionError,
-    state::{SessionState, TapSlot, add_graph_node},
+    state::{SessionState, TapSlot, add_graph_node, ensure_ctx},
+    transport::{TransportState, prepare_route_restart},
 };
-use crate::{DeckId, rt::TapNode};
+use crate::{
+    DeckId,
+    rt::{PlayerNode, TapNode},
+};
 
 pub(crate) fn install_deck<T, S>(
-    _state: &mut SessionState<T, S>,
-    _id: DeckId,
-    _inputs: MixerInputs,
-) -> Result<(), SessionError> {
-    todo!(
-        "Install the deck's PlayerNode from MixerInputs and owner pools, then connect its output to the master; HostedDeck supplies no pool handle yet (spec §4.2, §5.7)"
-    )
+    state: &mut SessionState<T, S>,
+    id: DeckId,
+    inputs: MixerInputs,
+    pools: PoolRegion<S>,
+) -> Result<(), SessionError>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    if state.deck_nodes.iter().any(|(held, _)| *held == id) {
+        return Err(SessionError::DeckAttached(id));
+    }
+    ensure_ctx(state)?;
+    let master = state.session_output_node_id.ok_or(SessionError::NoContext)?;
+    let ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
+    let node = add_graph_node(ctx, PlayerNode::<S, TransportState>::new(inputs, pools))?;
+    let installed = connect_stereo(ctx, node, master, "connect deck mixer to master")
+        .and_then(|()| {
+            ctx.update()
+                .map_err(|error| SessionError::Graph(format!("{error:?}")))
+        });
+    if let Err(error) = installed {
+        if let Err(remove_error) = ctx.remove_node(node) {
+            warn!(?remove_error, "failed to remove the rejected deck node");
+        }
+        return Err(error);
+    }
+    state.deck_nodes.push((id, node));
+    Ok(())
 }
 
+/// Removes a deck node after its command scope reports Closed.
 pub(crate) fn remove_deck<T, S>(
-    _state: &mut SessionState<T, S>,
-    _id: DeckId,
+    state: &mut SessionState<T, S>,
+    id: DeckId,
 ) -> Result<(), SessionError> {
-    todo!(
-        "Withdraw the deck mixer after its close receipt, reclaiming PCM on the owner thread (spec §5.7)"
-    )
+    let index = state
+        .deck_nodes
+        .iter()
+        .position(|(held, _)| *held == id)
+        .ok_or(SessionError::DeckNotFound(id))?;
+    let node = state.deck_nodes[index].1;
+    let ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
+    ctx.remove_node(node)
+        .map_err(|error| SessionError::Graph(format!("remove deck mixer failed: {error}")))?;
+    state.deck_nodes.remove(index);
+    if let Err(error) = ctx.update() {
+        warn!(?error, "graph update after deck retirement failed");
+    }
+    Ok(())
 }
 
-pub(crate) fn idle<T, S>(_state: &mut SessionState<T, S>) -> Result<(), SessionError> {
-    todo!(
-        "After abandoning host and deck Live values, release an idle native context or retain a browser device, then rebuild on the next registration (spec §5.7)"
-    )
+/// Stops the stream while retaining its context, scopes and applied settings.
+pub(crate) fn idle<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
+    if state.ctx.is_none() {
+        return Ok(());
+    }
+    prepare_route_restart(state)?;
+    state.stream_needs_restart = false;
+    state.publish_root();
+    Ok(())
 }
+
+/// Drops an empty, stopped context after every scope is Closed and its owner
+/// has read the channel to the end. A retained output or a processor still
+/// returning through its drop channel keeps the context alive.
+pub(crate) fn drop_idle_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
+    if !state.deck_nodes.is_empty() || state.stream.is_some() {
+        return Err(SessionError::Graph(
+            "cannot drop a context with deck nodes or a running stream".to_owned(),
+        ));
+    }
+    if state.retains_output || state.ctx.is_none() {
+        return Ok(());
+    }
+    let root_capacity = state.channel_config.values().root.values().capacity.get();
+    if state
+        .channel
+        .as_ref()
+        .is_some_and(|channel| channel.available() != root_capacity)
+    {
+        return Ok(());
+    }
+    if state
+        .ctx
+        .as_ref()
+        .and_then(FirewheelContext::proc_store)
+        .is_none()
+    {
+        return Ok(());
+    }
+    state.ctx.take();
+    state.channel = None;
+    state.transport_observation = None;
+    state.session_output_node_id = None;
+    state.session_limiter_node_id = None;
+    state.session_metronome_node_id = None;
+    for tap in [crate::api::Tap::Master, crate::api::Tap::Output] {
+        let slot = state.taps.slot(tap);
+        if matches!(slot, Some(TapSlot::Installed(_))) {
+            *slot = None;
+        }
+    }
+    state.publish_root();
+    Ok(())
+}
+
 fn connect_stereo(
     fw_ctx: &mut FirewheelContext,
     from: NodeID,
@@ -45,11 +135,11 @@ fn connect_stereo(
         .map_err(|err| SessionError::Graph(format!("{label} failed: {err}")))
 }
 
-pub(super) mod tap {
+pub(crate) mod tap {
     use super::*;
     use crate::api::Tap;
 
-    pub(in crate::session) fn attach<T, S>(
+    pub(crate) fn attach<T, S>(
         state: &mut SessionState<T, S>,
         tap: Tap,
         outputs: OutputGroup,
@@ -64,7 +154,7 @@ pub(super) mod tap {
         install(state, tap, from, outputs)
     }
 
-    pub(in crate::session) fn detach<T, S>(state: &mut SessionState<T, S>, tap: Tap) {
+    pub(crate) fn detach<T, S>(state: &mut SessionState<T, S>, tap: Tap) {
         let Some(TapSlot::Installed(tap_id)) = state.taps.slot(tap).take() else {
             return;
         };
@@ -79,7 +169,7 @@ pub(super) mod tap {
         }
     }
 
-    pub(in crate::session) fn install_requested<T, S>(
+    pub(crate) fn install_requested<T, S>(
         state: &mut SessionState<T, S>,
     ) -> Result<(), SessionError> {
         for tap in [Tap::Master, Tap::Output] {

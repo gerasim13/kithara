@@ -343,7 +343,7 @@ fn read_returns_failed_not_eof_on_decoder_error() {
         }
     }
     assert!(
-        reader.frames_until_eof().is_none(),
+        !reader.eof,
         "frames_until_eof must NOT report an EOF after a decode failure"
     );
 }

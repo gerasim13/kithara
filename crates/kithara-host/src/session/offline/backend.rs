@@ -35,13 +35,13 @@ impl Default for BackendConfig {
 /// The offline stream. There is no device behind it: the renderer drives the
 /// processor itself, one requested block at a time, so a caller pulls audio at
 /// whatever pace it likes instead of a sound card setting it.
-pub(super) struct OfflineStream {
+pub(crate) struct OfflineStream {
     processor: FirewheelProcessor,
     sample_rate: NonZeroU32,
 }
 
 impl OfflineStream {
-    pub(super) fn render(
+    pub(crate) fn render(
         &mut self,
         position: u64,
         frames: usize,

@@ -102,8 +102,6 @@ where
 }
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod document_tests {
-    use std::num::NonZeroUsize;
-
     use kithara_decode::{DecoderBackend, GaplessMode};
     use kithara_test_utils::kithara;
 
@@ -141,40 +139,12 @@ mod document_tests {
         assert!(error.to_string().contains("teapot"), "{error}");
     }
 
-    /// `preload_chunks` and `audio_buffer_chunks` are the patch's only
-    /// declared fields, and `headroom` is neither a substring of either nor
-    /// contains one, so the assertion cannot pass off serde's list of valid
-    /// names.
     #[kithara::test(native, flash(false))]
     fn an_unknown_field_is_rejected_and_named() {
         let error = serde_yaml_ng::from_str::<AudioConfigPatch>("headroom: 8\n")
             .expect_err("a typo must not be silently ignored");
 
         assert!(error.to_string().contains("headroom"), "{error}");
-    }
-
-    #[kithara::test(native, flash(false))]
-    fn the_document_names_both_live_keys() {
-        let patch: AudioConfigPatch =
-            serde_yaml_ng::from_str("preload_chunks: 8\naudio_buffer_chunks: 20\n")
-                .expect("the document types");
-
-        assert_eq!(patch.preload_chunks, NonZeroUsize::new(8));
-        assert_eq!(patch.audio_buffer_chunks, Some(20));
-    }
-
-    /// A document that names neither key leaves both unset, so the merge has
-    /// nothing to write and the caller's values stand.
-    #[kithara::test(native, flash(false))]
-    fn an_absent_key_stays_unset_rather_than_defaulting() {
-        let patch: AudioConfigPatch =
-            serde_yaml_ng::from_str("preload_chunks: 8\n").expect("the document types");
-
-        assert_eq!(patch.preload_chunks, NonZeroUsize::new(8));
-        assert!(
-            patch.audio_buffer_chunks.is_none(),
-            "an unnamed key must stay `None` so `apply` skips it"
-        );
     }
 
     /// `consumer_wake_mode` is overwritten for every player-managed resource

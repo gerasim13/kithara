@@ -9,12 +9,10 @@ use super::rebuild::{
 use crate::{
     consts,
     pipeline::{
-        seek::{ResumeState, SeekContext},
-        track::{
-            CurrentFsm, Track, TrackStep, WaitContext, WaitState, WaitingForSource, WaitingReason,
-        },
+        source::OwnerPhase,
+        track::{TrackStep, WaitingReason},
     },
-    traits::{AudioSource, AudioSourceExt},
+    traits::AudioSource,
 };
 
 /// Park the track in `WaitingForSource(Playback)` the way a transient
@@ -44,7 +42,7 @@ async fn byte_eof_resumes_decoding_while_the_decoder_still_produces(route_pcm: R
     park_playback_at_byte_eof(&mut fixture);
 
     assert!(
-        matches!(fixture.source.step_track(), TrackStep::StateChanged),
+        matches!(fixture.source.phase, OwnerPhase::Decoding),
         "byte-space EOF must resume the wait into the decode path"
     );
     let TrackStep::Produced(fetch) = fixture.source.step_track() else {
@@ -56,6 +54,35 @@ async fn byte_eof_resumes_decoding_while_the_decoder_still_produces(route_pcm: R
     );
 }
 
+/// With the decoder itself drained, the same parked byte-EOF still ends the
+/// track — through the decode path's exhausted finalization, not a wait
+/// shortcut (the first step resumes instead of reporting `Eof`).
+#[kithara::test(tokio)]
+async fn byte_eof_still_ends_a_drained_decoder_through_the_decode_path(route_pcm: RoutePcm) {
+    let mut fixture = route_signal_source_with_eof(&route_pcm, consts::SAMPLE_RATE, 0).await;
+    park_playback_at_byte_eof(&mut fixture);
+
+    assert!(
+        matches!(fixture.source.phase, OwnerPhase::Decoding),
+        "byte-space EOF must resume the wait, not shortcut to Eof"
+    );
+    for _ in 0..8 {
+        match fixture.source.step_track() {
+            TrackStep::Eof => {
+                assert!(matches!(fixture.source.phase, OwnerPhase::AtEof));
+                return;
+            }
+            TrackStep::Failed(_) => {
+                panic!("a drained decoder at byte EOF must finalize as EOF, not fail")
+            }
+            _ => {
+                let _ = fixture.source.prepare_deferred();
+                fixture.source.finish_deferred();
+            }
+        }
+    }
+    panic!("a drained decoder at byte EOF must still finalize the track");
+}
 
 /// The post-seek wait is the context that actually holds the flake's tail: a
 /// byte-space EOF while awaiting the first post-seek chunk must resume into
@@ -63,23 +90,15 @@ async fn byte_eof_resumes_decoding_while_the_decoder_still_produces(route_pcm: R
 #[kithara::test(tokio)]
 async fn byte_eof_resumes_a_post_seek_wait_into_the_tail(route_pcm: RoutePcm) {
     let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
-    fixture.source.update_state(
-        Track::<WaitingForSource>::new(WaitState {
-            context: WaitContext::PostSeek(ResumeState {
-                seek: SeekContext {
-                    epoch: 0,
-                    target: Duration::ZERO,
-                },
-                ..Default::default()
-            }),
-            reason: WaitingReason::Waiting,
-        })
-        .erase(),
-    );
+    fixture
+        .source
+        .seek(Duration::ZERO)
+        .expect("synchronous seek");
+    park_playback_at_byte_eof(&mut fixture);
     *fixture.phase.lock() = SourcePhase::Eof;
 
     assert!(
-        matches!(fixture.source.step_track(), TrackStep::StateChanged),
+        matches!(fixture.source.phase, OwnerPhase::Decoding),
         "byte-space EOF must resume the post-seek wait"
     );
     let TrackStep::Produced(fetch) = fixture.source.step_track() else {
