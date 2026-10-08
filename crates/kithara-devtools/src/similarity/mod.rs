@@ -3,6 +3,7 @@ mod behavior;
 mod catalog;
 mod chains;
 mod config;
+mod dependencies;
 mod report;
 mod shape;
 

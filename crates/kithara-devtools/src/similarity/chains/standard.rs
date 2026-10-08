@@ -41,6 +41,9 @@ pub(super) fn prelude(name: &str) -> Option<ItemPath> {
         "IntoIterator" => &["std", "iter", "IntoIterator"],
         "Drop" => &["std", "ops", "Drop"],
         "Clone" => &["std", "clone", "Clone"],
+        "Fn" => &["std", "ops", "Fn"],
+        "FnMut" => &["std", "ops", "FnMut"],
+        "FnOnce" => &["std", "ops", "FnOnce"],
         _ => return None,
     };
     Some(path.iter().map(|segment| (*segment).to_owned()).collect())
@@ -161,6 +164,16 @@ pub(super) fn returned(ty: &Ty, method: &str, scalar: bool) -> Option<Vec<Ty>> {
             vec![ty.slot(0), ty.slot(1)],
         )]);
     }
+    if ty.is(&["std", "collections", "HashMap"]) && matches!(method, "get" | "get_mut") {
+        return Some(option(ty.slot(1)));
+    }
+    if ty.is(&["std", "cell", "RefCell"]) && matches!(method, "borrow" | "borrow_mut") {
+        let guard = if method == "borrow" { "Ref" } else { "RefMut" };
+        return Some(vec![named(&["std", "cell", guard], vec![ty.slot(0)])]);
+    }
+    if ty.is(&["std", "cell", "OnceCell"]) && matches!(method, "get" | "get_mut") {
+        return Some(option(ty.slot(0)));
+    }
     if ty.is(&["std", "collections", "hash_map", "OccupiedEntry"])
         && matches!(method, "get" | "get_mut" | "into_mut")
     {
@@ -243,7 +256,7 @@ pub(super) fn closure(ty: &Ty, method: &str, arg: usize, input: usize) -> Option
     }
     if input == 0
         && ((method == "map_or" || method == "map_or_else") && arg == 1
-            || method == "map" && arg == 0)
+            || matches!(method, "map" | "and_then") && arg == 0)
         && (is_option(ty) || is_result(ty))
     {
         return Some(ty.slot(0));
@@ -252,6 +265,24 @@ pub(super) fn closure(ty: &Ty, method: &str, arg: usize, input: usize) -> Option
         return Some(ty.slot(1));
     }
     None
+}
+
+pub(super) fn callback_input(ty: &Ty, input: usize) -> Vec<Ty> {
+    if !["Fn", "FnMut", "FnOnce"]
+        .iter()
+        .any(|name| ty.is(&["std", "ops", name]))
+    {
+        return Vec::new();
+    }
+    ty.slot(0)
+        .iter()
+        .filter_map(|args| match args {
+            Ty::Tuple(inputs) => inputs.get(input),
+            _ => None,
+        })
+        .flatten()
+        .cloned()
+        .collect()
 }
 
 pub(super) fn constructed(path: &[String], arg: Vec<Ty>) -> Option<Vec<Ty>> {

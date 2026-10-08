@@ -26,7 +26,7 @@ impl Resolver<'_> {
         if self.crates.contains(krate.as_str()) {
             self.absolute(&krate, tail, depth, allow_foreign)
         } else if allow_foreign && !tail.is_empty() {
-            vec![module_key(&krate, tail)]
+            vec![standard::canonical(&module_key(&krate, tail))]
         } else {
             Vec::new()
         }
@@ -146,10 +146,7 @@ impl Resolver<'_> {
             return vec![standard::canonical(&module_key(krate, path))];
         }
         let key = module_key(krate, path);
-        if self.types.contains_key(&key)
-            || self.free.contains_key(&key)
-            || self.modules.contains(&key)
-        {
+        if self.types.contains_key(&key) || self.free.contains_key(&key) {
             return vec![key];
         }
         if path.split_last().is_some_and(|(name, prefix)| {
@@ -161,11 +158,16 @@ impl Resolver<'_> {
         }) {
             return vec![key];
         }
-        let cache_key = (key, depth, allow_foreign);
+        let cache_key = (key.clone(), depth, allow_foreign);
         if let Some(found) = self.path_memo.borrow().get(&cache_key) {
             return found.clone();
         }
-        let mut out = Vec::new();
+        let mut out: Vec<_> = self
+            .modules
+            .contains(&key)
+            .then_some(key)
+            .into_iter()
+            .collect();
         for (index, head) in path.iter().enumerate() {
             let module = path.get(..index).unwrap_or_default();
             let tail = path.get(index + 1..).unwrap_or_default();

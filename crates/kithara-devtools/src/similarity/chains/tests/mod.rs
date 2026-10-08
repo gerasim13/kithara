@@ -1,5 +1,6 @@
 mod basic;
 mod consts;
+mod dependency_aliases;
 mod ownership_contracts;
 mod projection_contracts;
 mod resolution;

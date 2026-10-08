@@ -218,11 +218,34 @@ impl<'f> Resolver<'f> {
 
     fn closure_type(&self, ty: &Ty, method: &str, arg: usize, input: usize) -> Vec<Ty> {
         self.autoderef(ty, |step| {
-            if self.methods_of(step, method).fns.is_empty() {
-                standard::closure(step, method, arg, input)
-            } else {
-                Some(Vec::new())
+            let found = self.methods_of(step, method);
+            if found.fns.is_empty() {
+                return standard::closure(step, method, arg, input);
             }
+            Some(dedup(
+                self.called(found)
+                    .iter()
+                    .flat_map(|fid| {
+                        let Some(fact) = self.fact(*fid) else {
+                            return Vec::new();
+                        };
+                        let Some(raw) = fact.inputs.get(arg) else {
+                            return Vec::new();
+                        };
+                        let Some(owner) = &fact.owner else {
+                            return Vec::new();
+                        };
+                        let scope = Scope::from(fact);
+                        let Some(bindings) = self.match_owner(owner, step, scope) else {
+                            return Vec::new();
+                        };
+                        self.known(raw, scope, &bindings, 0)
+                            .iter()
+                            .flat_map(|callable| standard::callback_input(callable, input))
+                            .collect()
+                    })
+                    .collect(),
+            ))
         })
         .into_iter()
         .flatten()
@@ -385,6 +408,26 @@ impl<'f> Resolver<'f> {
         let found = self.methods_of(ty, method);
         if !found.fns.is_empty() {
             return Some(self.returned(&self.called(found), Some(ty), None));
+        }
+        if method == "clone"
+            && ty.path().is_some_and(|key| {
+                self.types.get(key).into_iter().flatten().any(|def| {
+                    let derives = match def {
+                        TypeDef::Struct(data) => &data.derives,
+                        TypeDef::Enum(data) => &data.derives,
+                        _ => return false,
+                    };
+                    derives.iter().any(|path| {
+                        self.path(path, def.scope(), 0).iter().any(|path| {
+                            path.iter()
+                                .map(String::as_str)
+                                .eq(["std", "clone", "Clone"])
+                        })
+                    })
+                })
+            })
+        {
+            return Some(vec![ty.clone()]);
         }
         standard::returned(ty, method, scalar)
     }

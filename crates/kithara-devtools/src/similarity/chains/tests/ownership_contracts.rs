@@ -190,7 +190,7 @@ pub fn standard(value: &[Element]) { value.iter().for_each(|input| input.standar
 ",
     );
     assert!(lists(&unreached, "Element::finish"), "{unreached:?}");
-    assert!(lists(&unreached, "CallbackInput::finish"), "{unreached:?}");
+    assert!(!lists(&unreached, "CallbackInput::finish"), "{unreached:?}");
     assert!(!lists(&unreached, "Vec::for_each"), "{unreached:?}");
     assert!(!lists(&unreached, "Element::standard"), "{unreached:?}");
 }

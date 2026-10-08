@@ -5,6 +5,22 @@ use crate::similarity::chains::{
     resolve::Resolver,
 };
 
+#[test]
+fn a_same_named_module_does_not_hide_a_reexported_function() {
+    let unreached = unreached(
+        r"
+pub mod ci {
+    pub mod run { pub fn unrelated() {} }
+    mod command { pub(crate) fn run() { finish(); } fn finish() {} }
+    pub(crate) use command::run;
+}
+pub fn drive() { ci::run(); }
+",
+    );
+    assert!(!lists(&unreached, "run"), "{unreached:?}");
+    assert!(!lists(&unreached, "finish"), "{unreached:?}");
+}
+
 fn sources(files: &[(&str, &str)]) -> Vec<(String, String)> {
     files
         .iter()

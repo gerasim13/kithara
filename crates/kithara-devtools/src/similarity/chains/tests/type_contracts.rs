@@ -6,6 +6,121 @@ use crate::similarity::chains::{
 };
 
 #[test]
+fn derived_clone_preserves_the_owner_without_overriding_workspace_methods() {
+    let unreached = unreached(
+        r"
+#[derive(Clone)]
+pub struct Handle;
+impl Handle { fn store(&self) {} }
+pub struct Other;
+impl Other { fn store(&self) {} }
+pub struct Custom;
+impl Custom { fn clone(&self) -> Other { Other } fn store(&self) {} }
+#[derive(other::Clone)]
+pub struct Foreign;
+impl Foreign { fn store(&self) {} }
+pub fn drive(handle: Handle, custom: Custom, foreign: Foreign) {
+    handle.clone().store(); custom.clone().store(); foreign.clone().store();
+}
+",
+    );
+    assert!(!lists(&unreached, "Handle::store"), "{unreached:?}");
+    assert!(!lists(&unreached, "Other::store"), "{unreached:?}");
+    assert!(lists(&unreached, "Custom::store"), "{unreached:?}");
+    assert!(lists(&unreached, "Foreign::store"), "{unreached:?}");
+}
+
+#[test]
+fn declared_callback_inputs_preserve_the_receiver_and_argument_types() {
+    let unreached = unreached(
+        r"
+pub struct Scanner;
+pub struct Header;
+pub struct Other;
+impl Header { fn inspect(&self) {} }
+impl Other { fn inspect(&self) {} }
+impl Scanner {
+    fn walk<F>(&mut self, end: usize, visit: F)
+    where F: FnMut(&mut Self, Header) {}
+    fn finish(&self) {}
+    pub fn drive(&mut self) {
+        self.walk(0, |this, header| { this.finish(); header.inspect(); });
+    }
+}
+",
+    );
+    assert!(!lists(&unreached, "Scanner::finish"), "{unreached:?}");
+    assert!(!lists(&unreached, "Header::inspect"), "{unreached:?}");
+    assert!(lists(&unreached, "Other::inspect"), "{unreached:?}");
+}
+
+#[test]
+fn inferred_constructor_parameters_do_not_hide_generic_methods() {
+    let unreached = unreached(
+        r"
+pub struct Holder<T> { value: T }
+pub struct Item;
+impl<T> Holder<T> {
+    fn open(value: T) -> Self { Self { value } }
+    fn finish(&self) {}
+}
+impl Holder<Item> { fn specialized(&self) {} }
+pub fn drive(holder: &Holder<dep::Unknown>) { Holder::open(1).finish(); holder.specialized(); }
+",
+    );
+    assert!(!lists(&unreached, "Holder::open"), "{unreached:?}");
+    assert!(!lists(&unreached, "Holder::finish"), "{unreached:?}");
+    assert!(lists(&unreached, "Holder::specialized"), "{unreached:?}");
+}
+
+#[test]
+fn option_chaining_binds_the_declared_payload() {
+    let unreached = unreached(
+        r"
+pub struct Segment;
+impl Segment { fn position(&self) -> Option<usize> { Some(0) } }
+pub fn drive(segment: Option<&Segment>) {
+    segment.and_then(|segment| segment.position());
+}
+",
+    );
+    assert!(!lists(&unreached, "Segment::position"), "{unreached:?}");
+}
+
+#[test]
+fn map_lookup_preserves_the_value_type() {
+    let unreached = unreached(
+        r"
+use std::collections::HashMap;
+pub struct Decoder;
+impl Decoder { fn configure(&self) {} }
+pub fn drive(decoders: &mut HashMap<usize, Decoder>) {
+    if let Some(decoder) = decoders.get_mut(&0) { decoder.configure(); }
+}
+",
+    );
+    assert!(!lists(&unreached, "Decoder::configure"), "{unreached:?}");
+}
+
+#[test]
+fn cell_access_preserves_the_borrowed_or_stored_type() {
+    let unreached = unreached(
+        r"
+use std::cell::{RefCell, OnceCell};
+pub struct Picture;
+pub struct Source;
+impl Picture { fn hovered(&self) {} }
+impl Source { fn picture(&self) {} }
+pub fn drive(picture: &RefCell<Picture>, source: &OnceCell<Source>) {
+    picture.borrow().hovered();
+    if let Some(source) = source.get() { source.picture(); }
+}
+",
+    );
+    assert!(!lists(&unreached, "Picture::hovered"), "{unreached:?}");
+    assert!(!lists(&unreached, "Source::picture"), "{unreached:?}");
+}
+#[test]
 fn generic_fields_returns_and_aliased_deref_keep_the_actual_argument() {
     let unreached = unreached(
         r"

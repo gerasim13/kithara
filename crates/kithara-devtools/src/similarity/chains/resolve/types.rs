@@ -2,7 +2,7 @@ use syn::{GenericArgument, PathArguments, Type};
 
 use super::{Resolver, TypeDef, consts, dedup};
 use crate::similarity::chains::{
-    facts::path_segs,
+    facts::{AliasFact, path_segs},
     ty::{Bindings, Scope, Ty},
 };
 
@@ -102,7 +102,13 @@ impl Resolver<'_> {
                         _ => None,
                     })
                     .collect(),
-                _ => Vec::new(),
+                PathArguments::Parenthesized(args) => vec![vec![Ty::Tuple(
+                    args.inputs
+                        .iter()
+                        .map(|raw| self.known(&raw.ty, scope, bindings, depth))
+                        .collect(),
+                )]],
+                PathArguments::None => Vec::new(),
             })
             .unwrap_or_default();
         let mut out = Vec::new();
@@ -117,19 +123,32 @@ impl Resolver<'_> {
             for def in defs {
                 match *def {
                     TypeDef::Alias(alias) if depth < consts::ALIAS_DEPTH => {
-                        out.extend(self.known(
-                            &alias.ty,
-                            def.scope(),
-                            &Self::type_bindings(*def, &ty),
-                            depth + 1,
-                        ));
+                        out.extend(self.alias(alias, &args, depth));
                     }
                     TypeDef::Alias(_) => {}
-                    _ => out.push(ty.clone()),
+                    _ => {
+                        let mut args = args.clone();
+                        args.resize_with(args.len().max(def.params().len()), Vec::new);
+                        out.push(Ty::named(key.clone(), args));
+                    }
                 }
             }
         }
         dedup(out)
+    }
+
+    fn alias(&self, alias: &AliasFact, args: &[Vec<Ty>], depth: usize) -> Vec<Ty> {
+        let scope = TypeDef::Alias(alias).scope();
+        let mut bindings = Bindings::new();
+        for (index, name) in alias.params.iter().enumerate() {
+            let types = args.get(index).cloned().unwrap_or_else(|| {
+                alias.defaults.get(name).map_or_else(Vec::new, |default| {
+                    self.known(default, scope, &bindings, depth + 1)
+                })
+            });
+            bindings.insert(name.clone(), types);
+        }
+        self.known(&alias.ty, scope, &bindings, depth + 1)
     }
 
     pub(super) fn type_bindings(def: TypeDef<'_>, ty: &Ty) -> Bindings {

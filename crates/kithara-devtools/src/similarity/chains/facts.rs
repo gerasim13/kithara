@@ -75,6 +75,7 @@ pub(super) struct FnFact {
     pub(super) name: String,
     pub(super) cfg: Vec<String>,
     pub(super) ret: Option<Type>,
+    pub(super) inputs: Vec<Type>,
     pub(super) tokens: Vec<String>,
     pub(super) default: bool,
     pub(super) public: bool,
@@ -82,6 +83,7 @@ pub(super) struct FnFact {
 
 #[derive(Debug)]
 pub(super) struct StructFact {
+    pub(super) derives: Vec<syn::Path>,
     pub(super) bounds: BTreeMap<String, Vec<syn::Path>>,
     pub(super) fields: BTreeMap<String, Type>,
     pub(super) place: Place,
@@ -91,6 +93,7 @@ pub(super) struct StructFact {
 
 #[derive(Debug)]
 pub(super) struct EnumFact {
+    pub(super) derives: Vec<syn::Path>,
     pub(super) payload: BTreeMap<String, BTreeMap<String, Type>>,
     pub(super) place: Place,
     pub(super) name: String,
@@ -113,7 +116,34 @@ pub(super) struct AliasFact {
     pub(super) name: String,
     pub(super) ty: Type,
     pub(super) params: Vec<String>,
+    pub(super) defaults: BTreeMap<String, Type>,
     pub(super) bounds: BTreeMap<String, Vec<syn::Path>>,
+}
+
+impl AliasFact {
+    pub(super) fn new(place: Place, item: &syn::ItemType) -> Self {
+        let mut bounds = BTreeMap::new();
+        generics_map(&item.generics, &mut bounds);
+        Self {
+            place,
+            bounds,
+            name: item.ident.to_string(),
+            ty: (*item.ty).clone(),
+            params: item
+                .generics
+                .type_params()
+                .map(|param| param.ident.to_string())
+                .collect(),
+            defaults: item
+                .generics
+                .type_params()
+                .filter_map(|param| {
+                    let (_, default) = param.default.as_ref()?;
+                    Some((param.ident.to_string(), default.clone()))
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -444,6 +474,20 @@ struct ItemVisitor<'f> {
     module: Vec<String>,
 }
 
+fn derives(attrs: &[Attribute]) -> Vec<syn::Path> {
+    attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("derive"))
+        .filter_map(|attr| {
+            attr.parse_args_with(
+                syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+            )
+            .ok()
+        })
+        .flatten()
+        .collect()
+}
+
 impl ItemVisitor<'_> {
     /// Derive helper attributes (`#[painter(draw = self.paint(..))]`) hold code
     /// the derive expands into an impl of the type: their calls belong to a
@@ -479,6 +523,7 @@ impl ItemVisitor<'_> {
             cfg: self.cfg.clone(),
             generics: BTreeMap::new(),
             ret: None,
+            inputs: Vec::new(),
             tokens: Vec::new(),
             body: body.finish(),
         };
@@ -585,6 +630,14 @@ impl ItemVisitor<'_> {
             cfg,
             generics,
             ret,
+            inputs: sig
+                .inputs
+                .iter()
+                .filter_map(|input| match input {
+                    FnArg::Typed(input) => Some((*input.ty).clone()),
+                    FnArg::Receiver(_) => None,
+                })
+                .collect(),
             place: self.place(line, end),
             name: sig.ident.to_string(),
             owner: self.scope.owner.clone(),
@@ -640,6 +693,7 @@ impl<'ast> Visit<'ast> for ItemVisitor<'_> {
             })
             .collect();
         self.facts.enums.push(EnumFact {
+            derives: derives(&item.attrs),
             payload,
             place: self.place(item.ident.span().start().line, item.span().end().line),
             name: item.ident.to_string(),
@@ -742,6 +796,7 @@ impl<'ast> Visit<'ast> for ItemVisitor<'_> {
         let mut bounds = BTreeMap::new();
         generics_map(&item.generics, &mut bounds);
         self.facts.structs.push(StructFact {
+            derives: derives(&item.attrs),
             fields,
             bounds,
             place: self.place(item.ident.span().start().line, item.span().end().line),
@@ -797,21 +852,10 @@ impl<'ast> Visit<'ast> for ItemVisitor<'_> {
     }
 
     fn visit_item_type(&mut self, item: &'ast syn::ItemType) {
-        self.facts.aliases.push(AliasFact {
-            place: self.place(item.ident.span().start().line, item.span().end().line),
-            name: item.ident.to_string(),
-            ty: (*item.ty).clone(),
-            params: item
-                .generics
-                .type_params()
-                .map(|param| param.ident.to_string())
-                .collect(),
-            bounds: {
-                let mut bounds = BTreeMap::new();
-                generics_map(&item.generics, &mut bounds);
-                bounds
-            },
-        });
+        self.facts.aliases.push(AliasFact::new(
+            self.place(item.ident.span().start().line, item.span().end().line),
+            item,
+        ));
     }
 
     fn visit_item_use(&mut self, import: &'ast syn::ItemUse) {

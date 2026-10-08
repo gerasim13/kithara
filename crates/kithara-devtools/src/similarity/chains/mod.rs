@@ -1,6 +1,7 @@
 //! Parallel execution chains: a decision whose arms lead into alike chains of
 //! functions that only that arm calls.
 
+mod aliases;
 mod arms;
 mod body;
 mod chain;

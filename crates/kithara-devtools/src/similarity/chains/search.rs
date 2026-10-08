@@ -18,7 +18,8 @@ use super::{
 
 /// Finds the long parallel chains among `(path, text)` sources.
 pub(crate) fn detect(sources: &[(String, String)], config: &ChainConfig) -> Result<ChainReport> {
-    let facts = facts::collect(sources)?;
+    let mut facts = facts::collect(sources)?;
+    facts.add_dependency_aliases(&config.dependency_roots);
     let mut resolver = Resolver::new(&facts, config.max_dyn_targets);
     let graph = Graph::build(
         &facts,
