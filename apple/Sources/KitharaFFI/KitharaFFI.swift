@@ -667,20 +667,13 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func eqGain(band: UInt32)  -> Float
 
     /**
-     * Insert an item into the queue.
-     *
-     * Registers the item's URL + caller-supplied preferences with the
-     * Queue, which starts loading in the background and emits
-     * `TrackStatusChanged` events through the player's event stream.
-     *
-     * `after == None` places the item at the head (position 0),
-     * mirroring the iOS `AudioPlayerProtocol.insert(_:after:)` contract.
-     * Use [`Self::append`] for AVQueuePlayer-style append.
+     * Inserts a URL and caller preferences, starts background queue loading, and
+     * emits `TrackStatusChanged` through the player event stream.
+     * `after == None` inserts at position 0, matching iOS
+     * `AudioPlayerProtocol.insert(_:after:)`; [`Self::append`] appends instead.
      *
      * # Errors
-     *
-     * Returns [`FfiError::InvalidArgument`] if `after` is not currently
-     * in the queue, or if the item's URL is malformed.
+     * Returns [`FfiError::InvalidArgument`] for an absent `after` item or malformed URL.
      */
     func insert(item: AudioPlayerItem, after: AudioPlayerItem?) throws
 
@@ -879,19 +872,14 @@ public protocol AudioPlayerProtocol: AnyObject, Sendable {
     func setPlaybackOrder(order: FfiPlaybackOrder) throws
 
     /**
-     * Select `item` in the queue with the given transition.
-     *
-     * `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
-     * user-initiated-selection idiom: tap a track in a list).
-     * `FfiTransition::Crossfade` uses the player's configured duration
-     * (typical for Next/Prev buttons). Play state is not changed here:
-     * the engine continues playing if it was, pauses if it was.
+     * Selects `item` with an immediate cut for `FfiTransition::None`, or the
+     * configured crossfade duration for `FfiTransition::Crossfade`.
+     * The current playing or paused state is preserved.
      *
      * # Errors
-     *
-     * Returns [`FfiError::InvalidArgument`] if `item` is not in the
-     * queue, [`FfiError::NotReady`] if its resource is not yet loaded,
-     * or [`FfiError::Internal`] if the underlying Queue fails to select.
+     * Returns [`FfiError::InvalidArgument`] for an absent item,
+     * [`FfiError::NotReady`] for an unloaded resource, or [`FfiError::Internal`]
+     * when the underlying Queue cannot select it.
      */
     func select(item: AudioPlayerItem, transition: FfiTransition) throws
 
@@ -1086,20 +1074,13 @@ open func eqGain(band: UInt32) -> Float  {
 }
 
     /**
-     * Insert an item into the queue.
-     *
-     * Registers the item's URL + caller-supplied preferences with the
-     * Queue, which starts loading in the background and emits
-     * `TrackStatusChanged` events through the player's event stream.
-     *
-     * `after == None` places the item at the head (position 0),
-     * mirroring the iOS `AudioPlayerProtocol.insert(_:after:)` contract.
-     * Use [`Self::append`] for AVQueuePlayer-style append.
+     * Inserts a URL and caller preferences, starts background queue loading, and
+     * emits `TrackStatusChanged` through the player event stream.
+     * `after == None` inserts at position 0, matching iOS
+     * `AudioPlayerProtocol.insert(_:after:)`; [`Self::append`] appends instead.
      *
      * # Errors
-     *
-     * Returns [`FfiError::InvalidArgument`] if `after` is not currently
-     * in the queue, or if the item's URL is malformed.
+     * Returns [`FfiError::InvalidArgument`] for an absent `after` item or malformed URL.
      */
 open func insert(item: AudioPlayerItem, after: AudioPlayerItem?)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
     uniffi_kithara_ffi_fn_method_audioplayer_insert(
@@ -1501,19 +1482,14 @@ open func setPlaybackOrder(order: FfiPlaybackOrder)throws   {try rustCallWithErr
 }
 
     /**
-     * Select `item` in the queue with the given transition.
-     *
-     * `FfiTransition::None` performs an immediate cut (`AVQueuePlayer`
-     * user-initiated-selection idiom: tap a track in a list).
-     * `FfiTransition::Crossfade` uses the player's configured duration
-     * (typical for Next/Prev buttons). Play state is not changed here:
-     * the engine continues playing if it was, pauses if it was.
+     * Selects `item` with an immediate cut for `FfiTransition::None`, or the
+     * configured crossfade duration for `FfiTransition::Crossfade`.
+     * The current playing or paused state is preserved.
      *
      * # Errors
-     *
-     * Returns [`FfiError::InvalidArgument`] if `item` is not in the
-     * queue, [`FfiError::NotReady`] if its resource is not yet loaded,
-     * or [`FfiError::Internal`] if the underlying Queue fails to select.
+     * Returns [`FfiError::InvalidArgument`] for an absent item,
+     * [`FfiError::NotReady`] for an unloaded resource, or [`FfiError::Internal`]
+     * when the underlying Queue cannot select it.
      */
 open func select(item: AudioPlayerItem, transition: FfiTransition)throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
     uniffi_kithara_ffi_fn_method_audioplayer_select(
@@ -2021,24 +1997,18 @@ public func FfiConverterTypeAudioPlayerItem_lower(_ value: AudioPlayerItem) -> U
 
 
 /**
- * Foreign cache layout callback.
- *
- * Implementations must be pure and deterministic, fast, non-blocking,
- * non-throwing, and safe to call from arbitrary background threads. Returned
- * values must not contain query text, credentials, or other secrets.
- * `root` is called once for each store scope being created. `path` is called
- * once for each resource key being minted. Cache operations using that key do
- * not invoke either callback again.
- * Invalid output fails scope or key creation and never falls back to the
- * default layout.
- *
- * `root` must return exactly one non-empty component and cannot equal
- * `_index`. `path` must return a non-empty relative path of components
- * separated by `/`; no component may end in `.tmp`. Components are ASCII,
- * at most 96 bytes, never `.` or `..`, do not end in a dot or space, are not
- * Windows device names, and contain neither control bytes nor
- * `< > : " / \ | ? *`. Comparisons for `_index`, `.tmp`, and device names are
- * case-insensitive. The store rejects invalid output instead of rewriting it.
+ * Pure, deterministic cache-layout callbacks, fast, non-blocking, non-throwing
+ * and safe on arbitrary background threads. Output must contain no query text,
+ * credentials or other secrets.
+ * `root` runs once per new store scope, `path` once per new resource key;
+ * operations on that key do not repeat either callback. Invalid output fails
+ * creation without rewriting it or falling back to the default layout.
+ * `root` is one non-empty component other than `_index`; `path` is a non-empty
+ * relative `/`-separated path with no component ending in `.tmp`.
+ * Components are ASCII, at most 96 bytes, never `.` or `..`, never end in dot
+ * or space, and contain no controls or `< > : " / \ | ? *`.
+ * Windows device names are refused; `_index`, `.tmp` and device-name checks
+ * are case-insensitive.
  */
 public protocol FfiAssetLayout: AnyObject, Sendable {
 
@@ -2048,24 +2018,18 @@ public protocol FfiAssetLayout: AnyObject, Sendable {
 
 }
 /**
- * Foreign cache layout callback.
- *
- * Implementations must be pure and deterministic, fast, non-blocking,
- * non-throwing, and safe to call from arbitrary background threads. Returned
- * values must not contain query text, credentials, or other secrets.
- * `root` is called once for each store scope being created. `path` is called
- * once for each resource key being minted. Cache operations using that key do
- * not invoke either callback again.
- * Invalid output fails scope or key creation and never falls back to the
- * default layout.
- *
- * `root` must return exactly one non-empty component and cannot equal
- * `_index`. `path` must return a non-empty relative path of components
- * separated by `/`; no component may end in `.tmp`. Components are ASCII,
- * at most 96 bytes, never `.` or `..`, do not end in a dot or space, are not
- * Windows device names, and contain neither control bytes nor
- * `< > : " / \ | ? *`. Comparisons for `_index`, `.tmp`, and device names are
- * case-insensitive. The store rejects invalid output instead of rewriting it.
+ * Pure, deterministic cache-layout callbacks, fast, non-blocking, non-throwing
+ * and safe on arbitrary background threads. Output must contain no query text,
+ * credentials or other secrets.
+ * `root` runs once per new store scope, `path` once per new resource key;
+ * operations on that key do not repeat either callback. Invalid output fails
+ * creation without rewriting it or falling back to the default layout.
+ * `root` is one non-empty component other than `_index`; `path` is a non-empty
+ * relative `/`-separated path with no component ending in `.tmp`.
+ * Components are ASCII, at most 96 bytes, never `.` or `..`, never end in dot
+ * or space, and contain no controls or `< > : " / \ | ? *`.
+ * Windows device names are refused; `_index`, `.tmp` and device-name checks
+ * are case-insensitive.
  */
 open class FfiAssetLayoutImpl: FfiAssetLayout, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -5125,6 +5089,7 @@ public enum FfiAudioCodecKind: Equatable, Hashable {
     case alac
     case pcm
     case adpcm
+    case ape
     case unknown
 
 
@@ -5167,7 +5132,9 @@ public struct FfiConverterTypeFfiAudioCodecKind: FfiConverterRustBuffer {
 
         case 10: return .adpcm
 
-        case 11: return .unknown
+        case 11: return .ape
+
+        case 12: return .unknown
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -5217,8 +5184,12 @@ public struct FfiConverterTypeFfiAudioCodecKind: FfiConverterRustBuffer {
             writeInt(&buf, Int32(10))
 
 
-        case .unknown:
+        case .ape:
             writeInt(&buf, Int32(11))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(12))
 
         }
     }
@@ -5336,6 +5307,8 @@ public enum FfiContainerKind: Equatable, Hashable {
     case ogg
     case caf
     case mkv
+    case aiff
+    case ape
     case unknown
 
 
@@ -5378,7 +5351,11 @@ public struct FfiConverterTypeFfiContainerKind: FfiConverterRustBuffer {
 
         case 10: return .mkv
 
-        case 11: return .unknown
+        case 11: return .aiff
+
+        case 12: return .ape
+
+        case 13: return .unknown
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -5428,8 +5405,16 @@ public struct FfiConverterTypeFfiContainerKind: FfiConverterRustBuffer {
             writeInt(&buf, Int32(10))
 
 
-        case .unknown:
+        case .aiff:
             writeInt(&buf, Int32(11))
+
+
+        case .ape:
+            writeInt(&buf, Int32(12))
+
+
+        case .unknown:
+            writeInt(&buf, Int32(13))
 
         }
     }
@@ -9361,7 +9346,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_eq_gain() != 64291) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_insert() != 21561) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_insert() != 29525) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_is_muted() != 12244) {
@@ -9463,7 +9448,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playback_order() != 43219) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_select() != 43272) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_select() != 42529) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_audio_route_changed() != 52900) {
