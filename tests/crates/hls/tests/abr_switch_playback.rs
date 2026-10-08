@@ -1167,7 +1167,7 @@ fn read_manual_cross_codec_phase(
                 } else {
                     transition_samples += count;
                     if transition_samples >= 17_640 {
-                        paced_backoff(position.saturating_sub(consumed));
+                        pace(position.saturating_sub(consumed));
                     }
                     consumed = position;
                 }

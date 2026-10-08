@@ -1,32 +1,21 @@
-//! Format-reader adapters shared by software decoding and Android MPEG audio.
-//! Android uses the in-tree MPEG demuxer with `MediaCodec`; codec registration
-//! and general container probing require the `symphonia` software backend.
+//! Format-reader adapters shared by software decoding and native MPEG audio.
+//! Native decoders use the in-tree MPEG demuxer with their own frame codec;
+//! software codec registration and general source probing have separate owners.
 
 pub(crate) mod adapter;
 #[cfg(feature = "symphonia")]
-pub(crate) mod codec;
-#[cfg(feature = "symphonia")]
-pub(crate) mod config;
+mod codec;
 pub(crate) mod demuxer;
-#[cfg(feature = "fdk-aac")]
-pub(crate) mod fdk;
-#[cfg(all(test, feature = "symphonia"))]
-mod mp4_tests;
-#[cfg(feature = "opus")]
-mod opus;
+mod error;
 #[cfg(feature = "symphonia")]
-pub(crate) mod probe;
-#[cfg(feature = "symphonia")]
-pub(crate) mod registry;
+mod open;
+mod packets;
 #[cfg(all(test, feature = "symphonia"))]
 mod tests;
+mod track;
 
 #[cfg(feature = "symphonia")]
-pub(crate) use codec::SymphoniaCodec;
-#[cfg(feature = "symphonia")]
-pub(crate) use config::SymphoniaConfig;
-#[cfg(feature = "symphonia")]
-pub(crate) use demuxer::FileOpen;
+pub(crate) use codec::{SymphoniaCodec, SymphoniaConfig};
 pub(crate) use demuxer::SymphoniaDemuxer;
-
-mod packets;
+#[cfg(feature = "symphonia")]
+pub(crate) use open::FileOpen;

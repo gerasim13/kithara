@@ -214,12 +214,18 @@ where
         };
         let total = inner.source.coord.total_bytes();
         let upper = total.map_or(writer.watermark, |total| total.min(writer.watermark));
-        let cursor = steering_cursor(&inner.source.coord);
-        let Some(gap) = next_gap_from_cursor(&inner.asset.reader, cursor, upper) else {
-            if total.is_some_and(|total| inner.commit_if_complete(&writer.epoch, total)) {
-                return PeerAction::Done;
+        let gap = match total {
+            None if upper > 0 => 0..upper,
+            _ => {
+                let cursor = steering_cursor(&inner.source.coord);
+                let Some(gap) = next_gap_from_cursor(&inner.asset.reader, cursor, upper) else {
+                    if total.is_some_and(|total| inner.commit_if_complete(&writer.epoch, total)) {
+                        return PeerAction::Done;
+                    }
+                    return PeerAction::Pending;
+                };
+                gap
             }
-            return PeerAction::Pending;
         };
         let end_exclusive = (total.is_some() || writer.watermark != u64::MAX).then_some(gap.end);
         PeerAction::Fetch(FetchPlan {
@@ -791,8 +797,14 @@ mod tests {
         }
 
         #[kithara::test]
-        fn finite_watermark_already_present_stays_pending() {
-            let (_store, _key, inner, writer) = fresh_session(Some(4));
+        #[case::unknown_extent_without_demand(0, None)]
+        #[case::known_extent_with_cached_demand(4, Some(8))]
+        fn finite_watermark_already_present_stays_pending(
+            #[case] watermark: u64,
+            #[case] total: Option<u64>,
+        ) {
+            let (_store, _key, inner, writer) = fresh_session(Some(watermark));
+            inner.source.coord.set_total_bytes(total);
             assert!(matches!(
                 writer.epoch().write_at(0, b"data"),
                 WriterOutcome::Current(Ok(()))
@@ -1077,6 +1089,100 @@ mod tests {
         use super::*;
 
         #[kithara::test]
+        #[case::fully_cached(4, None)]
+        #[case::partially_cached(8, None)]
+        #[case::bounded_fully_cached(4, Some(4))]
+        #[case::bounded_partially_cached(8, Some(4))]
+        fn a_successor_establishes_extent_before_skipping_cached_bytes(
+            #[case] total: u64,
+            #[case] look_ahead: Option<u64>,
+        ) {
+            let (store, key, first, first_writer) = fresh_session(look_ahead);
+            first.source.coord.set_total_bytes(Some(total));
+            let first_epoch = first_writer.epoch();
+            assert!(matches!(
+                first_epoch.write_at(0, b"done"),
+                WriterOutcome::Current(Ok(()))
+            ));
+
+            let successor_coord = make_coord();
+            let (reader, lease, writer) =
+                attach_pending(&store, &key, &successor_coord, look_ahead);
+            assert!(writer.is_none());
+            assert_eq!(reader.len(), None);
+            assert!(reader.contains_range(0..4));
+            assert!(matches!(reader.status(), ResourceStatus::Active));
+            assert_eq!(successor_coord.total_bytes(), None);
+            let successor = make_inner(reader, lease, successor_coord, EventBus::new(16));
+            drop(first_writer);
+            let peer = make_peer(&successor, writer);
+            let lease = successor.resource_lease.as_ref().expect("successor lease");
+
+            let PeerAction::Fetch(head) = peer.next_action(&successor, lease) else {
+                panic!("unknown server extent must be established");
+            };
+            assert_eq!(head.start, 0);
+            assert_eq!(head.end_exclusive, look_ahead);
+            assert!(!first_epoch.is_current());
+            let mut headers = Headers::default();
+            headers.insert(
+                "content-length",
+                head.end_exclusive.unwrap_or(total).to_string(),
+            );
+            if let Some(end) = head.end_exclusive {
+                headers.insert("content-range", format!("bytes 0-{}/{total}", end - 1));
+            }
+            assert!(successor.capture_content_metadata(&headers, head.start, head.end_exclusive));
+            assert_eq!(successor.source.coord.total_bytes(), Some(total));
+            successor.complete_fetch(
+                &head.epoch,
+                completion(
+                    head.start,
+                    0,
+                    head.end_exclusive,
+                    Some(&NetError::Cancelled),
+                ),
+            );
+
+            if total > 4 {
+                if look_ahead.is_some() {
+                    assert!(matches!(
+                        peer.next_action(&successor, lease),
+                        PeerAction::Pending
+                    ));
+                    lease.request_until(total);
+                }
+                let PeerAction::Fetch(tail) = peer.next_action(&successor, lease) else {
+                    panic!("known missing tail must be fetched");
+                };
+                assert_eq!(tail.start, 4);
+                assert_eq!(tail.end_exclusive, Some(total));
+                headers.insert("content-range", "bytes 4-7/8");
+                headers.insert("content-length", "4");
+                assert!(successor.capture_content_metadata(
+                    &headers,
+                    tail.start,
+                    tail.end_exclusive
+                ));
+                assert!(matches!(
+                    tail.epoch.write_at(tail.start, b"tail"),
+                    WriterOutcome::Current(Ok(()))
+                ));
+                successor.complete_fetch(
+                    &tail.epoch,
+                    completion(tail.start, 4, tail.end_exclusive, None),
+                );
+                assert_ready_bytes(&store, &key, b"donetail");
+            } else {
+                assert_ready_bytes(&store, &key, b"done");
+            }
+            assert!(matches!(
+                peer.next_action(&successor, lease),
+                PeerAction::Done
+            ));
+        }
+
+        #[kithara::test]
         fn abr_cancel_observes_the_file_source_scope() {
             let store = AssetStore::builder(pools())
                 .backend(StorageBackend::Memory)
@@ -1109,6 +1215,7 @@ mod tests {
                 .build();
             let key = test_key(&store);
             let first_coord = make_coord();
+            first_coord.set_total_bytes(Some(8));
             let (first_reader, first_lease, first_writer) =
                 attach_pending(&store, &key, &first_coord, Some(4));
             let scope = CancelScope::new(None);
@@ -1152,6 +1259,7 @@ mod tests {
                 .build();
             let key = test_key(&store);
             let first_coord = make_coord();
+            first_coord.set_total_bytes(Some(8));
             let (first_reader, first_lease, first_writer) =
                 attach_pending(&store, &key, &first_coord, Some(4));
             let inner = make_inner(first_reader, first_lease, first_coord, EventBus::new(16));
@@ -1593,7 +1701,7 @@ mod tests {
                 panic!("a resource of unknown extent must fetch");
             };
 
-            assert_eq!(plan.start, 512);
+            assert_eq!(plan.start, 0);
         }
 
         /// A cursor past a known extent has no bytes to ask for, so it steers nothing

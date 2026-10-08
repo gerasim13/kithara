@@ -174,11 +174,11 @@ exempt_crates = [
 # (`kithara-download` batch placeholder, `kithara-hls` peer `wake_signal`).
 allowed_files = [
   "crates/kithara-app/src/bin/kithara/main.rs",
-  "crates/kithara-ffi/src/native/inner.rs",
+  "crates/kithara-ffi/src/native/inner/core.rs",
   "crates/kithara-ffi/src/core/item.rs",
   "crates/kithara-platform/src/common/cancel/scope.rs",
   "crates/kithara-download/src/batch.rs",
-  "crates/kithara-hls/src/peer.rs",
+  "crates/kithara-hls/src/peer/core.rs",
 ]
 
 [smoothing_primitive_sites]

@@ -1,11 +1,13 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    abr::{AbrController, AbrMode, AbrSettings, VariantDuration, VariantIndex, VariantInfo},
+    abr::{
+        AbrController, AbrMode, AbrSettings, Estimator, ThroughputEstimator, VariantDuration,
+        VariantIndex, VariantInfo,
+    },
     hls::{ParsedMaster, parse_master_playlist},
-    platform::time::Duration,
+    platform::{sync::Arc, time::Duration},
 };
-use kithara_config::ConfigOwner;
 
 /// Convert HLS master playlist variants to ABR variant list (test helper).
 fn variants_from_master(master: &ParsedMaster) -> Vec<VariantInfo> {
@@ -76,12 +78,14 @@ fn test_abr_controller_no_selector(
     abr_settings_default: AbrSettings,
     variants_from_parsed_playlist: Vec<VariantInfo>,
 ) {
-    let controller = AbrController::new(abr_settings_default);
+    let estimator: Arc<dyn Estimator> = Arc::new(ThroughputEstimator::new());
+    assert!(estimator.estimate_bps().is_none());
+    let _controller = AbrController::with_estimator(abr_settings_default, Arc::clone(&estimator));
     // Default settings now seed `initial_throughput_bps = Some(2 Mbps)` so
     // ABR can pick a sensible variant on the first tick instead of starting
     // at LQ. `is_some()` keeps the assertion future-proof against the exact
     // seed value.
-    assert!(controller.config().initial_throughput_bps.is_some());
+    assert!(estimator.estimate_bps().is_some());
     assert_eq!(variants_from_parsed_playlist.len(), 3);
 }
 

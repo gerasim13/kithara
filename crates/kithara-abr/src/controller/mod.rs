@@ -1,5 +1,5 @@
-//! Shared per-player ABR registry, coalesced tick readiness and deadlines,
-//! and event throttling. The existing downloader run loop drives decisions.
+//! Shared per-player ABR controller with per-peer tick readiness,
+//! interval deadlines, and event throttling.
 
 mod core;
 mod driver;

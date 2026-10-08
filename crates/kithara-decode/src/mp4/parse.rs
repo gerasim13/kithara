@@ -2,7 +2,7 @@
 
 use smallvec::SmallVec;
 
-use super::scan::{ItunSmpb, Mp4EditListEntry, Mp4MediaTiming, Mp4MetadataError};
+use super::{ItunSmpb, Mp4EditListEntry, Mp4MediaTiming, Mp4MetadataError};
 use crate::consts;
 
 pub(super) fn invalid(message: impl Into<String>) -> Mp4MetadataError {

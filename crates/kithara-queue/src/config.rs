@@ -44,25 +44,25 @@ where
         patch(skip),
         debug(skip)
     )]
-    pub factory: F,
+    pub(crate) factory: F,
 
     /// The deck's mixer: its owner builds it from this when it registers the
     /// queue; the queue reads its slot count and fade lengths here.
     #[config(builder(default), patch(skip), debug(skip))]
-    pub mixer: DeckMixerConfig,
+    pub(crate) mixer: DeckMixerConfig,
 
     /// The live fields the queue executes itself.
     #[config(builder(default), patch(skip), debug(skip))]
-    pub settings: QueueSettings,
+    pub(crate) settings: QueueSettings,
 
     /// Session time before the current track ends at which the queue loads
     /// its successor. Fixed for the queue's lifetime. Default: 3.5 s.
     #[config(builder(default = consts::DEFAULT_PRELOAD_LEAD), patch(skip), debug(skip))]
-    pub preload_lead: Duration,
+    pub(crate) preload_lead: Duration,
 
     /// The settings a new track starts with; a track change moves them.
     #[config(builder(default), patch(skip), debug(skip))]
-    pub track: TrackSettings,
+    pub(crate) track: TrackSettings,
 
     /// What every track the queue loads opens with: the worker, the session
     /// output and the playback policy.
@@ -74,40 +74,40 @@ where
     /// to a fresh standalone token (test / library use). Must never be
     /// `None` on the production app path.
     #[config(skip = "injected cancellation resource", patch(skip), debug(skip))]
-    pub cancel: Option<CancelToken>,
+    pub(crate) cancel: Option<CancelToken>,
 
     /// Shared store used for bare URI track sources.
     #[config(skip = "injected asset store", patch(skip), debug(skip))]
-    pub store: Option<AssetStore<S>>,
+    pub(crate) store: Option<AssetStore<S>>,
 
     /// Runtime the tasks beside each load run on: the cover read and the
     /// slow-transfer watch. `None` takes the runtime current where the queue
     /// is built; a queue built outside one with none passed fails every load
     /// with [`QueueError::NoRuntime`](crate::QueueError::NoRuntime).
     #[config(skip = "injected runtime", patch(skip), debug(skip))]
-    pub runtime: Option<RuntimeHandle>,
+    pub(crate) runtime: Option<RuntimeHandle>,
 
     /// Whether the queue starts playback by itself once the first track
     /// appended to a queue with nothing selected finishes loading. Off by
     /// default: the embedding decides when playback starts. A document cannot
     /// name it, because starting playback is the embedding's choice.
     #[config(sdk, builder(default = false), patch(skip))]
-    pub should_autoplay: bool,
+    pub(crate) should_autoplay: bool,
 
     /// Entries the navigation history keeps. Only explicit selections and
     /// auto-advances land there, so the default is a listening session's
     /// worth of back-steps; the queue's own track list is unbounded.
     #[config(sdk, builder(default = 100))]
-    pub max_history_size: usize,
+    pub(crate) max_history_size: usize,
 
     /// Initial queue traversal order; subsequent changes belong to navigation.
     #[config(sdk, builder(default))]
-    pub playback_order: PlaybackOrder,
+    pub(crate) playback_order: PlaybackOrder,
 
     /// Initial action when the current item ends; subsequent changes belong
     /// to the queue.
     #[config(sdk, builder(default))]
-    pub action_at_item_end: ActionAtItemEnd,
+    pub(crate) action_at_item_end: ActionAtItemEnd,
 }
 
 impl<S> QueueConfig<S, PlayerFactory>

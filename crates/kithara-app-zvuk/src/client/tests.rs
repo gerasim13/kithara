@@ -10,7 +10,7 @@ use std::{
 
 use axum::{Router, http::StatusCode};
 use bytes::Bytes;
-use kithara_net::{Headers, HttpClient, NetError, NetOptions, mock::NetMock};
+use kithara_net::{Headers, HttpClient, NetError, NetOptions, RetryPolicy, mock::NetMock};
 use kithara_platform::time::Duration;
 use kithara_test_utils::{TestHttpServer, bufpool::pools, cancel_token, kithara};
 use serde_json::Value;
@@ -336,9 +336,14 @@ async fn a_lost_reaction_is_sent_once_and_a_lost_read_is_resent() {
         async { StatusCode::SERVICE_UNAVAILABLE }
     }))
     .await;
-    let mut options = NetOptions::default();
-    options.retry_policy.max_retries = 2;
-    options.retry_policy.base_delay = Duration::from_millis(1);
+    let options = NetOptions::builder()
+        .retry_policy(
+            RetryPolicy::builder()
+                .max_retries(2)
+                .base_delay(Duration::from_millis(1))
+                .build(),
+        )
+        .build();
     let mut client = Client::new(
         HttpClient::new(options, pools(), cancel_token()),
         &identity(),

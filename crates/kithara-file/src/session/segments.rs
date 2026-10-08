@@ -67,13 +67,13 @@ impl FileSegmentIndex {
 /// Project one fragment onto the descriptor the stream layer speaks. A plain
 /// file carries a single variant, so `variant_index` is always zero.
 fn descriptor(fragment: &Fragment, segment_index: u32, timescale: u32) -> SegmentDescriptor {
-    SegmentDescriptor::new(
-        fragment.byte_range.clone(),
-        ticks_to_duration(fragment.decode_ticks, timescale),
-        ticks_to_duration(fragment.duration_ticks, timescale),
-        segment_index,
-        0,
-    )
+    SegmentDescriptor::builder()
+        .byte_range(fragment.byte_range.clone())
+        .decode_time(ticks_to_duration(fragment.decode_ticks, timescale))
+        .duration(ticks_to_duration(fragment.duration_ticks, timescale))
+        .segment_index(segment_index)
+        .variant_index(0)
+        .build()
 }
 
 fn ticks_to_duration(ticks: u64, timescale: u32) -> Duration {

@@ -834,13 +834,15 @@ impl TestByteMap {
 
     fn descriptor(index: u64) -> SegmentDescriptor {
         let start = Self::INIT_BYTES.saturating_add(index.saturating_mul(Self::SEGMENT_BYTES));
-        SegmentDescriptor::new(
-            start..start.saturating_add(Self::SEGMENT_BYTES),
-            Duration::from_secs(index.saturating_mul(Self::SEGMENT_SECS)),
-            Duration::from_secs(Self::SEGMENT_SECS),
-            u32::try_from(index).unwrap_or(u32::MAX),
-            0,
-        )
+        SegmentDescriptor::builder()
+            .byte_range(start..start.saturating_add(Self::SEGMENT_BYTES))
+            .decode_time(Duration::from_secs(
+                index.saturating_mul(Self::SEGMENT_SECS),
+            ))
+            .duration(Duration::from_secs(Self::SEGMENT_SECS))
+            .segment_index(u32::try_from(index).unwrap_or(u32::MAX))
+            .variant_index(0)
+            .build()
     }
 }
 

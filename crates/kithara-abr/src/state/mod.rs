@@ -1,4 +1,4 @@
-//! Per-peer ABR control state and pure decisions over an `AbrView` snapshot.
+//! Per-peer ABR control state, ticketed boundary decisions, and publication authority.
 
 mod core;
 mod decision;

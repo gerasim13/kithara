@@ -1,4 +1,4 @@
-use std::{fmt::Write, num::NonZeroU16};
+use std::num::NonZeroU16;
 
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
@@ -21,7 +21,7 @@ use crate::{
     backend::{
         Client, RequestBuilder, Response, StatusCode, build_client, head_request, post_request,
     },
-    error::{NetError, NetResult},
+    error::{NetError, NetResult, truncate_error_body},
     metrics::ConnectionMetrics,
     observe::Observer,
     range_response::{accepts_response_status, validate_range_response},
@@ -30,28 +30,6 @@ use crate::{
     traits::Net,
     types::{AcceptEncodingPolicy, Headers, NetOptions, RangeSpec, RetryPolicy},
 };
-
-/// Truncate an HTTP error body so it stays useful in logs without dumping
-/// kilobytes of HTML (rate-limit stubs, anti-bot challenges). Preserves
-/// the first 200 characters (char-aligned to not split a UTF-8 codepoint)
-/// and appends a `…(truncated, N chars total)` suffix for anything longer.
-fn truncate_error_body(mut body: String) -> String {
-    /// Maximum characters of an HTTP error body kept in
-    /// [`NetError::Status`].
-    const MAX_CHARS: usize = 200;
-
-    let total = body.chars().count();
-    if total <= MAX_CHARS {
-        return body;
-    }
-    let cut_at = body
-        .char_indices()
-        .nth(MAX_CHARS)
-        .map_or(body.len(), |(i, _)| i);
-    body.truncate(cut_at);
-    let _ = write!(body, "…(truncated, {total} chars total)");
-    body
-}
 
 /// Read an error response's body for [`NetError::Status`] context — a real
 /// socket read, so the fn is one `flash(io)` bracket. Bounded by the same
@@ -62,7 +40,7 @@ async fn error_body(resp: Response, inactivity: Duration) -> String {
     let body = timeout(inactivity, resp.text())
         .await
         .map_or_else(|_| String::new(), Result::unwrap_or_default);
-    truncate_error_body(body)
+    truncate_error_body(body, "\u{2026}")
 }
 
 /// Collect a full response body under the per-chunk inactivity bound: no
@@ -549,14 +527,7 @@ impl Net for RawHttp {
         #[cfg(not(target_arch = "wasm32"))]
         reject_undecoded_content_encoding(&resp, &url)?;
 
-        let mut out = Headers::default();
-        let str_pairs = resp
-            .headers()
-            .iter()
-            .filter_map(|(name, value)| value.to_str().ok().map(|v| (name.as_str(), v)));
-        for (name, v) in str_pairs {
-            out.insert(name, v);
-        }
+        let mut out = extract_headers(&resp);
 
         if out.get("content-length").is_none() {
             let total_from_range = out

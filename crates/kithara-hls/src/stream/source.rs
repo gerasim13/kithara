@@ -171,11 +171,25 @@ where
 #[cfg(test)]
 mod tests {
     use std::sync::OnceLock;
+    #[cfg(not(target_arch = "wasm32"))]
+    use std::{
+        future::{Future, poll_fn},
+        task::{Context, Poll, Wake, Waker},
+    };
 
     use kithara_abr::{Abr, AbrController, AbrMock, AbrMode, AbrSettings, AbrState, VariantIndex};
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
     use kithara_events::EventBus;
     use kithara_platform::{CancelToken, sync::ThreadGate, time::Duration as PlatformDuration};
+    #[cfg(not(target_arch = "wasm32"))]
+    use kithara_platform::{
+        sync::{
+            WaitGate,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
+        time::{self, Instant},
+        tokio::task,
+    };
     use kithara_stream::{ActivityWriter, AudioCodec, ContainerFormat, PlayheadState};
     use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};
@@ -195,6 +209,32 @@ mod tests {
     type TestHlsSource = HlsSource<crate::test_pools::TestPools>;
     type TestHlsVariant = HlsVariant<crate::test_pools::TestPools>;
     type TestPlanCtx = PlanCtx<crate::test_pools::TestPools>;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    struct RetainedPeerWake {
+        reader_advanced: Arc<DeferredWake>,
+        reader_gate: Arc<ThreadGate>,
+        measuring: AtomicBool,
+        forwarded: AtomicUsize,
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl Wake for RetainedPeerWake {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            if !self.measuring.load(Ordering::Acquire) {
+                return;
+            }
+            match self.forwarded.fetch_add(1, Ordering::SeqCst) {
+                0 => self.reader_advanced.notify_now(),
+                1 => self.reader_gate.signal(),
+                _ => {}
+            }
+        }
+    }
 
     /// One HLS track of equal-sized segments behind a real `HlsSource`, with the
     /// peer wake the source arms exposed so a test can observe it.
@@ -340,6 +380,92 @@ mod tests {
                 ctx,
             }
         }
+    }
+
+    #[kithara::test(native, flash(true), timeout(Duration::from_secs(10)))]
+    async fn retained_reader_wake_precedes_an_unrelated_deadline() {
+        let fixture = Fixture::with_look_ahead(Fixture::SEGMENT_BYTES);
+        let peer = Arc::clone(
+            fixture
+                .source
+                .hls_peer
+                .as_ref()
+                .expect("the fixture binds a peer"),
+        );
+        let (_eviction_tx, eviction_rx) = kithara_platform::tokio::sync::mpsc::unbounded_channel();
+        peer.activate(Arc::clone(&fixture.source.coord), eviction_rx);
+
+        let gate = Arc::new(ThreadGate::default());
+        let forwarded = Arc::new(RetainedPeerWake {
+            reader_advanced: Arc::clone(&fixture.wake),
+            reader_gate: Arc::clone(&gate),
+            measuring: AtomicBool::new(false),
+            forwarded: AtomicUsize::new(0),
+        });
+        let waker = Waker::from(Arc::clone(&forwarded));
+        let opening_commands =
+            kithara_download::Peer::poll_next(peer.as_ref(), &mut Context::from_waker(&waker));
+        assert!(
+            matches!(&opening_commands, Poll::Ready(Some(commands)) if !commands.is_empty()),
+            "the registered peer must retain its active fetch claims through measurement"
+        );
+        assert_eq!(forwarded.forwarded.load(Ordering::SeqCst), 0);
+
+        let mut distant_timer = std::pin::pin!(time::sleep(Duration::from_secs(30)));
+        let initial = poll_fn(|cx| Poll::Ready(distant_timer.as_mut().poll(cx))).await;
+        assert!(initial.is_pending(), "the distant timer must be armed");
+
+        let reader_budget = Duration::from_secs(3);
+        let since = gate.current();
+        let reader_gate = Arc::clone(&gate);
+        let started = Instant::now();
+        let reader = task::spawn_blocking(move || reader_gate.wait_timeout(since, reader_budget));
+        forwarded.measuring.store(true, Ordering::Release);
+        fixture.wake.notify_now();
+
+        let signaled = reader.await.expect("the waiting reader must complete");
+        let elapsed = started.elapsed();
+        assert!(
+            signaled,
+            "both retained wakes must reach the reader before its backstop"
+        );
+        assert_eq!(forwarded.forwarded.load(Ordering::SeqCst), 2);
+        if kithara_platform::flash::ambient_snapshot() {
+            assert_eq!(
+                elapsed,
+                Duration::ZERO,
+                "forwarding retained work must not wait for a clock advance"
+            );
+        } else {
+            assert!(
+                elapsed < reader_budget,
+                "retained work must precede the reader backstop"
+            );
+        }
+        let remaining = poll_fn(|cx| Poll::Ready(distant_timer.as_mut().poll(cx))).await;
+        assert!(
+            remaining.is_pending(),
+            "retained work must not consume the distant timer"
+        );
+
+        let quiescent = Instant::now();
+        let pause = Duration::from_millis(1);
+        time::sleep(pause).await;
+        if kithara_platform::flash::ambient_snapshot() {
+            assert_eq!(
+                quiescent.elapsed(),
+                pause,
+                "the forwarder must release its credit once no permit remains"
+            );
+        }
+        assert_eq!(forwarded.forwarded.load(Ordering::SeqCst), 2);
+        let remaining = poll_fn(|cx| Poll::Ready(distant_timer.as_mut().poll(cx))).await;
+        assert!(
+            remaining.is_pending(),
+            "quiescence must not consume the distant timer"
+        );
+        forwarded.measuring.store(false, Ordering::Release);
+        drop(opening_commands);
     }
 
     /// The look-ahead window is anchored on the reader cursor, so the reader
