@@ -2,7 +2,9 @@ use std::{error::Error as StdError, io, io::ErrorKind, num::TryFromIntError};
 
 use kithara_bufpool::PoolError;
 use kithara_signal::SignalError;
-use kithara_stream::{AudioCodec, ContainerFormat, PendingReason, VariantChangeError};
+#[cfg(any(test, apple_backend, android_backend))]
+use kithara_stream::PendingReason;
+use kithara_stream::{AudioCodec, ContainerFormat, VariantChangeError};
 #[cfg(any(apple_backend, android_backend))]
 use kithara_stream::{NotReadyCause, StreamPending};
 
@@ -98,9 +100,8 @@ pub enum DecodeError {
     #[error("decoder backend status {code} ({op})")]
     BackendStatus { code: i32, op: &'static str },
 
-    /// A seek interrupted the decode operation. Not a real error —
-    /// the caller should check for pending seeks and retry.
-    #[error("Interrupted by seek")]
+    /// Source I/O interrupted the decode operation or data is not ready yet.
+    #[error("Decode operation interrupted")]
     Interrupted,
 
     /// `frames * channels` does not fit a `usize`. Carries both operands so
@@ -135,14 +136,6 @@ pub enum DecodeError {
     },
 }
 
-fn is_seek_pending_io(err: &io::Error) -> bool {
-    err.kind() == ErrorKind::Interrupted
-        || err
-            .get_ref()
-            .and_then(|src| src.downcast_ref::<PendingReason>())
-            .is_some_and(|reason| matches!(reason, PendingReason::SeekPending))
-}
-
 fn is_variant_change_io(err: &io::Error) -> bool {
     err.get_ref()
         .and_then(|source| source.downcast_ref::<VariantChangeError>())
@@ -170,10 +163,11 @@ where
 }
 
 fn error_chain_is_interrupted(err: &(dyn StdError + 'static)) -> bool {
-    walk_error_chain(err, &is_seek_pending_io, &|leaf| {
-        leaf.downcast_ref::<PendingReason>()
-            .is_some_and(|reason| matches!(reason, PendingReason::SeekPending))
-    })
+    walk_error_chain(
+        err,
+        &|io_err| io_err.kind() == ErrorKind::Interrupted,
+        &|_| false,
+    )
 }
 
 fn error_chain_is_variant_change(err: &(dyn StdError + 'static)) -> bool {
@@ -191,7 +185,7 @@ fn error_chain_is_variant_change(err: &(dyn StdError + 'static)) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ErrorClass {
-    /// Interrupted by seek / cooperative pending — caller should retry.
+    /// Transient source interruption or cooperative pending.
     Interrupted,
     /// Cross-variant boundary — caller must recreate the decoder.
     VariantChange,
@@ -236,7 +230,7 @@ impl DecodeError {
             Self::Io { source } => {
                 if is_variant_change_io(source) {
                     ErrorClass::VariantChange
-                } else if is_seek_pending_io(source) {
+                } else if source.kind() == ErrorKind::Interrupted {
                     ErrorClass::Interrupted
                 } else {
                     ErrorClass::Other

@@ -1,8 +1,12 @@
-//! Playback transport ports prepared by the source pipeline.
+use crate::{AudioEvent, DecoderEvent};
+use kithara_events::EventSet;
 
+/// Deferred diagnostics from the owner-thread decoder chain.
+#[derive(Clone, Debug, EventSet)]
+#[non_exhaustive]
+pub enum AudioLaneEvent {
+    Decoder(DecoderEvent),
+    Audio(AudioEvent),
+}
+#[cfg(test)]
 mod gate;
-mod lane;
-
-pub use gate::PreloadGate;
-#[doc(hidden)]
-pub use lane::{AudioLaneEvent, PreparedAudioLane, ProducerPort};

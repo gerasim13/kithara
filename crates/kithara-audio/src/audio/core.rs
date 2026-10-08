@@ -1,445 +1,412 @@
-use std::{
-    marker::PhantomData,
-    num::NonZeroU32,
-    sync::atomic::{AtomicU32, Ordering},
+use super::{
+    chunk_position,
+    cursor::{ChunkCursor, ReadBuffer, source_spans_coalesce},
 };
-
+use crate::{
+    AudioControl, AudioRead, AudioSession, AudioSource, ChunkOutcome, DecodeError, Fetch,
+    PendingReason, ReadOutcome, SeekOutcome, SourceEnd, SourceSpan, TrackStep,
+};
 use kithara_decode::TrackMetadata;
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
-use kithara_signal::AudioSpec;
-use kithara_stream::{
-    DeferredWake, PlayheadWrite, SeekControl, SeekObserve, SeekPrepare, WorkerWake,
+use kithara_signal::{AudioChunk, AudioSpec};
+use kithara_stream::{Activity, ActivityWriter, PlayheadWrite};
+use std::{
+    marker::PhantomData,
+    num::{NonZeroU32, NonZeroUsize},
 };
-use kithara_test_utils::kithara;
 
-use super::{
-    AudioControl, AudioLaneEvent, AudioRead, AudioSession, ChunkOutcome, DecodeError,
-    PendingReason, PreloadGate, PreparedAudioLane, ReadOutcome, SeekOutcome, chunk_position,
-    cursor::ChunkCursor,
-    event::AudioEvents,
-    ring::{RecvCtx, RingConsumer, Wait},
-    seek::{SeekHandle, SeekHandleParts},
-};
-use crate::{ConsumerWakeMode, traits::SeekBegin};
-
-/// Pull-based PCM facade over a bounded producer ring.
+/// Open decoded source owned and driven by one lane thread.
 pub struct Audio<S> {
-    events: AudioEvents,
-    runtime: AudioRuntime,
+    source: Box<dyn AudioSource<Chunk = AudioChunk>>,
+    playhead: Arc<dyn PlayheadWrite>,
+    bus: EventBus,
+    metadata: TrackMetadata,
+    abr: Option<kithara_abr::AbrHandle>,
+    activity: Activity,
+    activity_writer: Option<ActivityWriter>,
+    cancel: CancelToken,
     cursor: ChunkCursor,
-    controls: Controls,
-    _marker: PhantomData<S>,
-    ring: RingConsumer,
-    session: Session,
-}
-
-/// Worker-independent audio reader and its still-concrete producer lane.
-///
-/// `kithara-play::PlayWorker` registers the task before exposing the reader.
-#[doc(hidden)]
-pub struct PreparedAudio<R, P> {
-    lane: PreparedAudioLane<P>,
-    reader: R,
-}
-
-impl<R, P> PreparedAudio<R, P> {
-    pub(super) const fn new(reader: R, lane: PreparedAudioLane<P>) -> Self {
-        Self { lane, reader }
-    }
-
-    /// Compose the reader facade and its still-concrete producer atomically.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn map<R2, P2, F>(self, map: F) -> PreparedAudio<R2, P2>
-    where
-        F: FnOnce(R, P) -> (R2, P2),
-    {
-        let (reader, lane) = self.lane.map_source_with(self.reader, map);
-        PreparedAudio { lane, reader }
-    }
-}
-
-impl<R, P> From<PreparedAudio<R, P>> for (R, PreparedAudioLane<P>) {
-    fn from(prepared: PreparedAudio<R, P>) -> Self {
-        (prepared.reader, prepared.lane)
-    }
-}
-
-pub(super) struct AudioParts<S> {
-    pub(super) emit: Arc<kithara_events::DeferredBus<AudioLaneEvent>>,
-    pub(super) runtime: AudioRuntime,
-    pub(super) cursor: ChunkCursor,
-    pub(super) controls: Controls,
-    pub(super) marker: PhantomData<S>,
-    pub(super) ring: RingConsumer,
-    pub(super) session: Session,
-}
-
-pub(super) struct Session {
-    pub(super) playhead: Arc<dyn PlayheadWrite>,
-    pub(super) preload_gate: Arc<PreloadGate>,
-    pub(super) seek: Arc<dyn SeekControl>,
-    pub(super) seek_obs: Arc<dyn SeekObserve>,
-    pub(super) abr_handle: Option<kithara_abr::AbrHandle>,
-    pub(super) peer_wake: Option<Arc<DeferredWake>>,
-    pub(super) seek_prepare: Option<Arc<dyn SeekPrepare>>,
-    pub(super) metadata: TrackMetadata,
-}
-
-pub(super) struct Controls {
-    pub(super) host_sample_rate: Arc<AtomicU32>,
-}
-
-pub(super) struct AudioRuntime {
-    pub(super) wake: Arc<dyn WorkerWake>,
-    pub(super) cancel: CancelToken,
-}
-
-impl Drop for AudioRuntime {
-    fn drop(&mut self) {
-        self.cancel.cancel();
-    }
-}
-
-impl<S> From<AudioParts<S>> for Audio<S> {
-    fn from(parts: AudioParts<S>) -> Self {
-        let wake_mode = parts.ring.consumer_wake_mode();
-        Self {
-            runtime: parts.runtime,
-            ring: parts.ring,
-            cursor: parts.cursor,
-            events: AudioEvents::new(parts.emit, wake_mode),
-            session: parts.session,
-            controls: parts.controls,
-            _marker: parts.marker,
-        }
-    }
+    current_chunk: Option<AudioChunk>,
+    preloaded: bool,
+    marker: PhantomData<fn() -> S>,
 }
 
 impl<S> Audio<S> {
+    pub(super) fn new(
+        source: Box<dyn AudioSource<Chunk = AudioChunk>>,
+        playhead: Arc<dyn PlayheadWrite>,
+        bus: EventBus,
+        metadata: TrackMetadata,
+        abr: Option<kithara_abr::AbrHandle>,
+        activity: Activity,
+        activity_writer: Option<ActivityWriter>,
+        cancel: CancelToken,
+        spec: AudioSpec,
+    ) -> Self {
+        Self {
+            source,
+            playhead,
+            bus,
+            metadata,
+            abr,
+            activity,
+            activity_writer,
+            cancel,
+            cursor: ChunkCursor::new(spec),
+            current_chunk: None,
+            preloaded: false,
+            marker: PhantomData,
+        }
+    }
+    /// Transfer the sole loader-priority writer to the owning lane.
+    pub fn take_activity_writer(&mut self) -> Option<ActivityWriter> {
+        self.activity_writer.take()
+    }
+    /// Read-only loader-priority snapshot.
     #[must_use]
-    /// Returns the adaptive-bitrate handle for adaptive sources.
+    pub fn activity(&self) -> Activity {
+        self.activity.clone()
+    }
+    /// Adaptive bitrate control for this open source.
+    #[must_use]
     pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
-        self.session.abr_handle.clone()
+        self.abr.clone()
     }
-
+    /// Currently selected adaptive variant.
     #[must_use]
-    /// Returns metadata for the currently selected adaptive variant.
     pub fn current_variant(&self) -> Option<kithara_abr::VariantInfo> {
-        self.session.abr_handle.as_ref()?.current_variant()
+        self.abr.as_ref()?.current_variant()
     }
-
+    /// Whether initial input preparation was requested.
     #[must_use]
-    /// Reports whether non-blocking reads have been enabled.
     pub const fn is_preloaded(&self) -> bool {
-        self.ring.preloaded
+        self.preloaded
     }
-
+    /// Track metadata captured at open.
     #[must_use]
-    /// Returns track metadata.
     pub const fn metadata(&self) -> &TrackMetadata {
-        &self.session.metadata
+        &self.metadata
     }
-
-    /// Enables non-blocking reads and primes the first PCM chunk.
-    ///
-    /// Returns as soon as the producer's delivered chunks are drained, with or
-    /// without a primed chunk; waiting for the first chunk belongs to the
-    /// preload latch this call sits behind, never to the prime itself.
+    /// Current decoded output format.
+    #[must_use]
+    pub fn spec(&self) -> AudioSpec {
+        self.cursor.spec()
+    }
+    /// Current committed source position.
+    #[must_use]
+    pub fn position(&self) -> Duration {
+        self.playhead.position()
+    }
+    /// Total content duration, when known.
+    #[must_use]
+    pub fn duration(&self) -> Option<Duration> {
+        self.playhead.duration()
+    }
+    /// Prepare one initial chunk without moving work to another thread.
     ///
     /// # Errors
-    ///
-    /// Returns [`DecodeError`] if the producer channel closes during preload.
+    /// Returns a source or decoder failure.
     pub fn preload(&mut self) -> Result<(), DecodeError> {
-        self.sync_seek();
-        if !self.is_preloaded() {
-            self.ring.preloaded = true;
-        }
-        if self.ring.current_chunk.is_none() && self.ring.phase != super::ConsumerPhase::AtEof {
-            self.prime_buffer();
-            if let super::ConsumerPhase::Failed { source } = self.ring.phase {
-                return Err(DecodeError::audio_stream("preload", source));
+        self.preloaded = true;
+        if self.current_chunk.is_none() {
+            if let ChunkOutcome::Chunk(chunk) = self.pull_chunk()? {
+                self.cursor.begin_chunk(&chunk);
+                self.current_chunk = Some(chunk);
             }
         }
         Ok(())
     }
-
-    /// Prime the first chunk from what the producer has already delivered.
-    ///
-    /// Never parks: the preload latch this serves also opens when the producer
-    /// parks upstream, so a parking prime would wait on a fetch that
-    /// construction neither owns nor bounds.
-    pub(crate) fn prime_buffer(&mut self) -> bool {
-        let recv = recv_ctx(&self.session, &self.runtime);
-        let was_playing = self.ring.phase == super::ConsumerPhase::Playing;
-        let filled = self.ring.fill(&mut self.cursor, recv, Wait::Never);
-        self.events.fill_result(
-            filled,
-            was_playing,
-            self.ring.phase.is_terminal(),
-            self.session.playhead.position(),
-            self.ring.validator.epoch,
-        );
-        self.wake_for_events();
-        filled
-    }
-
-    /// Reads interleaved PCM samples into `buf`.
+    /// Seek synchronously inside the open source, discarding locally buffered PCM.
     ///
     /// # Errors
-    ///
-    /// Returns [`DecodeError`] when the producer reports a failure or closes early.
-    #[kithara::measure(label = "audio.read")]
-    pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-        self.sync_seek();
-        let recv = recv_ctx(&self.session, &self.runtime);
-        let read = self.cursor.read(
-            &mut self.ring,
-            &mut self.events,
-            self.session.playhead.as_ref(),
-            recv,
-            buf,
-        )?;
-        let outcome = self
-            .events
-            .commit_read(&self.session, self.ring.validator.epoch, read);
-        self.wake_for_events();
-        Ok(outcome)
-    }
-
-    /// Starts a non-blocking seek to `position`.
-    ///
-    /// # Errors
-    ///
-    /// Propagates seek-layer decode errors.
+    /// Returns a source or decoder failure without rebuilding for a seek failure.
     pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        let outcome = self.seek_handle().begin(position);
-        self.sync_seek();
-        Ok(outcome)
+        self.current_chunk = None;
+        self.cursor.clear();
+        let result = self.source.seek(position);
+        if let Some(spec) = self.source.prepare_deferred() {
+            self.cursor.set_spec(spec);
+        }
+        self.source.finish_deferred();
+        result
     }
-
-    /// Control-plane handle that begins a seek without touching the reader.
-    ///
-    /// The blocking half of a seek — event publish, peer nudge, worker wake — lives here so a
-    /// caller on an audio callback can hand it off to the control thread and keep only
-    /// [`sync_seek`](Self::sync_seek).
-    #[must_use]
-    pub fn seek_handle(&self) -> Arc<dyn SeekBegin> {
-        Arc::new(SeekHandle::new(SeekHandleParts {
-            bus: self.events.bus().clone(),
-            peer_wake: self.session.peer_wake.clone(),
-            seek_prepare: self.session.seek_prepare.clone(),
-            playhead: Arc::clone(&self.session.playhead),
-            preload_gate: Arc::clone(&self.session.preload_gate),
-            seek: Arc::clone(&self.session.seek),
-            wake: self.runtime.wake.clone(),
-        }))
-    }
-
-    #[must_use]
-    /// Returns the current output PCM specification.
-    pub fn spec(&self) -> AudioSpec {
-        self.cursor.spec()
-    }
-
-    /// Adopt a seek epoch begun elsewhere, dropping everything buffered before it.
-    ///
-    /// Lock-free and allocation-free: recycled chunks go to the trash outlet and the cursor is
-    /// cleared in place, so this is the only half of a seek an audio callback may run. A no-op when
-    /// no new epoch was begun.
-    pub fn sync_seek(&mut self) {
-        let begun = self.session.seek_obs.epoch();
-        if begun == self.ring.validator.epoch {
+    /// Rebuild the decoder at a host-rate change on the owning thread.
+    /// A rebuild error becomes the source's terminal read failure.
+    pub fn set_host_sample_rate(&mut self, rate: NonZeroU32) {
+        if self.source.host_sample_rate() == Some(rate) {
             return;
         }
-        self.events.reset_underrun();
-        let popped = self.ring.begin_seek_epoch(begun, &mut self.cursor);
-        if popped {
-            self.ring.wake_worker(Some(self.runtime.wake.as_ref()));
+        if let Some(chunk) = &self.current_chunk {
+            self.source.commit_source_end(SourceEnd::new(
+                chunk
+                    .meta
+                    .frame_offset
+                    .saturating_add(self.cursor.consumed_frames()),
+                chunk.spec().sample_rate,
+            ));
+        }
+        self.current_chunk = None;
+        self.cursor.clear();
+        self.source.set_host_sample_rate(rate);
+        if let Some(spec) = self.source.prepare_deferred() {
+            self.cursor.set_spec(spec);
+        }
+        self.source.finish_deferred();
+    }
+    fn pull_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+        if let Some(spec) = self.source.prepare_deferred() {
+            self.cursor.set_spec(spec);
+        }
+        let step = self.source.step_track();
+        self.source.finish_deferred();
+        match step {
+            TrackStep::Produced(Fetch::Data { data, .. }) => Ok(ChunkOutcome::Chunk(data)),
+            TrackStep::Produced(Fetch::NaturalEof) | TrackStep::Eof => Ok(ChunkOutcome::Eof {
+                position: self.position(),
+            }),
+            TrackStep::Produced(Fetch::Failure) => Err(DecodeError::InvalidData {
+                detail: "source failed",
+            }),
+            TrackStep::Failed(error) => Err(error),
+            TrackStep::Blocked(_) | TrackStep::StateChanged => Ok(ChunkOutcome::Pending {
+                reason: PendingReason::StreamBackpressure,
+                position: self.position(),
+            }),
         }
     }
-
-    fn wake_for_events(&mut self) {
-        if self.events.take_wake_pending() {
-            self.ring.wake_worker(Some(self.runtime.wake.as_ref()));
+    /// Pull a chunk on the owning thread.
+    ///
+    /// # Errors
+    /// Returns a source or decoder failure.
+    pub fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+        let chunk = if let Some(chunk) = self.current_chunk.take() {
+            let mut consumed = self.cursor.consumed_frames();
+            crate::pipeline::seek::skip::apply_frames(chunk, &mut consumed)
+        } else {
+            None
+        };
+        let outcome = match chunk {
+            Some(chunk) => ChunkOutcome::Chunk(chunk),
+            None => self.pull_chunk()?,
+        };
+        if let ChunkOutcome::Chunk(chunk) = &outcome {
+            self.cursor.begin_chunk(chunk);
+            self.playhead.advance(&chunk_position(&chunk.meta));
+            self.source.commit_source_end(SourceEnd::new(
+                chunk
+                    .meta
+                    .frame_offset
+                    .saturating_add(u64::from(chunk.meta.frames)),
+                chunk.spec().sample_rate,
+            ));
         }
+        Ok(outcome)
     }
-
-    delegate::delegate! {
-        to self.session.playhead {
-            #[must_use]
-            /// Returns the known stream duration.
-            pub fn duration(&self) -> Option<Duration>;
-            #[must_use]
-            /// Returns the committed playback position.
-            pub fn position(&self) -> Duration;
+    /// Copy interleaved samples from the open source.
+    ///
+    /// # Errors
+    /// Returns invalid buffer geometry or a source failure.
+    pub fn read(&mut self, output: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+        self.read_into(ReadBuffer::Interleaved(output))
+    }
+    /// Copy samples into equal-length channel planes.
+    ///
+    /// # Errors
+    /// Returns invalid plane geometry or a source failure.
+    pub fn read_planar<'a>(
+        &mut self,
+        output: &'a mut [&'a mut [f32]],
+    ) -> Result<ReadOutcome, DecodeError> {
+        self.read_into(ReadBuffer::Planar(output))
+    }
+    fn read_into(&mut self, mut output: ReadBuffer<'_, '_>) -> Result<ReadOutcome, DecodeError> {
+        let capacity = output.capacity()?;
+        let mut written = 0usize;
+        let mut source_span: Option<SourceSpan> = None;
+        let mut output_frames = 0u64;
+        let mut eof = false;
+        while written < capacity {
+            if self.current_chunk.is_none() {
+                match self.pull_chunk()? {
+                    ChunkOutcome::Chunk(chunk) => {
+                        self.cursor.begin_chunk(&chunk);
+                        self.current_chunk = Some(chunk);
+                    }
+                    ChunkOutcome::Eof { .. } => {
+                        eof = true;
+                        break;
+                    }
+                    ChunkOutcome::Pending { .. } => break,
+                }
+            }
+            let Some(chunk) = self.current_chunk.as_ref() else {
+                break;
+            };
+            let span = SourceSpan::new(
+                chunk.meta.frame_offset,
+                chunk
+                    .meta
+                    .frame_offset
+                    .saturating_add(u64::from(chunk.meta.frames)),
+                chunk.spec().sample_rate,
+                u64::from(chunk.meta.frames),
+            );
+            if written > 0
+                && !source_spans_coalesce(
+                    source_span,
+                    output_frames,
+                    span,
+                    u64::from(chunk.meta.frames),
+                )
+            {
+                break;
+            }
+            let copied =
+                self.cursor
+                    .copy_into(chunk, span, &mut output, written, self.playhead.as_ref())?;
+            self.source.commit_source_end(SourceEnd::new(
+                chunk
+                    .meta
+                    .frame_offset
+                    .saturating_add(self.cursor.consumed_frames()),
+                chunk.spec().sample_rate,
+            ));
+            written += copied.count;
+            output_frames = output_frames.saturating_add(copied.output_frames);
+            source_span = match (source_span, copied.source_span) {
+                (Some(previous), Some(next)) => previous.followed_by(next),
+                (None, span) => span,
+                _ => None,
+            };
+            if copied.finished {
+                self.current_chunk = None;
+            } else if copied.count == 0 {
+                break;
+            }
+        }
+        if let Some(count) = NonZeroUsize::new(written) {
+            return Ok(ReadOutcome::Frames {
+                count,
+                position: self.position(),
+                source_span,
+            });
+        }
+        if eof {
+            Ok(ReadOutcome::Eof {
+                position: self.position(),
+            })
+        } else {
+            Ok(ReadOutcome::Pending {
+                reason: PendingReason::StreamBackpressure,
+                position: self.position(),
+            })
         }
     }
 }
 
-impl<S> AudioRead for Audio<S> {
-    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
-        self.sync_seek();
-        self.ring.preloaded = true;
-        let chunk = if let Some(chunk) = self.ring.current_chunk.take() {
-            self.ring.current_source_span = None;
-            Some(chunk)
-        } else {
-            let was_playing = self.ring.phase == super::ConsumerPhase::Playing;
-            let chunk = self
-                .ring
-                .recv_valid_chunk(recv_ctx(&self.session, &self.runtime), Wait::ForProducer);
-            self.events.fill_result(
-                chunk.is_some(),
-                was_playing,
-                self.ring.phase.is_terminal(),
-                self.session.playhead.position(),
-                self.ring.validator.epoch,
-            );
-            self.wake_for_events();
-            chunk.map(|(chunk, _source_span)| chunk)
-        };
-        let Some(chunk) = chunk else {
-            return chunk_outcome(self.ring.phase, self.position());
-        };
-        self.cursor.begin_chunk(&chunk);
-        self.ring.promote_playing();
-        self.session.playhead.advance(&chunk_position(&chunk.meta));
-        self.events.post_seek_output(
-            self.session.seek_obs.as_ref(),
-            self.ring.validator.epoch,
-            Some(chunk.meta),
-        );
-        self.wake_for_events();
-        Ok(ChunkOutcome::Chunk(chunk))
+impl<S> Drop for Audio<S> {
+    fn drop(&mut self) {
+        self.cancel.cancel();
     }
-
+}
+impl<S> AudioRead for Audio<S> {
+    fn decoded_frontier(&self) -> Duration {
+        self.current_chunk
+            .as_ref()
+            .map_or_else(|| self.position(), |chunk| chunk.meta.end_timestamp)
+    }
+    fn spec(&self) -> AudioSpec {
+        self.spec()
+    }
+    fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
+        self.next_chunk()
+    }
     fn position(&self) -> Duration {
         self.position()
     }
-
-    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-        Self::read(self, buf)
+    fn read(&mut self, output: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+        self.read(output)
     }
-
-    #[kithara::measure]
     fn read_planar<'a>(
         &mut self,
         output: &'a mut [&'a mut [f32]],
     ) -> Result<ReadOutcome, DecodeError> {
-        self.sync_seek();
-        let read = self.cursor.read_planar(
-            &mut self.ring,
-            &mut self.events,
-            self.session.playhead.as_ref(),
-            recv_ctx(&self.session, &self.runtime),
-            output,
-        )?;
-        let outcome = self
-            .events
-            .commit_read(&self.session, self.ring.validator.epoch, read);
-        self.wake_for_events();
-        Ok(outcome)
-    }
-
-    fn spec(&self) -> AudioSpec {
-        Self::spec(self)
-    }
-
-    delegate::delegate! {
-        to self.session.playhead {
-            #[call(cached)]
-            fn cached_span(&self) -> Duration;
-            fn decoded_frontier(&self) -> Duration;
-        }
+        self.read_planar(output)
     }
 }
-
 impl<S> AudioSession for Audio<S> {
+    fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
+        self.abr_handle()
+    }
+    fn duration(&self) -> Option<Duration> {
+        self.duration()
+    }
     fn event_bus(&self) -> &EventBus {
-        self.events.bus()
+        &self.bus
     }
-
-    fn preload_epoch(&self) -> u64 {
-        self.session.seek_obs.epoch()
+    fn is_preloaded(&self) -> bool {
+        self.is_preloaded()
     }
-
-    fn preload_gate(&self) -> Option<Arc<PreloadGate>> {
-        Some(self.session.preload_gate.clone())
-    }
-
-    delegate::delegate! {
-        to self {
-            fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
-            fn duration(&self) -> Option<Duration>;
-            fn is_preloaded(&self) -> bool;
-            fn metadata(&self) -> &TrackMetadata;
-        }
+    fn metadata(&self) -> &TrackMetadata {
+        self.metadata()
     }
 }
-
 impl<S> AudioControl for Audio<S> {
     fn preload(&mut self) -> Result<(), DecodeError> {
-        Self::preload(self)
+        self.preload()
     }
-
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
-        Self::seek(self, position)
+        self.seek(position)
     }
-
-    fn seek_handle(&self) -> Option<Arc<dyn SeekBegin>> {
-        Some(Self::seek_handle(self))
+    fn set_host_sample_rate(&mut self, rate: NonZeroU32) {
+        self.set_host_sample_rate(rate);
     }
-
-    fn set_consumer_wake_mode(&mut self, mode: ConsumerWakeMode) {
-        self.ring.set_consumer_wake_mode(mode);
-        self.events.set_wake_mode(self.ring.consumer_wake_mode());
+}
+impl<S: 'static> AudioSource for Audio<S> {
+    type Chunk = AudioChunk;
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+        self.seek(position)
     }
-
-    fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
-        let previous = self
-            .controls
-            .host_sample_rate
-            .swap(sample_rate.get(), Ordering::AcqRel);
-        if previous != sample_rate.get() {
-            self.runtime.wake.defer();
+    fn set_host_sample_rate(&mut self, rate: NonZeroU32) {
+        self.set_host_sample_rate(rate);
+    }
+    fn host_sample_rate(&self) -> Option<NonZeroU32> {
+        self.source.host_sample_rate()
+    }
+    fn commit_source_end(&mut self, end: SourceEnd) {
+        self.source.commit_source_end(end);
+    }
+    fn discontinuity(&self) -> Option<crate::SourceDiscontinuity> {
+        self.source.discontinuity()
+    }
+    fn finish_deferred(&mut self) {
+        self.source.finish_deferred();
+    }
+    fn prepare_deferred(&mut self) -> Option<AudioSpec> {
+        self.source.prepare_deferred()
+    }
+    fn step_track(&mut self) -> TrackStep<AudioChunk> {
+        if let Some(chunk) = self.current_chunk.take() {
+            let mut consumed = self.cursor.consumed_frames();
+            if let Some(chunk) = crate::pipeline::seek::skip::apply_frames(chunk, &mut consumed) {
+                let end = SourceEnd::new(
+                    chunk
+                        .meta
+                        .frame_offset
+                        .saturating_add(u64::from(chunk.meta.frames)),
+                    chunk.spec().sample_rate,
+                );
+                self.cursor.begin_chunk(&chunk);
+                return TrackStep::Produced(Fetch::rendered(chunk, end));
+            }
         }
+        self.source.step_track()
     }
-
-    fn sync_seek(&mut self) {
-        Self::sync_seek(self);
-    }
-}
-
-fn recv_ctx<'a>(session: &'a Session, runtime: &'a AudioRuntime) -> RecvCtx<'a> {
-    RecvCtx {
-        cancel: Some(&runtime.cancel),
-        worker: Some(runtime.wake.as_ref()),
-        abr: session.abr_handle.as_ref(),
+    fn warm_up(&mut self) {
+        self.source.warm_up();
     }
 }
-
-fn chunk_outcome(
-    phase: super::ConsumerPhase,
-    position: Duration,
-) -> Result<ChunkOutcome, DecodeError> {
-    match phase {
-        super::ConsumerPhase::AtEof => Ok(ChunkOutcome::Eof { position }),
-        super::ConsumerPhase::Failed { source: failure } => {
-            Err(DecodeError::audio_stream("chunk read", failure))
-        }
-        super::ConsumerPhase::SeekPending { .. } => Ok(ChunkOutcome::Pending {
-            position,
-            reason: PendingReason::SeekInProgress,
-        }),
-        _ => Ok(ChunkOutcome::Pending {
-            position,
-            reason: PendingReason::Buffering,
-        }),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{

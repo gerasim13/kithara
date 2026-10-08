@@ -14,7 +14,7 @@ use kithara_platform::sync::Notify;
 /// The produce core (the `#[rtsan_forbid_blocking]` region) must not call
 /// `Notify::notify_one`: scheduling the downloader's parked task cross-thread is
 /// a `kevent` syscall on macOS, illegal on the RT path. A reader-blocked probe
-/// or a seek-epoch bump reached on the core therefore [`arm`](Self::arm)s a
+/// or changed reader demand reached on the core therefore [`arm`](Self::arm)s a
 /// lock-free flag; the audio scheduler shell [`flush`](Self::flush)es it once
 /// per pass, off the forbid path, where the `notify_one` is allowed.
 ///
@@ -86,7 +86,6 @@ pub trait WorkerWake: Send + Sync {
     /// Wake the audio worker so it re-ticks the decoder now that data landed.
     fn wake(&self);
 }
-
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;

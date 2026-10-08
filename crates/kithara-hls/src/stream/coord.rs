@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{ops::Range, sync::atomic::AtomicU64};
+use std::ops::Range;
 
 use delegate::delegate;
 use kithara_abr::{AbrHandle, AbrPublisher};
@@ -14,11 +14,10 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    Activity, ByteMap, DeferredWake, MediaInfo, PlayheadRead, PlayheadState, PlayheadWrite,
-    ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekPrepare, SeekState,
-    SegmentDescriptor, SourceError, SourcePhase, SourceProbe, SourceSeekAnchor, StreamError,
-    StreamResult, VariantControl, VariantPromotion, VariantReaderPlan, VariantReaderTake,
-    VariantTransition,
+    Activity, ActivityWriter, ByteMap, DeferredWake, MediaInfo, PlayheadRead, PlayheadState,
+    PlayheadWrite, ReadOutcome, ReaderProfile, SegmentDescriptor, SourceError, SourcePhase,
+    SourceProbe, SourceSeekAnchor, StreamError, StreamResult, VariantControl, VariantPromotion,
+    VariantReaderPlan, VariantReaderTake, VariantTransition,
 };
 use kithara_test_utils::kithara;
 
@@ -66,18 +65,8 @@ where
     /// Backing playhead state — the coord owns the `Arc` directly and
     /// vends narrow trait-object handles from it.
     playhead: Arc<PlayheadState>,
-    /// Backing seek/activity state — the coord owns the `Arc` directly and
-    /// vends narrow trait-object handles from it.
-    seek: Arc<SeekState>,
-    /// Narrow seek-observe handle — derived from `seek` at construction.
-    /// Used by internal methods that only need epoch/target/pending reads.
-    seek_obs: Arc<dyn SeekObserve>,
-    /// Whether this coord currently holds the ABR lock for an in-flight seek.
-    /// The ABR lock is a shared counter, so the coord records its own level
-    /// rather than reading the counter back: it must never release a level it
-    /// did not take. The mutex also serialises the two threads that reconcile
-    /// the mirror — the peer poll and the produce pass that plans a reader.
-    abr_seek_lock: Mutex<bool>,
+    activity: Activity,
+    activity_writer: Mutex<Option<ActivityWriter>>,
     signal: SizeSignal,
 }
 
@@ -98,7 +87,7 @@ where
     pub(crate) fn new(
         env: HlsCoordEnv<S>,
         playhead: Arc<PlayheadState>,
-        seek: Arc<SeekState>,
+        writer: ActivityWriter,
         abr: AbrHandle,
         abr_publisher: AbrPublisher,
         variants: Arc<[Arc<HlsVariant<S>>]>,
@@ -111,7 +100,7 @@ where
             abr.current_variant_index().is_some(),
             "HlsCoord requires an AbrHandle with state — HlsPeer must construct AbrState"
         );
-        let seek_obs = Arc::clone(&seek) as Arc<dyn SeekObserve>;
+        let activity = writer.reader();
         let active_index = abr
             .current_variant_index()
             .expect("invariant: stateful ABR handle checked above");
@@ -122,7 +111,6 @@ where
         );
         let active_session = Arc::new(HlsSession::active(
             env.cancel.child(),
-            Arc::clone(&seek_obs),
             env.signal.clone(),
             active_index,
             Arc::clone(&active_variant),
@@ -130,12 +118,11 @@ where
         ));
         Self {
             playhead,
-            seek,
-            seek_obs,
+            activity,
+            activity_writer: Mutex::new(Some(writer)),
             abr,
             abr_publisher,
             variants,
-            abr_seek_lock: Mutex::new(false),
             cancel: env.cancel,
             scope: env.scope,
             config: env.config,
@@ -146,12 +133,15 @@ where
         }
     }
 
-    pub(crate) fn activity(&self) -> Arc<dyn Activity> {
-        Arc::clone(&self.seek) as Arc<dyn Activity>
+    pub(crate) fn activity(&self) -> Activity {
+        self.activity.clone()
     }
 
-    /// Mark an evicted segment missing and rebuild each resident reader from
-    /// its own cursor. Variants without a reader rebuild on activation.
+    pub(crate) fn take_activity_writer(&self) -> Option<ActivityWriter> {
+        self.activity_writer.lock().take()
+    }
+
+    /// Rebuild resident readers from their own cursors after an eviction.
     pub(crate) fn broadcast_eviction(
         &self,
         ctx: &PlanCtx<S>,
@@ -182,13 +172,6 @@ where
         }
     }
 
-    pub(super) fn commit_if_seek_epoch<T, F>(&self, epoch: u64, commit: F) -> Option<T>
-    where
-        F: FnOnce() -> T,
-    {
-        self.seek.commit_if_epoch(epoch, commit)
-    }
-
     /// Resolve the segment whose fetch queue owns the reader cursor.
     ///
     /// Deliberately wider than [`Self::find_at_offset`]: a cursor inside the
@@ -207,7 +190,7 @@ where
     /// Track-level phase. Master-cancel takes precedence (terminal
     /// `Cancelled`); otherwise the variant that currently serves
     /// `range.start` decides — mid-buffer boundary cross resolves to
-    /// the right `range_ready` / `is_flushing` / `total_bytes` view.
+    /// the right `range_ready` / `total_bytes` view.
     pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase {
         if self.cancel.is_cancelled() {
             return SourcePhase::Cancelled;
@@ -223,8 +206,7 @@ where
         Arc::clone(&self.playhead) as Arc<dyn PlayheadWrite>
     }
 
-    /// Wakes a reader parked on the pre-seek range so it re-probes against the new position and
-    /// flush gate after a seek repositions the active variant.
+    /// Retire the incoming session before seeking the active source.
     pub(crate) fn prepare_for_seek(&self) {
         self.cancel_incoming_for_seek();
         if !self.active().layout_seek_invariant() {
@@ -278,18 +260,6 @@ where
         }
     }
 
-    pub(crate) fn seek_control(&self) -> Arc<dyn SeekControl> {
-        Arc::clone(&self.seek) as Arc<dyn SeekControl>
-    }
-
-    pub(crate) fn seek_epoch_handle(&self) -> Arc<AtomicU64> {
-        self.seek.seek_epoch_arc()
-    }
-
-    pub(crate) fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
-    }
-
     /// Install the peer's `reader_advanced` wake so the `on_slow` hook can
     /// re-poll the peer when an in-flight fetch stalls past `soft_timeout`.
     /// Called once by `HlsPeer::activate`.
@@ -312,26 +282,6 @@ where
     /// closures can [`SizeSignal::fire`] on segment write/commit/fail.
     pub(crate) fn signal(&self) -> SizeSignal {
         self.signal.clone()
-    }
-
-    /// Keep ABR locked until the first post-seek output is committed.
-    ///
-    /// `plan_variant_reader` reconciles before it reads the claim, because it
-    /// is the site that mints a switch: a plan refused against a mirror that
-    /// still reads locked after the seek settled is refused for good — nothing
-    /// re-derives the pending intent, and the switch is lost. Idempotent, and
-    /// safe from any thread: the coord owns at most one lock level and moves
-    /// it only on an edge, so it never releases a level it did not take.
-    pub(crate) fn sync_abr_lock(&self) {
-        let mut held = self.abr_seek_lock.lock();
-        let pending = self.seek_obs.is_pending() || self.seek_obs.pending_epoch().is_some();
-        if pending && !*held {
-            self.abr.lock();
-            *held = true;
-        } else if !pending && *held {
-            self.abr.unlock();
-            *held = false;
-        }
     }
 
     /// On the RT path this is a single wake-free probe that never parks. Off-RT it blocks on the
@@ -392,10 +342,6 @@ where
             pub(crate) fn active(&self) -> Arc<HlsVariant<S>>;
             pub(crate) fn advance(&self, n: u64);
             pub(crate) fn position(&self) -> u64;
-            pub(crate) fn seek_time_anchor(
-                &self,
-                position: Duration,
-            ) -> StreamResult<Option<SourceSeekAnchor>>;
             #[call(seek_to_byte)]
             pub(crate) fn set_position(&self, pos: u64);
             /// Variant index of the authoritative active source session.
@@ -420,18 +366,22 @@ where
             pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
         }
     }
+
+    pub(crate) fn seek_time_anchor(
+        &self,
+        position: Duration,
+    ) -> StreamResult<Option<SourceSeekAnchor>> {
+        self.prepare_for_seek();
+        let anchor = self.active_session().seek_time_anchor(position)?;
+        self.signal().fire();
+        Ok(anchor)
+    }
 }
 
 pub(super) fn variant_switch_target_time(
-    seek_obs: &dyn SeekObserve,
     playhead_read: &dyn PlayheadRead,
     landing: Option<Duration>,
 ) -> Duration {
-    if seek_obs.is_pending() || seek_obs.is_flushing() {
-        return seek_obs
-            .target()
-            .unwrap_or_else(|| playhead_read.position());
-    }
     landing.unwrap_or_else(|| playhead_read.position())
 }
 
@@ -562,19 +512,6 @@ where
         }
     }
 }
-
-impl<S> SeekPrepare for HlsCoord<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    delegate! {
-        to self {
-            #[call(prepare_for_seek)]
-            fn prepare(&self);
-        }
-    }
-}
-
 #[cfg(test)]
 pub(super) mod tests {
     use std::{

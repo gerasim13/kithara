@@ -31,78 +31,49 @@ impl SourceEnd {
 /// Fetch result from a worker source.
 #[derive(Debug)]
 pub enum Fetch<C> {
-    /// Decoded data for an epoch.
+    /// Decoded data from the open source.
     Data {
         data: C,
-        epoch: u64,
         /// Exact decoded-source boundary represented by this rendered output.
         source_end: Option<SourceEnd>,
     },
-    /// Natural end-of-stream for an epoch.
-    NaturalEof { epoch: u64 },
-    /// Decoder or source failure for an epoch.
-    Failure { epoch: u64 },
+    /// Natural end-of-stream from the open source.
+    NaturalEof,
+    /// Decoder or source failure from the open source.
+    Failure,
 }
 
 impl<C> Fetch<C> {
     /// Create a data fetch.
     #[must_use]
-    pub const fn data(data: C, epoch: u64) -> Self {
+    pub const fn data(data: C) -> Self {
         Self::Data {
             data,
-            epoch,
             source_end: None,
         }
     }
 
     /// Create a natural end-of-stream marker.
     #[must_use]
-    pub const fn eof(epoch: u64) -> Self {
-        Self::NaturalEof { epoch }
-    }
-
-    /// Return the seek-invalidation epoch.
-    pub const fn epoch(&self) -> u64 {
-        match self {
-            Self::Data { epoch, .. } | Self::NaturalEof { epoch } | Self::Failure { epoch } => {
-                *epoch
-            }
-        }
+    pub const fn eof() -> Self {
+        Self::NaturalEof
     }
 
     /// Create a failure marker distinct from natural end-of-stream.
     #[must_use]
-    pub const fn failure(epoch: u64) -> Self {
-        Self::Failure { epoch }
+    pub const fn failure() -> Self {
+        Self::Failure
     }
 
     /// Create rendered data with its exact decoded-source boundary.
     #[must_use]
-    pub const fn rendered(data: C, epoch: u64, source_end: SourceEnd) -> Self {
+    pub const fn rendered(data: C, source_end: SourceEnd) -> Self {
         Self::Data {
             data,
-            epoch,
             source_end: Some(source_end),
         }
     }
 }
-
-/// Validator that checks epoch for seek invalidation.
-///
-/// Consumer increments epoch on seek; items with old epoch are discarded.
-#[derive(Debug, Clone, Default)]
-pub struct EpochValidator {
-    /// Current consumer epoch.
-    pub epoch: u64,
-}
-
-impl EpochValidator {
-    /// Check if a fetch result matches the current epoch.
-    pub const fn is_valid<C>(&self, item: &Fetch<C>) -> bool {
-        item.epoch() == self.epoch
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;

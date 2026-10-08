@@ -1,31 +1,5 @@
-use std::{
-    any::Any,
-    mem,
-    panic::{AssertUnwindSafe, catch_unwind},
-    sync::atomic::{AtomicU32, Ordering},
-    task::Poll,
-};
-
-use kithara_bufpool::{HasPool, PoolError, PoolRegion};
-use kithara_decode::{
-    BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
-    DecoderFactory as BackendDecoderFactory, DecoderSeekOutcome, GaplessMode,
-};
-use kithara_events::DeferredBus;
-use kithara_platform::{sync::Arc, time::Duration};
-use kithara_signal::AudioChunk;
-use kithara_stream::{
-    ByteMap, MediaInfo, OpenedReader, PlayheadWrite, ReaderProfile, SeekObserve, StreamType,
-    VariantTransition,
-};
-#[cfg(test)]
-use kithara_test_utils::kithara;
-use tracing::{debug, warn};
-
-#[cfg(test)]
-use crate::pipeline::decode::transition::OutgoingFrontier;
 use crate::{
-    AudioLaneEvent,
+    AudioLaneEvent, AudioObserver,
     pipeline::{
         blend::GaplessBlender,
         decode::{
@@ -36,15 +10,28 @@ use crate::{
         },
         fetch::Fetch,
         rebuild::RecreateState,
-        seek::{ResumeState, SeekContext, SeekEngine, emit::commit_outcome},
+        seek::emit::commit_outcome,
         stream::shared::SharedStream,
-        track::{TrackFailure, WaitingReason},
+        track::WaitingReason,
     },
-    traits::AudioObserver,
 };
+use kithara_bufpool::{HasPool, PoolError, PoolRegion};
+use kithara_decode::{
+    BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
+    DecoderFactory as BackendDecoderFactory, DecoderSeekOutcome, GaplessMode,
+};
+use kithara_events::DeferredBus;
+use kithara_platform::{sync::Arc, time::Duration};
+use kithara_signal::AudioChunk;
+use kithara_stream::{
+    ByteMap, MediaInfo, OpenedReader, PlayheadWrite, ReaderProfile, StreamType, VariantTransition,
+};
+use std::{any::Any, mem, num::NonZeroU32};
+use tracing::debug;
 
-type DecoderBuilder =
-    dyn Fn(OpenedReader, MediaInfo) -> Result<Box<dyn Decoder>, DecodeError> + Send + Sync;
+type DecoderBuilder = dyn Fn(OpenedReader, Option<MediaInfo>, Option<NonZeroU32>) -> Result<Box<dyn Decoder>, DecodeError>
+    + Send
+    + Sync;
 
 /// Decoder construction and reader-profile policy for one configured track.
 #[derive(Clone)]
@@ -55,7 +42,11 @@ pub(crate) struct DecoderFactory {
 
 impl DecoderFactory {
     pub(crate) fn new(
-        builder: impl Fn(OpenedReader, MediaInfo) -> Result<Box<dyn Decoder>, DecodeError>
+        builder: impl Fn(
+            OpenedReader,
+            Option<MediaInfo>,
+            Option<NonZeroU32>,
+        ) -> Result<Box<dyn Decoder>, DecodeError>
         + Send
         + Sync
         + 'static,
@@ -70,9 +61,10 @@ impl DecoderFactory {
     pub(crate) fn create(
         &self,
         reader: OpenedReader,
-        media_info: MediaInfo,
+        media_info: Option<MediaInfo>,
+        host_rate: Option<NonZeroU32>,
     ) -> Result<Box<dyn Decoder>, DecodeError> {
-        (self.builder)(reader, media_info)
+        (self.builder)(reader, media_info, host_rate)
     }
 
     pub(crate) fn reader_profile(
@@ -93,76 +85,6 @@ impl DecoderFactory {
     }
 }
 
-/// Decoder construction state shared by initial installation and later rebuilds.
-pub(crate) struct DecodeInit<S> {
-    pub(crate) playback_resampler_backend: &'static str,
-    pub(crate) host_sample_rate: Arc<AtomicU32>,
-    pub(crate) decoder: Box<dyn Decoder>,
-    pub(crate) decoder_backend: kithara_decode::DecoderBackend,
-    pub(crate) decoder_factory: DecoderFactory,
-    pub(crate) gapless_mode: GaplessMode,
-    pub(crate) media_info: Option<MediaInfo>,
-    pub(crate) pools: PoolRegion<S>,
-    pub(crate) recreate_on_host_rate_change: bool,
-}
-
-pub(crate) struct DecodeParts {
-    pub(crate) playback_resampler_backend: &'static str,
-    pub(crate) active: ActiveDecode,
-    pub(crate) host_sample_rate: Arc<AtomicU32>,
-    pub(crate) decoder_backend: kithara_decode::DecoderBackend,
-    pub(crate) factory: DecoderFactory,
-    pub(crate) recreate_on_host_rate_change: bool,
-    pub(crate) decoder_host_sample_rate: u32,
-}
-
-impl<S> DecodeInit<S>
-where
-    S: HasPool<f32>,
-{
-    pub(crate) fn decoder_host_sample_rate(&self) -> u32 {
-        self.host_sample_rate.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn into_parts(
-        self,
-        observer: Option<Box<dyn AudioObserver>>,
-        installed_at_seek_epoch: u64,
-    ) -> Result<DecodeParts, DecodeError> {
-        let decoder_host_sample_rate = self.decoder_host_sample_rate();
-        let Self {
-            decoder,
-            decoder_factory,
-            decoder_backend,
-            gapless_mode,
-            host_sample_rate,
-            media_info,
-            pools,
-            playback_resampler_backend,
-            recreate_on_host_rate_change,
-        } = self;
-        let active = DecoderGeneration::new(
-            decoder,
-            media_info,
-            0,
-            installed_at_seek_epoch,
-            None,
-            gapless_mode,
-        );
-        let active = ActiveDecode::new(active, gapless_mode, observer, &pools)
-            .map_err(DecodeError::backend)?;
-        Ok(DecodeParts {
-            host_sample_rate,
-            recreate_on_host_rate_change,
-            decoder_host_sample_rate,
-            decoder_backend,
-            playback_resampler_backend,
-            active,
-            factory: decoder_factory,
-        })
-    }
-}
-
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct ActiveDecode {
@@ -177,19 +99,15 @@ pub(crate) struct ActiveDecode {
     #[field(get, vis = "pub(crate)", copy)]
     gapless_mode: GaplessMode,
     observer: Option<Box<dyn AudioObserver>>,
-    rejected_chunk: Option<AudioChunk>,
     stage_error: Option<DecodeError>,
     discontinuity_revision: u64,
 }
 
 pub(crate) struct DecodeCtx<'a, T: StreamType> {
     pub(crate) cursor: &'a mut ResumeCursor,
-    pub(crate) seek: &'a SeekEngine,
     pub(crate) stream: &'a SharedStream<T>,
     pub(crate) playhead: &'a dyn PlayheadWrite,
-    pub(crate) seek_observe: &'a dyn SeekObserve,
     pub(crate) emit: Option<&'a DeferredBus<AudioLaneEvent>>,
-    pub(crate) resume: Option<&'a mut ResumeState>,
 }
 
 pub(crate) enum DecodeAction {
@@ -198,13 +116,12 @@ pub(crate) enum DecodeAction {
     Pending(WaitingReason),
     TransitionPending,
     StartRecreate(RecreateState),
-    SeekInterrupted,
     Eof,
-    Failed(TrackFailure),
+    Failed(DecodeError),
 }
 
 impl ActiveDecode {
-    fn new<S>(
+    pub(crate) fn new<S>(
         active: DecoderGeneration,
         gapless_mode: GaplessMode,
         observer: Option<Box<dyn AudioObserver>>,
@@ -223,7 +140,6 @@ impl ActiveDecode {
             discontinuity_revision: 0,
             incoming: None,
             announced_hold: None,
-            rejected_chunk: None,
             stage_error: None,
         })
     }
@@ -258,15 +174,13 @@ impl ActiveDecode {
     pub(crate) fn next_output(
         &mut self,
         cursor: &mut ResumeCursor,
-        epoch: u64,
     ) -> DecodeResult<Option<AudioChunk>> {
-        self.next_output_inner(cursor, epoch, true)
+        self.next_output_inner(cursor, true)
     }
 
     fn next_output_inner(
         &mut self,
         cursor: &mut ResumeCursor,
-        epoch: u64,
         allow_holdback: bool,
     ) -> DecodeResult<Option<AudioChunk>> {
         if allow_holdback && self.transition_holds_output() {
@@ -285,7 +199,7 @@ impl ActiveDecode {
         let Some(chunk) = next else {
             return Ok(None);
         };
-        cursor.record(&chunk, epoch);
+        cursor.record(&chunk);
         if let Some(observer) = &mut self.observer {
             let _observation = observer.try_observe(&chunk);
         }
@@ -295,59 +209,16 @@ impl ActiveDecode {
     pub(crate) fn next_output_unheld(
         &mut self,
         cursor: &mut ResumeCursor,
-        epoch: u64,
     ) -> DecodeResult<Option<AudioChunk>> {
-        self.next_output_inner(cursor, epoch, false)
+        self.next_output_inner(cursor, false)
     }
 
-    /// Retires the transition join a seek invalidated.
-    ///
-    /// A priming incoming means a join is armed on the active generation:
-    /// `outgoing_holdback_is_active` reports one, and decode output flows
-    /// through the holdback so the incoming can be spliced at the frontier it
-    /// latched. Retiring the active generation's staged PCM disarms that
-    /// holdback, and the claim outlives it — the next chunk is rejected as
-    /// unprepared, and the rejection fails the track. Re-arming is no answer
-    /// either: the latched frontier is pre-seek and the repositioned
-    /// generation never reaches it. So the incoming half goes back for
-    /// retirement, and the surviving ABR intent mints a fresh transition.
-    #[must_use]
-    pub(crate) fn notify_seek(&mut self) -> Option<DecoderGeneration> {
-        self.active.notify_seek();
-        self.disarm_seek_transition()
+    pub(crate) fn output_spec(&self) -> kithara_signal::AudioSpec {
+        self.active.blender_profile().spec()
     }
 
-    #[must_use]
-    pub(crate) fn disarm_seek_transition(&mut self) -> Option<DecoderGeneration> {
-        if !matches!(self.incoming, Some(IncomingDecode::Priming { .. })) {
-            return None;
-        }
-        self.discard_incoming()
-    }
-
-    fn outgoing_holdback_is_active(&self) -> bool {
-        let Some(IncomingDecode::Priming { generation, .. }) = self.incoming.as_ref() else {
-            return false;
-        };
-        self.blender.is_steady()
-            && self.active.blender_profile().spec() == generation.blender_profile().spec()
-    }
-
-    pub(crate) fn poll_seek<T: StreamType>(
-        &mut self,
-        stream: &SharedStream<T>,
-        playhead: &dyn PlayheadWrite,
-        request: SeekContext,
-    ) -> Poll<DecodeResult<DecoderSeekOutcome>> {
-        let outcome = self.active.poll_seek(request);
-        if let Poll::Ready(Ok(ref result)) = outcome {
-            commit_outcome(&self.active, stream, playhead, result);
-        }
-        outcome
-    }
-
-    pub(crate) fn prepare_deferred(&mut self, live_epoch: u64, prepare_input: bool) {
-        self.active.prepare_deferred(live_epoch, prepare_input);
+    pub(crate) fn prepare_deferred(&mut self) {
+        self.active.prepare_deferred(true);
         self.active.decoder_mut().flush_reader_signals();
         self.flush_incoming_reader_signals();
     }
@@ -388,42 +259,48 @@ impl ActiveDecode {
 
     fn reject_stage(&mut self, failure: StageFailure) -> DecodeError {
         let StageFailure { chunk, error } = failure;
-        debug_assert!(self.rejected_chunk.is_none());
-        self.rejected_chunk = Some(chunk);
+        drop(chunk);
         error
     }
 
     pub(crate) fn replace_active(&mut self, active: DecoderGeneration) -> DecoderGeneration {
+        self.discontinuity_revision = self.discontinuity_revision.wrapping_add(1);
         self.blender.replace_active(active.blender_profile());
         mem::replace(&mut self.active, active)
     }
 
     pub(crate) fn reset(&mut self) {
-        self.discontinuity_revision = self.discontinuity_revision.wrapping_add(1);
         self.stage_error = None;
         self.blender.reset();
     }
 
+    fn outgoing_holdback_is_active(&self) -> bool {
+        let Some(IncomingDecode::Priming { generation, .. }) = self.incoming.as_ref() else {
+            return false;
+        };
+        self.blender.is_steady()
+            && self.active.blender_profile().spec() == generation.blender_profile().spec()
+    }
+    pub(crate) fn notify_seek(&mut self) -> Option<DecoderGeneration> {
+        self.active.notify_seek();
+        self.reset();
+        self.discard_incoming()
+    }
     pub(crate) fn seek<T: StreamType>(
         &mut self,
         stream: &SharedStream<T>,
         playhead: &dyn PlayheadWrite,
         position: Duration,
     ) -> DecodeResult<DecoderSeekOutcome> {
+        self.active.notify_seek();
+        self.reset();
         let before = stream.position();
-        let outcome = match catch_unwind(AssertUnwindSafe(|| {
-            self.active.decoder_mut().seek(position)
-        })) {
-            Ok(result) => result,
-            Err(payload) => {
-                warn!(panic = %panic_message(payload), "decoder panicked during seek");
-                return Err(DecodeError::InvalidData {
-                    detail: "decoder panicked during seek",
-                });
-            }
-        };
+        let outcome = self.active.seek(position);
         if let Ok(ref outcome) = outcome {
             commit_outcome(&self.active, stream, playhead, outcome);
+            if matches!(outcome, DecoderSeekOutcome::Landed { .. }) {
+                self.active.trim_to(position);
+            }
         }
         debug!(
             ?position,
@@ -433,10 +310,6 @@ impl ActiveDecode {
             "decoder seek completed"
         );
         outcome
-    }
-
-    pub(crate) fn take_rejected_chunk(&mut self) -> Option<AudioChunk> {
-        self.rejected_chunk.take()
     }
 
     pub(crate) fn take_stage_error(&mut self) -> Option<DecodeError> {
@@ -479,7 +352,6 @@ pub(crate) fn panic_message(payload: Box<dyn Any + Send>) -> String {
         ),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;

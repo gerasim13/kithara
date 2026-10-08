@@ -1,13 +1,9 @@
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioSpec};
-use kithara_stream::StreamType;
 use num_traits::cast::ToPrimitive;
 use tracing::debug;
 
-use crate::{
-    consts,
-    pipeline::{decode::DecoderGeneration, seek::ResumeState, stream::shared::SharedStream},
-};
+use crate::{consts, pipeline::seek::ResumeState};
 
 pub(crate) fn duration(spec: AudioSpec, frames: usize) -> Duration {
     let nanos = (frames as u128)
@@ -30,40 +26,11 @@ pub(crate) fn frames(spec: AudioSpec, duration: Duration) -> usize {
     frames as usize
 }
 
-pub(crate) fn estimate_target_byte<T: StreamType>(
-    active: &DecoderGeneration,
-    stream: &SharedStream<T>,
-    position: Duration,
-) -> Option<u64> {
-    let duration = active.decoder().duration()?;
-    let len = stream.len()?;
-    if duration.is_zero() || len <= active.base_offset() {
-        return None;
-    }
-    let payload = len - active.base_offset();
-    let relative = position
-        .as_nanos()
-        .saturating_mul(u128::from(payload))
-        .saturating_div(duration.as_nanos().max(1))
-        .min(u128::from(payload));
-    let relative = u64::try_from(relative)
-        .expect("invariant: relative is clamped to payload (u64) above, so it fits");
-    Some(active.base_offset().saturating_add(relative))
-}
-
-pub(crate) fn apply(
-    mut chunk: AudioChunk,
-    epoch: u64,
-    resume: Option<&mut ResumeState>,
-) -> Option<AudioChunk> {
+pub(crate) fn apply(mut chunk: AudioChunk, resume: Option<&mut ResumeState>) -> Option<AudioChunk> {
     let Some(resume) = resume else {
         return Some(chunk);
     };
     if !resume.trim_head {
-        return Some(chunk);
-    }
-    if resume.seek.epoch != epoch {
-        resume.trim_head = false;
         return Some(chunk);
     }
     let spec = chunk.spec();
@@ -71,15 +38,12 @@ pub(crate) fn apply(
     if chunk_frames == 0 {
         return None;
     }
-    let drop_frames = frames(
-        spec,
-        resume.seek.target.saturating_sub(chunk.meta.timestamp),
-    );
+    let drop_frames = frames(spec, resume.target.saturating_sub(chunk.meta.timestamp));
     if drop_frames >= chunk_frames {
         return None;
     }
     debug!(
-        target = ?resume.seek.target,
+        target = ?resume.target,
         chunk_at = ?chunk.meta.timestamp,
         frame_offset = chunk.meta.frame_offset,
         drop_frames,

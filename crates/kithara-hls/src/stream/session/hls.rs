@@ -13,8 +13,8 @@ use kithara_platform::{
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    ByteMap, ConstructionGate, PendingReason, ReaderProfile, SeekObserve, SegmentDescriptor,
-    SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantTransition,
+    ByteMap, ConstructionGate, PendingReason, ReaderProfile, SegmentDescriptor, SourceError,
+    SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantTransition,
 };
 use tracing::debug;
 
@@ -30,7 +30,6 @@ pub(crate) struct HlsSession<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    seek: Arc<dyn SeekObserve>,
     pub(super) variant: Arc<HlsVariant<S>>,
     active: AtomicBool,
     position: AtomicU64,
@@ -68,14 +67,12 @@ where
 
     pub(crate) fn active(
         cancel: CancelToken,
-        seek: Arc<dyn SeekObserve>,
         signal: SizeSignal,
         variant_index: usize,
         variant: Arc<HlsVariant<S>>,
         position: u64,
     ) -> Self {
         Self {
-            seek,
             signal,
             variant,
             variant_index,
@@ -109,13 +106,6 @@ where
     pub(super) fn check_live(&self) -> io::Result<()> {
         if self.cancel.root.is_cancelled() {
             return Err(pending(PendingReason::SessionRetired));
-        }
-        if !self.active.load(Ordering::Acquire)
-            && self
-                .transition
-                .is_some_and(|transition| self.seek.epoch() != transition.id().seek_epoch())
-        {
-            return Err(pending(PendingReason::SeekPending));
         }
         Ok(())
     }
@@ -211,7 +201,6 @@ where
     pub(crate) fn incoming(
         cancel: CancelToken,
         profile: ReaderProfile,
-        seek: Arc<dyn SeekObserve>,
         signal: SizeSignal,
         transition: VariantTransition,
         variant: Arc<HlsVariant<S>>,
@@ -219,7 +208,6 @@ where
     ) -> StreamResult<Self> {
         let preparation = variant.prepare_reader(profile, content_time)?;
         Ok(Self {
-            seek,
             signal,
             variant,
             active: AtomicBool::new(false),
@@ -238,19 +226,10 @@ where
     /// Whether the construction window this session was prepared for is
     /// readable.
     ///
-    /// A pure question. It used to wake the peer on a negative answer, and that
-    /// wake deadlocked the stream: this is called under the transition lock,
-    /// while `wake_peer` takes the peer's state lock — and the peer takes those
-    /// two in the opposite order, `poll_state_phase` holding its state lock
-    /// across `prepare_for_seek` -> `cancel_incoming_for_seek`, which locks the
-    /// transition. A seek epoch landing while an incoming session was being
-    /// polled for readiness stopped the stream dead, with the queue full and
-    /// nothing in flight.
-    ///
-    /// The wake is still owed — the variant plans nothing by itself, so without
-    /// it an incoming session is only serviced when the *active* session happens
-    /// to ask for bytes. It belongs to the caller, which knows when it has let
-    /// the transition lock go. See [`wake_peer_for_readiness`].
+    /// A pure readiness question queried under the transition lock. Taking the
+    /// peer's state lock here would invert the peer's state-to-transition order.
+    /// The caller must wake the peer after releasing the transition lock so
+    /// incoming fetches progress independently of the active reader's demand.
     pub(crate) fn is_ready(&self) -> StreamResult<bool> {
         match &self.readiness {
             SessionReadiness::Active => Ok(true),

@@ -3,7 +3,6 @@ use std::cell::Cell;
 use std::{
     collections::VecDeque,
     panic::{AssertUnwindSafe, catch_unwind},
-    task::Poll,
 };
 
 use kithara_decode::{
@@ -11,15 +10,11 @@ use kithara_decode::{
     GaplessMode, GaplessProfile,
 };
 use kithara_signal::{AudioChunk, AudioSpec};
-use kithara_stream::MediaInfo;
+use kithara_stream::{ConstructionGate, MediaInfo};
 use kithara_test_utils::kithara;
 use tracing::warn;
 
-use crate::pipeline::{
-    decode::core::panic_message,
-    gapless::GaplessStage,
-    seek::{ResumeState, SeekContext},
-};
+use crate::pipeline::{decode::core::panic_message, gapless::GaplessStage, seek::ResumeState};
 
 #[derive(Clone, Copy)]
 pub(super) struct Holdback {
@@ -50,17 +45,11 @@ pub(crate) enum StageOutput {
     Invalid(StageFailure),
 }
 
-#[derive(Default)]
-struct SeekPreparation {
-    completed: Option<(SeekContext, DecodeResult<DecoderSeekOutcome>)>,
-    requested: Option<SeekContext>,
-}
-
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct DecoderGeneration {
     decoder: Box<dyn Decoder>,
-    seek_preparation: SeekPreparation,
+    construction_gate: Option<ConstructionGate>,
     #[field(get, vis = "pub(crate)", copy)]
     gapless_profile: GaplessProfile,
     pub(super) gapless: GaplessStage,
@@ -91,8 +80,6 @@ pub(crate) struct DecoderGeneration {
     staged_scan_count: Cell<usize>,
     #[field(get, vis = "pub(crate)")]
     base_offset: u64,
-    #[field(get, vis = "pub(crate)")]
-    installed_at_seek_epoch: u64,
 }
 
 impl DecoderGeneration {
@@ -100,7 +87,7 @@ impl DecoderGeneration {
         decoder: Box<dyn Decoder>,
         media_info: Option<MediaInfo>,
         base_offset: u64,
-        installed_at_seek_epoch: u64,
+        construction_gate: Option<ConstructionGate>,
         pending_head_skip: Option<ResumeState>,
         gapless_mode: GaplessMode,
     ) -> Self {
@@ -111,11 +98,10 @@ impl DecoderGeneration {
             decoder,
             media_info,
             base_offset,
-            installed_at_seek_epoch,
+            construction_gate,
             gapless_profile,
             gapless,
             pending_head_skip,
-            seek_preparation: SeekPreparation::default(),
             finished: false,
             source_exhausted: false,
             exhaustion_observed: false,
@@ -217,13 +203,6 @@ impl DecoderGeneration {
         }
     }
 
-    pub(crate) fn has_completed_seek(&self, request: SeekContext) -> bool {
-        self.seek_preparation
-            .completed
-            .as_ref()
-            .is_some_and(|(completed, _)| *completed == request)
-    }
-
     pub(crate) fn has_output(&self) -> bool {
         !self.staged.is_empty() || self.gapless.has_output()
     }
@@ -260,6 +239,7 @@ impl DecoderGeneration {
         self.exhaustion_observed = false;
         self.holdback = None;
         self.gapless.notify_seek();
+        self.pending_head_skip = None;
         self.staged.clear();
     }
 
@@ -270,17 +250,33 @@ impl DecoderGeneration {
         self.pending_head_skip.as_mut()
     }
 
-    pub(crate) fn poll_seek(
+    pub(crate) fn seek(
         &mut self,
-        request: SeekContext,
-    ) -> Poll<DecodeResult<DecoderSeekOutcome>> {
-        if self.has_completed_seek(request)
-            && let Some((_, result)) = self.seek_preparation.completed.take()
-        {
-            return Poll::Ready(result);
+        position: kithara_platform::time::Duration,
+    ) -> DecodeResult<DecoderSeekOutcome> {
+        if let Some(gate) = &self.construction_gate {
+            gate.arm();
         }
-        self.seek_preparation.requested = Some(request);
-        Poll::Pending
+        let result = catch_unwind(AssertUnwindSafe(|| self.decoder.seek(position)));
+        if let Some(gate) = &self.construction_gate {
+            gate.disarm();
+        }
+        match result {
+            Ok(result) => result,
+            Err(payload) => {
+                warn!(panic = %panic_message(payload), "decoder panicked during seek");
+                Err(DecodeError::InvalidData {
+                    detail: "decoder panicked during seek",
+                })
+            }
+        }
+    }
+
+    pub(crate) fn trim_to(&mut self, target: kithara_platform::time::Duration) {
+        self.pending_head_skip = Some(ResumeState {
+            target,
+            trim_head: true,
+        });
     }
 
     pub(crate) fn pop_staged(&mut self) -> Option<AudioChunk> {
@@ -288,36 +284,9 @@ impl DecoderGeneration {
         self.staged.pop_front()
     }
 
-    pub(crate) fn prepare_deferred(&mut self, live_epoch: u64, prepare_input: bool) {
+    pub(crate) fn prepare_deferred(&mut self, prepare_input: bool) {
         self.gapless.prepare_deferred();
-        if self
-            .seek_preparation
-            .completed
-            .as_ref()
-            .is_some_and(|(request, _)| request.epoch != live_epoch)
-        {
-            self.seek_preparation.completed = None;
-        }
-        if self
-            .seek_preparation
-            .requested
-            .is_some_and(|request| request.epoch != live_epoch)
-        {
-            self.seek_preparation.requested = None;
-        }
-        if let Some(request) = self.seek_preparation.requested.take() {
-            let result = match catch_unwind(AssertUnwindSafe(|| self.decoder.seek(request.target)))
-            {
-                Ok(result) => result,
-                Err(payload) => {
-                    warn!(panic = %panic_message(payload), "decoder panicked during seek preparation");
-                    Err(DecodeError::InvalidData {
-                        detail: "decoder panicked during seek",
-                    })
-                }
-            };
-            self.seek_preparation.completed = Some((request, result));
-        } else if prepare_input && self.seek_preparation.completed.is_none() {
+        if prepare_input {
             self.decoder.prepare_next_chunk();
         }
     }
@@ -428,7 +397,6 @@ pub(super) fn stage_failure(chunk: AudioChunk, detail: &'static str) -> StageFai
         error: DecodeError::InvalidData { detail },
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{cell::Cell, num::NonZeroU32};

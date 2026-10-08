@@ -10,9 +10,8 @@ use kithara_events::DeferredBus;
 use kithara_platform::{CancelScope, sync::Arc, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    Activity, BoxedEventSink, ByteMap, DeferredWake, MediaInfo, PlayheadRead, PlayheadWrite,
-    ReadOutcome, SeekControl, SeekObserve, SeekPrepare, Source, SourcePhase, SourceProbe,
-    StreamResult,
+    Activity, ActivityWriter, BoxedEventSink, ByteMap, DeferredWake, MediaInfo, PlayheadRead,
+    PlayheadWrite, ReadOutcome, Source, SourcePhase, SourceProbe, StreamResult,
 };
 
 use super::coord::{HlsCoord, HlsProbe};
@@ -138,16 +137,8 @@ where
         Arc::new(HlsProbe::new(Arc::clone(&self.coord)))
     }
 
-    fn seek_prepare(&self) -> Option<Arc<dyn SeekPrepare>> {
-        Some(Arc::clone(&self.coord) as Arc<dyn SeekPrepare>)
-    }
-
     fn take_reader_event_sink(&mut self) -> Option<BoxedEventSink> {
-        let sink = HlsReaderEventSink::new(
-            Arc::clone(&self.emit),
-            Arc::clone(&self.coord),
-            self.coord.seek_epoch_handle(),
-        );
+        let sink = HlsReaderEventSink::new(Arc::clone(&self.emit), Arc::clone(&self.coord));
         Some(Box::new(sink))
     }
 
@@ -167,18 +158,16 @@ where
                 range: Range<u64>,
                 timeout: Option<Duration>,
             ) -> StreamResult<WaitOutcome>;
-            fn activity(&self) -> Arc<dyn Activity>;
+            fn activity(&self) -> Activity;
+            fn take_activity_writer(&mut self) -> Option<ActivityWriter>;
             #[expr(Some($))]
             fn media_info(&self) -> Option<MediaInfo>;
             fn playhead_read(&self) -> Arc<dyn PlayheadRead>;
             fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
-            fn seek_control(&self) -> Arc<dyn SeekControl>;
-            fn seek_observe(&self) -> Arc<dyn SeekObserve>;
             fn set_worker_wake(&self, wake: Arc<dyn kithara_stream::WorkerWake>);
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::OnceLock;

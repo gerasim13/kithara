@@ -1,32 +1,3 @@
-use kithara_platform::{
-    sync::{ThreadGate, WaitGate},
-    time::Duration,
-};
-
-use crate::runtime::WakeSignal;
-
-#[derive(Default)]
-pub(crate) struct ThreadWake {
-    gate: ThreadGate,
-}
-
-impl ThreadWake {
-    delegate::delegate! {
-        to self.gate {
-            /// Snapshot the edge before checking the predicate the wait guards.
-            pub(crate) fn current(&self) -> u64;
-            /// Park until the edge moves past `since` or `timeout` elapses.
-            pub(crate) fn wait_timeout(&self, since: u64, timeout: Duration) -> bool;
-        }
-    }
-}
-
-impl WakeSignal for ThreadWake {
-    fn wake(&self) {
-        self.gate.signal();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use kithara_platform::{

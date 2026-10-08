@@ -1,231 +1,15 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-
+use crate::{
+    AudioEvent, DecodeErrorClass, DecodeErrorKind, DecoderBackend as EventDecoderBackend,
+    DecoderChangeCause, DecoderEvent, FrameDomain, GaplessSpan, PlaybackResamplerKind,
+    ResamplerKind,
+};
 use kithara_decode::{
     DecodeError, DecoderBackend as DecodeBackend, DecoderResamplerConfig, ErrorClass,
 };
-use kithara_events::{DeferredBus, EventBus};
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::time::Duration;
 use kithara_resampler::ResamplerBackend;
-use kithara_signal::{AudioChunkInfo, AudioSpec};
-use kithara_stream::{MediaInfo, PlayheadWrite, SeekObserve};
-use kithara_test_utils::kithara;
-use num_traits::cast::ToPrimitive;
-
-use super::{AudioLaneEvent, ReadOutcome, ThreadWake, WakeSignal};
-use crate::{
-    AudioEvent, ConsumerWakeMode, DecodeErrorClass, DecodeErrorKind,
-    DecoderBackend as EventDecoderBackend, DecoderChangeCause, DecoderEvent, FrameDomain,
-    GaplessSpan, PlaybackResamplerKind, ResamplerKind, SeekLifecycleStage, SegmentLocation, consts,
-};
-
-/// Reader-side event sink.
-///
-/// A `RealtimeDeferred` consumer reads on the audio callback, so its events
-/// go through the lock-free [`DeferredBus`] ring and reach the bus when the
-/// scheduler shell flushes. An `ImmediateOffRt` consumer runs off the
-/// real-time thread and may take the `broadcast::send` lock, so its events
-/// publish inline: everything a read births is on the bus when that read
-/// returns, and the deferred ring keeps the shell as its only flusher.
-pub(super) struct AudioEvents {
-    emit: Arc<DeferredBus<AudioLaneEvent>>,
-    wake_mode: ConsumerWakeMode,
-    last_progress_emit: Option<(u64, u64)>,
-    underrun_active: bool,
-    wake_pending: bool,
-}
-
-impl AudioEvents {
-    pub(super) const fn new(
-        emit: Arc<DeferredBus<AudioLaneEvent>>,
-        wake_mode: ConsumerWakeMode,
-    ) -> Self {
-        Self {
-            emit,
-            wake_mode,
-            wake_pending: false,
-            last_progress_emit: None,
-            underrun_active: false,
-        }
-    }
-
-    pub(super) fn commit_read(
-        &mut self,
-        session: &super::core::Session,
-        epoch: u64,
-        read: super::cursor::CursorRead,
-    ) -> ReadOutcome {
-        let super::cursor::CursorRead {
-            outcome,
-            first_output_meta,
-        } = read;
-        if matches!(outcome, ReadOutcome::Frames { .. }) {
-            debug_assert!(first_output_meta.is_some());
-            let position = session.playhead.position();
-            self.fill_result(true, false, false, position, epoch);
-            self.post_seek_output(session.seek_obs.as_ref(), epoch, first_output_meta);
-            self.progress(session.playhead.as_ref(), epoch);
-        }
-        outcome
-    }
-
-    pub(super) fn deferred(bus: &EventBus) -> Arc<DeferredBus<AudioLaneEvent>> {
-        Arc::new(DeferredBus::new(bus.clone(), consts::AUDIO_EVENT_CAPACITY))
-    }
-
-    pub(super) fn fill_result(
-        &mut self,
-        filled: bool,
-        was_playing: bool,
-        terminal: bool,
-        position: Duration,
-        epoch: u64,
-    ) {
-        if terminal {
-            self.underrun_active = false;
-            return;
-        }
-        if filled {
-            if self.underrun_active {
-                self.underrun_active = false;
-                self.publish(AudioEvent::UnderrunEnded {
-                    position_ms: clamp_millis(position),
-                    seek_epoch: epoch,
-                });
-            }
-        } else if was_playing && !self.underrun_active {
-            self.underrun_active = true;
-            self.publish(AudioEvent::UnderrunStarted {
-                position_ms: clamp_millis(position),
-                seek_epoch: epoch,
-            });
-        }
-    }
-
-    #[kithara::probe(epoch, pending = seek.pending_epoch().unwrap_or(0))]
-    pub(super) fn post_seek_output(
-        &mut self,
-        seek: &dyn SeekObserve,
-        epoch: u64,
-        meta: Option<AudioChunkInfo>,
-    ) {
-        let Some(seek_epoch) = seek.pending_epoch() else {
-            return;
-        };
-        if seek_epoch != epoch {
-            return;
-        }
-        let Some(meta) = meta else {
-            return;
-        };
-
-        let variant = meta.variant_index;
-        let segment_index = meta.segment_index;
-        self.publish(AudioEvent::SeekLifecycle {
-            seek_epoch,
-            stage: SeekLifecycleStage::OutputCommitted,
-            location: SegmentLocation::new(variant, segment_index, None, None),
-        });
-        self.publish(AudioEvent::SeekComplete {
-            seek_epoch,
-            position: meta.timestamp,
-        });
-        let _ = seek.clear_pending_epoch(seek_epoch);
-    }
-
-    pub(super) fn progress(&mut self, playhead: &dyn PlayheadWrite, epoch: u64) {
-        let position_ms = clamp_millis(playhead.position());
-        if let Some((last_epoch, last_ms)) = self.last_progress_emit
-            && last_epoch == epoch
-            && position_ms.abs_diff(last_ms) < consts::PROGRESS_EMIT_MIN_DELTA_MS
-        {
-            return;
-        }
-        self.last_progress_emit = Some((epoch, position_ms));
-
-        let total_ms = playhead.duration().map(clamp_millis);
-        let decoded_ms = clamp_millis(playhead.decoded_frontier());
-        let buffered_ms = Some(total_ms.map_or(decoded_ms, |total| decoded_ms.min(total)));
-        self.publish(AudioEvent::PlaybackProgress {
-            position_ms,
-            total_ms,
-            buffered_ms,
-            seek_epoch: epoch,
-        });
-    }
-
-    pub(super) fn publish(&mut self, event: AudioEvent) {
-        match self.wake_mode {
-            ConsumerWakeMode::RealtimeDeferred => {
-                self.emit.enqueue(event);
-                self.wake_pending = true;
-            }
-            ConsumerWakeMode::ImmediateOffRt => self.emit.bus().publish(event),
-        }
-    }
-
-    pub(super) const fn reset_underrun(&mut self) {
-        self.underrun_active = false;
-    }
-
-    pub(super) const fn set_wake_mode(&mut self, wake_mode: ConsumerWakeMode) {
-        self.wake_mode = wake_mode;
-    }
-
-    pub(super) const fn take_wake_pending(&mut self) -> bool {
-        let pending = self.wake_pending;
-        self.wake_pending = false;
-        pending
-    }
-
-    #[cfg(test)]
-    pub(super) fn test() -> Self {
-        Self::new(
-            Self::deferred(&EventBus::new(16)),
-            ConsumerWakeMode::RealtimeDeferred,
-        )
-    }
-
-    delegate::delegate! {
-        to self.emit {
-            pub(super) fn bus(&self) -> &EventBus;
-        }
-    }
-}
-
-pub(super) struct ReaderOutputWake {
-    emit: Arc<DeferredBus<AudioLaneEvent>>,
-    thread: Arc<ThreadWake>,
-    pending: AtomicBool,
-}
-
-impl ReaderOutputWake {
-    pub(super) fn new(thread: Arc<ThreadWake>, emit: Arc<DeferredBus<AudioLaneEvent>>) -> Self {
-        Self {
-            emit,
-            thread,
-            pending: AtomicBool::new(false),
-        }
-    }
-}
-
-impl WakeSignal for ReaderOutputWake {
-    /// A pre-push emptiness snapshot can race a consumer that is draining the ring.
-    fn flush_deferred(&self) {
-        self.emit.flush();
-        if self.pending.swap(false, Ordering::AcqRel) {
-            WakeSignal::wake(self.thread.as_ref());
-            self.emit.bus().publish(AudioEvent::OutputAvailable);
-        }
-    }
-
-    fn wake(&self) {
-        self.pending.store(true, Ordering::Release);
-    }
-}
-
-fn clamp_millis(duration: Duration) -> u64 {
-    ToPrimitive::to_u64(&duration.as_millis()).unwrap_or(u64::MAX)
-}
+use kithara_signal::AudioSpec;
+use kithara_stream::MediaInfo;
 
 pub(crate) const fn map_decoder_backend(backend: DecodeBackend) -> EventDecoderBackend {
     match backend {
@@ -322,7 +106,6 @@ pub(crate) struct DecoderChangedEventData<'a> {
     pub(crate) duration: Option<Duration>,
     pub(crate) media_info: Option<&'a MediaInfo>,
     pub(crate) base_offset: u64,
-    pub(crate) epoch: u64,
 }
 
 pub(crate) fn decoder_changed_event(data: DecoderChangedEventData<'_>) -> DecoderEvent {
@@ -334,7 +117,6 @@ pub(crate) fn decoder_changed_event(data: DecoderChangedEventData<'_>) -> Decode
         channels: data.spec.channels,
         bit_depth: None,
         bitrate: None,
-        epoch: data.epoch,
         cause: data.cause,
         variant: data.media_info.and_then(|info| info.variant_index),
         base_offset: data.base_offset,
@@ -394,7 +176,6 @@ where
         active: host_sample_rate != source_sample_rate && backend.name() != "none",
     })
 }
-
 #[cfg(test)]
 mod tests {
     use kithara_events::EventBus;

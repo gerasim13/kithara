@@ -1,24 +1,13 @@
-use std::{num::NonZeroUsize, ops::Range};
+use std::ops::Range;
 
 use kithara_platform::time::Duration;
 use kithara_signal::{
     AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, InterleavedView, SignalError,
 };
 use kithara_stream::PlayheadWrite;
-use kithara_test_utils::kithara;
 
-use super::{
-    ConsumerPhase, DecodeError, PendingReason, ReadOutcome, chunk_position,
-    event::AudioEvents,
-    ring::{RecvCtx, RingConsumer, Wait},
-};
-use crate::SourceSpan;
-
-#[derive(Clone, Copy)]
-pub(super) struct CursorRead {
-    pub(super) first_output_meta: Option<AudioChunkInfo>,
-    pub(super) outcome: ReadOutcome,
-}
+use super::chunk_position;
+use crate::{DecodeError, SourceSpan};
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
@@ -36,16 +25,24 @@ impl ChunkCursor {
         }
     }
 
+    pub(super) const fn set_spec(&mut self, spec: AudioSpec) {
+        self.spec = spec;
+    }
+
     pub(super) const fn begin_chunk(&mut self, chunk: &AudioChunk) {
         self.spec = chunk.spec();
         self.current_chunk_consumed_frames = 0;
+    }
+
+    pub(super) const fn consumed_frames(&self) -> u64 {
+        self.current_chunk_consumed_frames
     }
 
     pub(super) const fn clear(&mut self) {
         self.current_chunk_consumed_frames = 0;
     }
 
-    fn copy_into(
+    pub(super) fn copy_into(
         &mut self,
         chunk: &AudioChunk,
         source_span: Option<SourceSpan>,
@@ -113,149 +110,15 @@ impl ChunkCursor {
             output_frames: take_frames,
         })
     }
-
-    #[kithara::measure]
-    pub(super) fn read(
-        &mut self,
-        ring: &mut RingConsumer,
-        events: &mut AudioEvents,
-        playhead: &dyn PlayheadWrite,
-        recv: RecvCtx<'_>,
-        buf: &mut [f32],
-    ) -> Result<CursorRead, DecodeError> {
-        self.read_into(ring, events, playhead, recv, ReadBuffer::Interleaved(buf))
-    }
-
-    #[kithara::hang_watchdog]
-    fn read_into(
-        &mut self,
-        ring: &mut RingConsumer,
-        events: &mut AudioEvents,
-        playhead: &dyn PlayheadWrite,
-        recv: RecvCtx<'_>,
-        mut output: ReadBuffer<'_, '_>,
-    ) -> Result<CursorRead, DecodeError> {
-        let capacity = output.capacity()?;
-        if capacity == 0 {
-            return Ok(pending(playhead, PendingReason::Buffering));
-        }
-        match ring.phase {
-            ConsumerPhase::AtEof if ring.current_chunk.is_none() => {
-                return Ok(eof(playhead));
-            }
-            ConsumerPhase::Failed { source } => {
-                return Err(DecodeError::audio_stream("cursor read", source));
-            }
-            _ => {}
-        }
-
-        let mut written = 0;
-        let mut first_output_meta = None;
-        let mut source_span = None;
-        let mut source_output_frames = 0_u64;
-        while written < capacity {
-            hang_tick!();
-
-            if let Some(chunk) = ring.current_chunk.as_ref() {
-                let chunk_source_span = ring.current_source_span;
-                if written > 0
-                    && !source_spans_coalesce(
-                        source_span,
-                        source_output_frames,
-                        chunk_source_span,
-                        u64::from(chunk.meta.frames),
-                    )
-                {
-                    break;
-                }
-                let copied =
-                    self.copy_into(chunk, chunk_source_span, &mut output, written, playhead)?;
-                if copied.count > 0 {
-                    hang_reset!();
-                    first_output_meta.get_or_insert(chunk.meta);
-                    written += copied.count;
-                    if let Some(next) = copied.source_span {
-                        source_span =
-                            source_span.map_or(Some(next), |current| current.followed_by(next));
-                        source_output_frames = source_output_frames
-                            .checked_add(copied.output_frames)
-                            .ok_or(DecodeError::SampleCountOverflow {
-                                frames: source_output_frames,
-                                channels: 1,
-                            })?;
-                    }
-                }
-                if copied.finished {
-                    ring.recycle_current();
-                } else if copied.count == 0 {
-                    break;
-                }
-            }
-
-            if written >= capacity {
-                break;
-            }
-            let was_playing = ring.phase == ConsumerPhase::Playing;
-            let filled = ring.fill(self, recv, Wait::ForProducer);
-            events.fill_result(
-                filled,
-                was_playing,
-                ring.phase.is_terminal(),
-                playhead.position(),
-                ring.validator.epoch,
-            );
-            if !filled {
-                break;
-            }
-        }
-
-        if let Some(count) = NonZeroUsize::new(written) {
-            let position = playhead.position();
-            debug_assert!(count.get() <= capacity);
-            debug_assert!(
-                playhead
-                    .duration()
-                    .is_none_or(|duration| position <= duration)
-            );
-            return Ok(CursorRead {
-                first_output_meta,
-                outcome: ReadOutcome::Frames {
-                    count,
-                    position,
-                    source_span,
-                },
-            });
-        }
-
-        Ok(match ring.phase {
-            ConsumerPhase::AtEof => eof(playhead),
-            ConsumerPhase::Failed { source } => {
-                return Err(DecodeError::audio_stream("cursor read", source));
-            }
-            ConsumerPhase::SeekPending { .. } => pending(playhead, PendingReason::SeekInProgress),
-            _ => pending(playhead, PendingReason::Buffering),
-        })
-    }
-
-    pub(super) fn read_planar<'a>(
-        &mut self,
-        ring: &mut RingConsumer,
-        events: &mut AudioEvents,
-        playhead: &dyn PlayheadWrite,
-        recv: RecvCtx<'_>,
-        output: &'a mut [&'a mut [f32]],
-    ) -> Result<CursorRead, DecodeError> {
-        self.read_into(ring, events, playhead, recv, ReadBuffer::Planar(output))
-    }
 }
 
-enum ReadBuffer<'a, 'b> {
+pub(super) enum ReadBuffer<'a, 'b> {
     Interleaved(&'a mut [f32]),
     Planar(&'a mut [&'b mut [f32]]),
 }
 
 impl ReadBuffer<'_, '_> {
-    fn capacity(&self) -> Result<usize, DecodeError> {
+    pub(super) fn capacity(&self) -> Result<usize, DecodeError> {
         match self {
             Self::Interleaved(output) => Ok(output.len()),
             Self::Planar(output) => {
@@ -314,14 +177,14 @@ impl ReadBuffer<'_, '_> {
     }
 }
 
-struct CopyOutcome {
-    source_span: Option<SourceSpan>,
-    finished: bool,
-    output_frames: u64,
-    count: usize,
+pub(super) struct CopyOutcome {
+    pub(super) source_span: Option<SourceSpan>,
+    pub(super) finished: bool,
+    pub(super) output_frames: u64,
+    pub(super) count: usize,
 }
 
-fn source_spans_coalesce(
+pub(super) fn source_spans_coalesce(
     current: Option<SourceSpan>,
     current_output_frames: u64,
     next: Option<SourceSpan>,
@@ -373,26 +236,6 @@ fn interpolated_position(meta: AudioChunkInfo, consumed_frames: u64) -> Duration
     let nanos = u64::try_from(interpolated).unwrap_or(u64::MAX);
     Duration::from_nanos(nanos)
 }
-
-fn pending(playhead: &dyn PlayheadWrite, reason: PendingReason) -> CursorRead {
-    CursorRead {
-        outcome: ReadOutcome::Pending {
-            reason,
-            position: playhead.position(),
-        },
-        first_output_meta: None,
-    }
-}
-
-fn eof(playhead: &dyn PlayheadWrite) -> CursorRead {
-    CursorRead {
-        outcome: ReadOutcome::Eof {
-            position: playhead.position(),
-        },
-        first_output_meta: None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{num::NonZeroU32, sync::atomic::AtomicU64};

@@ -4375,6 +4375,7 @@ dependencies = [
  "kithara-file",
  "kithara-hls",
  "kithara-host",
+ "kithara-link",
  "kithara-net",
  "kithara-output",
  "kithara-platform",
@@ -5550,6 +5551,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-link"
+version = "0.0.1-alpha5"
+dependencies = [
+ "kithara-beat",
+ "kithara-command",
+ "kithara-config",
+ "kithara-events",
+ "kithara-host",
+ "kithara-platform",
+ "kithara-play",
+ "kithara-queue",
+ "kithara-render",
+ "kithara-signal",
+ "kithara-test-utils",
+ "kithara-warp",
+ "kithara-workspace-hack",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "kithara-mp4"
 version = "0.0.1-alpha5"
 dependencies = [
@@ -5949,6 +5971,7 @@ dependencies = [
 name = "kithara-stream"
 version = "0.0.1-alpha5"
 dependencies = [
+ "arc-swap",
  "bitflags 2.13.0",
  "bon",
  "delegate",

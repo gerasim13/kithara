@@ -1,7 +1,5 @@
 use kithara_abr::{AbrTicket, VariantIndex};
 
-use crate::seek::SeekEpoch;
-
 /// Result of publishing an audio-approved incoming variant.
 #[must_use]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -12,39 +10,28 @@ pub enum VariantPromotion {
     /// The transition is still exact, but publication is temporarily locked or
     /// its move-only reader has not been transferred yet.
     Deferred,
-    /// The transition was superseded, aborted, promoted, or invalidated by a
-    /// seek epoch change.
+    /// The transition was superseded, aborted, or already promoted.
     Stale,
 }
 
-/// Exact identity of one variant transition in one seek epoch.
+/// Exact identity of one variant transition for one accepted ABR request.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub struct VariantTransitionId {
     abr_ticket: AbrTicket,
-    seek_epoch: SeekEpoch,
 }
 
 impl VariantTransitionId {
-    /// Bind an accepted ABR request to the seek epoch that observed it.
+    /// Bind an accepted ABR request to its source transition.
     #[must_use]
-    pub const fn new(abr_ticket: AbrTicket, seek_epoch: SeekEpoch) -> Self {
-        Self {
-            abr_ticket,
-            seek_epoch,
-        }
+    pub const fn new(abr_ticket: AbrTicket) -> Self {
+        Self { abr_ticket }
     }
 
     /// Accepted ABR request carried by this transition.
     #[must_use]
     pub const fn abr_ticket(self) -> AbrTicket {
         self.abr_ticket
-    }
-
-    /// Seek epoch in which the request was prepared.
-    #[must_use]
-    pub const fn seek_epoch(self) -> SeekEpoch {
-        self.seek_epoch
     }
 }
 
@@ -113,7 +100,6 @@ impl VariantTransition {
         self.outgoing_disposition
     }
 }
-
 #[cfg(test)]
 mod tests {
     use kithara_abr::{AbrMode, AbrReason, AbrState, PendingAbrDecision, VariantIndex};

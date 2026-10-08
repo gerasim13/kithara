@@ -18,10 +18,11 @@ use kithara_test_utils::kithara;
 use tracing::debug;
 
 use crate::{
-    DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor, consts,
+    DeferredWake, MediaInfo, SourcePhase, SourceSeekAnchor,
+    activity::{Activity, ActivityWriter},
+    consts,
     error::{SourceError, StreamError, StreamResult},
     playhead::PlayheadWrite,
-    seek_state::{Activity, SeekControl, SeekObserve},
     source::{NotReadyCause, PendingReason, ReadOutcome, Source, VariantControl},
 };
 
@@ -99,21 +100,14 @@ impl StreamSeekPastEof {
 
 /// Typed payload of an `io::Error` (kind [`ErrorKind::Interrupted`])
 /// emitted by `impl Read for Stream` when the underlying source could
-/// not satisfy the read this call. Both `SeekPending` and
-/// `NotReady`/`Retry` surface as `Interrupted` so demuxers (notably
-/// Symphonia's fragmented MP4 reader) treat the pause as a transient
-/// cooperative interruption and let `kithara-decode::is_seek_pending_io`
-/// classify the failure correctly — the previous `WouldBlock` mapping
-/// was treated as a hard "would block" by Symphonia's seek path and
-/// corrupted the demuxer cursor on partial reads. Carries the
-/// [`PendingReason`] verbatim plus a snapshot of source/timeline state
+/// not satisfy the read this call. `NotReady`/`Retry` surface as `Interrupted`
+/// so demuxers can distinguish transient source backpressure from terminal
+/// failures. Carries the [`PendingReason`] verbatim plus a snapshot of source state
 /// at the wrap site, so callers downcasting from `io::Error` recover
 /// both *what* stalled and *why* without having to instrument their
 /// own decoder.
 #[derive(Debug, Clone, Copy, derive_more::Display)]
-#[display(
-    "{reason}: pos={pos} want={want} len={len:?} phase={phase:?} epoch={epoch} flushing={flushing}"
-)]
+#[display("{reason}: pos={pos} want={want} len={len:?} phase={phase:?}")]
 #[non_exhaustive]
 #[derive(derive_more::Error)]
 #[error(ignore)]
@@ -121,8 +115,6 @@ pub struct StreamPending {
     pub(crate) len: Option<u64>,
     pub(crate) reason: PendingReason,
     pub(crate) phase: SourcePhase,
-    pub(crate) flushing: bool,
-    pub(crate) epoch: u64,
     pub(crate) pos: u64,
     pub(crate) want: usize,
 }
@@ -136,15 +128,11 @@ impl StreamPending {
         want: usize,
         len: Option<u64>,
         phase: SourcePhase,
-        epoch: u64,
-        flushing: bool,
     ) -> Self {
         Self {
             len,
             reason,
             phase,
-            flushing,
-            epoch,
             pos,
             want,
         }
@@ -281,26 +269,19 @@ impl<T: StreamType> Stream<T> {
             pub fn take_reader_event_sink(&mut self) -> Option<crate::BoxedEventSink>;
             /// Optional byte-map handle for segment-aware decoders.
             pub fn byte_map(&self) -> Option<Arc<dyn crate::ByteMap>>;
-            /// Optional control-plane hook that rebuilds the byte space for a seek before its epoch
-            /// is minted.
-            pub fn seek_prepare(&self) -> Option<Arc<dyn crate::SeekPrepare>>;
             /// Absolute byte-position set — used by [`Stream::seek`] callers
             /// and audio FSM landings. Forwards to the source's atomic cursor.
             pub fn set_position(&self, pos: u64);
-            /// Narrow activity handle — set/query the `PLAYING` flag.
+            /// Read-only playback-activity snapshot.
             #[must_use]
-            pub fn activity(&self) -> Arc<dyn Activity>;
+            pub fn activity(&self) -> Activity;
+            /// Transfer the sole publisher to the audio chain.
+            pub fn take_activity_writer(&mut self) -> Option<ActivityWriter>;
             /// Narrow mutating playhead handle — position + duration.
             #[must_use]
             pub fn playhead_write(&self) -> Arc<dyn PlayheadWrite>;
             /// Get current read position.
             pub fn position(&self) -> u64;
-            /// Narrow seek-control handle — begin / complete / `mark_pending`.
-            #[must_use]
-            pub fn seek_control(&self) -> Arc<dyn SeekControl>;
-            /// Narrow seek-observe handle — read seek state without mutation.
-            #[must_use]
-            pub fn seek_observe(&self) -> Arc<dyn SeekObserve>;
             /// Optional HLS-only variant-coordination handle — `Some` for adaptive
             /// sources (HLS), `None` otherwise.
             #[must_use]
@@ -374,7 +355,7 @@ impl<T: StreamType> Stream<T> {
     /// # Errors
     ///
     /// Returns [`StreamReadError::Source`] only when the underlying source
-    /// reports a genuine I/O failure. Backpressure, seek-pending, and a
+    /// reports a genuine I/O failure. Backpressure and a
     /// variant fence are non-errors — they surface as `Ok(Pending(..))`.
     pub fn try_read(&mut self, buf: &mut [u8]) -> Result<StreamReadOutcome, StreamReadError> {
         self.try_read_with(buf, WaitMode::Probe)
@@ -397,9 +378,7 @@ impl<T: StreamType> Stream<T> {
             });
         }
 
-        let seek_obs = self.source.seek_observe();
         loop {
-            let read_epoch = seek_obs.epoch();
             let pos = self.source.position();
             let requested_end = pos.saturating_add(buf.len() as u64);
             let unit_end = if self.source.peer_wake().is_some() {
@@ -426,9 +405,6 @@ impl<T: StreamType> Stream<T> {
             let wait_outcome = match wait_result {
                 Ok(outcome) => outcome,
                 Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {
-                    if seek_obs.is_flushing() || seek_obs.epoch() != read_epoch {
-                        return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
-                    }
                     return Ok(StreamReadOutcome::Pending(PendingReason::NotReady(
                         NotReadyCause::WaitBudgetExhausted,
                     )));
@@ -443,17 +419,10 @@ impl<T: StreamType> Stream<T> {
                     return Ok(StreamReadOutcome::Eof { byte_position: pos });
                 }
                 WaitOutcome::Interrupted => {
-                    if seek_obs.is_flushing() {
-                        return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
-                    }
                     return Ok(StreamReadOutcome::Pending(PendingReason::NotReady(
                         NotReadyCause::WaitInterrupted,
                     )));
                 }
-            }
-
-            if seek_obs.epoch() != read_epoch {
-                return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
             }
 
             match self
@@ -462,9 +431,6 @@ impl<T: StreamType> Stream<T> {
                 .map_err(|e| StreamReadError::Source(IoError::other(e.to_string())))?
             {
                 ReadOutcome::Bytes(count) => {
-                    if seek_obs.epoch() != read_epoch {
-                        return Ok(StreamReadOutcome::Pending(PendingReason::SeekPending));
-                    }
                     hang_reset!();
                     self.source.advance(count.get() as u64);
                     let new_pos = self.source.position();
@@ -532,10 +498,6 @@ impl<T: StreamType> Stream<T> {
         match self.try_read(buf) {
             Ok(StreamReadOutcome::Bytes { count, .. }) => Ok(count.get()),
             Ok(StreamReadOutcome::Eof { .. }) => Ok(0),
-            Ok(StreamReadOutcome::Pending(reason @ PendingReason::SeekPending)) => {
-                self.arm_peer_wake();
-                Err(IoError::new(ErrorKind::Interrupted, reason))
-            }
             Ok(StreamReadOutcome::Pending(
                 reason @ (PendingReason::NotReady(_) | PendingReason::Retry),
             )) => {
@@ -657,10 +619,6 @@ impl<T: StreamType> Read for Stream<T> {
                     hang_tick!();
                     self.notify_peer_wake();
                 }
-                Ok(StreamReadOutcome::Pending(reason @ PendingReason::SeekPending)) => {
-                    self.notify_peer_wake();
-                    return Err(IoError::new(ErrorKind::Interrupted, reason));
-                }
                 Ok(StreamReadOutcome::Pending(PendingReason::VariantChange)) => {
                     return Err(IoError::other(VariantChangeError));
                 }
@@ -680,22 +638,19 @@ impl<T: StreamType> Stream<T> {
     /// `Pending(NotReady|Retry)` surfaced through `impl Read`. Pulls
     /// live source/timeline state at the moment of the wrap so the
     /// resulting `io::Error` carries the real reason ("data not ready
-    /// (`wait_budget_exhausted`): pos=N len=M phase=… epoch=E flushing=…")
+    /// (`wait_budget_exhausted`): pos=N len=M phase=…")
     /// instead of a bare "data not ready". Decoders downcast on
     /// `StreamPending` to recover the typed [`PendingReason`].
     fn snapshot_pending(&self, reason: PendingReason, want: usize) -> StreamPending {
         let pos = self.source.position();
         let len = self.source.len();
         let phase = self.source.phase_at(pos..pos.saturating_add(want as u64));
-        let seek_obs = self.source.seek_observe();
         StreamPending {
             reason,
             pos,
             want,
             len,
             phase,
-            epoch: seek_obs.epoch(),
-            flushing: seek_obs.is_flushing(),
         }
     }
 }
@@ -745,7 +700,6 @@ impl<T: StreamType> Seek for Stream<T> {
         Ok(new_pos)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{

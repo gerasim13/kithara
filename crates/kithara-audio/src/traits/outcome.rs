@@ -16,10 +16,6 @@ pub enum PendingReason {
     /// producer's most recent chunk and is waiting for the next one
     /// (mid-stream async pause, post-seek refill).
     Buffering,
-    /// A seek was issued; the consumer is waiting for the producer to
-    /// acknowledge the new epoch and deliver post-seek frames. Old
-    /// pre-seek frames have been drained.
-    SeekInProgress,
     /// Upstream stream-layer surfaced a pending status (network stall,
     /// retry, source-level backpressure). The reader will progress
     /// once the stream resumes.

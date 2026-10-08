@@ -21,7 +21,7 @@ use kithara_platform::{
         task::{spawn, yield_runnable},
     },
 };
-use kithara_stream::{Activity, DeferredWake, SeekObserve, WorkerWake};
+use kithara_stream::{Activity, DeferredWake, WorkerWake};
 use kithara_test_utils::kithara;
 
 use crate::{ids::duration_prefix, stream::HlsCoord, variant::PlanCtx};
@@ -36,25 +36,8 @@ where
     /// freshly resolved segment in `poll_next` to detect a boundary
     /// crossing. The initial value is set in [`HlsPeer::activate`].
     reader_segment: Arc<AtomicUsize>,
-    /// Narrow seek-observe handle — cloned from `HlsPeer.seek_obs` at
-    /// activation time. All epoch/target/pending reads use this directly
-    /// rather than routing through `coord.timeline`.
-    seek_obs: Arc<dyn SeekObserve>,
-    /// Target segment of an in-flight forward seek, held until the reader's
-    /// physical byte cursor catches up to it. `coord.position()` only
-    /// advances when the reader actually reads at the new offset, so right
-    /// after a forward seek it still resolves to the *pre-seek* segment until
-    /// the decoder recreate's first read lands (the off-RT `wait_range` is now
-    /// event-driven, but a native-backend recreate can still take several
-    /// scheduler polls). [`Self::apply_seek_change`] already aimed
-    /// `reader_segment` + the fetch plan at this target;
-    /// [`Self::apply_boundary_crossing`] honours it as a floor so a stale-low
-    /// resolved segment cannot drag the cursor back and re-plan the prefix.
-    /// Cleared once the reader physically resolves at/after the floor.
-    seek_settle_floor: Option<u32>,
     waker: Option<Waker>,
     eviction_rx: mpsc::UnboundedReceiver<ResourceKey>,
-    last_seek_epoch: u64,
     /// Variant the stored `reader_segment` was resolved against. A
     /// variant switch re-keys the byte space under an unmoved cursor:
     /// the same segment index now points at a different variant's bytes,
@@ -136,7 +119,7 @@ where
     abr: Arc<AbrState>,
     /// Narrow activity handle. Used by `priority()` to check whether
     /// the track is currently playing.
-    activity: Arc<dyn Activity>,
+    activity: Activity,
     /// Reader→peer wake channel. The HLS `Source` fires this whenever it
     /// advances the byte cursor or completes a seek, so `poll_next` runs
     /// again without waiting for the next downloader-driven wakeup. Owned
@@ -144,10 +127,6 @@ where
     /// of the peer, not of shared state.
     reader_advanced: Arc<DeferredWake>,
     reader_segment: Arc<AtomicUsize>,
-    /// Narrow seek-observe handle. Used by `poll_next`'s inner logic
-    /// (via `HlsTrackState`) to read the current epoch/target without
-    /// holding a wide seek/playhead aggregate.
-    seek_obs: Arc<dyn SeekObserve>,
     state: Arc<Mutex<Option<HlsTrackState<S>>>>,
     cancel: CancelToken,
     /// Wake-up trigger for the waker-forwarding micro-task: not a
@@ -169,16 +148,10 @@ impl<S> HlsPeer<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    pub(crate) fn new(
-        seek_obs: Arc<dyn SeekObserve>,
-        activity: Arc<dyn Activity>,
-        initial_mode: AbrMode,
-        cancel: CancelToken,
-    ) -> Self {
+    pub(crate) fn new(activity: Activity, initial_mode: AbrMode, cancel: CancelToken) -> Self {
         let abr = Arc::new(AbrState::new(initial_mode));
         let abr_publisher = abr.publisher();
         Self {
-            seek_obs,
             activity,
             abr,
             abr_publisher,
@@ -222,7 +195,6 @@ where
             look_ahead_segments: coord.look_ahead_segments,
             bus: active.event_bus(),
             scope: coord.scope.clone(),
-            seek_epoch: self.seek_obs.epoch(),
             signal: coord.signal(),
         };
         active.rebuild(&plan_ctx, initial_seg);
@@ -234,10 +206,7 @@ where
             *guard = Some(HlsTrackState {
                 reader_variant: coord.variant_index(),
                 coord,
-                seek_obs: Arc::clone(&self.seek_obs),
                 eviction_rx,
-                last_seek_epoch: 0,
-                seek_settle_floor: None,
                 reader_segment: Arc::clone(&self.reader_segment),
                 waker: None,
             });
@@ -515,12 +484,10 @@ where
         }
         let ctx = state.plan_ctx();
 
-        state.apply_seek_change(&coord, &ctx);
         let seg_at_reader = state.apply_boundary_crossing(&coord, &ctx);
         let needs_retick = coord.reconcile_escape(seg_at_reader);
         let evictions = state.drain_evictions();
         drop(guard);
-        coord.sync_abr_lock();
         if needs_retick {
             coord.abr.reevaluate();
         }
@@ -556,19 +523,6 @@ where
         self.reader_variant = variant_now;
         let demand_segment = coord.demand_segment_at_offset(pos);
         let resolved = demand_segment.unwrap_or_else(|| u32::try_from(prev).unwrap_or(0));
-        if let Some(floor) = self.seek_settle_floor {
-            if demand_segment.is_some_and(|idx| idx >= floor) {
-                self.seek_settle_floor = None;
-            } else if let Some(landing) = demand_segment
-                && floor.saturating_sub(landing) == 1
-            {
-                coord.active().rebuild(ctx, landing);
-                self.seek_settle_floor = Some(landing);
-                return landing;
-            } else {
-                return floor;
-            }
-        }
         let resolved_us = resolved as usize;
         let boundary_crossed = prev != resolved_us;
         if boundary_crossed {
@@ -584,27 +538,6 @@ where
             coord.active().rebuild(ctx, resolved);
         }
         resolved
-    }
-
-    fn apply_seek_change(&mut self, coord: &HlsCoord<S>, ctx: &PlanCtx<S>) {
-        let cur_seek = self.seek_obs.epoch();
-        if cur_seek == self.last_seek_epoch {
-            return;
-        }
-        self.last_seek_epoch = cur_seek;
-        kithara::probe_event!(
-            seek_epoch_reset,
-            seek_epoch = cur_seek,
-            segment_index = self.reader_segment.load(Ordering::Acquire),
-            variant = coord.variant_index()
-        );
-        if let Some(target) = self.seek_obs.target()
-            && let Some(seg) = coord.active().rebuild_at_time(ctx, target)
-        {
-            self.reader_segment.store(seg as usize, Ordering::Release);
-            self.reader_variant = coord.variant_index();
-            self.seek_settle_floor = Some(seg);
-        }
     }
 
     /// Drain the eviction channel into a local buffer so the broadcast
@@ -623,12 +556,10 @@ where
             scope: self.coord.scope.clone(),
             config: Arc::clone(&self.coord.config),
             look_ahead_segments: self.coord.look_ahead_segments,
-            seek_epoch: self.seek_obs.epoch(),
             signal: self.coord.signal(),
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use kithara_stream::SeekState;

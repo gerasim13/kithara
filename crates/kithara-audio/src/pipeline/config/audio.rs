@@ -1,4 +1,4 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroU32;
 
 use kithara_config::Config;
 use kithara_derive::Patch;
@@ -8,24 +8,9 @@ use kithara_resampler::{NoResamplerBackend, ResamplerBackend};
 use kithara_stream::{MediaInfo, StreamType};
 
 use crate::{
-    consts,
     pipeline::config::{AudioDecoderConfig, AudioDecoderConfigPatch},
     traits::AudioObserver,
 };
-
-/// The consumer's thread capability: how it wakes the decode worker after
-/// draining its ring, and how its reader-born events reach the bus.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum ConsumerWakeMode {
-    /// Arm a coalesced scheduler pass without signaling a thread gate.
-    #[default]
-    RealtimeDeferred,
-    /// Unpark the worker's thread, for a consumer off the real-time thread.
-    /// Marks the consumer's read path as free to block, so reader-born events
-    /// publish inline instead of waiting for a scheduler-shell flush.
-    ImmediateOffRt,
-}
 
 /// Configuration for audio pipeline with stream config.
 ///
@@ -47,16 +32,6 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
         get(ref)
     )]
     pub(crate) stream: T::Config,
-    /// Consumer wake capability for ring pops and reader-event delivery. Not
-    /// a document key: a player-managed resource has this value overwritten
-    /// with its session's wake policy, and declaring `ImmediateOffRt` here
-    /// would make a player-bound resource publish reads inline on the render
-    /// callback.
-    #[config(value, builder(default), patch(skip), get(copy))]
-    pub consumer_wake_mode: ConsumerWakeMode,
-    /// Number of chunks to buffer before signaling preload readiness.
-    #[config(value, builder(default = NonZeroUsize::new(consts::PRELOAD_CHUNKS).expect("preload chunk count is non-zero")), get(copy))]
-    pub preload_chunks: NonZeroUsize,
     /// Target sample rate of the audio host (for resampling). Not a document
     /// key: this is the rate the audio host actually opened, and the
     /// resource-preparation step that shares a player's engine always
@@ -68,16 +43,6 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
         get(copy)
     )]
     pub host_sample_rate: Option<NonZeroU32>,
-    /// Make audio-thread reads block on a producer-ring underrun instead of
-    /// zero-filling. Not a document key: the shipped binary is a real-time
-    /// host whose audio callback can never block; only an offline harness or
-    /// a player's own session policy sets this explicitly.
-    #[config(value, builder(default), patch(skip), get(copy))]
-    pub block_on_underrun: bool,
-    /// Output-ring depth in producer chunks. Default: 10 on native, 32 on
-    /// wasm32.
-    #[config(value, builder(default = consts::AUDIO_BUFFER_CHUNKS), get(copy))]
-    pub audio_buffer_chunks: usize,
     /// Decoder construction settings, including decoder-side resampling. A
     /// document names it under `audio.decoder`.
     #[config(
@@ -135,7 +100,6 @@ where
         self.media_info.as_ref()
     }
 }
-
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod document_tests {
     use std::num::NonZeroUsize;

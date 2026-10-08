@@ -11,12 +11,12 @@ use kithara_storage::WaitOutcome;
 use kithara_test_utils::kithara;
 
 use crate::{
+    activity::{Activity, ActivityWriter},
     error::StreamResult,
     media::MediaInfo,
     playhead::{PlayheadRead, PlayheadWrite},
     profile::ReaderProfile,
     reader::{VariantReaderPlan, VariantReaderTake},
-    seek_state::{Activity, SeekControl, SeekObserve},
     transition::{VariantPromotion, VariantTransition},
     wake::{DeferredWake, WorkerWake},
 };
@@ -71,12 +71,10 @@ pub enum SourcePhase {
     Eof,
     /// Requested range is available for non-blocking read.
     Ready,
-    /// Active seek in progress — decoder should be interrupted.
-    Seeking,
     /// Default: data not yet available, no specific sub-state.
     #[default]
     Waiting,
-    /// On-demand request is queued or already in flight for this seek epoch.
+    /// On-demand request is queued or already in flight for this reader.
     WaitingDemand,
     /// Metadata lookup needed before data can be requested.
     WaitingMetadata,
@@ -130,11 +128,6 @@ pub trait SourceProbe: Send + Sync + 'static {
 #[derive(derive_more::Error)]
 #[error(ignore)]
 pub enum PendingReason {
-    /// A seek is pending (consumer flagged the timeline). The caller
-    /// must abort the current read and let the seek apply — do **not**
-    /// retry from the same byte offset.
-    #[display("seek pending")]
-    SeekPending,
     /// Data is not yet available at the requested range. Transient —
     /// caller may retry after backoff. The inner [`NotReadyCause`] tells
     /// which point in the read pipeline failed to make progress (wait
@@ -174,10 +167,10 @@ pub enum NotReadyCause {
     /// budget. Typical when a fetch is slower than the read deadline.
     #[display("wait budget exhausted")]
     WaitBudgetExhausted,
-    /// `wait_range` returned `Interrupted` without an active flush, also
+    /// `wait_range` returned `Interrupted` without a terminal interruption, also
     /// past the spin budget — the downloader woke us but range still
     /// wasn't satisfied. Typical sign of a flapping ABR/eviction race.
-    #[display("wait interrupted, no flush")]
+    #[display("wait interrupted, source wait")]
     WaitInterrupted,
     /// `wait_range` reported ready but `read_at` then returned `Pending`
     /// with a non-`Retry` reason — surfaced verbatim from the source.
@@ -238,7 +231,10 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     }
 
     /// Narrow handle to the playback-activity flag.
-    fn activity(&self) -> Arc<dyn Activity>;
+    fn activity(&self) -> Activity;
+
+    /// Transfer the single publisher to the owning audio chain.
+    fn take_activity_writer(&mut self) -> Option<ActivityWriter>;
 
     /// Advance the byte cursor by `n` bytes after a successful read.
     fn advance(&self, n: u64);
@@ -333,18 +329,6 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     ///
     /// Returns an error if the read fails or the source is in an invalid state.
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome>;
-
-    /// Narrow mutating handle to seek coordination (`FLUSH_START` / `FLUSH_STOP`).
-    fn seek_control(&self) -> Arc<dyn SeekControl>;
-
-    /// Narrow read-only handle to seek/flush coordination state.
-    fn seek_observe(&self) -> Arc<dyn SeekObserve>;
-
-    /// Control-plane hook run once per seek, before the epoch is minted. Sources with a fixed byte
-    /// space keep the default `None`.
-    fn seek_prepare(&self) -> Option<Arc<dyn SeekPrepare>> {
-        None
-    }
 
     /// Absolute set of the byte cursor — used by [`Stream::seek`] and
     /// post-seek landings. Sources implement this via the same atomic
@@ -453,7 +437,7 @@ pub trait VariantControl: Send + Sync + 'static {
     ) -> StreamResult<Option<VariantTransition>>;
 
     /// Publish the incoming variant only when `transition` still identifies
-    /// the exact pending ABR intent in the same seek epoch.
+    /// the exact pending ABR intent and its prepared source session.
     fn promote_variant(&self, transition: VariantTransition) -> VariantPromotion;
 
     /// Transfer the prepared reader exactly once. The typed result keeps
@@ -476,17 +460,6 @@ pub trait VariantControl: Send + Sync + 'static {
     fn transition_demand_in_flight(&self, _transition: VariantTransition) -> bool {
         false
     }
-}
-
-/// Rebuilds a source's byte space for a seek about to begin.
-///
-/// The rebuild takes the layout's write lock, so it cannot run on the produce core where the reader
-/// resolves its anchor. Running it before the epoch exists leaves every later observer reading a
-/// layout that matches the seek.
-pub trait SeekPrepare: Send + Sync + 'static {
-    /// Collapse the byte space onto the geometry a seek resolves against. Idempotent: a repeated
-    /// call for the same layout is a no-op.
-    fn prepare(&self);
 }
 
 /// Segment-table view exposed by segmented sources (HLS, fragmented
@@ -560,7 +533,6 @@ pub trait ByteMap: Send + Sync + 'static {
     /// Total number of segments in the current layout variant.
     fn segment_count(&self) -> Option<u32>;
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};

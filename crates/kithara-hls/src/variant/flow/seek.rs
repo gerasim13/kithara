@@ -33,9 +33,7 @@ where
             .store(Self::NO_SEEK_TAIL, Ordering::Release);
     }
 
-    /// Resolve a time seek to its byte anchor on the produce core: lock-free
-    /// layout reads plus atomic anchor stores. The fetch plan belongs to the
-    /// download peer (`apply_seek_change` -> `rebuild_at_time`).
+    /// Resolve the target and replace the source's ordered fetch plan.
     pub(crate) fn prepare_seek_time_anchor(
         &self,
         position: Duration,
@@ -79,6 +77,12 @@ where
         self.set_seek_alias(byte_offset, seg_idx_u32);
         self.set_segment_aware_seek_tail(fetch_start);
         self.set_exact_seek_demand(byte_offset, seg_idx_u32);
+        self.flow.reader.clear_wait();
+        if self.fetch_plan_satisfied(fetch_start) {
+            self.flow.queue.lock().replace_with(std::iter::empty());
+        } else {
+            self.rebuild_queue(fetch_start, None);
+        }
         Ok(Some(anchor))
     }
 
