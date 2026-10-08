@@ -1,7 +1,7 @@
 use crate::{
     atoms::{
         bar::preset::{Preset, PresetData},
-        button::{Button, ButtonLabel, VisualState},
+        button::{ButtonLabel, VisualState},
         deck::summary::{Loaded, Summary},
         design::{
             fader::Fader,
@@ -158,23 +158,6 @@ impl ControlPainter for Fader {
 pub(crate) struct ButtonData {
     pub(crate) label: ButtonLabel<String>,
     pub(crate) active: bool,
-}
-
-impl ControlPainter for Button {
-    type Data = ButtonData;
-
-    const READS_POINTER: bool = true;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        state: VisualState,
-    ) {
-        self.paint(list, text, &data.label, data.active, bounds, state);
-    }
 }
 
 impl ControlPainter for StatusDot {

@@ -26,7 +26,12 @@ pub(crate) struct ButtonLabel<Words> {
     pub(crate) label: Words,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = crate::atoms::painter::ButtonData,
+    reads_pointer = true,
+    draw = self.paint(list, text, &data.label, data.active, bounds, state)
+)]
 pub(crate) struct Button {
     active: Face,
     idle: Face,
