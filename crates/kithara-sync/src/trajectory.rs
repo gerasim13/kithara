@@ -1,10 +1,9 @@
 use std::num::{NonZeroU16, NonZeroU32};
 
-use kithara_host::api::Tempo;
 use kithara_signal::SessionFrame;
 use kithara_warp::{SessionAnchor, SessionBeat};
 
-use crate::LinkError;
+use crate::{Tempo, TrajectoryError};
 
 /// Host tempo over session time, with continuous beats at every tempo step.
 #[derive(Clone, Debug)]
@@ -37,9 +36,9 @@ impl TempoTrajectory {
     ///
     /// # Errors
     /// Returns a refusal for an occupied frame or a frame at or before the anchor.
-    pub fn push(&mut self, frame: SessionFrame, tempo: Tempo) -> Result<(), LinkError> {
+    pub fn push(&mut self, frame: SessionFrame, tempo: Tempo) -> Result<(), TrajectoryError> {
         if frame <= self.steps[0].frame {
-            return Err(LinkError::BeforeAnchor { frame });
+            return Err(TrajectoryError::BeforeAnchor { frame });
         }
         let index = self.steps.partition_point(|step| step.frame < frame);
         if self
@@ -47,7 +46,7 @@ impl TempoTrajectory {
             .get(index)
             .is_some_and(|step| step.frame == frame)
         {
-            return Err(LinkError::Occupied { frame });
+            return Err(TrajectoryError::Occupied { frame });
         }
         let beat = self.beat_at(frame);
         self.steps.insert(index, TempoStep { frame, beat, tempo });
@@ -66,6 +65,9 @@ impl TempoTrajectory {
     }
 
     /// The continuous beat at a session frame.
+    ///
+    /// # Panics
+    /// Panics if the requested frame's beat is not representable on the session axis.
     #[must_use]
     pub fn beat_at(&self, frame: SessionFrame) -> SessionBeat {
         let index = self
@@ -84,10 +86,8 @@ impl TempoTrajectory {
     /// Panics if the requested beat lies outside the representable session axis.
     #[must_use]
     pub fn frame_at(&self, beat: SessionBeat) -> SessionFrame {
-        match self.try_frame_at(beat) {
-            Some(frame) => frame,
-            None => panic!("session frame is not representable"),
-        }
+        self.try_frame_at(beat)
+            .unwrap_or_else(|| panic!("session frame is not representable"))
     }
 
     pub(crate) fn try_frame_at(&self, beat: SessionBeat) -> Option<SessionFrame> {
@@ -130,7 +130,8 @@ impl TempoTrajectory {
         });
     }
 
-    pub(crate) fn reaxis_observed(&mut self, anchor: SessionAnchor, tempo: Tempo) {
+    /// Reanchors the trajectory on observed session geometry and tempo.
+    pub fn reaxis_observed(&mut self, anchor: SessionAnchor, tempo: Tempo) {
         self.sample_rate = anchor.sample_rate();
         self.steps.clear();
         self.steps.push(TempoStep {
@@ -144,11 +145,14 @@ impl TempoTrajectory {
         f64::from(self.beats_per_bar.get())
     }
 
-    pub(crate) fn sample_rate(&self) -> NonZeroU32 {
+    /// The output sample rate used for beat and frame conversion.
+    #[must_use]
+    pub fn sample_rate(&self) -> NonZeroU32 {
         self.sample_rate
     }
 
-    pub(crate) fn initial_tempo(&mut self, tempo: Tempo) {
+    /// Changes the anchor tempo and keeps later tempo steps continuous.
+    pub fn initial_tempo(&mut self, tempo: Tempo) {
         self.steps[0].tempo = tempo;
         self.reanchor(1);
     }
@@ -241,5 +245,100 @@ mod tests {
         assert_eq!(f64::from(host.beat_at(SessionFrame::new(192_000))), 8.0);
         host.withdraw(SessionFrame::new(0));
         assert_eq!(host.tempo_at(SessionFrame::new(0)), Tempo::DEFAULT);
+    }
+
+    #[kithara::test]
+    fn a_tempo_step_preserves_the_beat_at_its_commit_frame() {
+        let mut host = TempoTrajectory::new(
+            TempoStep {
+                frame: SessionFrame::new(0),
+                beat: SessionBeat::default(),
+                tempo: Tempo::new(120.0).expect("valid tempo"),
+            },
+            NonZeroU16::new(4).expect("nonzero meter"),
+            NonZeroU32::new(48_000).expect("nonzero rate"),
+        );
+        let now = SessionFrame::new(48_000);
+        let before = host.beat_at(now);
+        host.push(now, Tempo::new(90.0).expect("valid tempo"))
+            .expect("unoccupied frame after the anchor");
+
+        assert_eq!(host.beat_at(now), before);
+        assert_eq!(f64::from(host.beat_at(now)), 2.0);
+        assert_eq!(f64::from(host.beat_at(SessionFrame::new(96_000))), 3.5);
+        assert_eq!(host.tempo_at(now).beats_per_minute(), 90.0);
+    }
+
+    #[kithara::test]
+    fn every_block_tempo_step_lands_at_its_requested_frame() {
+        let mut host = TempoTrajectory::new(
+            TempoStep {
+                frame: SessionFrame::new(0),
+                beat: SessionBeat::default(),
+                tempo: Tempo::new(120.0).expect("valid tempo"),
+            },
+            NonZeroU16::new(4).expect("nonzero meter"),
+            NonZeroU32::new(48_000).expect("nonzero rate"),
+        );
+        for step in 0..16_i64 {
+            let target = if step % 2 == 0 { 124.0 } else { 116.0 };
+            let at = SessionFrame::new(step * 128);
+            let before = host.beat_at(at);
+            let tempo = Tempo::new(target).expect("valid tempo");
+            if step == 0 {
+                host.initial_tempo(tempo);
+            } else {
+                host.push(at, tempo).expect("each block has its own frame");
+            }
+            let played = host.tempo_at(at).beats_per_minute();
+
+            assert!((115.999..=124.001).contains(&played), "step {step}: tempo {played} left the knob range");
+            assert_eq!(played, target);
+            assert_eq!(host.beat_at(at), before);
+        }
+        for step in 0..16_i64 {
+            let target = if step % 2 == 0 { 124.0 } else { 116.0 };
+            assert_eq!(host.tempo_at(SessionFrame::new(step * 128)).beats_per_minute(), target);
+        }
+    }
+
+    #[kithara::test]
+    fn a_new_trajectory_starts_at_its_target_without_prior_geometry() {
+        let host = TempoTrajectory::new(
+            TempoStep {
+                frame: SessionFrame::new(48_000),
+                beat: SessionBeat::default(),
+                tempo: Tempo::new(120.0).expect("valid tempo"),
+            },
+            NonZeroU16::new(4).expect("nonzero meter"),
+            NonZeroU32::new(48_000).expect("nonzero rate"),
+        );
+
+        assert_eq!(f64::from(host.beat_at(SessionFrame::new(48_000))), 0.0);
+        assert_eq!(f64::from(host.beat_at(SessionFrame::new(96_000))), 2.0);
+        assert_eq!(host.tempo_at(SessionFrame::new(48_000)).beats_per_minute(), 120.0);
+    }
+
+    #[kithara::test]
+    fn refused_tempo_steps_name_the_anchor_or_occupied_frame() {
+        let mut host = TempoTrajectory::new(
+            TempoStep {
+                frame: SessionFrame::new(0),
+                beat: SessionBeat::default(),
+                tempo: Tempo::DEFAULT,
+            },
+            NonZeroU16::new(4).expect("nonzero meter"),
+            NonZeroU32::new(48_000).expect("nonzero rate"),
+        );
+
+        for frame in [-1, 0] {
+            let frame = SessionFrame::new(frame);
+            assert_eq!(host.push(frame, Tempo::DEFAULT), Err(TrajectoryError::BeforeAnchor { frame }));
+        }
+        let frame = SessionFrame::new(96_000);
+        host.push(frame, Tempo::new(60.0).expect("valid tempo")).expect("unoccupied frame");
+        assert_eq!(host.push(frame, Tempo::DEFAULT), Err(TrajectoryError::Occupied { frame }));
+        assert_eq!(host.tempo_at(frame).beats_per_minute(), 60.0);
+        assert_eq!(f64::from(host.beat_at(frame)), 4.0);
     }
 }

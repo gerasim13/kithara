@@ -21,6 +21,7 @@ kithara-play = { workspace = true, default-features = false }
 kithara-queue = { workspace = true, default-features = false }
 kithara-render = { workspace = true }
 kithara-signal = { workspace = true }
+kithara-sync = { workspace = true }
 kithara-warp = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

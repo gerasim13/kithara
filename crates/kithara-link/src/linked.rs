@@ -13,11 +13,12 @@ use kithara_render::{
     rt::DeckMixerConfig,
 };
 use kithara_signal::{FrameCount, SessionFrame};
+use kithara_sync::checked_correction;
 use kithara_warp::SpeedCurve;
 use tracing::warn;
 
 use crate::{
-    GridAnswer, LinkError, TempoTrajectory, covers, entry, jump_target, math::checked_correction,
+    GridAnswer, LinkError, TempoTrajectory, covers, entry, jump_target,
     phase_error, speed,
 };
 
@@ -83,7 +84,7 @@ pub enum SyncMode {
 }
 
 /// Synchronization progress beside the underlying track snapshot.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SyncStatus {
     Off,
     On,
@@ -308,16 +309,15 @@ impl<P> Linked<P> {
         }
         self.waiting = None;
         let result = match waiting {
-            Waiting::Load { .. } => Ok(None),
             Waiting::Play { at, .. } => self.apply(TrackCommand::Play { at }, out),
             Waiting::Seek { required } => self.apply(TrackCommand::Seek { to: required }, out),
             Waiting::Sync { .. } if self.synced() => self.sync(true, out),
-            Waiting::Sync { .. } => Ok(None),
+            Waiting::Load { .. } | Waiting::Sync { .. } => Ok(None),
         };
         match result {
             Ok(_) => {}
             Err(PlayError::Full(_) | PlayError::NotReady | PlayError::Untimed) => {
-                self.waiting = Some(waiting)
+                self.waiting = Some(waiting);
             }
             Err(error) => warn!(%error, "waiting linked command was refused"),
         }
@@ -463,10 +463,8 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
                         ));
                     }
                 };
-                let frame = match entry(&self.host, grid, required, Bound::AtOrAfter(bound)) {
-                    Some(frame) => frame,
-                    None => unreachable!("the grid covers the requested entry"),
-                };
+                let frame = entry(&self.host, grid, required, Bound::AtOrAfter(bound))
+                    .unwrap_or_else(|| unreachable!("the grid covers the requested entry"));
                 let sent = self.inner.apply(
                     TrackCommand::Play {
                         at: When::At(frame),
@@ -616,10 +614,11 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
                             .mark
                             .and_then(|mark| mark.session.frames_since(correction.at))
                             .unwrap_or(0);
-                        (correction.frames.get() as u64).saturating_sub(elapsed)
+                        usize::try_from(elapsed)
+                            .map_or(0, |elapsed| correction.frames.get().saturating_sub(elapsed))
                     });
                     SyncStatus::Correcting {
-                        remaining: FrameCount::new(remaining as usize),
+                        remaining: FrameCount::new(remaining),
                     }
                 }
                 None => SyncStatus::On,
@@ -909,11 +908,10 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
                 self.inner.snapshot().as_ref().status,
                 TrackStatus::Playing { .. }
             )
+            && let Err(error) = self.correct(at, false, out)
         {
-            if let Err(error) = self.correct(at, false, out) {
-                self.alignment = Some(false);
-                warn!(?at, %error, "tempo phase correction awaits a lane");
-            }
+            self.alignment = Some(false);
+            warn!(?at, %error, "tempo phase correction awaits a lane");
         }
     }
 }

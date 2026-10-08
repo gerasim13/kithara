@@ -5524,6 +5524,7 @@ dependencies = [
  "kithara-queue",
  "kithara-render",
  "kithara-signal",
+ "kithara-sync",
  "kithara-test-utils",
  "kithara-warp",
  "kithara-workspace-hack",
@@ -5678,6 +5679,7 @@ dependencies = [
  "kithara-render",
  "kithara-signal",
  "kithara-stream",
+ "kithara-sync",
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-macros",
@@ -5987,6 +5989,34 @@ dependencies = [
  "signalsmith-stretch",
  "smallvec",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "kithara-sync"
+version = "0.0.1-alpha5"
+dependencies = [
+ "fieldwork",
+ "kithara-beat",
+ "kithara-derive",
+ "kithara-signal",
+ "kithara-test-utils",
+ "kithara-warp",
+ "kithara-workspace-hack",
+ "num-traits",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "kithara-sync-tests"
+version = "0.0.1-alpha5"
+dependencies = [
+ "futures",
+ "kithara",
+ "kithara-integration-tests",
+ "kithara-test-dylib",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
 ]
 
 [[package]]

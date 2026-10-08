@@ -56,7 +56,7 @@ crates = ["kithara-audio", "kithara-effects", "kithara-warp"]
 [[layer]]
 index = 7
 name = "sync"
-crates = ["kithara-render"]
+crates = ["kithara-render", "kithara-sync"]
 
 [[layer]]
 index = 8
