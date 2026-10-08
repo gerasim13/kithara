@@ -655,11 +655,11 @@ impl<T: StreamType> Stream<T> {
         let len = self.source.len();
         let phase = self.source.phase_at(pos..pos.saturating_add(want as u64));
         StreamPending {
+            len,
             reason,
+            phase,
             pos,
             want,
-            len,
-            phase,
         }
     }
 }

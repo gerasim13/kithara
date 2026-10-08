@@ -78,30 +78,21 @@ fn slot(index: usize) -> Slot {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_audio::mock::{AudioReadMock, AudioSessionMock};
     use kithara_platform::{sync::Arc, time::Duration};
     use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
-    use unimock::{MockFn, Unimock, matching};
 
     use super::*;
     use crate::{
         rt::track::{PcmConsumer, PlayerResource},
         test_pools::pools,
+        worker::packet_tests::PacketRing,
     };
 
     fn track(src: Arc<str>) -> PlayerTrack {
         let sample_rate = NonZeroU32::new(44_100).expect("static sample rate");
-        let reader = Unimock::new((
-            AudioSessionMock::duration
-                .each_call(matching!())
-                .returns(Some(Duration::from_secs(1))),
-            AudioReadMock::spec
-                .each_call(matching!())
-                .returns(AudioSpec::new(2, sample_rate)),
-        ));
-        let resource = PlayerResource::new(PcmConsumer::new(Box::new(reader)), src, &pools())
-            .map_or_else(|error| panic!("test player resource: {error}"), Box::new);
+        let mut ring = PacketRing::new(AudioSpec::new(2, sample_rate), Duration::from_secs(1), 2);
+        let resource = PlayerResource::new(PcmConsumer::new(ring.receiver.take().expect("receiver")), src, &pools()).map_or_else(|error| panic!("test player resource: {error}"), Box::new);
 
         PlayerTrack::builder()
             .sample_rate(sample_rate)
@@ -114,13 +105,13 @@ mod tests {
         let (first, second) = (Slot::new(0), Slot::new(1));
         let mut tracks = TrackSlots::new(NonZeroUsize::new(2).expect("two slots"));
 
-        assert!(tracks.put(first, track(Arc::clone(&src))).is_none());
-        assert!(tracks.put(second, track(src)).is_none());
-        assert!(tracks.is_held(first) && tracks.is_held(second));
+        assert!(tracks.put(first, track(Arc::clone(&src))).is_ok());
+        assert!(tracks.put(second, track(src)).is_ok());
+        assert!(tracks.at(first).is_some() && tracks.at(second).is_some());
 
         assert!(tracks.take(first).is_some());
-        assert!(!tracks.is_held(first));
-        assert!(tracks.is_held(second));
+        assert!(!tracks.at(first).is_some());
+        assert!(tracks.at(second).is_some());
         assert!(tracks.at(Slot::new(2)).is_none(), "past the mixer's slots");
     }
 }

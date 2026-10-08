@@ -310,16 +310,16 @@ impl<T, S> Drop for DecoderNode<T, S> {
 #[cfg(test)]
 mod scheduler_tests {
     use kithara_audio::{
-        AudioRead, AudioSource, ChunkOutcome, Fetch, PreloadGate, TrackStep, WaitingReason,
+        AudioSource, Fetch, TrackStep, WaitingReason, SeekOutcome,
     };
     use kithara_platform::{
         CancelToken,
-        sync::Arc,
         thread,
         time::{Duration, timeout as platform_timeout},
     };
-    use kithara_signal::{AudioChunk, AudioChunkInfo};
-    use kithara_stream::{SeekControl, SeekObserve, SeekState};
+    use kithara_signal::AudioChunk;
+    use std::num::NonZeroU32;
+    use kithara_command::Sender;
     use kithara_test_utils::kithara;
     use kithara_worker::{
         Dispatcher, DispatcherConfig, TaskConfig, TaskHandle, Worker, WorkerConfig,
@@ -328,16 +328,15 @@ mod scheduler_tests {
     use super::{tests::prepared_node, *};
     use crate::{
         ServiceClass,
-        test_pools::{Pools, pools, sample_buffer},
+        test_pools::{Pools, TestPools, pools},
+        LaneProtocol, worker::PcmPacket,
     };
 
     fn empty_chunk(pools: &Pools) -> AudioChunk {
-        AudioChunk::new(AudioChunkInfo::default(), sample_buffer(pools, &[]))
+        tests::empty_chunk(pools)
     }
 
     struct MockSource {
-        seek: Arc<dyn SeekControl>,
-        seek_obs: Arc<dyn SeekObserve>,
         pools: Pools,
         ready: bool,
         should_panic: bool,
@@ -347,13 +346,8 @@ mod scheduler_tests {
 
     impl MockSource {
         fn new(pools: Pools, chunks: usize) -> Self {
-            let state = Arc::new(SeekState::new());
-            let seek = Arc::clone(&state) as Arc<dyn SeekControl>;
-            let seek_obs = Arc::clone(&state) as Arc<dyn SeekObserve>;
             Self {
                 pools,
-                seek,
-                seek_obs,
                 chunks_to_produce: chunks,
                 cursor: 0,
                 ready: true,
@@ -364,18 +358,14 @@ mod scheduler_tests {
 
     impl AudioSource for MockSource {
         type Chunk = AudioChunk;
-
-        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-            Arc::clone(&self.seek_obs)
+        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
+            self.cursor = 0;
+            Ok(SeekOutcome::Landed { target, landed_at: target })
         }
+        fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
+        fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
 
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
-            if self.seek_obs.is_pending() || self.seek_obs.is_flushing() {
-                let epoch = self.seek_obs.epoch();
-                self.seek.complete(epoch);
-                self.seek.clear_pending(epoch);
-                return TrackStep::StateChanged;
-            }
             if !self.ready {
                 return TrackStep::Blocked(WaitingReason::Waiting);
             }
@@ -386,31 +376,23 @@ mod scheduler_tests {
                 return TrackStep::Eof;
             }
             self.cursor += 1;
-            TrackStep::Produced(Fetch::data(empty_chunk(&self.pools), 0))
+            TrackStep::Produced(Fetch::data(empty_chunk(&self.pools)))
         }
     }
 
-    struct FailingSource {
-        seek_obs: Arc<dyn SeekObserve>,
-    }
-
-    impl Default for FailingSource {
-        fn default() -> Self {
-            Self {
-                seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-            }
-        }
-    }
+    #[derive(Default)]
+    struct FailingSource;
 
     impl AudioSource for FailingSource {
         type Chunk = AudioChunk;
-
-        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-            Arc::clone(&self.seek_obs)
+        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
+            Ok(SeekOutcome::Landed { target, landed_at: target })
         }
+        fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
+        fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
 
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
-            TrackStep::Failed
+            TrackStep::Failed(DecodeError::InvalidData { detail: "fixture failure" })
         }
     }
 
@@ -419,25 +401,19 @@ mod scheduler_tests {
         ringbuf_capacity: usize,
         preload_chunks: usize,
     ) -> (
-        DecoderNode<S>,
+        DecoderNode<S, TestPools>,
         impl FnMut() -> Option<()> + Send + 'static,
-        Arc<PreloadGate>,
+        Sender<LaneProtocol>,
     )
     where
         S: AudioSource<Chunk = AudioChunk>,
     {
-        let seek_obs = source.seek_observe();
-        let seek_epoch = seek_obs.epoch();
-        let (mut node, mut audio) =
-            prepared_node(source, ringbuf_capacity, preload_chunks.max(1)).await;
-        node.seek_obs = seek_obs;
-        node.runtime.seek_epoch = seek_epoch;
-        let preload_gate = Arc::clone(&node.preload_gate);
-        let pop = move || match audio.next_chunk() {
-            Ok(ChunkOutcome::Chunk(_)) => Some(()),
-            Ok(ChunkOutcome::Pending { .. } | ChunkOutcome::Eof { .. }) | Err(_) => None,
+        let (node, mut receiver, lane) = prepared_node(source, ringbuf_capacity, preload_chunks.max(1)).await;
+        let pop = move || match receiver.pop() {
+            Some(PcmPacket::Chunk(packet)) if !packet.meta.end_of_track => Some(()),
+            _ => None,
         };
-        (node, pop, preload_gate)
+        (node, pop, lane)
     }
 
     struct PlaybackScheduler {
@@ -446,7 +422,7 @@ mod scheduler_tests {
     }
 
     impl PlaybackScheduler {
-        fn register<S>(&self, node: DecoderNode<S>) -> Result<TaskHandle, kithara_worker::TaskError>
+        fn register<S>(&self, node: DecoderNode<S, TestPools>) -> Result<TaskHandle, kithara_worker::TaskError>
         where
             S: AudioSource<Chunk = AudioChunk>,
         {
@@ -484,7 +460,7 @@ mod scheduler_tests {
         )
     }
 
-    fn register<S>(handle: &PlaybackScheduler, node: DecoderNode<S>) -> TaskHandle
+    fn register<S>(handle: &PlaybackScheduler, node: DecoderNode<S, TestPools>) -> TaskHandle
     where
         S: AudioSource<Chunk = AudioChunk>,
     {
@@ -496,53 +472,30 @@ mod scheduler_tests {
     #[kithara::test(tokio)]
     #[case::progress(10, 3, "preload gate must open at the threshold")]
     #[case::eof(0, 8, "early EOF must open the preload gate")]
-    async fn worker_preload_gate_fires(
-        #[case] chunks: usize,
-        #[case] preload: usize,
-        #[case] message: &str,
-    ) {
-        let pools = pools();
-        let handle = test_scheduler();
-        let (node, _pop, gate) =
-            make_node(MockSource::new(pools.clone(), chunks), 32, preload).await;
-        let _id = register(&handle, node);
-
-        platform_timeout(Duration::from_secs(1), gate.wait())
-            .await
-            .expect(message);
-        assert!(gate.is_ready());
+    async fn worker_preload_gate_fires(#[case] chunks: usize, #[case] preload: usize, #[case] message: &str) {
+        let (mut node, _receiver, _lane) = prepared_node(MockSource::new(pools(), chunks), 32, preload).await;
+        platform_timeout(Duration::from_secs(1), node.preload()).await.expect(message).expect("preload succeeds");
+        assert!(node.source.is_preloaded() || node.terminal.is_some());
     }
 
     #[kithara::test(tokio)]
-    async fn worker_preload_gate_fires_on_failure() {
-        let handle = test_scheduler();
-        let (node, _pop, gate) = make_node(FailingSource::default(), 32, 8).await;
-        let _id = register(&handle, node);
-
-        platform_timeout(Duration::from_secs(1), gate.wait())
-            .await
-            .expect("decoder failure must open the preload gate");
-        assert!(gate.is_ready());
+    async fn worker_preload_reports_failure() {
+        let (mut node, mut receiver, _lane) = prepared_node(FailingSource, 32, 8).await;
+        assert!(platform_timeout(Duration::from_secs(1), node.preload()).await.expect("failure terminates preload").is_err());
+        assert!(matches!(receiver.pop(), Some(PcmPacket::Failed { .. })));
     }
 
     #[kithara::test(tokio)]
     async fn worker_preload_gate_reopens_after_seek() {
-        let pools = pools();
-        let handle = test_scheduler();
-        let source = MockSource::new(pools.clone(), 10);
-        let seek = Arc::clone(&source.seek);
-        let (node, _pop, gate) = make_node(source, 32, 1).await;
-        let _id = register(&handle, node);
-
-        platform_timeout(Duration::from_secs(1), gate.wait())
-            .await
-            .expect("initial preload gate must open");
-
-        let epoch = seek.begin(Duration::from_secs(1));
-        handle.wake_handle().wake();
-        platform_timeout(Duration::from_secs(1), gate.wait_for_epoch(epoch))
-            .await
-            .expect("post-seek gate must reopen");
+        let (mut node, _receiver, mut lane) = prepared_node(MockSource::new(pools(), 10), 32, 1).await;
+        platform_timeout(Duration::from_secs(1), node.preload()).await.expect("initial preload").expect("preload succeeds");
+        assert!(node.source.is_preloaded());
+        let id = tests::segment(&mut lane);
+        node.synchronize().expect("new segment");
+        assert!(!node.source.is_preloaded());
+        platform_timeout(Duration::from_secs(1), node.preload()).await.expect("post-segment preload").expect("preload succeeds");
+        assert!(node.source.is_preloaded());
+        assert!(lane.receipts().any(|receipt| matches!(receipt.outcome(), kithara_command::Outcome::Applied { data, .. } if data.ready == Some(id))));
     }
 
     /// Scheduler contracts observed through the product's `chunk_admitted` and
@@ -571,47 +524,43 @@ mod scheduler_tests {
 
         /// Source that always produces, so its node competes for every pass.
         struct EndlessSource {
-            seek_obs: Arc<dyn SeekObserve>,
-            /// Time each step holds the shared worker thread before producing.
+                /// Time each step holds the shared worker thread before producing.
             step: Duration,
             pools: Pools,
         }
 
         impl AudioSource for EndlessSource {
             type Chunk = AudioChunk;
-
-            fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-                Arc::clone(&self.seek_obs)
+            fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
+                Ok(SeekOutcome::Landed { target, landed_at: target })
             }
+            fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
+            fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
 
             fn step_track(&mut self) -> TrackStep<AudioChunk> {
                 thread::sleep(self.step);
-                TrackStep::Produced(Fetch::data(empty_chunk(&self.pools), 0))
+                TrackStep::Produced(Fetch::data(empty_chunk(&self.pools)))
             }
         }
 
         /// Source that never has data, so its node waits on every pass.
         struct WaitingSource {
-            seek_obs: Arc<dyn SeekObserve>,
-            /// Time each step holds the shared worker thread before waiting.
+                /// Time each step holds the shared worker thread before waiting.
             step: Duration,
         }
 
         impl AudioSource for WaitingSource {
             type Chunk = AudioChunk;
-
-            fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-                Arc::clone(&self.seek_obs)
+            fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
+                Ok(SeekOutcome::Landed { target, landed_at: target })
             }
+            fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
+            fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
 
             fn step_track(&mut self) -> TrackStep<AudioChunk> {
                 thread::sleep(self.step);
                 TrackStep::Blocked(WaitingReason::Waiting)
             }
-        }
-
-        fn new_seek() -> Arc<dyn SeekObserve> {
-            Arc::new(SeekState::new()) as Arc<dyn SeekObserve>
         }
 
         fn is(event: &ProbeEvent, probe: &str) -> bool {
@@ -746,8 +695,7 @@ mod scheduler_tests {
             let pools = pools();
             let handle = test_scheduler();
             let source = MockSource::new(pools.clone(), 100);
-            let seek = Arc::clone(&source.seek);
-            let (node, mut pop, _) = make_node(source, 32, 1).await;
+            let (node, mut pop, mut lane) = make_node(source, 32, 1).await;
             let _id = register(&handle, node);
 
             receive_chunks(&trace, &handle, &mut pop, 2).await;
@@ -757,7 +705,7 @@ mod scheduler_tests {
             })
             .await;
             let seen = trace.events().len();
-            let epoch = seek.begin(Duration::from_secs(10));
+            let id = tests::segment(&mut lane);
             handle.wake_handle().wake();
             // The consumer must observe the seek and retire the full pre-seek ring.
             let _ = pop();
@@ -765,7 +713,7 @@ mod scheduler_tests {
                 .wait_for(|events| {
                     events[seen..]
                         .iter()
-                        .any(|e| is(e, "chunk_admitted") && e.field("epoch") == Some(epoch))
+                        .any(|e| is(e, "chunk_admitted") && e.field("segment") == Some(id.get()))
                 })
                 .await;
             receive_chunks(&trace, &handle, &mut pop, 1).await;
@@ -839,7 +787,6 @@ mod scheduler_tests {
             let (node_b, _pop_b, _) = make_node(
                 WaitingSource {
                     step,
-                    seek_obs: new_seek(),
                 },
                 32,
                 0,
@@ -869,7 +816,6 @@ mod scheduler_tests {
                 EndlessSource {
                     step,
                     pools: pools.clone(),
-                    seek_obs: new_seek(),
                 },
                 32,
                 0,
@@ -896,583 +842,225 @@ mod scheduler_tests {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
-
-    use kithara_assets::AssetStore;
-    use kithara_audio::{
-        Audio, AudioConfig, AudioEvent, AudioRead, AudioSource, ChunkOutcome, Fetch,
-        NoResamplerBackend, PreloadGate, SourceEnd, TrackStep, WaitingReason,
-        mock::AudioSourceMock,
-    };
-    use kithara_command::{ChannelConfig, channel};
+    use std::num::{NonZeroU32, NonZeroUsize};
+    use kithara_audio::{AudioSource, Fetch, SourceEnd, TrackStep, WaitingReason, SeekOutcome};
+    use kithara_command::{Batch, ChannelConfig, Sender, When, channel};
     use kithara_effects::EffectDrain;
-    use kithara_events::{DeferredBus, EventBus};
-    use kithara_platform::{
-        sync::{Arc, Mutex},
-        time::Duration,
-    };
-    use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
-    use kithara_stream::{
-        PlayheadRead, PlayheadState, PlayheadWrite, SeekControl, SeekObserve, SeekState, Stream,
-        mock::NoopWorkerWake,
-    };
-    use kithara_test_fixtures::{assets, unit_fixtures::eq_silence as node_silence};
+    use kithara_platform::{sync::{Arc, Mutex}, time::Duration};
+    use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId};
+    use kithara_test_fixtures::unit_fixtures::eq_silence as node_silence;
     use kithara_test_utils::kithara;
     use kithara_worker::{Task, TickResult};
-    use unimock::{MockFn, Unimock, matching};
-
     use super::*;
-    use crate::{
-        LaneProtocol, WarpSource,
-        test_pools::{Pools, pools, sample_buffer},
-        worker::EngineLoad,
-    };
+    use crate::{LaneCommand, LaneProtocol, WarpSource, test_pools::{Pools, TestPools, pools}, worker::{EngineLoad, PcmReceiver, packet_tests::{PacketRing, chunk}}};
 
-    pub(super) async fn prepared_node<S>(
-        source: S,
-        capacity: usize,
-        preload_chunks: usize,
-    ) -> (
-        DecoderNode<S>,
-        Audio<Stream<kithara_file::File<crate::test_pools::TestPools>>>,
-    )
-    where
-        S: AudioSource<Chunk = AudioChunk>,
-    {
+    pub(super) async fn prepared_node<T>(source: T, capacity: usize, preload: usize) -> (DecoderNode<T, TestPools>, PcmReceiver, Sender<LaneProtocol>)
+    where T: AudioSource<Chunk = AudioChunk> {
         let pools = pools();
-        let path = assets::signal_wav_sine440_120ms()
-            .path()
-            .expect("native WAV fixture path");
-        let stream =
-            kithara_file::FileConfig::for_src(kithara_file::FileSrc::Local(path.to_owned()))
-                .store(AssetStore::builder(pools.clone()).build())
-                .pools(pools.clone())
-                .build();
-        let config = AudioConfig::<_, NoResamplerBackend>::for_stream(stream)
-            .audio_buffer_chunks(capacity)
-            .preload_chunks(
-                std::num::NonZeroUsize::new(preload_chunks).expect("non-zero preload threshold"),
-            )
-            .build();
-        let prepared = Audio::prepare(config, Arc::new(NoopWorkerWake), pools)
-            .await
-            .unwrap_or_else(|error| panic!("prepare real audio lane: {error}"))
-            .map(|audio, _| (audio, source));
-        let (audio, lane) = prepared.into();
-        let node = DecoderNode {
-            source: lane.source,
-            port: lane.port,
-            seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
-            preload_gate: lane.preload_gate,
-            playhead: lane.playhead,
-            emit: lane.emit,
-            preload_chunks: lane.preload_chunks,
-            engine_load: None,
-            runtime: DecoderRuntime::default(),
-        };
-        (node, audio)
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
+        let (lane, inbox) = channel(ChannelConfig::builder().build());
+        let source = WarpSource::new(source, kithara_warp::Warp::new((), &kithara_warp::WarpConfig::builder().build()).renderer(spec, pools.clone()), Vec::new(), EffectDrain::new(0, &pools).expect("drain"), spec, pools.clone(), inbox, NonZeroUsize::new(preload).expect("preload"));
+        let (receiver, producer) = PacketRing::new(spec, Duration::from_secs(1), capacity).into_ends();
+        (DecoderNode::new(source, producer, None, AudioChunkInfo { spec, ..AudioChunkInfo::default() }, None, pools), receiver, lane)
     }
 
-    fn empty_chunk(pools: &Pools) -> AudioChunk {
-        AudioChunk::new(AudioChunkInfo::default(), sample_buffer(pools, &[]))
+    pub(super) fn empty_chunk(_pools: &Pools) -> AudioChunk {
+        chunk(AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate")), SegmentId::FIRST, 0, 0, &[0.0, 0.0])
     }
 
-    struct PersistentEofSource {
-        seek: Arc<SeekState>,
+    pub(super) struct ScriptedSource {
+        pub(super) steps: std::collections::VecDeque<TrackStep<AudioChunk>>,
+        commits: Arc<Mutex<Vec<SourceEnd>>>,
     }
 
-    struct OneChunkSource {
-        seek: Arc<SeekState>,
-        chunk: Option<AudioChunk>,
+    impl ScriptedSource {
+        pub(super) fn new(steps: impl IntoIterator<Item = TrackStep<AudioChunk>>) -> Self { Self { steps: steps.into_iter().collect(), commits: Arc::new(Mutex::new(Vec::new())) } }
     }
 
-    struct CommitSource {
-        commits: Arc<Mutex<Vec<(SourceEnd, u64)>>>,
-        seek: Arc<SeekState>,
-        chunk: Option<AudioChunk>,
-        leading_chunk: Option<AudioChunk>,
-        source_end: SourceEnd,
-    }
-
-    impl AudioSource for CommitSource {
+    impl AudioSource for ScriptedSource {
         type Chunk = AudioChunk;
-
-        fn commit_source_end(&mut self, source_end: SourceEnd, epoch: u64) {
-            self.commits.lock().push((source_end, epoch));
-        }
-
-        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-            Arc::clone(&self.seek) as Arc<dyn SeekObserve>
-        }
-
-        fn step_track(&mut self) -> TrackStep<AudioChunk> {
-            if let Some(chunk) = self.leading_chunk.take() {
-                return TrackStep::Produced(Fetch::data(chunk, 0));
-            }
-            self.chunk.take().map_or(TrackStep::Eof, |chunk| {
-                TrackStep::Produced(Fetch::rendered(chunk, 7, self.source_end))
-            })
-        }
+        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> { Ok(SeekOutcome::Landed { target, landed_at: target }) }
+        fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
+        fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
+        fn commit_source_end(&mut self, end: SourceEnd) { self.commits.lock().push(end); }
+        fn step_track(&mut self) -> TrackStep<AudioChunk> { self.steps.pop_front().unwrap_or(TrackStep::Eof) }
     }
 
-    impl AudioSource for PersistentEofSource {
-        type Chunk = AudioChunk;
-
-        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-            Arc::clone(&self.seek) as Arc<dyn SeekObserve>
-        }
-
-        fn step_track(&mut self) -> TrackStep<AudioChunk> {
-            TrackStep::Eof
-        }
-    }
-
-    impl AudioSource for OneChunkSource {
-        type Chunk = AudioChunk;
-
-        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-            Arc::clone(&self.seek) as Arc<dyn SeekObserve>
-        }
-
-        fn step_track(&mut self) -> TrackStep<AudioChunk> {
-            self.chunk.take().map_or(TrackStep::Eof, |chunk| {
-                TrackStep::Produced(Fetch::data(chunk, 0))
-            })
-        }
+    fn produced() -> TrackStep<AudioChunk> { TrackStep::Produced(Fetch::data(empty_chunk(&pools()))) }
+    pub(super) fn segment(lane: &mut Sender<LaneProtocol>) -> SegmentId {
+        let id = SegmentId::FIRST.next();
+        lane.send(When::Next, Batch { basis: Vec::new(), commands: vec![LaneCommand::Segment { id, from: Duration::from_secs(1), speed: kithara_warp::SpeedCurve::Constant(1.0) }] }).expect("segment batch");
+        id
     }
 
     #[kithara::test(tokio)]
     async fn decoder_node_eof_under_backpressure() {
-        let pools = pools();
-        let source = OneChunkSource {
-            seek: Arc::new(SeekState::new()),
-            chunk: Some(empty_chunk(&pools)),
-        };
-
-        let bus = EventBus::new(8);
-        let mut events = bus.subscribe();
-        let (mut node, mut audio) = prepared_node(source, 1, 1).await;
-        node.emit = Arc::new(DeferredBus::new(bus, 8));
-
+        let (mut node, mut receiver, _lane) = prepared_node(ScriptedSource::new([produced()]), 1, 1).await;
         assert_eq!(node.tick(), TickResult::Progress);
         assert_eq!(node.tick(), TickResult::Backpressured);
-        assert!(!node.runtime.eof_sent);
-
-        assert!(matches!(audio.next_chunk(), Ok(ChunkOutcome::Chunk(_))));
-
+        assert!(node.terminal.is_none());
+        assert!(matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if !packet.meta.end_of_track));
         assert_eq!(node.tick(), TickResult::Progress);
-        assert!(node.runtime.eof_sent);
-        assert!(matches!(audio.next_chunk(), Ok(ChunkOutcome::Eof { .. })));
-        assert_eq!(node.tick(), TickResult::Backpressured);
-
-        node.emit.flush();
-        let end_events = std::iter::from_fn(|| events.try_recv().ok())
-            .filter(|envelope| matches!(envelope.event, AudioEvent::EndOfStream { .. }))
-            .count();
-        assert_eq!(end_events, 1, "current-epoch EOF must publish exactly once");
+        assert_eq!(node.tick(), TickResult::Progress);
+        assert!(node.terminal.is_some());
+        assert!(matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if packet.meta.end_of_track));
+        assert_eq!(node.tick(), TickResult::Waiting);
+        assert!(receiver.pop().is_none(), "current-segment EOF publishes exactly once");
     }
 
     #[kithara::test(tokio)]
     async fn decoder_node_does_not_republish_exhausted_warp_source_eof() {
-        let pools = pools();
-        let seek = Arc::new(SeekState::new());
-        let source = PersistentEofSource {
-            seek: Arc::clone(&seek),
-        };
-        let effects = Vec::new();
-        let drain = EffectDrain::new(effects.len(), &pools)
-            .unwrap_or_else(|error| panic!("test effect drain: {error}"));
-        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-        let config = kithara_warp::WarpConfig::builder().build();
-        let warp = kithara_warp::Warp::new((), &config);
-        let renderer = warp.renderer(spec, pools.clone());
-        let (_lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
-        let source = WarpSource::new(source, renderer, effects, drain, spec, pools, inbox);
-        let bus = EventBus::new(8);
-        let mut events = bus.subscribe();
-        let (mut node, mut audio) = prepared_node(source, 1, 1).await;
-        node.emit = Arc::new(DeferredBus::new(bus, 8));
-
+        let (mut node, mut receiver, _lane) = prepared_node(ScriptedSource::new([]), 1, 1).await;
         assert_eq!(node.tick(), TickResult::Progress);
         assert_eq!(node.tick(), TickResult::Progress);
-        assert!(matches!(audio.next_chunk(), Ok(ChunkOutcome::Eof { .. })));
-        assert_eq!(node.tick(), TickResult::Backpressured);
-        assert_eq!(node.tick(), TickResult::Backpressured);
-
-        node.emit.flush();
-        let end_events = std::iter::from_fn(|| events.try_recv().ok())
-            .filter(|envelope| matches!(envelope.event, AudioEvent::EndOfStream { .. }))
-            .count();
-        assert_eq!(end_events, 1);
+        assert!(matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if packet.meta.end_of_track));
+        assert_eq!(node.tick(), TickResult::Waiting);
+        assert_eq!(node.tick(), TickResult::Waiting);
+        assert!(receiver.pop().is_none(), "one terminal packet");
     }
 
     #[kithara::test(tokio)]
     async fn decoder_node_records_engine_load_on_produced(node_silence: Vec<f32>) {
-        let pools = pools();
-        use std::num::NonZero;
-
-        use kithara_signal::AudioSpec;
-
         let meter = Arc::new(EngineLoad::default());
         assert!(!meter.snapshot().is_active(), "idle before any tick");
-
-        let chunk = AudioChunk::new(
-            AudioChunkInfo {
-                spec: AudioSpec {
-                    channels: 2,
-                    sample_rate: NonZero::new(44_100).unwrap(),
-                },
-                frames: 4_410,
-                ..Default::default()
-            },
-            sample_buffer(&pools, &node_silence),
-        );
-        let source = Unimock::new(
-            AudioSourceMock::step_track
-                .next_call(matching!())
-                .returns(TrackStep::Produced(Fetch::data(chunk, 0))),
-        );
-
-        let (mut node, _audio) = prepared_node(source, 4, 1).await;
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
+        let packet = chunk(spec, SegmentId::FIRST, 0, 0, &node_silence[..8_820]);
+        let (mut node, _receiver, _lane) = prepared_node(ScriptedSource::new([TrackStep::Produced(Fetch::data(packet))]), 4, 1).await;
         node.engine_load = Some(Arc::clone(&meter));
-
         assert_eq!(node.tick(), TickResult::Progress);
-        assert!(
-            meter.snapshot().is_active(),
-            "engine meter records on a Produced tick: {:?}",
-            meter.snapshot()
-        );
+        assert!(meter.snapshot().is_active(), "meter records Produced ticks");
     }
 
     #[kithara::test(tokio)]
-    async fn worker_telemetry_throttles_immediate_repeats() {
-        let source = Unimock::new(());
-        let gate = Arc::new(PreloadGate::default());
-        let seek = Arc::new(SeekState::new());
-        let playhead = Arc::new(PlayheadState::new());
-        playhead.set_position(Duration::from_millis(100));
-        playhead.set_decoded_frontier(Duration::from_millis(350));
-        let bus = EventBus::new(8);
-        let mut events = bus.subscribe();
-        let emit = Arc::new(DeferredBus::new(bus, 8));
+    async fn worker_observation_reads_do_not_republish_packets() {
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
+        let packet = chunk(spec, SegmentId::FIRST, 0, 0, &vec![0.0; 30_870]);
+        let (mut node, mut receiver, _lane) = prepared_node(ScriptedSource::new([TrackStep::Produced(Fetch::data(packet))]), 4, 1).await;
         let meter = Arc::new(EngineLoad::default());
         meter.record(Duration::from_millis(5), 4_410, 44_100);
-
-        let (mut node, _audio) = prepared_node(source, 4, 1).await;
-        node.seek_obs = Arc::clone(&seek) as Arc<dyn SeekObserve>;
-        node.preload_gate = gate;
-        node.playhead = Arc::clone(&playhead) as Arc<dyn PlayheadWrite>;
-        node.emit = Arc::clone(&emit);
-        node.engine_load = Some(meter);
-
-        let now = Instant::now();
-        node.maybe_emit_worker_telemetry(now);
-        node.maybe_emit_worker_telemetry(now);
-        emit.flush();
-
-        assert!(matches!(
-            events.try_recv().map(|envelope| envelope.event),
-            Ok(AudioEvent::BufferHealth {
-                buffered_ms: 250,
-                decoded_frontier_ms: 350,
-                seek_epoch: 0,
-            })
-        ));
-        assert!(matches!(
-            events.try_recv().map(|envelope| envelope.event),
-            Ok(AudioEvent::EngineLoad { .. })
-        ));
-        assert!(
-            events.try_recv().is_err(),
-            "second immediate tick stays throttled"
-        );
+        node.engine_load = Some(Arc::clone(&meter));
+        receiver.set_position(Duration::from_millis(100));
+        assert_eq!(node.tick(), TickResult::Progress);
+        for _ in 0..2 {
+            assert_eq!(receiver.cached_span(), Duration::from_millis(250));
+            assert_eq!(receiver.decoded_frontier(), Duration::from_millis(350));
+            assert!(meter.snapshot().is_active());
+        }
+        assert!(receiver.pop().is_some());
+        assert!(receiver.pop().is_none(), "observations do not duplicate output");
     }
 
     #[kithara::test(tokio)]
     async fn decoder_node_distinguishes_failed_from_eof_on_the_wire() {
-        let eof_source = Unimock::new((
-            AudioSourceMock::step_track
-                .next_call(matching!())
-                .returns(TrackStep::Eof),
-            AudioSourceMock::decode_epoch.stub(|each| {
-                each.call(matching!()).returns(0u64);
-            }),
-        ));
-        let (mut eof_node, mut eof_audio) = prepared_node(eof_source, 1, 1).await;
+        let (mut eof_node, mut eof_receiver, _lane) = prepared_node(ScriptedSource::new([]), 1, 1).await;
         assert_eq!(eof_node.tick(), TickResult::Progress);
-        let eof_marker = eof_audio.next_chunk();
-
-        let failed_source = Unimock::new((
-            AudioSourceMock::step_track
-                .next_call(matching!())
-                .returns(TrackStep::Failed),
-            AudioSourceMock::decode_epoch.stub(|each| {
-                each.call(matching!()).returns(0u64);
-            }),
-        ));
-        let (mut failed_node, mut failed_audio) = prepared_node(failed_source, 1, 1).await;
-        let _ = failed_node.tick();
-        let failed_marker = failed_audio.next_chunk();
-
-        assert!(matches!(eof_marker, Ok(ChunkOutcome::Eof { .. })));
-        assert!(failed_marker.is_err());
+        assert_eq!(eof_node.tick(), TickResult::Progress);
+        let eof_marker = eof_receiver.pop();
+        let failed = TrackStep::Failed(DecodeError::InvalidData { detail: "fixture failure" });
+        let (mut failed_node, mut failed_receiver, _lane) = prepared_node(ScriptedSource::new([failed]), 1, 1).await;
+        assert_eq!(failed_node.tick(), TickResult::Progress);
+        let failed_marker = failed_receiver.pop();
+        assert!(matches!(eof_marker, Some(PcmPacket::Chunk(packet)) if packet.meta.end_of_track));
+        assert!(matches!(failed_marker, Some(PcmPacket::Failed { .. })));
     }
 
     #[kithara::test(tokio)]
-    async fn deferred_eof_event_keeps_the_decode_epoch() {
-        let seek_state = Arc::new(SeekState::new());
-        let seek_obs = Arc::clone(&seek_state) as Arc<dyn SeekObserve>;
-
-        let source = Unimock::new((
-            AudioSourceMock::step_track
-                .next_call(matching!())
-                .returns(TrackStep::Eof),
-            AudioSourceMock::decode_epoch
-                .next_call(matching!())
-                .returns(0u64),
-        ));
-
-        let bus = EventBus::new(8);
-        let mut events = bus.subscribe();
-        let (mut node, _audio) = prepared_node(source, 1, 1).await;
-        node.seek_obs = seek_obs;
-        node.emit = Arc::new(DeferredBus::new(bus, 8));
+    async fn an_admitted_eof_keeps_its_segment_after_a_later_segment_opens() {
+        let (mut node, mut receiver, mut lane) = prepared_node(ScriptedSource::new([]), 1, 1).await;
         assert_eq!(node.tick(), TickResult::Progress);
-
-        let live_epoch = seek_state.begin(Duration::from_secs(1));
-        assert_eq!(live_epoch, 1, "seek overtakes the deferred EOF flush");
-
-        node.emit.flush();
-        let mut eof_epochs = std::iter::from_fn(|| events.try_recv().ok()).filter_map(|envelope| {
-            match envelope.event {
-                AudioEvent::EndOfStream { seek_epoch } => Some(seek_epoch),
-                AudioEvent::FormatDetected { .. }
-                | AudioEvent::FormatChanged { .. }
-                | AudioEvent::PlaybackProgress { .. }
-                | AudioEvent::OutputAvailable
-                | AudioEvent::SeekLifecycle { .. }
-                | AudioEvent::SeekComplete { .. }
-                | AudioEvent::SeekRejected { .. }
-                | AudioEvent::DecoderReady { .. }
-                | AudioEvent::TrackFailed { .. }
-                | AudioEvent::UnderrunStarted { .. }
-                | AudioEvent::UnderrunEnded { .. }
-                | AudioEvent::BufferHealth { .. }
-                | AudioEvent::EngineLoad { .. }
-                | AudioEvent::PlaybackResamplerConfigured { .. } => None,
-            }
-        });
-        assert_eq!(eof_epochs.next(), Some(0));
-        assert_eq!(eof_epochs.next(), None);
+        assert_eq!(node.tick(), TickResult::Progress);
+        let next = segment(&mut lane);
+        node.synchronize().expect("segment opens");
+        assert_eq!(next, SegmentId::FIRST.next());
+        assert_eq!(node.source.cursor().segment, next);
+        let Some(PcmPacket::Chunk(eof)) = receiver.pop() else { panic!("EOF packet"); };
+        assert!(eof.meta.end_of_track);
+        assert_eq!(eof.meta.segment, SegmentId::FIRST);
+        assert!(receiver.pop().is_none());
     }
 
     #[kithara::test(tokio)]
     async fn decoded_frontier_advances_only_after_final_port_admission() {
-        let pools = pools();
-        let end = Duration::from_millis(750);
-        let mut chunk = empty_chunk(&pools);
-        chunk.meta.end_timestamp = end;
-        let source = Unimock::new((
-            AudioSourceMock::step_track
-                .next_call(matching!())
-                .returns(TrackStep::Produced(Fetch::data(empty_chunk(&pools), 0))),
-            AudioSourceMock::step_track
-                .next_call(matching!())
-                .returns(TrackStep::Produced(Fetch::data(chunk, 0))),
-        ));
-        let playhead = Arc::new(PlayheadState::new());
-        let (mut node, mut audio) = prepared_node(source, 1, 1).await;
-        node.playhead = Arc::clone(&playhead) as Arc<dyn PlayheadWrite>;
-
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
+        let packet = chunk(spec, SegmentId::FIRST, 1, 0, &vec![0.0; 66_150]);
+        let source = ScriptedSource::new([produced(), TrackStep::Produced(Fetch::data(packet))]);
+        let (mut node, mut receiver, _lane) = prepared_node(source, 1, 1).await;
+        let initial = spec.duration_for(1).expect("initial frame");
         assert_eq!(node.tick(), TickResult::Progress);
         assert_eq!(node.tick(), TickResult::Backpressured);
-        assert_eq!(playhead.decoded_frontier(), Duration::ZERO);
-
-        assert!(matches!(audio.next_chunk(), Ok(ChunkOutcome::Chunk(_))));
+        assert_eq!(receiver.decoded_frontier(), initial);
+        assert!(receiver.pop().is_some());
         assert_eq!(node.tick(), TickResult::Progress);
-        assert_eq!(playhead.decoded_frontier(), end);
+        assert_eq!(receiver.decoded_frontier(), Duration::from_millis(750));
     }
 
     #[kithara::test(tokio)]
     async fn source_end_commits_only_after_final_port_admission() {
-        let pools = pools();
-        let source_end = SourceEnd::new(
-            12_345,
-            NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
-        );
-        let commits = Arc::new(Mutex::new(Vec::new()));
-        let source = CommitSource {
-            source_end,
-            leading_chunk: Some(empty_chunk(&pools)),
-            chunk: Some(empty_chunk(&pools)),
-            commits: Arc::clone(&commits),
-            seek: Arc::new(SeekState::new()),
-        };
-        let (mut node, mut audio) = prepared_node(source, 1, 1).await;
-
+        let end = SourceEnd::new(12_345, NonZeroU32::new(44_100).expect("rate"));
+        let source = ScriptedSource::new([produced(), TrackStep::Produced(Fetch::rendered(empty_chunk(&pools()), end))]);
+        let commits = Arc::clone(&source.commits);
+        let (mut node, mut receiver, _lane) = prepared_node(source, 1, 1).await;
         assert_eq!(node.tick(), TickResult::Progress);
         assert_eq!(node.tick(), TickResult::Backpressured);
         assert!(commits.lock().is_empty());
-
-        assert!(matches!(audio.next_chunk(), Ok(ChunkOutcome::Chunk(_))));
+        assert!(receiver.pop().is_some());
         assert_eq!(node.tick(), TickResult::Progress);
-        assert_eq!(commits.lock().as_slice(), &[(source_end, 7)]);
+        assert_eq!(commits.lock().as_slice(), &[end]);
     }
 
     #[kithara::test(tokio)]
     async fn decoder_node_live_upstream_demand_does_not_tick_hang_wait() {
-        let source = Unimock::new(
-            AudioSourceMock::step_track
-                .next_call(matching!())
-                .returns(TrackStep::Blocked(WaitingReason::WaitingDemand)),
-        );
-
-        let (mut node, _audio) = prepared_node(source, 2, 1).await;
-
+        let source = ScriptedSource::new([TrackStep::Blocked(WaitingReason::WaitingDemand)]);
+        let (mut node, _receiver, _lane) = prepared_node(source, 2, 1).await;
         assert_eq!(node.tick(), TickResult::UpstreamPending);
     }
 
-    /// A producer that parked upstream with audio behind it opens the preload
-    /// latch. The chunk count reachable before the demuxer reads past the
-    /// delivered segment is not a property the pipeline controls, so a latch that
-    /// only counts chunks leaves resource construction waiting on a fetch that may
-    /// not land. The quota here is two against one emitted chunk, so the count
-    /// cannot be what opens it.
     #[kithara::test(tokio)]
     #[case(WaitingReason::Waiting)]
     #[case(WaitingReason::WaitingDemand)]
     #[case(WaitingReason::WaitingMetadata)]
-    async fn decoder_node_upstream_park_after_audio_opens_the_preload_gate(
-        #[case] reason: WaitingReason,
-    ) {
-        let pools = pools();
-        let source = Unimock::new((
-            AudioSourceMock::step_track
-                .next_call(matching!())
-                .returns(TrackStep::Produced(Fetch::data(empty_chunk(&pools), 0))),
-            AudioSourceMock::step_track
-                .next_call(matching!())
-                .returns(TrackStep::Blocked(reason)),
-        ));
-
-        let (mut node, _audio) = prepared_node(source, 4, 2).await;
-        let gate = Arc::clone(&node.preload_gate);
-
+    async fn decoder_node_upstream_park_after_audio_waits_for_the_preload_quota(#[case] reason: WaitingReason) {
+        let source = ScriptedSource::new([produced(), TrackStep::Blocked(reason)]);
+        let (mut node, _receiver, _lane) = prepared_node(source, 4, 2).await;
+        assert_eq!(node.tick(), TickResult::Progress);
+        assert!(!node.source.is_preloaded(), "one chunk is below quota");
         let _ = node.tick();
-        assert!(
-            !gate.is_ready(),
-            "the chunk quota is not met after one chunk"
-        );
-
-        let _ = node.tick();
-
-        assert!(
-            gate.is_ready(),
-            "a producer parked on {reason:?} with audio behind it must not strand the construction wait"
-        );
+        assert!(!node.source.is_preloaded(), "a park cannot replace the quota");
     }
 
-    /// A park with nothing emitted leaves the latch shut.
-    ///
-    /// The park states that the delivered bytes are spent, which releases
-    /// construction only when they yielded something. With no chunk behind it the
-    /// statement is vacuous, and opening on it starts playback against a ring that
-    /// holds no audio, where the playhead cannot advance past whatever the first
-    /// fetch happened to deliver.
     #[kithara::test(tokio)]
     #[case(WaitingReason::Waiting)]
     #[case(WaitingReason::WaitingDemand)]
     #[case(WaitingReason::WaitingMetadata)]
-    async fn decoder_node_park_without_audio_keeps_the_preload_gate_shut(
-        #[case] reason: WaitingReason,
-    ) {
-        let source = Unimock::new(
-            AudioSourceMock::step_track
-                .next_call(matching!())
-                .returns(TrackStep::Blocked(reason)),
-        );
-
-        let (mut node, _audio) = prepared_node(source, 2, 1).await;
-        let gate = Arc::clone(&node.preload_gate);
-
+    async fn decoder_node_park_without_audio_keeps_the_preload_gate_shut(#[case] reason: WaitingReason) {
+        let (mut node, _receiver, _lane) = prepared_node(ScriptedSource::new([TrackStep::Blocked(reason)]), 2, 1).await;
         let _ = node.tick();
-
-        assert!(
-            !gate.is_ready(),
-            "a park on {reason:?} with nothing emitted is not preload"
-        );
+        assert!(!node.source.is_preloaded(), "a park with nothing emitted is not preload");
     }
 
-    /// The park opener does not weaken the count opener: a producer that keeps
-    /// delivering never reaches a park, so the latch still waits for the full
-    /// chunk quota.
     #[kithara::test(tokio)]
     async fn decoder_node_preload_gate_stays_shut_below_the_chunk_quota() {
-        let pools = pools();
-        let source = Unimock::new(
-            AudioSourceMock::step_track
-                .next_call(matching!())
-                .returns(TrackStep::Produced(Fetch::data(empty_chunk(&pools), 0))),
-        );
-
-        let (mut node, _audio) = prepared_node(source, 4, 2).await;
-        let gate = Arc::clone(&node.preload_gate);
-
-        let _ = node.tick();
-
-        assert!(
-            !gate.is_ready(),
-            "one chunk of a two-chunk quota is not preload"
-        );
+        let (mut node, _receiver, _lane) = prepared_node(ScriptedSource::new([produced()]), 4, 2).await;
+        assert_eq!(node.tick(), TickResult::Progress);
+        assert!(!node.source.is_preloaded(), "one chunk of a two-chunk quota is not preload");
     }
 
     #[kithara::test(tokio)]
     async fn decoder_node_seek_rearms_preload_gate() {
-        let pools = pools();
-        let seek_state = Arc::new(SeekState::new());
-        let source = Unimock::new((
-            AudioSourceMock::step_track
-                .next_call(matching!())
-                .returns(TrackStep::Produced(Fetch::data(empty_chunk(&pools), 0))),
-            AudioSourceMock::step_track
-                .next_call(matching!())
-                .returns(TrackStep::StateChanged),
-            AudioSourceMock::step_track
-                .next_call(matching!())
-                .returns(TrackStep::Produced(Fetch::data(empty_chunk(&pools), 0))),
-        ));
-
-        let (mut node, mut audio) = prepared_node(source, 1, 1).await;
-        let gate = Arc::clone(&node.preload_gate);
-        node.seek_obs = Arc::clone(&seek_state) as Arc<dyn SeekObserve>;
-
+        let source = ScriptedSource::new([produced(), TrackStep::StateChanged, produced()]);
+        let (mut node, mut receiver, mut lane) = prepared_node(source, 1, 1).await;
         assert_eq!(node.tick(), TickResult::Progress);
-        assert!(node.runtime.preloaded);
-        assert!(gate.is_ready(), "first chunk opens the gate");
-
-        let epoch = SeekControl::begin(&*seek_state, Duration::from_secs(1));
-
+        assert!(node.source.is_preloaded(), "first chunk opens preload");
+        let id = segment(&mut lane);
         assert_eq!(node.tick(), TickResult::Backpressured);
-        assert!(!node.runtime.preloaded, "seek resets the preload runtime");
-        assert!(!gate.is_ready(), "sync_seek_epoch closes the gate");
-
-        assert!(
-            matches!(audio.next_chunk(), Ok(ChunkOutcome::Chunk(_))),
-            "consumer discards the stale pre-seek chunk"
-        );
-
+        assert!(!node.source.is_preloaded(), "new segment rearms preload");
+        assert_eq!(node.source.cursor().segment, id);
+        assert!(matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if packet.meta.segment == SegmentId::FIRST));
         assert_eq!(node.tick(), TickResult::Progress);
-        assert!(
-            !node.runtime.preloaded,
-            "source first applies the seek epoch"
-        );
-
+        assert!(!node.source.is_preloaded(), "StateChanged is not admitted PCM");
         assert_eq!(node.tick(), TickResult::Progress);
-        assert!(node.runtime.preloaded);
-        assert!(gate.is_ready(), "post-seek refill reopens the gate");
-        assert!(
-            gate.is_ready_for_epoch(epoch),
-            "post-seek refill must open the new seek epoch"
-        );
+        assert!(node.source.is_preloaded(), "new-segment refill opens preload");
+        assert!(matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if packet.meta.segment == id));
+        assert!(lane.receipts().any(|receipt| matches!(receipt.outcome(), kithara_command::Outcome::Applied { data, .. } if data.ready == Some(id))));
     }
 }

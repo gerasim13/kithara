@@ -3,6 +3,8 @@ mod core;
 mod load;
 mod node;
 mod reader;
+#[cfg(test)]
+pub(crate) use reader::tests as packet_tests;
 pub(crate) mod scheduler;
 mod track;
 

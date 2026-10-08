@@ -732,8 +732,7 @@ mod tests {
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     };
-    use kithara_signal::AudioChunkInfo;
-    use kithara_stream::{SeekControl, SeekObserve, SeekState};
+    use kithara_signal::{AudioChunkInfo, SegmentId, SourceSpan};
     #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     use kithara_test_fixtures::play_fixtures::half;
     #[cfg(any(
@@ -829,26 +828,24 @@ mod tests {
             drain,
             spec,
             pools.clone(),
-            idle_inbox(),
-        )
+            idle_inbox(), NonZeroUsize::new(1).expect("preload"))
     }
 
     struct RawSource {
         head: Arc<AtomicU64>,
-        seek: Arc<SeekState>,
         chunks: VecDeque<AudioChunk>,
     }
 
     impl AudioSource for RawSource {
         type Chunk = AudioChunk;
 
-        fn decode_epoch(&self) -> u64 {
-            self.seek.epoch()
+        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
+            Ok(SeekOutcome::Landed { target, landed_at: target })
         }
 
-        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-            Arc::clone(&self.seek) as Arc<dyn SeekObserve>
-        }
+        fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
+
+        fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
 
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
             let Some(chunk) = self.chunks.pop_front() else {
@@ -861,7 +858,7 @@ mod tests {
                     .saturating_add(u64::from(chunk.meta.frames)),
                 Ordering::Release,
             );
-            TrackStep::Produced(Fetch::data(chunk, self.seek.epoch()))
+            TrackStep::Produced(Fetch::data(chunk))
         }
     }
 
@@ -910,12 +907,19 @@ mod tests {
 
     struct DeferredSource {
         log: Arc<Mutex<Vec<&'static str>>>,
-        seek: Arc<SeekState>,
         spec: AudioSpec,
     }
 
     impl AudioSource for DeferredSource {
         type Chunk = AudioChunk;
+
+        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
+            Ok(SeekOutcome::Landed { target, landed_at: target })
+        }
+
+        fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
+
+        fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
 
         fn finish_deferred(&mut self) {
             self.log.lock().push("source.finish");
@@ -924,10 +928,6 @@ mod tests {
         fn prepare_deferred(&mut self) -> Option<AudioSpec> {
             self.log.lock().push("source.prepare");
             Some(self.spec)
-        }
-
-        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-            Arc::clone(&self.seek) as Arc<dyn SeekObserve>
         }
 
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
@@ -963,26 +963,29 @@ mod tests {
 
     struct RevisionSource {
         discontinuity: Arc<Mutex<SourceDiscontinuity>>,
-        seek: Arc<SeekState>,
         chunks: VecDeque<AudioChunk>,
     }
 
     impl AudioSource for RevisionSource {
         type Chunk = AudioChunk;
 
-        fn discontinuity(&self) -> Option<SourceDiscontinuity> {
-            Some(*self.discontinuity.lock())
+        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
+            Ok(SeekOutcome::Landed { target, landed_at: target })
         }
 
-        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-            Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+        fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
+
+        fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
+
+        fn discontinuity(&self) -> Option<SourceDiscontinuity> {
+            Some(*self.discontinuity.lock())
         }
 
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
             self.chunks
                 .pop_front()
                 .map_or(TrackStep::Blocked(WaitingReason::Waiting), |chunk| {
-                    TrackStep::Produced(Fetch::data(chunk, 0))
+                    TrackStep::Produced(Fetch::data(chunk))
                 })
         }
     }
@@ -1011,19 +1014,24 @@ mod tests {
 
     struct CountingEofSource {
         discontinuity: Arc<Mutex<Option<SourceDiscontinuity>>>,
-        seek: Arc<SeekState>,
         steps: Arc<AtomicU64>,
     }
 
     impl AudioSource for CountingEofSource {
         type Chunk = AudioChunk;
 
-        fn discontinuity(&self) -> Option<SourceDiscontinuity> {
-            *self.discontinuity.lock()
+        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
+            let revision = self.discontinuity.lock().map_or(0, |stamp| stamp.revision()) + 1;
+            *self.discontinuity.lock() = Some(SourceDiscontinuity::new(revision, AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"))));
+            Ok(SeekOutcome::Landed { target, landed_at: target })
         }
 
-        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-            Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+        fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
+
+        fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
+
+        fn discontinuity(&self) -> Option<SourceDiscontinuity> {
+            *self.discontinuity.lock()
         }
 
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
@@ -1057,36 +1065,28 @@ mod tests {
     }
 
     struct SeekApplyingSource {
-        seek: Arc<SeekState>,
         spec: AudioSpec,
-        decode_epoch: u64,
         revision: u64,
     }
 
     impl AudioSource for SeekApplyingSource {
         type Chunk = AudioChunk;
 
-        fn decode_epoch(&self) -> u64 {
-            self.decode_epoch
+        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
+            self.revision = self.revision.wrapping_add(1);
+            Ok(SeekOutcome::Landed { target, landed_at: target })
         }
+
+        fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
+
+        fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
 
         fn discontinuity(&self) -> Option<SourceDiscontinuity> {
             Some(SourceDiscontinuity::new(self.revision, self.spec))
         }
 
-        fn seek_observe(&self) -> Arc<dyn SeekObserve> {
-            Arc::clone(&self.seek) as Arc<dyn SeekObserve>
-        }
-
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
-            let live_epoch = self.seek.epoch();
-            if live_epoch != self.decode_epoch {
-                self.decode_epoch = live_epoch;
-                self.revision = self.revision.wrapping_add(1);
-                TrackStep::StateChanged
-            } else {
-                TrackStep::Eof
-            }
+            TrackStep::Eof
         }
     }
 
@@ -1193,7 +1193,6 @@ mod tests {
         let source = RawSource {
             chunks: VecDeque::from(chunks),
             head: Arc::new(AtomicU64::new(0)),
-            seek: Arc::new(SeekState::new()),
         };
         let mut source =
             source_stage_with_quantum(&pools, source, Vec::new(), spec, quantum_frames);
@@ -1232,7 +1231,6 @@ mod tests {
                 chunk(&pools, spec, u64::from(128_u32), &quarter),
             ]),
             head: Arc::clone(&head),
-            seek: Arc::new(SeekState::new()),
         };
         let effects: Vec<Box<dyn AudioEffect>> = vec![Box::<BufferThenHalveFrames>::default()];
         let mut source = source_stage(&pools, source, effects, spec);
@@ -1303,7 +1301,6 @@ mod tests {
         let source = DeferredSource {
             spec,
             log: Arc::clone(&log),
-            seek: Arc::new(SeekState::new()),
         };
         let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(DeferredEffect {
             log: Arc::clone(&log),
@@ -1330,7 +1327,6 @@ mod tests {
         let source = RevisionSource {
             chunks: VecDeque::new(),
             discontinuity: Arc::clone(&discontinuity),
-            seek: Arc::new(SeekState::new()),
         };
         let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(ResetCounter {
             resets: Arc::clone(&resets),
@@ -1359,21 +1355,24 @@ mod tests {
         let changed = AudioSpec::new(1, NonZeroU32::new(48_000).expect("changed rate"));
         let pools = pools();
         let first = chunk(&pools, initial, 256, &quarter);
-        let first_meta = first.meta;
+        let mut first_meta = first.meta;
+        first_meta.source_span = SourceSpan::new(256, 384, initial.sample_rate, 128);
         let first_samples = first.samples.to_vec();
         let mut second = chunk(&pools, changed, 512, &negative_quarter);
         second.meta.segment_index = Some(3);
         second.meta.variant_index = Some(2);
-        second.meta.epoch = 9;
+        second.meta.segment = SegmentId::FIRST.next();
         second.meta.source_byte_offset = Some(4096);
         second.meta.source_bytes = 1024;
-        let second_meta = second.meta;
+        let mut second_meta = second.meta;
+        second_meta.segment = SegmentId::FIRST;
+        second_meta.lane_frame = 128;
+        second_meta.source_span = SourceSpan::new(512, 640, changed.sample_rate, 128);
         let second_samples = second.samples.to_vec();
         let discontinuity = Arc::new(Mutex::new(SourceDiscontinuity::new(7, initial)));
         let source = RevisionSource {
             chunks: VecDeque::from([first, second]),
             discontinuity: Arc::clone(&discontinuity),
-            seek: Arc::new(SeekState::new()),
         };
         let effects = Vec::new();
         let mut source = source_stage(&pools, source, effects, initial);
@@ -1425,11 +1424,9 @@ mod tests {
             let sentinel_samples = sentinel.samples.to_vec();
 
             let head = Arc::new(AtomicU64::new(0));
-            let seek = Arc::new(SeekState::new());
             let raw = RawSource {
                 chunks: VecDeque::from([first_active, first_unity, sentinel]),
                 head: Arc::clone(&head),
-                seek: Arc::clone(&seek),
             };
             let render_quantum_frames = usize::try_from(ACTIVE_FRAMES)
                 .expect("test quantum fits usize")
@@ -1449,7 +1446,7 @@ mod tests {
                 .unwrap_or_else(|error| panic!("test effect drain: {error}"));
             let (mut lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
             let mut source =
-                WarpSource::new(raw, renderer, effects, drain, spec, pools.clone(), inbox);
+                WarpSource::new(raw, renderer, effects, drain, spec, pools.clone(), inbox, NonZeroUsize::new(1).expect("preload"));
 
             let initial = source.step_track();
             assert!(matches!(
@@ -1482,11 +1479,12 @@ mod tests {
             assert_eq!(head.load(Ordering::Acquire), first_unity_end);
             assert!(source.warp.transition_pending());
 
-            assert_eq!(
-                seek.begin(kithara_platform::time::Duration::from_secs(1)),
-                1
-            );
+            lane.send(When::Next, command_batch(LaneCommand::Segment {
+                id: SegmentId::FIRST.next(),
+                from: Duration::from_secs(1), speed: SpeedCurve::Constant(1.0),
+            })).expect("segment batch");
             assert!(matches!(source.step_track(), TrackStep::StateChanged));
+            assert_eq!(source.cursor().segment, SegmentId::FIRST.next());
             assert_eq!(head.load(Ordering::Acquire), first_unity_end);
             assert!(!source.warp.transition_pending());
 
@@ -1509,6 +1507,7 @@ mod tests {
             assert_eq!(head.load(Ordering::Acquire), sentinel_end);
             assert_eq!(data.samples.as_ptr(), sentinel_ptr);
             assert_eq!(&data.samples[..], &sentinel_samples);
+            assert_eq!(data.meta.segment, SegmentId::FIRST.next());
         }
     }
 
@@ -1526,15 +1525,13 @@ mod tests {
             let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("sample rate"));
             let raw = RawSource {
                 head: Arc::new(AtomicU64::new(0)),
-                seek: Arc::new(SeekState::new()),
-                chunks: VecDeque::new(),
+                    chunks: VecDeque::new(),
             };
             let decoded = chunk_with_frames(&pools, spec, 0, 64, quarter);
             let decoded_pointer = decoded.samples.as_ptr();
             let mut source = source_stage_with_quantum(&pools, raw, Vec::new(), spec, FRAMES);
             source.pending_input = Some(PendingInput {
                 chunk: decoded,
-                epoch: 0,
                 consumed_frames: 0,
             });
             source.prepare_staging();
@@ -1556,7 +1553,7 @@ mod tests {
         }
         let (mut source, decoded_pointer, staged_pointer) = prepare(&quarter);
         let result = reject(&mut source).await;
-        assert!(matches!(result, TrackStep::Failed));
+        assert!(matches!(result, TrackStep::Failed(_)));
         assert!(source.quantum_failed);
         let decoded = source
             .retired_input
@@ -1576,81 +1573,17 @@ mod tests {
     #[kithara::test(native)]
     #[cfg(feature = "stretch-signalsmith")]
     fn projected_backend_switch_keeps_pending_input_during_resident_output(quarter: Vec<f32>) {
-        use kithara_beat::{
-            BeatGridModel, BeatGridState as WireState, GridBeat, RawBeatGrid, SCHEMA_VERSION,
-        };
-        use kithara_signal::{SessionEpoch, SessionFrame};
-        use kithara_warp::{
-            AssetAxis, AssetExtent, Beat, BeatAlignment, BeatGridId, BeatGridRevision,
-            BeatGridSnapshot, MapPoint, SessionAnchor, SessionBeat, WarpMap, WarpMapRevision,
-            WarpPlan,
-        };
-
+        use kithara_warp::{GridSegment, RegionPlan};
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("sample rate"));
         let pools = pools();
-        let model = BeatGridModel::try_from(RawBeatGrid {
-            schema_version: SCHEMA_VERSION,
-            model_id: "projected-worker".to_owned(),
-            revision: 1,
-            state: WireState::Final,
-            duration: Some(10.0),
-            bpm: 120.0,
-            beats: vec![
-                GridBeat {
-                    at: 0.0,
-                    ordinal: 0,
-                    confidence: Some(1.0),
-                },
-                GridBeat {
-                    at: 0.5,
-                    ordinal: 1,
-                    confidence: Some(1.0),
-                },
-            ],
-            downbeats: Vec::new(),
-            meter: None,
-        })
-        .expect("valid model");
-        let asset = BeatGridSnapshot::model(
-            BeatGridId::allocate().expect("asset identity"),
-            BeatGridRevision::first(),
-            &model,
-            AssetAxis::new(spec.sample_rate, AssetExtent::Bounded(480_000)),
-        )
-        .expect("bounded asset grid");
-        let session = BeatGridSnapshot::session(
-            BeatGridId::allocate().expect("session identity"),
-            BeatGridRevision::first(),
-            SessionEpoch::new(0),
-            SessionAnchor::new(
-                SessionFrame::new(0),
-                SessionBeat::default(),
-                3.0,
-                spec.sample_rate,
-            )
-            .expect("session tempo"),
-            None,
-        );
-        let cue = Beat::new(0.0).expect("cue");
-        let alignment = BeatAlignment::new(
-            MapPoint::new(asset.stamp(), cue),
-            MapPoint::new(session.stamp(), cue),
-        );
-        let map = WarpMap::projected(asset, session, alignment, WarpMapRevision::first())
-            .expect("projected geometry");
         let config = kithara_warp::WarpConfig::builder()
-            .speed(1.0)
-            .keylock(true)
-            .backend(StretchKind::Signalsmith)
+            .speed(1.0).keylock(true).backend(StretchKind::Signalsmith)
             .render_quantum_frames(NonZeroUsize::new(128).expect("quantum"))
+            .region_plan(Arc::new(RegionPlan::new(vec![GridSegment::new(0, 480_000, 1.5)]).expect("region geometry")))
             .build();
-        config.plan().install(Some(Arc::new(
-            WarpPlan::new(map, SessionFrame::new(0)).expect("initial activation"),
-        )));
         let head = Arc::new(AtomicU64::new(0));
         let raw = RawSource {
             head: Arc::clone(&head),
-            seek: Arc::new(SeekState::new()),
             chunks: (0..8)
                 .map(|index| chunk_with_frames(&pools, spec, index * 4096, 4096, &quarter))
                 .collect(),
@@ -1664,8 +1597,7 @@ mod tests {
             drain,
             spec,
             pools.clone(),
-            idle_inbox(),
-        );
+            idle_inbox(), NonZeroUsize::new(1).expect("preload"));
         let mut produced = 0;
         for _ in 0..128 {
             flush_deferred(&mut source);
@@ -1702,7 +1634,7 @@ mod tests {
             "NeedsService is not a fatal render error"
         );
         assert!(
-            matches!(source.drain_state, DrainState::LiveWarp(_)),
+            matches!(source.drain_state, DrainState::LiveWarp),
             "backend retirement must be serviced before retrying the held input"
         );
         let mut resident_output = false;
@@ -1716,7 +1648,7 @@ mod tests {
                 .consumed_frames;
             let step = source.step_track();
             assert!(
-                !matches!(step, TrackStep::Failed | TrackStep::Eof),
+                !matches!(step, TrackStep::Failed(_) | TrackStep::Eof),
                 "backend service must neither fail nor finish the source"
             );
             let pending = source
@@ -1771,8 +1703,7 @@ mod tests {
             let raw = RawSource {
                 chunks: VecDeque::from([chunk(&source_pools, spec, 0, &quarter)]),
                 head: Arc::clone(&head),
-                seek: Arc::new(SeekState::new()),
-            };
+                };
             let config = kithara_warp::WarpConfig::builder()
                 .speed(0.5)
                 .keylock(true)
@@ -1791,12 +1722,11 @@ mod tests {
                 drain,
                 spec,
                 target_pools.clone(),
-                idle_inbox(),
-            );
+                idle_inbox(), NonZeroUsize::new(1).expect("preload"));
 
             for _ in 0..3 {
                 flush_deferred(&mut source);
-                assert!(matches!(source.step_track(), TrackStep::Failed));
+                assert!(matches!(source.step_track(), TrackStep::Failed(_)));
                 assert_eq!(head.load(Ordering::Acquire), 0);
             }
         }
@@ -1806,13 +1736,10 @@ mod tests {
     fn seek_cancels_stale_tail_and_resets_effects_once(quarter: Vec<f32>) {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
         let pools = pools();
-        let seek = Arc::new(SeekState::new());
         let resets = Arc::new(AtomicU64::new(0));
         let source = SeekApplyingSource {
             spec,
-            decode_epoch: 0,
             revision: 0,
-            seek: Arc::clone(&seek),
         };
         let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(ResettingTail {
             resets: Arc::clone(&resets),
@@ -1821,10 +1748,7 @@ mod tests {
         let mut source = source_stage(&pools, source, effects, spec);
 
         assert!(matches!(source.step_track(), TrackStep::StateChanged));
-        assert_eq!(
-            seek.begin(kithara_platform::time::Duration::from_secs(1)),
-            1
-        );
+        assert!(matches!(source.source.seek(Duration::from_secs(1)), Ok(SeekOutcome::Landed { .. })));
         assert!(matches!(source.step_track(), TrackStep::StateChanged));
         assert_eq!(
             resets.load(Ordering::Acquire),
@@ -1845,7 +1769,6 @@ mod tests {
         let source = RawSource {
             chunks: VecDeque::new(),
             head: Arc::new(AtomicU64::new(0)),
-            seek: Arc::new(SeekState::new()),
         };
         let effects: Vec<Box<dyn AudioEffect>> = vec![
             Box::new(ResettingTail {
@@ -1881,11 +1804,9 @@ mod tests {
         let flushes = Arc::new(AtomicU64::new(0));
         let resets = Arc::new(AtomicU64::new(0));
         let discontinuity = Arc::new(Mutex::new(None));
-        let seek = Arc::new(SeekState::new());
         let source = CountingEofSource {
             discontinuity: Arc::clone(&discontinuity),
             steps: Arc::clone(&steps),
-            seek: Arc::clone(&seek),
         };
         let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(CountingEmptyTail {
             flushes: Arc::clone(&flushes),
@@ -1902,10 +1823,7 @@ mod tests {
         assert_eq!(steps.load(Ordering::Acquire), 1);
         assert_eq!(flushes.load(Ordering::Acquire), 1);
 
-        assert_eq!(
-            seek.begin(kithara_platform::time::Duration::from_secs(1)),
-            1
-        );
+        assert!(matches!(source.source.seek(Duration::from_secs(1)), Ok(SeekOutcome::Landed { .. })));
         assert!(matches!(source.step_track(), TrackStep::StateChanged));
         assert!(matches!(source.step_track(), TrackStep::StateChanged));
         assert!(matches!(source.step_track(), TrackStep::Eof));
@@ -1993,7 +1911,6 @@ mod tests {
         let raw = RawSource {
             chunks,
             head: Arc::new(AtomicU64::new(0)),
-            seek: Arc::new(SeekState::new()),
         };
         let (lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
         let config = kithara_warp::WarpConfig::builder()
@@ -2005,7 +1922,7 @@ mod tests {
         let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
         let drain =
             EffectDrain::new(0, pools).unwrap_or_else(|error| panic!("test effect drain: {error}"));
-        let source = WarpSource::new(raw, renderer, Vec::new(), drain, spec, pools.clone(), inbox);
+        let source = WarpSource::new(raw, renderer, Vec::new(), drain, spec, pools.clone(), inbox, NonZeroUsize::new(1).expect("preload"));
         (source, lane)
     }
 
@@ -2042,7 +1959,7 @@ mod tests {
         let pools = pools();
         let (mut source, mut lane) = speed_lane(&pools, &quarter);
         let seq = lane
-            .send(When::At(LaneFrame(AT)), speed_batch(1.25))
+            .send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: AT }), speed_batch(1.25))
             .expect("the lane has room for one batch");
 
         let emitted = emit(&mut source, 0, AT + 2_000);
@@ -2078,7 +1995,7 @@ mod tests {
         assert!(
             matches!(
                 outcomes.as_slice(),
-                [(applied, Outcome::Applied { at: LaneFrame(AT), .. })] if *applied == seq
+                [(applied, Outcome::Applied { at: LaneFrame { segment: SegmentId::FIRST, frame: AT }, .. })] if *applied == seq
             ),
             "the receipt names the batch's frame: {outcomes:?}"
         );
@@ -2090,7 +2007,7 @@ mod tests {
         let (mut source, mut lane) = speed_lane(&pools, &quarter);
         let _ = emit(&mut source, 0, 1_000);
 
-        lane.send(When::At(LaneFrame(500)), speed_batch(1.25))
+        lane.send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: 500 }), speed_batch(1.25))
             .expect("the lane has room for one batch");
         let emitted = emit(&mut source, 1_000, 2_000);
 
@@ -2119,7 +2036,7 @@ mod tests {
         const SPEED: f64 = 1.25;
         let pools = pools();
         let (mut source, mut lane) = speed_lane(&pools, &quarter);
-        lane.send(When::At(LaneFrame(AT)), speed_batch(1.25))
+        lane.send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: AT }), speed_batch(1.25))
             .expect("the lane has room for one batch");
 
         let emitted = emit(&mut source, 0, AT + 4_000);
@@ -2160,7 +2077,7 @@ mod tests {
             0.8,
             (StretchKind::default(), false),
         );
-        lane.send(When::At(LaneFrame(AT)), speed_batch(1.25))
+        lane.send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: AT }), speed_batch(1.25))
             .expect("the lane has room for one batch");
 
         let emitted = emit(&mut source, 0, AT + 1_000);
@@ -2271,7 +2188,7 @@ mod tests {
             let pools = pools();
             let (mut source, mut lane) = stretch_lane(&pools, (backend, true), &signal);
             for (at, speed) in [(ENGAGE, 0.8), (FIRST, 1.25), (SECOND, 0.94)] {
-                lane.send(When::At(LaneFrame(at)), speed_batch(speed))
+                lane.send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: at }), speed_batch(speed))
                     .expect("the lane has room for each change");
             }
 
@@ -2314,16 +2231,16 @@ mod tests {
             let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
             let pools = pools();
             let (mut changed, mut lane) = stretch_lane(&pools, (backend, true), &signal);
-            lane.send(When::At(LaneFrame(ENGAGE)), speed_batch(0.8))
+            lane.send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: ENGAGE }), speed_batch(0.8))
                 .expect("the lane has room for the engaging batch");
-            lane.send(When::At(LaneFrame(AT)), speed_batch(1.25))
+            lane.send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: AT }), speed_batch(1.25))
                 .expect("the lane has room for the change");
             let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
             let cue = ENGAGE + (AT - ENGAGE) * 4 / 5;
 
             let (mut started, mut fresh) = stretch_lane(&pools, (backend, true), &signal);
             fresh
-                .send(When::At(LaneFrame(cue)), speed_batch(1.25))
+                .send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: cue }), speed_batch(1.25))
                 .expect("the lane has room for the start");
             let reference = emit(&mut started, 0, cue + SETTLE + (WINDOW + REACH) as u64);
 
@@ -2366,17 +2283,17 @@ mod tests {
                 let signal = chirp(12 * consts::LANE_CHUNK_FRAMES as usize);
                 let pools = pools();
                 let (mut changed, mut lane) = stretch_lane(&pools, from, &signal);
-                lane.send(When::At(LaneFrame(ENGAGE)), speed_batch(1.25))
+                lane.send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: ENGAGE }), speed_batch(1.25))
                     .expect("the lane has room for the engaging batch");
                 let seq = lane
-                    .send(When::At(LaneFrame(AT)), command_batch(command))
+                    .send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: AT }), command_batch(command.clone()))
                     .expect("the lane has room for the change");
                 let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
                 let cue = ENGAGE + (AT - ENGAGE) * 5 / 4;
 
                 let (mut started, mut fresh) = stretch_lane(&pools, to, &signal);
                 fresh
-                    .send(When::At(LaneFrame(cue)), speed_batch(1.25))
+                    .send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: cue }), speed_batch(1.25))
                     .expect("the lane has room for the start");
                 let reference = emit(&mut started, 0, cue + SETTLE + (WINDOW + REACH) as u64);
 
@@ -2397,7 +2314,7 @@ mod tests {
                         && matches!(
                             receipt.outcome(),
                             Outcome::Applied {
-                                at: LaneFrame(AT),
+                                at: LaneFrame { segment: SegmentId::FIRST, frame: AT },
                                 ..
                             }
                         )),
@@ -2422,17 +2339,17 @@ mod tests {
             let pools = pools();
             let (mut changed, mut lane) = stretch_lane(&pools, (backend, false), &signal);
             lane.send(
-                When::At(LaneFrame(AT)),
+                When::At(LaneFrame { segment: SegmentId::FIRST, frame: AT }),
                 command_batch(LaneCommand::SetKeylock(true)),
             )
             .expect("the lane has room for the engine change");
-            lane.send(When::At(LaneFrame(AT)), speed_batch(1.25))
+            lane.send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: AT }), speed_batch(1.25))
                 .expect("the lane has room for the speed change");
             let emitted = emit(&mut changed, 0, AT + SETTLE + WINDOW as u64);
 
             let (mut started, mut fresh) = stretch_lane(&pools, (backend, true), &signal);
             fresh
-                .send(When::At(LaneFrame(AT)), speed_batch(1.25))
+                .send(When::At(LaneFrame { segment: SegmentId::FIRST, frame: AT }), speed_batch(1.25))
                 .expect("the lane has room for the start");
             let reference = emit(&mut started, 0, AT + SETTLE + (WINDOW + REACH) as u64);
 
@@ -2463,7 +2380,6 @@ mod tests {
         let raw = RawSource {
             chunks: VecDeque::from(chunks),
             head: Arc::new(AtomicU64::new(0)),
-            seek: Arc::new(SeekState::new()),
         };
         let config = kithara_warp::WarpConfig::builder()
             .backend(StretchKind::Identity)
@@ -2475,7 +2391,7 @@ mod tests {
         let drain = EffectDrain::new(0, &pools).expect("empty effect drain");
         let (mut lane, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
         let mut source =
-            WarpSource::new(raw, renderer, Vec::new(), drain, spec, pools.clone(), inbox);
+            WarpSource::new(raw, renderer, Vec::new(), drain, spec, pools.clone(), inbox, NonZeroUsize::new(1).expect("preload"));
         for (index, pointer) in pointers.into_iter().enumerate() {
             if index == 1 {
                 lane.send(
@@ -2556,13 +2472,13 @@ mod tests {
             lane_over(&pools, 3, |_| &quarter, 2.0, (StretchKind::Identity, false));
         let first = lane
             .send(
-                When::At(LaneFrame(ENGAGE)),
+                When::At(LaneFrame { segment: SegmentId::FIRST, frame: ENGAGE }),
                 command_batch(LaneCommand::SetBackend(backend)),
             )
             .expect("the lane has room");
         let second = lane
             .send(
-                When::At(LaneFrame(RETURN)),
+                When::At(LaneFrame { segment: SegmentId::FIRST, frame: RETURN }),
                 command_batch(LaneCommand::SetBackend(StretchKind::Identity)),
             )
             .expect("the lane has room");
@@ -2635,8 +2551,8 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert!(matches!(outcomes.as_slice(), [
-            (engage, Outcome::Applied { at: LaneFrame(ENGAGE), .. }),
-            (identity, Outcome::Applied { at: LaneFrame(RETURN), .. }),
+            (engage, Outcome::Applied { at: LaneFrame { segment: SegmentId::FIRST, frame: ENGAGE }, .. }),
+            (identity, Outcome::Applied { at: LaneFrame { segment: SegmentId::FIRST, frame: RETURN }, .. }),
         ] if *engage == first && *identity == second));
     }
 }
