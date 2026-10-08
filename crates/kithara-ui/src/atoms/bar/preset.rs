@@ -10,7 +10,6 @@ use crate::{
     render::Skin,
     shaping::TextContext,
     skin::{GlobalBarSkin, TextRoleSkin},
-    solve::{Length, Size},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,9 +24,9 @@ pub(crate) struct PresetData {
     pub(crate) active: Option<usize>,
 }
 
-#[derive(Clone, PartialEq, kithara_derive::Retained)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct Preset {
-    metrics: GlobalBarSkin,
+    pub(crate) metrics: GlobalBarSkin,
     active: Rgba,
     active_hovered: Rgba,
     active_pressed: Rgba,
@@ -83,13 +82,6 @@ impl Preset {
         let count = count.to_f32()?;
         let gaps = self.metrics.chip_gap * (count - 1.0).max(0.0);
         (count > 0.0 && width > gaps).then_some((width - gaps) / count)
-    }
-
-    pub(crate) fn declared(&self) -> Size<Length> {
-        Size::new(
-            Length::Fixed(self.metrics.selector_width),
-            Length::Fixed(self.metrics.height),
-        )
     }
 
     /// The chip a point selects: the selector split into equal cells, not the
@@ -226,7 +218,6 @@ mod tests {
         render::{ReadValue, Reads, document::probe},
         shaping::TextContext,
         skin::{ColorRole, FontFamily, TextRoleSkin},
-        solve::{Length, Size},
     };
 
     mod consts {
@@ -256,7 +247,7 @@ mod tests {
 
     fn draw(active: Option<usize>, visual: IndexedVisual) -> DrawList {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         Preset::new(skin).paint(&mut list, &mut text, &data(active), consts::BOUNDS, visual);
         list.finish()
@@ -294,13 +285,6 @@ mod tests {
         let fills = fills(&list);
         let chip_width = (selector.w - skin.global_bar.chip_gap) / 2.0;
 
-        assert_eq!(
-            painter.declared(),
-            Size::new(
-                Length::Fixed(skin.global_bar.selector_width),
-                Length::Fixed(skin.global_bar.height),
-            )
-        );
         assert_eq!(
             selector,
             Rect {
@@ -409,7 +393,7 @@ mod tests {
             spacing: 0.0,
             weight: skin.global_bar.chip_text.weight,
         };
-        let mut shaper = TextContext::from(skin.text_resources());
+        let mut shaper = TextContext::from(skin.text_resources.as_ref());
         assert_eq!(text[0].0, "MICRO");
         assert_eq!(text[0].1, shaper.shape("MICRO", role, None));
         assert_eq!(text[0].2, skin.palette.bg);

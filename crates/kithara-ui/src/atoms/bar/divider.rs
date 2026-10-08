@@ -10,7 +10,6 @@ use crate::{
     data = (),
     draw = self.paint(list, bounds)
 )]
-#[derive(kithara_derive::Retained)]
 pub(crate) struct Divider {
     color: Rgba,
 }

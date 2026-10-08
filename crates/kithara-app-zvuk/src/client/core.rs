@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
 use bytes::Bytes;
-use kithara_net::{Headers, HttpClient, Net};
+use kithara_config::Config as _;
+use kithara_net::{Headers, HttpClient, Net, RetryPolicy};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use url::Url;
@@ -27,8 +28,12 @@ impl Client<HttpClient> {
     /// Uses one shared HTTP transport with operation-specific retry policies.
     #[must_use]
     pub(crate) fn new(net: HttpClient, config: &Config) -> Self {
-        let mut policy = net.options().retry_policy;
-        policy.max_retries = 0;
+        let current = net.options().values().retry_policy;
+        let policy = RetryPolicy::builder()
+            .base_delay(current.base_delay)
+            .max_delay(current.max_delay)
+            .max_retries(0)
+            .build();
         let mutations = net.with_retry_policy(policy);
         Self::with_transports(net, mutations, config)
     }

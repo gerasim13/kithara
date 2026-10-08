@@ -5,5 +5,5 @@ pub(crate) use spacer::Spacer;
 
 mod brand;
 mod divider;
-mod preset;
+pub(crate) mod preset;
 mod spacer;

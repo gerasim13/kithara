@@ -1,0 +1,356 @@
+use std::rc::Rc;
+
+use masonry::{
+    core::{BoxConstraints, LayoutCtx, WidgetPod},
+    kurbo::{Point, Size as MasonrySize},
+};
+use num_traits::cast::AsPrimitive;
+
+use super::{
+    built::{BlockState, Natural},
+    mount::main_length,
+    node::Node,
+};
+use crate::{
+    hosts::solve::{self, Alignment, Distribution, Input, Item, Limits, Measure, Padding, Size},
+    layout::Axis,
+    module::MeasureAxis,
+    render::document::Band,
+    size::SizeSpec,
+};
+
+pub(crate) struct Flex {
+    alignment: Alignment,
+    main_alignment: Alignment,
+    axis: Axis,
+    height: solve::Length,
+    width: solve::Length,
+    /// The axis whose room decides which children stand, when they come and go
+    /// with the room at all.
+    measure: Option<MeasureAxis>,
+    padding: Padding,
+    children: Vec<ChildLayout>,
+    /// Which child each item the solver asks about actually is, refilled
+    /// beside `stands`.
+    slots: Vec<usize>,
+    /// Which children the room reached, refilled at every layout. A retained
+    /// flow is laid out again for every frame that resizes it, so this is
+    /// storage the widget keeps rather than a list it builds each time.
+    stands: Vec<bool>,
+    spacing: f32,
+}
+
+#[derive(Clone)]
+pub(crate) struct ChildLayout {
+    band: Band,
+    /// Whether the document hides this child, when the child is a block at
+    /// all. A block stands here beside the band because both answer the same
+    /// question - whether this child is in the picture - and neither of them
+    /// rebuilds the flow to answer it.
+    block: Option<Rc<BlockState>>,
+    /// Whether the child stands above the flow, taking no slot in it.
+    floats: bool,
+    declared: Option<Size<solve::Length>>,
+    main_minimum: Option<f32>,
+    main_weight: Option<f32>,
+    natural: Natural,
+}
+
+impl ChildLayout {
+    /// The block that says whether the document shows this child at all.
+    pub(crate) fn blocked(mut self, block: Option<Rc<BlockState>>) -> Self {
+        self.block = block;
+        self
+    }
+
+    pub(crate) fn natural(natural: &Natural, main_minimum: Option<f32>) -> Self {
+        Self {
+            natural: natural.clone(),
+            main_minimum,
+            band: Band::ALWAYS,
+            block: None,
+            floats: false,
+            declared: None,
+            main_weight: None,
+        }
+    }
+
+    pub(crate) const fn cell(axis: Axis, size: SizeSpec, main_weight: f32) -> Self {
+        let declared = match axis {
+            Axis::Horizontal => Size::new(main_length(size.w), solve::Length::Fill),
+            Axis::Vertical => Size::new(solve::Length::Fill, main_length(size.h)),
+        };
+        Self {
+            natural: Natural::Fixed(declared),
+            band: Band::ALWAYS,
+            block: None,
+            floats: false,
+            declared: Some(declared),
+            main_minimum: None,
+            main_weight: Some(main_weight),
+        }
+    }
+
+    /// Whether this child stands above the flow rather than in it.
+    pub(crate) const fn floating(mut self, floats: bool) -> Self {
+        self.floats = floats;
+        self
+    }
+
+    /// The band of room this child stands in.
+    pub(crate) const fn within(mut self, band: Band) -> Self {
+        self.band = band;
+        self
+    }
+}
+
+impl Flex {
+    pub(crate) fn split(axis: Axis, children: Vec<ChildLayout>) -> Self {
+        Self::new(
+            axis,
+            solve::Length::Fill,
+            solve::Length::Fill,
+            Padding::default(),
+            0.0,
+            Alignment::Start,
+            children,
+        )
+    }
+
+    pub(crate) const fn new(
+        axis: Axis,
+        width: solve::Length,
+        height: solve::Length,
+        padding: Padding,
+        spacing: f32,
+        alignment: Alignment,
+        children: Vec<ChildLayout>,
+    ) -> Self {
+        Self {
+            axis,
+            width,
+            height,
+            padding,
+            spacing,
+            alignment,
+            children,
+            measure: None,
+            main_alignment: Alignment::Start,
+            stands: Vec::new(),
+            slots: Vec::new(),
+        }
+    }
+
+    pub(crate) const fn align_main(mut self, alignment: Alignment) -> Self {
+        self.main_alignment = alignment;
+        self
+    }
+
+    pub(crate) fn layout(
+        &mut self,
+        ctx: &mut LayoutCtx<'_>,
+        children: &mut [WidgetPod<Node>],
+        limits: Limits,
+    ) -> Size {
+        let outer_limits = limits.width(self.width).height(self.height);
+        let inner_limits = outer_limits.shrink(self.padding).loose();
+        self.stand(outer_limits);
+        let Self {
+            stands,
+            slots,
+            children: layouts,
+            ..
+        } = &mut *self;
+        slots.clear();
+        slots.extend(
+            stands
+                .iter()
+                .zip(layouts.iter())
+                .enumerate()
+                .filter_map(|(index, (on, layout))| (*on && !layout.floats).then_some(index)),
+        );
+        for (index, (on, layout)) in self.stands.iter().zip(&self.children).enumerate() {
+            let child = &mut children[index];
+            ctx.set_stashed(child, !on);
+            if *on && layout.floats {
+                let nothing = Limits::new(Size::ZERO, Size::ZERO);
+                Node::set_child_limits(ctx, child, nothing);
+                ctx.run_layout(child, &box_constraints(nothing));
+                ctx.place_child(child, Point::ORIGIN);
+            }
+        }
+        let items = self
+            .slots
+            .iter()
+            .map(|slot| {
+                let layout = &self.children[*slot];
+                let declared = layout.natural.now();
+                layout.main_weight.map_or_else(
+                    || Item::new(declared, layout.main_minimum),
+                    |weight| Item::weighted(declared, weight),
+                )
+            })
+            .collect();
+        let mut measure = MasonryMeasure {
+            children,
+            ctx,
+            layouts: &self.children,
+            stood: vec![None; self.slots.len()],
+            slots: &self.slots,
+        };
+        let Distribution { size, mut items } = solve::resolve(
+            Input {
+                items,
+                axis: self.axis,
+                limits: &inner_limits,
+                width: self.width,
+                height: self.height,
+                padding: Padding::default(),
+                spacing: self.spacing,
+                align_items: self.alignment,
+            },
+            &mut measure,
+        );
+        let content_main = items.last().map_or(0.0, |item| match self.axis {
+            Axis::Horizontal => item.offset.x + item.size.width,
+            Axis::Vertical => item.offset.y + item.size.height,
+        });
+        let available_main = match self.axis {
+            Axis::Horizontal => size.width,
+            Axis::Vertical => size.height,
+        };
+        let free = (available_main - content_main).max(0.0);
+        let offset = match self.main_alignment {
+            Alignment::Start => 0.0,
+            Alignment::Center => free / 2.0,
+            Alignment::End => free,
+        };
+        for item in &mut items {
+            match self.axis {
+                Axis::Horizontal => item.offset.x += offset,
+                Axis::Vertical => item.offset.y += offset,
+            }
+        }
+        let fitted = fit_padding(self.padding, size, outer_limits.max());
+        for (index, (slot, item)) in self.slots.iter().zip(items).enumerate() {
+            let placed = match measure.stood[index] {
+                Some((limits, size)) if size == item.size => limits,
+                _ => Limits::new(item.size, item.size),
+            };
+            let child = &mut measure.children[*slot];
+            Node::set_child_limits(measure.ctx, child, placed);
+            measure.ctx.run_layout(child, &box_constraints(placed));
+            measure.ctx.place_child(
+                child,
+                Point::new(
+                    f64::from(item.offset.x + fitted.left),
+                    f64::from(item.offset.y + fitted.top),
+                ),
+            );
+        }
+
+        outer_limits
+            .shrink(fitted)
+            .resolve(self.width, self.height, size)
+            .expand(fitted)
+    }
+
+    /// Names the axis whose room decides which children stand.
+    pub(crate) const fn measure(mut self, axis: Option<MeasureAxis>) -> Self {
+        self.measure = axis;
+        self
+    }
+
+    /// Records which children stand: the ones the room reached and the
+    /// document did not hide.
+    fn stand(&mut self, limits: Limits) {
+        self.stands.clear();
+        let room = self.measure.map(|axis| match axis {
+            MeasureAxis::Width => limits.max().width,
+            MeasureAxis::Height => limits.max().height,
+        });
+        self.stands.extend(self.children.iter().map(|child| {
+            let reached = room.is_none_or(|room| child.band.stands(room));
+            let shown = !child.block.as_ref().is_some_and(|block| block.is_hidden());
+            reached && shown
+        }));
+    }
+}
+
+struct MasonryMeasure<'a, 'ctx> {
+    ctx: &'a mut LayoutCtx<'ctx>,
+    layouts: &'a [ChildLayout],
+    children: &'a mut [WidgetPod<Node>],
+    /// Which child each item the solver asks about actually is: the solver sees
+    /// only the cells that stand.
+    slots: &'a [usize],
+    /// Where measuring left each cell: the limits it was last laid out under
+    /// and the size it answered there.
+    ///
+    /// Measuring a cell lays out everything inside it, and so does placing it,
+    /// so a cell placed at a size it was not measured at is walked twice - and
+    /// a cell inside that cell is walked twice for each of those, which is how
+    /// a page seven boxes deep comes to lay itself out seventy-five times over.
+    /// A cell the solver hands exactly the size it answered with is already
+    /// standing right, and asking Masonry for that same box again is answered
+    /// from its own layout cache rather than by walking the cell again.
+    stood: Vec<Option<(Limits, Size)>>,
+}
+
+impl Measure for MasonryMeasure<'_, '_> {
+    fn measure(&mut self, index: usize, limits: &Limits) -> Size {
+        let slot = self.slots[index];
+        let declared = self.layouts[slot].declared;
+        let child_limits = declared.map_or(*limits, |declared| {
+            limits.width(declared.width).height(declared.height).loose()
+        });
+        let child_limits = normalized(child_limits);
+        let child = &mut self.children[slot];
+        Node::set_child_limits(self.ctx, child, child_limits);
+        let intrinsic = self.ctx.run_layout(child, &box_constraints(child_limits));
+        let intrinsic = Size::new(intrinsic.width.as_(), intrinsic.height.as_());
+        self.stood[index] = Some((child_limits, intrinsic));
+        declared.map_or(intrinsic, |declared| {
+            limits
+                .width(declared.width)
+                .height(declared.height)
+                .resolve(declared.width, declared.height, intrinsic)
+        })
+    }
+}
+
+pub(crate) fn box_constraints(limits: Limits) -> BoxConstraints {
+    let limits = normalized(limits);
+    BoxConstraints::new(
+        MasonrySize::new(
+            f64::from(limits.min().width),
+            f64::from(limits.min().height),
+        ),
+        MasonrySize::new(
+            f64::from(limits.max().width),
+            f64::from(limits.max().height),
+        ),
+    )
+}
+
+pub(crate) fn normalized(limits: Limits) -> Limits {
+    let min = Size::new(limits.min().width.max(0.0), limits.min().height.max(0.0));
+    let max = Size::new(
+        limits.max().width.max(min.width),
+        limits.max().height.max(min.height),
+    );
+    Limits::with_compression(min, max, limits.compression())
+}
+
+fn fit_padding(padding: Padding, inner: Size, outer: Size) -> Padding {
+    let available_width = (outer.width - inner.width).max(0.0);
+    let available_height = (outer.height - inner.height).max(0.0);
+    let top = padding.top.min(available_height);
+    let left = padding.left.min(available_width);
+    Padding {
+        top,
+        right: padding.right.min(available_width - left),
+        bottom: padding.bottom.min(available_height - top),
+        left,
+    }
+}

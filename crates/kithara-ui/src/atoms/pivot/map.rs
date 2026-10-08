@@ -246,7 +246,7 @@ mod tests {
     }
 
     fn drawn(skin: &Skin) -> DrawList {
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         let data = PortalMapData {
             master: 120.0,
@@ -317,7 +317,7 @@ mod tests {
     #[kithara::test]
     fn a_target_is_drawn_as_a_curve_from_the_master_tempo() {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         let data = PortalMapData {
             master: 120.0,

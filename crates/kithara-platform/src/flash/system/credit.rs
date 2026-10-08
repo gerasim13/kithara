@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use super::{Core, FLASH, FlashInner, SyncHolder, WaiterId};
+use super::{Core, FLASH, FlashInner, SyncHolder, WaiterId, sched::WakeBatch};
 use crate::{
     backend::thread::current,
     common::thread_id::ACTIVE_NAMED_THREADS,
@@ -76,6 +76,7 @@ pub(crate) struct DedicatedSlot {
     /// The spawn site, captured on the parent and moved into the child with
     /// the reservation, so the claim can name WHO is holding the engine.
     origin: &'static Location<'static>,
+    join: Option<Arc<Join>>,
 }
 
 impl DedicatedSlot {
@@ -102,8 +103,9 @@ impl DedicatedSlot {
     /// previous dedicated flag, so a reused thread does not pace later
     /// unrelated tasks. A closure with a `JoinHandle` passes its `join`, which
     /// the exit hands the credit to.
-    pub(crate) fn claim_pooled(self, join: Option<Arc<Join>>) -> PoolParticipant {
+    pub(crate) fn claim_pooled(mut self) -> PoolParticipant {
         debug_assert!(!self.named, "claim_pooled on a spawn_named slot");
+        let join = self.join.take();
         let origin = self.origin;
         mem::forget(self);
         let prev = ctx::dedicated();
@@ -137,7 +139,15 @@ impl DedicatedSlot {
         Self {
             named: false,
             origin,
+            join: None,
         }
+    }
+
+    /// Associate queued work's reservation with its existing join owner.
+    pub(crate) fn joined(mut self, join: Option<Arc<Join>>) -> Self {
+        debug_assert!(!self.named, "named reservation cannot carry a pool join");
+        self.join = join;
+        self
     }
 
     /// Reserve for a `spawn_named` pacer thread: the `active` slot AND the
@@ -148,6 +158,7 @@ impl DedicatedSlot {
         Self {
             named: true,
             origin,
+            join: None,
         }
     }
 }
@@ -156,15 +167,18 @@ impl Drop for DedicatedSlot {
     /// An unconsumed reservation returns the raw `active` count directly on drop, since no thread
     /// ever claimed the slot as credit; this release may itself be the quiescent edge.
     fn drop(&mut self) {
-        FLASH.release_slot();
+        if let Some(join) = self.join.take() {
+            hand_over(Some(&join), Some(HeldSlot { _priv: () }));
+        } else {
+            FLASH.release_slot().fire();
+        }
         if self.named {
             ACTIVE_NAMED_THREADS.fetch_sub(1, Ordering::Release);
         }
     }
 }
 
-/// RAII exit settle of a dedicated `spawn_named` pacer (and, via
-/// [`Participant::unreserved`], of a slot-less non-ambient pool closure):
+/// RAII exit settle of a dedicated spawned thread:
 /// Drop (incl. unwind through a panicking body) runs the participant-exit
 /// settle — read + clear the credit, release the `active` slot if the thread
 /// exits `Running` — and decrements the named-thread count when this
@@ -173,20 +187,6 @@ impl Drop for DedicatedSlot {
 pub(crate) struct Participant {
     _not_send: PhantomData<*mut ()>,
     named: bool,
-}
-
-impl Participant {
-    /// Exit settle WITHOUT a reservation: the non-ambient `spawn_blocking`
-    /// arm. Such a closure is invisible to the engine (it never becomes
-    /// `Running` through the ambient bracket), so the settle is a defensive
-    /// no-op on the happy path — but RAII keeps the exit unwind-safe and
-    /// consistent with the ambient arm.
-    pub(crate) fn unreserved() -> Self {
-        Self {
-            named: false,
-            _not_send: PhantomData,
-        }
-    }
 }
 
 impl Drop for Participant {
@@ -209,13 +209,25 @@ pub(crate) struct PoolParticipant {
     prev_dedicated: bool,
 }
 
+impl PoolParticipant {
+    /// Bracket uncounted pooled work with the same exit lifecycle and TLS restoration.
+    pub(crate) fn unreserved(join: Option<Arc<Join>>) -> Self {
+        Self {
+            join,
+            prev_dedicated: ctx::dedicated(),
+            _not_send: PhantomData,
+        }
+    }
+}
+
 impl Drop for PoolParticipant {
     fn drop(&mut self) {
         let running = FLASH.exit_running();
         ctx::set_dedicated(self.prev_dedicated);
-        if running {
-            hand_over(self.join.as_deref(), HeldSlot { _priv: () });
-        }
+        hand_over(
+            self.join.as_deref(),
+            running.then(|| HeldSlot { _priv: () }),
+        );
     }
 }
 
@@ -230,9 +242,23 @@ pub(crate) struct HeldSlot {
     _priv: (),
 }
 
+impl HeldSlot {
+    /// Reserve a new terminal scheduling handoff after the original work's slot settled.
+    pub(in crate::flash) fn reserve() -> Self {
+        FLASH.pre_count_dedicated();
+        Self { _priv: () }
+    }
+
+    /// Consume this slot while an enclosing owner serializes settlement; fire wakes afterward.
+    pub(in crate::flash) fn release(self) -> WakeBatch {
+        mem::forget(self);
+        FLASH.release_slot()
+    }
+}
+
 impl Drop for HeldSlot {
     fn drop(&mut self) {
-        FLASH.release_slot();
+        FLASH.release_slot().fire();
     }
 }
 
@@ -455,7 +481,7 @@ impl FlashInner {
     /// and fires any advance the drop unblocks.
     pub(in crate::flash) fn on_participant_exit(&self) {
         if self.exit_running() {
-            self.release_slot();
+            self.release_slot().fire();
         }
     }
 
@@ -487,16 +513,14 @@ impl FlashInner {
     /// thread ever claimed ([`DedicatedSlot`]), a finished participant's
     /// [`HeldSlot`], or an exiting thread's cleared credit — and fire any
     /// advance the release unblocks.
-    fn release_slot(&self) {
+    fn release_slot(&self) -> WakeBatch {
         let mut s = self.core.lock();
         debug_assert!(
             s.registry.active > 0,
             "slot release without a matching count"
         );
         s.registry.active -= 1;
-        let adv = s.try_advance(&self.clock);
-        drop(s);
-        adv.fire();
+        s.try_advance(&self.clock)
     }
 
     /// Resume accounting after a wrapped sync wait's `token.wait()` returned. The firer

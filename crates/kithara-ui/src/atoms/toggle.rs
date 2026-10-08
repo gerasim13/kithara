@@ -12,8 +12,6 @@ use crate::{
     data = bool,
     draw = self.paint(list, *data, bounds)
 )]
-#[derive(kithara_derive::Retained)]
-#[retained(setter = set_bool)]
 pub(crate) struct Binary {
     active: Face,
     idle: Face,

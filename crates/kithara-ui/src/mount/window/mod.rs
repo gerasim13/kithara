@@ -4,4 +4,4 @@ pub(crate) use title_bar::TitleBar;
 
 mod controls;
 mod drag;
-mod title_bar;
+pub(crate) mod title_bar;

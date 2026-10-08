@@ -180,22 +180,6 @@ macro_rules! define_text_styles {
 
 text_roles!(define_text_styles);
 
-impl TextStyle {
-    /// The words this style sets, which are not always the words the document
-    /// wrote: a micro label is small capitals, so it is set in capitals whatever
-    /// case it was given.
-    ///
-    /// Every host asks here rather than deciding for itself, because the case a
-    /// run is set in changes how wide it is, and two hosts that answered
-    /// separately would lay the same document out differently.
-    pub(crate) fn cased(self, content: String) -> String {
-        match self {
-            Self::MicroLabel => content.to_uppercase(),
-            _ => content,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub enum ButtonStyle {

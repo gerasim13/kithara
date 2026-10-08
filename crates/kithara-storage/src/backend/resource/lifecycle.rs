@@ -8,13 +8,6 @@ use crate::{
     resource::{ResourceStatus, range_covered_by},
 };
 
-/// Whether finalizing also publishes the driver's committed snapshot.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Publish {
-    Snapshot,
-    Skip,
-}
-
 impl<D: DriverIo> ResourceCore<D> {
     /// Release the writer without the anti-hang failure stamp. Idempotent.
     pub(super) fn abandon_inner(&self) {
@@ -22,7 +15,11 @@ impl<D: DriverIo> ResourceCore<D> {
     }
 
     pub(super) fn commit_inner(&self, final_len: Option<u64>) -> StorageResult<()> {
-        self.finish_inner(final_len, Publish::Snapshot)
+        self.check_health()?;
+        self.inner.driver.commit(final_len)?;
+        self.notify_commit_inner(final_len);
+        self.publish_commit_inner(final_len);
+        Ok(())
     }
 
     /// Called from the decode produce path (`phase_at` cascade). Reads the
@@ -50,24 +47,31 @@ impl<D: DriverIo> ResourceCore<D> {
         self.inner.gate.notify_all();
     }
 
-    /// Seal or commit the driver, then publish the final availability; the displaced
-    /// snapshot is retired to the write side.
-    ///
-    /// The observer records the commit before the resource reports it: whoever sees `Committed`
-    /// may evict the resource and drop its record, and a record landing after that would revive
-    /// availability for a resource nobody can open.
-    fn finish_inner(&self, final_len: Option<u64>, publish: Publish) -> StorageResult<()> {
-        self.check_health()?;
-
-        match publish {
-            Publish::Snapshot => self.inner.driver.commit(final_len)?,
-            Publish::Skip => self.inner.driver.seal(final_len)?,
-        }
+    /// Notify the original observer after the canonical backing is readable,
+    /// before publishing readiness. Callers release their handover locks first
+    /// because an observer may read the resource it is recording.
+    pub(super) fn notify_commit_inner(&self, final_len: Option<u64>) {
         if let Some(len) = final_len
             && let Some(observer) = self.inner.observer.as_ref()
         {
             observer.on_commit(len);
         }
+    }
+
+    /// Hold a reopened driver's readable snapshot in an active lifecycle until
+    /// its original observer has recorded the commit. Unlike reactivation,
+    /// this leaves the backing store and available bytes untouched.
+    pub(super) fn stage_commit_inner(&self) {
+        self.inner.committed.store(false, Ordering::Release);
+        let mut state = self.inner.gate.lock();
+        state.committed = false;
+        state.final_len = None;
+    }
+
+    /// Publish readiness after the observer has recorded availability. Whoever
+    /// sees `Committed` may evict the resource, so its record must already exist.
+    /// The displaced availability snapshot is retired to the write side.
+    pub(super) fn publish_commit_inner(&self, final_len: Option<u64>) {
         self.inner.committed.store(true, Ordering::Release);
 
         {
@@ -90,8 +94,6 @@ impl<D: DriverIo> ResourceCore<D> {
             }
         }
         self.inner.gate.notify_all();
-
-        Ok(())
     }
 
     /// The committed snapshot stays published across a `reactivate`, so this confirms the lock-free
@@ -142,11 +144,13 @@ impl<D: DriverIo> ResourceCore<D> {
         Ok(())
     }
 
-    /// Commit without publishing a driver snapshot — see [`DriverIo::seal`].
-    /// Readiness is announced exactly as in [`Self::commit_inner`]: waiters
-    /// must wake whether or not a snapshot was published.
+    /// Finalize bytes without publishing availability or readiness. The
+    /// decorator calls [`Self::publish_commit_inner`] after publishing the
+    /// canonical backing resource, so observers and waiters cannot announce
+    /// a file that has not been renamed yet.
     pub(super) fn seal_inner(&self, final_len: Option<u64>) -> StorageResult<()> {
-        self.finish_inner(final_len, Publish::Skip)
+        self.check_health()?;
+        self.inner.driver.seal(final_len)
     }
 
     /// Whether dropping an uncommitted writer should mark the core failed.

@@ -339,13 +339,13 @@ mod tests {
 
         fn descriptor(index: u32) -> SegmentDescriptor {
             let start = Self::INIT_BYTES + u64::from(index) * Self::SEGMENT_BYTES;
-            SegmentDescriptor::new(
-                start..start + Self::SEGMENT_BYTES,
-                Duration::from_secs(u64::from(index) * Self::SEGMENT_SECS),
-                Duration::from_secs(Self::SEGMENT_SECS),
-                index,
-                0,
-            )
+            SegmentDescriptor::builder()
+                .byte_range(start..start + Self::SEGMENT_BYTES)
+                .decode_time(Duration::from_secs(u64::from(index) * Self::SEGMENT_SECS))
+                .duration(Duration::from_secs(Self::SEGMENT_SECS))
+                .segment_index(index)
+                .variant_index(0)
+                .build()
         }
 
         fn segment_start(index: u32) -> u64 {

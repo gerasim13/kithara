@@ -13,6 +13,7 @@
 pub(crate) mod demuxer;
 pub(crate) mod parsing;
 pub(crate) mod reader;
+mod sample;
 
 pub(crate) use demuxer::Fmp4SegmentDemuxer;
 

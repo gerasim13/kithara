@@ -12,14 +12,14 @@ pub(crate) use scalar::{Crossfader, Fader, Knob, Meter, Range, VuStereo, VuVerti
 pub(crate) use switch::{Checkbox, Toggle};
 pub(crate) use window::{Controls, Drag, TitleBar};
 
-mod badge;
-mod bar;
+pub(crate) mod badge;
+pub(crate) mod bar;
 mod contract;
-mod deck;
-mod label;
-mod panel;
-mod press;
+pub(crate) mod deck;
+pub(crate) mod label;
+pub(crate) mod panel;
+pub(crate) mod press;
 mod registry;
-mod scalar;
-mod switch;
-mod window;
+pub(crate) mod scalar;
+pub(crate) mod switch;
+pub(crate) mod window;

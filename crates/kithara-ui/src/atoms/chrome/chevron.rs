@@ -14,7 +14,6 @@ use crate::{
     data = bool,
     draw = self.paint(list, bounds, *data)
 )]
-#[derive(kithara_derive::Retained)]
 pub(crate) struct ChromeChevron {
     color: Rgba,
     line_color: Rgba,
@@ -103,7 +102,7 @@ mod tests {
 
     fn drawn(paint: impl FnOnce(&mut DrawListBuilder, &mut TextContext)) -> Vec<DrawCmd> {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         paint(&mut list, &mut text);
         list.finish().commands().to_vec()

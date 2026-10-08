@@ -1,85 +1,17 @@
-use std::{
-    io::{ErrorKind, SeekFrom},
-    ops::ControlFlow,
-};
+use std::{io::SeekFrom, ops::ControlFlow};
 
-use kithara_bufpool::{ByteBuffer, HasPool, PoolError, PoolRegion};
-use smallvec::SmallVec;
+use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use thiserror::Error;
 
-use super::parse::{
-    invalid, parse_data_box, parse_elst, parse_itunsmpb, parse_mdhd, parse_mvhd_timescale,
-    parse_stsd_codec, parse_stsd_sample_rate, read_be_u32, read_be_u64, read_text_fullbox_bytes,
+use super::{
+    Mp4Event,
+    boxes::{BoxRef, next_box, read_payload},
+    freeform::read_itunsmpb,
+    parse::{
+        parse_elst, parse_mdhd, parse_mvhd_timescale, parse_stsd_codec, parse_stsd_sample_rate,
+    },
 };
-use crate::{consts, traits::DecoderInput};
-
-/// Media-timing pair extracted from an `mdhd` box.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Mp4MediaTiming {
-    pub(crate) timescale: u32,
-    pub(crate) duration: u64,
-}
-
-/// Single `elst` edit-list entry normalized into integer fields.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Mp4EditListEntry {
-    pub(crate) media_time: i64,
-    pub(crate) segment_duration: u64,
-}
-
-/// Typed iTunes "iTunSMPB" payload. The four hex fields are: encoder version
-/// (ignored), encoder delay (front padding), encoder padding (trailing
-/// silence), and total non-padding sample count. We only surface the two that
-/// matter for gapless trimming.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ItunSmpb {
-    pub(crate) leading_frames: u64,
-    pub(crate) trailing_frames: u64,
-}
-
-/// Pull-style visitor invoked while streaming MP4 boxes.
-///
-/// The scanner only invokes the methods relevant to its current position and
-/// honors the returned [`ControlFlow`]: returning `Break(())` from any callback
-/// stops the scan as soon as the current box is closed. This lets a consumer
-/// build whatever stop condition it needs (e.g. "first track that yields
-/// gapless info wins") without the parser knowing anything about the goal.
-///
-/// All callbacks default to `Continue(())` so consumers only override what
-/// they care about.
-pub(crate) trait Mp4Visitor {
-    fn on_itunsmpb(&mut self, _info: ItunSmpb) -> ControlFlow<()> {
-        ControlFlow::Continue(())
-    }
-
-    fn on_movie_timescale(&mut self, _timescale: u32) -> ControlFlow<()> {
-        ControlFlow::Continue(())
-    }
-
-    fn on_track_begin(&mut self) -> ControlFlow<()> {
-        ControlFlow::Continue(())
-    }
-
-    fn on_track_codec(&mut self, _fourcc: [u8; 4]) -> ControlFlow<()> {
-        ControlFlow::Continue(())
-    }
-
-    fn on_track_edit_list(&mut self, _entries: &[Mp4EditListEntry]) -> ControlFlow<()> {
-        ControlFlow::Continue(())
-    }
-
-    fn on_track_end(&mut self) -> ControlFlow<()> {
-        ControlFlow::Continue(())
-    }
-
-    fn on_track_media_timing(&mut self, _timing: Mp4MediaTiming) -> ControlFlow<()> {
-        ControlFlow::Continue(())
-    }
-
-    fn on_track_sample_rate(&mut self, _sample_rate: u32) -> ControlFlow<()> {
-        ControlFlow::Continue(())
-    }
-}
+use crate::{DecoderInput, consts};
 
 /// MP4 metadata parsing error.
 #[derive(Debug, Error)]
@@ -104,7 +36,7 @@ pub(crate) enum Mp4MetadataError {
 /// strict size ceiling.
 pub(crate) fn scan_mp4<S>(
     reader: &mut dyn DecoderInput,
-    visitor: &mut dyn Mp4Visitor,
+    visitor: &mut dyn FnMut(Mp4Event<'_>) -> ControlFlow<()>,
     pools: &PoolRegion<S>,
 ) -> Result<(), Mp4MetadataError>
 where
@@ -121,18 +53,10 @@ where
     }
 }
 
-/// Header information for one MP4 box, captured from a streaming reader.
-#[derive(Clone, Copy)]
-struct BoxRef {
-    kind: [u8; 4],
-    /// Absolute byte position one past the last byte of the box.
-    end: u64,
-}
-
 struct Mp4Scanner<'a, S> {
     pools: &'a PoolRegion<S>,
     reader: &'a mut dyn DecoderInput,
-    visitor: &'a mut dyn Mp4Visitor,
+    visitor: &'a mut dyn FnMut(Mp4Event<'_>) -> ControlFlow<()>,
 }
 
 impl<'a, S> Mp4Scanner<'a, S>
@@ -141,7 +65,7 @@ where
 {
     fn new(
         reader: &'a mut dyn DecoderInput,
-        visitor: &'a mut dyn Mp4Visitor,
+        visitor: &'a mut dyn FnMut(Mp4Event<'_>) -> ControlFlow<()>,
         pools: &'a PoolRegion<S>,
     ) -> Self {
         Self {
@@ -154,63 +78,8 @@ where
     fn parse_edts(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
         self.walk_payload_child(end, consts::BOX_ELST, "elst", |this, payload| {
             let entries = parse_elst(payload)?;
-            Ok(this.visitor.on_track_edit_list(&entries))
+            Ok((this.visitor)(Mp4Event::TrackEditList(&entries)))
         })
-    }
-
-    /// Parses a freeform (`----`) tag, but only yields a value for the
-    /// `("com.apple.iTunes","iTunSMPB")` pair. For anything else, the tag is
-    /// walked and its bytes discarded — we never allocate the data payload.
-    fn parse_freeform_tag(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
-        let start = self.reader.stream_position()?;
-        let payload_len = end.saturating_sub(start);
-        let too_big =
-            usize::try_from(payload_len).map_or(true, |len| len > consts::FREEFORM_MAX_BYTES);
-        if payload_len == 0 || too_big {
-            return Ok(ControlFlow::Continue(()));
-        }
-
-        let mut mean: Option<SmallVec<[u8; 32]>> = None;
-        let mut name: Option<SmallVec<[u8; 32]>> = None;
-        let mut data_range: Option<(u64, u64)> = None;
-
-        let _ = self.walk_children(end, |this, header| {
-            match header.kind {
-                consts::BOX_MEAN => mean = this.read_text_fullbox_child(header, "mean")?,
-                consts::BOX_NAME => name = this.read_text_fullbox_child(header, "name")?,
-                consts::BOX_DATA => {
-                    let pos = this.reader.stream_position()?;
-                    data_range = Some((pos, header.end));
-                }
-                _ => {}
-            }
-            Ok(ControlFlow::Continue(()))
-        })?;
-
-        let matches = mean
-            .as_deref()
-            .is_some_and(|m| m == consts::ITUNES_MEAN.as_bytes())
-            && name
-                .as_deref()
-                .is_some_and(|n| n == consts::ITUNSMPB_NAME.as_bytes());
-        if !matches {
-            return Ok(ControlFlow::Continue(()));
-        }
-
-        let Some((data_start, data_end)) = data_range else {
-            return Ok(ControlFlow::Continue(()));
-        };
-
-        self.reader.seek(SeekFrom::Start(data_start))?;
-        let payload = read_payload(self.reader, data_end, "iTunSMPB data", self.pools)?;
-        let Some((_data_type, value)) = parse_data_box(&payload) else {
-            return Ok(ControlFlow::Continue(()));
-        };
-        let Some(info) = parse_itunsmpb(value) else {
-            return Ok(ControlFlow::Continue(()));
-        };
-
-        Ok(self.visitor.on_itunsmpb(info))
     }
 
     /// Walks `ilst` children but only descends into freeform (`----`) atoms.
@@ -218,7 +87,10 @@ where
     /// their `data` payloads — that is what keeps cover art out of memory.
     fn parse_ilst(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
         self.walk_matching_child(end, consts::BOX_FREEFORM, |this, header| {
-            this.parse_freeform_tag(header.end)
+            Ok(match read_itunsmpb(this.reader, header.end, this.pools)? {
+                Some(info) => (this.visitor)(Mp4Event::ItunSmpb(info)),
+                None => ControlFlow::Continue(()),
+            })
         })
     }
 
@@ -227,7 +99,7 @@ where
             consts::BOX_MDHD => {
                 let payload = read_payload(this.reader, header.end, "mdhd", this.pools)?;
                 if let Some(timing) = parse_mdhd(&payload) {
-                    return Ok(this.visitor.on_track_media_timing(timing));
+                    return Ok((this.visitor)(Mp4Event::TrackMediaTiming(timing)));
                 }
                 Ok(ControlFlow::Continue(()))
             }
@@ -267,7 +139,7 @@ where
             consts::BOX_MVHD => {
                 let payload = read_payload(this.reader, header.end, "mvhd", this.pools)?;
                 if let Some(timescale) = parse_mvhd_timescale(&payload) {
-                    return Ok(this.visitor.on_movie_timescale(timescale));
+                    return Ok((this.visitor)(Mp4Event::MovieTimescale(timescale)));
                 }
                 Ok(ControlFlow::Continue(()))
             }
@@ -281,19 +153,19 @@ where
     fn parse_stbl(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
         self.walk_payload_child(end, consts::BOX_STSD, "stsd", |this, payload| {
             if let Some(fourcc) = parse_stsd_codec(payload)
-                && this.visitor.on_track_codec(fourcc).is_break()
+                && (this.visitor)(Mp4Event::TrackCodec(fourcc)).is_break()
             {
                 return Ok(ControlFlow::Break(()));
             }
             if let Some(sample_rate) = parse_stsd_sample_rate(payload) {
-                return Ok(this.visitor.on_track_sample_rate(sample_rate));
+                return Ok((this.visitor)(Mp4Event::TrackSampleRate(sample_rate)));
             }
             Ok(ControlFlow::Continue(()))
         })
     }
 
     fn parse_trak(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
-        if self.visitor.on_track_begin().is_break() {
+        if (self.visitor)(Mp4Event::TrackBegin).is_break() {
             return Ok(ControlFlow::Break(()));
         }
 
@@ -303,7 +175,7 @@ where
             _ => Ok(ControlFlow::Continue(())),
         })?;
 
-        let close = self.visitor.on_track_end();
+        let close = (self.visitor)(Mp4Event::TrackEnd);
         Ok(if walk.is_break() || close.is_break() {
             ControlFlow::Break(())
         } else {
@@ -316,16 +188,12 @@ where
             this.parse_meta(header.end)
         })
     }
+}
 
-    fn read_text_fullbox_child(
-        &mut self,
-        header: BoxRef,
-        label: &'static str,
-    ) -> Result<Option<SmallVec<[u8; 32]>>, Mp4MetadataError> {
-        let payload = read_payload(self.reader, header.end, label, self.pools)?;
-        Ok(read_text_fullbox_bytes(&payload))
-    }
-
+impl<S> Mp4Scanner<'_, S>
+where
+    S: HasPool<u8>,
+{
     fn scan(mut self) -> Result<(), Mp4MetadataError> {
         while let Some(header) = next_box(self.reader, None)? {
             if header.kind == consts::BOX_MOOV {
@@ -394,19 +262,6 @@ where
     }
 }
 
-/// Captures the first audio-track codec tag and stops the scan.
-#[derive(Default)]
-struct CodecSniffer {
-    fourcc: Option<[u8; 4]>,
-}
-
-impl Mp4Visitor for CodecSniffer {
-    fn on_track_codec(&mut self, fourcc: [u8; 4]) -> ControlFlow<()> {
-        self.fourcc = Some(fourcc);
-        ControlFlow::Break(())
-    }
-}
-
 /// Sniff the first audio sample-entry codec tag from an MP4 container.
 /// Used by the probe path to disambiguate codecs that share the
 /// `.m4a`/`.mp4` extension (AAC vs ALAC vs FLAC). Reader position is
@@ -418,9 +273,21 @@ pub(crate) fn sniff_mp4_codec<S>(
 where
     S: HasPool<u8>,
 {
-    let mut sniffer = CodecSniffer::default();
-    match scan_mp4(reader, &mut sniffer, pools) {
-        Ok(()) => Ok(sniffer.fourcc),
+    let mut fourcc = None;
+    let result = scan_mp4(
+        reader,
+        &mut |event| {
+            if let Mp4Event::TrackCodec(codec) = event {
+                fourcc = Some(codec);
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        },
+        pools,
+    );
+    match result {
+        Ok(()) => Ok(fourcc),
         Err(Mp4MetadataError::Io(error)) => Err(error.into()),
         Err(Mp4MetadataError::Pool(error)) => Err(error.into()),
         Err(Mp4MetadataError::InvalidData(_)) => Ok(None),
@@ -459,84 +326,4 @@ fn scan_moov_for_mvex(reader: &mut dyn DecoderInput, end: u64) -> Result<bool, M
         reader.seek(SeekFrom::Start(header.end))?;
     }
     Ok(false)
-}
-
-fn next_box(
-    reader: &mut dyn DecoderInput,
-    end: Option<u64>,
-) -> Result<Option<BoxRef>, Mp4MetadataError> {
-    let start = reader.stream_position()?;
-    if end.is_some_and(|limit| start >= limit) {
-        return Ok(None);
-    }
-
-    let mut header = [0; 8];
-    match reader.read_exact(&mut header) {
-        Ok(()) => {}
-        Err(error) if error.kind() == ErrorKind::UnexpectedEof => {
-            if end.is_some() {
-                return Err(invalid("truncated MP4 box header"));
-            }
-            return Ok(None);
-        }
-        Err(error) => return Err(error.into()),
-    }
-
-    let size32 = read_be_u32(&header[..4]).ok_or_else(|| invalid("truncated MP4 box size"))?;
-    let kind = [header[4], header[5], header[6], header[7]];
-
-    let (header_len, total_size) = match size32 {
-        1 => {
-            let mut extended = [0; 8];
-            reader.read_exact(&mut extended).map_err(|error| {
-                if error.kind() == ErrorKind::UnexpectedEof {
-                    invalid("truncated extended MP4 box size")
-                } else {
-                    error.into()
-                }
-            })?;
-            let extended =
-                read_be_u64(&extended).ok_or_else(|| invalid("invalid extended MP4 box size"))?;
-            (16u64, extended)
-        }
-        0 => match end {
-            Some(limit) => (8u64, limit - start),
-            None => return Ok(None),
-        },
-        _ => (8u64, u64::from(size32)),
-    };
-
-    if total_size < header_len {
-        return Err(invalid("MP4 box size is smaller than its header"));
-    }
-
-    let box_end = start
-        .checked_add(total_size)
-        .ok_or_else(|| invalid("MP4 box size overflow"))?;
-
-    if end.is_some_and(|limit| box_end > limit) {
-        return Err(invalid("MP4 box extends past available bytes"));
-    }
-
-    Ok(Some(BoxRef { kind, end: box_end }))
-}
-
-fn read_payload<S>(
-    reader: &mut dyn DecoderInput,
-    end: u64,
-    label: &str,
-    pools: &PoolRegion<S>,
-) -> Result<ByteBuffer, Mp4MetadataError>
-where
-    S: HasPool<u8>,
-{
-    let start = reader.stream_position()?;
-    let payload_len = end
-        .checked_sub(start)
-        .and_then(|payload_len| usize::try_from(payload_len).ok())
-        .ok_or_else(|| invalid(format!("{label} payload range underflow")))?;
-
-    let mut payload = pools.get_with_len::<u8>(payload_len)?;
-    reader.read_exact(&mut payload)?;
-    Ok(payload)
 }

@@ -15,7 +15,6 @@ pub(crate) mod readout;
 pub(crate) mod search;
 pub(crate) mod tab;
 pub(crate) mod table;
-pub(crate) mod text;
 pub(crate) mod text_input;
 pub(crate) mod toggle;
 pub(crate) mod tree;

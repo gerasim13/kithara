@@ -2,8 +2,9 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
-    fs::OpenOptions,
-    path::PathBuf,
+    fs::{File, OpenOptions},
+    io::{self, ErrorKind},
+    path::{Path, PathBuf},
 };
 
 use arc_swap::ArcSwap;
@@ -11,6 +12,7 @@ use kithara_bufpool::ByteBuffer;
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_storage::StorageError;
 use rkyv::rancor::Error;
+use same_file::Handle;
 
 use super::core::{AssetTree, Availability, AvailabilityIndex, Entry, InnerIndex};
 use crate::{
@@ -96,30 +98,51 @@ impl AvailabilityIndex {
     /// production flush path goes through [`super::Flushable::flush`].
     #[cfg(test)]
     pub(crate) fn persist_to(&self, file: &IndexFile) -> AssetsResult<()> {
-        write_aggregate(&self.inner, file, false)
+        write_aggregate(&snapshot_aggregate(&self.inner), file, false)
     }
 }
 
 impl InnerIndex {
-    /// `sync_data` every committed file queued since the last flush. A file
-    /// that vanished (evicted, or its asset deleted) simply drops out — the
-    /// manifest entry goes with it.
-    fn barrier_pending_files(&self) {
-        let queued: Vec<PathBuf> = self
+    /// Force the detached cohort before publishing its selected availability.
+    /// Only a missing file whose key has already left both the selected and
+    /// live aggregate is a completed deletion; every other barrier error
+    /// preserves the obligations and prevents manifest publication.
+    fn barrier_pending_files(&self, index: &AvailabilityFile) -> AssetsResult<()> {
+        let paths: Vec<PathBuf> = self
             .pending_durability
             .iter()
             .map(|entry| entry.key().clone())
             .collect();
-        for path in queued {
-            self.pending_durability.remove(&path);
+        let queued: Vec<_> = paths
+            .into_iter()
+            .filter_map(|path| self.pending_durability.remove(&path))
+            .collect();
+        for (path, key) in &queued {
+            let (root, relative) = AvailabilityIndex::resolve_refs(key);
+            let selected = index
+                .assets
+                .get(root)
+                .and_then(|asset| asset.resources.get(relative));
             let synced = OpenOptions::new()
                 .write(true)
-                .open(&path)
-                .and_then(|file| file.sync_data());
+                .open(path)
+                .and_then(|file| sync_selected_file(file, path, selected));
             if let Err(error) = synced {
-                tracing::debug!(?path, %error, "availability: durability barrier skipped");
+                let present = self
+                    .assets
+                    .load()
+                    .get(root)
+                    .is_some_and(|asset| asset.contains_key(relative));
+                if error.kind() == ErrorKind::NotFound && selected.is_none() && !present {
+                    continue;
+                }
+                for (path, key) in queued {
+                    self.pending_durability.entry(path).or_insert(key);
+                }
+                return Err(error.into());
             }
         }
+        Ok(())
     }
 
     /// Committed files are forced onto the medium before the manifest names them; reversed, a crash
@@ -129,17 +152,41 @@ impl InnerIndex {
             return Ok(());
         };
         let _writing = p.writing.lock();
-        self.barrier_pending_files();
-        write_aggregate(self, &p.file, durable)?;
-        Ok(())
+        let index = snapshot_aggregate(self);
+        self.barrier_pending_files(&index)?;
+        write_aggregate(&index, &p.file, durable)
     }
 }
 
-/// Serialise the aggregate and publish it as `file`.
-///
-/// Only committed availability is serialised, so an uncommitted partial write is invisible after a
-/// rebuild, matching the aggregate probes' verdict.
-fn write_aggregate(inner: &InnerIndex, file: &IndexFile, durable: bool) -> AssetsResult<()> {
+/// Force the opened file, then verify the canonical path still names those
+/// bytes at the extent selected for this manifest. A rewrite may replace the
+/// path or shrink its payload while a flush is holding an older snapshot.
+fn sync_selected_file(
+    file: File,
+    path: &Path,
+    selected: Option<&ResourceAvailabilityFile>,
+) -> io::Result<()> {
+    let synced = Handle::from_file(file)?;
+    synced.as_file().sync_data()?;
+    let canonical = Handle::from_path(path)?;
+    let synced_len = synced.as_file().metadata()?.len();
+    let canonical_len = canonical.as_file().metadata()?.len();
+    let extent_matches = selected.is_none_or(|record| {
+        record.final_len == Some(synced_len)
+            && record.ranges.iter().all(|(_, end)| *end <= synced_len)
+    });
+    if synced != canonical || synced_len != canonical_len || !extent_matches {
+        return Err(io::Error::other(format!(
+            "availability file changed during durability barrier: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Freeze committed values before taking their durability cohort. Tree
+/// guards alone are insufficient: each entry still holds a live `ArcSwap`.
+fn snapshot_aggregate(inner: &InnerIndex) -> AvailabilityFile {
     let tree = inner.assets.load();
     let assets = tree
         .iter()
@@ -165,8 +212,284 @@ fn write_aggregate(inner: &InnerIndex, file: &IndexFile, durable: bool) -> Asset
             Some((root.clone(), AssetAvailabilityFile { resources }))
         })
         .collect();
-    let index = AvailabilityFile { assets, version: 1 };
-    let bytes = rkyv::to_bytes::<Error>(&index)
+    AvailabilityFile { assets, version: 1 }
+}
+
+fn write_aggregate(index: &AvailabilityFile, file: &IndexFile, durable: bool) -> AssetsResult<()> {
+    let bytes = rkyv::to_bytes::<Error>(index)
         .map_err(|e| AssetsError::Storage(StorageError::Failed(e.to_string())))?;
     file.write(&bytes, durable)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, ops::Range};
+
+    use kithara_platform::{CancelToken, time::Duration};
+    use kithara_storage::{
+        AtomicChunked, AvailabilityObserver, MmapDriver, MmapOptions, OpenIntent, OpenMode,
+        Resource,
+    };
+    use kithara_test_utils::kithara;
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::{index::ScopedAvailabilityObserver, layout::ResourceKey};
+
+    struct CheckpointOnCommit {
+        observer: Arc<ScopedAvailabilityObserver>,
+        index: AvailabilityIndex,
+        canonical: PathBuf,
+    }
+
+    impl AvailabilityObserver for CheckpointOnCommit {
+        fn on_commit(&self, final_len: u64) {
+            self.observer.on_commit(final_len);
+            let flushed = self.index.flush();
+            assert!(
+                self.canonical.is_file(),
+                "a commit observer may checkpoint only after the canonical file exists"
+            );
+            flushed.unwrap();
+        }
+
+        fn on_write(&self, range: Range<u64>) {
+            self.observer.on_write(range);
+        }
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn atomic_commit_publishes_canonical_file_before_manifest() {
+        let dir = TempDir::new().unwrap();
+        let pools = crate::test_pools::pools();
+        let manifest = dir.path().join("availability.bin");
+        let canonical = dir.path().join("asset/segment.bin");
+        let key = ResourceKey::relative("asset", "segment.bin");
+        let index = AvailabilityIndex::new();
+        index.enable_persistence(manifest.clone(), crate::test_pools::byte_buffer(&pools));
+        let observer: Arc<dyn AvailabilityObserver> = Arc::new(CheckpointOnCommit {
+            observer: ScopedAvailabilityObserver::for_file(
+                key.clone(),
+                index.clone(),
+                canonical.clone(),
+            ),
+            index: index.clone(),
+            canonical: canonical.clone(),
+        });
+        let resource =
+            AtomicChunked::<MmapDriver>::open_deferred(canonical.clone(), move |target, intent| {
+                let mode = match intent {
+                    OpenIntent::Fresh => OpenMode::ReadWrite,
+                    OpenIntent::Reopen => OpenMode::ReadOnly,
+                };
+                Resource::open_with_observer(
+                    CancelToken::never(),
+                    MmapOptions::for_path(target.to_path_buf())
+                        .mode(mode)
+                        .build(),
+                    Some(Arc::clone(&observer)),
+                )
+            })
+            .unwrap();
+        resource.write_at(0, b"payload").unwrap();
+        assert!(!canonical.exists());
+
+        resource.commit(Some(7)).unwrap();
+
+        assert_eq!(fs::read(&canonical).unwrap(), b"payload");
+        let restored = AvailabilityIndex::new();
+        restored
+            .load_from(
+                &IndexFile::new(manifest),
+                &mut crate::test_pools::byte_buffer(&pools),
+            )
+            .unwrap();
+        assert_eq!(restored.final_len(&key), Some(7));
+        assert!(restored.contains_range(&key, 0..7));
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[case::missing(false)]
+    #[case::directory(true)]
+    fn a_failed_file_barrier_preserves_the_previous_manifest(#[case] directory: bool) {
+        let dir = TempDir::new().unwrap();
+        let pools = crate::test_pools::pools();
+        let manifest = dir.path().join("availability.bin");
+        let canonical = dir.path().join("segment.bin");
+        let key = ResourceKey::relative("asset", "segment.bin");
+        let index = AvailabilityIndex::new();
+        index.enable_persistence(manifest.clone(), crate::test_pools::byte_buffer(&pools));
+        index.record_commit(&ResourceKey::relative("asset", "already-durable.bin"), 3);
+        index.flush().unwrap();
+        let previous = fs::read(&manifest).unwrap();
+        if directory {
+            fs::create_dir(&canonical).unwrap();
+        }
+        let observer =
+            ScopedAvailabilityObserver::for_file(key.clone(), index.clone(), canonical.clone());
+        observer.on_commit(7);
+
+        assert!(matches!(index.flush(), Err(AssetsError::Io(_))));
+        assert_eq!(fs::read(&manifest).unwrap(), previous);
+        assert!(matches!(index.flush(), Err(AssetsError::Io(_))));
+        if directory {
+            fs::remove_dir(&canonical).unwrap();
+        }
+        fs::write(&canonical, b"payload").unwrap();
+        index.flush().unwrap();
+
+        let restored = AvailabilityIndex::new();
+        restored
+            .load_from(
+                &IndexFile::new(manifest),
+                &mut crate::test_pools::byte_buffer(&pools),
+            )
+            .unwrap();
+        assert_eq!(restored.final_len(&key), Some(7));
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn a_deleted_resource_has_no_manifest_barrier_obligation() {
+        let dir = TempDir::new().unwrap();
+        let pools = crate::test_pools::pools();
+        let manifest = dir.path().join("availability.bin");
+        let canonical = dir.path().join("segment.bin");
+        let key = ResourceKey::relative("asset", "segment.bin");
+        let index = AvailabilityIndex::new();
+        index.enable_persistence(manifest.clone(), crate::test_pools::byte_buffer(&pools));
+        fs::write(&canonical, b"payload").unwrap();
+        ScopedAvailabilityObserver::for_file(key.clone(), index.clone(), canonical.clone())
+            .on_commit(7);
+        fs::remove_file(&canonical).unwrap();
+        index.remove(&key);
+
+        index.flush().unwrap();
+
+        let restored = AvailabilityIndex::new();
+        restored
+            .load_from(
+                &IndexFile::new(manifest),
+                &mut crate::test_pools::byte_buffer(&pools),
+            )
+            .unwrap();
+        assert_eq!(restored.final_len(&key), None);
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn every_same_size_file_commit_requires_a_durability_barrier() {
+        let dir = TempDir::new().unwrap();
+        let pools = crate::test_pools::pools();
+        let canonical = dir.path().join("segment.bin");
+        let key = ResourceKey::relative("asset", "segment.bin");
+        let index = AvailabilityIndex::new();
+        index.enable_persistence(
+            dir.path().join("availability.bin"),
+            crate::test_pools::byte_buffer(&pools),
+        );
+        let observer = ScopedAvailabilityObserver::for_file(key, index.clone(), canonical.clone());
+        fs::write(&canonical, b"first").unwrap();
+        observer.on_commit(5);
+        index.flush().unwrap();
+
+        fs::write(&canonical, b"later").unwrap();
+        observer.on_commit(5);
+        fs::remove_file(&canonical).unwrap();
+
+        assert!(matches!(index.flush(), Err(AssetsError::Io(_))));
+    }
+
+    fn open_observed_resource(
+        path: PathBuf,
+        index: AvailabilityIndex,
+        key: ResourceKey,
+    ) -> AtomicChunked<MmapDriver> {
+        let observer: Arc<dyn AvailabilityObserver> =
+            ScopedAvailabilityObserver::for_file(key, index, path.clone());
+        AtomicChunked::open_deferred(path, move |target, intent| {
+            let mode = match intent {
+                OpenIntent::Fresh => OpenMode::ReadWrite,
+                OpenIntent::Reopen => OpenMode::ReadOnly,
+            };
+            Resource::open_with_observer(
+                CancelToken::never(),
+                MmapOptions::for_path(target.to_path_buf())
+                    .mode(mode)
+                    .build(),
+                Some(Arc::clone(&observer)),
+            )
+        })
+        .unwrap()
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[case::same_size(7)]
+    #[case::shorter(3)]
+    fn a_file_barrier_rejects_a_replaced_handle_even_at_the_same_length(#[case] final_len: usize) {
+        let dir = TempDir::new().unwrap();
+        let canonical = dir.path().join("segment.bin");
+        let key = ResourceKey::relative("asset", "segment.bin");
+        let index = AvailabilityIndex::new();
+        let resource = open_observed_resource(canonical.clone(), index.clone(), key);
+        resource.write_at(0, b"payload").unwrap();
+        resource.commit(Some(7)).unwrap();
+        let selected = snapshot_aggregate(&index.inner);
+        let opened = OpenOptions::new().write(true).open(&canonical).unwrap();
+
+        resource.reactivate().unwrap();
+        let replacement = vec![0xAB; final_len];
+        resource.write_at(0, &replacement).unwrap();
+        resource.commit(Some(final_len as u64)).unwrap();
+        assert_eq!(fs::read(&canonical).unwrap(), replacement);
+
+        let record = &selected.assets["asset"].resources["segment.bin"];
+        assert_eq!(record.final_len, Some(7));
+        assert!(sync_selected_file(opened, &canonical, Some(record)).is_err());
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[case::empty(0)]
+    #[case::shorter(3)]
+    fn a_frozen_manifest_rejects_a_shrunk_resource_and_next_flush_records_its_extent(
+        #[case] final_len: usize,
+    ) {
+        let dir = TempDir::new().unwrap();
+        let pools = crate::test_pools::pools();
+        let canonical = dir.path().join("segment.bin");
+        let manifest = dir.path().join("availability.bin");
+        let key = ResourceKey::relative("asset", "segment.bin");
+        let index = AvailabilityIndex::new();
+        index.enable_persistence(manifest.clone(), crate::test_pools::byte_buffer(&pools));
+        let resource = open_observed_resource(canonical.clone(), index.clone(), key.clone());
+        resource.write_at(0, b"payload").unwrap();
+        resource.commit(Some(7)).unwrap();
+        index.flush().unwrap();
+        let selected = snapshot_aggregate(&index.inner);
+        let previous = fs::read(&manifest).unwrap();
+
+        resource.reactivate().unwrap();
+        resource.write_at(0, &vec![0xAB; final_len]).unwrap();
+        resource.commit(Some(final_len as u64)).unwrap();
+        assert_eq!(fs::metadata(&canonical).unwrap().len(), final_len as u64);
+
+        assert!(index.inner.barrier_pending_files(&selected).is_err());
+        assert_eq!(fs::read(&manifest).unwrap(), previous);
+        index.flush().unwrap();
+
+        let restored = AvailabilityIndex::new();
+        restored
+            .load_from(
+                &IndexFile::new(manifest),
+                &mut crate::test_pools::byte_buffer(&pools),
+            )
+            .unwrap();
+        assert_eq!(restored.final_len(&key), Some(final_len as u64));
+        assert!(restored.contains_range(&key, 0..final_len as u64));
+        assert!(!restored.contains_range(&key, final_len as u64..7));
+        assert!(
+            restored
+                .available_ranges(&key)
+                .iter()
+                .all(|range| range.end <= final_len as u64)
+        );
+    }
 }

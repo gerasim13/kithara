@@ -16,6 +16,7 @@ flash = ["kithara-net/flash", "kithara-test-utils/flash"]
 
 [dependencies]
 kithara-app-library = { workspace = true }
+kithara-config = { workspace = true }
 kithara-net = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-ui = { workspace = true, default-features = false, features = ["render"] }

@@ -1,4 +1,4 @@
-use js_sys::{Function, Object, Reflect};
+use js_sys::{Function, Number, Object, Reflect};
 use kithara::platform::sync::Arc;
 use num_traits::cast;
 use wasm_bindgen::prelude::*;
@@ -33,6 +33,13 @@ fn item_for_url(url: String) -> Arc<AudioPlayerItem> {
 
 fn id_to_f64(item: &Arc<AudioPlayerItem>) -> f64 {
     cast::<u64, f64>(item.track_id().as_u64()).unwrap_or(0.0)
+}
+
+fn id_from_f64(raw: f64) -> Option<u64> {
+    if raw.fract() != 0.0 || !(0.0..=Number::MAX_SAFE_INTEGER).contains(&raw) {
+        return None;
+    }
+    cast(raw)
 }
 
 /// Browser control surface for the cross-platform
@@ -147,14 +154,22 @@ impl AudioPlayer {
     }
 
     /// Insert a track after the item with `after_id` (or at the head when
-    /// `after_id` is negative). Returns the new track id.
+    /// `after_id` is a negative safe integer). Returns the new track id.
     ///
     /// # Errors
-    /// Returns a JS error if `after_id` is unknown.
+    /// Returns a JS error if `after_id` is not a safe integer or is an unknown
+    /// nonnegative track id.
     #[wasm_bindgen(js_name = insert)]
     pub fn insert_js(&self, url: String, after_id: f64) -> Result<f64, JsValue> {
+        let after = if after_id < 0.0 && id_from_f64(-after_id).is_some() {
+            None
+        } else {
+            Some(
+                self.item_by_id(after_id)
+                    .ok_or_else(|| JsValue::from_str("unknown track id"))?,
+            )
+        };
         let item = item_for_url(url);
-        let after = self.item_by_id(after_id);
         self.inner
             .insert(&item, after.as_ref())
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -168,10 +183,7 @@ impl AudioPlayer {
     }
 
     pub(crate) fn item_by_id(&self, raw: f64) -> Option<Arc<AudioPlayerItem>> {
-        if raw < 0.0 {
-            return None;
-        }
-        let id: u64 = cast(raw).unwrap_or(0);
+        let id = id_from_f64(raw)?;
         self.inner
             .items()
             .into_iter()
@@ -252,13 +264,16 @@ impl AudioPlayer {
     /// track with `id`.
     ///
     /// # Errors
-    /// Returns a JS error if the id is not in the queue.
+    /// Returns a JS error if the id is not in the queue or `observer_id` is not
+    /// a nonnegative safe integer.
     #[wasm_bindgen(js_name = removeItemObserver)]
     pub fn remove_item_observer_js(&self, id: f64, observer_id: f64) -> Result<(), JsValue> {
         let item = self
             .item_by_id(id)
             .ok_or_else(|| JsValue::from_str("unknown track id"))?;
-        item.remove_observer(cast(observer_id).unwrap_or(u64::MAX));
+        let observer_id =
+            id_from_f64(observer_id).ok_or_else(|| JsValue::from_str("invalid observer id"))?;
+        item.remove_observer(observer_id);
         Ok(())
     }
 

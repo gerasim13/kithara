@@ -6,7 +6,7 @@ use crate::{
     interact::{CursorShape, Hit, Hover, Input, Outcome, recognizers::click},
 };
 
-pub(in crate::engine) struct SegmentedComponent {
+pub(crate) struct SegmentedComponent {
     hover: Hover,
     path: String,
     item_count: usize,

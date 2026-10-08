@@ -1,9 +1,18 @@
-use kithara_events::EventBus;
-use kithara_platform::time::{Duration, Instant};
-use num_traits::ToPrimitive;
+use std::sync::atomic::Ordering;
 
-use super::{core::AbrController, peer::PeerEntry};
-use crate::AbrEvent;
+use kithara_events::EventBus;
+use kithara_platform::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use num_traits::ToPrimitive;
+use tracing::debug;
+
+use super::{
+    core::{AbrController, AbrPeerId},
+    peer::PeerEntry,
+};
+use crate::{AbrEvent, BandwidthSource, state::AbrView};
 
 /// Per-peer throttling state for sample / estimate / buffer events.
 #[derive(Default)]
@@ -13,27 +22,61 @@ pub(super) struct EventThrottleCache {
     pub(super) last_throughput_sample_at: Option<Instant>,
 }
 
-/// The throttled-emit sample for one ABR tick: the `now` timestamp, the
-/// optional bandwidth `estimate_bps`, and the `buffer_ahead` duration.
-#[derive(Clone, Copy)]
-pub(super) struct ThrottleSample {
-    pub(super) now: Instant,
-    pub(super) buffer_ahead: Option<Duration>,
-    pub(super) estimate_bps: Option<u64>,
-}
-
 impl AbrController {
+    /// Record a bandwidth sample for `peer_id`. Called by the Downloader
+    /// when a fetch completes. Also evaluates the peer at the sample timestamp.
+    pub fn record_bandwidth(
+        self: &Arc<Self>,
+        peer_id: AbrPeerId,
+        bytes: u64,
+        fetch_duration: Duration,
+        source: BandwidthSource,
+    ) {
+        if fetch_duration.is_zero() {
+            debug!(
+                ?peer_id,
+                bytes, "ABR: bandwidth sample dropped — zero fetch duration"
+            );
+            return;
+        }
+        self.estimator.push_sample(bytes, fetch_duration, source);
+
+        let Some(entry) = self.peer_entry(peer_id) else {
+            return;
+        };
+
+        entry.bytes_downloaded.fetch_add(bytes, Ordering::AcqRel);
+
+        let now = Instant::now();
+        let bus = entry.bus();
+        if let Some(ref bus) = bus {
+            let mut throttle = entry.throttle.lock();
+            let emit = throttle.last_throughput_sample_at.is_none_or(|t| {
+                now.duration_since(t) >= self.settings.throughput_sample_min_interval
+            });
+            if emit {
+                throttle.last_throughput_sample_at = Some(now);
+                drop(throttle);
+                let bps = bytes_per_second(bytes, fetch_duration);
+                bus.publish(AbrEvent::ThroughputSample {
+                    source,
+                    bytes_per_second: bps,
+                });
+            }
+        }
+
+        self.run_tick(peer_id, now);
+    }
+
     pub(super) fn emit_throttled(
         &self,
         entry: &PeerEntry,
         bus: &Option<EventBus>,
-        sample: ThrottleSample,
+        now: Instant,
+        view: &AbrView<'_>,
     ) {
-        let ThrottleSample {
-            now,
-            estimate_bps,
-            buffer_ahead,
-        } = sample;
+        let estimate_bps = view.estimate_bps;
+        let buffer_ahead = view.buffer_ahead;
         let Some(bus) = bus else {
             return;
         };

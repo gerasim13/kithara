@@ -12,7 +12,7 @@ pub(crate) struct PickerSnapshot {
     pub(crate) open: bool,
 }
 
-pub(in crate::engine) struct PickerComponent {
+pub(crate) struct PickerComponent {
     highlighted: Option<usize>,
     selected: Option<usize>,
     path: String,

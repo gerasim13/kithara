@@ -1,3 +1,8 @@
+#[cfg(not(target_arch = "wasm32"))]
+use std::{
+    future::{Future, poll_fn},
+    task::Poll,
+};
 use std::{
     mem,
     num::{NonZeroU32, NonZeroUsize},
@@ -12,6 +17,12 @@ use kithara_platform::{
         mpsc,
     },
     time::Duration,
+};
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_platform::{
+    sync::{ThreadGate, WaitGate},
+    time::{self, Instant},
+    tokio::{join, task},
 };
 use kithara_test_utils::kithara;
 
@@ -417,6 +428,59 @@ fn fairness_streak_yields_at_the_configured_interval_and_resets_on_waits() {
         park_after_outcome(&wake, &configured, pass_report(outcome), &mut streak);
         assert_eq!(streak, 0, "{outcome:?} must reset the progress streak");
     }
+}
+
+#[kithara::test(native, flash(true), timeout(Duration::from_secs(10)))]
+async fn progress_fairness_keeps_runnable_work_ahead_of_a_waiting_reader() {
+    let reader_budget = Duration::from_secs(3);
+    let mut distant_timer = std::pin::pin!(time::sleep(Duration::from_secs(30)));
+    let initial = poll_fn(|cx| Poll::Ready(distant_timer.as_mut().poll(cx))).await;
+    assert!(initial.is_pending(), "the distant timer must be armed");
+
+    let gate = Arc::new(ThreadGate::default());
+    let since = gate.current();
+    let reader_gate = Arc::clone(&gate);
+    let started = Instant::now();
+    let reader = task::spawn_blocking(move || reader_gate.wait_timeout(since, reader_budget));
+    let producer = task::spawn_blocking(move || {
+        let mut configured = budgets();
+        configured.fairness_yield_interval = NonZeroU32::MIN;
+        let mut streak = 0;
+
+        park_after_outcome(
+            &Wake::default(),
+            &configured,
+            pass_report(PassOutcome::Progress),
+            &mut streak,
+        );
+        gate.signal();
+    });
+
+    let (reader, producer) = join!(reader, producer);
+    let elapsed = started.elapsed();
+    let remaining = poll_fn(|cx| Poll::Ready(distant_timer.as_mut().poll(cx))).await;
+
+    producer.expect("the runnable producer must complete");
+    assert!(
+        reader.expect("the waiting reader must complete"),
+        "the producer must signal the reader before its backstop"
+    );
+    if kithara_platform::flash::ambient_snapshot() {
+        assert_eq!(
+            elapsed,
+            Duration::ZERO,
+            "a fairness opportunity must preserve runnable work credit"
+        );
+    } else {
+        assert!(
+            elapsed < reader_budget,
+            "the producer must finish within the reader's wait budget"
+        );
+    }
+    assert!(
+        remaining.is_pending(),
+        "runnable progress must not consume the distant timer"
+    );
 }
 
 #[kithara::test(flash(false))]

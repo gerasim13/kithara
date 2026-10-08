@@ -1,23 +1,22 @@
-use bon::Builder;
-
 /// A vertical pair of level bars with a volume cap.
-#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.vu_vertical.size)]
-#[derive(kithara_derive::NodeControl)]
-pub(crate) struct VuVertical {
-    pub(crate) ticks: bool,
-}
+pub(crate) struct VuVertical;
 
-#[cfg(feature = "render")]
-mod host {
-    use super::VuVertical;
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    #[derive(Builder)]
+    pub(crate) struct VuVertical {
+        pub(crate) ticks: bool,
+    }
+
     use crate::{
         atoms::vu::VerticalVu,
+        hosts::controls::{Drag, Draws, Grip, Reading},
         interact::{CursorShape, recognizers::Track},
-        render::{
-            ReadValue, Skin, StereoLevels,
-            controls::{Drag, Draws, Grip, Reading},
-        },
+        render::{ReadValue, Skin, StereoLevels},
     };
 
     impl Draws for VuVertical {

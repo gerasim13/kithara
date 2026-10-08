@@ -3812,8 +3812,8 @@ public struct FfiItemConfig: Equatable, Hashable {
     public let uuidI64: Int64?
     /**
      * Audio source. Accepts a network URL (`https://example.com/song.mp3`,
-     * `https://…/master.m3u8`) **or** an absolute local file path
-     * (`/Users/…/song.flac`). Parsed via
+     * `https://.../master.m3u8`) **or** an absolute local file path
+     * (`/Users/.../song.flac`). Parsed via
      * [`kithara::play::ResourceSrc::parse`] at insert time, then passed
      * to [`kithara::play::ResourceConfig::for_src`].
      */
@@ -3850,8 +3850,8 @@ public struct FfiItemConfig: Equatable, Hashable {
          */uuidI64: Int64?,
         /**
          * Audio source. Accepts a network URL (`https://example.com/song.mp3`,
-         * `https://…/master.m3u8`) **or** an absolute local file path
-         * (`/Users/…/song.flac`). Parsed via
+         * `https://.../master.m3u8`) **or** an absolute local file path
+         * (`/Users/.../song.flac`). Parsed via
          * [`kithara::play::ResourceSrc::parse`] at insert time, then passed
          * to [`kithara::play::ResourceConfig::for_src`].
          */url: String,
@@ -4080,7 +4080,7 @@ public func FfiConverterTypeFfiItemState_lower(_ value: FfiItemState) -> RustBuf
 /**
  * FFI-friendly mirror of [`kithara::hls::KeyOptions`].
  *
- * Holds domain-scoped DRM rules — providers with different key
+ * Holds domain-scoped DRM rules - providers with different key
  * processors and headers can coexist.
  */
 public struct FfiKeyOptions {
@@ -4150,7 +4150,7 @@ public struct FfiKeyRule {
      */
     public let salt: String?
     /**
-     * Domain patterns — exact (`"example.com"`), wildcard subdomain
+     * Domain patterns - exact (`"example.com"`), wildcard subdomain
      * (`"*.example.com"`), or match-any (`"*"`).
      */
     public let domains: [String]
@@ -4166,7 +4166,7 @@ public struct FfiKeyRule {
          * [`crate::observer::SALT_HEADER`] in the player-wide header map.
          */salt: String?,
         /**
-         * Domain patterns — exact (`"example.com"`), wildcard subdomain
+         * Domain patterns - exact (`"example.com"`), wildcard subdomain
          * (`"*.example.com"`), or match-any (`"*"`).
          */domains: [String]) {
         self.processor = processor
@@ -4339,7 +4339,7 @@ public func FfiConverterTypeFfiPlayerConfig_lower(_ value: FfiPlayerConfig) -> R
 /**
  * Snapshot of the player's current state, returned by [`crate::player::AudioPlayer::snapshot`].
  *
- * Fields are `Option` when no current item is loaded — callers should
+ * Fields are `Option` when no current item is loaded - callers should
  * not assume defaults.
  */
 public struct FfiPlayerSnapshot: Equatable, Hashable {
@@ -6376,7 +6376,7 @@ public enum FfiItemEvent: Equatable, Hashable {
     )
     /**
      * Buffered byte ranges, expressed as `[start, start + duration)` in
-     * seconds. Replaces the older scalar `BufferedDurationChanged` —
+     * seconds. Replaces the older scalar `BufferedDurationChanged` -
      * the total buffered time is the sum of `range.duration_seconds`.
      * Mirrors the iOS `AudioPlayerItemProtocol.rxLoadedRanges` shape.
      */
@@ -7395,7 +7395,7 @@ public enum FfiPlayerEvent: Equatable, Hashable {
     case queueEnded
     /**
      * A crossfade between tracks just started. `duration_seconds` is
-     * the configured crossfade window — UIs can drive progress from it.
+     * the configured crossfade window - UIs can drive progress from it.
      */
     case crossfadeStarted(settings: FfiCrossfadeSettings
     )
@@ -9285,7 +9285,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_is_live_stream() != 3373) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_is_playable() != 41740) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_is_playable() != 38758) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_load() != 14409) {
@@ -9303,7 +9303,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_remove_observer() != 50876) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_state() != 41337) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayeritem_state() != 47776) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayeritem_url() != 18833) {
@@ -9321,13 +9321,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_ffikeyprocessor_process_key() != 2649) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_itemloadcallback_on_complete() != 38539) {
+    if (uniffi_kithara_ffi_checksum_method_itemloadcallback_on_complete() != 59565) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_itemobserver_on_event() != 48962) {
+    if (uniffi_kithara_ffi_checksum_method_itemobserver_on_event() != 33340) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_playerobserver_on_event() != 2479) {
+    if (uniffi_kithara_ffi_checksum_method_playerobserver_on_event() != 54871) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_seekcallback_on_complete() != 52837) {
@@ -9342,13 +9342,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_fficipher_process_key() != 57446) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_action_at_item_end() != 13245) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_action_at_item_end() != 49131) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_append() != 35753) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_append() != 45079) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_crossfade_settings() != 23497) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_crossfade_settings() != 40198) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_current_item() != 65110) {
@@ -9363,7 +9363,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_eq_gain() != 64291) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_insert() != 29525) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_insert() != 50006) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_is_muted() != 12244) {
@@ -9381,7 +9381,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_play() != 3044) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_playback_order() != 46526) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_playback_order() != 1221) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_playing_rate() != 25490) {
@@ -9390,28 +9390,28 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_rate() != 63306) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_remove() != 44566) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_remove() != 24945) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_remove_all_items() != 21301) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_repeat_mode() != 59485) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_repeat_mode() != 64165) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_replace_item() != 29947) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_replace_item() != 28586) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_reset_eq() != 48058) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_reset_eq() != 64063) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_seek() != 27715) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_abr_mode() != 6807) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_abr_mode() != 18523) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_gain() != 50895) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_eq_gain() != 47120) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_muted() != 56476) {
@@ -9423,7 +9423,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playing_rate() != 63075) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_repeat_mode() != 38270) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_repeat_mode() != 42867) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_set_volume() != 21146) {
@@ -9432,13 +9432,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes() != 49387) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes_with_rule() != 46772) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_hls_aes_with_rule() != 47213) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_setup_network() != 65125) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_snapshot() != 4273) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_snapshot() != 47089) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_method_audioplayer_stop() != 2997) {
@@ -9450,34 +9450,34 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_method_audioplayer_volume() != 3417) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_advance_to_next_item() != 33255) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_advance_to_next_item() != 37535) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_return_to_previous_item() != 29933) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_return_to_previous_item() != 24092) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_action_at_item_end() != 23535) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_action_at_item_end() != 48442) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_crossfade_settings() != 50899) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_crossfade_settings() != 61726) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playback_order() != 43219) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_playback_order() != 38063) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_select() != 42529) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_select() != 6525) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_audio_route_changed() != 52900) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_audio_route_changed() != 20633) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_interruption() != 39618) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_notify_interruption() != 57273) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_ducking_mode() != 53086) {
+    if (uniffi_kithara_ffi_checksum_method_audioplayer_set_ducking_mode() != 36471) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new() != 40748) {
+    if (uniffi_kithara_ffi_checksum_constructor_audioplayeritem_new() != 59437) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_constructor_ffiassetlayoutregistry_new() != 47006) {
@@ -9489,7 +9489,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_constructor_fficipher_new() != 23745) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new() != 23244) {
+    if (uniffi_kithara_ffi_checksum_constructor_audioplayer_new() != 26443) {
         return InitializationResult.apiChecksumMismatch
     }
 

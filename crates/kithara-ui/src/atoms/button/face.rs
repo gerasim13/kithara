@@ -1,12 +1,12 @@
 use crate::{
     atoms::icon::mark::Marked,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
+    hosts::{icons::Mark, solve::Length},
     layout::FrameSides,
     module::ButtonStyle,
-    render::{Mark, Skin},
+    render::Skin,
     shaping::{GlyphRun, TextContext},
     skin::{FrameSkin, TextRoleSkin},
-    solve::{Length, Size},
 };
 
 /// What a document asks a button to be, before a skin resolves it.
@@ -26,18 +26,22 @@ pub(crate) struct ButtonLabel<Words> {
     pub(crate) label: Words,
 }
 
-#[derive(Clone, PartialEq, kithara_derive::Retained)]
-#[retained(setter = set_bool, field = active)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
+#[control_painter(
+    data = crate::atoms::painter::ButtonData,
+    reads_pointer = true,
+    draw = self.paint(list, text, &data.label, data.active, bounds, state)
+)]
 pub(crate) struct Button {
     active: Face,
     idle: Face,
-    width: Width,
+    pub(crate) width: Width,
 }
 
 /// What settles a button's width: the box the row hands it, a number the skin
 /// fixes, or a share of the row it sits in.
 #[derive(Clone, Copy, PartialEq)]
-enum Width {
+pub(crate) enum Width {
     Fill,
     Fixed(f32),
     Portion(u16),
@@ -135,12 +139,6 @@ impl Button {
         }
     }
 
-    /// The box it asks for. Only the width is its own: every button fills the
-    /// height of the row it sits in.
-    pub(crate) fn declared(&self) -> Size<Length> {
-        Size::new(self.width.length(), Length::Fill)
-    }
-
     const fn face(&self, active: bool) -> &Face {
         if active { &self.active } else { &self.idle }
     }
@@ -161,7 +159,7 @@ impl Button {
 }
 
 impl Width {
-    fn new(style: ButtonStyle, skin: &Skin) -> Self {
+    pub(crate) fn new(style: ButtonStyle, skin: &Skin) -> Self {
         match style {
             ButtonStyle::Default => Self::Fill,
             ButtonStyle::MicroPrimary => Self::Fixed(skin.button.micro_size),
@@ -171,27 +169,13 @@ impl Width {
         }
     }
 
-    const fn length(self) -> Length {
+    pub(crate) const fn length(self) -> Length {
         match self {
             Self::Fill => Length::Fill,
             Self::Fixed(value) => Length::Fixed(value),
             Self::Portion(factor) => Length::FillPortion(factor),
         }
     }
-}
-
-/// What a parent has to be told about a button's width before the button
-/// exists.
-///
-/// A retained host settles a row's shares while it is still walking the
-/// document, which is earlier than it holds a painter — so this reads the same
-/// table the painter reads rather than restating it.
-///
-/// Only the retained host asks: the immediate one reads the box off the built
-/// widget, which by then holds the painter.
-#[cfg(feature = "masonry")]
-pub(crate) fn declared_width(style: ButtonStyle, skin: &Skin) -> Length {
-    Width::new(style, skin).length()
 }
 
 impl Face {

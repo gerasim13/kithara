@@ -17,7 +17,6 @@ mod consts {
     data = String,
     draw = self.paint(list, text, data, bounds)
 )]
-#[derive(kithara_derive::Retained)]
 pub(crate) struct Select {
     background: Rgba,
     chevron: Rgba,
@@ -106,7 +105,7 @@ mod tests {
     #[kithara::test]
     fn the_word_and_the_chevron_each_clear_the_padding_on_their_own_edge() {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         Select::new(skin).paint(&mut list, &mut text, "PRESET", consts::BOUNDS);
         let list = list.finish();

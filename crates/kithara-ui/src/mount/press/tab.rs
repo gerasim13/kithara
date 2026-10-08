@@ -1,27 +1,25 @@
-use bon::Builder;
-
-use crate::{
-    ids::InternId,
-    size::{Dim, SizeSpec},
-};
+use crate::size::{Dim, SizeSpec};
 
 /// A full-width tab heading one page of a panel.
-#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = SizeSpec::new(Dim::Fill, Dim::Fixed(skin.tab_large.height)), composes_size = false)]
-#[derive(kithara_derive::NodeControl)]
-pub(crate) struct Tab {
-    pub(crate) label: InternId,
-}
+pub(crate) struct Tab;
 
-#[cfg(feature = "render")]
-mod host {
-    use super::Tab;
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    use crate::ids::InternId;
+
+    #[derive(Builder)]
+    pub(crate) struct Tab {
+        pub(crate) label: InternId,
+    }
+
     use crate::{
         atoms::{painter::Labelled, tab::TabLarge},
-        render::{
-            ReadValue, Skin,
-            controls::{Draws, Grip, Reading},
-        },
+        hosts::controls::{Draws, Grip, Reading},
+        render::{ReadValue, Skin},
     };
 
     impl Draws for Tab {

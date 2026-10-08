@@ -7,7 +7,7 @@ use kithara_bufpool::{HasPool, PoolRegion};
 
 use crate::{
     DecodeResult, GaplessInfo,
-    mp4::{ItunSmpb, Mp4EditListEntry, Mp4MediaTiming, Mp4Visitor, scan_mp4},
+    mp4::{Mp4EditListEntry, Mp4Event, Mp4MediaTiming, scan_mp4},
     traits::DecoderInput,
 };
 
@@ -39,7 +39,7 @@ where
     S: HasPool<u8>,
 {
     let mut probe = GaplessProbe::default();
-    match scan_mp4(reader, &mut probe, pools) {
+    match scan_mp4(reader, &mut |event| probe.visit(event), pools) {
         Ok(()) => Ok(probe.into()),
         Err(crate::mp4::Mp4MetadataError::Io(error)) => Err(error.into()),
         Err(crate::mp4::Mp4MetadataError::Pool(error)) => Err(error.into()),
@@ -51,8 +51,8 @@ where
 ///
 /// Priority follows the established contract:
 /// 1. A track-level edit list (`elst`) that yields a positive leading/trailing
-///    pair — emitted at `on_track_end`. Once seen, the scan is told to stop.
-/// 2. An iTunSMPB freeform tag — emitted at `on_itunsmpb`. Used only as a
+///    pair — emitted at track end. Once seen, the scan is told to stop.
+/// 2. An iTunSMPB freeform tag — emitted when the tag is read. Used only as a
 ///    fallback because traks come before `udta` in well-formed `moov` boxes,
 ///    and we don't want the iTunes tag to override a real `elst`.
 #[derive(Default)]
@@ -76,56 +76,45 @@ impl From<GaplessProbe> for Option<GaplessInfo> {
     }
 }
 
-impl Mp4Visitor for GaplessProbe {
-    fn on_itunsmpb(&mut self, info: ItunSmpb) -> ControlFlow<()> {
-        if info.leading_frames == 0 && info.trailing_frames == 0 {
-            return ControlFlow::Continue(());
-        }
-        self.itunsmpb = Some(GaplessInfo {
-            leading_frames: info.leading_frames,
-            trailing_frames: info.trailing_frames,
-        });
-        ControlFlow::Break(())
-    }
-
-    fn on_movie_timescale(&mut self, timescale: u32) -> ControlFlow<()> {
-        self.movie_timescale = Some(timescale);
-        ControlFlow::Continue(())
-    }
-
-    fn on_track_begin(&mut self) -> ControlFlow<()> {
-        self.current = Some(TrackState::default());
-        ControlFlow::Continue(())
-    }
-
-    fn on_track_edit_list(&mut self, entries: &[Mp4EditListEntry]) -> ControlFlow<()> {
-        if let Some(track) = &mut self.current {
-            track.first_edit = entries.first().copied();
-        }
-        ControlFlow::Continue(())
-    }
-
-    fn on_track_end(&mut self) -> ControlFlow<()> {
-        let Some(track) = self.current.take() else {
-            return ControlFlow::Continue(());
-        };
-        if let Some(info) = derive_from_track(&track, self.movie_timescale) {
-            self.elst_derived = Some(info);
-            return ControlFlow::Break(());
-        }
-        ControlFlow::Continue(())
-    }
-
-    fn on_track_media_timing(&mut self, timing: Mp4MediaTiming) -> ControlFlow<()> {
-        if let Some(track) = &mut self.current {
-            track.media = Some(timing);
-        }
-        ControlFlow::Continue(())
-    }
-
-    fn on_track_sample_rate(&mut self, sample_rate: u32) -> ControlFlow<()> {
-        if let Some(track) = &mut self.current {
-            track.sample_rate = Some(sample_rate);
+impl GaplessProbe {
+    fn visit(&mut self, event: Mp4Event<'_>) -> ControlFlow<()> {
+        match event {
+            Mp4Event::ItunSmpb(info) => {
+                if info.leading_frames == 0 && info.trailing_frames == 0 {
+                    return ControlFlow::Continue(());
+                }
+                self.itunsmpb = Some(GaplessInfo {
+                    leading_frames: info.leading_frames,
+                    trailing_frames: info.trailing_frames,
+                });
+                return ControlFlow::Break(());
+            }
+            Mp4Event::MovieTimescale(timescale) => self.movie_timescale = Some(timescale),
+            Mp4Event::TrackBegin => self.current = Some(TrackState::default()),
+            Mp4Event::TrackEditList(entries) => {
+                if let Some(track) = &mut self.current {
+                    track.first_edit = entries.first().copied();
+                }
+            }
+            Mp4Event::TrackEnd => {
+                if let Some(track) = self.current.take()
+                    && let Some(info) = derive_from_track(&track, self.movie_timescale)
+                {
+                    self.elst_derived = Some(info);
+                    return ControlFlow::Break(());
+                }
+            }
+            Mp4Event::TrackMediaTiming(timing) => {
+                if let Some(track) = &mut self.current {
+                    track.media = Some(timing);
+                }
+            }
+            Mp4Event::TrackSampleRate(sample_rate) => {
+                if let Some(track) = &mut self.current {
+                    track.sample_rate = Some(sample_rate);
+                }
+            }
+            Mp4Event::TrackCodec(_) => {}
         }
         ControlFlow::Continue(())
     }
@@ -172,7 +161,11 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::probe_mp4_gapless;
-    use crate::{GaplessInfo, test_pools::pools};
+    use crate::{
+        GaplessInfo,
+        mp4::{Mp4EditListEntry, Mp4MediaTiming},
+        test_pools::pools,
+    };
 
     fn atom(kind: [u8; 4], payload: &[u8]) -> Vec<u8> {
         let size = u32::try_from(payload.len() + 8).unwrap_or(u32::MAX);
@@ -260,23 +253,26 @@ mod tests {
         atom(*b"----", &freeform)
     }
 
-    fn track_with_elst(
-        sample_rate: u32,
-        media_timescale: u32,
-        media_duration: u32,
-        segment_duration: u32,
-        media_time: i32,
-    ) -> Vec<u8> {
+    fn track_with_elst(sample_rate: u32, media: Mp4MediaTiming, edit: Mp4EditListEntry) -> Vec<u8> {
         let mut stbl = Vec::new();
         stbl.extend_from_slice(&stsd(sample_rate));
 
         let minf = atom(*b"minf", &atom(*b"stbl", &stbl));
 
         let mut mdia = Vec::new();
-        mdia.extend_from_slice(&mdhd(media_timescale, media_duration));
+        mdia.extend_from_slice(&mdhd(
+            media.timescale,
+            u32::try_from(media.duration).expect("fixture duration"),
+        ));
         mdia.extend_from_slice(&minf);
 
-        let edts = atom(*b"edts", &elst_v0(segment_duration, media_time));
+        let edts = atom(
+            *b"edts",
+            &elst_v0(
+                u32::try_from(edit.segment_duration).expect("fixture duration"),
+                i32::try_from(edit.media_time).expect("fixture media time"),
+            ),
+        );
 
         let mut trak = Vec::new();
         trak.extend_from_slice(&atom(*b"mdia", &mdia));
@@ -288,7 +284,17 @@ mod tests {
     fn derives_gapless_from_edit_list() {
         let mut moov = Vec::new();
         moov.extend_from_slice(&mvhd(1_000));
-        moov.extend_from_slice(&track_with_elst(48_000, 48_000, 96_000, 1_916, 2_112));
+        moov.extend_from_slice(&track_with_elst(
+            48_000,
+            Mp4MediaTiming {
+                timescale: 48_000,
+                duration: 96_000,
+            },
+            Mp4EditListEntry {
+                segment_duration: 1_916,
+                media_time: 2_112,
+            },
+        ));
 
         let mut reader = Cursor::new(atom(*b"moov", &moov));
         assert_eq!(
@@ -334,7 +340,17 @@ mod tests {
 
         let mut moov = Vec::new();
         moov.extend_from_slice(&mvhd(1_000));
-        moov.extend_from_slice(&track_with_elst(48_000, 48_000, 96_000, 1_916, 2_112));
+        moov.extend_from_slice(&track_with_elst(
+            48_000,
+            Mp4MediaTiming {
+                timescale: 48_000,
+                duration: 96_000,
+            },
+            Mp4EditListEntry {
+                segment_duration: 1_916,
+                media_time: 2_112,
+            },
+        ));
         moov.extend_from_slice(&atom(*b"udta", &atom(*b"meta", &meta_payload)));
 
         let mut reader = Cursor::new(atom(*b"moov", &moov));

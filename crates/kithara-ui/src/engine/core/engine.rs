@@ -12,24 +12,11 @@ use crate::{
 
 #[derive(Default)]
 pub(crate) struct Engine {
-    router: Router,
-    components: Vec<RetainedComponent>,
+    pub(crate) router: Router,
+    pub(crate) components: Vec<RetainedComponent>,
 }
 
 impl Engine {
-    #[cfg(feature = "masonry")]
-    pub(crate) fn clear_focus(&mut self) {
-        self.router.clear_focus(&mut self.components);
-    }
-
-    #[cfg(feature = "masonry")]
-    pub(crate) fn column_divider_value(&self, path: &str) -> Option<f32> {
-        self.components
-            .iter()
-            .find(|component| component.path() == path && component.kind() == Kind::ColumnDivider)
-            .and_then(RetainedComponent::column_divider_value)
-    }
-
     pub(crate) fn cursor(&self, targets: &[Target<'_>]) -> CursorShape {
         self.router.cursor(&self.components, targets)
     }
@@ -42,12 +29,6 @@ impl Engine {
     ) -> Option<Emission> {
         self.router
             .handle(&mut self.components, input, targets, now)
-    }
-
-    pub(crate) fn has_pressed_item(&self) -> bool {
-        self.components
-            .iter()
-            .any(|component| component.pressed_item_index().is_some())
     }
 
     pub(crate) fn input_method<'a>(
@@ -79,10 +60,6 @@ impl Engine {
             .iter()
             .find(|component| component.path() == path && component.kind() == Kind::Picker)
             .and_then(RetainedComponent::picker_snapshot)
-    }
-
-    pub(crate) fn pressed_item_index(&self, path: &str) -> Option<usize> {
-        self.item_pressed(path).flatten()
     }
 
     pub(crate) fn reconcile(&mut self, descriptors: impl IntoIterator<Item = Descriptor>) {
@@ -119,33 +96,12 @@ impl Engine {
         }
     }
 
-    /// Whether the focused component edits text, so pasted text belongs to it.
-    pub(crate) fn editing_text(&self) -> bool {
-        self.router.focused_path().is_some_and(|path| {
-            self.components
-                .iter()
-                .any(|component| component.path() == path && component.kind() == Kind::TextInput)
-        })
-    }
-
     pub(crate) fn text_input_snapshot(&self, path: &str) -> Option<TextInputSnapshot> {
         let focused = self.router.focused_path() == Some(path);
         self.components
             .iter()
             .find(|component| component.path() == path && component.kind() == Kind::TextInput)
             .and_then(|component| component.text_input_snapshot(focused))
-    }
-
-    pub(crate) fn text_input_snapshots(&self) -> Vec<(String, TextInputSnapshot)> {
-        let focused = self.router.focused_path();
-        self.components
-            .iter()
-            .filter_map(|component| {
-                component
-                    .text_input_snapshot(focused == Some(component.path()))
-                    .map(|snapshot| (component.path().to_owned(), snapshot))
-            })
-            .collect()
     }
 
     delegate::delegate! {

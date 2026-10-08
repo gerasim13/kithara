@@ -9,9 +9,9 @@ use crate::{
     },
 };
 
-pub(in crate::engine) struct ScalarComponent {
+pub(crate) struct ScalarComponent {
     kind: Kind,
-    current: Option<f32>,
+    pub(crate) current: Option<f32>,
     drag_step: Option<f64>,
     scalar: Scalar,
     state: ScalarState,
@@ -34,11 +34,6 @@ impl ScalarComponent {
             current,
             state: ScalarState::default(),
         }
-    }
-
-    #[cfg(feature = "masonry")]
-    pub(super) const fn current(&self) -> Option<f32> {
-        self.current
     }
 
     pub(super) fn reconcile(mut self, next: Self) -> Self {
