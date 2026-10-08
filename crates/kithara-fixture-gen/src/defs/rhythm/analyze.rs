@@ -181,7 +181,7 @@ impl AudioRead for PcmReader {
             .map_err(DecodeError::from)?;
         samples.copy_from_slice(&self.samples[sample_start..sample_end]);
         self.cursor = end;
-        Ok(ChunkOutcome::Chunk(AudioChunk::new(
+        Ok(ChunkOutcome::Chunk(Box::new(AudioChunk::new(
             AudioChunkInfo {
                 end_timestamp: self.position_at(end),
                 frame_offset: u64::try_from(start).map_err(|_| DecodeError::InvalidData {
@@ -195,7 +195,7 @@ impl AudioRead for PcmReader {
                 ..AudioChunkInfo::default()
             },
             samples,
-        )))
+        ))))
     }
 
     fn position(&self) -> Duration {
@@ -225,8 +225,8 @@ impl AudioRead for PcmReader {
 }
 
 impl AudioControl for PcmReader {
-    fn seek(&mut self, target: Duration) -> Result<SeekOutcome, DecodeError> {
-        let frame = usize::try_from(self.spec.frame_at(target)?).map_err(|_| {
+    fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
+        let frame = usize::try_from(self.spec.frame_at(target).map_err(DecodeError::from)?).map_err(|_| {
             DecodeError::SeekOutOfRange {
                 detail: "fixture seek does not fit usize",
             }

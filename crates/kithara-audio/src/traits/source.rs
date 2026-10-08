@@ -18,6 +18,11 @@ pub trait AudioSource: Send + 'static {
     /// Commit the decoded-source boundary represented by admitted output.
     fn commit_source_end(&mut self, _source_end: SourceEnd) {}
     /// Seek within the open source on the owning thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioReadError`] when the source cannot reposition to
+    /// `position`.
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError>;
     /// Rebuild for a host-rate change on the owning thread.
     fn set_host_sample_rate(&mut self, rate: NonZeroU32);
