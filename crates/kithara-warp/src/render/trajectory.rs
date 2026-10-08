@@ -236,14 +236,18 @@ impl Trajectory {
         !matches!(self.curve, SpeedCurve::Constant(_))
     }
 
-    pub(super) fn constant_unity(&self) -> bool {
+    pub(super) fn unity_interval(&self) -> bool {
         !matches!(&self.curve, SpeedCurve::Ramp { frames, .. } if self.elapsed < frames.get())
+            && self.speed().is_ok_and(|speed| speed == 1.0)
+    }
+
+    pub(super) fn constant_unity(&self) -> bool {
+        self.unity_interval()
             && !matches!(
                 &self.curve,
                 SpeedCurve::Steps(steps)
                     if steps.last().is_some_and(|(frame, _)| *frame > self.elapsed)
             )
-            && self.speed().is_ok_and(|speed| speed == 1.0)
     }
 
     fn speed_at(&self) -> Result<Fraction, ElasticError> {

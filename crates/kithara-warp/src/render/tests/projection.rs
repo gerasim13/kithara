@@ -354,6 +354,44 @@ fn an_unapplied_activation_splits_every_crossing_source_quantum(#[case] input_fr
         .expect("crossing source quantum is split");
 
     assert_eq!(frames.get(), 16);
+
+    let mut input = chunk(&renderer.pools, &[0.25; 32]);
+    input.meta = AudioChunkInfo {
+        frames: 16,
+        ..meta
+    };
+    let pointer = input.samples.as_ptr();
+    let output = renderer
+        .render_quantum(input)
+        .continue_value()
+        .expect("prepared unity interval")
+        .expect("unity PCM");
+    assert_eq!(output.frames(), 16);
+    assert_eq!(output.samples.as_ptr(), pointer);
+    assert_eq!(&*output.samples, &[0.25; 32]);
+    let span = output.meta.source_span.expect("unity interval mapping");
+    assert_eq!(span.start(), 0);
+    assert_eq!(span.end(), 16);
+
+    renderer.prepare(spec());
+    renderer
+        .prepare_quantum(
+            AudioChunkInfo {
+                frame_offset: 16,
+                ..meta
+            },
+            4096,
+            8,
+        )
+        .expect("next interval activates at the boundary");
+    let span = renderer
+        .prepared_quantum
+        .expect("next interval")
+        .source_span
+        .expect("next interval mapping");
+    assert_eq!(span.output_frames(), 8);
+    assert_eq!(span.start(), 16);
+    assert_eq!(span.end(), 28);
 }
 
 #[cfg(any(
@@ -1097,9 +1135,10 @@ fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
     renderer.prepare(spec());
     let mut input = chunk(&renderer.pools, &[0.5; 128]);
     input.meta.frame_offset = admitted;
-    renderer
+    let frames = renderer
         .prepare_quantum(input.meta, input.frames(), usize::MAX)
         .expect("manual request");
+    assert_eq!(frames.get(), input.frames());
     let output = renderer
         .render_quantum(input)
         .continue_value()

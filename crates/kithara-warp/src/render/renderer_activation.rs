@@ -1,5 +1,3 @@
-use std::num::NonZeroUsize;
-
 use kithara_bufpool::HasPool;
 use kithara_signal::{AudioChunk, AudioChunkInfo, FrameCount};
 use kithara_stretch::ElasticError;
@@ -165,7 +163,11 @@ where
             return Err(crate::WarpRenderError::UnsupportedRegionPlan);
         }
         self.terminal_source_end = None;
-        if !self.requires_staging() || (self.plan.is_none() && self.trajectory.constant_unity()) {
+        if !self.requires_staging()
+            || (self.plan.is_none()
+                && (self.trajectory.constant_unity()
+                    || (!self.current_keylock && self.trajectory.unity_interval())))
+        {
             let prepared = self.prepare_unity_quantum(meta, remaining, output_limit)?;
             let frames = prepared.frames;
             self.prepared_quantum = Some(prepared);
@@ -186,7 +188,10 @@ where
             .trajectory
             .output_limit(output_limit)
             .min(self.source_block_frames.get())
-            .min(self.render_quantum_frames.map_or(remaining, NonZeroUsize::get));
+            .min(
+                self.render_quantum_frames
+                    .map_or(remaining, |limit| limit.get().min(remaining)),
+            );
         if outputs == 0 {
             return Err(ElasticError::EmptyOutput);
         }

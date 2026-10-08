@@ -661,7 +661,7 @@ where
                 return None;
             }
             if self.plan.is_none()
-                && self.trajectory.constant_unity()
+                && (!self.requires_staging() || self.trajectory.unity_interval())
                 && self.retiring_target.is_none()
                 && span.source_ratio_at(0)
                     == Some((

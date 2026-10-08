@@ -75,25 +75,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         let unity = self.stretch_target().1 && self.keylocked_unity();
         let trajectory = unity.then(|| self.trajectory.clone());
         if unity {
-            let latency = self
-                .engine
-                .as_ref()
-                .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
-                .capabilities()
-                .latency();
-            frames = frames.max(
-                latency
-                    .source_frames()
-                    .checked_add(latency.output_frames())
-                    .and_then(|frames| {
-                        frames.checked_mul(
-                            self.projection
-                                .as_ref()
-                                .map_or(1, |projection| projection.stages),
-                        )
-                    })
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-            );
             let mut identity = self.trajectory.clone();
             identity.snap_to_frame()?;
             let start = identity.span(0, self.spec.sample_rate, 1)?.start();

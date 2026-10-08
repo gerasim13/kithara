@@ -648,6 +648,9 @@ fn live_unity_transition_drains_active_backend_tail(
             "the fixture exercises an exact half-frame tie"
         );
         let snapped = before.0 / before.1.get() + 1;
+        let fade_frames = fx.engine_latency().get().max(
+            usize::try_from(u128::from(source) - snapped).expect("admitted identity lookahead"),
+        );
         assert!(
             before.0 < u128::from(source) * u128::from(before.1.get()),
             "the active engine retains decoded lookahead"
@@ -709,6 +712,11 @@ fn live_unity_transition_drains_active_backend_tail(
             samples.extend_from_slice(&output.samples);
             fx.prepare(spec());
             if fx.retiring_target.is_none() {
+                assert_eq!(
+                    index + 1,
+                    fade_frames.div_ceil(128),
+                    "the unity fade covers output latency and admitted source, not source-side warmup"
+                );
                 assert!(!fx.transition_pending());
                 assert!(samples.iter().any(|sample| sample.abs() > f32::EPSILON));
                 assert!(samples.iter().all(|sample| sample.is_finite()));
@@ -783,6 +791,10 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
             .expect("initial mapping")
             .source_ratio_at(2)
             .expect("phase");
+        let fade_frames = fx
+            .engine_latency()
+            .get()
+            .max(usize::try_from(source - 1).expect("admitted identity lookahead"));
         fx.output_remainder = debt;
         fx.set_speed(SpeedCurve::Constant(1.0), 1)
             .expect("unity command");
@@ -821,6 +833,11 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(
             samples.extend_from_slice(&unity.samples);
             fx.prepare(spec());
             if fx.retiring_target.is_none() {
+                assert_eq!(
+                    index + 1,
+                    fade_frames.div_ceil(128),
+                    "rounding debt does not extend the output-latency and source-catch-up fade"
+                );
                 assert!(!fx.transition_pending());
                 return samples;
             }

@@ -154,6 +154,41 @@ fn interrupted_backend_crossfades_keep_the_current_curve_and_phase() {
                     )
                     .expect("replacement curve");
             }
+            if frame == 19 {
+                let phase = renderer
+                    .trajectory
+                    .span(0, spec().sample_rate, 1)
+                    .expect("completed ramp phase")
+                    .source_ratio_at(0)
+                    .expect("exact phase");
+                assert_eq!(phase, (23, NonZeroU128::new(2).expect("half frame")));
+                renderer
+                    .prepare_engine_latency(spec())
+                    .expect("R6 identity transition");
+                assert_eq!(
+                    renderer
+                        .retiring_target
+                        .as_ref()
+                        .expect("retiring ramp engine")
+                        .trajectory
+                        .as_ref()
+                        .expect("unsnapped tail trajectory")
+                        .span(0, spec().sample_rate, 1)
+                        .expect("tail phase")
+                        .source_ratio_at(0),
+                    Some(phase),
+                    "R6 preserves the retiring engine's exact 11.5-frame phase"
+                );
+                assert_eq!(
+                    renderer
+                        .trajectory
+                        .span(0, spec().sample_rate, 1)
+                        .expect("identity phase")
+                        .source_ratio_at(0),
+                    Some((12, NonZeroU128::MIN)),
+                    "R6 identity rounds the half-frame tie forward under the tail crossfade"
+                );
+            }
             let next = if frame < 7 {
                 7
             } else if frame < 11 {
@@ -166,8 +201,11 @@ fn interrupted_backend_crossfades_keep_the_current_curve_and_phase() {
                 &mut source,
                 budgets[frame % budgets.len()].min(next - frame),
             );
+            let identity = frame >= 19;
             assert_positions(&output, frame, |frame| {
-                if frame <= 11 {
+                if identity {
+                    12.0 + (frame - 19) as f64
+                } else if frame <= 11 {
                     frame as f64 * 0.5
                 } else {
                     let ramp = (frame - 11).min(8) as f64;
