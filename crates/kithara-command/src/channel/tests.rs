@@ -2,6 +2,7 @@ use std::{
     mem,
     num::NonZeroUsize,
     ops::Range,
+    ops::{Deref, DerefMut},
     task::{Context, Poll},
 };
 
@@ -572,7 +573,8 @@ fn a_dropped_due_batch_comes_back_unanswered() {
 
 #[kithara::test]
 fn a_deferred_batch_is_answered_when_its_executor_resumes_it() {
-    let (mut sender, mut inbox) = pair(1, 0);
+    let (mut sender, inbox) = pair(1, 0);
+    let mut inbox = ResumeAt(inbox);
     let seq = send(&mut sender, When::Next, batch(1, &[]));
     inbox.drain();
     let due = inbox.next_due(Frame(64), BLOCK).expect("the batch is due");
@@ -607,7 +609,8 @@ fn a_deferred_batch_is_answered_when_its_executor_resumes_it() {
 
 #[kithara::test]
 fn a_deferred_batch_a_later_batch_shifted_under_resumes_stale() {
-    let (mut sender, mut inbox) = pair(8, 1);
+    let (mut sender, inbox) = pair(8, 1);
+    let mut inbox = ResumeAt(inbox);
     let deferred = send(&mut sender, When::Next, batch(1, &[(Slot(0), None)]));
     let shift = send(&mut sender, When::Next, batch(2, &[(Slot(0), None)]));
     inbox.drain();
@@ -629,7 +632,8 @@ fn a_deferred_batch_a_later_batch_shifted_under_resumes_stale() {
 
 #[kithara::test]
 fn a_deferred_batch_leaves_the_block_to_the_batches_after_it() {
-    let (mut sender, mut inbox) = pair(8, 0);
+    let (mut sender, inbox) = pair(8, 0);
+    let mut inbox = ResumeAt(inbox);
     let deferred = send(&mut sender, When::Next, batch(1, &[]));
     let next = send(&mut sender, When::Next, batch(2, &[]));
     inbox.drain();
@@ -783,7 +787,8 @@ fn a_released_sender_is_not_woken_by_a_receipt() {
 /// basis falls back to the last one that applied.
 #[kithara::test]
 fn the_sender_bases_each_batch_on_the_last_one_that_shifts_its_target() {
-    let (mut sender, mut inbox) = pair(4, 2);
+    let (sender, mut inbox) = pair(4, 2);
+    let mut sender = BasisAt(sender);
     assert_eq!(sender.basis(Slot(0)), None);
 
     let first = send(&mut sender, When::Next, batch(1, &[(Slot(0), None)]));
@@ -805,4 +810,246 @@ fn the_sender_bases_each_batch_on_the_last_one_that_shifts_its_target() {
 
     assert_eq!(sender.basis(Slot(0)), Some(second));
     assert_ne!(first, second);
+}
+
+#[kithara::test]
+fn a_next_basis_excludes_pending_future_shifts() {
+    let (mut sender, _inbox) = pair(4, 1);
+    send(
+        &mut sender,
+        When::At(Frame(200)),
+        batch(1, &[(Slot(0), None)]),
+    );
+    assert_eq!(sender.basis(Slot(0), When::Next), None);
+}
+
+#[kithara::test]
+fn basis_projection_skips_stale_pending_batches_in_moment_order() {
+    let (mut sender, mut inbox) = pair(4, 1);
+    let future = send(
+        &mut sender,
+        When::At(Frame(200)),
+        batch(1, &[(Slot(0), None)]),
+    );
+    let next = send(&mut sender, When::Next, batch(2, &[(Slot(0), None)]));
+    let dependent = send(
+        &mut sender,
+        When::At(Frame(250)),
+        batch(3, &[(Slot(0), Some(future))]),
+    );
+    assert_eq!(sender.basis(Slot(0), When::At(Frame(199))), Some(next));
+    assert_eq!(sender.basis(Slot(0), When::At(Frame(200))), Some(next));
+    assert_eq!(sender.basis(Slot(0), When::At(Frame(250))), Some(next));
+    let last = send(
+        &mut sender,
+        When::At(Frame(300)),
+        batch(4, &[(Slot(0), Some(next))]),
+    );
+    assert_eq!(sender.basis(Slot(0), When::At(Frame(300))), Some(last));
+    assert_eq!(sender.available(), 0);
+    assert!(matches!(
+        sender.send(When::Next, batch(5, &[(Slot(0), Some(next))])),
+        Err(SendError::Full(_))
+    ));
+    assert_eq!(sender.basis(Slot(0), When::Next), Some(next));
+    assert_eq!(run_block(&mut inbox, 64, BLOCK), [(0, 2)]);
+    assert_eq!(
+        outcomes(&mut sender),
+        [
+            (next, applied(64)),
+            (future, Outcome::Rejected(Rejection::Stale)),
+            (dependent, Outcome::Rejected(Rejection::Stale)),
+        ]
+    );
+    assert_eq!(run_block(&mut inbox, 250, BLOCK), [(50, 4)]);
+    assert_eq!(outcomes(&mut sender), [(last, applied(300))]);
+    assert_eq!(sender.available(), 4);
+}
+
+#[kithara::test]
+fn deferred_resume_rejects_a_future_basis_that_never_became_current() {
+    let (mut sender, mut inbox) = pair(2, 1);
+    let future = send(
+        &mut sender,
+        When::At(Frame(200)),
+        batch(1, &[(Slot(0), None)]),
+    );
+    let deferred = send(
+        &mut sender,
+        When::Deferred,
+        batch(2, &[(Slot(0), Some(future))]),
+    );
+    inbox.drain();
+    assert!(outcomes(&mut sender).is_empty());
+    assert_eq!(
+        inbox.next_deferred().expect("arrival").park(),
+        Some(deferred)
+    );
+    assert!(inbox.resume(deferred, Frame(64), Frame(70)).is_none());
+    assert!(!inbox.is_parked(deferred));
+    assert_eq!(
+        outcomes(&mut sender),
+        [(deferred, Outcome::Rejected(Rejection::Stale))]
+    );
+    assert_eq!(run_block(&mut inbox, 200, BLOCK), [(0, 1)]);
+    assert_eq!(outcomes(&mut sender), [(future, applied(200))]);
+}
+
+#[kithara::test]
+fn apply_answers_outdated_future_batches_in_the_same_block() {
+    let (mut sender, mut inbox) = pair(8, 2);
+    let future = send(
+        &mut sender,
+        When::At(Frame(200)),
+        batch(1, &[(Slot(0), None)]),
+    );
+    let shift = send(&mut sender, When::Next, batch(2, &[(Slot(0), None)]));
+    let equal = send(
+        &mut sender,
+        When::At(Frame(250)),
+        batch(3, &[(Slot(0), Some(shift))]),
+    );
+    let above = send(
+        &mut sender,
+        When::At(Frame(300)),
+        batch(4, &[(Slot(0), Some(equal))]),
+    );
+    let disjoint = send(
+        &mut sender,
+        When::At(Frame(400)),
+        batch(5, &[(Slot(1), None)]),
+    );
+    inbox.drain();
+    assert!(outcomes(&mut sender).is_empty(), "drain never judges");
+    inbox
+        .next_due(Frame(64), BLOCK)
+        .expect("Next is due")
+        .apply(());
+    assert_eq!(
+        outcomes(&mut sender),
+        [
+            (shift, applied(64)),
+            (future, Outcome::Rejected(Rejection::Stale)),
+        ]
+    );
+    assert_eq!(inbox.frames_until_due(Frame(64)), Some(186));
+    assert_eq!(run_block(&mut inbox, 250, BLOCK), [(0, 3), (50, 4)]);
+    assert_eq!(run_block(&mut inbox, 400, BLOCK), [(0, 5)]);
+    assert_eq!(
+        outcomes(&mut sender),
+        [
+            (equal, applied(250)),
+            (above, applied(300)),
+            (disjoint, applied(400))
+        ]
+    );
+}
+
+#[kithara::test]
+fn deferred_is_after_every_at_and_never_judged_by_next_due() {
+    let (mut sender, mut inbox) = pair(4, 1);
+    assert!(When::At(Frame(u64::MAX)) < When::Deferred);
+    let deferred = send(&mut sender, When::Deferred, batch(1, &[(Slot(0), None)]));
+    assert_eq!(sender.basis(Slot(0), When::Next), None);
+    assert_eq!(sender.basis(Slot(0), When::At(Frame(u64::MAX))), None);
+    assert_eq!(sender.basis(Slot(0), When::Deferred), Some(deferred));
+    inbox.drain();
+    assert_eq!(inbox.frames_until_due(Frame(0)), None);
+    assert!(inbox.next_due(Frame(0), BLOCK).is_none());
+    assert!(outcomes(&mut sender).is_empty());
+    let arrived = inbox
+        .next_deferred()
+        .expect("a deferred arrival is exposed");
+    assert_eq!(arrived.seq(), deferred);
+    assert_eq!(arrived.basis(), [(Slot(0), None)]);
+    assert_eq!(arrived.commands(), [1]);
+    drop(arrived);
+    assert_eq!(
+        outcomes(&mut sender),
+        [(deferred, Outcome::Rejected(Rejection::Unanswered))]
+    );
+    assert!(inbox.next_deferred().is_none());
+}
+
+#[kithara::test]
+fn deferred_resume_uses_its_firing_block_and_judges_its_basis() {
+    let (mut sender, mut inbox) = pair(8, 1);
+    let pending = send(&mut sender, When::Deferred, batch(1, &[(Slot(0), None)]));
+    inbox.drain();
+    assert_eq!(
+        inbox.next_deferred().expect("arrival").park(),
+        Some(pending)
+    );
+    assert!(inbox.is_parked(pending));
+    let due = inbox
+        .resume(pending, Frame(128), Frame(150))
+        .expect("parked");
+    assert_eq!(due.offset(), 22);
+    due.apply(());
+    assert!(!inbox.is_parked(pending));
+    assert!(inbox.resume(pending, Frame(128), Frame(150)).is_none());
+    let stale = send(&mut sender, When::Deferred, batch(2, &[(Slot(0), None)]));
+    inbox.drain();
+    assert!(inbox.next_deferred().expect("arrival").park().is_none());
+    let refused = send(&mut sender, When::Deferred, batch(3, &[]));
+    inbox.drain();
+    inbox
+        .next_deferred()
+        .expect("arrival")
+        .refuse("bad deferral");
+    assert_eq!(
+        outcomes(&mut sender),
+        [
+            (pending, applied(150)),
+            (stale, Outcome::Rejected(Rejection::Stale)),
+            (
+                refused,
+                Outcome::Rejected(Rejection::Refused("bad deferral"))
+            ),
+        ]
+    );
+}
+
+struct BasisAt(Sender<Test>);
+
+impl BasisAt {
+    fn basis(&self, target: Slot) -> Option<Seq> {
+        self.0.basis(target, When::At(Frame(u64::MAX)))
+    }
+}
+
+impl Deref for BasisAt {
+    type Target = Sender<Test>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for BasisAt {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+struct ResumeAt(Inbox<Test>);
+
+impl ResumeAt {
+    fn resume(&mut self, seq: Seq, at: Frame) -> Option<super::Due<'_, Test>> {
+        self.0.resume(seq, at, at)
+    }
+}
+
+impl Deref for ResumeAt {
+    type Target = Inbox<Test>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for ResumeAt {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }

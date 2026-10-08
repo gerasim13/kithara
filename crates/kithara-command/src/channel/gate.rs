@@ -3,9 +3,9 @@ use std::{
     sync::atomic::{AtomicU8, Ordering},
 };
 
-/// Entry to a channel's ring, shared by its two halves: a send enters before
-/// it pushes and leaves after, and the inbox closes the gate before its last
-/// drain, so every batch the gate let in is in the ring that drain reads.
+/// Entry to a channel's ring, shared by its two halves: a plain send or scoped
+/// publication enters before its ring-index store and leaves after it. The
+/// inbox closes the gate before its last drain, which reads every admitted batch.
 #[derive(Default)]
 pub(super) struct Gate(AtomicU8);
 
@@ -14,6 +14,10 @@ impl Gate {
     const CLOSED: u8 = 1;
     /// A send is between entering the gate and leaving it.
     const SENDING: u8 = 2;
+
+    pub(super) fn is_closed(&self) -> bool {
+        self.0.load(Ordering::Acquire) & Self::CLOSED != 0
+    }
 
     /// Enters for one send; `false` once the gate is closed.
     pub(super) fn enter(&self) -> bool {

@@ -102,3 +102,155 @@ fn draining_judging_and_answering_never_allocate() {
     assert!(outcomes.contains(&Outcome::Rejected(Rejection::Refused("busy"))));
     assert!(outcomes.contains(&Outcome::Rejected(Rejection::Unanswered)));
 }
+
+#[kithara::test(native)]
+fn deferred_resume_and_eager_scans_never_allocate_or_drop_batches() {
+    let (mut sender, mut inbox) = channel::<Test>(
+        ChannelConfig::builder()
+            .capacity(CAPACITY)
+            .targets(1)
+            .build(),
+    );
+    let parked_due = sender
+        .send(When::Next, batch(1, &[(Slot(0), None)]))
+        .expect("room");
+    let parked_arrival = sender
+        .send(When::Deferred, batch(2, &[(Slot(0), None)]))
+        .expect("room");
+    sender
+        .send(When::Deferred, batch(3, &[(Slot(0), None)]))
+        .expect("room");
+    sender
+        .send(When::At(Frame(1000)), batch(4, &[(Slot(0), None)]))
+        .expect("room");
+    sender
+        .send(When::Next, batch(5, &[(Slot(0), None)]))
+        .expect("room");
+    let resumed = sender.send(When::Next, batch(6, &[])).expect("room");
+    sender.send(When::Deferred, batch(7, &[])).expect("room");
+    sender.send(When::Deferred, batch(8, &[])).expect("room");
+
+    assert_no_alloc(|| {
+        inbox.drain();
+        assert_eq!(
+            inbox.next_due(Frame(64), BLOCK).expect("due").defer(),
+            parked_due
+        );
+        assert_eq!(
+            inbox.next_deferred().expect("arrival").park(),
+            Some(parked_arrival)
+        );
+        inbox.next_due(Frame(64), BLOCK).expect("shift").apply(());
+        assert!(!inbox.is_parked(parked_due));
+        assert!(!inbox.is_parked(parked_arrival));
+        inbox.next_due(Frame(64), BLOCK).expect("due").defer();
+        let due = inbox
+            .resume(resumed, Frame(128), Frame(150))
+            .expect("parked");
+        assert_eq!(due.offset(), 22);
+        due.refuse("executor event");
+        inbox
+            .next_deferred()
+            .expect("arrival")
+            .refuse("invalid deferral");
+        drop(inbox.next_deferred().expect("arrival"));
+        assert!(inbox.next_due(Frame(64), BLOCK).is_none());
+        assert!(inbox.next_deferred().is_none());
+    });
+    let receipts: Vec<_> = sender.receipts().collect();
+    assert_eq!(receipts.len(), 8);
+    assert_eq!(
+        receipts
+            .iter()
+            .filter(|receipt| matches!(receipt.outcome(), Outcome::Rejected(Rejection::Stale)))
+            .count(),
+        4
+    );
+    assert!(
+        receipts
+            .iter()
+            .all(|receipt| receipt.batch().commands.len() == 1)
+    );
+}
+
+#[kithara::test(native)]
+fn scoped_publish_walk_refuse_and_retire_never_allocate_or_drop_batches() {
+    use kithara_command::{Port, ScopedConfig, ScopedReceipt, scoped_channel};
+
+    let level = ChannelConfig::builder()
+        .capacity(CAPACITY)
+        .targets(1)
+        .build();
+    let (mut sender, mut inbox) = scoped_channel::<Test, Test>(
+        ScopedConfig::builder()
+            .root(level)
+            .scope(level)
+            .scopes(std::num::NonZeroU16::MIN.saturating_add(1))
+            .build(),
+    );
+    let first = sender.open(1).expect("slot");
+    let second = sender.open(1).expect("slot");
+    let root = sender.send(When::Next, batch(1, &[])).expect("room");
+    sender
+        .send(When::At(Frame(1000)), batch(2, &[]))
+        .expect("room");
+    for id in [first, second] {
+        let mut port = sender.scope(id).expect("scope");
+        port.send(When::Deferred, batch(3, &[(Slot(0), None)]))
+            .expect("room");
+        port.send(When::Next, batch(4, &[(Slot(0), None)]))
+            .expect("room");
+        port.send(When::At(Frame(1000)), batch(5, &[(Slot(0), None)]))
+            .expect("room");
+        port.send(When::Deferred, batch(6, &[])).expect("room");
+    }
+    sender.close(first).expect("reserved");
+    sender.close(second).expect("reserved");
+
+    assert_no_alloc(|| {
+        sender.publish().expect("live");
+        inbox.drain();
+        let mut level = inbox.root();
+        assert_eq!(
+            level.next_due(Frame(64), BLOCK).expect("Next").defer(),
+            root
+        );
+        level
+            .resume(root, Frame(128), Frame(150))
+            .expect("parked")
+            .apply(());
+        let mut level = inbox.scope(first).expect("scope");
+        let parked = level
+            .next_deferred()
+            .expect("arrival")
+            .park()
+            .expect("current");
+        level.next_due(Frame(64), BLOCK).expect("shift").apply(());
+        assert!(!level.is_parked(parked));
+        level
+            .next_deferred()
+            .expect("arrival")
+            .refuse("invalid deferral");
+        level.retire();
+        let mut level = inbox.scope(second).expect("scope");
+        level.next_due(Frame(64), BLOCK).expect("Next").defer();
+        level
+            .next_deferred()
+            .expect("arrival")
+            .park()
+            .expect("current");
+        inbox.refuse_timed("root axis", "scope axis");
+        inbox.retire_closing();
+        assert!(inbox.scope(first).is_none());
+        assert!(inbox.scope(second).is_none());
+    });
+    let receipts: Vec<_> = std::iter::from_fn(|| sender.receipt()).collect();
+    assert_eq!(receipts.len(), 12);
+    assert_eq!(
+        receipts
+            .iter()
+            .filter(|receipt| matches!(receipt, ScopedReceipt::Closed(_)))
+            .count(),
+        2
+    );
+}
