@@ -413,7 +413,9 @@ impl Deck {
 
     pub(super) fn finish_stops(&mut self, level: &mut LevelInbox<'_, DeckProtocol>) {
         for (index, interrupted) in self.interrupted.iter_mut().enumerate() {
-            let Some((seq, resume)) = interrupted.take() else { continue };
+            let Some((seq, resume)) = interrupted.take() else {
+                continue;
+            };
             let slot = Slot::new(u16::try_from(index).unwrap_or(u16::MAX));
             if let Some(commands) = level.committed_mut(seq) {
                 replace_stop(commands, slot, resume);

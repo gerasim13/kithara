@@ -2,8 +2,7 @@
 //! pass-level tests drive, over silence or over real PCM.
 
 use kithara_audio::{
-    AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome, ReadOutcome,
-    SeekOutcome,
+    AudioControl, AudioRead, AudioReadError, AudioSession, ChunkOutcome, ReadOutcome, SeekOutcome,
 };
 use kithara_decode::TrackMetadata;
 use kithara_events::EventBus;

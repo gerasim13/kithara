@@ -3,9 +3,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use kithara_audio::{
-    AudioSource, Fetch, SourceEnd, TrackStep, WaitingReason, TrackFailureKind,
-};
+use kithara_audio::{AudioSource, Fetch, SourceEnd, TrackFailureKind, TrackStep, WaitingReason};
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::{sync::Arc, time::WallInstant};
 use kithara_signal::{AudioChunk, AudioChunkInfo, FrameCount, SegmentId};
@@ -90,7 +88,10 @@ where
     fn synchronize(&mut self) -> Result<(), TrackFailureKind> {
         self.source.service_commands()?;
         let segment = self.source.cursor().segment;
-        if self.terminal.is_some_and(|terminal| matches!(terminal, Ok(ended) if ended != segment)) {
+        if self
+            .terminal
+            .is_some_and(|terminal| matches!(terminal, Ok(ended) if ended != segment))
+        {
             self.terminal = None;
         }
         if self
@@ -115,7 +116,10 @@ where
 
     fn fail(&mut self, failure: TrackFailureKind) {
         if matches!(self.terminal, Some(Err(_)))
-            || self.pending.as_ref().is_some_and(|pending| matches!(pending.packet, PcmPacket::Failed { .. }))
+            || self
+                .pending
+                .as_ref()
+                .is_some_and(|pending| matches!(pending.packet, PcmPacket::Failed { .. }))
         {
             return;
         }
@@ -134,7 +138,10 @@ where
             return TickResult::Waiting;
         };
         let (meta, terminal) = match &pending.packet {
-            PcmPacket::Chunk(chunk) => (Some(chunk.meta), chunk.meta.end_of_track.then_some(Ok(chunk.meta.segment))),
+            PcmPacket::Chunk(chunk) => (
+                Some(chunk.meta),
+                chunk.meta.end_of_track.then_some(Ok(chunk.meta.segment)),
+            ),
             PcmPacket::Failed { failure, .. } => (None, Some(Err(*failure))),
         };
         match self.port.forward.try_push(pending.packet) {
@@ -305,17 +312,15 @@ impl<T, S> Drop for DecoderNode<T, S> {
 
 #[cfg(test)]
 mod scheduler_tests {
-    use kithara_audio::{
-        AudioSource, Fetch, TrackStep, WaitingReason, SeekOutcome,
-    };
+    use std::num::NonZeroU32;
+
+    use kithara_audio::{AudioSource, Fetch, SeekOutcome, TrackStep, WaitingReason};
+    use kithara_command::Sender;
     use kithara_platform::{
-        CancelToken,
-        thread,
+        CancelToken, thread,
         time::{Duration, timeout as platform_timeout},
     };
     use kithara_signal::AudioChunk;
-    use std::num::NonZeroU32;
-    use kithara_command::Sender;
     use kithara_test_utils::kithara;
     use kithara_worker::{
         Dispatcher, DispatcherConfig, TaskConfig, TaskHandle, Worker, WorkerConfig,
@@ -323,15 +328,16 @@ mod scheduler_tests {
 
     use super::{tests::prepared_node, *};
     use crate::{
-        ServiceClass,
+        LaneProtocol, ServiceClass,
         test_pools::{Pools, TestPools, pools},
-        LaneProtocol, worker::PcmPacket,
+        worker::PcmPacket,
     };
 
     fn empty_chunk(pools: &Pools, frame: u64) -> AudioChunk {
         let mut chunk = tests::empty_chunk(pools);
         chunk.meta.frame_offset = frame;
-        chunk.meta.source_span = kithara_signal::SourceSpan::new(frame, frame + 1, chunk.spec().sample_rate, 1);
+        chunk.meta.source_span =
+            kithara_signal::SourceSpan::new(frame, frame + 1, chunk.spec().sample_rate, 1);
         chunk.meta.timestamp = chunk.spec().duration_for(frame).expect("timestamp");
         chunk.meta.end_timestamp = chunk.spec().duration_for(frame + 1).expect("end timestamp");
         chunk
@@ -361,10 +367,15 @@ mod scheduler_tests {
         type Chunk = AudioChunk;
         fn seek(&mut self, target: Duration) -> Result<SeekOutcome, kithara_audio::AudioReadError> {
             self.cursor = 0;
-            Ok(SeekOutcome::Landed { target, landed_at: target })
+            Ok(SeekOutcome::Landed {
+                target,
+                landed_at: target,
+            })
         }
         fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
-        fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
+        fn host_sample_rate(&self) -> Option<NonZeroU32> {
+            None
+        }
 
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
             if !self.ready {
@@ -388,13 +399,20 @@ mod scheduler_tests {
     impl AudioSource for FailingSource {
         type Chunk = AudioChunk;
         fn seek(&mut self, target: Duration) -> Result<SeekOutcome, kithara_audio::AudioReadError> {
-            Ok(SeekOutcome::Landed { target, landed_at: target })
+            Ok(SeekOutcome::Landed {
+                target,
+                landed_at: target,
+            })
         }
         fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
-        fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
+        fn host_sample_rate(&self) -> Option<NonZeroU32> {
+            None
+        }
 
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
-            TrackStep::Failed(TrackFailureKind::Decode { kind: kithara_audio::DecodeErrorKind::InvalidData })
+            TrackStep::Failed(TrackFailureKind::Decode {
+                kind: kithara_audio::DecodeErrorKind::InvalidData,
+            })
         }
     }
 
@@ -410,7 +428,8 @@ mod scheduler_tests {
     where
         S: AudioSource<Chunk = AudioChunk>,
     {
-        let (node, mut receiver, lane) = prepared_node(source, ringbuf_capacity, preload_chunks.max(1)).await;
+        let (node, mut receiver, lane) =
+            prepared_node(source, ringbuf_capacity, preload_chunks.max(1)).await;
         let pop = move || match receiver.pop() {
             Some(PcmPacket::Chunk(packet)) if !packet.meta.end_of_track => Some(()),
             _ => None,
@@ -424,7 +443,10 @@ mod scheduler_tests {
     }
 
     impl PlaybackScheduler {
-        fn register<S>(&self, node: DecoderNode<S, TestPools>) -> Result<TaskHandle, kithara_worker::TaskError>
+        fn register<S>(
+            &self,
+            node: DecoderNode<S, TestPools>,
+        ) -> Result<TaskHandle, kithara_worker::TaskError>
         where
             S: AudioSource<Chunk = AudioChunk>,
         {
@@ -474,28 +496,48 @@ mod scheduler_tests {
     #[kithara::test(tokio)]
     #[case::progress(10, 3, "preload gate must open at the threshold")]
     #[case::eof(0, 8, "early EOF must open the preload gate")]
-    async fn worker_preload_gate_fires(#[case] chunks: usize, #[case] preload: usize, #[case] message: &str) {
-        let (mut node, _receiver, _lane) = prepared_node(MockSource::new(pools(), chunks), 32, preload).await;
-        platform_timeout(Duration::from_secs(1), node.preload()).await.expect(message).expect("preload succeeds");
+    async fn worker_preload_gate_fires(
+        #[case] chunks: usize,
+        #[case] preload: usize,
+        #[case] message: &str,
+    ) {
+        let (mut node, _receiver, _lane) =
+            prepared_node(MockSource::new(pools(), chunks), 32, preload).await;
+        platform_timeout(Duration::from_secs(1), node.preload())
+            .await
+            .expect(message)
+            .expect("preload succeeds");
         assert!(node.source.is_preloaded() || node.terminal.is_some());
     }
 
     #[kithara::test(tokio)]
     async fn worker_preload_reports_failure() {
         let (mut node, mut receiver, _lane) = prepared_node(FailingSource, 32, 8).await;
-        assert!(platform_timeout(Duration::from_secs(1), node.preload()).await.expect("failure terminates preload").is_err());
+        assert!(
+            platform_timeout(Duration::from_secs(1), node.preload())
+                .await
+                .expect("failure terminates preload")
+                .is_err()
+        );
         assert!(matches!(receiver.pop(), Some(PcmPacket::Failed { .. })));
     }
 
     #[kithara::test(tokio)]
     async fn worker_preload_gate_reopens_after_seek() {
-        let (mut node, _receiver, mut lane) = prepared_node(MockSource::new(pools(), 10), 32, 1).await;
-        platform_timeout(Duration::from_secs(1), node.preload()).await.expect("initial preload").expect("preload succeeds");
+        let (mut node, _receiver, mut lane) =
+            prepared_node(MockSource::new(pools(), 10), 32, 1).await;
+        platform_timeout(Duration::from_secs(1), node.preload())
+            .await
+            .expect("initial preload")
+            .expect("preload succeeds");
         assert!(node.source.is_preloaded());
         let id = tests::segment(&mut lane);
         node.synchronize().expect("new segment");
         assert!(!node.source.is_preloaded());
-        platform_timeout(Duration::from_secs(1), node.preload()).await.expect("post-segment preload").expect("preload succeeds");
+        platform_timeout(Duration::from_secs(1), node.preload())
+            .await
+            .expect("post-segment preload")
+            .expect("preload succeeds");
         assert!(node.source.is_preloaded());
         assert!(lane.receipts().any(|receipt| matches!(receipt.outcome(), kithara_command::Outcome::Applied { data, .. } if data.ready == Some(id))));
     }
@@ -526,7 +568,7 @@ mod scheduler_tests {
 
         /// Source that always produces, so its node competes for every pass.
         struct EndlessSource {
-                /// Time each step holds the shared worker thread before producing.
+            /// Time each step holds the shared worker thread before producing.
             step: Duration,
             pools: Pools,
             cursor: u64,
@@ -534,12 +576,20 @@ mod scheduler_tests {
 
         impl AudioSource for EndlessSource {
             type Chunk = AudioChunk;
-            fn seek(&mut self, target: Duration) -> Result<SeekOutcome, kithara_audio::AudioReadError> {
+            fn seek(
+                &mut self,
+                target: Duration,
+            ) -> Result<SeekOutcome, kithara_audio::AudioReadError> {
                 self.cursor = 0;
-                Ok(SeekOutcome::Landed { target, landed_at: target })
+                Ok(SeekOutcome::Landed {
+                    target,
+                    landed_at: target,
+                })
             }
             fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
-            fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
+            fn host_sample_rate(&self) -> Option<NonZeroU32> {
+                None
+            }
 
             fn step_track(&mut self) -> TrackStep<AudioChunk> {
                 thread::sleep(self.step);
@@ -551,17 +601,25 @@ mod scheduler_tests {
 
         /// Source that never has data, so its node waits on every pass.
         struct WaitingSource {
-                /// Time each step holds the shared worker thread before waiting.
+            /// Time each step holds the shared worker thread before waiting.
             step: Duration,
         }
 
         impl AudioSource for WaitingSource {
             type Chunk = AudioChunk;
-            fn seek(&mut self, target: Duration) -> Result<SeekOutcome, kithara_audio::AudioReadError> {
-                Ok(SeekOutcome::Landed { target, landed_at: target })
+            fn seek(
+                &mut self,
+                target: Duration,
+            ) -> Result<SeekOutcome, kithara_audio::AudioReadError> {
+                Ok(SeekOutcome::Landed {
+                    target,
+                    landed_at: target,
+                })
             }
             fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
-            fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
+            fn host_sample_rate(&self) -> Option<NonZeroU32> {
+                None
+            }
 
             fn step_track(&mut self) -> TrackStep<AudioChunk> {
                 thread::sleep(self.step);
@@ -790,14 +848,7 @@ mod scheduler_tests {
             let (node_a, mut pop_a, _) =
                 make_node(MockSource::new(pools.clone(), 100), 32, 0).await;
             let _id_a = register(&handle, node_a);
-            let (node_b, _pop_b, _) = make_node(
-                WaitingSource {
-                    step,
-                },
-                32,
-                0,
-            )
-            .await;
+            let (node_b, _pop_b, _) = make_node(WaitingSource { step }, 32, 0).await;
             let _id_b = register(&handle, node_b);
 
             pass_after(&trace, &handle, 0, |pass| pass_field(pass, "waiting") >= 1).await;
@@ -850,32 +901,81 @@ mod scheduler_tests {
 #[cfg(test)]
 mod tests {
     use std::num::{NonZeroU32, NonZeroUsize};
-    use kithara_audio::{AudioSource, Fetch, SourceEnd, TrackStep, WaitingReason, SeekOutcome};
+
+    use kithara_audio::{AudioSource, Fetch, SeekOutcome, SourceEnd, TrackStep, WaitingReason};
     use kithara_command::{Batch, ChannelConfig, Sender, When, channel};
     use kithara_effects::EffectDrain;
-    use kithara_platform::{sync::{Arc, Mutex}, time::Duration};
+    use kithara_platform::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
     use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId};
     use kithara_test_fixtures::unit_fixtures::eq_silence as node_silence;
     use kithara_test_utils::kithara;
     use kithara_worker::{Task, TickResult};
-    use super::*;
-    use crate::{LaneCommand, LaneProtocol, WarpSource, test_pools::{Pools, TestPools, pools}, worker::{EngineLoad, PcmReceiver, packet_tests::{PacketRing, chunk}}};
 
-    pub(super) async fn prepared_node<T>(source: T, capacity: usize, preload: usize) -> (DecoderNode<T, TestPools>, PcmReceiver, Sender<LaneProtocol>)
-    where T: AudioSource<Chunk = AudioChunk> {
+    use super::*;
+    use crate::{
+        LaneCommand, LaneProtocol, WarpSource,
+        test_pools::{Pools, TestPools, pools},
+        worker::{
+            EngineLoad, PcmReceiver,
+            packet_tests::{PacketRing, chunk},
+        },
+    };
+
+    pub(super) async fn prepared_node<T>(
+        source: T,
+        capacity: usize,
+        preload: usize,
+    ) -> (DecoderNode<T, TestPools>, PcmReceiver, Sender<LaneProtocol>)
+    where
+        T: AudioSource<Chunk = AudioChunk>,
+    {
         let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
         let (lane, inbox) = channel(ChannelConfig::builder().build());
         let config = kithara_warp::WarpConfig::builder()
             .source_block_frames(NonZeroUsize::new(65_536).expect("source block"))
             .build();
-        let source = WarpSource::new(source, kithara_warp::Warp::new((), &config).renderer(spec, pools.clone()), Vec::new(), EffectDrain::new(0, &pools).expect("drain"), spec, pools.clone(), inbox, NonZeroUsize::new(preload).expect("preload"), crate::consts::DEFAULT_DECLICK);
-        let (receiver, producer) = PacketRing::new(spec, Duration::from_secs(1), capacity).into_ends();
-        (DecoderNode::new(source, producer, None, AudioChunkInfo { spec, ..AudioChunkInfo::default() }, None, pools), receiver, lane)
+        let source = WarpSource::new(
+            source,
+            kithara_warp::Warp::new((), &config).renderer(spec, pools.clone()),
+            Vec::new(),
+            EffectDrain::new(0, &pools).expect("drain"),
+            spec,
+            pools.clone(),
+            inbox,
+            NonZeroUsize::new(preload).expect("preload"),
+            crate::consts::DEFAULT_DECLICK,
+        );
+        let (receiver, producer) =
+            PacketRing::new(spec, Duration::from_secs(1), capacity).into_ends();
+        (
+            DecoderNode::new(
+                source,
+                producer,
+                None,
+                AudioChunkInfo {
+                    spec,
+                    ..AudioChunkInfo::default()
+                },
+                None,
+                pools,
+            ),
+            receiver,
+            lane,
+        )
     }
 
     pub(super) fn empty_chunk(_pools: &Pools) -> AudioChunk {
-        chunk(AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate")), SegmentId::FIRST, 0, 0, &[0.0, 0.0])
+        chunk(
+            AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate")),
+            SegmentId::FIRST,
+            0,
+            0,
+            &[0.0, 0.0],
+        )
     }
 
     pub(super) struct ScriptedSource {
@@ -884,31 +984,64 @@ mod tests {
     }
 
     impl ScriptedSource {
-        pub(super) fn new(steps: impl IntoIterator<Item = TrackStep<AudioChunk>>) -> Self { Self { steps: steps.into_iter().collect(), commits: Arc::new(Mutex::new(Vec::new())) } }
+        pub(super) fn new(steps: impl IntoIterator<Item = TrackStep<AudioChunk>>) -> Self {
+            Self {
+                steps: steps.into_iter().collect(),
+                commits: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
     }
 
     impl AudioSource for ScriptedSource {
         type Chunk = AudioChunk;
-        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, kithara_audio::AudioReadError> { Ok(SeekOutcome::Landed { target, landed_at: target }) }
+        fn seek(&mut self, target: Duration) -> Result<SeekOutcome, kithara_audio::AudioReadError> {
+            Ok(SeekOutcome::Landed {
+                target,
+                landed_at: target,
+            })
+        }
         fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
-        fn host_sample_rate(&self) -> Option<NonZeroU32> { None }
-        fn commit_source_end(&mut self, end: SourceEnd) { self.commits.lock().push(end); }
-        fn step_track(&mut self) -> TrackStep<AudioChunk> { self.steps.pop_front().unwrap_or(TrackStep::Eof) }
+        fn host_sample_rate(&self) -> Option<NonZeroU32> {
+            None
+        }
+        fn commit_source_end(&mut self, end: SourceEnd) {
+            self.commits.lock().push(end);
+        }
+        fn step_track(&mut self) -> TrackStep<AudioChunk> {
+            self.steps.pop_front().unwrap_or(TrackStep::Eof)
+        }
     }
 
-    fn produced() -> TrackStep<AudioChunk> { TrackStep::Produced(Fetch::data(empty_chunk(&pools()))) }
+    fn produced() -> TrackStep<AudioChunk> {
+        TrackStep::Produced(Fetch::data(empty_chunk(&pools())))
+    }
     pub(super) fn segment(lane: &mut Sender<LaneProtocol>) -> SegmentId {
         let id = SegmentId::FIRST.next();
-        lane.send(When::Next, Batch { basis: Vec::new(), commands: vec![LaneCommand::Segment { id, from: Duration::from_secs(1), speed: kithara_warp::SpeedCurve::Constant(1.0) }] }).expect("segment batch");
+        lane.send(
+            When::Next,
+            Batch {
+                basis: Vec::new(),
+                commands: vec![LaneCommand::Segment {
+                    id,
+                    from: Duration::from_secs(1),
+                    speed: kithara_warp::SpeedCurve::Constant(1.0),
+                }],
+            },
+        )
+        .expect("segment batch");
         id
     }
 
     #[kithara::test(tokio)]
     async fn worker_preload_gate_fires_on_failure() {
-        let failure = TrackFailureKind::Decode { kind: kithara_audio::DecodeErrorKind::InvalidData };
-        let (mut node, _receiver, _lane) = prepared_node(ScriptedSource::new([TrackStep::Failed(failure)]), 32, 8).await;
+        let failure = TrackFailureKind::Decode {
+            kind: kithara_audio::DecodeErrorKind::InvalidData,
+        };
+        let (mut node, _receiver, _lane) =
+            prepared_node(ScriptedSource::new([TrackStep::Failed(failure)]), 32, 8).await;
         let result = kithara_platform::time::timeout(Duration::from_secs(1), node.preload())
-            .await.expect("decoder failure must complete the preload wait");
+            .await
+            .expect("decoder failure must complete the preload wait");
         assert_eq!(result, Err(failure));
         assert_eq!(node.terminal, Some(Err(failure)));
     }
@@ -917,7 +1050,12 @@ mod tests {
     async fn worker_telemetry_throttles_immediate_repeats() {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
         let packet = chunk(spec, SegmentId::FIRST, 0, 0, &vec![0.0; 30_870]);
-        let (mut node, mut receiver, _lane) = prepared_node(ScriptedSource::new([TrackStep::Produced(Fetch::data(packet))]), 4, 1).await;
+        let (mut node, mut receiver, _lane) = prepared_node(
+            ScriptedSource::new([TrackStep::Produced(Fetch::data(packet))]),
+            4,
+            1,
+        )
+        .await;
         let meter = Arc::new(EngineLoad::default());
         meter.record(Duration::from_millis(5), 4_410, 44_100);
         node.engine_load = Some(Arc::clone(&meter));
@@ -932,7 +1070,10 @@ mod tests {
             assert_eq!(meter.snapshot().ms(), first.ms());
         }
         assert!(receiver.pop().is_some());
-        assert!(receiver.pop().is_none(), "second immediate observation does not republish");
+        assert!(
+            receiver.pop().is_none(),
+            "second immediate observation does not republish"
+        );
     }
 
     #[kithara::test(tokio)]
@@ -941,11 +1082,16 @@ mod tests {
         assert_eq!(node.tick(), TickResult::Progress);
         assert_eq!(node.tick(), TickResult::Progress);
         let live_segment = segment(&mut lane);
-        assert_eq!(live_segment, SegmentId::FIRST.next(), "seek overtakes the deferred EOF read");
-        let mut eof_segments = std::iter::from_fn(|| receiver.pop()).filter_map(|packet| match packet {
-            PcmPacket::Chunk(chunk) if chunk.meta.end_of_track => Some(chunk.meta.segment),
-            _ => None,
-        });
+        assert_eq!(
+            live_segment,
+            SegmentId::FIRST.next(),
+            "seek overtakes the deferred EOF read"
+        );
+        let mut eof_segments =
+            std::iter::from_fn(|| receiver.pop()).filter_map(|packet| match packet {
+                PcmPacket::Chunk(chunk) if chunk.meta.end_of_track => Some(chunk.meta.segment),
+                _ => None,
+            });
         assert_eq!(eof_segments.next(), Some(SegmentId::FIRST));
         assert_eq!(eof_segments.next(), None);
     }
@@ -954,28 +1100,44 @@ mod tests {
     #[case(WaitingReason::Waiting)]
     #[case(WaitingReason::WaitingDemand)]
     #[case(WaitingReason::WaitingMetadata)]
-    async fn decoder_node_upstream_park_after_audio_opens_the_preload_gate(#[case] reason: WaitingReason) {
+    async fn decoder_node_upstream_park_after_audio_opens_the_preload_gate(
+        #[case] reason: WaitingReason,
+    ) {
         let source = ScriptedSource::new([produced(), TrackStep::Blocked(reason)]);
         let (mut node, _receiver, _lane) = prepared_node(source, 4, 2).await;
         let _ = node.tick();
-        assert!(!node.source.is_preloaded(), "the chunk quota is not met after one chunk");
+        assert!(
+            !node.source.is_preloaded(),
+            "the chunk quota is not met after one chunk"
+        );
         let _ = node.tick();
-        assert!(node.source.is_preloaded(), "a producer parked on {reason:?} with audio behind it must not strand the construction wait");
+        assert!(
+            node.source.is_preloaded(),
+            "a producer parked on {reason:?} with audio behind it must not strand the construction wait"
+        );
     }
 
     #[kithara::test(tokio)]
     async fn decoder_node_eof_under_backpressure() {
-        let (mut node, mut receiver, _lane) = prepared_node(ScriptedSource::new([produced()]), 1, 1).await;
+        let (mut node, mut receiver, _lane) =
+            prepared_node(ScriptedSource::new([produced()]), 1, 1).await;
         assert_eq!(node.tick(), TickResult::Progress);
         assert_eq!(node.tick(), TickResult::Backpressured);
         assert!(node.terminal.is_none());
-        assert!(matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if !packet.meta.end_of_track));
+        assert!(
+            matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if !packet.meta.end_of_track)
+        );
         assert_eq!(node.tick(), TickResult::Progress);
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(node.terminal.is_some());
-        assert!(matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if packet.meta.end_of_track));
+        assert!(
+            matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if packet.meta.end_of_track)
+        );
         assert_eq!(node.tick(), TickResult::Waiting);
-        assert!(receiver.pop().is_none(), "current-segment EOF publishes exactly once");
+        assert!(
+            receiver.pop().is_none(),
+            "current-segment EOF publishes exactly once"
+        );
     }
 
     #[kithara::test(tokio)]
@@ -983,7 +1145,9 @@ mod tests {
         let (mut node, mut receiver, _lane) = prepared_node(ScriptedSource::new([]), 1, 1).await;
         assert_eq!(node.tick(), TickResult::Progress);
         assert_eq!(node.tick(), TickResult::Progress);
-        assert!(matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if packet.meta.end_of_track));
+        assert!(
+            matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if packet.meta.end_of_track)
+        );
         assert_eq!(node.tick(), TickResult::Waiting);
         assert_eq!(node.tick(), TickResult::Waiting);
         assert!(receiver.pop().is_none(), "one terminal packet");
@@ -995,7 +1159,12 @@ mod tests {
         assert!(!meter.snapshot().is_active(), "idle before any tick");
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
         let packet = chunk(spec, SegmentId::FIRST, 0, 0, &node_silence[..8_820]);
-        let (mut node, _receiver, _lane) = prepared_node(ScriptedSource::new([TrackStep::Produced(Fetch::data(packet))]), 4, 1).await;
+        let (mut node, _receiver, _lane) = prepared_node(
+            ScriptedSource::new([TrackStep::Produced(Fetch::data(packet))]),
+            4,
+            1,
+        )
+        .await;
         node.engine_load = Some(Arc::clone(&meter));
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(meter.snapshot().is_active(), "meter records Produced ticks");
@@ -1005,7 +1174,12 @@ mod tests {
     async fn worker_observation_reads_do_not_republish_packets() {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
         let packet = chunk(spec, SegmentId::FIRST, 0, 0, &vec![0.0; 30_870]);
-        let (mut node, mut receiver, _lane) = prepared_node(ScriptedSource::new([TrackStep::Produced(Fetch::data(packet))]), 4, 1).await;
+        let (mut node, mut receiver, _lane) = prepared_node(
+            ScriptedSource::new([TrackStep::Produced(Fetch::data(packet))]),
+            4,
+            1,
+        )
+        .await;
         let meter = Arc::new(EngineLoad::default());
         meter.record(Duration::from_millis(5), 4_410, 44_100);
         node.engine_load = Some(Arc::clone(&meter));
@@ -1017,17 +1191,24 @@ mod tests {
             assert!(meter.snapshot().is_active());
         }
         assert!(receiver.pop().is_some());
-        assert!(receiver.pop().is_none(), "observations do not duplicate output");
+        assert!(
+            receiver.pop().is_none(),
+            "observations do not duplicate output"
+        );
     }
 
     #[kithara::test(tokio)]
     async fn decoder_node_distinguishes_failed_from_eof_on_the_wire() {
-        let (mut eof_node, mut eof_receiver, _lane) = prepared_node(ScriptedSource::new([]), 1, 1).await;
+        let (mut eof_node, mut eof_receiver, _lane) =
+            prepared_node(ScriptedSource::new([]), 1, 1).await;
         assert_eq!(eof_node.tick(), TickResult::Progress);
         assert_eq!(eof_node.tick(), TickResult::Progress);
         let eof_marker = eof_receiver.pop();
-        let failed = TrackStep::Failed(TrackFailureKind::Decode { kind: kithara_audio::DecodeErrorKind::InvalidData });
-        let (mut failed_node, mut failed_receiver, _lane) = prepared_node(ScriptedSource::new([failed]), 1, 1).await;
+        let failed = TrackStep::Failed(TrackFailureKind::Decode {
+            kind: kithara_audio::DecodeErrorKind::InvalidData,
+        });
+        let (mut failed_node, mut failed_receiver, _lane) =
+            prepared_node(ScriptedSource::new([failed]), 1, 1).await;
         assert_eq!(failed_node.tick(), TickResult::Progress);
         let failed_marker = failed_receiver.pop();
         assert!(matches!(eof_marker, Some(PcmPacket::Chunk(packet)) if packet.meta.end_of_track));
@@ -1043,7 +1224,9 @@ mod tests {
         node.synchronize().expect("segment opens");
         assert_eq!(next, SegmentId::FIRST.next());
         assert_eq!(node.source.cursor().segment, next);
-        let Some(PcmPacket::Chunk(eof)) = receiver.pop() else { panic!("EOF packet"); };
+        let Some(PcmPacket::Chunk(eof)) = receiver.pop() else {
+            panic!("EOF packet");
+        };
         assert!(eof.meta.end_of_track);
         assert_eq!(eof.meta.segment, SegmentId::FIRST);
         assert!(receiver.pop().is_none());
@@ -1095,30 +1278,45 @@ mod tests {
     #[case(WaitingReason::Waiting)]
     #[case(WaitingReason::WaitingDemand)]
     #[case(WaitingReason::WaitingMetadata)]
-    async fn decoder_node_downstream_park_after_audio_waits_for_the_preload_quota(#[case] reason: WaitingReason) {
+    async fn decoder_node_downstream_park_after_audio_waits_for_the_preload_quota(
+        #[case] reason: WaitingReason,
+    ) {
         let source = ScriptedSource::new([produced(), TrackStep::Blocked(reason)]);
         let (mut node, _receiver, _lane) = prepared_node(source, 1, 2).await;
         assert_eq!(node.tick(), TickResult::Progress);
         assert!(!node.source.is_preloaded(), "one chunk is below quota");
         assert_eq!(node.tick(), TickResult::Backpressured);
-        assert!(!node.source.is_preloaded(), "a park cannot replace the quota");
+        assert!(
+            !node.source.is_preloaded(),
+            "a park cannot replace the quota"
+        );
     }
 
     #[kithara::test(tokio)]
     #[case(WaitingReason::Waiting)]
     #[case(WaitingReason::WaitingDemand)]
     #[case(WaitingReason::WaitingMetadata)]
-    async fn decoder_node_park_without_audio_keeps_the_preload_gate_shut(#[case] reason: WaitingReason) {
-        let (mut node, _receiver, _lane) = prepared_node(ScriptedSource::new([TrackStep::Blocked(reason)]), 2, 1).await;
+    async fn decoder_node_park_without_audio_keeps_the_preload_gate_shut(
+        #[case] reason: WaitingReason,
+    ) {
+        let (mut node, _receiver, _lane) =
+            prepared_node(ScriptedSource::new([TrackStep::Blocked(reason)]), 2, 1).await;
         let _ = node.tick();
-        assert!(!node.source.is_preloaded(), "a park with nothing emitted is not preload");
+        assert!(
+            !node.source.is_preloaded(),
+            "a park with nothing emitted is not preload"
+        );
     }
 
     #[kithara::test(tokio)]
     async fn decoder_node_preload_gate_stays_shut_below_the_chunk_quota() {
-        let (mut node, _receiver, _lane) = prepared_node(ScriptedSource::new([produced()]), 4, 2).await;
+        let (mut node, _receiver, _lane) =
+            prepared_node(ScriptedSource::new([produced()]), 4, 2).await;
         assert_eq!(node.tick(), TickResult::Progress);
-        assert!(!node.source.is_preloaded(), "one chunk of a two-chunk quota is not preload");
+        assert!(
+            !node.source.is_preloaded(),
+            "one chunk of a two-chunk quota is not preload"
+        );
     }
 
     #[kithara::test(tokio)]
@@ -1131,12 +1329,22 @@ mod tests {
         assert_eq!(node.tick(), TickResult::Backpressured);
         assert!(!node.source.is_preloaded(), "new segment rearms preload");
         assert_eq!(node.source.cursor().segment, id);
-        assert!(matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if packet.meta.segment == SegmentId::FIRST));
+        assert!(
+            matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if packet.meta.segment == SegmentId::FIRST)
+        );
         assert_eq!(node.tick(), TickResult::Progress);
-        assert!(!node.source.is_preloaded(), "StateChanged is not admitted PCM");
+        assert!(
+            !node.source.is_preloaded(),
+            "StateChanged is not admitted PCM"
+        );
         assert_eq!(node.tick(), TickResult::Progress);
-        assert!(node.source.is_preloaded(), "new-segment refill opens preload");
-        assert!(matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if packet.meta.segment == id));
+        assert!(
+            node.source.is_preloaded(),
+            "new-segment refill opens preload"
+        );
+        assert!(
+            matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if packet.meta.segment == id)
+        );
         assert!(lane.receipts().any(|receipt| matches!(receipt.outcome(), kithara_command::Outcome::Applied { data, .. } if data.ready == Some(id))));
     }
 }

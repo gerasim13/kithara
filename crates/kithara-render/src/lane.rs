@@ -276,7 +276,10 @@ impl Lane {
                 });
             }
         }
-        if let Some(Jump::Down { to, start, frames, .. }) = self.jump {
+        if let Some(Jump::Down {
+            to, start, frames, ..
+        }) = self.jump
+        {
             let frames = u64::try_from(frames).map_or(u64::MAX, |frames| frames);
             if self.cursor.frame.saturating_sub(start) >= frames {
                 self.position = Some(landing_position(
@@ -416,7 +419,11 @@ mod tests {
         assert_eq!(config.declick_frames(spec.sample_rate).get(), expected);
         let pools = crate::test_pools::pools();
         let (mut sender, inbox) = channel(ChannelConfig::builder().build());
-        let mut lane = Lane::new(inbox, NonZeroUsize::new(1).expect("preload"), config.declick());
+        let mut lane = Lane::new(
+            inbox,
+            NonZeroUsize::new(1).expect("preload"),
+            config.declick(),
+        );
         let mut warp = Warp::new((), &WarpConfig::builder().build()).renderer(spec, pools);
         jump(&mut sender);
         lane.execute_due(&mut JumpSource, &mut warp, spec)
@@ -435,7 +442,11 @@ mod tests {
         let spec = AudioSpec::new(1, NonZeroU32::new(44_100).expect("rate"));
         let pools = crate::test_pools::pools();
         let (mut sender, inbox) = channel(ChannelConfig::builder().build());
-        let mut lane = Lane::new(inbox, NonZeroUsize::new(1).expect("preload"), crate::consts::DEFAULT_DECLICK);
+        let mut lane = Lane::new(
+            inbox,
+            NonZeroUsize::new(1).expect("preload"),
+            crate::consts::DEFAULT_DECLICK,
+        );
         let mut warp = Warp::new((), &WarpConfig::builder().build()).renderer(spec, pools);
         jump(&mut sender);
         lane.execute_due(&mut JumpSource, &mut warp, spec)

@@ -3,7 +3,10 @@ use firewheel::{
     mask::{ConnectedMask, ConstantMask, SilenceMask},
     node::{ProcStore, StreamStatus},
 };
-use kithara_command::{Batch, Port, ChannelConfig, Outcome, Rejection, ScopedConfig, ScopedInbox, ScopedReceipt, ScopedSender, When, scoped_channel};
+use kithara_command::{
+    Batch, ChannelConfig, Outcome, Port, Rejection, ScopedConfig, ScopedInbox, ScopedReceipt,
+    ScopedSender, When, scoped_channel,
+};
 use kithara_effects::{
     GainDb,
     eq::{EqBandConfig, EqConfig, EqLayout},
@@ -25,7 +28,10 @@ use crate::{
         track::{PcmConsumer, PlayerResource},
     },
     test_pools::pools,
-    worker::{PcmPacket, packet_tests::{PacketRing, chunk}},
+    worker::{
+        PcmPacket,
+        packet_tests::{PacketRing, chunk},
+    },
 };
 
 const BLOCK: usize = 512;
@@ -78,7 +84,9 @@ struct TestMixer {
 
 impl std::ops::Deref for TestMixer {
     type Target = DeckMixer<TestSessionInbox>;
-    fn deref(&self) -> &Self::Target { &self.mixer }
+    fn deref(&self) -> &Self::Target {
+        &self.mixer
+    }
 }
 
 struct TestEnds {
@@ -88,11 +96,15 @@ struct TestEnds {
 
 impl std::ops::Deref for TestEnds {
     type Target = DeckEnds;
-    fn deref(&self) -> &Self::Target { &self.deck }
+    fn deref(&self) -> &Self::Target {
+        &self.deck
+    }
 }
 
 impl std::ops::DerefMut for TestEnds {
-    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.deck }
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.deck
+    }
 }
 
 fn mixer() -> (TestMixer, TestEnds) {
@@ -100,10 +112,15 @@ fn mixer() -> (TestMixer, TestEnds) {
 }
 
 fn mixer_without_declick() -> (TestMixer, TestEnds) {
-    mixer_with_config(DeckMixerConfig::builder().declick(SmootherConfig {
-        smooth_seconds: 0.0,
-        ..SmootherConfig::default()
-    }).build(), 64)
+    mixer_with_config(
+        DeckMixerConfig::builder()
+            .declick(SmootherConfig {
+                smooth_seconds: 0.0,
+                ..SmootherConfig::default()
+            })
+            .build(),
+        64,
+    )
 }
 
 fn apply_initial_batch(mixer: &mut TestMixer) {
@@ -114,13 +131,26 @@ fn apply_initial_batch(mixer: &mut TestMixer) {
 }
 
 fn mixer_with_config(config: DeckMixerConfig, capacity: usize) -> (TestMixer, TestEnds) {
-    let (mut ring, inbox) = scoped_channel(ScopedConfig::builder()
-        .scope(ChannelConfig::builder().targets(config.slots().get())
-            .capacity(NonZeroUsize::new(capacity).expect("capacity")).build()).build());
+    let (mut ring, inbox) = scoped_channel(
+        ScopedConfig::builder()
+            .scope(
+                ChannelConfig::builder()
+                    .targets(config.slots().get())
+                    .capacity(NonZeroUsize::new(capacity).expect("capacity"))
+                    .build(),
+            )
+            .build(),
+    );
     let scope = ring.open(config.slots().get()).expect("deck scope");
     let (deck, inputs) = scope_channels(scope, config);
     let mixer = DeckMixer::new(inputs, shape(), &pools()).expect("mixer pools");
-    (TestMixer { mixer, inbox: TestSessionInbox(inbox) }, TestEnds { ring, deck })
+    (
+        TestMixer {
+            mixer,
+            inbox: TestSessionInbox(inbox),
+        },
+        TestEnds { ring, deck },
+    )
 }
 
 fn proc_info() -> ProcInfo {
@@ -180,21 +210,43 @@ fn session_processors_read_the_same_host_context() {
 fn pcm(constant_half: &'static [u8], src: &str, seconds: f64) -> Box<PlayerResource> {
     let total = (seconds * f64::from(RATE)).floor() as usize;
     let frames = total.min(4096);
-    let samples = constant_half.chunks_exact(4).take(frames * 2)
-        .map(|bytes| f32::from_le_bytes(bytes.try_into().expect("sample bytes"))).collect::<Vec<_>>();
+    let samples = constant_half
+        .chunks_exact(4)
+        .take(frames * 2)
+        .map(|bytes| f32::from_le_bytes(bytes.try_into().expect("sample bytes")))
+        .collect::<Vec<_>>();
     pcm_samples(src, seconds, &samples, frames == total)
 }
 
 fn pcm_samples(src: &str, seconds: f64, samples: &[f32], ended: bool) -> Box<PlayerResource> {
     let spec = AudioSpec::new(2, NonZeroU32::new(RATE).expect("sample rate"));
     let mut ring = PacketRing::new(spec, Duration::from_secs_f64(seconds), 2);
-    ring.push(PcmPacket::Chunk(chunk(spec, SegmentId::FIRST, 0, 0, samples)));
+    ring.push(PcmPacket::Chunk(chunk(
+        spec,
+        SegmentId::FIRST,
+        0,
+        0,
+        samples,
+    )));
     if ended {
-        let mut end = chunk(spec, SegmentId::FIRST, (samples.len() / 2) as u64, (samples.len() / 2) as u64, &[]);
+        let mut end = chunk(
+            spec,
+            SegmentId::FIRST,
+            (samples.len() / 2) as u64,
+            (samples.len() / 2) as u64,
+            &[],
+        );
         end.meta.end_of_track = true;
         ring.push(PcmPacket::Chunk(end));
     }
-    Box::new(PlayerResource::new(PcmConsumer::new(ring.receiver.take().expect("receiver")), Arc::from(src), &pools()).expect("resource"))
+    Box::new(
+        PlayerResource::new(
+            PcmConsumer::new(ring.receiver.take().expect("receiver")),
+            Arc::from(src),
+            &pools(),
+        )
+        .expect("resource"),
+    )
 }
 
 fn send(ring: &mut TestEnds, when: When<SessionFrame>, parts: Vec<DeckPart>) -> Seq {
@@ -208,14 +260,18 @@ fn send_on(
     commands: Vec<DeckPart>,
 ) -> Seq {
     let scope = ring.deck.scope;
-    let seq = ring.ring.scope(scope).expect("live scope").send(
-        when,
-        Batch {
-            basis: basis.to_vec(),
-            commands,
-        },
-    )
-    .expect("the deck ring has room");
+    let seq = ring
+        .ring
+        .scope(scope)
+        .expect("live scope")
+        .send(
+            when,
+            Batch {
+                basis: basis.to_vec(),
+                commands,
+            },
+        )
+        .expect("the deck ring has room");
     ring.ring.publish().expect("publish batch");
     seq
 }
@@ -238,13 +294,30 @@ fn render_frames(mixer: &mut TestMixer, start: usize, frames: usize) -> Vec<f32>
     let mut right = vec![0.0f32; frames];
     let inputs: [&[f32]; 0] = [];
     let mut outputs = [&mut left[..], &mut right[..]];
-    let mut buffers = ProcBuffers { inputs: &inputs, outputs: &mut outputs };
+    let mut buffers = ProcBuffers {
+        inputs: &inputs,
+        outputs: &mut outputs,
+    };
     mixer.inbox.0.drain();
     let mut level = mixer.inbox.scope(mixer.mixer.scope).expect("live scope");
-    let context = RenderContext::new_linear(OutputContext::new(
-        frame_at(start)..frame_at(start + frames), shape().sample_rate,
-        SessionEpoch::new(0), None).expect("output range"), None).expect("context");
-    mixer.mixer.render_block_in(&mut level, Some(&context), frame_at(start), &mut buffers, frames);
+    let context = RenderContext::new_linear(
+        OutputContext::new(
+            frame_at(start)..frame_at(start + frames),
+            shape().sample_rate,
+            SessionEpoch::new(0),
+            None,
+        )
+        .expect("output range"),
+        None,
+    )
+    .expect("context");
+    mixer.mixer.render_block_in(
+        &mut level,
+        Some(&context),
+        frame_at(start),
+        &mut buffers,
+        frames,
+    );
     mixer.mixer.publish(frame_at(start + frames));
     left
 }
@@ -273,7 +346,10 @@ fn outcome_of(
 }
 
 fn assert_applied_at(outcome: &Outcome<DeckProtocol>, frame: usize) {
-    assert!(matches!(outcome, Outcome::Applied { at, data: () } if *at == frame_at(frame)), "expected applied at {frame}, got {outcome:?}");
+    assert!(
+        matches!(outcome, Outcome::Applied { at, data: () } if *at == frame_at(frame)),
+        "expected applied at {frame}, got {outcome:?}"
+    );
 }
 
 fn eq_layout(gains: &[GainDb]) -> Box<EqLayout> {
@@ -301,7 +377,10 @@ fn start_dc(mixer: &mut TestMixer, ends: &mut TestEnds, slots: &[Slot]) {
         });
         parts.push(DeckPart::Start {
             slot: *slot,
-            fade: Fade::Crossfade(CrossfadeSettings::new(0.0, CrossfadeCurve::Linear, 1.0, 0.5).expect("instant start")),
+            fade: Fade::Crossfade(
+                CrossfadeSettings::new(0.0, CrossfadeCurve::Linear, 1.0, 0.5)
+                    .expect("instant start"),
+            ),
         });
     }
     send(ends, When::Next, parts);
@@ -316,19 +395,40 @@ fn assert_stopped_once(
     slot: Slot,
     interrupt_at: usize,
 ) {
-    let matches = replies.iter().filter(|(answered, ..)| *answered == seq).collect::<Vec<_>>();
-    assert_eq!(matches.len(), 1, "every committed batch has exactly one verdict");
+    let matches = replies
+        .iter()
+        .filter(|(answered, ..)| *answered == seq)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        matches.len(),
+        1,
+        "every committed batch has exactly one verdict"
+    );
     let (_, outcome, parts) = matches[0];
     assert_applied_at(outcome, committed_at);
-    let marks = parts.iter().filter_map(|part| match part {
-        DeckPart::Returned(Returned::Stopped { slot: stopped, resume }) if *stopped == slot => Some(*resume),
-        _ => None,
-    }).collect::<Vec<_>>();
-    assert_eq!(marks, [crate::bridge::SlotMark {
-        session: frame_at(interrupt_at),
-        lane: crate::LaneFrame { segment: SegmentId::FIRST, frame: interrupt_at as u64 },
-        position: AudioSpec::new(2, shape().sample_rate).duration_for(interrupt_at as u64).expect("position"),
-    }]);
+    let marks = parts
+        .iter()
+        .filter_map(|part| match part {
+            DeckPart::Returned(Returned::Stopped {
+                slot: stopped,
+                resume,
+            }) if *stopped == slot => Some(*resume),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        marks,
+        [crate::bridge::SlotMark {
+            session: frame_at(interrupt_at),
+            lane: crate::LaneFrame {
+                segment: SegmentId::FIRST,
+                frame: interrupt_at as u64
+            },
+            position: AudioSpec::new(2, shape().sample_rate)
+                .duration_for(interrupt_at as u64)
+                .expect("position"),
+        }]
+    );
 }
 
 #[kithara::test]
@@ -337,33 +437,66 @@ fn assert_stopped_once(
 fn an_interrupted_stop_still_answers_its_batch(#[case] replace: bool) {
     let (mut mixer, mut ends) = mixer();
     start_dc(&mut mixer, &mut ends, &[A]);
-    let settings = CrossfadeSettings::new(2.0, CrossfadeCurve::Linear, 1.0, 0.5).expect("long ramp");
-    let stop = send(&mut ends, at(BLOCK), vec![
-        DeckPart::Stop { slot: A, fade: Fade::Crossfade(settings) }
-    ]);
+    let settings =
+        CrossfadeSettings::new(2.0, CrossfadeCurve::Linear, 1.0, 0.5).expect("long ramp");
+    let stop = send(
+        &mut ends,
+        at(BLOCK),
+        vec![DeckPart::Stop {
+            slot: A,
+            fade: Fade::Crossfade(settings),
+        }],
+    );
     let interrupted_at = BLOCK + 32;
-    let interrupt = send(&mut ends, at(interrupted_at), vec![if replace {
-        DeckPart::Replace { slot: A, pcm: pcm_samples("replacement", 1.0, &vec![1.0; 8192], false), segment: SegmentId::FIRST }
-    } else {
-        DeckPart::Start { slot: A, fade: Fade::Declick }
-    }]);
+    let interrupt = send(
+        &mut ends,
+        at(interrupted_at),
+        vec![if replace {
+            DeckPart::Replace {
+                slot: A,
+                pcm: pcm_samples("replacement", 1.0, &vec![1.0; 8192], false),
+                segment: SegmentId::FIRST,
+            }
+        } else {
+            DeckPart::Start {
+                slot: A,
+                fade: Fade::Declick,
+            }
+        }],
+    );
     render(&mut mixer, BLOCK);
     let replies = receipts(&mut ends);
     assert_stopped_once(&replies, stop, BLOCK, A, interrupted_at);
-    assert_eq!(replies.iter().filter(|(seq, ..)| *seq == interrupt).count(), 1);
+    assert_eq!(
+        replies.iter().filter(|(seq, ..)| *seq == interrupt).count(),
+        1
+    );
     assert_applied_at(outcome_of(&replies, interrupt), interrupted_at);
     render(&mut mixer, 2 * BLOCK);
-    assert!(receipts(&mut ends).is_empty(), "neither batch is answered twice");
+    assert!(
+        receipts(&mut ends).is_empty(),
+        "neither batch is answered twice"
+    );
 }
 
 #[kithara::test]
 fn a_stop_followed_by_start_in_one_batch_returns_its_interrupt_mark() {
     let (mut mixer, mut ends) = mixer();
     start_dc(&mut mixer, &mut ends, &[A]);
-    let seq = send(&mut ends, at(BLOCK), vec![
-        DeckPart::Stop { slot: A, fade: Fade::Declick },
-        DeckPart::Start { slot: A, fade: Fade::Declick },
-    ]);
+    let seq = send(
+        &mut ends,
+        at(BLOCK),
+        vec![
+            DeckPart::Stop {
+                slot: A,
+                fade: Fade::Declick,
+            },
+            DeckPart::Start {
+                slot: A,
+                fade: Fade::Declick,
+            },
+        ],
+    );
     render(&mut mixer, BLOCK);
     assert_stopped_once(&receipts(&mut ends), seq, BLOCK, A, BLOCK);
     render(&mut mixer, 2 * BLOCK);
@@ -374,11 +507,28 @@ fn a_stop_followed_by_start_in_one_batch_returns_its_interrupt_mark() {
 fn a_multislot_stop_completes_when_one_slot_is_interrupted() {
     let (mut mixer, mut ends) = mixer();
     start_dc(&mut mixer, &mut ends, &[A, B]);
-    let seq = send(&mut ends, at(BLOCK), vec![
-        DeckPart::Stop { slot: A, fade: Fade::Declick },
-        DeckPart::Stop { slot: B, fade: Fade::Declick },
-    ]);
-    send(&mut ends, at(BLOCK + 32), vec![DeckPart::Start { slot: A, fade: Fade::Declick }]);
+    let seq = send(
+        &mut ends,
+        at(BLOCK),
+        vec![
+            DeckPart::Stop {
+                slot: A,
+                fade: Fade::Declick,
+            },
+            DeckPart::Stop {
+                slot: B,
+                fade: Fade::Declick,
+            },
+        ],
+    );
+    send(
+        &mut ends,
+        at(BLOCK + 32),
+        vec![DeckPart::Start {
+            slot: A,
+            fade: Fade::Declick,
+        }],
+    );
     render(&mut mixer, BLOCK);
     let replies = receipts(&mut ends);
     assert_stopped_once(&replies, seq, BLOCK, A, BLOCK + 32);
@@ -392,16 +542,38 @@ fn interrupted_stops_release_credit_beyond_the_deck_capacity() {
     const CAPACITY: usize = 4;
     let (mut mixer, mut ends) = mixer_with_config(DeckMixerConfig::default(), CAPACITY);
     start_dc(&mut mixer, &mut ends, &[A]);
-    let settings = CrossfadeSettings::new(2.0, CrossfadeCurve::Linear, 1.0, 0.5).expect("long ramp");
+    let settings =
+        CrossfadeSettings::new(2.0, CrossfadeCurve::Linear, 1.0, 0.5).expect("long ramp");
     for iteration in 0..2 * CAPACITY {
         let frame = BLOCK + iteration * 32;
         let scope = ends.deck.scope;
         for (at, command) in [
-            (frame, DeckPart::Stop { slot: A, fade: Fade::Crossfade(settings) }),
-            (frame + 16, DeckPart::Start { slot: A, fade: Fade::Declick }),
+            (
+                frame,
+                DeckPart::Stop {
+                    slot: A,
+                    fade: Fade::Crossfade(settings),
+                },
+            ),
+            (
+                frame + 16,
+                DeckPart::Start {
+                    slot: A,
+                    fade: Fade::Declick,
+                },
+            ),
         ] {
-            let sent = ends.ring.scope(scope).expect("scope").send(self::at(at), Batch { basis: Vec::new(), commands: vec![command] });
-            assert!(sent.is_ok(), "interrupt {iteration} at {at} must not leak credit or return Full: {sent:?}");
+            let sent = ends.ring.scope(scope).expect("scope").send(
+                self::at(at),
+                Batch {
+                    basis: Vec::new(),
+                    commands: vec![command],
+                },
+            );
+            assert!(
+                sent.is_ok(),
+                "interrupt {iteration} at {at} must not leak credit or return Full: {sent:?}"
+            );
         }
         ends.ring.publish().expect("publish");
         render_frames(&mut mixer, frame, 32);
@@ -423,45 +595,88 @@ fn adopt_never_mixes_a_blocked_older_packet_or_publishes_its_mark(#[case] check_
     let mut packets = PacketRing::new(spec, Duration::from_secs(1), 2);
     let mut receiver = packets.receiver.take().expect("receiver");
     for _ in 0..2 {
-        receiver.recycle(PcmPacket::Chunk(chunk(spec, old, 0, 0, &[1.0; 2])))
+        receiver
+            .recycle(PcmPacket::Chunk(chunk(spec, old, 0, 0, &[1.0; 2])))
             .expect("fill reverse ring");
     }
-    assert!(receiver.recycle(PcmPacket::Chunk(chunk(spec, old, 0, 0, &[1.0; 2]))).is_err());
+    assert!(
+        receiver
+            .recycle(PcmPacket::Chunk(chunk(spec, old, 0, 0, &[1.0; 2])))
+            .is_err()
+    );
     packets.push(PcmPacket::Chunk(chunk(spec, old, 0, 0, &[1.0; 32])));
-    let resource = Box::new(PlayerResource::new(
-        PcmConsumer::new(receiver), Arc::from("segments"), &pools(),
-    ).expect("resource"));
+    let resource = Box::new(
+        PlayerResource::new(PcmConsumer::new(receiver), Arc::from("segments"), &pools())
+            .expect("resource"),
+    );
     let instant = Fade::Crossfade(
         CrossfadeSettings::new(0.0, CrossfadeCurve::Linear, 1.0, 0.5).expect("instant envelope"),
     );
-    send(&mut ends, at(0), vec![
-        DeckPart::Attach { slot: A, pcm: resource, segment: old },
-        DeckPart::Start { slot: A, fade: instant },
-    ]);
+    send(
+        &mut ends,
+        at(0),
+        vec![
+            DeckPart::Attach {
+                slot: A,
+                pcm: resource,
+                segment: old,
+            },
+            DeckPart::Start {
+                slot: A,
+                fade: instant,
+            },
+        ],
+    );
     assert_eq!(render_frames(&mut mixer, 0, 1), [1.0]);
     drop(receipts(&mut ends));
-    packets.push(PcmPacket::Chunk(chunk(spec, current, 100, 1000, &[2.0; 16])));
-    packets.push(PcmPacket::Chunk(chunk(spec, current, 108, 1008, &[2.0; 16])));
-    let adopt = send(&mut ends, at(1), vec![
-        DeckPart::Stop { slot: A, fade: instant },
-        DeckPart::Adopt { slot: A, segment: current },
-        DeckPart::Start { slot: A, fade: instant },
-    ]);
+    packets.push(PcmPacket::Chunk(chunk(
+        spec, current, 100, 1000, &[2.0; 16],
+    )));
+    packets.push(PcmPacket::Chunk(chunk(
+        spec, current, 108, 1008, &[2.0; 16],
+    )));
+    let adopt = send(
+        &mut ends,
+        at(1),
+        vec![
+            DeckPart::Stop {
+                slot: A,
+                fade: instant,
+            },
+            DeckPart::Adopt {
+                slot: A,
+                segment: current,
+            },
+            DeckPart::Start {
+                slot: A,
+                fade: instant,
+            },
+        ],
+    );
     let mixed = render_frames(&mut mixer, 1, 4);
     assert_applied_at(outcome_of(&receipts(&mut ends), adopt), 1);
     if check_mark {
-        assert_eq!(mixer.track(A).expect("track").mark(frame_at(5)), None,
-            "the old held packet cannot map the adopted slot");
+        assert_eq!(
+            mixer.track(A).expect("track").mark(frame_at(5)),
+            None,
+            "the old held packet cannot map the adopted slot"
+        );
     } else {
         assert_eq!(mixed, [0.0; 4], "no old packet reaches the mix after Adopt");
     }
     while packets.returned().is_some() {}
     assert_eq!(render_frames(&mut mixer, 5, 4), [2.0; 4]);
-    assert_eq!(mixer.track(A).expect("track").mark(frame_at(9)), Some(crate::bridge::SlotMark {
-        session: frame_at(9),
-        lane: crate::LaneFrame { segment: current, frame: 104 },
-        position: spec.duration_for(1004).expect("new source position"),
-    }));
+    assert_eq!(
+        mixer.track(A).expect("track").mark(frame_at(9)),
+        Some(crate::bridge::SlotMark {
+            session: frame_at(9),
+            lane: crate::LaneFrame {
+                segment: current,
+                frame: 104
+            },
+            position: spec.duration_for(1004).expect("new source position"),
+        })
+    );
 }
 
 #[kithara::test]
@@ -470,17 +685,42 @@ fn adopt_never_mixes_a_blocked_older_packet_or_publishes_its_mark(#[case] check_
 fn removing_a_slot_while_its_tail_sounds_preserves_gain_continuity(#[case] replace: bool) {
     let (mut mixer, mut ends) = mixer();
     start_dc(&mut mixer, &mut ends, &[A]);
-    send(&mut ends, at(BLOCK), vec![DeckPart::Replace {
-        slot: A, pcm: pcm_samples("second dc", 1.0, &vec![1.0; 8192], false), segment: SegmentId::FIRST,
-    }]);
+    send(
+        &mut ends,
+        at(BLOCK),
+        vec![DeckPart::Replace {
+            slot: A,
+            pcm: pcm_samples("second dc", 1.0, &vec![1.0; 8192], false),
+            segment: SegmentId::FIRST,
+        }],
+    );
     const CUT: usize = 100;
-    send(&mut ends, at(BLOCK + CUT), vec![if replace {
-        DeckPart::Replace { slot: A, pcm: pcm_samples("silence", 1.0, &vec![0.0; 8192], false), segment: SegmentId::FIRST }
-    } else { DeckPart::Detach { slot: A } }]);
+    send(
+        &mut ends,
+        at(BLOCK + CUT),
+        vec![if replace {
+            DeckPart::Replace {
+                slot: A,
+                pcm: pcm_samples("silence", 1.0, &vec![0.0; 8192], false),
+                segment: SegmentId::FIRST,
+            }
+        } else {
+            DeckPart::Detach { slot: A }
+        }],
+    );
     let left = render(&mut mixer, BLOCK);
-    assert!(left[CUT - 1] > 1.1, "both the existing tail and the new DC are sounding before removal");
-    let step = left[CUT - 1..CUT + 8].windows(2).map(|pair| (pair[1] - pair[0]).abs()).fold(0.0_f32, f32::max);
-    assert!(step < 0.02, "a sounding tail must not hard-cut its outgoing full-scale DC: step {step}");
+    assert!(
+        left[CUT - 1] > 1.1,
+        "both the existing tail and the new DC are sounding before removal"
+    );
+    let step = left[CUT - 1..CUT + 8]
+        .windows(2)
+        .map(|pair| (pair[1] - pair[0]).abs())
+        .fold(0.0_f32, f32::max);
+    assert!(
+        step < 0.02,
+        "a sounding tail must not hard-cut its outgoing full-scale DC: step {step}"
+    );
 }
 
 /// A slot started on a frame inside a block is silent before that frame and sounds after it.
@@ -749,12 +989,18 @@ async fn a_chain_whose_slot_shifted_comes_back_stale(constant_half: &'static [u8
         &mut ends,
         at(10),
         &[(B, Some(attached))],
-        vec![DeckPart::Adopt { slot: B, segment: SegmentId::FIRST.next() }],
+        vec![DeckPart::Adopt {
+            slot: B,
+            segment: SegmentId::FIRST.next(),
+        }],
     );
 
     render(&mut mixer, 0);
 
-    assert!(matches!(outcome_of(&receipts(&mut ends), chain), Outcome::Rejected(Rejection::Stale)));
+    assert!(matches!(
+        outcome_of(&receipts(&mut ends), chain),
+        Outcome::Rejected(Rejection::Stale)
+    ));
     assert_eq!(
         mixer.track(B).map(PlayerTrack::state),
         Some(SlotState::Stopped)
@@ -848,10 +1094,7 @@ async fn an_attach_to_an_occupied_slot_is_refused(constant_half: &'static [u8]) 
         outcome_of(&receipts, second),
         Outcome::Rejected(Rejection::Refused(DeckRefusal::Occupied { slot: A }))
     ));
-    assert_eq!(
-        mixer.track(A).map(|track| &**track.src()),
-        Some("held")
-    );
+    assert_eq!(mixer.track(A).map(|track| &**track.src()), Some("held"));
 }
 
 /// A band cut sent to a playing deck rides the deck's own ring: the block after it renders the

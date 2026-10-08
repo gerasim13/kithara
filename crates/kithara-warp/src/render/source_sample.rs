@@ -99,8 +99,8 @@ mod tests {
     #[kithara::test]
     fn quadratic_sampling_keeps_the_fraction_when_the_window_position_rounds_up() {
         let pools = pools();
-        let mut resident = SourceResidency::prepare(&pools, None, 0, 3, 0, 1)
-            .expect("three resident frames");
+        let mut resident =
+            SourceResidency::prepare(&pools, None, 0, 3, 0, 1).expect("three resident frames");
         resident
             .append(
                 AudioChunkInfo {
@@ -131,6 +131,9 @@ mod tests {
             .to_f32()
             .expect("quadratic value");
         assert_eq!(actual, expected);
-        assert!(actual > -1.0, "the fraction must not advance to the next sample");
+        assert!(
+            actual > -1.0,
+            "the fraction must not advance to the next sample"
+        );
     }
 }

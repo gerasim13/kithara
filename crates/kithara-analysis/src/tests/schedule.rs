@@ -189,7 +189,9 @@ impl AudioRead for Source {
         self.chunks = self.chunks.saturating_add(1);
         self.push(Call::Chunk { at });
         let pools = self.pools.as_ref().expect("test pass installs pool region");
-        Ok(ChunkOutcome::Chunk(Box::new(decoded(self.pcm, pools, at, frames))))
+        Ok(ChunkOutcome::Chunk(Box::new(decoded(
+            self.pcm, pools, at, frames,
+        ))))
     }
 
     fn position(&self) -> Duration {
