@@ -54,9 +54,6 @@ pub struct WarpConfig {
     /// Maximum source frames admitted to one elastic render operation.
     #[config(builder(default = consts::DEFAULT_SOURCE_BLOCK_FRAMES), get(copy))]
     source_block_frames: NonZeroUsize,
-    /// Output-frame window used to smooth live rate changes.
-    #[config(builder(default = NonZeroUsize::MIN), get(copy))]
-    rate_smooth_frames: NonZeroUsize,
     /// Optional output-frame cap between samples of live temporal controls.
     /// Without a cap, Warp consumes the complete source span accepted by its backend.
     #[config(get(copy))]

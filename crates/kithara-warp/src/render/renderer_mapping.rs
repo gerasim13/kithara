@@ -1,4 +1,4 @@
-use std::num::{NonZeroU32, NonZeroU64};
+use std::num::{NonZeroU32, NonZeroU128};
 
 use kithara_bufpool::HasPool;
 use kithara_signal::SourceSpan;
@@ -6,7 +6,7 @@ use kithara_stretch::ElasticError;
 
 use super::{renderer::WarpRenderer, trajectory::Fraction};
 
-fn fraction(position: (u128, NonZeroU64)) -> Fraction {
+fn fraction(position: (u128, NonZeroU128)) -> Fraction {
     Fraction {
         numerator: position.0,
         denominator: position.1,
@@ -49,7 +49,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         start: u64,
         rate: NonZeroU32,
         offset: u64,
-    ) -> Result<(u128, NonZeroU64), ElasticError> {
+    ) -> Result<(u128, NonZeroU128), ElasticError> {
         let nominal = self.trajectory.at_offset(start, rate, offset)?;
         let Some(plan) = self.plan.as_ref() else {
             return Ok(nominal);
@@ -59,14 +59,21 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .sub(position)
             .ok_or(ElasticError::SampleCountOverflow)?;
         loop {
-            let source = u64::try_from(position.numerator / u128::from(position.denominator.get()))
+            let source = u64::try_from(position.numerator / position.denominator.get())
                 .map_err(|_| ElasticError::SampleCountOverflow)?;
             let region = plan.region_at(source);
             let correction = Fraction::correction(region.correction())
                 .ok_or(ElasticError::SampleCountOverflow)?;
+            if region.end() == u64::MAX {
+                let position = remaining
+                    .div(correction)
+                    .and_then(|advance| position.add(advance))
+                    .ok_or(ElasticError::SampleCountOverflow)?;
+                return Ok((position.numerator, position.denominator));
+            }
             let end = Fraction {
                 numerator: u128::from(region.end()),
-                denominator: NonZeroU64::MIN,
+                denominator: NonZeroU128::MIN,
             };
             let available = end
                 .sub(position)
@@ -85,9 +92,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                     .and_then(|advance| position.add(advance))
                     .ok_or(ElasticError::SampleCountOverflow)?;
                 return Ok((position.numerator, position.denominator));
-            }
-            if region.end() == u64::MAX {
-                return Err(ElasticError::SampleCountOverflow);
             }
             remaining = remaining
                 .sub(available)
@@ -149,8 +153,10 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         while lower < upper {
             let middle = lower + (upper - lower).div_ceil(2);
             let endpoint = advance(middle).ok_or(ElasticError::SampleCountOverflow)?;
-            if endpoint.numerator
-                <= u128::from(region.end()) * u128::from(endpoint.denominator.get())
+            let whole = endpoint.numerator / endpoint.denominator.get();
+            if whole < u128::from(region.end())
+                || (whole == u128::from(region.end())
+                    && endpoint.numerator.is_multiple_of(endpoint.denominator.get()))
             {
                 lower = middle;
             } else {
@@ -174,20 +180,22 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .and_then(|denominator| {
                 Fraction {
                     numerator: 0,
-                    denominator: NonZeroU64::new(denominator)?,
+                    denominator: NonZeroU128::new(denominator)?,
                 }
                 .common(next)
             })
             .ok_or(ElasticError::SampleCountOverflow)?;
         let step = first
             .at(common)
-            .and_then(|step| u64::try_from(step).ok())
             .ok_or(ElasticError::SampleCountOverflow)?;
         let change = next
             .at(common)
             .and_then(|next| i128::try_from(next).ok())
-            .and_then(|next| next.checked_sub(i128::from(step)))
-            .and_then(|change| i64::try_from(change).ok())
+            .and_then(|next| {
+                i128::try_from(step)
+                    .ok()
+                    .and_then(|step| next.checked_sub(step))
+            })
             .ok_or(ElasticError::SampleCountOverflow)?;
         SourceSpan::from_ramp(
             position
@@ -195,7 +203,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 .ok_or(ElasticError::SampleCountOverflow)?,
             step,
             change,
-            NonZeroU64::new(common).ok_or(ElasticError::SampleCountOverflow)?,
+            NonZeroU128::new(common).ok_or(ElasticError::SampleCountOverflow)?,
             rate,
             lower.max(1),
         )

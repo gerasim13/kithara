@@ -281,6 +281,10 @@ where
     }
 
     fn service_scratch(&mut self) {
+        if !self.requires_staging() && self.plan.is_some() {
+            drop(self.deferred_scratch.take());
+            return;
+        }
         if self.scratch.is_some() {
             drop(self.deferred_scratch.take());
             return;
@@ -325,11 +329,6 @@ where
             return;
         }
         let channels = usize::from(self.spec.channels.max(1));
-        if spec.sample_rate != self.spec.sample_rate
-            && let Some(applied) = self.applied_speed.as_mut()
-        {
-            applied.update_sample_rate(spec.sample_rate);
-        }
 
         let (kind, keylock) = self.stretch_target();
         let entering_unity = spec == self.spec
@@ -371,7 +370,7 @@ where
                     resident.next_replacement.shrink_to_fit();
                 }
             }
-            let reusable = PreparedTarget {
+            let mut reusable = PreparedTarget {
                 projection: self.projection.take(),
                 residency: self.residency.take(),
                 activation_scratch: self.activation_scratch.take(),
@@ -379,6 +378,9 @@ where
                 pending_source: self.pending_source.take(),
                 scratch: self.scratch.take(),
             };
+            if spec != self.spec {
+                reusable = PreparedTarget::default();
+            }
             let target = Self::prepare_target(
                 (kind, keylock),
                 self.backends,

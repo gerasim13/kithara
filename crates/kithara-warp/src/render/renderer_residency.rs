@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, num::NonZeroU64};
+use std::{collections::VecDeque, num::NonZeroU128};
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_signal::{AudioChunkInfo, SourceSpan};
@@ -153,7 +153,7 @@ impl SourceResidency {
         Ok(())
     }
 
-    pub(super) fn history_position(&self, mut before: u64) -> Option<(u128, NonZeroU64)> {
+    pub(super) fn history_position(&self, mut before: u64) -> Option<(u128, NonZeroU128)> {
         for span in self.mappings.iter().rev() {
             if before <= span.output_frames() {
                 return span.source_ratio_at(span.output_frames() - before);

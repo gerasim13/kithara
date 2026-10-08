@@ -1,4 +1,4 @@
-use std::num::NonZeroU64;
+use std::num::{NonZeroU64, NonZeroU128};
 
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo};
@@ -41,7 +41,7 @@ fn region_boundaries_publish_exact_phase_under_every_output_budget(#[case] backe
                 let (numerator, denominator) = span.source_ratio_at(offset as u64).expect("phase");
                 assert_eq!(
                     numerator * 5,
-                    expected as u128 * u128::from(denominator.get())
+                    expected as u128 * denominator.get()
                 );
             }
             frame += output.frames();
@@ -74,11 +74,11 @@ fn fractional_region_crossing_is_an_exact_single_frame_run(#[case] backend: Stre
     let span = crossing.meta.source_span.expect("crossing mapping");
     assert_eq!(
         span.source_ratio_at(0),
-        Some((12, NonZeroU64::new(5).expect("denominator")))
+        Some((12, NonZeroU128::new(5).expect("denominator")))
     );
     assert_eq!(
         span.source_ratio_at(1),
-        Some((13, NonZeroU64::new(4).expect("denominator")))
+        Some((13, NonZeroU128::new(4).expect("denominator")))
     );
     let after = mapped_render(&mut renderer, &mut source, 7);
     assert_positions(&after, 0, |frame| 3.25 + frame as f64);
@@ -118,7 +118,7 @@ fn a_ramp_in_a_region_keeps_the_exact_scaled_integral(#[case] backend: StretchKi
             let (numerator, denominator) = span.source_ratio_at(offset as u64).expect("phase");
             assert_eq!(
                 numerator * 80,
-                (32 * boundary + boundary * boundary) * u128::from(denominator.get())
+                (32 * boundary + boundary * boundary) * denominator.get()
             );
         }
         frame += output.frames();
@@ -192,7 +192,311 @@ fn mapped_render(renderer: &mut WarpRenderer, source: &mut u64, budget: usize) -
     mapped_signal(renderer, source, budget, |frame| frame as f32 / 4096.0)
 }
 
-fn mapped_signal(
+#[kithara::test]
+#[case::decimal(1.1)]
+#[case::fitted_bar(128.0 / 120.5)]
+fn non_dyadic_regions_do_not_accumulate_denominators(#[case] correction: f64) {
+    let mut renderer = renderer(
+        &WarpConfig::builder()
+            .backend(StretchKind::Glide)
+            .speed(1.02)
+            .region_plan(Arc::new(
+                RegionPlan::new(vec![GridSegment::new(0, 1_000_000, correction)])
+                    .expect("non-dyadic region"),
+            ))
+            .build(),
+    );
+    let mut previous = None;
+    for _ in 0..1_000 {
+        let span = renderer
+            .mapping_span(0, spec().sample_rate, 128)
+            .expect("every corrected quantum is representable");
+        assert_eq!(span.output_frames(), 128);
+        let start = span.source_ratio_at(0).expect("start");
+        if let Some(previous) = previous {
+            assert_eq!(start, previous, "corrected phase remains continuous");
+        }
+        previous = span.source_ratio_at(128);
+        renderer
+            .trajectory
+            .advance(span)
+            .expect("corrected phase advance");
+    }
+}
+
+#[kithara::test]
+#[case::decimal(1.1)]
+#[case::fitted_grid(128.0 / 120.5)]
+fn long_interrupted_ramps_in_non_dyadic_regions_keep_exact_positions(#[case] correction: f64) {
+    let mut renderer = renderer(
+        &WarpConfig::builder()
+            .backend(StretchKind::Glide)
+            .speed(1.02)
+            .region_plan(Arc::new(
+                RegionPlan::new(vec![GridSegment::new(0, u64::MAX, correction)])
+                    .expect("non-dyadic correction"),
+            ))
+            .build(),
+    );
+    let rate = std::num::NonZeroU32::new(192_000).expect("rate");
+    let initial = renderer
+        .trajectory
+        .span(6_912_000_000, rate, 1)
+        .expect("ten-hour position");
+    renderer
+        .trajectory
+        .advance(initial)
+        .expect("initial advance");
+    let lengths = [47_999, 2_880_000, 2_879_999, 123_457];
+    let targets = [0.99, 1.02, 0.05, 4.0];
+    let mut wide_mapping = false;
+    for index in 0..1_000 {
+        let before = renderer
+            .trajectory
+            .at_offset(0, rate, 0)
+            .expect("current phase");
+        let origin = super::super::trajectory::Fraction {
+            numerator: before.0,
+            denominator: before.1,
+        }
+        .on_lattice()
+        .expect("bounded replacement origin");
+        let length = lengths[index % lengths.len()];
+        renderer
+            .set_speed(
+                SpeedCurve::Ramp {
+                    to: targets[index % targets.len()],
+                    frames: NonZeroU64::new(length).expect("duration"),
+                },
+                index as u64 + 1,
+            )
+            .expect("replacement curve");
+        let frames = (length / 2) | 1;
+        let span = renderer
+            .mapping_span(0, rate, frames as usize)
+            .expect("corrected ramp");
+        assert_eq!(span.output_frames(), frames);
+        assert_eq!(
+            span.source_ratio_at(0),
+            Some((origin.numerator, origin.denominator))
+        );
+        let endpoint = span.source_ratio_at(frames).expect("exact endpoint");
+        assert_eq!(
+            renderer
+                .mapped_position(0, rate, frames)
+                .expect("projected endpoint"),
+            endpoint
+        );
+        assert!(span.position_at(frames).is_some());
+        wide_mapping |= endpoint.1.get() > u128::from(u64::MAX);
+        renderer
+            .trajectory
+            .advance(span)
+            .expect("advance corrected phase");
+    }
+    assert!(
+        wide_mapping,
+        "the regression exercises denominators beyond u64"
+    );
+}
+
+#[kithara::test]
+#[case::unity(1.0)]
+#[case::manual_speed(1.02)]
+fn changing_non_dyadic_regions_keeps_phase_on_the_replacement_lattice(#[case] speed: f32) {
+    let plan = Arc::new(
+        RegionPlan::new(vec![
+            GridSegment::new(0, 127, 1.1),
+            GridSegment::new(127, 257, 128.0 / 120.5),
+            GridSegment::new(257, 389, 1.03),
+        ])
+        .expect("distinct corrections"),
+    );
+    let mut renderer = renderer(
+        &WarpConfig::builder()
+            .backend(StretchKind::Glide)
+            .speed(speed)
+            .region_plan(plan.clone())
+            .build(),
+    );
+    let mut source = 0;
+    let mut previous = Some((0, NonZeroU128::MIN));
+    let mut crossings = 0;
+    for _ in 0..128 {
+        let output = mapped_render(&mut renderer, &mut source, 17);
+        let span = output.meta.source_span.expect("corrected mapping");
+        assert!(output.frames() > 0 && output.frames() <= 17);
+        assert_eq!(span.output_frames(), output.frames() as u64);
+        assert_eq!(span.source_ratio_at(0), previous);
+        let (numerator, denominator) = span
+            .source_ratio_at(span.output_frames())
+            .expect("endpoint");
+        let mut endpoint = super::super::trajectory::Fraction {
+            numerator,
+            denominator,
+        };
+        if plan.region_at(span.start()) != plan.region_at(span.end()) {
+            crossings += 1;
+            endpoint = endpoint.on_lattice().expect("rounded ownership boundary");
+        }
+        previous = Some((endpoint.numerator, endpoint.denominator));
+    }
+    assert_eq!(
+        crossings, 3,
+        "every distinct region and the final gap are crossed"
+    );
+}
+
+#[kithara::test]
+#[cfg_attr(feature = "stretch-glide", case::varispeed(StretchKind::Glide))]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn a_failed_large_mapping_cannot_leak_scratch_into_a_smaller_quantum(#[case] backend: StretchKind) {
+    let mut renderer = renderer(
+        &WarpConfig::builder()
+            .backend(backend)
+            .keylock(true)
+            .speed(0.5)
+            .build(),
+    );
+    let mut source = 0;
+    mapped_signal(&mut renderer, &mut source, 128, |_| 0.25);
+    renderer.prepare(spec());
+    let meta = AudioChunkInfo {
+        spec: spec(),
+        frame_offset: source,
+        ..Default::default()
+    };
+    let count = renderer
+        .prepare_quantum(meta, 4096, 128)
+        .expect("fault request")
+        .get();
+    let prepared = renderer.prepared_quantum.as_mut().expect("cached quantum");
+    prepared.source_span = Some(
+        kithara_signal::SourceSpan::from_rational(
+            0,
+            1,
+            NonZeroU128::MIN,
+            spec().sample_rate,
+            1024,
+        )
+        .expect("large mapping"),
+    );
+    let mut input = chunk(&renderer.pools, &vec![0.25; count * 2]);
+    input.meta.frame_offset = source;
+    source += count as u64;
+    assert!(
+        renderer
+            .render_quantum(input)
+            .continue_value()
+            .expect("prepared input")
+            .is_none()
+    );
+    assert!(
+        renderer.scratch.as_ref().expect("scratch").is_empty(),
+        "failure clears partial PCM"
+    );
+    let output = mapped_signal(&mut renderer, &mut source, 8, |_| 0.25);
+    assert_eq!(output.frames(), 8);
+    assert_eq!(output.samples.len(), 16);
+    assert_eq!(
+        output
+            .meta
+            .source_span
+            .expect("published mapping")
+            .output_frames(),
+        8
+    );
+    assert!(output.samples.iter().all(|sample| sample.is_finite()));
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn a_large_drain_limit_is_only_an_upper_bound(#[case] backend: StretchKind) {
+    let mut renderer = renderer(
+        &WarpConfig::builder()
+            .backend(backend)
+            .keylock(true)
+            .speed(0.5)
+            .build(),
+    );
+    let input = chunk(&renderer.pools, &vec![0.25; 4096 * 2]);
+    renderer
+        .render(input)
+        .continue_value()
+        .expect("complete source");
+    let capability = renderer
+        .engine
+        .as_ref()
+        .expect("backend")
+        .capabilities()
+        .max_output_frames();
+    let mut quanta = 0;
+    while let Some(output) = renderer
+        .drain(usize::MAX)
+        .expect("an unbounded limit is accepted")
+    {
+        assert!(output.frames() <= capability);
+        assert!(output.frames() > 0);
+        quanta += 1;
+        assert!(quanta < 128, "terminal drain converges");
+        renderer.prepare(spec());
+    }
+    assert!(quanta > 0, "pending backend PCM is emitted");
+    assert!(
+        renderer
+            .drain(usize::MAX)
+            .expect("exhausted drain")
+            .is_none()
+    );
+}
+
+#[kithara::test]
+fn unity_after_a_fractional_phase_reads_the_final_interpolation_sample() {
+    let mut renderer = renderer(
+        &WarpConfig::builder()
+            .backend(StretchKind::Glide)
+            .speed(0.5)
+            .build(),
+    );
+    let mut source = 0;
+    let first = mapped_signal(&mut renderer, &mut source, 1, |frame| frame as f32 / 64.0);
+    let phase = first
+        .meta
+        .source_span
+        .expect("initial mapping")
+        .source_ratio_at(1)
+        .expect("half frame");
+    assert_eq!(
+        phase,
+        (1, NonZeroU128::new(2).expect("half frame denominator"))
+    );
+    renderer
+        .set_speed(SpeedCurve::Constant(1.0), 1)
+        .expect("instant unity");
+    let output = mapped_signal(&mut renderer, &mut source, 32, |frame| frame as f32 / 64.0);
+    assert_eq!(output.frames(), 32);
+    assert_eq!(
+        output
+            .meta
+            .source_span
+            .expect("unity mapping")
+            .source_ratio_at(0),
+        Some(phase)
+    );
+    for (frame, samples) in output.samples.chunks_exact(2).enumerate() {
+        assert_eq!(samples, &[(frame as f32 + 0.5) / 64.0; 2]);
+    }
+}
+
+pub(super) fn mapped_signal(
     renderer: &mut WarpRenderer,
     source: &mut u64,
     budget: usize,
@@ -401,7 +705,7 @@ fn switching_to_keylock_retains_the_full_reprime_history(#[case] backend: Stretc
     let (numerator, denominator) = resident
         .history_position(needed as u64)
         .expect("mapped history");
-    assert!(numerator / u128::from(denominator.get()) >= resident.start as u128);
+    assert!(numerator / denominator.get() >= resident.start as u128);
     let output = mapped_render(&mut renderer, &mut source, 7);
     assert_positions(&output, 0, |frame| {
         131_072.0 + frame as f64 * f64::from(0.05f32)

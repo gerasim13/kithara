@@ -87,11 +87,3 @@ pub(crate) const N: usize = 1 << 14;
 #[cfg(feature = "render")]
 #[cfg(test)]
 pub(crate) const SR: u32 = 44_100;
-
-/// Span the speed smoother measures its settle threshold against: the range
-/// a playback speed realistically travels over, from a heavy stretch back to
-/// unity and a little past it. The smoother reads it as a scale, not a bound,
-/// so a speed outside it still smooths — it just settles on the same relative
-/// terms as one inside.
-#[cfg(feature = "render")]
-pub(crate) const SPEED_SMOOTHING_SPAN: f32 = 2.0;

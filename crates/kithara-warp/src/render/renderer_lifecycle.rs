@@ -92,9 +92,13 @@ where
             .as_ref()
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
             .capabilities()
-            .latency()
-            .output_frames()
-            .min(output_limit);
+            .max_output_frames()
+            .min(output_limit)
+            .min(
+                self.scratch
+                    .as_ref()
+                    .map_or(0, |scratch| scratch.capacity() / channels),
+            );
         let sample_limit = frame_limit
             .checked_mul(channels)
             .ok_or(ElasticError::SampleCountOverflow)?;
@@ -416,24 +420,33 @@ where
             .checked_add(u64::from(meta.frames))
             .ok_or(ElasticError::SampleCountOverflow)?;
         let end = *self.terminal_source_end.get_or_insert(end);
+        let capability = self
+            .engine
+            .as_ref()
+            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
+            .capabilities()
+            .max_output_frames();
         let quantum = self
             .render_quantum_frames
             .map_or(Self::MAX_OUTPUT_FRAMES, NonZeroUsize::get)
             .min(output_limit)
             .min(self.source_block_frames.get())
-            .min(Self::MAX_OUTPUT_FRAMES);
+            .min(capability);
         let span = self.mapping_span(meta.frame_offset, meta.spec.sample_rate, quantum)?;
         let mut outputs = span.output_frames();
         while outputs > 0 {
             let (numerator, denominator) = span
                 .source_ratio_at(outputs - 1)
                 .ok_or(ElasticError::SampleCountOverflow)?;
-            if numerator < u128::from(end) * u128::from(denominator.get()) {
+            if numerator / denominator.get() < u128::from(end) {
                 break;
             }
             outputs -= 1;
         }
         if outputs == 0 {
+            self.active = false;
+            self.reset_pending = true;
+            self.prepared_quantum = None;
             return Ok(None);
         }
         let span = span
@@ -474,6 +487,7 @@ where
         }
         if complete {
             self.backend_transition_pending = false;
+            self.reprime_pending = false;
             self.active = false;
             self.pending_meta = None;
             self.source_frames_admitted = 0;
@@ -484,6 +498,8 @@ where
     }
 
     /// Drain one buffered output chunk after source EOF or a transition.
+    /// `output_limit` is an upper bound, further bounded by the backend and
+    /// pending output. Keep draining until `None` to consume the entire tail.
     ///
     /// # Errors
     /// Returns a service request when the engine needs re-priming, or its
@@ -506,10 +522,6 @@ where
             return Ok(None);
         }
         let snapshot = self.context.load();
-        if self.reprime_pending {
-            self.retire_for_reprime()?;
-            return Ok(None);
-        }
         if let Some(scratch) = self.scratch.as_mut() {
             scratch.clear();
         } else {
@@ -573,15 +585,9 @@ where
         let snapshot = self.context.load();
         self.prepared_quantum = None;
         let rate = self.rate;
-        let speed = match self.preview_speed(rate.speed(), chunk.frames().max(1)) {
-            Ok(speed) => speed,
-            Err(error) => {
-                warn!(%error, "time-stretch speed smoothing failed");
-                return ControlFlow::Break(chunk);
-            }
-        };
+        let speed = rate.speed();
         chunk.meta.render_revision = rate.revision();
-        ControlFlow::Continue(self.render_at(chunk, speed, snapshot, None, rate.speed()))
+        ControlFlow::Continue(self.render_at(chunk, speed, snapshot, None))
     }
 
     fn render_at(
@@ -590,7 +596,6 @@ where
         speed: f32,
         snapshot: Option<crate::RenderSnapshot>,
         prepared: Option<PreparedQuantum>,
-        target_speed: f32,
     ) -> Option<AudioChunk> {
         if chunk.spec() != self.spec {
             warn!(
@@ -616,7 +621,7 @@ where
             return None;
         }
         if let Some(output) = output.as_ref() {
-            self.commit_rate_render(snapshot, output, speed, target_speed);
+            self.commit_rate_render(snapshot, output, speed);
         }
         output
     }
@@ -660,6 +665,9 @@ where
                 }
                 Err(error) => {
                     warn!(%error, "varispeed source mapping failed");
+                    if let Some(scratch) = self.scratch.as_mut() {
+                        scratch.clear();
+                    }
                     self.defer_scratch(Some(chunk.samples));
                     None
                 }
@@ -705,7 +713,6 @@ where
             prepared.speed,
             snapshot,
             Some(prepared),
-            prepared.rate.speed(),
         ))
     }
 
@@ -714,7 +721,7 @@ where
         self.reset_pending = true;
         self.clear_render_state();
         self.committed = None;
-        self.snap_speed();
+        self.prepared_quantum = None;
     }
 }
 

@@ -111,7 +111,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 pending[frame * channels..(frame + 1) * channels].fill(0.0);
                 continue;
             };
-            let source = u64::try_from(numerator / u128::from(denominator.get()))
+            let source = u64::try_from(numerator / denominator.get())
                 .map_err(|_| ElasticError::SampleCountOverflow)?;
             if self.terminal_source_end.is_some_and(|end| source >= end) {
                 let pending = self
@@ -173,6 +173,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         scratch
             .ensure_len(count)
             .map_err(|_| ElasticError::PoolCapacity)?;
+        scratch.truncate(count);
         for frame in 0..frames {
             let offset = lookahead
                 .checked_add(frame)

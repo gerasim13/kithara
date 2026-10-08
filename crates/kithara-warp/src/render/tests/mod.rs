@@ -17,6 +17,7 @@ mod projection;
 ))]
 mod target;
 mod timeline;
+mod trajectory;
 
 use fixtures::{WarpRenderer, chunk, f64_of, renderer, spec};
 #[cfg(any(

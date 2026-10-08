@@ -1,4 +1,4 @@
-use std::num::{NonZeroU32, NonZeroU64};
+use std::num::{NonZeroU32, NonZeroU128};
 
 use kithara_signal::SourceSpan;
 use kithara_stretch::ElasticError;
@@ -9,7 +9,7 @@ use crate::{SpeedCurve, consts};
 #[derive(Clone, Copy)]
 pub(super) struct Fraction {
     pub(super) numerator: u128,
-    pub(super) denominator: NonZeroU64,
+    pub(super) denominator: NonZeroU128,
 }
 
 fn divisor(mut first: u128, mut second: u128) -> u128 {
@@ -20,13 +20,33 @@ fn divisor(mut first: u128, mut second: u128) -> u128 {
 }
 
 impl Fraction {
-    pub(super) fn new(numerator: u128, denominator: u64) -> Option<Self> {
-        let common = divisor(numerator, u128::from(denominator));
+    pub(super) fn on_lattice(self) -> Option<Self> {
+        let scale = 1u128 << 32;
+        let denominator = self.denominator.get();
+        let frames = u64::try_from(self.numerator / denominator).ok()?;
+        let mut remainder = self.numerator % denominator;
+        let mut fraction = 0;
+        for _ in 0..32 {
+            fraction <<= 1;
+            let complement = denominator - remainder;
+            if remainder >= complement {
+                remainder -= complement;
+                fraction += 1;
+            } else {
+                remainder += remainder;
+            }
+        }
+        if remainder >= denominator - remainder {
+            fraction += 1;
+        }
+        Self::new(u128::from(frames) * scale + fraction, scale)
+    }
+
+    pub(super) fn new(numerator: u128, denominator: u128) -> Option<Self> {
+        let common = divisor(numerator, denominator);
         Some(Self {
             numerator: numerator.checked_div(common)?,
-            denominator: NonZeroU64::new(
-                u64::try_from(u128::from(denominator).checked_div(common)?).ok()?,
-            )?,
+            denominator: NonZeroU128::new(denominator.checked_div(common)?)?,
         })
     }
 
@@ -41,7 +61,7 @@ impl Fraction {
         let (numerator, denominator) = if exponent >= 0 {
             (mantissa.checked_shl(exponent.unsigned_abs()), Some(1))
         } else {
-            (Some(mantissa), 1u64.checked_shl(exponent.unsigned_abs()))
+            (Some(mantissa), 1u128.checked_shl(exponent.unsigned_abs()))
         };
         numerator
             .zip(denominator)
@@ -49,22 +69,16 @@ impl Fraction {
             .ok_or(ElasticError::SampleCountOverflow)
     }
 
-    pub(super) fn common(self, other: Self) -> Option<u64> {
+    pub(super) fn common(self, other: Self) -> Option<u128> {
         let first = self.denominator.get();
         first
-            .checked_div(
-                u64::try_from(divisor(
-                    u128::from(first),
-                    u128::from(other.denominator.get()),
-                ))
-                .ok()?,
-            )?
+            .checked_div(divisor(first, other.denominator.get()))?
             .checked_mul(other.denominator.get())
     }
 
-    pub(super) fn at(self, denominator: u64) -> Option<u128> {
+    pub(super) fn at(self, denominator: u128) -> Option<u128> {
         self.numerator
-            .checked_mul(u128::from(denominator.checked_div(self.denominator.get())?))
+            .checked_mul(denominator.checked_div(self.denominator.get())?)
     }
 
     fn value(self) -> Result<f32, ElasticError> {
@@ -85,13 +99,17 @@ impl Fraction {
         if !value.is_finite() || value <= 0.0 {
             return None;
         }
+        let value = value.to_f32()?;
+        if !value.is_finite() || value <= 0.0 {
+            return None;
+        }
         let bits = value.to_bits();
-        let exponent = i32::try_from((bits >> 52) & 2047).ok()? - 1075;
-        let mantissa = u128::from((bits & 0x000f_ffff_ffff_ffff) | 0x0010_0000_0000_0000);
+        let exponent = i32::try_from((bits >> 23) & 255).ok()? - 150;
+        let mantissa = u128::from((bits & 0x7f_ffff) | 0x80_0000);
         let (numerator, denominator) = if exponent >= 0 {
             (mantissa.checked_shl(exponent.unsigned_abs())?, 1)
         } else {
-            (mantissa, 1u64.checked_shl(exponent.unsigned_abs())?)
+            (mantissa, 1u128.checked_shl(exponent.unsigned_abs())?)
         };
         Self::new(numerator, denominator)
     }
@@ -107,20 +125,18 @@ impl Fraction {
     }
 
     pub(super) fn mul(self, other: Self) -> Option<Self> {
-        let first = divisor(self.numerator, u128::from(other.denominator.get()));
-        let second = divisor(other.numerator, u128::from(self.denominator.get()));
+        let first = divisor(self.numerator, other.denominator.get());
+        let second = divisor(other.numerator, self.denominator.get());
         Self::new(
             (self.numerator / first).checked_mul(other.numerator / second)?,
-            u64::try_from(u128::from(self.denominator.get()) / second)
-                .ok()?
-                .checked_mul(u64::try_from(u128::from(other.denominator.get()) / first).ok()?)?,
+            (self.denominator.get() / second).checked_mul(other.denominator.get() / first)?,
         )
     }
 
     pub(super) fn div(self, other: Self) -> Option<Self> {
         self.mul(Self {
-            numerator: u128::from(other.denominator.get()),
-            denominator: NonZeroU64::new(u64::try_from(other.numerator).ok()?)?,
+            numerator: other.denominator.get(),
+            denominator: NonZeroU128::new(other.numerator)?,
         })
     }
 
@@ -134,7 +150,43 @@ pub(super) struct Trajectory {
     curve: SpeedCurve,
     origin_speed: Fraction,
     elapsed: u64,
-    position: Option<Fraction>,
+    position: Option<Phase>,
+}
+
+/// Replacement origins use whole source frames and Q32 fractions, rounded to
+/// nearest with exact half units toward the next frame. A running curve keeps
+/// its exact integral until the next replacement.
+#[derive(Clone, Copy)]
+enum Phase {
+    Origin { frames: u64, fraction: u32 },
+    Rendered(SourceSpan),
+}
+
+impl Phase {
+    fn ratio(self) -> Option<Fraction> {
+        match self {
+            Self::Origin { frames, fraction } => Fraction::new(
+                (u128::from(frames) << 32) + u128::from(fraction),
+                1u128 << 32,
+            ),
+            Self::Rendered(span) => {
+                let (numerator, denominator) = span.source_ratio_at(span.output_frames())?;
+                Some(Fraction {
+                    numerator,
+                    denominator,
+                })
+            }
+        }
+    }
+
+    fn on_lattice(self) -> Option<Self> {
+        let position = self.ratio()?.on_lattice()?;
+        let numerator = position.at(1u128 << 32)?;
+        Some(Self::Origin {
+            frames: u64::try_from(numerator >> 32).ok()?,
+            fraction: u32::try_from(numerator & u128::from(u32::MAX)).ok()?,
+        })
+    }
 }
 
 impl Trajectory {
@@ -143,7 +195,7 @@ impl Trajectory {
             curve: SpeedCurve::Constant(speed),
             origin_speed: Fraction {
                 numerator: 1,
-                denominator: NonZeroU64::MIN,
+                denominator: NonZeroU128::MIN,
             },
             elapsed: 0,
             position: None,
@@ -154,8 +206,24 @@ impl Trajectory {
         self.position = None;
     }
 
+    pub(super) fn snap_position(&mut self) -> Result<(), ElasticError> {
+        if let Some(position) = self.position {
+            self.position = Some(
+                position
+                    .on_lattice()
+                    .ok_or(ElasticError::SampleCountOverflow)?,
+            );
+        }
+        Ok(())
+    }
+
     pub(super) fn requires_quanta(&self) -> bool {
         !matches!(self.curve, SpeedCurve::Constant(_))
+    }
+
+    pub(super) fn constant_unity(&self) -> bool {
+        !matches!(&self.curve, SpeedCurve::Ramp { frames, .. } if self.elapsed < frames.get())
+            && self.speed().is_ok_and(|speed| speed == 1.0)
     }
 
     fn speed_at(&self) -> Result<Fraction, ElasticError> {
@@ -175,7 +243,7 @@ impl Trajectory {
                 let denominator = self
                     .origin_speed
                     .common(target)
-                    .and_then(|common| common.checked_mul(frames.get()))
+                    .and_then(|common| common.checked_mul(u128::from(frames.get())))
                     .ok_or(ElasticError::SampleCountOverflow)?;
                 let numerator = self
                     .origin_speed
@@ -210,11 +278,21 @@ impl Trajectory {
                 }
             }
         }
-        let origin_speed = self.speed_at()?;
+        let origin_speed = Fraction::speed(self.speed_at()?.value()?)?;
+        let position = match self.position {
+            Some(position) => Some(
+                position
+                    .on_lattice()
+                    .ok_or(ElasticError::SampleCountOverflow)?,
+            ),
+            None => None,
+        };
         let previous = std::mem::replace(&mut self.curve, curve);
         let previous_origin = self.origin_speed;
         let previous_elapsed = self.elapsed;
+        let previous_position = self.position;
         self.origin_speed = origin_speed;
+        self.position = position;
         self.elapsed = 0;
         let result = self.speed_at().and_then(Fraction::value).and_then(|speed| {
             let frames = match &self.curve {
@@ -232,6 +310,7 @@ impl Trajectory {
             self.curve = previous;
             self.origin_speed = previous_origin;
             self.elapsed = previous_elapsed;
+            self.position = previous_position;
         }
         result
     }
@@ -260,10 +339,7 @@ impl Trajectory {
         sample_rate: NonZeroU32,
         frames: usize,
     ) -> Result<SourceSpan, ElasticError> {
-        let position = self.position.unwrap_or_else(|| Fraction {
-            numerator: u128::from(start),
-            denominator: NonZeroU64::MIN,
-        });
+        let position = self.source_position(start)?;
         SourceSpan::from_rational(
             position.numerator,
             position.denominator.get(),
@@ -274,9 +350,9 @@ impl Trajectory {
         .ok_or(ElasticError::SampleCountOverflow)
     }
 
-    pub(super) fn projection_stages(&self, correction: f64) -> Result<usize, ElasticError> {
+    pub(super) fn speed_bounds(&self) -> Result<(f32, f32), ElasticError> {
         let origin = self.origin_speed.value()?;
-        let (minimum, maximum) = match &self.curve {
+        Ok(match &self.curve {
             SpeedCurve::Constant(speed) => (*speed, *speed),
             SpeedCurve::Ramp { to, .. } => (origin.min(*to), origin.max(*to)),
             SpeedCurve::Steps(steps) => steps
@@ -284,7 +360,11 @@ impl Trajectory {
                 .fold((origin, origin), |(minimum, maximum), (_, speed)| {
                     (minimum.min(*speed), maximum.max(*speed))
                 }),
-        };
+        })
+    }
+
+    pub(super) fn projection_stages(&self, correction: f64) -> Result<usize, ElasticError> {
+        let (minimum, maximum) = self.speed_bounds()?;
         let mut pitch = correction / f64::from(minimum);
         let mut stages = 1;
         while pitch > 4.0 {
@@ -309,7 +389,7 @@ impl Trajectory {
         start: u64,
         rate: NonZeroU32,
         offset: u64,
-    ) -> Result<(u128, NonZeroU64), ElasticError> {
+    ) -> Result<(u128, NonZeroU128), ElasticError> {
         let mut cursor = self.clone();
         let mut remaining = offset;
         while remaining > 0 {
@@ -332,17 +412,14 @@ impl Trajectory {
         sample_rate: NonZeroU32,
         frames: usize,
     ) -> Result<SourceSpan, ElasticError> {
-        let position = self.position.unwrap_or_else(|| Fraction {
-            numerator: u128::from(start),
-            denominator: NonZeroU64::MIN,
-        });
+        let position = self.source_position(start)?;
         let speed = self.speed_at()?;
         let common = position
             .common(speed)
             .ok_or(ElasticError::SampleCountOverflow)?;
         let mut denominator = common;
         let mut step = speed.at(common).ok_or(ElasticError::SampleCountOverflow)?;
-        let mut change = 0i64;
+        let mut change = 0i128;
         if let SpeedCurve::Ramp {
             to,
             frames: duration,
@@ -363,18 +440,18 @@ impl Trajectory {
                 })
                 .ok_or(ElasticError::SampleCountOverflow)?;
             let ramp_denominator = basis
-                .checked_mul(duration.get())
+                .checked_mul(u128::from(duration.get()))
                 .and_then(|value| value.checked_mul(2))
                 .ok_or(ElasticError::SampleCountOverflow)?;
             denominator = common
-                .checked_div(
-                    u64::try_from(divisor(u128::from(common), u128::from(ramp_denominator)))
-                        .map_err(|_| ElasticError::SampleCountOverflow)?,
-                )
+                .checked_div(divisor(common, ramp_denominator))
                 .and_then(|value| value.checked_mul(ramp_denominator))
                 .ok_or(ElasticError::SampleCountOverflow)?;
             let scaled_delta = delta
-                .checked_mul(i128::from(denominator / ramp_denominator))
+                .checked_mul(
+                    i128::try_from(denominator / ramp_denominator)
+                        .map_err(|_| ElasticError::SampleCountOverflow)?,
+                )
                 .ok_or(ElasticError::SampleCountOverflow)?;
             step = u128::try_from(
                 i128::try_from(
@@ -387,20 +464,17 @@ impl Trajectory {
                 .ok_or(ElasticError::SampleCountOverflow)?,
             )
             .map_err(|_| ElasticError::SampleCountOverflow)?;
-            change = i64::try_from(
-                scaled_delta
-                    .checked_mul(2)
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-            )
-            .map_err(|_| ElasticError::SampleCountOverflow)?;
+            change = scaled_delta
+                .checked_mul(2)
+                .ok_or(ElasticError::SampleCountOverflow)?;
         }
         SourceSpan::from_ramp(
             position
                 .at(denominator)
                 .ok_or(ElasticError::SampleCountOverflow)?,
-            u64::try_from(step).map_err(|_| ElasticError::SampleCountOverflow)?,
+            step,
             change,
-            NonZeroU64::new(denominator).ok_or(ElasticError::SampleCountOverflow)?,
+            NonZeroU128::new(denominator).ok_or(ElasticError::SampleCountOverflow)?,
             sample_rate,
             u64::try_from(frames).map_err(|_| ElasticError::SampleCountOverflow)?,
         )
@@ -408,17 +482,24 @@ impl Trajectory {
     }
 
     pub(super) fn advance(&mut self, span: SourceSpan) -> Result<(), ElasticError> {
-        let (numerator, denominator) = span
-            .source_ratio_at(span.output_frames())
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        self.position = Some(Fraction {
-            numerator,
-            denominator,
-        });
-        self.elapsed = self
+        let elapsed = self
             .elapsed
             .checked_add(span.output_frames())
             .ok_or(ElasticError::SampleCountOverflow)?;
+        self.position = Some(Phase::Rendered(span));
+        self.elapsed = elapsed;
         Ok(())
+    }
+
+    fn source_position(&self, start: u64) -> Result<Fraction, ElasticError> {
+        self.position.map_or_else(
+            || {
+                Ok(Fraction {
+                    numerator: u128::from(start),
+                    denominator: NonZeroU128::MIN,
+                })
+            },
+            |position| position.ratio().ok_or(ElasticError::SampleCountOverflow),
+        )
     }
 }

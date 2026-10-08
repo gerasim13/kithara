@@ -1,7 +1,6 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
-use kithara_dsp::param::{MIN_SETTLE_RATIO, SmoothedParam, SmootherConfig};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SourceSpan};
 use kithara_stretch::{
@@ -87,8 +86,6 @@ pub struct WarpRenderer<S> {
     pub(super) source_block_frames: NonZeroUsize,
     /// Latency-sized pooled output discarded while priming an inactive engine.
     pub(super) activation_scratch: Option<SampleBuffer>,
-    /// Raw source-chunk speed, smoothed toward [`Self::rate`].
-    pub(super) applied_speed: Option<SmoothedParam>,
     /// Speed the last [`Self::set_speed`] set, with the revision stamped on
     /// every chunk rendered toward it.
     pub(super) rate: RateTarget,
@@ -180,8 +177,6 @@ where
         let (current_kind, current_keylock) = Self::stretch_for(requested_kind, requested_keylock);
         let plan = config.region_plan().clone();
         let speed = config.speed();
-        let smooth_frames: f32 = config.rate_smooth_frames().get().as_();
-        let sample_rate: f32 = spec.sample_rate.get().as_();
         let target = if plan.is_some()
             && !current_kind
                 .capabilities()
@@ -238,17 +233,6 @@ where
             source_block_frames: config.source_block_frames(),
             render_quantum_frames: config.render_quantum_frames(),
             prepared_quantum: None,
-            applied_speed: (config.rate_smooth_frames().get() > 1).then(|| {
-                SmoothedParam::new(
-                    speed,
-                    consts::SPEED_SMOOTHING_SPAN,
-                    SmootherConfig {
-                        smooth_seconds: smooth_frames / sample_rate * -MIN_SETTLE_RATIO.ln(),
-                        settle_ratio: MIN_SETTLE_RATIO,
-                    },
-                    spec.sample_rate,
-                )
-            }),
             applied_pitch: f64::NAN,
             rate: RateTarget::new(speed, 0),
             active: false,
@@ -421,7 +405,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         snapshot: Option<RenderSnapshot>,
         output: &AudioChunk,
         applied_rate: f32,
-        target_rate: f32,
     ) {
         let output_frames = output.frames();
         let request_revision = output.meta.render_revision;
@@ -447,9 +430,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             let frames: f64 = span.output_frames().as_();
             (rate / frames).as_()
         } else {
-            if let Err(error) = self.advance_speed(target_rate, output_frames) {
-                warn!(%error, "time-stretch speed smoothing failed");
-            }
             applied_rate
         };
         let Some(snapshot) = snapshot else {
@@ -620,6 +600,11 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .ok_or(ElasticError::PoolCapacity)?
             .remember_mapping(span)?;
         self.trajectory.advance(span)?;
+        if let Some(plan) = self.plan.as_ref()
+            && plan.region_at(span.start()) != plan.region_at(span.end())
+        {
+            self.trajectory.snap_position()?;
+        }
         self.rendered_source_end = Some((span.end(), span.sample_rate()));
         self.rate = RateTarget::new(self.trajectory.speed()?, self.rate.revision());
         Ok(())
@@ -713,14 +698,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.rate = target;
         self.prepared_quantum = None;
         Ok(())
-    }
-
-    pub(super) fn snap_speed(&mut self) {
-        if let Some(applied) = self.applied_speed.as_mut() {
-            applied.set_value(self.rate.speed());
-            applied.reset_to_target();
-        }
-        self.prepared_quantum = None;
     }
 
     /// The engine `kind` and `keylock` ask for: keylock only where the backend
