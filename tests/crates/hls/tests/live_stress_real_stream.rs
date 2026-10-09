@@ -34,6 +34,8 @@ use kithara_integration_tests::{
     bufpool_ext::{Pools, TestPools, pools},
     mixed_encrypted, mixed_plain,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_test_utils::pace;
 use kithara_test_utils::{TestTempDir, Xorshift64, temp_dir};
 use tracing::info;
 use url::Url;
@@ -215,6 +217,14 @@ fn warmup_to_variant(audio: &mut LiveAudio, variant: usize, label: &str) {
         if playing == Some(variant) {
             break;
         }
+        // Warmup stands in for a listener: do not outrun the network delivering
+        // the switch, otherwise the transition races the read budget.
+        pace(
+            chunk
+                .spec()
+                .duration_for(chunk.frames() as u64)
+                .expect("chunk playback duration must be representable"),
+        );
     }
     assert_eq!(
         playing,

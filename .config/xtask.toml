@@ -237,15 +237,12 @@ default_modes = [
   "rtsan-file",
   "rtsan-hls",
 ]
-# Every lane mode repeats each of these lanes; a command mode runs once. A lane
-# missing here is either one whose every test a lane here already runs, or one
-# `[stress.not_stressed]` gives a reason for.
+# Repeat engine contracts, including distinct backend and analysis feature
+# builds. App, UI, tooling and test-infrastructure self-tests use ordinary CI.
+# Positive package selections keep new workspace members out until reviewed.
 lanes = [
-  "workspace",
-  "broadcast",
-  "harness",
-  "fixtures",
-  "tooling",
+  "engine",
+  "engine-broadcast",
   "net-host",
   "analysis",
   "integration-regressions",
@@ -613,6 +610,99 @@ cargo.exclude = [
   "kithara-ffi-web-analysis-tests",
 ]
 cargo.profile = "test-release"
+
+# The stress surface is the audio engine and its domain test facades. The
+# support crates these tests depend on still compile; their own tests are not
+# selected. Mixed packages name their actual engine targets below.
+[test.lanes.engine]
+default_features = [
+  "kithara-platform/tokio-rt-multi-thread",
+  "kithara-dsp/spectrum",
+]
+cargo.packages = [
+  "kithara",
+  "kithara-abr",
+  "kithara-analysis",
+  "kithara-analysis-tests",
+  "kithara-assets",
+  "kithara-audio",
+  "kithara-audio-tests",
+  "kithara-beat",
+  "kithara-blob",
+  "kithara-broadcast",
+  "kithara-broadcast-tests",
+  "kithara-bufpool",
+  "kithara-command",
+  "kithara-config",
+  "kithara-decode",
+  "kithara-decode-tests",
+  "kithara-download",
+  "kithara-drm",
+  "kithara-dsp",
+  "kithara-dsp-tests",
+  "kithara-effects",
+  "kithara-effects-tests",
+  "kithara-encode",
+  "kithara-events",
+  "kithara-file",
+  "kithara-file-tests",
+  "kithara-harness-tests",
+  "kithara-hls",
+  "kithara-hls-tests",
+  "kithara-host",
+  "kithara-host-tests",
+  "kithara-integration-tests",
+  "kithara-mp4",
+  "kithara-mpa",
+  "kithara-net",
+  "kithara-output",
+  "kithara-platform",
+  "kithara-play",
+  "kithara-play-tests",
+  "kithara-queue",
+  "kithara-queue-tests",
+  "kithara-record",
+  "kithara-render",
+  "kithara-resampler",
+  "kithara-ring",
+  "kithara-signal",
+  "kithara-storage",
+  "kithara-stream",
+  "kithara-stream-tests",
+  "kithara-stretch",
+  "kithara-sync",
+  "kithara-sync-tests",
+  "kithara-warp",
+  "kithara-warp-tests",
+  "kithara-waveform",
+  "kithara-worker",
+]
+cargo.profile = "test-release"
+runner.nextest.filter = """
+not (
+  package(=kithara-platform)
+  + package(=kithara-integration-tests)
+  + package(=kithara-harness-tests)
+)
++ binary_id(=kithara-platform)
++ (
+  package(=kithara-integration-tests)
+  & (
+    binary_id(=kithara-integration-tests::suite_light)
+    + binary_id(=kithara-integration-tests::suite_heavy)
+    + binary_id(=kithara-integration-tests::suite_stress)
+  )
+)
++ (
+  binary_id(=kithara-harness-tests::suite_light)
+  & (
+    test(=offline_harness_smoke::offline_harness_smoke)
+    + test(=offline_harness_smoke::offline_harness_glide_varispeed)
+    + test(=audio_artifact::recording_core_writes_float_wav_through_disk_assets)
+    + test(=audio_artifact::recording_core_preserves_payload_across_packet_boundary)
+  )
+)
+"""
 
 [test.lanes.android]
 default_backend = "none"
@@ -1041,6 +1131,18 @@ default_no_block = true
 # `broadcast::state` runs in the gate against stand-in packagers; the live
 # packager in `broadcast::engine` and the on-air shutdown in `engine::owner`
 # need the feature.
+
+# Live engine packaging retains its feature and detector variants without
+# selecting app orchestration tests from the ordinary broadcast gate.
+[test.lanes.engine-broadcast]
+cargo.packages = ["kithara-broadcast", "kithara-broadcast-tests"]
+cargo.profile = "test-release"
+cargo.lib = true
+cargo.tests = ["broadcast", "packaging_tests"]
+runner.nextest.filter = "binary(broadcast) + package(=kithara-broadcast)"
+default_features = ["kithara-broadcast-tests/broadcast"]
+default_flash = true
+default_no_block = true
 
 # Integration regression tests are red by design and stay outside the main gate.
 [test.lanes.integration-regressions]
