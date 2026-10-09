@@ -1,9 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::{
-    future::{Future, poll_fn},
+    future::poll_fn,
     num::NonZeroUsize,
-    pin::{Pin, pin},
     task::Poll,
 };
 
@@ -14,7 +13,7 @@ use kithara::{
     platform::time::Duration,
     play::{
         DispatcherProtocol, LoadRefusal, PlayWorker, PlayWorkerConfig, ResourceConfig,
-        ResourceLoad, ResourceSrc, dispatch,
+        ResourceLoad, ResourceSrc,
     },
 };
 use kithara_command::{Batch, ChannelConfig, Outcome, Receipt, Rejection, Sender, When, channel};
@@ -117,19 +116,27 @@ fn load(worker: &PlayWorker<TestPools>, dir: &TestTempDir, name: &str) -> Batch<
     }
 }
 
-/// The next receipt, driving the dispatcher until it answers one.
-async fn answered(
-    sender: &mut Sender<Loads>,
-    mut dispatcher: Pin<&mut impl Future<Output = ()>>,
-) -> Receipt<Loads> {
-    poll_fn(|cx| {
-        assert!(
-            dispatcher.as_mut().poll(cx).is_pending(),
-            "the dispatcher runs while its sender lives"
-        );
+/// The next receipt from the dispatcher's configured worker owner.
+async fn answered(sender: &mut Sender<Loads>) -> Receipt<Loads> {
+    let receipt = poll_fn(|cx| {
+        sender.hold(cx.waker().clone());
         sender.receipts().next().map_or(Poll::Pending, Poll::Ready)
     })
-    .await
+    .await;
+    let barrier = sender
+        .send(When::Next, Batch { basis: Vec::new(), commands: Vec::new() })
+        .expect("the live dispatcher accepts the next batch");
+    let live = poll_fn(|cx| {
+        sender.hold(cx.waker().clone());
+        sender.receipts().next().map_or(Poll::Pending, Poll::Ready)
+    })
+    .await;
+    assert!(
+        live.seq() == barrier && matches!(live.outcome(), Outcome::Applied { .. }),
+        "the dispatcher runs while its sender lives"
+    );
+    sender.release();
+    receipt
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(30)))]
@@ -143,12 +150,12 @@ async fn the_dispatcher_opens_each_load_once_and_answers_a_load_past_capacity_fo
     );
     let trace = usdt_trace::scope();
     let (mut sender, inbox) = channel::<Loads>(ChannelConfig::builder().build());
-    let mut dispatcher = pin!(dispatch(inbox));
+    let _dispatcher = worker.start_dispatcher(inbox).expect("the worker owns its dispatcher");
 
     let first = sender
         .send(When::Next, load(&worker, &temp_dir, "a.mp3"))
         .expect("the channel has room");
-    let receipt = answered(&mut sender, dispatcher.as_mut()).await;
+    let receipt = answered(&mut sender).await;
     assert_eq!(receipt.seq(), first);
     let (Outcome::Applied { data: held, .. }, _) = receipt.into() else {
         panic!("the first load fits the worker");
@@ -158,7 +165,7 @@ async fn the_dispatcher_opens_each_load_once_and_answers_a_load_past_capacity_fo
     let second = sender
         .send(When::Next, load(&worker, &temp_dir, "b.mp3"))
         .expect("the channel has room");
-    let receipt = answered(&mut sender, dispatcher.as_mut()).await;
+    let receipt = answered(&mut sender).await;
     assert_eq!(receipt.seq(), second);
     assert!(
         matches!(

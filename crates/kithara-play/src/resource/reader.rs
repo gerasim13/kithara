@@ -1,7 +1,7 @@
 use std::{
     fmt::{self, Debug, Formatter},
     marker::PhantomData,
-    num::NonZeroU32,
+    num::{NonZeroU32, NonZeroUsize},
     pin::pin,
 };
 
@@ -16,6 +16,7 @@ use kithara_command::{Inbox, Sender};
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{
+    CancelToken,
     maybe_send::{BoxFuture, MaybeSendFuture},
     sync::Arc,
     time::Duration,
@@ -127,6 +128,23 @@ impl Debug for Resource {
 type ResourceOpen = Result<(OpenedTrack, ResourceLane, FrameCount), LoadRefusal>;
 type LaneChannel = (Sender<LaneProtocol>, Inbox<LaneProtocol>);
 
+fn geometry(
+    warp: &kithara_warp::WarpConfig,
+    audio_buffer_chunks: NonZeroUsize,
+) -> Result<FrameCount, PlayError> {
+    let source_block = warp.source_block_frames().get();
+    let packet = warp
+        .render_quantum_frames()
+        .map_or(source_block, |quantum| quantum.get().min(source_block));
+    audio_buffer_chunks
+        .get()
+        .checked_add(1)
+        .and_then(|packets| packets.checked_mul(packet))
+        .and_then(|frames| frames.checked_sub(1))
+        .map(FrameCount::new)
+        .ok_or_else(|| PlayError::Internal("lane ring frame depth overflow".into()))
+}
+
 /// A single-use source open and its preparation-owned lane wiring.
 pub struct ResourceLoad<S, B = PlaybackResamplerBackend> {
     opener: Box<
@@ -134,7 +152,8 @@ pub struct ResourceLoad<S, B = PlaybackResamplerBackend> {
             + Send,
     >,
     channel: Option<Box<dyn Fn() -> LaneChannel + Send>>,
-    geometry: Result<(Option<FrameCount>, FrameCount), PlayError>,
+    cancel: Option<CancelToken>,
+    geometry: Result<(FrameCount, FrameCount), PlayError>,
     marker: PhantomData<fn() -> (S, B)>,
 }
 
@@ -159,14 +178,7 @@ impl<S, B> ResourceLoad<S, B> {
 
     /// Maximum rendered lead, including the held packet, and the lane's Jump ramp.
     pub(crate) fn lane_geometry(&self) -> Result<(FrameCount, FrameCount), PlayError> {
-        let (ring_depth, declick) = self.geometry.clone()?;
-        let ring_depth = match ring_depth {
-            Some(ring_depth) => ring_depth,
-            None => todo!(
-                "kithara-warp::WarpRenderer uncapped output-packet frame bound (contract §2 lane lead)"
-            ),
-        };
-        Ok((ring_depth, declick))
+        self.geometry.clone()
     }
 }
 
@@ -178,52 +190,31 @@ where
     /// Captures the configured source and decoder observer for one open.
     #[must_use]
     pub fn new(config: ResourceConfig<S, B>, observer: Box<dyn AudioObserver>) -> Self {
-        let geometry = Self::geometry(&config);
+        let geometry = Self::config_geometry(&config);
         let channel = config.worker.clone().map(|worker| {
             Box::new(move || worker.lane_channel()) as Box<dyn Fn() -> LaneChannel + Send>
         });
         let cancel = config.cancel.clone();
         Self {
             opener: Box::new(move |position, start, inbox| {
-                Box::pin(async move {
-                    let open = Self::load(config, observer, position, start, inbox);
-                    match cancel {
-                        None => open.await,
-                        Some(cancel) => match select(pin!(cancel.cancelled()), pin!(open)).await {
-                            Either::Left(((), _open)) => Err(LoadRefusal::Cancelled),
-                            Either::Right((opened, _cancel)) => opened,
-                        },
-                    }
-                })
+                Box::pin(Self::load(config, observer, position, start, inbox))
             }),
             channel,
+            cancel,
             geometry,
             marker: PhantomData,
         }
     }
 
-    fn geometry(
+    fn config_geometry(
         config: &ResourceConfig<S, B>,
-    ) -> Result<(Option<FrameCount>, FrameCount), PlayError> {
+    ) -> Result<(FrameCount, FrameCount), PlayError> {
         let worker = config.worker.as_ref().ok_or_else(|| {
             PlayError::Internal("ResourceConfig requires an explicit PlayWorker".into())
         })?;
         let audio = config.clone().build_file_config(worker, None);
         let track = config.build_track_config(audio);
-        let ring_depth = track
-            .warp()
-            .render_quantum_frames()
-            .map(|quantum| {
-                track
-                    .audio_buffer_chunks()
-                    .get()
-                    .checked_add(1)
-                    .and_then(|packets| packets.checked_mul(quantum.get()))
-                    .and_then(|frames| frames.checked_sub(1))
-                    .map(FrameCount::new)
-                    .ok_or_else(|| PlayError::Internal("lane ring frame depth overflow".into()))
-            })
-            .transpose()?;
+        let ring_depth = geometry(track.warp(), track.audio_buffer_chunks())?;
         let rate = config.host_sample_rate.ok_or_else(|| {
             PlayError::Internal("lane geometry requires the prepared host sample rate".into())
         })?;
@@ -247,18 +238,20 @@ where
         let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
             detail: "ResourceConfig requires an explicit PlayWorker",
         })?;
+        let cancel_link = config.cancel_link.clone();
+        let cancel = config.cancel.clone();
         let (receiver, lane, latency) = match source_type {
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
                 let audio = config.clone().build_file_config(&worker, Some(observer));
                 let track = config.build_track_config(audio);
                 let (receiver, lane, latency) = worker.load(track, position, start, inbox).await?;
-                (receiver, ResourceLane::new(lane), latency)
+                (receiver, ResourceLane::new(lane, cancel, cancel_link), latency)
             }
             SourceType::HlsStream(_) => {
                 let audio = config.clone().build_hls_config(&worker, Some(observer))?;
                 let track = config.build_track_config(audio);
                 let (receiver, lane, latency) = worker.load(track, position, start, inbox).await?;
-                (receiver, ResourceLane::new(lane), latency)
+                (receiver, ResourceLane::new(lane, cancel, cancel_link), latency)
             }
         };
         Ok((
@@ -321,12 +314,21 @@ impl<S, B> Open for ResourceLoad<S, B> {
         inbox: Inbox<LaneProtocol>,
     ) -> impl MaybeSendFuture<Output = Result<(OpenedTrack, ResourceLane, FrameCount), LoadRefusal>>
     {
-        (self.opener)(position, start, inbox)
+        async move {
+            let open = (self.opener)(position, start, inbox);
+            match self.cancel {
+                None => open.await,
+                Some(cancel) => match select(pin!(cancel.cancelled()), pin!(open)).await {
+                    Either::Left(((), _open)) => Err(LoadRefusal::Cancelled),
+                    Either::Right((opened, _cancel)) => opened,
+                },
+            }
+        }
     }
 }
 
 #[cfg(feature = "mock")]
-pub mod mock {
+pub(crate) mod mock {
     use super::*;
     use kithara_render::TrackConfig;
     use kithara_stream::StreamType;
@@ -369,24 +371,20 @@ pub mod mock {
         S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
         L: kithara_render::LaneTask + 'static,
     {
-        let depth = config.warp().render_quantum_frames().map(|quantum| {
-            let frames = config.audio_buffer_chunks().get().checked_add(1)
-                .and_then(|packets| packets.checked_mul(quantum.get()))
-                .and_then(|frames| frames.checked_sub(1))
-                .expect("fixture lane depth fits usize");
-            FrameCount::new(frames)
-        });
-        let geometry = Ok((depth, config.declick_frames(sample_rate)));
+        let geometry = geometry(config.warp(), config.audio_buffer_chunks())
+            .map(|depth| (depth, config.declick_frames(sample_rate)));
         let channel_worker = worker.clone();
         ResourceLoad {
             opener: Box::new(move |position, start, inbox| Box::pin(async move {
                 let pools = worker.pools().clone();
+                let cancel = config.audio().cancel().cloned();
                 let (receiver, lane, latency) = open(worker, config, position, start, inbox).await?;
                 let opened = OpenedTrack::new(receiver, src, &pools)
                     .map_err(LoadRefusal::Pool)?;
-                Ok((opened, ResourceLane::new(lane), latency))
+                Ok((opened, ResourceLane::new(lane, cancel, None), latency))
             })),
             channel: Some(Box::new(move || channel_worker.lane_channel())),
+            cancel: None,
             geometry,
             marker: PhantomData,
         }
@@ -407,43 +405,136 @@ mod tests {
         sync::atomic::{AtomicU8, Ordering},
     };
 
-    use firewheel::{
-        clock::InstantSamples,
-        dsp::{buffer::ConstSequentialBuffer, declick::DeclickValues},
-        event::{NodeEvent, ProcEvents, ProcEventsIndex, ScheduledEventEntry},
-        log::{RealtimeLoggerConfig, realtime_logger},
-        mask::{ConnectedMask, ConstantMask, SilenceMask},
-        node::{
-            AudioNodeProcessor, NUM_SCRATCH_BUFFERS, ProcBuffers, ProcExtra, ProcInfo, ProcStore,
-            StreamStatus,
-        },
-    };
     use kithara_assets::{AssetStore, StorageBackend};
     use kithara_audio::{
         AudioControl, AudioObserverSlot, AudioRead, AudioSession, ReadOutcome, SeekOutcome,
     };
-    use kithara_bufpool::PoolRegion;
     use kithara_decode::TrackMetadata;
-    use kithara_events::TrackId;
     use kithara_platform::{CancelToken, sync::Arc};
     use kithara_render::{
-        bridge::{DeckPart, PlayerNotification, TrackTransition, slot_channels},
-        rt::{DeckMixer, DeckMixerConfig, StreamShape, track::PlayerResource},
+        bridge::{DeckPart, Fade, Slot, SlotState},
+        rt::{DeckMixerConfig, StreamShape},
     };
-    use kithara_signal::{AudioSpec, OutputContext, SessionEpoch, SessionFrame};
+    use kithara_signal::{AudioSpec, SegmentId, SessionFrame};
     use kithara_test_fixtures::play_fixtures::half;
     use kithara_test_utils::kithara;
     use kithara_warp::{
-        PresentationFrontier, RenderContext, SpeedCurve, StretchKind, Warp, WarpConfig,
+        SpeedCurve, StretchKind, WarpConfig,
         supports_playback_rate,
     };
-    use ringbuf::traits::Consumer;
+    use kithara_command::{Batch, Outcome, When};
+    use kithara_render::{LaneCommand, LaneTask};
+    use kithara_worker::Task;
+    use kithara_test_utils::TestTempDir;
 
     use super::*;
     use crate::{
         PlayWorker, PlayWorkerConfig, ResourceSrc, consts,
         test_pools::{TestPools, pools},
     };
+
+    #[kithara::test]
+    #[case::configured(Some(64), 255)]
+    #[case::uncapped(None, 1_023)]
+    #[case::source_bound(Some(512), 1_023)]
+    fn lane_geometry_bounds_the_held_packet_and_ring(
+        #[case] quantum: Option<usize>,
+        #[case] expected_frames: usize,
+    ) {
+        let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
+            ResourceSrc::parse("https://example.com/song.wav").expect("valid source"),
+        )
+        .store(AssetStore::builder(pools()).build())
+        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+        .host_sample_rate(NonZeroU32::new(48_000).expect("nonzero rate"))
+        .audio_buffer_chunks(NonZeroUsize::new(3).expect("nonzero ring"))
+        .warp(
+            WarpConfig::builder()
+                .source_block_frames(NonZeroUsize::new(256).expect("nonzero block"))
+                .maybe_render_quantum_frames(quantum.and_then(NonZeroUsize::new))
+                .build(),
+        )
+        .build();
+        let load = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
+
+        let (ring_depth, _) = load.lane_geometry().expect("bounded lane geometry");
+
+        assert_eq!(ring_depth, FrameCount::new(expected_frames));
+    }
+
+    #[kithara::test]
+    #[case::packet_count(usize::MAX, 1)]
+    #[case::frame_count(1, usize::MAX)]
+    fn lane_geometry_refuses_overflow(
+        #[case] chunks: usize,
+        #[case] packet: usize,
+    ) {
+        let warp = WarpConfig::builder()
+            .source_block_frames(NonZeroUsize::new(packet).expect("nonzero packet"))
+            .build();
+
+        assert!(matches!(
+            geometry(&warp, NonZeroUsize::new(chunks).expect("nonzero ring")),
+            Err(PlayError::Internal(detail)) if detail == "lane ring frame depth overflow"
+        ));
+    }
+
+    #[kithara::test(tokio)]
+    #[case::queue(true)]
+    #[case::track(false)]
+    async fn cancellation_precedes_in_flight_future_drop(#[case] cancel_queue: bool) {
+        use futures::{channel::oneshot, future};
+
+        struct Probe {
+            cancel: CancelToken,
+            state: Arc<AtomicU8>,
+        }
+
+        impl Drop for Probe {
+            fn drop(&mut self) {
+                self.state.store(if self.cancel.is_cancelled() { 1 } else { 2 }, Ordering::SeqCst);
+            }
+        }
+
+        let owner = CancelToken::root();
+        let queue_cancel = owner.child();
+        let track_cancel = owner.child();
+        let prep = crate::ResourcePrep::builder()
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+            .cancel(queue_cancel.clone())
+            .build();
+        let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
+            ResourceSrc::parse("https://example.com/song.mp3").expect("valid original source"),
+        )
+        .store(AssetStore::builder(pools()).build())
+        .cancel(track_cancel.clone())
+        .build();
+        let prepared = prep.prepare(config, &crate::mock::output(None).get())
+            .expect("unmeasured preparation");
+        let cancel = prepared.cancel.clone().expect("per-track child");
+        let mut load = ResourceLoad::new(prepared, Box::new(AudioObserverSlot::default().relay()));
+        let source = load.opener;
+        let state = Arc::new(AtomicU8::new(0));
+        let probe = Probe { cancel, state: Arc::clone(&state) };
+        let (started_tx, started_rx) = oneshot::channel();
+        load.opener = Box::new(move |_, _, _| Box::pin(async move {
+            let _source = source;
+            let _probe = probe;
+            started_tx.send(()).expect("canceller waits for the future");
+            future::pending::<()>().await;
+            Err(LoadRefusal::Cancelled)
+        }));
+        let (_sender, inbox) = load.lane_channel().expect("configured lane");
+        let opening = load.open(Duration::ZERO, crate::TrackSettings::default().lane_start(), inbox);
+        let canceller = async {
+            started_rx.await.expect("the open started");
+            if cancel_queue { queue_cancel.cancel(); } else { track_cancel.cancel(); }
+        };
+        let (opened, ()) = future::join(opening, canceller).await;
+
+        assert!(matches!(opened, Err(LoadRefusal::Cancelled)));
+        assert_eq!(state.load(Ordering::SeqCst), 1);
+    }
 
     struct DropProbe {
         state: Arc<AtomicU8>,
@@ -513,13 +604,6 @@ mod tests {
             }
         }
 
-        fn with_frames(samples: Vec<f32>) -> Self {
-            Self {
-                total_frames: samples.len() / 2,
-                samples,
-                ..Self::default()
-            }
-        }
     }
 
     impl AudioSession for EofReader {
@@ -589,70 +673,51 @@ mod tests {
         }
     }
 
-    fn warped_player_resource(
-        pools: &PoolRegion<TestPools>,
+    impl kithara_worker::Task for EofReader {
+        fn tick(&mut self) -> kithara_worker::TickResult {
+            kithara_worker::TickResult::Waiting
+        }
+    }
+
+    impl kithara_render::LaneTask for EofReader {
+        fn set_priority(&mut self, _class: kithara_render::ServiceClass) {}
+
+        fn poll_commands(&mut self, _context: &mut std::task::Context<'_>) -> std::task::Poll<()> {
+            std::task::Poll::Pending
+        }
+    }
+
+    async fn warped_player_resource(
         speed: f32,
         src: &str,
-        samples: Vec<f32>,
-    ) -> Box<PlayerResource> {
-        let consumer =
-            PcmConsumer::from(Resource::from_reader(EofReader::with_frames(samples), None))
-                .with_playback_rate(PlaybackRate::for_warp(speed));
-        PlayerResource::new(consumer, Arc::from(src), pools)
-            .map_or_else(|error| panic!("test player resource: {error}"), Box::new)
+        samples: &[f32],
+    ) -> (OpenedTrack, ResourceLane, Sender<LaneProtocol>, TestTempDir) {
+        let dir = TestTempDir::new();
+        let path = dir.path().join(format!("{src}.wav"));
+        let sample_rate = NonZeroU32::new(consts::SAMPLE_RATE).expect("static rate");
+        crate::mock::write_pcm_wav(&path, samples, AudioSpec::new(2, sample_rate))
+            .expect("float WAV fixture");
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+        let warp = WarpConfig::builder().speed(speed).build();
+        let load: ResourceLoad<TestPools> = ResourceLoad::new(
+            ResourceConfig::for_src(ResourceSrc::Path(path))
+                .store(AssetStore::builder(pools()).build())
+                .worker(worker)
+                .host_sample_rate(sample_rate)
+                .warp(warp)
+                .build(),
+            Box::new(AudioObserverSlot::default().relay()),
+        );
+        let (sender, inbox) = load.lane_channel().expect("explicit lane");
+        let start = crate::TrackSettings::builder().speed(speed).build().lane_start();
+        let (opened, lane, _) = load.open(Duration::ZERO, start, inbox).await.expect("URI opens");
+        (opened, lane, sender, dir)
     }
 
-    fn process_block(processor: &mut DeckMixer, extra: &mut ProcExtra) {
-        let info = ProcInfo {
-            sample_rate: NonZeroU32::new(consts::SAMPLE_RATE).expect("static sample rate"),
-            frames: consts::BLOCK_FRAMES,
-            in_silence_mask: SilenceMask::default(),
-            out_silence_mask: SilenceMask::default(),
-            in_constant_mask: ConstantMask::default(),
-            out_constant_mask: ConstantMask::default(),
-            in_connected_mask: ConnectedMask::default(),
-            out_connected_mask: ConnectedMask::default(),
-            total_cpu_seconds_recip: 1.0,
-            process_to_playback_delay: None,
-            did_just_unbypass: false,
-            last_marker_instant: InstantSamples(0),
-            sample_rate_recip: f64::from(consts::SAMPLE_RATE).recip(),
-            clock_samples: InstantSamples(0),
-            duration_since_stream_start: Duration::ZERO,
-            stream_status: StreamStatus::empty(),
-            dropped_frames: 0,
-        };
-        let inputs: [&[f32]; 0] = [];
-        let mut left = [0.0; consts::BLOCK_FRAMES];
-        let mut right = [0.0; consts::BLOCK_FRAMES];
-        let mut outputs = [&mut left[..], &mut right[..]];
-        let buffers = ProcBuffers {
-            inputs: &inputs,
-            outputs: &mut outputs,
-        };
-        let mut immediate: [Option<NodeEvent>; 0] = [];
-        let mut scheduled: [Option<ScheduledEventEntry>; 0] = [];
-        let mut indices: Vec<ProcEventsIndex> = Vec::new();
-        let mut events = ProcEvents::new(&mut immediate, &mut scheduled, &mut indices);
-        processor.events(&info, &mut events, extra);
-        let _ = processor.process(&info, buffers, extra);
-    }
-
-    fn rate_notifications(control: &mut kithara_render::bridge::SlotControl) -> Vec<f32> {
-        let mut rates = Vec::new();
-        while let Some(notification) = control.notif_rx.try_pop() {
-            if let PlayerNotification::RateChanged { rate } = notification {
-                rates.push(rate);
-            }
-        }
-        rates
-    }
-
-    #[kithara::test(native, flash(false))]
-    fn a_loaded_track_takes_the_processor_rate(half: Vec<f32>) {
+    #[kithara::test(native, tokio, flash(false))]
+    async fn a_loaded_track_takes_the_processor_rate(half: Vec<f32>) {
         let pools = pools();
         let effective_rate = if supports_playback_rate() { 1.5 } else { 1.0 };
-        let (inputs, mut control) = slot_channels();
         let shape = StreamShape {
             sample_rate: NonZeroU32::new(consts::SAMPLE_RATE).expect("static sample rate"),
             max_block_frames: NonZeroU32::new(
@@ -660,87 +725,60 @@ mod tests {
             )
             .expect("static block size"),
         };
-        let mut processor = DeckMixer::new(inputs, shape, &pools, DeckMixerConfig::default());
-        let (logger, _logger_rx) = realtime_logger(RealtimeLoggerConfig::default());
-        let mut extra = ProcExtra {
-            logger,
-            store: ProcStore::with_capacity(0),
-            scratch_buffers: ConstSequentialBuffer::<f32, NUM_SCRATCH_BUFFERS>::new(
-                consts::BLOCK_FRAMES,
-            ),
-            declick_values: DeclickValues::new(NonZeroU32::new(16).expect("static declick length")),
-        };
-        let first: Arc<str> = Arc::from("first");
-        let first_id = TrackId::allocate();
-        control
-            .send(DeckPart::Attach {
-                resource: warped_player_resource(&pools, 1.0, &first, half.clone()),
-                item_id: first_id,
-            })
-            .expect("load first track");
-        control
-            .send(DeckPart::Fade(TrackTransition::FadeIn {
-                item_id: first_id,
-                settings: crate::CrossfadeSettings::default(),
-                epoch: 0,
-            }))
-            .expect("fade in first track");
-        control.send(DeckPart::StartAll).expect("start playback");
-        process_block(&mut processor, &mut extra);
-        let _ = rate_notifications(&mut control);
-
-        control
-            .send(DeckPart::SetRate(1.5))
-            .expect("set the slot rate");
-        let first_position = processor
-            .track(first_id)
-            .expect("first track loaded")
-            .position();
-        process_block(&mut processor, &mut extra);
-        let first_advance = processor
-            .track(first_id)
-            .expect("first track loaded")
-            .position()
-            - first_position;
+        let mut mixer = crate::mock::MixerRig::new(DeckMixerConfig::default(), shape, &pools)
+            .expect("offline mixer");
+        let first_slot = Slot::new(0);
+        let next_slot = Slot::new(1);
+        let (first, mut first_lane, mut first_control, _first_dir) =
+            warped_player_resource(1.0, "first", &half).await;
+        mixer.send(When::Next, DeckPart::Attach {
+            slot: first_slot, pcm: first.pcm, segment: SegmentId::FIRST,
+        }).expect("attach first");
+        mixer.send(When::Next, DeckPart::Start {
+            slot: first_slot, fade: Fade::Crossfade(crate::CrossfadeSettings::default()),
+        }).expect("start first");
+        mixer.block(SessionFrame::new(0)).expect("first host block");
+        let first_position = mixer.ends.snapshot.read().slots[0].position;
+        let rate_seq = first_control.send(When::Next, Batch {
+            basis: Vec::new(), commands: vec![LaneCommand::SetSpeed(SpeedCurve::Constant(1.5))],
+        }).expect("speed goes to its lane");
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        let _ = first_lane.poll_commands(&mut context);
+        first_lane.tick();
         let block_frames = u32::try_from(consts::BLOCK_FRAMES).expect("block size fits u32");
+        let at = SessionFrame::new(i64::from(block_frames));
+        mixer.block(at).expect("changed-speed block");
+        let first_advance = mixer.ends.snapshot.read().slots[0].position - first_position;
         let expected_advance =
             f64::from(block_frames) * f64::from(effective_rate) / f64::from(consts::SAMPLE_RATE);
         assert!((first_advance - expected_advance).abs() < f64::EPSILON);
-        assert_eq!(processor.playback().snapshot().rate(), effective_rate);
-        let notifications = rate_notifications(&mut control);
+        assert_eq!(first_advance * f64::from(consts::SAMPLE_RATE) / f64::from(block_frames), f64::from(effective_rate));
+        let notifications: Vec<_> = first_control.receipts().filter_map(|receipt| {
+            matches!(receipt.outcome(), Outcome::Applied { .. }).then_some(receipt.seq())
+        }).collect();
         if supports_playback_rate() {
-            assert_eq!(notifications, [1.5]);
+            assert_eq!(notifications, [rate_seq]);
         } else {
             assert!(notifications.is_empty());
         }
 
-        let next: Arc<str> = Arc::from("next");
-        let next_id = TrackId::allocate();
-        control
-            .send(DeckPart::Attach {
-                resource: warped_player_resource(&pools, 1.0, &next, half),
-                item_id: next_id,
-            })
-            .expect("load next track");
-        control
-            .send(DeckPart::Fade(TrackTransition::FadeIn {
-                item_id: next_id,
-                settings: crate::CrossfadeSettings::default(),
-                epoch: 0,
-            }))
-            .expect("fade in next track");
-
-        process_block(&mut processor, &mut extra);
-
-        assert_eq!(processor.playback().snapshot().rate(), effective_rate);
-        assert_eq!(
-            processor
-                .track(next_id)
-                .expect("next track loaded")
-                .position(),
-            expected_advance
-        );
-        assert!(rate_notifications(&mut control).is_empty());
+        let (next, mut next_lane, _next_control, _next_dir) =
+            warped_player_resource(effective_rate, "next", &half).await;
+        mixer.send(When::Next, DeckPart::Attach {
+            slot: next_slot, pcm: next.pcm, segment: SegmentId::FIRST,
+        }).expect("attach next");
+        mixer.send(When::Next, DeckPart::Start {
+            slot: next_slot, fade: Fade::Crossfade(crate::CrossfadeSettings::default()),
+        }).expect("start next");
+        first_lane.tick();
+        next_lane.tick();
+        let first_position = mixer.ends.snapshot.read().slots[0].position;
+        mixer.block(at + FrameCount::new(consts::BLOCK_FRAMES)).expect("next-track block");
+        let snapshot = mixer.ends.snapshot.read();
+        assert_eq!((snapshot.slots[0].position - first_position) * f64::from(consts::SAMPLE_RATE) / f64::from(block_frames), f64::from(effective_rate));
+        assert_eq!(snapshot.slots[1].position, expected_advance);
+        assert!(first_control.receipts().next().is_none());
+        assert_eq!(snapshot.slots[1].state, SlotState::Playing);
     }
 
     /// Pin (W3 Task 3.3 (b)): a mid-session unload — i.e. dropping the
@@ -756,8 +794,7 @@ mod tests {
         let stream_sub = track.child(); // File/Hls subtree F = T.child()
         let audio_sub = track.child(); // Audio subtree A = T.child()
 
-        let mut resource = Resource::from_reader(EofReader::default(), None);
-        resource.consumer.cancel_on_drop(Some(track.clone()));
+        let resource = ResourceLane::new(EofReader::default(), Some(track.clone()), None);
 
         assert!(!stream_sub.is_cancelled() && !audio_sub.is_cancelled());
         drop(resource);
@@ -896,7 +933,7 @@ mod tests {
     /// without panicking and cancels nothing.
     #[kithara::test(native, flash(false))]
     fn drop_without_cancel_is_passive() {
-        let resource = Resource::from_reader(EofReader::default(), None);
+        let resource = ResourceLane::new(EofReader::default(), None, None);
         drop(resource);
     }
 
@@ -905,8 +942,7 @@ mod tests {
         let track = CancelToken::never();
         let state = Arc::new(AtomicU8::new(consts::NOT_DROPPED));
         let reader = EofReader::with_drop_probe(track.clone(), Arc::clone(&state));
-        let mut resource = Resource::from_reader(reader, None);
-        resource.consumer.cancel_on_drop(Some(track));
+        let resource = ResourceLane::new(reader, Some(track), None);
 
         drop(resource);
 
@@ -918,8 +954,8 @@ mod tests {
         let track = CancelToken::never();
         let state = Arc::new(AtomicU8::new(consts::NOT_DROPPED));
         let reader = EofReader::with_drop_probe(track.clone(), Arc::clone(&state));
-        let mut resource = Resource::from_reader(reader, None);
-        resource.consumer.cancel_on_drop(Some(track.clone()));
+        let resource = Resource::from_reader(reader, None);
+        let lane = ResourceLane::new(EofReader::default(), Some(track.clone()), None);
 
         let reader: Box<dyn AudioReader> = resource.into();
 
@@ -930,38 +966,34 @@ mod tests {
 
         assert!(!track.is_cancelled());
         assert_eq!(state.load(Ordering::SeqCst), consts::DROPPED_BEFORE_CANCEL);
+        drop(lane);
+        assert!(track.is_cancelled());
     }
 
-    #[kithara::test(native, flash(false))]
-    fn seek_withdraws_the_resident_warp_context(half: Vec<f32>) {
-        let mut warp = Warp::new((), &WarpConfig::builder().build());
-        let publisher = warp
-            .take_publisher()
-            .expect("fixture Warp owns its publisher");
-        let reader = publisher.reader();
-        let resource = Resource::from_reader(EofReader::with_frames(half[..2].to_vec()), None);
-        let output = OutputContext::new(
-            SessionFrame::new(0)..SessionFrame::new(1),
+    #[kithara::test(native, tokio, flash(false))]
+    async fn seek_withdraws_the_resident_warp_context(half: Vec<f32>) {
+        let shape = StreamShape::new(
+            NonZeroU32::MIN,
             NonZeroU32::new(consts::SAMPLE_RATE).expect("static sample rate"),
-            SessionEpoch::new(1),
-            None,
-        )
-        .expect("fixture output range is ordered");
-        let context = RenderContext::new(output, None).expect("fixture context is valid");
-        publisher.publish(
-            &context,
-            PresentationFrontier::builder()
-                .source(1)
-                .output(SessionFrame::new(0))
-                .build(),
         );
-        assert!(reader.load().is_some());
-        let consumer = PcmConsumer::from(resource).with_render_publisher(publisher);
-        let mut resource = PlayerResource::new(consumer, Arc::from("seek"), &pools())
-            .unwrap_or_else(|error| panic!("test player resource: {error}"));
+        let mut mixer = crate::mock::MixerRig::new(DeckMixerConfig::default(), shape, &pools())
+            .expect("offline mixer");
+        let slot = Slot::new(0);
+        let (opened, _lane, _control, _dir) =
+            warped_player_resource(1.0, "seek", &half[..2]).await;
+        mixer.send(When::Next, DeckPart::Attach {
+            slot, pcm: opened.pcm, segment: SegmentId::FIRST,
+        }).expect("attach first segment");
+        mixer.send(When::Next, DeckPart::Start { slot, fade: Fade::Declick })
+            .expect("start first segment");
+        mixer.block(SessionFrame::new(0)).expect("present first segment");
+        assert!(mixer.ends.snapshot.read().slots[0].mark.is_some());
 
-        resource.reset_for_seek();
+        mixer.send(When::Next, DeckPart::Adopt {
+            slot, segment: SegmentId::FIRST.next(),
+        }).expect("adopt seek segment before its PCM arrives");
+        mixer.block(SessionFrame::new(1)).expect("withdraw the old segment");
 
-        assert!(reader.load().is_none());
+        assert!(mixer.ends.snapshot.read().slots[0].mark.is_none());
     }
 }

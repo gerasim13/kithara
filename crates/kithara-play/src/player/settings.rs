@@ -46,9 +46,9 @@ impl TrackSettings {
 }
 
 /// A speed is finite and no slower than the slowest speed the renderer plays.
-fn check_speed(speed: f32) -> Result<f32, PlayError> {
-    if speed.is_finite() && speed >= MIN_SPEED {
-        Ok(speed)
+pub(super) fn check_speed(speed: f32) -> Result<f32, PlayError> {
+    if speed.is_finite() {
+        Ok(speed.max(MIN_SPEED))
     } else {
         Err(PlayError::InvalidParameter {
             name: "speed".to_owned(),
@@ -69,14 +69,18 @@ impl From<TrackSettingsChange> for LaneCommand {
 
 /// What one track is built from: the item it plays, the mixer slot its deck
 /// assigned it, and the settings it starts with.
-#[derive(Clone, Copy, Debug, Config)]
+#[derive(Clone, Copy, Debug, Config, Patch)]
 #[config(construction)]
+#[patch(fallible)]
 pub struct PlayerConfig {
     #[config(value)]
+    #[patch(skip)]
     pub item: TrackId,
     #[config(value)]
+    #[patch(skip)]
     pub slot: Slot,
     #[config(nested)]
+    #[patch(nested, fallible)]
     pub settings: TrackSettings,
 }
 
@@ -91,7 +95,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use kithara_warp::{SpeedCurve, StretchKind, WarpConfig};
 
-    use super::{TrackSettings, TrackSettingsChange};
+    use super::{PlayerConfigPatch, TrackSettings, TrackSettingsChange};
     use crate::PlayError;
 
     fn lane() -> (Sender<LaneProtocol>, Inbox<LaneProtocol>) {
@@ -207,7 +211,7 @@ mod tests {
         let refused = live.send(
             &mut sender,
             When::Next,
-            TrackSettingsChange::Speed(0.0),
+            TrackSettingsChange::Speed(f32::NAN),
             LaneCommand::from,
         );
 
@@ -217,5 +221,87 @@ mod tests {
         ));
         assert!(execute(&mut inbox, 0).is_empty(), "nothing was sent");
         assert!((live.config().speed() - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[kithara::test]
+    #[case(0.0)]
+    #[case(-1.0)]
+    #[case(f32::NAN)]
+    fn a_rate_under_the_floor_requests_the_slowest_speed(#[case] rate: f32) {
+        let (mut sender, mut inbox) = lane();
+        let mut live = settings();
+        let sent = live.send(
+            &mut sender,
+            When::Next,
+            TrackSettingsChange::Speed(rate),
+            LaneCommand::from,
+        );
+        if rate.is_nan() {
+            assert!(matches!(
+                sent,
+                Err(LiveError::Invalid(PlayError::InvalidParameter { .. }))
+            ));
+            assert!(execute(&mut inbox, 0).is_empty(), "nothing was sent");
+            assert_eq!(live.config().speed(), 1.0);
+            assert_eq!(live.projected().speed(), 1.0);
+            assert_eq!(live.pending().count(), 0);
+            return;
+        }
+        sent.expect("finite speeds clamp to the renderer floor");
+
+        assert!(matches!(
+            execute(&mut inbox, 0).as_slice(),
+            [LaneCommand::SetSpeed(SpeedCurve::Constant(speed))] if *speed == kithara_warp::MIN_SPEED
+        ));
+        for receipt in sender.receipts() {
+            live.settle(&receipt);
+        }
+        assert!((live.config().speed() - kithara_warp::MIN_SPEED).abs() < f32::EPSILON);
+    }
+
+    #[kithara::test]
+    #[case(0.0)]
+    #[case(-1.0)]
+    #[case(f32::NAN)]
+    fn an_audible_member_without_a_forward_speed_is_refused(#[case] rate: f32) {
+        let (mut sender, mut inbox) = lane();
+        let mut live = settings();
+        let result = live.send(
+            &mut sender,
+            When::Next,
+            TrackSettingsChange::Speed(rate),
+            LaneCommand::from,
+        );
+        if rate.is_nan() {
+            assert!(matches!(result, Err(LiveError::Invalid(PlayError::InvalidParameter { .. }))));
+            assert!(execute(&mut inbox, 0).is_empty());
+            assert_eq!(live.config().speed(), 1.0);
+            assert_eq!(live.projected().speed(), 1.0);
+            assert_eq!(live.pending().count(), 0);
+        } else {
+            result.expect("a finite sub-floor speed is admitted at MIN_SPEED");
+            assert!(matches!(
+                execute(&mut inbox, 0).as_slice(),
+                [LaneCommand::SetSpeed(SpeedCurve::Constant(speed))] if *speed == kithara_warp::MIN_SPEED
+            ));
+            for receipt in sender.receipts() {
+                live.settle(&receipt);
+            }
+            assert_eq!(live.config().speed(), kithara_warp::MIN_SPEED);
+        }
+    }
+
+    #[kithara::test(native)]
+    fn the_host_owned_sample_rate_field_is_not_a_document_key() {
+        let error = serde_yaml_ng::from_str::<PlayerConfigPatch>("sample_rate: 48000\n")
+            .expect_err("a host-owned field must not be settable from a player document");
+        assert!(error.to_string().contains("sample_rate"), "{error}");
+    }
+
+    #[kithara::test(native)]
+    fn the_queue_owned_prefetch_field_is_not_a_document_key() {
+        let error = serde_yaml_ng::from_str::<PlayerConfigPatch>("prefetch_duration: 8.0\n")
+            .expect_err("a queue-owned field must not be settable from a document");
+        assert!(error.to_string().contains("prefetch_duration"), "{error}");
     }
 }

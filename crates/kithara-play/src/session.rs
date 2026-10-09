@@ -142,7 +142,7 @@ mod tests {
 
     #[kithara::test]
     fn a_view_reads_what_its_session_publishes_after_it_was_taken() {
-        let output = SessionOutputView::new(sample_rate(), ConsumerWakeMode::RealtimeDeferred);
+        let output = SessionOutputView::new(sample_rate());
         let view = output.clone();
         assert_eq!(view.get().sample_rate.measured, None);
 

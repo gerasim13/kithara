@@ -10,8 +10,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara_audio::{
-    AudioControl, AudioRead, AudioReadError, AudioSession, DecodeError, DecodeErrorKind,
-    ReadOutcome, SeekOutcome, TrackFailureKind,
+    AudioControl, AudioRead, AudioReadError, AudioSession, ReadOutcome, SeekOutcome,
     mock::{Fault, MockReader, TestPcmReader},
 };
 use kithara_decode::TrackMetadata;
@@ -115,7 +114,7 @@ impl AudioSession for ChunkReader {
 }
 
 impl AudioControl for ChunkReader {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
         Ok(SeekOutcome::Landed {
             target: position,
             landed_at: position,
@@ -210,7 +209,7 @@ impl AudioSession for PositionReader {
 }
 
 impl AudioControl for PositionReader {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
         let frame = (position.as_secs_f64() * self.spec.sample_rate.get() as f64) as u64;
         self.frame_idx = frame.min(self.total_frames);
         Ok(SeekOutcome::Landed {

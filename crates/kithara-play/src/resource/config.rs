@@ -12,7 +12,7 @@ use kithara_events::EventBus;
 use kithara_file::FileConfigPatch;
 use kithara_hls::{HlsConfigPatch, KeyOptions};
 use kithara_net::Headers;
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::{CancelToken, CancelWakerGuard, sync::Arc};
 use kithara_warp::WarpConfig;
 use kithara_waveform::Waveform;
 use url::Url;
@@ -98,6 +98,9 @@ where
     /// standalone scope (see [`CancelScope::new`](kithara_platform::CancelScope)).
     #[config(skip = "composed into the resource cancel scope")]
     pub(crate) cancel: Option<CancelToken>,
+    /// Keeps the deck's cancellation connected to this track's subtree.
+    #[config(skip = "retained until the resource lane is released", builder(skip))]
+    pub(crate) cancel_link: Option<Arc<CancelWakerGuard>>,
     /// Optional cache discriminator mixed into the asset root.
     #[config(skip = "transferred to the asset key")]
     pub(crate) discriminator: Option<String>,

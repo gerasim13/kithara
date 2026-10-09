@@ -193,6 +193,10 @@ impl<'a, S> Outbox<'a, S> {
         self.deck_owned(at, parts).map_err(|(error, _parts)| error)
     }
 
+    pub(crate) fn deck_basis(&self, slot: Slot, at: When<SessionFrame>) -> Option<Seq> {
+        self.deck.basis(slot, at)
+    }
+
     pub(crate) fn deck_owned(
         &mut self,
         at: When<SessionFrame>,
@@ -300,7 +304,7 @@ impl<'a, S> Outbox<'a, S> {
 }
 
 /// The slots a part shifts the time of.
-fn slots(part: &DeckPart) -> impl Iterator<Item = Slot> {
+pub(crate) fn slots(part: &DeckPart) -> impl Iterator<Item = Slot> {
     let (first, second) = match *part {
         DeckPart::Attach { slot, .. }
         | DeckPart::Detach { slot }

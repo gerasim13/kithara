@@ -4,8 +4,9 @@ use kithara_audio::{AudioDecoderConfig, DecoderResamplerSettings, ResamplerOptio
 use kithara_bufpool::HasPool;
 use kithara_config::bon::Builder;
 use kithara_decode::GaplessMode;
+use kithara_derive::Patch;
 use kithara_events::EventBus;
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::{CancelScope, CancelToken, sync::Arc};
 use kithara_warp::WarpConfig;
 
 use crate::{EngineLoad, OutputSnapshot, PlayError, PlayWorker, resource::ResourceConfig};
@@ -15,24 +16,31 @@ use crate::{EngineLoad, OutputSnapshot, PlayError, PlayWorker, resource::Resourc
 ///
 /// The deck holds one and prepares each track's config with it just before
 /// the track loads, using the output snapshot lent by that owner pass.
-#[derive(Builder)]
+#[derive(Builder, Patch)]
 #[builder(crate = ::kithara_config::bon)]
 #[derive_where::derive_where(Clone)]
 pub struct ResourcePrep<S> {
+    #[patch(skip)]
     pub worker: PlayWorker<S>,
     #[builder(default)]
+    #[patch(skip)]
     pub bus: EventBus,
+    #[patch(skip)]
     pub cancel: Option<CancelToken>,
     /// The renderer every track starts from; a track starts it at its own
     /// settings.
     #[builder(default = WarpConfig::builder().build())]
+    #[patch(skip)]
     pub warp: WarpConfig,
+    #[patch(skip)]
     pub response_budget_frames: Option<NonZeroUsize>,
     #[builder(default)]
     pub gapless_mode: GaplessMode,
     #[builder(default)]
+    #[patch(skip)]
     pub block_on_underrun: bool,
     #[builder(default)]
+    #[patch(skip)]
     pub engine_load: Arc<EngineLoad>,
 }
 
@@ -57,10 +65,11 @@ where
         B: Clone + Default,
     {
         let bus = config.bus.or_else(|| Some(self.bus.scoped()));
-        let cancel = config
-            .cancel
-            .or_else(|| self.cancel.clone())
-            .map(|parent| parent.child());
+        let cancel = CancelScope::new(config.cancel.clone().or_else(|| self.cancel.clone())).token();
+        let cancel_link = self.cancel.as_ref().map(|parent| {
+            let track = cancel.clone();
+            Arc::new(parent.on_cancel(move || track.cancel()))
+        });
         let (preload_chunks, audio_buffer_chunks) =
             match (self.warp.render_quantum_frames(), output.stream_shape) {
                 (Some(quantum), Some(shape)) => {
@@ -95,7 +104,8 @@ where
             .build();
         Ok(ResourceConfig {
             bus,
-            cancel,
+            cancel: Some(cancel),
+            cancel_link,
             worker: Some(self.worker.clone()),
             block_on_underrun: self.block_on_underrun,
             preload_chunks,
@@ -141,6 +151,56 @@ mod tests {
             .bus(EventBus::new(16))
             .warp(warp)
             .build()
+    }
+
+    #[kithara::test]
+    fn default_response_budget_leaves_the_deadline_to_the_application() {
+        let config = prep(WarpConfig::builder().build());
+
+        assert_eq!(config.response_budget_frames, None);
+    }
+
+    #[kithara::test]
+    fn prepare_config_applies_player_gapless_mode() {
+        let prep = ResourcePrep { gapless_mode: GaplessMode::Disabled, ..prep(WarpConfig::builder().build()) };
+        let config = prep.prepare(
+            resource_config("https://example.com/song.mp3"),
+            &mock::output(None).get(),
+        ).expect("test output answers stream-shape queries");
+
+        assert_eq!(config.decoder.gapless_mode(), GaplessMode::Disabled);
+        assert!(config.cancel.is_some(), "prepare_config must inject a per-track cancel child");
+    }
+
+    #[kithara::test(native)]
+    fn a_document_named_gapless_mode_reaches_the_prepared_decoder() {
+        let patch: ResourcePrepPatch = serde_yaml_ng::from_str("gapless_mode:\n  mode: disabled\n")
+            .expect("the document types");
+        let mut prep = prep(WarpConfig::builder().build());
+        prep.apply(patch);
+        let config = prep.prepare(
+            resource_config("https://example.com/song.mp3"),
+            &mock::output(None).get(),
+        ).expect("test output answers stream-shape queries");
+
+        assert_eq!(config.decoder.gapless_mode(), GaplessMode::Disabled);
+    }
+
+    #[kithara::test(native)]
+    fn a_gapless_mode_patch_reaches_the_player() {
+        let patch: ResourcePrepPatch = serde_yaml_ng::from_str("gapless_mode:\n  mode: disabled\n")
+            .expect("the document types");
+        let mut prep = prep(WarpConfig::builder().build());
+        let crossfade = crate::CrossfadeSettings { duration: 2.5, ..crate::CrossfadeSettings::default() };
+        prep.apply(patch);
+        let config = prep.prepare(
+            resource_config("https://example.com/song.mp3"),
+            &mock::output(None).get(),
+        ).expect("test output answers stream-shape queries");
+
+        assert_eq!(prep.gapless_mode, GaplessMode::Disabled);
+        assert_eq!(config.decoder.gapless_mode(), GaplessMode::Disabled);
+        assert!((crossfade.duration - 2.5).abs() < f32::EPSILON, "a sibling field must survive the patch");
     }
 
     fn prep_with_geometry(
@@ -260,8 +320,8 @@ mod tests {
 
     #[kithara::test]
     fn prepare_config_carries_the_sessions_rate_and_wake_mode() {
-        let prepared = prep(None, WarpConfig::builder().build())
-            .prepare(resource_config("https://example.com/song.mp3"))
+        let prepared = prep(WarpConfig::builder().build())
+            .prepare(resource_config("https://example.com/song.mp3"), &mock::output(None).get())
             .expect("unmeasured preparation");
 
         assert_eq!(

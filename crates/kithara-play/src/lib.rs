@@ -51,7 +51,7 @@ pub use player::{
 pub use resource::{
     ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, Cover, MAX_ARTIFACT_BYTES,
     OpenedTrack, PlaybackResamplerBackend, Resource, ResourceConfig, ResourceLane, ResourceLoad,
-    ResourcePrep, ResourceSrc, SourceType,
+    ResourcePrep, ResourcePrepPatch, ResourceSrc, SourceType,
 };
 pub use session::{OutputSnapshot, PlayerId, SessionError, SessionOutputView, SessionSampleRate};
 mod consts;

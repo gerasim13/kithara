@@ -159,7 +159,7 @@ unimock = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["signal"] }
-kithara-test-utils = { path = "../kithara-test-utils", features = ["http-server"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["http-server", "temp-dir"] }
 
 assert_no_alloc = { workspace = true }
 axum = { workspace = true }

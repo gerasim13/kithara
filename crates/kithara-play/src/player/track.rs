@@ -9,7 +9,7 @@ use kithara_command::{
 use kithara_config::{ConfigOwner, LiveConfig};
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
-use kithara_platform::time::Duration;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_render::{
     CrossfadeSettings, Dispatched, DispatcherProtocol, LaneCommand, LaneFrame, LaneId,
     LaneProtocol, LoadRequest,
@@ -25,7 +25,7 @@ use tracing::warn;
 use super::{
     factory::Track,
     outbox::{Bound, Outbox, Player, Settled, TrackReceipt, rejection},
-    settings::{PlayerConfig, TrackSettings, TrackSettingsChange, TrackSettingsExec},
+    settings::{PlayerConfig, TrackSettings, TrackSettingsChange, TrackSettingsExec, check_speed},
 };
 use crate::{OpenedTrack, PlayError, ResourceLoad};
 
@@ -179,6 +179,12 @@ struct LaneOperation {
     applied: Option<bool>,
 }
 
+struct PlaybackOperation {
+    seq: Option<Seq>,
+    segment: SegmentId,
+    basis: Vec<(Slot, Option<Seq>)>,
+}
+
 /// The sole segment issuer and command producer for one track.
 pub struct PlayerImpl<S> {
     item: TrackId,
@@ -194,6 +200,7 @@ pub struct PlayerImpl<S> {
     adopting: Vec<Adoption>,
     adopt_retry: Option<Seq>,
     lane_commands: Vec<LaneOperation>,
+    playback_commands: Vec<PlaybackOperation>,
     speed_answers: VecDeque<(
         Seq,
         Result<(LaneFrame, Option<SessionFrame>), Rejection<PlayError>>,
@@ -232,6 +239,7 @@ impl<S> PlayerImpl<S> {
             adopting: Vec::new(),
             adopt_retry: None,
             lane_commands: Vec::new(),
+            playback_commands: Vec::new(),
             speed_answers: VecDeque::new(),
             segment_speed: config.settings.speed(),
             play: None,
@@ -276,6 +284,9 @@ impl<S> PlayerImpl<S> {
             self.mark = slot.mark;
             if slot.position.is_finite() && slot.position >= 0.0 {
                 self.position = Position::from_secs_f64(slot.position);
+            }
+            if slot.duration.is_finite() && slot.duration > 0.0 {
+                self.duration = Some(Duration::from_secs_f64(slot.duration));
             }
         }
     }
@@ -698,7 +709,8 @@ impl<S> PlayerImpl<S> {
         speed: f32,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
-        let change = TrackSettings::check(TrackSettingsChange::Speed(speed))?;
+        let speed = check_speed(speed)?;
+        let change = TrackSettingsChange::Speed(speed);
         let attached = self.attached();
         if attached && out.is_grouped() {
             return Err(PlayError::Internal(
@@ -726,10 +738,10 @@ impl<S> PlayerImpl<S> {
             self.settings.track(seq, When::Next, change);
         }
         self.segment = segment;
+        self.playback_commands.clear();
         self.segment_speed = speed;
         self.ready = None;
         self.mark = None;
-        self.position = from;
         if self
             .loading
             .as_ref()
@@ -790,21 +802,18 @@ impl<S> PlayerImpl<S> {
             Outcome::Rejected(reason) => {
                 if attaching.is_some() {
                     self.attaching = None;
-                    if self.restore_attachment(&mut batch.commands) {
-                        if self.play.is_none() {
-                            self.play = attaching.and_then(|attach| attach.play);
-                        }
-                        if attaching.is_some_and(|attach| attach.replacement) {
-                            if let Some(loading) = self.loading.as_mut() {
-                                loading.evict = Some(When::Next);
-                            }
-                            self.reserved_ready();
-                        } else if !matches!(reason, Rejection::Unanswered) {
-                            return Settled::Pending;
-                        }
-                    } else {
-                        self.loading = None;
-                        self.status = TrackStatus::Idle;
+                    let returned = self.restore_attachment(&mut batch.commands);
+                    self.loading = None;
+                    self.status = TrackStatus::Released;
+                    self.ready = None;
+                    self.play = None;
+                    self.playback_commands.clear();
+                    self.adopting.clear();
+                    self.adopt_retry = None;
+                    if let Err(error) = self.release_lane(out) {
+                        warn!(%error, "refused attachment waits for lane release room");
+                    }
+                    if !returned {
                         return Settled::Rejected {
                             seq: answered,
                             reason: Rejection::Refused(PlayError::Internal(
@@ -843,6 +852,11 @@ impl<S> PlayerImpl<S> {
                 {
                     self.status = TrackStatus::Released;
                     self.mark = None;
+                    self.play = None;
+                    self.ready = None;
+                    self.playback_commands.clear();
+                    self.adopting.clear();
+                    self.adopt_retry = None;
                     if let Err(error) = self.release_lane(out) {
                         warn!(%error, "lane release waits for dispatcher room");
                     }
@@ -917,13 +931,48 @@ impl<S> PlayerImpl<S> {
             self.play = Some(at);
             return Ok(None);
         }
-        out.deck(
+        self.send_playback(
             at,
             vec![DeckPart::Start {
                 slot: self.slot,
                 fade: Fade::Declick,
             }],
+            out,
         )
+    }
+
+    fn send_playback(
+        &mut self,
+        at: When<SessionFrame>,
+        parts: Vec<DeckPart>,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, PlayError> {
+        let basis = parts
+            .iter()
+            .flat_map(super::outbox::slots)
+            .map(|slot| (slot, out.deck_basis(slot, at)))
+            .collect();
+        let seq = if at == When::Deferred {
+            Some(out.deferred(parts)?)
+        } else {
+            out.deck(at, parts)?
+        };
+        if let Some(pending) = self.playback_commands.iter_mut().find(|operation| {
+            seq.is_none() && operation.seq.is_none() && operation.segment == self.segment
+        }) {
+            for basis in basis {
+                if !pending.basis.contains(&basis) {
+                    pending.basis.push(basis);
+                }
+            }
+        } else {
+            self.playback_commands.push(PlaybackOperation {
+                seq,
+                segment: self.segment,
+                basis,
+            });
+        }
+        Ok(seq)
     }
 
     fn configure(
@@ -1029,12 +1078,13 @@ impl<S> Player<S> for PlayerImpl<S> {
                 if !self.attached() {
                     return Ok(None);
                 }
-                out.deck(
+                self.send_playback(
                     at,
                     vec![DeckPart::Stop {
                         slot,
                         fade: Fade::Declick,
                     }],
+                    out,
                 )
             }
             TrackCommand::Seek { to } => self.segment(to, None, out),
@@ -1054,12 +1104,15 @@ impl<S> Player<S> for PlayerImpl<S> {
                     .map(Some)
             }
             TrackCommand::Configure(change, at) => self.configure(change, at, out),
-            TrackCommand::SetSpeed { speed, at } => {
+            TrackCommand::SetSpeed { mut speed, at } => {
                 if let SpeedCurve::Constant(speed) = speed {
                     return self.configure(TrackSettingsChange::Speed(speed), at, out);
                 }
-                let final_speed = match &speed {
-                    SpeedCurve::Ramp { to, .. } => *to,
+                let final_speed = match &mut speed {
+                    SpeedCurve::Ramp { to, .. } => {
+                        *to = check_speed(*to)?;
+                        *to
+                    }
                     SpeedCurve::Steps(steps) => {
                         let Some(&(_, last)) = steps.last() else {
                             return Err(PlayError::Internal(
@@ -1067,16 +1120,16 @@ impl<S> Player<S> for PlayerImpl<S> {
                             ));
                         };
                         let mut previous = None;
-                        for &(frame, value) in steps.iter() {
-                            TrackSettings::check(TrackSettingsChange::Speed(value))?;
-                            if previous.is_some_and(|prior| frame <= prior) {
+                        for (frame, value) in Arc::make_mut(steps) {
+                            *value = check_speed(*value)?;
+                            if previous.is_some_and(|prior| *frame <= prior) {
                                 return Err(PlayError::Internal(
                                     "speed steps must increase on the output axis".into(),
                                 ));
                             }
-                            previous = Some(frame);
+                            previous = Some(*frame);
                         }
-                        last
+                        check_speed(last)?
                     }
                     _ => return Err(PlayError::Internal("unsupported speed curve".into())),
                 };
@@ -1107,7 +1160,7 @@ impl<S> Player<S> for PlayerImpl<S> {
                     },
                     (_, FadeDir::Out) => return Ok(None),
                 };
-                out.deck(at, vec![part])
+                self.send_playback(at, vec![part], out)
             }
             TrackCommand::PlayAfter { track } if track == slot => {
                 if out.is_grouped() {
@@ -1132,6 +1185,7 @@ impl<S> Player<S> for PlayerImpl<S> {
                 )?;
                 let seq = out.deferred(vec![DeckPart::Adopt { slot, segment }])?;
                 self.segment = segment;
+                self.playback_commands.clear();
                 self.segment_speed = self.settings.projected().speed();
                 self.ready = None;
                 self.repeat = true;
@@ -1142,9 +1196,14 @@ impl<S> Player<S> for PlayerImpl<S> {
                 });
                 Ok(Some(seq))
             }
-            TrackCommand::PlayAfter { track } => out.chain(track, slot).map(Some),
+            TrackCommand::PlayAfter { track } => self.send_playback(
+                When::Deferred,
+                vec![DeckPart::Chain { from: track, to: slot }],
+                out,
+            ),
             TrackCommand::Release => {
                 self.play = None;
+                self.playback_commands.clear();
                 if let Some(attaching) = self.attaching.as_mut() {
                     attaching.play = None;
                 }
@@ -1153,7 +1212,7 @@ impl<S> Player<S> for PlayerImpl<S> {
                     return Ok(None);
                 }
                 if self.attached() {
-                    return out.deck(When::Next, vec![DeckPart::Detach { slot }]);
+                    return self.send_playback(When::Next, vec![DeckPart::Detach { slot }], out);
                 }
                 self.status = TrackStatus::Released;
                 self.release_lane(out)?;
@@ -1164,18 +1223,35 @@ impl<S> Player<S> for PlayerImpl<S> {
     }
 
     fn settle(&mut self, receipt: TrackReceipt<'_, S>, out: &mut Outbox<'_, S>) -> Settled {
-        self.observe(out);
         match receipt {
-            TrackReceipt::Loaded(receipt) => self.opened(receipt, out),
+            TrackReceipt::Loaded(receipt) => {
+                self.observe(out);
+                self.opened(receipt, out)
+            }
             TrackReceipt::Deck {
                 seq,
                 outcome,
                 batch,
             } if batch.basis.iter().any(|&(slot, _)| slot == self.slot) => {
+                let attaching = self.attaching.is_some_and(|attach| attach.seq == Some(seq));
+                let adopting = self.adopting.iter().any(|adopt| adopt.seq == seq);
+                let playback = self.playback_commands.iter().position(|operation| {
+                    operation.seq == Some(seq)
+                        && operation.segment == self.segment
+                        && operation.basis.iter().all(|basis| batch.basis.contains(basis))
+                });
+                if !attaching && !adopting && playback.is_none() {
+                    return Settled::Pending;
+                }
+                if let Some(index) = playback {
+                    self.playback_commands.remove(index);
+                }
+                self.observe(out);
                 self.applied(seq, outcome, batch, out)
             }
             TrackReceipt::Deck { .. } => Settled::Pending,
             TrackReceipt::Event(event) => {
+                self.observe(out);
                 if !self.attached() || matches!(self.status, TrackStatus::Failed { .. }) {
                     return Settled::Pending;
                 }
@@ -1259,6 +1335,16 @@ impl<S> Track<S> for PlayerImpl<S> {
     }
 
     fn finish_group(&mut self, result: Result<Seq, &mut Vec<DeckPart>>) {
+        match &result {
+            Ok(seq) => {
+                for operation in &mut self.playback_commands {
+                    if operation.seq.is_none() {
+                        operation.seq = Some(*seq);
+                    }
+                }
+            }
+            Err(_) => self.playback_commands.retain(|operation| operation.seq.is_some()),
+        }
         let Some(attaching) = self.attaching.filter(|attach| attach.seq.is_none()) else {
             return;
         };
