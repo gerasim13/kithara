@@ -74,10 +74,8 @@ protected. `configure-runners` writes the executors, Docker for Linux and host
 shell for the rest, so the Apple lane reuses host filesystem and cache roots
 across jobs, not a machine per build.
 
-Apple packaging needs a case-folding checkout filesystem: Xcode creates a
-`Headers` directory and `cargo-swift` addresses it as `headers`. When
-`host_root` is case-sensitive, point `build_root` at a case-folding APFS
-location; every runner uses it for `builds_dir`.
+Set `build_root` when checkouts need a separate storage location from
+`host_root`; every runner uses it for `builds_dir`.
 
 Runners and the bridge validate `gitlab_url` against the platform trust store;
 no private CA is installed. A host that cannot build that chain is a network

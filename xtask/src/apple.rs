@@ -351,21 +351,21 @@ fn archive_strings(lib: &FsPath, tools: &ToolsConfig) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+fn slice_build_plan<'a>(
+    slices: &[(&str, &[&'a str])],
+    target: Option<&'a str>,
+) -> Vec<Vec<&'a str>> {
+    target.map_or_else(
+        || slices.iter().map(|(_, targets)| targets.to_vec()).collect(),
+        |target| vec![vec![target]],
+    )
+}
+
 fn run_build(
     profile: crate::BuildProfile,
     target: Option<&str>,
     tools: &ToolsConfig,
 ) -> Result<()> {
-    match Command::new("cargo")
-        .args(["swift", "--help"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-    {
-        Ok(s) if s.success() => {}
-        _ => bail!("cargo-swift not found. Install with: cargo install cargo-swift"),
-    }
-
     let metadata = MetadataCommand::new()
         .exec()
         .context("failed to read cargo metadata")?;
@@ -379,69 +379,42 @@ fn run_build(
         None
     };
 
-    println!("==> Building KitharaFFI with cargo-swift");
+    println!("==> Building Apple static libraries");
     let features = device_features("apple", true);
-
-    let mut cmd = Command::new("cargo");
-    if matches!(profile, crate::BuildProfile::Release) {
-        cmd.args(consts::RELEASE_CARGO_ARGS);
+    let plan = slice_build_plan(consts::SLICE_TARGETS, target);
+    let mut builds = Vec::new();
+    for triple in plan.iter().flatten() {
+        let (archive, libs) = build_slice_staticlib(
+            &crate_dir,
+            profile,
+            triple,
+            &deployment_target,
+            &features,
+            tools,
+        )?;
+        builds.push((*triple, archive, libs));
     }
-    cmd.args(["swift", "package"]);
-    if let Some(target) = target {
-        cmd.args(["--target", target]);
-    } else {
-        cmd.args(["-p", "ios", "macos"]);
-    }
-    cmd.args(["-n", "KitharaFFI"]);
-    if matches!(profile, crate::BuildProfile::Release) {
-        cmd.arg("--release");
-        set_release_rustflags(&mut cmd);
-    }
-    cmd.args([
-        "--lib-type",
-        "static",
-        // Device build: drop default features so `symphonia` is absent —
-        // the Apple AudioToolbox backend is the sole decoder on-device.
-        "--no-default-features",
-        "-F",
-        &features,
-        "--swift-tools-version",
-        "6.0",
-        "-y",
-    ]);
-    cmd.current_dir(&crate_dir);
-    cmd.env("IPHONEOS_DEPLOYMENT_TARGET", &deployment_target);
-    set_simulator_bindgen_args(&mut cmd, tools)?;
-
-    let status = cmd.status().context("failed to run cargo swift package")?;
-    if !status.success() {
-        bail!("cargo swift package failed");
-    }
-
+    let (_, archive, _) = builds.first().context("no Apple targets to build")?;
+    let generated_dir = crate_dir.join("generated");
+    let (swift_src, headers) = generate_apple_bindings(archive, &generated_dir)?;
+    let ffi_module = headers
+        .file_name()
+        .context("generated headers have no module directory")?;
+    let xcf_dst = apple_dir.join(ffi_module).with_extension("xcframework");
+    let swift_name = swift_src
+        .file_name()
+        .context("generated Swift has no filename")?;
+    let swift_dst = apple_dir
+        .join("Sources")
+        .join(
+            swift_src
+                .file_stem()
+                .context("generated Swift has no module name")?,
+        )
+        .join(swift_name);
     println!("==> Copying outputs to apple/");
-
-    let xcf_src = crate_dir.join("KitharaFFI/KitharaFFIInternal.xcframework");
-    let xcf_dst = apple_dir.join("KitharaFFIInternal.xcframework");
-    let swift_src = crate_dir.join("KitharaFFI/Sources/KitharaFFI/KitharaFFI.swift");
-    let swift_dst = apple_dir.join("Sources/KitharaFFI/KitharaFFI.swift");
-
-    if xcf_dst.exists() {
-        fs::remove_dir_all(&xcf_dst).with_context(|| format!("remove {}", xcf_dst.display()))?;
-    }
-    copy_dir_all(&xcf_src, &xcf_dst)
-        .with_context(|| format!("copy {} -> {}", xcf_src.display(), xcf_dst.display()))?;
-    if target.is_none() {
-        keep_arm64_ios_simulator_only(&xcf_dst, tools)?;
-    }
-    package_slice_staticlibs(
-        &xcf_dst,
-        &crate_dir,
-        profile,
-        target,
-        &deployment_target,
-        &features,
-        tools,
-    )?;
+    assemble_staticlib_xcframework(&xcf_dst, &plan, &builds, &headers, tools)?;
+    apply_slice_link_directives(&xcf_dst, &builds, ffi_module, target)?;
     if matches!(profile, crate::BuildProfile::Release) {
         strip_xcframework(&xcf_dst, tools)?;
     }
@@ -485,6 +458,106 @@ fn run_build(
     Ok(())
 }
 
+fn generate_apple_bindings(archive: &FsPath, out_dir: &FsPath) -> Result<(PathBuf, PathBuf)> {
+    if out_dir.exists() {
+        fs::remove_dir_all(out_dir).with_context(|| format!("remove {}", out_dir.display()))?;
+    }
+    uniffi_bindgen::bindings::generate(uniffi_bindgen::bindings::GenerateOptions {
+        languages: vec![uniffi_bindgen::bindings::TargetLanguage::Swift],
+        source: archive
+            .to_path_buf()
+            .try_into()
+            .context("archive path is not UTF-8")?,
+        out_dir: out_dir
+            .to_path_buf()
+            .try_into()
+            .context("bindings path is not UTF-8")?,
+        metadata_no_deps: true,
+        ..Default::default()
+    })
+    .with_context(|| format!("generate Swift bindings from {}", archive.display()))?;
+    let sources = swift_files(out_dir)?;
+    let [swift] = sources.as_slice() else {
+        bail!(
+            "expected one generated Swift binding, got {}",
+            sources.len()
+        );
+    };
+    let headers = fs::read_dir(out_dir)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|extension| extension == "h"))
+        .collect::<Vec<_>>();
+    let [header] = headers.as_slice() else {
+        bail!("expected one generated C header, got {}", headers.len());
+    };
+    let header_dir = out_dir.join("Headers").join(
+        header
+            .file_stem()
+            .context("generated header has no module name")?,
+    );
+    fs::create_dir_all(&header_dir)?;
+    fs::copy(
+        header,
+        header_dir.join(header.file_name().context("header has no filename")?),
+    )?;
+    let modulemap = header.with_extension("modulemap");
+    fs::copy(&modulemap, header_dir.join("module.modulemap"))
+        .with_context(|| format!("copy {}", modulemap.display()))?;
+    Ok((swift.clone(), header_dir))
+}
+
+fn assemble_staticlib_xcframework(
+    xcframework: &FsPath,
+    plan: &[Vec<&str>],
+    builds: &[(&str, PathBuf, Vec<NativeLib>)],
+    headers: &FsPath,
+    tools: &ToolsConfig,
+) -> Result<()> {
+    let staging = TempWorkDir::create("kithara-apple-staticlibs")?;
+    let mut command = Command::new(tools.program("xcodebuild"));
+    command.arg("-create-xcframework");
+    for (index, targets) in plan.iter().enumerate() {
+        let archives = targets
+            .iter()
+            .map(|target| {
+                builds
+                    .iter()
+                    .find_map(|(triple, archive, _)| {
+                        (*triple == *target).then_some(archive.clone())
+                    })
+                    .with_context(|| format!("missing staticlib build for {target}"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let archive = match archives.as_slice() {
+            [archive] => archive.clone(),
+            [] => bail!("xcframework slice has no targets"),
+            _ => {
+                let directory = staging.path().join(index.to_string());
+                fs::create_dir_all(&directory)?;
+                let name = archives[0]
+                    .file_name()
+                    .context("staticlib has no filename")?;
+                let archive = directory.join(name);
+                lipo_create(&archives, &archive, tools)?;
+                archive
+            }
+        };
+        command.arg("-library").arg(archive).arg("-headers").arg(
+            headers
+                .parent()
+                .context("generated headers have no parent")?,
+        );
+    }
+    if xcframework.exists() {
+        fs::remove_dir_all(xcframework)
+            .with_context(|| format!("remove {}", xcframework.display()))?;
+    }
+    command.arg("-output").arg(xcframework);
+    run_quiet(&mut command, "create staticlib xcframework")
+}
+
 fn device_features(platform: &str, dev: bool) -> String {
     let mut features = format!("uniffi,{platform}");
     if dev {
@@ -508,25 +581,17 @@ fn normalize_generated_swift(src: &str) -> String {
 }
 
 /// `signalsmith-stretch` runs `bindgen`, which derives clang's target from
-/// cargo's `TARGET`. For simulator slices that yields `arm64-apple-ios-sim`,
-/// but libclang wants `-simulator`; pin valid simulator triples and sysroot.
+/// cargo's `TARGET`. For the simulator slice that yields `arm64-apple-ios-sim`,
+/// but libclang wants `-simulator`; pin a valid simulator triple and sysroot.
 fn set_simulator_bindgen_args(cmd: &mut Command, tools: &ToolsConfig) -> Result<()> {
     let sim_sdk = sdk_path("iphonesimulator", tools)?;
     let sim_sdk = sim_sdk
         .to_str()
         .context("iphonesimulator SDK path is not UTF-8")?;
-    for (key, triple) in [
-        (
-            "BINDGEN_EXTRA_CLANG_ARGS_aarch64_apple_ios_sim",
-            "arm64-apple-ios-simulator",
-        ),
-        (
-            "BINDGEN_EXTRA_CLANG_ARGS_x86_64_apple_ios",
-            "x86_64-apple-ios-simulator",
-        ),
-    ] {
-        cmd.env(key, format!("--target={triple} -isysroot {sim_sdk}"));
-    }
+    cmd.env(
+        "BINDGEN_EXTRA_CLANG_ARGS_aarch64_apple_ios_sim",
+        format!("--target=arm64-apple-ios-simulator -isysroot {sim_sdk}"),
+    );
     Ok(())
 }
 
@@ -647,30 +712,20 @@ fn union_native_libs(lists: &[Vec<NativeLib>]) -> Vec<NativeLib> {
     union
 }
 
-/// Package each slice's staticlib archive together with its native link list.
-///
-/// `cargo swift` builds `kithara-ffi` with its declared `crate-type`
-/// (`lib`, `staticlib`, `cdylib`), and cargo skips LTO for any unit that also
-/// emits an rlib, so the packaged archive is a pile of per-crate objects that
-/// the profile's `lto = "fat"` never touched. A `staticlib`-only unit is the
-/// shape fat LTO accepts. Both profiles ship the archive whose native link
-/// list rustc printed, so the modulemap always describes what ships.
-fn package_slice_staticlibs(
+/// Each slice ships the archive whose native link list rustc printed, so its
+/// modulemap always describes what ships.
+fn apply_slice_link_directives(
     xcframework: &FsPath,
-    crate_dir: &FsPath,
-    profile: crate::BuildProfile,
+    builds: &[(&str, PathBuf, Vec<NativeLib>)],
+    ffi_module: &std::ffi::OsStr,
     target: Option<&str>,
-    deployment_target: &str,
-    features: &str,
-    tools: &ToolsConfig,
 ) -> Result<()> {
     require_dir(xcframework)?;
     for entry in
         fs::read_dir(xcframework).with_context(|| format!("read {}", xcframework.display()))?
     {
         let slice_dir = entry?.path();
-        let lib = slice_dir.join("libkithara_ffi.a");
-        if !lib.is_file() {
+        if !slice_dir.is_dir() {
             continue;
         }
         let slice = slice_dir
@@ -687,32 +742,19 @@ fn package_slice_staticlibs(
                 })?,
         };
 
-        println!(
-            "==> Packaging {} with native link directives",
-            lib.display()
-        );
-        let builds = targets
+        let lists = targets
             .iter()
             .map(|target| {
-                build_slice_staticlib(
-                    crate_dir,
-                    profile,
-                    target,
-                    deployment_target,
-                    features,
-                    tools,
-                )
+                builds
+                    .iter()
+                    .find_map(|(triple, _, libs)| (*triple == *target).then_some(libs.clone()))
+                    .with_context(|| format!("missing native link list for {target}"))
             })
             .collect::<Result<Vec<_>>>()?;
-        let (archives, lists): (Vec<_>, Vec<_>) = builds.into_iter().unzip();
-        match archives.as_slice() {
-            [thin] => {
-                fs::copy(thin, &lib)
-                    .with_context(|| format!("copy {} -> {}", thin.display(), lib.display()))?;
-            }
-            fat => lipo_create(fat, &lib, tools)?,
-        }
-        let modulemap = slice_dir.join("Headers/KitharaFFIInternal/module.modulemap");
+        let modulemap = slice_dir
+            .join("Headers")
+            .join(ffi_module)
+            .join("module.modulemap");
         let source = fs::read_to_string(&modulemap)
             .with_context(|| format!("read {}", modulemap.display()))?;
         fs::write(
@@ -937,71 +979,6 @@ fn consumer_platform(
     }
 }
 
-fn keep_arm64_ios_simulator_only(xcframework: &FsPath, tools: &ToolsConfig) -> Result<()> {
-    let fat = xcframework.join(consts::IOS_SIMULATOR_FAT_SLICE);
-    let thin = xcframework.join(consts::IOS_SIMULATOR_SLICE);
-    if fat.exists() {
-        if thin.exists() {
-            fs::remove_dir_all(&thin).with_context(|| format!("remove {}", thin.display()))?;
-        }
-        fs::rename(&fat, &thin)
-            .with_context(|| format!("rename {} -> {}", fat.display(), thin.display()))?;
-        let lib = thin.join("libkithara_ffi.a");
-        let tmp = thin.join("libkithara_ffi.arm64.a");
-        lipo_thin(&lib, "arm64", &tmp, tools)?;
-        fs::rename(&tmp, &lib)
-            .with_context(|| format!("replace {} with {}", lib.display(), tmp.display()))?;
-    } else if !thin.exists() {
-        bail!(
-            "missing iOS simulator slice: expected {} or {} under {}",
-            consts::IOS_SIMULATOR_SLICE,
-            consts::IOS_SIMULATOR_FAT_SLICE,
-            xcframework.display()
-        );
-    }
-    update_ios_simulator_plist(xcframework)
-}
-
-fn update_ios_simulator_plist(xcframework: &FsPath) -> Result<()> {
-    let plist = xcframework.join("Info.plist");
-    let mut root =
-        PlistValue::from_file(&plist).with_context(|| format!("read {}", plist.display()))?;
-    let libraries = root
-        .as_dictionary_mut()
-        .and_then(|dict| dict.get_mut("AvailableLibraries"))
-        .and_then(PlistValue::as_array_mut)
-        .with_context(|| format!("invalid xcframework plist {}", plist.display()))?;
-
-    let mut updated = false;
-    for library in libraries {
-        let Some(dict) = library.as_dictionary_mut() else {
-            continue;
-        };
-        let platform = dict
-            .get("SupportedPlatform")
-            .and_then(PlistValue::as_string);
-        let variant = dict
-            .get("SupportedPlatformVariant")
-            .and_then(PlistValue::as_string);
-        if platform == Some("ios") && variant == Some("simulator") {
-            dict.insert(
-                "LibraryIdentifier".into(),
-                PlistValue::String(consts::IOS_SIMULATOR_SLICE.to_string()),
-            );
-            dict.insert(
-                "SupportedArchitectures".into(),
-                PlistValue::Array(vec![PlistValue::String("arm64".to_string())]),
-            );
-            updated = true;
-        }
-    }
-
-    if !updated {
-        bail!("missing iOS simulator library entry in {}", plist.display());
-    }
-    plist::to_file_xml(&plist, &root).with_context(|| format!("write {}", plist.display()))
-}
-
 fn zip_dir(
     parent: &FsPath,
     directory_name: &str,
@@ -1080,7 +1057,6 @@ fn run_single(profile: crate::BuildProfile, tools: &ToolsConfig) -> Result<()> {
         true
     };
     require_dir(&internal)?;
-    keep_arm64_ios_simulator_only(&internal, tools)?;
     if matches!(profile, crate::BuildProfile::Release) && !built_internal {
         strip_xcframework(&internal, tools)?;
     }
@@ -1571,13 +1547,6 @@ fn lipo_create(thin: &[PathBuf], out: &FsPath, tools: &ToolsConfig) -> Result<()
     run_quiet(&mut cmd, &format!("{program} create"))
 }
 
-fn lipo_thin(fat: &FsPath, arch: &str, out: &FsPath, tools: &ToolsConfig) -> Result<()> {
-    let program = tools.program("lipo");
-    let mut cmd = Command::new(program);
-    cmd.arg(fat).arg("-thin").arg(arch).arg("-output").arg(out);
-    run_quiet(&mut cmd, &format!("{program} thin"))
-}
-
 fn require_dir(path: &FsPath) -> Result<()> {
     if !path.is_dir() {
         bail!("required directory is missing: {}", path.display());
@@ -1930,6 +1899,27 @@ fn require_apple_needles<'a>(needles: &'a [String], key: &str) -> Result<&'a [St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_plan_preserves_each_slice_and_its_architectures() {
+        let slices: &[(&str, &[&str])] = &[
+            ("device", &["device-target"]),
+            ("universal", &["first-target", "second-target"]),
+        ];
+        assert_eq!(
+            slice_build_plan(slices, None),
+            vec![vec!["device-target"], vec!["first-target", "second-target"]]
+        );
+    }
+
+    #[test]
+    fn build_plan_explicit_target_replaces_all_registered_slices() {
+        let slices: &[(&str, &[&str])] = &[("unused", &["unused-target"])];
+        assert_eq!(
+            slice_build_plan(slices, Some("selected-target")),
+            vec![vec!["selected-target"]]
+        );
+    }
 
     #[test]
     fn native_libraries_keep_first_seen_order_without_duplicates() {

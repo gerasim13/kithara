@@ -87,7 +87,7 @@ pub(crate) const RENDER: &str = "com.kithara.OfflineCaptureTest#rendersCleanWav"
 /// `core::fmt` panic plumbing drops out of each slice; same lane as the
 /// wasm flags in `crates/kithara-ffi/.cargo/config.toml`.
 ///
-/// No `embed-bitcode=no` here: `package_slice_staticlibs` runs fat LTO over
+/// No `embed-bitcode=no` here: `build_slice_staticlib` runs fat LTO over
 /// the slice, and LTO consumes exactly the rlib bitcode that flag
 /// suppresses. rustc rejects the two together for the same reason.
 pub(crate) const RELEASE_RUSTFLAGS: &[&str] =
@@ -99,28 +99,18 @@ pub(crate) const SLICE_TARGETS: &[(&str, &[&str])] = &[
     ("ios-arm64", &["aarch64-apple-ios"]),
     (IOS_SIMULATOR_SLICE, &["aarch64-apple-ios-sim"]),
     (
-        IOS_SIMULATOR_FAT_SLICE,
-        &["aarch64-apple-ios-sim", "x86_64-apple-ios"],
-    ),
-    (
         "macos-arm64_x86_64",
         &["aarch64-apple-darwin", "x86_64-apple-darwin"],
     ),
 ];
 
-/// `+nightly` propagates to the nested `cargo build` processes that
-/// cargo-swift spawns (rustup exports `RUSTUP_TOOLCHAIN`), which is what
-/// activates the `[unstable] build-std` section of
-/// `crates/kithara-ffi/.cargo/config.toml` for every slice. `-Z` CLI
-/// flags must not be added here: the outer cargo consumes them without
-/// forwarding to external subcommands, so they silently do nothing.
+/// Nightly enables the `[unstable] build-std` section of
+/// `crates/kithara-ffi/.cargo/config.toml` for every release slice.
 pub(crate) const RELEASE_CARGO_ARGS: &[&str] = &["+nightly"];
 
 /// Slice subdirectories inside the `*.xcframework` we expect to find.
 pub(crate) const XCFRAMEWORK_SLICES: &[&str] =
     &["ios-arm64", IOS_SIMULATOR_SLICE, "macos-arm64_x86_64"];
-
-pub(crate) const IOS_SIMULATOR_FAT_SLICE: &str = "ios-arm64_x86_64-simulator";
 
 pub(crate) const IOS_SIMULATOR_SLICE: &str = "ios-arm64-simulator";
 
