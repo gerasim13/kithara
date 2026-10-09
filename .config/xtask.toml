@@ -402,6 +402,43 @@ RUST_BACKTRACE = "1"
 KITHARA_HANG_DUMP_DIR = "hang"
 KITHARA_NO_BLOCK_LOG = "no-block.log"
 
+# One flaky test repeated under the CPU contention a full run gives it. A run
+# of every test supplies that contention only as a side effect of the other
+# tests it schedules, and pays hours for it; filtered to one test, the lanes
+# above repeat it on an idle machine, where a race decided by scheduling never
+# shows. `KITHARA_TEST_LOAD` spins that many threads per CPU inside each test
+# process, for the test's whole body. Off the default list: these lanes answer
+# a `filter` aimed at one test, not the nightly sweep.
+[stress.modes.reproduction-load-flash-on]
+flash = true
+
+[stress.modes.reproduction-load-flash-on.set_env]
+KITHARA_FLASH_SYNC_TRACE = "1"
+KITHARA_HANG_PREKILL_SECS = "630"
+KITHARA_TEST_LOAD = "1"
+NEXTEST_FINAL_STATUS_LEVEL = "fail"
+NEXTEST_SHOW_PROGRESS = "counter"
+NEXTEST_STATUS_LEVEL = "fail"
+RUST_BACKTRACE = "1"
+
+[stress.modes.reproduction-load-flash-on.raw_path_env]
+KITHARA_HANG_DUMP_DIR = "hang"
+
+[stress.modes.reproduction-load-flash-off]
+flash = false
+
+[stress.modes.reproduction-load-flash-off.set_env]
+KITHARA_FLASH_SYNC_TRACE = "1"
+KITHARA_HANG_PREKILL_SECS = "630"
+KITHARA_TEST_LOAD = "1"
+NEXTEST_FINAL_STATUS_LEVEL = "fail"
+NEXTEST_SHOW_PROGRESS = "counter"
+NEXTEST_STATUS_LEVEL = "fail"
+RUST_BACKTRACE = "1"
+
+[stress.modes.reproduction-load-flash-off.raw_path_env]
+KITHARA_HANG_DUMP_DIR = "hang"
+
 # The real-time contract, measured the same way. They belong in the run
 # because the violation is intermittent: one was seen firing on a single attempt
 # out of two, which a gate that runs each lane once reports as green half the
