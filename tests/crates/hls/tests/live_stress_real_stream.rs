@@ -34,6 +34,8 @@ use kithara_integration_tests::{
     bufpool_ext::{Pools, TestPools, pools},
     mixed_encrypted, mixed_plain,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_test_utils::pace;
 use kithara_test_utils::{TestTempDir, Xorshift64, temp_dir};
 use tracing::info;
 use url::Url;
@@ -215,6 +217,13 @@ fn warmup_to_variant(audio: &mut LiveAudio, variant: usize, label: &str) {
         if playing == Some(variant) {
             break;
         }
+        // Cached playback must not outrun the incoming variant's preparation.
+        pace(
+            chunk
+                .meta
+                .end_timestamp
+                .saturating_sub(chunk.meta.timestamp),
+        );
     }
     assert_eq!(
         playing,
