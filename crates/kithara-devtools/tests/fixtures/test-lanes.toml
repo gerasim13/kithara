@@ -14,6 +14,10 @@ features = ["virtual-time"]
 default = false
 features = ["nb-detect"]
 
+[load]
+default = false
+features = ["cpu-load"]
+
 [net_backends.http]
 features = []
 
@@ -34,6 +38,7 @@ runner.nextest.filter = "test(loom_model_)"
 [lanes.typed]
 default_backend = "native"
 default_no_block = true
+default_load = true
 env.DEMO_MODE = "strict"
 cargo.packages = ["demo", "demo-tests"]
 cargo.profile = "test-release"
@@ -44,7 +49,7 @@ runner.nextest.test_threads = 1
 runner.nextest.ignore_default_filter = true
 
 [lanes.tools]
-undeclared_toggles = ["flash", "no-block"]
+undeclared_toggles = ["flash", "no-block", "load"]
 cargo.packages = ["demo-tools"]
 
 [lanes.docs]
