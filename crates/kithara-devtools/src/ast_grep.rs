@@ -1,15 +1,18 @@
 use std::{
     collections::BTreeMap,
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
 };
 
-use anyhow::{Result, bail};
+use anyhow::{Context as _, Result, bail, ensure};
 use clap::Args;
 use serde::Deserialize;
 
 use crate::{
     Ctx,
-    common::{exclude::cfg_test_module_globs, report::print_check_block},
+    common::{
+        exclude::{cfg_test_byte_ranges, cfg_test_module_globs},
+        report::print_check_block,
+    },
     util::ensure_clean_tree,
     verdict::NotClean,
 };
@@ -28,8 +31,7 @@ pub struct AstGrepArgs {
     /// Refuses to run on a dirty working tree unless `--allow-dirty`.
     #[arg(long)]
     pub fix: bool,
-    /// Bypass the grouped renderer and stream ast-grep's native short
-    /// output verbatim. Useful when you need the upstream formatting.
+    /// Print one diagnostic per line instead of grouping by rule.
     #[arg(long)]
     pub raw: bool,
     /// Promote every warning to an error (passes `--warning` to ast-grep).
@@ -50,7 +52,14 @@ struct Match {
 
 #[derive(Debug, Deserialize)]
 struct Range {
+    #[serde(rename = "byteOffset")]
+    byte_offset: ByteOffset,
     start: Position,
+}
+
+#[derive(Debug, Deserialize)]
+struct ByteOffset {
+    start: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,11 +70,12 @@ struct Position {
 
 pub(crate) fn run(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
     if args.fix {
+        ensure!(
+            std::fs::canonicalize(std::env::current_dir()?)? == std::fs::canonicalize(&ctx.root)?,
+            "ast-grep --fix must run from its workspace root so the dirty-tree gate protects the target",
+        );
         ensure_clean_tree(args.allow_dirty, "ast-grep")?;
-        return run_native(args, ctx);
-    }
-    if args.raw {
-        return run_native(args, ctx);
+        run_native(args, ctx)?;
     }
     run_grouped(args, ctx)
 }
@@ -77,9 +87,8 @@ pub(crate) fn run(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
 /// ast-grep's `--globs` "always overrides any other ignore logic". A file a
 /// `#[cfg(test)] mod name;` declaration brings in is excluded the same way:
 /// ast-grep does no cfg evaluation and reads one file at a time, so the
-/// attribute standing in the parent is invisible to every rule. (Inline
-/// `#[cfg(test)]` is still not handled here; rules that care use a
-/// `not: inside cfg(test)` clause.)
+/// attribute standing in the parent is invisible to every rule. Inline
+/// test-only items are filtered from the structured diagnostics below.
 fn add_exclude_globs(cmd: &mut Command, ctx: &Ctx) {
     let project = &ctx.config;
     for pat in &project.lint_exclude.runtime_paths() {
@@ -92,7 +101,8 @@ fn add_exclude_globs(cmd: &mut Command, ctx: &Ctx) {
 
 fn run_native(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
     let mut cmd = Command::new(ctx.config.tools.program("ast-grep"));
-    cmd.arg("scan")
+    cmd.current_dir(&ctx.root)
+        .arg("scan")
         .arg("--config")
         .arg("sgconfig.yml")
         .arg("--report-style")
@@ -108,23 +118,20 @@ fn run_native(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
         cmd.arg(p);
     }
     let status = cmd.status()?;
-    if !status.success() {
-        bail!("ast-grep failed (exit code {:?})", status.code());
+    if !status.success() && status.code() != Some(1) {
+        bail!("ast-grep autofix failed (exit code {:?})", status.code());
     }
     Ok(())
 }
 
 /// Parse ast-grep `--json=stream` output into the per-rule grouping.
-fn parse_into(stdout: &str, by_rule: &mut BTreeMap<String, RuleGroup>) {
+fn parse_into(stdout: &str, by_rule: &mut BTreeMap<String, RuleGroup>) -> Result<()> {
     for line in stdout.lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let m: Match = match serde_json::from_str(line) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
+        let m: Match = serde_json::from_str(line).context("parse ast-grep diagnostic")?;
         let entry = by_rule
             .entry(m.rule_id.clone())
             .or_insert_with(|| RuleGroup {
@@ -133,11 +140,45 @@ fn parse_into(stdout: &str, by_rule: &mut BTreeMap<String, RuleGroup>) {
                 hits: Vec::new(),
             });
         entry.hits.push(Hit {
+            byte_offset: m.range.byte_offset.start,
             file: m.file,
             line: m.range.start.line + 1,
             column: m.range.start.column + 1,
         });
     }
+    Ok(())
+}
+
+fn parse_output(output: &Output, by_rule: &mut BTreeMap<String, RuleGroup>) -> Result<()> {
+    // Exit 1 reports diagnostics; other nonzero exits are execution failures.
+    if !output.status.success() && output.status.code() != Some(1) {
+        bail!(
+            "ast-grep failed (exit code {:?}): {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).trim(),
+        );
+    }
+    let stdout = std::str::from_utf8(&output.stdout).context("decode ast-grep diagnostics")?;
+    if !output.status.success() && stdout.trim().is_empty() {
+        bail!("ast-grep failed without diagnostics");
+    }
+    parse_into(stdout, by_rule)
+}
+
+fn exclude_test_hits(groups: &mut BTreeMap<String, RuleGroup>, ctx: &Ctx) {
+    let mut ranges_by_file: BTreeMap<String, Option<Vec<std::ops::Range<usize>>>> = BTreeMap::new();
+    for group in groups.values_mut() {
+        group.hits.retain(|hit| {
+            let ranges = ranges_by_file.entry(hit.file.clone()).or_insert_with(|| {
+                let source = std::fs::read_to_string(ctx.root.join(&hit.file)).ok()?;
+                cfg_test_byte_ranges(&source)
+            });
+            ranges
+                .as_ref()
+                .is_none_or(|ranges| !ranges.iter().any(|range| range.contains(&hit.byte_offset)))
+        });
+    }
+    groups.retain(|_, group| !group.hits.is_empty());
 }
 
 /// Runs a second pass for hard-correctness rules that must also see tests: the main scan applies
@@ -147,7 +188,8 @@ fn run_grouped(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
     let project = &ctx.config;
 
     let mut cmd = Command::new(ctx.config.tools.program("ast-grep"));
-    cmd.arg("scan")
+    cmd.current_dir(&ctx.root)
+        .arg("scan")
         .arg("--config")
         .arg("sgconfig.yml")
         .arg("--json=stream");
@@ -159,17 +201,18 @@ fn run_grouped(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
         cmd.arg(p);
     }
     cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::inherit());
+    cmd.stderr(Stdio::piped());
 
     let output = cmd.output()?;
     let mut by_rule: BTreeMap<String, RuleGroup> = BTreeMap::new();
-    parse_into(&String::from_utf8_lossy(&output.stdout), &mut by_rule);
-    let mut ok = output.status.success();
+    parse_output(&output, &mut by_rule)?;
+    exclude_test_hits(&mut by_rule, ctx);
 
     for rule_id in &project.lint_exclude.scan_all_rules {
         let rule_file = format!(".config/ast-grep/{rule_id}.yml");
         let mut rule_cmd = Command::new(ctx.config.tools.program("ast-grep"));
         rule_cmd
+            .current_dir(&ctx.root)
             .arg("scan")
             .arg("--rule")
             .arg(&rule_file)
@@ -181,17 +224,31 @@ fn run_grouped(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
             rule_cmd.arg(p);
         }
         rule_cmd.stdout(Stdio::piped());
-        rule_cmd.stderr(Stdio::inherit());
+        rule_cmd.stderr(Stdio::piped());
         let rule_out = rule_cmd.output()?;
         by_rule.remove(rule_id);
-        parse_into(&String::from_utf8_lossy(&rule_out.stdout), &mut by_rule);
-        ok = ok && rule_out.status.success();
+        parse_output(&rule_out, &mut by_rule)?;
     }
 
-    print_grouped(&by_rule);
+    if args.raw {
+        for (rule, group) in &by_rule {
+            for hit in &group.hits {
+                println!(
+                    "{}:{}:{}: {}[{rule}]: {}",
+                    hit.file,
+                    hit.line,
+                    hit.column,
+                    group.severity,
+                    group.message.trim(),
+                );
+            }
+        }
+    } else {
+        print_grouped(&by_rule);
+    }
 
-    if !ok {
-        let findings = print_failing_rules(&by_rule, args.strict);
+    let findings = print_failing_rules(&by_rule, args.strict);
+    if findings > 0 {
         return Err(NotClean::raised("ast-grep", findings));
     }
     Ok(())
@@ -204,6 +261,7 @@ struct RuleGroup {
 }
 
 struct Hit {
+    byte_offset: usize,
     file: String,
     column: u32,
     line: u32,
@@ -298,7 +356,134 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::parse_into;
+    use super::{AstGrepArgs, parse_into, run_grouped};
+    use crate::{Ctx, common::project::ProjectConfig};
+
+    fn grouped_fixture(source: &str, severity: &str) -> (tempfile::TempDir, Ctx, AstGrepArgs) {
+        let root = tempdir().expect("tempdir");
+        fs::create_dir_all(root.path().join(".config/ast-grep")).expect("rules directory");
+        fs::write(
+            root.path().join("sgconfig.yml"),
+            "ruleDirs: [.config/ast-grep]\n",
+        )
+        .expect("scan config");
+        fs::write(
+            root.path().join(".config/ast-grep/context.yml"),
+            format!("id: context\nlanguage: Rust\nmessage: domain value\nseverity: {severity}\nrule:\n  kind: integer_literal\n  regex: '^42$'\n"),
+        )
+        .expect("rule");
+        fs::create_dir_all(root.path().join("crates/example/src")).expect("source directory");
+        fs::write(root.path().join("crates/example/src/lib.rs"), source).expect("source");
+        let ctx = Ctx::new(root.path().to_owned(), ProjectConfig::default());
+        let args = AstGrepArgs {
+            paths: vec!["crates".to_owned()],
+            allow_dirty: false,
+            fix: false,
+            raw: false,
+            strict: false,
+        };
+        (root, ctx, args)
+    }
+
+    #[test]
+    fn grouped_scan_filters_test_only_hits_before_deciding_failure() {
+        for attr in [
+            "cfg(test)",
+            "cfg(all(\n test, feature = \"fixtures\"\n))",
+            "test",
+        ] {
+            let source = format!("#[{attr}]\nfn fixture() -> u32 {{ 42 }}");
+            let (_root, ctx, mut args) = grouped_fixture(&source, "error");
+            assert!(run_grouped(&args, &ctx).is_ok(), "{attr}");
+            args.raw = true;
+            assert!(run_grouped(&args, &ctx).is_ok(), "raw: {attr}");
+        }
+    }
+
+    #[test]
+    fn grouped_scan_keeps_production_hits_on_shared_lines_and_inside_functions() {
+        for source in [
+            "#[cfg(test)] fn fixture() -> u32 { 42 } fn production() -> u32 { 42 }",
+            "fn production() -> u32 { #[cfg(test)] fn fixture() -> u32 { 42 } 42 }",
+        ] {
+            let (_root, ctx, args) = grouped_fixture(source, "error");
+            let error = run_grouped(&args, &ctx).expect_err("production finding remains");
+            let findings = error
+                .downcast_ref::<crate::verdict::NotClean>()
+                .expect("lint verdict");
+            assert_eq!(findings.findings, Some(1));
+        }
+    }
+
+    #[test]
+    fn fixer_rejects_a_target_outside_the_checked_worktree() {
+        let (root, ctx, mut args) = grouped_fixture("fn production() -> u32 { 42 }", "error");
+        args.fix = true;
+        let error = super::run(&args, &ctx).expect_err("target and checked tree must coincide");
+        assert!(error.to_string().contains("workspace root"));
+        assert_eq!(
+            fs::read_to_string(root.path().join("crates/example/src/lib.rs"))
+                .expect("unchanged source"),
+            "fn production() -> u32 { 42 }",
+        );
+    }
+
+    #[test]
+    fn grouped_scan_retains_production_errors_and_strict_warnings() {
+        for attr in [
+            "cfg(any(test, feature = \"mock\"))",
+            "cfg(not(test))",
+            "cfg_attr(feature = \"mock\", cfg(test))",
+        ] {
+            let source = format!("#[{attr}]\nfn production() -> u32 {{ 42 }}");
+            let (_root, ctx, args) = grouped_fixture(&source, "error");
+            assert!(run_grouped(&args, &ctx).is_err(), "{attr}");
+        }
+        let (_root, ctx, mut args) = grouped_fixture("fn production() -> u32 { 42 }", "warning");
+        assert!(run_grouped(&args, &ctx).is_ok());
+        args.strict = true;
+        assert!(run_grouped(&args, &ctx).is_err());
+    }
+
+    #[test]
+    fn grouped_scan_keeps_full_source_correctness_rules_in_tests() {
+        let (root, mut ctx, args) = grouped_fixture("#[cfg(test)] mod fixture;", "error");
+        fs::write(
+            root.path().join("crates/example/src/fixture.rs"),
+            "fn fixture() -> u32 { 42 }",
+        )
+        .expect("test-only external source");
+        assert!(run_grouped(&args, &ctx).is_ok());
+        ctx.config
+            .lint_exclude
+            .scan_all_rules
+            .push("context".to_owned());
+        assert!(run_grouped(&args, &ctx).is_err());
+    }
+
+    #[test]
+    fn grouped_scan_rejects_execution_and_diagnostic_errors() {
+        let (root, ctx, args) = grouped_fixture("", "error");
+        fs::remove_file(root.path().join("sgconfig.yml")).expect("remove config");
+        assert!(run_grouped(&args, &ctx).is_err());
+        assert!(parse_into("invalid json", &mut BTreeMap::new()).is_err());
+    }
+
+    #[test]
+    fn native_fixer_applies_edits_before_context_aware_reporting() {
+        let (root, ctx, mut args) = grouped_fixture("fn production() -> u32 { 42 }", "error");
+        let rule = root.path().join(".config/ast-grep/context.yml");
+        let source = fs::read_to_string(&rule).expect("read rule");
+        fs::write(&rule, format!("{source}fix: '43'\n")).expect("fix rule");
+        args.fix = true;
+        super::run_native(&args, &ctx).expect("native rewrite");
+        assert_eq!(
+            fs::read_to_string(root.path().join("crates/example/src/lib.rs"))
+                .expect("fixed source"),
+            "fn production() -> u32 { 43 }",
+        );
+        assert!(run_grouped(&args, &ctx).is_ok());
+    }
 
     fn rule_hits_at(rule_file: &str, relative_path: &str, source: &str) -> usize {
         let temp = tempdir().expect("tempdir");
@@ -351,6 +536,24 @@ mod tests {
 
     fn magic_number_hits(source: &str) -> usize {
         rule_hits("style.no-magic-numbers.yml", source)
+    }
+
+    #[test]
+    fn magic_number_rule_keeps_feature_enabled_and_non_test_code_visible() {
+        for cfg in [
+            "any(test, feature = \"mock\")",
+            "not(test)",
+            "feature = \"test\"",
+        ] {
+            let source = format!("#[cfg({cfg})]\nmod enabled {{ fn value() -> u32 {{ 42 }} }}");
+            assert_eq!(magic_number_hits(&source), 1, "{cfg}");
+        }
+        assert_eq!(
+            magic_number_hits(
+                "#[cfg_attr(feature = \"mock\", cfg(test))]\nmod enabled { fn value() -> u32 { 42 } }"
+            ),
+            1,
+        );
     }
 
     fn module_root_hits(relative_path: &str, source: &str) -> usize {
@@ -730,9 +933,9 @@ fn local() -> u32 {
 
     #[test]
     fn a_reported_hit_names_the_line_an_editor_calls_it() {
-        let stdout = r#"{"file":"crates/kithara-ui/src/capture/set.rs","message":"m","ruleId":"perf.prefer-primitive-pool","severity":"error","range":{"start":{"line":29,"column":4}}}"#;
+        let stdout = r#"{"file":"crates/kithara-ui/src/capture/set.rs","message":"m","ruleId":"perf.prefer-primitive-pool","severity":"error","range":{"byteOffset":{"start":300},"start":{"line":29,"column":4}}}"#;
         let mut by_rule = BTreeMap::new();
-        parse_into(stdout, &mut by_rule);
+        parse_into(stdout, &mut by_rule).expect("valid diagnostic");
         let hit = &by_rule["perf.prefer-primitive-pool"].hits[0];
         assert_eq!(
             hit.line, 30,
