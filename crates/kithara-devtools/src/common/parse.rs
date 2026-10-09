@@ -7,7 +7,7 @@ use syn::{
     visit::{self, Visit},
 };
 
-use crate::common::exclude::{attrs_have_cfg_test, item_attrs};
+use crate::common::exclude::{attrs_are_test_only, attrs_have_test_marker, item_is_test_only};
 
 /// Counts of items in a parsed `.rs` file, excluding anything predicated on
 /// `#[cfg(test)]`. Test code is not production surface, and the lint namespaces
@@ -41,7 +41,9 @@ pub fn parse_file(path: &Path) -> Result<File> {
 #[must_use]
 pub fn count_items(file: &File) -> ItemStats {
     let mut s = ItemStats::default();
-    walk_items(&file.items, &mut s);
+    if !attrs_are_test_only(&file.attrs) {
+        walk_items(&file.items, &mut s);
+    }
     s
 }
 
@@ -50,14 +52,16 @@ pub fn count_items(file: &File) -> ItemStats {
 #[must_use]
 pub fn type_weights(file: &File) -> BTreeMap<String, TypeWeight> {
     let mut local_types: BTreeMap<String, TypeWeight> = BTreeMap::new();
-    collect_local_types(&file.items, &mut local_types);
-    accumulate_impls(&file.items, &mut local_types);
+    if !attrs_are_test_only(&file.attrs) {
+        collect_local_types(&file.items, &mut local_types);
+        accumulate_impls(&file.items, &mut local_types);
+    }
     local_types
 }
 
 fn collect_local_types(items: &[Item], out: &mut BTreeMap<String, TypeWeight>) {
     for item in items {
-        if attrs_have_cfg_test(item_attrs(item)) {
+        if item_is_test_only(item) {
             continue;
         }
         match item {
@@ -85,7 +89,7 @@ fn collect_local_types(items: &[Item], out: &mut BTreeMap<String, TypeWeight>) {
 
 fn accumulate_impls(items: &[Item], local_types: &mut BTreeMap<String, TypeWeight>) {
     for item in items {
-        if attrs_have_cfg_test(item_attrs(item)) {
+        if item_is_test_only(item) {
             continue;
         }
         match item {
@@ -96,7 +100,8 @@ fn accumulate_impls(items: &[Item], local_types: &mut BTreeMap<String, TypeWeigh
                     w.impl_blocks += 1;
                     for it in &im.items {
                         if let ImplItem::Fn(f) = it
-                            && !attrs_have_cfg_test(&f.attrs)
+                            && !attrs_are_test_only(&f.attrs)
+                            && !attrs_have_test_marker(&f.attrs)
                         {
                             w.impl_fns += 1;
                         }
@@ -539,7 +544,7 @@ pub fn pub_methods(im: &ItemImpl) -> impl Iterator<Item = &ImplItemFn> {
 
 fn walk_items(items: &[Item], s: &mut ItemStats) {
     for item in items {
-        if attrs_have_cfg_test(item_attrs(item)) {
+        if item_is_test_only(item) {
             continue;
         }
         match item {
@@ -548,7 +553,8 @@ fn walk_items(items: &[Item], s: &mut ItemStats) {
             Item::Impl(im) => {
                 for it in &im.items {
                     if let ImplItem::Fn(f) = it
-                        && !attrs_have_cfg_test(&f.attrs)
+                        && !attrs_are_test_only(&f.attrs)
+                        && !attrs_have_test_marker(&f.attrs)
                     {
                         s.fns += 1;
                     }
@@ -595,13 +601,80 @@ mod tests {
     }
 
     #[test]
-    fn cfg_test_nested_in_any_is_still_test_code() {
+    fn cfg_test_nested_in_any_retains_production_density() {
         let source = "\
 #[cfg(any(test, feature = \"usdt\"))]
 fn under_either(&self) {}
 fn always(&self) {}
 ";
-        assert_eq!(stats(source), (1, 0));
+        assert_eq!(stats(source), (2, 0));
+    }
+
+    #[test]
+    fn file_inner_cfg_test_excludes_density_and_type_weights() {
+        let source = "#![cfg(test)]\nstruct Fixture;\nimpl Fixture { fn helper(&self) {} }";
+        let file = syn::parse_file(source).expect("fixture parses");
+
+        assert_eq!(stats(source), (0, 0));
+        assert!(type_weights(&file).is_empty());
+    }
+
+    #[test]
+    fn test_markers_exclude_functions_without_hiding_annotated_types() {
+        let source = r#"
+#[some::test]
+struct Real;
+#[some::test]
+impl Real { fn production(&self) {} }
+#[test]
+fn test_case() {}
+#[tokio::test]
+async fn async_test_case() {}
+"#;
+        let file = syn::parse_file(source).expect("fixture parses");
+        let weights = type_weights(&file);
+
+        assert_eq!(stats(source), (1, 1));
+        assert_eq!(
+            (weights["Real"].impl_blocks, weights["Real"].impl_fns),
+            (1, 1)
+        );
+    }
+
+    #[test]
+    fn test_only_cfg_excludes_counts_without_hiding_production_branches() {
+        let source = r#"
+struct Real;
+#[cfg(all(
+    feature = "fixtures",
+    test,
+))]
+mod fixtures {
+    struct Helper;
+    fn helper() {}
+}
+#[cfg(all(test, feature = "fixtures"))]
+impl Real { fn helper(&self) {} }
+impl Real {
+    #[cfg(all(test, feature = "fixtures"))]
+    fn helper(&self) {}
+    #[cfg(any(test, feature = "runtime"))]
+    fn runtime(&self) {}
+    #[cfg(not(test))]
+    fn production(&self) {}
+}
+#[cfg_attr(feature = "fixtures", allow(dead_code))]
+fn conditional_attribute() {}
+"#;
+        let file = syn::parse_file(source).expect("fixture parses");
+        let weights = type_weights(&file);
+
+        assert_eq!(stats(source), (3, 1));
+        assert_eq!(weights.len(), 1);
+        assert_eq!(
+            (weights["Real"].impl_blocks, weights["Real"].impl_fns),
+            (1, 2)
+        );
     }
 
     #[test]
