@@ -22,7 +22,7 @@ documents and reusable agent assets that should be loaded only when relevant.
 | `guides/architecture-shape.md` | owner graphs, shared state, channels, god objects, callback flows, coupling |
 | `guides/red-flags.md` | non-trivial work, a design check, a handoff, or a lint failure |
 | `guides/rule-placement.md` | deciding where a new rule belongs |
-| `guides/test-harness.md` | adding or debugging tests, changing test utilities, explaining validation scope |
+| `guides/test-harness.md` | adding or debugging tests, a flaky test or a stress report, changing test utilities, explaining validation scope |
 | `guides/tooling.md` | repo tooling, an autofix, formatter/lint config, dependency policy, `arch viz` or `quality assess` flags |
 | `guides/lint-policy.md` | lint policy, a lint exception, or a lint you cannot resolve locally |
 | `guides/performance.md` | a hot path, allocations, or a performance regression |

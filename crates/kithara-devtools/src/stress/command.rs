@@ -2364,7 +2364,8 @@ mod tests {
     use crate::{
         common::project::{
             ProjectConfig, StressEnvironmentConfig, TestCargoOptions, TestCommandConfig,
-            TestFlashConfig, TestLaneConfig, TestNetBackendConfig, TestNoBlockConfig,
+            TestFlashConfig, TestLaneConfig, TestLoadConfig, TestNetBackendConfig,
+            TestNoBlockConfig,
         },
         stress::selection::{unit_runner, validate_directory_name},
     };
@@ -2413,7 +2414,10 @@ mod tests {
                         "tools".to_owned(),
                         TestLaneConfig {
                             default_backend: Some("local".to_owned()),
-                            undeclared_toggles: vec![consts::FLASH_TOGGLE.to_owned()],
+                            undeclared_toggles: vec![
+                                consts::FLASH_TOGGLE.to_owned(),
+                                consts::LOAD_TOGGLE.to_owned(),
+                            ],
                             ..lane("tools")
                         },
                     ),
@@ -2445,6 +2449,8 @@ mod tests {
                     "features = ['nb-detect']\ndefault = false",
                 )
                 .expect("no-block config"),
+                load: toml::from_str::<TestLoadConfig>("features = ['cpu-load']\ndefault = false")
+                    .expect("load config"),
                 ..TestCommandConfig::default()
             },
             ..ProjectConfig::default()
@@ -2484,6 +2490,72 @@ mod tests {
                 vec!["nb-detect".to_owned(), "virtual-time".to_owned()]
             )
         );
+    }
+
+    #[test]
+    fn a_load_mode_composes_with_lane_features_and_skips_undeclared_lanes() {
+        let project = lanes_project();
+        let mode = StressModeConfig {
+            flash: Some(true),
+            load: Some(true),
+            ..StressModeConfig::default()
+        };
+        let resolved = |lane: &str| match unit_runner(&project, &mode, Some(lane))
+            .expect("a lane mode resolves")
+        {
+            StressRunner::Lane(lane) => (lane.backend, lane.features),
+            StressRunner::Command(_) => panic!("a lane mode runs its lane"),
+        };
+
+        assert_eq!(
+            resolved("product"),
+            (
+                "http".to_owned(),
+                vec!["cpu-load".to_owned(), "virtual-time".to_owned()]
+            )
+        );
+        assert_eq!(
+            resolved("tools"),
+            ("local".to_owned(), vec!["tools/local".to_owned()])
+        );
+        assert_eq!(
+            resolved("detector"),
+            (
+                "http".to_owned(),
+                vec![
+                    "cpu-load".to_owned(),
+                    "nb-detect".to_owned(),
+                    "virtual-time".to_owned(),
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn a_load_mode_preserves_or_overrides_the_lane_load_default() {
+        let mut project = lanes_project();
+        project
+            .test
+            .lanes
+            .get_mut("detector")
+            .expect("detector lane")
+            .default_load = Some(true);
+
+        for (load, expected) in [(None, true), (Some(false), false)] {
+            let mode = StressModeConfig {
+                load,
+                ..StressModeConfig::default()
+            };
+            let StressRunner::Lane(lane) =
+                unit_runner(&project, &mode, Some("detector")).expect("a lane mode resolves")
+            else {
+                panic!("a lane mode runs its lane");
+            };
+
+            assert_eq!(lane.features.contains(&"cpu-load".to_owned()), expected);
+            assert!(lane.features.contains(&"nb-detect".to_owned()));
+            assert!(lane.features.contains(&"virtual-time".to_owned()));
+        }
     }
 
     /// A run repeats every lane mode on every lane it names and a command mode

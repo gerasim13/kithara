@@ -23,6 +23,8 @@ fn missing_config_file_yields_defaults() {
     assert_eq!(config.perf.nextest_profile, "perf");
     assert!(!config.test.no_block.enabled);
     assert!(config.test.no_block.items.is_empty());
+    assert!(!config.test.load.enabled);
+    assert!(config.test.load.items.is_empty());
 }
 
 #[test]
@@ -147,6 +149,10 @@ features = ["virtual-time"]
 [test.no_block]
 default = false
 features = ["no-block-detector"]
+
+[test.load]
+default = false
+features = ["cpu-pressure"]
 "#,
     );
 
@@ -156,6 +162,8 @@ features = ["no-block-detector"]
     assert_eq!(config.test.flash.items, ["virtual-time"]);
     assert!(!config.test.no_block.enabled);
     assert_eq!(config.test.no_block.items, ["no-block-detector"]);
+    assert!(!config.test.load.enabled);
+    assert_eq!(config.test.load.items, ["cpu-pressure"]);
 }
 
 #[test]
@@ -194,6 +202,7 @@ remove = ["OLD_TRACE"]
 
 [stress.modes.baseline]
 flash = true
+load = true
 
 [stress.modes.baseline.set_env]
 TRACE_LEVEL = "warn"
@@ -219,6 +228,7 @@ features = []
     assert_eq!(config.stress.nextest_profile, "repeated");
     assert_eq!(config.stress.max_count, 10);
     assert_eq!(mode.flash, Some(true));
+    assert_eq!(mode.load, Some(true));
     assert_eq!(mode.set_env["TRACE_LEVEL"], "warn");
     assert_eq!(mode.raw_path_env["CAPTURE_DIR"], "captures");
 }
@@ -227,10 +237,7 @@ features = []
 /// has no lane to ask, so a toggle there would be recorded and do nothing.
 #[test]
 fn a_stress_mode_that_runs_a_command_cannot_ask_for_a_toggle() {
-    let temp = tempdir().expect("tempdir");
-    write_config(
-        temp.path(),
-        r#"
+    let template = r#"
 [stress]
 default_modes = ["probe"]
 lanes = ["workspace"]
@@ -259,7 +266,7 @@ report = "report.md"
 [stress.modes.probe]
 command = ["probe", "run"]
 attempt_junit = "probe/junit.xml"
-flash = true
+TOGGLE
 
 [test]
 default_lane = "workspace"
@@ -270,15 +277,23 @@ cargo.workspace = true
 
 [test.net_backends.http]
 features = []
-"#,
-    );
+"#;
+    for toggle in ["flash", "no_block", "load"] {
+        for value in [true, false] {
+            let temp = tempdir().expect("tempdir");
+            write_config(
+                temp.path(),
+                &template.replace("TOGGLE", &format!("{toggle} = {value}")),
+            );
 
-    let error = ProjectConfig::load(temp.path()).expect_err("a toggled command mode fails");
+            let error = ProjectConfig::load(temp.path()).expect_err("a toggled command mode fails");
 
-    assert!(
-        format!("{error:#}").contains("runs a command, so its toggles reach nothing"),
-        "{error:#}"
-    );
+            assert!(
+                format!("{error:#}").contains("runs a command, so its toggles reach nothing"),
+                "{error:#}"
+            );
+        }
+    }
 }
 
 #[test]

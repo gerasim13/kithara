@@ -87,11 +87,8 @@ pub(crate) struct CiHost {
     pub(crate) macos_guest_xcode_developer_dir: PathBuf,
     pub(crate) gitlab_url: Url,
     pub(crate) host_root: PathBuf,
-    /// Where runners check work out. Separate from `host_root` because Apple's
-    /// packaging cannot run on a case-sensitive volume — `xcodebuild` writes
-    /// `Headers` and `cargo swift package` then removes `headers` — while the
-    /// rest of the host root is happy either way. Defaults to `host_root` for
-    /// a machine whose volume already folds case.
+    /// Where runners check work out when checkout storage is separate from
+    /// the host's toolchains and caches. Defaults to `host_root`.
     #[serde(default)]
     pub(crate) build_root: Option<PathBuf>,
     pub(crate) host_xcode_developer_dir: PathBuf,

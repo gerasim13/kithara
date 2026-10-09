@@ -12741,6 +12741,7 @@ dependencies = [
  "toml 1.1.7+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
+ "uniffi_bindgen",
 ]
 
 [[package]]

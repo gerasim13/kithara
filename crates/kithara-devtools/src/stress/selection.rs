@@ -138,7 +138,7 @@ pub(super) fn unit_runner(
     let Some(lane) = lane else {
         return Ok(StressRunner::Command(mode.command.clone()));
     };
-    let choice = toggled(&project.test, lane, mode.flash, mode.no_block)?;
+    let choice = toggled(&project.test, lane, mode.flash, mode.no_block, mode.load)?;
     resolve(&project.test, &choice).map(|lane| StressRunner::Lane(Box::new(lane)))
 }
 
