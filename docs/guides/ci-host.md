@@ -160,9 +160,14 @@ a diverged branch.
 GitHub pull requests are verified before merge. While both default branches are
 equal, the bridge reserves the exact head and base pair, publishes one
 quarantine ref, and starts its GitLab pipeline; the result lands on the head
-commit under the status context `kithara/gitlab-verification`. Branch protection
-must require that context on `main` and forbid direct pushes and bypasses, or
-the verifier is advisory. Once the default branch moves, the next attempt
+commit under the status context `kithara/gitlab-verification`. The verifier is
+advisory by decision; merging stays the maintainer's call, so the status carries
+the risk. Every verdict names the default-branch commit it was judged against.
+When the default branch moves after a pass, the next tick sets the status to
+pending and says the earlier pass was against an older base. Each default-branch
+commit carries the verdict of its own GitLab pipeline under the same context;
+a commit that stops being the head is still watched until its pipeline finishes.
+Each status links to its pipeline. Once the default branch moves, the next attempt
 reserves against the new base with a new ref.
 
 A pull request changing a CI control path is rejected before a pipeline exists;
