@@ -69,15 +69,6 @@ rule:
                 - pattern: $TYPE::from_be_bytes([$$$VALUES])
                 - pattern: $TYPE::from_le_bytes([$$$VALUES])
               stopBy: end
-        - not:
-            inside:
-              all:
-                - kind: mod_item
-                - follows:
-                    kind: attribute_item
-                    regex: 'cfg(?:_attr)?\([^\n]*test'
-                    stopBy: end
-              stopBy: end
     - all:
         - kind: float_literal
         - not:
@@ -113,13 +104,4 @@ rule:
                 - pattern: $VALUE - 0.5
                 - pattern: $VALUE * 0.5
                 - pattern: 0.5 * $VALUE
-              stopBy: end
-        - not:
-            inside:
-              all:
-                - kind: mod_item
-                - follows:
-                    kind: attribute_item
-                    regex: 'cfg(?:_attr)?\([^\n]*test'
-                    stopBy: end
               stopBy: end
