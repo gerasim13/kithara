@@ -217,12 +217,13 @@ fn warmup_to_variant(audio: &mut LiveAudio, variant: usize, label: &str) {
         if playing == Some(variant) {
             break;
         }
-        // Cached playback must not outrun the incoming variant's preparation.
+        // Warmup stands in for a listener: do not outrun the network delivering
+        // the switch, otherwise the transition races the read budget.
         pace(
             chunk
-                .meta
-                .end_timestamp
-                .saturating_sub(chunk.meta.timestamp),
+                .spec()
+                .duration_for(chunk.frames() as u64)
+                .expect("chunk playback duration must be representable"),
         );
     }
     assert_eq!(
