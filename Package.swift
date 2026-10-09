@@ -96,15 +96,7 @@ let package = Package(
             // `cargo swift package` on every build, so it cannot be annotated
             // here; the generated target keeps the older language mode while
             // everything written by hand stays on Swift 6.
-            swiftSettings: [.swiftLanguageMode(.v5)],
-            linkerSettings: [
-                .linkedFramework("Accelerate"),
-                .linkedFramework("AudioToolbox"),
-                .linkedFramework("CoreAudio"),
-                .linkedFramework("Security"),
-                .linkedFramework("SystemConfiguration"),
-                .linkedLibrary("c++"),
-            ]
+            swiftSettings: [.swiftLanguageMode(.v5)]
         ),
 
         // Swifty public API layer.

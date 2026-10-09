@@ -87,7 +87,7 @@ pub(crate) const RENDER: &str = "com.kithara.OfflineCaptureTest#rendersCleanWav"
 /// `core::fmt` panic plumbing drops out of each slice; same lane as the
 /// wasm flags in `crates/kithara-ffi/.cargo/config.toml`.
 ///
-/// No `embed-bitcode=no` here: `relink_slices_with_lto` runs fat LTO over
+/// No `embed-bitcode=no` here: `package_slice_staticlibs` runs fat LTO over
 /// the slice, and LTO consumes exactly the rlib bitcode that flag
 /// suppresses. rustc rejects the two together for the same reason.
 pub(crate) const RELEASE_RUSTFLAGS: &[&str] =

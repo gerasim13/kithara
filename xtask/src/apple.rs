@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use cargo_metadata::MetadataCommand;
+use cargo_metadata::{Message, MetadataCommand};
 use kithara_devtools::{Ctx, common::tools::ToolsConfig};
 use plist::{Dictionary as PlistDictionary, Value as PlistValue};
 use regex::Regex;
@@ -32,9 +32,6 @@ struct SingleFrameworkSpec {
     short_version: String,
     /// `MinimumOSVersion` / build target (e.g. `15.6`).
     deployment_target: String,
-    /// System frameworks the Rust core needs autolinked into the static
-    /// framework (e.g. `AudioToolbox`, `CoreAudio`).
-    autolink_frameworks: Vec<String>,
     /// `CFBundleVersion` build number; defaults to `1`.
     #[serde(default = "default_bundle_version")]
     bundle_version: String,
@@ -436,15 +433,16 @@ fn run_build(
     if target.is_none() {
         keep_arm64_ios_simulator_only(&xcf_dst, tools)?;
     }
+    package_slice_staticlibs(
+        &xcf_dst,
+        &crate_dir,
+        profile,
+        target,
+        &deployment_target,
+        &features,
+        tools,
+    )?;
     if matches!(profile, crate::BuildProfile::Release) {
-        relink_slices_with_lto(
-            &xcf_dst,
-            &crate_dir,
-            metadata.target_directory.as_std_path(),
-            &deployment_target,
-            &features,
-            tools,
-        )?;
         strip_xcframework(&xcf_dst, tools)?;
     }
     link_like_a_consumer(&xcf_dst, tools)?;
@@ -591,17 +589,77 @@ fn run_release(release: &ReleaseConfig, apple: &AppleConfig, tools: &ToolsConfig
     Ok(())
 }
 
-/// Rebuild every packaged slice as a whole-program archive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NativeLib {
+    Framework(String),
+    Library(String),
+}
+
+fn parse_native_static_libs(note: &str) -> Result<Vec<NativeLib>> {
+    let tokens = note
+        .strip_prefix("native-static-libs:")
+        .with_context(|| format!("missing native-static-libs: prefix in `{note}`"))?;
+    let mut tokens = tokens.split_whitespace();
+    let mut libs = Vec::new();
+    while let Some(token) = tokens.next() {
+        let lib = if token == "-framework" {
+            let name = tokens.next().context("missing name after `-framework`")?;
+            if name.starts_with('-') {
+                bail!("invalid framework name token `{name}` after `-framework`");
+            }
+            NativeLib::Framework(name.to_owned())
+        } else if let Some(name) = token.strip_prefix("-l").filter(|name| !name.is_empty()) {
+            NativeLib::Library(name.to_owned())
+        } else {
+            bail!("unknown native-static-libs token `{token}`");
+        };
+        if !libs.contains(&lib) {
+            libs.push(lib);
+        }
+    }
+    Ok(libs)
+}
+
+fn with_link_directives(modulemap: &str, libs: &[NativeLib]) -> Result<String> {
+    let closing = modulemap
+        .rfind('}')
+        .context("modulemap has no closing `}`")?;
+    let mut output = modulemap[..closing].trim_end().to_owned();
+    output.push('\n');
+    for lib in libs {
+        let line = match lib {
+            NativeLib::Framework(name) => format!("    link framework \"{name}\"\n"),
+            NativeLib::Library(name) => format!("    link \"{name}\"\n"),
+        };
+        output.push_str(&line);
+    }
+    output.push_str(&modulemap[closing..]);
+    Ok(output)
+}
+
+fn union_native_libs(lists: &[Vec<NativeLib>]) -> Vec<NativeLib> {
+    let mut union = Vec::new();
+    for lib in lists.iter().flatten() {
+        if !union.contains(lib) {
+            union.push(lib.clone());
+        }
+    }
+    union
+}
+
+/// Package each slice's staticlib archive together with its native link list.
 ///
 /// `cargo swift` builds `kithara-ffi` with its declared `crate-type`
 /// (`lib`, `staticlib`, `cdylib`), and cargo skips LTO for any unit that also
 /// emits an rlib, so the packaged archive is a pile of per-crate objects that
 /// the profile's `lto = "fat"` never touched. A `staticlib`-only unit is the
-/// shape fat LTO accepts; rebuild each slice that way and swap it in.
-fn relink_slices_with_lto(
+/// shape fat LTO accepts. Both profiles ship the archive whose native link
+/// list rustc printed, so the modulemap always describes what ships.
+fn package_slice_staticlibs(
     xcframework: &FsPath,
     crate_dir: &FsPath,
-    target_dir: &FsPath,
+    profile: crate::BuildProfile,
+    target: Option<&str>,
     deployment_target: &str,
     features: &str,
     tools: &ToolsConfig,
@@ -619,20 +677,26 @@ fn relink_slices_with_lto(
             .file_name()
             .and_then(|name| name.to_str())
             .with_context(|| format!("slice name is not UTF-8: {}", slice_dir.display()))?;
-        let targets = consts::SLICE_TARGETS
-            .iter()
-            .find_map(|(name, targets)| (*name == slice).then_some(*targets))
-            .with_context(|| {
-                format!("no target triples registered for xcframework slice `{slice}`")
-            })?;
+        let targets = match target.as_ref() {
+            Some(target) => std::slice::from_ref(target),
+            None => consts::SLICE_TARGETS
+                .iter()
+                .find_map(|(name, targets)| (*name == slice).then_some(*targets))
+                .with_context(|| {
+                    format!("no target triples registered for xcframework slice `{slice}`")
+                })?,
+        };
 
-        println!("==> Relinking {} with fat LTO", lib.display());
-        let archives = targets
+        println!(
+            "==> Packaging {} with native link directives",
+            lib.display()
+        );
+        let builds = targets
             .iter()
             .map(|target| {
                 build_slice_staticlib(
                     crate_dir,
-                    target_dir,
+                    profile,
                     target,
                     deployment_target,
                     features,
@@ -640,6 +704,7 @@ fn relink_slices_with_lto(
                 )
             })
             .collect::<Result<Vec<_>>>()?;
+        let (archives, lists): (Vec<_>, Vec<_>) = builds.into_iter().unzip();
         match archives.as_slice() {
             [thin] => {
                 fs::copy(thin, &lib)
@@ -647,28 +712,39 @@ fn relink_slices_with_lto(
             }
             fat => lipo_create(fat, &lib, tools)?,
         }
+        let modulemap = slice_dir.join("Headers/KitharaFFIInternal/module.modulemap");
+        let source = fs::read_to_string(&modulemap)
+            .with_context(|| format!("read {}", modulemap.display()))?;
+        fs::write(
+            &modulemap,
+            with_link_directives(&source, &union_native_libs(&lists))?,
+        )
+        .with_context(|| format!("write {}", modulemap.display()))?;
     }
     Ok(())
 }
 
 /// Build one target's `kithara-ffi` archive as a `staticlib`-only unit and
-/// return its path. `cargo rustc` overrides the manifest `crate-type`, which
-/// is what lets cargo turn fat LTO on for this unit.
+/// return its reported path and native libraries. Overriding the manifest
+/// `crate-type` lets cargo turn fat LTO on for the release unit.
 fn build_slice_staticlib(
     crate_dir: &FsPath,
-    target_dir: &FsPath,
+    profile: crate::BuildProfile,
     target: &str,
     deployment_target: &str,
     features: &str,
     tools: &ToolsConfig,
-) -> Result<PathBuf> {
+) -> Result<(PathBuf, Vec<NativeLib>)> {
     let mut cmd = Command::new("cargo");
-    cmd.args(consts::RELEASE_CARGO_ARGS);
+    if matches!(profile, crate::BuildProfile::Release) {
+        cmd.args(consts::RELEASE_CARGO_ARGS);
+    }
+    cmd.args(["rustc", "-p", "kithara-ffi"]);
+    if matches!(profile, crate::BuildProfile::Release) {
+        cmd.arg("--release");
+        set_release_rustflags(&mut cmd);
+    }
     cmd.args([
-        "rustc",
-        "-p",
-        "kithara-ffi",
-        "--release",
         "--target",
         target,
         "--no-default-features",
@@ -676,24 +752,66 @@ fn build_slice_staticlib(
         features,
         "--crate-type",
         "staticlib",
+        "--message-format=json",
     ]);
+    cmd.args(["--", "--print", "native-static-libs"]);
     cmd.current_dir(crate_dir);
     cmd.env("IPHONEOS_DEPLOYMENT_TARGET", deployment_target);
-    set_release_rustflags(&mut cmd);
     set_simulator_bindgen_args(&mut cmd, tools)?;
 
-    let status = cmd
-        .status()
+    let output = cmd
+        .stderr(Stdio::inherit())
+        .output()
         .with_context(|| format!("failed to run cargo rustc for {target}"))?;
-    if !status.success() {
+    let mut artifact = None;
+    let mut notes = Vec::new();
+    let mut build_failed = false;
+    for message in Message::parse_stream(output.stdout.as_slice()) {
+        match message.with_context(|| format!("read cargo rustc messages for {target}"))? {
+            Message::CompilerArtifact(compiled)
+                if compiled.manifest_path.as_std_path() == crate_dir.join("Cargo.toml") =>
+            {
+                if let Some(archive) = compiled
+                    .filenames
+                    .iter()
+                    .find(|path| path.extension() == Some("a"))
+                {
+                    artifact = Some((compiled.package_id, archive.clone().into_std_path_buf()));
+                }
+            }
+            Message::CompilerMessage(diagnostic) => {
+                if let Some(rendered) = &diagnostic.message.rendered {
+                    eprint!("{rendered}");
+                }
+                if diagnostic
+                    .message
+                    .message
+                    .starts_with("native-static-libs:")
+                {
+                    notes.push((diagnostic.package_id, diagnostic.message.message));
+                }
+            }
+            Message::BuildFinished(finished) => build_failed |= !finished.success,
+            _ => {}
+        }
+    }
+    if !output.status.success() || build_failed {
         bail!("staticlib build failed for {target}");
     }
-    let lib = target_dir
-        .join(target)
-        .join("release")
-        .join("libkithara_ffi.a");
+    let (package, lib) =
+        artifact.with_context(|| format!("missing kithara-ffi archive for {target}"))?;
+    let notes = notes
+        .into_iter()
+        .filter_map(|(owner, note)| (owner == package).then_some(note))
+        .collect::<Vec<_>>();
+    let [note] = notes.as_slice() else {
+        bail!(
+            "expected exactly one native-static-libs note for kithara-ffi ({target}), got {}",
+            notes.len()
+        );
+    };
     require_file(&lib)?;
-    Ok(lib)
+    Ok((lib, parse_native_static_libs(note)?))
 }
 
 fn strip_xcframework(xcframework: &FsPath, tools: &ToolsConfig) -> Result<()> {
@@ -979,7 +1097,7 @@ fn run_single(profile: crate::BuildProfile, tools: &ToolsConfig) -> Result<()> {
     fs::create_dir_all(&merged)?;
 
     println!("==> Merging the Swift layers into one module");
-    merge_sources(&apple_dir, &merged, &spec.autolink_frameworks)?;
+    merge_sources(&apple_dir, &merged)?;
 
     let dist = apple_dir.join("dist");
     fs::create_dir_all(&dist)?;
@@ -1018,7 +1136,7 @@ fn resolve_rxswift(root: &FsPath, tools: &ToolsConfig) -> Result<PathBuf> {
 }
 
 /// Copy + transform the three Swift layers into one single-module directory.
-fn merge_sources(apple_dir: &FsPath, merged: &FsPath, autolink: &[String]) -> Result<()> {
+fn merge_sources(apple_dir: &FsPath, merged: &FsPath) -> Result<()> {
     let ffi = apple_dir.join("Sources/KitharaFFI/KitharaFFI.swift");
     let content = fs::read_to_string(&ffi).with_context(|| format!("read {}", ffi.display()))?;
     fs::write(merged.join("KitharaFFI.swift"), transform_ffi(&content)?)?;
@@ -1036,14 +1154,6 @@ fn merge_sources(apple_dir: &FsPath, merged: &FsPath, autolink: &[String]) -> Re
         }
     }
 
-    // Autolink stub: importing these system frameworks makes the static
-    // framework carry `-framework` directives, so a consumer resolves the
-    // Rust core's symbols with no extra link flags.
-    let system_link = autolink
-        .iter()
-        .map(|fw| format!("import {fw}\n"))
-        .collect::<String>();
-    fs::write(merged.join("_SystemLink.swift"), system_link)?;
     Ok(())
 }
 
@@ -1820,6 +1930,134 @@ fn require_apple_needles<'a>(needles: &'a [String], key: &str) -> Result<&'a [St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_libraries_keep_first_seen_order_without_duplicates() {
+        assert_eq!(
+            parse_native_static_libs(
+                "native-static-libs: -lsupport -framework Echo -framework Wave \
+                 -lsupport -framework Echo -lmath -lEcho"
+            )
+            .unwrap(),
+            vec![
+                NativeLib::Library("support".into()),
+                NativeLib::Framework("Echo".into()),
+                NativeLib::Framework("Wave".into()),
+                NativeLib::Library("math".into()),
+                NativeLib::Library("Echo".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn unknown_native_library_tokens_are_refused() {
+        for token in ["-pthread", "unexpected", "-l"] {
+            let note = format!("native-static-libs: -lsupport {token}");
+            let error = parse_native_static_libs(&note).unwrap_err().to_string();
+            assert!(error.contains(token), "{error}");
+        }
+    }
+
+    #[test]
+    fn native_libraries_require_the_note_prefix_and_framework_name() {
+        for (note, token) in [
+            ("-lsupport", "-lsupport"),
+            ("native-static-libs: -framework", "-framework"),
+            ("native-static-libs: -framework -lsupport", "-lsupport"),
+        ] {
+            let error = parse_native_static_libs(note).unwrap_err().to_string();
+            assert!(error.contains(token), "{error}");
+        }
+    }
+
+    #[test]
+    fn native_link_directives_stay_inside_the_module() {
+        let libs = vec![
+            NativeLib::Framework("Echo".into()),
+            NativeLib::Library("support".into()),
+        ];
+        for modulemap in [
+            "module Example {\n    header \"Example.h\"\n    export *\n}\n",
+            "module Example {\n    header \"Example.h\"\n    export *\n  }\n",
+            "module Example {\n    header \"Example.h\"\n    export * }\n",
+        ] {
+            assert_eq!(
+                with_link_directives(modulemap, &libs).unwrap(),
+                concat!(
+                    "module Example {\n",
+                    "    header \"Example.h\"\n",
+                    "    export *\n",
+                    "    link framework \"Echo\"\n",
+                    "    link \"support\"\n",
+                    "}\n",
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn modulemaps_without_a_closing_brace_are_refused() {
+        let error = with_link_directives("module Example {\n", &[])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains('}'), "{error}");
+    }
+
+    #[test]
+    fn fat_slices_link_the_ordered_union_of_their_targets() {
+        let lists = vec![
+            parse_native_static_libs("native-static-libs: -lsupport -framework Echo").unwrap(),
+            parse_native_static_libs(
+                "native-static-libs: -framework Wave -lsupport -framework Echo -lmath",
+            )
+            .unwrap(),
+        ];
+        assert_eq!(
+            union_native_libs(&lists),
+            vec![
+                NativeLib::Library("support".into()),
+                NativeLib::Framework("Echo".into()),
+                NativeLib::Framework("Wave".into()),
+                NativeLib::Library("math".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn consumer_platform_maps_supported_plist_entries() {
+        for (platform, variant, expected) in [
+            ("ios", None, ("iphoneos", "ios", "")),
+            (
+                "ios",
+                Some("simulator"),
+                ("iphonesimulator", "ios", "-simulator"),
+            ),
+            ("macos", None, ("macosx", "macos", "")),
+        ] {
+            let mut library = PlistDictionary::new();
+            library.insert("SupportedPlatform".into(), platform.into());
+            if let Some(variant) = variant {
+                library.insert("SupportedPlatformVariant".into(), variant.into());
+            }
+            assert_eq!(consumer_platform(&library).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn consumer_platform_refuses_unknown_plist_platforms_and_variants() {
+        for (platform, variant) in [
+            ("unknown", None),
+            ("ios", Some("unknown")),
+            ("macos", Some("simulator")),
+        ] {
+            let mut library = PlistDictionary::new();
+            library.insert("SupportedPlatform".into(), platform.into());
+            if let Some(variant) = variant {
+                library.insert("SupportedPlatformVariant".into(), variant.into());
+            }
+            assert!(consumer_platform(&library).is_err());
+        }
+    }
 
     #[test]
     fn transform_ffi_keeps_track_id_internal_to_ffi_namespace() {
