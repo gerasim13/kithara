@@ -104,6 +104,8 @@ integration-regressions = ["all"]
 # path-dep against the virtual `kithara::platform::time::Instant`. Used by the
 # phase-continuity equivalence proof.
 flash = ["kithara/flash", "kithara-test-utils/flash"]
+# CPU load beside every test body; enabled by `just test run --load=on`.
+load = ["kithara-test-utils/load"]
 # Poll-blocking detector; enabled by `just test run --no-block=on`.
 no-block = ["kithara/no-block", "kithara-test-utils/no-block"]
 # Run integration tests with the native Apple HTTP backend (`NSURLSession`).

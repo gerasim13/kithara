@@ -581,6 +581,8 @@ pub struct TestCommandConfig {
     pub flash: TestFlashConfig,
     #[config(nested)]
     pub no_block: TestNoBlockConfig,
+    #[config(nested)]
+    pub load: TestLoadConfig,
     pub features: Vec<String>,
     /// Tests whose retried pass a lane tolerates, each naming the issue that
     /// owns the defect.
@@ -625,6 +627,15 @@ impl ToggleSchema for TestNoBlock {
 
 pub type TestNoBlockConfig = ToggleConfig<TestNoBlock>;
 
+pub enum TestLoad {}
+
+impl ToggleSchema for TestLoad {
+    const FIELDS: &'static [&'static str; 2] = &["features", "default"];
+    const DEFAULT: bool = false;
+}
+
+pub type TestLoadConfig = ToggleConfig<TestLoad>;
+
 #[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]
 #[config(builder(none))]
@@ -646,6 +657,7 @@ pub struct TestLaneConfig {
     /// Poll-blocking detector default for this lane, so two schedulers cannot
     /// run the same lane under different rules.
     pub default_no_block: Option<bool>,
+    pub default_load: Option<bool>,
     /// What the lane builds: its packages, targets and Cargo profile.
     pub cargo: TestCargoOptions,
     /// What runs the built tests: nextest unless the lane names `cargo`.
@@ -660,12 +672,12 @@ pub struct TestLaneConfig {
     pub owns: Vec<String>,
     /// Toggles whose feature none of this lane's packages declares.
     ///
-    /// `default_flash`/`default_no_block` say what a lane runs with by
+    /// `default_flash`/`default_no_block`/`default_load` say what a lane runs with by
     /// default, which a caller may override. This says the lane cannot carry
     /// the toggle at all: cargo applies an unqualified feature to every
     /// selected package and fails the whole run when none of them declares it,
     /// so a run-wide request has to leave such a lane alone. Valid entries are
-    /// `flash` and `no-block`.
+    /// `flash`, `no-block` and `load`.
     pub undeclared_toggles: Vec<String>,
 }
 
@@ -848,6 +860,7 @@ pub struct StressModeConfig {
     /// The blocking detector this mode asks every lane for; unset keeps each
     /// lane's own.
     pub no_block: Option<bool>,
+    pub load: Option<bool>,
     /// Whether the command performs the run's repeats itself.
     ///
     /// A command that runs its tests under nextest can be handed the count
@@ -1122,7 +1135,9 @@ impl StressConfig {
         if let Some(path) = &mode.attempt_junit {
             validate_relative_path(&format!("stress.modes.{name}.attempt_junit"), path)?;
         }
-        if !mode.command.is_empty() && (mode.flash.is_some() || mode.no_block.is_some()) {
+        if !mode.command.is_empty()
+            && (mode.flash.is_some() || mode.no_block.is_some() || mode.load.is_some())
+        {
             bail!("stress mode `{name}` runs a command, so its toggles reach nothing");
         }
         Ok(())

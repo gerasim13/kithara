@@ -21,7 +21,7 @@ pub struct TestArgs {
     /// Arguments for the configured test command. Recipe-level flags accepted anywhere:
     /// `--lane=<configured-name>`, `--touched`, `--flash=true|false|on|off`, `--no-flash`,
     /// `--loom=true|false|on|off`, `--no-loom`, `--no-block=true|false|on|off`,
-    /// `--net-backend=<configured-name>`, and `--narrow=<filterset>`.
+    /// `--load=true|false|on|off`, `--net-backend=<configured-name>`, and `--narrow=<filterset>`.
     #[arg(value_name = "ARGS", allow_hyphen_values = true)]
     pub(crate) args: Vec<String>,
 }

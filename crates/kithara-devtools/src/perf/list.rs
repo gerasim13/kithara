@@ -62,6 +62,7 @@ pub(crate) fn nextest_list(
             toggles: LaneToggles {
                 flash,
                 no_block: false,
+                load: false,
             },
         },
     )?
