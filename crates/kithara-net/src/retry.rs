@@ -2,17 +2,20 @@ use std::future::Future;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use kithara_platform::{CancelToken, sync::Arc, time::sleep, tokio};
+#[cfg(not(feature = "client-host"))]
+use kithara_platform::sync::Arc;
+use kithara_platform::{CancelToken, time::sleep, tokio};
 use url::Url;
 
 use crate::{
     ByteStream,
-    error::{NetError, NetResult, Retryability},
-    metrics::ConnectionMetrics,
+    error::{NetError, Retryability},
     observe::Observer,
     traits::Net,
     types::{Headers, RangeSpec, RetryPolicy},
 };
+#[cfg(not(feature = "client-host"))]
+use crate::{error::NetResult, metrics::ConnectionMetrics};
 
 /// Retry decorator for Net implementations
 pub struct RetryNet<N> {
@@ -136,12 +139,14 @@ impl<N: Net> Net for RetryNet<N> {
     }
 }
 
+#[cfg(not(feature = "client-host"))]
 #[derive_where::derive_where(Clone)]
 pub struct RetryClient<Raw> {
     pub(crate) net: Arc<RetryNet<Raw>>,
     pub(crate) connection_metrics: ConnectionMetrics,
 }
 
+#[cfg(not(feature = "client-host"))]
 impl<Raw: Net> RetryClient<Raw> {
     #[must_use]
     pub fn connection_count(&self) -> usize {
@@ -186,6 +191,7 @@ impl<Raw: Net> RetryClient<Raw> {
 
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg(not(feature = "client-host"))]
 impl<Raw: Net> Net for RetryClient<Raw> {
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
         self.net.get_bytes(url, headers).await
