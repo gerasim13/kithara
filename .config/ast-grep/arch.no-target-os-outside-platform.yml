@@ -9,9 +9,8 @@ message: |
   wasm or apple build can silently regress. The platform crates exist
   precisely to centralize these gates.
 
-  Suppress with `// ast-grep-ignore: arch.no-target-os-outside-platform`
-  only when the gate is on a `mod` that is itself a thin platform shim
-  (document the why on the owning crate wiki page).
+  Platform primitives and Android ABI bindings are owned by
+  `kithara-platform` and `kithara-android` respectively.
 severity: warning
 language: Rust
 files:
@@ -22,6 +21,8 @@ ignores:
   - "**/*_test.rs"
   - "**/*_tests.rs"
   - "**/tests.rs"
+  - "crates/kithara-platform/src/**"
+  - "crates/kithara-android/src/**"
   # `kithara-ffi/src/lib.rs` is the structural boundary for the
   # browser/wasm split (`mod native;` / `pub mod web;` target_arch gates).
   # Android JNI gates live one level down in `src/native/mod.rs`, alongside

@@ -556,6 +556,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn target_gate_rule_recognizes_platform_owners_and_keeps_business_gates() {
+        let source = "#[cfg(target_os = \"android\")]\nfn gate() {}\n";
+        for path in [
+            "crates/kithara-platform/src/common/gate.rs",
+            "crates/kithara-android/src/lib.rs",
+        ] {
+            assert_eq!(
+                rule_hits_at("arch.no-target-os-outside-platform.yml", path, source),
+                0,
+                "{path}"
+            );
+        }
+        assert_eq!(
+            rule_hits_at(
+                "arch.no-target-os-outside-platform.yml",
+                "crates/kithara-audio/src/gate.rs",
+                source
+            ),
+            1,
+        );
+    }
+
     fn module_root_hits(relative_path: &str, source: &str) -> usize {
         rule_hits_at("style.no-items-in-lib-or-mod-rs.yml", relative_path, source)
     }
