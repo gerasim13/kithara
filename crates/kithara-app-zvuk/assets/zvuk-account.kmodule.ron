@@ -1,0 +1,99 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "zvuk-account",
+    chrome: Plain,
+    parameters: ["source"],
+    item: { "title": "@library.source.zvuk", "icon": "Zvuk" },
+    root: Column(
+        id: "rows",
+        size: (w: Fill, h: Shrink),
+        gap: 0.0,
+        children: [
+            Row(
+                id: "account",
+                size: (w: Fill, h: Fixed(36.0)),
+                gap: 10.0,
+                pad_x: 16.0,
+                frame: (top: false, right: false, bottom: true, left: false),
+                frame_color: LineInner,
+                children: [
+                    Text(id: "account-label", style: Body, color: TextDim, label: "@zvuk.account.label"),
+                    Spacer(id: "account-gap", size: Some((w: Fill, h: Fill))),
+                    Optional(
+                        id: "fault",
+                        hidden: Model(id: "source.account_fault_hidden", with: { "source": "$source" }),
+                        child: Text(id: "fault-text", style: MicroLabel, read: Model(id: "source.account_fault", with: { "source": "$source" })),
+                    ),
+                    Optional(
+                        id: "identity",
+                        hidden: Model(id: "source.account_label_hidden", with: { "source": "$source" }),
+                        child: Text(id: "identity-text", style: Mono, color: Text, read: Model(id: "source.account_label", with: { "source": "$source" })),
+                    ),
+                    Optional(
+                        id: "awaiting",
+                        hidden: Model(id: "source.account_awaiting_hidden", with: { "source": "$source" }),
+                        child: Row(
+                            id: "awaiting-side",
+                            size: (w: Shrink, h: Fill),
+                            gap: 10.0,
+                            children: [
+                                Text(id: "awaiting-caption", style: MicroLabel, label: "@zvuk.account.awaiting"),
+                                Pressable(
+                                    id: "cancel-press",
+                                    press: Command(id: "source.account_cancel", with: { "source": "$source" }),
+                                    child: Row(
+                                        id: "cancel-chip",
+                                        size: (w: Shrink, h: Shrink),
+                                        gap: 0.0,
+                                        pad_x: 10.0,
+                                        pad_y: 3.0,
+                                        frame: (top: true, right: true, bottom: true, left: true),
+                                        frame_color: Line,
+                                        children: [Text(id: "cancel-label", style: Cell, label: "@zvuk.account.cancel")],
+                                    ),
+                                ),
+                            ],
+                        ),
+                    ),
+                    Optional(
+                        id: "connect",
+                        hidden: Model(id: "source.account_connect_hidden", with: { "source": "$source" }),
+                        child: Pressable(
+                            id: "connect-press",
+                            press: Command(id: "source.account_connect", with: { "source": "$source" }),
+                            child: Row(
+                                id: "connect-chip",
+                                size: (w: Shrink, h: Shrink),
+                                gap: 0.0,
+                                pad_x: 10.0,
+                                pad_y: 3.0,
+                                frame: (top: true, right: true, bottom: true, left: true),
+                                frame_color: Line,
+                                children: [Text(id: "connect-label", style: Cell, label: "@zvuk.account.connect")],
+                            ),
+                        ),
+                    ),
+                    Optional(
+                        id: "disconnect",
+                        hidden: Model(id: "source.account_disconnect_hidden", with: { "source": "$source" }),
+                        child: Pressable(
+                            id: "disconnect-press",
+                            press: Command(id: "source.account_disconnect", with: { "source": "$source" }),
+                            child: Row(
+                                id: "disconnect-chip",
+                                size: (w: Shrink, h: Shrink),
+                                gap: 0.0,
+                                pad_x: 10.0,
+                                pad_y: 3.0,
+                                frame: (top: true, right: true, bottom: true, left: true),
+                                frame_color: Line,
+                                children: [Text(id: "disconnect-label", style: Cell, label: "@zvuk.account.disconnect")],
+                            ),
+                        ),
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

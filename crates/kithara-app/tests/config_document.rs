@@ -45,7 +45,7 @@ fn the_shipped_document_configures_the_application() {
         "the shipped document accepts test-server certificates"
     );
     config
-        .drm_policy()
+        .drm_policy(&[])
         .expect("the shipped providers are valid");
 }
 

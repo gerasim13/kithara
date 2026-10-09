@@ -248,9 +248,12 @@ fn caption_spec(
     machine: &mut Expander<'_, '_>,
 ) -> Result<Option<ControlSpec>, UiDocError> {
     let spec = match control {
-        ControlNode::NavItem { label, icon, .. } => ControlSpec::NavItem {
+        ControlNode::NavItem {
+            label, icon, style, ..
+        } => ControlSpec::NavItem {
             label: intern_text(context, machine.interner, label, path, &context.origin)?,
             icon: context.param(icon, path)?,
+            style: *style,
         },
         ControlNode::TabLarge { label, .. } => ControlSpec::TabLarge {
             label: intern_text(context, machine.interner, label, path, &context.origin)?,

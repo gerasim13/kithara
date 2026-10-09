@@ -4,7 +4,7 @@ use crate::{
         picture::sprite::{Fit, fitted},
     },
     draw::{DrawListBuilder, Image, Pt, Rect, Rgba, Transform},
-    shaping::TextContext,
+    shaping::{Elision, TextContext},
     skin::{TextRoleSkin, WaveOverlaySkin},
 };
 
@@ -204,8 +204,9 @@ fn draw_summary(
     data: Overlay<'_>,
     metrics: WaveOverlaySkin,
 ) {
-    let (title, title_run) = text.shape_elided(data.title, metrics.title, bounds.w);
-    let (artist, artist_run) = text.shape_elided(data.artist, metrics.artist, bounds.w);
+    let (title, title_run) = text.shape_elided(data.title, metrics.title, bounds.w, Elision::End);
+    let (artist, artist_run) =
+        text.shape_elided(data.artist, metrics.artist, bounds.w, Elision::End);
     let total_text_height = title_run.height() + metrics.summary_gap + artist_run.height();
     let title_y = header.y + (header.h - total_text_height) / 2.0;
     let mut clipped = list.child();
@@ -309,7 +310,7 @@ fn draw_right(
     role: TextRoleSkin,
     color: Rgba,
 ) {
-    let (content, run) = text.shape_elided(content, role, max_width);
+    let (content, run) = text.shape_elided(content, role, max_width, Elision::End);
     let x = position.x - run.width();
     list.text(
         &run,

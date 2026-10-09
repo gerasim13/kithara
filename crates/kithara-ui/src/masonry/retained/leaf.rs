@@ -246,10 +246,10 @@ impl Leaf {
             } => {
                 if !content.is_empty() {
                     let max_width = (bounds.w - *padding_x * 2.0).max(0.0);
-                    let run = text.shape(content, *role, Some(max_width));
+                    let (content, run) = role.fit(text, content, max_width);
                     list.text(
                         &run,
-                        content,
+                        &content,
                         Transform::translate(Pt {
                             x: text_x(*align, bounds, run.width(), *padding_x),
                             y: (bounds.h - run.height()) / 2.0,
@@ -297,10 +297,11 @@ impl Leaf {
     pub(crate) fn set_read(&mut self, value: &ReadValue<'_>) -> bool {
         match self {
             Self::Control(control) => control.set_read(value),
-            Self::Text { content, .. } => match value {
+            Self::Text { content, role, .. } => match value {
                 ReadValue::Text(text) => {
-                    *text != content && {
-                        *content = (*text).to_owned();
+                    let cased = role.cased(text);
+                    *cased != **content && {
+                        *content = cased.into_owned();
                         true
                     }
                 }

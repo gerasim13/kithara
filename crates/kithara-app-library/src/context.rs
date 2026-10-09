@@ -3,20 +3,26 @@ use kithara_platform::{CancelToken, tokio::runtime::Handle};
 use kithara_ui::error::UiDocError;
 use serde::de::DeserializeOwned;
 use serde_yaml_ng::Value;
+use url::Url;
 
-use crate::Registration;
+use crate::{Registration, Secrets};
 
-/// Shared runtime and HTTP client for plugins.
+/// The operating-system services a plugin may use.
 #[derive(Clone)]
 pub struct Environment {
     runtime: Handle,
     net: HttpClient,
+    secrets: Secrets,
 }
 
 impl Environment {
     #[must_use]
-    pub const fn new(runtime: Handle, net: HttpClient) -> Self {
-        Self { runtime, net }
+    pub const fn new(runtime: Handle, net: HttpClient, secrets: Secrets) -> Self {
+        Self {
+            runtime,
+            net,
+            secrets,
+        }
     }
 
     /// Runtime for plugin tasks.
@@ -30,7 +36,26 @@ impl Environment {
     pub const fn net(&self) -> &HttpClient {
         &self.net
     }
+
+    /// The operating system's secret store.
+    #[must_use]
+    pub const fn secrets(&self) -> &Secrets {
+        &self.secrets
+    }
+
+    /// Opens `url` in the system browser.
+    ///
+    /// # Errors
+    /// Returns [`OpenUrlError`] when no browser takes the URL.
+    pub fn open_url(&self, url: &Url) -> Result<(), OpenUrlError> {
+        webbrowser::open(url.as_str()).map_err(OpenUrlError::from)
+    }
 }
+
+/// The system browser did not open a URL.
+#[derive(Debug, thiserror::Error)]
+#[error("the browser did not open the URL")]
+pub struct OpenUrlError(#[from] std::io::Error);
 
 /// Plugin cancellation token and resolved `sources` configuration entry.
 pub struct Context {

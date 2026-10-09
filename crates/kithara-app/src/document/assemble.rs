@@ -10,7 +10,7 @@ use kithara::{
     play::PlayWorkerConfig,
     worker::{OwnedPoolConfig, Worker, WorkerConfig},
 };
-use kithara_config::Config as _;
+use kithara_app_library::KeyAccess;
 
 use super::{Config, PolicyError};
 use crate::{
@@ -35,7 +35,25 @@ pub enum AssembleError {
 
 #[bon::bon]
 impl AppConfig {
-    /// Assembles what `document` describes over `pools`.
+    /// The HTTP client the document's `net:` section describes; `is_insecure`
+    /// forces invalid certificates to be accepted.
+    #[must_use]
+    pub fn client(
+        document: &Config,
+        pools: &Pools,
+        shutdown: &CancelToken,
+        is_insecure: bool,
+    ) -> HttpClient {
+        let mut net = NetOptions::builder().build();
+        net.apply(document.net());
+        let mut forced = NetOptionsPatch::default();
+        forced.is_insecure = is_insecure.then_some(true);
+        net.apply(forced);
+        HttpClient::new(net, pools.clone(), shutdown.child())
+    }
+
+    /// Assembles what `document` describes over `pools` and `net`, with the
+    /// key access the registered plugins grant.
     ///
     /// # Errors
     /// Returns [`AssembleError`] when a section of the document is refused.
@@ -43,9 +61,10 @@ impl AppConfig {
     pub fn assemble(
         document: &Config,
         pools: Pools,
+        net: HttpClient,
+        grants: &[KeyAccess],
         shutdown: CancelToken,
         runtime: Handle,
-        #[builder(default)] is_insecure: bool,
         ui_package: Option<PathBuf>,
     ) -> Result<Self, AssembleError> {
         let compute_threads = thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
@@ -72,14 +91,7 @@ impl AppConfig {
         };
         #[cfg(not(feature = "broadcast"))]
         let broadcast = AppBroadcastConfig::default();
-        let mut net = NetOptions::builder().build();
-        net.apply(document.net());
-        let should_accept_invalid_certs = net.values().is_insecure || is_insecure;
-        let mut net_override = NetOptionsPatch::default();
-        net_override.is_insecure = Some(should_accept_invalid_certs);
-        net.apply(net_override);
-        let client = HttpClient::new(net, pools.clone(), shutdown.child());
-        let mut downloader_config = DownloaderConfig::for_client(client.clone()).build();
+        let mut downloader_config = DownloaderConfig::for_client(net.clone()).build();
         downloader_config.apply(document.downloader());
         let downloader = Downloader::new(downloader_config);
         let mut flush_policy = FlushPolicy::default();
@@ -93,9 +105,8 @@ impl AppConfig {
         store_config.apply(document.assets_store());
         let store = AppStore::open(store_config);
         let builder = Self::builder()
-            .drm(AppDrm::new(document.drm_policy()?))
-            .net(client)
-            .sources(document.sources().clone())
+            .drm(AppDrm::new(document.drm_policy(grants)?))
+            .net(net)
             .beat_analysis(document.beat()?)
             .downloader(downloader)
             .shutdown(shutdown)
@@ -113,7 +124,6 @@ impl AppConfig {
         let builder = builder.ui(document.ui()?);
         let mut config = builder
             .tracks(document.tracks().to_vec())
-            .should_accept_invalid_certs(should_accept_invalid_certs)
             .maybe_ui_package(ui_package)
             .build();
         config.apply(document.app());

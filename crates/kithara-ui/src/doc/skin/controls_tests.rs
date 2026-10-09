@@ -1,6 +1,11 @@
 use kithara_test_utils::kithara;
 
-use super::{FontFamily, FontWeight, controls::*, palette::ColorRole, primitives::TextRoleSkin};
+use super::{
+    FontFamily, FontWeight,
+    controls::*,
+    palette::ColorRole,
+    primitives::{TextCase, TextRoleSkin},
+};
 use crate::builtin;
 
 const fn mono(size: f32, spacing: f32, color: ColorRole) -> TextRoleSkin {
@@ -10,6 +15,8 @@ const fn mono(size: f32, spacing: f32, color: ColorRole) -> TextRoleSkin {
         color,
         font: FontFamily::Mono,
         weight: FontWeight::Normal,
+        case: TextCase::AsWritten,
+        elide: None,
     }
 }
 

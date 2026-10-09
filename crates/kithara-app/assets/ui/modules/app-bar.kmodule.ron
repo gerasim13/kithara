@@ -85,6 +85,16 @@
                     ],
                 ),
             ),
+            Row(
+                id: "settings-group",
+                gap: 0.0,
+                size: (w: Shrink, h: Fill),
+                children: [
+                    Divider(id: "before-settings"),
+                    SettingsButton(id: "settings-open", write: View(id: "/settings", set: On)),
+                    Include(id: "settings", source: "app-settings.kmodule.ron"),
+                ],
+            ),
             Optional(
                 id: "window-block",
                 hidden: Model(id: "ui.window.chrome_hidden", with: { "window": "1" }),

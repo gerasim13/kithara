@@ -234,8 +234,15 @@ pub enum UiDocError {
         address: String,
         reason: &'static str,
     },
-    #[error("{origin}: item template has no slot \"content\" for the fill")]
-    TemplateWithoutContent { origin: SourceUri },
+    #[error("{origin}: no slot draws the fill documents of collection {address:?}")]
+    UndrawnCollection { origin: SourceUri, address: String },
+    #[error("{fill}: item value {name:?} {reason} item template {template}")]
+    ItemValue {
+        fill: SourceUri,
+        template: SourceUri,
+        name: String,
+        reason: &'static str,
+    },
     #[error("{origin}: slot {slot:?} shows `from` through exactly one of `each` and `select`")]
     CollectionShape { origin: SourceUri, slot: String },
     #[error("{origin}: scope {name:?} at {path} carries {value:?}, which {reason}")]

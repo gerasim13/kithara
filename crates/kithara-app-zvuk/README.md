@@ -18,8 +18,9 @@ requests on native and WASM targets.
 
 ## Usage
 
-Add `Source::FACTORY` to the app's source list. It reads `sources.zvuk` and
-registers its page in `app-library/pages`.
+Add `Source::FACTORY` to the app's source list; it mounts the source from
+its `sources.zvuk` entry. `Source::registered` builds the same registration
+over services the caller supplies.
 
 ```rust
 use kithara_app_library::Factory;
@@ -29,20 +30,35 @@ const FACTORIES: &[Factory] = &[kithara_app_zvuk::Source::FACTORY];
 
 ### Configuration
 
-The source owns the schema of its entry. Both fields are required, and each is
-a literal or an environment reference that the document resolves like any other.
-A null or absent entry mounts no source.
+The source owns the schema of its entry. `user_agent` is the client identity
+every request carries; it is a literal or an environment reference that the
+document resolves like any other. A null or absent entry mounts no source.
 
 ```yaml
 sources:
   zvuk:
     user_agent: <client identity>
-    auth_token: $KITHARA_DRM_PROD_AUTH_TOKEN
 ```
 
-Catalogue requests carry `User-Agent` and `X-Auth-Token` from this entry and no
-DRM provider header. Reads keep the shared client's retry policy; like and
-unlike requests go out once, over a single-attempt handle on the same transport.
+### Account
+
+The account connects through Zvuk's device sign-in: Connect requests a code,
+opens its confirmation page in the system browser and polls, at most every two
+seconds, until the code is confirmed, expires or is cancelled. The access token lives
+under the key `zvuk` of the app's secret store: the `secrets` section of the
+configuration overlay, or with `keystore` the operating system's store under the
+service `kithara`. A stored token starts the account signed in; a build without
+`keystore` also takes one written by hand as `secrets: { zvuk: <token> }`.
+Disconnect asks Zvuk to revoke the session and removes the stored token whatever
+Zvuk answers; a code confirmed while the store refuses the write is revoked
+again.
+
+The account task is the single writer of the token. Catalogue requests and the
+`zvuk.com` key grant read it per request; without a token the catalogue sends
+no request. The token stays out of `Debug` output, errors and logs.
+
+Catalogue reads keep the shared client's retry policy; like and unlike requests
+go out once.
 
 See [library sources](https://github.com/zvuk/kithara/wiki/kithara-app#library-sources)
 for the source contract.

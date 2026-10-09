@@ -8,7 +8,7 @@ use super::backend::*;
 use crate::{
     draw::{DrawCmd, DrawListBuilder, LineCap, LineJoin, Pen, Pt, Rect, Rgba, Transform, replay},
     shaping::{FontPolicy, GlyphFace, GlyphRun, TextContext, TextResources},
-    skin::{ColorRole, FontFamily, FontWeight, TextRoleSkin},
+    skin::{ColorRole, FontFamily, FontWeight, TextCase, TextRoleSkin},
 };
 
 #[kithara::test]
@@ -201,6 +201,8 @@ const FIXTURE: DrawFixture = {
             size: 12.0,
             spacing: 0.0,
             weight: FontWeight::Normal,
+            case: TextCase::AsWritten,
+            elide: None,
         },
     }
 };

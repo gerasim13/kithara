@@ -46,9 +46,10 @@ fn each_expanded(node: &ExpandedNode, visit: &mut impl FnMut(&ExpandedNode)) {
         ExpandedNode::Optional { child, .. }
         | ExpandedNode::Pressable { child, .. }
         | ExpandedNode::Reveal { child, .. }
-        | ExpandedNode::Scroll { child, .. } => {
-            each_expanded(child, visit);
-        }
+        | ExpandedNode::Scroll { child, .. }
+        | ExpandedNode::Object { child, .. }
+        | ExpandedNode::Placed { child, .. }
+        | ExpandedNode::Modal { content: child, .. } => each_expanded(child, visit),
         ExpandedNode::Adaptive { base, steps, .. } => {
             each_expanded(base, visit);
             for (_, branch) in steps {
@@ -472,8 +473,9 @@ fn the_micro_bar_reveals_its_cells_as_the_window_widens() {
                 ((590.0, None), "micro-bar/summary"),
                 ((0.0, Some(350.0)), "micro-bar/drag"),
                 ((350.0, None), "micro-bar/wave"),
-                ((670.0, None), "micro-bar/speaker"),
+                ((674.0, None), "micro-bar/speaker"),
                 ((440.0, None), "micro-bar/remain"),
+                ((0.0, None), "micro-bar/settings-open"),
                 ((0.0, None), "micro-bar/window-block"),
             ],
             "{layout:?}",
@@ -521,6 +523,7 @@ fn the_bar_reveals_its_telemetry_as_the_window_widens() {
                 ((0.0, None), "bar/drag"),
                 ((1120.0, None), "bar/cpu-block"),
                 ((0.0, None), "bar/broadcast-block"),
+                ((0.0, None), "bar/before-settings"),
                 ((0.0, None), "bar/window-block"),
             ],
             "{layout:?}",
@@ -556,7 +559,7 @@ fn the_window_minimum_holds_the_micro_bar() {
 
         assert_eq!(
             ui.min,
-            SizeSpec::new(Dim::Fixed(221.0), Dim::Fixed(42.0)),
+            SizeSpec::new(Dim::Fixed(259.0), Dim::Fixed(42.0)),
             "{layout:?}",
         );
         assert_eq!(

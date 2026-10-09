@@ -185,13 +185,10 @@ impl NodeControl for mount::label::text::host::Text<'_> {
             .read
             .and_then(|binding| host.ctx.read(binding))
             .and_then(|value| match value {
-                ReadValue::Text(value) => Some(value.to_owned()),
+                ReadValue::Text(value) => Some(value),
                 _ => None,
             })
-            .or_else(|| {
-                self.label
-                    .map(|label| host.ctx.ui.resolve(label).to_owned())
-            })
+            .or_else(|| self.label.map(|label| host.ctx.ui.resolve(label)))
             .unwrap_or_default();
         host.text_leaf(self, content, cx.declared)
     }

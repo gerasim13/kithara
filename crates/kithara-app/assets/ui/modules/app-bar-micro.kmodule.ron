@@ -47,7 +47,7 @@
                 read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
                 write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
             )),
-            Reveal(from: 670.0, child: Row(
+            Reveal(from: 674.0, child: Row(
                 id: "volume-cell",
                 gap: 6.0,
                 pad_x: 9.0,
@@ -79,6 +79,17 @@
                     ),
                 ],
             )),
+            Row(
+                id: "settings-cell",
+                gap: 0.0,
+                size: (w: Shrink, h: Fill),
+                frame: (top: false, right: false, bottom: false, left: true),
+                frame_color: LineInner,
+                children: [
+                    SettingsButton(id: "settings-open", write: View(id: "/settings", set: On)),
+                    Include(id: "settings", source: "app-settings.kmodule.ron"),
+                ],
+            ),
             Optional(
                 id: "window-block",
                 hidden: Model(id: "ui.window.chrome_hidden", with: { "window": "1" }),

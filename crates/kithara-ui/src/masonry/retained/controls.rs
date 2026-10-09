@@ -233,7 +233,7 @@ mod flags {
             (
                 "NavItem",
                 Box::new(Painted::pooled(
-                    NavItem::new(skin),
+                    NavItem::new(skin, None),
                     NavData {
                         mark,
                         active: false,

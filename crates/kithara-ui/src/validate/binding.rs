@@ -111,9 +111,11 @@ pub(super) const fn binding_parts(binding: &BindingRef) -> Option<BindingParts<'
 
 /// A view binding names no endpoint, so what is checked is the side it sits on:
 /// state reads as a bool, whether it is a flag standing on or a page the state
-/// stands at, and is written by a press.
+/// stands at, and is written by a press. A page state named without a page
+/// reads as the text of the page it stands at, and a write to it is refused.
 fn check_view(
     id: &StateId,
+    binding: &BindingRef,
     side: BindingSide,
     expected_kind: Option<ValueKind>,
     path: &str,
@@ -125,14 +127,17 @@ fn check_view(
         id: id.0.clone(),
         path: path.to_owned(),
     };
-    let wanted = if matches!(side, BindingSide::Read) {
-        ValueKind::Bool
-    } else {
-        ValueKind::Trigger
+    let wanted = match (binding, side) {
+        (BindingRef::Page { name: None, .. }, BindingSide::Read) => ValueKind::Text,
+        (BindingRef::Page { name: None, .. }, BindingSide::Write | BindingSide::ModelWrite) => {
+            return Err(wrong("a page state is written at a page name".to_owned()));
+        }
+        (_, BindingSide::Read) => ValueKind::Bool,
+        (_, BindingSide::Write | BindingSide::ModelWrite) => ValueKind::Trigger,
     };
     match expected_kind {
         Some(kind) if kind == wanted => Ok(()),
-        Some(kind) => Err(wrong(format!("view state reads as a bool, not {kind}"))),
+        Some(kind) => Err(wrong(format!("view state reads as {wanted}, not {kind}"))),
         None => Err(wrong("control does not support this side".to_owned())),
     }
 }
@@ -146,7 +151,7 @@ pub(super) fn check_binding(
     endpoints: &dyn EndpointRegistry,
 ) -> Result<(), UiDocError> {
     if let BindingRef::View { id, .. } | BindingRef::Page { id, .. } = binding {
-        return check_view(id, side, expected_kind, path, origin);
+        return check_view(id, binding, side, expected_kind, path, origin);
     }
     let Some((category, id, with)) = binding_parts(binding) else {
         unreachable!("the view binding is answered above")

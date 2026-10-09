@@ -1,0 +1,168 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "app-settings",
+    chrome: Plain,
+    root: Modal(
+        id: "window",
+        open: View(id: "/settings"),
+        close: View(id: "/settings", set: Off),
+        content: Column(
+            id: "surface",
+            size: (w: Fixed(880.0), h: Shrink),
+            gap: 0.0,
+            children: [
+                Row(
+                    id: "header",
+                    size: (w: Fill, h: Fixed(32.0)),
+                    gap: 0.0,
+                    background: BgFooter,
+                    frame: (top: false, right: false, bottom: true, left: false),
+                    frame_color: Line,
+                    children: [
+                        Row(
+                            id: "heading",
+                            size: (w: Shrink, h: Fill),
+                            gap: 8.0,
+                            pad_x: 13.0,
+                            children: [
+                                Glyph(id: "gear", icon: Gear, style: Menu, color: TextDim),
+                                Text(id: "title", style: WindowTitle, label: "@settings.title"),
+                            ],
+                        ),
+                        Row(id: "heading-gap", size: (w: Fill, h: Fill), children: []),
+                        Pressable(
+                            id: "close",
+                            press: View(id: "/settings", set: Off),
+                            child: Row(
+                                id: "close-cell",
+                                size: (w: Fixed(32.0), h: Fill),
+                                gap: 0.0,
+                                frame: (top: false, right: false, bottom: false, left: true),
+                                frame_color: LineInner,
+                                children: [
+                                    Row(id: "close-lead", size: (w: Fill, h: Fill), children: []),
+                                    Glyph(id: "close-icon", icon: X, style: Menu, color: Muted),
+                                    Row(id: "close-trail", size: (w: Fill, h: Fill), children: []),
+                                ],
+                            ),
+                        ),
+                    ],
+                ),
+                Row(
+                    id: "body",
+                    size: (w: Fill, h: Fixed(340.0)),
+                    gap: 0.0,
+                    children: [
+                        Column(
+                            id: "nav-panel",
+                            size: (w: Fixed(198.0), h: Fill),
+                            gap: 0.0,
+                            background: BgFooter,
+                            frame: (top: false, right: true, bottom: false, left: false),
+                            frame_color: Line,
+                            children: [
+                                Column(
+                                    id: "nav-list",
+                                    size: (w: Fill, h: Fill),
+                                    gap: 0.0,
+                                    pad_y: 8.0,
+                                    children: [
+                                        Slot(
+                                            id: "nav",
+                                            from: "sections",
+                                            each: Include(source: "settings/nav-item.kmodule.ron"),
+                                            size: (w: Fill, h: Shrink),
+                                        ),
+                                        Row(id: "nav-gap", size: (w: Fill, h: Fill), children: []),
+                                    ],
+                                ),
+                                Row(
+                                    id: "version-cell",
+                                    size: (w: Fill, h: Fixed(34.0)),
+                                    gap: 6.0,
+                                    pad_x: 12.0,
+                                    frame: (top: true, right: false, bottom: false, left: false),
+                                    frame_color: LineInner,
+                                    children: [
+                                        Text(id: "version-label", style: Note, label: "@settings.version"),
+                                        Text(id: "version", style: Note, read: Model(id: "ui.app.version")),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        Column(
+                            id: "detail-column",
+                            size: (w: Fill, h: Fill),
+                            gap: 0.0,
+                            children: [
+                                Scroll(
+                                    id: "detail-scroll",
+                                    size: (w: Fill, h: Fill),
+                                    child: Slot(
+                                        id: "detail",
+                                        from: "sections",
+                                        select: Page(id: "/settings-section"),
+                                        size: (w: Fill, h: Shrink),
+                                        default: [Spacer(id: "unfilled", size: Some((w: Fill, h: Fill)))],
+                                    ),
+                                ),
+                                Row(
+                                    id: "footer",
+                                    size: (w: Fill, h: Fixed(34.0)),
+                                    gap: 0.0,
+                                    background: BgFooter,
+                                    frame: (top: true, right: false, bottom: false, left: false),
+                                    frame_color: Line,
+                                    children: [
+                                        Row(id: "footer-lead", size: (w: Fixed(16.0), h: Fill), children: []),
+                                        Row(
+                                            id: "config",
+                                            size: (w: Fill, h: Fill),
+                                            gap: 6.0,
+                                            children: [
+                                                Text(id: "config-label", style: Note, label: "@settings.config", size: (w: Shrink, h: Fill)),
+                                                Text(id: "config-path", style: Note, read: Model(id: "ui.app.config_path"), size: (w: Fill, h: Fill)),
+                                            ],
+                                        ),
+                                        Row(
+                                            id: "actions",
+                                            size: (w: Shrink, h: Fill),
+                                            gap: 6.0,
+                                            children: [
+                                                Row(
+                                                    id: "reset",
+                                                    size: (w: Shrink, h: Fixed(30.0)),
+                                                    pad_x: 12.0,
+                                                    frame: (top: true, right: true, bottom: true, left: true),
+                                                    frame_color: Line,
+                                                    children: [
+                                                        Text(id: "reset-label", style: Cell, label: "@settings.reset"),
+                                                    ],
+                                                ),
+                                                Pressable(
+                                                    id: "done",
+                                                    press: View(id: "/settings", set: Off),
+                                                    child: Row(
+                                                        id: "done-face",
+                                                        size: (w: Shrink, h: Fixed(30.0)),
+                                                        pad_x: 12.0,
+                                                        background: Accent,
+                                                        children: [
+                                                            Text(id: "done-label", style: Cell, color: Bg, label: "@settings.done"),
+                                                        ],
+                                                    ),
+                                                ),
+                                            ],
+                                        ),
+                                        Row(id: "footer-trail", size: (w: Fixed(12.0), h: Fill), children: []),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+        ),
+    ),
+)

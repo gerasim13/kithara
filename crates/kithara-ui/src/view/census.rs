@@ -51,7 +51,9 @@ pub struct PageStanding {
     /// the document rather than from a list beside it that can disagree.
     pub offered: BTreeSet<String>,
     pub initial: String,
-    pub shown: String,
+    /// The page that picked this screen. A selection picks none: it turns on
+    /// the screen it stands on.
+    pub shown: Option<String>,
 }
 
 /// Where each press writes, by the path of the control that publishes it.
@@ -110,9 +112,29 @@ pub(crate) struct Tabs<'a> {
     pub(crate) origin: &'a SourceUri,
     pub(crate) initial: &'a str,
     pub(crate) path: &'a str,
-    pub(crate) shown: &'a str,
+    pub(crate) shown: Option<&'a str>,
     pub(crate) state: &'a str,
     pub(crate) pages: BTreeSet<String>,
+}
+
+impl<'a> Tabs<'a> {
+    /// The pages a `select` slot reading a page state declares: its fill keys,
+    /// the first standing until the state is written.
+    fn selected(site: ControlSite<'a>, origin: &'a SourceUri) -> Option<Self> {
+        let (Some(first), Some(BindingRef::Page { id, name: None })) =
+            (site.fills.first(), site.read)
+        else {
+            return None;
+        };
+        Some(Self {
+            origin,
+            initial: &first.key,
+            path: site.path,
+            shown: None,
+            state: &id.0,
+            pages: site.fills.iter().map(|fill| fill.key.clone()).collect(),
+        })
+    }
 }
 
 /// One naming of a page, kept until the pages a `Tabs` declares are known.
@@ -200,7 +222,10 @@ impl Census {
     ) -> Option<(String, Write)> {
         match binding {
             BindingRef::View { id, set, .. } => Some((id.0.clone(), Write::Flag(*set))),
-            BindingRef::Page { id, name } => {
+            BindingRef::Page {
+                id,
+                name: Some(name),
+            } => {
                 self.named.push(Named {
                     origin: origin.clone(),
                     page: name.clone(),
@@ -209,7 +234,8 @@ impl Census {
                 });
                 Some((id.0.clone(), Write::Page(name.clone())))
             }
-            BindingRef::Command { .. }
+            BindingRef::Page { name: None, .. }
+            | BindingRef::Command { .. }
             | BindingRef::Model { .. }
             | BindingRef::Parameter { .. }
             | BindingRef::Telemetry { .. } => None,
@@ -262,7 +288,7 @@ impl Census {
             PageStanding {
                 initial: tabs.initial.to_owned(),
                 offered: pages,
-                shown: tabs.shown.to_owned(),
+                shown: tabs.shown.map(str::to_owned),
             },
         );
     }
@@ -272,6 +298,9 @@ impl Census {
     /// A popover dismisses itself on its own path, so the state it reads for whether it stands open
     /// is the same state that dismissal shuts.
     pub(crate) fn note_site(&mut self, site: ControlSite<'_>, origin: &SourceUri) {
+        if let Some(selection) = Tabs::selected(site, origin) {
+            self.note_pages(selection);
+        }
         for binding in [
             site.read,
             site.active,
