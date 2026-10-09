@@ -755,14 +755,11 @@ pub struct StressConfig {
     /// lane runs belong to the revision the lane was asked about.
     pub build_dir: String,
     pub default_filter: String,
-    /// The test lanes every lane mode repeats, in order. One lane is not the
-    /// suite: the tests outside the workspace lane belong to lanes of their
-    /// own, and a flake there is found only by repeating that lane.
+    /// The test lanes every lane mode repeats, in order. The repository owns
+    /// the campaign's domain and any distinct feature or backend selections.
     pub lanes: Vec<String>,
-    /// The test lanes no campaign repeats, each with the reason. A lane is
-    /// either repeated — named in `lanes`, or running only what a named lane
-    /// already runs — or listed here, so a gap is a decision someone wrote
-    /// down rather than a lane nobody added.
+    /// Domain lanes intentionally left out of repetition, each with its
+    /// reason. Lanes outside the campaign's domain need no exemption.
     pub not_stressed: BTreeMap<String, String>,
     pub nextest_config: String,
     pub nextest_profile: String,

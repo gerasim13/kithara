@@ -1,5 +1,5 @@
-//! The default campaign repeats every test some lane runs, or the lane says
-//! why it is left out.
+//! The default campaign preserves the audio engine's domain and feature
+//! coverage. Support and application lanes belong to ordinary CI.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -20,6 +20,37 @@ use crate::{
 /// Each package `cargo tree` resolves, with every feature set it builds the
 /// package with.
 type Build = BTreeMap<String, Vec<BTreeSet<String>>>;
+
+/// Ordinary lanes that own engine contracts, including instrumented builds.
+/// Mixed integration and broadcast selections have their own stress lanes and
+/// pinned-nextest selection contracts.
+const ENGINE_DOMAINS: &[&str] = &[
+    "abr",
+    "analysis",
+    "assets",
+    "audio",
+    "core",
+    "decode",
+    "dsp",
+    "effects",
+    "encode",
+    "file",
+    "hls",
+    "host",
+    "net",
+    "net-host",
+    "play",
+    "queue",
+    "render",
+    "storage",
+    "sync",
+    "warp",
+    "usdt-warp",
+    "usdt-play-scheduler",
+    "usdt-hls",
+    "usdt-hls-stress",
+    "usdt-queue",
+];
 
 /// The packages and features cargo resolves for a lane's build, read from
 /// `cargo tree` over the lane's own selection and features. The output is
@@ -100,22 +131,98 @@ fn targets_within(own: &TestCargoOptions, theirs: &TestCargoOptions) -> bool {
 
 /// Whether `stressed` runs every test `lane` runs, features aside: both under
 /// nextest at the campaign's thread count, the same Cargo profile, at least
-/// the same environment, and a selection and filter no narrower.
-fn runs_within(lane: &TestLaneConfig, stressed: &TestLaneConfig, metadata: &Metadata) -> bool {
+/// the same environment, and a selection and filter no narrower. Core's
+/// deterministic PCM input generators are support, not an engine contract.
+fn runs_within(
+    name: &str,
+    lane: &TestLaneConfig,
+    stressed_name: &str,
+    stressed: &TestLaneConfig,
+    metadata: &Metadata,
+) -> bool {
     let (TestRunner::Nextest(own), TestRunner::Nextest(theirs)) = (&lane.runner, &stressed.runner)
     else {
         return false;
     };
+    let filter_covers = theirs.filter.is_none()
+        || theirs.filter == own.filter
+        || (stressed_name == "engine" && ENGINE_DOMAINS.contains(&name));
+    let mut selected = selected_by(&lane.cargo, metadata);
+    if name == "core" {
+        selected.remove("kithara-core-test-fixtures");
+    }
     own.test_threads.is_none()
-        && theirs.filter.is_none()
+        && filter_covers
         && (theirs.ignore_default_filter || !own.ignore_default_filter)
         && lane.cargo.profile == stressed.cargo.profile
         && lane
             .env
             .iter()
             .all(|(key, value)| stressed.env.get(key) == Some(value))
-        && selected_by(&lane.cargo, metadata).is_subset(&selected_by(&stressed.cargo, metadata))
+        && !selected.is_empty()
+        && selected.is_subset(&selected_by(&stressed.cargo, metadata))
         && targets_within(&lane.cargo, &stressed.cargo)
+}
+
+#[test]
+fn removing_any_engine_domain_package_breaks_test_coverage() {
+    let project = ProjectConfig::load(&root()).expect("repository config");
+    let metadata = this_workspace();
+    for name in ENGINE_DOMAINS {
+        let domain = &project.test.lanes[*name];
+        assert!(runs_within(
+            name,
+            domain,
+            "engine",
+            &project.test.lanes["engine"],
+            &metadata
+        ));
+        for package in &domain.cargo.packages {
+            if *name == "core" && package == "kithara-core-test-fixtures" {
+                continue;
+            }
+            let mut stressed = project.test.lanes["engine"].clone();
+            stressed
+                .cargo
+                .packages
+                .retain(|selected| selected != package);
+            assert!(
+                !runs_within(name, domain, "engine", &stressed, &metadata),
+                "{name} lost {package}'s tests even if a dependency still builds it"
+            );
+        }
+    }
+}
+
+#[test]
+fn only_cores_known_pcm_fixture_package_is_outside_engine_coverage() {
+    let project = ProjectConfig::load(&root()).expect("repository config");
+    let metadata = this_workspace();
+    let stressed = &project.test.lanes["engine"];
+    let mut core = project.test.lanes["core"].clone();
+    assert!(
+        core.cargo
+            .packages
+            .iter()
+            .any(|package| package == "kithara-core-test-fixtures")
+    );
+    assert!(
+        !stressed
+            .cargo
+            .packages
+            .iter()
+            .any(|package| package == "kithara-core-test-fixtures")
+    );
+    assert!(runs_within("core", &core, "engine", stressed, &metadata));
+    core.cargo.packages.push("kithara-test-utils".to_owned());
+    assert!(!runs_within("core", &core, "engine", stressed, &metadata));
+    assert!(!runs_within(
+        "audio",
+        &project.test.lanes["core"],
+        "engine",
+        stressed,
+        &metadata
+    ));
 }
 
 /// The builds of `lanes`, resolved side by side: each `cargo tree` waits on
@@ -134,13 +241,8 @@ fn builds_of(lanes: &[ResolvedLane]) -> Vec<Build> {
     })
 }
 
-/// Every lane is repeated by the default campaign or says why not. The
-/// campaign repeats a lane it names, and a lane whose every test a named lane
-/// already runs in a build with at least its features: naming that one would
-/// repeat the same tests twice, and exempting it would report a gap that is
-/// not there.
 #[test]
-fn every_lane_is_stressed_exempt_or_covered() {
+fn every_engine_domain_is_stressed_or_covered_with_its_features() {
     let project = ProjectConfig::load(&root()).expect("load repository config");
     let metadata = this_workspace();
     let (test, stress) = (&project.test, &project.stress);
@@ -154,15 +256,23 @@ fn every_lane_is_stressed_exempt_or_covered() {
             stress.default_filter
         ));
     }
-    let candidates = test
-        .lanes
+    let candidates = ENGINE_DOMAINS
         .iter()
-        .filter(|(name, _)| !stress.lanes.contains(name))
-        .map(|(name, lane)| {
+        .filter(|name| !stress.lanes.iter().any(|lane| lane == **name))
+        .map(|&name| {
+            let lane = &test.lanes[name];
             let within = stress
                 .lanes
                 .iter()
-                .filter(|stressed| runs_within(lane, &test.lanes[stressed.as_str()], &metadata))
+                .filter(|stressed| {
+                    runs_within(
+                        name,
+                        lane,
+                        stressed,
+                        &test.lanes[stressed.as_str()],
+                        &metadata,
+                    )
+                })
                 .collect::<Vec<_>>();
             (name, within)
         })
@@ -171,7 +281,7 @@ fn every_lane_is_stressed_exempt_or_covered() {
     let mut own = BTreeMap::new();
     for (name, within) in &candidates {
         if !within.is_empty() {
-            own.insert(name.as_str(), lanes.len());
+            own.insert(*name, lanes.len());
             lanes.push(resolved(name, None, None));
         }
     }
@@ -192,7 +302,7 @@ fn every_lane_is_stressed_exempt_or_covered() {
     }
     let builds = builds_of(&lanes);
     for (name, within) in &candidates {
-        let lane = own.get(name.as_str()).map(|&index| &builds[index]);
+        let lane = own.get(name).map(|&index| &builds[index]);
         let covered_by = within.iter().find(|stressed| {
             lane.is_some_and(|lane| {
                 units[stressed.as_str()]
@@ -200,38 +310,31 @@ fn every_lane_is_stressed_exempt_or_covered() {
                     .any(|&(_, unit)| first_uncovered(lane, &builds[unit]).is_none())
             })
         });
-        match (covered_by, stress.not_stressed.contains_key(name.as_str())) {
-            (Some(stressed), true) => failures.push(format!(
-                "lane `{name}` is exempt from stress, but stress lane `{stressed}` already repeats \
-                 every test it runs"
-            )),
-            (None, false) => {
-                let mut why = Vec::new();
-                for stressed in within {
-                    for &(mode, unit) in &units[stressed.as_str()] {
-                        if let Some((package, features)) =
-                            lane.and_then(|lane| first_uncovered(lane, &builds[unit]))
-                        {
-                            why.push(format!(
-                                "`{stressed}` under `{mode}` builds no `{package}` with {features:?}"
-                            ));
-                        }
+        if covered_by.is_none() {
+            let mut why = Vec::new();
+            for stressed in within {
+                for &(mode, unit) in &units[stressed.as_str()] {
+                    if let Some((package, features)) =
+                        lane.and_then(|lane| first_uncovered(lane, &builds[unit]))
+                    {
+                        why.push(format!(
+                            "`{stressed}` under `{mode}` builds no `{package}` with {features:?}"
+                        ));
                     }
                 }
-                if why.is_empty() {
-                    why.push(
-                        "no stress lane runs it under the same runner, profile, environment, \
-                         selection and targets"
-                            .to_owned(),
-                    );
-                }
-                failures.push(format!(
-                    "lane `{name}` is not in stress.lanes, has no reason in stress.not_stressed, \
-                     and no stress lane runs every test it runs: {}",
-                    why.join("; ")
-                ));
             }
-            _ => {}
+            if why.is_empty() {
+                why.push(
+                    "no stress lane runs it under the same runner, profile, environment, \
+                     selection and targets"
+                        .to_owned(),
+                );
+            }
+            failures.push(format!(
+                "engine domain lane `{name}` is not in stress.lanes and no stress lane \
+                 preserves its engine tests and features: {}",
+                why.join("; ")
+            ));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));

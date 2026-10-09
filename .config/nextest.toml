@@ -161,7 +161,7 @@ threads-required = "num-test-threads"
 [[profile.default.overrides]]
 filter = """
 (binary_id(=kithara-devtools) and (
-    test(=stress::coverage_tests::every_lane_is_stressed_exempt_or_covered)
+    test(=stress::coverage_tests::every_engine_domain_is_stressed_or_covered_with_its_features)
     + test(=test::repository_tests::the_pinned_nextest_builds_exactly_the_cargo_arguments_a_lane_derives)
 ))
 + (binary_id(=kithara-devtools::viz_portable) and (
@@ -174,7 +174,7 @@ threads-required = "num-test-threads"
 [[profile.ci.overrides]]
 filter = """
 (binary_id(=kithara-devtools) and (
-    test(=stress::coverage_tests::every_lane_is_stressed_exempt_or_covered)
+    test(=stress::coverage_tests::every_engine_domain_is_stressed_or_covered_with_its_features)
     + test(=test::repository_tests::the_pinned_nextest_builds_exactly_the_cargo_arguments_a_lane_derives)
 ))
 + (binary_id(=kithara-devtools::viz_portable) and (
