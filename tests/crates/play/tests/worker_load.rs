@@ -18,6 +18,8 @@ use kithara::{
     },
 };
 use kithara_command::{Batch, ChannelConfig, Outcome, Receipt, Rejection, Sender, When, channel};
+use kithara_render::{DispatcherCommand, LaneStart, LoadRequest};
+use kithara::warp::{SpeedCurve, WarpConfig};
 use kithara_integration_tests::usdt_trace::{self, Scope};
 use kithara_test_fixtures::fixtures::tone_mp3;
 use kithara_test_utils::{TestTempDir, temp_dir};
@@ -60,13 +62,12 @@ async fn a_load_opens_its_source_once_and_a_load_past_capacity_opens_nothing(
     );
     let trace = usdt_trace::scope();
 
-    let held = worker
-        .load(mp3(&worker, &temp_dir, "a.mp3"))
+    let held = kithara_integration_tests::mock::load_audio(&worker, mp3(&worker, &temp_dir, "a.mp3"))
         .await
         .expect("the first load fits the worker");
     assert_eq!(opened(&trace), 1, "a load opens its source once");
 
-    let refused = worker.load(mp3(&worker, &temp_dir, "b.mp3")).await;
+    let refused = kithara_integration_tests::mock::load_audio(&worker, mp3(&worker, &temp_dir, "b.mp3")).await;
     assert!(
         matches!(refused, Err(LoadRefusal::Capacity { capacity: 1 })),
         "a load past capacity is refused for capacity"
@@ -78,8 +79,7 @@ async fn a_load_opens_its_source_once_and_a_load_past_capacity_opens_nothing(
     );
 
     drop(held);
-    let _reloaded = worker
-        .load(mp3(&worker, &temp_dir, "c.mp3"))
+    let _reloaded = kithara_integration_tests::mock::load_audio(&worker, mp3(&worker, &temp_dir, "c.mp3"))
         .await
         .expect("a released lane frees its slot");
     assert_eq!(opened(&trace), 2, "the next load opens its own source");
@@ -95,16 +95,25 @@ fn load(worker: &PlayWorker<TestPools>, dir: &TestTempDir, name: &str) -> Batch<
             root: dir.path().join(format!("{name}.cache")),
         })
         .build();
+    let warp = WarpConfig::builder().build();
+    let start = LaneStart {
+        speed: SpeedCurve::Constant(warp.speed()),
+        keylock: warp.keylock(),
+        backend: warp.backend(),
+    };
     let config = ResourceConfig::for_src(ResourceSrc::Path(path))
         .store(store)
         .worker(worker.clone())
+        .warp(warp)
         .build();
     Batch {
         basis: Vec::new(),
-        commands: vec![ResourceLoad::new(
-            config,
-            Box::new(AudioObserverSlot::default().relay()),
-        )],
+        commands: vec![DispatcherCommand::Load(LoadRequest {
+            item: ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay())),
+            position: Duration::ZERO,
+            start,
+            inbox: worker.lane_channel().1,
+        })],
     }
 }
 

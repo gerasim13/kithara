@@ -3,11 +3,10 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    audio::{AudioConfig, AudioControl, AudioSession, NoResamplerBackend},
+    audio::{AudioConfig, NoResamplerBackend},
     effects::AudioEffect,
     host::{HostConfig, HostSettings},
     platform::{
-        CancelToken,
         flash::real_io,
         sync::{
             Arc,
@@ -15,23 +14,24 @@ use kithara::{
         },
         time::{self, Duration, Instant},
     },
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio, TrackConfig},
+    play::TrackConfig,
     queue::{Queue, QueueConfig, QueueEvent, TrackStatus, Transition},
     signal::AudioChunk,
-    stream::Stream,
     warp::{StretchKind, WarpConfig},
 };
 #[cfg(not(target_os = "android"))]
 use kithara_integration_tests::audio_artifact::write_audio_artifact;
 use kithara_integration_tests::{
-    bufpool_ext::{TestPools, pools},
+    bufpool_ext::pools,
     cochlea::{
         CochleaReport, assert_oracle_load_bearing, continuity_failures, percentile_f32,
         time_stretch_failures,
     },
     kithara,
     memory_source::{MemStream, MemStreamConfig, MemorySource},
-    offline::{OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
+    mock::InjectedFactory,
+    offline::{OfflinePlayer, OfflinePlayerOptions},
+    waits::wait_for_loader_done_event,
 };
 use kithara_test_fixtures::{
     assets::{marked_sine_wav_a440_6s, sine_wav_a440_6s},
@@ -371,16 +371,38 @@ fn audio_config(
         .build()
 }
 
-async fn wait_for_preload(audio: &RegisteredAudio<Stream<MemStream>, TestPools>) {
-    let gate = audio
-        .preload_gate()
-        .expect("worker-backed audio exposes a preload gate");
-    time::timeout(
-        Duration::from_secs(5),
-        gate.wait_for_epoch(audio.preload_epoch()),
-    )
-    .await
-    .expect("audio preload gate must open");
+async fn passthrough_player(
+    source: &[u8],
+    warp: WarpConfig,
+    effects: Vec<Box<dyn AudioEffect>>,
+) -> OfflinePlayer<InjectedFactory> {
+    let factory = InjectedFactory::default();
+    let player = OfflinePlayer::with_factory(
+        OfflinePlayerOptions::builder().crossfade_duration(0.0).warp(warp.clone()).build(),
+        HostConfig::offline(pools())
+            .settings(HostSettings::builder()
+                .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
+                .build()).build(),
+        factory.clone(),
+    ).await;
+    let load = kithara::play::mock::track_load(
+        audio_config(source, warp, effects), Arc::from("fixture.wav"), player.worker().clone(),
+        NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"),
+        |worker, config, position, start, inbox| Box::pin(async move {
+            worker.load(config, position, start, inbox).await
+        }),
+    );
+    let mut events = player.player().subscribe();
+    let id = player.run(player.player(), move |queue| {
+        let id = queue.append("fixture.wav").expect("append explicit source fixture");
+        factory.insert(id, load);
+        queue.select(id, Transition::None).expect("select explicit source fixture");
+        id
+    }).await;
+    wait_for_loader_done_event(&mut events, player.player(), id, Duration::from_secs(5))
+        .await.expect("audio preload gate must open");
+    player.run(player.player(), kithara::queue::QueueControl::play).await;
+    player
 }
 
 /// Render the source at the real device cadence and capture the result.
@@ -400,62 +422,10 @@ async fn render_passthrough(
     with_load: bool,
 ) -> RealtimeCapture {
     let load_probe = Arc::new(LoadProbe::new());
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::builder(pools())
-            .cancel(CancelToken::never())
-            .build(),
-    );
-    let mut target_audio = worker
-        .load(audio_config(source, warp_config(stretch), Vec::new()))
-        .await
-        .expect("target audio construction");
-    wait_for_preload(&target_audio).await;
-    target_audio.preload().expect("target preload");
-
-    let mut load_audio = if with_load {
-        let mut audio = worker
-            .load(audio_config(
-                source,
-                warp_config(None),
-                vec![Box::new(BurstLoadEffect::new(Arc::clone(&load_probe)))],
-            ))
-            .await
-            .expect("load audio construction");
-        wait_for_preload(&audio).await;
-        audio.preload().expect("load preload");
-        Some(audio)
-    } else {
-        None
-    };
-
-    let target = OfflinePlayer::new(
-        HostConfig::offline(pools())
-            .settings(
-                HostSettings::builder()
-                    .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
-                    .build(),
-            )
-            .build(),
-    )
-    .await;
-    target.set_fade_duration(0.0).await;
-    target
-        .load_and_fadein(resource_from_reader(target_audio))
-        .await;
-    let mut load = if let Some(audio) = load_audio.take() {
-        let player = OfflinePlayer::new(
-            HostConfig::offline(pools())
-                .settings(
-                    HostSettings::builder()
-                        .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
-                        .build(),
-                )
-                .build(),
-        )
-        .await;
-        player.set_fade_duration(0.0).await;
-        player.load_and_fadein(resource_from_reader(audio)).await;
-        Some(player)
+    let target = passthrough_player(source, warp_config(stretch), Vec::new()).await;
+    let mut load = if with_load {
+        Some(passthrough_player(source, warp_config(None),
+            vec![Box::new(BurstLoadEffect::new(Arc::clone(&load_probe)))]).await)
     } else {
         None
     };
@@ -528,7 +498,7 @@ async fn render_queue_passthrough(stretch: Option<(StretchKind, f32)>) -> Vec<f3
     .await;
     let queue = harness
         .insert_control(Queue::new(
-            QueueConfig::builder().player(harness.take_player()).build(),
+            QueueConfig::builder().prep(harness.resource_prep().clone()).build(),
         ))
         .await;
     let mut events = queue.subscribe::<QueueEvent>();

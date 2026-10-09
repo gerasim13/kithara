@@ -20,7 +20,7 @@ use kithara::{
         CancelToken,
         time::{Duration, sleep},
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
+    play::{PlayWorker, PlayWorkerConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
 };
 use kithara_app::{
@@ -103,13 +103,11 @@ fn build_prod_ctx() -> ProdCtx {
 
 async fn prod_queue(prod: &ProdCtx, pacing: Option<Duration>) -> OfflineQueue<AppPools> {
     let session = HostConfig::offline(prod.config.worker.pools().clone()).build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session.settings().sample_rate())
+    let player = kithara::play::ResourcePrep::builder()
+            
             .worker(prod.config.worker.clone())
-            .build(),
-    );
-    let queue = Queue::new(QueueConfig::builder().player(player).build());
+            .build();
+    let queue = Queue::new(QueueConfig::builder().prep(player).build());
     match pacing {
         Some(interval) => OfflineQueue::paced(session, queue, interval).await,
         None => OfflineQueue::new(session, queue).await,

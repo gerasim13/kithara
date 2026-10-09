@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     fs, io,
+    num::NonZeroUsize,
     path::{Path, PathBuf},
 };
 
@@ -23,6 +24,7 @@ use kithara::{
     net::NetOptionsPatch,
     play::{PlayWorkerConfigPatch, PlaybackResamplerBackend, policy::DomainKeyPolicy},
     queue::QueueConfigPatch,
+    warp::WarpConfigPatch,
     worker::{DispatcherConfigPatch, WorkerConfigPatch},
 };
 use kithara_app_document::merge;
@@ -123,7 +125,19 @@ impl Config {
     /// exists until a track does.
     #[must_use]
     pub fn audio(&self) -> AudioConfigPatch {
-        self.document.audio.clone()
+        self.document.audio.pipeline.clone()
+    }
+
+    pub fn preload_chunks(&self) -> Option<NonZeroUsize> {
+        self.document.audio.preload_chunks
+    }
+
+    pub fn audio_buffer_chunks(&self) -> Option<NonZeroUsize> {
+        self.document.audio.audio_buffer_chunks
+    }
+
+    pub fn warp(&self) -> WarpConfigPatch {
+        self.document.warp.clone()
     }
 
     /// What the document's `beat:` section says about source beat analysis,
@@ -543,12 +557,12 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn the_queue_section_survives_the_load_pipeline() {
         let dir = tempdir();
-        let path = write(&dir, "queue", "queue:\n  max_concurrent_loads: 5\n");
+        let path = write(&dir, "queue", "queue:\n  mixer:\n    slots: 5\n");
 
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
 
         assert_eq!(
-            config.queue().max_concurrent_loads.map(NonZeroUsize::get),
+            config.queue().mixer.slots.map(NonZeroUsize::get),
             Some(5)
         );
         assert!(
@@ -621,7 +635,7 @@ mod tests {
 
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
 
-        assert_eq!(config.audio().preload_chunks, NonZeroUsize::new(7));
+        assert_eq!(config.preload_chunks(), NonZeroUsize::new(7));
         assert_eq!(config.file().reader_event_capacity, Some(512));
         assert_eq!(
             config.hls().size_probe_method,
@@ -968,7 +982,7 @@ mod tests {
         let path = write(
             &dir,
             "typed-field",
-            "player:\n  crossfade_duration: $KITHARA_DRM_PROD_KEY\n",
+            "queue:\n  settings:\n    crossfade:\n      duration: $KITHARA_DRM_PROD_KEY\n",
         );
 
         let error =

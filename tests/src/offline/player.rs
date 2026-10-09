@@ -13,7 +13,7 @@ use kithara::{
     },
     play::{
         CrossfadeSettings, HostedDeck, PlayWorker, PlayWorkerConfig, PlayerEvent, Resource,
-        ResourcePrep,
+        ResourcePrep, PlayerFactory, TrackFactory, TrackSettings,
     },
     queue::{Queue, QueueConfig, QueueControl, QueueError, QueueSettings, TrackSource, Transition},
     warp::WarpConfig,
@@ -26,12 +26,18 @@ use crate::{
     event::TestEvent,
 };
 
+use kithara_render::bridge::{DeckSnapshot, RtMetricsSnapshot};
+use super::host::ObservedDeck;
+
 /// Product queue on an offline Host, rendered deterministically by the test.
-pub struct OfflinePlayer {
+pub struct OfflinePlayer<F: TrackFactory<TestPools> = PlayerFactory> {
     events: Mutex<EventReceiver<TestEvent>>,
     host: OfflineHostHarness<TestPools>,
-    queue: HostOwned<Queue<TestPools>>,
+    queue: HostOwned<ObservedDeck<Queue<TestPools, F>>>,
+    snapshot: Arc<Mutex<DeckSnapshot>>,
     worker: PlayWorker<TestPools>,
+    prep: ResourcePrep<TestPools>,
+    pcm_decks: Mutex<Vec<crate::mock::PcmDeck>>,
 }
 
 /// Product player settings a test varies.
@@ -39,6 +45,8 @@ pub struct OfflinePlayer {
 pub struct OfflinePlayerOptions {
     #[builder(default = CrossfadeSettings::default().duration)]
     crossfade_duration: f32,
+    #[builder(default)]
+    gapless: bool,
     eq_layout: Option<Vec<EqBandConfig>>,
     #[builder(default)]
     gapless_mode: GaplessMode,
@@ -102,8 +110,26 @@ impl OfflinePlayer {
         options: OfflinePlayerOptions,
         session: HostConfig<TestPools>,
     ) -> Self {
+        Self::with_factory(options, session, PlayerFactory).await
+    }
+}
+
+impl<F> OfflinePlayer<F>
+where
+    F: TrackFactory<TestPools> + MaybeSend + 'static,
+    F::Track: MaybeSend,
+{
+    pub async fn with_factory(
+        options: OfflinePlayerOptions,
+        session: HostConfig<TestPools>,
+        factory: F,
+    ) -> Self {
         let pools = offline_pools(&session).clone();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+        let track = options.warp.as_ref().map_or_else(TrackSettings::default, |warp| {
+            TrackSettings::builder().speed(warp.speed()).keylock(warp.keylock())
+                .backend(warp.backend()).build()
+        });
         let prep = ResourcePrep::builder()
             .worker(worker.clone())
             .gapless_mode(options.gapless_mode)
@@ -112,14 +138,16 @@ impl OfflinePlayer {
             .maybe_response_budget_frames(options.response_budget_frames)
             .build();
         let settings = QueueSettings::builder()
+            .gapless(options.gapless)
             .crossfade(CrossfadeSettings {
                 duration: options.crossfade_duration,
                 ..CrossfadeSettings::default()
             })
             .build();
         let queue = Queue::new(
-            QueueConfig::builder()
-                .prep(prep)
+            QueueConfig::with_factory(factory)
+                .prep(prep.clone())
+                .track(track)
                 .settings(settings)
                 .store(memory_asset_store())
                 .build(),
@@ -129,17 +157,21 @@ impl OfflinePlayer {
             .await
             .unwrap_or_else(|error| panic!("create product offline Host: {error}"));
 
-        let queue = host.insert(queue).await
+        let snapshot = Arc::new(Mutex::new(DeckSnapshot::default()));
+        let queue = host.insert(ObservedDeck { inner: queue, snapshot: snapshot.clone() }).await
             .unwrap_or_else(|error| panic!("insert product offline queue: {error}"));
         if let Some(layout) = options.eq_layout {
             queue.set_eq_layout(layout)
                 .unwrap_or_else(|error| panic!("configure product offline queue EQ: {error}"));
         }
         Self {
+            snapshot,
             events: Mutex::new(events),
             host,
             queue,
             worker,
+            prep,
+            pcm_decks: Mutex::new(Vec::new()),
         }
     }
 
@@ -147,6 +179,17 @@ impl OfflinePlayer {
     #[must_use]
     pub fn player(&self) -> &QueueControl<TestPools> {
         self.queue.control()
+    }
+
+    pub fn resource_prep(&self) -> &ResourcePrep<TestPools> {
+        &self.prep
+    }
+
+    pub fn pcm_deck(&self, reader: Box<dyn AudioReader>) -> TrackSource<TestPools> {
+        let deck = crate::mock::PcmDeck::new(reader);
+        let source = deck.source();
+        self.pcm_decks.lock().push(deck);
+        source
     }
 
     delegate::delegate! {
@@ -184,6 +227,14 @@ impl OfflinePlayer {
     #[must_use]
     pub fn position(&self) -> f64 {
         self.queue.position_seconds().unwrap_or_default()
+    }
+
+    pub fn metrics(&self) -> RtMetricsSnapshot {
+        self.snapshot.lock().metrics
+    }
+
+    pub fn deck_snapshot(&self) -> DeckSnapshot {
+        self.snapshot.lock().clone()
     }
 
     /// Issues queue control calls from the host owner thread.
@@ -250,7 +301,21 @@ impl OfflinePlayer {
         }).await;
     }
 
-    /// Seek through the product player. The product runtime owns seek epochs.
+    pub async fn load_config(&self, config: kithara::play::ResourceConfig<TestPools>) -> kithara::events::TrackId {
+        let mut events = self.player().subscribe();
+        let id = self.with_queue(move |control| {
+            let id = control.append(TrackSource::Config(Box::new(config)))
+                .expect("append configured fixture source");
+            control.select(id, Transition::Crossfade).expect("select configured fixture source");
+            control.play();
+            id
+        }).await;
+        crate::waits::wait_for_loader_done_event(&mut events, self.player(), id, super::loader::LOCAL_LOAD_DEADLINE)
+            .await.expect("configured fixture source is ready");
+        id
+    }
+
+    /// Seek through the product player. The product runtime owns segments.
     ///
     /// # Panics
     ///
@@ -306,11 +371,17 @@ impl OfflinePlayer {
             host,
             queue,
             worker,
+            prep,
+            pcm_decks,
+            snapshot,
         } = self;
         drop(events);
+        drop(snapshot);
         drop(queue);
         drop(worker);
         host.close().await;
+        drop(prep);
+        drop(pcm_decks);
     }
 
     fn drain_events(&self) -> Vec<TestEvent> {

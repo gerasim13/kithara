@@ -8,6 +8,7 @@ use kithara::{
     net::{HttpClient, NetOptions, NetOptionsPatch},
     platform::{CancelToken, thread, tokio::runtime::Handle},
     play::PlayWorkerConfig,
+    warp::{WarpConfig, WarpConfigPatchError},
     worker::{OwnedPoolConfig, Worker, WorkerConfig},
 };
 use kithara_config::Config as _;
@@ -31,6 +32,8 @@ pub enum AssembleError {
     /// The `draw_pool:` section fails the draw-buffer schema.
     #[display("draw_pool: {_0}")]
     DrawPool(PoolError),
+    #[display("warp: {_0}")]
+    Warp(WarpConfigPatchError),
 }
 
 #[bon::bon]
@@ -92,6 +95,8 @@ impl AppConfig {
             .into_config();
         store_config.apply(document.assets_store());
         let store = AppStore::open(store_config);
+        let mut warp = WarpConfig::builder().build();
+        warp.apply(document.warp())?;
         let builder = Self::builder()
             .drm(AppDrm::new(document.drm_policy()?))
             .net(client)
@@ -106,6 +111,9 @@ impl AppConfig {
             .queue(document.queue())
             .dispatcher(document.dispatcher())
             .audio(document.audio())
+            .maybe_preload_chunks(document.preload_chunks())
+            .maybe_audio_buffer_chunks(document.audio_buffer_chunks())
+            .warp(warp)
             .hls(document.hls())
             .file(document.file());
         #[cfg(feature = "gui")]

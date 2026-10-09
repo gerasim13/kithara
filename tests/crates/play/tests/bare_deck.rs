@@ -8,11 +8,11 @@ use std::num::NonZeroU32;
 use kithara::{
     audio::mock::TestPcmReader,
     events::TrackId,
-    play::{Resource, SelectionPlayback},
+    queue::Transition,
     signal::AudioSpec,
 };
 use kithara_integration_tests::offline::{
-    OfflinePlayer, OfflinePlayerOptions, resource_from_reader,
+    OfflinePlayer, OfflinePlayerOptions,
 };
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -23,9 +23,9 @@ const ITEM_FRAMES: usize = 4_410;
 const BLOCKS: usize = 40;
 const LEVEL: f32 = 0.25;
 
-fn constant_item(value: f32) -> Resource {
+fn constant_item(value: f32) -> kithara_integration_tests::mock::PcmDeck {
     let spec = AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate"));
-    resource_from_reader(TestPcmReader::with_samples(spec, vec![value; ITEM_FRAMES]))
+    kithara_integration_tests::mock::PcmDeck::new(Box::new(TestPcmReader::with_samples(spec, vec![value; ITEM_FRAMES])))
 }
 
 #[kithara::test(tokio)]
@@ -39,11 +39,17 @@ async fn a_bare_deck_keeps_its_item_past_the_end() {
     )
     .await;
     let item = TrackId::allocate();
+    let deck = constant_item(LEVEL);
+    let source = deck.source();
     harness
-        .with_player(move |player| {
+        .with_queue(move |player| {
             player
-                .select(item, Some(constant_item(LEVEL)), SelectionPlayback::Play)
+                .append_with_id(item, source)
+                .expect("append the item");
+            player
+                .select(item, Transition::None)
                 .expect("select the item");
+            player.play();
         })
         .await;
 
@@ -53,7 +59,7 @@ async fn a_bare_deck_keeps_its_item_past_the_end() {
         peak = block.iter().map(|sample| sample.abs()).fold(peak, f32::max);
         let _ = harness.tick_and_drain().await;
     }
-    let current = harness.with_player(|player| player.current_item()).await;
+    let current = harness.player().current().map(|entry| entry.id);
     harness.close().await;
 
     assert!(

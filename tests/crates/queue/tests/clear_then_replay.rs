@@ -4,7 +4,7 @@
 use kithara::{
     host::HostConfig,
     platform::time::Duration,
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
 };
 use kithara_integration_tests::{
@@ -37,19 +37,17 @@ async fn a_cleared_queue_plays_the_track_appended_after_it(
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let session_pools = pools();
     let session = HostConfig::offline(session_pools.clone()).build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session.settings().sample_rate())
+    let player = kithara::play::ResourcePrep::builder()
+            
             .worker(PlayWorker::new(
                 PlayWorkerConfig::builder(session_pools.clone()).build(),
             ))
-            .build(),
-    );
+            .build();
     let queue = OfflineQueue::paced(
         session,
         Queue::new(
             QueueConfig::builder()
-                .player(player)
+                .prep(player)
                 .store(store.clone())
                 .build(),
         ),

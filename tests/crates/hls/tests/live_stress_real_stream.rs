@@ -6,6 +6,7 @@ use std::{
     task::Poll,
 };
 
+use kithara_integration_tests::mock::LaneAudio;
 #[cfg(target_arch = "wasm32")]
 use gloo_timers::future::TimeoutFuture;
 #[cfg(target_arch = "wasm32")]
@@ -21,7 +22,7 @@ use kithara::{
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig},
     signal::AudioChunk,
     stream::Stream,
 };
@@ -88,7 +89,7 @@ enum SeekRegression {
     RandomPrefix,
 }
 
-type LiveAudio = RegisteredAudio<Stream<Hls<TestPools>>, TestPools>;
+type LiveAudio = LaneAudio<Stream<Hls<TestPools>>, TestPools>;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn file_count_and_size(path: &Path) -> (u64, u64) {
@@ -155,12 +156,9 @@ async fn build_live_audio(
         .cancel(cancel)
         .events(EventBus::default())
         .build();
-    worker
-        .load(
-            AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-                .block_on_underrun(true)
-                .build(),
-        )
+    kithara_integration_tests::mock::load_audio(&worker, kithara::play::TrackConfig::for_audio(AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build())
+        .block_on_underrun(true)
+                .build())
         .await
         .expect("audio creation")
 }
@@ -271,11 +269,11 @@ fn assert_sequential_read(audio: &mut LiveAudio, chunks: usize) {
             .unwrap_or_else(|| panic!("sequential read stopped early at chunk {idx}"));
         if let Some(epoch) = seq_epoch {
             assert_eq!(
-                chunk.meta.epoch, epoch,
+                chunk.meta.segment.get(), epoch,
                 "sequential read changed epoch unexpectedly after final seek"
             );
         } else {
-            seq_epoch = Some(chunk.meta.epoch);
+            seq_epoch = Some(chunk.meta.segment.get());
         }
         if let Some(prev_end) = seq_end_frame {
             assert!(
@@ -302,7 +300,7 @@ async fn next_chunk(audio: &mut LiveAudio, stage: &str) -> Option<AudioChunk> {
 
 fn poll_chunk(audio: &mut LiveAudio, stage: &str) -> Poll<Option<AudioChunk>> {
     match AudioRead::next_chunk(audio) {
-        Ok(ChunkOutcome::Chunk(chunk)) => Poll::Ready(Some(chunk)),
+        Ok(ChunkOutcome::Chunk(chunk)) => Poll::Ready(Some(*chunk)),
         Ok(ChunkOutcome::Eof { .. }) => Poll::Ready(None),
         Ok(ChunkOutcome::Pending { .. }) => Poll::Pending,
         Err(e) => panic!("next_chunk decode error at stage='{stage}': {e}"),
@@ -334,12 +332,9 @@ async fn live_real_drm_playback_smoke(#[future(awt)] mixed_encrypted: (TestServe
         .build();
 
     info!("creating Audio<Stream<Hls>> for DRM asset");
-    let mut audio = worker
-        .load(
-            AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-                .block_on_underrun(true)
-                .build(),
-        )
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, kithara::play::TrackConfig::for_audio(AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build())
+        .block_on_underrun(true)
+                .build())
         .await
         .expect("audio creation");
     info!("audio created");
@@ -434,15 +429,15 @@ async fn live_ephemeral_revisit_sequence_regression(
         .events(EventBus::default())
         .build();
 
-    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+    let config = kithara::play::TrackConfig::for_audio(AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
                 .build(),
-        )
+        ).build())
         .block_on_underrun(true)
         .build();
-    let mut audio = worker.load(config).await.expect("audio creation");
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config).await.expect("audio creation");
     #[cfg(target_arch = "wasm32")]
     let _ = audio.preload();
 
@@ -670,12 +665,9 @@ async fn live_real_stream_seek_resume_native(
         .initial_abr_mode(auto(0))
         .build();
 
-    let mut audio = worker
-        .load(
-            AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-                .block_on_underrun(true)
-                .build(),
-        )
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, kithara::play::TrackConfig::for_audio(AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build())
+        .block_on_underrun(true)
+                .build())
         .await
         .expect("audio creation");
 
@@ -793,12 +785,9 @@ async fn live_stress_real_stream_seek_read_cache(
         .events(EventBus::default())
         .build();
 
-    let mut audio = worker
-        .load(
-            AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-                .block_on_underrun(true)
-                .build(),
-        )
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, kithara::play::TrackConfig::for_audio(AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build())
+        .block_on_underrun(true)
+                .build())
         .await
         .expect("audio creation");
 
@@ -939,12 +928,9 @@ async fn live_ephemeral_small_cache_playback(
         .initial_abr_mode(auto(0))
         .build();
 
-    let mut audio = worker
-        .load(
-            AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-                .block_on_underrun(true)
-                .build(),
-        )
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, kithara::play::TrackConfig::for_audio(AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build())
+        .block_on_underrun(true)
+                .build())
         .await
         .expect("audio creation");
     #[cfg(target_arch = "wasm32")]
@@ -1037,15 +1023,15 @@ async fn live_ephemeral_small_cache_seek_stress(
             .initial_abr_mode(auto(0))
             .build();
 
-        let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+        let config = kithara::play::TrackConfig::for_audio(AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
                     .backend(backend)
                     .build(),
-            )
-            .block_on_underrun(true)
+            ).build())
+        .block_on_underrun(true)
             .build();
-        let mut audio = worker.load(config).await.expect("audio creation");
+        let mut audio = kithara_integration_tests::mock::load_audio(&worker, config).await.expect("audio creation");
         info!(label, "Warmup: reading initial chunks");
         spawn_blocking(move || {
             let _ = audio.preload();

@@ -1,4 +1,6 @@
-use std::num::NonZero;
+use std::num::{NonZero, NonZeroU32};
+
+use num_traits::ToPrimitive;
 
 use kithara::{
     platform::sync::Arc,
@@ -9,10 +11,9 @@ use kithara::{
     stretch::StretchKind,
     warp::{
         GridSegment, PresentationFrontier, RegionPlan, RegionPlanError, RenderContext,
-        SessionAnchor, SessionBeat, Warp, WarpConfig, WarpMapRevision, WarpPlan,
-        mock::{
-            asset_grid, asset_grid_over, plan_over, plan_over_at, session_grid_spaced, spaced_plan,
-        },
+        SessionAnchor, SessionBeat, Warp, WarpConfig, WarpMapRevision, WarpMap,
+        AssetAxis, AssetExtent, BeatAlignment, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridQuery, Beat, MapPoint, SpeedCurve,
+        mock::asset_grid,
     },
 };
 use kithara_test_fixtures::unit_fixtures::{warp_clicks, warp_nominal_clicks, warp_sine};
@@ -97,7 +98,7 @@ fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[
         offset += u64_of(frames);
     }
     loop {
-        let output = fx.flush();
+        let output = fx.drain(usize::MAX).expect("drain renderer");
         fx.prepare(spec());
         let Some(o) = output else {
             break;
@@ -433,11 +434,11 @@ fn activation_keeps_the_absolute_host_frame_rounding_phase() {
     assert!((remainder - 5.0 / 11.0).abs() < 1e-9, "{remainder}");
 
     let plan = plan_over(asset_grid(120.0, sample_rate), target);
-    let BeatGridQuery::Resolved(source) = plan.source_at(SessionFrame::new(174_545)) else {
+    let BeatGridQuery::Resolved(source) = plan.0.source_at(SessionFrame::new(174_545)) else {
         panic!("covered activation");
     };
     assert!((f64::from(source) - 191_999.5).abs() < 1e-9);
-    let BeatGridQuery::Resolved(rate) = plan.rate_at(SessionFrame::new(174_545)) else {
+    let BeatGridQuery::Resolved(rate) = plan.0.rate_at(SessionFrame::new(174_545)) else {
         panic!("covered activation rate");
     };
     assert!((rate - 1.1).abs() < 1e-12);
@@ -447,7 +448,7 @@ fn activation_keeps_the_absolute_host_frame_rounding_phase() {
 fn render_on_grid(
     backend: StretchKind,
     speed: f32,
-    plan: Option<WarpPlan>,
+    plan: Option<Projection>,
     source: &[f32],
     session_beats: f64,
     swap: Option<PlanSwap>,
@@ -463,7 +464,7 @@ fn render_on_grid(
 #[hang_watchdog]
 fn render_configured_grid(
     config: WarpConfig,
-    plan: Option<WarpPlan>,
+    plan: Option<Projection>,
     source: &[f32],
     timeline: Timeline,
     swap: Option<PlanSwap>,
@@ -478,11 +479,11 @@ fn render_configured_grid(
 
 /// A plan installed mid-render: once the source reaches the frame, the
 /// function builds the plan from the source frontier and the output frame.
-type PlanSwap = (usize, fn(u64, usize) -> WarpPlan);
+type PlanSwap = (usize, fn(u64, usize) -> Projection);
 
 /// A retarget installed at a source/output frontier: the session anchor, the
 /// map revision published with it, and the plan to install alongside.
-type Retarget = (SessionAnchor, WarpMapRevision, Option<WarpPlan>);
+type Retarget = (SessionAnchor, WarpMapRevision, Option<Projection>);
 
 /// The session timeline a render publishes before its first block.
 #[derive(Clone, Copy, Debug)]
@@ -508,7 +509,7 @@ pub(crate) struct Presented {
 #[hang_watchdog]
 pub(crate) fn render_configured_grid_with_updates(
     config: WarpConfig,
-    plan: Option<WarpPlan>,
+    plan: Option<Projection>,
     source: InterleavedView<'_>,
     timeline: Timeline,
     swap: Option<PlanSwap>,
@@ -543,8 +544,10 @@ pub(crate) fn render_configured_grid_with_updates(
             .output(SessionFrame::new(0))
             .build(),
     );
-    config.plan().install(plan.map(Arc::new));
     let mut fx = warp.renderer(spec, pools.clone());
+    if let Some(projection) = &plan {
+        install_projection(&mut fx, projection, source.len() / CH, 0, config.speed());
+    }
     let mut out = Vec::new();
     let mut positions = Vec::new();
     let mut present = |out: &mut Vec<f32>, chunk: AudioChunk| {
@@ -565,12 +568,8 @@ pub(crate) fn render_configured_grid_with_updates(
         if swap.as_ref().is_some_and(|(at, _)| offset >= u64_of(*at))
             && let Some((_, plan)) = swap.take()
         {
-            config.plan().install(Some(Arc::new(plan(
-                fx.rendered_source_end()
-                    .expect("presented source frontier")
-                    .0,
-                out.len() / CH,
-            ))));
+            let projection = plan(fx.rendered_source_end().expect("presented source frontier").0, out.len() / CH);
+            install_projection(&mut fx, &projection, source.len() / CH, out.len() / CH, config.speed());
         }
         let mut consumed = carried;
         while consumed < frames {
@@ -599,7 +598,7 @@ pub(crate) fn render_configured_grid_with_updates(
                         .build(),
                 );
                 if let Some(plan) = plan {
-                    config.plan().install(Some(Arc::new(plan)));
+                    install_projection(&mut fx, &plan, source.len() / CH, output_frontier, config.speed());
                 }
             }
             fx.prepare(spec);
@@ -614,7 +613,7 @@ pub(crate) fn render_configured_grid_with_updates(
                 Ok(frames) => frames.get(),
                 Err(kithara::warp::WarpRenderError::NeedsService) => {
                     while fx.transition_pending() {
-                        if let Some(output) = fx.flush() {
+                        if let Some(output) = fx.drain(usize::MAX).expect("drain renderer") {
                             present(&mut out, output);
                         }
                         fx.prepare(spec);
@@ -631,7 +630,7 @@ pub(crate) fn render_configured_grid_with_updates(
             let start = usize::try_from(meta.frame_offset).expect("fixture source frame");
             let available = source.len() / CH - start;
             let planned = if planned > available {
-                fx.prepare_terminal_quantum(meta, available)
+                fx.prepare_terminal_quantum(available)
                     .expect("terminal source quantum")
                     .get()
             } else {
@@ -656,7 +655,7 @@ pub(crate) fn render_configured_grid_with_updates(
         offset += u64_of(frames);
     }
     loop {
-        let output = fx.flush();
+        let output = fx.drain(usize::MAX).expect("drain renderer");
         fx.prepare(spec);
         let Some(o) = output else {
             break;
@@ -991,4 +990,142 @@ fn a_second_plan_through_one_renderer_keeps_only_its_own_tempo(
              (the departed {LEAVING_BPM} BPM plan renders {leaving})"
         );
     }
+}
+
+
+pub(crate) type Projection = (WarpMap, SessionFrame);
+
+fn install_projection(
+    renderer: &mut kithara::warp::WarpRenderer<kithara_test_utils::bufpool::TestPools>,
+    projection: &Projection,
+    source_frames: usize,
+    output_frame: usize,
+    manual_speed: f32,
+) {
+    use num_traits::ToPrimitive;
+    let (map, activation) = projection;
+    let end_source = kithara::warp::AssetFrame::new(f64_of(source_frames.saturating_sub(1))).expect("source endpoint");
+    let BeatGridQuery::Resolved(end) = map.output_at(end_source) else { panic!("projection covers the fixture"); };
+    let end = i64::from(end).to_usize().expect("nonnegative output endpoint") + 1;
+    let activation = i64::from(*activation).to_usize().expect("nonnegative activation").max(output_frame);
+    let source_at = |frame: usize| {
+        let BeatGridQuery::Resolved(source) = map.source_at(SessionFrame::new(i64_of(frame))) else { panic!("projection covers output frame {frame}"); };
+        f64::from(source)
+    };
+    let mut steps = Vec::new();
+    if activation > output_frame { steps.push((0, manual_speed)); }
+    let mut frame = activation;
+    while frame < end {
+        let next = frame + 1;
+        let speed = source_at(next) - source_at(frame);
+        let speed = speed.to_f32().expect("representable speed");
+        if steps.last().is_none_or(|(_, previous)| *previous != speed) {
+            steps.push((u64_of(frame - output_frame), speed));
+        }
+        frame = next;
+    }
+    assert!(!steps.is_empty(), "projection supplies a speed curve");
+    renderer.set_speed(SpeedCurve::Steps(Arc::from(steps)), u64::from(map.revision()))
+        .expect("projected speed is admissible");
+}
+
+fn asset_grid_over(
+    spans: &[(f64, f64, i64)],
+    frames: Option<u64>,
+    sample_rate: NonZeroU32,
+) -> BeatGridSnapshot {
+    let rate = f64::from(sample_rate.get());
+    let (first, _, _) = spans.first().expect("fixture has a marked span");
+    let (_, last_spacing, _) = spans.last().expect("fixture has a marked span");
+    let origin = kithara::beat::GridBeat {
+        at: *first / rate,
+        ordinal: 0,
+        confidence: Some(1.0),
+    };
+    let mut end = *first;
+    let mut ordinal = 0;
+    let span_ends = spans.iter().map(|&(start, frames_per_beat, count)| {
+        assert_eq!(start, end, "fixture marked spans share their boundary");
+        end = count
+            .to_f64()
+            .unwrap_or_default()
+            .mul_add(frames_per_beat, start);
+        ordinal += count;
+        kithara::beat::GridBeat {
+            at: end / rate,
+            ordinal,
+            confidence: Some(1.0),
+        }
+    });
+    let model = kithara::beat::BeatGridModel::try_from(kithara::beat::RawBeatGrid {
+        schema_version: kithara::beat::SCHEMA_VERSION,
+        model_id: "warp-spans".to_owned(),
+        revision: 1,
+        state: kithara::beat::BeatGridState::Final,
+        duration: None,
+        bpm: rate * 60.0 / last_spacing,
+        beats: std::iter::once(origin).chain(span_ends).collect(),
+        downbeats: Vec::new(),
+        meter: None,
+    })
+    .expect("fixture marked beats form a valid model");
+    let axis = AssetAxis::new(
+        sample_rate,
+        AssetExtent::Bounded(frames.unwrap_or_else(|| end.ceil().to_u64().unwrap_or_default() + 1)),
+    );
+    BeatGridSnapshot::model(
+        BeatGridId::allocate().expect("invariant: fixture grid id can be allocated"),
+        BeatGridRevision::first(),
+        &model,
+        axis,
+    )
+    .expect("fixture model materializes on its declared axis")
+}
+
+fn session_grid_spaced(frames_per_beat: f64, sample_rate: NonZeroU32) -> BeatGridSnapshot {
+    kithara::warp::mock::session_grid(
+        f64::from(sample_rate.get()) * 60.0 / frames_per_beat,
+        sample_rate,
+    )
+}
+
+fn plan_over(source: BeatGridSnapshot, target: BeatGridSnapshot) -> Projection {
+    let beat = Beat::new(0.0).expect("fixture cue");
+    let alignment = BeatAlignment::new(
+        MapPoint::new(source.stamp(), beat),
+        MapPoint::new(target.stamp(), beat),
+    );
+    let map = WarpMap::projected(source, target, alignment, WarpMapRevision::first())
+        .expect("fixture projection");
+    (map, SessionFrame::new(0))
+}
+
+fn spaced_plan(
+    spans: &[(f64, f64, i64)],
+    host_frames_per_beat: f64,
+    sample_rate: NonZeroU32,
+) -> Projection {
+    plan_over(
+        asset_grid_over(spans, None, sample_rate),
+        session_grid_spaced(host_frames_per_beat, sample_rate),
+    )
+}
+
+fn plan_over_at(
+    source: BeatGridSnapshot,
+    target: BeatGridSnapshot,
+    source_beat: f64,
+    target_beat: f64,
+    output: SessionFrame,
+) -> Projection {
+    let alignment = BeatAlignment::new(
+        MapPoint::new(source.stamp(), Beat::new(source_beat).expect("source cue")),
+        MapPoint::new(target.stamp(), Beat::new(target_beat).expect("target cue")),
+    );
+    let revision = WarpMapRevision::first()
+        .checked_next()
+        .expect("replacement revision");
+    let map =
+        WarpMap::projected(source, target, alignment, revision).expect("replacement projection");
+    (map, output)
 }

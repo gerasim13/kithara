@@ -15,5 +15,7 @@ pub use config::ResourceConfig;
 pub use lane::ResourceLane;
 pub use prepare::ResourcePrep;
 pub use reader::{OpenedTrack, Resource, ResourceLoad};
+#[cfg(feature = "mock")]
+pub(crate) use reader::mock as source_mock;
 pub use resampler::PlaybackResamplerBackend;
 pub use source::{ResourceSrc, SourceType};

@@ -1,26 +1,26 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, sync::Mutex};
 
 use kithara::{
     audio::mock::TestPcmReader,
-    events::TrackId,
     host::{
         HostConfig, HostOwned, HostSettings, HostSettingsChange, HostSettingsControl,
         MetronomeConfigControl, Tap,
     },
     platform::time::{self, Duration},
     play::{
-        PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SelectTransition,
-        SessionDuckingMode, player::PlayerControl,
+        PlayError, PlayWorker, PlayWorkerConfig, ResourcePrep, SessionDuckingMode,
     },
     signal::{AudioSpec, SessionFrame},
+    queue::{Queue, QueueConfig, QueueControl, QueueError, QueueSettings, Transition},
 };
 use kithara_command::When;
 use kithara_config::Configure;
 use kithara_integration_tests::{
     audio_artifact::{AudioArtifactTap, artifact_label},
-    offline::{OfflineHostHarness, resource_from_reader},
+    offline::OfflineHostHarness,
+    mock::PcmDeck,
 };
 use kithara_test_fixtures::{
     analysis_beat_fixtures::sine_440_long,
@@ -54,7 +54,8 @@ const RING_OVERFILL: usize = 64;
 
 struct MixHarness {
     host: OfflineHostHarness<TestPools>,
-    players: Vec<HostOwned<PlayerImpl<TestPools>>>,
+    players: Vec<HostOwned<Queue<TestPools>>>,
+    pcm_decks: Mutex<Vec<PcmDeck>>,
 }
 
 impl MixHarness {
@@ -72,20 +73,18 @@ impl MixHarness {
         .expect("create product offline Host");
         let mut players = Vec::with_capacity(count);
         for _ in 0..count {
-            let config = PlayerConfig::builder()
-                .worker(PlayWorker::new(
-                    PlayWorkerConfig::builder(pools.clone()).build(),
-                ))
-                .sample_rate(sample_rate)
-                .crossfade_duration(0.0)
+            let config = QueueConfig::builder()
+                .prep(ResourcePrep::builder()
+                    .worker(PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build()))
+                    .build())
+                .settings(QueueSettings::builder().crossfade(kithara::play::CrossfadeSettings {
+                    duration: 0.0,
+                    ..Default::default()
+                }).build())
                 .build();
-            players.push(
-                host.insert(PlayerImpl::new(config))
-                    .await
-                    .expect("insert player into product offline Host"),
-            );
+            players.push(host.insert(Queue::new(config)).await.expect("insert deck"));
         }
-        Self { host, players }
+        Self { host, players, pcm_decks: Mutex::new(Vec::new()) }
     }
 
     async fn set_ducking(&self, mode: SessionDuckingMode) {
@@ -111,25 +110,16 @@ impl MixHarness {
             .iter()
             .map(|player| player.control().clone())
             .collect();
-        self.host
-            .run(move || {
-                for (player, reader) in players.iter().zip(readers) {
-                    player
-                        .select_with_crossfade(
-                            TrackId::allocate(),
-                            Some(resource_from_reader(reader)),
-                            SelectTransition {
-                                playback: kithara::play::SelectionPlayback::Play,
-                                crossfade: kithara::play::CrossfadeSettings {
-                                    duration: 0.0,
-                                    ..Default::default()
-                                },
-                            },
-                        )
-                        .expect("select item");
-                }
-            })
-            .await;
+        let decks: Vec<_> = readers.into_iter().map(|reader| PcmDeck::new(Box::new(reader))).collect();
+        let sources: Vec<_> = decks.iter().map(PcmDeck::source).collect();
+        self.pcm_decks.lock().expect("PCM deck retention").extend(decks);
+        self.host.run(move || {
+            for (player, source) in players.iter().zip(sources) {
+                let id = player.append(source).expect("append PCM deck");
+                player.select(id, Transition::None).expect("select PCM deck");
+                player.play();
+            }
+        }).await;
     }
 
     // Removing every item empties the deck; the Host still holds it.
@@ -142,13 +132,13 @@ impl MixHarness {
         self.host
             .run(move || {
                 for player in &players {
-                    player.remove_all_items().expect("the deck takes the clear");
+                    player.clear().expect("the deck takes the clear");
                 }
             })
             .await;
     }
 
-    async fn apply(&self, levels: &[f32]) -> Result<(), PlayError> {
+    async fn apply(&self, levels: &[f32]) -> Result<(), QueueError> {
         let players: Vec<_> = self
             .players
             .iter()
@@ -192,15 +182,16 @@ impl MixHarness {
     }
 
     async fn close(self) {
-        let Self { host, players } = self;
+        let Self { host, players, pcm_decks } = self;
         drop(players);
         host.close().await;
+        drop(pcm_decks);
     }
 }
 
 /// Sends `player`'s deck parts until its ring refuses one, with no block
 /// rendered in between; returns the refusal.
-fn fill_the_deck(player: &PlayerControl) -> Option<PlayError> {
+fn fill_the_deck(player: &QueueControl<TestPools>) -> Option<QueueError> {
     (0..RING_OVERFILL).find_map(|_| player.set_eq_gain(0, 0.0).err())
 }
 
@@ -332,7 +323,7 @@ async fn rejected_mix_changes_no_rendered_gain(
         .apply(&[0.5, 2.0])
         .await
         .expect_err("invalid level must be rejected");
-    assert!(matches!(err, PlayError::MixLevel { .. }));
+    assert!(matches!(err, QueueError::Play(PlayError::MixLevel { .. })));
     assert_near(
         harness.steady_peak().await,
         expected,
@@ -397,11 +388,11 @@ async fn a_refused_close_leaves_the_player_open(constant_four: &'static [u8]) {
         .run(move || (fill_the_deck(&player), player.close()))
         .await;
     assert!(
-        matches!(refused, Some(PlayError::SlotChannelFull { .. })),
+        matches!(refused, Some(QueueError::Play(PlayError::Full(_)))),
         "the deck's ring fills: {refused:?}"
     );
     assert!(
-        matches!(closed, Err(PlayError::SlotChannelFull { .. })),
+        matches!(closed, Err(QueueError::Play(PlayError::Full(_)))),
         "a full ring refuses the close: {closed:?}"
     );
     assert_near(
@@ -437,16 +428,16 @@ async fn a_refused_clear_keeps_the_track_the_deck_plays(constant_four: &'static 
         .host
         .run(move || {
             let refused = fill_the_deck(&player);
-            let cleared = player.remove_all_items();
-            (refused, cleared, player.current_item())
+            let cleared = player.clear();
+            (refused, cleared, player.current())
         })
         .await;
     assert!(
-        matches!(refused, Some(PlayError::SlotChannelFull { .. })),
+        matches!(refused, Some(QueueError::Play(PlayError::Full(_)))),
         "the deck's ring fills: {refused:?}"
     );
     assert!(
-        matches!(cleared, Err(PlayError::SlotChannelFull { .. })),
+        matches!(cleared, Err(QueueError::Play(PlayError::Full(_)))),
         "a full ring refuses the clear: {cleared:?}"
     );
     assert!(

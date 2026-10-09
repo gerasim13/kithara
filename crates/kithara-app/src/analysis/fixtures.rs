@@ -265,6 +265,8 @@ pub(crate) async fn track_sourced(
         .worker(app.worker.clone())
         .store(app.store.clone())
         .audio(app.audio.clone())
+        .maybe_preload_chunks(app.preload_chunks)
+        .maybe_audio_buffer_chunks(app.audio_buffer_chunks)
         .hls(app.hls.clone())
         .file(app.file.clone())
         .maybe_beat_grid(beat_grid)

@@ -8,15 +8,15 @@ use kithara::{
         SeekOutcome,
     },
     decode::{
-        DecodeError, GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer,
+        GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer,
         SilenceTrimParams, TrackMetadata,
     },
     events::{EventBus, TrackId},
     platform::{
-        sync::Arc,
         time::{self, Duration},
     },
-    play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc, SuccessorLink},
+    play::{PlayerEvent, ResourceConfig, ResourceSrc},
+    queue::{TrackSource, Transition},
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
     stream::AudioCodec,
 };
@@ -129,6 +129,7 @@ async fn single_track_silence_trim_strips_leading_priming(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
@@ -186,6 +187,7 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
@@ -257,6 +259,7 @@ async fn two_tracks_gapless_stitch_continuity_metric(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
@@ -367,6 +370,7 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         FUSED_FIXTURE_DEVICE_RATE,
@@ -425,6 +429,7 @@ async fn render_apple_fused_deficit_seam(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         FUSED_FIXTURE_DEVICE_RATE,
@@ -483,6 +488,7 @@ async fn disabled_gapless_mode_keeps_full_decoded_length(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(GaplessMode::Disabled)
             .build(),
         GAPLESS_SAMPLE_RATE,
@@ -525,6 +531,7 @@ async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_meta
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
@@ -557,6 +564,7 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
@@ -632,6 +640,7 @@ async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
         GAPLESS_SAMPLE_RATE,
@@ -718,26 +727,15 @@ async fn gapless_source(
 }
 
 async fn create_resource(
-    harness: &OfflinePlayer,
+    _harness: &OfflinePlayer,
     created: &CreatedHls,
     cache_dir: &std::path::Path,
-) -> Resource {
-    let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::<TestPools>::for_src(
+) -> ResourceConfig<TestPools> {
+    ResourceConfig::<TestPools>::for_src(
         ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
     )
-    .store(store)
-    .build();
-    let worker = harness.worker().clone();
-    config = harness
-        .with_player(move |player| player.prepare_config(config, worker))
-        .await
-        .expect("prepare gapless e2e HLS resource config");
-    let mut resource = Resource::new(config)
-        .await
-        .expect("open HLS resource for gapless e2e fixture");
-    let _ = resource.preload().await;
-    resource
+    .store(kithara_integration_tests::disk_asset_store(cache_dir))
+    .build()
 }
 
 #[cfg(all(
@@ -804,28 +802,23 @@ async fn render_synthetic_fused_deficit_seam(
         OfflinePlayerOptions::builder()
             .block_on_underrun(true)
             .crossfade_duration(0.0)
+            .gapless(true)
             .gapless_mode(GaplessMode::Disabled)
             .build(),
         FUSED_FIXTURE_DEVICE_RATE,
     )
     .await;
     harness
-        .with_player(move |player| player.set_level(FUSED_FIXTURE_MASTER_LEVEL))
+        .with_queue(move |queue| queue.set_level(FUSED_FIXTURE_MASTER_LEVEL))
         .await
         .expect("set the mix level");
     let first_frames = synthetic_tail_trimmed_first_frames(tail_compensation, stereo);
     let first_frame_count = first_frames.len();
-    let first = Resource::from_reader(
-        SyntheticPcmReader::new(first_frames, first_frame_count),
-        Some(Arc::from("fused-deficit-1")),
-    );
-    let second = Resource::from_reader(
-        SyntheticPcmReader::new(
-            pcm[FUSED_FIXTURE_IDEAL_DEVICE_FRAMES..].to_vec(),
-            FUSED_FIXTURE_IDEAL_DEVICE_FRAMES,
-        ),
-        Some(Arc::from("fused-deficit-2")),
-    );
+    let first = harness.pcm_deck(Box::new(SyntheticPcmReader::new(first_frames, first_frame_count)));
+    let second = harness.pcm_deck(Box::new(SyntheticPcmReader::new(
+        pcm[FUSED_FIXTURE_IDEAL_DEVICE_FRAMES..].to_vec(),
+        FUSED_FIXTURE_IDEAL_DEVICE_FRAMES,
+    )));
 
     let [_, second_id] = load_tagged_queue(&harness, [first, second]).await;
 
@@ -906,26 +899,23 @@ fn left_frames_from_chunks(chunks: impl IntoIterator<Item = AudioChunk>) -> Vec<
 /// order they were given.
 async fn load_tagged_queue<const N: usize>(
     harness: &OfflinePlayer,
-    items: [Resource; N],
+    items: [impl Into<TrackSource<TestPools>>; N],
 ) -> [TrackId; N] {
-    let ids = [(); N].map(|()| TrackId::allocate());
-    harness
-        .with_player(move |player| {
-            let mut items = items.into_iter().zip(ids);
-            if let Some((resource, id)) = items.next() {
-                player
-                    .select(id, Some(resource), kithara::play::SelectionPlayback::Play)
-                    .expect("select first queue item");
-            }
-            if let Some((resource, id)) = items.next() {
-                player
-                    .arm_next(id, resource, SuccessorLink::Gapless)
-                    .expect("arm the second item as the gapless successor");
-            }
-            assert!(items.next().is_none(), "the deck holds at most two items");
-        })
-        .await;
-    ids
+    let mut items = items.into_iter();
+    let first = items.next().map(Into::into);
+    let second = items.next().map(Into::into);
+    assert!(items.next().is_none(), "the deck holds at most two items");
+    harness.with_queue(move |queue| {
+        let mut ids = Vec::new();
+        for item in first.into_iter().chain(second) {
+            ids.push(queue.append(item).expect("append gapless queue item"));
+        }
+        if let Some(id) = ids.first() {
+            queue.select(*id, Transition::None).expect("select first queue item");
+            queue.play();
+        }
+        ids.try_into().unwrap_or_else(|_| panic!("queue must retain every item identity"))
+    }).await
 }
 
 struct SyntheticSeamRender {
@@ -1102,7 +1092,7 @@ impl AudioRead for SyntheticPcmReader {
 }
 
 impl AudioControl for SyntheticPcmReader {
-    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
         let frames = frames_for_test_duration(position);
         if frames >= self.frames.len() {
             self.position_frames = self.frames.len();

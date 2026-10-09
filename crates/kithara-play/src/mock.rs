@@ -13,6 +13,7 @@ use kithara_render::{
 use kithara_signal::SessionFrame;
 
 pub use crate::api::equalizer::EqualizerMock;
+pub use crate::resource::source_mock::{resource_tracks, track_load};
 use crate::{OpenedTrack, PlayError, ResourceLoad, player::Outbox, session::SessionOutputView};
 
 /// Sample rate every mock session runs at.

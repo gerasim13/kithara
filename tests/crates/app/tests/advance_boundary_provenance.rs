@@ -12,7 +12,7 @@ use kithara::{
         time::{self, Duration},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayerImpl, ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     warp::WarpConfig,
 };
@@ -69,15 +69,6 @@ const LINEAR_PATH_MAX_PEAK: f32 = 0.9;
 
 type ClassRun = (FrameClass, usize, usize);
 type ToneRun = (ToneClass, usize, usize);
-
-/// Takes the harness player for a queue, its mix level lowered first.
-fn provenance_player(harness: &OfflinePlayer) -> PlayerImpl<TestPools> {
-    let player = harness.take_player();
-    player
-        .set_level(PROVENANCE_LEVEL)
-        .expect("set the mix level");
-    player
-}
 
 fn assert_provenance_headroom(rendered: &[f32], label: &str) {
     let left = deinterleave_left(rendered, usize::from(CHANNELS));
@@ -1117,14 +1108,15 @@ async fn setup_queue_with_sample_rate(
     let queue = harness
         .insert_control(Queue::new(
             QueueConfig::builder()
-                .player(provenance_player(&harness))
-                .crossfade_settings(kithara::play::CrossfadeSettings {
+                .prep(harness.resource_prep().clone())
+                .settings(kithara::queue::QueueSettings::builder().crossfade(kithara::play::CrossfadeSettings {
                     duration: 0.0,
                     ..kithara::play::CrossfadeSettings::default()
-                })
+                }).build())
                 .build(),
         ))
         .await;
+    harness.run(&queue, |control| control.set_level(PROVENANCE_LEVEL)).await.expect("set the mix level");
 
     let source_a = hls_source(&sources[0], &temp_dir.path().join("a"));
     let source_b = hls_source(&sources[1], &temp_dir.path().join("b"));
@@ -1150,14 +1142,15 @@ async fn setup_multivariant_flac_queue(sources: &[Url; 2], temp_dir: &TestTempDi
     let queue = harness
         .insert_control(Queue::new(
             QueueConfig::builder()
-                .player(provenance_player(&harness))
-                .crossfade_settings(kithara::play::CrossfadeSettings {
+                .prep(harness.resource_prep().clone())
+                .settings(kithara::queue::QueueSettings::builder().crossfade(kithara::play::CrossfadeSettings {
                     duration: 0.0,
                     ..kithara::play::CrossfadeSettings::default()
-                })
+                }).build())
                 .build(),
         ))
         .await;
+    harness.run(&queue, |control| control.set_level(PROVENANCE_LEVEL)).await.expect("set the mix level");
 
     let source_a = hls_source(&sources[0], &temp_dir.path().join("a"));
     let source_b = hls_source(&sources[1], &temp_dir.path().join("b"));
@@ -1182,14 +1175,15 @@ async fn setup_flac_queue_with_player_config(
     let queue = harness
         .insert_control(Queue::new(
             QueueConfig::builder()
-                .player(provenance_player(&harness))
-                .crossfade_settings(kithara::play::CrossfadeSettings {
+                .prep(harness.resource_prep().clone())
+                .settings(kithara::queue::QueueSettings::builder().crossfade(kithara::play::CrossfadeSettings {
                     duration: CROSSFADE_SECS,
                     ..kithara::play::CrossfadeSettings::default()
-                })
+                }).build())
                 .build(),
         ))
         .await;
+    harness.run(&queue, |control| control.set_level(PROVENANCE_LEVEL)).await.expect("set the mix level");
     let source_a = hls_source(&sources[0], &temp_dir.path().join("a"));
     let source_b = hls_source(&sources[1], &temp_dir.path().join("b"));
     let id_a = append_loaded(&harness, &queue, source_a).await;
@@ -1213,14 +1207,15 @@ async fn setup_sine_aac_queue(sources: &[Url; 2], temp_dir: &TestTempDir) -> Que
     let queue = harness
         .insert_control(Queue::new(
             QueueConfig::builder()
-                .player(harness.take_player())
-                .crossfade_settings(kithara::play::CrossfadeSettings {
+                .prep(harness.resource_prep().clone())
+                .settings(kithara::queue::QueueSettings::builder().crossfade(kithara::play::CrossfadeSettings {
                     duration: 0.0,
                     ..kithara::play::CrossfadeSettings::default()
-                })
+                }).build())
                 .build(),
         ))
         .await;
+    harness.run(&queue, |control| control.set_level(PROVENANCE_LEVEL)).await.expect("set the mix level");
 
     let source_a = hls_source(&sources[0], &temp_dir.path().join("a"));
     let source_b = hls_source(&sources[1], &temp_dir.path().join("b"));

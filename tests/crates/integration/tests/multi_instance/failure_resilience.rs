@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use kithara_integration_tests::mock::LaneAudio;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioRead, ReadOutcome},
@@ -11,7 +12,7 @@ use kithara::{
         time::{Duration, sleep},
         tokio::task::{JoinHandle, spawn, spawn_blocking},
     },
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -44,7 +45,7 @@ struct Outcome {
 /// Read HLS audio until EOF or the stream stops producing data.
 /// Returns total samples read. Unlike `read_to_eof`, this tolerates
 /// early termination because some instances are intentionally cancelled.
-fn read_hls_best_effort(audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>) -> u64 {
+fn read_hls_best_effort(audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>) -> u64 {
     const MAX_PENDING_READS: usize = if cfg!(target_arch = "wasm32") { 200 } else { 1 };
 
     let mut buf = vec![0.0f32; 4096];
@@ -90,7 +91,7 @@ async fn create_hls_audio(
     server: &CreatedHls,
     cache_dir: &Path,
     cancel: CancelToken,
-) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
+) -> LaneAudio<Stream<Hls<TestPools>>, TestPools> {
     let url = server.master_url();
     let pools = pools();
 
@@ -116,8 +117,7 @@ async fn create_hls_audio(
         .build();
 
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    worker
-        .load(config)
+    kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create Audio<Stream<Hls>>")
 }

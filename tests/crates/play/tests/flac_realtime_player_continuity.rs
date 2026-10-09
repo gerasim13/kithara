@@ -7,7 +7,7 @@ use kithara::{
     decode::DecoderBackend,
     host::{HostConfig, HostSettings},
     platform::time::{Duration, Instant, sleep},
-    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -140,10 +140,6 @@ async fn run_case(
             .initial_abr_mode(initial_mode)
             .build();
 
-    let resource = Resource::new(cfg)
-        .await
-        .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
-    let abr = resource.abr_handle();
 
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
@@ -155,7 +151,8 @@ async fn run_case(
             .build(),
     )
     .await;
-    player.load_and_fadein(resource).await;
+    player.load_config(cfg).await;
+    let abr = player.player().current_abr_handle();
 
     let chan = CHANNELS as usize;
     let wall_budget_ms = num_traits::cast::<f64, u64>(PLAY_SECS * 1000.0 / 4.0).unwrap_or(u64::MAX)

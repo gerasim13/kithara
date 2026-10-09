@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 
 use kithara::{
     events::TrackId,
-    play::{PlayerEvent, Resource, player::PlayerControl},
+    play::{PlayerEvent, Resource},
     signal::AudioSpec,
 };
 use kithara_integration_tests::offline::{
@@ -34,7 +34,7 @@ fn make_resource(constant_half: &'static [u8], duration_secs: f64) -> Resource {
 async fn fixed_rate_reader_keeps_source_and_player_clock_at_unity(constant_half: &'static [u8]) {
     let oracle = loaded_harness(constant_half).await;
     assert_eq!(oracle.player().rate(), 1.0);
-    oracle.with_player(PlayerControl::pause).await;
+    oracle.with_queue(kithara::queue::QueueControl::pause).await;
     assert_eq!(
         oracle.player().rate(),
         1.0,
@@ -46,11 +46,11 @@ async fn fixed_rate_reader_keeps_source_and_player_clock_at_unity(constant_half:
     assert_eq!(oracle.player().rate(), 0.0);
 
     oracle
-        .with_player(move |player| player.set_default_rate(FAST_RATE))
+        .with_queue(move |player| player.set_default_rate(FAST_RATE))
         .await
         .expect("a finite rate is accepted");
     assert_eq!(oracle.player().default_rate(), FAST_RATE);
-    oracle.with_player(PlayerControl::play).await;
+    oracle.with_queue(kithara::queue::QueueControl::play).await;
     assert_eq!(
         oracle.player().rate(),
         0.0,
@@ -106,15 +106,15 @@ fn rate_events(events: Vec<PlayerEvent>) -> Vec<f32> {
 async fn loaded_harness(constant_half: &'static [u8]) -> OfflinePlayer {
     let harness =
         OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;
+    let deck_source = harness.pcm_deck((make_resource(constant_half, 1.0)).into());
     harness
-        .with_player(move |player| {
+        .with_queue(move |player| {
+            let deck_id = TrackId::allocate();
+            player.append_with_id(deck_id, deck_source).expect("append PCM deck");
             player
-                .select(
-                    TrackId::allocate(),
-                    Some(make_resource(constant_half, 1.0)),
-                    kithara::play::SelectionPlayback::Play,
-                )
+                .select(deck_id, kithara::queue::Transition::None)
                 .expect("select the item");
+            player.play();
         })
         .await;
 
@@ -128,7 +128,7 @@ async fn loaded_harness(constant_half: &'static [u8]) -> OfflinePlayer {
 async fn blocks_until_silence(constant_half: &'static [u8], rate: f32) -> usize {
     let harness = loaded_harness(constant_half).await;
     harness
-        .with_player(move |player| player.set_default_rate(rate))
+        .with_queue(move |player| player.set_default_rate(rate))
         .await
         .expect("a finite rate is accepted");
 
@@ -149,7 +149,7 @@ async fn media_advance(constant_half: &'static [u8], rate: f32) -> f64 {
     let harness = loaded_harness(constant_half).await;
     let start = harness.player().position_seconds().unwrap_or(0.0);
     harness
-        .with_player(move |player| player.set_default_rate(rate))
+        .with_queue(move |player| player.set_default_rate(rate))
         .await
         .expect("a finite rate is accepted");
     for _ in 0..CLOCK_BLOCKS {

@@ -13,10 +13,10 @@ use kithara::{
         thread,
     },
     play::{
-        AllocatedSlot, BufferGeometryError, DeckRegistration, PlayError, PlayWorker,
-        PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionBinding, SessionError, SessionEvent,
-        player::{Player, PlayerControlSource},
+        BufferGeometryError, DeckControl, DeckMixerConfig, DeckPass, HostedDeck, Outbox,
+        PlayError, PlayWorker, PlayWorkerConfig, ResourcePrep, SessionError, SessionEvent, TrackReceipt,
     },
+    queue::{Queue, QueueConfig},
     warp::WarpConfig,
     worker::DispatcherConfig,
 };
@@ -46,12 +46,9 @@ fn sample_rate() -> NonZeroU32 {
 #[kithara::test(tokio)]
 async fn failed_deck_preparation_releases_host_membership() {
     let region = pools();
-    let sample_rate = sample_rate();
     let host = offline_host(&region).await;
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let invalid = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(sample_rate)
+    let invalid = Queue::new(QueueConfig::builder().prep(ResourcePrep::builder()
             .worker(worker.clone())
             .warp(
                 WarpConfig::builder()
@@ -59,8 +56,7 @@ async fn failed_deck_preparation_releases_host_membership() {
                     .build(),
             )
             .response_budget_frames(NonZeroUsize::new(1).expect("budget"))
-            .build(),
-    );
+            .build()).build());
     assert!(matches!(
         host.insert(invalid).await,
         Err(PlayError::Session(SessionError::BufferGeometry(
@@ -75,12 +71,9 @@ async fn failed_deck_preparation_releases_host_membership() {
         );
     })
     .await;
-    let valid = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(sample_rate)
+    let valid = Queue::new(QueueConfig::builder().prep(ResourcePrep::builder()
             .worker(worker)
-            .build(),
-    );
+            .build()).build());
     let deck = host
         .insert(valid)
         .await
@@ -105,12 +98,9 @@ async fn a_deck_runs_from_its_insert_to_its_remove() {
     let host = offline_host(&region).await;
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let deck = host
-        .insert(PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(sample_rate())
+        .insert(Queue::new(QueueConfig::builder().prep(ResourcePrep::builder()
                 .worker(worker)
-                .build(),
-        ))
+                .build()).build()))
         .await
         .expect("the Host takes the deck");
     host.with(move |host| {
@@ -137,15 +127,12 @@ async fn a_route_change_reaches_every_deck_the_host_holds() {
     let mut decks = Vec::new();
     for _ in 0..2 {
         let deck = host
-            .insert(PlayerImpl::new(
-                PlayerConfig::builder()
-                    .sample_rate(sample_rate())
+            .insert(Queue::new(QueueConfig::builder().prep(ResourcePrep::builder()
                     .worker(worker.clone())
-                    .build(),
-            ))
+                    .build()).build()))
             .await
             .expect("the Host takes the deck");
-        decks.push((deck.bus().subscribe::<SessionEvent>(), deck));
+        decks.push((deck.subscribe::<SessionEvent>(), deck));
     }
 
     host.invalidate_audio_route("oldDeviceUnavailable")
@@ -187,43 +174,38 @@ impl<P> ThreadProbe<P> {
     }
 }
 
-impl<P: Player> Player for ThreadProbe<P> {
-    fn close(&mut self) -> Result<(), PlayError> {
+impl<S, P: HostedDeck<S>> HostedDeck<S> for ThreadProbe<P> {
+    fn close(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError> {
         self.note(Call::Close);
-        self.inner.close()
+        self.inner.close(out)
     }
 
-    fn drain(&mut self) {
+    fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
         self.note(Call::Drain);
-        self.inner.drain();
+        self.inner.drain(pass, out);
     }
 
-    fn tick(&mut self) -> Result<(), PlayError> {
+    fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
         self.note(Call::Tick);
-        self.inner.tick()
+        self.inner.tick(pass, out);
     }
 
     delegate! {
         to self.inner {
+            fn worker(&self) -> Option<&PlayWorker<S>>;
+            fn mixer_config(&self) -> DeckMixerConfig;
+            fn settle(&mut self, receipt: TrackReceipt<'_, S>, pass: DeckPass<'_>, out: &mut Outbox<'_, S>);
             fn hold(&mut self, waker: Waker);
             fn release(&mut self);
         }
     }
 }
 
-impl<P: PlayerControlSource> PlayerControlSource for ThreadProbe<P> {
+impl<P: DeckControl> DeckControl for ThreadProbe<P> {
     type Control = P::Control;
-    type Schema = P::Schema;
 
-    delegate! {
-        to self.inner {
-            fn attach_session(
-                &mut self,
-                binding: SessionBinding,
-            ) -> Result<DeckRegistration<Self::Schema>, PlayError>;
-            fn control(&self) -> Self::Control;
-            fn seat(&mut self, slot: AllocatedSlot);
-        }
+    fn control(&self) -> Self::Control {
+        self.inner.control()
     }
 }
 
@@ -236,7 +218,7 @@ async fn probed_host(
     seen: &Arc<Mutex<Vec<Call>>>,
 ) -> (
     OfflineHostHarness<TestPools>,
-    HostOwned<ThreadProbe<PlayerImpl<TestPools>>>,
+    HostOwned<ThreadProbe<Queue<TestPools>>>,
 ) {
     let region = pools();
     let config = HostConfig::offline(region.clone())
@@ -252,12 +234,9 @@ async fn probed_host(
     let host = OfflineHostHarness::new(config).await.expect("offline host");
     let deck = host
         .insert(ThreadProbe {
-            inner: PlayerImpl::new(
-                PlayerConfig::builder()
-                    .sample_rate(sample_rate())
+            inner: Queue::new(QueueConfig::builder().prep(ResourcePrep::builder()
                     .worker(PlayWorker::new(PlayWorkerConfig::builder(region).build()))
-                    .build(),
-            ),
+                    .build()).build()),
             seen: Arc::clone(seen),
         })
         .await

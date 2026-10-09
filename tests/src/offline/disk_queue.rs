@@ -1,4 +1,4 @@
-use std::{num::NonZeroUsize, path::Path};
+use std::path::Path;
 
 use kithara::{
     assets::AssetStore,
@@ -54,7 +54,6 @@ impl DiskQueue {
         #[builder(start_fn)] cache: &Path,
         #[builder(default)] pacing: RenderPacing,
         crossfade_seconds: Option<f32>,
-        max_concurrent_loads: Option<NonZeroUsize>,
         max_concurrent_downloads: Option<usize>,
         #[builder(default)] block_on_underrun: bool,
         #[builder(default)] net: NetOptions,
@@ -79,7 +78,6 @@ impl DiskQueue {
                 .prep(prep)
                 .store(store.clone())
                 .settings(QueueSettings::builder().crossfade(crossfade_settings).build())
-                .maybe_max_concurrent_loads(max_concurrent_loads)
                 .build(),
         );
         let queue = match pacing {

@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use kithara::{
     host::{HostConfig, HostSettings},
     platform::time::{Duration, sleep},
-    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
     TestServerHelper,
@@ -73,9 +73,6 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
             .store(store)
             .build();
 
-    let resource = Resource::new(cfg)
-        .await
-        .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
 
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
@@ -89,7 +86,7 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
             .build(),
     )
     .await;
-    player.load_and_fadein(resource).await;
+    player.load_config(cfg).await;
 
     // Warm-up is state-driven, not a fixed-size burst: the render races the
     // REAL network + decode pipeline, and under flash the burst's virtual

@@ -7,7 +7,7 @@ use kithara::{
     host::{HostConfig, HostSettings},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
-    play::{PlayerConfig, PlayerEvent, PlayerImpl, ResourceConfig, ResourceSrc},
+    play::{PlayerEvent, ResourceConfig, ResourceSrc},
     queue::{PlaybackView, Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
@@ -110,14 +110,12 @@ async fn run_case(
         u32::try_from(BLOCK_FRAMES).expect("fixture block size fits u32"),
     )
     .expect("fixture block size must be non-zero");
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(sample_rate)
+    let player = kithara::play::ResourcePrep::builder()
+            
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
             ))
-            .build(),
-    );
+            .build();
     let queue = OfflineQueue::new(
         HostConfig::offline(pools)
             .settings(HostSettings::builder().sample_rate(sample_rate).build())
@@ -125,7 +123,7 @@ async fn run_case(
             .build(),
         Queue::new(
             QueueConfig::builder()
-                .player(player)
+                .prep(player)
                 .store(store.clone())
                 .build(),
         ),

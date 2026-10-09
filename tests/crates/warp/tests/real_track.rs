@@ -12,7 +12,7 @@ use kithara::{
     stretch::StretchKind,
     warp::{
         Beat, BeatAlignment, BeatGridId, BeatGridRevision, BeatGridSnapshot, MapPoint,
-        SessionAnchor, SessionBeat, WarpConfig, WarpMap, WarpMapRevision, WarpPlan,
+        SessionAnchor, SessionBeat, WarpConfig, WarpMap, WarpMapRevision,
     },
 };
 use kithara_integration_tests::{
@@ -23,7 +23,7 @@ use kithara_test_fixtures::assets::by_name;
 use num_traits::ToPrimitive;
 
 use crate::{
-    region::{CH, Presented, Timeline, render_configured_grid_with_updates},
+    region::{CH, Presented, Projection, Timeline, render_configured_grid_with_updates},
     test_pools::pools,
 };
 
@@ -309,7 +309,7 @@ fn plan(
     anchor: SessionAnchor,
     activation: SessionFrame,
     revision: WarpMapRevision,
-) -> WarpPlan {
+) -> Projection {
     let target = BeatGridSnapshot::session(
         BeatGridId::allocate().expect("grid id"),
         BeatGridRevision::first(),
@@ -323,7 +323,7 @@ fn plan(
         MapPoint::new(target.stamp(), beat),
     );
     let map = WarpMap::projected(source.clone(), target, alignment, revision).expect("projection");
-    WarpPlan::new(map, activation.max(anchor.frame())).expect("activation")
+    (map, activation.max(anchor.frame()))
 }
 
 fn render(

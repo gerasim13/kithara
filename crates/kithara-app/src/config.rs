@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt, num::NonZeroU32, path::PathBuf};
+use std::{collections::BTreeMap, fmt, num::{NonZeroU32, NonZeroUsize}, path::PathBuf};
 
 #[cfg(feature = "gui")]
 use kithara::ui::source::UiConfig;
@@ -14,6 +14,7 @@ use kithara::{
     play::policy::DomainKeyPolicy,
     prelude::PlaybackResamplerBackend,
     queue::QueueConfigPatch,
+    warp::WarpConfig,
     worker::{DispatcherConfigPatch, Worker},
 };
 use kithara_config::Config;
@@ -124,6 +125,12 @@ pub struct AppConfig {
     /// track does. Reached through `audio`, not through [`AppConfigPatch`].
     #[config(builder(default), patch(skip))]
     pub audio: AudioConfigPatch,
+    #[config(patch(skip))]
+    pub preload_chunks: Option<NonZeroUsize>,
+    #[config(patch(skip))]
+    pub audio_buffer_chunks: Option<NonZeroUsize>,
+    #[config(builder(default = WarpConfig::builder().build()), patch(skip))]
+    pub warp: WarpConfig,
     /// What the document's `hls:` section says about every HLS track. Carried
     /// as a patch for the same reason [`AppConfig::audio`] is.
     #[config(builder(default), patch(skip))]

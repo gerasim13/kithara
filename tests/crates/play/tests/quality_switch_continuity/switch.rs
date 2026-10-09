@@ -11,7 +11,7 @@ use kithara::{
         time::{Duration, Instant, sleep},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -319,12 +319,6 @@ async fn prepare_player(
     .initial_abr_mode(AbrMode::manual(initial_variant))
     .events(bus)
     .build();
-    let resource = Resource::new(config)
-        .await
-        .unwrap_or_else(|error| panic!("open {label} resource: {error:?}"));
-    let abr = resource
-        .abr_handle()
-        .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
     // WHY: The fixture sine peaks at full scale, so its inter-sample reconstruction
     // can exceed a unity ceiling. Keep it below the limiter while measuring playback.
     let mut player = OfflinePlayer::new(
@@ -347,7 +341,9 @@ async fn prepare_player(
         .set_volume(0.9)
         .await
         .expect("the player takes the volume");
-    player.load_and_fadein(resource).await;
+    player.load_config(config).await;
+    let abr = player.player().current_abr_handle()
+        .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
 
     // Render to a capture point fixed in *frames*, not to whichever frame the
     // warm-up happens to stop on. A cold start can hand back a short block, and

@@ -1,11 +1,12 @@
 use std::path::Path;
 
+use kithara_integration_tests::mock::LaneAudio;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::AudioConfig,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -51,7 +52,7 @@ async fn create_hls_audio(
     server: &CreatedHls,
     cache_dir: &Path,
     abr: AbrMode,
-) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
+) -> LaneAudio<Stream<Hls<TestPools>>, TestPools> {
     let url = server.master_url();
     let cancel = CancelToken::never();
     let pools = pools();
@@ -75,14 +76,13 @@ async fn create_hls_audio(
         .build();
     // Park on ring underrun instead of surfacing Pending, so the blocking
     // readers never spin against the virtual clock.
-    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .media_info(wav_info)
+    let config = kithara::play::TrackConfig::for_audio(AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+        .media_info(wav_info).build())
         .block_on_underrun(true)
         .build();
 
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    worker
-        .load(config)
+    kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create Audio<Stream<Hls>>")
 }

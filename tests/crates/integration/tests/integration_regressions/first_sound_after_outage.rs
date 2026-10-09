@@ -6,7 +6,7 @@ use kithara::{
     host::HostConfig,
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{CancelToken, sync::Arc, time::Duration, tokio},
-    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueEvent, TrackSource},
 };
 use kithara_integration_tests::{
@@ -16,7 +16,6 @@ use kithara_integration_tests::{
     event::TestEvent,
     kithara,
     offline::{OfflineQueue, QueueTicker},
-    test_defaults::consts as shared,
     test_server::NetworkMode,
     waits::{wait_for_event, wait_for_position_event},
 };
@@ -75,17 +74,15 @@ async fn first_sound_arrives_after_an_outage_before_playback(
         DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
             .build(),
     );
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(shared::NON_ZERO_SAMPLE_RATE)
+    let player = kithara::play::ResourcePrep::builder()
+            
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
             ))
-            .build(),
-    );
+            .build();
     let queue = OfflineQueue::paced(
         HostConfig::offline(pools).build(),
-        Queue::new(QueueConfig::builder().player(player).build()),
+        Queue::new(QueueConfig::builder().prep(player).build()),
         Duration::from_millis(10),
     )
     .await

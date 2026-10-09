@@ -32,7 +32,7 @@ use kithara::{
         time::{self, Duration, sleep},
         tokio::sync::broadcast::error::RecvError,
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
     queue::{
         ActionAtItemEnd, Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus,
         Transition,
@@ -122,19 +122,17 @@ async fn build_queue(
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let pools = pools();
     let session = HostConfig::offline(pools.clone()).build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session.settings().sample_rate())
+    let player = kithara::play::ResourcePrep::builder()
+            
             .worker(PlayWorker::new(
                 PlayWorkerConfig::builder(pools.clone()).build(),
             ))
-            .build(),
-    );
+            .build();
     let queue = OfflineQueue::paced(
         session,
         Queue::new(
             QueueConfig::builder()
-                .player(player)
+                .prep(player)
                 .store(store.clone())
                 .build(),
         ),

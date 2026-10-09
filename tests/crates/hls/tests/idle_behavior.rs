@@ -85,8 +85,7 @@ async fn idle_does_not_panic_hang_detector(
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let mut audio = worker
-        .load(AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build())
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build())
         .await
         .expect("audio creation");
 
@@ -181,12 +180,9 @@ async fn idle_prefetch_is_capped(
         .events(bus.clone())
         .build();
 
-    let _audio = worker
-        .load(
-            AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+    let _audio = kithara_integration_tests::mock::load_audio(&worker, AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
                 .events(bus.clone())
-                .build(),
-        )
+                .build())
         .await
         .expect("audio creation");
 

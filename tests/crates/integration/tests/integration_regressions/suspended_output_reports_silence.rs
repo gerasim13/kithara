@@ -27,7 +27,7 @@ async fn a_suspended_output_reports_silence_until_the_rt_processor_runs_again(
     assert!(harness.player().is_playing());
 
     harness
-        .with_player(move |player| player.notify_interruption(InterruptionKind::Began))
+        .with_queue(move |player| player.notify_interruption(InterruptionKind::Began))
         .await;
     assert_eq!(
         harness.player().rate(),
@@ -43,7 +43,7 @@ async fn a_suspended_output_reports_silence_until_the_rt_processor_runs_again(
     // it over, the stream rebuild takes it, and until the processor runs the
     // last thing it published still describes an output that is gone.
     harness
-        .with_player(move |player| {
+        .with_queue(move |player| {
             player.notify_interruption(InterruptionKind::Ended {
                 should_resume: true,
             })
@@ -79,21 +79,21 @@ async fn a_suspended_output_reports_silence_until_the_rt_processor_runs_again(
 async fn loaded_harness(constant_half: &'static [u8]) -> OfflinePlayer {
     let harness =
         OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;
-    harness
-        .with_player(move |player| {
-            player
-                .select(
-                    TrackId::allocate(),
-                    Some(resource_from_reader(
+    let deck_source = harness.pcm_deck((resource_from_reader(
                         kithara::audio::mock::TestPcmReader::with_pcm(
                             AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
                             1.0,
                             constant_half,
                         ),
-                    )),
-                    kithara::play::SelectionPlayback::Play,
-                )
+                    )).into());
+    harness
+        .with_queue(move |player| {
+            let deck_id = TrackId::allocate();
+            player.append_with_id(deck_id, deck_source).expect("append PCM deck");
+            player
+                .select(deck_id, kithara::queue::Transition::None)
                 .expect("select the item");
+            player.play();
         })
         .await;
 

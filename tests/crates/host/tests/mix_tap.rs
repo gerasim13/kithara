@@ -39,15 +39,15 @@ pub(super) async fn play_resource(
     harness: OfflinePlayer,
     make: impl FnOnce() -> Resource + Send + 'static,
 ) -> OfflinePlayer {
+    let deck_source = harness.pcm_deck((make()).into());
     harness
-        .with_player(move |player| {
+        .with_queue(move |player| {
+            let deck_id = TrackId::allocate();
+            player.append_with_id(deck_id, deck_source).expect("append PCM deck");
             player
-                .select(
-                    TrackId::allocate(),
-                    Some(make()),
-                    kithara::play::SelectionPlayback::Play,
-                )
+                .select(deck_id, kithara::queue::Transition::None)
                 .expect("select the item");
+            player.play();
         })
         .await;
     harness.render(BLOCK_FRAMES).await;
@@ -127,15 +127,15 @@ async fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for(constant_hal
         .expect("arm the mix tap before a session output exists");
     assert!(tap.drain().is_empty(), "an idle session feeds nothing");
 
+    let deck_source = harness.pcm_deck((make_resource(constant_half)).into());
     harness
-        .with_player(move |player| {
+        .with_queue(move |player| {
+            let deck_id = TrackId::allocate();
+            player.append_with_id(deck_id, deck_source).expect("append PCM deck");
             player
-                .select(
-                    TrackId::allocate(),
-                    Some(make_resource(constant_half)),
-                    kithara::play::SelectionPlayback::Play,
-                )
+                .select(deck_id, kithara::queue::Transition::None)
                 .expect("select the item");
+            player.play();
         })
         .await;
 

@@ -49,12 +49,12 @@ async fn queue_playback_architecture(#[future(awt)] served_mp3: (TestServerHelpe
     let queue = harness
         .insert_control(Queue::new(
             QueueConfig::builder()
-                .player(harness.take_player())
+                .prep(harness.resource_prep().clone())
                 .store(store.clone())
-                .crossfade_settings(kithara::play::CrossfadeSettings {
+                .settings(kithara::queue::QueueSettings::builder().crossfade(kithara::play::CrossfadeSettings {
                     duration: 0.0,
                     ..kithara::play::CrossfadeSettings::default()
-                })
+                }).build())
                 .build(),
         ))
         .await;

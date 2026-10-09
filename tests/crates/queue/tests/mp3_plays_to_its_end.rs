@@ -86,11 +86,11 @@ async fn play_queue(
     )
     .await;
     let config = QueueConfig::builder()
-        .player(harness.take_player())
-        .crossfade_settings(kithara::play::CrossfadeSettings {
+        .prep(harness.resource_prep().clone())
+        .settings(kithara::queue::QueueSettings::builder().crossfade(kithara::play::CrossfadeSettings {
             duration: crossfade,
             ..kithara::play::CrossfadeSettings::default()
-        })
+        }).build())
         .build();
     let queue: QueueControl<TestPools> = harness.insert_control(Queue::new(config)).await;
 

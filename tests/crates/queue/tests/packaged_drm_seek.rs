@@ -13,7 +13,7 @@ use kithara::{
         CancelToken,
         time::{Duration, Instant, timeout},
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, policy::DomainKeyPolicy},
+    play::{PlayWorker, PlayWorkerConfig, policy::DomainKeyPolicy},
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackStatus, Transition},
 };
 use kithara_app::{
@@ -138,15 +138,13 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
         .build();
 
     let session_config = HostConfig::offline(session_pools).build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session_config.settings().sample_rate())
+    let player = kithara::play::ResourcePrep::builder()
+            
             .worker(worker)
-            .build(),
-    );
+            .build();
     let queue = OfflineQueue::paced(
         session_config,
-        Queue::new(QueueConfig::builder().player(player).build()),
+        Queue::new(QueueConfig::builder().prep(player).build()),
         RENDER_PACE,
     )
     .await

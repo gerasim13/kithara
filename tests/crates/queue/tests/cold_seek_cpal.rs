@@ -11,7 +11,7 @@ use kithara::{
         time::{Duration, Instant, timeout},
     },
     play::{
-        PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
+        PlayError, PlayWorker, PlayWorkerConfig, ResourceConfig,
         ResourceSrc,
     },
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
@@ -113,13 +113,11 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let owner = OffThread::spawn("cpal-seek-host", move || {
         let mut host = Host::new(HostConfig::builder().build())?;
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(host.sample_rate())
+        let player = kithara::play::ResourcePrep::builder()
+                
                 .worker(worker)
-                .build(),
-        );
-        let queue = Queue::new(QueueConfig::builder().player(player).build());
+                .build();
+        let queue = Queue::new(QueueConfig::builder().prep(player).build());
         let queue = host.insert(queue)?;
         Ok::<_, PlayError>((queue, host))
     })

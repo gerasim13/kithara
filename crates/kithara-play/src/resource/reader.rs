@@ -325,6 +325,74 @@ impl<S, B> Open for ResourceLoad<S, B> {
     }
 }
 
+#[cfg(feature = "mock")]
+pub mod mock {
+    use super::*;
+    use kithara_render::TrackConfig;
+    use kithara_stream::StreamType;
+    use crate::PlayWorker;
+
+    pub fn resource_tracks<S>(
+        config: ResourceConfig<S>,
+    ) -> Result<(PlayWorker<S>, Either<TrackConfig<kithara_file::File<S>, PlaybackResamplerBackend>, TrackConfig<kithara_hls::Hls<S>, PlaybackResamplerBackend>>), LoadRefusal>
+    where
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    {
+        let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
+            detail: "ResourceConfig requires an explicit PlayWorker",
+        })?;
+        let track = match SourceType::detect(&config.src)? {
+            SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
+                let audio = config.clone().build_file_config(&worker, None);
+                Either::Left(config.build_track_config(audio))
+            }
+            SourceType::HlsStream(_) => {
+                let audio = config.clone().build_hls_config(&worker, None)?;
+                Either::Right(config.build_track_config(audio))
+            }
+        };
+        Ok((worker, track))
+    }
+
+    /// Opens an explicit source configuration through the real dispatcher and lane.
+    pub fn track_load<T, B, S, L>(
+        config: TrackConfig<T, B>,
+        src: Arc<str>,
+        worker: PlayWorker<S>,
+        sample_rate: NonZeroU32,
+        open: impl FnOnce(PlayWorker<S>, TrackConfig<T, B>, Duration, LaneStart, Inbox<LaneProtocol>)
+            -> BoxFuture<'static, Result<(PcmReceiver, L, FrameCount), LoadRefusal>> + Send + 'static,
+    ) -> ResourceLoad<S>
+    where
+        T: StreamType<Events = EventBus> + 'static,
+        B: Default + ResamplerBackend,
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+        L: kithara_render::LaneTask + 'static,
+    {
+        let depth = config.warp().render_quantum_frames().map(|quantum| {
+            let frames = config.audio_buffer_chunks().get().checked_add(1)
+                .and_then(|packets| packets.checked_mul(quantum.get()))
+                .and_then(|frames| frames.checked_sub(1))
+                .expect("fixture lane depth fits usize");
+            FrameCount::new(frames)
+        });
+        let geometry = Ok((depth, config.declick_frames(sample_rate)));
+        let channel_worker = worker.clone();
+        ResourceLoad {
+            opener: Box::new(move |position, start, inbox| Box::pin(async move {
+                let pools = worker.pools().clone();
+                let (receiver, lane, latency) = open(worker, config, position, start, inbox).await?;
+                let opened = OpenedTrack::new(receiver, src, &pools)
+                    .map_err(LoadRefusal::Pool)?;
+                Ok((opened, ResourceLane::new(lane), latency))
+            })),
+            channel: Some(Box::new(move || channel_worker.lane_channel())),
+            geometry,
+            marker: PhantomData,
+        }
+    }
+}
+
 /// Transfer the directly owned reader to another off-RT consumer.
 impl From<Resource> for Box<dyn AudioReader> {
     fn from(resource: Resource) -> Self {

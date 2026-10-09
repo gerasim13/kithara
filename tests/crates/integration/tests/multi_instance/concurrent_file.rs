@@ -1,11 +1,12 @@
 use std::path::Path;
 
+use kithara_integration_tests::mock::LaneAudio;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::AudioConfig,
     file::{File, FileConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig},
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -22,7 +23,7 @@ use url::Url;
 async fn create_file_audio(
     url: Url,
     cache_dir: &Path,
-) -> RegisteredAudio<Stream<File<TestPools>>, TestPools> {
+) -> LaneAudio<Stream<File<TestPools>>, TestPools> {
     let pools = pools();
     let file_config = FileConfig::for_src(url.into())
         .store(
@@ -38,8 +39,7 @@ async fn create_file_audio(
         .hint(("mp3").to_string())
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    worker
-        .load(config)
+    kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create Audio<Stream<File>>")
 }

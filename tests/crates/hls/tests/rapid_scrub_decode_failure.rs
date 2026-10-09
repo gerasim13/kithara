@@ -14,7 +14,7 @@ use kithara::{
         time::{Duration, Instant, sleep, timeout},
     },
     play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl, ResourceConfig,
+        PlayWorker, PlayWorkerConfig, PlayerEvent, ResourceConfig,
         ResourceSrc,
     },
     queue::{Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, TrackStatus, Transition},
@@ -206,17 +206,15 @@ impl Harness {
             })
             .build();
         let session = HostConfig::offline(pools.clone()).build();
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(session.settings().sample_rate())
+        let player = kithara::play::ResourcePrep::builder()
+                
                 .worker(PlayWorker::new(
                     PlayWorkerConfig::builder(pools.clone()).build(),
                 ))
-                .build(),
-        );
+                .build();
         let queue = OfflineQueue::paced(
             session,
-            Queue::new(QueueConfig::builder().player(player).build()),
+            Queue::new(QueueConfig::builder().prep(player).build()),
             RENDER_PACE,
         )
         .await

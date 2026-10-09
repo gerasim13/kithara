@@ -6,7 +6,7 @@ use kithara::{
     decode::DecoderBackend,
     host::{HostConfig, HostSettings},
     platform::time::Duration,
-    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
     TestServerHelper, fixture_protocol::DelayRule, hls_fixture::create_test_downloader,
@@ -87,9 +87,6 @@ async fn hls_seek_middle_repeated_seeks_stress(
             )
             .build();
 
-    let resource = Resource::new(cfg)
-        .await
-        .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
 
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
@@ -103,7 +100,7 @@ async fn hls_seek_middle_repeated_seeks_stress(
             .build(),
     )
     .await;
-    player.load_and_fadein(resource).await;
+    player.load_config(cfg).await;
 
     let warmup_target = player.position() + consts::PRE_SEEK_RENDER_SECS;
     render_until_position(

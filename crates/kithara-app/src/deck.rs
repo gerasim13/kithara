@@ -106,6 +106,7 @@ impl Deck {
         let cancel = config.shutdown.child();
         let prep = ResourcePrep::builder()
             .worker(config.worker.clone())
+            .warp(config.warp.clone())
             .cancel(cancel.child())
             .build();
         let mut queue_config = QueueConfig::builder()

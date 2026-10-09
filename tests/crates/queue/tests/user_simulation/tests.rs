@@ -8,7 +8,7 @@ use kithara::{
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
+    play::{PlayWorker, PlayWorkerConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::AudioCodec,
 };
@@ -366,15 +366,13 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: PreparedTrack, #[c
     .initial_abr_mode(AbrMode::Auto(None))
     .build();
     let session_config = HostConfig::offline(pools).build();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(session_config.settings().sample_rate())
+    let player = kithara::play::ResourcePrep::builder()
+            
             .worker(worker)
-            .build(),
-    );
+            .build();
     let queue = OfflineQueue::paced(
         session_config,
-        Queue::new(QueueConfig::builder().player(player).build()),
+        Queue::new(QueueConfig::builder().prep(player).build()),
         RENDER_PACE,
     )
     .await

@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::{
-    num::{NonZeroU32, NonZeroUsize},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     ops::Range,
     path::PathBuf,
 };
@@ -32,6 +32,7 @@ fn response_source() -> PathBuf {
 }
 
 use crate::bufpool_ext::TestPools;
+use kithara_integration_tests::mock::RampedFactory;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -248,7 +249,7 @@ async fn capture_command_boundary(
 /// room the target needs.
 async fn send_target_rate(
     harness: &OfflinePlayer,
-    queue: &HostOwned<Queue<TestPools>>,
+    queue: &HostOwned<Queue<TestPools, RampedFactory>>,
     case: ResponseCase,
     samples: &mut Vec<f32>,
 ) -> usize {
@@ -262,7 +263,7 @@ async fn send_target_rate(
         .await;
     if let Some(refused) = refused {
         assert!(
-            matches!(refused, QueueError::Play(PlayError::SlotChannelFull { .. })),
+            matches!(refused, QueueError::Play(PlayError::Full(_))),
             "a burst past the deck's room is refused as full, not {refused:?}"
         );
         samples.extend(capture_frames(harness, case.callback_frames, case.callback_frames).await);
@@ -346,16 +347,13 @@ async fn playing_queue(
     backends: ElasticBackendConfig,
     case: ResponseCase,
     response_source: PathBuf,
-) -> (OfflinePlayer, HostOwned<Queue<TestPools>>) {
+) -> (OfflinePlayer, HostOwned<Queue<TestPools, RampedFactory>>) {
     let warp = WarpConfig::builder()
         .speed(1.0)
         .backend(backend)
         .backends(backends)
         .source_block_frames(
             NonZeroUsize::new(case.source_block_frames).expect("case source block is non-zero"),
-        )
-        .rate_smooth_frames(
-            NonZeroUsize::new(case.smooth_frames).expect("case smoothing is non-zero"),
         )
         .maybe_render_quantum_frames(case.render_quantum_frames)
         .build();
@@ -378,7 +376,10 @@ async fn playing_queue(
         SAMPLE_RATE,
     )
     .await;
-    let queue = Queue::new(QueueConfig::builder().player(harness.take_player()).build());
+    let frames = NonZeroU64::new(u64::try_from(case.smooth_frames).expect("smoothing fits u64"))
+        .expect("smoothing is nonzero");
+    let queue = Queue::new(QueueConfig::with_factory(RampedFactory(frames))
+        .prep(harness.resource_prep().clone()).build());
     let queue = harness.insert(queue).await;
     harness
         .run(queue.control(), move |q| {

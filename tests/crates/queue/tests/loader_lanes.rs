@@ -4,7 +4,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{num::NonZeroUsize, sync::Arc};
+use std::sync::Arc;
 
 use kithara::{
     assets::AssetStore,
@@ -28,9 +28,6 @@ use crate::bufpool_ext::TestPools;
 mod consts {
     use super::Duration;
 
-    /// Background lane width. One permit, so a single hung prefetch
-    /// saturates it.
-    pub(super) const BG_CAP: usize = 1;
     /// Above the probe buffer (1 `KiB`) so the probe waits for bytes, not EOF.
     pub(super) const HUNG_BODY_LEN: usize = 64 * 1024;
     pub(super) const HUNG_THROTTLE_CHUNK: usize = 1;
@@ -130,7 +127,6 @@ async fn select_pending_track_parked_behind_hung_load_promotes(tone_mp3: &'stati
         ticker: mut tick_handle,
         ..
     } = DiskQueue::builder(temp.path())
-        .max_concurrent_loads(NonZeroUsize::new(consts::BG_CAP).expect("loader cap is non-zero"))
         .open()
         .await;
 
@@ -164,7 +160,7 @@ async fn select_pending_track_parked_behind_hung_load_promotes(tone_mp3: &'stati
     queue.run(QueueControl::play).await;
 
     let load_result = wait_for_loader_done(&queue, fast_id, consts::FAST_DEADLINE).await;
-    assert_hung_still_loading(&queue, hung_id);
+    assert_hung_superseded(&queue, hung_id);
     load_result.unwrap_or_else(|e| {
         panic!("selected Pending track stayed parked behind the hung background load: {e}")
     });
@@ -198,7 +194,6 @@ async fn superseded_hung_selection_frees_lane_for_next_select(tone_mp3: &'static
         ticker: mut tick_handle,
         ..
     } = DiskQueue::builder(temp.path())
-        .max_concurrent_loads(NonZeroUsize::new(consts::BG_CAP).expect("loader cap is non-zero"))
         .open()
         .await;
     let mut events = queue.subscribe();
@@ -263,10 +258,8 @@ async fn superseded_hung_selection_frees_lane_for_next_select(tone_mp3: &'static
     queue.close().await;
 }
 
-/// Setup invariant: the hung track must still be mid-load when the fast
-/// track resolves, otherwise the scenario did not actually exercise lane
-/// isolation.
-fn assert_hung_still_loading(queue: &QueueControl<TestPools>, hung_id: TrackId) {
+/// A loaded foreground target must leave the abandoned target cancelled.
+fn assert_hung_superseded(queue: &QueueControl<TestPools>, hung_id: TrackId) {
     assert!(
         matches!(status_of(queue, hung_id), Some(TrackStatus::Cancelled)),
         "the user selection must supersede the pending initial load (last={:?})",

@@ -7,9 +7,9 @@ use kithara::{
     audio::{
         DecoderBackend as DecoderBackendKind, DecoderEvent, DecoderResamplerSettings, ResamplerKind,
     },
-    events::{EventReceiver, TrackId},
+    events::EventReceiver,
     platform::{time::sleep, tokio::sync::broadcast::error::TryRecvError},
-    play::{PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc},
+    play::{PlaybackResamplerBackend, ResourceConfig, ResourceSrc},
     stream::AudioCodec,
     warp::WarpConfig,
 };
@@ -225,35 +225,10 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
     .initial_abr_mode(AbrMode::manual(AAC_HIGH))
     .events(bus)
     .build();
-    let config = harness
-        .player()
-        .prepare_config(config, harness.worker().clone())
-        .unwrap_or_else(|error| panic!("prepare {label} Kithara App resource: {error}"));
-    let resource = Resource::new(config)
-        .await
-        .unwrap_or_else(|error| panic!("open {label} Kithara App resource: {error:?}"));
-    assert_eq!(
-        resource.spec().sample_rate.get(),
-        HOST_SAMPLE_RATE,
-        "{label} resource must expose the host-rate PCM contract",
-    );
-    let abr = resource
-        .abr_handle()
+    harness.load_config(config).await;
+    let abr = harness.player()
+        .current_abr_handle()
         .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
-    let select_label = label.to_owned();
-    harness
-        .with_player(move |player| {
-            player
-                .select(
-                    TrackId::allocate(),
-                    Some(resource),
-                    kithara::play::SelectionPlayback::Play,
-                )
-                .unwrap_or_else(|error| {
-                    panic!("select {select_label} Kithara App resource: {error}")
-                });
-        })
-        .await;
 
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut active_blocks = 0usize;
@@ -296,6 +271,11 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
         "{label} must start on AAC high",
     );
     assert_initial_apple_decoder(&lifecycle.decoders, label);
+    assert_eq!(
+        lifecycle.resamplers.first().expect("resource publishes its PCM resampler").output_rate,
+        HOST_SAMPLE_RATE,
+        "{label} resource must expose the host-rate PCM contract",
+    );
     assert_rubato_route(&lifecycle.resamplers, label);
     let capture_frame = host_frame(harness.player().position_seconds().unwrap_or(0.0), label);
     DesktopPrepared {

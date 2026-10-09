@@ -13,7 +13,7 @@ use kithara_command::{
 };
 use kithara_events::TrackId;
 use kithara_play::{
-    Bound, DeckPass, HostedDeck, Outbox, PlayError, PlayWorker, Player, Position, ResourceConfig,
+    Bound, DeckPass, HostedDeck, Outbox, OutputSnapshot, PlayError, PlayWorker, Player, Position, ResourceConfig,
     ResourceLoad, ResourceSrc, Settled, Track, TrackCommand, TrackReceipt, TrackSettings,
     TrackSettingsChange, TrackSnapshot, TrackStatus, mock::DeckRig,
 };
@@ -436,6 +436,7 @@ pub(super) struct Rig {
     pub queues: DeckRig<TestPools>,
     pub now: SessionFrame,
     pub delivery: FrameCount,
+    output: OutputSnapshot,
     observation: DeckSnapshot,
 }
 
@@ -445,6 +446,7 @@ impl Rig {
             queues: DeckRig::new(DeckMixerConfig::default()).expect("deck scope"),
             now: SessionFrame::new(now),
             delivery: FrameCount::new(128),
+            output: kithara_play::mock::output(None).get(),
             observation: DeckSnapshot::default(),
         }
     }
@@ -465,6 +467,7 @@ impl Rig {
         let pass = DeckPass {
             now: self.now,
             delivery: self.delivery,
+            output: &self.output,
             deck: &self.observation,
         };
         run(

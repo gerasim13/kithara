@@ -10,7 +10,6 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     decode::DecoderBackend,
-    file::{File as FileSource, FileConfig, FileSrc},
     hls::{Hls, HlsConfig},
     host::{HostConfig, HostSettings},
     platform::{
@@ -19,7 +18,7 @@ use kithara::{
         time::{Duration, Instant, sleep, timeout},
     },
     play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, RegisteredAudio, Resource,
+        PlayWorker, PlayWorkerConfig, Resource,
         ResourceConfig, ResourceSrc,
     },
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
@@ -27,7 +26,6 @@ use kithara::{
 use kithara_integration_tests::{
     Content, CreatedHls, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::PackagedSignal,
-    offline::resource_from_reader,
     output_continuity::{
         CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe,
         render_offline_window, render_until_audible,
@@ -154,7 +152,7 @@ async fn open_resource(
     backend: DecoderBackend,
 ) -> Resource {
     let config = resource_config(url, store, backend, Some("mp3"), worker);
-    Resource::new(config)
+    kithara_integration_tests::mock::open_resource(config)
         .await
         .unwrap_or_else(|err| panic!("resource should open for {}: {err}", url))
 }
@@ -186,8 +184,7 @@ async fn warm_hls_worker(
                 .build(),
         )
         .build();
-    let mut audio = worker
-        .load(config)
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
 
@@ -290,7 +287,7 @@ async fn open_packaged_hls_audio(
     worker: PlayWorker<TestPools>,
     _codec: AudioCodec,
     backend: DecoderBackend,
-) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
+) -> kithara_integration_tests::mock::LaneAudio<Stream<Hls<TestPools>>, TestPools> {
     let hls = HlsConfig::for_url(url.clone())
         .store(store)
         .pools(worker.pools().clone())
@@ -302,8 +299,7 @@ async fn open_packaged_hls_audio(
                 .build(),
         )
         .build();
-    let mut audio = worker
-        .load(config)
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .unwrap_or_else(|err| panic!("packaged HLS audio should open for {url}: {err}"));
     audio.preload().expect("packaged HLS preload must succeed");
@@ -311,7 +307,7 @@ async fn open_packaged_hls_audio(
 }
 
 async fn read_audio_some(
-    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    audio: &mut kithara_integration_tests::mock::LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     stage: &str,
 ) -> usize {
     let deadline = Instant::now() + consts::READ_TIMEOUT;
@@ -408,7 +404,7 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
     drop(ok);
 
     for attempt in 0..2 {
-        let result = Resource::new(resource_config(
+        let result = kithara_integration_tests::mock::open_resource(resource_config(
             &bad_url,
             store.clone(),
             backend,
@@ -552,13 +548,7 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     let hls_server = open_audio_hls_server;
     let (_server, ok_url, bad_url) = mp3_endpoints;
     let region = pools();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(shared::NON_ZERO_SAMPLE_RATE)
-            .worker(play_worker(&region))
-            .build(),
-    );
-    let worker = player.worker().clone();
+    let worker = play_worker(&region);
     let store = asset_store(&temp_dir, ephemeral, &region);
     let hls_url = hls_server.master_url();
 
@@ -576,7 +566,7 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     );
 
     for attempt in 0..2 {
-        let result = Resource::new(resource_config(
+        let result = kithara_integration_tests::mock::open_resource(resource_config(
             &bad_url,
             store.clone(),
             backend,
@@ -860,13 +850,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
         progress_probe.progress_events
     );
 
-    let decode_audio =
-        open_packaged_hls_audio(&url, store, play_worker(&region), codec, backend).await;
-    let mut resource = resource_from_reader(decode_audio);
-    timeout(consts::READ_TIMEOUT, resource.preload())
-        .await
-        .expect("packaged HLS preload must complete")
-        .expect("packaged HLS preload must succeed");
+    let resource = resource_config(&url, store, backend, None, play_worker(&region));
     let mut player = OfflinePlayer::new(
         HostConfig::offline(region.clone())
             .settings(
@@ -879,7 +863,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
             .build(),
     )
     .await;
-    player.load_and_fadein(resource).await;
+    player.load_config(resource).await;
     render_until_audible(
         &mut player,
         "packaged warmup",
@@ -941,13 +925,7 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     let hls_server = open_audio_hls_server;
     let (_server, ok_url, _) = mp3_endpoints;
     let region = pools();
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .sample_rate(shared::NON_ZERO_SAMPLE_RATE)
-            .worker(play_worker(&region))
-            .build(),
-    );
-    let worker = player.worker().clone();
+    let worker = play_worker(&region);
     let store = asset_store(&temp_dir, ephemeral, &region);
     let hls_url = hls_server.master_url();
 
@@ -1052,78 +1030,41 @@ async fn stress_offline_crossfade_no_gaps(
     let make_mp3 = |w: PlayWorker<TestPools>, s: AssetStore<TestPools>, cancel: CancelToken| {
         let p = local_mp3.clone();
         async move {
-            let pools = w.pools().clone();
-            let file_cfg = FileConfig::for_src(FileSrc::Local(p))
+            ResourceConfig::for_src(ResourceSrc::Path(p))
                 .store(s)
-                .pools(pools)
-                .cancel(cancel.clone())
-                .build();
-            let audio_cfg = AudioConfig::<FileSource<TestPools>>::for_stream(file_cfg)
+                .worker(w)
                 .hint("mp3".to_string())
                 .cancel(cancel)
-                .build();
-            let audio = w.load(audio_cfg).await.expect("create local MP3 audio");
-            resource_from_reader(audio)
+                .build()
         }
     };
 
     let make_hls = |w: PlayWorker<TestPools>, s: AssetStore<TestPools>, cancel: CancelToken| {
         let u = hls_url.clone();
         async move {
-            let pools = w.pools().clone();
-            let wav_info = MediaInfo::builder()
-                .maybe_codec(Some(AudioCodec::Pcm))
-                .maybe_container(Some(ContainerFormat::Wav))
-                .build();
-            let cfg = HlsConfig::for_url(u)
+            ResourceConfig::for_src(ResourceSrc::Url(u))
                 .store(s)
-                .pools(pools)
-                .cancel(cancel.clone())
-                .build();
-            let audio_config = AudioConfig::<Hls<TestPools>>::for_stream(cfg)
-                .media_info(wav_info)
+                .worker(w)
+                .hint("wav")
                 .cancel(cancel)
-                .build();
-            let audio = w.load(audio_config).await.expect("HLS audio");
-            let mut r = resource_from_reader(audio);
-            timeout(consts::READ_TIMEOUT, r.preload())
-                .await
-                .expect("HLS preload")
-                .expect("HLS preload result");
-            r
+                .build()
         }
     };
 
-    let mut mp3_1 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
-    timeout(consts::READ_TIMEOUT, mp3_1.preload())
-        .await
-        .expect("mp3_1 preload deadline")
-        .expect("mp3_1 preload");
-    player.load_and_fadein(mp3_1).await;
+    let mp3_1 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
+    player.load_config(mp3_1).await;
     let s1a = render_offline_window(&mut player, 40, "MP3 solo", BLOCK, SR).await;
 
-    let mut hls_1 = make_hls(worker.clone(), store.clone(), master_cancel.child()).await;
-    timeout(consts::READ_TIMEOUT, hls_1.preload())
-        .await
-        .expect("hls_1 preload deadline")
-        .expect("hls_1 preload");
-    player.load_and_fadein(hls_1).await;
+    let hls_1 = make_hls(worker.clone(), store.clone(), master_cancel.child()).await;
+    player.load_config(hls_1).await;
     let s1b = render_offline_window(&mut player, 80, "MP3→HLS fade", BLOCK, SR).await;
 
-    let mut mp3_2 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
-    timeout(consts::READ_TIMEOUT, mp3_2.preload())
-        .await
-        .expect("mp3_2 preload deadline")
-        .expect("mp3_2 preload");
-    player.load_and_fadein(mp3_2).await;
+    let mp3_2 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
+    player.load_config(mp3_2).await;
     let s2 = render_offline_window(&mut player, 80, "HLS→MP3 fade", BLOCK, SR).await;
 
-    let mut mp3_3 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
-    timeout(consts::READ_TIMEOUT, mp3_3.preload())
-        .await
-        .expect("mp3_3 preload deadline")
-        .expect("mp3_3 preload");
-    player.load_and_fadein(mp3_3).await;
+    let mp3_3 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
+    player.load_config(mp3_3).await;
     let s3 = render_offline_window(&mut player, 80, "MP3→MP3 fade", BLOCK, SR).await;
 
     info!("\n=== Stress crossfade results (budget={block_budget:?}) ===");
@@ -1182,7 +1123,7 @@ async fn resource_mp3_no_hint_decodes_with_duration(
     let path = url.as_str();
 
     let config = resource_config(&url, store, backend, None, play_worker(&region));
-    let mut resource = Resource::new(config)
+    let mut resource = kithara_integration_tests::mock::open_resource(config)
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed for path={path}: {e}"));
 
@@ -1287,7 +1228,7 @@ async fn local_resource_decodes_with_duration(
             .worker(play_worker(&region))
             .build();
 
-    let mut resource = Resource::new(config)
+    let mut resource = kithara_integration_tests::mock::open_resource(config)
         .await
         .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
 
