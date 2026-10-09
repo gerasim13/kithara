@@ -8,8 +8,7 @@
 )]
 
 use kithara_audio::{
-    ConsumerWakeMode,
-    mock::{MockReader, TestPcmReader},
+    mock::TestPcmReader,
 };
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::sync::Arc;
@@ -158,29 +157,15 @@ fn replay_same_item_does_not_re_emit_current_item_changed(constant_half: &'stati
     );
 }
 
-/// A selected resource never passes `ConfigPrep`, so adoption into the
-/// real-time arena is the only place a session wake policy can reach it. A
-/// reader left on the direct-consumer default publishes its reader events
-/// inline from the audio callback.
 #[kithara::test(tokio)]
 async fn a_selected_resource_adopts_the_session_wake_mode() {
-    let (player, _audio_thread) = prepared_player(0.0);
-    let (reader, recorded) = MockReader::wake_mode_tracking(AUDIO_SPEC);
-
-    player
-        .select(
-            TrackId::allocate(),
-            Some(Resource::from_reader(reader, None)),
-            SelectionPlayback::Play,
-        )
-        .expect("select the item");
-
-    let applied = *recorded.lock();
-    assert_eq!(
-        applied,
-        Some(ConsumerWakeMode::RealtimeDeferred),
-        "adoption must apply the session wake mode to a selected resource"
-    );
+    let pools = pools();
+    let dir = kithara_test_utils::TestTempDir::new();
+    let prep = kithara_play::ResourcePrep::builder()
+        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build()))
+        .build();
+    mock::assert_prepared_render_off_bus(&prep, &mock::output(None).get(), &pools, &dir.path().join("selected.wav"))
+        .await.expect("selected lane renders off the bus");
 }
 
 #[kithara::test]

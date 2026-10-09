@@ -131,7 +131,7 @@ pub use wire::{PlayerId, SessionError, SessionSampleRate};
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_audio::ConsumerWakeMode;
+    use kithara_test_utils::{TestTempDir, bufpool::pools};
     use kithara_test_utils::kithara;
 
     use super::{SessionOutputView, SessionSampleRate};
@@ -140,8 +140,8 @@ mod tests {
         NonZeroU32::new(48_000).expect("fixture sample rate is non-zero")
     }
 
-    #[kithara::test]
-    fn a_view_reads_what_its_session_publishes_after_it_was_taken() {
+    #[kithara::test(native, tokio)]
+    async fn a_view_reads_what_its_session_publishes_after_it_was_taken() {
         let output = SessionOutputView::new(sample_rate());
         let view = output.clone();
         assert_eq!(view.get().sample_rate.measured, None);
@@ -150,9 +150,21 @@ mod tests {
 
         assert_eq!(view.get().sample_rate.measured, Some(44_100));
         assert_eq!(view.get().sample_rate.output(), 44_100);
-        assert_eq!(
-            view.get().consumer_wake_mode,
-            ConsumerWakeMode::RealtimeDeferred
-        );
+        assert_session_render_off_bus(&view).await;
+    }
+
+    async fn assert_session_render_off_bus(view: &SessionOutputView) {
+        let pools = pools();
+        let dir = TestTempDir::new();
+        let prep = crate::ResourcePrep::builder()
+            .worker(crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools.clone()).build()))
+            .build();
+        crate::mock::assert_prepared_render_off_bus(&prep, &view.get(), &pools, &dir.path().join("session.wav"))
+            .await.expect("session-prepared lane renders off the bus");
+    }
+
+    #[kithara::test(native, tokio)]
+    async fn session_handle_delegates_explicit_consumer_wake_mode() {
+        assert_session_render_off_bus(&SessionOutputView::new(sample_rate())).await;
     }
 }

@@ -67,10 +67,6 @@ mod tests {
     }
 
     impl HostDispatcher<TestPools> for Session {
-        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            ConsumerWakeMode::RealtimeDeferred
-        }
-
         fn dispatch(
             &self,
             cmd: HostCmd<TestPools>,

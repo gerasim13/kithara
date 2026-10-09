@@ -5,14 +5,13 @@ use std::{
 };
 
 use firewheel::FirewheelContext;
-use kithara_audio::ConsumerWakeMode;
 use kithara_events::EventBus;
 use kithara_platform::{
     sync::{Mutex, mpsc},
     thread::{JoinHandle, spawn_named},
 };
 use kithara_play::{
-    DeckRegistration, PlayError, SessionBinding, SessionError, SessionTransportSnapshot,
+    DeckRegistration, PlayError, SessionError, SessionOutputView, SessionTransportSnapshot,
 };
 use kithara_test_utils::{
     bufpool::{TestPools, pools},
@@ -29,6 +28,22 @@ use crate::session::{protocol::HostCmd, state::RootView};
 
 type RingSetup =
     Box<dyn FnOnce(&mut FirewheelContext) -> Result<(), RingSessionError> + Send + 'static>;
+
+#[kithara::test(native, tokio)]
+async fn ring_binding_keeps_resource_events_off_the_render_thread() {
+    let session = ManualRingSession::start(ManualRingConfig::new(
+        kithara_play::mock::SAMPLE_RATE, 128, 4,
+    )).expect("offline session starts");
+    let pools = pools();
+    let dir = kithara_test_utils::TestTempDir::new();
+    let prep = kithara_play::ResourcePrep::builder()
+        .worker(kithara_play::PlayWorker::new(kithara_play::PlayWorkerConfig::builder(pools.clone()).build()))
+        .build();
+    kithara_play::mock::assert_prepared_render_off_bus(
+        &prep, &session.binding().get(), &pools, &dir.path().join("session.wav"),
+    ).await.expect("session-prepared lane renders off the bus");
+    session.shutdown().expect("offline session stops");
+}
 
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
@@ -238,8 +253,8 @@ impl ManualRingSession {
 
     /// What a deck joins this session with. The ring backend drives the
     /// device callback's processor.
-    pub(crate) fn binding(&self) -> SessionBinding {
-        self.view().binding(ConsumerWakeMode::RealtimeDeferred)
+    pub(crate) fn binding(&self) -> SessionOutputView {
+        self.view().output.clone()
     }
 
     fn view(&self) -> &RootView {

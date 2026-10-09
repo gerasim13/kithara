@@ -52,12 +52,8 @@ async fn wait_for_frames<R: AudioRead>(audio: &mut R, budget: Duration) -> usize
 ///
 /// Every reader in this file pulls off the real-time thread — from a
 /// blocking pool thread or from the test task itself, never from a render
-/// callback — so the configuration says so. The default
-/// [`ConsumerWakeMode::RealtimeDeferred`] only arms a scheduler pass and
-/// leaves the producer's thread gate unsignalled, which is correct when a
-/// render callback runs that pass and a deadlock when nothing does: a
-/// producer parked on a full ring waits for a wake the reader never sends,
-/// and the reader polls an empty ring forever.
+/// callback. Reads publish their events inline on that owning thread; deck
+/// callbacks consume only PCM packets and report through deck channels.
 fn test_wav_config(
     tmp: &NamedTempFile,
     worker: &PlayWorker<TestPools>,

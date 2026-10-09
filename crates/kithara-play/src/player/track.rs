@@ -990,6 +990,29 @@ impl<S> PlayerImpl<S> {
         }
         let when = self.lane_when(at, out)?;
         let change = TrackSettings::check(change)?;
+        if let TrackSettingsChange::Speed(speed) = change
+            && matches!(when, When::Next)
+            && speed == self.settings.config().speed()
+            && !self.lane_commands.iter().any(|operation| {
+                operation.segment == self.segment
+                    && operation.applied.is_none()
+                    && matches!(operation.command, LaneCommand::SetSpeed(_))
+            })
+            && self
+                .lane_commands
+                .iter()
+                .filter(|operation| {
+                    operation.segment == self.segment
+                        && operation.applied == Some(true)
+                        && matches!(operation.command, LaneCommand::SetSpeed(_))
+                })
+                .max_by_key(|operation| (operation.when, operation.seq))
+                .is_none_or(|operation| {
+                    matches!(operation.command, LaneCommand::SetSpeed(SpeedCurve::Constant(_)))
+                })
+        {
+            return Ok(None);
+        }
         let seq = self.send_lane(LaneCommand::from(change), when)?;
         self.settings.track(seq, when, change);
         Ok(Some(seq))

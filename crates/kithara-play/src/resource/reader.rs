@@ -714,6 +714,53 @@ mod tests {
         (opened, lane, sender, dir)
     }
 
+    #[kithara::test(native, tokio)]
+    async fn playback_rate_reports_only_a_real_warp_control() {
+        let samples = vec![0.5; 16_384];
+        let mut fixed = Resource::from_reader(EofReader {
+            samples: samples.clone(), total_frames: samples.len() / 2, ..EofReader::default()
+        }, None);
+        let mut buffer = vec![0.0; consts::BLOCK_FRAMES * 2];
+        assert!(matches!(fixed.read(&mut buffer).expect("direct reader block"),
+            ReadOutcome::Frames { count, .. } if count.get() == consts::BLOCK_FRAMES * 2));
+        let block_frames = u32::try_from(consts::BLOCK_FRAMES).expect("block size fits u32");
+        let seconds = f64::from(block_frames) / f64::from(consts::SAMPLE_RATE);
+        assert_eq!(fixed.position(), Duration::from_secs_f64(seconds));
+
+        let pools = pools();
+        let shape = StreamShape::new(
+            NonZeroU32::new(u32::try_from(consts::BLOCK_FRAMES).expect("block size fits u32")).expect("nonzero block"),
+            NonZeroU32::new(consts::SAMPLE_RATE).expect("sample rate"),
+        );
+        let mut mixer = crate::mock::MixerRig::new(DeckMixerConfig::default(), shape, &pools)
+            .expect("offline mixer");
+        let (opened, mut lane, mut control, _dir) = warped_player_resource(1.25, "rate", &samples).await;
+        let (built, applied) = if supports_playback_rate() { (1.25, 1.5) } else { (1.0, 1.0) };
+        let slot = Slot::new(0);
+        mixer.send(When::Next, DeckPart::Attach { slot, pcm: opened.pcm, segment: SegmentId::FIRST })
+            .expect("attach warped lane");
+        mixer.send(When::Next, DeckPart::Start { slot, fade: Fade::Declick }).expect("start warped lane");
+        mixer.block(SessionFrame::new(0)).expect("built-speed block");
+        let before = mixer.ends.snapshot.read().slots[0].position;
+        assert_eq!(before / seconds, built);
+        let seq = control.send(When::Next, Batch {
+            basis: Vec::new(), commands: vec![LaneCommand::SetSpeed(SpeedCurve::Constant(1.5))],
+        }).expect("rate command");
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        let _ = lane.poll_commands(&mut context);
+        lane.tick();
+        mixer.block(SessionFrame::new(i64::from(shape.max_block_frames.get()))).expect("applied-speed block");
+        let advance = mixer.ends.snapshot.read().slots[0].position - before;
+        assert_eq!(advance / seconds, applied);
+        let receipts: Vec<_> = control.receipts().filter_map(|receipt|
+            matches!(receipt.outcome(), Outcome::Applied { .. }).then_some(receipt.seq())
+        ).collect();
+        if supports_playback_rate() { assert_eq!(receipts, [seq]); } else { assert!(receipts.is_empty()); }
+        assert!(matches!(fixed.read(&mut buffer).expect("direct reader stays independent of warp commands"),
+            ReadOutcome::Frames { count, .. } if count.get() == consts::BLOCK_FRAMES * 2));
+        assert_eq!(fixed.position(), Duration::from_secs_f64(seconds * 2.0));
+    }
+
     #[kithara::test(native, tokio, flash(false))]
     async fn a_loaded_track_takes_the_processor_rate(half: Vec<f32>) {
         let pools = pools();

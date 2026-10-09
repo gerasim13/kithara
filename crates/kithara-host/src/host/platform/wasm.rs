@@ -137,7 +137,6 @@ mod tests {
         task::Waker,
     };
 
-    use kithara_audio::ConsumerWakeMode;
     use kithara_command::{Post, Ticket};
     use kithara_platform::{sync::Arc, time};
     use kithara_play::{PlayError, player::Player};
@@ -219,10 +218,6 @@ mod tests {
     }
 
     impl HostDispatcher<TestPools> for Dispatcher {
-        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            ConsumerWakeMode::RealtimeDeferred
-        }
-
         fn dispatch(
             &self,
             cmd: HostCmd<TestPools>,

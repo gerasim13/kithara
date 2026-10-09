@@ -147,8 +147,7 @@ mod document_tests {
         assert!(error.to_string().contains("headroom"), "{error}");
     }
 
-    /// `consumer_wake_mode` is overwritten for every player-managed resource
-    /// (see the field's doc comment).
+    /// The deleted consumer policy cannot be revived by a configuration document.
     #[kithara::test(native, flash(false))]
     fn the_realtime_unsafe_wake_mode_is_not_a_document_key() {
         let error =

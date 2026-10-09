@@ -124,7 +124,7 @@ mod tests {
     use std::num::NonZeroUsize;
 
     use kithara_assets::AssetStore;
-    use kithara_audio::ConsumerWakeMode;
+    use kithara_test_utils::TestTempDir;
     use kithara_render::rt::{BufferGeometryError, StreamShape};
     use kithara_test_utils::kithara;
     use kithara_warp::WarpConfig;
@@ -191,7 +191,7 @@ mod tests {
         let patch: ResourcePrepPatch = serde_yaml_ng::from_str("gapless_mode:\n  mode: disabled\n")
             .expect("the document types");
         let mut prep = prep(WarpConfig::builder().build());
-        let crossfade = crate::CrossfadeSettings { duration: 2.5, ..crate::CrossfadeSettings::default() };
+        prep.warp = WarpConfig::builder().speed(2.5).build();
         prep.apply(patch);
         let config = prep.prepare(
             resource_config("https://example.com/song.mp3"),
@@ -200,7 +200,8 @@ mod tests {
 
         assert_eq!(prep.gapless_mode, GaplessMode::Disabled);
         assert_eq!(config.decoder.gapless_mode(), GaplessMode::Disabled);
-        assert!((crossfade.duration - 2.5).abs() < f32::EPSILON, "a sibling field must survive the patch");
+        assert!((prep.warp.speed() - 2.5).abs() < f32::EPSILON, "a sibling field must survive the patch");
+        assert!((config.warp.speed() - 2.5).abs() < f32::EPSILON);
     }
 
     fn prep_with_geometry(
@@ -318,9 +319,10 @@ mod tests {
         );
     }
 
-    #[kithara::test]
-    fn prepare_config_carries_the_sessions_rate_and_wake_mode() {
-        let prepared = prep(WarpConfig::builder().build())
+    #[kithara::test(native, tokio)]
+    async fn prepare_config_carries_the_sessions_rate_and_wake_mode() {
+        let prep = prep(WarpConfig::builder().build());
+        let prepared = prep
             .prepare(resource_config("https://example.com/song.mp3"), &mock::output(None).get())
             .expect("unmeasured preparation");
 
@@ -328,10 +330,9 @@ mod tests {
             prepared.host_sample_rate.map(NonZeroU32::get),
             Some(mock::SAMPLE_RATE.get())
         );
-        assert_eq!(
-            prepared.consumer_wake_mode,
-            Some(ConsumerWakeMode::RealtimeDeferred)
-        );
+        let dir = TestTempDir::new();
+        mock::assert_prepared_render_off_bus(&prep, &mock::output(None).get(), &pools(), &dir.path().join("prepared.wav"))
+            .await.expect("player-prepared lane renders off the bus");
     }
 
     #[kithara::test]

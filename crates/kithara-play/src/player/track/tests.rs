@@ -3,7 +3,7 @@ use kithara_audio::AudioObserverSlot;
 use kithara_command::{ChannelConfig, Inbox, Port, channel};
 use kithara_platform::sync::Arc;
 use kithara_render::{
-    LaneFrame, LoadRefusal, Loaded,
+    LaneFrame, LoadRefusal, Loaded, Open,
     bridge::DeckEvent,
     rt::DeckMixerConfig,
 };
@@ -228,15 +228,64 @@ fn entering_arms_the_member_that_reached_presentation() {
 fn a_rejected_launch_leaves_the_member_silent() {
     let mut rig = rig();
     let (mut track, _inbox) = prepared_track();
-    let seq = command_at_zero(&mut track, &mut rig, TrackCommand::Play { at: When::At(frame(0)) })
-        .expect("scheduled start");
-    let receipt = answer_next(&mut rig, Err(DeckRefusal::Outdated { slot: A }));
-
-    assert!(matches!(answer_track(&mut track, &mut rig, receipt), Settled::Rejected { seq: answered, .. } if answered == seq));
+    let pools = pools();
+    let dir = TestTempDir::new();
+    let path = dir.path().join("rejected.wav");
+    mock::write_pcm_wav(&path, &vec![0.5; 8_192], AudioSpec::new(2, mock::SAMPLE_RATE))
+        .expect("audible source fixture");
+    let worker = crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools.clone()).build());
+    let prep = crate::ResourcePrep::builder().worker(worker).build();
+    let config: ResourceConfig<TestPools> = prep.prepare(ResourceConfig::for_src(ResourceSrc::Path(path))
+        .store(AssetStore::builder(pools.clone()).backend(kithara_assets::StorageBackend::Memory).build())
+        .build(), &mock::output(None).get()).expect("prepared source");
+    let load = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
+    let (_control, inbox) = load.lane_channel().expect("lane channel");
+    let (opened, _lane, _) = futures::executor::block_on(load.open(
+        Duration::ZERO, TrackSettings::default().lane_start(), inbox,
+    )).expect("URI source opens");
+    let shape = kithara_render::rt::StreamShape::new(NonZeroU32::new(128).expect("block frames"), mock::SAMPLE_RATE);
+    let mut mixer = mock::MixerRig::new(DeckMixerConfig::default(), shape, &pools).expect("offline mixer");
+    mixer.send(When::Next, DeckPart::Attach { slot: A, pcm: opened.pcm, segment: SegmentId::FIRST })
+        .expect("attach audible lane");
+    mixer.block(frame(0)).expect("loaded host block");
+    assert!(mixer.ring.receipt().is_some());
+    let output = mock::output(Some(shape)).get();
+    let snapshot = crate::DeckSnapshot::default();
+    let pass = crate::DeckPass { now: frame(128), delivery: FrameCount::new(0), output: &output, deck: &snapshot };
+    let seq = {
+        let mut scope = mixer.ring.scope(mixer.scope).expect("live scope");
+        let mut out = Outbox::new(&mut scope, &mut rig.deck.dispatcher).in_pass(pass);
+        let seq = track.apply(TrackCommand::Play { at: When::At(frame(256)) }, &mut out)
+            .expect("scheduled start").expect("start sequence");
+        out.deck(When::At(frame(192)), vec![DeckPart::Adopt { slot: A, segment: SegmentId::FIRST }])
+            .expect("intervening slot operation");
+        seq
+    };
+    let pcm = mixer.block(frame(128)).expect("slot basis changes before launch");
+    assert!(pcm.iter().flatten().all(|sample| *sample == 0.0));
+    let pcm = mixer.block(frame(256)).expect("rejected launch host block");
+    let _ = mixer.ring.receipt().expect("adopt applied");
+    let kithara_command::ScopedReceipt::Scope(_, receipt) = mixer.ring.receipt().expect("start rejected") else {
+        panic!("deck reply");
+    };
+    assert_eq!(receipt.seq(), seq);
+    let (outcome, mut batch) = receipt.into();
+    assert!(matches!(outcome, Outcome::Rejected(Rejection::Stale)));
+    let settled = {
+        let mut scope = mixer.ring.scope(mixer.scope).expect("live scope");
+        let mut out = Outbox::new(&mut scope, &mut rig.deck.dispatcher);
+        track.settle(TrackReceipt::Deck { seq, outcome: &outcome, batch: &mut batch }, &mut out)
+    };
+    assert!(matches!(settled, Settled::Rejected { seq: answered, .. } if answered == seq));
     assert_eq!(track.status, TrackStatus::Loaded);
     assert_eq!(track.play, None);
     assert!(track.playback_commands.is_empty());
     assert_eq!(rig.deck.mixer.held(A), None);
+    assert!(pcm.iter().flatten().all(|sample| *sample == 0.0));
+    assert_eq!(mixer.ends.snapshot.read().slots[0].state, SlotState::Stopped);
+    mixer.send(When::Next, DeckPart::Start { slot: A, fade: Fade::Declick }).expect("valid launch");
+    let pcm = mixer.block(frame(384)).expect("audible control block");
+    assert!(pcm.iter().flatten().any(|sample| *sample != 0.0));
 }
 
 #[kithara::test]
@@ -289,6 +338,7 @@ fn an_installed_lane_the_owner_refuses_is_dropped_and_reported_cancelled() {
 #[case::sequence(1)]
 #[case::basis(2)]
 #[case::segment(3)]
+#[case::load(4)]
 fn installed_free_receipt_is_consumed_once(#[case] foreign: u8) {
     let mut rig = rig();
     let (mut track, _inbox) = prepared_track();
@@ -301,7 +351,7 @@ fn installed_free_receipt_is_consumed_once(#[case] foreign: u8) {
     }])).expect("live scope").expect("foreign operation admitted").expect("foreign sequence");
     let original_basis = batch.basis.clone();
     let original_segment = track.segment;
-    let foreign_seq = if foreign == 1 { other_seq } else { seq };
+    let foreign_seq = if matches!(foreign, 1 | 4) { other_seq } else { seq };
     match foreign {
         0 => batch.basis = vec![(B, None)],
         2 => batch.basis = vec![(A, Some(other_seq))],
@@ -309,6 +359,20 @@ fn installed_free_receipt_is_consumed_once(#[case] foreign: u8) {
         _ => {}
     }
     let before = track.snapshot();
+
+    if foreign == 4 {
+        let mut first = self::track(B);
+        let _ = load(&mut first, &mut rig, Position::ZERO);
+        let mut other = self::track(B);
+        let foreign_load = load(&mut other, &mut rig, Position::ZERO);
+        assert_ne!(foreign_load, seq);
+        let _ = rig.open(Err(LoadRefusal::Cancelled)).expect("first dispatcher reply");
+        let opened = opened_fixture(&mut rig, "foreign");
+        let receipt = rig.open(Ok(opened)).expect("independent foreign load reply");
+        assert_eq!(receipt.seq(), foreign_load);
+        assert!(matches!(rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
+            .expect("live scope"), Settled::Pending));
+    }
 
     assert!(matches!(rig.with_outbox(|out| track.settle(TrackReceipt::Deck {
         seq: foreign_seq, outcome: &outcome, batch: &mut batch,
@@ -1237,6 +1301,58 @@ fn a_loaded_track_sends_each_change_to_its_lane() {
     );
     rig.with_outbox(|out| track.tick(frame(0), out)).expect("live deck scope");
     assert!((track.snapshot().speed - 2.0).abs() < f32::EPSILON);
+}
+
+#[kithara::test]
+fn full_notification_ring_retries_latest_effective_rate_once() {
+    let mut rig = rig();
+    let (mut track, _) = prepared_track();
+    let (sender, mut inbox) = channel(ChannelConfig::builder()
+        .capacity(std::num::NonZeroUsize::new(2).expect("two outstanding rates")).build());
+    track.lane = Some(sender);
+    let first = command_at_zero(&mut track, &mut rig,
+        TrackCommand::Configure(TrackSettingsChange::Speed(1.25), When::Next))
+        .expect("first rate is admitted");
+    let latest = command_at_zero(&mut track, &mut rig,
+        TrackCommand::Configure(TrackSettingsChange::Speed(1.5), When::Next))
+        .expect("latest rate is admitted");
+    let commands = lane_commands(&mut inbox);
+    assert!(matches!(commands.as_slice(), [LaneCommand::SetSpeed(SpeedCurve::Constant(first)),
+        LaneCommand::SetSpeed(SpeedCurve::Constant(latest))] if *first == 1.25 && *latest == 1.5));
+    assert_ne!(first, latest);
+    assert_eq!(track.lane.as_ref().expect("lane").available(), 0);
+    assert_eq!(track.projected().speed(), 1.5);
+    assert_eq!(track.snapshot().speed, 1.0);
+    rig.with_outbox(|out| track.tick(frame(0), out)).expect("owner takes the reserved replies");
+    assert_eq!(track.snapshot().speed, 1.5);
+    assert_eq!(track.lane.as_ref().expect("lane").available(), 2);
+    assert!(track.lane.as_mut().expect("lane").receipts().next().is_none());
+    assert_eq!(command_at_zero(&mut track, &mut rig,
+        TrackCommand::Configure(TrackSettingsChange::Speed(1.5), When::Next)), None);
+    assert!(lane_commands(&mut inbox).is_empty());
+    rig.with_outbox(|out| track.tick(frame(0), out)).expect("unchanged rate owner pass");
+    assert_eq!(track.snapshot().speed, 1.5);
+    assert!(track.lane.as_mut().expect("lane").receipts().next().is_none());
+}
+
+#[kithara::test]
+fn an_unchanged_speed_target_still_cancels_a_ramp() {
+    let mut rig = rig();
+    let (mut track, mut inbox) = prepared_track();
+    assert!(command_at_zero(&mut track, &mut rig, TrackCommand::SetSpeed {
+        speed: SpeedCurve::Ramp {
+            to: 1.5,
+            frames: std::num::NonZeroU64::new(128).expect("ramp frames"),
+        }, at: When::Next,
+    }).is_some());
+    assert!(matches!(lane_commands(&mut inbox).as_slice(), [LaneCommand::SetSpeed(SpeedCurve::Ramp { .. })]));
+    rig.with_outbox(|out| track.tick(frame(0), out)).expect("ramp applies");
+    assert_eq!(track.snapshot().speed, 1.5);
+    assert!(command_at_zero(&mut track, &mut rig, TrackCommand::Configure(
+        TrackSettingsChange::Speed(1.5), When::Next,
+    )).is_some());
+    assert!(matches!(lane_commands(&mut inbox).as_slice(),
+        [LaneCommand::SetSpeed(SpeedCurve::Constant(speed))] if *speed == 1.5));
 }
 
 #[kithara::test]

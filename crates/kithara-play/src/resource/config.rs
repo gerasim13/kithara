@@ -169,7 +169,7 @@ mod tests {
 
     use kithara_assets::AssetStore;
     use kithara_audio::{
-        ConsumerWakeMode, DecoderResamplerSettings, ResamplerBackend,
+        DecoderResamplerSettings, ResamplerBackend,
         ResamplerOptions,
     };
     use kithara_decode::DecodeError;
@@ -287,28 +287,53 @@ mod tests {
         assert!(kithara_hls::Hls::<TestPools>::event_bus(audio_config.stream()).is_some());
     }
 
-    #[kithara::test]
-    fn direct_resources_wake_the_worker_off_rt() {
-        let worker = worker();
-        let file: ResourceConfig<TestPools> =
-            ResourceConfig::for_src(valid_src("https://example.com/a.mp3"))
-                .store(store())
-                .build();
-        assert_eq!(
-            file.build_file_config(&worker, None).consumer_wake_mode(),
-            ConsumerWakeMode::ImmediateOffRt
-        );
+    #[kithara::test(native, tokio)]
+    async fn direct_resources_wake_the_worker_off_rt() {
+        use axum::{Router, routing::get};
+        use kithara_audio::{Audio, DecoderChangeCause, DecoderEvent};
+        use kithara_platform::sync::Arc;
+        use kithara_stream::mock::NoopWorkerWake;
+        use kithara_test_utils::{TestHttpServer, TestTempDir};
 
-        let hls: ResourceConfig<TestPools> =
-            ResourceConfig::for_src(valid_src("https://example.com/a.m3u8"))
+        let worker = worker();
+        let dir = TestTempDir::new();
+        let path = dir.path().join("direct.wav");
+        crate::mock::write_pcm_wav(
+            &path, &vec![0.5; 8_192], kithara_signal::AudioSpec::new(2, crate::mock::SAMPLE_RATE),
+        ).expect("direct float WAV");
+        let file_bus = EventBus::new(32);
+        let mut file_events = file_bus.subscribe::<DecoderEvent>();
+        let file: ResourceConfig<TestPools> =
+            ResourceConfig::for_src(ResourceSrc::Path(path.clone()))
                 .store(store())
+                .events(file_bus)
                 .build();
-        assert_eq!(
-            hls.build_hls_config(&worker, None)
-                .expect("valid HLS config")
-                .consumer_wake_mode(),
-            ConsumerWakeMode::ImmediateOffRt
-        );
+        let _file = Audio::prepare(file.build_file_config(&worker, None), Arc::new(NoopWorkerWake), pools())
+            .await.expect("direct file builds");
+        assert!(matches!(file_events.try_recv().expect("build publishes inline").event,
+            DecoderEvent::DecoderChanged { cause: DecoderChangeCause::Initial, .. }));
+
+        let wav = std::fs::read(path).expect("generated segment");
+        let server = TestHttpServer::new(Router::new()
+            .route("/direct.m3u8", get(|| async {
+                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:1,\n/direct.wav\n#EXT-X-ENDLIST\n"
+            }))
+            .route("/direct.wav", get(move || {
+                let wav = wav.clone();
+                async move { wav }
+            }))).await;
+        let hls_bus = EventBus::new(32);
+        let mut hls_events = hls_bus.subscribe::<DecoderEvent>();
+        let hls: ResourceConfig<TestPools> =
+            ResourceConfig::for_src(ResourceSrc::Url(server.url("/direct.m3u8")))
+                .store(store())
+                .events(hls_bus)
+                .hint("wav")
+                .build();
+        let _hls = Audio::prepare(hls.build_hls_config(&worker, None).expect("valid HLS config"),
+            Arc::new(NoopWorkerWake), pools()).await.expect("direct HLS builds");
+        assert!(matches!(hls_events.try_recv().expect("build publishes inline").event,
+            DecoderEvent::DecoderChanged { cause: DecoderChangeCause::Initial, .. }));
     }
 
     #[kithara::test]

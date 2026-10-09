@@ -5,7 +5,7 @@ use kithara_command::{
     ScopedReceipt, ScopedSender, Sender, When, channel, scoped_channel,
 };
 use kithara_render::{
-    Dispatched, DispatcherCommand, DispatcherProtocol, LoadRefusal, LoadRequest, Loaded,
+    Dispatched, DispatcherCommand, DispatcherProtocol, LoadRefusal, LoadRequest, Loaded, Open,
     bridge::{DeckEvents, DeckProtocol, scope_channels},
     mock::MockDeck,
     rt::{DeckMixerConfig, StreamShape},
@@ -80,6 +80,67 @@ pub fn output(shape: Option<StreamShape>) -> SessionOutputView {
     let output = SessionOutputView::new(SAMPLE_RATE);
     output.publish(output.get().sample_rate, shape);
     output
+}
+
+/// Opens player-prepared float WAV input and checks two real session render blocks.
+///
+/// # Errors
+/// Returns fixture, preparation, lane, or offline mixer failures.
+pub async fn assert_prepared_render_off_bus<S>(
+    prep: &crate::ResourcePrep<S>,
+    output: &crate::OutputSnapshot,
+    pools: &kithara_bufpool::PoolRegion<S>,
+    path: &std::path::Path,
+) -> Result<(), PlayError>
+where
+    S: kithara_bufpool::HasPool<u8> + kithara_bufpool::HasPool<f32> + Send + Sync + 'static,
+{
+    use kithara_events::TryRecvError;
+    use kithara_render::bridge::{Fade, Slot, SlotState};
+    use kithara_signal::{AudioSpec, SegmentId};
+
+    #[derive(Debug, kithara_events::EventSet)]
+    enum RenderEvents {
+        Audio(kithara_audio::AudioEvent),
+        Decoder(kithara_audio::DecoderEvent),
+        File(kithara_file::FileEvent),
+        Hls(kithara_hls::HlsEvent),
+        Drm(kithara_hls::DrmEvent),
+        Player(crate::PlayerEvent),
+    }
+
+    let rate = NonZeroU32::new(output.sample_rate.output()).ok_or(PlayError::Closed)?;
+    let frames = NonZeroU32::new(128).ok_or(PlayError::Closed)?;
+    let shape = StreamShape::new(frames, rate);
+    write_pcm_wav(path, &vec![0.5; 8_192], AudioSpec::new(2, rate))
+        .map_err(|error| PlayError::Internal(error.to_string()))?;
+    let config: crate::ResourceConfig<S> = crate::ResourceConfig::for_src(crate::ResourceSrc::Path(path.to_owned()))
+        .store(kithara_assets::AssetStore::builder(pools.clone())
+            .backend(kithara_assets::StorageBackend::Memory).build())
+        .build();
+    let prepared = prep.prepare(config, output)?;
+    let mut events = prepared.bus.as_ref().ok_or(PlayError::Closed)?.subscribe::<RenderEvents>();
+    let load = ResourceLoad::new(prepared, Box::new(kithara_audio::AudioObserverSlot::default().relay()));
+    let (_control, inbox) = load.lane_channel()?;
+    let (opened, _lane, _) = load.open(
+        kithara_platform::time::Duration::ZERO, TrackSettings::default().lane_start(), inbox,
+    ).await.map_err(|error| PlayError::Internal(format!("{error:?}")))?;
+    let mut mixer = MixerRig::new(DeckMixerConfig::default(), shape, pools)?;
+    let slot = Slot::new(0);
+    mixer.send(When::Next, DeckPart::Attach { slot, pcm: opened.pcm, segment: SegmentId::FIRST })?;
+    mixer.send(When::Next, DeckPart::Start { slot, fade: Fade::Declick })?;
+    while events.try_recv().is_ok() {}
+    let mut position = 0.0;
+    for block in 0..2 {
+        let pcm = mixer.block(SessionFrame::new(block * i64::from(frames.get())))?;
+        assert!(matches!(events.try_recv(), Err(TryRecvError::Empty)));
+        let snapshot = mixer.ends.snapshot.read();
+        assert_eq!(snapshot.slots[0].state, SlotState::Playing);
+        assert!(snapshot.slots[0].position > position);
+        assert!(pcm.iter().flatten().any(|sample| *sample != 0.0));
+        position = snapshot.slots[0].position;
+    }
+    Ok(())
 }
 
 /// The scoped command inbox installed in a mock audio-thread processor store.
