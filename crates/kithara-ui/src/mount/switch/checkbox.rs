@@ -1,18 +1,15 @@
 /// A square switch bound to one boolean endpoint.
-#[derive(kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.checkbox.size)]
-#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Checkbox;
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Checkbox;
     use crate::{
         atoms::toggle::Binary,
-        render::{
-            ReadValue, Skin,
-            controls::{Draws, Grip, Reading},
-        },
+        hosts::controls::{Draws, Grip, Reading},
+        render::{ReadValue, Skin},
     };
 
     impl Draws for Checkbox {

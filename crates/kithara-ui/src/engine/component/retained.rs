@@ -46,7 +46,7 @@ pub(crate) trait Component {
     fn path(&self) -> &str;
 }
 
-pub(in crate::engine) enum RetainedComponent {
+pub(crate) enum RetainedComponent {
     Scalar(ScalarComponent),
     Activation(ActivationComponent),
     Crossing(CrossingComponent),
@@ -61,17 +61,6 @@ pub(in crate::engine) enum RetainedComponent {
 impl RetainedComponent {
     pub(in crate::engine) fn blur(&mut self) {
         self.component_mut().blur();
-    }
-
-    #[cfg(feature = "masonry")]
-    pub(in crate::engine) fn column_divider_value(&self) -> Option<f32> {
-        if let Self::Scalar(component) = self
-            && component.kind() == Kind::ColumnDivider
-        {
-            component.current()
-        } else {
-            None
-        }
     }
 
     fn component(&self) -> &dyn Component {
@@ -164,7 +153,7 @@ impl RetainedComponent {
         }
     }
 
-    pub(in crate::engine) fn pressed_item_index(&self) -> Option<usize> {
+    pub(crate) fn pressed_item_index(&self) -> Option<usize> {
         if let Self::Item(component) = self {
             component.pressed_index()
         } else {
@@ -210,10 +199,7 @@ impl RetainedComponent {
         }
     }
 
-    pub(in crate::engine) fn text_input_snapshot(
-        &self,
-        focused: bool,
-    ) -> Option<TextInputSnapshot> {
+    pub(crate) fn text_input_snapshot(&self, focused: bool) -> Option<TextInputSnapshot> {
         if let Self::TextInput(component) = self {
             Some(component.snapshot(focused))
         } else {
@@ -225,10 +211,10 @@ impl RetainedComponent {
         to self {
             #[expr($.path())]
             #[call(component)]
-            pub(in crate::engine) fn path(&self) -> &str;
+            pub(crate) fn path(&self) -> &str;
             #[expr($.kind())]
             #[call(component)]
-            pub(in crate::engine) fn kind(&self) -> Kind;
+            pub(crate) fn kind(&self) -> Kind;
             #[expr($.event_path())]
             #[call(component)]
             pub(in crate::engine) fn event_path(&self) -> &str;

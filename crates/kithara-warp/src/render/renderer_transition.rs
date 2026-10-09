@@ -30,8 +30,8 @@ impl RetiringTarget {
             .capabilities()
             .latency();
         latency
-            .source_frames()
-            .checked_add(latency.output_frames())
+            .first()
+            .checked_add(latency.second())
             .and_then(|frames| frames.checked_mul(stages))
             .ok_or(ElasticError::SampleCountOverflow)
     }
@@ -55,8 +55,8 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .capabilities()
             .latency();
         let frames = latency
-            .source_frames()
-            .checked_add(latency.output_frames())
+            .first()
+            .checked_add(latency.second())
             .and_then(|frames| frames.checked_mul(stages))
             .ok_or(ElasticError::SampleCountOverflow)?;
         self.retiring_target.as_ref().map_or(Ok(frames), |target| {

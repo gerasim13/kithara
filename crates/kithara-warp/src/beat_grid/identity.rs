@@ -1,5 +1,6 @@
 use std::num::NonZeroU64;
 
+use kithara_signal::Revision;
 use portable_atomic::{AtomicU64, Ordering};
 
 /// Stable identity of one beat-grid owner.
@@ -49,41 +50,11 @@ impl BeatGridId {
 #[error("beat grid identity space is exhausted")]
 pub struct BeatGridIdAllocationError;
 
+/// The revision domain for beat-grid snapshots.
+pub enum BeatGridRevisionTag {}
+
 /// Monotonic revision of one [`BeatGridId`].
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    derive_more::Display,
-    derive_more::Into,
-)]
-#[display("{_0}")]
-#[into(u64)]
-#[repr(transparent)]
-pub struct BeatGridRevision(NonZeroU64);
-
-impl BeatGridRevision {
-    /// Returns the next owner-assigned revision, or `None` on exhaustion.
-    #[must_use]
-    pub fn checked_next(self) -> Option<Self> {
-        self.0
-            .get()
-            .checked_add(1)
-            .and_then(NonZeroU64::new)
-            .map(Self)
-    }
-
-    /// Returns the first revision assigned by a grid owner.
-    #[must_use]
-    pub const fn first() -> Self {
-        Self(NonZeroU64::MIN)
-    }
-}
+pub type BeatGridRevision = Revision<BeatGridRevisionTag>;
 
 /// Identity and immutable revision of one grid snapshot.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, fieldwork::Fieldwork)]

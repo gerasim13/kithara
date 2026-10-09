@@ -147,7 +147,7 @@ fn live_activation_primes_from_passthrough_history(
         .expect("compiled backend is available")
         .capabilities()
         .latency();
-    let cue = latency.source_frames();
+    let cue = latency.first();
     assert!(cue > 0, "activation needs backend history");
 
     let pools = renderer.pools.clone();
@@ -423,7 +423,7 @@ fn rendered_source_frontier_excludes_backend_lookahead(
         .expect("compiled backend is available")
         .capabilities()
         .latency()
-        .source_frames();
+        .first();
     assert!(source_latency > 0, "backend must declare source lookahead");
 
     let output = render_serviced(&mut renderer, input).expect("half-speed render emits samples");
@@ -477,7 +477,7 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(
         .expect("compiled backend is available")
         .capabilities()
         .latency()
-        .source_frames();
+        .first();
     let held =
         u64::try_from(source_latency.min(source_frames)).expect("backend source latency fits u64");
 

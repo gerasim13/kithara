@@ -1,25 +1,16 @@
-use bon::Builder;
-
 use crate::{
-    expand::Binding,
-    module::{GlyphStyle, IconName},
+    module::GlyphStyle,
     mount::Control,
     size::{Dim, SizeSpec},
-    skin::{ColorRole, SkinDoc},
+    skin::SkinDoc,
 };
 
 /// A single icon, drawn as a text glyph.
-#[derive(Builder, kithara_derive::ViewControl, kithara_derive::NodeControl)]
-pub(crate) struct Glyph<'a> {
+pub(crate) struct Glyph {
     pub(crate) style: GlyphStyle,
-    pub(crate) icon: IconName,
-    pub(crate) active: Option<&'a Binding>,
-    pub(crate) active_color: Option<ColorRole>,
-    pub(crate) active_icon: Option<IconName>,
-    pub(crate) color: Option<ColorRole>,
 }
 
-impl Control for Glyph<'_> {
+impl Control for Glyph {
     fn size(&self, skin: &SkinDoc) -> SizeSpec {
         match self.style {
             GlyphStyle::Menu => cell(skin.menu.icon_size),
@@ -41,17 +32,28 @@ fn cell(side: f32) -> SizeSpec {
     SizeSpec::new(Dim::Fixed(side), Dim::Fill)
 }
 
-#[cfg(feature = "render")]
-mod host {
-    use super::Glyph;
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    use crate::{expand::Binding, skin::ColorRole};
+
+    #[derive(Builder)]
+    pub(crate) struct Glyph<'a> {
+        pub(crate) style: GlyphStyle,
+        pub(crate) icon: IconName,
+        pub(crate) active: Option<&'a Binding>,
+        pub(crate) active_color: Option<ColorRole>,
+        pub(crate) active_icon: Option<IconName>,
+        pub(crate) color: Option<ColorRole>,
+    }
+
     use crate::{
         atoms::icon::glyph::{Glyph as Face, GlyphData},
         draw::Rgba,
+        hosts::controls::{Draws, Reading},
         module::{GlyphStyle, IconName},
-        render::{
-            ReadValue, Skin,
-            controls::{Draws, Reading},
-        },
+        render::{ReadValue, Skin},
     };
 
     impl Draws for Glyph<'_> {
@@ -115,8 +117,9 @@ mod host {
         use crate::{
             builtin,
             draw::{DrawList, DrawListBuilder, Rect},
+            hosts::controls::Draws,
             module::IconName,
-            render::{Skin, controls::Draws},
+            render::Skin,
             shaping::TextContext,
             skin::ColorRole,
         };
@@ -212,7 +215,7 @@ mod host {
             let mut list = DrawListBuilder::default();
             painter.paint(
                 &mut list,
-                &mut TextContext::from(skin.text_resources()),
+                &mut TextContext::from(skin.text_resources.as_ref()),
                 &GlyphData {
                     active,
                     active_mark: None,

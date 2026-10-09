@@ -1122,7 +1122,7 @@ fn knob_caption_is_document_text_and_optional() {
     assert_eq!(captions, vec![Some("LOW"), None]);
 }
 
-fn block_registry() -> kithara_ui::mock::TestRegistry {
+fn block_registry() -> kithara_ui::mock::MapEndpoints {
     let mut registry = kithara_ui::mock::player_registry();
     registry.insert(
         EndpointCategory::Model,

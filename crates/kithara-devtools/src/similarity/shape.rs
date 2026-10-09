@@ -304,17 +304,15 @@ impl ShapeArena {
     }
 
     #[must_use]
-    pub(super) fn is_ambiguous_scalar(&self, shape: ShapeId) -> bool {
+    pub(super) fn is_scalar(&self, shape: ShapeId) -> bool {
         if self.is_primitive(shape) {
-            return true;
+            return !matches!(&self.shapes[shape.0], Shape::Path { name, .. } if name == "str");
         }
         match &self.shapes[shape.0] {
-            Shape::Generic(_) => true,
             Shape::Path { name, arguments }
                 if matches!(
                     name.as_str(),
-                    "Option"
-                        | "NonZeroI8"
+                    "NonZeroI8"
                         | "NonZeroI16"
                         | "NonZeroI32"
                         | "NonZeroI64"
@@ -328,10 +326,7 @@ impl ShapeArena {
                         | "NonZeroUsize"
                 ) =>
             {
-                !arguments.is_empty()
-                    && arguments
-                        .iter()
-                        .all(|argument| self.is_ambiguous_scalar(*argument))
+                arguments.is_empty()
             }
             _ => false,
         }
@@ -440,6 +435,9 @@ mod tests {
     fn nested_shapes_and_pair_comparisons_are_reused() {
         let config: SimilarityConfig = toml::from_str(
             r#"
+                [gate]
+                min_behavior = 0.9
+
                 [[types.relations]]
                 left = "List"
                 right = "Vec"
@@ -480,6 +478,9 @@ mod tests {
     fn inline_capacity_array_is_normalized_as_container_element() {
         let config: SimilarityConfig = toml::from_str(
             r#"
+                [gate]
+                min_behavior = 0.9
+
                 [[types.relations]]
                 left = "Vec"
                 right = "SmallVec"

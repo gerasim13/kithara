@@ -1,20 +1,17 @@
 /// A horizontal bar filled from the left to show one fraction.
-#[derive(kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.meter.size)]
-#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Meter;
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use num_traits::cast::AsPrimitive;
 
     use super::Meter;
     use crate::{
         atoms::design::meter::Meter as Face,
-        render::{
-            ReadValue, Skin,
-            controls::{Draws, Reading},
-        },
+        hosts::controls::{Draws, Reading},
+        render::{ReadValue, Skin},
     };
 
     impl Draws for Meter {

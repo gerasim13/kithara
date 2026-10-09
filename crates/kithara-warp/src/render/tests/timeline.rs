@@ -516,7 +516,7 @@ fn rendered_source_frontier_excludes_pending_source(
         .expect("compiled backend is available")
         .capabilities()
         .latency()
-        .source_frames();
+        .first();
     assert!(source_latency <= probe.source_block_frames.get());
     let latency = u64::try_from(source_latency).expect("source latency fits u64");
     let mut fx = renderer(

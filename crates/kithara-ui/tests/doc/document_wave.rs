@@ -196,7 +196,7 @@ impl Host for WaveHost<'_> {
     }
 }
 
-fn studio_registry() -> kithara_ui::mock::TestRegistry {
+fn studio_registry() -> kithara_ui::mock::MapEndpoints {
     let mut registry = kithara_ui::mock::player_registry();
     for (category, id, value) in [
         (

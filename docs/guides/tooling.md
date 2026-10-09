@@ -140,8 +140,13 @@ it. Native artifacts live under `target/similarity/<revision>/`.
 - `.config/similarity.toml` owns the project exclusions and the optional type
   dictionaries that give a pair its similarity, substitution safety, direction, and
   caveats.
+- `just lint similarity --gate` is the one blocking slice, run by `lint full`:
+  struct pairs the analysis would merge with behavior at or above
+  `[gate].min_behavior`. It has no baseline, so a twin is fixed by folding it into
+  one generic type. Pairs never compiled together (exclusive `cfg`), test code, and
+  all-scalar structs in crates with no dependency edge between them are not twins.
 - Audit and advisory analyze production source; strict also includes test paths and
-  `#[cfg(test)]` items. The analysis is diagnostic: it alters no CI threshold or
+  `#[cfg(test)]` items. Outside the gate the analysis is diagnostic: it alters no CI threshold or
   latency budget, and a high score is a refactoring candidate, never proof of
   behavioral equivalence.
 

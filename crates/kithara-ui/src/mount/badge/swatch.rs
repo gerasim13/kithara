@@ -1,25 +1,24 @@
-use bon::Builder;
-
-use crate::{ids::InternId, skin::ColorRole};
-
 /// One palette colour, shown with its name.
-#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.swatch.size)]
-#[derive(kithara_derive::NodeControl)]
-pub(crate) struct Swatch {
-    pub(crate) role: ColorRole,
-    pub(crate) label: InternId,
-}
+pub(crate) struct Swatch;
 
-#[cfg(feature = "render")]
-mod host {
-    use super::Swatch;
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    use crate::{ids::InternId, skin::ColorRole};
+
+    #[derive(Builder)]
+    pub(crate) struct Swatch {
+        pub(crate) role: ColorRole,
+        pub(crate) label: InternId,
+    }
+
     use crate::{
         atoms::design::swatch::Swatch as Face,
-        render::{
-            Skin,
-            controls::{Draws, Reading},
-        },
+        hosts::controls::{Draws, Reading},
+        render::Skin,
     };
 
     impl Draws for Swatch {

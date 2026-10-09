@@ -7,7 +7,7 @@ use kithara_ui::{
 };
 use num_traits::cast::AsPrimitive;
 
-use crate::demo::DemoRegistry;
+use crate::demo::MapEndpoints;
 
 mod consts {
     pub(super) const FRAME_WINDOW: usize = 300;
@@ -146,7 +146,7 @@ impl StressState {
     }
 }
 
-pub(crate) fn insert_endpoints(registry: &mut DemoRegistry) {
+pub(crate) fn insert_endpoints(registry: &mut MapEndpoints) {
     for id in ["bench.fps", "bench.frame_ms_avg", "bench.frame_ms_p99"] {
         registry.insert(
             EndpointCategory::Model,

@@ -1865,14 +1865,14 @@ mod tests {
                 default_backend: "http".to_owned(),
                 default_lane: "product".to_owned(),
                 nextest_config: ".config/nextest.toml".to_owned(),
-                flash: TestFlashConfig {
-                    features: vec!["virtual-time".to_owned()],
-                    default: true,
-                },
-                no_block: TestNoBlockConfig {
-                    features: vec!["nb-detect".to_owned()],
-                    default: false,
-                },
+                flash: toml::from_str::<TestFlashConfig>(
+                    "features = ['virtual-time']\ndefault = true",
+                )
+                .expect("flash config"),
+                no_block: toml::from_str::<TestNoBlockConfig>(
+                    "features = ['nb-detect']\ndefault = false",
+                )
+                .expect("no-block config"),
                 ..TestCommandConfig::default()
             },
             ..ProjectConfig::default()

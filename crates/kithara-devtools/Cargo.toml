@@ -21,6 +21,7 @@ anyhow = { workspace = true }
 cargo_metadata = { workspace = true }
 clap = { workspace = true }
 delegate = { workspace = true }
+derive-where = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
 fs4 = { workspace = true }

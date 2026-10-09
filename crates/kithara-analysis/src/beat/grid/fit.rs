@@ -34,23 +34,15 @@ impl<'a> GridFitCtx<'a> {
     }
 }
 
-#[derive(Clone, Copy)]
-struct Segment {
-    end: usize,
-    start: usize,
-}
+enum SegmentTag {}
 
-impl Segment {
-    const fn new(start: usize, end: usize) -> Self {
-        Self { end, start }
-    }
-}
+type Segment = kithara_signal::FramePair<SegmentTag>;
 
 /// Least-squares fit `src = intercept + slope × bar_idx` over the non-outlier
 /// downbeats of `[start, end]`. Returns `(intercept, slope, max_residual)`.
 /// Fewer than two trusted points: line through the endpoints, residual 0.
 fn fit_segment(ctx: &GridFitCtx<'_>, segment: Segment) -> (f64, f64, f64) {
-    let Segment { start, end } = segment;
+    let (start, end) = (segment.first(), segment.second());
     let trusted = (start..=end).filter(|&index| ctx.outliers[index] == 0.0);
     let (count, sum_x, sum_y) =
         trusted
@@ -117,7 +109,7 @@ fn aligned_mid(start: usize, end: usize, align: usize, min_seg: usize) -> usize 
 /// downbeats fit one line within `residual_ms`, or the leaf is too short to
 /// split into two `min_leaf_bars` halves.
 fn bisect_segment(ctx: &GridFitCtx<'_>, segment: Segment, visit: &mut impl FnMut(Segment)) {
-    let Segment { start, end } = segment;
+    let (start, end) = (segment.first(), segment.second());
     if end - start <= 1 {
         visit(segment);
         return;
@@ -160,8 +152,8 @@ impl FitSpan {
         Self {
             intercept,
             slope,
-            end: segment.end,
-            start: segment.start,
+            end: segment.second(),
+            start: segment.first(),
         }
     }
 

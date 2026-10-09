@@ -802,7 +802,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
             .capabilities()
             .latency()
-            .output_frames()
+            .second()
             .max(1);
         for _ in 0..=capacity.div_ceil(quantum) {
             self.scratch

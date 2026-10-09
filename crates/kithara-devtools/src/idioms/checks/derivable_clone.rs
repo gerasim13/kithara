@@ -3,12 +3,12 @@ use std::fs;
 use anyhow::Result;
 use syn::{
     Expr, ExprCall, ExprField, GenericArgument, GenericParam, ImplItem, ItemImpl, Member,
-    PathArguments, Stmt, Type, visit, visit::Visit,
+    PathArguments, Stmt, Type,
 };
 
-use super::{Check, Context};
+use super::{Check, Context, derivable_support::check_impls};
 use crate::{
-    common::{parse::self_ty_name, violation::Violation, walker::relative_to},
+    common::{violation::Violation, walker::relative_to},
     idioms::config::DerivableSeverity,
 };
 
@@ -45,39 +45,13 @@ impl Check for DerivableClone {
 }
 
 fn check_source(source: &str) -> Vec<(String, usize)> {
-    let Ok(file) = syn::parse_file(source) else {
-        return Vec::new();
-    };
-    let mut visitor = CloneVisitor::default();
-    visitor.visit_file(&file);
-    visitor.findings
-}
-
-#[derive(Default)]
-struct CloneVisitor {
-    findings: Vec<(String, usize)>,
-}
-
-impl<'ast> Visit<'ast> for CloneVisitor {
-    fn visit_item_impl(&mut self, implementation: &'ast ItemImpl) {
-        let is_clone = implementation
-            .trait_
-            .as_ref()
-            .and_then(|(path, _)| path.segments.last())
-            .is_some_and(|segment| segment.ident == "Clone");
-        if is_clone
-            && unspecialized(implementation)
+    check_impls(source, "Clone", |implementation| {
+        unspecialized(implementation)
             && implementation.items.len() == 1
             && implementation.items.iter().any(|item| {
                 matches!(item, ImplItem::Fn(function) if function.sig.ident == "clone" && structural(&function.block.stmts))
             })
-            && let Some(name) = self_ty_name(&implementation.self_ty)
-        {
-            self.findings
-                .push((name, implementation.impl_token.span.start().line));
-        }
-        visit::visit_item_impl(self, implementation);
-    }
+    })
 }
 
 fn unspecialized(implementation: &ItemImpl) -> bool {

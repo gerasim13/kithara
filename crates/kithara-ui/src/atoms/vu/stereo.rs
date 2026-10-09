@@ -11,8 +11,6 @@ use crate::{
     data = StereoLevels,
     draw = self.paint(list, *data, bounds)
 )]
-#[derive(kithara_derive::Retained)]
-#[retained(setter = set_levels)]
 pub(crate) struct StereoMeter {
     palette: RenderPalette,
     metrics: VuStereoSkin,

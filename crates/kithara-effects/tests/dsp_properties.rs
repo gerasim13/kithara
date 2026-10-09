@@ -357,8 +357,8 @@ fn run_stage(stage: &mut dyn Resampler, input: &[f32]) -> Vec<f32> {
                 .process_into_buffer(&input_refs, &mut output_refs)
                 .expect("rubato stage must accept its own block size")
         };
-        cursor += produced.input_frames;
-        buffer.truncate(produced.output_frames);
+        cursor += produced.first();
+        buffer.truncate(produced.second());
         out.append(&mut buffer);
     }
     out

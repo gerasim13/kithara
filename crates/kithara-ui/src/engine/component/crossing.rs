@@ -6,7 +6,7 @@ use crate::{
     interact::{CursorShape, Hit, Input, Outcome, recognizers::Crossing},
 };
 
-pub(in crate::engine) struct CrossingComponent {
+pub(crate) struct CrossingComponent {
     crossing: Crossing,
     path: String,
 }

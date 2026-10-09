@@ -27,7 +27,14 @@ impl<T: Default> Default for Mutex<T> {
     }
 }
 
-pub(crate) struct MutexGuard<'a, T>(parking_lot::MutexGuard<'a, T>);
+pub(crate) struct MutexGuard<'a, T>(pub(crate) parking_lot::MutexGuard<'a, T>);
+
+#[cfg(not(feature = "loom"))]
+impl<T> MutexGuard<'_, T> {
+    pub(crate) fn unlocked<F: FnOnce()>(&mut self, operation: F) {
+        parking_lot::lock_api::MutexGuard::unlocked(&mut self.0, operation);
+    }
+}
 
 impl<T> Deref for MutexGuard<'_, T> {
     type Target = T;

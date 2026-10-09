@@ -275,7 +275,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             engine
                 .capabilities()
                 .latency()
-                .output_frames()
+                .second()
                 .saturating_mul(stages)
         }))
     }
@@ -504,7 +504,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         let latency = self
             .engine
             .as_ref()
-            .map_or(0, |engine| engine.capabilities().latency().source_frames());
+            .map_or(0, |engine| engine.capabilities().latency().first());
         let backend_held = u64::try_from(latency)
             .unwrap_or(u64::MAX)
             .min(backend_admitted);
@@ -698,7 +698,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             && self
                 .engine
                 .as_ref()
-                .is_some_and(|engine| engine.capabilities().latency().source_frames() > 0);
+                .is_some_and(|engine| engine.capabilities().latency().first() > 0);
         self.rate = target;
         self.prepared_quantum = None;
         Ok(())
@@ -849,7 +849,7 @@ mod latency_tests {
             .expect("fixture engine is prepared")
             .capabilities()
             .latency()
-            .output_frames();
+            .second();
 
         assert!(!renderer.active);
         assert!(renderer.rendered_source_end.is_none());

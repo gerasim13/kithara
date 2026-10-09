@@ -1,19 +1,19 @@
 /// The global bar's own button, which opens the settings surface.
-#[derive(kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.global_bar.settings_size)]
-#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Settings;
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Settings;
     use crate::{
         atoms::bar::settings::Settings as Face,
-        module::IconName,
-        render::{
-            Mark, Skin,
+        hosts::{
             controls::{Draws, Grip, Reading},
+            icons::Mark,
         },
+        module::IconName,
+        render::Skin,
     };
 
     impl Draws for Settings {

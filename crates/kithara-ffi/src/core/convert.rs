@@ -612,9 +612,9 @@ mod tests {
         assets::{AssetEvent, EvictReason},
         audio::{
             AudioEvent, DecodeErrorClass, DecodeErrorKind, DecoderBackend, DecoderChangeCause,
-            DecoderEvent, FrameDomain, GaplessSpan, PlaybackResamplerKind, ResamplerKind,
-            TrackFailureKind,
+            DecoderEvent, FrameDomain, PlaybackResamplerKind, ResamplerKind, TrackFailureKind,
         },
+        decode::GaplessInfo,
         download::{CancelReason, DownloaderEvent, RequestId},
         events::{SlotId, TrackId},
         platform::{sync::Arc, time::Duration},
@@ -746,7 +746,7 @@ mod tests {
                     variant: Some(3),
                     base_offset: 4096,
                     duration: Some(Duration::from_millis(2500)),
-                    gapless: Some(GaplessSpan::new(2112, 512)),
+                    gapless: Some(GaplessInfo::new(2112, 512)),
                 },
                 |event| {
                     matches!(

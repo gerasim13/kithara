@@ -14,7 +14,7 @@ use super::{
 use crate::{
     atoms::design::quad::rule,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
-    render::WaveBucket,
+    render::{WaveBucket, Zoom},
     shaping::TextContext,
     skin::WaveSkin,
 };
@@ -46,7 +46,7 @@ pub(crate) fn draw(
     metrics: WaveSkin,
     palette: HeroPalette,
 ) {
-    let zoom = super::zoom_math::Zoom::from(data.zoom);
+    let zoom = Zoom::from(data.zoom);
     let window = window_bounds(data.position, zoom);
     draw_bars(list, bounds, data, &window, metrics, palette.base);
     bars::draw_coverage(
@@ -74,12 +74,7 @@ fn draw_bars(
     palette: WavePalette,
 ) {
     let step = bars::step(metrics);
-    let Some(grid) = bar_grid(
-        bounds.w.round(),
-        step,
-        super::zoom_math::Zoom::from(data.zoom),
-        window,
-    ) else {
+    let Some(grid) = bar_grid(bounds.w.round(), step, Zoom::from(data.zoom), window) else {
         return;
     };
     let played = Played::new(
@@ -269,9 +264,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        atoms::wave::zoom_math::DEFAULT_ZOOM,
         builtin,
         draw::{DrawCmd, Geom},
+        render::DEFAULT_ZOOM,
     };
 
     fn palette() -> WavePalette {

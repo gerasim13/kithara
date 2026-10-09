@@ -7,12 +7,12 @@
 [
   {
     "label": "run: kithara · immediate (iced + wgpu)",
-    "command": "just run -- --host immediate",
+    "command": "just run --features zvuk -- --host immediate",
     "use_new_terminal": true,
   },
   {
     "label": "run: kithara · retained (masonry + vello)",
-    "command": "just run --features masonry -- --host retained",
+    "command": "just run --features masonry,zvuk -- --host retained",
     "use_new_terminal": true,
   },
   {

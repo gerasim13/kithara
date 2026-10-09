@@ -6,10 +6,10 @@ pub(crate) use range::Range;
 pub(crate) use vu_stereo::VuStereo;
 pub(crate) use vu_vertical::VuVertical;
 
-mod crossfader;
-mod fader;
-mod knob;
+pub(crate) mod crossfader;
+pub(crate) mod fader;
+pub(crate) mod knob;
 mod meter;
 mod range;
 mod vu_stereo;
-mod vu_vertical;
+pub(crate) mod vu_vertical;

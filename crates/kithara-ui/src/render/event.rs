@@ -1,62 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::{draw::Pt, interact::recognizers::Edge, validate::Gesture};
-#[cfg(feature = "masonry")]
-use crate::{engine::EngineEvent, interact::recognizers::DragEvent};
-
-/// The one place a control event is built. Every publisher and every widget
-/// goes through here, so a binding rule has a single site to attach to instead
-/// of fifteen literals to keep in step.
-pub(crate) fn control_event(path: &str, action: ControlAction) -> Published {
-    Published::Gesture {
-        action,
-        path: path.to_owned(),
-    }
-}
-
-pub(crate) fn carry_event(path: &str, step: Carry) -> Published {
-    Published::Carry {
-        step,
-        path: path.to_owned(),
-    }
-}
-
-/// Where one end of a two-handled interval publishes.
-///
-/// Both ends are host-owned scalars under the control's own path, so the
-/// control needs no second document node and the host needs no rule for
-/// turning an index back into a name.
-pub(crate) fn span_event(path: &str, edge: Edge, value: f32) -> Published {
-    let child = match edge {
-        Edge::Min => "min",
-        Edge::Max => "max",
-    };
-    control_event(
-        &format!("{path}/{child}"),
-        ControlAction::SetScalar(f64::from(value)),
-    )
-}
-
-#[cfg(feature = "masonry")]
-pub(crate) fn engine_value(path: &str, child: Option<&str>, event: EngineEvent) -> Published {
-    match event {
-        EngineEvent::Scalar(value) => {
-            let path = child.map_or_else(|| path.to_owned(), |child| format!("{path}/{child}"));
-            control_event(&path, ControlAction::SetScalar(value))
-        }
-        EngineEvent::Activate => control_event(path, ControlAction::Activate),
-        EngineEvent::Crossing(over) => carry_event(path, Carry(CarryStep::Over(over))),
-        EngineEvent::Index(selected) => control_event(path, ControlAction::SelectIndex(selected)),
-        EngineEvent::Drag { event, index } => carry_event(
-            path,
-            Carry(match event {
-                DragEvent::Started => CarryStep::Start(index),
-                DragEvent::Dropped => CarryStep::Drop,
-            }),
-        ),
-        EngineEvent::Text(query) => control_event(path, ControlAction::Text(query)),
-    }
-}
+use crate::{draw::Pt, validate::Gesture};
 
 /// Action emitted by an interactive control.
 #[derive(Clone, Debug, PartialEq)]
@@ -106,10 +50,8 @@ pub enum WriteValue {
 /// One step of a row carried from the table it was picked up in to the drop
 /// zone it is let go over, which the toolkit follows for itself.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Carry(pub(crate) CarryStep);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CarryStep {
+#[non_exhaustive]
+pub enum Carry {
     /// The row at this index is now being carried out of the table.
     Start(usize),
     /// The pointer crossed into (`true`) or out of (`false`) a drop zone.

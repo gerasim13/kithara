@@ -1,18 +1,15 @@
 /// The wordmark at the head of the global bar.
-#[derive(kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.global_bar.brand_size)]
-#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Brand;
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Brand;
     use crate::{
         atoms::bar::brand::Brand as Face,
-        render::{
-            Skin,
-            controls::{Draws, Reading},
-        },
+        hosts::controls::{Draws, Reading},
+        render::Skin,
     };
 
     impl Draws for Brand {

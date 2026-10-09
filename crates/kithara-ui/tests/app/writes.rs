@@ -8,7 +8,7 @@ use kithara_ui::{
     compile::{CompiledUi, compile},
     draw::Pt,
     error::UiDocError,
-    mock::TestRegistry,
+    mock::MapEndpoints,
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     render::{ReadValue, Reads, Scope, Skin, UiEvent, WriteValue},
     source::{MemResolver, UiConfig},
@@ -19,8 +19,8 @@ use crate::{scenario::Scenario, ui::skin};
 
 const DOCUMENT: &str = "writes.klayout.ron";
 
-fn endpoints() -> TestRegistry {
-    let mut registry = TestRegistry::default();
+fn endpoints() -> MapEndpoints {
+    let mut registry = MapEndpoints::default();
     for (category, id, kind) in [
         (
             EndpointCategory::Command,
@@ -113,7 +113,7 @@ impl App for Deck {
     fn update(&mut self, _event: UiEvent) {}
 }
 
-fn compiled(resolver: &MemResolver, endpoints: &TestRegistry) -> Result<CompiledUi, UiDocError> {
+fn compiled(resolver: &MemResolver, endpoints: &MapEndpoints) -> Result<CompiledUi, UiDocError> {
     compile(
         DOCUMENT,
         resolver,
@@ -125,7 +125,7 @@ fn compiled(resolver: &MemResolver, endpoints: &TestRegistry) -> Result<Compiled
     )
 }
 
-fn mount(play: &str) -> (TestRegistry, MemResolver) {
+fn mount(play: &str) -> (MapEndpoints, MemResolver) {
     (endpoints(), deck(play))
 }
 

@@ -1,13 +1,18 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use syn::{Fields, GenericParam, ImplItem, Item, Meta};
+use syn::{Fields, GenericParam, ImplItem, Item};
 
 use super::{
     SimilarityConfig,
     behavior::BehaviorGraph,
     catalog::TypeCatalog,
+    cfg::{Predicate, module_predicates},
+    config::is_test_path,
     shape::{ComparisonCache, ShapeArena, ShapeId, TypeSubstitution},
 };
 use crate::consts;
@@ -33,6 +38,17 @@ pub(super) struct Candidate {
     pub(super) substitutions: Vec<TypeSubstitution>,
     pub(super) overall_similarity: f64,
     pub(super) state_similarity: f64,
+}
+
+impl Candidate {
+    pub(super) fn is_twin(&self, min_behavior: f64) -> bool {
+        self.left.kind == AbstractionKind::Struct
+            && self.right.kind == AbstractionKind::Struct
+            && self.recommendation == Recommendation::Merge
+            && self
+                .behavior_similarity
+                .is_some_and(|score| score >= min_behavior)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -81,31 +97,68 @@ fn analyze_source_with_config(
     source: &str,
     config: &SimilarityConfig,
 ) -> Result<AnalysisReport> {
-    analyze_sources(&[(path.to_string(), source.to_string())], config, false)
+    analyze_sources(
+        &[(path.to_string(), source.to_string())],
+        &[],
+        config,
+        false,
+    )
+}
+
+/// Struct pairs that cannot be folded: cfg alternatives never compiled together,
+/// and all-scalar structs in crates with no dependency edge between them.
+fn never_twins(left: &Abstraction, right: &Abstraction, config: &SimilarityConfig) -> bool {
+    let depends = |from: &str, to: &str| {
+        config
+            .workspace_dependencies
+            .get(from)
+            .is_some_and(|dependencies| dependencies.contains(to))
+    };
+    let (left_crate, right_crate) = (crate_from_path(&left.path), crate_from_path(&right.path));
+    !left.cfg.can_coexist(&right.cfg)
+        || left.primitive_fields
+            && right.primitive_fields
+            && left_crate != right_crate
+            && !depends(left_crate, right_crate)
+            && !depends(right_crate, left_crate)
 }
 
 pub(super) fn analyze_sources(
     sources: &[(String, String)],
+    module_sources: &[(String, String)],
     config: &SimilarityConfig,
     include_tests: bool,
 ) -> Result<AnalysisReport> {
     let catalog = TypeCatalog::from_config(config)?;
-    let mut arena = ShapeArena::default();
-    let mut abstractions = Vec::new();
-    let mut pending_impls = Vec::new();
-    for (path, source) in sources {
-        let file = syn::parse_file(source)
-            .with_context(|| format!("parse Rust source for similarity: {path}"))?;
-        collect_module(
-            &file.items,
-            "",
-            path,
-            include_tests,
-            &mut arena,
-            &mut abstractions,
-            &mut pending_impls,
-        );
+    let mut collected = Collector::default();
+    let files = sources
+        .iter()
+        .chain(module_sources)
+        .map(|(path, source)| {
+            let file = syn::parse_file(source)
+                .with_context(|| format!("parse Rust source for similarity: {path}"))?;
+            Ok((path.clone(), file))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let modules = module_predicates(&files)?;
+    for (path, _) in sources {
+        let Some(file) = files.get(path) else {
+            continue;
+        };
+        let effective = match modules.get(path) {
+            Some(predicate) => predicate.clone(),
+            None => Predicate::from_attributes(&file.attrs)?,
+        };
+        if !include_tests && (is_test_path(Path::new(path)) || effective.is_test_only()) {
+            continue;
+        }
+        collected.collect_module(&file.items, "", path, &effective, include_tests)?;
     }
+    let Collector {
+        arena,
+        mut abstractions,
+        pending_impls,
+    } = collected;
     attach_impls(&mut abstractions, pending_impls);
     let mut cache = ComparisonCache::default();
     let mut candidates = Vec::new();
@@ -113,6 +166,9 @@ pub(super) fn analyze_sources(
     for (left_index, right_index) in pairs {
         let left = &abstractions[left_index];
         let right = &abstractions[right_index];
+        if left.kind == AbstractionKind::Struct && never_twins(left, right, config) {
+            continue;
+        }
         if left.kind == AbstractionKind::Function {
             let Some(behavior) = compare_behaviors(&left.behaviors, &right.behaviors)
                 .filter(|behavior| behavior.score >= 0.75)
@@ -248,13 +304,7 @@ fn candidate_pairs(
                 let mut keys = BTreeSet::new();
                 for field in &abstraction.fields {
                     let shape = arena.bucket_key(field.shape, catalog);
-                    if arena.is_ambiguous_scalar(field.shape) {
-                        for token in identifier_tokens(&field.name) {
-                            keys.insert(format!("struct:{shape}:field:{token}"));
-                        }
-                    } else {
-                        keys.insert(format!("struct:{shape}"));
-                    }
+                    keys.insert(format!("struct:{shape}"));
                 }
                 for key in keys {
                     buckets.entry(key).or_default().push(index);
@@ -290,6 +340,8 @@ fn candidate_pairs(
 
 #[derive(Debug)]
 struct Abstraction {
+    cfg: Predicate,
+    primitive_fields: bool,
     kind: AbstractionKind,
     name: String,
     path: String,
@@ -319,133 +371,159 @@ struct PendingImpl {
     behaviors: Vec<Behavior>,
 }
 
-fn collect_module(
-    items: &[Item],
-    module: &str,
-    path: &str,
-    include_tests: bool,
-    arena: &mut ShapeArena,
-    abstractions: &mut Vec<Abstraction>,
-    pending_impls: &mut Vec<PendingImpl>,
-) {
-    for item in items {
-        if !include_tests && is_test_item(item) {
-            continue;
-        }
-        match item {
-            Item::Struct(item) => {
-                let generic_parameters = item
-                    .generics
-                    .params
-                    .iter()
-                    .filter_map(|parameter| match parameter {
-                        GenericParam::Type(parameter) => Some(parameter.ident.to_string()),
-                        GenericParam::Lifetime(_) | GenericParam::Const(_) => None,
-                    })
-                    .enumerate()
-                    .map(|(index, name)| (name, index))
-                    .collect::<BTreeMap<_, _>>();
-                let fields = match &item.fields {
-                    Fields::Named(fields) => fields
-                        .named
+#[derive(Default)]
+struct Collector {
+    arena: ShapeArena,
+    abstractions: Vec<Abstraction>,
+    pending_impls: Vec<PendingImpl>,
+}
+
+impl Collector {
+    fn collect_module(
+        &mut self,
+        items: &[Item],
+        module: &str,
+        path: &str,
+        inherited: &Predicate,
+        include_tests: bool,
+    ) -> Result<()> {
+        for item in items {
+            if !include_tests && is_test_item(item)? {
+                continue;
+            }
+            match item {
+                Item::Struct(item) => {
+                    let cfg = inherited
+                        .clone()
+                        .and(Predicate::from_attributes(&item.attrs)?);
+                    if !include_tests && cfg.is_test_only() {
+                        continue;
+                    }
+                    let generic_parameters = item
+                        .generics
+                        .params
                         .iter()
-                        .filter_map(|field| {
-                            Some(Field {
-                                name: field.ident.as_ref()?.to_string(),
-                                shape: arena.intern(&field.ty, &generic_parameters),
-                            })
+                        .filter_map(|parameter| match parameter {
+                            GenericParam::Type(parameter) => Some(parameter.ident.to_string()),
+                            GenericParam::Lifetime(_) | GenericParam::Const(_) => None,
                         })
-                        .collect(),
-                    Fields::Unnamed(fields) => fields
-                        .unnamed
-                        .iter()
                         .enumerate()
-                        .map(|(index, field)| Field {
-                            name: index.to_string(),
-                            shape: arena.intern(&field.ty, &generic_parameters),
-                        })
-                        .collect(),
-                    Fields::Unit => Vec::new(),
-                };
-                abstractions.push(Abstraction {
-                    fields,
-                    path: path.to_string(),
-                    line: item.ident.span().start().line,
-                    name: item.ident.to_string(),
-                    qualified_name: qualify_source(path, module, &item.ident.to_string()),
-                    kind: AbstractionKind::Struct,
-                    behaviors: Vec::new(),
-                });
-            }
-            Item::Fn(item) => abstractions.push(Abstraction {
-                path: path.to_string(),
-                line: item.sig.ident.span().start().line,
-                name: item.sig.ident.to_string(),
-                qualified_name: qualify_source(path, module, &item.sig.ident.to_string()),
-                kind: AbstractionKind::Function,
-                fields: Vec::new(),
-                behaviors: vec![Behavior {
-                    name: item.sig.ident.to_string(),
-                    graph: BehaviorGraph::from_function(&item.sig, &item.block),
-                }],
-            }),
-            Item::Mod(item_module) => {
-                if let Some((_, items)) = &item_module.content {
-                    collect_module(
-                        items,
-                        &qualify(module, &item_module.ident.to_string()),
-                        path,
-                        include_tests,
-                        arena,
-                        abstractions,
-                        pending_impls,
-                    );
+                        .map(|(index, name)| (name, index))
+                        .collect::<BTreeMap<_, _>>();
+                    let fields: Vec<Field> = match &item.fields {
+                        Fields::Named(fields) => fields
+                            .named
+                            .iter()
+                            .filter_map(|field| {
+                                Some(Field {
+                                    name: field.ident.as_ref()?.to_string(),
+                                    shape: self.arena.intern(&field.ty, &generic_parameters),
+                                })
+                            })
+                            .collect(),
+                        Fields::Unnamed(fields) => fields
+                            .unnamed
+                            .iter()
+                            .enumerate()
+                            .map(|(index, field)| Field {
+                                name: index.to_string(),
+                                shape: self.arena.intern(&field.ty, &generic_parameters),
+                            })
+                            .collect(),
+                        Fields::Unit => Vec::new(),
+                    };
+                    self.abstractions.push(Abstraction {
+                        cfg,
+                        primitive_fields: !fields.is_empty()
+                            && fields.iter().all(|field| self.arena.is_scalar(field.shape)),
+                        fields,
+                        path: path.to_string(),
+                        line: item.ident.span().start().line,
+                        name: item.ident.to_string(),
+                        qualified_name: qualify_source(path, module, &item.ident.to_string()),
+                        kind: AbstractionKind::Struct,
+                        behaviors: Vec::new(),
+                    });
                 }
+                Item::Fn(item) => self.abstractions.push(Abstraction {
+                    cfg: inherited
+                        .clone()
+                        .and(Predicate::from_attributes(&item.attrs)?),
+                    primitive_fields: false,
+                    path: path.to_string(),
+                    line: item.sig.ident.span().start().line,
+                    name: item.sig.ident.to_string(),
+                    qualified_name: qualify_source(path, module, &item.sig.ident.to_string()),
+                    kind: AbstractionKind::Function,
+                    fields: Vec::new(),
+                    behaviors: vec![Behavior {
+                        name: item.sig.ident.to_string(),
+                        graph: BehaviorGraph::from_function(&item.sig, &item.block),
+                    }],
+                }),
+                Item::Mod(item_module) => {
+                    if let Some((_, items)) = &item_module.content {
+                        let cfg = inherited
+                            .clone()
+                            .and(Predicate::from_attributes(&item_module.attrs)?);
+                        if !include_tests && cfg.is_test_only() {
+                            continue;
+                        }
+                        self.collect_module(
+                            items,
+                            &qualify(module, &item_module.ident.to_string()),
+                            path,
+                            &cfg,
+                            include_tests,
+                        )?;
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
-    }
-    for item in items {
-        if !include_tests && is_test_item(item) {
-            continue;
-        }
-        let Item::Impl(item) = item else {
-            continue;
-        };
-        let Some(owner) = crate::common::parse::self_ty_name(&item.self_ty) else {
-            continue;
-        };
-        let owner_generics = item
-            .generics
-            .params
-            .iter()
-            .filter_map(|parameter| match parameter {
-                GenericParam::Type(parameter) => Some(parameter.ident.to_string()),
-                GenericParam::Lifetime(_) | GenericParam::Const(_) => None,
-            })
-            .enumerate()
-            .map(|(index, name)| (name, index))
-            .collect::<BTreeMap<_, _>>();
-        let mut behaviors = Vec::new();
-        for method in &item.items {
-            let ImplItem::Fn(method) = method else {
+        for item in items {
+            if !include_tests && is_test_item(item)? {
+                continue;
+            }
+            let Item::Impl(item) = item else {
                 continue;
             };
-            behaviors.push(Behavior {
-                name: method.sig.ident.to_string(),
-                graph: BehaviorGraph::from_method(
-                    &method.sig,
-                    &method.block,
-                    owner_generics.clone(),
-                ),
+            let Some(owner) = crate::common::parse::self_ty_name(&item.self_ty) else {
+                continue;
+            };
+            let owner_generics = item
+                .generics
+                .params
+                .iter()
+                .filter_map(|parameter| match parameter {
+                    GenericParam::Type(parameter) => Some(parameter.ident.to_string()),
+                    GenericParam::Lifetime(_) | GenericParam::Const(_) => None,
+                })
+                .enumerate()
+                .map(|(index, name)| (name, index))
+                .collect::<BTreeMap<_, _>>();
+            let mut behaviors = Vec::new();
+            for method in &item.items {
+                let ImplItem::Fn(method) = method else {
+                    continue;
+                };
+                behaviors.push(Behavior {
+                    name: method.sig.ident.to_string(),
+                    graph: BehaviorGraph::from_method(
+                        &method.sig,
+                        &method.block,
+                        owner_generics.clone(),
+                    ),
+                });
+            }
+            self.pending_impls.push(PendingImpl {
+                owner,
+                behaviors,
+                path: path.to_string(),
+                module: module.to_string(),
             });
         }
-        pending_impls.push(PendingImpl {
-            owner,
-            behaviors,
-            path: path.to_string(),
-            module: module.to_string(),
-        });
+        Ok(())
     }
 }
 
@@ -487,6 +565,9 @@ fn attach_impls(abstractions: &mut [Abstraction], pending_impls: Vec<PendingImpl
 }
 
 fn crate_from_path(path: &str) -> &str {
+    if let Some((crate_root, _)) = path.split_once("/src/") {
+        return crate_root;
+    }
     let mut components = path.split('/');
     let first = components.next().unwrap_or(path);
     if first == "crates" {
@@ -496,7 +577,7 @@ fn crate_from_path(path: &str) -> &str {
     }
 }
 
-fn is_test_item(item: &Item) -> bool {
+fn is_test_item(item: &Item) -> Result<bool> {
     let attributes = match item {
         Item::Const(item) => &item.attrs,
         Item::Enum(item) => &item.attrs,
@@ -513,22 +594,12 @@ fn is_test_item(item: &Item) -> bool {
         Item::Type(item) => &item.attrs,
         Item::Union(item) => &item.attrs,
         Item::Use(item) => &item.attrs,
-        _ => return false,
+        _ => return Ok(false),
     };
-    attributes.iter().any(|attribute| {
-        if attribute.path().is_ident("test") {
-            return true;
-        }
-        let Meta::List(list) = &attribute.meta else {
-            return false;
-        };
-        attribute.path().is_ident("cfg")
-            && list
-                .tokens
-                .to_string()
-                .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
-                .any(|token| token == "test")
-    })
+    Ok(attributes
+        .iter()
+        .any(|attribute| attribute.path().is_ident("test"))
+        || Predicate::from_attributes(attributes)?.is_test_only())
 }
 
 fn qualify(module: &str, name: &str) -> String {
@@ -690,10 +761,7 @@ fn matched_fields(
             let comparison = arena.compare(left_field.shape, right_field.shape, catalog, cache);
             let name_similarity = identifier_similarity(&left_field.name, &right_field.name);
             let score = 0.15f64.mul_add(name_similarity, 0.85 * comparison.score);
-            let ambiguous_primitive = arena.is_ambiguous_scalar(left_field.shape)
-                && arena.is_ambiguous_scalar(right_field.shape)
-                && name_similarity < 0.34;
-            if comparison.score >= 0.55 && score >= 0.60 && !ambiguous_primitive {
+            if comparison.score >= 0.55 && score >= 0.60 {
                 possible.push(PossiblePair {
                     left: left_index,
                     right: right_index,
@@ -760,6 +828,212 @@ fn identifier_tokens(identifier: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
+    fn twins(sources: &[(&str, &str)]) -> AnalysisReport {
+        let sources = sources
+            .iter()
+            .map(|(path, source)| (path.to_string(), source.to_string()))
+            .collect::<Vec<_>>();
+        analyze_sources(&sources, &[], &SimilarityConfig::default(), false).expect("analysis")
+    }
+
+    const NEWTYPE: &str = r#"
+        struct Count(u64);
+        impl Count { fn next(&self) -> u64 { self.0 + 1 } }
+    "#;
+
+    #[test]
+    fn cfg_alternatives_are_not_twins_but_overlapping_modules_are() {
+        let roots = r#"
+            #[cfg(feature = "flash")]
+            mod enabled { mod lock; }
+            #[cfg(all(feature = "flash", not(feature = "loom")))]
+            mod backend;
+            #[cfg(not(feature = "flash"))]
+            mod system;
+        "#;
+        let report = twins(&[
+            ("crates/sample/src/lib.rs", roots),
+            ("crates/sample/src/enabled/lock.rs", NEWTYPE),
+            ("crates/sample/src/backend.rs", NEWTYPE),
+            ("crates/sample/src/system.rs", NEWTYPE),
+        ]);
+        assert_eq!(report.candidates.len(), 1);
+        assert_eq!(report.candidates[0].recommendation, Recommendation::Merge);
+        assert!(
+            report.candidates[0]
+                .behavior_similarity
+                .is_some_and(|score| score >= 0.9)
+        );
+
+        let report = twins(&[(
+            "src/lib.rs",
+            r#"
+            #[cfg(any(target_os = "ios", target_os = "android"))]
+            struct Mobile(u64);
+            #[cfg(all(not(target_os = "ios"), target_os = "android"))]
+            struct Android(u64);
+            #[cfg(target_os = "linux")]
+            struct Linux(u64);
+        "#,
+        )]);
+        assert_eq!(report.candidates.len(), 1);
+
+        let report = twins(&[
+            (
+                "src/lib.rs",
+                "#[cfg(unix)] mod nested; #[cfg(not(unix))] mod other;",
+            ),
+            ("src/nested.rs", "mod main;"),
+            ("src/nested/main.rs", NEWTYPE),
+            ("src/other.rs", NEWTYPE),
+        ]);
+        assert!(report.candidates.is_empty());
+    }
+
+    #[test]
+    fn test_paths_and_out_of_line_test_modules_are_not_product_twins() {
+        for path in [
+            "tests.rs",
+            "count_tests.rs",
+            "count_test.rs",
+            "tests/count.rs",
+        ] {
+            let report = twins(&[
+                ("crates/sample/src/lib.rs", NEWTYPE),
+                (&format!("crates/sample/src/{path}"), NEWTYPE),
+            ]);
+            assert!(report.candidates.is_empty(), "test path: {path}");
+        }
+        let report = twins(&[
+            (
+                "crates/sample/src/lib.rs",
+                "mod live; #[cfg(test)] mod fixtures;",
+            ),
+            ("crates/sample/src/live.rs", NEWTYPE),
+            ("crates/sample/src/fixtures.rs", "mod nested;"),
+            ("crates/sample/src/fixtures/nested.rs", NEWTYPE),
+        ]);
+        assert_eq!(report.abstractions, 1);
+        assert!(report.candidates.is_empty());
+    }
+
+    #[test]
+    fn primitive_fields_are_dropped_only_across_unrelated_crates() {
+        for scalar in ["u64", "i32", "f32", "bool", "char", "std::num::NonZeroU64"] {
+            let source = r#"
+                struct Count { first: u64, second: u64 }
+                impl Count { fn text(&self) -> String { self.first.to_string() } }
+            "#
+            .replace("u64", scalar);
+            let report = twins(&[
+                ("crates/first/src/lib.rs", &source),
+                ("crates/second/src/lib.rs", &source),
+            ]);
+            assert!(report.candidates.is_empty(), "cross-crate scalar: {scalar}");
+            let report = twins(&[
+                ("crates/first/src/left.rs", &source),
+                ("crates/first/src/right.rs", &source),
+            ]);
+            assert_eq!(report.candidates.len(), 1, "same-crate scalar: {scalar}");
+        }
+        let report = twins(&[
+            ("crates/first/src/lib.rs", "struct Count(Vec<u64>);"),
+            ("crates/second/src/lib.rs", "struct Count(Vec<u64>);"),
+        ]);
+        assert_eq!(report.candidates.len(), 1);
+    }
+
+    #[test]
+    fn primitive_fields_remain_twins_across_dependent_crates() {
+        let sources = [
+            (
+                "crates/first/src/lib.rs".to_owned(),
+                "struct Pair { first: usize, second: usize }".to_owned(),
+            ),
+            (
+                "crates/second/src/lib.rs".to_owned(),
+                "struct Pair { first: usize, second: usize }".to_owned(),
+            ),
+        ];
+        for (owner, dependency) in [
+            ("crates/first", "crates/second"),
+            ("crates/second", "crates/first"),
+        ] {
+            let mut config = SimilarityConfig::default();
+            config.workspace_dependencies.insert(
+                owner.to_owned(),
+                [dependency.to_owned()].into_iter().collect(),
+            );
+            let report = analyze_sources(&sources, &[], &config, false).expect("analysis");
+            assert_eq!(report.candidates.len(), 1);
+        }
+    }
+
+    #[test]
+    fn non_primitive_field_keeps_unrelated_crates_in_scope() {
+        let report = twins(&[
+            (
+                "crates/first/src/lib.rs",
+                "struct Pair { first: usize, second: Vec<u64> }",
+            ),
+            (
+                "crates/second/src/lib.rs",
+                "struct Pair { first: usize, second: Vec<u64> }",
+            ),
+        ]);
+        assert_eq!(report.candidates.len(), 1);
+    }
+
+    #[test]
+    fn same_crate_newtypes_gate_without_field_name_agreement() {
+        let report = twins(&[(
+            "crates/sample/src/lib.rs",
+            r#"
+            struct FrameCount(u64);
+            impl FrameCount { fn next(&self) -> u64 { self.0 + 1 } }
+            struct SampleCount(u64);
+            impl SampleCount { fn next(&self) -> u64 { self.0 + 1 } }
+            struct Frames { frames: u64 }
+            impl Frames { fn next(&self) -> u64 { self.frames + 1 } }
+            struct Samples { samples: u64 }
+            impl Samples { fn next(&self) -> u64 { self.samples + 1 } }
+        "#,
+        )]);
+        assert_eq!(
+            report
+                .candidates
+                .iter()
+                .filter(|candidate| candidate.is_twin(0.9))
+                .count(),
+            6
+        );
+        assert!(!report.candidates[0].is_twin(1.01));
+    }
+
+    #[test]
+    fn function_pairs_never_gate() {
+        let report = twins(&[(
+            "src/lib.rs",
+            r#"
+            fn left<T: Clone>(values: &[T]) -> Option<T> {
+                let value = values.first()?;
+                Some(value.clone())
+            }
+            fn right<U: Clone>(values: &[U]) -> Option<U> {
+                let value = values.first()?;
+                Some(value.clone())
+            }
+        "#,
+        )]);
+        assert_eq!(report.candidates.len(), 1);
+        assert!(
+            report
+                .candidates
+                .iter()
+                .all(|candidate| !candidate.is_twin(0.9))
+        );
+    }
+
     #[test]
     fn nested_derived_partial_shapes_are_composition_candidates() {
         let source = r#"
@@ -797,6 +1071,9 @@ mod tests {
         "#;
         let config = toml::from_str(
             r#"
+                [gate]
+                min_behavior = 0.9
+
                 [[types.relations]]
                 left = "List"
                 right = "Vec"
@@ -929,7 +1206,7 @@ mod tests {
     }
 
     #[test]
-    fn unrelated_numeric_records_do_not_match_on_primitive_types_alone() {
+    fn unrelated_numeric_records_are_not_twins_without_matching_behavior() {
         let source = r#"
             struct Position {
                 end_position_ns: usize,
@@ -946,7 +1223,12 @@ mod tests {
 
         let report = analyze_source("src/lib.rs", source).expect("analyze source");
 
-        assert!(report.candidates.is_empty());
+        assert_eq!(report.candidates.len(), 1);
+        assert_eq!(
+            report.candidates[0].recommendation,
+            Recommendation::ReviewStructuralOverlap
+        );
+        assert!(!report.candidates[0].is_twin(0.9));
     }
 
     #[test]
@@ -962,7 +1244,7 @@ mod tests {
     }
 
     #[test]
-    fn optional_numeric_fields_need_matching_semantics() {
+    fn optional_numeric_fields_are_not_twins_without_matching_behavior() {
         let source = r#"
             struct Clock {
                 last_beat: Option<u64>,
@@ -977,7 +1259,12 @@ mod tests {
 
         let report = analyze_source("src/lib.rs", source).expect("analyze source");
 
-        assert!(report.candidates.is_empty());
+        assert_eq!(report.candidates.len(), 1);
+        assert_eq!(
+            report.candidates[0].recommendation,
+            Recommendation::ReviewStructuralOverlap
+        );
+        assert!(!report.candidates[0].is_twin(0.9));
     }
 
     #[test]
@@ -1033,7 +1320,7 @@ mod tests {
         ];
 
         let report =
-            analyze_sources(&sources, &SimilarityConfig::default(), false).expect("analysis");
+            analyze_sources(&sources, &[], &SimilarityConfig::default(), false).expect("analysis");
         let candidate = report
             .candidates
             .iter()

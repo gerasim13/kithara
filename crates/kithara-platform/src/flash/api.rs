@@ -233,16 +233,22 @@ pub(crate) fn reset() {
     FLASH.reset();
 }
 
+pub enum DynamicMode {}
+
+pub enum AmbientMode {}
+
 /// RAII guard for a `#[kithara::flash(bool)]` or test-body region. `on=true` activates
 /// flash for the dynamic extent IFF the test is flash-eligible (ambient);
 /// `on=false` carves REAL inside a flash region. Saves/restores the previous
 /// whole `Mode` so regions nest bidirectionally (LIFO premise — see
 /// `flash/ctx.rs`). `!Send`: it restores THIS thread's mode, so moving it to
 /// another thread would restore the wrong thread's state.
-#[must_use]
-pub struct FlashScope(ModeSnapshot, PhantomData<*mut ()>);
+pub type FlashScope = ModeScope<DynamicMode>;
 
-impl Drop for FlashScope {
+#[must_use]
+pub struct ModeScope<Tag>(ModeSnapshot, PhantomData<(*mut (), fn() -> Tag)>);
+
+impl<Tag> Drop for ModeScope<Tag> {
     fn drop(&mut self) {
         ctx::restore_mode(self.0);
     }
@@ -258,7 +264,7 @@ impl Drop for FlashScope {
 /// expands `::kithara_platform::flash::enter_dynamic` into the annotated crate.
 #[doc(hidden)]
 pub fn enter_dynamic(on: bool) -> FlashScope {
-    FlashScope(ctx::push_active(on), PhantomData)
+    ModeScope(ctx::push_active(on), PhantomData)
 }
 
 /// Enter a REAL-time carve on this thread (flash off for the guard's lifetime).
@@ -275,20 +281,13 @@ pub fn flash_real() -> FlashScope {
 /// macro's WASM body may hold one (single-threaded driver, sole ambient
 /// writer there). Async-native emissions hold NONE: a body-held scope inside
 /// the cancellable timeout would tear down non-LIFO on `Elapsed`.
-#[must_use]
-pub struct AmbientScope(ModeSnapshot, PhantomData<*mut ()>);
-
-impl Drop for AmbientScope {
-    fn drop(&mut self) {
-        ctx::restore_mode(self.0);
-    }
-}
+pub type AmbientScope = ModeScope<AmbientMode>;
 
 /// Set the per-test ambient gate; restores the previous mode on drop. The test
 /// macro sets it for the test body; the platform spawn wrappers re-establish it
 /// on each spawned child via [`set_ambient_for_spawn`].
 pub fn ambient_scope(on: bool) -> AmbientScope {
-    AmbientScope(ctx::push_ambient(on), PhantomData)
+    ModeScope(ctx::push_ambient(on), PhantomData)
 }
 
 /// Snapshot the per-test ambient gate (for spawn propagation into a child).

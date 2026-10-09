@@ -1,11 +1,9 @@
-mod component;
+pub(crate) mod component;
 mod core;
-mod model;
+pub(crate) mod model;
 mod router;
 
 pub(crate) use core::Engine;
 
-pub(crate) use component::{
-    Component, ItemComponent, PickerSnapshot, ScrollState, TextInputSnapshot, scalar_value,
-};
+pub(crate) use component::{PickerSnapshot, TextInputSnapshot, scalar_value};
 pub(crate) use model::{Descriptor, EngineEvent, ScrollConfig, Target};

@@ -160,12 +160,12 @@ where
                 return self.finish_output();
             }
             let process = self.process_block(input_frames)?;
-            if process.input_frames > input_frames {
+            if process.first() > input_frames {
                 return Err(DecodeError::InvalidData {
                     detail: "decoder resampler consumed more frames than supplied",
                 });
             }
-            self.drop_consumed(process.input_frames)?;
+            self.drop_consumed(process.first())?;
         }
     }
 
@@ -225,15 +225,15 @@ where
             self.input.resize_frames(FrameCount::new(input_frames))?;
             let ready_before = self.ready_output_frames();
             let process = self.process_block(input_frames)?;
-            if process.input_frames > input_frames {
+            if process.first() > input_frames {
                 return Err(DecodeError::InvalidData {
                     detail: "decoder resampler consumed more frames than supplied",
                 });
             }
-            if process.input_frames == 0 && self.ready_output_frames() == ready_before {
+            if process.first() == 0 && self.ready_output_frames() == ready_before {
                 break;
             }
-            self.drop_consumed(process.input_frames)?;
+            self.drop_consumed(process.first())?;
         }
         self.finish_output()
     }
@@ -267,14 +267,14 @@ where
                 .process_into_buffer(&input, &mut output)
                 .map_err(DecodeError::backend)?
         };
-        if process.output_frames > output_frames {
+        if process.second() > output_frames {
             return Err(DecodeError::InvalidData {
                 detail: "decoder resampler produced more frames than requested",
             });
         }
-        let skip = self.output_skip_frames.min(process.output_frames);
+        let skip = self.output_skip_frames.min(process.second());
         self.output_skip_frames -= skip;
-        let available = process.output_frames.saturating_sub(skip);
+        let available = process.second().saturating_sub(skip);
         let remaining = self
             .expected_output_frames()
             .saturating_sub(self.ready_output_frames());

@@ -5,7 +5,7 @@ use crate::{
     compile::{CompiledUi, compile},
     draw::Pt,
     error::UiDocError,
-    mock::TestRegistry,
+    mock::MapEndpoints,
     module::ViewSet,
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     render::{ControlAction, Published, ReadValue, Reads, ScalarRange, UiEvent, WriteValue},
@@ -26,8 +26,8 @@ impl Reads for Interval {
     }
 }
 
-fn registry() -> TestRegistry {
-    let mut registry = TestRegistry::default();
+fn registry() -> MapEndpoints {
+    let mut registry = MapEndpoints::default();
     for (category, id, kind) in [
         (
             EndpointCategory::Command,

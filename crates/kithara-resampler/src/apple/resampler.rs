@@ -148,7 +148,7 @@ impl Resampler for AppleResampler {
     fn drain_into_buffer(&mut self, output: &mut [&mut [f32]]) -> Result<usize, ResamplerError> {
         self.input_state.stage_empty_eos();
         let process = self.fill_output(output)?;
-        Ok(process.output_frames)
+        Ok(process.second())
     }
 
     fn flush_into_buffer(
@@ -471,8 +471,8 @@ mod tests {
         let process = resampler
             .flush_into_buffer(&input_refs, &mut output_refs)
             .unwrap_or_else(|err| panic!("flush_into_buffer({backend:?}) failed: {err}"));
-        assert_eq!(process.input_frames, frames);
-        truncate_planar(&mut output, process.output_frames);
+        assert_eq!(process.first(), frames);
+        truncate_planar(&mut output, process.second());
 
         let mut drain_calls = 0;
         loop {
@@ -578,7 +578,7 @@ mod tests {
             pump_count += 1;
             assert!(pump_count <= consts::DRAIN_LIMIT);
             let needed = contract_frames.saturating_sub(frame_count(output));
-            append_planar(output, &zero_output, process.output_frames.min(needed));
+            append_planar(output, &zero_output, process.second().min(needed));
         }
     }
 

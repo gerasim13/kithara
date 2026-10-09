@@ -10,14 +10,10 @@ use crate::{
 /// receive the same metrics as built-in Kithara controls instead of creating a
 /// second text answer at the host boundary.
 pub struct TextMeasurer<'a> {
-    context: &'a mut TextContext,
+    pub(crate) context: &'a mut TextContext,
 }
 
 impl<'a> TextMeasurer<'a> {
-    pub(crate) const fn new(context: &'a mut TextContext) -> Self {
-        Self { context }
-    }
-
     /// Measures a shaped run without retaining a second cached layout.
     #[must_use]
     pub fn measure(&mut self, content: &str, role: TextRoleSkin, max_width: Option<f32>) -> Size2 {

@@ -1,24 +1,23 @@
-use bon::Builder;
-
-use crate::ids::InternId;
-
 /// A labelled picker the document opens.
-#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.select.size)]
-#[derive(kithara_derive::NodeControl)]
-pub(crate) struct Select {
-    pub(crate) label: InternId,
-}
+pub(crate) struct Select;
 
-#[cfg(feature = "render")]
-mod host {
-    use super::Select;
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    use crate::ids::InternId;
+
+    #[derive(Builder)]
+    pub(crate) struct Select {
+        pub(crate) label: InternId,
+    }
+
     use crate::{
         atoms::design::select::Select as Face,
-        render::{
-            Skin,
-            controls::{Draws, Reading},
-        },
+        hosts::controls::{Draws, Reading},
+        render::Skin,
     };
 
     impl Draws for Select {
