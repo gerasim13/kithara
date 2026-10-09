@@ -422,7 +422,7 @@ mod tests {
         SpeedCurve, StretchKind, WarpConfig,
         supports_playback_rate,
     };
-    use kithara_command::{Batch, Outcome, When};
+    use kithara_command::{Batch, Outcome, Seq, When};
     use kithara_render::{LaneCommand, LaneTask};
     use kithara_worker::Task;
     use kithara_test_utils::TestTempDir;
@@ -687,6 +687,26 @@ mod tests {
         }
     }
 
+    const RATE_RING_PACKETS: usize = 16;
+
+    /// Upper bound on the ticks that fill a lane; a filled ring stops progress far
+    /// sooner, so the bound only turns a livelock into a failure.
+    const FILL_TICKS: usize = 1_024;
+
+    /// Drives `lane` as the lane dispatcher does, `poll_commands`, `recycle`, then
+    /// `tick`, until it stops making progress.
+    fn fill(lane: &mut impl LaneTask) {
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        for _ in 0..FILL_TICKS {
+            let _ = lane.poll_commands(&mut context);
+            lane.recycle();
+            if lane.tick() != kithara_worker::TickResult::Progress {
+                return;
+            }
+        }
+        panic!("the lane did not stop making progress within {FILL_TICKS} ticks");
+    }
+
     async fn warped_player_resource(
         speed: f32,
         src: &str,
@@ -704,6 +724,7 @@ mod tests {
                 .store(AssetStore::builder(pools()).build())
                 .worker(worker)
                 .host_sample_rate(sample_rate)
+                .audio_buffer_chunks(NonZeroUsize::new(RATE_RING_PACKETS).expect("nonzero ring"))
                 .warp(warp)
                 .build(),
             Box::new(AudioObserverSlot::default().relay()),
@@ -714,9 +735,75 @@ mod tests {
         (opened, lane, sender, dir)
     }
 
+    /// Host blocks a speed change may wait behind a full lane ring before it sounds.
+    fn rate_change_window() -> usize {
+        let ring_lead = geometry(
+            &WarpConfig::builder().build(),
+            NonZeroUsize::new(RATE_RING_PACKETS).expect("nonzero ring"),
+        ).expect("bounded lane geometry");
+        ring_lead.get() / consts::BLOCK_FRAMES + 2
+    }
+
+    fn rate_change_blocks(
+        mixer: &mut crate::mock::MixerRig,
+        lane: &mut ResourceLane,
+        control: &mut Sender<LaneProtocol>,
+        seq: Seq,
+        built_frames: i64,
+        applied_frames: i64,
+    ) -> (SessionFrame, Vec<Seq>) {
+        let block_frames = i64::try_from(consts::BLOCK_FRAMES).expect("block frames fit the session");
+        let mut at = SessionFrame::new(block_frames);
+        let mut applied_at = None;
+        let mut receipts = Vec::new();
+        let blocks = rate_change_window();
+        for _ in 0..blocks {
+            let before = mixer.ends.snapshot.read().slots[0].position;
+            fill(lane);
+            mixer.block(at).expect("rate-change host block");
+            for receipt in control.receipts() {
+                if let Outcome::Applied { at: lane_at, .. } = receipt.outcome() {
+                    receipts.push(receipt.seq());
+                    if receipt.seq() == seq {
+                        applied_at = Some(*lane_at);
+                    }
+                }
+            }
+            let snapshot = mixer.ends.snapshot.read();
+            let advance = snapshot.slots[0].position - before;
+            let source_frames = (advance * f64::from(consts::SAMPLE_RATE)).round() as i64;
+            if !supports_playback_rate() {
+                assert_eq!(source_frames, block_frames, "a fixed lane advances at unity speed");
+                return (at, receipts);
+            }
+            if let Some(lane_at) = applied_at {
+                let mark = snapshot.slots[0].mark.expect("a playing slot publishes its mark");
+                assert_eq!(lane_at.segment, mark.lane.segment);
+                let session_at = SessionFrame::new(
+                    i64::from(mark.session)
+                        + i64::try_from(lane_at.frame).expect("applied lane frame fits the session")
+                        - i64::try_from(mark.lane.frame).expect("marked lane frame fits the session"),
+                );
+                if at + FrameCount::new(consts::BLOCK_FRAMES) <= session_at {
+                    assert_eq!(source_frames, built_frames, "the lane lead keeps its built speed");
+                }
+                if at >= session_at {
+                    assert_eq!(source_frames, applied_frames,
+                        "the observed speed matches the processor rate");
+                    return (at, receipts);
+                }
+            } else {
+                assert_eq!(source_frames, built_frames, "the lane has not applied its speed change");
+            }
+            at = at + FrameCount::new(consts::BLOCK_FRAMES);
+        }
+        panic!("the SetSpeed frame was not reached within {blocks} host blocks");
+    }
+
     #[kithara::test(native, tokio)]
     async fn playback_rate_reports_only_a_real_warp_control() {
-        let samples = vec![0.5; 16_384];
+        // Stereo, long enough to sound through the whole window at the fastest speed, 1.5.
+        let samples = vec![0.5; (rate_change_window() + 1) * consts::BLOCK_FRAMES * 3 / 2 * 2];
         let mut fixed = Resource::from_reader(EofReader {
             samples: samples.clone(), total_frames: samples.len() / 2, ..EofReader::default()
         }, None);
@@ -735,26 +822,28 @@ mod tests {
         let mut mixer = crate::mock::MixerRig::new(DeckMixerConfig::default(), shape, &pools)
             .expect("offline mixer");
         let (opened, mut lane, mut control, _dir) = warped_player_resource(1.25, "rate", &samples).await;
-        let (built, applied) = if supports_playback_rate() { (1.25, 1.5) } else { (1.0, 1.0) };
+        assert_eq!(block_frames % 4, 0, "chosen speeds advance whole source frames");
+        let (built_frames, applied_frames) = if supports_playback_rate() {
+            (i64::from(block_frames) * 5 / 4, i64::from(block_frames) * 3 / 2)
+        } else {
+            (i64::from(block_frames), i64::from(block_frames))
+        };
         let slot = Slot::new(0);
         mixer.send(When::Next, DeckPart::Attach { slot, pcm: opened.pcm, segment: SegmentId::FIRST })
             .expect("attach warped lane");
         mixer.send(When::Next, DeckPart::Start { slot, fade: Fade::Declick }).expect("start warped lane");
+        fill(&mut lane);
         mixer.block(SessionFrame::new(0)).expect("built-speed block");
         let before = mixer.ends.snapshot.read().slots[0].position;
-        assert_eq!(before / seconds, built);
+        assert_eq!((before * f64::from(consts::SAMPLE_RATE)).round() as i64, built_frames);
         let seq = control.send(When::Next, Batch {
             basis: Vec::new(), commands: vec![LaneCommand::SetSpeed(SpeedCurve::Constant(1.5))],
         }).expect("rate command");
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
         let _ = lane.poll_commands(&mut context);
-        lane.tick();
-        mixer.block(SessionFrame::new(i64::from(shape.max_block_frames.get()))).expect("applied-speed block");
-        let advance = mixer.ends.snapshot.read().slots[0].position - before;
-        assert_eq!(advance / seconds, applied);
-        let receipts: Vec<_> = control.receipts().filter_map(|receipt|
-            matches!(receipt.outcome(), Outcome::Applied { .. }).then_some(receipt.seq())
-        ).collect();
+        let (_, receipts) = rate_change_blocks(
+            &mut mixer, &mut lane, &mut control, seq, built_frames, applied_frames,
+        );
         if supports_playback_rate() { assert_eq!(receipts, [seq]); } else { assert!(receipts.is_empty()); }
         assert!(matches!(fixed.read(&mut buffer).expect("direct reader stays independent of warp commands"),
             ReadOutcome::Frames { count, .. } if count.get() == consts::BLOCK_FRAMES * 2));
@@ -784,25 +873,24 @@ mod tests {
         mixer.send(When::Next, DeckPart::Start {
             slot: first_slot, fade: Fade::Crossfade(crate::CrossfadeSettings::default()),
         }).expect("start first");
+        fill(&mut first_lane);
         mixer.block(SessionFrame::new(0)).expect("first host block");
-        let first_position = mixer.ends.snapshot.read().slots[0].position;
         let rate_seq = first_control.send(When::Next, Batch {
             basis: Vec::new(), commands: vec![LaneCommand::SetSpeed(SpeedCurve::Constant(1.5))],
         }).expect("speed goes to its lane");
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
         let _ = first_lane.poll_commands(&mut context);
-        first_lane.tick();
         let block_frames = u32::try_from(consts::BLOCK_FRAMES).expect("block size fits u32");
-        let at = SessionFrame::new(i64::from(block_frames));
-        mixer.block(at).expect("changed-speed block");
-        let first_advance = mixer.ends.snapshot.read().slots[0].position - first_position;
-        let expected_advance =
-            f64::from(block_frames) * f64::from(effective_rate) / f64::from(consts::SAMPLE_RATE);
-        assert!((first_advance - expected_advance).abs() < f64::EPSILON);
-        assert_eq!(first_advance * f64::from(consts::SAMPLE_RATE) / f64::from(block_frames), f64::from(effective_rate));
-        let notifications: Vec<_> = first_control.receipts().filter_map(|receipt| {
-            matches!(receipt.outcome(), Outcome::Applied { .. }).then_some(receipt.seq())
-        }).collect();
+        assert_eq!(block_frames % 2, 0, "chosen speed advances whole source frames");
+        let expected_frames = if supports_playback_rate() {
+            i64::from(block_frames) * 3 / 2
+        } else {
+            i64::from(block_frames)
+        };
+        let (at, notifications) = rate_change_blocks(
+            &mut mixer, &mut first_lane, &mut first_control, rate_seq,
+            i64::from(block_frames), expected_frames,
+        );
         if supports_playback_rate() {
             assert_eq!(notifications, [rate_seq]);
         } else {
@@ -817,13 +905,13 @@ mod tests {
         mixer.send(When::Next, DeckPart::Start {
             slot: next_slot, fade: Fade::Crossfade(crate::CrossfadeSettings::default()),
         }).expect("start next");
-        first_lane.tick();
-        next_lane.tick();
+        fill(&mut first_lane);
+        fill(&mut next_lane);
         let first_position = mixer.ends.snapshot.read().slots[0].position;
         mixer.block(at + FrameCount::new(consts::BLOCK_FRAMES)).expect("next-track block");
         let snapshot = mixer.ends.snapshot.read();
-        assert_eq!((snapshot.slots[0].position - first_position) * f64::from(consts::SAMPLE_RATE) / f64::from(block_frames), f64::from(effective_rate));
-        assert_eq!(snapshot.slots[1].position, expected_advance);
+        assert_eq!(((snapshot.slots[0].position - first_position) * f64::from(consts::SAMPLE_RATE)).round() as i64, expected_frames);
+        assert_eq!((snapshot.slots[1].position * f64::from(consts::SAMPLE_RATE)).round() as i64, expected_frames);
         assert!(first_control.receipts().next().is_none());
         assert_eq!(snapshot.slots[1].state, SlotState::Playing);
     }

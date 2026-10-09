@@ -316,6 +316,9 @@ mod tests {
         let wav = std::fs::read(path).expect("generated segment");
         let server = TestHttpServer::new(Router::new()
             .route("/direct.m3u8", get(|| async {
+                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-STREAM-INF:BANDWIDTH=2822400\n/direct-media.m3u8\n"
+            }))
+            .route("/direct-media.m3u8", get(|| async {
                 "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:1,\n/direct.wav\n#EXT-X-ENDLIST\n"
             }))
             .route("/direct.wav", get(move || {

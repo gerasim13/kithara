@@ -1,6 +1,6 @@
 //! The audio-thread side of a deck, driven by a test in place of a `DeckMixer`.
 
-use kithara_command::LevelInbox;
+use kithara_command::{LevelInbox, Seq, Target};
 use kithara_platform::time::Duration;
 use kithara_signal::{SegmentId, SessionFrame};
 use num_traits::ToPrimitive;
@@ -8,7 +8,7 @@ use ringbuf::traits::Producer;
 
 use crate::{
     LaneFrame,
-    bridge::{DeckEvent, DeckPart, DeckProtocol, MixerInputs, Returned, Slot, SlotMark},
+    bridge::{DeckEvent, DeckPart, DeckProtocol, DeckRefusal, MixerInputs, Returned, Slot, SlotMark},
     rt::track::PlayerResource,
 };
 
@@ -40,6 +40,7 @@ pub fn report(inputs: &mut MixerInputs, event: DeckEvent) -> Result<(), DeckEven
 pub struct MockDeck {
     inputs: MixerInputs,
     held: Vec<Option<(Box<PlayerResource>, SegmentId)>>,
+    armed: Vec<Option<Seq>>,
 }
 
 impl MockDeck {
@@ -48,7 +49,8 @@ impl MockDeck {
         let held = std::iter::repeat_with(|| None)
             .take(inputs.config.slots().get())
             .collect();
-        Self { inputs, held }
+        let armed = vec![None; inputs.config.slots().get()];
+        Self { inputs, held, armed }
     }
 
     /// Applies every batch due by `at` on its own frame; a `Stop` reports the slot at
@@ -59,6 +61,23 @@ impl MockDeck {
         at: SessionFrame,
         stopped_at: f64,
     ) {
+        while let Some(deferred) = level.next_deferred() {
+            let slot = match deferred.commands() {
+                [DeckPart::Chain { from, .. }] => *from,
+                [DeckPart::Adopt { slot, .. }] => *slot,
+                _ => {
+                    deferred.refuse(DeckRefusal::Deferral);
+                    continue;
+                }
+            };
+            if self.armed[slot.index()].is_some() {
+                deferred.refuse(DeckRefusal::Occupied { slot });
+                continue;
+            }
+            if let Some(seq) = deferred.park() {
+                self.armed[slot.index()] = Some(seq);
+            }
+        }
         let held = &mut self.held;
         while let Some(mut due) = level.next_due(at, 1) {
             let at = due.at();
@@ -71,6 +90,29 @@ impl MockDeck {
             }
             due.apply(());
         }
+    }
+
+    /// Applies the batch armed on `slot` at its end frame, as `Deck::fire_ended` does.
+    pub fn end(
+        &mut self,
+        level: &mut LevelInbox<'_, DeckProtocol>,
+        slot: Slot,
+        at: SessionFrame,
+    ) {
+        let Some(seq) = self.armed[slot.index()].take() else {
+            return;
+        };
+        let Some(mut due) = level.resume(seq, at, at) else {
+            return;
+        };
+        let commands = due.commands_mut();
+        for _ in 0..commands.len() {
+            let part = commands.remove(0);
+            if let Some(left) = hold(&mut self.held, part, at, 0.0) {
+                commands.push(left);
+            }
+        }
+        due.apply(());
     }
 
     /// Reports `event` to the deck's owner as the mixer does.
@@ -162,6 +204,40 @@ mod tests {
         test_pools::pools,
         worker::packet_tests::PacketRing,
     };
+
+    #[kithara::test]
+    fn a_deferred_chain_applies_on_its_leading_slots_end_frame() {
+        let config = DeckMixerConfig::default();
+        let (mut sender, mut inbox) = scoped_channel::<DeckProtocol, DeckProtocol>(
+            ScopedConfig::builder()
+                .scope(ChannelConfig::builder().targets(config.slots().get()).build())
+                .build(),
+        );
+        let scope = sender.open(config.slots().get()).expect("scope");
+        let (_ends, inputs) = scope_channels(scope, config);
+        let mut deck = MockDeck::new(inputs);
+        let from = Slot::new(0);
+        let to = Slot::new(1);
+        let seq = sender.scope(scope).expect("scope").send(
+            When::Deferred,
+            Batch { basis: Vec::new(), commands: vec![DeckPart::Chain { from, to }] },
+        ).expect("deferred chain");
+        sender.publish().expect("publish");
+        inbox.drain();
+        deck.block(&mut inbox.scope(scope).expect("borrowed level"), SessionFrame::new(0), 0.0);
+        assert!(sender.receipt().is_none(), "the chain waits for the leading slot");
+        let at = SessionFrame::new(4_096);
+        deck.end(&mut inbox.scope(scope).expect("borrowed level"), from, at);
+        let Some(ScopedReceipt::Scope(answered_scope, receipt)) = sender.receipt() else {
+            panic!("one scope receipt");
+        };
+        assert_eq!(answered_scope, scope);
+        assert_eq!(receipt.seq(), seq);
+        assert!(matches!(receipt.outcome(), Outcome::Applied { at: applied, .. } if *applied == at));
+        assert!(matches!(receipt.batch().commands.as_slice(),
+            [DeckPart::Chain { from: leading, to: following }] if *leading == from && *following == to));
+        assert!(sender.receipt().is_none(), "exactly one terminal receipt");
+    }
 
     fn pcm(src: &str) -> Box<PlayerResource> {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));

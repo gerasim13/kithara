@@ -3,8 +3,8 @@ use kithara_audio::AudioObserverSlot;
 use kithara_command::{ChannelConfig, Inbox, Port, channel};
 use kithara_platform::sync::Arc;
 use kithara_render::{
-    LaneFrame, LoadRefusal, Loaded, Open,
-    bridge::DeckEvent,
+    DispatcherCommand, LaneFrame, LoadRefusal, Loaded, Open,
+    bridge::{DeckEvent, SlotSnapshot},
     rt::DeckMixerConfig,
 };
 use kithara_signal::AudioSpec;
@@ -25,6 +25,7 @@ const B: Slot = Slot::new(1);
 struct Rig {
     deck: DeckRig<TestPools>,
     sources: Vec<TestTempDir>,
+    runtime: kithara_platform::tokio::runtime::Runtime,
 }
 
 impl std::ops::Deref for Rig {
@@ -61,6 +62,20 @@ impl Rig {
             let mut scope = self.deck.inbox.scope(self.deck.scope).expect("live scope");
             self.deck.mixer.block(&mut scope, at, stopped_at);
         }
+        self.answers()
+    }
+
+    fn end(&mut self, slot: Slot, at: SessionFrame) -> Vec<Answer> {
+        self.deck.ring.publish().expect("publish deck commands");
+        self.deck.inbox.drain();
+        {
+            let mut scope = self.deck.inbox.scope(self.deck.scope).expect("live scope");
+            self.deck.mixer.end(&mut scope, slot, at);
+        }
+        self.answers()
+    }
+
+    fn answers(&mut self) -> Vec<Answer> {
         let mut answers = Vec::new();
         while let Some(receipt) = self.deck.ring.receipt() {
             let kithara_command::ScopedReceipt::Scope(scope, receipt) = receipt else {
@@ -80,6 +95,10 @@ fn rig() -> Rig {
     Rig {
         deck: DeckRig::new(DeckMixerConfig::default()).expect("deck scope opens"),
         sources: Vec::new(),
+        runtime: kithara_platform::tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("fixture runtime starts"),
     }
 }
 
@@ -153,13 +172,17 @@ fn prepared_track() -> (Track, Inbox<LaneProtocol>) {
     (track, inbox)
 }
 
-fn command_at_zero(track: &mut Track, rig: &mut Rig, command: TrackCommand<TestPools>) -> Option<Seq> {
+fn in_pass<R>(rig: &mut Rig, now: SessionFrame, run: impl FnOnce(&mut Outbox<'_, TestPools>) -> R) -> R {
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot::default();
-    let pass = crate::DeckPass { now: frame(0), delivery: FrameCount::new(0), output: &output, deck: &deck };
+    let pass = crate::DeckPass { now, delivery: FrameCount::new(0), output: &output, deck: &deck };
     let mut scope = rig.deck.ring.scope(rig.deck.scope).expect("live deck scope");
     let mut out = Outbox::new(&mut scope, &mut rig.deck.dispatcher).in_pass(pass);
-    track.apply(command, &mut out).expect("admitted owner command")
+    run(&mut out)
+}
+
+fn command_at_zero(track: &mut Track, rig: &mut Rig, command: TrackCommand<TestPools>) -> Option<Seq> {
+    in_pass(rig, frame(0), |out| track.apply(command, out)).expect("admitted owner command")
 }
 
 #[kithara::test]
@@ -240,7 +263,7 @@ fn a_rejected_launch_leaves_the_member_silent() {
         .build(), &mock::output(None).get()).expect("prepared source");
     let load = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
     let (_control, inbox) = load.lane_channel().expect("lane channel");
-    let (opened, _lane, _) = futures::executor::block_on(load.open(
+    let (opened, _lane, _) = rig.runtime.block_on(load.open(
         Duration::ZERO, TrackSettings::default().lane_start(), inbox,
     )).expect("URI source opens");
     let shape = kithara_render::rt::StreamShape::new(NonZeroU32::new(128).expect("block frames"), mock::SAMPLE_RATE);
@@ -257,14 +280,14 @@ fn a_rejected_launch_leaves_the_member_silent() {
         let mut out = Outbox::new(&mut scope, &mut rig.deck.dispatcher).in_pass(pass);
         let seq = track.apply(TrackCommand::Play { at: When::At(frame(256)) }, &mut out)
             .expect("scheduled start").expect("start sequence");
-        out.deck(When::At(frame(192)), vec![DeckPart::Adopt { slot: A, segment: SegmentId::FIRST }])
+        out.deck(When::At(frame(192)), vec![DeckPart::Stop { slot: A, fade: Fade::Declick }])
             .expect("intervening slot operation");
         seq
     };
     let pcm = mixer.block(frame(128)).expect("slot basis changes before launch");
     assert!(pcm.iter().flatten().all(|sample| *sample == 0.0));
     let pcm = mixer.block(frame(256)).expect("rejected launch host block");
-    let _ = mixer.ring.receipt().expect("adopt applied");
+    let _ = mixer.ring.receipt().expect("stop applied");
     let kithara_command::ScopedReceipt::Scope(_, receipt) = mixer.ring.receipt().expect("start rejected") else {
         panic!("deck reply");
     };
@@ -787,10 +810,25 @@ fn opened_fixture(rig: &mut Rig, src: &str) -> Loaded<OpenedTrack> {
         |worker, config, position, start, inbox| Box::pin(async move {
             worker.load(config, position, start, inbox).await
         }));
-    let opened = futures::executor::block_on(rig.load_fixture(load, Position::ZERO))
+    let opened = rig.runtime.block_on(rig.deck.load_fixture(load, Position::ZERO))
         .expect("real dispatcher opens the WAV once");
     rig.sources.push(dir);
     opened
+}
+
+fn open_at_position(
+    rig: &mut Rig,
+    opened: Loaded<OpenedTrack>,
+) -> (Receipt<DispatcherProtocol<ResourceLoad<TestPools>>>, Position) {
+    rig.opens.drain();
+    let due = rig.opens.next_due((), 1).expect("one open");
+    let [DispatcherCommand::Load(request)] = due.commands() else {
+        panic!("expected a dispatcher load");
+    };
+    let position = request.position;
+    due.apply(Dispatched::Loaded(opened));
+    let receipt = rig.dispatcher.receipts().next().expect("one load receipt");
+    (receipt, position)
 }
 
 /// The commands the lane takes in its next block, in order.
@@ -937,22 +975,22 @@ fn a_speed_curve_clamps_every_finite_subfloor_point(#[case] speed: SpeedCurve) {
 fn a_track_loaded_at_a_position_stands_there_once_attached() {
     let mut rig = rig();
     let mut track = track(A);
-    load(&mut track, &mut rig, Position::from_secs(3));
+    let seq = load(&mut track, &mut rig, Position::from_secs(3));
     let opened = opened_fixture(&mut rig, "track");
-    let receipt = rig.open(Ok(opened)).expect("one open");
+    let (receipt, position) = open_at_position(&mut rig, opened);
+    assert_eq!(position, Position::from_secs(3));
     rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out)).expect("live deck scope");
 
     let mut receipts = rig.block(frame(0), 0.0);
-    settle(&mut track, &mut rig, &mut receipts);
+    assert_eq!(receipts.len(), 1);
+    let settled = settle(&mut track, &mut rig, &mut receipts);
 
     assert!(
-        matches!(
-            receipts[0].batch().commands.as_slice(),
-            [DeckPart::Attach { slot, segment, .. }] if *slot == A && *segment == SegmentId::FIRST
-        ),
-        "{:?}",
-        receipts[0].batch().commands
+        matches!(settled.as_slice(), [Settled::Applied { seq: answered, .. }] if *answered == seq),
+        "the attach answers the load: {settled:?}"
     );
+    assert!(receipts[0].batch().commands.is_empty());
+    assert_eq!(rig.deck.mixer.held(A), Some("track"));
     assert_eq!(track.snapshot().position, Position::from_secs(3));
 }
 
@@ -983,13 +1021,13 @@ fn play_sounds_from_its_frame_and_pause_reports_where_it_stopped() {
     let mut rig = rig();
     let (mut track, _lane) = loaded(&mut rig, A, "track");
 
-    let play = rig.with_outbox(|out| track
+    let play = in_pass(&mut rig, frame(0), |out| track
         .apply(
             TrackCommand::Play {
                 at: When::At(frame(4_096)),
             },
             out,
-        )).expect("live deck scope")
+        ))
         .expect("the deck has room")
         .expect("a play goes out on its own");
     assert!(
@@ -1009,13 +1047,13 @@ fn play_sounds_from_its_frame_and_pause_reports_where_it_stopped() {
         }
     );
 
-    rig.with_outbox(|out| track
+    in_pass(&mut rig, frame(4_096), |out| track
         .apply(
             TrackCommand::Pause {
                 at: When::At(frame(8_192)),
             },
             out,
-        )).expect("live deck scope")
+        ))
         .expect("the deck has room");
     let mut receipts = rig.block(frame(8_192), 1.5);
     settle(&mut track, &mut rig, &mut receipts);
@@ -1036,10 +1074,14 @@ fn a_track_played_after_another_chains_from_its_slot() {
     let (mut leading, _) = loaded(&mut rig, A, "leading");
     let (mut following, _) = loaded(&mut rig, B, "following");
 
+    command_at_zero(&mut leading, &mut rig, TrackCommand::Play { at: When::Next });
+    let mut receipts = rig.block(frame(0), 0.0);
+    settle(&mut leading, &mut rig, &mut receipts);
     rig.with_outbox(|out| following
         .apply(TrackCommand::PlayAfter { track: A }, out)).expect("live deck scope")
         .expect("the deck has room");
-    let mut receipts = rig.block(frame(0), 0.0);
+    assert!(rig.block(frame(0), 0.0).is_empty(), "the chain waits for the leading track's end");
+    let mut receipts = rig.end(A, frame(4_096));
 
     assert!(
         matches!(
@@ -1055,12 +1097,16 @@ fn a_track_played_after_another_chains_from_its_slot() {
             .map(|receipt| &receipt.batch().commands)
             .collect::<Vec<_>>()
     );
+    assert!(matches!(receipts[0].outcome, Outcome::Applied { at, .. } if at == frame(4_096)));
     settle(&mut leading, &mut rig, &mut receipts);
     settle(&mut following, &mut rig, &mut receipts);
-    assert_eq!(leading.snapshot().status, TrackStatus::Loaded);
+    rig.with_outbox(|out| leading.settle(TrackReceipt::Event(DeckEvent::Ended {
+        slot: A, at: frame(4_096),
+    }), out)).expect("live deck scope");
+    assert_eq!(leading.snapshot().status, TrackStatus::Ended { at: frame(4_096) });
     assert_eq!(
         following.snapshot().status,
-        TrackStatus::Playing { since: frame(0) }
+        TrackStatus::Playing { since: frame(4_096) }
     );
 }
 
@@ -1165,10 +1211,10 @@ fn an_evicting_track_takes_the_slot_over_on_its_frame() {
     settle(&mut old, &mut rig, &mut receipts);
 
     let mut new = track(A);
-    let seq = load(&mut new, &mut rig, Position::ZERO);
+    load(&mut new, &mut rig, Position::ZERO);
     rig.with_outbox(|out| new.apply(
         TrackCommand::Evict {
-            at: When::At(frame(1_024)),
+            at: When::Next,
         },
         out,
     )).expect("live deck scope")
@@ -1176,6 +1222,38 @@ fn an_evicting_track_takes_the_slot_over_on_its_frame() {
     let opened = opened_fixture(&mut rig, "new");
     let receipt = rig.open(Ok(opened)).expect("one open");
     rig.with_outbox(|out| new.settle(TrackReceipt::Loaded(receipt), out)).expect("live deck scope");
+    assert_eq!(rig.deck.mixer.held(A), Some("old"));
+    let output = mock::output(None).get();
+    let deck = crate::DeckSnapshot {
+        slots: vec![SlotSnapshot { state: SlotState::Playing, ..Default::default() }],
+        ..Default::default()
+    };
+    let pass = crate::DeckPass {
+        now: frame(0), delivery: FrameCount::new(0), output: &output, deck: &deck,
+    };
+    let seq = {
+        let mut scope = rig.deck.ring.scope(rig.deck.scope).expect("live deck scope");
+        let mut out = Outbox::new(&mut scope, &mut rig.deck.dispatcher).in_pass(pass);
+        let at = When::At(frame(1_024));
+        let result = out.together_owned(at, |out| {
+            new.apply(TrackCommand::Evict { at }, out)?;
+            new.apply(TrackCommand::Fade {
+                at, settings: CrossfadeSettings::default(), dir: FadeDir::In,
+            }, out)?;
+            Ok(())
+        });
+        match result {
+            Ok(((), Some(seq))) => {
+                new.finish_group(Ok(seq));
+                seq
+            }
+            Ok(((), None)) => panic!("the replacement sends one group"),
+            Err((error, mut parts)) => {
+                new.finish_group(Err(&mut parts));
+                panic!("the replacement group was refused: {error}");
+            }
+        }
+    };
     assert_eq!(
         rig.deck.mixer.held(A),
         Some("old"),
@@ -1191,7 +1269,7 @@ fn an_evicting_track_takes_the_slot_over_on_its_frame() {
             receipts[0].batch().commands.as_slice(),
             [
                 DeckPart::Returned(Returned::Pcm { slot, pcm }),
-                DeckPart::Start { slot: started, fade: Fade::Declick },
+                DeckPart::Start { slot: started, fade: Fade::Crossfade(_) },
             ] if *slot == A && &**pcm.src() == "old" && *started == A
         ),
         "{:?}",
@@ -1199,7 +1277,7 @@ fn an_evicting_track_takes_the_slot_over_on_its_frame() {
     );
     assert!(
         matches!(settled.as_slice(), [Settled::Applied { seq: answered, at }] if *answered == seq && *at == frame(1_024)),
-        "the replace answers the load: {settled:?}"
+        "the replace answers the group: {settled:?}"
     );
     assert_eq!(rig.deck.mixer.held(A), Some("new"));
     assert_eq!(old.snapshot().status, TrackStatus::Released);
@@ -1233,17 +1311,19 @@ fn a_track_whose_slot_faded_out_reports_it() {
 #[kithara::test]
 fn a_load_the_deck_has_no_room_for_leaves_the_lane_untouched() {
     let mut rig = rig();
-    while rig
-        .ring
-        .send(
-            When::Next,
-            Batch {
+    {
+        let deck = &mut rig.deck;
+        let mut scope = deck.ring.scope(deck.scope).expect("live deck scope");
+        let error = loop {
+            if let Err(error) = scope.send(When::Next, Batch {
                 basis: Vec::new(),
                 commands: Vec::new(),
-            },
-        )
-        .is_ok()
-    {}
+            }) {
+                break error;
+            }
+        };
+        assert!(matches!(error, SendError::Full(_)), "{error:?}");
+    }
     let (sender, mut inbox) = lane();
     let mut track = track(A);
     let seq = load(&mut track, &mut rig, Position::ZERO);

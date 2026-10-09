@@ -491,7 +491,18 @@ impl<S> PlayerImpl<S> {
                     return Settled::Pending;
                 }
                 self.reserved_ready();
-                self.attach(out);
+                if let Err(error) = self.attach(out) {
+                    self.loading = None;
+                    self.lane = None;
+                    self.status = TrackStatus::Idle;
+                    if let Err(error) = self.release_lane(out) {
+                        warn!(%error, "refused open waits for dispatcher room");
+                    }
+                    return Settled::Rejected {
+                        seq,
+                        reason: Rejection::Refused(error),
+                    };
+                }
                 Settled::Pending
             }
             Outcome::Rejected(refused) => {
@@ -514,25 +525,23 @@ impl<S> PlayerImpl<S> {
         }
     }
 
-    fn attach(&mut self, out: &mut Outbox<'_, S>) {
-        if out.is_grouped() || out.deck_available() == 0 || self.attaching.is_some() {
-            return;
+    fn attach(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError> {
+        if out.is_grouped() || self.attaching.is_some() {
+            return Ok(());
         }
         let Some(loading) = self.loading.as_mut() else {
-            return;
+            return Ok(());
         };
         if loading.evict.is_some() {
-            return;
+            return Ok(());
         }
         let Some(opened) = loading.opened.take() else {
-            return;
+            return Ok(());
         };
-        let OpenedTrack {
-            pcm,
-            duration,
-            abr,
-            metadata,
-        } = opened;
+        if out.deck_available() == 0 {
+            return Err(PlayError::Full("deck"));
+        }
+        let OpenedTrack { pcm, .. } = opened;
         let seq = loading.seq;
         let at = When::Next;
         let slot = self.slot;
@@ -557,26 +566,11 @@ impl<S> PlayerImpl<S> {
                     replacement: false,
                     play: if start { self.play.take() } else { None },
                 });
+                Ok(())
             }
             Err((error, parts)) => {
-                let pcm = parts.into_iter().find_map(|part| match part {
-                    DeckPart::Attach { pcm, .. } | DeckPart::Replace { pcm, .. } => Some(pcm),
-                    _ => None,
-                });
-                if let Some(pcm) = pcm {
-                    loading.opened = Some(OpenedTrack {
-                        pcm,
-                        duration,
-                        abr,
-                        metadata,
-                    });
-                } else {
-                    warn!(%error, "attachment refusal lost its original PCM-bearing part");
-                    self.status = TrackStatus::Idle;
-                    self.loading = None;
-                    return;
-                }
-                warn!(%error, "the deck refused attachment");
+                drop(parts);
+                Err(error)
             }
         }
     }
@@ -1264,6 +1258,25 @@ impl<S> Player<S> for PlayerImpl<S> {
                         && operation.basis.iter().all(|basis| batch.basis.contains(basis))
                 });
                 if !attaching && !adopting && playback.is_none() {
+                    if self.attached()
+                        && self.attaching.is_none()
+                        && self.status != TrackStatus::Released
+                        && batch.commands.iter().any(|part| {
+                            matches!(part, DeckPart::Returned(Returned::Pcm { slot, .. })
+                                if *slot == self.slot)
+                        })
+                    {
+                        self.status = TrackStatus::Released;
+                        self.mark = None;
+                        self.play = None;
+                        self.ready = None;
+                        self.playback_commands.clear();
+                        self.adopting.clear();
+                        self.adopt_retry = None;
+                        if let Err(error) = self.release_lane(out) {
+                            warn!(%error, "lane release waits for dispatcher room");
+                        }
+                    }
                     return Settled::Pending;
                 }
                 if let Some(index) = playback {
@@ -1311,7 +1324,6 @@ impl<S> Player<S> for PlayerImpl<S> {
         self.observe(out);
         self.settle_lane();
         self.retry_adopt(out);
-        self.attach(out);
         if self.status == TrackStatus::Released {
             if let Err(error) = self.release_lane(out) {
                 warn!(%error, "lane release waits for room");
