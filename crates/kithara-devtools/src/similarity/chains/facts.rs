@@ -8,7 +8,7 @@ use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use quote::ToTokens;
 use syn::{
     Attribute, Expr, FnArg, GenericParam, ImplItem, Item, Lit, Meta, Pat, ReturnType, TraitItem,
-    Type, TypeParamBound, UseTree, WherePredicate,
+    Type, TypeParamBound, WherePredicate,
     parse::{ParseStream, Parser},
     spanned::Spanned,
     visit,
@@ -39,14 +39,7 @@ mod consts {
     pub(super) const DEREF_TARGET: &str = "Target";
 }
 
-/// A `use` binding: the name it brings into scope and the path it names. A
-/// glob import has the alias `*`.
-#[derive(Clone, Debug)]
-pub(super) struct Import {
-    pub(super) alias: String,
-    pub(super) path: Vec<String>,
-    pub(super) absolute: bool,
-}
+pub(super) use crate::common::imports::{Import, use_tree};
 
 #[derive(Debug)]
 pub(super) struct UseFact {
@@ -388,53 +381,6 @@ fn generics_map(generics: &syn::Generics, into: &mut BTreeMap<String, Vec<syn::P
                 bound.bounds.iter(),
                 into.entry(segment.ident.to_string()).or_default(),
             );
-        }
-    }
-}
-
-/// Flattens a `use` tree into its bindings.
-pub(super) fn use_tree(tree: &UseTree, prefix: &mut Vec<String>, out: &mut Vec<Import>) {
-    match tree {
-        UseTree::Path(path) => {
-            prefix.push(path.ident.to_string());
-            use_tree(&path.tree, prefix, out);
-            prefix.pop();
-        }
-        UseTree::Name(name) => {
-            let name = name.ident.to_string();
-            let mut path = prefix.clone();
-            let alias = if name == "self" {
-                prefix.last().cloned().unwrap_or_default()
-            } else {
-                path.push(name.clone());
-                name
-            };
-            out.push(Import {
-                alias,
-                path,
-                absolute: false,
-            });
-        }
-        UseTree::Rename(rename) => {
-            let mut path = prefix.clone();
-            if rename.ident != "self" {
-                path.push(rename.ident.to_string());
-            }
-            out.push(Import {
-                path,
-                alias: rename.rename.to_string(),
-                absolute: false,
-            });
-        }
-        UseTree::Glob(_) => out.push(Import {
-            alias: "*".to_string(),
-            path: prefix.clone(),
-            absolute: false,
-        }),
-        UseTree::Group(group) => {
-            for item in &group.items {
-                use_tree(item, prefix, out);
-            }
         }
     }
 }
