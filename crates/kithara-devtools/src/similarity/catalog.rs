@@ -292,6 +292,9 @@ mod tests {
     fn directional_relation_follows_compared_type_order() {
         let config: SimilarityConfig = toml::from_str(
             r#"
+                [gate]
+                min_behavior = 0.9
+
                 [[types.relations]]
                 left = "Arc"
                 right = "Rc"

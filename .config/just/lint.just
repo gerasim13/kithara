@@ -42,7 +42,7 @@ gate:
     just lint fast
     cargo test -p xtask
 
-# Full CI chain: fast checks, xtask tests, quality scans, and idioms.
+# Full CI chain: fast checks, xtask tests, quality scans, idioms, and struct twins.
 # It runs every idiom check below, so it takes the shared part directly rather
 # than through `fast`, whose two-check pass it would then repeat.
 full:
@@ -53,6 +53,7 @@ full:
     just quality trait-mock-audit
     just quality trait-mock-exceptions
     just lint idioms
+    just lint similarity --gate
 
 [positional-arguments]
 ast-grep *ARGS:

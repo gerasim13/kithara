@@ -8,6 +8,7 @@ use glob::Pattern;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use toml::Table;
 
+use super::toggle::{ToggleConfig, ToggleSchema};
 use crate::consts;
 
 pub(crate) fn load_optional_config<T: Default + DeserializeOwned>(
@@ -608,38 +609,32 @@ pub struct KnownFlake {
     pub test: String,
 }
 
-#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
-#[serde(default, deny_unknown_fields)]
-#[config(builder(none), fields(value))]
-pub struct TestFlashConfig {
-    pub features: Vec<String>,
-    pub default: bool,
+pub enum TestFlash {}
+
+impl ToggleSchema for TestFlash {
+    const FIELDS: &'static [&'static str; 2] = &["features", "default"];
+    const DEFAULT: bool = true;
 }
 
-impl Default for TestFlashConfig {
-    fn default() -> Self {
-        Self {
-            features: Vec::new(),
-            default: true,
-        }
-    }
+pub type TestFlashConfig = ToggleConfig<TestFlash>;
+
+pub enum TestNoBlock {}
+
+impl ToggleSchema for TestNoBlock {
+    const FIELDS: &'static [&'static str; 2] = &["features", "default"];
+    const DEFAULT: bool = false;
 }
 
-#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
-#[serde(default, deny_unknown_fields)]
-#[config(builder(none), fields(value))]
-pub struct TestNoBlockConfig {
-    pub features: Vec<String>,
-    pub default: bool,
+pub type TestNoBlockConfig = ToggleConfig<TestNoBlock>;
+
+pub enum TestLoad {}
+
+impl ToggleSchema for TestLoad {
+    const FIELDS: &'static [&'static str; 2] = &["features", "default"];
+    const DEFAULT: bool = false;
 }
 
-#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
-#[serde(default, deny_unknown_fields)]
-#[config(builder(none), fields(value))]
-pub struct TestLoadConfig {
-    pub features: Vec<String>,
-    pub default: bool,
-}
+pub type TestLoadConfig = ToggleConfig<TestLoad>;
 
 #[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]

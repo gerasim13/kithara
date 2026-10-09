@@ -1,11 +1,11 @@
 use std::fs;
 
 use anyhow::Result;
-use syn::{Expr, ImplItem, ItemImpl, Stmt, visit, visit::Visit};
+use syn::{Expr, ImplItem, Stmt};
 
-use super::{Check, Context};
+use super::{Check, Context, derivable_support::check_impls};
 use crate::{
-    common::{parse::self_ty_name, violation::Violation, walker::relative_to},
+    common::{violation::Violation, walker::relative_to},
     idioms::config::DerivableSeverity,
 };
 
@@ -42,38 +42,12 @@ impl Check for DerivableBuiltDefault {
 }
 
 fn check_source(source: &str) -> Vec<(String, usize)> {
-    let Ok(file) = syn::parse_file(source) else {
-        return Vec::new();
-    };
-    let mut visitor = DefaultVisitor::default();
-    visitor.visit_file(&file);
-    visitor.findings
-}
-
-#[derive(Default)]
-struct DefaultVisitor {
-    findings: Vec<(String, usize)>,
-}
-
-impl<'ast> Visit<'ast> for DefaultVisitor {
-    fn visit_item_impl(&mut self, implementation: &'ast ItemImpl) {
-        let is_default = implementation
-            .trait_
-            .as_ref()
-            .and_then(|(path, _)| path.segments.last())
-            .is_some_and(|segment| segment.ident == "Default");
-        if is_default
-            && implementation.items.len() == 1
+    check_impls(source, "Default", |implementation| {
+        implementation.items.len() == 1
             && implementation.items.iter().any(|item| {
                 matches!(item, ImplItem::Fn(function) if function.sig.ident == "default" && builder_build(&function.block.stmts))
             })
-            && let Some(name) = self_ty_name(&implementation.self_ty)
-        {
-            self.findings
-                .push((name, implementation.impl_token.span.start().line));
-        }
-        visit::visit_item_impl(self, implementation);
-    }
+    })
 }
 
 fn builder_build(statements: &[Stmt]) -> bool {

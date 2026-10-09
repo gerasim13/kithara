@@ -56,8 +56,8 @@ fn rubato_resamples_borrowed_planar_slices(rubato_stereo: Vec<f32>) {
         .process_into_buffer(&input_refs, &mut output_refs)
         .unwrap_or_else(|err| panic!("rubato process failed: {err}"));
 
-    assert_eq!(process.input_frames, resampler.input_frames_next());
-    assert!(process.output_frames > 0);
+    assert_eq!(process.first(), resampler.input_frames_next());
+    assert!(process.second() > 0);
 }
 
 #[kithara::test(native, flash(false))]
@@ -93,7 +93,7 @@ fn rubato_resamples_nine_channels_without_touching_extra_output(rubato_nine: Vec
         .process_into_buffer(&input_refs, &mut output_refs)
         .unwrap_or_else(|err| panic!("rubato process failed: {err}"));
 
-    assert!(process.output_frames > 0);
+    assert!(process.second() > 0);
     assert!(output[channels.get()].iter().all(|sample| *sample == 1.0));
 }
 

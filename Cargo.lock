@@ -4941,6 +4941,7 @@ dependencies = [
  "cargo_metadata 0.23.1",
  "clap",
  "delegate",
+ "derive-where",
  "derive_more",
  "fieldwork",
  "fs4",
@@ -5540,6 +5541,7 @@ dependencies = [
  "bytes",
  "dashmap",
  "delegate",
+ "derive-where",
  "derive_more",
  "fieldwork",
  "futures",
@@ -5808,6 +5810,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-config",
  "kithara-dsp",
+ "kithara-signal",
  "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -5834,6 +5837,7 @@ name = "kithara-signal"
 version = "0.0.1-alpha5"
 dependencies = [
  "delegate",
+ "derive-where",
  "derive_more",
  "fieldwork",
  "kithara-blob",
@@ -6209,6 +6213,7 @@ dependencies = [
  "arc-swap",
  "bon",
  "delegate",
+ "derive-where",
  "derive_more",
  "fieldwork",
  "kithara-beat",
@@ -12736,6 +12741,7 @@ dependencies = [
  "toml 1.1.7+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
+ "uniffi_bindgen",
 ]
 
 [[package]]

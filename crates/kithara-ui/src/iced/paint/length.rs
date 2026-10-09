@@ -1,9 +1,6 @@
 use crate::{
     atoms::{
-        bar::{
-            brand::Brand, context::Context, divider::Divider, preset::Preset, settings::Settings,
-            spacer::Spacer,
-        },
+        bar::{brand::Brand, context::Context, fill::Fill, preset::Preset, settings::Settings},
         button::Button,
         chip::Chip,
         chrome::{chevron::ChromeChevron, label::ChromeLabel},
@@ -45,11 +42,9 @@ impl PainterLength for Brand {}
 
 impl PainterLength for Context {}
 
-impl PainterLength for Divider {}
+impl PainterLength for Fill {}
 
 impl PainterLength for Settings {}
-
-impl PainterLength for Spacer {}
 
 impl PainterLength for Chip {}
 

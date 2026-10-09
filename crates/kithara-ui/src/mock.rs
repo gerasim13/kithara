@@ -1,33 +1,10 @@
-use std::collections::BTreeMap;
-
-use crate::{
-    ids::EndpointId,
-    registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
-};
-
-/// An endpoint registry a test fills by hand.
-#[derive(Default)]
-pub struct TestRegistry {
-    endpoints: BTreeMap<(EndpointCategory, EndpointId), EndpointDesc>,
-}
-
-impl TestRegistry {
-    pub fn insert(&mut self, category: EndpointCategory, id: &str, description: EndpointDesc) {
-        self.endpoints
-            .insert((category, EndpointId(id.to_owned())), description);
-    }
-}
-
-impl EndpointRegistry for TestRegistry {
-    fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
-        self.endpoints.get(&(category, id.clone()))
-    }
-}
+pub use crate::registry::MapEndpoints;
+use crate::registry::{EndpointCategory, EndpointDesc, ValueKind};
 
 /// The endpoints the built-in player document names, each with the kind and scope it declares.
 #[must_use]
-pub fn player_registry() -> TestRegistry {
-    let mut registry = TestRegistry::default();
+pub fn player_registry() -> MapEndpoints {
+    let mut registry = MapEndpoints::default();
     registry.insert(
         EndpointCategory::Command,
         "deck.transport.jump_back",
@@ -146,7 +123,7 @@ pub fn player_registry() -> TestRegistry {
     registry
 }
 
-fn insert_bar_endpoints(registry: &mut TestRegistry) {
+fn insert_bar_endpoints(registry: &mut MapEndpoints) {
     registry.insert(
         EndpointCategory::Telemetry,
         "engine.load",
@@ -176,7 +153,7 @@ fn insert_bar_endpoints(registry: &mut TestRegistry) {
     );
 }
 
-fn insert_menu_endpoints(registry: &mut TestRegistry) {
+fn insert_menu_endpoints(registry: &mut MapEndpoints) {
     for (id, kind) in [
         ("ui.window.can_open", ValueKind::Bool),
         ("ui.prefs.wave_follow", ValueKind::Bool),
@@ -237,7 +214,7 @@ fn insert_menu_endpoints(registry: &mut TestRegistry) {
     }
 }
 
-fn insert_clock_endpoints(registry: &mut TestRegistry) {
+fn insert_clock_endpoints(registry: &mut MapEndpoints) {
     for (id, kind) in [
         ("clock.bpm", ValueKind::Text),
         ("clock.source", ValueKind::Text),
@@ -306,7 +283,7 @@ fn insert_clock_endpoints(registry: &mut TestRegistry) {
     );
 }
 
-fn insert_stream_endpoints(registry: &mut TestRegistry) {
+fn insert_stream_endpoints(registry: &mut MapEndpoints) {
     registry.insert(
         EndpointCategory::Telemetry,
         "deck.stream.quality_hidden",

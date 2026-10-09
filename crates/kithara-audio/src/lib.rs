@@ -22,8 +22,8 @@ mod traits;
 pub use audio::{Audio, PreparedAudio, SeekHandle, event::map_decode_error_kind};
 pub use event::{
     AudioEvent, DecodeErrorClass, DecodeErrorKind, DecoderBackend, DecoderChangeCause,
-    DecoderEvent, FrameDomain, GaplessSpan, PlaybackResamplerKind, ResamplerKind,
-    SeekLifecycleStage, SegmentLocation, TrackFailureKind,
+    DecoderEvent, FrameDomain, PlaybackResamplerKind, ResamplerKind, SeekLifecycleStage,
+    SegmentLocation, TrackFailureKind,
 };
 #[cfg(feature = "resample-glide")]
 pub use kithara_resampler::glide::{GlideBackend, GlideConfig};

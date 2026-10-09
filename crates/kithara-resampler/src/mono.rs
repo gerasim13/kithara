@@ -156,7 +156,7 @@ where
         };
         self.pending.drain(..needed);
 
-        let out = &self.output_block[..written.output_frames];
+        let out = &self.output_block[..written.second()];
         let skip = self.skip.min(out.len());
         self.skip -= skip;
         append_slice(&mut self.ready, &out[skip..])?;

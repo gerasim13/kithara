@@ -151,8 +151,8 @@ impl<'a> ToolchainInstaller<'a> {
         )?;
         // `rust-src` is not optional here. Anything reaching for `-Zbuild-std`
         // needs it, and third-party tools reach for it through the channel
-        // names rather than the pinned toolchain: `cargo swift` and the
-        // sanitizer both asked for plain `nightly`, and the documentation
+        // names rather than the pinned toolchain: Apple release builds and
+        // the sanitizer ask for plain `nightly`, and the documentation
         // build asked for stable. Installing the component only on the pinned
         // nightly left each of them failing on a missing standard library.
         for toolchain in [
@@ -211,14 +211,7 @@ impl<'a> ToolchainInstaller<'a> {
             ],
             "install Rust components",
         )?;
-        for target in [
-            "aarch64-apple-ios",
-            "aarch64-apple-ios-sim",
-            "aarch64-linux-android",
-            "wasm32-unknown-unknown",
-            "x86_64-apple-ios",
-            "x86_64-linux-android",
-        ] {
+        for target in stable_targets() {
             run(
                 &[
                     "target",
@@ -497,6 +490,20 @@ fn write_private(path: &Path, contents: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Every Apple xcframework slice target, plus the Android and WASM targets
+/// the other lanes on this host build.
+fn stable_targets() -> Vec<&'static str> {
+    crate::consts::SLICE_TARGETS
+        .iter()
+        .flat_map(|(_, targets)| targets.iter().copied())
+        .chain([
+            "aarch64-linux-android",
+            "wasm32-unknown-unknown",
+            "x86_64-linux-android",
+        ])
+        .collect()
+}
+
 fn path_text(path: &Path) -> Result<&str> {
     path.to_str()
         .with_context(|| format!("path is not UTF-8: {}", path.display()))
@@ -538,6 +545,20 @@ fn make_traversable(_path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stable_targets_cover_every_apple_slice_target() {
+        let provisioned = stable_targets();
+        for target in crate::consts::SLICE_TARGETS
+            .iter()
+            .flat_map(|(_, targets)| targets.iter())
+        {
+            assert!(
+                provisioned.contains(target),
+                "{target} is built for an Apple slice but the host never installs it"
+            );
+        }
+    }
 
     #[test]
     fn sha256_verification_rejects_modified_content() {

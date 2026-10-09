@@ -1,45 +1,36 @@
+use std::marker::PhantomData;
+
 use bytes::Bytes;
 
+pub enum PayloadWrite {}
+
+pub enum FixedPatch {}
+
 /// One latest-snapshot payload write in an analysis-file update.
-#[derive(Debug)]
-#[non_exhaustive]
-pub struct AnalysisFileWrite {
-    bytes: Bytes,
-    offset: u64,
-}
-
-impl AnalysisFileWrite {
-    pub(super) const fn new(offset: u64, bytes: Bytes) -> Self {
-        Self { bytes, offset }
-    }
-
-    /// Complete versioned `AnalysisProgress` payload.
-    #[must_use]
-    pub fn bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-
-    /// Absolute destination offset.
-    #[must_use]
-    pub const fn offset(&self) -> u64 {
-        self.offset
-    }
-}
+pub type AnalysisFileWrite = AnalysisFileBytes<PayloadWrite>;
 
 /// One absolute fixed-header or fixed-index patch.
-#[derive(Debug)]
+pub type AnalysisFilePatch = AnalysisFileBytes<FixedPatch>;
+
+#[derive_where::derive_where(Debug)]
 #[non_exhaustive]
-pub struct AnalysisFilePatch {
+pub struct AnalysisFileBytes<Tag> {
     bytes: Bytes,
     offset: u64,
+    #[derive_where(skip(Debug))]
+    marker: PhantomData<fn() -> Tag>,
 }
 
-impl AnalysisFilePatch {
+impl<Tag> AnalysisFileBytes<Tag> {
     pub(super) const fn new(offset: u64, bytes: Bytes) -> Self {
-        Self { bytes, offset }
+        Self {
+            bytes,
+            offset,
+            marker: PhantomData,
+        }
     }
 
-    /// Replacement bytes for this fixed location.
+    /// Replacement bytes for the destination location.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.bytes

@@ -48,12 +48,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             return None;
         }
         let cue = self.projection.active.as_ref()?.activation().source();
-        let history = self
-            .engine
-            .as_ref()?
-            .capabilities()
-            .latency()
-            .source_frames();
+        let history = self.engine.as_ref()?.capabilities().latency().first();
         Some(cue.saturating_sub(u64::try_from(history).ok()?))
     }
 

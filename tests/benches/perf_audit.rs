@@ -134,14 +134,14 @@ fn stretch_engine(backend: StretchKind, pools: &Pools) -> Box<dyn ElasticEngine>
 
 fn prime_fixture(engine: &dyn ElasticEngine) -> PrimeFixture {
     let latency = engine.capabilities().latency();
-    let request = ElasticRequest::new(latency.output_frames(), latency.output_frames())
+    let request = ElasticRequest::new(latency.second(), latency.second())
         .unwrap_or_else(|error| panic!("invalid {latency:?} benchmark prime request: {error}"));
     PrimeFixture {
         discarded_output: vec![0.0; request.output_frames() * consts::CHANNELS],
         request,
         source: make_pcm(request.source_frames()),
-        source_history: make_pcm(latency.source_frames()),
-        source_lookahead: make_pcm(latency.source_frames()),
+        source_history: make_pcm(latency.first()),
+        source_lookahead: make_pcm(latency.first()),
     }
 }
 

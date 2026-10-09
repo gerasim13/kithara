@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use derive_more::Display;
 
 use crate::ids::EndpointId;
@@ -52,6 +54,24 @@ impl EndpointDesc {
     pub fn with_scope(mut self, name: &str) -> Self {
         self.scopes.push(name.to_owned());
         self
+    }
+}
+
+#[derive(Default)]
+pub struct MapEndpoints {
+    endpoints: BTreeMap<(EndpointCategory, EndpointId), EndpointDesc>,
+}
+
+impl MapEndpoints {
+    pub fn insert(&mut self, category: EndpointCategory, id: &str, description: EndpointDesc) {
+        self.endpoints
+            .insert((category, EndpointId(id.to_owned())), description);
+    }
+}
+
+impl EndpointRegistry for MapEndpoints {
+    fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
+        self.endpoints.get(&(category, id.clone()))
     }
 }
 

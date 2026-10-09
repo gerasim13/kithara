@@ -6,5 +6,5 @@ pub use audio::{
 };
 pub use decoder::{
     DecodeErrorClass, DecodeErrorKind, DecoderBackend, DecoderChangeCause, DecoderEvent,
-    FrameDomain, GaplessSpan, ResamplerKind,
+    FrameDomain, ResamplerKind,
 };

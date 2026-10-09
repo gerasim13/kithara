@@ -248,18 +248,14 @@ fn synthetic_project() -> ProjectConfig {
             nextest_config: ".config/nextest.toml".to_owned(),
             known_flakes: Vec::new(),
             features: vec!["base-feature".to_owned()],
-            flash: TestFlashConfig {
-                features: vec!["virtual-time".to_owned()],
-                default: true,
-            },
-            no_block: TestNoBlockConfig {
-                features: vec!["nb-detect".to_owned()],
-                default: false,
-            },
-            load: TestLoadConfig {
-                features: vec!["cpu-load".to_owned()],
-                default: false,
-            },
+            flash: toml::from_str::<TestFlashConfig>("features = ['virtual-time']\ndefault = true")
+                .expect("flash config"),
+            no_block: toml::from_str::<TestNoBlockConfig>(
+                "features = ['nb-detect']\ndefault = false",
+            )
+            .expect("no-block config"),
+            load: toml::from_str::<TestLoadConfig>("features = ['cpu-load']\ndefault = false")
+                .expect("load config"),
             loom_lane: "loom".to_owned(),
         },
         lint_exclude: LintExcludeConfig::default(),
@@ -538,7 +534,7 @@ fn a_lane_without_the_detector_stays_without_it_when_the_gate_asks_for_it() {
 #[test]
 fn a_lane_without_load_stays_without_it_when_asked_for_it() {
     let mut project = synthetic_project();
-    project.test.load.default = true;
+    project.test.load.enabled = true;
     project
         .test
         .lanes
@@ -559,7 +555,7 @@ fn a_lane_without_load_stays_without_it_when_asked_for_it() {
 #[test]
 fn load_resolves_cli_then_lane_then_project_default() {
     let mut project = synthetic_project();
-    project.test.load.default = true;
+    project.test.load.enabled = true;
     let default = TestRequest::parse(&[]).expect("parse request");
 
     assert!(

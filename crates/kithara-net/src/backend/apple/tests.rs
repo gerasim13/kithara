@@ -25,7 +25,7 @@ use kithara_platform::{
 };
 use kithara_test_utils::TestHttpServer;
 
-use super::client::AppleNet;
+use super::client::HttpClient;
 use crate::{
     error::NetError,
     test_pools::pools,
@@ -153,7 +153,7 @@ async fn apple_get_bytes_retries_503_until_ok() {
     .await;
     let url = server.url(PROBE);
 
-    let client = AppleNet::new(fast_options(3), pools(), CancelToken::never());
+    let client = HttpClient::new(fast_options(3), pools(), CancelToken::never());
     let body = client
         .get_bytes(url, None)
         .await
@@ -183,7 +183,7 @@ async fn apple_accept_encoding_policy_is_authoritative_per_request() {
     let options = NetOptions::builder()
         .compression(Compression::GZIP | Compression::DEFLATE)
         .build();
-    let client = AppleNet::new(options, pools(), CancelToken::never());
+    let client = HttpClient::new(options, pools(), CancelToken::never());
 
     let body = client
         .get_bytes(url.clone(), Some(overriding_accept_encoding()))
@@ -246,7 +246,7 @@ async fn apple_whole_body_preserves_configured_auto_decode() {
     .await;
     let url = server.url(PROBE);
     let options = NetOptions::builder().compression(Compression::GZIP).build();
-    let client = AppleNet::new(options, pools(), CancelToken::never());
+    let client = HttpClient::new(options, pools(), CancelToken::never());
 
     let body = client
         .get_bytes(url, None)
@@ -267,7 +267,7 @@ async fn apple_identity_stream_rejects_nonidentity_content_encoding() {
     })
     .await;
     let url = server.url(PROBE);
-    let client = AppleNet::new(fast_options(0), pools(), CancelToken::never());
+    let client = HttpClient::new(fast_options(0), pools(), CancelToken::never());
 
     let Err(error) = client.stream(url.clone(), None).await else {
         panic!("encoded bytes must not reach an identity stream");
@@ -289,7 +289,7 @@ async fn apple_head_backfills_content_length_from_content_range() {
     })
     .await;
 
-    let client = AppleNet::new(fast_options(0), pools(), CancelToken::never());
+    let client = HttpClient::new(fast_options(0), pools(), CancelToken::never());
     let headers = client.head(server.url(PROBE), None).await.expect("head");
 
     assert_eq!(headers.get("content-length"), Some("1234"));
@@ -299,7 +299,7 @@ async fn apple_head_backfills_content_length_from_content_range() {
 async fn apple_range_rejects_partial_without_content_range() {
     let server = serve(|| async { respond(StatusCode::PARTIAL_CONTENT, &[], "part") }).await;
     let url = server.url(PROBE);
-    let client = AppleNet::new(fast_options(0), pools(), CancelToken::never());
+    let client = HttpClient::new(fast_options(0), pools(), CancelToken::never());
 
     let Err(error) = client
         .get_range(url, RangeSpec::new(0, Some(3)), None)
@@ -322,7 +322,7 @@ async fn apple_range_rejects_partial_without_content_length() {
     })
     .await;
     let url = server.url(PROBE);
-    let client = AppleNet::new(fast_options(0), pools(), CancelToken::never());
+    let client = HttpClient::new(fast_options(0), pools(), CancelToken::never());
 
     let Err(error) = client
         .get_range(url, RangeSpec::new(0, Some(3)), None)
@@ -364,7 +364,7 @@ async fn apple_resume_rejects_a_different_content_range() {
         }
     })
     .await;
-    let client = AppleNet::new(fast_options(1), pools(), CancelToken::never());
+    let client = HttpClient::new(fast_options(1), pools(), CancelToken::never());
     let stream = client
         .stream(server.url(PROBE), None)
         .await
@@ -415,7 +415,7 @@ async fn apple_resume_rejects_a_conflicting_representation_total() {
         }
     })
     .await;
-    let client = AppleNet::new(fast_options(1), pools(), CancelToken::never());
+    let client = HttpClient::new(fast_options(1), pools(), CancelToken::never());
     let stream = client
         .stream(server.url(PROBE), None)
         .await
@@ -467,7 +467,7 @@ async fn apple_ignored_range_resume_continues_after_discovering_total() {
         }
     })
     .await;
-    let client = AppleNet::new(fast_options(2), pools(), CancelToken::never());
+    let client = HttpClient::new(fast_options(2), pools(), CancelToken::never());
     let stream = client
         .get_range(
             server.url(PROBE),
@@ -491,7 +491,7 @@ async fn apple_open_ended_stream_delivers_chunks() {
     let server =
         serve(|| async { respond(StatusCode::OK, &[], unsized_body(&[b"abc", b"def"])) }).await;
 
-    let client = AppleNet::new(fast_options(0), pools(), CancelToken::never());
+    let client = HttpClient::new(fast_options(0), pools(), CancelToken::never());
     let stream = client
         .stream(server.url(PROBE), None)
         .await
@@ -550,7 +550,7 @@ async fn apple_short_body_yields_before_premature_eof_under_flash() {
     })
     .await;
 
-    let client = AppleNet::new(fast_options(1), pools(), CancelToken::never());
+    let client = HttpClient::new(fast_options(1), pools(), CancelToken::never());
     let stream = client
         .stream(server.url(PROBE), None)
         .await
@@ -580,7 +580,7 @@ async fn apple_stream_head_stall_times_out() {
     let server = serve(|| async { stalled_head() }).await;
     let url = server.url(PROBE);
 
-    let client = AppleNet::new(stream_options(300), pools(), CancelToken::never());
+    let client = HttpClient::new(stream_options(300), pools(), CancelToken::never());
     let result = client.stream(url, None).await;
 
     match result {
@@ -595,7 +595,7 @@ async fn apple_stream_observes_cancellation() {
     let url = server.url(PROBE);
 
     let cancel = CancelToken::root();
-    let client = AppleNet::new(stream_options(5000), pools(), cancel.clone());
+    let client = HttpClient::new(stream_options(5000), pools(), cancel.clone());
     let cancel_task = cancel.clone();
     drop(spawn(async move {
         kithara_platform::time::sleep(Duration::from_millis(50)).await;

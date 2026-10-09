@@ -13,6 +13,7 @@ use syn::{
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
     spanned::Spanned,
+    visit::{self, Visit},
 };
 
 use super::Context;
@@ -26,6 +27,47 @@ use crate::{
     },
     idioms::config::DerivableSeverity,
 };
+
+pub(super) fn check_impls(
+    source: &str,
+    trait_name: &str,
+    predicate: impl Fn(&ItemImpl) -> bool,
+) -> Vec<(String, usize)> {
+    let Ok(file) = syn::parse_file(source) else {
+        return Vec::new();
+    };
+    let mut visitor = DerivableVisitor {
+        trait_name,
+        predicate,
+        findings: Vec::new(),
+    };
+    visitor.visit_file(&file);
+    visitor.findings
+}
+
+struct DerivableVisitor<'name, Predicate> {
+    trait_name: &'name str,
+    predicate: Predicate,
+    findings: Vec<(String, usize)>,
+}
+
+impl<'ast, Predicate: Fn(&ItemImpl) -> bool> Visit<'ast> for DerivableVisitor<'_, Predicate> {
+    fn visit_item_impl(&mut self, implementation: &'ast ItemImpl) {
+        let matches_trait = implementation
+            .trait_
+            .as_ref()
+            .and_then(|(path, _)| path.segments.last())
+            .is_some_and(|segment| segment.ident == self.trait_name);
+        if matches_trait
+            && (self.predicate)(implementation)
+            && let Some(name) = self_ty_name(&implementation.self_ty)
+        {
+            self.findings
+                .push((name, implementation.impl_token.span.start().line));
+        }
+        visit::visit_item_impl(self, implementation);
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Kind {
@@ -995,4 +1037,23 @@ fn coalesce_deref_mut(
         }
     }
     candidates
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_impls;
+
+    #[test]
+    fn visits_nested_impls_in_source_order_with_check_specific_predicates() {
+        let source = "impl Other for Outer {\n fn nested() {\n  impl fmt::Debug for module::Inner {}\n }\n}\n#[custom]\nimpl Debug for Skipped {}\nimpl Debug for Last {}\nimpl Last {}\n";
+        let findings = check_impls(source, "Debug", |implementation| {
+            implementation.attrs.is_empty()
+        });
+        assert_eq!(findings, [("Inner".to_owned(), 3), ("Last".to_owned(), 8)]);
+    }
+
+    #[test]
+    fn ignores_invalid_source() {
+        assert!(check_impls("impl {", "Debug", |_| true).is_empty());
+    }
 }

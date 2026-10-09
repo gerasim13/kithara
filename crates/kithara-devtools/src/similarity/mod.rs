@@ -1,6 +1,7 @@
 mod analysis;
 mod behavior;
 mod catalog;
+mod cfg;
 mod chains;
 mod config;
 mod dependencies;
