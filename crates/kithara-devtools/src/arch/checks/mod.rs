@@ -10,6 +10,7 @@ pub(crate) mod canonical_types;
 pub(crate) mod cfg_density;
 mod context;
 pub(crate) mod dead_exports;
+mod declaration_index;
 pub(crate) mod direction;
 pub(crate) mod duplicate_error_enums;
 pub(crate) mod field_always_constant;

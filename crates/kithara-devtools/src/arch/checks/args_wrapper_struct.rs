@@ -35,17 +35,18 @@ fn emit(
     out: &mut Vec<Violation>,
 ) {
     let empty = Suppressions::default();
-    for (name, info) in &idx.structs {
+    for (identity, info) in &idx.structs {
+        let name = &info.name;
         if info.is_pub {
             continue;
         }
         if info.field_names.len() < min_fields {
             continue;
         }
-        if idx.impl_method_counts.get(name).copied().unwrap_or(0) > 0 {
+        if idx.impl_method_counts.get(identity).copied().unwrap_or(0) > 0 {
             continue;
         }
-        let Some(sites) = idx.literals.get(name) else {
+        let Some(sites) = idx.literals.get(identity) else {
             continue;
         };
         if sites.len() < min_call_sites {
@@ -56,11 +57,14 @@ fn emit(
         };
         let consumes_via_destructure = idx
             .destructuring_consumers
-            .get(name)
+            .get(identity)
             .is_some_and(|set| set.iter().any(|fn_name| fn_name == consumer));
         if !consumes_via_destructure {
             continue;
         }
+        let Some(consumer) = consumer.1.last() else {
+            continue;
+        };
         let sup = idx.suppressions.get(&info.rel).unwrap_or(&empty);
         if sup.is_suppressed(info.line, consts::ID) {
             continue;
@@ -219,5 +223,67 @@ mod tests {
         "#;
         assert_eq!(count(src), 0);
         assert_eq!(count_with(src, 5, 1), 1);
+    }
+
+    #[test]
+    fn same_named_consumers_in_different_modules_are_distinct() {
+        let src = r#"
+            struct Args { a: u32, b: u32, c: u32, d: u32, e: u32 }
+            mod first {
+                use super::Args;
+                fn consume(args: Args) { let Args { a, b, c, d, e } = args; }
+                fn caller() { consume(Args { a:1, b:2, c:3, d:4, e:5 }); }
+            }
+            mod second {
+                use super::Args;
+                fn consume(args: Args) { let Args { a, b, c, d, e } = args; }
+                fn caller() { consume(Args { a:2, b:3, c:4, d:5, e:6 }); }
+            }
+        "#;
+        assert_eq!(count(src), 0);
+    }
+
+    #[test]
+    fn unknown_method_receiver_does_not_prove_a_single_consumer() {
+        let src = r#"
+            struct Args { a: u32, b: u32, c: u32, d: u32, e: u32 }
+            fn consume(args: Args) { let Args { a, b, c, d, e } = args; }
+            fn caller(receiver: Unknown) {
+                receiver.consume(Args { a:1, b:2, c:3, d:4, e:5 });
+                receiver.consume(Args { a:2, b:3, c:4, d:5, e:6 });
+            }
+        "#;
+        assert_eq!(count(src), 0);
+    }
+
+    #[test]
+    fn same_named_impl_does_not_hide_an_unrelated_args_wrapper() {
+        let src = r#"
+            mod first {
+                struct Args { a: u32, b: u32, c: u32, d: u32, e: u32 }
+                impl Args { fn domain_operation(&self) {} }
+            }
+            mod second {
+                struct Args { a: u32, b: u32, c: u32, d: u32, e: u32 }
+                fn consume(args: Args) { let Args { a, b, c, d, e } = args; }
+                fn first() { consume(Args { a:1, b:2, c:3, d:4, e:5 }); }
+                fn second() { consume(Args { a:2, b:3, c:4, d:5, e:6 }); }
+            }
+        "#;
+        assert_eq!(count(src), 1);
+    }
+
+    #[test]
+    fn local_callable_binding_does_not_credit_a_module_function() {
+        let src = r#"
+            struct Args { a: u32, b: u32, c: u32, d: u32, e: u32 }
+            fn consume(args: Args) { let Args { a, b, c, d, e } = args; }
+            fn caller() {
+                let consume = |_: Args| {};
+                consume(Args { a:1, b:2, c:3, d:4, e:5 });
+                consume(Args { a:2, b:3, c:4, d:5, e:6 });
+            }
+        "#;
+        assert_eq!(count(src), 0);
     }
 }
