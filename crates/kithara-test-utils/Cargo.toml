@@ -17,6 +17,9 @@ http-server = ["dep:axum", "kithara-platform/tokio-net"]
 # Temporary-directory fixtures.
 temp-dir = ["dep:tempfile"]
 mock = ["dep:unimock"]
+# One spinning thread per CPU for the body of every `#[kithara::test]`;
+# enabled by `just test run --load=on`.
+load = []
 no-block = ["kithara-platform/no-block"]
 # The test log subscriber on wasm32, where `test::setup_tracing*` exist only
 # with it. Native builds always carry the subscriber.

@@ -61,6 +61,7 @@ pub(crate) fn run(params: &MatrixParams, project: &ProjectConfig) -> Result<()> 
                     toggles: LaneToggles {
                         flash: lane.flash,
                         no_block: false,
+                        load: false,
                     },
                 },
             )?;

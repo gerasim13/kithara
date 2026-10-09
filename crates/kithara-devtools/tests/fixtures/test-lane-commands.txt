@@ -32,11 +32,11 @@
 # tools [-E test(seek)]
   cargo nextest run -p demo-tools --features base-feature -E test(seek)
 # typed []
-  cargo nextest run -p demo -p demo-tests --cargo-profile test-release --lib --test suite --features base-feature,demo/native-net,nb-detect,virtual-time --test-threads 1 --ignore-default-filter -E test(fast)
+  cargo nextest run -p demo -p demo-tests --cargo-profile test-release --lib --test suite --features base-feature,cpu-load,demo/native-net,nb-detect,virtual-time --test-threads 1 --ignore-default-filter -E test(fast)
     DEMO_MODE=strict
 # typed [--profile ci --timings]
-  cargo nextest run -p demo -p demo-tests --cargo-profile test-release --lib --test suite --features base-feature,demo/native-net,nb-detect,virtual-time --test-threads 1 --ignore-default-filter -E test(fast) --profile ci --timings
+  cargo nextest run -p demo -p demo-tests --cargo-profile test-release --lib --test suite --features base-feature,cpu-load,demo/native-net,nb-detect,virtual-time --test-threads 1 --ignore-default-filter -E test(fast) --profile ci --timings
     DEMO_MODE=strict
 # typed [-E test(seek)]
-  cargo nextest run -p demo -p demo-tests --cargo-profile test-release --lib --test suite --features base-feature,demo/native-net,nb-detect,virtual-time --test-threads 1 --ignore-default-filter -E '(test(fast)) & ((test(seek)))'
+  cargo nextest run -p demo -p demo-tests --cargo-profile test-release --lib --test suite --features base-feature,cpu-load,demo/native-net,nb-detect,virtual-time --test-threads 1 --ignore-default-filter -E '(test(fast)) & ((test(seek)))'
     DEMO_MODE=strict

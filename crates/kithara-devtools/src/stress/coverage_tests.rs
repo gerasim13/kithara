@@ -246,8 +246,12 @@ fn every_engine_domain_is_stressed_or_covered_with_its_features() {
     let project = ProjectConfig::load(&root()).expect("load repository config");
     let metadata = this_workspace();
     let (test, stress) = (&project.test, &project.stress);
-    let resolved = |lane: &str, flash: Option<bool>, no_block: Option<bool>| {
-        resolve(test, &toggled(test, lane, flash, no_block).expect("lane")).expect("resolve")
+    let resolved = |lane: &str, flash: Option<bool>, no_block: Option<bool>, load: Option<bool>| {
+        resolve(
+            test,
+            &toggled(test, lane, flash, no_block, load).expect("lane"),
+        )
+        .expect("resolve")
     };
     let mut failures = Vec::new();
     if stress.default_filter != "all()" {
@@ -282,7 +286,7 @@ fn every_engine_domain_is_stressed_or_covered_with_its_features() {
     for (name, within) in &candidates {
         if !within.is_empty() {
             own.insert(*name, lanes.len());
-            lanes.push(resolved(name, None, None));
+            lanes.push(resolved(name, None, None, None));
         }
     }
     let mut units = BTreeMap::<&str, Vec<(&str, usize)>>::new();
@@ -295,7 +299,7 @@ fn every_engine_domain_is_stressed_or_covered_with_its_features() {
             let mode = &stress.modes[name];
             if mode.command.is_empty() {
                 indices.push((name.as_str(), lanes.len()));
-                lanes.push(resolved(stressed, mode.flash, mode.no_block));
+                lanes.push(resolved(stressed, mode.flash, mode.no_block, mode.load));
             }
         }
         units.insert(stressed.as_str(), indices);

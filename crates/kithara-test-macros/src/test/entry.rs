@@ -16,7 +16,7 @@ use super::{
     parse::TestArgs,
     shared::{
         finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_serial_attr,
-        make_sync_test_attrs, make_tracing_init, make_wasm_serial_guard, wrap_with_timeout,
+        make_sync_test_attrs, make_test_setup, make_wasm_serial_guard, wrap_with_timeout,
     },
 };
 
@@ -104,12 +104,12 @@ fn generate_wasm_only(ctx: &GenCtx<'_>) -> TokenStream2 {
 
     let emit = |name: &Ident, case_values: Option<&[Expr]>| -> TokenStream2 {
         let preamble = make_preamble(ctx.params, case_values);
-        let tracing_init = make_tracing_init(ctx.args, ctx.remaining_attrs);
+        let test_setup = make_test_setup(ctx.args, ctx.remaining_attrs);
         // wasm emission: no per-poll `with_ambient`, the body-held scope is
         // the sole ambient writer — KEEP it.
         let ambient = make_ambient_stmt(ctx.args);
         let body_stmts = ctx.body_stmts;
-        let full = quote! { { #tracing_init #preamble #ambient #(#body_stmts)* } };
+        let full = quote! { { #test_setup #preamble #ambient #(#body_stmts)* } };
         let with_timeout = wrap_with_timeout(&full, &ctx.args.timeout, true, name);
         let wrapped = finalize_body(&with_timeout, ctx.args, name, true);
         let serial_guard = make_wasm_serial_guard(ctx.args);
@@ -146,13 +146,13 @@ fn generate_native_only(ctx: &GenCtx<'_>) -> TokenStream2 {
 
     let mut emit_one = |name: &Ident, case_values: Option<&[Expr]>| {
         let preamble = make_preamble(ctx.params, case_values);
-        let tracing_init = make_tracing_init(ctx.args, ctx.remaining_attrs);
+        let test_setup = make_test_setup(ctx.args, ctx.remaining_attrs);
         let ambient = make_ambient_stmt(ctx.args);
         let body_stmts = ctx.body_stmts;
         // Plain body for the async-native branches (sole ambient holder there
         // is the per-poll `with_ambient`); held body for the sync branch.
-        let full_plain = quote! { #tracing_init #preamble #(#body_stmts)* };
-        let full_held = quote! { #tracing_init #preamble #ambient #(#body_stmts)* };
+        let full_plain = quote! { #preamble #(#body_stmts)* };
+        let full_held = quote! { #test_setup #preamble #ambient #(#body_stmts)* };
         tests.extend(emit_native_only_one(
             ctx,
             name,
@@ -300,6 +300,36 @@ mod tests {
 
         assert!(expanded.contains("async fn contract"));
         assert!(expanded.contains("wasm_serial_guard"));
+        Ok(())
+    }
+
+    #[test]
+    fn every_emitted_test_starts_its_load_once() -> syn::Result<()> {
+        for (attrs, source) in [
+            ("", "fn contract() {}"),
+            ("", "async fn contract() {}"),
+            ("tokio", "async fn contract() {}"),
+            (
+                "tokio, timeout(std::time::Duration::from_secs(5))",
+                "async fn contract() {}",
+            ),
+            ("tokio, native", "async fn contract() {}"),
+            (
+                "tokio, native, timeout(std::time::Duration::from_secs(5))",
+                "async fn contract() {}",
+            ),
+            ("browser", "async fn contract() {}"),
+        ] {
+            let args = syn::parse_str::<TestArgs>(attrs)?;
+            let function = syn::parse_str(source)?;
+
+            let expanded = generate(args, function)?.to_string();
+            assert_eq!(
+                expanded.matches("LoadGuard").count(),
+                expanded.matches("fn contract").count(),
+                "`{attrs}` `{source}` must start the load once per emitted test: {expanded}"
+            );
+        }
         Ok(())
     }
 
