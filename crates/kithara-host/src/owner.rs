@@ -22,7 +22,7 @@ use crate::{
     HostSettingsChange, HostSettingsExec,
     session::{
         SessionError,
-        decks::{Deck, DeckInbox, DeckWake, Decks},
+        decks::{Deck, DeckInbox, DeckMsg, DeckWake, Decks},
         dispatch::tick_session,
         graph,
         state::{SessionState, SessionStream},
@@ -78,11 +78,11 @@ pub trait HostOwner<S>:
     fn release_id(command: &Self::Command) -> Option<DeckId>;
     /// Identifies consecutive next-block tempo posts that share one winner.
     fn is_next_tempo(command: &Self::Command) -> bool;
-    /// Settles executor answers, drives decks, and publishes the owner snapshot.
+    /// Settles executor receipts and publishes the owner snapshot.
     fn pass(&mut self) -> Vec<HostSettled>;
 }
 
-/// One operation on the canonical owner, answered through its receipt.
+/// One operation on the canonical owner, answered after checks and sending.
 pub enum HostCommand<S, D: ?Sized> {
     Register {
         id: DeckId,
@@ -109,7 +109,6 @@ pub enum HostCommand<S, D: ?Sized> {
         tap: crate::api::Tap,
     },
     Restart,
-    Idle,
     #[doc(hidden)]
     _Marker(PhantomData<fn() -> S>),
 }
@@ -124,10 +123,6 @@ pub enum HostSettled {
     Batch {
         seq: Seq,
         outcome: Result<SessionFrame, Rejection<PlayError>>,
-    },
-    Replanned {
-        from: Seq,
-        to: Seq,
     },
     Closed {
         deck: DeckId,
@@ -185,21 +180,14 @@ where
             .close(record.scope)
             .map_err(|error| PlayError::Internal(error.to_string()))?;
         record.releasing = true;
+        if self.decks.0.iter().all(|(_, record)| record.releasing) {
+            graph::idle(&mut self.session)?;
+        }
         Ok(())
     }
 
     fn release(&mut self, id: DeckId) -> Result<(), PlayError> {
         self.close(id)
-    }
-
-    fn idle(&mut self) -> Result<(), PlayError> {
-        if self.decks.0.is_empty() {
-            graph::idle(&mut self.session).map_err(Into::into)
-        } else {
-            crate::session::transport::prepare_route_restart(&mut self.session)
-                .map(|_| ())
-                .map_err(Into::into)
-        }
     }
 
     fn restart(&mut self) -> Result<(), PlayError> {
@@ -307,7 +295,6 @@ where
                 Ok(None)
             }
             HostCommand::Restart => self.restart().map(|()| None),
-            HostCommand::Idle => self.idle().map(|()| None),
             HostCommand::_Marker(_) => Err(PlayError::Internal(
                 "a marker is not an owner command".to_owned(),
             )),
@@ -319,12 +306,33 @@ where
             return Err(SessionError::DeckAttached(id).into());
         }
         crate::session::state::ensure_ctx(&mut self.session)?;
+        let prep = deck.resource_prep();
+        if let Some(prep) = prep
+            && let Some(quantum) = prep.warp.render_quantum_frames()
+        {
+            let shape = self
+                .session
+                .root_view
+                .output
+                .get()
+                .stream_shape
+                .ok_or(SessionError::NoContext)?;
+            if let Err(error) = shape.playback_buffers(quantum, prep.response_budget_frames) {
+                if self.decks.0.is_empty() {
+                    graph::idle(&mut self.session)?;
+                    graph::drop_idle_context(&mut self.session)?;
+                }
+                return Err(error.into());
+            }
+        }
+        let bus = prep.map(|prep| prep.bus.clone());
         let worker = deck.worker().ok_or_else(|| {
             PlayError::Internal("a hosted deck requires its resource worker".into())
         })?;
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.session.worker_wake_allowance.is_zero() {
-            self.session.worker_wake_allowance = worker.wake_allowance();
+        if let Some(delay) = &mut self.session.delivery_delay {
+            *delay = (*delay).max(
+                crate::consts::SESSION_PUMP_INTERVAL.saturating_add(worker.wake_allowance()),
+            );
         }
         let pools = worker.pools().clone();
         if let Some(inbox) = self.dispatcher_inbox.take() {
@@ -342,7 +350,7 @@ where
             .open(deck.mixer_config().slots().get())
             .map_err(|error| PlayError::Internal(error.to_string()))?;
         let (mut record, inputs) = Deck::new(deck, scope)?;
-        if let Err(error) = graph::install_deck(&mut self.session, id, inputs, pools) {
+        if let Err(error) = graph::install_deck(&mut self.session, id, inputs, pools, bus) {
             if let Some(channel) = &mut self.session.channel {
                 let _ = channel.close(scope);
             }
@@ -350,12 +358,8 @@ where
             self.decks.0.push((id, record));
             return Err(error.into());
         }
-        let waker = DeckWake::waker(&self.inbox, id);
-        record.deck.hold(waker.clone());
-        self.dispatcher.hold(waker.clone());
-        if let Some(channel) = &mut self.session.channel {
-            channel.hold(waker);
-        }
+        record.deck.hold(DeckWake::waker(&self.inbox, DeckMsg::Drain(id)));
+        self.dispatcher.hold(DeckWake::waker(&self.inbox, DeckMsg::Receipts));
         self.decks.0.push((id, record));
         self.with_deck(id, &mut |deck, out, pass| deck.drain(pass, out))?;
         Ok(())
@@ -592,18 +596,12 @@ where
         }
         self.retire_stopped_scopes();
         self.route_receipts(now, delivery);
+        self.poll_events();
     }
 
     fn pass(&mut self) -> Vec<HostSettled> {
         if let Err(error) = tick_session(&mut self.session) {
             tracing::warn!(%error, "host graph pass failed");
-        }
-        if self.clock().is_some() {
-            self.poll_events();
-            self.each_deck(&mut |_, deck, out, pass| {
-                deck.drain(pass, out);
-                deck.tick(pass, out);
-            });
         }
         self.publish_root();
         if let Some(channel) = &mut self.session.channel
@@ -725,7 +723,7 @@ where
                         continue;
                     };
                     let id = self.decks.0[index].0;
-                    if self.session.deck_nodes.iter().any(|(deck, _)| *deck == id)
+                    if self.session.deck_nodes.iter().any(|deck| deck.id == id)
                         && let Err(error) = graph::remove_deck(&mut self.session, id)
                     {
                         tracing::error!(%error, ?id, "closed deck node could not be reclaimed");

@@ -10,7 +10,12 @@ use kithara_play::{
 };
 use kithara_signal::{AudioSpec, FrameCount, SessionFrame};
 
-use super::{Queue, Transition, command::play_error, slots::Role, types::Target};
+use super::{
+    Queue, Transition,
+    command::play_error,
+    slots::{LoadState, Role},
+    types::Target,
+};
 use crate::{ActionAtItemEnd, AdvanceReason, QueueError, QueueEvent, RepeatMode, TrackStatus};
 
 impl<S, F> Queue<S, F>
@@ -61,6 +66,7 @@ where
         };
         self.cancel_target(out)?;
         self.target = Some(Target {
+            playing: true,
             to: id,
             bound,
             settings,
@@ -114,7 +120,8 @@ where
             return Ok(None);
         };
         if !matches!(active.role, Role::Incoming { batch: None })
-            || (active.load.is_some() && !self.active.is_replacement(index))
+            || (matches!(active.load, Some(LoadState::Opening(_)))
+                && !self.active.is_replacement(index))
         {
             return Ok(None);
         }
@@ -130,17 +137,26 @@ where
                 return Ok(None);
             }
             if let Some(target) = &mut self.target {
-                target.retry = Some(load);
+                target.retry = Some(load.seq());
             }
+        }
+        if !target.playing {
+            let sent = self
+                .active
+                .get_mut(index)
+                .ok_or(PlayError::NoActiveSlot)?
+                .track
+                .apply(TrackCommand::Pause { at: When::Next }, out)?;
+            if sent.is_none() {
+                self.enter_target(index, self.earliest()?)?;
+            }
+            return Ok(sent);
         }
         let Some(frame) = self.transition_entry(index, target.bound)? else {
             return Ok(None);
         };
         let sent = self.send_transition(index, frame, out)?;
-        if let Some(sent) = sent
-            && let Some(previous) = self.target.and_then(|target| target.retry)
-        {
-            self.retarget_answers(previous, sent);
+        if sent.is_some() {
             if let Some(target) = &mut self.target {
                 target.retry = None;
             }
@@ -148,26 +164,32 @@ where
         Ok(sent)
     }
 
-    fn finish_load(&mut self, index: usize) -> Result<bool, PlayError> {
-        let active = self.active.get_mut(index).ok_or(PlayError::NoActiveSlot)?;
+    pub(super) fn accept_load(&mut self, index: usize, seq: Seq) {
+        let Some(active) = self.active.get_mut(index) else {
+            return;
+        };
         let id = active.item;
         let metadata = active.track.snapshot().as_ref().metadata.clone();
-        active.load = None;
+        active.load = Some(LoadState::Attaching(seq));
         if !self.tracks.loaded(id, &metadata) {
-            return Ok(false);
+            return;
         }
-        if let Some(position) = self
-            .tracks
-            .records()
-            .iter()
-            .position(|record| record.id == id)
-        {
+        if let Some(position) = self.tracks.records().iter().position(|record| record.id == id) {
             self.announce(QueueEvent::NextTrackReady {
                 id,
                 index: position,
             });
         }
-        Ok(true)
+    }
+
+    fn finish_load(&mut self, index: usize) -> Result<bool, PlayError> {
+        let active = self.active.get_mut(index).ok_or(PlayError::NoActiveSlot)?;
+        active.load = None;
+        Ok(self
+            .tracks
+            .records()
+            .iter()
+            .any(|record| record.id == active.item && record.status != TrackStatus::Cancelled))
     }
 
     /// Step 3: a deadline entry may not precede what this pass can deliver.
@@ -302,6 +324,11 @@ where
         {
             return Ok(());
         }
+        self.enter_target(index, at)
+    }
+
+    fn enter_target(&mut self, index: usize, at: SessionFrame) -> Result<(), PlayError> {
+        let target = self.target.ok_or(PlayError::NotReady)?;
         if let Some(current) = self.active_current_index() {
             let slot = self
                 .active
@@ -332,7 +359,7 @@ where
             id: self.current,
             reason: target.reason,
         });
-        if target.settings.duration > 0.0 && !target.chained {
+        if target.playing && target.settings.duration > 0.0 && !target.chained {
             self.announce(QueueEvent::CrossfadeStarted {
                 settings: target.settings,
             });
@@ -376,12 +403,10 @@ where
             }
             return Ok(());
         }
-        if active.load == Some(seq) {
+        if active.load.is_some_and(|load| load.seq() == seq) {
             let id = active.item;
             if applied && self.finish_load(index)? {
-                if let Some(sent) = self.transition_loaded(out)? {
-                    self.retarget_answers(seq, sent);
-                }
+                self.transition_loaded(out)?;
             } else if !applied {
                 self.active
                     .get_mut(index)
@@ -390,7 +415,10 @@ where
                 if let Settled::Rejected { reason, .. } = settled
                     && self.tracks.records().iter().any(|record| {
                         record.id == id
-                            && matches!(record.status, TrackStatus::Loading | TrackStatus::Slow)
+                            && matches!(
+                                record.status,
+                                TrackStatus::Loading | TrackStatus::Slow | TrackStatus::Loaded
+                            )
                     })
                 {
                     let error = QueueError::Play(super::hosted::refusal(reason));
@@ -418,6 +446,23 @@ where
                     reason: Rejection::Stale,
                     ..
                 } => {
+                    if self.target.is_some_and(|target| !target.playing) {
+                        self.active.get_mut(index).ok_or(PlayError::NoActiveSlot)?.role =
+                            Role::Incoming { batch: None };
+                        if matches!(
+                            self.active
+                                .get(index)
+                                .ok_or(PlayError::NoActiveSlot)?
+                                .track
+                                .snapshot()
+                                .as_ref()
+                                .status,
+                            PlayingStatus::Paused { .. }
+                        ) {
+                            self.target.as_mut().ok_or(PlayError::NotReady)?.stale = None;
+                        }
+                        return Ok(());
+                    }
                     let target = self.target.as_mut().ok_or(PlayError::NotReady)?;
                     target.stale = None;
                     target.settings = target.transition.settings(self.config.settings.crossfade());
@@ -448,6 +493,14 @@ where
                 }
             }
             return Ok(());
+        }
+        if applied
+            && self.target.is_some_and(|target| !target.playing && target.stale.is_some())
+            && active.role == (Role::Incoming { batch: None })
+            && matches!(active.track.snapshot().as_ref().status, PlayingStatus::Paused { .. })
+        {
+            self.target.as_mut().ok_or(PlayError::NotReady)?.stale = None;
+            return self.enter_target(index, self.earliest()?);
         }
         match settled {
             Settled::Applied { at, .. } => self.transition_applied(seq, *at),
@@ -499,23 +552,12 @@ where
             self.target = None;
             return Ok(());
         }
-        let seq = if let Some(index) = self.incoming_index(target.to) {
-            let seq = self.active.get(index).and_then(|active| match active.role {
-                Role::Incoming { batch } => batch.or(active.load),
-                _ => None,
-            });
+        if let Some(index) = self.incoming_index(target.to) {
             self.release_track(index, out)?;
-            seq
-        } else {
-            None
         }
-        .or(target.retry);
         self.tracks.set_status(target.to, TrackStatus::Cancelled);
         self.target = None;
         self.reap_released();
-        if let Some(seq) = seq {
-            self.finish_answers(seq, Err(PlayError::NotReady));
-        }
         Ok(())
     }
 
@@ -647,7 +689,7 @@ where
         Ok(())
     }
 
-    fn incoming_index(&self, id: TrackId) -> Option<usize> {
+    pub(super) fn incoming_index(&self, id: TrackId) -> Option<usize> {
         self.active
             .position(|active| active.item == id && matches!(active.role, Role::Incoming { .. }))
     }
@@ -662,10 +704,10 @@ where
         if out.deck_available() == 0 {
             return Err(PlayError::Full("deck"));
         }
-        let previous = self.target.and_then(|target| target.retry);
         let seq = self.repeat_segment(out)?;
         let to = self.current.ok_or(PlayError::NoActiveSlot)?;
         self.target = Some(Target {
+            playing: true,
             to,
             bound: Bound::AtOrBefore(end),
             settings: Transition::None.settings(self.config.settings.crossfade()),
@@ -677,9 +719,6 @@ where
             repeat: Some(seq),
             chained: false,
         });
-        if let Some(previous) = previous {
-            self.retarget_answers(previous, seq);
-        }
         Ok(())
     }
 
@@ -705,32 +744,17 @@ where
 
     fn loaded_tracks(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError> {
         let ready = self.active.indices(|active| {
-            active.load.is_some()
+            matches!(active.load, Some(LoadState::Attaching(_)))
                 && matches!(
                     active.track.snapshot().as_ref().status,
                     PlayingStatus::Loaded | PlayingStatus::Paused { .. }
                 )
         });
         for index in ready {
-            let Some(active) = self.active.get_mut(index) else {
-                continue;
-            };
-            let previous = active.load.take();
-            let id = active.item;
-            let metadata = active.track.snapshot().as_ref().metadata.clone();
-            if self.tracks.loaded(id, &metadata)
-                && let Some(index) = self
-                    .tracks
-                    .records()
-                    .iter()
-                    .position(|record| record.id == id)
-            {
-                self.announce(QueueEvent::NextTrackReady { id, index });
-            }
-            if let Some(previous) = previous
-                && let Some(sent) = self.transition_loaded(out)?
-            {
-                self.retarget_answers(previous, sent);
+            if self.finish_load(index)? {
+                self.transition_loaded(out)?;
+            } else {
+                self.cancel_target(out).map_err(play_error)?;
             }
         }
         Ok(())

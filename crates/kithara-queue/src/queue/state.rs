@@ -1,8 +1,8 @@
 use kithara_bufpool::HasPool;
-use kithara_command::{Answer, Seq, mailbox};
+use kithara_command::mailbox;
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::{CancelScope, CancelToken, tokio::runtime::Handle as RuntimeHandle};
-use kithara_play::{DeckSnapshot, PlayError, PlayerFactory, TrackFactory};
+use kithara_play::{DeckSnapshot, PlayError, PlayerFactory, Position, TrackFactory};
 use kithara_signal::{FrameCount, SessionFrame};
 
 use super::{
@@ -12,10 +12,12 @@ use super::{
     view::QueueView,
 };
 use crate::{
-    QueueConfig, QueueError, QueueEvent, loader::Loader, navigation::NavigationState, track::Tracks,
+    QueueConfig, QueueEvent, loader::Loader, navigation::NavigationState, track::Tracks,
 };
 
 /// Cloneable command capability and the queue's published state.
+/// Commands answer after the owner accepts and sends them; executor effects
+/// enter the published state on their receipts.
 #[derive_where::derive_where(Clone)]
 pub struct QueueControl<S>
 where
@@ -36,6 +38,7 @@ where
     pub(super) tracks: Tracks<S>,
     pub(super) navigation: NavigationState,
     pub(super) current: Option<TrackId>,
+    pub(super) held_position: Option<Position>,
     pub(super) target: Option<Target>,
     pub(super) active: Slots<F::Track>,
     pub(super) postbox: QueuePostbox<S>,
@@ -45,7 +48,6 @@ where
     pub(super) loader: Option<Loader<S>>,
     pub(super) shutdown: CancelToken,
     pub(super) events: Vec<QueueEvent>,
-    pub(super) answers: Vec<(Seq, Answer<QueueError>)>,
     pub(super) clock: Option<(SessionFrame, FrameCount)>,
     pub(super) deck: DeckSnapshot,
 }
@@ -95,6 +97,7 @@ where
             tracks,
             navigation,
             current: None,
+            held_position: None,
             target: None,
             postbox,
             mailbox,
@@ -103,7 +106,6 @@ where
             loader,
             shutdown,
             events: Vec::new(),
-            answers: Vec::new(),
             clock: None,
             deck: DeckSnapshot::default(),
         }

@@ -3,6 +3,7 @@
 use std::{num::NonZeroU32, sync::Mutex};
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     audio::mock::TestPcmReader,
     host::{
         HostConfig, HostOwned, HostSettings, HostSettingsChange, HostSettingsControl,
@@ -30,6 +31,7 @@ use kithara_test_fixtures::{
     signal::peak,
 };
 use kithara_test_utils::bufpool::{TestPools, pools};
+use kithara_test_utils::TestTempDir;
 use num_traits::AsPrimitive;
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -56,6 +58,7 @@ struct MixHarness {
     host: OfflineHostHarness<TestPools>,
     players: Vec<HostOwned<Queue<TestPools>>>,
     pcm_decks: Mutex<Vec<PcmDeck>>,
+    _store_dir: TestTempDir,
 }
 
 impl MixHarness {
@@ -63,6 +66,10 @@ impl MixHarness {
     // each player's first slot.
     async fn new(count: usize) -> Self {
         let pools = pools();
+        let store_dir = TestTempDir::new();
+        let store = AssetStore::builder(pools.clone())
+            .backend(StorageBackend::Disk { root: store_dir.path().to_path_buf() })
+            .build();
         let sample_rate = NonZeroU32::new(SAMPLE_RATE).expect("fixture sample rate is non-zero");
         let host = OfflineHostHarness::new(
             HostConfig::offline(pools.clone())
@@ -74,6 +81,7 @@ impl MixHarness {
         let mut players = Vec::with_capacity(count);
         for _ in 0..count {
             let config = QueueConfig::builder()
+                .store(store.clone())
                 .prep(ResourcePrep::builder()
                     .worker(PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build()))
                     .build())
@@ -84,7 +92,7 @@ impl MixHarness {
                 .build();
             players.push(host.insert(Queue::new(config)).await.expect("insert deck"));
         }
-        Self { host, players, pcm_decks: Mutex::new(Vec::new()) }
+        Self { host, players, pcm_decks: Mutex::new(Vec::new()), _store_dir: store_dir }
     }
 
     async fn set_ducking(&self, mode: SessionDuckingMode) {
@@ -113,13 +121,25 @@ impl MixHarness {
         let decks: Vec<_> = readers.into_iter().map(|reader| PcmDeck::new(Box::new(reader))).collect();
         let sources: Vec<_> = decks.iter().map(PcmDeck::source).collect();
         self.pcm_decks.lock().expect("PCM deck retention").extend(decks);
-        self.host.run(move || {
+        let selected = self.host.run(move || {
+            let mut selected = Vec::new();
             for (player, source) in players.iter().zip(sources) {
                 let id = player.append(source).expect("append PCM deck");
                 player.select(id, Transition::None).expect("select PCM deck");
                 player.play();
+                selected.push((player.clone(), id));
             }
+            selected
         }).await;
+        for (player, id) in selected {
+            kithara_integration_tests::waits::wait_for_loader_done(
+                &player,
+                id,
+                Duration::from_secs(30),
+            )
+            .await
+            .expect("PCM deck loads before the first render");
+        }
     }
 
     // Removing every item empties the deck; the Host still holds it.
@@ -182,10 +202,11 @@ impl MixHarness {
     }
 
     async fn close(self) {
-        let Self { host, players, pcm_decks } = self;
+        let Self { host, players, pcm_decks, _store_dir } = self;
         drop(players);
         host.close().await;
         drop(pcm_decks);
+        drop(_store_dir);
     }
 }
 

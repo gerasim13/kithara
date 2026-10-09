@@ -99,7 +99,8 @@ impl<S, O: HostOwner<S>> Host<S, O> {
         }
     }
 
-    /// Posts an owner command and returns the receipt number without waiting.
+    /// Posts an owner command and returns its ticket number without waiting.
+    /// The owner answers after checks and sending; effects publish on receipts.
     pub fn send(&self, command: O::Command) -> Result<Seq, PlayError> {
         self.dispatcher
             .dispatch(command)
@@ -169,6 +170,10 @@ impl<S, O: HostOwner<S>> Host<S, O> {
     }
 
     /// Closes and releases a deck on the canonical owner thread.
+    ///
+    /// Removing the last live deck stops the output and settles without a render.
+    /// On an offline session, removing a non-last deck waits for the next render
+    /// to apply its close on the processor.
     pub fn remove<D: DeckControl>(&mut self, deck: &HostOwned<D>) -> Result<(), PlayError> {
         self.validate_removal(deck)?;
         self.ask(HostCommand::Release(deck.id()))
@@ -264,6 +269,8 @@ impl<S, O: HostOwner<S>> Configure<HostSettingsChange> for Host<S, O> {
     type Config = HostSettings;
     type Error = PlayError;
     type Output = ();
+    /// Answers after the owner accepts and sends the change.
+    /// Settings remain confirmed state, published on the executor receipt.
     fn configure(&self, change: HostSettingsChange, at: Self::At) -> Result<(), PlayError> {
         self.ask(HostCommand::Configure(change, at))
     }

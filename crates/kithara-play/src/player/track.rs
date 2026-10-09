@@ -1095,6 +1095,13 @@ impl<S> Player<S> for PlayerImpl<S> {
                 if !self.attached() {
                     return Ok(None);
                 }
+                if matches!(at, When::Next)
+                    && matches!(self.status, TrackStatus::Loaded | TrackStatus::Paused { .. })
+                    && self.playback_commands.is_empty()
+                {
+                    self.status = TrackStatus::Paused { at: self.position };
+                    return Ok(None);
+                }
                 self.send_playback(
                     at,
                     vec![DeckPart::Stop {
@@ -1104,7 +1111,13 @@ impl<S> Player<S> for PlayerImpl<S> {
                     out,
                 )
             }
-            TrackCommand::Seek { to } => self.segment(to, None, out),
+            TrackCommand::Seek { to } => {
+                if self.status == TrackStatus::Idle {
+                    self.position = to;
+                    return Ok(None);
+                }
+                self.segment(to, None, out)
+            }
             TrackCommand::SetHostRate { rate } => self.segment(self.position, Some(rate), out),
             TrackCommand::Jump { to, at } => {
                 let start = i64::from(at)

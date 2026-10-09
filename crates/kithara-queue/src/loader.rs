@@ -228,6 +228,7 @@ pub(crate) fn asks_again(refusal: &LoadRefusal) -> bool {
         LoadRefusal::Open(error) => can_answer_later(error),
         LoadRefusal::Capacity { .. }
         | LoadRefusal::Cancelled
+        | LoadRefusal::NoRuntime
         | LoadRefusal::Pool(_)
         | LoadRefusal::Source(_) => false,
     }

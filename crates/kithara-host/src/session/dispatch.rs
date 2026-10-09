@@ -3,7 +3,9 @@ use std::num::NonZeroU32;
 use firewheel::{FirewheelContext, error::UpdateError};
 use kithara_command::{Answer, Post, Seq};
 use kithara_config::ConfigOwner;
-use kithara_play::{PlayError, StreamShape};
+use kithara_play::{
+    HostedDeck, PlayError, RouteChangeReason, RouteDescription, SessionEvent, StreamShape,
+};
 use tracing::{debug, trace, warn};
 
 use super::{
@@ -20,18 +22,14 @@ pub(crate) fn run_host_cmd<S, O: HostOwner<S>>(
     owner.apply(command)
 }
 
-/// Pending ticket answers belong to the owner, not to a second deck dispatcher.
+/// Only membership release waits for an executor receipt.
 pub(crate) struct OwnerPosts {
-    pending: Vec<(Seq, Answer<PlayError>)>,
     closing: Vec<(DeckId, Answer<PlayError>)>,
 }
 
 impl OwnerPosts {
     pub(crate) fn new() -> Self {
-        Self {
-            pending: Vec::new(),
-            closing: Vec::new(),
-        }
+        Self { closing: Vec::new() }
     }
     pub(crate) fn drain<S, O: HostOwner<S>>(
         &mut self,
@@ -55,7 +53,6 @@ impl OwnerPosts {
                         self.closing.push((id, answer));
                     }
                 }
-                Ok(Some(seq)) => self.pending.push((seq, answer)),
                 outcome => answer.answer(outcome.map(|_| ())),
             }
         }
@@ -65,9 +62,12 @@ impl OwnerPosts {
         mailbox.drain().collect()
     }
 
-    pub(crate) fn pass<S, O: HostOwner<S>>(&mut self, owner: &mut O) {
+    pub(crate) fn pass<S, O: HostOwner<S>>(&mut self, owner: &mut O, tick: bool) {
+        if tick && owner.clock().is_some() {
+            owner.each_deck(&mut |_, deck, out, pass| deck.tick(pass, out));
+        }
         let settled = owner.pass();
-        if !self.pending.is_empty() || !self.closing.is_empty() {
+        if !self.closing.is_empty() {
             self.settle(settled);
         }
     }
@@ -75,25 +75,6 @@ impl OwnerPosts {
     fn settle(&mut self, settled: Vec<HostSettled>) {
         for settled in settled {
             match settled {
-                HostSettled::Replanned { from, to } => {
-                    if let Some((seq, _)) = self.pending.iter_mut().find(|(seq, _)| *seq == from) {
-                        *seq = to;
-                    }
-                }
-                HostSettled::Settings { seq, outcome, .. }
-                | HostSettled::Batch { seq, outcome } => {
-                    if let Some(index) = self.pending.iter().position(|(held, _)| *held == seq) {
-                        let (_, answer) = self.pending.remove(index);
-                        answer.answer(outcome.map(|_| ()).map_err(|reason| match reason {
-                            kithara_command::Rejection::Late => PlayError::Late,
-                            kithara_command::Rejection::Stale => {
-                                PlayError::Internal("owner batch basis is stale".into())
-                            }
-                            kithara_command::Rejection::Unanswered => PlayError::Closed,
-                            kithara_command::Rejection::Refused(error) => error,
-                        }));
-                    }
-                }
                 HostSettled::Closed { deck } => {
                     let mut index = 0;
                     while index < self.closing.len() {
@@ -105,6 +86,7 @@ impl OwnerPosts {
                         }
                     }
                 }
+                HostSettled::Settings { .. } | HostSettled::Batch { .. } => {}
             }
         }
     }
@@ -208,7 +190,16 @@ pub(crate) fn invalidate_audio_route<T, S>(
     restart_stream(state).map_err(|err| SessionError::RestartFailed {
         reason: reason.to_owned(),
         r#source: err.to_string(),
-    })
+    })?;
+    for deck in &state.deck_nodes {
+        if let Some(bus) = &deck.bus {
+            bus.publish(SessionEvent::RouteChanged {
+                reason: RouteChangeReason::Unknown,
+                previous_route: RouteDescription::default(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Restarts the output at the rate the settings ask for.

@@ -3,7 +3,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use kithara_bufpool::PoolRegion;
 use kithara_config::Config;
 use kithara_derive::Patch;
-use kithara_platform::{CancelToken, time::Duration};
+use kithara_platform::{CancelToken, time::Duration, tokio::runtime::Handle};
 use kithara_worker::Worker;
 
 use crate::consts;
@@ -62,6 +62,14 @@ pub struct PlayWorkerConfig<S> {
     /// key: a live worker is an object only code can hand over.
     #[config(skip = "transferred to the playback worker", patch(skip))]
     pub(crate) worker: Option<Worker>,
+    /// Runtime for source opens and lane commands; defaults to the ambient runtime.
+    /// When sharing a base worker, that worker's runtime is used instead.
+    #[config(
+        skip = "transferred to the base worker",
+        builder(required, default = Handle::try_current().ok()),
+        patch(skip)
+    )]
+    pub(crate) runtime: Option<Handle>,
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

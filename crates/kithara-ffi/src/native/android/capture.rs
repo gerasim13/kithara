@@ -93,7 +93,11 @@ fn render(
     let store = FfiStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .build();
-    let worker = FfiWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let worker = FfiWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
+            .runtime(Some(runtime.handle().clone()))
+            .build(),
+    );
     let mut host = FfiHost::new(
         HostConfig::offline(pools)
             .settings(

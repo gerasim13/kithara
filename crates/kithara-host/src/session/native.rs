@@ -117,7 +117,7 @@ fn engine_thread<S, O: HostOwner<S>>(
             }
         }
         posts.drain(&mut owner, &mut mailbox);
-        posts.pass(&mut owner);
+        posts.pass(&mut owner, true);
         if shutdown {
             break;
         }
@@ -153,7 +153,7 @@ where
             start_stream_cpal(ctx, rate, output_block_frames)
                 .map(|backend| SessionStream::Realtime { _backend: backend })
         };
-        let state = SessionState::new(
+        let mut state = SessionState::new(
             root,
             view,
             output_block_frames,
@@ -163,6 +163,7 @@ where
             channel_config,
             start,
         );
+        state.delivery_delay = Some(consts::SESSION_PUMP_INTERVAL);
         engine_thread(cmd_rx, mailbox, layer(HostCore::new(state, inbox)));
     });
     client

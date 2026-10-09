@@ -83,22 +83,25 @@ where
     }
 
     /// Selects an identity; the published current item changes on its receipt.
+    /// Answers once the owner accepted and sent it, not when RT applies it.
     /// # Errors
-    /// Returns an unknown identity, the track's refusal or a closed mailbox.
+    /// Returns an unknown identity, an admission refusal or a closed mailbox.
     pub fn select(&self, id: TrackId, transition: Transition) -> Result<(), QueueError> {
         self.call(QueueCommand::Select { id, transition })
     }
 
     /// Moves after the last requested target.
+    /// Answers once the owner accepted and sent it; effects publish on receipts.
     /// # Errors
-    /// Returns the track's refusal or a closed mailbox.
+    /// Returns an admission refusal or a closed mailbox.
     pub fn next(&self, transition: Transition) -> Result<(), QueueError> {
         self.call(QueueCommand::Next(transition))
     }
 
     /// Selects the previous identity in navigation history.
+    /// Answers once the owner accepted and sent it; effects publish on receipts.
     /// # Errors
-    /// Returns the track's refusal or a closed mailbox.
+    /// Returns an admission refusal or a closed mailbox.
     pub fn previous(&self, transition: Transition) -> Result<(), QueueError> {
         self.call(QueueCommand::Previous(transition))
     }

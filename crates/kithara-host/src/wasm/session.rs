@@ -41,6 +41,22 @@ pub(crate) struct HostRoute<C> {
 
 pub(crate) struct HostWake {
     notify: Arc<Notify>,
+    decks: Mutex<Vec<DeckMsg>>,
+}
+
+struct DeckWake {
+    host: Arc<HostWake>,
+    message: DeckMsg,
+}
+
+impl Wake for DeckWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        drop(self.host.post(self.message));
+    }
 }
 
 impl HostWake {
@@ -60,13 +76,14 @@ impl Wake for HostWake {
 }
 
 impl DeckInbox for HostWake {
-    fn post(&self, _message: DeckMsg) -> Result<(), PlayError> {
+    fn post(&self, message: DeckMsg) -> Result<(), PlayError> {
+        self.decks.lock().push(message);
         self.notify.notify_one();
         Ok(())
     }
 
-    fn waker(&self, _id: crate::DeckId) -> Waker {
-        Waker::noop().clone()
+    fn waker(self: Arc<Self>, message: DeckMsg) -> Waker {
+        Waker::from(Arc::new(DeckWake { host: self, message }))
     }
 }
 
@@ -74,6 +91,7 @@ impl<C> HostRoute<C> {
     pub(crate) fn new(postbox: HostPostbox<C>, mut mailbox: HostMailbox<C>) -> Self {
         let wake = Arc::new(HostWake {
             notify: Arc::new(Notify::new()),
+            decks: Mutex::new(Vec::new()),
         });
         mailbox.hold(Waker::from(wake.clone()));
         Self {
@@ -87,6 +105,7 @@ impl<C> HostRoute<C> {
     pub(crate) fn close(&self) {
         self.mailbox.lock().take();
         *self.posts.lock() = OwnerPosts::new();
+        self.wake.decks.lock().clear();
         self.wake.notify.notify_one();
     }
 
@@ -104,10 +123,11 @@ impl<C> HostRoute<C> {
         if let Some(mailbox) = self.mailbox.lock().as_mut() {
             posts.drain(owner, mailbox);
         }
-        if owner.clock().is_none() {
-            owner.each_deck(&mut |_, deck, out, pass| deck.drain(pass, out));
+        let messages = std::mem::take(&mut *self.wake.decks.lock());
+        for message in messages {
+            message.run(owner);
         }
-        posts.pass(owner);
+        posts.pass(owner, true);
         true
     }
 }

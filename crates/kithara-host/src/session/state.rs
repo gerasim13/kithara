@@ -8,6 +8,7 @@ use firewheel::{
 };
 use kithara_command::{Live, ScopedConfig, ScopedSender, Seq, When};
 use kithara_config::ConfigOwner;
+use kithara_events::EventBus;
 use kithara_output::OutputGroup;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{PlayError, SessionOutputView, SessionSampleRate, StreamShape};
@@ -29,7 +30,6 @@ use super::{
 use crate::{
     DeckId,
     api::Tap,
-    consts,
     host::HostSettings,
     rt::{MasterNode, SessionOutput},
 };
@@ -217,14 +217,20 @@ pub(crate) enum SessionStream {
     Offline(crate::session::offline::backend::OfflineStream),
 }
 
+pub(crate) struct DeckNode {
+    pub(crate) id: DeckId,
+    pub(crate) node: NodeID,
+    pub(crate) bus: Option<EventBus>,
+}
+
 pub(crate) struct SessionState<T, S> {
     pub(crate) settled: Vec<crate::HostSettled>,
     /// The single clock read and delivery lead for the current owner pass.
     pub(crate) iteration_clock: Option<(SessionFrame, FrameCount)>,
-    /// The configured scheduler wake allowance included in the delivery lead.
-    pub(crate) worker_wake_allowance: Duration,
+    /// Wall-time delivery lead, absent for a runtime that drains before rendering.
+    pub(crate) delivery_delay: Option<Duration>,
     /// Graph node identities; deck state remains with the deck's owner.
-    pub(crate) deck_nodes: Vec<(DeckId, NodeID)>,
+    pub(crate) deck_nodes: Vec<DeckNode>,
     pub(crate) channel_config: ScopedConfig,
     marker: std::marker::PhantomData<fn() -> S>,
     pub(crate) root: HostRoot,
@@ -313,7 +319,7 @@ impl<T, S> SessionState<T, S> {
             reserved_session_grid: Some(generation),
             settled: Vec::new(),
             iteration_clock: None,
-            worker_wake_allowance: Duration::ZERO,
+            delivery_delay: None,
             deck_nodes: Vec::new(),
             marker: std::marker::PhantomData,
         };
@@ -341,7 +347,7 @@ impl<T, S> SessionState<T, S> {
 
     /// The configured owner pump and worker wake allowances, plus one output block.
     pub(crate) fn delivery(&self) -> FrameCount {
-        let duration = consts::SESSION_PUMP_INTERVAL.saturating_add(self.worker_wake_allowance);
+        let duration = self.delivery_delay.unwrap_or_default();
         let publication_frames = duration
             .as_nanos()
             .saturating_mul(u128::from(sample_rate(self).output()))

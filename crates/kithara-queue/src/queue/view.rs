@@ -4,7 +4,7 @@ use kithara_bufpool::HasPool;
 use kithara_events::{EventReceiver, EventSet, TrackId};
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    EngineLoadSnapshot, Player, PlayerStatus, SlotSnapshot, TrackFactory, TrackSettings,
+    EngineLoadSnapshot, Player, PlayerStatus, Position, SlotSnapshot, TrackFactory, TrackSettings,
     TrackSnapshot, TrackStatus as PlayingStatus,
 };
 
@@ -32,6 +32,7 @@ where
     initial: TrackSettings,
     slot: Option<SlotSnapshot>,
     sample_rate: u32,
+    held_position: Option<Position>,
 }
 
 /// Handles only read this snapshot; the queue is its sole publisher.
@@ -63,6 +64,7 @@ where
             initial,
             slot: None,
             sample_rate: 0,
+            held_position: None,
         })))
     }
 
@@ -111,6 +113,7 @@ where
             initial: self.config.track,
             slot,
             sample_rate: self.deck.sample_rate,
+            held_position: self.held_position,
         }
     }
 
@@ -288,6 +291,7 @@ where
             .track
             .as_ref()
             .map(|track| track.position.as_secs_f64())
+            .or_else(|| snapshot.held_position.map(|position| position.as_secs_f64()))
     }
 
     #[must_use]

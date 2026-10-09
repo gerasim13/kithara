@@ -8,7 +8,7 @@ use kithara_platform::{
     sync::{Arc, mpsc, mpsc::TryRecvError},
     time::Duration,
 };
-use kithara_play::{HostedDeck, PlayError};
+use kithara_play::PlayError;
 use kithara_worker::{Dispatcher, Task, TaskConfig, TickResult};
 use thiserror::Error;
 
@@ -69,8 +69,6 @@ pub(crate) struct OfflineTaskConfig<S> {
     pub(crate) settings: Live<HostSettings, HostProtocol>,
     #[config(skip = "transferred to session state")]
     pub(crate) channel_config: ScopedConfig,
-    #[config(skip = "applied to owner delivery lead")]
-    pub(crate) worker_wake_allowance: Duration,
     #[config(skip = "transferred to session state")]
     pub(crate) declick_frames: NonZeroU32,
     #[config(skip = "transferred to the offline task")]
@@ -112,10 +110,6 @@ where
             }
         }
         self.posts.drain(&mut self.owner, &mut self.mailbox);
-        if self.owner.clock().is_none() {
-            self.owner
-                .each_deck(&mut |_, deck, out, pass| deck.drain(pass, out));
-        }
         let mut published = false;
         for request in requests {
             match request {
@@ -127,21 +121,23 @@ where
                     frames,
                     answer,
                 } => {
-                    if published {
-                        self.owner.begin_pass();
-                    }
                     let prepared = self.owner.prepare_offline();
-                    self.posts.pass(&mut self.owner);
+                    self.owner.begin_pass();
+                    self.posts.pass(&mut self.owner, true);
                     published = true;
                     let result = prepared
                         .map_err(OfflineSessionError::Owner)
                         .and_then(|()| self.render(position, frames));
+                    if result.is_ok() {
+                        self.owner.begin_pass();
+                        self.posts.pass(&mut self.owner, false);
+                    }
                     drop(answer.send(result));
                 }
             }
         }
         if !published {
-            self.posts.pass(&mut self.owner);
+            self.posts.pass(&mut self.owner, false);
         }
         if stopped {
             TickResult::Done
@@ -210,7 +206,6 @@ where
         output,
         settings,
         channel_config,
-        worker_wake_allowance,
     } = config;
     let (cmd_tx, cmd_rx) = mpsc::channel();
     let (postbox, mailbox) = mailbox();
@@ -234,7 +229,7 @@ where
                     .map(SessionStream::Offline)
                     .map_err(|error| error.to_string())
             };
-            let mut state = SessionState::new(
+            let state = SessionState::new(
                 root,
                 root_view,
                 Some(max_block_frames),
@@ -244,7 +239,6 @@ where
                 channel_config,
                 start,
             );
-            state.worker_wake_allowance = worker_wake_allowance;
             OfflineSessionTask {
                 cmd_rx,
                 mailbox,

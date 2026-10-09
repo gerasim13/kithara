@@ -21,6 +21,7 @@ mod hls_seek_past_end_terminates;
 mod local_seek_hang_iters;
 mod non_leading_track_completion;
 mod parameter_smoothing;
+mod player;
 mod quality_switch_continuity;
 mod resource_regressions;
 mod seamless_queue_advance;

@@ -27,8 +27,21 @@ pub(super) struct Active<T> {
     pub(super) slot: Slot,
     pub(super) track: T,
     pub(super) role: Role,
-    /// The dispatcher load the track waits on, until its attach applied.
-    pub(super) load: Option<Seq>,
+    pub(super) load: Option<LoadState>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LoadState {
+    Opening(Seq),
+    Attaching(Seq),
+}
+
+impl LoadState {
+    pub(super) fn seq(self) -> Seq {
+        match self {
+            Self::Opening(seq) | Self::Attaching(seq) => seq,
+        }
+    }
 }
 
 /// The slot owners and one prepared replacement waiting off-slot for its receipt.

@@ -374,15 +374,6 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> HostOwner<S> for Lin
         let settled = self.inner.pass();
         let mut answers = std::mem::take(&mut self.answers);
         for answer in settled {
-            if let HostSettled::Replanned { from, to } = &answer
-                && let Some(operation) = self
-                    .tempo
-                    .iter_mut()
-                    .find(|operation| operation.pending.seq == *from)
-            {
-                operation.pending.seq = *to;
-                continue;
-            }
             if matches!(&answer, HostSettled::Settings {
                 seq, change: HostSettingsChange::Tempo(_), ..
             } if self.tempo.iter().any(|operation| operation.pending.seq == *seq && !operation.retry))

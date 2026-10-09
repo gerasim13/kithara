@@ -40,7 +40,7 @@ pub(super) async fn play_resource(
     make: impl FnOnce() -> Resource + Send + 'static,
 ) -> OfflinePlayer {
     let deck_source = harness.pcm_deck((make()).into());
-    harness
+    let deck_id = harness
         .with_queue(move |player| {
             let deck_id = TrackId::allocate();
             player.append_with_id(deck_id, deck_source).expect("append PCM deck");
@@ -48,8 +48,16 @@ pub(super) async fn play_resource(
                 .select(deck_id, kithara::queue::Transition::None)
                 .expect("select the item");
             player.play();
+            deck_id
         })
         .await;
+    kithara_integration_tests::waits::wait_for_loader_done(
+        harness.player(),
+        deck_id,
+        kithara::platform::time::Duration::from_secs(30),
+    )
+    .await
+    .expect("PCM deck loads before the first render");
     harness.render(BLOCK_FRAMES).await;
     let _ = harness.tick_and_drain().await;
     harness
@@ -128,7 +136,7 @@ async fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for(constant_hal
     assert!(tap.drain().is_empty(), "an idle session feeds nothing");
 
     let deck_source = harness.pcm_deck((make_resource(constant_half)).into());
-    harness
+    let deck_id = harness
         .with_queue(move |player| {
             let deck_id = TrackId::allocate();
             player.append_with_id(deck_id, deck_source).expect("append PCM deck");
@@ -136,8 +144,16 @@ async fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for(constant_hal
                 .select(deck_id, kithara::queue::Transition::None)
                 .expect("select the item");
             player.play();
+            deck_id
         })
         .await;
+    kithara_integration_tests::waits::wait_for_loader_done(
+        harness.player(),
+        deck_id,
+        kithara::platform::time::Duration::from_secs(30),
+    )
+    .await
+    .expect("PCM deck loads before the first render");
 
     let rendered = render_blocks(&harness, BLOCKS).await;
     assert_eq!(

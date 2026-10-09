@@ -2,7 +2,7 @@ use kithara_bufpool::SampleBuffer;
 use kithara_command::Ticket;
 use kithara_platform::{
     maybe_send::MaybeSend,
-    sync::{Mutex, mpsc},
+    sync::{Arc, Mutex, mpsc},
 };
 use kithara_play::PlayError;
 
@@ -17,7 +17,7 @@ use crate::session::{
 
 pub(crate) struct OfflineSessionClient<C> {
     postbox: HostPostbox<C>,
-    cmd_tx: Mutex<mpsc::Sender<OfflineMsg>>,
+    cmd_tx: Arc<Mutex<mpsc::Sender<OfflineMsg>>>,
     control: OfflineTaskRoute,
 }
 
@@ -29,7 +29,7 @@ impl<C> OfflineSessionClient<C> {
     ) -> Self {
         Self {
             postbox,
-            cmd_tx: Mutex::new(cmd_tx),
+            cmd_tx: Arc::new(Mutex::new(cmd_tx)),
             control,
         }
     }
@@ -85,7 +85,31 @@ impl<C: MaybeSend + 'static> DeckInbox for OfflineSessionClient<C> {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn waker(&self, _id: crate::DeckId) -> std::task::Waker {
-        std::task::Waker::from(kithara_platform::sync::Arc::new(self.control.clone()))
+    fn waker(self: Arc<Self>, message: DeckMsg) -> std::task::Waker {
+        std::task::Waker::from(Arc::new(OfflineDeckWake {
+            cmd_tx: self.cmd_tx.clone(),
+            control: self.control.clone(),
+            message,
+        }))
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+struct OfflineDeckWake {
+    cmd_tx: Arc<Mutex<mpsc::Sender<OfflineMsg>>>,
+    control: OfflineTaskRoute,
+    message: DeckMsg,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl std::task::Wake for OfflineDeckWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        if self.cmd_tx.lock().send(OfflineMsg::Deck(self.message)).is_ok() {
+            self.control.wake();
+        }
     }
 }

@@ -113,12 +113,8 @@ pub(crate) fn settle_receipt<T, S>(
     };
     if matches!(receipt.outcome(), Outcome::Rejected(Rejection::Refused(_)))
         && settled.when == When::Next
-        && let Some(to) = send_again(state, receipt, settled.change)
+        && send_again(state, receipt, settled.change).is_some()
     {
-        state.settled.push(crate::HostSettled::Replanned {
-            from: receipt.seq(),
-            to,
-        });
         return;
     }
     let outcome = match receipt.outcome() {

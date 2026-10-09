@@ -688,6 +688,10 @@ where
         self.inner.worker()
     }
 
+    fn resource_prep(&self) -> Option<&kithara_play::ResourcePrep<S>> {
+        self.inner.resource_prep()
+    }
+
     fn mixer_config(&self) -> DeckMixerConfig {
         self.inner.mixer_config()
     }

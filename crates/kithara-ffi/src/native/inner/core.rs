@@ -123,6 +123,7 @@ impl NativeInner {
         let worker = FfiWorker::new(
             PlayWorkerConfig::builder(pools.clone())
                 .cancel(cancel.child())
+                .runtime(Some(crate::FFI_RUNTIME.clone()))
                 .build(),
         );
         let queue_store = store.handle().clone();

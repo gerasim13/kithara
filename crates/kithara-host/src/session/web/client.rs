@@ -91,6 +91,7 @@ where
                 .map(|backend| SessionStream::Realtime { _backend: backend })
         },
     );
+    session.delivery_delay = Some(SESSION_PUMP_INTERVAL);
     // A browser unlocks its output through a user gesture and can never resume
     // a closed `AudioContext`: releasing the device on idle is irreversible, so
     // every later context stays suspended and the render callback never runs

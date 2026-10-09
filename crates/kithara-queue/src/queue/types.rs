@@ -54,6 +54,7 @@ pub(super) struct Target {
     pub(super) settings: CrossfadeSettings,
     pub(super) transition: Transition,
     pub(super) reason: AdvanceReason,
+    pub(super) playing: bool,
     /// Scheduled ahead of the current track's end rather than pressed: the
     /// navigation cursor moves once it applies, and it gives way when nothing
     /// sounds by the time it enters.
@@ -147,6 +148,7 @@ mod tests {
     fn a_target_carries_its_transition_and_reason() {
         let bound = Bound::AtOrAfter(kithara_signal::SessionFrame::new(64));
         let target = Target {
+            playing: true,
             to: TrackId(5),
             bound,
             settings: CrossfadeSettings::default(),

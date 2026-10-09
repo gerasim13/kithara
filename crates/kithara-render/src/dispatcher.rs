@@ -11,7 +11,7 @@ use std::{
 
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture, stream::FuturesUnordered};
 use kithara_command::{Inbox, Protocol, Seq};
-use kithara_platform::{maybe_send::MaybeSendFuture, time::Duration};
+use kithara_platform::{maybe_send::MaybeSendFuture, time::Duration, tokio::runtime::Handle};
 use kithara_signal::FrameCount;
 use kithara_warp::{SpeedCurve, StretchKind};
 use kithara_worker::{Priority, Task, TickResult};
@@ -129,7 +129,7 @@ where
         }
     }
 
-    fn poll(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+    fn poll(&mut self, cx: &mut Context<'_>, runtime_ready: bool) -> Poll<()> {
         let mut progress = false;
         while let Poll::Ready(Some((seq, lane, result))) = self.opening.poll_next_unpin(cx) {
             progress = true;
@@ -162,6 +162,10 @@ where
             };
             match command {
                 DispatcherCommand::Load(request) => {
+                    if !runtime_ready {
+                        due.refuse(LoadRefusal::NoRuntime);
+                        continue;
+                    }
                     if self.lanes.len() + self.opening.len() >= self.capacity.get() {
                         due.refuse(LoadRefusal::Capacity {
                             capacity: self.capacity.get(),
@@ -241,6 +245,7 @@ where
 }
 
 /// Drive source opens, commands and resident lanes on the current owner thread.
+/// The caller supplies the execution context required by its sources.
 pub async fn dispatch<I>(inbox: Inbox<DispatcherProtocol<I>>)
 where
     I: Open + 'static,
@@ -248,12 +253,13 @@ where
     I::Lane: LaneTask,
 {
     let mut dispatcher = DispatchState::new(inbox, crate::consts::CAPACITY);
-    poll_fn(|cx| dispatcher.poll(cx)).await;
+    poll_fn(|cx| dispatcher.poll(cx, true)).await;
 }
 
 pub(crate) struct DispatcherTask<I: Open> {
     dispatcher: DispatchState<I>,
     waker: Waker,
+    runtime: Option<Handle>,
 }
 
 impl<I> DispatcherTask<I>
@@ -266,10 +272,12 @@ where
         inbox: Inbox<DispatcherProtocol<I>>,
         capacity: NonZeroUsize,
         wake: kithara_worker::Wake,
+        runtime: Option<Handle>,
     ) -> Self {
         Self {
             dispatcher: DispatchState::new(inbox, capacity),
             waker: Waker::from(std::sync::Arc::new(Wake::new(wake))),
+            runtime,
         }
     }
 }
@@ -291,8 +299,11 @@ where
     }
 
     fn tick(&mut self) -> TickResult {
+        #[cfg(not(target_arch = "wasm32"))]
+        let _runtime = self.runtime.as_ref().map(Handle::enter);
         let mut context = Context::from_waker(&self.waker);
-        if self.dispatcher.poll(&mut context).is_ready() {
+        let runtime_ready = cfg!(target_arch = "wasm32") || self.runtime.is_some();
+        if self.dispatcher.poll(&mut context, runtime_ready).is_ready() {
             TickResult::Done
         } else {
             self.dispatcher.outcome
@@ -396,6 +407,33 @@ mod tests {
 
     fn receipts(sender: &mut Sender<Protocol>) -> Vec<Receipt<Protocol>> {
         sender.receipts().collect()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test]
+    fn a_play_worker_without_a_runtime_refuses_an_open() {
+        use crate::{PlayWorker, PlayWorkerConfig, test_pools::pools};
+
+        assert!(Handle::try_current().is_err());
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+        let (mut sender, inbox) = pair();
+        let _task = worker.start_dispatcher(inbox).expect("the dispatcher starts");
+        let (_answer, opening) = gate();
+        let seq = send(&mut sender, vec![opening]);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+
+        loop {
+            if let Some(receipt) = sender.receipts().next() {
+                assert_eq!(receipt.seq(), seq);
+                assert!(matches!(
+                    receipt.outcome(),
+                    Outcome::Rejected(Rejection::Refused(LoadRefusal::NoRuntime))
+                ));
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "the load must settle");
+            kithara_platform::thread::sleep(Duration::from_millis(1));
+        }
     }
 
     #[kithara::test]

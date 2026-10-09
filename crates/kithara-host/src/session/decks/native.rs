@@ -9,17 +9,19 @@ use kithara_play::{HostedDeck, PlayError};
 
 use crate::{DeckId, HostOwner};
 
-/// A wake of a held deck's postbox, never an ownership-transfer message.
+/// A deck mailbox or dispatcher receipt wake, never ownership transfer.
+#[derive(Clone, Copy)]
 pub(crate) enum DeckMsg {
     Drain(DeckId),
+    Receipts,
 }
 
 impl DeckMsg {
     pub(crate) fn run<S, O: HostOwner<S>>(self, owner: &mut O) {
         match self {
+            Self::Receipts => owner.begin_pass(),
             Self::Drain(id) => {
-                if let Err(error) =
-                    owner.with_deck(id, &mut |deck, out, pass| deck.drain(pass, out))
+                if let Err(error) = owner.with_deck(id, &mut |deck, out, pass| deck.drain(pass, out))
                 {
                     tracing::warn!(?id, %error, "host deck drain failed");
                 }
@@ -33,12 +35,12 @@ pub(crate) trait DeckInbox:
 {
     fn post(&self, message: DeckMsg) -> Result<(), PlayError>;
     #[cfg(target_arch = "wasm32")]
-    fn waker(&self, id: DeckId) -> Waker;
+    fn waker(self: Arc<Self>, message: DeckMsg) -> Waker;
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct DeckWake {
-    id: DeckId,
+    message: DeckMsg,
     inbox: Weak<dyn DeckInbox>,
 }
 
@@ -47,13 +49,13 @@ pub(crate) struct DeckWake;
 
 impl DeckWake {
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn waker(inbox: &Arc<dyn DeckInbox>, id: DeckId) -> Waker {
-        inbox.waker(id)
+    pub(crate) fn waker(inbox: &Arc<dyn DeckInbox>, message: DeckMsg) -> Waker {
+        inbox.clone().waker(message)
     }
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn waker(inbox: &Arc<dyn DeckInbox>, id: DeckId) -> Waker {
+    pub(crate) fn waker(inbox: &Arc<dyn DeckInbox>, message: DeckMsg) -> Waker {
         Waker::from(Arc::new(Self {
-            id,
+            message,
             inbox: Arc::downgrade(inbox),
         }))
     }
@@ -66,7 +68,7 @@ impl Wake for DeckWake {
     }
     fn wake_by_ref(self: &Arc<Self>) {
         if let Some(inbox) = self.inbox.upgrade() {
-            drop(inbox.post(DeckMsg::Drain(self.id)));
+            drop(inbox.post(self.message));
         }
     }
 }

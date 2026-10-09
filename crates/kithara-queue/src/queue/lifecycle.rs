@@ -109,8 +109,8 @@ where
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, QueueError> {
         let sent = self.release_all(out)?;
-        self.cancel_target_answers();
         self.target = None;
+        self.held_position = None;
         let ids = self.track_ids();
         self.tracks.records_mut().clear();
         let repeat = self.navigation.repeat_mode();
@@ -137,14 +137,14 @@ where
         }) {
             let active = self.active.get_mut(index).ok_or(QueueError::NotReady(id))?;
             active.role = role;
-            return Ok(active.load);
+            return Ok(active.load.map(super::slots::LoadState::seq));
         }
         let slot = match self.active.free_slot() {
             Some(slot) => slot,
             None => return self.evict_for(id, role, output, out),
         };
         let active = self.prepare_track(id, slot, role, output, out)?;
-        let seq = active.load;
+        let seq = active.load.map(super::slots::LoadState::seq);
         self.active.push(active);
         Ok(seq)
     }
@@ -184,20 +184,22 @@ where
         })?;
         let output = output.ok_or(PlayError::NotReady)?;
         let (item, load) = loader.start(id, source, observer, output)?;
+        let position = self.held_position.unwrap_or(Position::ZERO);
         let seq = track.apply(
             TrackCommand::Load {
                 item,
-                position: Position::ZERO,
+                position,
             },
             out,
         )?;
+        self.held_position = None;
         self.tracks.begin_load(id, load);
         Ok(Active {
             item: id,
             slot,
             track,
             role,
-            load: seq,
+            load: seq.map(super::slots::LoadState::Opening),
         })
     }
 
@@ -230,7 +232,7 @@ where
         replacement
             .track
             .apply(TrackCommand::Evict { at: When::Next }, out)?;
-        let seq = replacement.load;
+        let seq = replacement.load.map(super::slots::LoadState::seq);
         self.active.stage(replacement);
         Ok(seq)
     }
@@ -298,7 +300,6 @@ where
             release(out)?;
             None
         };
-        self.cancel_target_answers();
         for active in self.active.iter_mut() {
             active.role = Role::Leaving;
         }
@@ -310,7 +311,6 @@ where
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
         let sent = self.release_all(out)?;
-        self.cancel_target_answers();
         self.target = None;
         self.shutdown.cancel();
         self.tracks.cancel_loads();
@@ -336,34 +336,15 @@ where
         }
     }
 
-    pub(super) fn cancel_target_answers(&mut self) {
-        if let Some(target) = self.target {
-            let seq = self
-                .active
-                .iter()
-                .find(|active| {
-                    active.item == target.to && matches!(active.role, Role::Incoming { .. })
-                })
-                .and_then(|active| match active.role {
-                    Role::Incoming { batch } => batch.or(active.load),
-                    _ => None,
-                })
-                .or(target.retry)
-                .or(target.repeat);
-            if let Some(seq) = seq {
-                self.finish_answers(seq, Err(PlayError::NotReady));
-            }
-        }
-    }
-
     pub(super) fn retry_load(
         &mut self,
         index: usize,
-        previous: Seq,
         output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) -> Result<(), QueueError> {
-        let id = self.active.get(index).ok_or(PlayError::NoActiveSlot)?.item;
+        let active = self.active.get(index).ok_or(PlayError::NoActiveSlot)?;
+        let id = active.item;
+        let position = active.track.snapshot().as_ref().position;
         let source = self
             .tracks
             .source(id)
@@ -383,18 +364,15 @@ where
             .apply(
                 TrackCommand::Load {
                     item,
-                    position: Position::ZERO,
+                    position,
                 },
                 out,
             )?;
         self.active
             .get_mut(index)
             .ok_or(PlayError::NoActiveSlot)?
-            .load = seq;
+            .load = seq.map(super::slots::LoadState::Opening);
         self.tracks.begin_load(id, load);
-        if let Some(seq) = seq {
-            self.retarget_answers(previous, seq);
-        }
         Ok(())
     }
 }

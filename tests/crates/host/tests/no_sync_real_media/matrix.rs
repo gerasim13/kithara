@@ -1,6 +1,7 @@
 use std::{num::NonZeroU32, path::PathBuf};
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     bufpool::PoolRegion,
     events::EventBus,
     hls::AbrMode,
@@ -1027,7 +1028,12 @@ async fn prepare_deck(
     let prep = ResourcePrep::builder().worker(worker.clone())
         .warp(WarpConfig::builder().backend(StretchKind::Signalsmith).keylock(true).build())
         .block_on_underrun(true).build();
-    let player = Queue::new(QueueConfig::builder().prep(prep)
+    let store = AssetStore::builder(pool_region.clone())
+        .backend(StorageBackend::Disk {
+            root: media_dir.path().join(format!("{}-deck-{deck_index}-assets", case.label)),
+        })
+        .build();
+    let player = Queue::new(QueueConfig::builder().prep(prep).store(store)
         .track(TrackSettings::builder().backend(StretchKind::Signalsmith).keylock(true).build())
         .settings(QueueSettings::builder().crossfade(CrossfadeSettings { duration: 0.0, ..Default::default() }).build())
         .build());

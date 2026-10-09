@@ -77,6 +77,12 @@ where
 {
     pub(super) fn validate_command(&self, command: &QueueCommand<S>) -> Result<(), QueueError> {
         self.ensure_open()?;
+        if let QueueCommand::Select { transition, .. } = command {
+            transition
+                .settings(self.config.settings.crossfade())
+                .validate()
+                .map_err(PlayError::from)?;
+        }
         let id = match command {
             QueueCommand::Select { id, .. } | QueueCommand::Remove(id) => Some(*id),
             QueueCommand::Insert { after, .. } => *after,
@@ -156,17 +162,37 @@ where
                 if self.active_current_index().is_some() {
                     self.transport(TrackCommand::Play { at }, out)
                         .map_err(Into::into)
+                } else if self.target.is_some() {
+                    self.target.as_mut().ok_or(PlayError::NotReady)?.playing = true;
+                    self.transition_loaded(out).map_err(Into::into)
                 } else {
                     self.next_target(Transition::None, AdvanceReason::InitialLoad, false, output, out)
                 }
             }
             QueueCommand::Pause { at } => {
+                if self.active_current_index().is_none() && self.target.is_some() {
+                    self.withdraw_transition(out)?;
+                    self.target.as_mut().ok_or(PlayError::NotReady)?.playing = false;
+                    return self.transition_loaded(out).map_err(Into::into);
+                }
                 self.cancel_auto(out)?;
                 self.transport(TrackCommand::Pause { at }, out)
                     .map_err(Into::into)
             }
             QueueCommand::Seek { to } => {
-                let sent = self.transport(TrackCommand::Seek { to }, out)?;
+                let index = self.active_current_index().or_else(|| {
+                    self.target.and_then(|target| self.incoming_index(target.to))
+                });
+                let Some(index) = index else {
+                    self.held_position = Some(to);
+                    return Ok(None);
+                };
+                let sent = self
+                    .active
+                    .get_mut(index)
+                    .ok_or(PlayError::NoActiveSlot)?
+                    .track
+                    .apply(TrackCommand::Seek { to }, out)?;
                 self.withdraw_auto(out)?;
                 Ok(sent)
             }

@@ -2,13 +2,14 @@ use firewheel::{FirewheelContext, node::NodeID};
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_command::Port;
 use kithara_config::Config;
+use kithara_events::EventBus;
 use kithara_output::OutputGroup;
 use kithara_render::bridge::MixerInputs;
 use tracing::{debug, warn};
 
 use super::{
     SessionError,
-    state::{SessionState, TapSlot, add_graph_node, ensure_ctx},
+    state::{DeckNode, SessionState, TapSlot, add_graph_node, ensure_ctx},
     transport::{TransportState, prepare_route_restart},
 };
 use crate::{
@@ -21,11 +22,12 @@ pub(crate) fn install_deck<T, S>(
     id: DeckId,
     inputs: MixerInputs,
     pools: PoolRegion<S>,
+    bus: Option<EventBus>,
 ) -> Result<(), SessionError>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    if state.deck_nodes.iter().any(|(held, _)| *held == id) {
+    if state.deck_nodes.iter().any(|deck| deck.id == id) {
         return Err(SessionError::DeckAttached(id));
     }
     ensure_ctx(state)?;
@@ -45,7 +47,7 @@ where
         }
         return Err(error);
     }
-    state.deck_nodes.push((id, node));
+    state.deck_nodes.push(DeckNode { id, node, bus });
     Ok(())
 }
 
@@ -57,9 +59,9 @@ pub(crate) fn remove_deck<T, S>(
     let index = state
         .deck_nodes
         .iter()
-        .position(|(held, _)| *held == id)
+        .position(|deck| deck.id == id)
         .ok_or(SessionError::DeckNotFound(id))?;
-    let node = state.deck_nodes[index].1;
+    let node = state.deck_nodes[index].node;
     let ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
     ctx.remove_node(node)
         .map_err(|error| SessionError::Graph(format!("remove deck mixer failed: {error}")))?;

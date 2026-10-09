@@ -142,7 +142,6 @@ where
         let settings = Live::new(settings)?;
         let worker = Worker::new(worker);
         let dispatcher = worker.dispatcher(*dispatcher);
-        let worker_wake_allowance = dispatcher.wake_allowance();
         let (client, task_handle) = crate::session::offline::spawn(
             &dispatcher,
             task,
@@ -153,7 +152,6 @@ where
                 .output(SessionOutput::new(limiter))
                 .settings(settings)
                 .channel_config(channel_config)
-                .worker_wake_allowance(worker_wake_allowance)
                 .declick_frames(declick_frames)
                 .max_block_frames(max_block_frames)
                 .pools(pools)
@@ -458,6 +456,21 @@ mod tests {
             Err(PlayError::Late)
         ));
         assert_eq!(host.tempo(), tempo(120.0), "a late change changes nothing");
+    }
+
+    #[kithara::test(native)]
+    fn a_change_one_block_ahead_is_accepted_offline() {
+        let mut host = tempo_host();
+        render_frames(&mut host, 0..128);
+
+        host.configure(
+            HostSettingsChange::Tempo(tempo(128.0)),
+            When::At(SessionFrame::new(256)),
+        )
+        .expect("one block gives the offline owner enough delivery lead");
+        assert_eq!(host.tempo(), tempo(120.0));
+        render_frames(&mut host, 128..384);
+        assert_eq!(host.tempo(), tempo(128.0));
     }
 
     #[kithara::test(native)]

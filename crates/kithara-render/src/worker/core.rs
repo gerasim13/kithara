@@ -36,6 +36,8 @@ pub enum LoadRefusal {
     Capacity { capacity: usize },
     #[error("the track's load was cancelled before it opened")]
     Cancelled,
+    #[error("play worker has no runtime for opening a track")]
+    NoRuntime,
     #[error(transparent)]
     Open(#[from] DecodeError),
     #[error(transparent)]
@@ -50,6 +52,7 @@ impl From<LoadRefusal> for DecodeError {
             LoadRefusal::Open(error) => error,
             refusal @ (LoadRefusal::Capacity { .. }
             | LoadRefusal::Cancelled
+            | LoadRefusal::NoRuntime
             | LoadRefusal::Pool(_)
             | LoadRefusal::Source(_)) => Self::audio_stream("play worker load", refusal),
         }
@@ -79,6 +82,7 @@ impl<S> PlayWorker<S> {
             idle_timeout,
             lane_capacity,
             pools,
+            runtime,
             slow_tick_threshold,
             task_burst,
             wait_timeout,
@@ -90,6 +94,11 @@ impl<S> PlayWorker<S> {
             let worker_config = cancel.map_or_else(WorkerConfig::new, |cancel| {
                 WorkerConfig::new().with_cancel(cancel)
             });
+            let worker_config = if let Some(runtime) = runtime {
+                worker_config.with_runtime(runtime)
+            } else {
+                worker_config
+            };
             (Worker::new(worker_config), None)
         };
         let id = WORKER_ID.fetch_add(1, Ordering::Relaxed);
@@ -156,7 +165,9 @@ impl<S> PlayWorker<S> {
             .dispatcher
             .reserve(TaskConfig::new().with_priority(ServiceClass::Warm.into()))
             .map_err(task_refusal)?
-            .start_local(move |_| DispatcherTask::new(inbox, capacity, wake))
+            .start_local(move |context| {
+                DispatcherTask::new(inbox, capacity, wake, context.runtime().cloned())
+            })
             .map_err(task_refusal)
     }
 }

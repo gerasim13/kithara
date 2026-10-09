@@ -250,7 +250,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn prepare_config_without_a_measured_output_keeps_default_resampling_work() {
+    fn prepare_config_without_a_session_keeps_default_resampling_work() {
         let prepared = prep(WarpConfig::builder().build())
             .prepare(
                 resource_config("https://example.com/song.mp3"),
@@ -264,7 +264,7 @@ mod tests {
     #[kithara::test]
     #[case::default(None, None)]
     #[case::explicit(Some(64), Some(64))]
-    fn unmeasured_preparation_preserves_audio_settings_and_resolves_deck_quantum(
+    fn unbound_preparation_preserves_audio_settings_and_resolves_player_quantum(
         #[case] configured: Option<usize>,
         #[case] expected: Option<usize>,
     ) {

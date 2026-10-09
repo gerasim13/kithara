@@ -11,7 +11,10 @@ use kithara_play::{
 use kithara_signal::SessionFrame;
 use tracing::warn;
 
-use super::{Queue, QueueCommand, QueueControl, QueueSnapshot, command::play_error, slots::Role};
+use super::{
+    Queue, QueueCommand, QueueControl, QueueSnapshot, command::play_error,
+    slots::{LoadState, Role},
+};
 use crate::{ActionAtItemEnd, QueueError, QueueEvent, TrackStatus, loader};
 
 impl<S, F> DeckControl for Queue<S, F>
@@ -122,12 +125,19 @@ where
             }
             TrackReceipt::Loaded(receipt) => {
                 let seq = receipt.seq();
-                if let Some(index) = self.active.position(|active| active.load == Some(seq)) {
+                if let Some(index) = self
+                    .active
+                    .position(|active| active.load == Some(LoadState::Opening(seq)))
+                {
+                    let opened = matches!(
+                        receipt.outcome(),
+                        Outcome::Applied { .. }
+                    );
                     let retry = self.classify_load(index, receipt.outcome());
                     if let Some(active) = self.active.get_mut(index) {
                         let settled = active.track.settle(TrackReceipt::Loaded(receipt), out);
                         if retry {
-                            if let Err(error) = self.retry_load(index, seq, output, out) {
+                            if let Err(error) = self.retry_load(index, output, out) {
                                 let error = play_error(error);
                                 outcomes.push((
                                     index,
@@ -138,6 +148,9 @@ where
                                 ));
                             }
                         } else {
+                            if opened {
+                                self.accept_load(index, seq);
+                            }
                             outcomes.push((index, settled));
                         }
                     }
@@ -146,7 +159,11 @@ where
         }
         let mut result = Settled::Pending;
         for (index, settled) in outcomes {
-            let loading = self.active.get(index).and_then(|active| active.load);
+            let loading = self
+                .active
+                .get(index)
+                .and_then(|active| active.load)
+                .map(LoadState::seq);
             let rescheduling = self.target.and_then(|target| target.stale);
             if let Err(error) = self.transition_settled(index, &settled, out) {
                 let seq = match settled {
@@ -154,7 +171,6 @@ where
                     Settled::Pending => None,
                 };
                 if let Some(seq) = seq {
-                    self.finish_answers(seq, Err(error.clone()));
                     result = Settled::Rejected {
                         seq,
                         reason: Rejection::Refused(error),
@@ -164,9 +180,6 @@ where
             }
             match &settled {
                 Settled::Applied { seq, .. } => {
-                    if loading != Some(*seq) {
-                        self.finish_answers(*seq, Ok(()));
-                    }
                     if !matches!(result, Settled::Rejected { .. }) && loading != Some(*seq) {
                         result = settled;
                     }
@@ -176,7 +189,6 @@ where
                     if !retrying
                         && (rescheduling != Some(*seq) || !matches!(reason, Rejection::Stale))
                     {
-                        self.finish_answers(*seq, Err(refusal(reason)));
                         result = settled;
                     }
                 }
@@ -185,6 +197,9 @@ where
         }
         if let Err(error) = self.release_tails(out) {
             warn!(%error, "outgoing queue track could not release");
+        }
+        if let Err(error) = self.transition_loaded(out) {
+            warn!(%error, "loaded queue target could not enter");
         }
         self.reap_released();
         self.publish();
@@ -211,7 +226,6 @@ where
         }
         self.publish();
     }
-
 }
 
 impl<S, F> HostedDeck<S> for Queue<S, F>
@@ -225,7 +239,11 @@ where
     }
 
     fn worker(&self) -> Option<&PlayWorker<S>> {
-        self.config.prep.as_ref().filter(|_| self.loader.is_some()).map(|prep| &prep.worker)
+        self.config.prep.as_ref().map(|prep| &prep.worker)
+    }
+
+    fn resource_prep(&self) -> Option<&kithara_play::ResourcePrep<S>> {
+        self.config.prep.as_ref()
     }
 
     fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
@@ -237,8 +255,7 @@ where
                 continue;
             }
             match self.apply_with_output(post.command, Some(pass.output), out) {
-                Ok(Some(seq)) => self.answers.push((seq, post.answer)),
-                Ok(None) => post.answer.answer(Ok(())),
+                Ok(_) => post.answer.answer(Ok(())),
                 Err(error) => post.answer.answer(Err(error.into())),
             }
         }
@@ -327,30 +344,6 @@ where
                 .apply(TrackCommand::SetHostRate { rate }, out)?;
         }
         Ok(())
-    }
-
-    pub(super) fn retarget_answers(&mut self, previous: Seq, next: Seq) {
-        for (seq, _) in &mut self.answers {
-            if *seq == previous {
-                *seq = next;
-            }
-        }
-    }
-
-    pub(super) fn finish_answers(&mut self, seq: Seq, result: Result<(), PlayError>) {
-        if !self.answers.iter().any(|(pending, _)| *pending == seq) {
-            return;
-        }
-        self.publish();
-        let mut index = 0;
-        while index < self.answers.len() {
-            if self.answers[index].0 == seq {
-                let (_, answer) = self.answers.remove(index);
-                answer.answer(result.clone().map_err(QueueError::from));
-            } else {
-                index += 1;
-            }
-        }
     }
 
     fn classify_load(
@@ -473,3 +466,6 @@ pub(super) fn refusal(reason: &Rejection<PlayError>) -> PlayError {
 
 #[cfg(test)]
 mod terminal_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod entry_tests;

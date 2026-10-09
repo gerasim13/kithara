@@ -5,7 +5,7 @@ use kithara_render::{bridge::DeckSnapshot, rt::DeckMixerConfig};
 use kithara_signal::{FrameCount, SessionFrame};
 
 use super::{Outbox, TrackReceipt};
-use crate::{OutputSnapshot, PlayError, PlayWorker};
+use crate::{OutputSnapshot, PlayError, PlayWorker, ResourcePrep};
 
 /// A deck's public control endpoint before the owner registers it.
 pub trait DeckControl {
@@ -22,6 +22,12 @@ pub trait DeckControl {
 pub trait HostedDeck<S>: MaybeSend + 'static {
     /// The worker and typed pools shared by the deck's resource loads.
     fn worker(&self) -> Option<&PlayWorker<S>>;
+
+    /// Resource-loading policy checked against the session before registration.
+    /// Decks that do not load resources have no preparation policy.
+    fn resource_prep(&self) -> Option<&ResourcePrep<S>> {
+        None
+    }
 
     /// The mixer the owner builds for this deck when it registers it.
     fn mixer_config(&self) -> DeckMixerConfig;
