@@ -736,7 +736,7 @@ async fn live_real_stream_seek_resume_native(
     timeout(browser_timeout(60, 360)),
     hang_timeout_secs(3),
     tracing(
-        "kithara_audio=info,kithara_hls=info,kithara_hls::stream::transition=debug,kithara_abr=debug"
+        "kithara_audio=debug,kithara_hls=debug,kithara_decode=debug,kithara_abr=info"
     )
 )]
 #[case::hls_ephemeral(false, "HLS", true)]
