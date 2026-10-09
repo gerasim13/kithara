@@ -207,19 +207,26 @@ fn chunk_key(chunk: &AudioChunk) -> (usize, usize) {
 #[cfg(not(target_arch = "wasm32"))]
 fn warmup_to_variant(audio: &mut LiveAudio, variant: usize, label: &str) {
     let mut playing = None;
+    let mut chunks = 0usize;
+    let mut ended = false;
     for _ in 0..consts::WARMUP_CHUNK_BUDGET {
         let Some(chunk) = next_chunk(audio, "warmup") else {
+            ended = true;
             break;
         };
+        chunks += 1;
         playing = chunk.meta.variant_index;
         if playing == Some(variant) {
             break;
         }
     }
+    let abr_variant = audio
+        .abr_handle()
+        .and_then(|abr| abr.current_variant_index());
     assert_eq!(
         playing,
         Some(variant),
-        "{label} ABR must reach the top variant during the warmup"
+        "{label} ABR must reach the top variant during the warmup: {chunks} chunks, stream ended: {ended}, ABR variant {abr_variant:?}"
     );
 }
 
@@ -728,7 +735,9 @@ async fn live_real_stream_seek_resume_native(
     serial,
     timeout(browser_timeout(60, 360)),
     hang_timeout_secs(3),
-    tracing("kithara_audio=info,kithara_hls=info")
+    tracing(
+        "kithara_audio=info,kithara_hls=info,kithara_hls::stream::transition=debug,kithara_abr=debug"
+    )
 )]
 #[case::hls_ephemeral(false, "HLS", true)]
 #[case::drm_ephemeral(true, "DRM", true)]
