@@ -168,6 +168,15 @@ pub(crate) const PULL_HEAD: &str = "8a4e697a770d5e6f8091a2b3c4d5e6f708192a3b";
 #[cfg(test)]
 pub(crate) const RETIRED_HEAD: &str = "6cd1433327cd8f9e0a1b2c3d4e5f60718293a4b5";
 
+#[cfg(test)]
+pub(crate) const STATUS_BASE: &str = "0123456789abcdef0123456789abcdef01234567";
+
+#[cfg(test)]
+pub(crate) const STATUS_OLD_BASE: &str = "89abcdef0123456789abcdef0123456789abcdef";
+
+#[cfg(test)]
+pub(crate) const STATUS_URL: &str = "https://gitlab.example/team/audio/-/pipelines/42";
+
 // Two cleanup intervals tolerate a paused VM while bounding a killed job's
 // stale claim. A live helper refreshes this every 30 seconds.
 pub(crate) const HEARTBEAT_MAX_AGE: Duration = Duration::from_secs(10 * 60);
