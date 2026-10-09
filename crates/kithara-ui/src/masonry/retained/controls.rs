@@ -7,10 +7,7 @@ pub(crate) use super::{
 };
 use crate::{
     atoms::{
-        bar::{
-            brand::Brand, context::Context, divider::Divider, preset::Preset, settings::Settings,
-            spacer::Spacer,
-        },
+        bar::{brand::Brand, context::Context, fill::Fill, preset::Preset, settings::Settings},
         button::Button,
         chip::Chip,
         chrome::{chevron::ChromeChevron, label::ChromeLabel},
@@ -503,13 +500,11 @@ pub(crate) trait Retained: ControlPainter {
 
 impl Retained for Brand {}
 
-impl Retained for Divider {}
+impl Retained for Fill {}
 
 impl Retained for Preset {}
 
 impl Retained for Settings {}
-
-impl Retained for Spacer {}
 
 impl Retained for Button {
     fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {

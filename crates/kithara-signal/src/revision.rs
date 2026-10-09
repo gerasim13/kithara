@@ -1,4 +1,4 @@
-use std::{fmt, marker::PhantomData, num::NonZeroU64};
+use std::{marker::PhantomData, num::NonZeroU64};
 
 /// A non-zero monotonic revision, without trait bounds on its domain marker.
 ///
@@ -10,7 +10,9 @@ use std::{fmt, marker::PhantomData, num::NonZeroU64};
 /// enum Topology {}
 /// let transport: Revision<Transport> = Revision::<Topology>::first();
 /// ```
+#[derive(derive_more::Display)]
 #[derive_where::derive_where(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[display("{_0}")]
 #[repr(transparent)]
 pub struct Revision<Tag>(
     NonZeroU64,
@@ -32,12 +34,6 @@ impl<Tag> Revision<Tag> {
     #[must_use]
     pub const fn first() -> Self {
         Self(NonZeroU64::MIN, PhantomData)
-    }
-}
-
-impl<Tag> fmt::Display for Revision<Tag> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
     }
 }
 
