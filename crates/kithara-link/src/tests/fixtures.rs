@@ -227,7 +227,8 @@ impl Player<TestPools> for ScriptedTrack {
             }
             TrackCommand::SetHostRate { rate } => Command::Rate(rate),
             TrackCommand::Release => Command::Release,
-            TrackCommand::Fade { .. }
+            TrackCommand::Supersede
+            | TrackCommand::Fade { .. }
             | TrackCommand::PlayAfter { .. }
             | TrackCommand::Evict { .. } => {
                 panic!("unexpected command in synchronization fixture")
@@ -338,6 +339,10 @@ impl Player<TestPools> for ScriptedTrack {
 }
 
 impl Track<TestPools> for ScriptedTrack {
+    fn admit(&mut self, _change: kithara_play::TrackSettingsChange, _at: When<SessionFrame>, _out: &Outbox<'_, TestPools>) -> Result<(), PlayError> {
+        Ok(())
+    }
+
     fn projected(&self) -> TrackSettings {
         TrackSettings::builder()
             .speed(self.snapshot().speed)
@@ -464,7 +469,7 @@ impl Rig {
             .ring
             .scope(self.queues.scope)
             .expect("live deck scope");
-        let pass = DeckPass {
+        let pass = DeckPass { mix: Default::default(), suspended: false,
             now: self.now,
             delivery: self.delivery,
             output: &self.output,

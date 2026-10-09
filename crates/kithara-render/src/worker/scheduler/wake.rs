@@ -1,14 +1,15 @@
 /// Playback adapter for the base worker wake capability.
 #[derive(Clone)]
-pub(crate) struct Wake(kithara_worker::Wake);
+pub struct StreamWake(kithara_worker::Wake);
 
-impl Wake {
-    pub(crate) const fn new(wake: kithara_worker::Wake) -> Self {
+impl StreamWake {
+    #[must_use]
+    pub const fn new(wake: kithara_worker::Wake) -> Self {
         Self(wake)
     }
 }
 
-impl kithara_stream::WorkerWake for Wake {
+impl kithara_stream::WorkerWake for StreamWake {
     delegate::delegate! {
         to self.0 {
             fn wake(&self);
@@ -17,7 +18,7 @@ impl kithara_stream::WorkerWake for Wake {
     }
 }
 
-impl std::task::Wake for Wake {
+impl std::task::Wake for StreamWake {
     fn wake(self: std::sync::Arc<Self>) {
         kithara_stream::WorkerWake::wake(&*self);
     }

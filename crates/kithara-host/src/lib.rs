@@ -25,4 +25,4 @@ pub use rt::{MetronomeConfig, MetronomeConfigChange, MetronomeConfigControl};
 pub use session::TransportEvent;
 mod consts;
 
-pub use owner::{DeckControl, DeckId, EqPart, HostCommand, HostCore, HostOwner, HostSettled};
+pub use owner::{DeckControl, DeckId, HostCommand, HostCore, HostOwner, HostSettled};

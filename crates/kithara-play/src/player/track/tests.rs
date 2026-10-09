@@ -54,39 +54,21 @@ impl Answer {
     }
 }
 
+impl From<Receipt<DeckProtocol>> for Answer {
+    fn from(receipt: Receipt<DeckProtocol>) -> Self {
+        let seq = receipt.seq();
+        let (outcome, batch) = receipt.into();
+        Self { seq, outcome, batch }
+    }
+}
+
 impl Rig {
     fn block(&mut self, at: SessionFrame, stopped_at: f64) -> Vec<Answer> {
-        self.deck.ring.publish().expect("publish deck commands");
-        self.deck.inbox.drain();
-        {
-            let mut scope = self.deck.inbox.scope(self.deck.scope).expect("live scope");
-            self.deck.mixer.block(&mut scope, at, stopped_at);
-        }
-        self.answers()
+        self.deck.block(at, stopped_at).expect("mock deck block").into_iter().map(Answer::from).collect()
     }
 
     fn end(&mut self, slot: Slot, at: SessionFrame) -> Vec<Answer> {
-        self.deck.ring.publish().expect("publish deck commands");
-        self.deck.inbox.drain();
-        {
-            let mut scope = self.deck.inbox.scope(self.deck.scope).expect("live scope");
-            self.deck.mixer.end(&mut scope, slot, at);
-        }
-        self.answers()
-    }
-
-    fn answers(&mut self) -> Vec<Answer> {
-        let mut answers = Vec::new();
-        while let Some(receipt) = self.deck.ring.receipt() {
-            let kithara_command::ScopedReceipt::Scope(scope, receipt) = receipt else {
-                panic!("expected a deck receipt");
-            };
-            assert_eq!(scope, self.deck.scope);
-            let seq = receipt.seq();
-            let (outcome, batch) = receipt.into();
-            answers.push(Answer { seq, outcome, batch });
-        }
-        answers
+        self.deck.end(slot, at).expect("mock deck end").into_iter().map(Answer::from).collect()
     }
 }
 type Track = PlayerImpl<TestPools>;
@@ -175,7 +157,7 @@ fn prepared_track() -> (Track, Inbox<LaneProtocol>) {
 fn in_pass<R>(rig: &mut Rig, now: SessionFrame, run: impl FnOnce(&mut Outbox<'_, TestPools>) -> R) -> R {
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot::default();
-    let pass = crate::DeckPass { now, delivery: FrameCount::new(0), output: &output, deck: &deck };
+    let pass = crate::DeckPass { mix: Default::default(), suspended: false, now, delivery: FrameCount::new(0), output: &output, deck: &deck };
     let mut scope = rig.deck.ring.scope(rig.deck.scope).expect("live deck scope");
     let mut out = Outbox::new(&mut scope, &mut rig.deck.dispatcher).in_pass(pass);
     run(&mut out)
@@ -274,7 +256,7 @@ fn a_rejected_launch_leaves_the_member_silent() {
     assert!(mixer.ring.receipt().is_some());
     let output = mock::output(Some(shape)).get();
     let snapshot = crate::DeckSnapshot::default();
-    let pass = crate::DeckPass { now: frame(128), delivery: FrameCount::new(0), output: &output, deck: &snapshot };
+    let pass = crate::DeckPass { mix: Default::default(), suspended: false, now: frame(128), delivery: FrameCount::new(0), output: &output, deck: &snapshot };
     let seq = {
         let mut scope = mixer.ring.scope(mixer.scope).expect("live scope");
         let mut out = Outbox::new(&mut scope, &mut rig.deck.dispatcher).in_pass(pass);
@@ -336,7 +318,7 @@ fn an_installed_lane_the_owner_refuses_is_dropped_and_reported_cancelled() {
     assert!(batch.commands.is_empty(), "the refused consumer is returned to its owner");
     rig.deck.opens.drain();
     let due = rig.deck.opens.next_due((), 1).expect("one lane release");
-    assert!(matches!(due.commands(), [kithara_render::DispatcherCommand::Release(released)]
+    assert!(matches!(due.commands(), [DispatcherCommand::Release(released)]
         if *released == lane));
     due.apply(Dispatched::Released);
     assert!(rig.deck.opens.next_due((), 1).is_none());
@@ -526,7 +508,7 @@ fn a_relocation_is_refused_off_the_applied_lane(#[case] invalid: u8) {
     let before = track.snapshot();
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot::default();
-    let pass = crate::DeckPass { now: frame(0), delivery: FrameCount::new(0), output: &output, deck: &deck };
+    let pass = crate::DeckPass { mix: Default::default(), suspended: false, now: frame(0), delivery: FrameCount::new(0), output: &output, deck: &deck };
     let refused = {
         let mut scope = rig.deck.ring.scope(rig.deck.scope).expect("live deck scope");
         let mut out = Outbox::new(&mut scope, &mut rig.deck.dispatcher).in_pass(pass);
@@ -660,7 +642,7 @@ fn playback_shared_seek_epoch_increments() {
     }
     rig.deck.opens.drain();
     let mut request = rig.deck.opens.next_due((), 1).expect("one original load");
-    let kithara_render::DispatcherCommand::Load(load) = request.commands_mut().pop().expect("load command") else {
+    let DispatcherCommand::Load(load) = request.commands_mut().pop().expect("load command") else {
         panic!("unexpected dispatcher command");
     };
     let mut inbox = load.inbox;
@@ -705,18 +687,18 @@ fn withdrawing_the_newest_epoch_unpublishes_the_seek() {
         if *slot == A && segment.get() == 2));
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot {
-        slots: vec![crate::SlotSnapshot {
+        slots: vec![SlotSnapshot {
             position: 8.0,
             mark: Some(SlotMark {
                 session: frame(0),
                 lane: LaneFrame { segment: track.segment, frame: 0 },
                 position: Position::from_secs(8),
             }),
-            ..crate::SlotSnapshot::default()
+            ..SlotSnapshot::default()
         }],
         ..crate::DeckSnapshot::default()
     };
-    let pass = crate::DeckPass { now: frame(0), delivery: FrameCount::new(0), output: &output, deck: &deck };
+    let pass = crate::DeckPass { mix: Default::default(), suspended: false, now: frame(0), delivery: FrameCount::new(0), output: &output, deck: &deck };
     let seq = receipt.seq();
     let (outcome, mut batch) = receipt.into();
     let mut scope = rig.deck.ring.scope(rig.deck.scope).expect("live scope");
@@ -768,10 +750,10 @@ fn an_epoch_adopted_before_it_is_published_reports_the_audio_thread() {
     track.attach_at = Some(frame(0));
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot {
-        slots: vec![crate::SlotSnapshot { position: 1.5, duration: 162.0, ..crate::SlotSnapshot::default() }],
+        slots: vec![SlotSnapshot { position: 1.5, duration: 162.0, ..SlotSnapshot::default() }],
         ..crate::DeckSnapshot::default()
     };
-    let pass = crate::DeckPass { now: frame(0), delivery: FrameCount::new(0), output: &output, deck: &deck };
+    let pass = crate::DeckPass { mix: Default::default(), suspended: false, now: frame(0), delivery: FrameCount::new(0), output: &output, deck: &deck };
     {
         let mut scope = rig.deck.ring.scope(rig.deck.scope).expect("live deck scope");
         let mut out = Outbox::new(&mut scope, &mut rig.deck.dispatcher).in_pass(pass);
@@ -1228,7 +1210,7 @@ fn an_evicting_track_takes_the_slot_over_on_its_frame() {
         slots: vec![SlotSnapshot { state: SlotState::Playing, ..Default::default() }],
         ..Default::default()
     };
-    let pass = crate::DeckPass {
+    let pass = crate::DeckPass { mix: Default::default(), suspended: false,
         now: frame(0), delivery: FrameCount::new(0), output: &output, deck: &deck,
     };
     let seq = {
@@ -1287,6 +1269,240 @@ fn an_evicting_track_takes_the_slot_over_on_its_frame() {
             since: frame(1_024)
         }
     );
+}
+
+#[kithara::test]
+#[case::released_replacement_before_its_frame(false, false)]
+#[case::released_replacement_the_deck_already_applied(true, false)]
+#[case::parked_repeat(false, true)]
+fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
+    #[case] applied: bool,
+    #[case] repeat: bool,
+) {
+    let mut rig = rig();
+    let (mut old, mut lane) = loaded(&mut rig, A, "old");
+    rig.with_outbox(|out| old.apply(TrackCommand::Play { at: When::Next }, out))
+        .expect("deck scope").expect("start");
+    let mut receipts = rig.block(frame(0), 0.0);
+    settle(&mut old, &mut rig, &mut receipts);
+    if repeat {
+        let original = old.segment;
+        let seq = rig.with_outbox(|out| old.apply(TrackCommand::PlayAfter { track: A }, out))
+            .expect("deck scope").expect("repeat").expect("parked batch");
+        rig.with_outbox(|out| old.apply(TrackCommand::Supersede, out))
+            .expect("deck scope").expect("supersede");
+        assert!(matches!(rig.with_outbox(|out| old.apply(
+            TrackCommand::Seek { to: Position::ZERO }, out,
+        )).expect("deck scope"), Err(PlayError::NotReady)),
+            "a pending supersession retains the lane credit needed to restore its segment");
+        let mut receipts = rig.block(frame(0), 0.0);
+        assert!(receipts.iter().any(|receipt| receipt.seq == seq
+            && matches!(receipt.outcome, Outcome::Rejected(Rejection::Stale))));
+        assert!(settle(&mut old, &mut rig, &mut receipts).iter()
+            .all(|settled| matches!(settled, Settled::Pending)));
+        assert_eq!(old.segment, original);
+        lane.drain();
+        let mut restored = false;
+        while let Some(due) = lane.next_due(LaneFrame::default(), 1) {
+            restored |= due.commands().iter().any(|command| {
+                matches!(command, LaneCommand::Segment { id, .. } if *id == original)
+            });
+            due.apply(kithara_render::LaneApplied {
+                engine_latency: FrameCount::new(0), ready: Some(original),
+            });
+        }
+        assert!(restored, "supersession restores the lane's segment too");
+        rig.with_outbox(|out| old.tick(frame(64), out)).expect("deck scope");
+        let mut receipts = rig.block(frame(64), 0.0);
+        assert!(!receipts.iter().any(|receipt| receipt.batch.commands.iter()
+            .any(|part| matches!(part, DeckPart::Adopt { .. }))));
+        settle(&mut old, &mut rig, &mut receipts);
+        assert_eq!(rig.mixer.held(A), Some("old"));
+        assert!(matches!(old.snapshot().status, TrackStatus::Playing { .. }));
+        let mut receipts = rig.end(A, frame(1_024));
+        assert!(!receipts.iter().any(|receipt| receipt.batch.commands.iter()
+            .any(|part| matches!(part, DeckPart::Adopt { .. }))));
+        settle(&mut old, &mut rig, &mut receipts);
+        rig.mixer.report(DeckEvent::Ended { slot: A, at: frame(1_024) }).expect("event ring");
+        let event = rig.events.drain().next().expect("Ended event");
+        assert!(matches!(event, DeckEvent::Ended { slot: A, .. }));
+        rig.with_outbox(|out| old.settle(TrackReceipt::Event(event), out)).expect("deck scope");
+        assert!(matches!(old.snapshot().status, TrackStatus::Ended { .. }));
+        rig.with_outbox(|out| old.apply(
+            TrackCommand::Configure(TrackSettingsChange::Speed(1.25), When::Next), out,
+        )).expect("deck scope").expect("configuration after cancellation is ready and timely");
+        rig.runtime.block_on(kithara_platform::tokio::task::LocalSet::new().run_until(async {
+            a_cancelled_repeat_reaches_its_original_end(441).await;
+            a_cancelled_repeat_reaches_its_original_end(66_150).await;
+        }));
+        return;
+    }
+    let mut new = track(A);
+    load(&mut new, &mut rig, Position::ZERO);
+    rig.with_outbox(|out| new.apply(TrackCommand::Evict { at: When::Next }, out))
+        .expect("deck scope").expect("stage replacement");
+    let opened = opened_fixture(&mut rig, "new");
+    let receipt = rig.open(Ok(opened)).expect("replacement load");
+    rig.with_outbox(|out| new.settle(TrackReceipt::Loaded(receipt), out)).expect("deck scope");
+    let output = mock::output(None).get();
+    let deck = crate::DeckSnapshot {
+        slots: vec![SlotSnapshot { state: SlotState::Playing, ..Default::default() }],
+        ..Default::default()
+    };
+    let mut scope = rig.deck.ring.scope(rig.deck.scope).expect("deck scope");
+    let mut out = Outbox::new(&mut scope, &mut rig.deck.dispatcher).in_pass(crate::DeckPass {
+        mix: Default::default(), suspended: false,
+        now: frame(0), delivery: FrameCount::new(0), output: &output, deck: &deck,
+    });
+    let at = When::At(frame(1_024));
+    let (_, seq) = out.together(at, |out| {
+        new.apply(TrackCommand::Evict { at }, out)?;
+        new.apply(TrackCommand::Fade { at, settings: CrossfadeSettings::default(), dir: FadeDir::In }, out)?;
+        Ok(())
+    }).expect("replacement group");
+    let seq = seq.expect("group sequence");
+    new.finish_group(Ok(seq));
+    drop(out);
+    drop(scope);
+    let mut receipts = if applied { rig.block(frame(1_024), 0.0) } else { Vec::new() };
+    rig.with_outbox(|out| new.apply(TrackCommand::Release, out))
+        .expect("deck scope").expect("release replacement");
+    receipts.extend(rig.block(frame(if applied { 1_088 } else { 64 }), 0.0));
+    assert!(!receipts.iter().any(|receipt| receipt.batch.commands.iter()
+        .any(|part| matches!(part, DeckPart::Detach { .. }))));
+    let settled = settle(&mut new, &mut rig, &mut receipts);
+    if applied {
+        assert!(settled.iter().any(|settled| matches!(settled, Settled::Applied { seq: answer, .. } if *answer == seq)));
+        rig.with_outbox(|out| new.tick(frame(1_152), out)).expect("deck scope");
+        let mut receipts = rig.block(frame(1_152), 0.0);
+        settle(&mut new, &mut rig, &mut receipts);
+        assert_eq!(rig.mixer.held(A), None);
+    } else {
+        assert!(settled.iter().any(|settled| matches!(settled,
+            Settled::Rejected { seq: answer, reason: Rejection::Stale } if *answer == seq)));
+        rig.block(frame(1_024), 0.0);
+        assert_eq!(rig.mixer.held(A), Some("old"));
+        assert!(matches!(old.snapshot().status, TrackStatus::Playing { .. }));
+    }
+    assert_eq!(new.snapshot().status, TrackStatus::Released);
+}
+
+fn with_mixer<R>(
+    mixer: &mut mock::MixerRig,
+    dispatcher: &mut Sender<DispatcherProtocol<ResourceLoad<TestPools>>>,
+    now: SessionFrame,
+    run: impl FnOnce(&mut Outbox<'_, TestPools>) -> R,
+) -> R {
+    let output = mock::output(None).get();
+    let deck = mixer.ends.snapshot.read();
+    let mut scope = mixer.ring.scope(mixer.scope).expect("live mixer scope");
+    let mut out = Outbox::new(&mut scope, dispatcher).in_pass(crate::DeckPass {
+        mix: Default::default(), suspended: false,
+        now, delivery: FrameCount::new(0), output: &output, deck,
+    });
+    run(&mut out)
+}
+
+async fn a_cancelled_repeat_reaches_its_original_end(frames: usize) {
+    use kithara_render::rt::StreamShape;
+
+    let dir = TestTempDir::new();
+    let path = dir.path().join("repeat.wav");
+    mock::write_pcm_wav(&path, &vec![0.5; frames * 2], AudioSpec::new(2, mock::SAMPLE_RATE))
+        .expect("float WAV at the deck rate");
+    let worker = crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools()).build());
+    let config = ResourceConfig::for_src(ResourceSrc::Path(path))
+        .store(AssetStore::builder(pools()).build()).worker(worker.clone())
+        .host_sample_rate(mock::SAMPLE_RATE).build();
+    let (_, config) = mock::resource_tracks(config).expect("file config");
+    let futures::future::Either::Left(config) = config else { panic!("WAV source") };
+    let item = mock::track_load(config, Arc::from("repeat"), worker, mock::SAMPLE_RATE,
+        |worker, config, position, start, inbox| Box::pin(async move {
+            worker.load(config, position, start, inbox).await
+        }));
+    let (mut dispatcher, inbox) = channel(ChannelConfig::builder().build());
+    let driver = kithara_platform::tokio::task::spawn_local(kithara_render::dispatch(inbox));
+    let shape = StreamShape::new(NonZeroU32::new(64).expect("block frames"), mock::SAMPLE_RATE);
+    let mut mixer = mock::MixerRig::new(DeckMixerConfig::default(), shape, &pools()).expect("real mixer");
+    let mut track = track(A);
+    with_mixer(&mut mixer, &mut dispatcher, frame(0), |out| track.apply(
+        TrackCommand::Load { item, position: Position::ZERO }, out,
+    )).expect("load");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let receipt = loop {
+        if let Some(receipt) = dispatcher.receipts().next() { break receipt; }
+        assert!(std::time::Instant::now() < deadline, "real lane opens");
+        kithara_platform::tokio::task::yield_now().await;
+    };
+    with_mixer(&mut mixer, &mut dispatcher, frame(0), |out| track.settle(TrackReceipt::Loaded(receipt), out));
+    mixer.block(frame(0)).expect("attach block");
+    settle_mixer(&mut track, &mut mixer, &mut dispatcher, frame(0));
+    with_mixer(&mut mixer, &mut dispatcher, frame(64), |out| track.apply(TrackCommand::Play { at: When::Next }, out))
+        .expect("play");
+    mixer.block(frame(64)).expect("start block");
+    settle_mixer(&mut track, &mut mixer, &mut dispatcher, frame(64));
+    let original = track.segment;
+    with_mixer(&mut mixer, &mut dispatcher, frame(128), |out| track.apply(TrackCommand::PlayAfter { track: A }, out))
+        .expect("park repeat");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while frames == 441 && track.ready != Some(track.segment) {
+        track.settle_lane();
+        assert!(std::time::Instant::now() < deadline, "lane switches to the repeated segment");
+        kithara_platform::tokio::task::yield_now().await;
+    }
+    kithara_platform::time::sleep(Duration::from_millis(10)).await;
+    with_mixer(&mut mixer, &mut dispatcher, frame(128), |out| track.apply(TrackCommand::Supersede, out))
+        .expect("cancel parked repeat");
+    let mut ended = false;
+    let blocks = frames.div_ceil(64) + 32;
+    let mut tail_audible = false;
+    for block in 2..blocks {
+        let at = frame(i64::try_from(block * 64).expect("test frame"));
+        let pcm = mixer.block(at).expect("original tail block");
+        settle_mixer(&mut track, &mut mixer, &mut dispatcher, at);
+        let snapshot = mixer.ends.snapshot.read();
+        assert!(snapshot.slots[0].mark.is_none_or(|mark| mark.lane.segment == original),
+            "the mixer never adopts the repeated segment");
+        if ended {
+            assert!(pcm.iter().flatten().all(|sample| *sample == 0.0), "no frame of the repeat is heard");
+        }
+        if frames > 441 && block * 64 >= frames - 4_410 && block * 64 < frames - 128 {
+            tail_audible |= pcm.iter().flatten().any(|sample| *sample > 0.4);
+        }
+        for event in mixer.ends.events.drain().collect::<Vec<_>>() {
+            ended |= matches!(event, DeckEvent::Ended { slot: A, .. });
+            with_mixer(&mut mixer, &mut dispatcher, at, |out| track.settle(TrackReceipt::Event(event), out));
+        }
+        kithara_platform::time::sleep(Duration::from_millis(1)).await;
+    }
+    assert!(ended, "the original segment publishes Ended");
+    assert!(matches!(track.snapshot().status, TrackStatus::Ended { .. }));
+    assert_eq!(track.segment, original);
+    assert!(frames == 441 || tail_audible, "cancellation retains the original unread tail");
+    with_mixer(&mut mixer, &mut dispatcher, frame(2_048), |out| track.apply(
+        TrackCommand::Configure(TrackSettingsChange::Speed(1.25), When::Next), out,
+    )).expect("Configure after supersession is neither NotReady nor Late");
+    with_mixer(&mut mixer, &mut dispatcher, frame(2_048), |out| track.apply(
+        TrackCommand::Seek { to: Position::ZERO }, out,
+    )).expect("a later seek remains admissible");
+    assert_eq!(track.segment, original.next().next(), "a cancelled segment's buffered PCM is never adopted by a later seek");
+    driver.abort();
+}
+
+fn settle_mixer(
+    track: &mut Track,
+    mixer: &mut mock::MixerRig,
+    dispatcher: &mut Sender<DispatcherProtocol<ResourceLoad<TestPools>>>,
+    now: SessionFrame,
+) {
+    while let Some(receipt) = mixer.ring.receipt() {
+        let kithara_command::ScopedReceipt::Scope(_, receipt) = receipt else { continue };
+        let seq = receipt.seq();
+        let (outcome, mut batch) = receipt.into();
+        with_mixer(mixer, dispatcher, now, |out| track.settle(TrackReceipt::Deck {
+            seq, outcome: &outcome, batch: &mut batch,
+        }, out));
+    }
 }
 
 #[kithara::test]

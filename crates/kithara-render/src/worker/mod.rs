@@ -74,3 +74,4 @@ where
     );
     (node, receiver, sender)
 }
+pub use scheduler::StreamWake;

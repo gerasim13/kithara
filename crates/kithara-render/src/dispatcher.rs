@@ -16,7 +16,7 @@ use kithara_signal::FrameCount;
 use kithara_warp::{SpeedCurve, StretchKind};
 use kithara_worker::{Priority, Task, TickResult};
 
-use crate::{LaneProtocol, LoadRefusal, ServiceClass, worker::scheduler::Wake};
+use crate::{LaneProtocol, LoadRefusal, ServiceClass, worker::scheduler::StreamWake};
 
 /// Dispatcher-issued identity in load admission order.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -276,7 +276,7 @@ where
     ) -> Self {
         Self {
             dispatcher: DispatchState::new(inbox, capacity),
-            waker: Waker::from(std::sync::Arc::new(Wake::new(wake))),
+            waker: Waker::from(std::sync::Arc::new(StreamWake::new(wake))),
             runtime,
         }
     }

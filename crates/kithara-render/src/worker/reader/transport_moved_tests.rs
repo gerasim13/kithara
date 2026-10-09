@@ -66,7 +66,7 @@ async fn a_nonblocking_poll_of_an_empty_ring_states_its_demand() {
     let mut fixture = PcmFixture::with_wake(
         4,
         false,
-        crate::worker::scheduler::Wake::new(dispatcher.wake_handle()),
+        crate::worker::scheduler::StreamWake::new(dispatcher.wake_handle()),
     )
     .await;
     let timeout = Duration::from_secs(2);

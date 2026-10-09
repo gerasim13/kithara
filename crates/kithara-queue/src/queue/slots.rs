@@ -44,11 +44,11 @@ impl LoadState {
     }
 }
 
-/// The slot owners and one prepared replacement waiting off-slot for its receipt.
+/// The slot owners and prepared replacements waiting off-slot for their receipts.
 pub(super) struct Slots<T> {
     capacity: usize,
     active: Vec<Active<T>>,
-    replacement: Option<Active<T>>,
+    staged: Vec<Active<T>>,
     fades: Vec<Option<SessionFrame>>,
 }
 
@@ -57,7 +57,7 @@ impl<T> Slots<T> {
         Self {
             capacity,
             active: Vec::with_capacity(capacity),
-            replacement: None,
+            staged: Vec::new(),
             fades: vec![None; capacity],
         }
     }
@@ -100,23 +100,25 @@ impl<T> Slots<T> {
     }
 
     pub(super) fn stage(&mut self, replacement: Active<T>) {
-        debug_assert!(self.replacement.is_none());
-        self.replacement = Some(replacement);
+        debug_assert!(self.replacement_index().is_none());
+        self.staged.push(replacement);
     }
 
     pub(super) fn is_replacement(&self, index: usize) -> bool {
-        index == self.active.len() && self.replacement.is_some()
+        index >= self.active.len() && index < self.len()
     }
 
     pub(super) fn replacement_index(&self) -> Option<usize> {
-        self.replacement.as_ref().map(|_| self.active.len())
+        self.staged.iter().position(|active| active.role != Role::Leaving)
+            .map(|index| self.active.len() + index)
     }
 
     pub(super) fn activate_replacement(&mut self, index: usize) {
         if !self.is_replacement(index) {
             return;
         }
-        if let Some(replacement) = self.replacement.take() {
+        {
+            let replacement = self.staged.remove(index - self.active.len());
             self.fades[usize::from(replacement.slot.get())] = None;
             if let Some(victim) = self
                 .active
@@ -131,10 +133,8 @@ impl<T> Slots<T> {
     }
 
     pub(super) fn remove(&mut self, index: usize) -> Active<T> {
-        if index == self.active.len()
-            && let Some(replacement) = self.replacement.take()
-        {
-            return replacement;
+        if index >= self.active.len() {
+            return self.staged.remove(index - self.active.len());
         }
         let active = self.active.remove(index);
         self.fades[usize::from(active.slot.get())] = None;
@@ -158,27 +158,27 @@ impl<T> Slots<T> {
     }
 
     pub(super) fn get(&self, index: usize) -> Option<&Active<T>> {
-        if index == self.active.len() {
-            self.replacement.as_ref()
+        if index >= self.active.len() {
+            self.staged.get(index - self.active.len())
         } else {
             self.active.get(index)
         }
     }
 
     pub(super) fn get_mut(&mut self, index: usize) -> Option<&mut Active<T>> {
-        if index == self.active.len() {
-            self.replacement.as_mut()
+        if index >= self.active.len() {
+            self.staged.get_mut(index - self.active.len())
         } else {
             self.active.get_mut(index)
         }
     }
 
     pub(super) fn iter(&self) -> impl Iterator<Item = &Active<T>> {
-        self.active.iter().chain(self.replacement.iter())
+        self.active.iter().chain(self.staged.iter())
     }
 
     pub(super) fn iter_mut(&mut self) -> impl Iterator<Item = &mut Active<T>> {
-        self.active.iter_mut().chain(self.replacement.iter_mut())
+        self.active.iter_mut().chain(self.staged.iter_mut())
     }
 
     /// Indices of the tracks `find` picks, in slot-assignment order.
@@ -191,7 +191,7 @@ impl<T> Slots<T> {
     }
 
     pub(super) fn len(&self) -> usize {
-        self.active.len() + usize::from(self.replacement.is_some())
+        self.active.len() + self.staged.len()
     }
 }
 

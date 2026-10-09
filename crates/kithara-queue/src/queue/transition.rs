@@ -23,6 +23,14 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     F: TrackFactory<S>,
 {
+    fn auto_bound(&self, settings: kithara_play::CrossfadeSettings) -> Result<Option<Bound>, PlayError> {
+        let Some(end) = self.current_end() else {
+            return Ok(None);
+        };
+        let duration = if self.config.settings.gapless() { 0.0 } else { settings.duration };
+        Ok(Some(Bound::AtOrBefore(end - self.fade_frames(duration)?)))
+    }
+
     pub(super) fn next_target(
         &mut self,
         transition: Transition,
@@ -53,14 +61,7 @@ where
             .validate()
             .map_err(PlayError::from)?;
         let bound = if auto {
-            let duration = if self.config.settings.gapless() {
-                0.0
-            } else {
-                settings.duration
-            };
-            Bound::AtOrBefore(
-                self.current_end().ok_or(PlayError::Untimed)? - self.fade_frames(duration)?,
-            )
+            self.auto_bound(settings)?.ok_or(PlayError::Untimed)?
         } else {
             Bound::AtOrAfter(self.earliest()?)
         };
@@ -152,7 +153,12 @@ where
             }
             return Ok(sent);
         }
-        let Some(frame) = self.transition_entry(index, target.bound)? else {
+        let bound = if target.auto {
+            let Some(bound) = self.auto_bound(target.settings)? else { return Ok(None) };
+            self.target.as_mut().ok_or(PlayError::NotReady)?.bound = bound;
+            bound
+        } else { target.bound };
+        let Some(frame) = self.transition_entry(index, bound)? else {
             return Ok(None);
         };
         let sent = self.send_transition(index, frame, out)?;
@@ -466,19 +472,6 @@ where
                     let target = self.target.as_mut().ok_or(PlayError::NotReady)?;
                     target.stale = None;
                     target.settings = target.transition.settings(self.config.settings.crossfade());
-                    let auto = target.auto;
-                    let duration = if self.config.settings.gapless() {
-                        0.0
-                    } else {
-                        target.settings.duration
-                    };
-                    if auto {
-                        let bound = Bound::AtOrBefore(
-                            self.current_end().ok_or(PlayError::Untimed)?
-                                - self.fade_frames(duration)?,
-                        );
-                        self.target.as_mut().ok_or(PlayError::NotReady)?.bound = bound;
-                    }
                     self.active
                         .get_mut(index)
                         .ok_or(PlayError::NoActiveSlot)?
@@ -547,7 +540,7 @@ where
         let Some(target) = self.target else {
             return Ok(());
         };
-        if target.auto && self.single_slot_repeat(target.to) {
+        if target.repeat.is_some() {
             self.cancel_repeat(out)?;
             self.target = None;
             return Ok(());
@@ -605,17 +598,6 @@ where
         } else {
             let settings = target.transition.settings(self.config.settings.crossfade());
             self.target.as_mut().ok_or(PlayError::NotReady)?.settings = settings;
-            if target.auto {
-                let duration = if self.config.settings.gapless() {
-                    0.0
-                } else {
-                    settings.duration
-                };
-                let bound = Bound::AtOrBefore(
-                    self.current_end().ok_or(PlayError::Untimed)? - self.fade_frames(duration)?,
-                );
-                self.target.as_mut().ok_or(PlayError::NotReady)?.bound = bound;
-            }
         }
         Ok(())
     }
@@ -645,13 +627,7 @@ where
                 }
                 return Ok(());
             }
-            let duration = if self.config.settings.gapless() {
-                0.0
-            } else {
-                target.settings.duration
-            };
-            let bound = Bound::AtOrBefore(end - self.fade_frames(duration)?);
-            if target.auto && target.bound != bound {
+            if target.auto && self.auto_bound(target.settings)? != Some(target.bound) {
                 self.withdraw_auto(out)?;
             }
             return Ok(());
@@ -736,10 +712,11 @@ where
             })
     }
 
-    fn cancel_repeat(&mut self, _out: &mut Outbox<'_, S>) -> Result<(), PlayError> {
-        todo!(
-            "kithara-render::DeckProtocol cancellation of a parked Deferred Adopt, exposed by kithara-play Track without Detach or Stop of its incumbent segment (contract §8.6; ruling D6)"
-        )
+    fn cancel_repeat(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError> {
+        let index = self.active_current_index().ok_or(PlayError::NoActiveSlot)?;
+        self.active.get_mut(index).ok_or(PlayError::NoActiveSlot)?
+            .track.apply(TrackCommand::Supersede, out)?;
+        Ok(())
     }
 
     fn loaded_tracks(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError> {
@@ -771,12 +748,12 @@ where
             return None;
         }
         snapshot.duration?;
-        let sample_rate = NonZeroU32::new(self.deck.sample_rate)?;
+        let sample_rate = NonZeroU32::new(self.deck.mixer.sample_rate)?;
         track.planned_end(sample_rate).ok().flatten()
     }
 
     fn frames(&self, duration: Duration) -> Result<FrameCount, PlayError> {
-        let sample_rate = NonZeroU32::new(self.deck.sample_rate).ok_or(PlayError::Untimed)?;
+        let sample_rate = NonZeroU32::new(self.deck.mixer.sample_rate).ok_or(PlayError::Untimed)?;
         let spec = AudioSpec::new(1, sample_rate);
         spec.frames_for(duration)
             .map_err(|error| PlayError::Internal(error.to_string()))

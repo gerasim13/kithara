@@ -132,6 +132,10 @@ where
         self.lane.finish_preload();
     }
 
+    pub(crate) fn finish_segment(&mut self) {
+        self.lane.finish_segment();
+    }
+
     /// Whether admission has made the current segment ready for playback.
     #[must_use]
     pub fn is_preloaded(&self) -> bool {

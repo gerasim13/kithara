@@ -32,6 +32,11 @@ fn rig() -> mock::DeckRig<TestPools> {
     mock::DeckRig::new(DeckMixerConfig::default()).expect("deck scope opens")
 }
 
+#[kithara::test]
+fn an_empty_deck_rig_runs_its_mixer_block() {
+    assert!(rig().block(kithara_signal::SessionFrame::new(0), 0.0).expect("mock block").is_empty());
+}
+
 fn prepared(prep: &ResourcePrep<TestPools>) -> ResourceConfig<TestPools> {
     let config = ResourceConfig::for_src(
         ResourceSrc::parse("https://example.com/song.mp3").expect("valid fixture URI"),

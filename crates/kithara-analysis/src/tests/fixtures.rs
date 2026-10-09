@@ -152,6 +152,8 @@ pub(super) struct FakeReader {
     bus: EventBus,
     metadata: TrackMetadata,
     outcomes: VecDeque<Result<ChunkOutcome, DecodeError>>,
+    #[cfg(feature = "analysis-waveform")]
+    wake: Option<kithara_worker::Wake>,
 }
 
 impl FakeReader {
@@ -160,6 +162,8 @@ impl FakeReader {
             outcomes,
             bus: EventBus::default(),
             metadata: TrackMetadata::default(),
+            #[cfg(feature = "analysis-waveform")]
+            wake: None,
         }
     }
 
@@ -177,6 +181,12 @@ impl FakeReader {
             .collect();
         outcomes.push_back(Ok(eof()));
         Self::new(outcomes)
+    }
+
+    #[cfg(feature = "analysis-waveform")]
+    pub(super) fn pending_with_wake(mut self, wake: kithara_worker::Wake) -> Self {
+        self.wake = Some(wake);
+        self
     }
 
     #[cfg(feature = "analysis-waveform")]
@@ -245,6 +255,11 @@ impl AudioSession for FakeReader {
 
 impl AudioRead for FakeReader {
     fn next_chunk(&mut self) -> Result<ChunkOutcome, AudioReadError> {
+        #[cfg(feature = "analysis-waveform")]
+        if let Some(wake) = self.wake.take() {
+            wake.wake();
+            return Ok(pending());
+        }
         self.outcomes
             .pop_front()
             .unwrap_or_else(|| Ok(eof()))

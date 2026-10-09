@@ -146,14 +146,6 @@ pub fn remote_host<S: HasPool<f32> + Send + Sync + 'static>(sender: HostSender<S
     Host::browser_remote(sender)
 }
 
-/// Warms the local browser backend through its owner.
-pub fn warm_up_audio<S: HasPool<f32> + Send + Sync + 'static>(
-    host: &Host<S>,
-) -> Result<(), PlayError> {
-    assert_main_thread("warm_up_audio");
-    host.browser_warm_up()
-}
-
 /// Runs pending owner commands and one owner pass on the main thread.
 pub fn tick_and_poll<S: HasPool<f32> + Send + Sync + 'static>(receiver: &HostReceiver<S>) {
     assert_main_thread("tick_and_poll");

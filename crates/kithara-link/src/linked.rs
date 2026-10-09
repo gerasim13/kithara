@@ -159,6 +159,15 @@ struct RunningCorrection {
 }
 
 impl<P> Linked<P> {
+    fn synced_speed(&self, change: TrackSettingsChange) -> Result<(), PlayError> {
+        if self.mode == SyncMode::On && let TrackSettingsChange::Speed(speed) = change {
+            return Err(PlayError::InvalidParameter {
+                name: "speed while synchronized".into(), value: speed,
+            });
+        }
+        Ok(())
+    }
+
     /// Decorates a track with synchronization initially off.
     #[must_use]
     pub fn new(inner: P, config: LinkConfig, host: TempoTrajectory) -> Self {
@@ -426,13 +435,8 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
         }
         match command {
             TrackCommand::Load { .. } => unreachable!("load was handled before the SYNC dispatch"),
-            TrackCommand::Configure(TrackSettingsChange::Speed(speed), _) => {
-                Err(PlayError::InvalidParameter {
-                    name: "speed while synchronized".into(),
-                    value: speed,
-                })
-            }
             TrackCommand::Configure(change, at) => {
+                self.synced_speed(change)?;
                 self.inner.apply(TrackCommand::Configure(change, at), out)
             }
             TrackCommand::Play { at } => {
@@ -508,6 +512,7 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
             TrackCommand::PlayAfter { track } => {
                 self.inner.apply(TrackCommand::PlayAfter { track }, out)
             }
+            TrackCommand::Supersede => self.inner.apply(TrackCommand::Supersede, out),
             TrackCommand::Release => self.inner.apply(TrackCommand::Release, out),
             TrackCommand::Evict { at } => self.inner.apply(TrackCommand::Evict { at }, out),
         }
@@ -631,6 +636,11 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
 }
 
 impl<S, P: Track<S>> Track<S> for Linked<P> {
+    fn admit(&mut self, change: TrackSettingsChange, at: When<SessionFrame>, out: &Outbox<'_, S>) -> Result<(), PlayError> {
+        self.synced_speed(change)?;
+        self.inner.admit(change, at, out)
+    }
+
     fn projected(&self) -> TrackSettings {
         self.inner.projected()
     }

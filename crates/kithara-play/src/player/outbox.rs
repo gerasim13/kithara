@@ -1,6 +1,6 @@
 //! What a player sends through and what comes back to it.
 
-use kithara_command::{Batch, Outcome, Port, Receipt, Rejection, SendError, Sender, Seq, When};
+use kithara_command::{Batch, Live, LiveError, Outcome, Port, Receipt, Rejection, SendError, Sender, Seq, When};
 use kithara_render::{
     DispatcherCommand, DispatcherProtocol, LaneId, LoadRequest,
     bridge::{DeckEvent, DeckPart, DeckProtocol, Slot},
@@ -8,7 +8,7 @@ use kithara_render::{
 use kithara_signal::SessionFrame;
 pub use kithara_sync::Bound;
 
-use crate::{DeckPass, PlayError, ResourceLoad};
+use crate::{DeckEqChange, DeckMixSettings, DeckMixSettingsChange, DeckPass, InterruptionKind, PlayError, ResourceLoad, SessionEvent};
 
 /// One loaded track or a deck built of them: it changes its own state on the
 /// owner's thread and reaches the executors only through the [`Outbox`] it is
@@ -57,6 +57,8 @@ pub struct Outbox<'a, S> {
     group: Option<Group>,
     pass: Option<DeckPass<'a>>,
     dispatches: Option<&'a mut Vec<Seq>>,
+    mix: Option<&'a mut Live<DeckMixSettings, DeckProtocol>>,
+    session: Option<(&'a mut Option<u64>, &'a kithara_events::EventBus, u64)>,
 }
 
 /// The batch [`Outbox::together`] is collecting.
@@ -78,6 +80,8 @@ impl<'a, S> Outbox<'a, S> {
             group: None,
             pass: None,
             dispatches: None,
+            mix: None,
+            session: None,
         }
     }
 
@@ -91,6 +95,49 @@ impl<'a, S> Outbox<'a, S> {
     pub fn track_dispatches(mut self, dispatches: &'a mut Vec<Seq>) -> Self {
         self.dispatches = Some(dispatches);
         self
+    }
+
+    pub fn lend_mix(mut self, mix: &'a mut Live<DeckMixSettings, DeckProtocol>) -> Self {
+        self.mix = Some(mix);
+        self
+    }
+
+    pub fn lend_session(mut self, suspended_at: &'a mut Option<u64>, bus: &'a kithara_events::EventBus, blocks: u64) -> Self {
+        self.session = Some((suspended_at, bus, blocks));
+        self
+    }
+
+    pub fn mix(&mut self, at: When<SessionFrame>, change: DeckMixSettingsChange) -> Result<Seq, PlayError> {
+        self.check_when(at)?;
+        let mix = self.mix.as_mut().ok_or_else(|| PlayError::Internal("deck mix change outside its owner's pass".into()))?;
+        mix.send(&mut *self.deck, at, change, DeckPart::Mix).map_err(|error| match error {
+            LiveError::Invalid(error) => PlayError::from(error),
+            LiveError::Send(SendError::Full(_)) => PlayError::Full("deck"),
+            LiveError::Send(SendError::Closed(_)) => PlayError::Closed,
+            LiveError::Send(SendError::Target(_)) => PlayError::Internal("a deck mix batch names a slot".into()),
+        })
+    }
+
+    pub fn eq(&mut self, parts: Vec<DeckEqChange>) -> Result<Option<Seq>, PlayError> {
+        self.deck(When::Next, parts.into_iter().map(DeckPart::Eq).collect())
+    }
+
+    pub fn eq_layout(&mut self, pools: &kithara_bufpool::PoolRegion<S>, bands: &[crate::EqBandConfig], rate: std::num::NonZeroU32) -> Result<Option<Seq>, PlayError>
+    where
+        S: kithara_bufpool::HasPool<f32>,
+    {
+        let config = kithara_effects::eq::EqConfig::builder(pools.clone()).build();
+        let layout = kithara_effects::eq::EqLayout::new(&config, bands, rate)?;
+        self.eq(vec![DeckEqChange::Layout(Box::new(layout))])
+    }
+
+    pub fn notify_interruption(&mut self, kind: InterruptionKind) -> Result<bool, PlayError> {
+        let (suspended_at, bus, blocks) = self.session.as_mut().ok_or(PlayError::NotReady)?;
+        if matches!(kind, InterruptionKind::Began) {
+            **suspended_at = Some(*blocks);
+        }
+        bus.publish(SessionEvent::Interruption { kind });
+        Ok(suspended_at.is_some_and(|at| *blocks <= at.saturating_add(1)))
     }
 
     /// The current iteration's observations, when a host owns this outbox.
@@ -118,6 +165,24 @@ impl<'a, S> Outbox<'a, S> {
             }
         }
         Ok(())
+    }
+
+    /// Supersedes scheduled and parked batches without changing the slot's playback.
+    pub(crate) fn supersede(&mut self, slot: Slot) -> Result<(), PlayError> {
+        let basis = (slot, self.deck.basis(slot, When::Next));
+        if let Some(group) = self.group.as_mut() {
+            if group.at != When::Next {
+                return Err(PlayError::Internal("supersession requires Next".into()));
+            }
+            if !group.basis.iter().any(|entry| entry.0 == slot) {
+                group.basis.push(basis);
+            }
+            return Ok(());
+        }
+        deck_sent(self.deck.send(When::Next, Batch {
+            basis: vec![basis],
+            commands: Vec::new(),
+        })).map(drop)
     }
 
     /// Runs `send` with every deck part it sends collected into one batch
@@ -164,7 +229,7 @@ impl<'a, S> Outbox<'a, S> {
             Ok(value) => value,
             Err(error) => return Err((error, group.map_or_else(Vec::new, |group| group.parts))),
         };
-        let Some(Group { at, basis, parts }) = group.filter(|group| !group.parts.is_empty()) else {
+        let Some(Group { at, basis, parts }) = group.filter(|group| !group.parts.is_empty() || !group.basis.is_empty()) else {
             return Ok((value, None));
         };
         let seq = deck_sent_owned(self.deck.send(

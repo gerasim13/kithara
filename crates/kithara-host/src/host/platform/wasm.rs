@@ -119,13 +119,6 @@ where
         }
     }
 
-    pub(crate) fn browser_warm_up(&self) -> Result<(), PlayError> {
-        let state =
-            self._session.platform().web_state.as_ref().ok_or_else(|| {
-                PlayError::Internal("audio warm-up requires a local host".to_owned())
-            })?;
-        crate::session::warm_up_audio::<S, HostCore<S>>(state).map_err(Into::into)
-    }
 }
 
 #[cfg(test)]

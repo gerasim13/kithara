@@ -2,7 +2,7 @@
 
 //! Unified facade for audio streaming and decoding through `Resource`.
 //! `ResourceConfig` combines a source with the caller's `AssetStore`, typed pools
-//! and `PlayWorker`. `Resource::new` opens decoded interleaved PCM through the
+//! and `PlayWorker`. `Resource::open` opens decoded interleaved PCM through the
 //! common `AudioReader` read/seek interface; `ReadOutcome` distinguishes frames,
 //! pending work and end of input.
 

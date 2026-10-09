@@ -47,6 +47,80 @@ use kithara_integration_tests::{
 use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+async fn a_press_before_f_on_one_slot_leaves_the_sounding_track_untouched() {
+    use kithara::play::{CrossfadeSettings, DeckMixerConfig, ResourcePrep};
+    use kithara::queue::QueueSettings;
+    use kithara_test_fixtures::{assets, signal::mean_abs};
+
+    let config = HostConfig::offline(pools()).build();
+    let queue = Queue::new(QueueConfig::builder()
+        .prep(ResourcePrep::builder().worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build())).build())
+        .store(AssetStore::builder(pools()).build())
+        .mixer(DeckMixerConfig::builder().slots(1).build())
+        .settings(QueueSettings::builder().crossfade(CrossfadeSettings { duration: 0.5, ..Default::default() }).build())
+        .build());
+    let harness = OfflineQueue::new(config, queue).await.expect("one-slot host");
+    let mut events = harness.control().subscribe();
+    let sources = [assets::constant_wav_loud_1_5s(), assets::constant_wav_quiet_1_5s(), assets::constant_wav_four_1_5s()];
+    let mut ids = Vec::new();
+    for source in sources {
+        let source = kithara_integration_tests::offline::asset_source(&source);
+        ids.push(harness.run(move |queue| queue.append(source)).await.expect("append"));
+    }
+    let first = ids[0];
+    let cancelled = ids[1];
+    let selected = ids[2];
+    harness.run(move |queue| queue.select(first, Transition::None)).await.expect("select first");
+    harness.run(QueueControl::play).await;
+    let deadline = time::Instant::now() + Duration::from_secs(10);
+    let mut reference = 0.0;
+    loop {
+        assert!(time::Instant::now() < deadline, "replacement must arm before F");
+        let pcm = harness.render(128).await;
+        let control = harness.control();
+        if control.current().is_some_and(|track| track.id == first) && control.position_seconds().is_some_and(|position| position > 0.1) {
+            reference = mean_abs(&pcm);
+        }
+        if control.track(cancelled).is_some_and(|track| track.status == TrackStatus::Loaded) {
+            assert!(control.position_seconds().is_some_and(|position| position < 0.9));
+            assert!(reference > 0.1, "first track is audible");
+            break;
+        }
+        sleep(Duration::from_millis(1)).await;
+    }
+    let _ = harness.render(128).await;
+    assert_eq!(harness.control().current().map(|track| track.id), Some(first));
+    assert!(harness.control().position_seconds().is_some_and(|position| position < 0.9));
+    while events.try_recv().is_ok() {}
+    harness.run(move |queue| queue.select(selected, Transition::Crossfade)).await.expect("press is accepted");
+    let deadline = time::Instant::now() + Duration::from_secs(10);
+    let mut changed = false;
+    while !changed {
+        assert!(time::Instant::now() < deadline, "selected track becomes current");
+        let pcm = harness.render(128).await;
+        while let Ok(event) = events.try_recv() {
+            match event {
+                QueueEvent::CurrentTrackChanged { id: Some(id) } => {
+                    assert_ne!(id, cancelled);
+                    changed |= id == selected;
+                }
+                QueueEvent::CrossfadeStarted { .. } => assert!(changed, "only the selected track starts a crossfade"),
+                _ => {}
+            }
+        }
+        if !changed {
+            assert!((mean_abs(&pcm) - reference).abs() < 0.02, "the cancelled replacement never dips the incumbent");
+        }
+        sleep(Duration::from_millis(1)).await;
+    }
+    assert_eq!(harness.control().current().map(|track| track.id), Some(selected));
+    assert_eq!(harness.control().track(cancelled).expect("cancelled item").status, TrackStatus::Cancelled);
+    let pcm = harness.render(16_384).await;
+    assert!(mean_abs(&pcm[pcm.len() - 256..]) > 0.005, "selected track is audible");
+    harness.close().await;
+}
+
 use crate::bufpool_ext::{TestPools, pools};
 
 mod consts {

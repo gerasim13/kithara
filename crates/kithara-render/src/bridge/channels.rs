@@ -11,7 +11,7 @@ use ringbuf::{
 };
 use triple_buffer::{Input, Output, triple_buffer};
 
-use super::{DeckEvent, DeckProtocol, DeckSnapshot, SlotSnapshot};
+use super::{DeckEvent, DeckProtocol, DeckSnapshot};
 use crate::rt::DeckMixerConfig;
 
 /// Events a deck's mixer can hold for its owner per slot before it counts an overflow.
@@ -54,10 +54,7 @@ impl DeckEvents {
 pub fn scope_channels(scope: ScopeId, config: DeckMixerConfig) -> (DeckEnds, MixerInputs) {
     let slots = config.slots().get();
     let (events_tx, events_rx) = HeapRb::<DeckEvent>::new(slots * EVENTS_PER_SLOT).split();
-    let initial = DeckSnapshot {
-        slots: vec![SlotSnapshot::default(); slots],
-        ..DeckSnapshot::default()
-    };
+    let initial = DeckSnapshot::new(config);
     let (snapshot_in, snapshot_out) = triple_buffer(&initial);
     (
         DeckEnds {

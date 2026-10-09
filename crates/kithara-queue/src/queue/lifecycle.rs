@@ -213,13 +213,10 @@ where
         if let Some(index) = self.active.replacement_index() {
             self.release_track(index, out)?;
             self.reap_released();
-            if self.active.replacement_index().is_some() {
-                return Err(QueueError::NotReady(id));
-            }
         }
         let victim =
             self.active
-                .quietest(&self.deck, |_| true)
+                .quietest(&self.deck.mixer, |_| true)
                 .ok_or(PlayError::InvalidConfiguration {
                     reason: "a mixer must have at least one slot".into(),
                 })?;
@@ -242,7 +239,6 @@ where
         index: usize,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
-        self.check_release(index)?;
         let replacement = self.active.is_replacement(index);
         let active = self.active.get_mut(index).ok_or(PlayError::NoActiveSlot)?;
         let sent = active.track.apply(TrackCommand::Release, out)?;
@@ -252,18 +248,6 @@ where
             self.active.clear_fade(slot);
         }
         Ok(sent)
-    }
-
-    fn check_release(&self, index: usize) -> Result<(), PlayError> {
-        let active = self.active.get(index).ok_or(PlayError::NoActiveSlot)?;
-        if self.active.is_replacement(index)
-            && matches!(active.role, Role::Incoming { batch: Some(_) })
-        {
-            todo!(
-                "kithara-render::DeckProtocol cancellation of a pending unattached Replace before releasing its incoming lane, without Detach of the incumbent (contract §8.6 fast-next)"
-            );
-        }
-        Ok(())
     }
 
     pub(super) fn release_all(
@@ -284,9 +268,6 @@ where
         }
         if out.dispatcher_available() < dispatcher {
             return Err(PlayError::Full("dispatcher"));
-        }
-        for index in 0..self.active.len() {
-            self.check_release(index)?;
         }
         let mut release = |out: &mut Outbox<'_, S>| {
             for active in self.active.iter_mut() {

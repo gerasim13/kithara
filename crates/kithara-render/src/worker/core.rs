@@ -20,7 +20,7 @@ use kithara_worker::{
 
 use super::{
     DecoderNode, PcmReceiver, PlayWorkerConfig, TrackConfig,
-    scheduler::{PlaybackObserver, Wake},
+    scheduler::{PlaybackObserver, StreamWake},
 };
 use crate::{
     LaneProtocol, ServiceClass, WarpSource,
@@ -217,7 +217,7 @@ where
         // renderer, and decoder stay out of the callers' inline future state;
         // only the boxed lane crosses it.
         let (receiver, mut lane) = {
-            let wake = Wake::new(self.0.dispatcher.wake_handle());
+            let wake = StreamWake::new(self.0.dispatcher.wake_handle());
             // Keep cold source preparation out of the callers' inline future state.
             let mut audio = Box::pin(Audio::<Stream<T>>::prepare(
                 audio,
@@ -363,7 +363,7 @@ mod tests {
             play.load::<File<_>, NoResamplerBackend, _>(audio(), Duration::ZERO, start, inbox);
         let source = Audio::<Stream<File<_>>>::prepare(
             audio(),
-            Arc::new(Wake::new(play.0.dispatcher.wake_handle())),
+            Arc::new(StreamWake::new(play.0.dispatcher.wake_handle())),
             play.pools().clone(),
         );
         let bytes = size_of_val(&preparation);

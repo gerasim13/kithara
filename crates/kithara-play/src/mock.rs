@@ -6,7 +6,7 @@ use kithara_command::{
 };
 use kithara_render::{
     Dispatched, DispatcherCommand, DispatcherProtocol, LoadRefusal, LoadRequest, Loaded, Open,
-    bridge::{DeckEvents, DeckProtocol, scope_channels},
+    bridge::{DeckEvents, DeckProtocol, Slot, scope_channels},
     mock::MockDeck,
     rt::{DeckMixerConfig, StreamShape},
 };
@@ -339,27 +339,31 @@ impl<S> DeckRig<S> {
 
     /// Plays the deck's block at `at` and returns the receipts of the batches
     /// it applied; a slot stopped there stood at `stopped_at` seconds.
-    pub fn block(&mut self, at: SessionFrame, stopped_at: f64) -> Vec<Receipt<DeckProtocol>> {
-        if let Err(error) = self.ring.publish() {
-            tracing::warn!(%error, "mock deck channel publication failed");
-        }
-        self.inbox.drain();
-        self.run_mixer(at, stopped_at);
-        let mut receipts = Vec::new();
-        while let Some(receipt) = self.ring.receipt() {
-            if let ScopedReceipt::Scope(scope, receipt) = receipt
-                && scope == self.scope
-            {
-                receipts.push(receipt);
-            }
-        }
-        receipts
+    pub fn block(&mut self, at: SessionFrame, stopped_at: f64) -> Result<Vec<Receipt<DeckProtocol>>, PlayError> {
+        self.pass(|mixer, level| mixer.block(level, at, stopped_at))
     }
 
-    fn run_mixer(&mut self, _at: SessionFrame, _stopped_at: f64) {
-        todo!(
-            "kithara-render::mock::MockDeck::block with a borrowed scoped level and SlotMark Stop receipts (contract §§5-6)"
-        )
+    pub fn end(&mut self, slot: Slot, at: SessionFrame) -> Result<Vec<Receipt<DeckProtocol>>, PlayError> {
+        self.pass(|mixer, level| mixer.end(level, slot, at))
+    }
+
+    fn pass(
+        &mut self,
+        run: impl FnOnce(&mut MockDeck, &mut kithara_command::LevelInbox<'_, DeckProtocol>),
+    ) -> Result<Vec<Receipt<DeckProtocol>>, PlayError> {
+        self.ring.publish().map_err(|error| PlayError::Internal(error.to_string()))?;
+        self.inbox.drain();
+        let mut level = self.inbox.scope(self.scope).ok_or(PlayError::Closed)?;
+        run(&mut self.mixer, &mut level);
+        let mut receipts = Vec::new();
+        while let Some(receipt) = self.ring.receipt() {
+            let ScopedReceipt::Scope(scope, receipt) = receipt else {
+                panic!("expected a deck receipt");
+            };
+            assert_eq!(scope, self.scope);
+            receipts.push(receipt);
+        }
+        Ok(receipts)
     }
 }
 

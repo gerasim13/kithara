@@ -119,6 +119,9 @@ pub(crate) struct Lane {
     declick: SmootherConfig,
     preload: Preload,
     pending: Option<(Seq, FrameCount)>,
+    deferred: Option<Seq>,
+    ended: bool,
+    parked: Option<(LaneFrame, Duration)>,
     jump: Option<Jump>,
 }
 
@@ -136,6 +139,9 @@ impl Lane {
             declick,
             preload: Preload::Filling(0),
             pending: None,
+            deferred: None,
+            ended: false,
+            parked: None,
             jump: None,
         }
     }
@@ -191,6 +197,10 @@ impl Lane {
         self.finish_pending(Some(self.cursor.segment));
     }
 
+    pub(crate) fn finish_segment(&mut self) {
+        self.ended = true;
+    }
+
     pub(crate) fn execute_due<T, S>(
         &mut self,
         source: &mut T,
@@ -202,17 +212,33 @@ impl Lane {
         S: HasPool<f32>,
     {
         self.inbox.drain();
+        loop {
+            let next = match self.inbox.next_deferred() {
+                Some(deferred) => deferred.park(),
+                None => break,
+            };
+            let previous = self.deferred.replace(next.ok_or(TrackFailureKind::Render)?);
+            if let Some(previous) = previous {
+                drop(self.inbox.resume(previous, self.cursor, self.cursor));
+            }
+        }
         let mut changed = LaneChange::None;
         let declick_frames = self.declick_frames(spec.sample_rate).get();
         loop {
-            let Some(due) = self.inbox.next_due(self.cursor, 1) else {
-                break;
-            };
+            let deferred = self.ended && self.inbox.frames_until_due(self.cursor).is_none_or(|frames| frames > 0);
+            let Some(due) = (if deferred && self.deferred.is_some() {
+                let seq = self.deferred.take().ok_or(TrackFailureKind::Render)?;
+                self.inbox.resume(seq, self.cursor, self.cursor)
+            } else {
+                self.inbox.next_due(self.cursor, 1)
+            }) else { break };
             if changed == LaneChange::None {
                 changed = LaneChange::Controls;
             }
             let revision = due.seq().get();
             let mut segment = None;
+            let mut restored_same = false;
+            let mut cancelled_deferred = None;
             for command in due.commands() {
                 match command {
                     LaneCommand::SetSpeed(curve) => warp
@@ -231,23 +257,36 @@ impl Lane {
                         });
                     }
                     LaneCommand::Segment { id, from, speed } => {
-                        self.cursor = LaneFrame {
-                            segment: *id,
-                            frame: 0,
-                        };
+                        if *id == self.cursor.segment && self.deferred.is_some() {
+                            restored_same = true;
+                            cancelled_deferred = self.deferred.take();
+                            continue;
+                        }
+                        let restored = self.parked.filter(|(cursor, _)| cursor.segment == *id);
+                        if deferred {
+                            self.parked = Some((self.cursor, self.position.unwrap_or(*from)));
+                        } else {
+                            self.parked = None;
+                        }
+                        cancelled_deferred = self.deferred.take();
+                        self.cursor = restored.map_or(LaneFrame { segment: *id, frame: 0 }, |(cursor, _)| cursor);
+                        let from = restored.map_or(*from, |(_, position)| position);
                         self.position = Some(landing_position(
                             source
-                                .seek(*from)
+                                .seek(from)
                                 .map_err(|error| TrackFailureKind::from(&error))?,
                         ));
                         warp.reset();
                         warp.set_speed(speed.clone(), revision)
                             .map_err(|_| TrackFailureKind::Render)?;
                         self.jump = None;
+                        self.ended = false;
                         segment = Some(*id);
                         changed = LaneChange::Source;
                     }
                     LaneCommand::SetHostRate { id, rate } => {
+                        cancelled_deferred = self.deferred.take();
+                        self.parked = None;
                         source.set_host_sample_rate(*rate);
                         warp.reset();
                         self.cursor = LaneFrame {
@@ -255,6 +294,7 @@ impl Lane {
                             frame: 0,
                         };
                         self.jump = None;
+                        self.ended = false;
                         segment = Some(*id);
                         changed = LaneChange::Source;
                     }
@@ -272,8 +312,11 @@ impl Lane {
             } else {
                 due.apply(LaneApplied {
                     engine_latency: latency,
-                    ready: None,
+                    ready: restored_same.then_some(self.cursor.segment),
                 });
+            }
+            if let Some(seq) = cancelled_deferred {
+                drop(self.inbox.resume(seq, self.cursor, self.cursor));
             }
         }
         if let Some(Jump::Down {
@@ -489,6 +532,46 @@ mod tests {
             "retriggering Jump must not reset gain to unity: {previous} -> {}",
             after.samples[0]
         );
+    }
+
+    #[kithara::test]
+    #[case::seek(false)]
+    #[case::cancel_pending_repeat(true)]
+    fn a_current_segment_command_only_preserves_the_cursor_when_it_cancels_a_repeat(
+        #[case] pending_repeat: bool,
+    ) {
+        let spec = AudioSpec::new(1, NonZeroU32::new(44_100).expect("rate"));
+        let (mut sender, inbox) = channel(ChannelConfig::builder().build());
+        let mut lane = Lane::new(
+            inbox,
+            NonZeroUsize::new(1).expect("preload"),
+            crate::consts::DEFAULT_DECLICK,
+        );
+        lane.cursor.frame = 64;
+        let mut warp = Warp::new((), &WarpConfig::builder().build())
+            .renderer(spec, crate::test_pools::pools());
+        if pending_repeat {
+            sender.send(When::Deferred, Batch {
+                basis: Vec::new(),
+                commands: vec![LaneCommand::Segment {
+                    id: SegmentId::FIRST.next(),
+                    from: Duration::ZERO,
+                    speed: SpeedCurve::Constant(1.0),
+                }],
+            }).expect("repeat credit");
+        }
+        sender.send(When::Next, Batch {
+            basis: Vec::new(),
+            commands: vec![LaneCommand::Segment {
+                id: SegmentId::FIRST,
+                from: Duration::from_secs(1),
+                speed: SpeedCurve::Constant(1.0),
+            }],
+        }).expect("segment credit");
+        lane.execute_due(&mut JumpSource, &mut warp, spec).expect("segment accepted");
+        assert_eq!(lane.cursor.frame, if pending_repeat { 64 } else { 0 });
+        assert_eq!(lane.position, if pending_repeat { None } else { Some(Duration::from_secs(1)) });
+        assert!(lane.deferred.is_none());
     }
 
     #[kithara::test]

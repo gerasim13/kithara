@@ -226,8 +226,8 @@ where
         self.call(QueueCommand::ResetEq)
     }
 
-    pub fn notify_interruption(&self, kind: InterruptionKind) {
-        let _ = self.call(QueueCommand::NotifyInterruption(kind));
+    pub fn notify_interruption(&self, kind: InterruptionKind) -> Result<(), QueueError> {
+        self.call(QueueCommand::NotifyInterruption(kind))
     }
 
     /// Whether the queue is gone, so no command reaches it.

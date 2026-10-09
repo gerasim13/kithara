@@ -227,6 +227,61 @@ fn assert_near(actual: f32, expected: f32, what: &str) {
     );
 }
 
+#[kithara::test(tokio)]
+async fn a_deck_mix_shows_once_its_mixer_applies_it() {
+    let harness = MixHarness::new(1).await;
+    let player = harness.players[0].control().clone();
+    let mut events = player.subscribe::<kithara::play::PlayerEvent>();
+    let control = player.clone();
+    harness.host.run(move || {
+        control.set_volume(0.5).expect("send volume");
+        control.set_muted(true).expect("send mute");
+    }).await;
+    assert_eq!(player.volume(), 1.0);
+    assert!(!player.is_muted());
+    harness.render_block().await;
+    assert_eq!(player.volume(), 0.5);
+    assert!(player.is_muted());
+    assert!(matches!(events.try_recv().expect("volume event").event,
+        kithara::play::PlayerEvent::VolumeChanged { volume: 0.5 }));
+    assert!(matches!(events.try_recv().expect("mute event").event,
+        kithara::play::PlayerEvent::MuteChanged { muted: true }));
+    let control = player.clone();
+    let error = harness.host.run(move || control.set_level(2.0)).await;
+    assert!(matches!(error, Err(QueueError::Play(PlayError::MixLevel { level: 2.0 }))));
+    harness.render_block().await;
+    assert_eq!(player.volume(), 0.5);
+    harness.close().await;
+}
+
+#[kithara::test(tokio)]
+async fn an_eq_layout_and_gain_show_once_the_mixer_applies_them() {
+    let harness = MixHarness::new(1).await;
+    let player = harness.players[0].control().clone();
+    assert_eq!(player.eq_band_count(), 10);
+    assert_eq!(player.eq_gain(0), Some(0.0));
+    let control = player.clone();
+    harness.host.run(move || {
+        control.set_eq_layout(kithara::effects::eq::generate_log_spaced_bands(3))
+            .expect("send layout");
+        control.set_eq_gain(1, -6.0).expect("send gain");
+    }).await;
+    assert_eq!(player.eq_band_count(), 10);
+    assert_eq!(player.eq_gain(1), Some(0.0));
+    harness.render_block().await;
+    assert_eq!(player.eq_band_count(), 3);
+    assert_eq!(player.eq_gain(1), Some(-6.0));
+    assert_eq!(player.eq_gain(3), None);
+    let control = player.clone();
+    let error = harness.host.run(move || control.set_eq_gain(5, 0.0)).await;
+    assert!(matches!(error, Err(QueueError::Play(PlayError::EqBandOutOfRange { band: 5, bands: 3 }))));
+    let control = player.clone();
+    harness.host.run(move || control.reset_eq().expect("send reset")).await;
+    harness.render_block().await;
+    assert_eq!(player.eq_gain(1), Some(0.0));
+    harness.close().await;
+}
+
 #[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
 #[case::two(vec![constant_four(), constant_two()], &[0.4, 0.2], &[0.5, 0.25], "two-player sum")]
 #[case::four(

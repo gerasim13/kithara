@@ -8,7 +8,7 @@ use std::{
 use delegate::delegate;
 use futures::future::{Either, select};
 use kithara_audio::{
-    AudioObserver, AudioReadError, AudioReader, ChunkOutcome, ReadOutcome, ResamplerBackend,
+    Audio, AudioObserver, AudioReadError, AudioReader, ChunkOutcome, ReadOutcome, ResamplerBackend,
     SeekOutcome,
 };
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
@@ -47,6 +47,32 @@ pub struct Resource {
 }
 
 impl Resource {
+    /// Opens a decoded source for direct pulls by the dispatcher owning `wake`.
+    ///
+    /// # Errors
+    /// Returns source detection, configuration, or decoder initialization failures.
+    pub async fn open<S, B>(config: ResourceConfig<S, B>, wake: kithara_worker::Wake) -> Result<Self, DecodeError>
+    where
+        B: Default + ResamplerBackend,
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    {
+        let src: Arc<str> = Arc::from(config.src.to_string());
+        let source_type = SourceType::detect(&config.src)?;
+        let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
+            detail: "ResourceConfig requires an explicit PlayWorker",
+        })?;
+        let pools = worker.pools().clone();
+        let wake: Arc<dyn kithara_stream::WorkerWake> = Arc::new(kithara_render::StreamWake::new(wake));
+        Ok(match source_type {
+            SourceType::RemoteFile(_) | SourceType::LocalFile(_) => Self::from_reader(
+                Audio::prepare(config.build_file_config(&worker, None), wake, pools).await?, Some(src),
+            ),
+            SourceType::HlsStream(_) => Self::from_reader(
+                Audio::prepare(config.build_hls_config(&worker, None)?, wake, pools).await?, Some(src),
+            ),
+        })
+    }
+
     /// Wraps a directly owned reader and prepares its first input off-RT.
     #[must_use]
     pub fn from_reader<R: AudioReader + 'static>(mut reader: R, src: Option<Arc<str>>) -> Self {
@@ -424,7 +450,6 @@ mod tests {
     };
     use kithara_command::{Batch, Outcome, Seq, When};
     use kithara_render::{LaneCommand, LaneTask};
-    use kithara_worker::Task;
     use kithara_test_utils::TestTempDir;
 
     use super::*;
@@ -432,6 +457,36 @@ mod tests {
         PlayWorker, PlayWorkerConfig, ResourceSrc, consts,
         test_pools::{TestPools, pools},
     };
+
+    #[kithara::test(tokio)]
+    async fn a_direct_resource_decodes_to_the_end_without_the_play_dispatcher() {
+        let dir = TestTempDir::new();
+        let path = dir.path().join("direct.wav");
+        let spec = AudioSpec::new(2, crate::mock::SAMPLE_RATE);
+        crate::mock::write_pcm_wav(&path, &vec![0.5; 4096 * 2], spec).expect("float WAV");
+        let cancel = CancelToken::root();
+        cancel.cancel();
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).cancel(cancel).build());
+        let config: ResourceConfig<TestPools> = ResourceConfig::for_src(ResourceSrc::Path(path))
+            .store(AssetStore::builder(pools()).backend(StorageBackend::Memory).build())
+            .worker(worker)
+            .build();
+        let resource = Resource::open(config, kithara_worker::Wake::default()).await.expect("direct reader");
+        let mut reader: Box<dyn AudioReader> = resource.into();
+        assert_eq!(reader.spec().sample_rate, crate::mock::SAMPLE_RATE);
+        let mut frames = 0;
+        for _ in 0..8192 {
+            match reader.next_chunk().expect("decoded chunk") {
+                ChunkOutcome::Chunk(chunk) => frames += chunk.frames(),
+                ChunkOutcome::Pending { .. } => kithara_platform::tokio::task::yield_now().await,
+                ChunkOutcome::Eof { .. } => {
+                    assert_eq!(frames, 4096);
+                    return;
+                }
+            }
+        }
+        panic!("direct reader did not reach EOF");
+    }
 
     #[kithara::test]
     #[case::configured(Some(64), 255)]
@@ -679,7 +734,7 @@ mod tests {
         }
     }
 
-    impl kithara_render::LaneTask for EofReader {
+    impl LaneTask for EofReader {
         fn set_priority(&mut self, _class: kithara_render::ServiceClass) {}
 
         fn poll_commands(&mut self, _context: &mut std::task::Context<'_>) -> std::task::Poll<()> {

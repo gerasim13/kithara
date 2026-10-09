@@ -69,6 +69,8 @@ pub enum TrackCommand<S> {
     PlayAfter {
         track: Slot,
     },
+    /// Supersedes scheduled slot batches without stopping the sounding segment.
+    Supersede,
     Release,
     Evict {
         at: When<SessionFrame>,
@@ -159,6 +161,8 @@ struct Adoption {
     seq: Seq,
     caller: Seq,
     segment: SegmentId,
+    parked: Option<(SegmentId, Position)>,
+    cancelled: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -197,6 +201,7 @@ pub struct PlayerImpl<S> {
     attaching: Option<Attaching>,
     segment: SegmentId,
     ready: Option<SegmentId>,
+    issued_segment: SegmentId,
     adopting: Vec<Adoption>,
     adopt_retry: Option<Seq>,
     lane_commands: Vec<LaneOperation>,
@@ -208,6 +213,7 @@ pub struct PlayerImpl<S> {
     segment_speed: f32,
     play: Option<When<SessionFrame>>,
     repeat: bool,
+    releasing: bool,
     resume: Option<SlotMark>,
     mark: Option<SlotMark>,
     attach_at: Option<SessionFrame>,
@@ -236,6 +242,7 @@ impl<S> PlayerImpl<S> {
             attaching: None,
             segment: SegmentId::FIRST,
             ready: None,
+            issued_segment: SegmentId::FIRST,
             adopting: Vec::new(),
             adopt_retry: None,
             lane_commands: Vec::new(),
@@ -244,6 +251,7 @@ impl<S> PlayerImpl<S> {
             segment_speed: config.settings.speed(),
             play: None,
             repeat: false,
+            releasing: false,
             resume: None,
             mark: None,
             attach_at: None,
@@ -380,6 +388,9 @@ impl<S> PlayerImpl<S> {
     }
 
     fn send_lane(&mut self, command: LaneCommand, when: When<LaneFrame>) -> Result<Seq, PlayError> {
+        if self.adopting.iter().any(|adoption| adoption.cancelled) {
+            return Err(PlayError::NotReady);
+        }
         let session = match when {
             When::At(frame) => self.mark.and_then(|mark| session_at(mark, frame)),
             When::Next | When::Deferred => None,
@@ -718,7 +729,7 @@ impl<S> PlayerImpl<S> {
         if attached && out.deck_available() == 0 {
             return Err(PlayError::Full("deck"));
         }
-        let segment = self.segment.next();
+        let segment = self.issued_segment.next();
         let command = match rate {
             Some(rate) => LaneCommand::SetHostRate { id: segment, rate },
             None => LaneCommand::Segment {
@@ -728,6 +739,7 @@ impl<S> PlayerImpl<S> {
             },
         };
         let seq = self.send_lane(command, When::Next)?;
+        self.issued_segment = segment;
         if rate.is_none() {
             self.settings.track(seq, When::Next, change);
         }
@@ -758,6 +770,8 @@ impl<S> PlayerImpl<S> {
                     seq: adopt,
                     caller: adopt,
                     segment,
+                    parked: None,
+                    cancelled: false,
                 });
             }
             return Ok(adopt);
@@ -777,6 +791,27 @@ impl<S> PlayerImpl<S> {
         if let Some(index) = self.adopting.iter().position(|adopt| adopt.seq == seq) {
             let adoption = self.adopting.remove(index);
             answered = adoption.caller;
+            if adoption.cancelled {
+                if adoption.segment == self.segment
+                    && matches!(outcome, Outcome::Rejected(Rejection::Stale))
+                    && let Some((segment, position)) = adoption.parked
+                {
+                    if let Err(error) = self.send_lane(LaneCommand::Segment {
+                        id: segment,
+                        from: position,
+                        speed: SpeedCurve::Constant(self.settings.projected().speed()),
+                    }, When::Next) {
+                        return Settled::Rejected {
+                            seq: answered,
+                            reason: Rejection::Refused(error),
+                        };
+                    }
+                    self.segment = segment;
+                    self.ready = None;
+                }
+                self.repeat = false;
+                return Settled::Pending;
+            }
             if matches!(
                 outcome,
                 Outcome::Rejected(
@@ -880,6 +915,8 @@ impl<S> PlayerImpl<S> {
                     seq,
                     caller,
                     segment: self.segment,
+                    parked: None,
+                    cancelled: false,
                 });
                 self.adopt_retry = None;
             }
@@ -969,18 +1006,20 @@ impl<S> PlayerImpl<S> {
         Ok(seq)
     }
 
-    fn configure(
-        &mut self,
+    fn configuring(
+        &self,
         change: TrackSettingsChange,
         at: When<SessionFrame>,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Option<Seq>, PlayError> {
+        out: &Outbox<'_, S>,
+    ) -> Result<Configuring, PlayError> {
+        if self.adopting.iter().any(|adoption| adoption.cancelled) {
+            return Err(PlayError::NotReady);
+        }
         if self.lane.is_none() {
             if !matches!(at, When::Next) {
                 return Err(PlayError::Untimed);
             }
-            self.settings.apply(change)?;
-            return Ok(None);
+            return Ok(Configuring::Apply(TrackSettings::check(change)?));
         }
         let when = self.lane_when(at, out)?;
         let change = TrackSettings::check(change)?;
@@ -1005,11 +1044,32 @@ impl<S> PlayerImpl<S> {
                     matches!(operation.command, LaneCommand::SetSpeed(SpeedCurve::Constant(_)))
                 })
         {
-            return Ok(None);
+            return Ok(Configuring::Unchanged);
         }
-        let seq = self.send_lane(LaneCommand::from(change), when)?;
-        self.settings.track(seq, when, change);
-        Ok(Some(seq))
+        if self.lane.as_ref().is_none_or(|lane| lane.available() == 0) {
+            return Err(PlayError::Full("lane"));
+        }
+        Ok(Configuring::Send(when, change))
+    }
+
+    fn configure(
+        &mut self,
+        change: TrackSettingsChange,
+        at: When<SessionFrame>,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, PlayError> {
+        match self.configuring(change, at, out)? {
+            Configuring::Apply(change) => {
+                self.settings.apply(change)?;
+                Ok(None)
+            }
+            Configuring::Unchanged => Ok(None),
+            Configuring::Send(when, change) => {
+                let seq = self.send_lane(LaneCommand::from(change), when)?;
+                self.settings.track(seq, when, change);
+                Ok(Some(seq))
+            }
+        }
     }
 
     fn settle_lane(&mut self) {
@@ -1204,15 +1264,17 @@ impl<S> Player<S> for PlayerImpl<S> {
                 if out.deck_available() == 0 {
                     return Err(PlayError::Full("deck"));
                 }
-                let segment = self.segment.next();
+                let parked = (self.segment, self.position);
+                let segment = self.issued_segment.next();
                 self.send_lane(
                     LaneCommand::Segment {
                         id: segment,
                         from: Position::ZERO,
                         speed: SpeedCurve::Constant(self.settings.projected().speed()),
                     },
-                    When::Next,
+                    When::Deferred,
                 )?;
+                self.issued_segment = segment;
                 let seq = out.deferred(vec![DeckPart::Adopt { slot, segment }])?;
                 self.segment = segment;
                 self.playback_commands.clear();
@@ -1223,6 +1285,8 @@ impl<S> Player<S> for PlayerImpl<S> {
                     seq,
                     caller: seq,
                     segment,
+                    parked: Some(parked),
+                    cancelled: false,
                 });
                 Ok(Some(seq))
             }
@@ -1231,6 +1295,22 @@ impl<S> Player<S> for PlayerImpl<S> {
                 vec![DeckPart::Chain { from: track, to: slot }],
                 out,
             ),
+            TrackCommand::Supersede => {
+                if self.adopting.iter().any(|adoption| adoption.parked.is_some())
+                    && self.lane.as_ref().is_none_or(|lane| lane.available() == 0)
+                {
+                    return Err(PlayError::Full("lane"));
+                }
+                out.supersede(slot)?;
+                for adoption in &mut self.adopting {
+                    if adoption.parked.is_some() {
+                        adoption.cancelled = true;
+                    }
+                }
+                self.adopt_retry = None;
+                self.repeat = false;
+                Ok(None)
+            }
             TrackCommand::Release => {
                 self.play = None;
                 self.playback_commands.clear();
@@ -1239,6 +1319,13 @@ impl<S> Player<S> for PlayerImpl<S> {
                 }
                 if self.status == TrackStatus::Released {
                     self.release_lane(out)?;
+                    return Ok(None);
+                }
+                if self.attaching.is_some_and(|attach| attach.replacement && attach.seq.is_some()) {
+                    if !self.releasing {
+                        out.supersede(slot)?;
+                        self.releasing = true;
+                    }
                     return Ok(None);
                 }
                 if self.attached() {
@@ -1341,6 +1428,10 @@ impl<S> Player<S> for PlayerImpl<S> {
             if let Err(error) = self.release_lane(out) {
                 warn!(%error, "lane release waits for room");
             }
+        } else if self.releasing && self.attaching.is_none() && self.playback_commands.is_empty() {
+            if let Err(error) = self.send_playback(When::Next, vec![DeckPart::Detach { slot: self.slot }], out) {
+                warn!(%error, "released replacement waits to detach");
+            }
         } else if self.attached()
             && self.ready == Some(self.segment)
             && let Some(at) = self.play
@@ -1377,7 +1468,19 @@ impl<S> Player<S> for PlayerImpl<S> {
     }
 }
 
+enum Configuring {
+    Apply(TrackSettingsChange),
+    Unchanged,
+    Send(When<LaneFrame>, TrackSettingsChange),
+}
+
 impl<S> Track<S> for PlayerImpl<S> {
+    fn admit(&mut self, change: TrackSettingsChange, at: When<SessionFrame>, out: &Outbox<'_, S>) -> Result<(), PlayError> {
+        self.observe(out);
+        self.settle_lane();
+        self.configuring(change, at, out).map(drop)
+    }
+
     fn projected(&self) -> TrackSettings {
         self.settings.projected()
     }

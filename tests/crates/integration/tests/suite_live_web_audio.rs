@@ -230,7 +230,6 @@ async fn live_web_audio_plays_at_session_rate() {
     )
     .expect("build the product web Host");
     let (sender, receiver) = wasm::worker_host_channel(&host).expect("open the Worker route");
-    wasm::warm_up_audio(&host).expect("warm up the audio context");
 
     let (pcm_tx, mut pcm_rx) = HeapRb::<f32>::new(TAP_CAPACITY).split();
     let drops = Arc::new(AtomicU64::new(0));
@@ -505,7 +504,6 @@ async fn two_decks_in_one_host_follow_the_crossfader() {
     )
     .expect("build the product web Host");
     let (sender, receiver) = wasm::worker_host_channel(&host).expect("open the Worker route");
-    wasm::warm_up_audio(&host).expect("warm up the audio context");
 
     let (pcm_tx, mut pcm_rx) = HeapRb::<f32>::new(TAP_CAPACITY).split();
     let drops = Arc::new(AtomicU64::new(0));

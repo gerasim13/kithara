@@ -4,7 +4,7 @@ use kithara_bufpool::HasPool;
 use kithara_events::{EventReceiver, EventSet, TrackId};
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    EngineLoadSnapshot, Player, PlayerStatus, Position, SlotSnapshot, TrackFactory, TrackSettings,
+    DeckMixSettings, DeckMixerConfig, DeckSnapshot, EngineLoadSnapshot, Player, PlayerStatus, Position, SlotSnapshot, TrackFactory, TrackSettings,
     TrackSnapshot, TrackStatus as PlayingStatus,
 };
 
@@ -14,6 +14,19 @@ use crate::{
     TrackSource, TrackStatus,
     track::{TrackRecord, TrackRow, Tracks},
 };
+
+#[derive(Clone)]
+pub(super) struct DeckObservation {
+    pub(super) mix: DeckMixSettings,
+    pub(super) mixer: DeckSnapshot,
+    pub(super) suspended: bool,
+}
+
+impl DeckObservation {
+    pub(super) fn new(config: DeckMixerConfig) -> Self {
+        Self { mix: config.mix(), mixer: DeckSnapshot::new(config), suspended: false }
+    }
+}
 
 /// The queue's published rows, sounding track and navigation settings.
 #[derive_where::derive_where(Clone)]
@@ -33,6 +46,8 @@ where
     slot: Option<SlotSnapshot>,
     sample_rate: u32,
     held_position: Option<Position>,
+    pub(super) deck: DeckObservation,
+    engine_load: EngineLoadSnapshot,
 }
 
 /// Handles only read this snapshot; the queue is its sole publisher.
@@ -51,6 +66,7 @@ where
         settings: QueueSettings,
         initial: TrackSettings,
         action: ActionAtItemEnd,
+        deck: DeckObservation,
     ) -> Self {
         Self(Arc::new(ArcSwap::from_pointee(QueueSnapshot {
             current: None,
@@ -65,6 +81,8 @@ where
             slot: None,
             sample_rate: 0,
             held_position: None,
+            deck,
+            engine_load: EngineLoadSnapshot::default(),
         })))
     }
 
@@ -94,7 +112,7 @@ where
             .map(|track| track.snapshot().as_ref().clone());
         let slot = track
             .as_ref()
-            .and_then(|track| self.deck.slots.get(usize::from(track.slot.get())).copied());
+            .and_then(|track| self.deck.mixer.slots.get(usize::from(track.slot.get())).copied());
         let published = self.view.read();
         let rows = if published.revision == self.tracks.revision() {
             Arc::clone(&published.rows)
@@ -112,8 +130,10 @@ where
             action: self.config.action_at_item_end,
             initial: self.config.track,
             slot,
-            sample_rate: self.deck.sample_rate,
+            sample_rate: self.deck.mixer.sample_rate,
             held_position: self.held_position,
+            deck: self.deck.clone(),
+            engine_load: self.config.prep.as_ref().map_or_else(EngineLoadSnapshot::default, |prep| prep.engine_load.snapshot()),
         }
     }
 
@@ -258,8 +278,8 @@ where
 
     #[must_use]
     pub fn is_playing(&self) -> bool {
-        self.view
-            .read()
+        let snapshot = self.view.read();
+        !snapshot.deck.suspended && snapshot
             .track
             .as_ref()
             .is_some_and(|track| matches!(track.status, PlayingStatus::Playing { .. }))
@@ -268,6 +288,7 @@ where
     #[must_use]
     pub fn rate(&self) -> f32 {
         let snapshot = self.view.read();
+        if snapshot.deck.suspended { return 0.0; }
         snapshot
             .track
             .as_ref()
@@ -349,42 +370,44 @@ where
             buffered: snapshot.slot.map(|slot| slot.frontier.max(slot.cached)),
             duration: track.duration.map(|duration| duration.as_secs_f64()),
             position: Some(track.position.as_secs_f64()),
-            playing: matches!(track.status, PlayingStatus::Playing { .. }),
+            playing: !snapshot.deck.suspended && matches!(track.status, PlayingStatus::Playing { .. }),
         }
+    }
+
+    /// Blocks rendered by this deck's mixer, published by its Host pass.
+    #[must_use]
+    pub fn mixer_blocks(&self) -> u64 {
+        self.view.read().deck.mixer.blocks
+    }
+
+    /// Real-time counters from the same published mixer observation.
+    #[must_use]
+    pub fn mixer_metrics(&self) -> kithara_play::RtMetricsSnapshot {
+        self.view.read().deck.mixer.metrics
     }
 
     #[must_use]
     pub fn engine_load(&self) -> EngineLoadSnapshot {
-        todo!(
-            "kithara-host DeckPass worker load observation for the published queue snapshot; DeckSnapshot only carries RT counters (contract §8.1; skeleton queue view)"
-        )
+        self.view.read().engine_load
     }
 
     #[must_use]
     pub fn volume(&self) -> f32 {
-        todo!(
-            "kithara-host DeckPass published applied deck mix volume (contract §8.4; skeleton queue view)"
-        )
+        f32::from(self.view.read().deck.mix.volume())
     }
 
     #[must_use]
     pub fn is_muted(&self) -> bool {
-        todo!(
-            "kithara-host DeckPass published applied deck mute (contract §8.4; skeleton queue view)"
-        )
+        self.view.read().deck.mix.muted()
     }
 
     #[must_use]
     pub fn eq_band_count(&self) -> usize {
-        todo!(
-            "kithara-host DeckPass published applied deck EQ layout (contract §8.4; skeleton queue view)"
-        )
+        self.view.read().deck.mixer.eq.bands()
     }
 
     #[must_use]
     pub fn eq_gain(&self, band: usize) -> Option<f32> {
-        todo!(
-            "kithara-host DeckPass published applied deck EQ band {band} (contract §8.4; skeleton queue view)"
-        )
+        self.view.read().deck.mixer.eq.gain(band).map(f32::from)
     }
 }

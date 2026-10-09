@@ -59,6 +59,10 @@ pub trait HostedDeck<S>: MaybeSend + 'static {
 /// What the owner tells its deck on one pass.
 #[derive(Clone, Copy, Debug)]
 pub struct DeckPass<'a> {
+    /// Mix confirmed by the Host's Applied receipts.
+    pub mix: crate::DeckMixSettings,
+    /// The platform holds the output until the mixer has published past suspension.
+    pub suspended: bool,
     /// The session frame the pass stands on.
     pub now: SessionFrame,
     /// Frames a batch sent now takes to reach the mixer: the session thread,

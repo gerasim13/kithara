@@ -301,15 +301,17 @@ where
         if self.clock.is_none() {
             return;
         }
-        if self.deck.sample_rate != 0
-            && self.deck.sample_rate != pass.deck.sample_rate
+        if self.deck.mixer.sample_rate != 0
+            && self.deck.mixer.sample_rate != pass.deck.sample_rate
             && let Some(rate) = NonZeroU32::new(pass.deck.sample_rate)
             && let Err(error) = self.set_host_rate(rate, out)
         {
             warn!(%error, "queue tracks could not adopt the output rate");
             return;
         }
-        self.deck.clone_from(pass.deck);
+        self.deck.mix = pass.mix;
+        self.deck.suspended = pass.suspended;
+        self.deck.mixer.clone_from(pass.deck);
     }
 
     fn set_host_rate(

@@ -4,6 +4,11 @@ use kithara_dsp::param::{DEFAULT_SETTLE_RATIO, SmootherConfig};
 use kithara_platform::time::Duration;
 use kithara_signal::FrameCount;
 
+pub(crate) const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
+    Some(value) => value,
+    None => unreachable!(),
+};
+
 /// Tracks a deck holds at once.
 pub(crate) const DEFAULT_DECK_SLOTS: NonZeroUsize = match NonZeroUsize::new(4) {
     Some(value) => value,

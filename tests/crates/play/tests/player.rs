@@ -61,6 +61,15 @@ impl RenderSink for Capture {
     }
 }
 
+fn render_block(host: &mut Host<TestPools>) {
+    let request = OfflineRenderRequest::builder()
+        .spec(AudioSpec::new(2, mock::SAMPLE_RATE))
+        .frames(0..512)
+        .build();
+    host.render(&request, &CancelScope::new(None).token(), &mut Capture::default())
+        .expect("the deck applies its pending batch");
+}
+
 #[derive(Clone, Copy)]
 enum PlayerBasicScenario {
     AdvanceOnEmpty,
@@ -105,18 +114,21 @@ fn player_basic_behaviors(#[case] scenario: PlayerBasicScenario) {
 
 #[kithara::test]
 fn player_volume_clamps() {
-    let (_host, player) = player();
+    let (mut host, player) = player();
     player.set_volume(2.0).expect("volume clamps");
+    render_block(&mut host);
     assert!((player.volume() - 1.0).abs() < f32::EPSILON);
     player.set_volume(-1.0).expect("volume clamps");
+    render_block(&mut host);
     assert!((player.volume() - 0.0).abs() < f32::EPSILON);
 }
 
 #[kithara::test]
 fn player_muted() {
-    let (_host, player) = player();
+    let (mut host, player) = player();
     assert!(!player.is_muted());
     player.set_muted(true).expect("mute is accepted");
+    render_block(&mut host);
     assert!(player.is_muted());
 }
 
@@ -151,9 +163,10 @@ fn player_prefetch_duration() {
 
 #[kithara::test]
 fn player_events_subscribe() {
-    let (_host, player) = player();
+    let (mut host, player) = player();
     let mut rx = player.subscribe::<PlayerEvent>();
     player.set_volume(0.5).expect("volume is accepted");
+    render_block(&mut host);
     let event = rx.try_recv();
     assert!(event.is_ok());
 }
@@ -190,11 +203,13 @@ fn a_configured_sample_rate_reaches_the_engine_it_prepares() {
 
 #[kithara::test]
 fn eq_band_count_tracks_a_replacement_layout_before_start() {
-    let (_host, player) = player();
+    let (mut host, player) = player();
     player.set_eq_layout(generate_log_spaced_bands(3)).expect("initial layout");
+    render_block(&mut host);
     assert_eq!(player.eq_band_count(), 3);
 
     player.set_eq_layout(generate_log_spaced_bands(4)).unwrap();
+    render_block(&mut host);
     assert_eq!(player.eq_band_count(), 4);
 }
 
@@ -218,6 +233,7 @@ fn player_config_builder() {
     .expect("offline host starts");
     let player = _host.insert(Queue::new(config)).expect("host accepts its deck");
     player.set_eq_layout(generate_log_spaced_bands(5)).expect("valid EQ layout");
+    render_block(&mut _host);
     assert_eq!(values.mixer.slots().get(), 8);
     assert!((values.track.speed() - 0.5).abs() < f32::EPSILON);
     assert!((values.settings.crossfade().duration - 2.5).abs() < f32::EPSILON);
@@ -227,11 +243,12 @@ fn player_config_builder() {
 
 #[kithara::test(tokio)]
 async fn synchronous_player_events_remain_in_order() {
-    let (_host, player) = player();
+    let (mut host, player) = player();
     let mut rx = player.subscribe::<PlayerEvent>();
 
     player.set_volume(0.5).expect("volume is accepted");
     player.set_muted(true).expect("mute is accepted");
+    render_block(&mut host);
     player.set_rate(2.0).expect("rate is accepted");
 
     let e1 = rx.try_recv();

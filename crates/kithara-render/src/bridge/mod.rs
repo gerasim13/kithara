@@ -13,4 +13,4 @@ pub use protocol::{
     DeckEqChange, DeckEvent, DeckPart, DeckProtocol, DeckRefusal, Fade, FadeDir, PlaybackFault,
     Returned, Slot, SlotState,
 };
-pub use snapshot::{DeckSnapshot, SlotSnapshot};
+pub use snapshot::{DeckSnapshot, EqSnapshot, SlotSnapshot};

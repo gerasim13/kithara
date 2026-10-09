@@ -1,10 +1,10 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_dsp::param::{SmoothedParam, SmootherConfig};
 use kithara_effects::{
     GainDb,
-    eq::{EqConfig, EqLayout, StereoEq},
+    eq::{EqConfig, EqLayout, StereoEq, generate_log_spaced_bands},
 };
 
 use super::processor::StreamShape;
@@ -23,20 +23,26 @@ impl RenderPass {
     /// A deck's gain runs from silence to unity.
     const GAIN_SPAN: f32 = 1.0;
 
-    pub(crate) fn new<S>(pools: &PoolRegion<S>, shape: StreamShape, gain: f32) -> Self
+    pub(crate) fn new<S>(pools: &PoolRegion<S>, shape: StreamShape, gain: f32, config: super::DeckMixerConfig) -> Result<Self, PoolError>
     where
         S: HasPool<f32>,
     {
-        Self {
+        let eq_config = EqConfig::builder(pools.clone()).build();
+        let mut eq = StereoEq::new(&eq_config, shape.sample_rate);
+        if config.eq_bands() > 0 {
+            let layout = EqLayout::new(&eq_config, &generate_log_spaced_bands(config.eq_bands()), config.sample_rate())?;
+            eq.take_layout(Box::new(layout));
+        }
+        Ok(Self {
             gain: SmoothedParam::new(
                 gain,
                 Self::GAIN_SPAN,
                 SmootherConfig::default(),
                 shape.sample_rate,
             ),
-            eq: StereoEq::new(&EqConfig::builder(pools.clone()).build(), shape.sample_rate),
+            eq,
             priming: true,
-        }
+        })
     }
 
     /// Whether this is the first range the deck renders; the output gain moves to its target.
@@ -66,6 +72,8 @@ impl RenderPass {
             pub(crate) fn set_gain(&mut self, gain: f32);
         }
         to self.eq {
+            #[call(read_gains)]
+            pub(crate) fn read_eq(&self, gains: &mut [GainDb]) -> usize;
             /// Ramp `band` of the deck's equaliser to `gain` from the next frame rendered.
             #[call(set_gain)]
             pub(crate) fn set_eq_gain(&mut self, band: usize, gain: GainDb);

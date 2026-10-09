@@ -15,7 +15,7 @@ use ringbuf::{
 };
 use triple_buffer::{Input, Output, triple_buffer};
 
-use super::scheduler::Wake;
+use super::scheduler::StreamWake;
 
 #[cfg(test)]
 pub(crate) mod tests {
@@ -40,7 +40,7 @@ pub(crate) mod tests {
                     reverse: reverse_tx,
                     playing: playing_tx,
                     ready: None,
-                    wake: Wake::new(kithara_worker::Wake::default()),
+                    wake: StreamWake::new(kithara_worker::Wake::default()),
                     spec,
                     duration: Some(duration),
                     position: Duration::ZERO,
@@ -150,7 +150,7 @@ pub struct PcmReceiver {
     reverse: HeapProd<PcmPacket>,
     playing: Input<bool>,
     ready: Option<Arc<ThreadGate>>,
-    wake: Wake,
+    wake: StreamWake,
     spec: AudioSpec,
     duration: Option<Duration>,
     position: Duration,
@@ -163,7 +163,7 @@ impl PcmReceiver {
     pub(super) fn new<T>(
         capacity: NonZeroUsize,
         block_on_underrun: bool,
-        wake: Wake,
+        wake: StreamWake,
         audio: &Audio<T>,
         position: Duration,
     ) -> (Self, PcmProducer) {
@@ -343,7 +343,7 @@ pub(super) fn packet_fixture(blocking: bool, spec: AudioSpec) -> (PcmReceiver, P
             reverse: returned,
             playing,
             ready: ready.clone(),
-            wake: Wake::new(dispatcher.wake_handle()),
+            wake: StreamWake::new(dispatcher.wake_handle()),
             spec,
             duration: None,
             position: Duration::ZERO,

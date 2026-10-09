@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 
 use kithara::{events::TrackId, play::InterruptionKind, signal::AudioSpec};
 use kithara_integration_tests::offline::{
-    OfflinePlayer, OfflinePlayerOptions, resource_from_reader,
+    OfflinePlayer, OfflinePlayerOptions,
 };
 use kithara_test_fixtures::integration_fixtures::constant_half;
 
@@ -27,7 +27,7 @@ async fn a_suspended_output_reports_silence_until_the_rt_processor_runs_again(
     assert!(harness.player().is_playing());
 
     harness
-        .with_queue(move |player| player.notify_interruption(InterruptionKind::Began))
+        .with_queue(move |player| player.notify_interruption(InterruptionKind::Began).expect("begin interruption"))
         .await;
     assert_eq!(
         harness.player().rate(),
@@ -46,7 +46,7 @@ async fn a_suspended_output_reports_silence_until_the_rt_processor_runs_again(
         .with_queue(move |player| {
             player.notify_interruption(InterruptionKind::Ended {
                 should_resume: true,
-            })
+            }).expect("end interruption")
         })
         .await;
     assert_eq!(
@@ -79,13 +79,13 @@ async fn a_suspended_output_reports_silence_until_the_rt_processor_runs_again(
 async fn loaded_harness(constant_half: &'static [u8]) -> OfflinePlayer {
     let harness =
         OfflinePlayer::with_sample_rate(OfflinePlayerOptions::builder().build(), SAMPLE_RATE).await;
-    let deck_source = harness.pcm_deck((resource_from_reader(
+    let deck_source = harness.pcm_deck(Box::new(
                         kithara::audio::mock::TestPcmReader::with_pcm(
                             AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
                             1.0,
                             constant_half,
                         ),
-                    )).into());
+                    ));
     harness
         .with_queue(move |player| {
             let deck_id = TrackId::allocate();

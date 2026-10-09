@@ -87,6 +87,7 @@ pub(crate) fn worker_main(
     cmd_rx: mpsc::Receiver<WorkerCmd>,
     host_sender: wasm::HostSender<FfiPools>,
     pools: Pools,
+    queue_tx: mpsc::Sender<FfiQueueControl>,
 ) {
     /// Default crossfade window, in seconds. Mirrors the legacy worker.
     const CROSSFADE_SECONDS: f32 = 5.0;
@@ -121,6 +122,10 @@ pub(crate) fn worker_main(
             }
         };
         let queue = owner.control().clone();
+        if queue_tx.send(queue.clone()).is_err() {
+            clog!("[WORKER] queue reader receiver was dropped");
+            return;
+        }
         let analysis = Rc::new(RefCell::new(AnalysisRuns::new(state.pools.clone())));
         let build_state = Rc::new(RefCell::new(state));
         crate::web::observer::source::spawn(&queue);

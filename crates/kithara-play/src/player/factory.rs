@@ -1,16 +1,23 @@
 use std::num::NonZeroU32;
 
-use kithara_command::Seq;
+use kithara_command::{Seq, When};
 use kithara_render::bridge::DeckPart;
 use kithara_signal::SessionFrame;
 
 use super::{
-    Player, PlayerConfig, PlayerImpl, Position, Settled, TrackCommand, TrackSettings, TrackSnapshot,
+    Player, PlayerConfig, PlayerImpl, Position, Settled, TrackCommand, TrackSettings, TrackSettingsChange, TrackSnapshot,
 };
 use crate::PlayError;
 
 /// A player of one track: what a queue drives and builds the next track from.
 pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSnapshot>> {
+    /// Checks a configuration change without sending it. Receipt intake may
+    /// change admission before a subsequent apply.
+    ///
+    /// # Errors
+    /// Returns a checked change's refusal, Untimed, Late or Full("lane").
+    fn admit(&mut self, change: TrackSettingsChange, at: When<SessionFrame>, out: &super::Outbox<'_, S>) -> Result<(), PlayError>;
+
     /// The settings a track built after this one starts with: the applied ones and the changes still in flight.
     fn projected(&self) -> TrackSettings;
 

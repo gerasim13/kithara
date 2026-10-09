@@ -1,13 +1,12 @@
 use kithara::{
     download::{Downloader, DownloaderConfig},
-    effects::eq::generate_log_spaced_bands,
     host::HostOwned,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
     },
-    play::{PlayWorkerConfig, ResourcePrep, TrackSettings},
+    play::{DeckMixerConfig, PlayWorkerConfig, ResourcePrep, TrackSettings},
     queue::{QueueConfig, QueueSettings},
     warp::{StretchKind, WarpCapabilities, WarpConfig},
 };
@@ -135,6 +134,7 @@ impl NativeInner {
             .cancel(cancel.child())
             .build();
         let queue_config = QueueConfig::builder()
+            .mixer(DeckMixerConfig::builder().eq_bands(eq_band_count as usize).build())
             .prep(prep)
             .track(track)
             .cancel(cancel.child())
@@ -149,13 +149,6 @@ impl NativeInner {
             )
             .build();
         let queue_owner = session::insert(FfiQueue::new(queue_config))?;
-        if let Err(error) = queue_owner
-            .control()
-            .set_eq_layout(generate_log_spaced_bands(eq_band_count as usize))
-        {
-            session::remove(&queue_owner)?;
-            return Err(error.into());
-        }
         let queue = queue_owner.control().clone();
         let net = default_net_options();
         let downloader = Downloader::new(

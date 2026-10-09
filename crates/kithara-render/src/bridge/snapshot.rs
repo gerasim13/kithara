@@ -1,4 +1,7 @@
+use kithara_effects::GainDb;
+
 use super::{RtMetricsSnapshot, SlotMark, SlotState};
+use crate::rt::DeckMixerConfig;
 
 /// What a deck's mixer last published of each slot and of itself, once per block.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -11,6 +14,47 @@ pub struct DeckSnapshot {
     pub blocks: u64,
     /// The mixer's real-time counters.
     pub metrics: RtMetricsSnapshot,
+    pub eq: EqSnapshot,
+}
+
+impl DeckSnapshot {
+    #[must_use]
+    pub fn new(config: DeckMixerConfig) -> Self {
+        Self {
+            slots: vec![SlotSnapshot::default(); config.slots().get()],
+            eq: EqSnapshot {
+                bands: config.eq_bands(),
+                gains: vec![GainDb::default(); config.eq_bands()],
+            },
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EqSnapshot {
+    bands: usize,
+    gains: Vec<GainDb>,
+}
+
+impl EqSnapshot {
+    #[must_use]
+    pub const fn bands(&self) -> usize {
+        self.bands
+    }
+
+    #[must_use]
+    pub fn gain(&self, band: usize) -> Option<GainDb> {
+        self.gains.get(band).copied().filter(|_| band < self.bands)
+    }
+
+    pub(crate) fn gains_mut(&mut self) -> &mut [GainDb] {
+        &mut self.gains
+    }
+
+    pub(crate) fn set_bands(&mut self, bands: usize) {
+        self.bands = bands;
+    }
 }
 
 /// One slot as its mixer last published it.

@@ -1,4 +1,7 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, num::NonZeroU32};
+
+use firewheel::FirewheelContext;
+use firewheel_web_audio::WebAudioBackend;
 
 use kithara_bufpool::HasPool;
 use kithara_command::{Live, ScopedConfig, Ticket, mailbox};
@@ -10,7 +13,6 @@ use kithara_platform::{
     tokio::{select, task::spawn as spawn_task},
 };
 
-use super::bridge::start_stream_web_audio;
 use crate::{
     HostCore, HostOwner, HostSettings, PlayError,
     consts::SESSION_PUMP_INTERVAL,
@@ -132,4 +134,18 @@ pub(crate) fn remote<S: 'static, O: HostOwner<S>>(
         host: SessionHost::Remote,
         marker: PhantomData,
     })
+}
+
+fn start_stream_web_audio(
+    ctx: &mut FirewheelContext,
+    sample_rate: u32,
+) -> Result<WebAudioBackend, String> {
+    WebAudioBackend::new(
+        ctx,
+        firewheel_web_audio::WebAudioConfig {
+            sample_rate: NonZeroU32::new(sample_rate),
+            request_input: false,
+        },
+    )
+    .map_err(|error| error.to_string())
 }

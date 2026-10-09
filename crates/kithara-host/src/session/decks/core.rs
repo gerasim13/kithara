@@ -16,6 +16,8 @@ pub(crate) struct Deck<S, D: ?Sized> {
     pub(crate) receipts: DeckEvents,
     pub(crate) mix: Live<DeckMixSettings, DeckProtocol>,
     pub(crate) snapshot: Output<DeckSnapshot>,
+    pub(crate) suspended_at: Option<u64>,
+    pub(crate) session_bus: kithara_events::EventBus,
     marker: std::marker::PhantomData<fn() -> S>,
 }
 
@@ -25,6 +27,7 @@ impl<S, D: ?Sized + HostedDeck<S>> Deck<S, D> {
         let mix =
             Live::new(config.mix()).map_err(|error| PlayError::Internal(error.to_string()))?;
         let (ends, inputs) = scope_channels(scope, config);
+        let session_bus = deck.resource_prep().map_or_else(kithara_events::EventBus::default, |prep| prep.bus.clone());
         Ok((
             Self {
                 deck,
@@ -34,6 +37,8 @@ impl<S, D: ?Sized + HostedDeck<S>> Deck<S, D> {
                 receipts: ends.events,
                 snapshot: ends.snapshot,
                 mix,
+                suspended_at: None,
+                session_bus,
                 marker: std::marker::PhantomData,
             },
             inputs,

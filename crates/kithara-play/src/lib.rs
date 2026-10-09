@@ -30,13 +30,14 @@ pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;
 pub use kithara_effects::eq::EqBandConfig;
+pub use kithara_effects::GainDb;
 pub use kithara_net::Headers;
 pub use kithara_render::{
     CrossfadeCurve, CrossfadeSettings, CrossfadeSettingsPatch, CrossfadeSettingsPatchError, DispatcherProtocol, EngineLoad, EngineLoadSnapshot,
     InvalidCrossfade, LoadRefusal, PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch,
     ServiceClass, TrackConfig,
     bridge::{
-        DeckEvent, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot, FadeDir, MixTapWriter,
+        DeckEqChange, DeckEvent, DeckMixSettings, DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot, EqSnapshot, FadeDir, MixTapWriter,
         PlaybackFault, RtMetricsSnapshot, Slot, SlotSnapshot,
     },
     dispatch,

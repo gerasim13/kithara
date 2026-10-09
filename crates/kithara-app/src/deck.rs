@@ -1,10 +1,12 @@
 #[cfg(feature = "gui")]
-use kithara::effects::{GainDb, eq::EqBandConfig};
+use kithara::effects::{
+    GainDb,
+    eq::{EqBandConfig, generate_log_spaced_bands},
+};
 use kithara::{
-    effects::eq::generate_log_spaced_bands,
     host::HostOwned,
     platform::CancelToken,
-    play::{PlayError, ResourcePrep},
+    play::{DeckMixerConfig, PlayError, ResourcePrep},
     queue::{QueueConfig, QueueError},
 };
 
@@ -113,6 +115,7 @@ impl Deck {
             .prep(prep)
             .store(config.store.clone())
             .cancel(cancel.clone())
+            .mixer(DeckMixerConfig::builder().eq_bands(config.eq_bands).build())
             .build();
         queue_config
             .apply(config.queue.clone())
@@ -121,15 +124,6 @@ impl Deck {
             })?;
         let queue = AppQueue::new(queue_config);
         let queue = host.insert(queue)?;
-        if let Err(error) = queue
-            .control()
-            .set_eq_layout(generate_log_spaced_bands(config.eq_bands))
-        {
-            host.remove(&queue)?;
-            return Err(PlayError::InvalidConfiguration {
-                reason: error.to_string(),
-            });
-        }
 
         Ok(Self { id, queue, cancel })
     }

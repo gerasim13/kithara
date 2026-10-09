@@ -2,6 +2,13 @@ use kithara::platform::sync::mpsc;
 
 use crate::{config::FfiPlayerConfig, player::AudioPlayer, types::FfiError};
 
+fn wait_for_publication(mut published: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !published() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 #[kithara::test]
 fn create_player() {
     let _player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
@@ -50,6 +57,7 @@ fn volume_roundtrip() {
     let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
     assert!((player.volume() - 1.0).abs() < f32::EPSILON);
     player.set_volume(0.5).expect("the player takes the volume");
+    wait_for_publication(|| (player.volume() - 0.5).abs() < f32::EPSILON);
     assert!((player.volume() - 0.5).abs() < f32::EPSILON);
 }
 
@@ -58,6 +66,7 @@ fn muted_roundtrip() {
     let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
     assert!(!player.is_muted());
     player.set_muted(true).expect("the player takes the mute");
+    wait_for_publication(|| player.is_muted());
     assert!(player.is_muted());
 }
 
@@ -81,8 +90,10 @@ fn eq_gain_default_zero() {
 fn idle_player_eq_can_be_configured_and_reset() {
     let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
     player.set_eq_gain(0, 3.0).expect("configure idle EQ");
+    wait_for_publication(|| player.eq_gain(0) == 3.0);
     assert_eq!(player.eq_gain(0), 3.0);
     player.reset_eq().expect("reset idle EQ");
+    wait_for_publication(|| player.eq_gain(0) == 0.0);
     assert_eq!(player.eq_gain(0), 0.0);
     assert!(matches!(
         player.set_eq_gain(99, 3.0),

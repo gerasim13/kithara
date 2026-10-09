@@ -9,7 +9,7 @@ use kithara::{
     signal::SessionFrame,
     warp::SpeedCurve,
 };
-use kithara_command::Seq;
+use kithara_command::{Seq, When};
 use kithara_render::bridge::DeckPart;
 
 use crate::bufpool_ext::TestPools;
@@ -82,6 +82,7 @@ impl Player<TestPools> for RampedTrack {
 impl Track<TestPools> for RampedTrack {
     delegate::delegate! {
         to self.inner {
+            fn admit(&mut self, change: TrackSettingsChange, at: When<SessionFrame>, out: &Outbox<'_, TestPools>) -> Result<(), PlayError>;
             fn projected(&self) -> TrackSettings;
             fn planned(&self, at: SessionFrame, sample_rate: NonZeroU32) -> Result<(Duration, f32), PlayError>;
             fn planned_end(&self, sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError>;

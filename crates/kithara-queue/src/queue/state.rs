@@ -2,14 +2,14 @@ use kithara_bufpool::HasPool;
 use kithara_command::mailbox;
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::{CancelScope, CancelToken, tokio::runtime::Handle as RuntimeHandle};
-use kithara_play::{DeckSnapshot, PlayError, PlayerFactory, Position, TrackFactory};
+use kithara_play::{PlayError, PlayerEvent, PlayerFactory, Position, TrackFactory};
 use kithara_signal::{FrameCount, SessionFrame};
 
 use super::{
     command::{QueueMailbox, QueuePostbox},
     slots::{Role, Slots},
     types::Target,
-    view::QueueView,
+    view::{DeckObservation, QueueView},
 };
 use crate::{
     QueueConfig, QueueEvent, loader::Loader, navigation::NavigationState, track::Tracks,
@@ -49,7 +49,7 @@ where
     pub(super) shutdown: CancelToken,
     pub(super) events: Vec<QueueEvent>,
     pub(super) clock: Option<(SessionFrame, FrameCount)>,
-    pub(super) deck: DeckSnapshot,
+    pub(super) deck: DeckObservation,
 }
 
 impl<S, F> Queue<S, F>
@@ -84,12 +84,14 @@ where
         let mut navigation = NavigationState::new(config.max_history_size);
         navigation.set_playback_order(config.playback_order, &[]);
         let tracks = Tracks::default();
+        let deck = DeckObservation::new(config.mixer);
         let view = QueueView::new(
             &tracks,
             &navigation,
             config.settings,
             config.track,
             config.action_at_item_end,
+            deck.clone(),
         );
         Self {
             active: Slots::new(config.mixer.slots().get()),
@@ -107,7 +109,7 @@ where
             shutdown,
             events: Vec::new(),
             clock: None,
-            deck: DeckSnapshot::default(),
+            deck,
         }
     }
 
@@ -179,7 +181,15 @@ where
     pub(super) fn publish(&mut self) {
         self.events.extend(self.tracks.drain_events());
         let snapshot = self.queue_snapshot();
+        let previous = self.view.read().deck.mix;
+        let mix = snapshot.deck.mix;
         self.view.publish(snapshot);
+        if previous.volume() != mix.volume() {
+            self.bus.publish(PlayerEvent::VolumeChanged { volume: f32::from(mix.volume()) });
+        }
+        if previous.muted() != mix.muted() {
+            self.bus.publish(PlayerEvent::MuteChanged { muted: mix.muted() });
+        }
         for event in self.events.drain(..) {
             self.bus.publish(event);
         }

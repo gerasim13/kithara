@@ -1,12 +1,12 @@
 use kithara_audio::{DecodeErrorKind, TrackFailureKind};
 use std::num::NonZeroU32;
 
-use kithara_command::{ChannelConfig, Seq, channel};
+use kithara_command::{Batch, ChannelConfig, Seq, When, channel};
 use kithara_events::TrackId;
 use kithara_platform::time::Duration;
 use kithara_play::{
     Bound, DeckEvent, DeckPart, Outbox, PlayError, PlaybackFault, Player, PlayerConfig, Settled, Slot,
-    Track, TrackCommand, TrackFactory, TrackReceipt, TrackSettings, TrackSnapshot,
+    Track, TrackCommand, TrackFactory, TrackReceipt, TrackSettings, TrackSettingsChange, TrackSnapshot,
     TrackStatus as PlayerTrackStatus,
 };
 use kithara_signal::{FrameCount, SessionFrame};
@@ -18,7 +18,7 @@ use crate::{
     track::TrackRecord,
 };
 
-struct SnapshotTrack(TrackSnapshot);
+struct SnapshotTrack(TrackSnapshot, Vec<(TrackSettingsChange, When<SessionFrame>)>);
 struct SnapshotFactory;
 
 impl TrackFactory<TestPools> for SnapshotFactory {
@@ -40,7 +40,7 @@ impl TrackFactory<TestPools> for SnapshotFactory {
             pending_lane: false,
             attached: true,
             declick: FrameCount::new(0),
-        }))
+        }, Vec::new()))
     }
 }
 
@@ -54,9 +54,23 @@ impl Player<TestPools> for SnapshotTrack {
     }
     fn apply(
         &mut self,
-        _command: Self::Command,
-        _out: &mut Outbox<'_, TestPools>,
+        command: Self::Command,
+        out: &mut Outbox<'_, TestPools>,
     ) -> Result<Option<Seq>, PlayError> {
+        match command {
+            TrackCommand::Configure(change, when) => {
+                self.admit(change, when, out)?;
+                self.1.push((change, when));
+                if matches!(change, TrackSettingsChange::Speed(speed) if speed != self.0.speed) {
+                    return Ok(Some(fixture_seq()));
+                }
+            }
+            TrackCommand::Pause { .. } => {
+                self.0.status = PlayerTrackStatus::Paused { at: Duration::ZERO };
+                return Ok(Some(fixture_seq()));
+            }
+            _ => {}
+        }
         Ok(None)
     }
     fn settle(
@@ -73,6 +87,14 @@ impl Player<TestPools> for SnapshotTrack {
 }
 
 impl Track<TestPools> for SnapshotTrack {
+    fn admit(&mut self, _change: TrackSettingsChange, at: When<SessionFrame>, _out: &Outbox<'_, TestPools>) -> Result<(), PlayError> {
+        if self.0.lane_room == 0 { return Err(PlayError::Full("lane")); }
+        if matches!(at, When::At(_)) && !matches!(self.0.status, PlayerTrackStatus::Playing { .. }) {
+            return Err(PlayError::Untimed);
+        }
+        Ok(())
+    }
+
     fn projected(&self) -> TrackSettings {
         TrackSettings::default()
     }
@@ -111,7 +133,71 @@ impl Track<TestPools> for SnapshotTrack {
     }
 }
 
+fn fixture_seq() -> Seq {
+    let (mut sender, _inbox) = channel::<kithara_play::DeckProtocol>(ChannelConfig::builder().build());
+    sender.send(When::Next, Batch { basis: Vec::new(), commands: Vec::new() })
+        .expect("fixture sequence")
+}
+
 type TestQueue = Queue<TestPools, SnapshotFactory>;
+
+#[kithara::test]
+fn a_track_settings_change_with_one_full_lane_reaches_no_track() {
+    let (mut queue, _, _) = selected_second();
+    let outgoing = 0;
+    let current = 1;
+    queue.active.get_mut(current).expect("current").track.0.lane_room = 4;
+    let (mut deck, _deck_inbox) = channel(ChannelConfig::builder().build());
+    let (mut dispatcher, _dispatcher_inbox) = channel(ChannelConfig::builder().build());
+    let mut out = Outbox::new(&mut deck, &mut dispatcher);
+    let error = queue.apply_command(QueueCommand::ConfigureTrack(TrackSettingsChange::Speed(1.5), When::Next), None, &mut out);
+    assert!(matches!(error, Err(QueueError::Play(PlayError::Full("lane")))));
+    for index in [outgoing, current] {
+        assert!(queue.active.get(index).expect("receiver").track.1.is_empty());
+    }
+    assert_eq!(queue.config.track.speed(), 1.0);
+    let silent = &mut queue.active.get_mut(outgoing).expect("outgoing").track;
+    silent.0.lane_room = 4;
+    silent.0.status = PlayerTrackStatus::Loaded;
+    let at = When::At(SessionFrame::new(128));
+    queue.apply_command(QueueCommand::ConfigureTrack(TrackSettingsChange::Speed(1.5), at), None, &mut out)
+        .expect("all receivers admit");
+    assert!(matches!(queue.active.get(current).expect("current").track.1.as_slice(),
+        [(TrackSettingsChange::Speed(1.5), sent_at)] if *sent_at == at));
+    assert!(matches!(queue.active.get(outgoing).expect("silent").track.1.as_slice(),
+        [(TrackSettingsChange::Speed(1.5), When::Next)]));
+    assert_eq!(queue.config.track.speed(), 1.5);
+}
+
+#[kithara::test]
+#[case(true)]
+#[case(false)]
+fn a_speed_change_on_the_current_track_withdraws_a_sent_automatic_transition(#[case] auto: bool) {
+    let (mut queue, incoming, _) = selected_second();
+    let batch = fixture_seq();
+    let receiver = queue.active.get_mut(0).expect("incoming");
+    receiver.role = Role::Incoming { batch: Some(batch) };
+    receiver.track.0.status = PlayerTrackStatus::Loaded;
+    receiver.track.0.lane_room = 4;
+    queue.active.get_mut(1).expect("current").track.0.lane_room = 4;
+    queue.target = Some(super::super::types::Target {
+        to: incoming, bound: Bound::AtOrBefore(SessionFrame::new(512)),
+        settings: Default::default(), transition: super::super::Transition::None,
+        reason: crate::AdvanceReason::NaturalEof, playing: true, auto,
+        stale: None, retry: None, repeat: None, chained: false,
+    });
+    let (mut deck, _deck_inbox) = channel(ChannelConfig::builder().build());
+    let (mut dispatcher, _dispatcher_inbox) = channel(ChannelConfig::builder().build());
+    queue.apply_command(QueueCommand::ConfigureTrack(TrackSettingsChange::Speed(2.0), When::Next), None,
+        &mut Outbox::new(&mut deck, &mut dispatcher)).expect("broadcast accepted");
+    let target = queue.target.expect("transition retained");
+    assert_eq!(target.to, incoming);
+    assert_eq!(target.stale, auto.then_some(batch));
+    assert_eq!(matches!(queue.active.get(0).expect("incoming").track.0.status,
+        PlayerTrackStatus::Paused { .. }), auto);
+    assert_ne!(queue.tracks.records_mut().iter().find(|record| record.id == incoming)
+        .expect("incoming row").status, TrackStatus::Cancelled);
+}
 
 fn selected_second() -> (TestQueue, TrackId, TrackId) {
     let config = QueueConfig {

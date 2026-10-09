@@ -3,12 +3,12 @@ use kithara_command::{Mailbox, Postbox, Seq, When};
 use kithara_config::LiveConfig;
 use kithara_events::TrackId;
 use kithara_play::{
-    EqBandConfig, InterruptionKind, Outbox, OutputSnapshot, PlayError, Player, Position, TrackCommand,
-    TrackFactory, TrackSettings, TrackSettingsChange,
+    DeckEqChange, DeckMixSettingsChange, EqBandConfig, GainDb, InterruptionKind, Outbox, OutputSnapshot, PlayError, Player, Position, TrackCommand,
+    TrackFactory, Track, TrackSettings, TrackSettingsChange, TrackStatus as PlayingStatus,
 };
-use kithara_signal::SessionFrame;
+use kithara_signal::{FaderValue, SessionFrame};
 
-use super::{Queue, Transition, types::Placement};
+use super::{Queue, Transition, types::Placement, slots::Role};
 use crate::{
     ActionAtItemEnd, AdvanceReason, PlaybackOrder, QueueError, QueueEvent, QueueRepeatMode,
     QueueSettingsChange, RepeatMode, TrackSource, TrackStatus, loading::LoadReport,
@@ -197,7 +197,7 @@ where
                 Ok(sent)
             }
             QueueCommand::ConfigureTrack(change, at) => {
-                self.configure_tracks(change, at, out).map_err(Into::into)
+                self.configure_tracks(change, at, out)
             }
             QueueCommand::ConfigureQueue(change, at) => {
                 if matches!(at, When::At(_)) {
@@ -252,13 +252,16 @@ where
                 Ok(None)
             }
             QueueCommand::Close => self.close_tracks(out).map_err(Into::into),
-            QueueCommand::SetVolume(_)
-            | QueueCommand::SetLevel(_)
-            | QueueCommand::SetMuted(_)
-            | QueueCommand::SetEqGain { .. }
-            | QueueCommand::SetEqLayout(_)
-            | QueueCommand::ResetEq
-            | QueueCommand::NotifyInterruption(_) => self.forward_host(command),
+            QueueCommand::SetVolume(volume) => out.mix(When::Next, DeckMixSettingsChange::Volume(FaderValue::from(volume))).map(Some).map_err(Into::into),
+            QueueCommand::SetLevel(level) => out.mix(When::Next, DeckMixSettingsChange::Level(level)).map(Some).map_err(Into::into),
+            QueueCommand::SetMuted(muted) => out.mix(When::Next, DeckMixSettingsChange::Muted(muted)).map(Some).map_err(Into::into),
+            QueueCommand::SetEqGain { band, gain_db } => self.set_eq_gain(band, gain_db, out).map_err(Into::into),
+            QueueCommand::SetEqLayout(bands) => self.set_eq_layout(&bands, out).map_err(Into::into),
+            QueueCommand::ResetEq => out.eq((0..self.deck.mixer.eq.bands()).map(|band| DeckEqChange::Gain { band, gain: GainDb::default() }).collect()).map_err(Into::into),
+            QueueCommand::NotifyInterruption(kind) => {
+                self.deck.suspended = out.notify_interruption(kind)?;
+                Ok(None)
+            }
         }
     }
 
@@ -279,40 +282,58 @@ where
         &mut self,
         change: TrackSettingsChange,
         at: When<SessionFrame>,
-        _out: &mut Outbox<'_, S>,
-    ) -> Result<Option<Seq>, PlayError> {
-        let change = <TrackSettings as LiveConfig>::check(change)?;
-        if let When::At(frame) = at {
-            if !self.current_track().is_some_and(|track| {
-                matches!(
-                    track.snapshot().as_ref().status,
-                    kithara_play::TrackStatus::Playing { .. }
-                )
-            }) {
-                return Err(PlayError::Untimed);
-            }
-            let earliest = self
-                .current_track()
-                .ok_or(PlayError::Untimed)?
-                .entry(kithara_play::Bound::AtOrAfter(self.earliest()?))
-                .ok_or(PlayError::Untimed)?;
-            if frame < earliest {
-                return Err(PlayError::Late);
-            }
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, QueueError> {
+        let change = TrackSettings::check(change)?;
+        let receivers: Vec<_> = self.active.indices(|active| active.role != Role::Leaving)
+            .into_iter().map(|index| {
+                let sounding = self.active.get(index).is_some_and(|active|
+                    matches!(active.track.snapshot().as_ref().status, PlayingStatus::Playing { .. }));
+                (index, if sounding { at } else { When::Next })
+            }).collect();
+        if matches!(at, When::At(_)) && !receivers.iter().any(|(_, when)| *when == at) {
+            return Err(PlayError::Untimed.into());
         }
-        if self.active.len() == 0 {
-            self.config.track.apply_change(change);
-            return Ok(None);
+        for &(index, when) in &receivers {
+            self.active.get_mut(index).ok_or(PlayError::NoActiveSlot)?
+                .track.admit(change, when, out)?;
         }
-        todo!(
-            "Broadcast TrackSettings once: preflight every lane's available room and reachable frame, send nothing on Untimed/Late/Full, send sounding tracks at the requested time and silent tracks on Next, join all receipts, then withdraw an automatic transition whose A_end moved (spec 4.4)"
-        )
+        let withdraw = matches!(change, TrackSettingsChange::Speed(_))
+            && self.target.is_some_and(|target| target.auto && target.stale.is_none()
+                && target.repeat.is_none() && self.incoming_index(target.to)
+                    .and_then(|index| self.active.get(index))
+                    .is_some_and(|active| matches!(active.role, Role::Incoming { batch: Some(_) })));
+        if withdraw && out.deck_available() == 0 {
+            return Err(PlayError::Full("deck").into());
+        }
+        let current = self.active_current_index();
+        let mut moved = false;
+        for (index, when) in receivers {
+            let sent = self.active.get_mut(index).ok_or(PlayError::NoActiveSlot)?
+                .track.apply(TrackCommand::Configure(change, when), out)?;
+            moved |= Some(index) == current && sent.is_some();
+        }
+        self.config.track.apply_change(change);
+        if withdraw && moved {
+            self.withdraw_auto(out)?;
+        }
+        Ok(None)
     }
 
-    fn forward_host(&mut self, _command: QueueCommand<S>) -> Result<Option<Seq>, QueueError> {
-        todo!(
-            "kithara-host command postbox and published deck mix/EQ owner bridge for preserved queue facade forwarding and joined receipts (contract §8.4; skeleton queue)"
-        )
+    fn set_eq_gain(&self, band: usize, gain_db: f32, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
+        let bands = self.deck.mixer.eq.bands();
+        if band >= bands {
+            return Err(PlayError::EqBandOutOfRange { band, bands });
+        }
+        out.eq(vec![DeckEqChange::Gain { band, gain: GainDb::from(gain_db) }])
+    }
+
+    fn set_eq_layout(&self, bands: &[EqBandConfig], out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
+        if bands.len() > self.config.mixer.eq_bands() {
+            return Err(PlayError::InvalidConfiguration { reason: "EQ layout exceeds the deck's configured band capacity".into() });
+        }
+        let prep = self.config.prep.as_ref().ok_or(PlayError::NotReady)?;
+        out.eq_layout(prep.worker.pools(), bands, self.config.mixer.sample_rate())
     }
 }
 

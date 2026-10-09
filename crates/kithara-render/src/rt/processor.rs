@@ -185,7 +185,7 @@ impl<E: SessionInbox> DeckMixer<E> {
                 recycle: vec![0; slots.get()],
                 declick_frames,
                 evict_frames,
-                render: RenderPass::new(pools, shape, mix.gain()),
+                render: RenderPass::new(pools, shape, mix.gain(), config)?,
                 mix,
                 events,
                 metrics: RtMetrics::default(),
@@ -264,6 +264,8 @@ impl<E: SessionInbox> DeckMixer<E> {
         snapshot.sample_rate = self.deck.sample_rate.get();
         snapshot.blocks = self.blocks;
         snapshot.metrics = self.deck.metrics.snapshot();
+        let bands = self.deck.render.read_eq(snapshot.eq.gains_mut());
+        snapshot.eq.set_bands(bands);
         self.snapshot.publish();
     }
 }

@@ -78,8 +78,10 @@ async fn failed_deck_preparation_releases_host_membership() {
         .insert(valid)
         .await
         .expect("host can prepare the next deck");
+    let control = deck.control().clone();
+    host.run(move || control.set_eq_gain(0, -6.0).expect("configure idle EQ")).await;
+    host.render(consts::BLOCK_FRAMES).await;
     host.with(move |host| {
-        deck.set_eq_gain(0, -6.0).expect("configure idle EQ");
         assert_eq!(deck.eq_gain(0), Some(-6.0));
         deck.play();
         assert!(host.output_sample_rate().measured.is_some());

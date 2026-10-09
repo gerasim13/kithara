@@ -20,14 +20,38 @@ use crate::{
     test_pools::{TestPools, pools},
 };
 
+#[kithara::test]
+fn a_host_pass_publishes_the_deck_mixer_counters() {
+    let prep = ResourcePrep::builder()
+        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+        .build();
+    let mut queue = Queue::new(QueueConfig::builder().prep(prep).build());
+    let control = queue.control();
+    assert_eq!(control.mixer_blocks(), 0);
+    let mut deck = kithara_play::DeckSnapshot::new(DeckMixerConfig::default());
+    deck.blocks = 7;
+    let output = mock::output(None).get();
+    let pass = DeckPass {
+        mix: Default::default(), suspended: false,
+        now: SessionFrame::new(0), delivery: FrameCount::new(128),
+        output: &output, deck: &deck,
+    };
+    let mut rig = mock::DeckRig::new(DeckMixerConfig::default()).expect("deck rig");
+    let mut scope = rig.ring.scope(rig.scope).expect("deck scope");
+    let mut out = Outbox::new(&mut scope, &mut rig.dispatcher).in_pass(pass);
+    HostedDeck::tick(&mut queue, pass, &mut out);
+    assert_eq!(control.mixer_blocks(), 7);
+    assert_eq!(control.mixer_metrics(), deck.metrics);
+}
+
 fn with_outbox<Value>(
     queue: &mut Queue<TestPools>,
     rig: &mut mock::DeckRig<TestPools>,
     run: impl FnOnce(&mut Queue<TestPools>, &mut Outbox<'_, TestPools>) -> Value,
 ) -> Value {
     let output = mock::output(None).get();
-    let deck = queue.deck.clone();
-    let pass = DeckPass {
+    let deck = queue.deck.mixer.clone();
+    let pass = DeckPass { mix: Default::default(), suspended: false,
         now: SessionFrame::new(0),
         delivery: FrameCount::new(128),
         output: &output,
@@ -49,7 +73,7 @@ fn pending_selection() -> (Queue<TestPools>, TrackId, TrackId, mock::DeckRig<Tes
     let store = AssetStore::builder(pools()).backend(StorageBackend::Memory).build();
     let mut queue = Queue::new(QueueConfig::builder().prep(prep).store(store).build());
     queue.clock = Some((SessionFrame::new(0), FrameCount::new(128)));
-    queue.deck.sample_rate = mock::SAMPLE_RATE.get();
+    queue.deck.mixer.sample_rate = mock::SAMPLE_RATE.get();
     let mut rig = mock::DeckRig::new(DeckMixerConfig::default()).expect("fixture command ring");
     let first = TrackId::allocate();
     let second = TrackId::allocate();

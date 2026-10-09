@@ -123,6 +123,15 @@ fn mixer_without_declick() -> (TestMixer, TestEnds) {
     )
 }
 
+#[kithara::test]
+fn an_empty_deck_counts_every_block_it_renders() {
+    let (mut mixer, mut ends) = mixer();
+    for start in [0, 128, 256] {
+        render(&mut mixer, start);
+    }
+    assert_eq!(ends.deck.snapshot.read().blocks, 3);
+}
+
 fn apply_initial_batch(mixer: &mut TestMixer) {
     mixer.inbox.0.drain();
     let mut level = mixer.inbox.scope(mixer.mixer.scope).expect("live scope");

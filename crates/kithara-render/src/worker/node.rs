@@ -160,6 +160,9 @@ where
                 }
                 if let Some(terminal) = terminal {
                     self.source.finish_preload();
+                    if terminal.is_ok() {
+                        self.source.finish_segment();
+                    }
                     self.terminal = Some(terminal);
                 }
                 self.port.signal();
