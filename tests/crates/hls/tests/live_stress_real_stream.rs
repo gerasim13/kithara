@@ -215,6 +215,14 @@ fn warmup_to_variant(audio: &mut LiveAudio, variant: usize, label: &str) {
         if playing == Some(variant) {
             break;
         }
+        // Warmup stands in for a listener: do not outrun the network delivering
+        // the switch, otherwise the transition races the read budget.
+        thread::sleep(
+            chunk
+                .spec()
+                .duration_for(chunk.frames() as u64)
+                .expect("chunk playback duration must be representable"),
+        );
     }
     assert_eq!(
         playing,
