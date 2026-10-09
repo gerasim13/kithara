@@ -162,6 +162,7 @@ threads-required = "num-test-threads"
 filter = """
 (binary_id(=kithara-devtools) and (
     test(=stress::coverage_tests::every_engine_domain_is_stressed_or_covered_with_its_features)
+    + test(=stress::command::engine_selection_tests::pinned_nextest_keeps_engine_contracts_and_rejects_support_tests)
     + test(=test::repository_tests::the_pinned_nextest_builds_exactly_the_cargo_arguments_a_lane_derives)
 ))
 + (binary_id(=kithara-devtools::viz_portable) and (
@@ -175,6 +176,7 @@ threads-required = "num-test-threads"
 filter = """
 (binary_id(=kithara-devtools) and (
     test(=stress::coverage_tests::every_engine_domain_is_stressed_or_covered_with_its_features)
+    + test(=stress::command::engine_selection_tests::pinned_nextest_keeps_engine_contracts_and_rejects_support_tests)
     + test(=test::repository_tests::the_pinned_nextest_builds_exactly_the_cargo_arguments_a_lane_derives)
 ))
 + (binary_id(=kithara-devtools::viz_portable) and (

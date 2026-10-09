@@ -2677,3 +2677,359 @@ mod tests {
         assert!(error.to_string().contains("must not overlap"));
     }
 }
+
+#[cfg(test)]
+mod engine_selection_tests {
+    use std::{collections::BTreeSet, fs, path::Path, process::Command};
+
+    use serde_json::Value;
+    use tempfile::TempDir;
+
+    use crate::{
+        common::project::{ProjectConfig, TestRunner},
+        test::{
+            NextestAction,
+            repository_tests::{root, selected_by, this_workspace},
+            resolve, toggled,
+        },
+    };
+
+    const SUPPORT_PACKAGES: &[&str] = &[
+        "kithara-app",
+        "kithara-app-document",
+        "kithara-app-library",
+        "kithara-app-zvuk",
+        "kithara-app-tests",
+        "kithara-ui",
+        "kithara-ui-capture",
+        "kithara-ui-draw",
+        "kithara-ui-gallery",
+        "kithara-ui-input",
+        "kithara-ui-lottie",
+        "kithara-ui-shaping",
+        "kithara-android",
+        "kithara-apple",
+        "kithara-ffi",
+        "kithara-devtools",
+        "xtask",
+        "kithara-derive",
+        "kithara-test-fixtures",
+        "kithara-test-macros",
+        "kithara-test-utils",
+        "kithara-fixture-gen",
+        "kithara-fixture-media",
+        "kithara-core-test-fixtures",
+        "kithara-test-dylib",
+        "kithara-workspace-hack",
+        "kithara-future-support",
+    ];
+
+    #[test]
+    fn default_stress_selects_explicit_engine_packages_and_preserves_variants() {
+        let project = ProjectConfig::load(&root()).expect("repository config");
+        let metadata = this_workspace();
+        assert_eq!(project.stress.default_count, 50);
+        assert_eq!(project.stress.default_filter, "all()");
+        assert_eq!(
+            project.stress.default_modes,
+            [
+                "reproduction-flash-on",
+                "reproduction-flash-off",
+                "reproduction-no-block",
+                "rtsan",
+                "rtsan-file",
+                "rtsan-hls",
+            ]
+        );
+        assert_eq!(
+            project.stress.lanes,
+            [
+                "engine",
+                "engine-broadcast",
+                "net-host",
+                "analysis",
+                "integration-regressions",
+            ]
+        );
+        for name in &project.stress.lanes {
+            let lane = &project.test.lanes[name];
+            assert!(
+                !lane.cargo.workspace,
+                "{name} must not auto-include workspace members"
+            );
+            assert!(
+                lane.cargo.exclude.is_empty(),
+                "{name} uses positive package selection"
+            );
+            assert!(
+                !lane.cargo.packages.is_empty(),
+                "{name} must select packages"
+            );
+            let selected = selected_by(&lane.cargo, &metadata);
+            assert_eq!(
+                selected.len(),
+                lane.cargo.packages.len(),
+                "{name} selects only existing packages"
+            );
+            for package in SUPPORT_PACKAGES {
+                assert!(
+                    !selected.contains(package),
+                    "{name} selects support package {package}"
+                );
+            }
+        }
+        let engine = selected_by(&project.test.lanes["engine"].cargo, &metadata);
+        for package in [
+            "kithara",
+            "kithara-audio",
+            "kithara-play",
+            "kithara-record",
+            "kithara-sync",
+            "kithara-warp",
+            "kithara-harness-tests",
+            "kithara-integration-tests",
+            "kithara-audio-tests",
+            "kithara-decode-tests",
+            "kithara-file-tests",
+            "kithara-hls-tests",
+            "kithara-host-tests",
+            "kithara-play-tests",
+            "kithara-queue-tests",
+            "kithara-stream-tests",
+            "kithara-sync-tests",
+            "kithara-warp-tests",
+        ] {
+            assert!(engine.contains(package), "engine omits {package}");
+        }
+        assert!(
+            project.test.lanes["broadcast"]
+                .cargo
+                .packages
+                .iter()
+                .any(|p| p == "kithara-app")
+        );
+        for name in ["workspace", "tooling", "harness", "fixtures", "app", "ui"] {
+            assert!(
+                project.test.lanes.contains_key(name),
+                "ordinary {name} gate remains configured"
+            );
+        }
+        assert_eq!(
+            project.test.lanes["analysis"].default_features,
+            ["kithara-beat/dsp", "kithara-waveform/dsp"]
+        );
+        assert_eq!(
+            project.test.lanes["net-host"].default_backend.as_deref(),
+            Some("host")
+        );
+        let broadcast = &project.test.lanes["engine-broadcast"];
+        assert_eq!(broadcast.default_no_block, Some(true));
+        assert!(
+            broadcast
+                .default_features
+                .iter()
+                .any(|feature| feature == "kithara-broadcast-tests/broadcast")
+        );
+        for mode in ["rtsan", "rtsan-file", "rtsan-hls"] {
+            assert!(
+                !project.stress.modes[mode].command.is_empty(),
+                "{mode} sanitizer remains enabled"
+            );
+        }
+    }
+
+    fn fixture_package(root: &Path, name: &str, library: &str, targets: &[(&str, &str)]) {
+        let dir = root.join(name);
+        fs::create_dir_all(dir.join("src")).expect("fixture source directory");
+        fs::create_dir_all(dir.join("tests")).expect("fixture tests directory");
+        let mut manifest = format!(
+            "[package]\nname = {name:?}\nversion = \"0.0.0\"\nedition = \"2024\"\nautotests = false\n"
+        );
+        fs::write(dir.join("src/lib.rs"), library).expect("fixture library");
+        for (target, source) in targets {
+            manifest.push_str(&format!(
+                "\n[[test]]\nname = {target:?}\npath = \"tests/{target}.rs\"\n"
+            ));
+            fs::write(dir.join(format!("tests/{target}.rs")), source).expect("fixture test target");
+        }
+        fs::write(dir.join("Cargo.toml"), manifest).expect("fixture package manifest");
+    }
+
+    fn engine_fixture(project: &ProjectConfig) -> TempDir {
+        let fixture = TempDir::new().expect("fixture workspace");
+        let mut packages = project.test.lanes["engine"]
+            .cargo
+            .packages
+            .iter()
+            .map(String::as_str)
+            .chain(
+                project.test.lanes["engine-broadcast"]
+                    .cargo
+                    .packages
+                    .iter()
+                    .map(String::as_str),
+            )
+            .chain(SUPPORT_PACKAGES.iter().copied())
+            .collect::<BTreeSet<_>>();
+        packages.extend([
+            "kithara-platform",
+            "kithara-integration-tests",
+            "kithara-harness-tests",
+        ]);
+        for package in &packages {
+            let targets = match *package {
+                "kithara-platform" => vec![
+                    ("flash_attr", "#[test] fn support_contract() {}"),
+                    ("flash_spawn", "#[test] fn support_contract() {}"),
+                    ("future_support", "#[test] fn support_contract() {}"),
+                ],
+                "kithara-integration-tests" => vec![
+                    ("suite_light", "#[test] fn engine_contract() {}"),
+                    ("suite_heavy", "#[test] fn engine_contract() {}"),
+                    ("suite_stress", "#[test] fn engine_contract() {}"),
+                    ("future_support", "#[test] fn support_contract() {}"),
+                ],
+                "kithara-harness-tests" => vec![
+                    (
+                        "suite_light",
+                        "mod offline_harness_smoke { #[test] fn offline_harness_smoke() {} #[test] fn offline_harness_glide_varispeed() {} } mod audio_artifact { #[test] fn recording_core_writes_float_wav_through_disk_assets() {} #[test] fn recording_core_preserves_payload_across_packet_boundary() {} #[test] fn timeline_coalesces_adjacent_presented_spans() {} } mod fixture_server { #[test] fn support_contract() {} } mod no_block { #[test] fn support_contract() {} } mod future_support { #[test] fn offline_harness_smoke() {} }",
+                    ),
+                    ("suite_harness", "#[test] fn support_contract() {}"),
+                    ("future_support", "#[test] fn support_contract() {}"),
+                ],
+                "kithara-broadcast-tests" => vec![("broadcast", "#[test] fn engine_contract() {}")],
+                "kithara-broadcast" => vec![("packaging_tests", "#[test] fn engine_contract() {}")],
+                _ => Vec::new(),
+            };
+            let library = match *package {
+                "kithara-integration-tests" | "kithara-harness-tests" => {
+                    "#[test] fn support_contract() {}"
+                }
+                _ => "#[test] fn engine_contract() {} #[test] fn future_engine_contract() {}",
+            };
+            fixture_package(fixture.path(), package, library, &targets);
+        }
+        let members = packages
+            .iter()
+            .map(|name| format!("{name:?}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        fs::write(
+            fixture.path().join("Cargo.toml"),
+            format!("[workspace]\nresolver = \"3\"\nmembers = [{members}]\n"),
+        )
+        .expect("fixture workspace manifest");
+        fixture
+    }
+
+    #[test]
+    fn pinned_nextest_keeps_engine_contracts_and_rejects_support_tests() {
+        let project = ProjectConfig::load(&root()).expect("repository config");
+        let fixture = engine_fixture(&project);
+        let pins: toml::Table =
+            toml::from_str(&fs::read_to_string(root().join(".config/ci-pins.toml")).expect("pins"))
+                .expect("pins TOML");
+        let version = Command::new("cargo-nextest")
+            .args(["nextest", "--version"])
+            .output()
+            .expect("pinned nextest");
+        assert!(
+            String::from_utf8_lossy(&version.stdout).contains(
+                pins["cargo_tools"]["cargo-nextest"]
+                    .as_str()
+                    .expect("nextest pin")
+            )
+        );
+        for name in ["engine", "engine-broadcast"] {
+            let mut lane = resolve(
+                &project.test,
+                &toggled(&project.test, name, None, None).expect("lane"),
+            )
+            .expect("resolved lane");
+            lane.cargo.profile = None;
+            lane.features.clear();
+            let TestRunner::Nextest(nextest) = &mut lane.runner else {
+                panic!("nextest lane")
+            };
+            nextest.ignore_default_filter = true;
+            let command = lane
+                .command(NextestAction::List, &["--message-format=json".to_owned()])
+                .expect("list command");
+            let output = Command::new("cargo-nextest")
+                .args(command.get_args())
+                .envs(
+                    command
+                        .get_envs()
+                        .filter_map(|(key, value)| value.map(|value| (key, value))),
+                )
+                .env_remove("RUSTFLAGS")
+                .env_remove("CARGO_ENCODED_RUSTFLAGS")
+                .env("CARGO_TARGET_DIR", fixture.path().join("target"))
+                .current_dir(fixture.path())
+                .output()
+                .expect("nextest inventory");
+            assert!(
+                output.status.success(),
+                "{name}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let inventory: Value = serde_json::from_slice(&output.stdout).expect("nextest JSON");
+            let mut selected = BTreeSet::new();
+            for (binary, suite) in inventory["rust-suites"].as_object().expect("test suites") {
+                for (test, verdict) in suite["testcases"].as_object().expect("test cases") {
+                    if verdict["filter-match"]["status"] == "matches" {
+                        selected.insert(format!("{binary}::{test}"));
+                    }
+                }
+            }
+            assert!(!selected.is_empty(), "{name} must select real contracts");
+            for package in SUPPORT_PACKAGES {
+                assert!(
+                    !selected
+                        .iter()
+                        .any(|test| test.starts_with(&format!("{package}::"))),
+                    "{name} selected support package {package}"
+                );
+            }
+            assert!(
+                !selected.iter().any(|test| test.contains("support_contract")
+                    || test.contains("future_support")
+                    || test.contains("timeline_coalesces")),
+                "{name}: {selected:?}"
+            );
+            if name == "engine" {
+                for package in &project.test.lanes["engine"].cargo.packages {
+                    if !matches!(
+                        package.as_str(),
+                        "kithara-integration-tests" | "kithara-harness-tests"
+                    ) {
+                        for test in ["engine_contract", "future_engine_contract"] {
+                            assert!(
+                                selected.contains(&format!("{package}::{test}")),
+                                "engine omitted {package}::{test}"
+                            );
+                        }
+                    }
+                }
+                for test in [
+                    "kithara-platform::engine_contract",
+                    "kithara-integration-tests::suite_light::engine_contract",
+                    "kithara-integration-tests::suite_heavy::engine_contract",
+                    "kithara-integration-tests::suite_stress::engine_contract",
+                    "kithara-harness-tests::suite_light::offline_harness_smoke::offline_harness_smoke",
+                    "kithara-harness-tests::suite_light::offline_harness_smoke::offline_harness_glide_varispeed",
+                    "kithara-harness-tests::suite_light::audio_artifact::recording_core_writes_float_wav_through_disk_assets",
+                    "kithara-harness-tests::suite_light::audio_artifact::recording_core_preserves_payload_across_packet_boundary",
+                ] {
+                    assert!(
+                        selected.contains(test),
+                        "{name} omitted {test}: {selected:?}"
+                    );
+                }
+            } else {
+                assert!(selected.contains("kithara-broadcast::engine_contract"));
+                assert!(selected.contains("kithara-broadcast-tests::broadcast::engine_contract"));
+            }
+        }
+    }
+}
