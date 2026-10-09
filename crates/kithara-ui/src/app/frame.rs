@@ -1,6 +1,6 @@
 use masonry::vello::Scene;
 
-use crate::render::{shader::ShaderDeclaration, vis::VisDeclaration};
+use crate::masonry::{shader::ShaderDeclaration, vis::VisDeclaration};
 
 /// One complete retained frame: shader images, Vello commands, then native Vis draws.
 #[non_exhaustive]

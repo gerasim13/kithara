@@ -6,7 +6,7 @@ use crate::{
     interact::{CursorShape, Hit, Hover, Input, Outcome, recognizers::click},
 };
 
-pub(in crate::engine) struct ActivationComponent {
+pub(crate) struct ActivationComponent {
     hover: Hover,
     path: String,
     press: Press,

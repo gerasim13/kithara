@@ -7,8 +7,6 @@ mod modal;
 mod module;
 mod placed;
 mod popover;
-#[cfg(feature = "masonry")]
-mod poses;
 #[cfg(test)]
 mod probe;
 
@@ -21,7 +19,5 @@ pub use modal::Modal;
 pub use module::Module;
 pub use placed::{PlacedMount, Snap};
 pub use popover::Popover;
-#[cfg(feature = "masonry")]
-pub(crate) use poses::placements;
 #[cfg(test)]
 pub(crate) use probe::probe;

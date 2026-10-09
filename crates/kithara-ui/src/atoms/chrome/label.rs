@@ -5,10 +5,10 @@ use crate::{
         painter::ControlPainter,
     },
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
+    hosts::solve::Size,
     render::Skin,
     shaping::TextContext,
     skin::{ColorRole, FrameSkin, TextRoleSkin},
-    solve::{Length, Size},
 };
 
 /// The word a module's footer carries, in the one role both hosts shape it in.
@@ -21,7 +21,7 @@ pub(crate) fn footer_role(skin: &Skin) -> TextRoleSkin {
 /// Every number the skin settles is resolved when the label is built, so the
 /// two hosts draw the same box from the same figures instead of each reading
 /// the skin its own way.
-#[derive(Clone, PartialEq, kithara_derive::Retained)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct ChromeLabel {
     frame: FrameSkin,
     background: Rgba,
@@ -113,10 +113,6 @@ impl ControlPainter for ChromeLabel {
         self.paint(list, text, data, bounds);
     }
 
-    fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
-        Size::new(Length::Shrink, Length::Fill)
-    }
-
     fn measure(&self, text: &mut TextContext, data: &Self::Data) -> Size {
         let (width, height) = self.intrinsic(text, data);
         Size::new(width, height)
@@ -145,7 +141,7 @@ mod tests {
 
     fn drawn(paint: impl FnOnce(&mut DrawListBuilder, &mut TextContext)) -> Vec<DrawCmd> {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         paint(&mut list, &mut text);
         list.finish().commands().to_vec()
@@ -183,7 +179,7 @@ mod tests {
     #[kithara::test]
     fn a_label_asks_for_the_padding_either_side_of_its_word() {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let label = ChromeLabel::title(skin);
         let run = text.shape("DECK", label.role, None);
         let word = run.width();
@@ -199,7 +195,7 @@ mod tests {
     #[kithara::test]
     fn a_label_asks_for_the_height_of_its_own_run() {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let label = ChromeLabel::title(skin);
         let run = text.shape("DECK", label.role, None);
         let line = run.height();

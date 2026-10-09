@@ -1,6 +1,6 @@
 use crate::draw::{DrawListBuilder, Rect, Rgba};
 
-#[derive(Clone, PartialEq, kithara_derive::ControlPainter, kithara_derive::Retained)]
+#[derive(Clone, PartialEq, kithara_derive::ControlPainter)]
 #[control_painter(data = (), draw = self.paint(list, bounds))]
 pub(crate) struct Fill {
     color: Rgba,

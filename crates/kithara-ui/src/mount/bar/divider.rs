@@ -1,20 +1,17 @@
 use crate::size::{Dim, SizeSpec};
 
 /// A hairline separating two runs of a bar.
-#[derive(kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = SizeSpec::new(Dim::Fixed(skin.divider.width), Dim::Fill))]
-#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Divider;
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Divider;
     use crate::{
         atoms::bar::fill::Fill as Face,
-        render::{
-            Skin,
-            controls::{Draws, Reading},
-        },
+        hosts::controls::{Draws, Reading},
+        render::Skin,
     };
 
     impl Draws for Divider {

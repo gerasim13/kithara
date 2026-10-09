@@ -13,9 +13,10 @@ use crate::{
         },
     },
     draw::{DrawList, DrawListBuilder, Pt, Rect, Transform},
+    hosts::drag::Carried,
     interact::ScrollAxis,
     module::{TableColumnStyle, TableFrame},
-    render::{Carried, ReadValue, Skin},
+    render::{ReadValue, Skin},
     shaping::TextContext,
     skin::{ColorRole, FrameSkin, TextRoleSkin},
 };
@@ -839,7 +840,7 @@ mod tests {
         let picture = TableFace::new(rows, columns.clone(), skin, TableFrame::new(0.0, 0.0, true));
         (
             picture,
-            TextContext::from(skin.text_resources()),
+            TextContext::from(skin.text_resources.as_ref()),
             Rect {
                 h: 160.0,
                 w: 180.0,

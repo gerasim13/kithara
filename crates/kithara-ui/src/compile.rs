@@ -56,16 +56,10 @@ pub struct CompiledUi {
     arena: StrArena,
     includes: Vec<IncludedModule>,
     #[cfg(feature = "render")]
-    draw_buffers: DrawBuffers,
+    pub(crate) draw_buffers: DrawBuffers,
 }
 
 impl CompiledUi {
-    #[cfg(feature = "render")]
-    #[must_use]
-    pub(crate) const fn draw_buffers(&self) -> &DrawBuffers {
-        &self.draw_buffers
-    }
-
     /// Current allocation-reuse counters for this compiled document.
     #[cfg(feature = "render")]
     #[must_use]

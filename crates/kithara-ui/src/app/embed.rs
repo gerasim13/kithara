@@ -29,13 +29,12 @@ use crate::{
     error::UiDocError,
     ids::SourceUri,
     interact::{Input, PointerPhase, ScrollAxis, masonry::masonry_text_event},
+    masonry::retained::{MasonryHost, MasonryRoot, MasonryState},
     module::ViewSet,
     render::{
         Published, Reads, Skin, UiEvent, WindowCommand,
         custom::CustomKinds,
-        document,
-        document::{Clock, Ctx},
-        masonry::{MasonryHost, MasonryRoot, MasonryState},
+        document::{self, Clock, Ctx},
     },
     source::UiConfig,
     view::{Screens, ViewState},
@@ -289,9 +288,9 @@ where
     }
 
     /// Draws the current document, in the physical pixels the caller sized it
-    /// with. The caller prepares [`crate::render::shader::ShaderPass`],
+    /// with. The caller prepares [`crate::masonry::shader::ShaderPass`],
     /// rasterises the Vello scene, then sends native declarations through
-    /// [`crate::render::vis::VisPass`] on the same target.
+    /// [`crate::masonry::vis::VisPass`] on the same target.
     ///
     /// The document is laid out and painted in logical units. This method scales
     /// the Vello scene; the host gives that same scale and its physical target

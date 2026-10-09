@@ -7,7 +7,7 @@ use super::{
 use crate::interact::{CursorShape, Input, Outcome, PointerOwnership, PointerPhase};
 
 #[derive(Default)]
-pub(super) struct Router {
+pub(crate) struct Router {
     capture: Option<Identity>,
     focus: Option<String>,
 }
@@ -23,7 +23,7 @@ impl Router {
         self.capture.is_some()
     }
 
-    pub(super) fn clear_focus(&mut self, components: &mut [RetainedComponent]) {
+    pub(crate) fn clear_focus(&mut self, components: &mut [RetainedComponent]) {
         let focus = self.focus.take();
         if let Some(component) = focus.as_deref().and_then(|path| {
             components
@@ -71,7 +71,7 @@ impl Router {
             .unwrap_or(CursorShape::None)
     }
 
-    pub(super) fn focused_path(&self) -> Option<&str> {
+    pub(crate) fn focused_path(&self) -> Option<&str> {
         self.focus.as_deref()
     }
 

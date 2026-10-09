@@ -1,5 +1,3 @@
-use bon::Builder;
-
 use crate::{
     module::WindowControlsStyle,
     mount::Control,
@@ -8,7 +6,6 @@ use crate::{
 };
 
 /// The close, minimise and maximise buttons.
-#[derive(Builder)]
 pub(crate) struct Controls {
     pub(crate) style: WindowControlsStyle,
 }

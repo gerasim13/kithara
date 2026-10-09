@@ -12,8 +12,7 @@ use crate::{
 #[fieldwork(opt_in, get)]
 pub(crate) struct ScrollState {
     config: ScrollConfig,
-    #[field(get, vis = "pub(crate)")]
-    offset: f32,
+    pub(crate) offset: f32,
     viewport_extent: f32,
 }
 
@@ -46,7 +45,7 @@ impl ScrollState {
         self.row_at(hit).map_or(Outcome::IGNORED, Outcome::set)
     }
 
-    fn max_offset(&self) -> f32 {
+    pub(crate) fn max_offset(&self) -> f32 {
         (self.config.content_extent().max(0.0) - self.viewport_extent).max(0.0)
     }
 
@@ -81,10 +80,6 @@ impl ScrollState {
         self.clamp_offset();
     }
 
-    pub(crate) fn sync_offset(&mut self, offset: f32) {
-        self.offset = offset.clamp(0.0, self.max_offset());
-    }
-
     fn wheel(&mut self, scroll: Scroll, hit: &Hit) -> Outcome<usize> {
         const LINE_STEP_PX: f32 = 60.0;
 
@@ -114,7 +109,7 @@ impl ScrollState {
     }
 }
 
-pub(in crate::engine) struct ScrollComponent {
+pub(crate) struct ScrollComponent {
     state: ScrollState,
     path: String,
 }
@@ -128,7 +123,7 @@ impl ScrollComponent {
     }
 
     pub(super) fn offset(&self) -> f32 {
-        self.state.offset()
+        self.state.offset
     }
 
     pub(super) fn reconcile(mut self, next: Self) -> Self {

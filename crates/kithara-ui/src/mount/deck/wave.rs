@@ -1,19 +1,11 @@
-use bon::Builder;
-
-use crate::{
-    expand::Binding, ids::InternId, module::WaveStyle, mount::Control, size::SizeSpec,
-    skin::SkinDoc,
-};
+use crate::{module::WaveStyle, mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// The track's waveform, zoomed and scrubbed.
-#[derive(Builder, kithara_derive::NodeControl)]
-pub(crate) struct Wave<'a> {
-    pub(crate) badge: Option<InternId>,
-    pub(crate) zoom: Option<&'a Binding>,
+pub(crate) struct Wave {
     pub(crate) style: WaveStyle,
 }
 
-impl Control for Wave<'_> {
+impl Control for Wave {
     /// Each style is a height the rows it stands in are built to, so a fourth
     /// one names its own number before it renders.
     fn size(&self, skin: &SkinDoc) -> SizeSpec {
@@ -25,18 +17,27 @@ impl Control for Wave<'_> {
     }
 }
 
-#[cfg(feature = "render")]
-mod host {
-    use super::Wave;
-    #[cfg(feature = "masonry")]
-    use crate::render::controls::DataRefresh;
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
     use crate::{
         atoms::wave::face::{Drawn, Wave as Face},
-        render::{
-            Skin,
-            controls::{Draws, Reading},
-        },
+        expand::Binding,
+        hosts::controls::{Draws, Reading},
+        ids::InternId,
+        module::WaveStyle,
+        render::Skin,
     };
+
+    /// The wave as a host draws it: the badge it wears and the endpoint its
+    /// zoom follows.
+    #[derive(Builder)]
+    pub(crate) struct Wave<'a> {
+        pub(crate) badge: Option<InternId>,
+        pub(crate) zoom: Option<&'a Binding>,
+        pub(crate) style: WaveStyle,
+    }
 
     impl Draws for Wave<'_> {
         type Painter = Face;
@@ -56,21 +57,6 @@ mod host {
 
         fn painter(&self, skin: &Skin) -> Face {
             Face::new(self.style, skin)
-        }
-
-        #[cfg(feature = "masonry")]
-        fn retained_refresh(
-            &self,
-            read: Reading<'_>,
-            _endpoint: Option<&str>,
-        ) -> Option<DataRefresh<Drawn>> {
-            let scope = read.scope.to_owned();
-            let zoom = self
-                .zoom
-                .map(|binding| read.ctx.ui.resolve(binding.key).to_owned());
-            Some(Box::new(move |data, ctx| {
-                data.refresh(&ctx, &scope, zoom.as_deref())
-            }))
         }
     }
 }

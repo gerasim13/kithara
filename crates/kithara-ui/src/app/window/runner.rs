@@ -34,7 +34,8 @@ use crate::{
     backends::paint_color,
     draw::{Pt, TRANSPARENT},
     interact::{Input, InputMethod, Key, MOUSE, Modifiers, PointerInput, PointerPhase, Scroll},
-    render::{WindowCommand, WindowEdge, shader::ShaderPass, vis::VisPass},
+    masonry::{shader::ShaderPass, vis::VisPass},
+    render::{WindowCommand, WindowEdge},
 };
 
 /// Opens a window of `size` logical points and runs `app` in it until the

@@ -1,19 +1,18 @@
 /// The deck's position and what is left of the track.
-#[derive(kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.deck.time_size)]
-#[derive(kithara_derive::NodeControl)]
 pub(crate) struct Time;
 
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 mod host {
     use super::Time;
     use crate::{
         atoms::deck::clock::{Clock as Face, Elapsed},
-        render::{
-            ReadValue, Skin,
+        hosts::{
             controls::{Draws, Reading},
             model::derived,
         },
+        render::{ReadValue, Skin},
     };
 
     impl Draws for Time {

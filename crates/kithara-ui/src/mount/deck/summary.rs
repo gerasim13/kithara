@@ -1,27 +1,26 @@
-use bon::Builder;
-
-use crate::module::DeckSummaryStyle;
-
 /// The deck's headline: what is loaded and how it is playing.
-#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.deck.summary_size)]
-#[derive(kithara_derive::NodeControl)]
-pub(crate) struct Summary {
-    pub(crate) style: DeckSummaryStyle,
-}
+pub(crate) struct Summary;
 
-#[cfg(feature = "render")]
-mod host {
-    use super::Summary;
-    #[cfg(feature = "masonry")]
-    use crate::render::controls::DataRefresh;
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    use crate::module::DeckSummaryStyle;
+
+    #[derive(Builder)]
+    pub(crate) struct Summary {
+        pub(crate) style: DeckSummaryStyle,
+    }
+
     use crate::{
         atoms::deck::summary::{Loaded, Summary as Face},
-        render::{
-            ReadValue, Reads, Skin,
+        hosts::{
             controls::{Draws, Reading},
             model::derived,
         },
+        render::{ReadValue, Reads, Skin},
     };
 
     /// What stands in for a source nobody reported.
@@ -41,22 +40,13 @@ mod host {
         fn painter(&self, skin: &Skin) -> Face {
             Face::new(self.style, skin)
         }
-
-        #[cfg(feature = "masonry")]
-        fn retained_refresh(
-            &self,
-            read: Reading<'_>,
-            _endpoint: Option<&str>,
-        ) -> Option<DataRefresh<Loaded>> {
-            let scope = read.scope.to_owned();
-            Some(Box::new(move |data, ctx| {
-                let next = snapshot(None, &ctx, &scope);
-                std::mem::replace(data, next) != *data
-            }))
-        }
     }
 
-    fn snapshot(value: Option<&ReadValue<'_>>, reads: &dyn Reads, scope: &str) -> Loaded {
+    pub(crate) fn snapshot(
+        value: Option<&ReadValue<'_>>,
+        reads: &dyn Reads,
+        scope: &str,
+    ) -> Loaded {
         /// What a deck with nothing loaded says.
         const NO_TRACK: &str = "No track loaded";
 

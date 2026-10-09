@@ -13,8 +13,6 @@ use crate::{
     data = f32,
     draw = self.paint(list, text, *data, bounds)
 )]
-#[derive(kithara_derive::Retained)]
-#[retained(setter = set_scalar)]
 pub(crate) struct Crossfader {
     arrows: (char, char),
     captions: CrossfaderLabels,

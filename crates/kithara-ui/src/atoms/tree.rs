@@ -1,0 +1,374 @@
+use std::{f32::consts::PI, ops::Range};
+
+use num_traits::ToPrimitive;
+
+use crate::{
+    atoms::icon::mark::Marked,
+    draw::{DrawListBuilder, Pt, Rect, Rgba, TRANSPARENT, Transform},
+    module::IconName,
+    render::{Skin, TreeRow},
+    shaping::TextContext,
+};
+
+#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
+pub(crate) struct Tree {
+    #[field(get, vis = "pub(crate)")]
+    skin: Skin,
+    /// What the search field holds, and whether the tree draws one.
+    #[field(get, vis = "pub(crate)")]
+    query: Option<String>,
+    rows: Vec<Row>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct Row {
+    icon: IconName,
+    count: Option<String>,
+    expanded: Option<bool>,
+    page: bool,
+    label: String,
+    muted: bool,
+    selected: bool,
+    depth: u8,
+}
+
+impl Tree {
+    pub(crate) fn new(rows: &[TreeRow<'_>], query: Option<&str>, skin: &Skin) -> Self {
+        Self {
+            query: query.map(str::to_owned),
+            rows: rows.iter().copied().map(Row::new).collect(),
+            skin: skin.clone(),
+        }
+    }
+
+    pub(crate) fn paint_rows(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        viewport: Rect,
+        offset: f32,
+        hovered: Option<usize>,
+    ) {
+        let mut contents = DrawListBuilder::default();
+        let visible = visible_rows(
+            self.rows.len(),
+            self.skin.tree.row_height,
+            viewport.h,
+            offset,
+        );
+        let first = visible.start;
+        for (relative, row) in self.rows[visible].iter().enumerate() {
+            let index = first + relative;
+            let y = index.to_f32().map_or(f32::MAX, |index| {
+                index.mul_add(self.skin.tree.row_height, viewport.y) - offset
+            });
+            row.paint(
+                &mut contents,
+                text,
+                Rect {
+                    y,
+                    h: self.skin.tree.row_height,
+                    w: viewport.w,
+                    x: viewport.x,
+                },
+                hovered == Some(index),
+                &self.skin,
+            );
+        }
+
+        list.clip(viewport, contents.finish());
+        paint_scrollbar(list, self.rows.len(), &self.skin, viewport, offset);
+    }
+
+    pub(crate) fn row_count(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub(crate) fn toggle_regions(&self, viewport: Rect, offset: f32) -> Vec<(usize, Rect)> {
+        let skin = &self.skin;
+        let visible = visible_rows(self.rows.len(), skin.tree.row_height, viewport.h, offset);
+        let first = visible.start;
+        self.rows[visible]
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.expanded.is_some())
+            .filter_map(|(relative, row)| {
+                let index = first + relative;
+                let y = index
+                    .to_f32()?
+                    .mul_add(skin.tree.row_height, viewport.y - offset);
+                let top = y.max(viewport.y);
+                let bottom = (y + skin.tree.row_height).min(viewport.y + viewport.h);
+                Some((
+                    index,
+                    Rect {
+                        h: (bottom - top).max(0.0),
+                        w: if row.page {
+                            skin.tree.chevron_width
+                        } else {
+                            viewport.w
+                        },
+                        x: if row.page {
+                            row.chevron_x(viewport.x, skin)
+                        } else {
+                            viewport.x
+                        },
+                        y: top,
+                    },
+                ))
+            })
+            .collect()
+    }
+}
+
+impl Row {
+    fn new(row: TreeRow<'_>) -> Self {
+        Self {
+            count: row.count.map(|count| count.to_string()),
+            depth: row.depth,
+            expanded: row.expanded,
+            page: row.page,
+            icon: row.icon,
+            label: row.label.to_owned(),
+            muted: row.muted,
+            selected: row.selected,
+        }
+    }
+
+    fn paint(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        bounds: Rect,
+        hovered: bool,
+        skin: &Skin,
+    ) {
+        let background = if self.selected {
+            skin.rgba(skin.tree.row_selected_fill)
+        } else if hovered {
+            skin.rgba(skin.tree.row_hovered_fill)
+        } else {
+            TRANSPARENT
+        };
+        let marker = Rect {
+            h: bounds.h,
+            w: skin.tree.marker_width,
+            x: bounds.x,
+            y: bounds.y,
+        };
+        list.fill_rect(bounds, background);
+        list.fill_rect(
+            marker,
+            if self.selected {
+                skin.rgba(skin.tree.row_marker_color)
+            } else {
+                TRANSPARENT
+            },
+        );
+
+        let color = if self.selected {
+            skin.rgba(skin.tree.row_text_color)
+        } else if self.muted {
+            skin.rgba(skin.tree.row_muted_text_color)
+        } else {
+            skin.rgba(skin.tree.row_idle_text_color)
+        };
+        let chevron_x = self.chevron_x(bounds.x, skin);
+        self.paint_chevron(list, text, bounds, chevron_x, skin);
+        let icon_x = chevron_x + skin.tree.chevron_width + skin.tree.content_gap;
+        self.paint_icon(list, text, bounds, icon_x, color, skin);
+        let label_x = icon_x + skin.tree.icon_size + skin.tree.content_gap;
+        self.paint_labels(list, text, bounds, label_x, color, skin);
+    }
+
+    fn chevron_x(&self, left: f32, skin: &Skin) -> f32 {
+        let indent = skin
+            .tree
+            .indent_step
+            .mul_add(f32::from(self.depth), skin.tree.indent_base);
+        left + skin.tree.marker_width + indent
+    }
+
+    fn paint_chevron(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        bounds: Rect,
+        x: f32,
+        skin: &Skin,
+    ) {
+        let icon = match self.expanded {
+            Some(true) => IconName::ChevronDown,
+            Some(false) => IconName::ChevronRight,
+            None => return,
+        };
+        let Some(mark) = icon.mark() else {
+            return;
+        };
+        Marked::new(mark, skin.tree.chevron_size).centred(
+            list,
+            text,
+            Rect {
+                x,
+                w: skin.tree.chevron_width,
+                ..bounds
+            },
+            skin.rgba(skin.tree.chevron_color),
+        );
+    }
+
+    fn paint_icon(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        bounds: Rect,
+        x: f32,
+        color: Rgba,
+        skin: &Skin,
+    ) {
+        if self.icon == IconName::Zvuk {
+            paint_zvuk(list, bounds, x, color, skin.tree.icon_size);
+            return;
+        }
+        let Some(glyph) = self.icon.lucide_glyph() else {
+            return;
+        };
+        let content = glyph.to_string();
+        let run = text.shape_lucide(&content, skin.tree.icon_size);
+        list.text(
+            &run,
+            &content,
+            Transform::translate(Pt {
+                x: x + (skin.tree.icon_size - run.width()) / 2.0,
+                y: bounds.y + (bounds.h - run.height()) / 2.0,
+            }),
+            color,
+        );
+    }
+
+    fn paint_labels(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        bounds: Rect,
+        label_x: f32,
+        color: Rgba,
+        skin: &Skin,
+    ) {
+        let right = bounds.x + bounds.w - skin.tree.row_padding_right;
+        let count_run = self
+            .count
+            .as_deref()
+            .map(|content| text.shape(content, skin.tree.count_text, None));
+        let label_right = count_run
+            .as_ref()
+            .map_or(right, |run| right - run.width() - skin.tree.content_gap);
+        let label = text.shape(
+            &self.label,
+            skin.tree.label_text,
+            Some((label_right - label_x).max(0.0)),
+        );
+        list.text(
+            &label,
+            &self.label,
+            Transform::translate(Pt {
+                x: label_x,
+                y: bounds.y + (bounds.h - label.height()) / 2.0,
+            }),
+            color,
+        );
+        if let Some((content, run)) = self.count.as_deref().zip(count_run.as_ref()) {
+            list.text(
+                run,
+                content,
+                Transform::translate(Pt {
+                    x: right - run.width(),
+                    y: bounds.y + (bounds.h - run.height()) / 2.0,
+                }),
+                skin.rgba(skin.tree.count_text.color),
+            );
+        }
+    }
+}
+
+fn visible_rows(
+    row_count: usize,
+    row_height: f32,
+    viewport_height: f32,
+    offset: f32,
+) -> Range<usize> {
+    if row_height <= 0.0 || viewport_height <= 0.0 {
+        return 0..0;
+    }
+    let start = (offset.max(0.0) / row_height)
+        .floor()
+        .to_usize()
+        .map_or(row_count, |index| index.min(row_count));
+    let end = ((offset.max(0.0) + viewport_height) / row_height)
+        .ceil()
+        .to_usize()
+        .map_or(row_count, |index| index.min(row_count));
+    start..end.max(start)
+}
+
+fn paint_scrollbar(
+    list: &mut DrawListBuilder,
+    row_count: usize,
+    skin: &Skin,
+    viewport: Rect,
+    offset: f32,
+) {
+    let content_height = row_count
+        .to_f32()
+        .map_or(f32::MAX, |count| count * skin.tree.row_height);
+    let max_offset = (content_height - viewport.h).max(0.0);
+    if viewport.h <= 0.0 || max_offset <= 0.0 {
+        return;
+    }
+    let width = skin.tree.scrollbar_width.min(viewport.w.max(0.0));
+    let x = (viewport.x + viewport.w - skin.tree.scrollbar_margin - width).max(viewport.x);
+    let rail = Rect {
+        x,
+        h: viewport.h,
+        w: width,
+        y: viewport.y,
+    };
+    let thumb_height = (viewport.h * viewport.h / content_height)
+        .max(width)
+        .min(viewport.h);
+    let travel = viewport.h - thumb_height;
+    let thumb = Rect {
+        x,
+        h: thumb_height,
+        w: width,
+        y: viewport.y + offset.clamp(0.0, max_offset) / max_offset * travel,
+    };
+    list.fill_rect(rail, skin.rgba(skin.tree.scrollbar_background));
+    list.fill_rect(thumb, skin.rgba(skin.tree.scroller_color));
+}
+
+fn paint_zvuk(list: &mut DrawListBuilder, bounds: Rect, x: f32, color: Rgba, icon_size: f32) {
+    let top = bounds.y + (bounds.h - icon_size) / 2.0;
+    let inset = icon_size * 0.12;
+    let center = Pt {
+        x: x + inset * 2.0,
+        y: top + icon_size - inset * 2.0,
+    };
+    let width = (icon_size * 0.08).max(0.75);
+    list.stroke_rounded_rect(
+        Rect {
+            x,
+            h: icon_size,
+            w: icon_size,
+            y: top,
+        },
+        icon_size * 0.22,
+        color,
+        width,
+    );
+    list.fill_circle(center, width, color);
+    for radius in [icon_size * 0.28, icon_size * 0.5] {
+        list.stroke_arc(center, radius, -PI / 2.0, 0.0, color, width);
+    }
+}

@@ -1,25 +1,26 @@
-use bon::Builder;
-
-use crate::ids::InternId;
-
 /// The deck's tempo, editable in place.
-#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.deck.bpm_size)]
-#[derive(kithara_derive::NodeControl)]
-pub(crate) struct Bpm {
-    pub(crate) placeholder: Option<InternId>,
-}
+pub(crate) struct Bpm;
 
-#[cfg(feature = "render")]
-mod host {
-    use super::Bpm;
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    use crate::ids::InternId;
+
+    #[derive(Builder)]
+    pub(crate) struct Bpm {
+        pub(crate) placeholder: Option<InternId>,
+    }
+
     use crate::{
         atoms::deck::tempo::{Reading as Beat, Tempo as Face},
-        render::{
-            ReadValue, Skin, WaveformView,
+        hosts::{
             controls::{Draws, Reading},
             model::derived,
         },
+        render::{ReadValue, Skin, WaveformView},
     };
 
     mod consts {

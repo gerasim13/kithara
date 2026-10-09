@@ -1,14 +1,14 @@
 //! Serializable modular UI model for kithara.
 
 pub mod app;
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 pub(crate) mod atoms;
 #[cfg(any(feature = "render", feature = "vello"))]
 pub mod backends;
 pub mod builtin;
 pub mod capture;
 pub mod compile;
-#[cfg(feature = "render")]
+#[cfg(any(feature = "iced", feature = "masonry"))]
 pub(crate) mod engine;
 pub mod error;
 pub mod expand;
@@ -20,8 +20,6 @@ pub mod registry;
 #[cfg(feature = "render")]
 pub mod render;
 pub mod size;
-#[cfg(feature = "render")]
-pub(crate) mod solve;
 pub mod source;
 pub mod view;
 
@@ -33,6 +31,12 @@ pub use {kithara_ui_draw as draw, kithara_ui_lottie as lottie, kithara_ui_shapin
 
 mod consts;
 mod doc;
+#[cfg(any(feature = "iced", feature = "masonry"))]
+mod hosts;
+#[cfg(feature = "iced")]
+mod iced;
+#[cfg(feature = "masonry")]
+mod masonry;
 mod resolve;
 mod room;
 mod shader;

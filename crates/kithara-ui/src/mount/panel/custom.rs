@@ -1,4 +1,4 @@
-use crate::{ids::InternId, size::SizeSpec};
+use crate::size::SizeSpec;
 
 /// Content the application registered under a kind, standing in the box the
 /// document declares for it.
@@ -8,12 +8,22 @@ use crate::{ids::InternId, size::SizeSpec};
 /// matters says so by declaring `Shrink` on that axis instead.
 #[derive(kithara_derive::Control)]
 #[control(size = SizeSpec::FILL)]
-pub(crate) struct Custom {
-    pub(crate) kind: InternId,
-}
+pub(crate) struct Custom;
 
-impl Custom {
-    pub(crate) const fn new(kind: InternId) -> Self {
-        Self { kind }
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    use crate::ids::InternId;
+
+    #[derive(Builder)]
+    pub(crate) struct Custom {
+        pub(crate) kind: InternId,
+    }
+
+    impl Custom {
+        pub(crate) const fn new(kind: InternId) -> Self {
+            Self { kind }
+        }
     }
 }

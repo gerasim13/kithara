@@ -102,7 +102,7 @@ fn grapheme_boundary_at_or_after(query: &str, index: usize) -> usize {
         .unwrap_or(query.len())
 }
 
-pub(in crate::engine) struct TextInputComponent {
+pub(crate) struct TextInputComponent {
     cursor: Cursor,
     modifiers: Modifiers,
     preedit: Option<PreeditSnapshot>,
