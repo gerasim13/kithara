@@ -27,7 +27,7 @@ pub(crate) fn emit_one_test(
     let ambient = make_ambient_stmt(args);
     // Async-native emissions install mode per poll; wasm and sync emissions
     // hold both ambient and active scopes in the body.
-    let full_plain = quote! { #test_setup #preamble #(#body_stmts)* };
+    let full_plain = quote! { #preamble #(#body_stmts)* };
     let full_held = quote! { #test_setup #preamble #ambient #(#body_stmts)* };
     let serial_attr = make_serial_attr(args);
     let wasm_serial_guard = make_wasm_serial_guard(args);

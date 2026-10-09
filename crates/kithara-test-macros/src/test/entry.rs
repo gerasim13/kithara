@@ -151,7 +151,7 @@ fn generate_native_only(ctx: &GenCtx<'_>) -> TokenStream2 {
         let body_stmts = ctx.body_stmts;
         // Plain body for the async-native branches (sole ambient holder there
         // is the per-poll `with_ambient`); held body for the sync branch.
-        let full_plain = quote! { #test_setup #preamble #(#body_stmts)* };
+        let full_plain = quote! { #preamble #(#body_stmts)* };
         let full_held = quote! { #test_setup #preamble #ambient #(#body_stmts)* };
         tests.extend(emit_native_only_one(
             ctx,
@@ -300,6 +300,36 @@ mod tests {
 
         assert!(expanded.contains("async fn contract"));
         assert!(expanded.contains("wasm_serial_guard"));
+        Ok(())
+    }
+
+    #[test]
+    fn every_emitted_test_starts_its_load_once() -> syn::Result<()> {
+        for (attrs, source) in [
+            ("", "fn contract() {}"),
+            ("", "async fn contract() {}"),
+            ("tokio", "async fn contract() {}"),
+            (
+                "tokio, timeout(std::time::Duration::from_secs(5))",
+                "async fn contract() {}",
+            ),
+            ("tokio, native", "async fn contract() {}"),
+            (
+                "tokio, native, timeout(std::time::Duration::from_secs(5))",
+                "async fn contract() {}",
+            ),
+            ("browser", "async fn contract() {}"),
+        ] {
+            let args = syn::parse_str::<TestArgs>(attrs)?;
+            let function = syn::parse_str(source)?;
+
+            let expanded = generate(args, function)?.to_string();
+            assert_eq!(
+                expanded.matches("LoadGuard").count(),
+                expanded.matches("fn contract").count(),
+                "`{attrs}` `{source}` must start the load once per emitted test: {expanded}"
+            );
+        }
         Ok(())
     }
 
