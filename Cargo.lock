@@ -4943,7 +4943,6 @@ dependencies = [
 name = "kithara-audio"
 version = "0.0.1-alpha5"
 dependencies = [
- "arc-swap",
  "crossbeam-queue",
  "delegate",
  "derive-where",
@@ -4970,7 +4969,6 @@ dependencies = [
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
- "ringbuf",
  "serde",
  "serde_yaml_ng",
  "thiserror 2.0.21",
@@ -5817,7 +5815,6 @@ dependencies = [
  "kithara-decode",
  "kithara-events",
  "kithara-host",
- "kithara-platform",
  "kithara-play",
  "kithara-queue",
  "kithara-render",
@@ -5989,7 +5986,6 @@ dependencies = [
  "kithara-worker",
  "kithara-workspace-hack",
  "num-traits",
- "ringbuf",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -6048,13 +6044,11 @@ dependencies = [
  "kithara-signal",
  "kithara-test-utils",
  "kithara-warp",
- "kithara-waveform",
  "kithara-workspace-hack",
  "num-traits",
  "rand 0.10.3",
  "serde",
  "serde_yaml_ng",
- "smallvec",
  "thiserror 2.0.21",
  "tracing",
 ]
@@ -6065,7 +6059,6 @@ version = "0.0.1-alpha5"
 dependencies = [
  "aes",
  "bytes",
- "delegate",
  "kithara",
  "kithara-app",
  "kithara-devtools",
@@ -6238,7 +6231,6 @@ name = "kithara-stream"
 version = "0.0.1-alpha5"
 dependencies = [
  "arc-swap",
- "bitflags 2.13.2",
  "bon",
  "delegate",
  "derive_more",
@@ -6557,7 +6549,6 @@ dependencies = [
 name = "kithara-warp"
 version = "0.0.1-alpha5"
 dependencies = [
- "arc-swap",
  "bon",
  "delegate",
  "derive-where",

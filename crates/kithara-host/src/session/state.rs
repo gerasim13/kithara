@@ -207,7 +207,7 @@ impl RootView {
 pub(crate) enum SessionStream {
     #[cfg(not(target_arch = "wasm32"))]
     Realtime {
-        _backend: firewheel::cpal::CpalStream,
+        _backend: Box<firewheel::cpal::CpalStream>,
     },
     #[cfg(target_arch = "wasm32")]
     Realtime {

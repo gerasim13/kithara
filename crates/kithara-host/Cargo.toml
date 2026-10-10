@@ -40,7 +40,6 @@ stretch-identity = ["kithara-play/stretch-identity"]
 usdt = ["kithara-effects/usdt", "kithara-play/usdt"]
 
 [dependencies]
-kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
 kithara-command = { workspace = true }
 kithara-config = { workspace = true }

@@ -38,7 +38,6 @@ kithara-stretch = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["client-reqwest", "usdt", "tls-rustls"], optional = true }
 
-arc-swap = { workspace = true }
 bon = { workspace = true }
 delegate = { workspace = true }
 derive-where = { workspace = true }

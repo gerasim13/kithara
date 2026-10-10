@@ -147,8 +147,11 @@ where
     let inbox: Arc<dyn DeckInbox> = client.clone();
     spawn_named("host-deck-session", move || {
         let start = move |ctx: &mut FirewheelContext, rate| {
-            start_stream_cpal(ctx, rate, output_block_frames)
-                .map(|backend| SessionStream::Realtime { _backend: backend })
+            start_stream_cpal(ctx, rate, output_block_frames).map(|backend| {
+                SessionStream::Realtime {
+                    _backend: Box::new(backend),
+                }
+            })
         };
         let mut state = SessionState::new(
             root,

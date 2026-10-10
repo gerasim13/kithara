@@ -9,6 +9,11 @@ description = "Pure beat-phase, entry-placement, and tempo-trajectory mathematic
 keywords = ["audio", "beatgrid", "tempo", "sync"]
 categories = ["multimedia::audio"]
 
+[package.metadata.cargo-machete]
+# `serde` is reached only through `#[derive(Ranged)]`; the expansion names it,
+# never a source line in this crate.
+ignored = ["serde"]
+
 [dependencies]
 kithara-beat = { workspace = true }
 kithara-derive = { workspace = true, features = ["ranged"] }
