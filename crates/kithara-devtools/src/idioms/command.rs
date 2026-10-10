@@ -17,7 +17,7 @@ use super::{
 };
 use crate::common::{
     baseline::{Baseline, RatchetDiff},
-    exclude::apply_lint_excludes,
+    exclude::{apply_lint_excludes, cfg_test_module_globs},
     project::ProjectConfig,
     report,
     scan::Scan,
@@ -175,12 +175,19 @@ fn apply_common_exclusions(
     policy: checks::CheckPolicy,
     path_patterns: &[String],
     module_patterns: &[String],
+    test_module_paths: &[String],
     workspace_root: &Path,
 ) {
     if policy.keeps_source_findings() {
         return;
     }
-    apply_lint_excludes(report, path_patterns, module_patterns, workspace_root);
+    apply_lint_excludes(
+        report,
+        path_patterns,
+        module_patterns,
+        test_module_paths,
+        workspace_root,
+    );
 }
 
 /// Runs each selected check, returning its wall time and its violations in
@@ -201,6 +208,7 @@ fn run_checks(
     project: &ProjectConfig,
     cache: &VerdictCache,
 ) -> Result<Vec<(Duration, Vec<Violation>)>> {
+    let test_module_paths = cfg_test_module_globs(ctx.workspace_root);
     selected
         .par_iter()
         .map(|check| {
@@ -217,6 +225,7 @@ fn run_checks(
                 check.policy(),
                 &project.lint_exclude.runtime_paths(),
                 &project.lint_exclude.modules,
+                &test_module_paths,
                 ctx.workspace_root,
             );
             check_report.violations.sort_by(|a, b| a.key.cmp(&b.key));
@@ -355,6 +364,7 @@ mod tests {
             checks::CheckPolicy::Default,
             &[],
             &[],
+            &[],
             dir.path(),
         );
         assert!(ordinary.violations.is_empty());
@@ -368,6 +378,7 @@ mod tests {
         apply_common_exclusions(
             &mut derivable,
             checks::CheckPolicy::WorkspaceSources,
+            &[],
             &[],
             &[],
             dir.path(),
