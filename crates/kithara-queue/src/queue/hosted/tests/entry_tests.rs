@@ -409,6 +409,13 @@ async fn a_pause_over_a_scheduled_entry_settles_current_paused(#[case] reverse: 
 }
 
 pub(super) fn empty_queue() -> (Queue<TestPools>, mock::DeckRig<TestPools>, TestTempDir) {
+    queue_with_load_settings(std::num::NonZeroUsize::new(3).expect("default cap"), false)
+}
+
+pub(super) fn queue_with_load_settings(
+    max_concurrent_loads: std::num::NonZeroUsize,
+    should_autoplay: bool,
+) -> (Queue<TestPools>, mock::DeckRig<TestPools>, TestTempDir) {
     let dir = TestTempDir::new();
     let path = dir.path().join("entry.wav");
     mock::write_pcm_wav(&path, &[0.5; 2_048], AudioSpec::new(2, mock::SAMPLE_RATE))
@@ -419,7 +426,14 @@ pub(super) fn empty_queue() -> (Queue<TestPools>, mock::DeckRig<TestPools>, Test
     let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
         .build();
-    let mut queue = Queue::new(QueueConfig::builder().prep(prep).store(store).build());
+    let mut queue = Queue::new(
+        QueueConfig::builder()
+            .prep(prep)
+            .store(store)
+            .max_concurrent_loads(max_concurrent_loads)
+            .should_autoplay(should_autoplay)
+            .build(),
+    );
     queue.clock = Some((SessionFrame::new(0), FrameCount::new(128)));
     queue.deck.mixer.sample_rate = mock::SAMPLE_RATE.get();
     let rig = mock::DeckRig::new(DeckMixerConfig::default()).expect("fixture command ring");

@@ -828,11 +828,22 @@ async fn a_background_warm_keeps_the_holder_of_a_held_entry(tone_mp3: String) {
     host_b.close().await;
 }
 
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn settle(owner: &mut Owner) {
     while owner.active.is_some() {
-        time::timeout(Duration::from_secs(2), owner.drive())
-            .await
-            .expect("the pass progresses");
+        let progress = time::timeout(Duration::from_secs(2), owner.drive());
+        ::kithara::platform::tokio::pin!(progress);
+        loop {
+            hang_tick!();
+            ::kithara::platform::tokio::select! {
+                result = &mut progress => {
+                    result.expect("the pass progresses");
+                    hang_reset!();
+                    break;
+                }
+                () = time::sleep(Duration::from_millis(100)) => {}
+            }
+        }
     }
 }
 

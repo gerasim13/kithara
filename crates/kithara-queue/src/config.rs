@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use kithara_assets::AssetStore;
 use kithara_bufpool::HasPool;
 use kithara_config::Config;
@@ -78,9 +80,17 @@ where
     #[config(skip = "injected cancellation resource", patch(skip), debug(skip))]
     pub(crate) cancel: Option<CancelToken>,
 
-    /// Shared store used for bare URI track sources.
+    /// Shared store used for bare URI track sources; unset, the queue builds one
+    /// from its prep worker's pools.
     #[config(skip = "injected asset store", patch(skip), debug(skip))]
     pub(crate) store: Option<AssetStore<S>>,
+
+    /// Background loads the queue keeps open at once: appended tracks opened
+    /// ahead of a selection and held off the deck. Tracks beyond it stay
+    /// `Pending` until a place frees. The bound counts parked tracks even after
+    /// their open is answered, not just in-flight opens. Default: 3.
+    #[config(sdk, builder(default = consts::DEFAULT_MAX_CONCURRENT_LOADS))]
+    pub(crate) max_concurrent_loads: NonZeroUsize,
 
     /// Runtime the tasks beside each load run on: the cover read and the
     /// slow-transfer watch. `None` takes the runtime current where the queue
@@ -89,9 +99,9 @@ where
     #[config(skip = "injected runtime", patch(skip), debug(skip))]
     pub(crate) runtime: Option<RuntimeHandle>,
 
-    /// Whether the queue starts playback by itself once the first track
-    /// appended to a queue with nothing selected finishes loading. Off by
-    /// default: the embedding decides when playback starts. A document cannot
+    /// Whether the initial target (the first track appended to a queue with
+    /// nothing selected) starts playing once it loads; when off, it loads and
+    /// enters paused. A document cannot
     /// name it, because starting playback is the embedding's choice.
     #[config(sdk, builder(default = false), patch(skip))]
     pub(crate) should_autoplay: bool,
@@ -144,6 +154,14 @@ mod tests {
         assert_eq!(cfg.preload_lead, Duration::from_millis(3_500));
         assert!(!cfg.settings.gapless());
     }
+
+    #[kithara::test]
+    fn default_config_has_reasonable_loader_cap() {
+        let cfg = config();
+        assert_eq!(cfg.max_concurrent_loads.get(), 3);
+        assert!(cfg.store.is_none());
+        assert_eq!(cfg.preload_lead, Duration::from_millis(3_500));
+    }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -152,6 +170,24 @@ mod document_tests {
 
     use super::{QueueConfigPatch, tests::config};
     use crate::PlaybackOrder;
+
+    #[kithara::test(native, flash(false))]
+    fn a_document_sets_the_load_cap_and_leaves_the_history_size() {
+        let patch: QueueConfigPatch =
+            serde_yaml_ng::from_str("max_concurrent_loads: 5\n").expect("the document types");
+        // Seeded off the crate default so a merge that reset every unnamed
+        // field could not pass this by coincidence.
+        let mut config = config();
+        config.max_history_size = 37;
+
+        config.apply(patch).expect("the document patch is valid");
+
+        assert_eq!(config.max_concurrent_loads.get(), 5);
+        assert_eq!(
+            config.max_history_size, 37,
+            "a key the document does not name must keep its seeded value"
+        );
+    }
 
     #[kithara::test(native, flash(false))]
     fn a_document_sets_the_order_and_leaves_the_history_size() {

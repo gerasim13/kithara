@@ -2,7 +2,7 @@ use kithara_command::{
     Batch, Live, LiveError, Outcome, Port, Receipt, Rejection, SendError, Sender, Seq, When,
 };
 use kithara_render::{
-    DispatcherCommand, DispatcherProtocol, LaneId, LoadRequest,
+    DispatcherCommand, DispatcherProtocol, LaneId, LoadRequest, ServiceClass,
     bridge::{DeckEvent, DeckPart, DeckProtocol, Slot},
 };
 use kithara_signal::SessionFrame;
@@ -359,6 +359,15 @@ impl<'a, S> Outbox<'a, S> {
 
     pub(crate) fn release(&mut self, lane: LaneId) -> Result<Seq, PlayError> {
         self.dispatch(DispatcherCommand::Release(lane))
+    }
+
+    /// Asks the dispatcher to move a resident lane to another service class.
+    pub(crate) fn prioritize(
+        &mut self,
+        lane: LaneId,
+        class: ServiceClass,
+    ) -> Result<Seq, PlayError> {
+        self.dispatch(DispatcherCommand::SetPriority(lane, class))
     }
 
     fn dispatch(&mut self, command: DispatcherCommand<ResourceLoad<S>>) -> Result<Seq, PlayError> {

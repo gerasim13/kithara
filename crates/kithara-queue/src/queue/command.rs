@@ -9,7 +9,7 @@ use kithara_play::{
 };
 use kithara_signal::{FaderValue, SessionFrame};
 
-use super::{Queue, Transition, slots::Role, types::Placement};
+use super::{Queue, Transition, slots::Role, transition::TransitionRequest, types::Placement};
 use crate::{
     ActionAtItemEnd, AdvanceReason, PlaybackOrder, QueueError, QueueEvent, QueueRepeatMode,
     QueueSettingsChange, RepeatMode, TrackSource, TrackStatus, loading::LoadReport,
@@ -115,7 +115,7 @@ where
         match command {
             QueueCommand::Append { id, source } => {
                 self.insert_entry(id, source, Placement::Append);
-                self.autoplay(output, out)?;
+                self.arm_initial_load(output, out);
                 Ok(None)
             }
             QueueCommand::Insert { id, source, after } => {
@@ -131,7 +131,7 @@ where
                     None => 0,
                 };
                 self.insert_entry(id, source, Placement::At(index));
-                self.autoplay(output, out)?;
+                self.arm_initial_load(output, out);
                 Ok(None)
             }
             QueueCommand::Remove(id) => self.remove_entry(id, output, out),
@@ -141,28 +141,39 @@ where
                 for source in sources {
                     self.insert_entry(TrackId::allocate(), source, Placement::Append);
                 }
-                self.autoplay(output, out)?;
+                self.arm_initial_load(output, out);
                 Ok(None)
             }
             QueueCommand::Select { id, transition } => self.request_transition(
-                id,
-                transition,
-                AdvanceReason::UserSelect,
-                false,
+                TransitionRequest {
+                    id,
+                    transition,
+                    reason: AdvanceReason::UserSelect,
+                    auto: false,
+                    playing: true,
+                },
                 output,
                 out,
             ),
-            QueueCommand::Next(transition) => {
-                self.next_target(transition, AdvanceReason::UserNext, false, output, out)
-            }
+            QueueCommand::Next(transition) => self.next_target(
+                transition,
+                AdvanceReason::UserNext,
+                false,
+                true,
+                output,
+                out,
+            ),
             QueueCommand::Previous(transition) => {
                 let ids = self.track_ids();
                 self.navigation.prev(&ids).map_or(Ok(None), |id| {
                     self.request_transition(
-                        id,
-                        transition,
-                        AdvanceReason::UserPrev,
-                        false,
+                        TransitionRequest {
+                            id,
+                            transition,
+                            reason: AdvanceReason::UserPrev,
+                            auto: false,
+                            playing: true,
+                        },
                         output,
                         out,
                     )
@@ -269,6 +280,7 @@ where
                 Transition::None,
                 AdvanceReason::InitialLoad,
                 false,
+                true,
                 output,
                 out,
             )
@@ -365,6 +377,13 @@ where
                 .track
                 .admit(change, when, out)?;
         }
+        for parked in self
+            .active
+            .parked_iter_mut()
+            .filter(|parked| parked.track.snapshot().as_ref().status != PlayingStatus::Released)
+        {
+            parked.track.admit(change, When::Next, out)?;
+        }
         let withdraw = matches!(change, TrackSettingsChange::Speed(_))
             && self.target.is_some_and(|target| {
                 target.auto
@@ -390,6 +409,15 @@ where
                 .track
                 .apply(TrackCommand::Configure(change, when), out)?;
             moved |= Some(index) == current && sent.is_some();
+        }
+        for parked in self
+            .active
+            .parked_iter_mut()
+            .filter(|parked| parked.track.snapshot().as_ref().status != PlayingStatus::Released)
+        {
+            parked
+                .track
+                .apply(TrackCommand::Configure(change, When::Next), out)?;
         }
         self.config.track.apply_change(change);
         if withdraw && moved {

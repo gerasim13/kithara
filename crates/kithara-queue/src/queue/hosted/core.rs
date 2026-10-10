@@ -1,7 +1,8 @@
 use std::{num::NonZeroU32, task::Waker};
 
 use kithara_bufpool::HasPool;
-use kithara_command::{Outcome, Rejection, Seq};
+use kithara_command::{Outcome, Receipt, Rejection, Seq};
+use kithara_events::TrackId;
 use kithara_platform::maybe_send::MaybeSend;
 use kithara_play::{
     DeckEvent, DeckMixerConfig, DeckPass, HostedDeck, LoadRefusal, Outbox, OutputSnapshot,
@@ -30,6 +31,7 @@ where
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
         let result = self.apply_command(command, output, out).map_err(play_error);
+        self.pump_loads(output, out);
         self.publish();
         result
     }
@@ -83,7 +85,14 @@ where
                     .position(|active| active.load == Some(LoadState::Opening(seq)))
                 {
                     let opened = matches!(receipt.outcome(), Outcome::Applied { .. });
-                    let retry = self.classify_load(index, receipt.outcome());
+                    let Some(active) = self.active.get(index) else {
+                        return Settled::Pending;
+                    };
+                    let id = active.item;
+                    let leaving = active.role == Role::Leaving;
+                    let wanted = self.target.is_some_and(|target| target.to == id)
+                        && matches!(active.role, Role::Incoming { .. });
+                    let retry = self.classify_load(id, leaving, wanted, receipt.outcome());
                     if let Some(active) = self.active.get_mut(index) {
                         let settled = active.track.settle(TrackReceipt::Loaded(receipt), out);
                         if retry {
@@ -104,7 +113,13 @@ where
                             outcomes.push((index, settled));
                         }
                     }
+                } else if let Some(index) = self
+                    .active
+                    .parked_position(|parked| parked.load == Some(LoadState::Opening(seq)))
+                {
+                    self.settle_parked(index, receipt, out);
                 }
+                self.pump_loads(output, out);
             }
         }
         let result = self.settle_transitions(outcomes, out);
@@ -165,23 +180,59 @@ where
         result
     }
 
+    fn settle_parked(
+        &mut self,
+        index: usize,
+        receipt: Receipt<kithara_play::DispatcherProtocol<kithara_play::ResourceLoad<S>>>,
+        out: &mut Outbox<'_, S>,
+    ) {
+        let Some(parked) = self.active.parked_get_mut(index) else {
+            return;
+        };
+        let id = parked.item;
+        let leaving = parked.track.snapshot().as_ref().status == PlayingStatus::Released;
+        if matches!(receipt.outcome(), Outcome::Applied { .. }) {
+            let seq = receipt.seq();
+            parked.track.settle(TrackReceipt::Loaded(receipt), out);
+            parked.load = Some(LoadState::Attaching(seq));
+            let metadata = parked.track.snapshot().as_ref().metadata.clone();
+            if !leaving {
+                self.announce_loaded(id, &metadata);
+            }
+        } else {
+            self.classify_load(id, leaving, false, receipt.outcome());
+            if let Some(parked) = self.active.parked_get_mut(index) {
+                parked.track.settle(TrackReceipt::Loaded(receipt), out);
+            }
+            self.active.take_parked(index);
+        }
+    }
+
     pub(super) fn tick_with_output(
         &mut self,
         now: SessionFrame,
         output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) {
+        let parked = self.active.parked_len();
         if let Some((_, delivery)) = self.clock {
             self.clock = Some((now, delivery));
         }
         for active in self.active.iter_mut() {
             active.track.tick(now, out);
         }
+        for parked in self.active.parked_iter_mut() {
+            parked.track.tick(now, out);
+        }
         if let Err(error) = self.tick_deadlines(now, output, out) {
             warn!(%error, "queue deadline could not advance");
         }
         if let Err(error) = self.transition_loaded(out) {
             warn!(%error, "loaded queue target could not enter");
+        }
+        self.reap_released();
+        if self.active.parked_len() < parked {
+            self.pump_loads(output, out);
         }
         self.publish();
     }
@@ -254,13 +305,12 @@ where
     F: TrackFactory<S>,
 {
     fn accept_host_pass(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
+        let had_clock = self.clock.is_some();
         self.clock = out.pass().map(|pass| (pass.now, pass.delivery));
-        if self.clock.is_none() {
-            return;
-        }
+        let rate = pass.output.sample_rate.output();
         if self.deck.mixer.sample_rate != 0
-            && self.deck.mixer.sample_rate != pass.deck.sample_rate
-            && let Some(rate) = NonZeroU32::new(pass.deck.sample_rate)
+            && self.deck.mixer.sample_rate != rate
+            && let Some(rate) = NonZeroU32::new(rate)
             && let Err(error) = self.set_host_rate(rate, out)
         {
             warn!(%error, "queue tracks could not adopt the output rate");
@@ -269,6 +319,11 @@ where
         self.deck.mix = pass.mix;
         self.deck.suspended = pass.suspended;
         self.deck.mixer.clone_from(pass.deck);
+        self.deck.mixer.sample_rate = rate;
+        if !had_clock {
+            self.arm_initial_load(Some(pass.output), out);
+            self.pump_loads(Some(pass.output), out);
+        }
     }
 
     fn set_host_rate(
@@ -276,9 +331,9 @@ where
         rate: NonZeroU32,
         out: &mut Outbox<'_, S>,
     ) -> Result<(), PlayError> {
-        let loaded = self.active.indices(|active| {
+        let loaded = self.active.tracks().filter(|track| {
             matches!(
-                active.track.snapshot().as_ref().status,
+                track.snapshot().as_ref().status,
                 PlayingStatus::Loaded
                     | PlayingStatus::Playing { .. }
                     | PlayingStatus::Paused { .. }
@@ -286,37 +341,42 @@ where
                     | PlayingStatus::Ended { .. }
             )
         });
-        if out.deck_available() < loaded.len() {
-            return Err(PlayError::Full("deck"));
-        }
-        for index in &loaded {
-            let active = self.active.get(*index).ok_or(PlayError::NoActiveSlot)?;
-            if active.track.snapshot().as_ref().lane_room == 0 {
+        let mut attached = 0;
+        for track in loaded {
+            let snapshot = track.snapshot();
+            attached += usize::from(snapshot.as_ref().attached);
+            if snapshot.as_ref().lane_room == 0 {
                 return Err(PlayError::Full("lane"));
             }
         }
-        for index in loaded {
-            self.active
-                .get_mut(index)
-                .ok_or(PlayError::NoActiveSlot)?
-                .track
-                .apply(TrackCommand::SetHostRate { rate }, out)?;
+        if out.deck_available() < attached {
+            return Err(PlayError::Full("deck"));
+        }
+        for track in self.active.tracks_mut() {
+            if matches!(
+                track.snapshot().as_ref().status,
+                PlayingStatus::Loaded
+                    | PlayingStatus::Playing { .. }
+                    | PlayingStatus::Paused { .. }
+                    | PlayingStatus::Faded { .. }
+                    | PlayingStatus::Ended { .. }
+            ) {
+                track.apply(TrackCommand::SetHostRate { rate }, out)?;
+            }
         }
         Ok(())
     }
 
     fn classify_load(
         &mut self,
-        index: usize,
+        id: TrackId,
+        leaving: bool,
+        wanted: bool,
         outcome: &Outcome<kithara_play::DispatcherProtocol<kithara_play::ResourceLoad<S>>>,
     ) -> bool {
-        let Some(active) = self.active.get(index) else {
-            return false;
-        };
-        if active.role == Role::Leaving {
+        if leaving {
             return false;
         }
-        let id = active.item;
         let rejected = match outcome {
             Outcome::Applied { .. } => return false,
             Outcome::Rejected(rejected) => rejected,
@@ -335,8 +395,6 @@ where
             self.tracks.set_status(id, TrackStatus::Cancelled);
             return false;
         }
-        let wanted = self.target.is_some_and(|target| target.to == id)
-            && matches!(active.role, Role::Incoming { .. });
         let error = QueueError::Resource(refusal.to_string());
         let retry = self
             .tracks
@@ -402,6 +460,7 @@ where
                 match self.next_target(
                     super::super::Transition::None,
                     crate::AdvanceReason::TrackFailed,
+                    true,
                     true,
                     output,
                     out,

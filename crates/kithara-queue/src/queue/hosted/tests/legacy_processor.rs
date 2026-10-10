@@ -227,10 +227,13 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
         1,
         |queue, out| {
             queue.request_transition(
-                second,
-                Transition::None,
-                AdvanceReason::NaturalEof,
-                true,
+                crate::queue::transition::TransitionRequest {
+                    id: second,
+                    transition: Transition::None,
+                    reason: AdvanceReason::NaturalEof,
+                    auto: true,
+                    playing: true,
+                },
                 Some(&mock::output(Some(shape)).get()),
                 out,
             )

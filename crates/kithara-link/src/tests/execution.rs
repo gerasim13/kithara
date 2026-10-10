@@ -74,7 +74,7 @@ async fn a_lane_dropped_before_its_turn_is_reported_only_by_its_cancellation() {
     let track: PlayerImpl<TestPools> = PlayerFactory
         .track(PlayerConfig {
             item: kithara_events::TrackId::allocate(),
-            slot: Slot::new(0),
+            slot: Some(Slot::new(0)),
             settings: TrackSettings::default(),
         })
         .expect("track");

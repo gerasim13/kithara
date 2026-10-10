@@ -22,7 +22,7 @@ use kithara::{
 use kithara_command::{Batch, Outcome, Rejection, SendError, Sender, When};
 use kithara_render::{
     Dispatched, DispatcherCommand, LaneCommand, LaneProtocol, LaneStart, LoadRequest, PcmPacket,
-    PcmReceiver,
+    PcmReceiver, ServiceClass,
 };
 
 use super::dispatcher::{LaneLoader, LaneOpen, ReleaseLane};
@@ -218,6 +218,7 @@ where
                 Batch {
                     basis: Vec::new(),
                     commands: vec![DispatcherCommand::Load(Box::new(LoadRequest {
+                        class: ServiceClass::Warm,
                         item: LaneOpen {
                             worker: worker.clone(),
                             config,

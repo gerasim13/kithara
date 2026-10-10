@@ -6045,6 +6045,7 @@ dependencies = [
  "kithara-queue",
  "kithara-render",
  "kithara-signal",
+ "kithara-stream",
  "kithara-test-utils",
  "kithara-warp",
  "kithara-waveform",

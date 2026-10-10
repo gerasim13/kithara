@@ -66,9 +66,7 @@ impl<S> Track<S> for PlayerImpl<S> {
                         self.play = attaching.play;
                     }
                     if attaching.replacement {
-                        if let Some(loading) = self.loading.as_mut() {
-                            loading.evict = Some(When::Next);
-                        }
+                        self.slot = None;
                         self.reserved_ready();
                     }
                 } else {

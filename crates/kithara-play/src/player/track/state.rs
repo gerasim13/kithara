@@ -58,7 +58,10 @@ pub enum TrackCommand<S> {
     /// Supersedes scheduled slot batches without stopping the sounding segment.
     Supersede,
     Release,
-    Evict {
+    /// Seats a track once: Next attaches its held PCM as soon as it opens;
+    /// At(frame) replaces the slot's sounding consumer on that frame.
+    Seat {
+        slot: Slot,
         at: When<SessionFrame>,
     },
 }
@@ -92,7 +95,8 @@ pub enum TrackStatus {
 #[derive(Clone)]
 pub struct TrackSnapshot {
     pub item: TrackId,
-    pub slot: Slot,
+    /// None while a background load holds the track off the deck.
+    pub slot: Option<Slot>,
     pub status: TrackStatus,
     pub speed: f32,
     pub position: Position,
@@ -139,7 +143,6 @@ impl AsRef<Self> for TrackSnapshot {
 
 pub(super) struct Loading {
     pub(super) seq: Seq,
-    pub(super) evict: Option<When<SessionFrame>>,
     pub(super) opened: Option<OpenedTrack>,
 }
 

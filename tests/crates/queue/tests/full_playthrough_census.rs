@@ -21,7 +21,7 @@
 
 use std::collections::BTreeMap;
 
-use kithara::{
+use ::kithara::{
     events::TrackId,
     platform::{
         sync::Arc,
@@ -48,7 +48,7 @@ use kithara_test_fixtures::{
     hls_fixtures::frame_samples,
     signal::{FrameClass, classify_windows},
 };
-use kithara_test_utils::{TestTempDir, probe::IntoProbeArg, temp_dir};
+use kithara_test_utils::{TestTempDir, kithara, probe::IntoProbeArg, temp_dir};
 
 use crate::bufpool_ext::TestPools;
 
@@ -308,10 +308,10 @@ async fn build_queue(
     let config = QueueConfig::builder()
         .prep(harness.resource_prep().clone())
         .settings(
-            kithara::queue::QueueSettings::builder()
-                .crossfade(kithara::play::CrossfadeSettings {
+            ::kithara::queue::QueueSettings::builder()
+                .crossfade(::kithara::play::CrossfadeSettings {
                     duration: seam.crossfade_seconds(),
-                    ..kithara::play::CrossfadeSettings::default()
+                    ..::kithara::play::CrossfadeSettings::default()
                 })
                 .build(),
         )
@@ -348,7 +348,7 @@ async fn build_queue(
                         .track(id)
                         .expect("rejected track remains visible")
                         .status,
-                    kithara::queue::TrackStatus::Failed(_)
+                    ::kithara::queue::TrackStatus::Failed(_)
                 ));
                 rejected += 1;
             }
@@ -416,13 +416,16 @@ struct QueueLog {
 }
 
 #[kithara::flash(true)]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn play_to_the_end(census: &Census) -> (Vec<f32>, QueueLog) {
     let block_duration = render_block_duration();
     let mut receiver = census.queue.subscribe();
     let mut log = QueueLog::default();
     let mut rendered = Vec::new();
+    let mut observed = (None, None, 0, 0, false);
 
     for _ in 0..BLOCK_BUDGET {
+        hang_tick!();
         let _ = census.harness.run(&census.queue, QueueControl::tick).await;
         rendered.extend(census.harness.render(BLOCK_FRAMES).await);
 
@@ -443,6 +446,17 @@ async fn play_to_the_end(census: &Census) -> (Vec<f32>, QueueLog) {
                 TestEvent::Queue(QueueEvent::QueueEnded) => log.ended = true,
                 _ => {}
             }
+        }
+        let progress = (
+            census.queue.current_index(),
+            census.queue.position_seconds(),
+            log.advances.len(),
+            log.crossfades,
+            log.ended,
+        );
+        if progress != observed {
+            observed = progress;
+            hang_reset!();
         }
 
         time::sleep(block_duration).await;

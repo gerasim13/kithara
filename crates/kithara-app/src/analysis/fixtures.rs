@@ -3,7 +3,7 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
-use kithara::{
+use ::kithara::{
     analysis::{
         AnalysisFingerprint, AnalysisProgress, AnalysisToken, BeatArtifact, BeatGridModel,
         BeatGridState, BeatSnapshot, BeatState, Bucket, GRID_SCHEMA_VERSION, GridBeat, RangeSet,
@@ -19,6 +19,7 @@ use kithara::{
         sync::{Arc, Mutex},
         time::{Duration, sleep},
         tokio::{
+            self,
             runtime::Handle,
             sync::{mpsc, oneshot, watch},
             task,
@@ -30,7 +31,7 @@ use kithara::{
     worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig},
 };
 use kithara_test_fixtures::{asset::Asset, assets};
-use kithara_test_utils::off_thread::OffThread;
+use kithara_test_utils::{kithara, off_thread::OffThread};
 use url::Url;
 
 use super::{Entry, Request, TrackArtifacts};
@@ -368,6 +369,7 @@ pub(crate) fn long_wav() -> String {
     asset_url(&assets::sine_wav_a440_12s())
 }
 
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 pub(crate) async fn next_subscribe(
     requests: &mut mpsc::Receiver<Request>,
 ) -> (
@@ -375,7 +377,13 @@ pub(crate) async fn next_subscribe(
     oneshot::Sender<watch::Receiver<Option<TrackArtifacts>>>,
 ) {
     loop {
-        match requests.recv().await {
+        hang_tick!();
+        let request = tokio::select! {
+            request = requests.recv() => request,
+            () = sleep(Duration::from_millis(100)) => continue,
+        };
+        hang_reset!();
+        match request {
             Some(Request::Subscribe {
                 track_id, reply, ..
             }) => return (track_id, reply),
@@ -428,8 +436,10 @@ pub(crate) async fn serve_subscribe(
 /// the virtual clock; a deck parked on a timer then waits on a clock this loop
 /// is holding still, and the budget expires on a publication that was only
 /// ever one clock step away.
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 pub(crate) async fn wait_for_revision(state: &Mutex<UiState>, revision: u64) {
     for _ in 0..consts::REVISION_POLLS {
+        hang_tick!();
         if state
             .lock()
             .analysis
@@ -438,6 +448,7 @@ pub(crate) async fn wait_for_revision(state: &Mutex<UiState>, revision: u64) {
             .map(TrackAnalysis::revision)
             == Some(revision)
         {
+            hang_reset!();
             return;
         }
         sleep(consts::REVISION_POLL_INTERVAL).await;
