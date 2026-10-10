@@ -49,13 +49,8 @@ impl<S, D: ?Sized + HostedDeck<S>> Deck<S, D> {
 }
 
 /// Decks held only on the owner's session thread.
+#[derive_where::derive_where(Default)]
 pub(crate) struct Decks<S, D: ?Sized>(pub(crate) Vec<(DeckId, Deck<S, D>)>);
-
-impl<S, D: ?Sized> Default for Decks<S, D> {
-    fn default() -> Self {
-        Self(Vec::new())
-    }
-}
 
 impl<S, D: ?Sized> Decks<S, D> {
     pub(crate) fn index(&self, id: DeckId) -> Result<usize, PlayError> {
