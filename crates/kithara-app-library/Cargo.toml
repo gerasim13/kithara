@@ -23,6 +23,7 @@ kithara-net = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-ui = { workspace = true, default-features = false, features = ["render"] }
 
+derive_more = { workspace = true }
 keyring-core = { workspace = true }
 serde = { workspace = true }
 serde_yaml_ng = { workspace = true }

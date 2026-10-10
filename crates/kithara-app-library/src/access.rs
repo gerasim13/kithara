@@ -3,7 +3,8 @@ use std::fmt;
 use kithara_platform::tokio::sync::watch;
 
 /// An account's access token. `Debug` hides the value.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, derive_more::Debug, PartialEq, Eq)]
+#[debug("AccessToken(<redacted>)")]
 pub struct AccessToken(String);
 
 impl AccessToken {
@@ -16,12 +17,6 @@ impl AccessToken {
     #[must_use]
     pub fn expose(&self) -> &str {
         &self.0
-    }
-}
-
-impl fmt::Debug for AccessToken {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("AccessToken(<redacted>)")
     }
 }
 
@@ -93,7 +88,7 @@ mod tests {
         let (_sender, receiver) = watch::channel(Some(token.clone()));
         let access = KeyAccess::new("example.com", "X-Auth-Token", receiver);
 
-        let shown = format!("{token:?} {access:?}");
+        let shown = format!("{token:?} {token:#?} {access:?} {access:#?}");
 
         assert!(!shown.contains(consts::TOKEN), "{shown}");
         assert!(shown.contains("example.com"), "{shown}");
