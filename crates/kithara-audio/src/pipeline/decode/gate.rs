@@ -75,14 +75,6 @@ impl ReadinessGate {
         }
     }
 
-    pub(crate) fn source_is_ready_for_chunk<T: StreamType>(
-        &self,
-        stream: &SharedStream<T>,
-        byte: u64,
-    ) -> bool {
-        self.source_ready_for_range(stream, chunk_lookahead_range(stream, byte))
-    }
-
     fn source_is_ready_for_seek_landing<T: StreamType>(
         &self,
         stream: &SharedStream<T>,
@@ -139,7 +131,7 @@ impl ReadinessGate {
     }
 }
 
-pub(crate) fn post_seek_anchor_offset<T: StreamType>(
+fn post_seek_anchor_offset<T: StreamType>(
     stream: &SharedStream<T>,
     resume: &ResumeState,
 ) -> Option<u64> {
@@ -189,7 +181,7 @@ fn demand_phase<T: StreamType>(stream: &SharedStream<T>, range: Range<u64>) -> S
 
 #[kithara::probe(
     apply_seek = u64::from(matches!(context, WaitContext::ApplySeek(_))),
-    post_seek = u64::from(matches!(context, WaitContext::PostSeek(_))),
+    post_seek = u64::from(matches!(context, WaitContext::PostSeek(_) | WaitContext::ChunkGate(Some(_)))),
     position = stream.position()
 )]
 /// `Seeking` here means the landing bytes are absent while the source flushes for this very seek,
@@ -216,11 +208,14 @@ pub(crate) fn source_phase_for_wait_context<T: StreamType>(
             }
         }
         WaitContext::Recreation(recreate) => recreate_phase(stream, recreate),
-        WaitContext::PostSeek(resume) => post_seek_anchor_offset(stream, resume).map_or_else(
-            || stream.phase(),
-            |byte| demand_phase(stream, chunk_lookahead_range(stream, byte)),
-        ),
-        WaitContext::Playback => source_phase_forward(stream),
+        WaitContext::ChunkGate(resume) => {
+            let byte = resume
+                .as_ref()
+                .and_then(|resume| post_seek_anchor_offset(stream, resume))
+                .unwrap_or_else(|| stream.position());
+            demand_phase(stream, chunk_lookahead_range(stream, byte))
+        }
+        WaitContext::Playback | WaitContext::PostSeek(_) => source_phase_forward(stream),
         WaitContext::Seek(_) => stream.phase(),
     }
 }
