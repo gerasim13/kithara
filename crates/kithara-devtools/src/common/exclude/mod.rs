@@ -7,6 +7,6 @@ pub use source::{
     attrs_have_cfg_test, non_test_line_count,
 };
 pub(crate) use source::{
-    attrs_are_test_only, attrs_have_test_marker, cfg_test_byte_ranges, cfg_test_lines, item_attrs,
-    item_is_test_only,
+    attr_without_test, attrs_are_test_only, attrs_have_test_marker, cfg_test_byte_ranges,
+    collect_cfg_test_ranges, item_attrs, item_is_test_only,
 };

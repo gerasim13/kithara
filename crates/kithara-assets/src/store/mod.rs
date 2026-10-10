@@ -1,5 +1,7 @@
 mod builder;
 mod chain;
+#[cfg(not(target_arch = "wasm32"))]
+mod disk;
 mod handle;
 
 pub(crate) use builder::AssetStoreConfigOwnerAccess;
