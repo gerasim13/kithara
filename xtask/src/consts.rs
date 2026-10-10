@@ -87,7 +87,7 @@ pub(crate) const RENDER: &str = "com.kithara.OfflineCaptureTest#rendersCleanWav"
 /// `core::fmt` panic plumbing drops out of each slice; same lane as the
 /// wasm flags in `crates/kithara-ffi/.cargo/config.toml`.
 ///
-/// No `embed-bitcode=no` here: `relink_slices_with_lto` runs fat LTO over
+/// No `embed-bitcode=no` here: `build_slice_staticlib` runs fat LTO over
 /// the slice, and LTO consumes exactly the rlib bitcode that flag
 /// suppresses. rustc rejects the two together for the same reason.
 pub(crate) const RELEASE_RUSTFLAGS: &[&str] =
@@ -99,28 +99,18 @@ pub(crate) const SLICE_TARGETS: &[(&str, &[&str])] = &[
     ("ios-arm64", &["aarch64-apple-ios"]),
     (IOS_SIMULATOR_SLICE, &["aarch64-apple-ios-sim"]),
     (
-        IOS_SIMULATOR_FAT_SLICE,
-        &["aarch64-apple-ios-sim", "x86_64-apple-ios"],
-    ),
-    (
         "macos-arm64_x86_64",
         &["aarch64-apple-darwin", "x86_64-apple-darwin"],
     ),
 ];
 
-/// `+nightly` propagates to the nested `cargo build` processes that
-/// cargo-swift spawns (rustup exports `RUSTUP_TOOLCHAIN`), which is what
-/// activates the `[unstable] build-std` section of
-/// `crates/kithara-ffi/.cargo/config.toml` for every slice. `-Z` CLI
-/// flags must not be added here: the outer cargo consumes them without
-/// forwarding to external subcommands, so they silently do nothing.
+/// Nightly enables the `[unstable] build-std` section of
+/// `crates/kithara-ffi/.cargo/config.toml` for every release slice.
 pub(crate) const RELEASE_CARGO_ARGS: &[&str] = &["+nightly"];
 
 /// Slice subdirectories inside the `*.xcframework` we expect to find.
 pub(crate) const XCFRAMEWORK_SLICES: &[&str] =
     &["ios-arm64", IOS_SIMULATOR_SLICE, "macos-arm64_x86_64"];
-
-pub(crate) const IOS_SIMULATOR_FAT_SLICE: &str = "ios-arm64_x86_64-simulator";
 
 pub(crate) const IOS_SIMULATOR_SLICE: &str = "ios-arm64-simulator";
 
@@ -177,6 +167,15 @@ pub(crate) const PULL_HEAD: &str = "8a4e697a770d5e6f8091a2b3c4d5e6f708192a3b";
 
 #[cfg(test)]
 pub(crate) const RETIRED_HEAD: &str = "6cd1433327cd8f9e0a1b2c3d4e5f60718293a4b5";
+
+#[cfg(test)]
+pub(crate) const STATUS_BASE: &str = "0123456789abcdef0123456789abcdef01234567";
+
+#[cfg(test)]
+pub(crate) const STATUS_OLD_BASE: &str = "89abcdef0123456789abcdef0123456789abcdef";
+
+#[cfg(test)]
+pub(crate) const STATUS_URL: &str = "https://gitlab.example/team/audio/-/pipelines/42";
 
 // Two cleanup intervals tolerate a paused VM while bounding a killed job's
 // stale claim. A live helper refreshes this every 30 seconds.

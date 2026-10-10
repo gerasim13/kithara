@@ -1,5 +1,7 @@
+#[cfg(test)]
+use std::collections::BTreeSet;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fmt::Write as _,
     fs,
     fs::{File, OpenOptions},
@@ -12,33 +14,624 @@ use anyhow::{Context, Error, Result, ensure};
 use clap::{Args, Subcommand};
 
 use super::{
+    artifacts::Evidence,
     environment::RunEnvironment,
     manifest::{
         BuildSnapshot, ExecuteResult, ExpectedProvenance, Manifest, ManifestConfig, ManifestSpec,
-        PolicySnapshot, Selection, StressRunner,
+        Selection, StressRunner,
     },
     output,
     pressure::Sampler,
+    selection::{Shard, Unit, policy_snapshot, resolve_lanes, resolve_modes, units},
     system,
 };
 use crate::{
     Ctx,
     common::project::{
-        ProjectConfig, StressArtifactConfig, StressConfig, StressEvidenceConfig, StressModeConfig,
+        StressArtifactConfig, StressConfig, StressEvidenceConfig, StressModeConfig,
         StressRenderBudgets,
     },
     consts, lease,
     stress_report::{self, StressReportArgs},
     stress_run::{self, StressRunSpec},
-    test::{resolve, toggled},
     verdict::{ChildFailure, NotClean},
 };
+
+#[cfg(test)]
+mod sharding_tests {
+    use clap::Parser;
+
+    use super::*;
+    use crate::{
+        common::project::ProjectConfig,
+        stress::system::{CgroupScope, CgroupV2, CpuSet, Limits, SystemSnapshot},
+    };
+
+    #[derive(Parser)]
+    struct Cli {
+        #[command(subcommand)]
+        command: StressCommand,
+    }
+
+    #[test]
+    fn shard_flags_are_paired_and_the_report_accepts_preserved_roots() {
+        for flags in [vec!["--shard-index", "0"], vec!["--shard-count", "3"]] {
+            assert!(Cli::try_parse_from([vec!["stress", "run"], flags].concat()).is_err());
+        }
+        let cli =
+            Cli::try_parse_from(["stress", "run", "--shard-index", "0", "--shard-count", "3"])
+                .expect("paired shard arguments");
+        let StressCommand::Run(run) = cli.command else {
+            panic!("run arguments");
+        };
+        Shard::new(run.shard_index, run.shard_count).expect("valid partition");
+        let cli = Cli::try_parse_from([
+            "stress",
+            "report",
+            "--raw",
+            "shard0",
+            "--raw",
+            "shard1",
+            "--execute-result",
+            "success",
+            "--expected-controller-sha",
+            &"a".repeat(40),
+            "--expected-subject-sha",
+            &"b".repeat(40),
+        ])
+        .expect("preserved raw roots");
+        let StressCommand::Report(report) = cli.command else {
+            panic!("report arguments");
+        };
+        assert_eq!(
+            report.raw,
+            [PathBuf::from("shard0"), PathBuf::from("shard1")]
+        );
+    }
+
+    #[test]
+    fn nightly_shards_preserve_every_configured_unit_exactly_once() {
+        let root = crate::test::repository_tests::root();
+        let project = ProjectConfig::load(&root).expect("load nightly selection");
+        let config = &project.stress;
+        let modes = resolve_modes(&[], config).expect("default modes");
+        let lanes = resolve_lanes(&[], config).expect("default lanes");
+        let canonical = units(&project, config, &modes, &lanes).expect("canonical units");
+        let expected = canonical
+            .iter()
+            .map(Unit::directory)
+            .collect::<BTreeSet<_>>();
+        assert!(!expected.is_empty());
+        assert_eq!(config.default_count, 50);
+        let mut observed = BTreeMap::<PathBuf, usize>::new();
+        for index in 0..3 {
+            let partition = Shard::new(Some(index), Some(3))
+                .expect("shard")
+                .partition(
+                    units(&project, config, &modes, &lanes).expect("canonical units"),
+                    &modes,
+                    config,
+                )
+                .expect("partition");
+            let assigned = partition
+                .iter()
+                .map(|unit| unit.mode_name)
+                .collect::<BTreeSet<_>>();
+            let expected_modes = if index == 0 {
+                vec![
+                    modes[0].as_str(),
+                    modes[3].as_str(),
+                    modes[4].as_str(),
+                    modes[5].as_str(),
+                ]
+            } else {
+                vec![modes[index].as_str()]
+            };
+            assert_eq!(assigned, expected_modes.into_iter().collect());
+            for unit in partition {
+                *observed.entry(unit.directory()).or_default() += 1;
+            }
+        }
+        assert_eq!(observed.keys().cloned().collect::<BTreeSet<_>>(), expected);
+        assert!(observed.values().all(|count| *count == 1));
+        let unsharded = Shard::new(None, None)
+            .expect("unsharded")
+            .partition(canonical, &modes, config)
+            .expect("partition");
+        assert_eq!(
+            unsharded
+                .iter()
+                .map(Unit::directory)
+                .collect::<BTreeSet<_>>(),
+            expected
+        );
+    }
+
+    #[test]
+    fn command_group_follows_requested_lane_modes_even_when_a_lane_mode_is_deduplicated() {
+        let root = crate::test::repository_tests::root();
+        let mut project = ProjectConfig::load(&root).expect("load nightly selection");
+        let defaults = project.stress.default_modes.clone();
+        let duplicate = "duplicate-flash".to_owned();
+        project.stress.modes.insert(
+            duplicate.clone(),
+            project.stress.modes[&defaults[0]].clone(),
+        );
+        let requested = vec![
+            defaults[3].clone(),
+            defaults[0].clone(),
+            duplicate.clone(),
+            defaults[2].clone(),
+        ];
+        let config = &project.stress;
+        let modes = resolve_modes(&requested, config).expect("interleaved requested modes");
+        let lanes = resolve_lanes(&[], config).expect("lanes");
+        let expected_modes = [
+            BTreeSet::from([defaults[0].as_str(), defaults[3].as_str()]),
+            BTreeSet::new(),
+            BTreeSet::from([defaults[2].as_str()]),
+        ];
+        for (index, expected) in expected_modes.into_iter().enumerate() {
+            let canonical = units(&project, config, &modes, &lanes).expect("canonical units");
+            assert!(canonical.iter().all(|unit| unit.mode_name != duplicate));
+            let partition = Shard::new(Some(index), Some(3))
+                .expect("shard")
+                .partition(canonical, &modes, config)
+                .expect("partition");
+            assert_eq!(
+                partition
+                    .iter()
+                    .map(|unit| unit.mode_name)
+                    .collect::<BTreeSet<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn deduplication_precedes_partitioning_and_uses_runner_and_policy_identity() {
+        let mut project = project(&["one", "duplicate", "policy"]);
+        project
+            .stress
+            .modes
+            .get_mut("duplicate")
+            .expect("duplicate mode")
+            .command = project.stress.modes["one"].command.clone();
+        project
+            .stress
+            .modes
+            .get_mut("policy")
+            .expect("policy mode")
+            .command = project.stress.modes["one"].command.clone();
+        project
+            .stress
+            .modes
+            .get_mut("policy")
+            .expect("policy mode")
+            .set_env = BTreeMap::from([("POLICY".to_owned(), "distinct".to_owned())]);
+        let modes = &project.stress.default_modes;
+        let resolved = units(&project, &project.stress, modes, &[]).expect("deduplicate");
+        assert_eq!(
+            resolved.iter().map(Unit::name).collect::<Vec<_>>(),
+            ["one", "policy"]
+        );
+        let commands = Shard::new(Some(0), Some(3))
+            .expect("command shard")
+            .partition(
+                units(&project, &project.stress, modes, &[]).expect("units"),
+                modes,
+                &project.stress,
+            )
+            .expect("partition");
+        assert_eq!(
+            commands.iter().map(Unit::name).collect::<Vec<_>>(),
+            ["one", "policy"]
+        );
+        let duplicate_shard = Shard::new(Some(1), Some(3))
+            .expect("shard")
+            .partition(resolved, modes, &project.stress)
+            .expect("partition");
+        assert!(duplicate_shard.is_empty());
+    }
+
+    fn project(names: &[&str]) -> ProjectConfig {
+        ProjectConfig {
+            stress: StressConfig {
+                default_count: 1,
+                default_filter: "all()".to_owned(),
+                default_modes: names.iter().map(|name| (*name).to_owned()).collect(),
+                modes: names
+                    .iter()
+                    .map(|name| {
+                        (
+                            (*name).to_owned(),
+                            StressModeConfig {
+                                command: vec![format!("must-not-run-{name}")],
+                                ..StressModeConfig::default()
+                            },
+                        )
+                    })
+                    .collect(),
+                build_dir: "target-stress".to_owned(),
+                max_count: 2,
+                max_test_threads: 1,
+                nextest_config: "nextest.toml".to_owned(),
+                nextest_profile: "stress".to_owned(),
+                test_threads: "1".to_owned(),
+                workflow_job_timeout_minutes: 1,
+                artifacts: StressArtifactConfig {
+                    attempts: "attempts.json".to_owned(),
+                    log: "lane.log".to_owned(),
+                    manifest: "manifest.json".to_owned(),
+                    subject_junit: "target/nextest/stress/junit.xml".to_owned(),
+                    ..StressArtifactConfig::default()
+                },
+                ..StressConfig::default()
+            },
+            ..ProjectConfig::default()
+        }
+    }
+
+    fn checkout(root: &Path) {
+        fs::create_dir_all(root).expect("checkout directory");
+        fs::write(root.join("identity"), root.to_string_lossy().as_bytes()).expect("identity");
+        for arguments in [
+            vec!["init", "-q"],
+            vec!["add", "identity"],
+            vec![
+                "-c",
+                "user.name=Stress Test",
+                "-c",
+                "user.email=stress@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-q",
+                "-m",
+                "identity",
+            ],
+        ] {
+            let output = Command::new("git")
+                .args(arguments)
+                .current_dir(root)
+                .output()
+                .expect("git fixture");
+            assert!(output.status.success(), "{output:?}");
+        }
+    }
+
+    fn empty_run(root: &Path) -> (Ctx, RunArgs) {
+        let controller = root.join("controller");
+        let subject = root.join("subject");
+        checkout(&controller);
+        checkout(&subject);
+        fs::write(controller.join("nextest.toml"), "").expect("nextest config");
+        let args = RunArgs {
+            count: None,
+            expected_controller_sha: None,
+            expected_subject_sha: None,
+            filter: None,
+            lanes: Vec::new(),
+            modes: Vec::new(),
+            output: Some(root.join("raw")),
+            shard_count: Some(2),
+            shard_index: Some(1),
+            subject_root: subject,
+        };
+        (Ctx::new(controller, project(&["one"])), args)
+    }
+
+    #[test]
+    fn an_empty_shard_records_selection_without_claiming_execution_or_creating_a_build() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (ctx, args) = empty_run(temp.path());
+        execute_run(&args, &ctx).expect("empty partition validates and creates transport receipt");
+        let raw = args.output.as_ref().expect("raw");
+        let receipt = fs::read(raw.join("selection.json")).expect("receipt");
+        let selected: serde_json::Value = serde_json::from_slice(&receipt).expect("selection JSON");
+        assert_eq!(selected["units"], serde_json::json!([]));
+        assert_eq!(selected["shard"]["index"], 1);
+        assert_eq!(fs::read_dir(raw).expect("raw entries").count(), 1);
+        assert!(!args.subject_root.join("target-stress").exists());
+        assert!(
+            execute_run(&args, &ctx).is_err(),
+            "raw evidence must remain immutable"
+        );
+        assert_eq!(
+            fs::read(raw.join("selection.json")).expect("receipt"),
+            receipt
+        );
+    }
+
+    #[test]
+    fn even_an_empty_shard_rejects_invalid_selection_before_creating_evidence() {
+        for invalid in [
+            "count",
+            "pair",
+            "zero",
+            "index",
+            "filter",
+            "controller",
+            "subject",
+            "config",
+            "junit",
+        ] {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let (ctx, mut args) = empty_run(temp.path());
+            match invalid {
+                "count" => args.count = Some(0),
+                "pair" => args.shard_count = None,
+                "zero" => args.shard_count = Some(0),
+                "index" => args.shard_index = Some(2),
+                "filter" => args.filter = Some("test(selected)".to_owned()),
+                "controller" => args.expected_controller_sha = Some("a".repeat(40)),
+                "subject" => args.expected_subject_sha = Some("b".repeat(40)),
+                "config" => fs::remove_file(ctx.root.join("nextest.toml")).expect("remove config"),
+                "junit" => {
+                    let path = subject_junit(&args.subject_root, &ctx.config.stress);
+                    fs::create_dir_all(path.parent().expect("JUnit parent"))
+                        .expect("create JUnit parent");
+                    fs::write(path, "stale").expect("stale JUnit");
+                }
+                _ => panic!("invalid fixture"),
+            }
+            assert!(execute_run(&args, &ctx).is_err(), "accepted {invalid}");
+            assert!(
+                !args.output.as_ref().expect("raw").exists(),
+                "{invalid} created raw evidence"
+            );
+            assert!(!args.subject_root.join("target-stress").exists());
+        }
+    }
+
+    #[test]
+    fn a_checkout_that_changes_after_preflight_is_rejected_before_the_unit_starts() {
+        for changed in ["controller", "subject"] {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let (ctx, args) = empty_run(temp.path());
+            let config = &ctx.config.stress;
+            let modes = resolve_modes(&[], config).expect("modes");
+            let selected = units(&ctx.config, config, &modes, &[]).expect("units");
+            let raw = args.output.as_ref().expect("raw");
+            let inputs = RunInputs::validate(&args, &ctx, &selected, raw).expect("preflight");
+            let checkout = if changed == "controller" {
+                &ctx.root
+            } else {
+                &args.subject_root
+            };
+            fs::write(checkout.join("identity"), "changed after preflight").expect("change source");
+            let output = Command::new("git")
+                .args([
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "user.name=Stress Test",
+                    "-c",
+                    "user.email=stress@example.invalid",
+                    "commit",
+                    "-q",
+                    "-am",
+                    "changed revision",
+                ])
+                .current_dir(checkout)
+                .output()
+                .expect("advance checkout revision");
+            assert!(output.status.success(), "{output:?}");
+
+            let error = run_lane(
+                &inputs,
+                config,
+                &selected[0],
+                &raw.join(selected[0].directory()),
+            )
+            .expect_err("a unit cannot claim the preflight revision after checkout changes");
+
+            assert!(
+                error.to_string().contains(&format!("{changed} revision")),
+                "{error:#}"
+            );
+            assert!(error.to_string().contains("expected"), "{error:#}");
+            assert!(!raw.exists());
+            assert!(!inputs.build.exists());
+        }
+    }
+
+    fn system() -> SystemSnapshot {
+        SystemSnapshot {
+            cgroup_v2: CgroupV2 {
+                scope: CgroupScope::Unavailable,
+                path: None,
+            },
+            cpuset: CpuSet {
+                cgroup_effective: None,
+                proc_allowed: None,
+            },
+            kernel: "fixture kernel".to_owned(),
+            limits: Limits {
+                cgroup_cpu_max: None,
+                cgroup_memory_max: None,
+                cgroup_pids_max: None,
+                ulimit_open_files: None,
+                ulimit_processes: None,
+            },
+        }
+    }
+
+    fn keep_unit(ctx: &Ctx, root: &Path, name: &str, code: i32) -> Vec<u8> {
+        let config = &ctx.config.stress;
+        let modes = [name.to_owned()];
+        let resolved = units(&ctx.config, config, &modes, &[]).expect("command unit");
+        let unit = &resolved[0];
+        let paths = Paths::new(root.join(unit.directory()), &config.artifacts);
+        fs::create_dir_all(&paths.raw).expect("unit directory");
+        fs::write(&paths.attempts, format!("[{code}]")).expect("attempts");
+        fs::write(&paths.log, "").expect("log");
+        let mut manifest = Manifest::start(
+            ManifestSpec {
+                build: BuildSnapshot::new(Path::new("/fixture/build")).expect("build snapshot"),
+                config: ManifestConfig::new(
+                    &config.nextest_profile,
+                    &config.nextest_config,
+                    config.workflow_job_timeout_minutes,
+                ),
+                controller_sha: "a".repeat(40),
+                subject_sha: "b".repeat(40),
+                mode: name.to_owned(),
+                runner: unit.runner.clone(),
+                policy: policy_snapshot(config, unit.mode),
+                selection: Selection {
+                    count: 1,
+                    filter: "all()".to_owned(),
+                    test_threads: "1".to_owned(),
+                },
+            },
+            system(),
+        )
+        .expect("manifest");
+        manifest.finalize(code, true).expect("finalize manifest");
+        manifest
+            .write_atomic(&paths.manifest)
+            .expect("archive manifest");
+        fs::read(paths.manifest).expect("manifest bytes")
+    }
+
+    fn report(root: &Path, raw: Vec<PathBuf>, result: ExecuteResult) -> ReportArgs {
+        ReportArgs {
+            count: None,
+            execute_result: result,
+            expected_controller_sha: "a".repeat(40),
+            expected_subject_sha: "b".repeat(40),
+            filter: None,
+            lanes: Vec::new(),
+            modes: Vec::new(),
+            output: Some(root.join("report.md")),
+            raw,
+        }
+    }
+
+    #[test]
+    fn preserved_shards_are_verified_once_without_mutating_their_manifests() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ctx = Ctx::new(temp.path().to_path_buf(), project(&["one", "two"]));
+        let roots = [temp.path().join("shard0"), temp.path().join("shard1")];
+        let before = [
+            keep_unit(&ctx, &roots[0], "one", 0),
+            keep_unit(&ctx, &roots[1], "two", 0),
+        ];
+        let args = report(temp.path(), roots.to_vec(), ExecuteResult::Success);
+        run_report(&args, &ctx).expect("independent preserved artifacts");
+        let markdown = fs::read_to_string(args.output.expect("report path")).expect("report");
+        for (index, name) in ["one", "two"].into_iter().enumerate() {
+            assert!(markdown.contains(&format!("# Mode `{name}`")), "{markdown}");
+            assert_eq!(
+                fs::read(roots[index].join(name).join("manifest.json")).expect("manifest"),
+                before[index]
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_shard_fails_the_aggregate_and_keeps_the_other_units_reported() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ctx = Ctx::new(temp.path().to_path_buf(), project(&["one", "two"]));
+        let roots = [temp.path().join("shard0"), temp.path().join("shard1")];
+        keep_unit(&ctx, &roots[0], "one", 0);
+        keep_unit(&ctx, &roots[1], "two", 1);
+        let args = report(temp.path(), roots.to_vec(), ExecuteResult::Failure);
+        assert!(run_report(&args, &ctx).is_err());
+        let markdown = fs::read_to_string(args.output.expect("report")).expect("markdown");
+        assert!(markdown.contains("# Mode `one`"));
+        assert!(markdown.contains("# Mode `two`"));
+        assert!(markdown.contains("Result: **FAILED**"));
+        assert!(!markdown.contains("Validated against trusted workflow inputs: **no**"));
+    }
+
+    #[test]
+    fn a_forged_shard_revision_is_excluded_while_the_other_unit_remains_reported() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ctx = Ctx::new(temp.path().to_path_buf(), project(&["one", "two"]));
+        let roots = [temp.path().join("shard0"), temp.path().join("shard1")];
+        keep_unit(&ctx, &roots[0], "one", 0);
+        keep_unit(&ctx, &roots[1], "two", 0);
+        let path = roots[1].join("two/manifest.json");
+        let mut manifest = Manifest::read(&path).expect("manifest");
+        manifest.subject.sha = "c".repeat(40);
+        manifest
+            .write_atomic(&path)
+            .expect("forge valid but unexpected revision");
+        let args = report(temp.path(), roots.to_vec(), ExecuteResult::Success);
+
+        assert!(run_report(&args, &ctx).is_err());
+
+        let markdown = fs::read_to_string(args.output.expect("report")).expect("markdown");
+        assert!(markdown.contains("# Mode `one`"));
+        assert!(markdown.contains("Validated against trusted workflow inputs: **yes**"));
+        assert!(markdown.contains("# Mode `two`"));
+        assert!(markdown.contains("Result: **INVALID PROVENANCE**"));
+        assert!(markdown.contains("subject.sha"));
+    }
+
+    #[test]
+    fn duplicate_missing_and_unexpected_units_fail_with_a_useful_report() {
+        for broken in [
+            "duplicate",
+            "missing",
+            "unexpected",
+            "missing-root",
+            "root-alias",
+        ] {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let ctx = Ctx::new(temp.path().to_path_buf(), project(&["one", "two"]));
+            let first = temp.path().join("shard0");
+            let second = temp.path().join("shard1");
+            keep_unit(&ctx, &first, "one", 0);
+            fs::create_dir(&second).expect("second shard");
+            if broken != "missing" {
+                keep_unit(&ctx, &second, "two", 0);
+            }
+            let mut roots = vec![first.clone(), second.clone()];
+            match broken {
+                "duplicate" => {
+                    keep_unit(&ctx, &second, "one", 0);
+                }
+                "unexpected" => {
+                    fs::create_dir(first.join("unexpected-mode")).expect("unknown unit");
+                }
+                "missing-root" => roots.push(temp.path().join("absent-shard")),
+                "root-alias" => roots.push(first.join(".")),
+                _ => {}
+            }
+            let args = report(temp.path(), roots, ExecuteResult::Success);
+            assert!(run_report(&args, &ctx).is_err(), "accepted {broken}");
+            let markdown =
+                fs::read_to_string(args.output.expect("report")).expect("useful failure report");
+            assert!(
+                markdown.contains("## Artifact layout"),
+                "{broken}: {markdown}"
+            );
+            assert!(markdown.contains("# Mode `one`") || markdown.contains("# Unit `one`"));
+        }
+    }
+
+    #[test]
+    fn report_output_cannot_land_inside_any_preserved_shard_before_all_paths_are_checked() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ctx = Ctx::new(temp.path().to_path_buf(), project(&["one", "two"]));
+        let roots = [temp.path().join("shard0"), temp.path().join("shard1")];
+        keep_unit(&ctx, &roots[0], "one", 0);
+        keep_unit(&ctx, &roots[1], "two", 0);
+        let mut args = report(temp.path(), roots.to_vec(), ExecuteResult::Success);
+        args.output = Some(roots[1].join("uncreated/report.md"));
+        assert!(run_report(&args, &ctx).is_err());
+        assert!(!roots[1].join("uncreated").exists());
+    }
+}
 
 #[cfg(test)]
 mod subject {
     use super::*;
     use crate::{
-        common::project::{TestCargoOptions, TestRunner},
+        common::project::{ProjectConfig, TestCargoOptions, TestRunner},
         test::ResolvedLane,
     };
 
@@ -92,6 +685,8 @@ mod subject {
         };
         let args = RunArgs {
             count: None,
+            shard_index: None,
+            shard_count: None,
             expected_controller_sha: None,
             expected_subject_sha: None,
             filter: None,
@@ -169,7 +764,7 @@ mod subject {
             count: None,
             filter: Some("test(selected)".to_owned()),
             output: Some(output.clone()),
-            raw: temp.path().join("raw"),
+            raw: vec![temp.path().join("raw")],
             expected_controller_sha: "a".repeat(40),
             expected_subject_sha: "b".repeat(40),
             modes: Vec::new(),
@@ -207,7 +802,7 @@ mod subject {
             count: None,
             filter: None,
             output: Some(output.clone()),
-            raw: temp.path().join("raw"),
+            raw: vec![temp.path().join("raw")],
             expected_controller_sha: "a".repeat(40),
             expected_subject_sha: "b".repeat(40),
             modes: Vec::new(),
@@ -344,6 +939,13 @@ pub struct RunArgs {
     /// Nextest filterset selecting tests to repeat; requires only lane modes.
     #[arg(long)]
     filter: Option<String>,
+    /// Zero-based shard of the complete, deduplicated selection.
+    #[arg(long, requires = "shard_count")]
+    shard_index: Option<usize>,
+    /// Number of shards; lane modes follow requested order and command modes
+    /// share the following group.
+    #[arg(long, requires = "shard_index")]
+    shard_count: Option<usize>,
     /// Fresh raw evidence directory owned by this run.
     #[arg(long)]
     output: Option<PathBuf>,
@@ -375,9 +977,9 @@ pub struct ReportArgs {
     /// Markdown report destination.
     #[arg(long)]
     output: Option<PathBuf>,
-    /// Downloaded raw evidence directory.
-    #[arg(long)]
-    raw: PathBuf,
+    /// Downloaded raw evidence root; repeat for independently preserved shards.
+    #[arg(long, required = true)]
+    raw: Vec<PathBuf>,
     #[arg(long)]
     expected_controller_sha: String,
     #[arg(long)]
@@ -441,35 +1043,6 @@ struct ReportExpectation<'a> {
     count: usize,
 }
 
-/// One body of evidence a run produces: a lane mode on one test lane, or a
-/// command mode on its own.
-#[derive(Debug)]
-struct Unit<'a> {
-    mode_name: &'a str,
-    mode: &'a StressModeConfig,
-    /// The test lane a lane mode runs on; a command mode has none.
-    lane: Option<&'a str>,
-    runner: StressRunner,
-}
-
-impl Unit<'_> {
-    /// Where the unit's evidence lands inside the run: `<mode>/<lane>`, or
-    /// `<mode>` for a command mode.
-    fn directory(&self) -> PathBuf {
-        let mode = PathBuf::from(self.mode_name);
-        self.lane
-            .map_or_else(|| mode.clone(), |lane| mode.join(lane))
-    }
-
-    /// The unit as the report names it.
-    fn name(&self) -> String {
-        self.lane.map_or_else(
-            || self.mode_name.to_owned(),
-            |lane| format!("{}/{lane}", self.mode_name),
-        )
-    }
-}
-
 impl Paths {
     fn new(raw: PathBuf, artifacts: &StressArtifactConfig) -> Self {
         Self {
@@ -502,25 +1075,39 @@ fn execute_run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let lanes = resolve_lanes(&args.lanes, config)?;
     let units = units(&ctx.config, config, &modes, &lanes)?;
     validate_filter(args.filter.as_deref(), &config.default_filter, &units)?;
+    let shard = Shard::new(args.shard_index, args.shard_count)?;
     let root = absolute_from(
         &ctx.root,
         args.output
             .as_deref()
             .unwrap_or_else(|| Path::new(&config.raw_output)),
     );
-    let subject_root = absolute_existing_directory(&ctx.root, &args.subject_root, "subject")?;
-    let subject_junit = subject_junit(&subject_root, config);
-    ensure!(
-        !subject_junit
-            .try_exists()
-            .with_context(|| format!("inspect stress JUnit path {}", subject_junit.display()))?,
-        "stress JUnit already exists: {}; remove it before starting a new run",
-        subject_junit.display()
-    );
+    let inputs = RunInputs::validate(args, ctx, &units, &root)?;
+    let units = shard.partition(units, &modes, config)?;
     prepare_run_root(&root)?;
+    if units.is_empty() {
+        let receipt = serde_json::json!({
+            "schema": "stress-selection-v1",
+            "shard": shard,
+            "modes": modes,
+            "lanes": lanes,
+            "controller_sha": inputs.controller_sha,
+            "subject_sha": inputs.subject_sha,
+            "filter": inputs.filter,
+            "count": inputs.count,
+            "units": [],
+        });
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(root.join("selection.json"))
+            .context("create empty stress selection receipt")?;
+        serde_json::to_writer(file, &receipt).context("write empty stress selection receipt")?;
+        return Ok(());
+    }
     let mut failure = None;
     for unit in &units {
-        let outcome = run_lane(args, ctx, unit, &root.join(unit.directory()));
+        let outcome = run_lane(&inputs, config, unit, &root.join(unit.directory()));
         if let Err(error) = outcome
             && failure.is_none()
         {
@@ -551,97 +1138,6 @@ fn subject_junit(subject_root: &Path, config: &StressConfig) -> PathBuf {
     subject_root.join(&config.artifacts.subject_junit)
 }
 
-/// The modes this invocation is made of: what was asked for, or what the
-/// project says a run is.
-fn resolve_modes(requested: &[String], config: &StressConfig) -> Result<Vec<String>> {
-    let modes = if requested.is_empty() {
-        config.default_modes.clone()
-    } else {
-        requested.to_vec()
-    };
-    ensure!(!modes.is_empty(), "a run must name at least one mode");
-    let mut seen = BTreeSet::new();
-    for mode in &modes {
-        config.mode(mode)?;
-        validate_directory_name("mode", mode)?;
-        ensure!(seen.insert(mode), "stress mode `{mode}` is named twice");
-    }
-    Ok(modes)
-}
-
-/// The test lanes this invocation's lane modes run on: what was asked for, or
-/// every lane the project stresses.
-fn resolve_lanes(requested: &[String], config: &StressConfig) -> Result<Vec<String>> {
-    let lanes = if requested.is_empty() {
-        config.lanes.clone()
-    } else {
-        requested.to_vec()
-    };
-    let mut seen = BTreeSet::new();
-    for lane in &lanes {
-        ensure!(
-            config.lanes.contains(lane),
-            "stress lane `{lane}` is not in stress.lanes"
-        );
-        validate_directory_name("lane", lane)?;
-        ensure!(seen.insert(lane), "stress lane `{lane}` is named twice");
-    }
-    Ok(lanes)
-}
-
-/// A mode or a lane names the directory its evidence lands in, so it has to be
-/// a plain directory name rather than anything that could climb out of the run.
-fn validate_directory_name(kind: &str, name: &str) -> Result<()> {
-    let mut components = Path::new(name).components();
-    let single =
-        matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none();
-    ensure!(
-        single && !name.is_empty(),
-        "stress {kind} `{name}` is not usable as a directory name"
-    );
-    Ok(())
-}
-
-/// What a run is made of, in order: each lane mode on each lane, and each
-/// command mode once.
-///
-/// A unit whose runner and policy an earlier unit already has is left out. A
-/// lane that declares no flash resolves the same under both clocks, and
-/// repeating it under the second would spend hours measuring the same tests
-/// twice.
-fn units<'a>(
-    project: &ProjectConfig,
-    config: &'a StressConfig,
-    modes: &'a [String],
-    lanes: &'a [String],
-) -> Result<Vec<Unit<'a>>> {
-    let mut seen = Vec::<(StressRunner, PolicySnapshot)>::new();
-    let mut units = Vec::new();
-    for mode_name in modes {
-        let mode = config.mode(mode_name)?;
-        let targets = if mode.command.is_empty() {
-            lanes.iter().map(|lane| Some(lane.as_str())).collect()
-        } else {
-            vec![None]
-        };
-        for lane in targets {
-            let runner = unit_runner(project, mode, lane)?;
-            let identity = (runner.clone(), policy_snapshot(config, mode));
-            if seen.contains(&identity) {
-                continue;
-            }
-            seen.push(identity);
-            units.push(Unit {
-                mode_name,
-                mode,
-                lane,
-                runner,
-            });
-        }
-    }
-    Ok(units)
-}
-
 fn validate_filter(filter: Option<&str>, default_filter: &str, units: &[Unit<'_>]) -> Result<()> {
     let effective_filter = filter.unwrap_or(default_filter);
     if filter.is_some() || effective_filter.trim() != "all()" {
@@ -655,27 +1151,6 @@ fn validate_filter(filter: Option<&str>, default_filter: &str, units: &[Unit<'_>
         }
     }
     Ok(())
-}
-
-/// What one mode actually invokes on `lane`, in the shape the manifest
-/// records.
-///
-/// A command mode has no lane and is described by its own words rather than
-/// by the project's test runner, so that its manifest names what really ran
-/// and the reporter can verify it the same way it verifies any other mode. A
-/// lane mode asks the lane for its toggles and nothing else: the lane resolves
-/// on its own backend and keeps off a toggle none of its packages declares,
-/// exactly as `just test run --lane` would.
-fn unit_runner(
-    project: &ProjectConfig,
-    mode: &StressModeConfig,
-    lane: Option<&str>,
-) -> Result<StressRunner> {
-    let Some(lane) = lane else {
-        return Ok(StressRunner::Command(mode.command.clone()));
-    };
-    let choice = toggled(&project.test, lane, mode.flash, mode.no_block)?;
-    resolve(&project.test, &choice).map(|lane| StressRunner::Lane(Box::new(lane)))
 }
 
 /// Records one exit code per attempt, in order.
@@ -779,70 +1254,126 @@ fn keep_attempt_report(report: &Path, directory: &Path, attempt: usize) -> Resul
         .map(|_| ())
 }
 
+/// Immutable invocation inputs validated before any selected unit starts.
+struct RunInputs {
+    build: PathBuf,
+    config_file: PathBuf,
+    controller_root: PathBuf,
+    controller_sha: String,
+    count: usize,
+    filter: String,
+    subject_junit: PathBuf,
+    subject_root: PathBuf,
+    subject_sha: String,
+}
+
+impl RunInputs {
+    fn validate(args: &RunArgs, ctx: &Ctx, units: &[Unit<'_>], raw: &Path) -> Result<Self> {
+        let config = &ctx.config.stress;
+        let count = args.count.unwrap_or(config.default_count);
+        validate_count(count, config.max_count)?;
+        let filter = args
+            .filter
+            .clone()
+            .unwrap_or_else(|| config.default_filter.clone());
+        ensure!(!filter.trim().is_empty(), "stress filter is empty");
+        let subject_root = absolute_existing_directory(&ctx.root, &args.subject_root, "subject")?;
+        let subject_junit = subject_junit(&subject_root, config);
+        ensure!(
+            !subject_junit.try_exists().with_context(|| format!(
+                "inspect stress JUnit path {}",
+                subject_junit.display()
+            ))?,
+            "stress JUnit already exists: {}; remove it before starting a new run",
+            subject_junit.display()
+        );
+        ensure_raw_outside_subject_evidence(raw, &subject_junit)?;
+        let inputs = Self {
+            build: build_root(&subject_root, config),
+            config_file: absolute_existing_file(
+                &ctx.root,
+                Path::new(&config.nextest_config),
+                "nextest config",
+            )?,
+            controller_root: ctx.root.clone(),
+            controller_sha: revision(
+                &ctx.root,
+                args.expected_controller_sha.as_deref(),
+                "controller",
+            )?,
+            count,
+            filter,
+            subject_junit,
+            subject_root: subject_root.clone(),
+            subject_sha: revision(
+                &subject_root,
+                args.expected_subject_sha.as_deref(),
+                "subject",
+            )?,
+        };
+        BuildSnapshot::new(&inputs.build)?;
+        for unit in units {
+            let paths = Paths::new(raw.join(unit.directory()), &config.artifacts);
+            if let Some(spec) = inputs.spec(unit, &paths, config) {
+                stress_run::validate(&spec)?;
+            }
+            RunEnvironment::new(&paths.raw, &inputs.build, config, unit.mode)?;
+        }
+        Ok(inputs)
+    }
+
+    fn spec(&self, unit: &Unit<'_>, paths: &Paths, config: &StressConfig) -> Option<StressRunSpec> {
+        match &unit.runner {
+            StressRunner::Lane(lane) => Some(StressRunSpec {
+                count: self.count,
+                inventory: paths.inventory.clone(),
+                junit: self.subject_junit.clone(),
+                config_file: self.config_file.clone(),
+                filter: self.filter.clone(),
+                test_threads: config.test_threads.clone(),
+                profile: config.nextest_profile.clone(),
+                max_count: config.max_count,
+                max_test_threads: config.max_test_threads,
+                runner: lane.as_ref().clone(),
+                render: config.render.clone(),
+            }),
+            StressRunner::Command(_) => None,
+        }
+    }
+}
+
 /// The build lease is held for the lane so the host's build-cache budget leaves these artifacts
 /// alone while the lane is still executing them.
-fn run_lane(args: &RunArgs, ctx: &Ctx, unit: &Unit<'_>, raw: &Path) -> Result<()> {
-    let config = &ctx.config.stress;
-    let mode = unit.mode;
-    let filter = args
-        .filter
-        .clone()
-        .unwrap_or_else(|| config.default_filter.clone());
-    let count = args.count.unwrap_or(config.default_count);
-    validate_count(count, config.max_count)?;
-    let subject_root = absolute_existing_directory(&ctx.root, &args.subject_root, "subject")?;
-    let paths = Paths::new(raw.to_path_buf(), &config.artifacts);
-    let config_file = absolute_existing_file(
-        &ctx.root,
-        Path::new(&config.nextest_config),
-        "nextest config",
-    )?;
-    let controller_sha = revision(
-        &ctx.root,
-        args.expected_controller_sha.as_deref(),
+fn run_lane(inputs: &RunInputs, config: &StressConfig, unit: &Unit<'_>, raw: &Path) -> Result<()> {
+    revision(
+        &inputs.controller_root,
+        Some(&inputs.controller_sha),
         "controller",
     )?;
-    let subject_sha = revision(
-        &subject_root,
-        args.expected_subject_sha.as_deref(),
-        "subject",
-    )?;
-    let subject_junit = subject_junit(&subject_root, config);
+    revision(&inputs.subject_root, Some(&inputs.subject_sha), "subject")?;
+    let mode = unit.mode;
+    let count = inputs.count;
+    let paths = Paths::new(raw.to_path_buf(), &config.artifacts);
     let runner = unit.runner.clone();
     let commanded = unit.lane.is_none();
-    let build = build_root(&subject_root, config);
-    let _build_lease = lease::hold(&build)
+    let build = &inputs.build;
+    let subject_root = &inputs.subject_root;
+    let subject_junit = &inputs.subject_junit;
+    let _build_lease = lease::hold(build)
         .with_context(|| format!("lease the stress build {}", build.display()))?;
-    let spec = match &runner {
-        StressRunner::Lane(lane) => Some(StressRunSpec {
-            count,
-            inventory: paths.inventory.clone(),
-            junit: subject_junit.clone(),
-            config_file: config_file.clone(),
-            filter: filter.clone(),
-            test_threads: config.test_threads.clone(),
-            profile: config.nextest_profile.clone(),
-            max_count: config.max_count,
-            max_test_threads: config.max_test_threads,
-            runner: lane.as_ref().clone(),
-            render: config.render.clone(),
-        }),
-        StressRunner::Command(_) => None,
-    };
-    if let Some(spec) = &spec {
-        stress_run::validate(spec)?;
-        clear_previous_lane_junit(&subject_junit)?;
+    let spec = inputs.spec(unit, &paths, config);
+    if spec.is_some() {
+        clear_previous_lane_junit(subject_junit)?;
     }
-    ensure_raw_outside_subject_evidence(&paths.raw, &subject_junit)?;
     let system = system::capture()?;
-    let environment = RunEnvironment::new(&paths.raw, &build, config, mode)?;
+    let environment = RunEnvironment::new(&paths.raw, build, config, mode)?;
     let mut manifest = Manifest::start(
         ManifestSpec {
-            controller_sha,
-            subject_sha,
+            controller_sha: inputs.controller_sha.clone(),
+            subject_sha: inputs.subject_sha.clone(),
             runner,
             mode: unit.mode_name.to_owned(),
-            build: BuildSnapshot::new(&build)?,
+            build: BuildSnapshot::new(build)?,
             config: ManifestConfig::new(
                 config.nextest_profile.clone(),
                 config.nextest_config.clone(),
@@ -850,7 +1381,7 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, unit: &Unit<'_>, raw: &Path) -> Result<()
             ),
             selection: Selection {
                 count,
-                filter: filter.clone(),
+                filter: inputs.filter.clone(),
                 test_threads: config.test_threads.clone(),
             },
             policy: policy_snapshot(config, mode),
@@ -869,7 +1400,7 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, unit: &Unit<'_>, raw: &Path) -> Result<()
         (Ok(()), Ok(sampler)) => {
             let primary = spec.as_ref().map_or_else(
                 || {
-                    run_command_lane(&subject_root, mode, &paths, count, &environment).and_then(
+                    run_command_lane(subject_root, mode, &paths, count, &environment).and_then(
                         |codes| {
                             write_attempts(&paths.attempts, &codes)?;
                             let failed = codes.iter().filter(|code| **code != 0).count();
@@ -885,7 +1416,7 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, unit: &Unit<'_>, raw: &Path) -> Result<()
                     )
                 },
                 |spec| {
-                    stress_run::run(spec, &subject_root, &paths.log, &|command| {
+                    stress_run::run(spec, subject_root, &paths.log, &|command| {
                         environment.apply(command);
                     })
                 },
@@ -907,7 +1438,7 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, unit: &Unit<'_>, raw: &Path) -> Result<()
         (Ok(()), Ok(()))
     } else {
         (
-            stage_junit(&subject_junit, &paths.junit),
+            stage_junit(subject_junit, &paths.junit),
             render_raw_report(&paths, count, config),
         )
     };
@@ -921,15 +1452,6 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, unit: &Unit<'_>, raw: &Path) -> Result<()
     manifest.finalize(final_code, sampler_healthy)?;
     manifest.write_atomic(&paths.manifest)?;
     final_error.map_or(Ok(()), Err)
-}
-
-fn policy_snapshot(config: &StressConfig, mode: &StressModeConfig) -> PolicySnapshot {
-    PolicySnapshot {
-        remove_env: config.environment.remove.clone(),
-        set_env: mode.set_env.clone(),
-        raw_path_env: mode.raw_path_env.clone(),
-        evidence: config.evidence.clone(),
-    }
 }
 
 fn render_raw_report(paths: &Paths, count: usize, config: &StressConfig) -> Result<()> {
@@ -972,16 +1494,22 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
         .filter
         .clone()
         .unwrap_or_else(|| config.default_filter.clone());
-    let count = args.count.unwrap_or(config.default_count);
-    validate_count(count, config.max_count)?;
-    let raw_root = absolute_from_current(&args.raw)?;
+    let count = args.validate(config)?;
+    let raw_roots = args
+        .raw
+        .iter()
+        .map(|raw| absolute_from_current(raw))
+        .collect::<Result<Vec<_>>>()?;
     let output = absolute_from(
         &ctx.root,
         args.output
             .as_deref()
             .unwrap_or_else(|| Path::new(&config.report_output)),
     );
-    ensure_report_outside_raw(&raw_root, &output)?;
+    for raw in &raw_roots {
+        ensure_report_outside_raw(raw, &output)?;
+    }
+    let evidence = Evidence::read(&raw_roots, &units)?;
 
     let mut sections = String::new();
     let mut measured = Vec::<stress_report::Comparison>::new();
@@ -992,7 +1520,19 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
     let mut unclean = Vec::new();
     for unit in &units {
         let mode = unit.mode;
-        let paths = Paths::new(raw_root.join(unit.directory()), &config.artifacts);
+        let Some(directory) = evidence.directory(unit) else {
+            let reason = "unit evidence is missing or duplicated".to_owned();
+            excluded.push((unit.name(), reason.clone()));
+            unclean.push((unit.name(), reason));
+            exit_codes.push(None);
+            writeln!(
+                sections,
+                "\n# Unit `{}`\n\n- Result: **INVALID PROVENANCE**\n\nUnit evidence is missing or duplicated.\n",
+                markdown_cell(&unit.name())
+            )?;
+            continue;
+        };
+        let paths = Paths::new(directory.to_path_buf(), &config.artifacts);
         let report_args = StressReportArgs::new(
             paths.junit.clone(),
             paths.inventory.clone(),
@@ -1071,12 +1611,46 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
             markdown_cell(&format!("{error:#}"))
         );
     }
+    if !evidence.issues.is_empty() {
+        writeln!(document, "\n## Artifact layout\n")?;
+        for issue in &evidence.issues {
+            writeln!(document, "- `{}`", markdown_cell(issue))?;
+        }
+    }
     document.push_str(&sections);
     stress_report::write_report(&output, &document)?;
     if let Some(summary) = unclean_summary(&unclean, &output) {
         println!("{summary}");
     }
-    choose_failure(failure.map_or(Ok(()), Err), run, Ok(()), Ok(())).map_or(Ok(()), Err)
+    let layout = if evidence.issues.is_empty() {
+        Ok(())
+    } else {
+        Err(NotClean::raised(
+            "stress artifact layout",
+            evidence.issues.len(),
+        ))
+    };
+    choose_failure(failure.map_or(Ok(()), Err), run, layout, Ok(())).map_or(Ok(()), Err)
+}
+
+impl ReportArgs {
+    fn validate(&self, config: &StressConfig) -> Result<usize> {
+        let count = self.count.unwrap_or(config.default_count);
+        validate_count(count, config.max_count)?;
+        ensure!(
+            valid_sha(&self.expected_controller_sha),
+            "expected controller revision must be a full SHA"
+        );
+        ensure!(
+            valid_sha(&self.expected_subject_sha),
+            "expected subject revision must be a full SHA"
+        );
+        ensure!(
+            !self.raw.is_empty(),
+            "at least one raw evidence root is required"
+        );
+        Ok(count)
+    }
 }
 
 /// Places a unit's per-test rates in its lane's comparison, a column per mode.
@@ -1690,11 +2264,6 @@ fn ensure_report_outside_raw(raw: &Path, output: &Path) -> Result<()> {
         "stress report output must be outside the raw evidence directory: {}",
         output.display()
     );
-    let parent = output
-        .parent()
-        .context("stress report output has no parent directory")?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("create stress report parent {}", parent.display()))?;
     Ok(())
 }
 
@@ -1792,9 +2361,13 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     use super::*;
-    use crate::common::project::{
-        StressEnvironmentConfig, TestCargoOptions, TestCommandConfig, TestFlashConfig,
-        TestLaneConfig, TestNetBackendConfig, TestNoBlockConfig,
+    use crate::{
+        common::project::{
+            ProjectConfig, StressEnvironmentConfig, TestCargoOptions, TestCommandConfig,
+            TestFlashConfig, TestLaneConfig, TestLoadConfig, TestNetBackendConfig,
+            TestNoBlockConfig,
+        },
+        stress::selection::{unit_runner, validate_directory_name},
     };
 
     /// A lane the run launches once per repeat.
@@ -1841,7 +2414,10 @@ mod tests {
                         "tools".to_owned(),
                         TestLaneConfig {
                             default_backend: Some("local".to_owned()),
-                            undeclared_toggles: vec![consts::FLASH_TOGGLE.to_owned()],
+                            undeclared_toggles: vec![
+                                consts::FLASH_TOGGLE.to_owned(),
+                                consts::LOAD_TOGGLE.to_owned(),
+                            ],
                             ..lane("tools")
                         },
                     ),
@@ -1865,14 +2441,16 @@ mod tests {
                 default_backend: "http".to_owned(),
                 default_lane: "product".to_owned(),
                 nextest_config: ".config/nextest.toml".to_owned(),
-                flash: TestFlashConfig {
-                    features: vec!["virtual-time".to_owned()],
-                    default: true,
-                },
-                no_block: TestNoBlockConfig {
-                    features: vec!["nb-detect".to_owned()],
-                    default: false,
-                },
+                flash: toml::from_str::<TestFlashConfig>(
+                    "features = ['virtual-time']\ndefault = true",
+                )
+                .expect("flash config"),
+                no_block: toml::from_str::<TestNoBlockConfig>(
+                    "features = ['nb-detect']\ndefault = false",
+                )
+                .expect("no-block config"),
+                load: toml::from_str::<TestLoadConfig>("features = ['cpu-load']\ndefault = false")
+                    .expect("load config"),
                 ..TestCommandConfig::default()
             },
             ..ProjectConfig::default()
@@ -1912,6 +2490,72 @@ mod tests {
                 vec!["nb-detect".to_owned(), "virtual-time".to_owned()]
             )
         );
+    }
+
+    #[test]
+    fn a_load_mode_composes_with_lane_features_and_skips_undeclared_lanes() {
+        let project = lanes_project();
+        let mode = StressModeConfig {
+            flash: Some(true),
+            load: Some(true),
+            ..StressModeConfig::default()
+        };
+        let resolved = |lane: &str| match unit_runner(&project, &mode, Some(lane))
+            .expect("a lane mode resolves")
+        {
+            StressRunner::Lane(lane) => (lane.backend, lane.features),
+            StressRunner::Command(_) => panic!("a lane mode runs its lane"),
+        };
+
+        assert_eq!(
+            resolved("product"),
+            (
+                "http".to_owned(),
+                vec!["cpu-load".to_owned(), "virtual-time".to_owned()]
+            )
+        );
+        assert_eq!(
+            resolved("tools"),
+            ("local".to_owned(), vec!["tools/local".to_owned()])
+        );
+        assert_eq!(
+            resolved("detector"),
+            (
+                "http".to_owned(),
+                vec![
+                    "cpu-load".to_owned(),
+                    "nb-detect".to_owned(),
+                    "virtual-time".to_owned(),
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn a_load_mode_preserves_or_overrides_the_lane_load_default() {
+        let mut project = lanes_project();
+        project
+            .test
+            .lanes
+            .get_mut("detector")
+            .expect("detector lane")
+            .default_load = Some(true);
+
+        for (load, expected) in [(None, true), (Some(false), false)] {
+            let mode = StressModeConfig {
+                load,
+                ..StressModeConfig::default()
+            };
+            let StressRunner::Lane(lane) =
+                unit_runner(&project, &mode, Some("detector")).expect("a lane mode resolves")
+            else {
+                panic!("a lane mode runs its lane");
+            };
+
+            assert_eq!(lane.features.contains(&"cpu-load".to_owned()), expected);
+            assert!(lane.features.contains(&"nb-detect".to_owned()));
+            assert!(lane.features.contains(&"virtual-time".to_owned()));
+        }
     }
 
     /// A run repeats every lane mode on every lane it names and a command mode
@@ -2675,5 +3319,361 @@ mod tests {
             .expect_err("symlinked subject evidence overlap must be rejected");
 
         assert!(error.to_string().contains("must not overlap"));
+    }
+}
+
+#[cfg(test)]
+mod engine_selection_tests {
+    use std::{collections::BTreeSet, fs, path::Path, process::Command};
+
+    use serde_json::Value;
+    use tempfile::TempDir;
+
+    use crate::{
+        common::project::{ProjectConfig, TestRunner},
+        test::{
+            NextestAction,
+            repository_tests::{root, selected_by, this_workspace},
+            resolve, toggled,
+        },
+    };
+
+    const SUPPORT_PACKAGES: &[&str] = &[
+        "kithara-app",
+        "kithara-app-document",
+        "kithara-app-library",
+        "kithara-app-zvuk",
+        "kithara-app-tests",
+        "kithara-ui",
+        "kithara-ui-capture",
+        "kithara-ui-draw",
+        "kithara-ui-gallery",
+        "kithara-ui-input",
+        "kithara-ui-lottie",
+        "kithara-ui-shaping",
+        "kithara-android",
+        "kithara-apple",
+        "kithara-ffi",
+        "kithara-devtools",
+        "xtask",
+        "kithara-derive",
+        "kithara-test-fixtures",
+        "kithara-test-macros",
+        "kithara-test-utils",
+        "kithara-fixture-gen",
+        "kithara-fixture-media",
+        "kithara-core-test-fixtures",
+        "kithara-test-dylib",
+        "kithara-workspace-hack",
+        "kithara-future-support",
+    ];
+
+    #[test]
+    fn default_stress_selects_explicit_engine_packages_and_preserves_variants() {
+        let project = ProjectConfig::load(&root()).expect("repository config");
+        let metadata = this_workspace();
+        assert_eq!(project.stress.default_count, 50);
+        assert_eq!(project.stress.default_filter, "all()");
+        assert_eq!(
+            project.stress.default_modes,
+            [
+                "reproduction-flash-on",
+                "reproduction-flash-off",
+                "reproduction-no-block",
+                "rtsan",
+                "rtsan-file",
+                "rtsan-hls",
+            ]
+        );
+        assert_eq!(
+            project.stress.lanes,
+            [
+                "engine",
+                "engine-broadcast",
+                "net-host",
+                "analysis",
+                "integration-regressions",
+            ]
+        );
+        for name in &project.stress.lanes {
+            let lane = &project.test.lanes[name];
+            assert!(
+                !lane.cargo.workspace,
+                "{name} must not auto-include workspace members"
+            );
+            assert!(
+                lane.cargo.exclude.is_empty(),
+                "{name} uses positive package selection"
+            );
+            assert!(
+                !lane.cargo.packages.is_empty(),
+                "{name} must select packages"
+            );
+            let selected = selected_by(&lane.cargo, &metadata);
+            assert_eq!(
+                selected.len(),
+                lane.cargo.packages.len(),
+                "{name} selects only existing packages"
+            );
+            for package in SUPPORT_PACKAGES {
+                assert!(
+                    !selected.contains(package),
+                    "{name} selects support package {package}"
+                );
+            }
+        }
+        let engine = selected_by(&project.test.lanes["engine"].cargo, &metadata);
+        for package in [
+            "kithara",
+            "kithara-audio",
+            "kithara-play",
+            "kithara-record",
+            "kithara-sync",
+            "kithara-warp",
+            "kithara-harness-tests",
+            "kithara-integration-tests",
+            "kithara-audio-tests",
+            "kithara-decode-tests",
+            "kithara-file-tests",
+            "kithara-hls-tests",
+            "kithara-host-tests",
+            "kithara-play-tests",
+            "kithara-queue-tests",
+            "kithara-stream-tests",
+            "kithara-sync-tests",
+            "kithara-warp-tests",
+        ] {
+            assert!(engine.contains(package), "engine omits {package}");
+        }
+        assert!(
+            project.test.lanes["broadcast"]
+                .cargo
+                .packages
+                .iter()
+                .any(|p| p == "kithara-app")
+        );
+        for name in ["workspace", "tooling", "harness", "fixtures", "app", "ui"] {
+            assert!(
+                project.test.lanes.contains_key(name),
+                "ordinary {name} gate remains configured"
+            );
+        }
+        assert_eq!(
+            project.test.lanes["analysis"].default_features,
+            ["kithara-beat/dsp", "kithara-waveform/dsp"]
+        );
+        assert_eq!(
+            project.test.lanes["net-host"].default_backend.as_deref(),
+            Some("host")
+        );
+        let broadcast = &project.test.lanes["engine-broadcast"];
+        assert_eq!(broadcast.default_no_block, Some(true));
+        assert!(
+            broadcast
+                .default_features
+                .iter()
+                .any(|feature| feature == "kithara-broadcast-tests/broadcast")
+        );
+        for mode in ["rtsan", "rtsan-file", "rtsan-hls"] {
+            assert!(
+                !project.stress.modes[mode].command.is_empty(),
+                "{mode} sanitizer remains enabled"
+            );
+        }
+    }
+
+    fn fixture_package(root: &Path, name: &str, library: &str, targets: &[(&str, &str)]) {
+        let dir = root.join(name);
+        fs::create_dir_all(dir.join("src")).expect("fixture source directory");
+        fs::create_dir_all(dir.join("tests")).expect("fixture tests directory");
+        let mut manifest = format!(
+            "[package]\nname = {name:?}\nversion = \"0.0.0\"\nedition = \"2024\"\nautotests = false\n"
+        );
+        fs::write(dir.join("src/lib.rs"), library).expect("fixture library");
+        for (target, source) in targets {
+            manifest.push_str(&format!(
+                "\n[[test]]\nname = {target:?}\npath = \"tests/{target}.rs\"\n"
+            ));
+            fs::write(dir.join(format!("tests/{target}.rs")), source).expect("fixture test target");
+        }
+        fs::write(dir.join("Cargo.toml"), manifest).expect("fixture package manifest");
+    }
+
+    fn engine_fixture(project: &ProjectConfig) -> TempDir {
+        let fixture = TempDir::new().expect("fixture workspace");
+        let mut packages = project.test.lanes["engine"]
+            .cargo
+            .packages
+            .iter()
+            .map(String::as_str)
+            .chain(
+                project.test.lanes["engine-broadcast"]
+                    .cargo
+                    .packages
+                    .iter()
+                    .map(String::as_str),
+            )
+            .chain(SUPPORT_PACKAGES.iter().copied())
+            .collect::<BTreeSet<_>>();
+        packages.extend([
+            "kithara-platform",
+            "kithara-integration-tests",
+            "kithara-harness-tests",
+        ]);
+        for package in &packages {
+            let targets = match *package {
+                "kithara-platform" => vec![
+                    ("flash_attr", "#[test] fn support_contract() {}"),
+                    ("flash_spawn", "#[test] fn support_contract() {}"),
+                    ("future_support", "#[test] fn support_contract() {}"),
+                ],
+                "kithara-integration-tests" => vec![
+                    ("suite_light", "#[test] fn engine_contract() {}"),
+                    ("suite_heavy", "#[test] fn engine_contract() {}"),
+                    ("suite_stress", "#[test] fn engine_contract() {}"),
+                    ("future_support", "#[test] fn support_contract() {}"),
+                ],
+                "kithara-harness-tests" => vec![
+                    (
+                        "suite_light",
+                        "mod offline_harness_smoke { #[test] fn offline_harness_smoke() {} #[test] fn offline_harness_glide_varispeed() {} } mod audio_artifact { #[test] fn recording_core_writes_float_wav_through_disk_assets() {} #[test] fn recording_core_preserves_payload_across_packet_boundary() {} #[test] fn timeline_coalesces_adjacent_presented_spans() {} } mod fixture_server { #[test] fn support_contract() {} } mod no_block { #[test] fn support_contract() {} } mod future_support { #[test] fn offline_harness_smoke() {} }",
+                    ),
+                    ("suite_harness", "#[test] fn support_contract() {}"),
+                    ("future_support", "#[test] fn support_contract() {}"),
+                ],
+                "kithara-broadcast-tests" => vec![("broadcast", "#[test] fn engine_contract() {}")],
+                "kithara-broadcast" => vec![("packaging_tests", "#[test] fn engine_contract() {}")],
+                _ => Vec::new(),
+            };
+            let library = match *package {
+                "kithara-integration-tests" | "kithara-harness-tests" => {
+                    "#[test] fn support_contract() {}"
+                }
+                _ => "#[test] fn engine_contract() {} #[test] fn future_engine_contract() {}",
+            };
+            fixture_package(fixture.path(), package, library, &targets);
+        }
+        let members = packages
+            .iter()
+            .map(|name| format!("{name:?}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        fs::write(
+            fixture.path().join("Cargo.toml"),
+            format!("[workspace]\nresolver = \"3\"\nmembers = [{members}]\n"),
+        )
+        .expect("fixture workspace manifest");
+        fixture
+    }
+
+    #[test]
+    fn pinned_nextest_keeps_engine_contracts_and_rejects_support_tests() {
+        let project = ProjectConfig::load(&root()).expect("repository config");
+        let fixture = engine_fixture(&project);
+        let pins: toml::Table =
+            toml::from_str(&fs::read_to_string(root().join(".config/ci-pins.toml")).expect("pins"))
+                .expect("pins TOML");
+        let version = Command::new("cargo-nextest")
+            .args(["nextest", "--version"])
+            .output()
+            .expect("pinned nextest");
+        assert!(
+            String::from_utf8_lossy(&version.stdout).contains(
+                pins["cargo_tools"]["cargo-nextest"]
+                    .as_str()
+                    .expect("nextest pin")
+            )
+        );
+        for name in ["engine", "engine-broadcast"] {
+            let mut lane = resolve(
+                &project.test,
+                &toggled(&project.test, name, None, None, None).expect("lane"),
+            )
+            .expect("resolved lane");
+            lane.cargo.profile = None;
+            lane.features.clear();
+            let TestRunner::Nextest(nextest) = &mut lane.runner else {
+                panic!("nextest lane")
+            };
+            nextest.ignore_default_filter = true;
+            let command = lane
+                .command(NextestAction::List, &["--message-format=json".to_owned()])
+                .expect("list command");
+            let output = Command::new("cargo-nextest")
+                .args(command.get_args())
+                .envs(
+                    command
+                        .get_envs()
+                        .filter_map(|(key, value)| value.map(|value| (key, value))),
+                )
+                .env_remove("RUSTFLAGS")
+                .env_remove("CARGO_ENCODED_RUSTFLAGS")
+                .env("CARGO_TARGET_DIR", fixture.path().join("target"))
+                .current_dir(fixture.path())
+                .output()
+                .expect("nextest inventory");
+            assert!(
+                output.status.success(),
+                "{name}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let inventory: Value = serde_json::from_slice(&output.stdout).expect("nextest JSON");
+            let mut selected = BTreeSet::new();
+            for (binary, suite) in inventory["rust-suites"].as_object().expect("test suites") {
+                for (test, verdict) in suite["testcases"].as_object().expect("test cases") {
+                    if verdict["filter-match"]["status"] == "matches" {
+                        selected.insert(format!("{binary}::{test}"));
+                    }
+                }
+            }
+            assert!(!selected.is_empty(), "{name} must select real contracts");
+            for package in SUPPORT_PACKAGES {
+                assert!(
+                    !selected
+                        .iter()
+                        .any(|test| test.starts_with(&format!("{package}::"))),
+                    "{name} selected support package {package}"
+                );
+            }
+            assert!(
+                !selected.iter().any(|test| test.contains("support_contract")
+                    || test.contains("future_support")
+                    || test.contains("timeline_coalesces")),
+                "{name}: {selected:?}"
+            );
+            if name == "engine" {
+                for package in &project.test.lanes["engine"].cargo.packages {
+                    if !matches!(
+                        package.as_str(),
+                        "kithara-integration-tests" | "kithara-harness-tests"
+                    ) {
+                        for test in ["engine_contract", "future_engine_contract"] {
+                            assert!(
+                                selected.contains(&format!("{package}::{test}")),
+                                "engine omitted {package}::{test}"
+                            );
+                        }
+                    }
+                }
+                for test in [
+                    "kithara-platform::engine_contract",
+                    "kithara-integration-tests::suite_light::engine_contract",
+                    "kithara-integration-tests::suite_heavy::engine_contract",
+                    "kithara-integration-tests::suite_stress::engine_contract",
+                    "kithara-harness-tests::suite_light::offline_harness_smoke::offline_harness_smoke",
+                    "kithara-harness-tests::suite_light::offline_harness_smoke::offline_harness_glide_varispeed",
+                    "kithara-harness-tests::suite_light::audio_artifact::recording_core_writes_float_wav_through_disk_assets",
+                    "kithara-harness-tests::suite_light::audio_artifact::recording_core_preserves_payload_across_packet_boundary",
+                ] {
+                    assert!(
+                        selected.contains(test),
+                        "{name} omitted {test}: {selected:?}"
+                    );
+                }
+            } else {
+                assert!(selected.contains("kithara-broadcast::engine_contract"));
+                assert!(selected.contains("kithara-broadcast-tests::broadcast::engine_contract"));
+            }
+        }
     }
 }

@@ -24,6 +24,7 @@ playback = [
 stretch-signalsmith = ["kithara/stretch-signalsmith"]
 stretch-glide = ["kithara/stretch-glide"]
 flash = ["kithara/flash", "kithara-test-utils/flash", "kithara-integration-tests?/flash"]
+load = ["kithara-test-utils/load", "kithara-integration-tests?/load"]
 no-block = ["kithara/no-block", "kithara-test-utils/no-block", "kithara-integration-tests?/no-block"]
 usdt = ["kithara/usdt", "kithara-test-utils/usdt", "kithara-integration-tests?/usdt"]
 

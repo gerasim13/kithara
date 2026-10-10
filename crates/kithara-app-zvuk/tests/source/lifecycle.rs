@@ -1,17 +1,26 @@
-use kithara_app_library::{Context, Environment, RegisterError};
+use kithara_app_library::{Context, Environment, RegisterError, Secrets};
 use kithara_app_zvuk::Source;
 use kithara_net::{HttpClient, NetError, NetOptions};
-use kithara_platform::tokio::runtime::Handle;
+use kithara_platform::{CancelToken, tokio::runtime::Handle};
 use kithara_test_utils::bufpool::pools;
+use kithara_ui::{error::UiDocError, ids::SourceUri, text::parse_text};
 use serde_yaml_ng::Value as Section;
 
-use super::{support::queue_completed, *};
+use super::{
+    support::{memory, queue_completed, refusing},
+    *,
+};
+
+/// Plugin services over `secrets`.
+fn environment(cancel: &CancelToken, secrets: Secrets) -> Environment {
+    let net = HttpClient::new(NetOptions::default(), pools(), cancel.clone());
+    Environment::new(Handle::current(), net, secrets)
+}
 
 #[kithara::test(tokio)]
 async fn a_mismatched_entry_names_the_plugin_and_not_its_value() {
     let cancel = kithara_test_utils::cancel_token();
-    let net = HttpClient::new(NetOptions::default(), pools(), cancel.clone());
-    let environment = Environment::new(Handle::current(), net);
+    let environment = environment(&cancel, memory());
     let entry = Section::String("secret-token-hunter2".to_owned());
 
     let Err(cause) = (Source::FACTORY.register)(&environment, Context::new(cancel, entry)) else {
@@ -21,6 +30,78 @@ async fn a_mismatched_entry_names_the_plugin_and_not_its_value() {
     let message = RegisterError::new(Source::FACTORY.id, cause).to_string();
     assert!(message.contains("sources.zvuk"), "{message}");
     assert!(!message.contains("hunter2"), "{message}");
+}
+
+/// The page states a missing account in the words of the catalog it is
+/// built with.
+#[kithara::test(tokio)]
+async fn a_signed_out_page_reads_its_status_from_the_catalog() {
+    let cancel = kithara_test_utils::cancel_token();
+    let environment = environment(&cancel, memory());
+    let entry: Section = serde_yaml_ng::from_str("{user_agent: agent}").expect("the entry parses");
+    let registration = (Source::FACTORY.register)(&environment, Context::new(cancel, entry))
+        .expect("the entry registers");
+    let shipped = registration.page().texts[0];
+    let mut words = parse_text(shipped.text, &SourceUri(shipped.path.to_owned()))
+        .expect("the source's captions parse");
+    words.entries.insert(
+        "zvuk.status.not_connected".to_owned(),
+        "synthetic locale wording".to_owned(),
+    );
+
+    let source = registration
+        .build(&words)
+        .expect("the catalog words every label");
+
+    assert_eq!(
+        source.status(),
+        PageStatus::Unreadable(Some("synthetic locale wording"))
+    );
+}
+
+/// The account row words its fault in the catalog the source is built with;
+/// a catalog without a fault's words fails the build naming the key.
+#[kithara::test(tokio)]
+async fn the_account_row_words_its_fault_from_the_catalog() {
+    const STORE: &str = "zvuk.account.fault.store";
+    let cancel = kithara_test_utils::cancel_token();
+    let environment = environment(&cancel, refusing());
+    let register = || {
+        let entry: Section =
+            serde_yaml_ng::from_str("{user_agent: agent}").expect("the entry parses");
+        (Source::FACTORY.register)(&environment, Context::new(cancel.clone(), entry))
+            .expect("the entry registers")
+    };
+    let registration = register();
+    let shipped = registration.page().texts[0];
+    let mut words = parse_text(shipped.text, &SourceUri(shipped.path.to_owned()))
+        .expect("the source's captions parse");
+    let mut missing = words.clone();
+    missing.entries.remove(STORE);
+    words
+        .entries
+        .insert(STORE.to_owned(), "synthetic store wording".to_owned());
+
+    let Err(error) = register().build(&missing) else {
+        panic!("a catalog without the store fault's words must not build");
+    };
+    assert!(
+        matches!(&error, UiDocError::UnknownTextKey { key, .. } if key == STORE),
+        "{error}"
+    );
+    let mut source = registration
+        .build(&words)
+        .expect("the catalog words every label");
+    wait_until(
+        Duration::from_secs(2),
+        "the row shows the store fault",
+        || {
+            source.tick();
+            source.read("account_fault") == Some(ReadValue::Text("synthetic store wording"))
+        },
+    )
+    .await
+    .expect("the row words the store fault from the catalog");
 }
 
 /// Selecting the node already shown neither restarts nor drops its request,
@@ -35,7 +116,7 @@ async fn reselecting_the_current_node_keeps_its_request_rows_and_query() {
             .next_call(matching!(_, _, _))
             .returns(Ok(stream_reply())),
     )));
-    let mut source = source(net.clone());
+    let mut source = source(net.clone()).await;
     source.select("liked");
     source.select("liked");
     source.tick();
@@ -68,7 +149,7 @@ async fn reselecting_the_current_node_keeps_its_request_rows_and_query() {
 /// and the reaction's fault instead of retrying the catalogue.
 #[kithara::test]
 async fn reselecting_after_a_side_operation_fault_keeps_the_page_without_a_retry() {
-    let net = Unimock::new((
+    let net = DelayedNet::new(Unimock::new((
         NetMock::post_bytes
             .next_call(matching!(_, _, _))
             .returns(Ok(search_reply())),
@@ -78,8 +159,8 @@ async fn reselecting_after_a_side_operation_fault_keeps_the_page_without_a_retry
         NetMock::post_bytes
             .next_call(matching!(_, _, _))
             .returns(Err(NetError::Timeout)),
-    ));
-    let mut source = loaded_search(net).await;
+    )));
+    let mut source = loaded_search(net.clone()).await;
     source.write("like_track", &WriteValue::Text("1000".into()));
     wait_until(Duration::from_secs(2), "the reaction fails", || {
         source.tick();
@@ -98,6 +179,7 @@ async fn reselecting_after_a_side_operation_fault_keeps_the_page_without_a_retry
     assert_eq!(source.rows(Some("1000")).len(), 5);
     assert!(source.rows(None).iter().all(|row| row.drag().is_some()));
     assert_eq!(reactions(&*source, "1000"), [false]);
+    release(source, &net).await;
 }
 
 #[kithara::test]
@@ -178,7 +260,7 @@ async fn leaving_search_discards_its_queued_result_and_clears_the_query() {
         NetMock::post_bytes.next_call(matching!(_, _, _)).returns(Ok(stream_reply())),
         NetMock::post_bytes.next_call(matching!((_, body, _) if String::from_utf8_lossy(body).contains("KitharaPlaylist"))).returns(Ok(Bytes::from_static(br#"{"data":{"playlists":[{"id":"empty","tracks":[]}]}}"#))),
     )));
-    let mut source = source(net.clone());
+    let mut source = source(net.clone()).await;
     queue_completed(&mut *source, &net, "old", 4).await;
     source.select("playlist:empty");
     source.tick();
@@ -188,68 +270,83 @@ async fn leaving_search_discards_its_queued_result_and_clears_the_query() {
     release(source, &net).await;
 }
 
-/// A new query drops the outstanding request before starting its own, and an
-/// emptied query drops it without starting another.
+/// A new query drops the request it supersedes, which ends without a result,
+/// and shows its own; an emptied query drops the request in flight without
+/// starting another.
 #[kithara::test]
 async fn a_superseding_query_cancels_the_outstanding_request() {
-    let net = DelayedNet::new(Unimock::new(
+    let net = DelayedNet::new(Unimock::new((
         NetMock::post_bytes.next_call(matching!((_, body, _) if serde_json::from_slice::<serde_json::Value>(body).unwrap()["variables"]["query"] == "current"))
-            .returns(Ok(Bytes::from_static(br#"{"data":{"search":{"tracks":{"items":[]}}}}"#))),
-    ));
-    let mut source = source(net.clone());
-    for (query, events) in [
-        ("blocked", &["start:blocked"][..]),
-        (
-            "current",
-            &[
-                "start:blocked",
-                "end:blocked",
-                "start:current",
-                "end:current",
-            ],
-        ),
-        (
-            "blocked",
-            &[
-                "start:blocked",
-                "end:blocked",
-                "start:current",
-                "end:current",
-                "start:blocked",
-            ],
-        ),
-        (
-            "",
-            &[
-                "start:blocked",
-                "end:blocked",
-                "start:current",
-                "end:current",
-                "start:blocked",
-                "end:blocked",
-            ],
-        ),
-    ] {
-        source.write("query", &WriteValue::Text(query.into()));
-        time::sleep(Duration::from_millis(300)).await;
-        wait_until(Duration::from_secs(2), "the requests settle", || {
+            .returns(Ok(search_reply())),
+        NetMock::post_bytes.next_call(matching!(_, _, _)).returns(Ok(stream_reply())),
+    )));
+    let seen = |event: &str| {
+        net.events()
+            .iter()
+            .filter(|logged| *logged == event)
+            .count()
+    };
+    let mut source = source(net.clone()).await;
+
+    source.write("query", &WriteValue::Text("blocked".into()));
+    wait_until(Duration::from_secs(2), "the held search starts", || {
+        source.tick();
+        seen("start:blocked") == 1
+    })
+    .await
+    .expect("the held search must start");
+    source.write("query", &WriteValue::Text("current".into()));
+    wait_until(Duration::from_secs(2), "the newer search shows", || {
+        source.tick();
+        source.status() == PageStatus::Ready && seen("end:blocked") == 1
+    })
+    .await
+    .expect("the newer query must replace the held search");
+    assert_eq!(source.rows(None).len(), 5);
+
+    source.write("query", &WriteValue::Text("blocked".into()));
+    wait_until(
+        Duration::from_secs(2),
+        "the held search starts again",
+        || {
             source.tick();
-            net.events() == events
-        })
-        .await
-        .expect("each query must replace the outstanding request");
-    }
+            seen("start:blocked") == 2
+        },
+    )
+    .await
+    .expect("the held search must start again");
+    source.write("query", &WriteValue::Text(String::new()));
+    wait_until(Duration::from_secs(2), "the held search ends", || {
+        source.tick();
+        seen("end:blocked") == 2
+    })
+    .await
+    .expect("an emptied query must drop the held search");
     assert!(source.rows(None).is_empty());
     assert_eq!(source.status(), PageStatus::Empty);
     release(source, &net).await;
-    assert_eq!(net.events().len(), 6);
+    let mut events = net.events();
+    events.sort();
+    assert_eq!(
+        events,
+        [
+            "end:blocked",
+            "end:blocked",
+            "end:current",
+            "end:node",
+            "start:blocked",
+            "start:blocked",
+            "start:current",
+            "start:node",
+        ]
+    );
 }
 
 #[kithara::test]
 async fn dropping_the_source_cancels_its_request_without_cancelling_the_parent() {
     let net = DelayedNet::new(Unimock::new(()));
     let parent = kithara_test_utils::cancel_token();
-    let mut source = registered(net.clone(), &parent);
+    let mut source = registered(net.clone(), &parent).await;
     source.write("query", &WriteValue::Text("blocked".into()));
     time::sleep(Duration::from_millis(300)).await;
     wait_until(Duration::from_secs(2), "blocked search starts", || {
@@ -274,61 +371,10 @@ async fn shutdown_discards_a_completion_already_waiting_for_tick() {
             .returns(Ok(stream_reply())),
     )));
     let parent = kithara_test_utils::cancel_token();
-    let mut source = registered(net.clone(), &parent);
+    let mut source = registered(net.clone(), &parent).await;
     queue_completed(&mut *source, &net, "needle", 4).await;
     parent.cancel();
     source.tick();
     assert!(source.rows(None).is_empty());
     release(source, &net).await;
-}
-
-/// A token rejection latches the source whichever request meets it, even a
-/// catalogue request a newer query superseded or a playlist listing beside a
-/// search still in flight: the page turns unreadable, every request stops and
-/// nothing starts another, while the parent and the branch remain.
-#[kithara::test]
-async fn an_authentication_rejection_latches_the_source() {
-    for superseded in [true, false] {
-        let net = DelayedNet::new(Unimock::new(
-            NetMock::post_bytes
-                .next_call(matching!(_, _, _))
-                .returns(Err(NetError::Status {
-                    status: std::num::NonZeroU16::new(401).unwrap(),
-                    url: None,
-                    body: None,
-                })),
-        ));
-        let parent = kithara_test_utils::cancel_token();
-        let mut source = registered(net.clone(), &parent);
-        let expected: &[&str] = if superseded {
-            queue_completed(&mut *source, &net, "old", 2).await;
-            source.write("query", &WriteValue::Text("current".into()));
-            &["start:old", "end:old"]
-        } else {
-            source.write("query", &WriteValue::Text("blocked".into()));
-            time::sleep(Duration::from_millis(300)).await;
-            wait_until(Duration::from_secs(2), "blocked search starts", || {
-                source.tick();
-                net.events() == ["start:blocked"]
-            })
-            .await
-            .expect("the blocked search must be in flight before the rejection");
-            source.expand("playlists");
-            &["start:blocked", "start:node", "end:node", "end:blocked"]
-        };
-        until(&mut *source, PageStatus::Unreadable).await;
-        source.select("liked");
-        source.expand("playlists");
-        source.write("query", &WriteValue::Text("another".into()));
-        time::sleep(Duration::from_millis(300)).await;
-        source.tick();
-        assert_eq!(source.status(), PageStatus::Unreadable);
-        assert!(
-            matches!(source.read("fault"), Some(ReadValue::Text(text)) if text.contains("authentication"))
-        );
-        assert_eq!(source.branch().key, "zvuk");
-        release(source, &net).await;
-        assert_eq!(net.events(), expected, "superseded: {superseded}");
-        assert!(!parent.is_cancelled());
-    }
 }

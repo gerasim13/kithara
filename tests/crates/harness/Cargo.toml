@@ -13,6 +13,7 @@ ignored = ["serial_test"]
 [features]
 harness = []
 flash = ["kithara/flash", "kithara-integration-tests/flash"]
+load = ["kithara-integration-tests/load"]
 no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 
 [dependencies]

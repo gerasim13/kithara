@@ -80,7 +80,13 @@ impl Rig {
         let (sender, commands) = mpsc::unbounded_channel();
         let snapshots = Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished()));
         let runtime = test_fixture::runtime();
-        let boot = test_fixture::boot(runtime.handle(), config, Arc::clone(&snapshots), sender);
+        let boot = test_fixture::boot(
+            runtime.handle(),
+            config,
+            Arc::clone(&snapshots),
+            sender,
+            Vec::new(),
+        );
         let engine = Engine::new(
             DeckSet::new(host, decks),
             config.clone(),

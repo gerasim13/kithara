@@ -5,7 +5,7 @@ mod response;
 mod session;
 mod stream;
 
-pub use client::AppleNet as HttpClient;
+pub use client::HttpClient;
 
 #[cfg(all(test, feature = "client-apple", target_os = "macos"))]
 mod tests;

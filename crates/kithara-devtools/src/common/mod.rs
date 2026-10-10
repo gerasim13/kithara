@@ -11,6 +11,7 @@
 pub mod baseline;
 pub mod exclude;
 pub mod fix;
+pub(crate) mod imports;
 mod libtest;
 pub mod parse;
 pub(crate) mod process;
@@ -21,6 +22,7 @@ pub mod scope;
 pub mod style;
 pub mod suppress;
 pub mod timestamp;
+pub mod toggle;
 pub mod tools;
 #[cfg(feature = "lint")]
 pub mod verdict_cache;

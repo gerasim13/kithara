@@ -66,7 +66,7 @@ pub(crate) struct CanonicalType {
 #[config(builder(none), fields(nested))]
 pub(crate) struct ThresholdsConfig {
     #[serde(default)]
-    pub(crate) arc_clone_hotspots: ArcCloneHotspotsThreshold,
+    pub(crate) arc_clone_hotspots: WarnThreshold,
     #[serde(default)]
     pub(crate) args_wrapper_struct: ArgsWrapperStructThreshold,
     #[serde(default)]
@@ -76,9 +76,9 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) dead_exports: DeadExportsThreshold,
     #[serde(default)]
-    pub(crate) field_always_constant: FieldAlwaysConstantThreshold,
+    pub(crate) field_always_constant: FieldCallSitesThreshold,
     #[serde(default)]
-    pub(crate) field_always_equals_other_field: FieldAlwaysEqualsOtherFieldThreshold,
+    pub(crate) field_always_equals_other_field: FieldCallSitesThreshold,
     #[serde(default)]
     pub(crate) field_passthrough: FieldPassthroughThreshold,
     #[serde(default)]
@@ -112,7 +112,7 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) platform_layer_hygiene: PlatformLayerHygieneThreshold,
     #[serde(default)]
-    pub(crate) pub_struct_open_fields: PubStructOpenFieldsThreshold,
+    pub(crate) pub_struct_open_fields: WarnThreshold,
     #[serde(default)]
     pub(crate) readme_presence: ReadmePresenceThreshold,
     #[serde(default)]
@@ -228,33 +228,14 @@ const fn default_args_wrapper_min_call_sites() -> usize {
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
 #[config(builder(none), fields(value))]
-pub(crate) struct FieldAlwaysConstantThreshold {
+pub(crate) struct FieldCallSitesThreshold {
     #[serde(default)]
     pub(crate) exempt_files: Vec<String>,
     #[serde(default = "default_field_always_min_call_sites")]
     pub(crate) min_call_sites: usize,
 }
 
-impl Default for FieldAlwaysConstantThreshold {
-    fn default() -> Self {
-        Self {
-            min_call_sites: default_field_always_min_call_sites(),
-            exempt_files: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
-#[serde(deny_unknown_fields)]
-#[config(builder(none), fields(value))]
-pub(crate) struct FieldAlwaysEqualsOtherFieldThreshold {
-    #[serde(default)]
-    pub(crate) exempt_files: Vec<String>,
-    #[serde(default = "default_field_always_min_call_sites")]
-    pub(crate) min_call_sites: usize,
-}
-
-impl Default for FieldAlwaysEqualsOtherFieldThreshold {
+impl Default for FieldCallSitesThreshold {
     fn default() -> Self {
         Self {
             min_call_sites: default_field_always_min_call_sites(),
@@ -380,11 +361,11 @@ impl Default for SharedStateThreshold {
 #[derive(Debug, Deserialize, Clone, kithara_config::Config)]
 #[serde(deny_unknown_fields)]
 #[config(builder(none), fields(value))]
-pub(crate) struct ArcCloneHotspotsThreshold {
+pub(crate) struct WarnThreshold {
     pub(crate) warn: usize,
 }
 
-impl Default for ArcCloneHotspotsThreshold {
+impl Default for WarnThreshold {
     fn default() -> Self {
         Self { warn: 3 }
     }
@@ -522,22 +503,6 @@ pub(crate) struct GodTraitThreshold {
 impl Default for GodTraitThreshold {
     fn default() -> Self {
         Self { warn: 7 }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone, kithara_config::Config)]
-#[serde(deny_unknown_fields)]
-#[config(builder(none), fields(value))]
-pub(crate) struct PubStructOpenFieldsThreshold {
-    /// `pub` structs with at least this many `pub` fields are flagged. Signals
-    /// missing invariants / direct mutation. Candidate for a builder or
-    /// encapsulated setter API.
-    pub(crate) warn: usize,
-}
-
-impl Default for PubStructOpenFieldsThreshold {
-    fn default() -> Self {
-        Self { warn: 3 }
     }
 }
 

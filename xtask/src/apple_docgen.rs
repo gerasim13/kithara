@@ -1,8 +1,7 @@
 use std::{
-    env, fs,
+    fs,
     path::{Path as FsPath, PathBuf},
     process::Command,
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail};
@@ -41,10 +40,12 @@ pub(crate) fn run(check: bool, docgen: &DocgenConfig) -> Result<()> {
     let documented = check_swift_docs(&root, &docgen.swift_dirs)?;
 
     if check {
-        let temp = TempDir::create(&format!(
-            "{}-apple-docgen",
-            kithara_devtools::util::project_name()
-        ))?;
+        let temp = tempfile::Builder::new()
+            .prefix(&format!(
+                "{}-apple-docgen",
+                kithara_devtools::util::project_name()
+            ))
+            .tempdir()?;
         write_pages(temp.path(), &pages)?;
         println!(
             "docgen --check: {}/{} allowlisted symbols covered, {documented} public Swift symbols documented, format_version={}",
@@ -317,32 +318,4 @@ fn symbol_label(decl_line: &str) -> String {
         .trim_end_matches('{')
         .trim()
         .to_string()
-}
-
-#[derive(fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
-struct TempDir {
-    #[field(get)]
-    path: PathBuf,
-}
-
-impl TempDir {
-    fn create(prefix: &str) -> Result<Self> {
-        let epoch = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .context("system clock is before UNIX_EPOCH")?;
-        let path = env::temp_dir().join(format!(
-            "{prefix}-{}-{}",
-            std::process::id(),
-            epoch.as_nanos()
-        ));
-        fs::create_dir_all(&path).with_context(|| format!("create {}", path.display()))?;
-        Ok(Self { path })
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
-    }
 }

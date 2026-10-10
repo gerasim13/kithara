@@ -194,7 +194,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             && self
                 .engine
                 .as_ref()
-                .is_some_and(|engine| engine.capabilities().latency().output_frames() > 0)
+                .is_some_and(|engine| engine.capabilities().latency().second() > 0)
             && self
                 .projection
                 .active

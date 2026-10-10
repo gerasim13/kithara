@@ -9,15 +9,18 @@ use kithara::{
     },
     play::wasm as play_wasm,
 };
+use kithara_app_library::{Environment, Secrets};
 use tracing::Level;
 use tracing_log::LogTracer;
 use tracing_wasm::WASMLayerConfigBuilder;
 
 use super::worker;
 use crate::{
+    config::AppConfig,
     document::Config,
     engine::{EngineError, EngineSnapshot},
     gui::{Boot, FrontendError, immediate},
+    plugins,
     pools::{self, AppHost, AppPools},
     theme::Palette,
 };
@@ -61,7 +64,14 @@ pub async fn run(shutdown: CancelToken) -> Result<(), FrontendError> {
     let (commands, received) = mpsc::unbounded_channel();
     let ui_package = app.ui_package.clone();
     let settings = document.ui()?;
-    let sources = document.sources().clone();
+    let net = AppConfig::client(&document, &pools, &shutdown, false);
+    let environment = Environment::new(
+        runtime.clone(),
+        net.clone(),
+        Secrets::native(document.overlay()),
+    );
+    let registered = plugins::mount(&document, &environment, &shutdown)?;
+    let grants = plugins::grants(&registered);
     let builder = Boot::builder()
         .maybe_package(ui_package.as_deref())
         .settings(&settings)
@@ -70,12 +80,15 @@ pub async fn run(shutdown: CancelToken) -> Result<(), FrontendError> {
         .snapshots(Arc::clone(&snapshots))
         .commands(commands)
         .runtime(runtime)
+        .plugins(registered)
         .chrome_hidden(true);
 
     task::spawn(pump(host, receiver, shutdown.child()));
     let (built, stopped) = worker::spawn(
         document,
         pools,
+        net,
+        grants,
         sender,
         snapshots,
         received,
@@ -85,15 +98,7 @@ pub async fn run(shutdown: CancelToken) -> Result<(), FrontendError> {
         .await
         .unwrap_or(Err(EngineError::Panicked))
         .map_err(FrontendError::from)
-        .and_then(|net| {
-            immediate(
-                builder
-                    .net(&net)
-                    .sources(&sources)
-                    .shutdown(&shutdown)
-                    .build()?,
-            )
-        });
+        .and_then(|()| immediate(builder.build()?));
     if started.is_err() {
         shutdown.cancel();
     }

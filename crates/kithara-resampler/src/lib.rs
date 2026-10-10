@@ -28,5 +28,5 @@ pub use error::{ResamplerBuildError, ResamplerError};
 pub use factory::create_resampler;
 pub use mode::ResamplerMode;
 pub use mono::{MonoStream, MonoStreamConfig};
-pub use traits::{Resampler, ResamplerControl, ResamplerProcess};
+pub use traits::{Resampler, ResamplerControl, ResamplerProcess, ResamplerProcessTag};
 mod consts;

@@ -30,12 +30,12 @@ impl BungeeElastic {
         let latency = self.capabilities.latency();
         let source = Self::frame_count(self.rendered_source_frames(request))?;
         let output = Self::frame_count(request.output_frames())?;
-        let source_tail = Self::frame_count(latency.source_frames())?
+        let source_tail = Self::frame_count(latency.first())?
             .checked_mul(output)
             .map(|frames| frames.div_ceil(source))
             .ok_or(ElasticError::SampleCountOverflow)?;
         let total = source_tail
-            .checked_add(Self::frame_count(latency.output_frames())?)
+            .checked_add(Self::frame_count(latency.second())?)
             .ok_or(ElasticError::SampleCountOverflow)?;
         usize::try_from(total).map_err(|_| ElasticError::SampleCountOverflow)
     }
@@ -80,7 +80,7 @@ impl BungeeElastic {
 
     fn prepare_exact_tail(&mut self) -> Result<(), ElasticError> {
         if self.tail_remaining.is_some()
-            || self.rate_age_frames != self.capabilities.latency().output_frames()
+            || self.rate_age_frames != self.capabilities.latency().second()
         {
             return Ok(());
         }
@@ -92,7 +92,7 @@ impl BungeeElastic {
     }
 
     fn record_request(&mut self, request: ElasticRequest) -> Result<(), ElasticError> {
-        let latency_frames = self.capabilities.latency().output_frames();
+        let latency_frames = self.capabilities.latency().second();
         let same_rate = self.last_request.map(|previous| {
             Ok::<_, ElasticError>(
                 Self::frame_count(self.rendered_source_frames(previous))?
@@ -181,7 +181,7 @@ impl ElasticEngine for BungeeElastic {
         let latency = Self::latency(&mut core, &config)?;
         let maximum_warm_source = config.rate_envelope().max_source_frames_per_output()
             * latency
-                .output_frames()
+                .second()
                 .to_f64()
                 .ok_or(ElasticError::SampleCountOverflow)?;
         let maximum_warm_source = maximum_warm_source
@@ -189,8 +189,8 @@ impl ElasticEngine for BungeeElastic {
             .to_usize()
             .ok_or(ElasticError::SampleCountOverflow)?;
         let prime_context = latency
-            .source_frames()
-            .checked_add(latency.source_frames())
+            .first()
+            .checked_add(latency.first())
             .and_then(|frames| frames.checked_add(maximum_warm_source))
             .ok_or(ElasticError::SampleCountOverflow)?;
         let retained = core.max_input_frames().max(prime_context);

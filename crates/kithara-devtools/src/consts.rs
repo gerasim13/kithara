@@ -151,6 +151,7 @@ pub(crate) const COMMENTED_CONFIG_TEMPLATE: &str = r#"
 # default_features = []
 # default_flash = true
 # default_no_block = false
+# default_load = false
 #
 # [test.net_backends.default]
 # features = []
@@ -567,6 +568,7 @@ pub(crate) const PASSED_JUNIT: &str = r#"<testsuites uuid="run" timestamp="2026-
 
 pub(crate) const FLASH_TOGGLE: &str = "flash";
 pub(crate) const NO_BLOCK_TOGGLE: &str = "no-block";
+pub(crate) const LOAD_TOGGLE: &str = "load";
 pub(crate) const CONFIG_PATH: &str = ".config/typos.toml";
 pub(crate) const TYPOS_INSTALL_HINT: &str = "cargo install typos-cli";
 

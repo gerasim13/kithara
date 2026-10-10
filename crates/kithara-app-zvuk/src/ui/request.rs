@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 
+use kithara_app_library::AccessToken;
 use kithara_net::Net;
 
-use crate::{Client, Error, MediaTrack, Playlist, PlaylistId, TrackId, TrackPage};
+use crate::{Client, Error, MediaTrack, PlaylistId, TrackId, TrackPage};
 
 #[derive(Clone, PartialEq)]
 pub(super) enum Mode {
@@ -16,42 +17,18 @@ pub(super) struct Batch {
     pub(super) streams: Result<Vec<MediaTrack>, Error>,
 }
 
-pub(super) enum Completed {
-    Catalogue(u64, Option<Result<Batch, Error>>),
-    Playlists(Option<Result<Vec<Playlist>, Error>>),
-    Like(TrackId, bool, Option<Result<(), Error>>),
-}
-
-impl Completed {
-    /// Whether the operation met the token rejection that latches the source.
-    pub(super) fn rejects_authentication(&self) -> bool {
-        matches!(
-            self,
-            Self::Catalogue(
-                _,
-                Some(
-                    Err(Error::AuthenticationRejected)
-                        | Ok(Batch {
-                            streams: Err(Error::AuthenticationRejected),
-                            ..
-                        })
-                )
-            ) | Self::Playlists(Some(Err(Error::AuthenticationRejected)))
-                | Self::Like(_, _, Some(Err(Error::AuthenticationRejected)))
-        )
-    }
-}
-
 impl Mode {
+    /// The node's page and its streams; a refused token fails the whole batch.
     pub(super) async fn load<N: Net>(
         &self,
         client: &Client<N>,
+        token: &AccessToken,
         query: &str,
     ) -> Result<Batch, Error> {
         let page = match self {
-            Self::Search => client.search(query).await?,
-            Self::Liked => client.liked_tracks().await?,
-            Self::Playlist(id) => client.playlist_tracks(id).await?,
+            Self::Search => client.search(token, query).await?,
+            Self::Liked => client.liked_tracks(token).await?,
+            Self::Playlist(id) => client.playlist_tracks(token, id).await?,
         };
         let mut listed = HashSet::new();
         let ids = page
@@ -60,7 +37,10 @@ impl Mode {
             .filter(|track| listed.insert(&track.id))
             .map(|track| track.id.clone())
             .collect::<Vec<TrackId>>();
-        let streams = client.streams(&ids).await;
+        let streams = match client.streams(token, &ids).await {
+            Err(Error::AuthenticationRejected) => return Err(Error::AuthenticationRejected),
+            streams => streams,
+        };
         Ok(Batch { page, streams })
     }
 }

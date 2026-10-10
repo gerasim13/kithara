@@ -3,12 +3,18 @@
 //! from its configuration.
 #![forbid(unsafe_code)]
 
+mod access;
 mod context;
 mod page;
 mod playable;
+mod secrets;
 mod source;
 
-pub use context::{Cause, Context, Environment, Factory, RegisterError, SectionError};
+pub use access::{AccessToken, KeyAccess};
+pub use context::{
+    Cause, Context, Environment, Factory, OpenUrlError, RegisterError, SectionError,
+};
 pub use page::{Document, Endpoint, Registration, SourcePage};
 pub use playable::{NoSource, Playable};
-pub use source::{BranchNode, LibrarySource, PAGES, PageStatus, worded};
+pub use secrets::{SecretError, Secrets};
+pub use source::{BranchNode, LibrarySource, PAGES, PageStatus, SECTIONS, worded};

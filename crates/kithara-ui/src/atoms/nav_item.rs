@@ -1,6 +1,7 @@
 use crate::{
     atoms::{icon::mark::Marked, painter::NavData},
     draw::{DrawListBuilder, Pt, Rect, Rgba, TRANSPARENT, Transform},
+    module::TextStyle,
     render::Skin,
     shaping::TextContext,
     skin::{NavSkin, TextRoleSkin},
@@ -25,24 +26,27 @@ pub(crate) struct NavItem {
 struct Face {
     background: Rgba,
     content: Rgba,
+    icon: Rgba,
     marker: Rgba,
 }
 
 impl NavItem {
-    pub(crate) fn new(skin: &Skin) -> Self {
+    pub(crate) fn new(skin: &Skin, style: Option<TextStyle>) -> Self {
         Self {
             active: Face {
                 background: skin.rgba(skin.nav.selected_fill),
                 content: skin.rgba(skin.nav.text.color),
+                icon: skin.rgba(skin.nav.text.color),
                 marker: skin.rgba(skin.nav.marker_color),
             },
             idle: Face {
                 background: TRANSPARENT,
                 content: skin.rgba(skin.nav.idle_text_color),
+                icon: skin.rgba(skin.nav.idle_icon_color),
                 marker: TRANSPARENT,
             },
             metrics: skin.nav,
-            role: skin.nav.text,
+            role: style.map_or(skin.nav.text, |style| skin.text.role(style)),
         }
     }
 
@@ -72,7 +76,7 @@ impl NavItem {
         let marker = self.marker(bounds);
         list.fill_rect(bounds, face.background);
         list.fill_rect(marker, face.marker);
-        self.paint_content(list, text, data, face.content, bounds, marker);
+        self.paint_content(list, text, data, face, bounds, marker);
     }
 
     fn paint_content(
@@ -80,26 +84,31 @@ impl NavItem {
         list: &mut DrawListBuilder,
         text: &mut TextContext,
         data: &NavData,
-        content: Rgba,
+        face: &Face,
         bounds: Rect,
         marker: Rect,
     ) {
         let x = marker.x + marker.w + self.metrics.text_pad_x;
-        let width =
-            Marked::new(data.mark, self.metrics.icon_size).paint(list, text, x, bounds, content);
+        let icon = Rect {
+            x,
+            w: self.metrics.icon_box,
+            ..bounds
+        };
+        Marked::new(data.mark, self.metrics.icon_size).centred(list, text, icon, face.icon);
 
         if data.label.is_empty() {
             return;
         }
-        let run = text.shape(&data.label, self.role, None);
+        let label = self.role.cased(&data.label);
+        let run = text.shape(&label, self.role, None);
         list.text(
             &run,
-            &data.label,
+            &label,
             Transform::translate(Pt {
-                x: x + width + self.metrics.icon_gap,
+                x: x + self.metrics.icon_box + self.metrics.icon_gap,
                 y: bounds.y + (bounds.h - run.height()) / 2.0,
             }),
-            content,
+            face.content,
         );
     }
 }
@@ -136,7 +145,7 @@ mod tests {
         let mark = Mark::Glyph(char::from(lucide_icons::Icon::Disc));
         let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut builder = DrawListBuilder::default();
-        NavItem::new(skin).paint(&mut builder, &mut text, &data(mark, true), bounds);
+        NavItem::new(skin, None).paint(&mut builder, &mut text, &data(mark, true), bounds);
         let list = builder.finish();
 
         let [background, marker, icon, label] = list.commands() else {
@@ -178,7 +187,7 @@ mod tests {
             panic!("the fixture mark is a glyph");
         };
         assert_eq!(icon_content, &glyph.to_string());
-        assert_eq!(icon_transform.dx, 19.0);
+        assert_eq!(icon_transform.dx, 17.0 + (14.0 - icon_run.width()) / 2.0);
         assert_eq!(
             icon_transform.dy,
             bounds.y + (bounds.h - icon_run.height()) / 2.0
@@ -199,10 +208,7 @@ mod tests {
             Some(&GlyphFace::Embedded(FontId::JetBrainsMonoRegular))
         );
         assert_eq!(label_content, "PRIMITIVES");
-        assert_eq!(
-            label_transform.dx,
-            icon_transform.dx + icon_run.width() + 8.0
-        );
+        assert_eq!(label_transform.dx, 17.0 + 14.0 + 8.0);
         assert_eq!(
             label_transform.dy,
             bounds.y + (bounds.h - label_run.height()) / 2.0
@@ -215,7 +221,7 @@ mod tests {
         let skin = builtin::skin();
         let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut builder = DrawListBuilder::default();
-        NavItem::new(skin).paint(
+        NavItem::new(skin, None).paint(
             &mut builder,
             &mut text,
             &data(Mark::Glyph(char::from(lucide_icons::Icon::Disc)), false),
@@ -249,8 +255,44 @@ mod tests {
 
         assert_eq!(background.a, 0.0);
         assert_eq!(marker.a, 0.0);
-        assert_eq!(*icon_color, skin.palette.text_dim);
+        assert_eq!(*icon_color, skin.palette.icon);
         assert_eq!(*label_color, skin.palette.text_dim);
+    }
+
+    /// A nav item given a text role sets its label in that role's face and
+    /// case.
+    #[kithara::test]
+    fn a_nav_item_given_a_text_role_sets_its_label_in_that_role() {
+        let skin = builtin::skin();
+        let mut text = TextContext::from(skin.text_resources.as_ref());
+        let mut label = |style| {
+            let mut builder = DrawListBuilder::default();
+            NavItem::new(skin, style).paint(
+                &mut builder,
+                &mut text,
+                &NavData {
+                    active: true,
+                    mark: Mark::Glyph(char::from(lucide_icons::Icon::Disc)),
+                    label: "Zvuk".to_owned(),
+                },
+                Rect {
+                    h: 30.0,
+                    w: 198.0,
+                    x: 0.0,
+                    y: 0.0,
+                },
+            );
+            let list = builder.finish();
+            let [.., DrawCmd::Text { content, run, .. }] = list.commands() else {
+                panic!("a nav item must end with its label");
+            };
+            (content.clone(), run.width())
+        };
+        let ((content, cell), (_, default)) = (label(Some(TextStyle::Cell)), label(None));
+
+        assert_eq!(content, "ZVUK");
+        assert_eq!(cell, text.shape("ZVUK", skin.text.cell, None).width());
+        assert_ne!(cell, default);
     }
 
     /// Turning to another page is a repaint, not a rebuild, so one mounted item
@@ -264,7 +306,7 @@ mod tests {
             x: 0.0,
             y: 0.0,
         };
-        let item = NavItem::new(skin);
+        let item = NavItem::new(skin, None);
         let mark = Mark::Glyph(char::from(lucide_icons::Icon::Disc));
         let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut draw = |active| {

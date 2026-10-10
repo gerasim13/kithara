@@ -32,11 +32,15 @@ impl Control for Text {
             | TextStyle::PivotValue => SizeSpec::new(Dim::Shrink, Dim::Shrink),
             TextStyle::Body
             | TextStyle::Brand
+            | TextStyle::Cell
+            | TextStyle::ModuleTitle
             | TextStyle::DeckLetter
             | TextStyle::TrackTitle
             | TextStyle::Telemetry
             | TextStyle::MicroLabel
-            | TextStyle::Section => skin.text.size,
+            | TextStyle::Note
+            | TextStyle::Section
+            | TextStyle::WindowTitle => skin.text.size,
         }
     }
 }

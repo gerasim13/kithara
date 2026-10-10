@@ -18,8 +18,8 @@ use crate::{
     common::project::{
         AuditClippyConfig, HealthConfig, KnownFlake, LintExcludeConfig, OrphansConfig, PerfConfig,
         ProjectConfig, ProjectIdentity, QualityConfig, StressConfig, TestCargoOptions,
-        TestCargoRunner, TestCommandConfig, TestFlashConfig, TestLaneConfig, TestNetBackendConfig,
-        TestNextestRunner, TestNoBlockConfig, TestRunner, WorkspaceScan,
+        TestCargoRunner, TestCommandConfig, TestFlashConfig, TestLaneConfig, TestLoadConfig,
+        TestNetBackendConfig, TestNextestRunner, TestNoBlockConfig, TestRunner, WorkspaceScan,
     },
     consts,
     touched::Touched,
@@ -187,6 +187,7 @@ fn synthetic_project() -> ProjectConfig {
             undeclared_toggles: vec![
                 consts::FLASH_TOGGLE.to_owned(),
                 consts::NO_BLOCK_TOGGLE.to_owned(),
+                consts::LOAD_TOGGLE.to_owned(),
             ],
             ..TestLaneConfig::default()
         },
@@ -195,6 +196,7 @@ fn synthetic_project() -> ProjectConfig {
         "detector".to_owned(),
         TestLaneConfig {
             default_no_block: Some(true),
+            default_load: Some(true),
             cargo: packages(&["demo-detector"]),
             ..TestLaneConfig::default()
         },
@@ -246,14 +248,14 @@ fn synthetic_project() -> ProjectConfig {
             nextest_config: ".config/nextest.toml".to_owned(),
             known_flakes: Vec::new(),
             features: vec!["base-feature".to_owned()],
-            flash: TestFlashConfig {
-                features: vec!["virtual-time".to_owned()],
-                default: true,
-            },
-            no_block: TestNoBlockConfig {
-                features: vec!["nb-detect".to_owned()],
-                default: false,
-            },
+            flash: toml::from_str::<TestFlashConfig>("features = ['virtual-time']\ndefault = true")
+                .expect("flash config"),
+            no_block: toml::from_str::<TestNoBlockConfig>(
+                "features = ['nb-detect']\ndefault = false",
+            )
+            .expect("no-block config"),
+            load: toml::from_str::<TestLoadConfig>("features = ['cpu-load']\ndefault = false")
+                .expect("load config"),
             loom_lane: "loom".to_owned(),
         },
         lint_exclude: LintExcludeConfig::default(),
@@ -301,6 +303,7 @@ fn lane_features_flash_and_backend() {
         LaneToggles {
             flash: true,
             no_block: false,
+            load: false,
         },
         "native",
     )
@@ -316,6 +319,7 @@ fn lane_features_flash_and_backend() {
         LaneToggles {
             flash: false,
             no_block: false,
+            load: false,
         },
         "http",
     )
@@ -331,6 +335,17 @@ fn features_default_request_omits_no_block() {
 
     let feats = features_for(test, &test.default_lane, &request).expect("features");
     assert!(!feats.contains("nb-detect"));
+}
+
+#[test]
+fn features_default_request_omits_load() {
+    let project = synthetic_project();
+    let request = TestRequest::parse(&[]).expect("parse request");
+
+    let feats =
+        features_for(&project.test, &project.test.default_lane, &request).expect("features");
+
+    assert!(!feats.contains("cpu-load"));
 }
 
 #[test]
@@ -422,6 +437,44 @@ fn no_block_off_keeps_no_block_features_out() {
 }
 
 #[test]
+fn load_on_adds_features_and_composes_with_other_toggles_and_backend() {
+    let project = synthetic_project();
+    let request = TestRequest::parse(&[
+        "--flash=on".to_owned(),
+        "--no-block=on".to_owned(),
+        "--load=on".to_owned(),
+        "--net-backend=native".to_owned(),
+    ])
+    .expect("parse request");
+
+    let feats =
+        features_for(&project.test, &project.test.default_lane, &request).expect("features");
+
+    assert_eq!(
+        feats,
+        BTreeSet::from([
+            "base-feature".to_owned(),
+            "cpu-load".to_owned(),
+            "demo/native-net".to_owned(),
+            "nb-detect".to_owned(),
+            "virtual-time".to_owned(),
+        ])
+    );
+}
+
+#[test]
+fn load_off_keeps_load_features_out() {
+    let project = synthetic_project();
+    let request = TestRequest::parse(&["--load=off".to_owned()]).expect("parse request");
+
+    let feats =
+        features_for(&project.test, &project.test.default_lane, &request).expect("features");
+
+    assert!(!feats.contains("cpu-load"));
+    assert!(feats.contains("virtual-time"));
+}
+
+#[test]
 fn a_lane_that_asks_for_the_detector_gets_it_without_a_flag() {
     let project = synthetic_project();
     let test = &project.test;
@@ -430,6 +483,16 @@ fn a_lane_that_asks_for_the_detector_gets_it_without_a_flag() {
     let feats = features_for(test, "detector", &request).expect("features");
 
     assert!(feats.contains("nb-detect"));
+}
+
+#[test]
+fn a_lane_that_asks_for_load_gets_it_without_a_flag() {
+    let project = synthetic_project();
+    let request = TestRequest::parse(&[]).expect("parse request");
+
+    let feats = features_for(&project.test, "detector", &request).expect("features");
+
+    assert!(feats.contains("cpu-load"));
 }
 
 #[test]
@@ -444,6 +507,17 @@ fn an_explicit_off_overrides_the_lane_detector_default() {
 }
 
 #[test]
+fn an_explicit_off_overrides_the_lane_load_default() {
+    let project = synthetic_project();
+    let request = TestRequest::parse(&["--load=off".to_owned()]).expect("parse request");
+
+    let feats = features_for(&project.test, "detector", &request).expect("features");
+
+    assert!(!feats.contains("cpu-load"));
+    assert!(feats.contains("nb-detect"));
+}
+
+#[test]
 fn a_lane_without_the_detector_stays_without_it_when_the_gate_asks_for_it() {
     let project = synthetic_project();
     let test = &project.test;
@@ -454,6 +528,60 @@ fn a_lane_without_the_detector_stays_without_it_when_the_gate_asks_for_it() {
     assert!(
         !feats.contains("nb-detect"),
         "a lane whose packages do not declare the feature cannot be given it",
+    );
+}
+
+#[test]
+fn a_lane_without_load_stays_without_it_when_asked_for_it() {
+    let mut project = synthetic_project();
+    project.test.load.enabled = true;
+    project
+        .test
+        .lanes
+        .get_mut("toolsmith")
+        .expect("toolsmith lane")
+        .default_load = Some(true);
+
+    for args in [vec![], vec!["--load=on".to_owned()]] {
+        let request = TestRequest::parse(&args).expect("parse request");
+        let choice = requested(&project.test, "toolsmith", Some(&request)).expect("lane");
+        let feats = features_for(&project.test, "toolsmith", &request).expect("features");
+
+        assert!(!choice.toggles.load);
+        assert!(!feats.contains("cpu-load"));
+    }
+}
+
+#[test]
+fn load_resolves_cli_then_lane_then_project_default() {
+    let mut project = synthetic_project();
+    project.test.load.enabled = true;
+    let default = TestRequest::parse(&[]).expect("parse request");
+
+    assert!(
+        features_for(&project.test, "workspace", &default)
+            .expect("features")
+            .contains("cpu-load")
+    );
+
+    project
+        .test
+        .lanes
+        .get_mut("workspace")
+        .expect("workspace lane")
+        .default_load = Some(false);
+
+    assert!(
+        !features_for(&project.test, "workspace", &default)
+            .expect("features")
+            .contains("cpu-load")
+    );
+
+    let explicit = TestRequest::parse(&["--load=on".to_owned()]).expect("parse request");
+    assert!(
+        features_for(&project.test, "workspace", &explicit)
+            .expect("features")
+            .contains("cpu-load")
     );
 }
 
@@ -488,6 +616,40 @@ fn no_block_space_form_parses_to_on() {
 
     let feats = features_for(test, &test.default_lane, &request).expect("features");
     assert!(feats.contains("nb-detect"));
+}
+
+#[test]
+fn load_equals_and_space_forms_parse_all_toggle_values() {
+    for (value, expected) in [
+        ("on", true),
+        ("true", true),
+        ("off", false),
+        ("false", false),
+    ] {
+        for args in [
+            vec![format!("--load={value}")],
+            vec!["--load".to_owned(), value.to_owned()],
+        ] {
+            let request = TestRequest::parse(&args).expect("parse request");
+
+            assert_eq!(request.load, Some(expected));
+            assert!(request.passthrough.is_empty());
+        }
+    }
+}
+
+#[test]
+fn load_invalid_or_missing_value_is_a_typed_error() {
+    for args in [
+        vec!["--load".to_owned()],
+        vec!["--load=".to_owned()],
+        vec!["--load=bogus".to_owned()],
+        vec!["--load".to_owned(), "bogus".to_owned()],
+    ] {
+        let error = TestRequest::parse(&args).expect_err("parse invalid load");
+
+        assert!(error.to_string().contains("load"));
+    }
 }
 
 #[test]
@@ -555,6 +717,7 @@ fn the_inventory_lists_the_same_selection_the_run_builds() {
             toggles: LaneToggles {
                 flash: true,
                 no_block: true,
+                load: true,
             },
         },
     )
@@ -574,7 +737,7 @@ fn the_inventory_lists_the_same_selection_the_run_builds() {
             "list",
             "--workspace",
             "--features",
-            "base-feature,nb-detect,virtual-time",
+            "base-feature,cpu-load,nb-detect,virtual-time",
             "--message-format",
             "json",
         ]
@@ -615,6 +778,26 @@ fn loom_flag_with_no_block_on_composes_features() {
             "base-feature".to_owned(),
             "demo/loom".to_owned(),
             "nb-detect".to_owned(),
+        ])
+    );
+}
+
+#[test]
+fn loom_flag_with_load_on_composes_features() {
+    let project = synthetic_project();
+    let request = TestRequest::parse(&["--loom=on".to_owned(), "--load=on".to_owned()])
+        .expect("parse request");
+
+    let name = select_lane(&project.test, &request).expect("select loom lane");
+    let features = features_for(&project.test, name, &request).expect("loom features");
+
+    assert_eq!(name, "loom");
+    assert_eq!(
+        features,
+        BTreeSet::from([
+            "base-feature".to_owned(),
+            "cpu-load".to_owned(),
+            "demo/loom".to_owned(),
         ])
     );
 }

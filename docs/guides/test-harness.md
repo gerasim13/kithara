@@ -21,6 +21,9 @@ validation scope.
 - `flash` is the default axis and defaults ON.
 - `no-block` is off by default; enable with `--no-block=on` for poll-blocking
   detector coverage.
+- `load` is off by default; `--load=on` spins one thread per CPU beside every
+  `#[kithara::test]` body, for the body's whole length. It combines with
+  either clock: CPU contention reorders real threads under flash too.
 - `just ci gate` keeps two explicit lanes: flash ON + no-block ON, and flash
   OFF.
 - Tests that verify detector behavior are gated behind the `no-block` feature.
@@ -34,6 +37,33 @@ validation scope.
   `flash=off` is required because the test is real-time or live I/O, say so.
 - Loom models run through `just test run --loom=on`; add `--flash=on` only when
   the modeled contract also requires Flash virtual-time behavior.
+
+## Flaky Tests
+
+A flake is judged from stress evidence, never from reading code or from local
+repeat loops.
+
+1. Start from the newest stress report on `main` (the nightly run's
+  `stress-evidence-*` artifact): the failure rate per mode, the symptom
+  clusters, and the flight events that only failing attempts carry.
+1. Reproduce the one test, not the sweep. Dispatch the Stress workflow with
+  `filter` naming the test, `mode` set to
+  `reproduction-load-flash-on reproduction-load-flash-off`, and a `count` of
+  100-200 (`just ci stress --filter ... --mode ...` is the same run). A full
+  sweep supplies CPU contention only as a side effect of other tests and
+  takes hours; filtered without `load`, the test runs on an idle machine
+  where a scheduling race does not show.
+1. Read the cause from that report: flight event signatures present in failed
+  attempts and absent from passed ones, hang dumps, and the wait graph. When
+  the evidence is too thin, widen the test's `tracing(...)` filter on a
+  disposable branch and repeat step 2.
+1. Write a deterministic regression test from the cause (test-server gates,
+  fixture delays, a forced ordering) that fails without load. Load finds a
+  race; it is not the proof of one.
+1. Fix the owner. The regression test passes, and step 2 repeated at the same
+  count reports no failure. Never weaken the flaky test's assertion or budget.
+
+`just test run --load=on -E 'test(<name>)'` is a local look, not a verdict.
 
 ## Harness Shape
 

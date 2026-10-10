@@ -11,23 +11,44 @@ client-reqwest = ["kithara-net/client-reqwest"]
 tls-rustls = ["kithara-net/tls-rustls"]
 client-wreq = ["kithara-net/client-wreq"]
 flash = ["kithara-net/flash", "kithara-test-utils/flash"]
+# Keep secrets in the operating system's store instead of the configuration overlay.
+keystore = [
+    "dep:apple-native-keyring-store",
+    "dep:windows-native-keyring-store",
+    "dep:zbus-secret-service-keyring-store",
+]
 
 [dependencies]
 kithara-net = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-ui = { workspace = true, default-features = false, features = ["render"] }
 
+derive_more = { workspace = true }
+keyring-core = { workspace = true }
 serde = { workspace = true }
 serde_yaml_ng = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 url = { workspace = true }
+webbrowser = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
+zbus-secret-service-keyring-store = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = { workspace = true, optional = true }
+
 [dev-dependencies]
 kithara-net = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 kithara-test-utils = { workspace = true }
+
+keyring-core = { workspace = true, features = ["sample"] }
 
 [lints]
 workspace = true

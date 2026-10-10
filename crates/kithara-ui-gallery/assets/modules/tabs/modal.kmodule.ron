@@ -56,7 +56,7 @@
                                 Text(
                                     id: "note",
                                     style: MicroLabel,
-                                    label: "PRESS OUTSIDE, ESC OR DONE TO CLOSE.",
+                                    label: "ESC OR DONE TO CLOSE.",
                                     size: (w: Fill, h: Fixed(36.0)),
                                 ),
                             ],

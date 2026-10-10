@@ -33,7 +33,7 @@ pub(crate) fn spawn(
         driven.block_on(serve(build, built_tx, commands, cancel));
     });
     match runtime.block_on(built) {
-        Ok(Ok(_)) => Ok(Driver { thread }),
+        Ok(Ok(())) => Ok(Driver { thread }),
         Ok(Err(error)) => {
             thread.join().map_err(|_| EngineError::Panicked)?;
             Err(error)

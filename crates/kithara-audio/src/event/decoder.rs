@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use kithara_decode::GaplessInfo;
 use kithara_events::Event;
 use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, ContainerFormat, SeekEpoch};
@@ -52,23 +53,6 @@ pub enum FrameDomain {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct GaplessSpan {
-    pub leading_frames: u64,
-    pub trailing_frames: u64,
-}
-
-impl GaplessSpan {
-    #[must_use]
-    pub const fn new(leading_frames: u64, trailing_frames: u64) -> Self {
-        Self {
-            leading_frames,
-            trailing_frames,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResamplerKind {
     Rubato,
     Apple,
@@ -91,7 +75,7 @@ pub enum DecoderEvent {
         variant: Option<u32>,
         base_offset: u64,
         duration: Option<Duration>,
-        gapless: Option<GaplessSpan>,
+        gapless: Option<GaplessInfo>,
     },
     DecodeError {
         class: DecodeErrorClass,

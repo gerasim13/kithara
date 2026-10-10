@@ -190,7 +190,7 @@ const UNANSWERED: Points = Points {
     two: None,
 };
 
-fn registry() -> kithara_ui::mock::TestRegistry {
+fn registry() -> kithara_ui::mock::MapEndpoints {
     let mut registry = kithara_ui::mock::player_registry();
     for id in ["scene.one", "scene.two"] {
         registry.insert(

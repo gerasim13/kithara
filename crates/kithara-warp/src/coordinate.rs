@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, num::NonZeroU32};
+use std::{cmp::Ordering, marker::PhantomData, num::NonZeroU32};
 
 use kithara_signal::{SessionEpoch, SessionFrame};
 use num_traits::cast::ToPrimitive;
@@ -26,26 +26,45 @@ pub enum MapCoordinateError {
     InexactSessionFrame,
 }
 
+pub enum AssetFrameTag {}
+
+pub enum FrameUncertaintyTag {}
+
 /// A continuous frame coordinate in decoded asset-native audio.
-#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, derive_more::Into)]
-pub struct AssetFrame(f64);
+pub type AssetFrame = FrameQuantity<AssetFrameTag>;
 
-impl AssetFrame {
-    pub(crate) const ZERO: Self = Self(0.0);
+#[derive_where::derive_where(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
+#[repr(transparent)]
+pub struct FrameQuantity<Tag>(f64, #[derive_where(skip(Debug))] PhantomData<fn() -> Tag>);
 
-    /// Creates a finite, non-negative asset-frame coordinate.
+impl<Tag> FrameQuantity<Tag> {
+    pub(crate) const ZERO: Self = Self(0.0, PhantomData);
+
+    fn nonnegative(value: f64, negative: MapCoordinateError) -> Result<Self, MapCoordinateError> {
+        if !value.is_finite() {
+            return Err(MapCoordinateError::NonFinite);
+        }
+        if value < 0.0 {
+            return Err(negative);
+        }
+        Ok(Self(value, PhantomData))
+    }
+}
+
+impl<Tag> From<FrameQuantity<Tag>> for f64 {
+    fn from(quantity: FrameQuantity<Tag>) -> Self {
+        quantity.0
+    }
+}
+
+impl FrameQuantity<AssetFrameTag> {
+    /// Creates a finite, non-negative asset coordinate.
     ///
     /// # Errors
     ///
     /// Returns [`MapCoordinateError`] for a non-finite or negative value.
     pub fn new(value: f64) -> Result<Self, MapCoordinateError> {
-        if !value.is_finite() {
-            return Err(MapCoordinateError::NonFinite);
-        }
-        if value < 0.0 {
-            return Err(MapCoordinateError::NegativeAssetFrame);
-        }
-        Ok(Self(value))
+        Self::nonnegative(value, MapCoordinateError::NegativeAssetFrame)
     }
 }
 
@@ -115,25 +134,16 @@ impl TryFrom<BeatOrdinal> for Beat {
 }
 
 /// Maximum absolute error measured in the grid's native frame axis.
-#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, derive_more::Into)]
-pub struct FrameUncertainty(f64);
+pub type FrameUncertainty = FrameQuantity<FrameUncertaintyTag>;
 
-impl FrameUncertainty {
-    pub(crate) const ZERO: Self = Self(0.0);
-
+impl FrameQuantity<FrameUncertaintyTag> {
     /// Creates a finite, non-negative uncertainty.
     ///
     /// # Errors
     ///
     /// Returns [`MapCoordinateError`] for a non-finite or negative value.
     pub fn new(value: f64) -> Result<Self, MapCoordinateError> {
-        if !value.is_finite() {
-            return Err(MapCoordinateError::NonFinite);
-        }
-        if value < 0.0 {
-            return Err(MapCoordinateError::NegativeUncertainty);
-        }
-        Ok(Self(value))
+        Self::nonnegative(value, MapCoordinateError::NegativeUncertainty)
     }
 }
 
@@ -344,7 +354,32 @@ pub(crate) enum AxisKind {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{AssetFrame, Beat, MapCoordinateError};
+    use super::{AssetFrame, Beat, FrameUncertainty, MapCoordinateError};
+
+    #[kithara::test]
+    fn frame_quantities_preserve_domains_without_marker_bounds() {
+        fn assert_traits<Value: Clone + Copy + std::fmt::Debug + Default + PartialOrd>() {}
+
+        assert_traits::<AssetFrame>();
+        assert_traits::<FrameUncertainty>();
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(
+                FrameUncertainty::new(value),
+                Err(MapCoordinateError::NonFinite)
+            );
+        }
+        assert_eq!(
+            FrameUncertainty::new(-1.0),
+            Err(MapCoordinateError::NegativeUncertainty)
+        );
+        assert_eq!(f64::from(FrameUncertainty::default()), 0.0);
+        assert_eq!(
+            f64::from(FrameUncertainty::new(3.5).expect("uncertainty")),
+            3.5
+        );
+        assert_eq!(size_of::<FrameUncertainty>(), size_of::<f64>());
+        assert_eq!(size_of::<AssetFrame>(), size_of::<f64>());
+    }
 
     #[kithara::test]
     fn musical_coordinates_preserve_the_validated_domain() {

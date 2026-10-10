@@ -9,6 +9,9 @@ use kithara_ui::{
 /// Library page collection and origin for source caption errors.
 pub const PAGES: &str = "app-library/pages";
 
+/// Settings window collection a source fills with its section.
+pub const SECTIONS: &str = "app-settings/sections";
+
 /// One branch of the library tree and the page its nodes show.
 pub trait LibrarySource {
     /// A read its page declares, by the endpoint's name under `source.`.
@@ -36,20 +39,21 @@ pub trait LibrarySource {
 
     fn select(&mut self, node: &str);
 
-    fn status(&self) -> PageStatus;
+    fn status(&self) -> PageStatus<'_>;
 
     fn tick(&mut self);
 }
 
-/// Where a source's page stands; the shell words it.
+/// Where a source's page stands; the shell words it unless the source
+/// gives a reason worded by the catalog it was built with.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PageStatus {
+pub enum PageStatus<'a> {
     /// It lists at least one row.
     Ready,
     Loading,
     /// It has no row to list.
     Empty,
-    Unreadable,
+    Unreadable(Option<&'a str>),
 }
 
 /// One node of a source's branch.

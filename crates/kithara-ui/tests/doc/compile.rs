@@ -1122,7 +1122,7 @@ fn knob_caption_is_document_text_and_optional() {
     assert_eq!(captions, vec![Some("LOW"), None]);
 }
 
-fn block_registry() -> kithara_ui::mock::TestRegistry {
+fn block_registry() -> kithara_ui::mock::MapEndpoints {
     let mut registry = kithara_ui::mock::player_registry();
     registry.insert(
         EndpointCategory::Model,
@@ -2755,8 +2755,8 @@ fn a_tabs_compiles_the_page_it_stands_at() {
     .unwrap();
 
     assert_eq!(
-        ui.views().pages()["shown"].shown,
-        "one",
+        ui.views().pages()["shown"].shown.as_deref(),
+        Some("one"),
         "a state standing nowhere must show the page the document calls initial"
     );
     let mut view = ViewState::new();

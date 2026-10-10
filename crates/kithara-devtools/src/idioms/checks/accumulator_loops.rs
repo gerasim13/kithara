@@ -1,12 +1,12 @@
 use anyhow::Result;
 use syn::{
-    BinOp, Block, Expr, ExprAwait, ExprBinary, ExprBreak, ExprContinue, ExprForLoop, ExprIf,
-    ExprMethodCall, ExprReturn, Lit, Pat, PatIdent, Stmt,
+    BinOp, Block, Expr, ExprAwait, ExprBinary, ExprForLoop, ExprIf, ExprMethodCall, Lit, Pat,
+    PatIdent, Stmt,
     spanned::Spanned,
     visit::{self, Visit},
 };
 
-use super::{Check, Context};
+use super::{Check, Context, jump::body_has_jump};
 use crate::{
     common::{
         violation::Violation,
@@ -255,12 +255,6 @@ fn is_lit_one(e: &Expr) -> bool {
     int.base10_digits() == "1"
 }
 
-fn body_has_jump(b: &Block) -> bool {
-    let mut v = JumpFinder { found: false };
-    v.visit_block(b);
-    v.found
-}
-
 /// The accumulated expression contains an `.await`, so the loop is a
 /// *sequential async* accumulation. There is no pure `.map().collect()` /
 /// `.map().sum()` equivalent: rewriting it requires `futures::stream`
@@ -286,29 +280,6 @@ impl<'ast> Visit<'ast> for AwaitFinder {
     fn visit_expr_closure(&mut self, _: &'ast syn::ExprClosure) {}
     fn visit_expr_for_loop(&mut self, _: &'ast ExprForLoop) {}
     fn visit_expr_loop(&mut self, _: &'ast syn::ExprLoop) {}
-    fn visit_expr_while(&mut self, _: &'ast syn::ExprWhile) {}
-}
-
-struct JumpFinder {
-    found: bool,
-}
-
-impl<'ast> Visit<'ast> for JumpFinder {
-    fn visit_expr_break(&mut self, _: &'ast ExprBreak) {
-        self.found = true;
-    }
-
-    fn visit_expr_closure(&mut self, _: &'ast syn::ExprClosure) {}
-
-    fn visit_expr_continue(&mut self, _: &'ast ExprContinue) {
-        self.found = true;
-    }
-
-    fn visit_expr_for_loop(&mut self, _: &'ast ExprForLoop) {}
-    fn visit_expr_loop(&mut self, _: &'ast syn::ExprLoop) {}
-    fn visit_expr_return(&mut self, _: &'ast ExprReturn) {
-        self.found = true;
-    }
     fn visit_expr_while(&mut self, _: &'ast syn::ExprWhile) {}
 }
 

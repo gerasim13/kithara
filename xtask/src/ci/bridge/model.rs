@@ -3,6 +3,8 @@ use std::path::Path;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::ci::run::PipelineKind;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Direction {
     Equal,
@@ -42,7 +44,15 @@ pub(super) enum PipelineObservation {
     Invalid(String),
 }
 
+/// The parent names each dispatcher `dispatch:<kind>` for the `KITHARA_PIPELINE_KIND`
+/// it sets. The judge accepts only the kind it started or expects, so a run of
+/// another kind can never pass for it.
+pub(super) fn dispatcher(kind: PipelineKind) -> String {
+    format!("dispatch:{}", kind.name())
+}
+
 pub(super) fn pipeline_observation(
+    kind: PipelineKind,
     parent: &str,
     children: &[(&str, Option<&str>)],
 ) -> PipelineObservation {
@@ -60,13 +70,15 @@ pub(super) fn pipeline_observation(
     }
     let [(name, Some(child))] = children else {
         return PipelineObservation::Invalid(format!(
-            "successful quarantine parent must have exactly one downstream child; observed {}",
+            "successful {} parent must have exactly one downstream child; observed {}",
+            kind.name(),
             children.len()
         ));
     };
-    if *name != "dispatch:quarantine" {
+    if *name != dispatcher(kind) {
         return PipelineObservation::Invalid(format!(
-            "successful quarantine parent produced unexpected child {name:?}"
+            "successful {} parent produced unexpected child {name:?}",
+            kind.name()
         ));
     }
     match *child {
@@ -141,6 +153,10 @@ pub(super) fn regular_file(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use clap::ValueEnum;
+
     use super::*;
 
     #[test]
@@ -179,15 +195,20 @@ mod tests {
     #[test]
     fn successful_parent_requires_exactly_one_successful_child() {
         assert_eq!(
-            pipeline_observation("success", &[("dispatch:quarantine", Some("success"))]),
+            pipeline_observation(
+                PipelineKind::Quarantine,
+                "success",
+                &[("dispatch:quarantine", Some("success"))]
+            ),
             PipelineObservation::Succeeded
         );
         assert!(matches!(
-            pipeline_observation("success", &[]),
+            pipeline_observation(PipelineKind::Quarantine, "success", &[]),
             PipelineObservation::Invalid(_)
         ));
         assert!(matches!(
             pipeline_observation(
+                PipelineKind::Quarantine,
                 "success",
                 &[
                     ("dispatch:quarantine", Some("success")),
@@ -197,11 +218,19 @@ mod tests {
             PipelineObservation::Invalid(_)
         ));
         assert!(matches!(
-            pipeline_observation("success", &[("dispatch:quarantine", None)]),
+            pipeline_observation(
+                PipelineKind::Quarantine,
+                "success",
+                &[("dispatch:quarantine", None)]
+            ),
             PipelineObservation::Invalid(_)
         ));
         assert!(matches!(
-            pipeline_observation("success", &[("dispatch:main", Some("success"))]),
+            pipeline_observation(
+                PipelineKind::Quarantine,
+                "success",
+                &[("dispatch:main", Some("success"))]
+            ),
             PipelineObservation::Invalid(_)
         ));
     }
@@ -213,15 +242,19 @@ mod tests {
     #[test]
     fn a_cancellation_is_carried_apart_from_a_failure() {
         assert_eq!(
-            pipeline_observation("canceled", &[]),
+            pipeline_observation(PipelineKind::Quarantine, "canceled", &[]),
             PipelineObservation::Cancelled
         );
         assert_eq!(
-            pipeline_observation("success", &[("dispatch:quarantine", Some("canceled"))]),
+            pipeline_observation(
+                PipelineKind::Quarantine,
+                "success",
+                &[("dispatch:quarantine", Some("canceled"))]
+            ),
             PipelineObservation::Cancelled
         );
         assert_eq!(
-            pipeline_observation("failed", &[]),
+            pipeline_observation(PipelineKind::Quarantine, "failed", &[]),
             PipelineObservation::Failed("failed".into())
         );
     }
@@ -229,16 +262,78 @@ mod tests {
     #[test]
     fn running_and_terminal_child_observations_are_distinct() {
         assert_eq!(
-            pipeline_observation("running", &[]),
+            pipeline_observation(PipelineKind::Quarantine, "running", &[]),
             PipelineObservation::Running
         );
         assert_eq!(
-            pipeline_observation("success", &[("dispatch:quarantine", Some("running"))]),
+            pipeline_observation(
+                PipelineKind::Quarantine,
+                "success",
+                &[("dispatch:quarantine", Some("running"))]
+            ),
             PipelineObservation::Running
         );
         assert_eq!(
-            pipeline_observation("success", &[("dispatch:quarantine", Some("failed"))]),
+            pipeline_observation(
+                PipelineKind::Quarantine,
+                "success",
+                &[("dispatch:quarantine", Some("failed"))]
+            ),
             PipelineObservation::Failed("failed".into())
         );
+    }
+
+    #[test]
+    fn a_successful_parent_is_judged_by_the_dispatcher_of_its_own_kind() {
+        let main = dispatcher(PipelineKind::Main);
+        let quarantine = dispatcher(PipelineKind::Quarantine);
+
+        assert_eq!(
+            pipeline_observation(PipelineKind::Main, "success", &[(&main, Some("success"))]),
+            PipelineObservation::Succeeded
+        );
+        assert!(matches!(
+            pipeline_observation(
+                PipelineKind::Main,
+                "success",
+                &[(&quarantine, Some("success"))]
+            ),
+            PipelineObservation::Invalid(_)
+        ));
+        assert_eq!(
+            pipeline_observation(PipelineKind::Main, "success", &[(&main, Some("failed"))]),
+            PipelineObservation::Failed("failed".into())
+        );
+    }
+
+    #[test]
+    fn every_pipeline_kind_has_its_dispatcher_in_the_parent_pipeline() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask has a workspace root");
+        let pipeline = fs::read_to_string(root.join(".gitlab-ci.yml"))
+            .expect("the parent pipeline definition is readable");
+
+        for &kind in PipelineKind::value_variants() {
+            let job = format!("{}:", dispatcher(kind));
+            let mut lines = pipeline.lines();
+            lines.find(|line| *line == job).unwrap_or_else(|| {
+                panic!("the parent pipeline defines the {} dispatcher", kind.name())
+            });
+            let mut block = lines.take_while(|line| {
+                line.is_empty()
+                    || line.starts_with('#')
+                    || line.starts_with(' ')
+                    || line.starts_with('\t')
+            });
+
+            assert!(
+                block.any(|line| {
+                    line.trim_start().strip_prefix("KITHARA_PIPELINE_KIND: ") == Some(kind.name())
+                }),
+                "{job} sets KITHARA_PIPELINE_KIND to {}",
+                kind.name()
+            );
+        }
     }
 }

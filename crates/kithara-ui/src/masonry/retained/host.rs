@@ -331,7 +331,7 @@ where
     pub(crate) fn text_leaf(
         &self,
         spec: &mount::label::text::host::Text<'_>,
-        content: String,
+        content: &str,
         declared: Size<Length>,
     ) -> MasonryNode<Action> {
         let style = spec.style;
@@ -360,7 +360,7 @@ where
             TextStyle::VisTitle => self.skin.vis.name_padding_x,
             _ => 0.0,
         };
-        let content = style.cased(content);
+        let content = role.cased(content).into_owned();
         let mut output = MasonryNode::document(
             NodeLayout::Leaf(Leaf::Text {
                 content,

@@ -84,8 +84,7 @@ app-level dependencies your integration needs.
 
 ### Apple XCFramework
 
-Prerequisites: Xcode + Command Line Tools, `cargo-swift`
-(`cargo install cargo-swift`), and the Apple targets:
+Prerequisites: Xcode + Command Line Tools and the Apple targets:
 
 ```bash
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin x86_64-apple-darwin
@@ -94,8 +93,7 @@ just platform apple xcframework --profile debug # faster local iteration
 ```
 
 Output: `apple/KitharaFFIInternal.xcframework`, with slices
-`macos-arm64_x86_64`, `ios-arm64`, and `ios-arm64_x86_64-simulator` (the
-simulator slice keeps that name on Apple Silicon — expected).
+`macos-arm64_x86_64`, `ios-arm64`, and `ios-arm64-simulator`.
 
 The verified local-development path is to build the XCFramework first, then
 point the consumer Swift package or Xcode project at this repo via

@@ -1,7 +1,68 @@
-use std::{collections::BTreeSet, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 use anyhow::{Context, Result};
-use cargo_metadata::{Metadata, TargetKind};
+use cargo_metadata::{DependencyKind, Metadata, TargetKind};
+
+pub(super) fn workspace_edges(metadata: &Metadata) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let resolve = metadata
+        .resolve
+        .as_ref()
+        .context("cargo metadata has no dependency resolve")?;
+    let members = metadata
+        .workspace_packages()
+        .into_iter()
+        .map(|package| {
+            let directory = package
+                .manifest_path
+                .parent()
+                .context("workspace package has no directory")?;
+            let relative = directory.strip_prefix(&metadata.workspace_root)?;
+            Ok((package.id.clone(), relative.as_str().replace('\\', "/")))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let direct = resolve
+        .nodes
+        .iter()
+        .filter(|node| members.contains_key(&node.id))
+        .map(|node| {
+            let dependencies = node
+                .deps
+                .iter()
+                .filter(|dependency| {
+                    members.contains_key(&dependency.pkg)
+                        && dependency
+                            .dep_kinds
+                            .iter()
+                            .any(|kind| kind.kind == DependencyKind::Normal)
+                })
+                .map(|dependency| dependency.pkg.clone())
+                .collect::<BTreeSet<_>>();
+            (node.id.clone(), dependencies)
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut edges = BTreeMap::new();
+    for (owner, directory) in &members {
+        let mut pending = vec![owner.clone()];
+        let mut visited = BTreeSet::new();
+        while let Some(package) = pending.pop() {
+            if visited.insert(package.clone()) {
+                pending.extend(direct.get(&package).into_iter().flatten().cloned());
+            }
+        }
+        visited.remove(owner);
+        edges.insert(
+            directory.clone(),
+            visited
+                .iter()
+                .filter_map(|package| members.get(package).cloned())
+                .collect(),
+        );
+    }
+    Ok(edges)
+}
 
 pub(super) fn roots(metadata: &Metadata) -> Result<BTreeSet<(String, PathBuf)>> {
     let resolve = metadata
@@ -47,6 +108,53 @@ mod tests {
             .exec()
             .expect("workspace metadata");
         assert!(roots(&metadata).is_err());
+        assert!(workspace_edges(&metadata).is_err());
+    }
+
+    #[test]
+    fn workspace_edges_follow_only_normal_workspace_dependencies() {
+        let temp = tempfile::tempdir().expect("workspace directory");
+        fs::write(
+            temp.path().join("Cargo.toml"),
+            "[workspace]\nmembers = ['owner', 'middle', 'leaf', 'dev', 'build']\nexclude = ['foreign']\nresolver = '3'\n",
+        )
+        .expect("workspace manifest");
+        for (name, dependencies) in [
+            (
+                "owner",
+                "[dependencies]\nrenamed = { package = 'middle', path = '../middle' }\nforeign = { path = '../foreign' }\n[dev-dependencies]\ndev = { path = '../dev' }\n[build-dependencies]\nbuild = { path = '../build' }\n",
+            ),
+            ("middle", "[dependencies]\nleaf = { path = '../leaf' }\n"),
+            ("leaf", ""),
+            ("dev", ""),
+            ("build", ""),
+            ("foreign", "[dependencies]\ndev = { path = '../dev' }\n"),
+        ] {
+            let directory = temp.path().join(name);
+            fs::create_dir(&directory).expect("package directory");
+            fs::write(
+                directory.join("Cargo.toml"),
+                format!(
+                    "[package]\nname = '{name}'\nversion = '0.0.0'\n[lib]\npath = 'lib.rs'\n{dependencies}",
+                ),
+            )
+            .expect("package manifest");
+            fs::write(directory.join("lib.rs"), "").expect("library source");
+        }
+        let metadata = MetadataCommand::new()
+            .manifest_path(temp.path().join("Cargo.toml"))
+            .exec()
+            .expect("workspace metadata");
+        let edges = workspace_edges(&metadata).expect("workspace dependencies");
+        assert_eq!(
+            edges["owner"],
+            BTreeSet::from(["middle".into(), "leaf".into()])
+        );
+        assert_eq!(edges["middle"], BTreeSet::from(["leaf".into()]));
+        for name in ["leaf", "dev", "build"] {
+            assert!(edges[name].is_empty());
+        }
+        assert!(!edges.contains_key("foreign"));
     }
 
     #[test]

@@ -168,7 +168,7 @@ fn a_hidden_block_renders_none_of_the_endpoints_below_it() {
     );
 }
 
-fn menu_registry() -> kithara_ui::mock::TestRegistry {
+fn menu_registry() -> kithara_ui::mock::MapEndpoints {
     let mut registry = kithara_ui::mock::player_registry();
     registry.insert(
         EndpointCategory::Model,

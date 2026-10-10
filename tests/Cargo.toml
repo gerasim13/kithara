@@ -29,7 +29,9 @@ all = [
     "dep:kithara-encode",
     "dep:kithara-record",
     "dep:kithara-app",
+    "dep:kithara-app-library",
     "dep:kithara-devtools",
+    "dep:keyring-core",
     "kithara/queue",
     "kithara/backend-cpal",
     "kithara-app/analysis-waveform",
@@ -105,6 +107,8 @@ integration-regressions = ["all"]
 # path-dep against the virtual `kithara::platform::time::Instant`. Used by the
 # phase-continuity equivalence proof.
 flash = ["kithara/flash", "kithara-test-utils/flash"]
+# CPU load beside every test body; enabled by `just test run --load=on`.
+load = ["kithara-test-utils/load"]
 # Poll-blocking detector; enabled by `just test run --no-block=on`.
 no-block = ["kithara/no-block", "kithara-test-utils/no-block"]
 # Run integration tests with the native Apple HTTP backend (`NSURLSession`).
@@ -174,7 +178,10 @@ kithara = { workspace = true, default-features = false, optional = true }
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara = { workspace = true, default-features = false, optional = true, features = ["full", "encode", "fdk-aac", "ffmpeg", "symphonia", "opus", "ape", "client-reqwest", "tls-rustls"] }
 kithara-app = { workspace = true, default-features = false, optional = true }
+kithara-app-library = { workspace = true, optional = true }
 kithara-devtools = { workspace = true, optional = true }
+
+keyring-core = { workspace = true, optional = true, features = ["sample"] }
 
 # `bungee-sys` fails through `cmake`/MSVC and its build script refuses Android
 # by target triple. Android stretches through Signalsmith, the backend

@@ -7,7 +7,7 @@ use super::{
     shared::{
         finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_hang_budget,
         make_hard_timeout_watchdog, make_prekill_guard, make_runtime_builder, make_selenium_attrs,
-        make_serial_attr, make_tracing_init, make_wasm_serial_guard, wrap_with_model,
+        make_serial_attr, make_test_setup, make_wasm_serial_guard, wrap_with_model,
         wrap_with_soft_fail, wrap_with_timeout,
     },
 };
@@ -50,10 +50,10 @@ pub(crate) fn emit_async_runtime_test(
     // test to reach this — whichever it happens to be — was reported as an
     // unsafe `malloc` in a real-time context. Process-wide setup belongs
     // before the future exists.
-    let tracing_init = make_tracing_init(args, remaining_attrs);
+    let test_setup = make_test_setup(args, remaining_attrs);
     let runtime_body = quote! {
         {
-            #tracing_init
+            #test_setup
             let __rt = #runtime_builder;
             __rt.block_on(
                 ::kithara_test_utils::kithara_platform::flash::participate(
@@ -171,10 +171,10 @@ pub(crate) fn emit_async_timeout_test(
     // test to reach this — whichever it happens to be — was reported as an
     // unsafe `malloc` in a real-time context. Process-wide setup belongs
     // before the future exists.
-    let tracing_init = make_tracing_init(args, remaining_attrs);
+    let test_setup = make_test_setup(args, remaining_attrs);
     let runtime_body = quote! {
         {
-            #tracing_init
+            #test_setup
             let __rt = #runtime_builder;
             let __result = ::std::panic::catch_unwind(
                 ::std::panic::AssertUnwindSafe(|| {
@@ -272,7 +272,7 @@ pub(crate) fn emit_browser_test(
 ) -> TokenStream2 {
     let mut output = TokenStream2::new();
     let serial_attr = make_serial_attr(args);
-    let tracing_init = make_tracing_init(args, remaining_attrs);
+    let test_setup = make_test_setup(args, remaining_attrs);
 
     output.extend(make_dedicated_worker_config());
 
@@ -280,7 +280,7 @@ pub(crate) fn emit_browser_test(
     // sole ambient writer — KEEP it (same for the native sync branch below).
     let ambient = make_ambient_stmt(args);
     let wasm_body = quote! {
-        #tracing_init
+        #test_setup
         ::kithara_test_utils::kithara_platform::tokio::ensure_thread_pool().await;
         #preamble
         #ambient
@@ -327,7 +327,7 @@ pub(crate) fn emit_browser_test(
                 &serial_attr,
             ));
         } else {
-            let native_body_held = quote! { #tracing_init #preamble #ambient #(#body_stmts)* };
+            let native_body_held = quote! { #test_setup #preamble #ambient #(#body_stmts)* };
             let native_with_timeout =
                 wrap_with_timeout(&native_body_held, &args.timeout, false, fn_name);
             let native_wrapped = finalize_body(&native_with_timeout, args, fn_name, false);

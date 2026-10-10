@@ -5,7 +5,7 @@ use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
     error::UiDocError,
-    mock::TestRegistry,
+    mock::MapEndpoints,
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     source::{MemResolver, UiConfig},
     view,
@@ -15,8 +15,8 @@ const LAYOUT: &str = "validate.klayout.ron";
 const MODULE: &str = "m.ron";
 
 /// The endpoints the documents below bind, and nothing else.
-fn registry() -> TestRegistry {
-    let mut registry = TestRegistry::default();
+fn registry() -> MapEndpoints {
+    let mut registry = MapEndpoints::default();
     for (category, id, description) in [
         (
             EndpointCategory::Command,
@@ -826,7 +826,7 @@ fn model_binding_on_write_side_is_direction_error() {
 }
 
 /// A modal over a quiet surface, opening and shutting on state the view
-/// keeps; `close` is what Escape and a press on the scrim write.
+/// keeps; `close` is what Escape writes.
 fn modal(id: &str, close: &str, content: &str) -> String {
     format!(
         r#"Modal(id: "{id}", open: View(id: "settings"), close: {close},

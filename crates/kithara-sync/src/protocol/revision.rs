@@ -1,106 +1,23 @@
-use std::num::NonZeroU64;
-
+use kithara_signal::Revision;
 use kithara_warp::BeatGridId;
 
-fn checked_next_revision(revision: NonZeroU64) -> Option<NonZeroU64> {
-    revision.get().checked_add(1).and_then(NonZeroU64::new)
-}
+/// The revision domain for synchronization-group topology.
+pub enum TopologyRevisionTag {}
 
 /// Monotonic revision of one synchronization-group topology.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    derive_more::Display,
-    derive_more::Into,
-)]
-#[display("{_0}")]
-#[into(u64)]
-#[repr(transparent)]
-pub struct TopologyRevision(NonZeroU64);
+pub type TopologyRevision = Revision<TopologyRevisionTag>;
 
-impl TopologyRevision {
-    /// Returns the next owner-assigned revision, or `None` on exhaustion.
-    #[must_use]
-    pub fn checked_next(self) -> Option<Self> {
-        checked_next_revision(self.0).map(Self)
-    }
-
-    /// Returns the first revision assigned by a group owner.
-    #[must_use]
-    pub const fn first() -> Self {
-        Self(NonZeroU64::MIN)
-    }
-}
+/// The revision domain for synchronization operations.
+pub enum SyncOperationIdTag {}
 
 /// Monotonic identity of one synchronization operation.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    derive_more::Display,
-    derive_more::Into,
-)]
-#[display("{_0}")]
-#[into(u64)]
-#[repr(transparent)]
-pub struct SyncOperationId(NonZeroU64);
+pub type SyncOperationId = Revision<SyncOperationIdTag>;
 
-impl SyncOperationId {
-    /// Returns the next owner-assigned identity, or `None` on exhaustion.
-    #[must_use]
-    pub fn checked_next(self) -> Option<Self> {
-        checked_next_revision(self.0).map(Self)
-    }
-
-    /// Returns the first operation identity assigned by a group owner.
-    #[must_use]
-    pub const fn first() -> Self {
-        Self(NonZeroU64::MIN)
-    }
-}
+/// The revision domain for track loads into stable decks.
+pub enum LoadGenerationTag {}
 
 /// Monotonic identity of one track load into a stable deck.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    derive_more::Display,
-    derive_more::Into,
-)]
-#[display("{_0}")]
-#[into(u64)]
-#[repr(transparent)]
-pub struct LoadGeneration(NonZeroU64);
-
-impl LoadGeneration {
-    /// Returns the next owner-assigned generation, or `None` on exhaustion.
-    #[must_use]
-    pub fn checked_next(self) -> Option<Self> {
-        checked_next_revision(self.0).map(Self)
-    }
-
-    /// Returns the first generation assigned by a deck owner.
-    #[must_use]
-    pub const fn first() -> Self {
-        Self(NonZeroU64::MIN)
-    }
-}
+pub type LoadGeneration = Revision<LoadGenerationTag>;
 
 /// Identity and immutable revision of one group topology snapshot.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, fieldwork::Fieldwork)]

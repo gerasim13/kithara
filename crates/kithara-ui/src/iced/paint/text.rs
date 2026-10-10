@@ -46,10 +46,10 @@ impl<'data, 'skin> Text<'data, 'skin> {
         }
 
         let max_width = (bounds.w - self.padding_x * 2.0).max(0.0);
-        let run = text.shape(self.content, self.role, Some(max_width));
+        let (content, run) = self.role.fit(text, self.content, max_width);
         list.text(
             &run,
-            self.content,
+            &content,
             Transform::translate(Pt {
                 x: bounds.x + self.padding_x,
                 y: bounds.y + (bounds.h - run.height()) / 2.0,

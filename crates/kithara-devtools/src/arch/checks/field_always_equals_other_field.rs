@@ -30,11 +30,12 @@ impl Check for FieldAlwaysEqualsOtherField {
 
 fn emit(idx: &WorkspaceStructIndex, min_call_sites: usize, out: &mut Vec<Violation>) {
     let empty = Suppressions::default();
-    for (name, info) in &idx.structs {
+    for (identity, info) in &idx.structs {
+        let name = &info.name;
         if info.is_pub {
             continue;
         }
-        let Some(sites) = idx.literals.get(name) else {
+        let Some(sites) = idx.literals.get(identity) else {
             continue;
         };
         let full = full_literal_sites(sites);
@@ -189,5 +190,24 @@ mod tests {
         assert!(ks.iter().any(|k| k.contains("x==y")), "{ks:?}");
         assert!(ks.iter().any(|k| k.contains("x==z")), "{ks:?}");
         assert!(ks.iter().any(|k| k.contains("y==z")), "{ks:?}");
+    }
+
+    #[test]
+    fn same_named_structs_keep_their_own_equal_fields() {
+        let src = r#"
+            mod first {
+                struct Meter { x: u32, y: u32 }
+                fn a(v: u32) -> Meter { Meter { x: v, y: v } }
+                fn b(v: u32) -> Meter { Meter { x: v, y: v } }
+                fn c(v: u32) -> Meter { Meter { x: v, y: v } }
+            }
+            mod second {
+                struct Meter { x: u32, y: u32 }
+                fn a() -> Meter { Meter { x: 1, y: 2 } }
+                fn b() -> Meter { Meter { x: 2, y: 3 } }
+                fn c() -> Meter { Meter { x: 3, y: 4 } }
+            }
+        "#;
+        assert_eq!(count(src, 3), 1);
     }
 }

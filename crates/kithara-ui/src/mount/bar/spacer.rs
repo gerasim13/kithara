@@ -7,7 +7,7 @@ pub(crate) struct Spacer;
 mod host {
     use super::Spacer;
     use crate::{
-        atoms::bar::spacer::Spacer as Face,
+        atoms::bar::fill::Fill as Face,
         hosts::controls::{Draws, Reading},
         render::Skin,
     };
@@ -20,7 +20,7 @@ mod host {
         }
 
         fn painter(&self, skin: &Skin) -> Face {
-            Face::new(skin)
+            Face::new(skin.rgba(skin.global_bar.panel_fill))
         }
     }
 }

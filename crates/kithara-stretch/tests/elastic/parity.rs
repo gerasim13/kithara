@@ -152,8 +152,8 @@ fn misplaced_kicks(backend: StretchKind, name: &str, profile: Profile) -> Vec<St
     let mut engine = build_engine(config).expect("the product engine prepares");
     let capabilities = engine.capabilities();
     let latency = capabilities.latency();
-    let history = latency.source_frames();
-    let lead = latency.output_frames();
+    let history = latency.first();
+    let lead = latency.second();
     let train = kick_train(history);
     let frames = train.len() / CHANNELS;
     let mut advance = vec![0.0];

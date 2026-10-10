@@ -28,16 +28,36 @@ use crate::{
 /// `.config/similarity.toml`. Project-agnostic: when the file is absent
 /// no crates are excluded - every project supplies its own list.
 #[derive(Clone, Debug, Default, Deserialize, kithara_config::Config)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 #[config(builder(none), fields(value))]
 pub(crate) struct SimilarityConfig {
     #[serde(skip)]
     pub(super) active_dependencies: BTreeSet<String>,
+    #[serde(skip)]
+    pub(super) workspace_dependencies: BTreeMap<String, BTreeSet<String>>,
+    #[config(nested)]
+    gate: GateConfig,
+    #[serde(default)]
     #[config(nested)]
     pub(super) types: TypeConfig,
+    #[serde(default)]
     #[config(nested)]
     chains: ChainConfig,
+    #[serde(default)]
     excluded_crates: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, kithara_config::Config)]
+#[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
+struct GateConfig {
+    min_behavior: f64,
+}
+
+impl Default for GateConfig {
+    fn default() -> Self {
+        Self { min_behavior: 0.9 }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, kithara_config::Config)]
@@ -107,8 +127,12 @@ impl SimilarityConfig {
         }
         let text = fs::read_to_string(&path)
             .with_context(|| format!("read similarity config: {}", path.display()))?;
-        toml::from_str(&text)
-            .with_context(|| format!("parse similarity config: {}", path.display()))
+        let config: Self = toml::from_str(&text)
+            .with_context(|| format!("parse similarity config: {}", path.display()))?;
+        if !(0.0..=1.0).contains(&config.gate.min_behavior) {
+            bail!("gate.min_behavior must be between 0.0 and 1.0");
+        }
+        Ok(config)
     }
 }
 
@@ -120,6 +144,7 @@ fn activate_dependencies(config: &mut SimilarityConfig, metadata: &Metadata) -> 
         .map(|dependency| dependency.name.clone())
         .collect();
     config.chains.dependency_roots = dependencies::roots(metadata)?;
+    config.workspace_dependencies = dependencies::workspace_edges(metadata)?;
     Ok(())
 }
 
@@ -147,6 +172,9 @@ impl Profile {
 
 #[derive(Debug, Args)]
 pub struct SimilarityArgs {
+    /// Fail on struct twins using native analysis only.
+    #[arg(long)]
+    pub gate: bool,
     #[arg(long, value_enum, default_value_t = Profile::Advisory)]
     pub profile: Profile,
     /// Optional roots to scan. Empty = all production crate `src/` dirs
@@ -176,7 +204,7 @@ pub(crate) fn run(args: &SimilarityArgs, ctx: &Ctx) -> Result<()> {
     } else {
         &config.excluded_crates
     };
-    let include_tests = matches!(args.profile, Profile::Strict);
+    let include_tests = !args.gate && matches!(args.profile, Profile::Strict);
 
     let roots = if args.paths.is_empty() {
         default_roots(&metadata, excluded, include_tests)
@@ -191,7 +219,38 @@ pub(crate) fn run(args: &SimilarityArgs, ctx: &Ctx) -> Result<()> {
         return Ok(());
     }
     let sources = source_files(&ctx.root, &roots, include_tests)?;
-    let native = analysis::analyze_sources(&sources, &config, include_tests)?;
+    let modules = module_sources(&ctx.root, &sources)?;
+    let native = analysis::analyze_sources(&sources, &modules, &config, include_tests)?;
+    if args.gate {
+        let mut output = io::stdout().lock();
+        let mut found = false;
+        for twin in native
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.is_twin(config.gate.min_behavior))
+        {
+            let Some(behavior) = twin.behavior_similarity else {
+                continue;
+            };
+            found = true;
+            writeln!(
+                output,
+                "{}:{} {} <-> {}:{} {} (behavior {:.0}%)",
+                twin.left.path,
+                twin.left.line,
+                twin.left.name,
+                twin.right.path,
+                twin.right.line,
+                twin.right.name,
+                behavior * 100.0
+            )?;
+        }
+        return if found {
+            Err(NotClean::reported("struct twins"))
+        } else {
+            Ok(())
+        };
+    }
     let chains = chains::detect(&sources, &config.chains)?;
     let revision = revision(&ctx.root);
     let output = ctx.root.join("target/similarity").join(&revision);
@@ -286,15 +345,55 @@ fn source_files(
         .collect()
 }
 
-fn is_test_path(path: &Path) -> bool {
+pub(super) fn is_test_path(path: &Path) -> bool {
     path.components().any(|component| {
         matches!(component, Component::Normal(name) if name == "tests" || name == "benches")
     }) || path.file_name().is_some_and(|name| {
-        matches!(
-            name.to_str(),
-            Some("test.rs" | "tests.rs" | "bench.rs" | "benches.rs")
-        )
+        name.to_str().is_some_and(|name| {
+            matches!(name, "test.rs" | "tests.rs" | "bench.rs" | "benches.rs")
+                || name.ends_with("_tests.rs")
+                || name.ends_with("_test.rs")
+        })
     })
+}
+
+fn module_sources(
+    workspace_root: &Path,
+    sources: &[(String, String)],
+) -> Result<Vec<(String, String)>> {
+    let scanned = sources
+        .iter()
+        .map(|(path, _)| path.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut parents = BTreeSet::new();
+    for (path, _) in sources {
+        let Some(directory) = Path::new(path).parent() else {
+            continue;
+        };
+        for ancestor in directory.ancestors() {
+            if ancestor.as_os_str().is_empty() {
+                break;
+            }
+            for filename in ["lib.rs", "main.rs", "mod.rs"] {
+                parents.insert(ancestor.join(filename));
+            }
+            parents.insert(ancestor.with_extension("rs"));
+            if ancestor.file_name().is_some_and(|name| name == "src") {
+                break;
+            }
+        }
+    }
+    let mut modules = Vec::new();
+    for parent in parents {
+        let relative = parent.to_string_lossy().replace('\\', "/");
+        let path = workspace_root.join(&parent);
+        if !scanned.contains(relative.as_str()) && path.is_file() {
+            let text = fs::read_to_string(&path)
+                .with_context(|| format!("read module cfg context: {}", path.display()))?;
+            modules.push((relative, text));
+        }
+    }
+    Ok(modules)
 }
 
 fn revision(root: &Path) -> String {
@@ -353,6 +452,69 @@ mod tests {
     use super::*;
 
     #[test]
+    fn gate_config_is_required_and_rejects_unknown_fields() {
+        for source in [
+            "",
+            "[gate]",
+            "[gate]\nmin_behavior = 0.9\nunknown = true",
+            "[gate]\nmin_behavior = 0.9\n[unknown]",
+        ] {
+            assert!(
+                toml::from_str::<SimilarityConfig>(source).is_err(),
+                "{source}"
+            );
+        }
+        let config: SimilarityConfig =
+            toml::from_str("[gate]\nmin_behavior = 0.9").expect("valid gate config");
+        assert_eq!(config.gate.min_behavior, 0.9);
+    }
+
+    #[test]
+    fn gate_threshold_must_be_a_finite_fraction() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(temp.path().join(".config")).expect("config directory");
+        for threshold in ["-0.1", "1.1", "nan", "inf"] {
+            fs::write(
+                temp.path().join(consts::SIMILARITY_CONFIG_REL),
+                format!("[gate]\nmin_behavior = {threshold}"),
+            )
+            .expect("config fixture");
+            assert!(SimilarityConfig::load(temp.path()).is_err(), "{threshold}");
+        }
+    }
+
+    #[test]
+    fn scoped_scan_reads_parent_cfg_without_scanning_parent_structs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let directory = temp.path().join("crates/sample/src");
+        fs::create_dir_all(&directory).expect("source directory");
+        fs::write(
+            directory.join("lib.rs"),
+            r#"
+            struct Unscanned(u64);
+            #[cfg(feature = "left")] mod left;
+            #[cfg(not(feature = "left"))] mod right;
+        "#,
+        )
+        .expect("root module");
+        let source = "struct Count(u64); impl Count { fn next(&self) -> u64 { self.0 + 1 } }";
+        for name in ["left", "right"] {
+            fs::write(directory.join(format!("{name}.rs")), source).expect("module");
+        }
+        let roots = vec![
+            "crates/sample/src/left.rs".to_string(),
+            "crates/sample/src/right.rs".to_string(),
+        ];
+        let sources = source_files(temp.path(), &roots, false).expect("sources");
+        let modules = module_sources(temp.path(), &sources).expect("module context");
+        let report =
+            analysis::analyze_sources(&sources, &modules, &SimilarityConfig::default(), false)
+                .expect("scoped analysis");
+        assert_eq!(report.abstractions, 2);
+        assert!(report.candidates.is_empty());
+    }
+
+    #[test]
     fn production_scan_omits_test_paths_but_strict_scan_keeps_them() {
         let temp = tempfile::tempdir().expect("tempdir");
         let src = temp.path().join("crate/src");
@@ -374,6 +536,7 @@ mod tests {
         let command = SimilarityArgs::augment_args(clap::Command::new("similarity"));
         let matches = command.try_get_matches_from([
             "similarity",
+            "--gate",
             "--include-default-excluded",
             "--profile",
             "strict",

@@ -362,7 +362,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .capabilities()
             .latency();
         let terminal_offset = self.projected_output_offset(plan, output_end)?;
-        if terminal_offset > output_offset.saturating_add(latency.output_frames()) {
+        if terminal_offset > output_offset.saturating_add(latency.second()) {
             return Err(uncovered);
         }
         let audible_start = Self::projected_source(plan, start)?;
@@ -377,7 +377,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .to_f64()
             .ok_or(ElasticError::SampleCountOverflow)?
             * latency
-                .output_frames()
+                .second()
                 .to_f64()
                 .ok_or(ElasticError::SampleCountOverflow)?
             / covered_output
@@ -391,8 +391,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .ok_or(ElasticError::SampleCountOverflow)?;
         let input_start = warm_end
             .checked_add(
-                u64::try_from(latency.source_frames())
-                    .map_err(|_| ElasticError::SampleCountOverflow)?,
+                u64::try_from(latency.first()).map_err(|_| ElasticError::SampleCountOverflow)?,
             )
             .ok_or(ElasticError::SampleCountOverflow)?;
         let mut audible_meta = meta;
@@ -472,7 +471,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         };
         let audible_start = source_at(start, "projected audible start is uncovered")?;
         let advanced_offset = output_offset
-            .checked_add(latency.output_frames())
+            .checked_add(latency.second())
             .ok_or(ElasticError::SampleCountOverflow)?;
         let advanced_start = endpoint(advanced_offset)?;
         let Ok(delayed_start) = source_at(advanced_start, "projected admitted start is uncovered")
@@ -488,8 +487,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         };
         let input_start = delayed_start
             .checked_add(
-                u64::try_from(latency.source_frames())
-                    .map_err(|_| ElasticError::SampleCountOverflow)?,
+                u64::try_from(latency.first()).map_err(|_| ElasticError::SampleCountOverflow)?,
             )
             .ok_or(ElasticError::SampleCountOverflow)?;
         let resident = self.residency.as_ref().ok_or(ElasticError::PoolCapacity)?;
@@ -538,8 +536,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .end
             .source()
             .checked_add(
-                u64::try_from(latency.source_frames())
-                    .map_err(|_| ElasticError::SampleCountOverflow)?,
+                u64::try_from(latency.first()).map_err(|_| ElasticError::SampleCountOverflow)?,
             )
             .ok_or(ElasticError::SampleCountOverflow)?;
         let audible_end = endpoint(
@@ -648,14 +645,14 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .active
             .as_ref()
             .is_some_and(|active| std::ptr::eq(active.as_ref(), plan));
-        if (resident.primed && same_map) || latency.output_frames() == 0 {
+        if (resident.primed && same_map) || latency.second() == 0 {
             return Ok(None);
         }
         if audible_start > 0 {
             let history_start = i64::try_from(audible_start)
                 .ok()
                 .and_then(|cue| {
-                    i64::try_from(latency.source_frames())
+                    i64::try_from(latency.first())
                         .ok()
                         .and_then(|history| cue.checked_sub(history))
                 })
@@ -672,8 +669,8 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .ok_or(ElasticError::SampleCountOverflow)?;
         Ok(Some((
             audible_start,
-            latency.source_frames(),
-            ElasticRequest::new(warm_frames, latency.output_frames())?,
+            latency.first(),
+            ElasticRequest::new(warm_frames, latency.second())?,
         )))
     }
 }

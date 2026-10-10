@@ -12,7 +12,7 @@ use super::{
     command::BridgeConfig,
     model::{PipelineObservation, PullRequest, pipeline_observation},
 };
-use crate::consts;
+use crate::{ci::run::PipelineKind, consts};
 
 enum Payload<'a> {
     Json(&'a Value),
@@ -145,15 +145,17 @@ impl Github {
         }
     }
 
-    pub(super) fn report_status(&self, sha: &str, state: &str, description: &str) -> Result<()> {
+    pub(super) fn report_status(
+        &self,
+        sha: &str,
+        state: &str,
+        description: &str,
+        target_url: Option<&str>,
+    ) -> Result<()> {
         self.request(
             &Method::POST,
             &format!("/repos/{}/statuses/{sha}", self.config.github_repo),
-            Some(&json!({
-                "state": state,
-                "context": consts::STATUS_CONTEXT,
-                "description": status_description(description),
-            })),
+            Some(&status_body(state, description, target_url)),
         )?;
         Ok(())
     }
@@ -261,6 +263,44 @@ impl Gitlab {
         Ok(ids)
     }
 
+    pub(super) fn default_branch_pipeline(&self, sha: &str) -> Result<Option<u64>> {
+        let reference = &self.config.gitlab_branch;
+        let mut url = self.project_url("pipelines")?;
+        url.query_pairs_mut()
+            .append_pair("ref", reference)
+            .append_pair("sha", sha)
+            .append_pair("source", "push")
+            .append_pair("order_by", "id")
+            .append_pair("sort", "desc")
+            .append_pair("per_page", "1");
+        let response =
+            self.api
+                .request(&Method::GET, &url, ("PRIVATE-TOKEN", &self.token), None)?;
+        let pipelines = response
+            .as_array()
+            .context("GitLab pipeline list response was not an array")?;
+        let Some(pipeline) = pipelines.first() else {
+            return Ok(None);
+        };
+        let pipeline_ref = pipeline["ref"]
+            .as_str()
+            .context("GitLab pipeline list entry has no ref")?;
+        let pipeline_sha = pipeline["sha"]
+            .as_str()
+            .context("GitLab pipeline list entry has no sha")?;
+        if pipeline_ref != reference || pipeline_sha != sha {
+            bail!(
+                "GitLab pipeline query for {reference} at {sha} returned unexpected ref \
+                 {pipeline_ref} at {pipeline_sha}"
+            );
+        }
+        Ok(Some(
+            pipeline["id"]
+                .as_u64()
+                .context("GitLab pipeline list entry has no numeric id")?,
+        ))
+    }
+
     /// Stop every run still holding a slot on `reference`.
     ///
     /// Deleting the branch does not stop its pipeline: a queued run keeps its
@@ -291,7 +331,11 @@ impl Gitlab {
         Ok(())
     }
 
-    pub(super) fn pipeline_observation(&self, pipeline_id: u64) -> Result<PipelineObservation> {
+    pub(super) fn pipeline_observation(
+        &self,
+        pipeline_id: u64,
+        kind: PipelineKind,
+    ) -> Result<PipelineObservation> {
         let parent = self.request(&Method::GET, &format!("pipelines/{pipeline_id}"), None)?;
         let parent_status = parent["status"]
             .as_str()
@@ -300,7 +344,7 @@ impl Gitlab {
             return Ok(PipelineObservation::Running);
         }
         if parent_status != "success" {
-            return Ok(pipeline_observation(parent_status, &[]));
+            return Ok(pipeline_observation(kind, parent_status, &[]));
         }
         let bridges = self.request(
             &Method::GET,
@@ -321,7 +365,7 @@ impl Gitlab {
                 )
             })
             .collect::<Vec<_>>();
-        Ok(pipeline_observation(parent_status, &children))
+        Ok(pipeline_observation(kind, parent_status, &children))
     }
 
     pub(super) fn ensure_issue(&self, title: &str, description: &str) -> Result<()> {
@@ -381,6 +425,18 @@ fn read_secret(path: &std::path::Path, label: &str) -> Result<String> {
         bail!("{label} file is empty");
     }
     Ok(secret)
+}
+
+fn status_body(state: &str, description: &str, target_url: Option<&str>) -> Value {
+    let mut body = json!({
+        "state": state,
+        "context": consts::STATUS_CONTEXT,
+        "description": status_description(description),
+    });
+    if let Some(url) = target_url {
+        body["target_url"] = json!(url);
+    }
+    body
 }
 
 fn status_description(detail: &str) -> String {
@@ -476,17 +532,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn verification_status_uses_the_required_context_and_exact_head() {
-        let sha = "0123456789abcdef0123456789abcdef01234567";
-        let path = format!("/repos/owner/repo/statuses/{sha}");
-        let body = json!({
-            "state": "pending",
-            "context": consts::STATUS_CONTEXT,
-            "description": status_description("GitLab verification running"),
-        });
+    fn verification_status_body_normalizes_descriptions_and_includes_only_supplied_urls() {
+        let url = "https://gitlab.example/owner/repo/-/pipelines/42";
+        let body = status_body("pending", "  GitLab\n verification\t running  ", Some(url));
 
-        assert_eq!(path, format!("/repos/owner/repo/statuses/{sha}"));
+        assert_eq!(body["state"], "pending");
         assert_eq!(body["context"], "kithara/gitlab-verification");
+        assert_eq!(body["description"], "GitLab verification running");
+        assert_eq!(body["target_url"], url);
+
+        let body = status_body("failure", &"path ".repeat(80), None);
+        assert_eq!(
+            body["description"],
+            format!("{}…", "path ".repeat(27) + "path")
+        );
+        assert!(!body.as_object().unwrap().contains_key("target_url"));
     }
 
     #[test]

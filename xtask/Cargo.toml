@@ -40,6 +40,7 @@ tiny_http = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+uniffi_bindgen = { workspace = true }
 
 # The descriptor ceiling this raises is a Unix concept; Windows hands out
 # handles from a pool with no per-process limit to lift.

@@ -11,7 +11,7 @@ use kithara_ui::{
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{ReadValue, Reads, Scope, Skin, UiEvent},
     source::{FillDocument, Limits, MemResolver, OverlayResolver, SourceResolver, UiConfig},
-    view,
+    view::{self, Screens, ViewState},
 };
 
 use super::press::trigger;
@@ -394,39 +394,13 @@ fn a_module_included_twice_draws_its_fill_per_instance() {
 }
 
 #[kithara::test]
-fn a_template_without_content_fails_loading() {
-    let resolver = documents(ONE, BARE_ITEM, &[("alpha", "fixture.press")]);
-    let endpoints = Endpoints::default();
-
-    let retained = retained(&resolver, &endpoints, Page::default()).err();
-    let immediate = compiled(&resolver).err();
-
-    for (host, error) in [
-        ("retained", retained),
-        ("immediate", immediate.map(|error| error.to_string())),
-    ] {
-        let error = error.unwrap_or_else(|| panic!("the {host} host must refuse the template"));
-        assert!(
-            error.contains("item.kmodule.ron") && error.contains("content"),
-            "the {host} host names the template: {error}"
-        );
-    }
-    assert!(matches!(
-        compiled(&resolver),
-        Err(UiDocError::TemplateWithoutContent { origin }) if origin.0 == "item.kmodule.ron"
-    ));
-}
-
-#[kithara::test]
 fn an_unknown_endpoint_in_a_fill_fails_loading() {
     let resolver = documents(ONE, ITEM, &[("alpha", "fixture.nowhere")]);
-    let endpoints = Endpoints::default();
 
-    let retained = retained(&resolver, &endpoints, Page::default()).err();
-    let immediate = compiled(&resolver).err().map(|error| error.to_string());
-
-    for (host, error) in [("retained", retained), ("immediate", immediate)] {
-        let error = error.unwrap_or_else(|| panic!("the {host} host must refuse the fill"));
+    for (host, error) in ["retained", "immediate"]
+        .into_iter()
+        .zip(refusals(&resolver, "the fill"))
+    {
         assert!(
             error.contains("fixture.nowhere"),
             "the {host} host names the endpoint: {error}"
@@ -532,13 +506,11 @@ fn a_selection_needs_the_room_of_its_largest_fill() {
 #[kithara::test]
 fn a_slot_with_both_each_and_select_fails_loading() {
     let resolver = documents_in(BOTH, ONE, ITEM, &[("alpha", "fixture.press")]);
-    let endpoints = Endpoints::default();
 
-    let retained = retained(&resolver, &endpoints, Page::default()).err();
-    let immediate = compiled(&resolver).err().map(|error| error.to_string());
-
-    for (host, error) in [("retained", retained), ("immediate", immediate)] {
-        let error = error.unwrap_or_else(|| panic!("the {host} host must refuse the slot"));
+    for (host, error) in ["retained", "immediate"]
+        .into_iter()
+        .zip(refusals(&resolver, "the slot"))
+    {
         assert!(
             error.contains("rack.kmodule.ron") && error.contains("items"),
             "the {host} host names the slot: {error}"
@@ -705,13 +677,11 @@ fn a_literal_scope_value_that_cannot_stand_in_a_scoped_key_fails_loading() {
 #[kithara::test]
 fn a_parsed_fill_is_named_by_the_origin_it_was_parsed_with() {
     let resolver = documents(ONE, ITEM, &[("alpha", "fixture.nowhere")]);
-    let endpoints = Endpoints::default();
 
-    let retained = retained(&resolver, &endpoints, Page::default()).err();
-    let immediate = compiled(&resolver).err().map(|error| error.to_string());
-
-    for (host, error) in [("retained", retained), ("immediate", immediate)] {
-        let error = error.unwrap_or_else(|| panic!("the {host} host must refuse the fill"));
+    for (host, error) in ["retained", "immediate"]
+        .into_iter()
+        .zip(refusals(&resolver, "the fill"))
+    {
         assert!(
             error.starts_with("alpha.kmodule.ron:"),
             "the {host} host names the fill's origin: {error}"
@@ -793,4 +763,214 @@ fn a_parsed_fill_owns_its_origin_alone() {
             "loading the package names the origin and the address of {case}: {message}"
         );
     }
+}
+
+const LISTED: &str = r#"(schema: "kithara.module", version: 1, id: "rack", chrome: Plain,
+    parameters: ["deck"],
+    root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+        Slot(id: "nav", from: "items", each: Include(source: "item.kmodule.ron"),
+            size: Some((w: Fill, h: Fill))),
+        Slot(id: "detail", from: "items", select: Page(id: "/section"),
+            size: Some((w: Fill, h: Fill))),
+    ]))"#;
+
+fn turning(page: &str) -> String {
+    format!(
+        r#"(schema: "kithara.module", version: 1, id: "item", chrome: Plain,
+            parameters: ["key"],
+            root: Pressable(id: "turn", press: Page(id: "/section", name: "{page}"),
+                child: Spacer(id: "turn-face", size: Some((w: Fill, h: Fill)))))"#
+    )
+}
+
+fn valued(declared: &str) -> String {
+    format!(
+        r#"(schema: "kithara.module", version: 1, id: "item", chrome: Plain,
+            parameters: [{declared}],
+            root: Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+                Pressable(id: "press", press: Command(id: "fixture.sourced", with: {{ "source": "$title" }}),
+                    child: Spacer(id: "press-face", size: Some((w: Fill, h: Fill)))),
+                Slot(id: "content", size: Some((w: Fill, h: Fixed(0.0)))),
+            ]))"#
+    )
+}
+
+fn with_items(template: &str, fills: &[(&str, &str)]) -> MemResolver {
+    let mut resolver = documents_in(RACK, ONE, template, &[]);
+    for (key, item) in fills {
+        let origin = SourceUri(format!("{key}.kmodule.ron"));
+        let text = format!(
+            r#"(schema: "kithara.module", version: 1, id: "valued-page", chrome: Plain,
+                item: {{ {item} }},
+                root: Spacer(id: "valued-face", size: Some((w: Fill, h: Fill))))"#
+        );
+        let document = FillDocument::parse(&text, origin)
+            .unwrap_or_else(|error| panic!("the fill must parse: {error}"));
+        resolver.fill("rack/items", key, document);
+    }
+    resolver
+}
+
+fn refusals(resolver: &dyn SourceResolver, case: &str) -> [String; 2] {
+    let endpoints = Endpoints::default();
+    let retained = retained(resolver, &endpoints, Page::default())
+        .err()
+        .unwrap_or_else(|| panic!("the retained host must refuse {case}"));
+    let immediate = compiled(resolver)
+        .err()
+        .unwrap_or_else(|| panic!("the immediate host must refuse {case}"));
+    [retained, immediate.to_string()]
+}
+
+/// A selection by page state stands at the first fill until an item of the
+/// list beside it turns the state; the list draws its items, not the fills.
+#[kithara::test]
+fn a_selection_by_page_state_stands_at_the_first_fill_until_an_item_turns_it() {
+    let resolver = documents_in(
+        LISTED,
+        ONE,
+        &turning("$key"),
+        &[("alpha", "fixture.press"), ("beta", "fixture.press")],
+    );
+
+    assert_both(
+        &resolver,
+        None,
+        &[RIGHT],
+        &[trigger("fixture.press@deck=a,source=alpha")],
+        "the first fill stands while the page state is unwritten",
+    );
+    assert_both(
+        &resolver,
+        None,
+        &[Pt { x: 100.0, y: 150.0 }, RIGHT],
+        &[trigger("fixture.press@deck=a,source=beta")],
+        "only the second fill stands once its item turns the page state",
+    );
+    assert_both(
+        &resolver,
+        None,
+        &[Pt { x: 100.0, y: 150.0 }, Pt { x: 100.0, y: 50.0 }, RIGHT],
+        &[trigger("fixture.press@deck=a,source=alpha")],
+        "the first fill stands again once its item turns the page state back",
+    );
+    let endpoints = Endpoints::default();
+    let mut ui = retained(&resolver, &endpoints, Page::default())
+        .unwrap_or_else(|error| panic!("the page must mount on the retained host: {error}"));
+    assert!(ui.rect_of("demo/nav/alpha/turn-face").is_some());
+    assert!(ui.rect_of("demo/nav/alpha/press-face").is_none());
+    for phase in [PointerPhase::Move, PointerPhase::Down, PointerPhase::Up] {
+        ui.input(Input::Pointer(PointerInput::new(
+            MOUSE,
+            None,
+            phase,
+            Some(Pt { x: 100.0, y: 150.0 }),
+            1,
+        )));
+    }
+    ui.scene()
+        .unwrap_or_else(|error| panic!("the retained host must draw the turn: {error}"));
+    let laid = |path: &str| {
+        ui.rect_of(path)
+            .is_some_and(|rect| rect.w > 0.0 && rect.h > 0.0)
+    };
+    assert_eq!(
+        (
+            laid("demo/detail/alpha/press-face"),
+            laid("demo/detail/beta/press-face")
+        ),
+        (false, true),
+        "the retained host lays out only the fill its item turned to"
+    );
+}
+
+/// A selection turns on the screen it stands on: the screen answers for every
+/// page it selects, so a turn compiles nothing.
+#[kithara::test]
+fn turning_a_selection_keeps_its_screen() {
+    let resolver = documents_in(
+        LISTED,
+        ONE,
+        &turning("$key"),
+        &[("alpha", "fixture.press"), ("beta", "fixture.press")],
+    );
+    let ui = compiled(&resolver).unwrap_or_else(|error| panic!("the page must compile: {error}"));
+    let mut view = ViewState::new();
+    view.stand("section", "beta");
+
+    assert_eq!(
+        Screens::new(2, ui).show(&view, || Err("compiled again")),
+        Ok(false)
+    );
+}
+
+/// Fills that cannot stand fail loading in both hosts, naming why: fills
+/// drawn nowhere name their collection, a write to a page no fill has names
+/// the page and its state, and a missing or undeclared item value names the
+/// value and its fill.
+#[kithara::test]
+fn a_fill_that_cannot_stand_fails_loading_naming_why() {
+    let pressing = [("alpha", "fixture.press"), ("beta", "fixture.press")];
+    let cases = [
+        (
+            "fills drawn nowhere",
+            documents(ONE, BARE_ITEM, &pressing[..1]),
+            &["rack/items"][..],
+        ),
+        (
+            "a page no fill has",
+            documents_in(LISTED, ONE, &turning("gamma"), &pressing),
+            &["gamma", "section"],
+        ),
+        (
+            "a missing item value",
+            with_items(
+                &valued(r#""title", "icon""#),
+                &[("alpha", r#""title": "first""#)],
+            ),
+            &["icon", "alpha.kmodule.ron"],
+        ),
+        (
+            "an undeclared item value",
+            with_items(
+                &valued(r#""title""#),
+                &[("alpha", r#""title": "first", "badge": "new""#)],
+            ),
+            &["badge", "alpha.kmodule.ron"],
+        ),
+    ];
+
+    for (case, resolver, named) in cases {
+        for (host, error) in ["retained", "immediate"]
+            .into_iter()
+            .zip(refusals(&resolver, case))
+        {
+            assert!(
+                named.iter().all(|word| error.contains(word)),
+                "the {host} host names {named:?} for {case}: {error}"
+            );
+        }
+    }
+}
+
+#[kithara::test]
+fn an_item_template_receives_each_fills_item_values() {
+    let resolver = with_items(
+        &valued(r#""title""#),
+        &[
+            ("alpha", r#""title": "first""#),
+            ("beta", r#""title": "second""#),
+        ],
+    );
+
+    assert_both(
+        &resolver,
+        None,
+        &[TOP, BOTTOM],
+        &[
+            trigger("fixture.sourced@source=first"),
+            trigger("fixture.sourced@source=second"),
+        ],
+        "each item is drawn with the values its fill gives",
+    );
 }

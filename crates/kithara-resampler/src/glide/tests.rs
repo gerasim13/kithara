@@ -85,11 +85,11 @@ fn stream_through(chunk: usize, input: &[f32]) -> Vec<f32> {
         let process = resampler
             .process_into_buffer(&[&input[offset..end]], &mut [&mut block])
             .unwrap_or_else(|err| panic!("stream process should succeed: {err}"));
-        output.extend_from_slice(&block[..process.output_frames]);
-        if process.input_frames == 0 {
+        output.extend_from_slice(&block[..process.second()]);
+        if process.first() == 0 {
             break;
         }
-        offset += process.input_frames;
+        offset += process.first();
     }
     output
 }
@@ -142,8 +142,8 @@ fn unity_fast_path_copies_input(glide_unity: Vec<f32>) {
         .process_into_buffer(&[&input], &mut [&mut output])
         .unwrap_or_else(|err| panic!("unity process should succeed: {err}"));
 
-    assert_eq!(process.input_frames, input.len());
-    assert_eq!(process.output_frames, output.len());
+    assert_eq!(process.first(), input.len());
+    assert_eq!(process.second(), output.len());
     assert_eq!(output.as_slice(), input);
 }
 
@@ -156,8 +156,8 @@ fn quadratic_interpolates_between_input_frames(glide_quadratic: Vec<f32>) {
         .process_into_buffer(&[&input], &mut [&mut output])
         .unwrap_or_else(|err| panic!("glide process should succeed: {err}"));
 
-    assert!(process.output_frames > input.len());
-    assert!(output[..process.output_frames].iter().any(|sample| {
+    assert!(process.second() > input.len());
+    assert!(output[..process.second()].iter().any(|sample| {
         let magnitude = sample.abs();
         magnitude > 0.0 && magnitude < 1.0
     }));
@@ -190,8 +190,8 @@ fn glide_ratio_reaches_target_without_discontinuity(glide_transition: Vec<f32>) 
         .process_into_buffer(&[&input], &mut [&mut output])
         .unwrap_or_else(|err| panic!("glide process should succeed: {err}"));
 
-    assert!(process.output_frames > 0);
-    for pair in output[..process.output_frames].windows(2) {
+    assert!(process.second() > 0);
+    for pair in output[..process.second()].windows(2) {
         assert!((pair[1] - pair[0]).abs() < 0.5);
     }
 }
@@ -257,11 +257,11 @@ fn anti_alias_smooths_fast_glide(glide_alias: Vec<f32>) {
     let plain_frames = plain
         .process_into_buffer(&[&input], &mut [&mut plain_output])
         .unwrap_or_else(|err| panic!("plain process should succeed: {err}"))
-        .output_frames;
+        .second();
     let filtered_frames = filtered
         .process_into_buffer(&[&input], &mut [&mut filtered_output])
         .unwrap_or_else(|err| panic!("filtered process should succeed: {err}"))
-        .output_frames;
+        .second();
     let plain_energy: f32 = plain_output[..plain_frames]
         .iter()
         .map(|sample| sample.abs())
@@ -445,9 +445,9 @@ fn entering_the_filter_keeps_a_constant_signal_constant() {
         .process_into_buffer(&[&input], &mut [&mut output])
         .unwrap_or_else(|err| panic!("filtered block should render: {err}"));
 
-    assert!(process.output_frames > 0);
+    assert!(process.second() > 0);
     assert!(
-        output[..process.output_frames]
+        output[..process.second()]
             .iter()
             .all(|sample| (sample - 0.5).abs() < CONSTANT_TOLERANCE),
         "the filter did not start in the steady state: {output:?}"
@@ -513,11 +513,11 @@ fn every_interpolation_reproduces_a_ramp_through_the_factory(#[case] interpolati
         .unwrap_or_else(|err| panic!("ramp process should succeed: {err}"));
 
     assert!(
-        process.output_frames > 2,
+        process.second() > 2,
         "{interpolation:?} rendered {} frames",
-        process.output_frames
+        process.second()
     );
-    for (sample, frame) in output[..process.output_frames].iter().zip(0_u16..).skip(2) {
+    for (sample, frame) in output[..process.second()].iter().zip(0_u16..).skip(2) {
         let expected = f32::from(frame) * 0.5;
         assert!(
             (sample - expected).abs() < RAMP_TOLERANCE,
@@ -553,7 +553,7 @@ fn every_interpolation_takes_frames_from_its_next_block_at_a_one_frame_chunk(
         .unwrap_or_else(|err| panic!("the next block should process: {err}"));
 
     assert!(
-        process.input_frames > 0,
+        process.first() > 0,
         "{interpolation:?} took nothing from a block of {} frames",
         input.len()
     );
@@ -596,12 +596,12 @@ fn glide_ramp_lands_on_its_target_rate() {
         .unwrap_or_else(|err| panic!("glide process should succeed: {err}"));
 
     assert!(
-        process.output_frames > 24,
+        process.second() > 24,
         "the glide did not finish inside one block: {} frames",
-        process.output_frames
+        process.second()
     );
     let mut cursor = 0.0_f64;
-    for (sample, frame) in output[..process.output_frames].iter().zip(0_u32..) {
+    for (sample, frame) in output[..process.second()].iter().zip(0_u32..) {
         assert!(
             (f64::from(*sample) - cursor).abs() < POSITION_TOLERANCE,
             "frame {frame}: {sample} against {cursor}"
