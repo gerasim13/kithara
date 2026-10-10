@@ -4,7 +4,8 @@ use crate::{
         icon::mark::Marked,
     },
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
-    render::{Mark, Skin},
+    hosts::icons::Mark,
+    render::Skin,
     shaping::TextContext,
     skin::TextRoleSkin,
 };
@@ -228,7 +229,7 @@ mod tests {
 
     fn drawn(scope: Option<Scope>) -> Vec<DrawCmd> {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         Context::new(skin).paint(
             &mut list,

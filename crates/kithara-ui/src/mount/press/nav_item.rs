@@ -1,29 +1,26 @@
-use bon::Builder;
-
-use crate::{
-    ids::InternId,
-    module::IconName,
-    size::{Dim, SizeSpec},
-};
+use crate::size::{Dim, SizeSpec};
 
 /// One row of the navigation rail: an icon, a word, and a selected state.
-#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = SizeSpec::new(Dim::Fill, Dim::Fixed(skin.nav.item_height)))]
-#[derive(kithara_derive::NodeControl)]
-pub(crate) struct NavItem {
-    pub(crate) icon: IconName,
-    pub(crate) label: InternId,
-}
+pub(crate) struct NavItem;
 
-#[cfg(feature = "render")]
-mod host {
-    use super::NavItem;
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    use crate::{ids::InternId, module::IconName};
+
+    #[derive(Builder)]
+    pub(crate) struct NavItem {
+        pub(crate) icon: IconName,
+        pub(crate) label: InternId,
+    }
+
     use crate::{
         atoms::{nav_item::NavItem as Face, painter::NavData},
-        render::{
-            ReadValue, Skin,
-            controls::{Draws, Grip, Reading},
-        },
+        hosts::controls::{Draws, Grip, Reading},
+        render::{ReadValue, Skin},
     };
 
     impl Draws for NavItem {

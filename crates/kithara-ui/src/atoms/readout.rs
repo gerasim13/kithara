@@ -1,10 +1,11 @@
 use crate::{
     atoms::design::quad::border,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
+    hosts::skin::tone_color,
     module::Tone,
     render::Skin,
     shaping::TextContext,
-    skin::{ReadoutSkin, TextRoleSkin, tone_color},
+    skin::{ReadoutSkin, TextRoleSkin},
 };
 
 /// A caption stacked over the value it names, framed or bare.
@@ -110,7 +111,7 @@ mod tests {
 
     fn drawn(tone: Tone, framed: bool) -> crate::draw::DrawList {
         let skin = builtin::skin();
-        let mut text = TextContext::from(skin.text_resources());
+        let mut text = TextContext::from(skin.text_resources.as_ref());
         let mut list = DrawListBuilder::default();
         Readout::new(tone, framed, skin).paint(&mut list, &mut text, &data(), consts::BOUNDS);
         list.finish()

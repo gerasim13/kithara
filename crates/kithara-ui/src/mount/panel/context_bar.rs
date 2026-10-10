@@ -1,30 +1,29 @@
-use bon::Builder;
-
-use crate::{
-    expand::Binding,
-    ids::InternId,
-    size::{Dim, SizeSpec},
-};
+use crate::size::{Dim, SizeSpec};
 
 /// The strip under the tree that names the scope in view.
-#[derive(Builder, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = SizeSpec::new(Dim::Fill, Dim::Fixed(skin.tree.context_height)))]
-#[derive(kithara_derive::NodeControl)]
-pub(crate) struct ContextBar<'a> {
-    pub(crate) scope_items: &'a [InternId],
-    pub(crate) scope: Option<&'a Binding>,
-}
+pub(crate) struct ContextBar;
 
-#[cfg(feature = "render")]
-mod host {
-    use super::ContextBar;
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    use crate::{expand::Binding, ids::InternId};
+
+    #[derive(Builder)]
+    pub(crate) struct ContextBar<'a> {
+        pub(crate) scope_items: &'a [InternId],
+        pub(crate) scope: Option<&'a Binding>,
+    }
+
     use crate::{
         atoms::bar::context::{Context, Scope, Viewed},
-        render::{
-            ReadValue, Skin,
+        hosts::{
             controls::{Draws, Reading},
-            picker_selected_index,
+            picker::picker_selected_index,
         },
+        render::{ReadValue, Skin},
     };
 
     impl Draws for ContextBar<'_> {

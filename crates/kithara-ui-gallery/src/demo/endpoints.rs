@@ -1,9 +1,6 @@
-use std::collections::BTreeMap;
-
 use kithara_ui::{
     builtin,
-    ids::EndpointId,
-    registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
+    registry::{EndpointCategory, EndpointDesc, EndpointRegistry, MapEndpoints, ValueKind},
 };
 
 use super::{
@@ -12,25 +9,7 @@ use super::{
     reads::FONT_FAMILIES,
 };
 
-#[derive(Default)]
-pub struct DemoRegistry {
-    endpoints: BTreeMap<(EndpointCategory, EndpointId), EndpointDesc>,
-}
-
-impl DemoRegistry {
-    pub fn insert(&mut self, category: EndpointCategory, id: &str, description: EndpointDesc) {
-        self.endpoints
-            .insert((category, EndpointId(id.to_owned())), description);
-    }
-}
-
-impl EndpointRegistry for DemoRegistry {
-    fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
-        self.endpoints.get(&(category, id.clone()))
-    }
-}
-
-fn insert_engine_endpoints(registry: &mut DemoRegistry) {
+fn insert_engine_endpoints(registry: &mut MapEndpoints) {
     registry.insert(
         EndpointCategory::Telemetry,
         "engine.load",
@@ -43,7 +22,7 @@ fn insert_engine_endpoints(registry: &mut DemoRegistry) {
     );
 }
 
-fn insert_output_levels(registry: &mut DemoRegistry) {
+fn insert_output_levels(registry: &mut MapEndpoints) {
     registry.insert(
         EndpointCategory::Telemetry,
         "player.output.levels",
@@ -51,7 +30,7 @@ fn insert_output_levels(registry: &mut DemoRegistry) {
     );
 }
 
-fn insert_deck_endpoints(registry: &mut DemoRegistry) {
+fn insert_deck_endpoints(registry: &mut MapEndpoints) {
     for (id, kind) in [
         ("deck.transport.jump_back", ValueKind::Trigger),
         ("deck.transport.jump_forward", ValueKind::Trigger),
@@ -101,7 +80,7 @@ fn insert_deck_endpoints(registry: &mut DemoRegistry) {
     }
 }
 
-fn insert_clock_endpoints(registry: &mut DemoRegistry) {
+fn insert_clock_endpoints(registry: &mut MapEndpoints) {
     for (id, kind) in [
         ("clock.bpm", ValueKind::Text),
         ("clock.source", ValueKind::Text),
@@ -175,7 +154,7 @@ fn insert_clock_endpoints(registry: &mut DemoRegistry) {
     );
 }
 
-fn insert_pivot_endpoints(registry: &mut DemoRegistry) {
+fn insert_pivot_endpoints(registry: &mut MapEndpoints) {
     for (id, kind) in [
         ("pivot.map", ValueKind::PortalMap),
         ("pivot.master.label", ValueKind::Text),
@@ -253,7 +232,7 @@ fn insert_pivot_endpoints(registry: &mut DemoRegistry) {
     );
 }
 
-fn insert_quality_endpoints(registry: &mut DemoRegistry) {
+fn insert_quality_endpoints(registry: &mut MapEndpoints) {
     registry.insert(
         EndpointCategory::Model,
         "deck.stream.quality",
@@ -297,7 +276,7 @@ fn insert_quality_endpoints(registry: &mut DemoRegistry) {
 /// they hold fixed values rather than animating.
 #[must_use]
 pub fn registry() -> impl EndpointRegistry {
-    let mut registry = DemoRegistry::default();
+    let mut registry = MapEndpoints::default();
     insert_deck_endpoints(&mut registry);
     insert_clock_endpoints(&mut registry);
     insert_pivot_endpoints(&mut registry);
@@ -374,7 +353,7 @@ pub fn registry() -> impl EndpointRegistry {
 /// Everything the gallery pages read for themselves: the words they label
 /// their sections with, the poses their objects hold, and the flag each tab
 /// answers with.
-fn insert_page_endpoints(registry: &mut DemoRegistry) {
+fn insert_page_endpoints(registry: &mut MapEndpoints) {
     for id in [
         "gallery.label.knobs",
         "gallery.label.meters",
@@ -523,7 +502,7 @@ fn insert_page_endpoints(registry: &mut DemoRegistry) {
     }
 }
 
-fn insert_table_endpoints(registry: &mut DemoRegistry) {
+fn insert_table_endpoints(registry: &mut MapEndpoints) {
     registry.insert(
         EndpointCategory::Model,
         "gallery.table.preset",
@@ -558,7 +537,7 @@ fn insert_table_endpoints(registry: &mut DemoRegistry) {
     }
 }
 
-fn insert_menu_endpoints(registry: &mut DemoRegistry) {
+fn insert_menu_endpoints(registry: &mut MapEndpoints) {
     for (id, kind) in [
         ("ui.window.can_open", ValueKind::Bool),
         ("ui.prefs.wave_follow", ValueKind::Bool),
@@ -637,7 +616,7 @@ fn insert_menu_endpoints(registry: &mut DemoRegistry) {
     );
 }
 
-fn insert_library_endpoints(registry: &mut DemoRegistry) {
+fn insert_library_endpoints(registry: &mut MapEndpoints) {
     for (id, kind) in [
         ("library.visible_tracks", ValueKind::Table),
         ("library.long_tracks", ValueKind::Table),

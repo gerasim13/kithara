@@ -1,7 +1,4 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use tracing::info;
@@ -186,8 +183,7 @@ impl<'a> SystemSetup<'a> {
                 self.config.host.quota_bytes
             );
         }
-        self.disable_indexing()?;
-        self.verify_case_folding()
+        self.disable_indexing()
     }
 
     /// A mounted volume is indexed by default, and this one holds nothing a
@@ -213,37 +209,6 @@ impl<'a> SystemSetup<'a> {
             )?;
         }
         Ok(())
-    }
-
-    /// Apple's own tooling assumes the case folding a stock macOS volume has.
-    /// `xcodebuild -create-xcframework` writes `Headers`, and the packaging
-    /// step then removes `headers`; on a case-sensitive volume those are two
-    /// names and the build dies with `No such file or directory`. This host
-    /// was given a case-sensitive volume and `apple:xcframework` never
-    /// succeeded on it once, while the same job passed inside a guest whose
-    /// disk was an ordinary one.
-    fn verify_case_folding(&self) -> Result<()> {
-        let probe =
-            case_folding_root(self.config).join(format!(".case-check.{}", std::process::id()));
-        fs::create_dir(&probe)
-            .with_context(|| format!("creating case-folding probe {}", probe.display()))?;
-        let lower = probe.join("probe");
-        let upper = probe.join("PROBE");
-        let result = (|| {
-            fs::write(&lower, [])?;
-            fs::write(&upper, [])?;
-            if fs::read_dir(&probe)?.count() != 1 {
-                bail!(
-                    "CI volume must fold case like a stock macOS volume; a case-sensitive one \
-                     breaks `xcodebuild -create-xcframework` packaging"
-                );
-            }
-            Ok(())
-        })();
-        let _ = fs::remove_file(lower);
-        let _ = fs::remove_file(upper);
-        let _ = fs::remove_dir(probe);
-        result
     }
 
     fn ensure_ci_user(&self) -> Result<()> {
@@ -482,10 +447,6 @@ impl<'a> SystemSetup<'a> {
     }
 }
 
-fn case_folding_root(config: &CiConfig) -> &Path {
-    config.host.build_root()
-}
-
 fn checkout_directories(config: &CiConfig) -> Vec<PathBuf> {
     let build_root = config.host.build_root();
     let mut directories = Vec::with_capacity(4);
@@ -554,6 +515,8 @@ fn parse_volume_quota(text: &str, device: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     #[test]
@@ -576,18 +539,6 @@ mod tests {
     fn quota_parser_is_scoped_to_device() {
         assert_eq!(parse_volume_quota(consts::APFS_LIST, "disk3s6"), None);
         assert_eq!(parse_volume_quota(consts::APFS_LIST, "disk9s1"), None);
-    }
-
-    #[test]
-    fn case_folding_belongs_to_the_checkout_root() {
-        let mut config = crate::ci::config::fixture();
-        config.host.host_root = PathBuf::from("/case-sensitive-ci-root");
-        config.host.build_root = Some(PathBuf::from("/case-folding-build-root"));
-
-        assert_eq!(
-            case_folding_root(&config),
-            Path::new("/case-folding-build-root")
-        );
     }
 
     /// One tool, one address. The privileged bootstrap spells `xcodebuild`

@@ -179,7 +179,7 @@ impl Reads for Phase {
     }
 }
 
-fn registry() -> kithara_ui::mock::TestRegistry {
+fn registry() -> kithara_ui::mock::MapEndpoints {
     let mut registry = kithara_ui::mock::player_registry();
     for id in ["gallery.phase", "gallery.clock"] {
         registry.insert(

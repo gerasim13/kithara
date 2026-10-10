@@ -416,11 +416,11 @@ fn rate_aware_latency_frames(capabilities: ElasticCapabilities, request: Elastic
         .expect("the output span fits in f64");
     capabilities
         .latency()
-        .source_frames()
+        .first()
         .to_f64()
         .map(|frames| (frames / (source_frames / output_frames)).ceil())
         .and_then(|frames| frames.to_usize())
-        .and_then(|frames| frames.checked_add(capabilities.latency().output_frames()))
+        .and_then(|frames| frames.checked_add(capabilities.latency().second()))
         .expect("the rate-aware latency fits in usize")
 }
 
@@ -436,10 +436,10 @@ fn rate_aware_terminal_source_frames(
         .expect("the request spans fit in f64");
     capabilities
         .latency()
-        .source_frames()
+        .first()
         .checked_add(source_frames_at(
             rate,
-            capabilities.latency().output_frames(),
+            capabilities.latency().second(),
             true,
         ))
         .expect("the terminal source span fits in usize")
@@ -491,14 +491,8 @@ fn backend_declares_its_prepared_domain_and_latency(
         capabilities.rate_envelope().max_source_frames_per_output(),
         4.0
     );
-    assert_eq!(
-        capabilities.latency().source_frames(),
-        expected_source_latency
-    );
-    assert_eq!(
-        capabilities.latency().output_frames(),
-        expected_output_latency
-    );
+    assert_eq!(capabilities.latency().first(), expected_source_latency);
+    assert_eq!(capabilities.latency().second(), expected_output_latency);
 }
 
 #[kithara::test]
@@ -516,7 +510,7 @@ fn unprimed_render_exposes_the_declared_total_latency(
     let mut engine = prepared_backend(backend, FRAMES, FRAMES);
     let latency = engine.capabilities().latency();
     assert!(
-        latency.source_frames() + latency.output_frames() < FRAMES,
+        latency.first() + latency.second() < FRAMES,
         "the fixture must outlast the complete declared latency"
     );
     let source = impulse_markers(stretch_pcm, FRAMES, 0);
@@ -531,8 +525,8 @@ fn unprimed_render_exposes_the_declared_total_latency(
         .expect("unity is inside the supported envelope");
 
     let expected_first_audible = latency
-        .source_frames()
-        .checked_add(latency.output_frames())
+        .first()
+        .checked_add(latency.second())
         .expect("the declared latency fits usize");
     assert_eq!(
         first_audible_frame(&output, CHANNELS),

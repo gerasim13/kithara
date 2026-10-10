@@ -12,7 +12,6 @@ use crate::{
     data = crate::atoms::painter::CellData,
     draw = self.paint(list, text, data.label.as_deref(), data.highlighted, bounds)
 )]
-#[derive(kithara_derive::Retained)]
 pub(crate) struct Cell {
     metrics: CellSkin,
     highlighted: Face,
@@ -111,7 +110,7 @@ mod tests {
         };
         let cell = Cell::new(skin);
         let draw = |label, highlighted| {
-            let mut text = TextContext::from(skin.text_resources());
+            let mut text = TextContext::from(skin.text_resources.as_ref());
             let mut list = DrawListBuilder::default();
             cell.paint(&mut list, &mut text, label, highlighted, bounds);
             list.finish()

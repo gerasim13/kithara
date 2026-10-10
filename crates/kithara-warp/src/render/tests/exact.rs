@@ -754,7 +754,7 @@ fn switching_to_keylock_retains_the_full_reprime_history(#[case] backend: Stretc
         .expect("engine")
         .capabilities()
         .latency();
-    let needed = latency.source_frames() * 3;
+    let needed = latency.first() * 3;
     let resident = renderer.residency.as_ref().expect("history");
     assert!(resident.history_frames >= needed * 4);
     let (numerator, denominator) = resident

@@ -2,7 +2,7 @@ use kithara_ui_shaping::{FontFamily, FontWeight, TextStyle};
 use serde::{Deserialize, Serialize};
 
 use super::palette::ColorRole;
-use crate::module::{Tone, WindowControlsStyle};
+use crate::module::WindowControlsStyle;
 
 /// One of the two looks a control switches between: what it paints under
 /// itself, and what it draws on top. A face naming no fill paints none, and
@@ -40,16 +40,6 @@ pub struct ToneColors {
     pub success: ColorRole,
 }
 
-/// The role one tone names in a control's own tone set.
-pub(crate) const fn tone_color(tone: Tone, tones: ToneColors) -> ColorRole {
-    match tone {
-        Tone::Accent => tones.accent,
-        Tone::Danger => tones.danger,
-        Tone::Neutral => tones.neutral,
-        Tone::Success => tones.success,
-    }
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, kithara_derive::Mirror)]
 #[mirror(into = TextStyle)]
 #[serde(deny_unknown_fields)]
@@ -61,18 +51,6 @@ pub struct TextRoleSkin {
     pub weight: FontWeight,
     pub size: f32,
     pub spacing: f32,
-}
-
-impl TextRoleSkin {
-    /// This role set in the face a run names, keeping the skin's where it
-    /// names none.
-    pub(crate) fn faced(self, font: Option<FontFamily>, weight: Option<FontWeight>) -> Self {
-        Self {
-            font: font.unwrap_or(self.font),
-            weight: weight.unwrap_or(self.weight),
-            ..self
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]

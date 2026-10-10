@@ -32,11 +32,15 @@ pub(super) fn validate_config(config: &TestCommandConfig) -> Result<()> {
     }
     for (name, lane) in &config.lanes {
         for entry in &lane.undeclared_toggles {
-            if entry != consts::FLASH_TOGGLE && entry != consts::NO_BLOCK_TOGGLE {
+            if entry != consts::FLASH_TOGGLE
+                && entry != consts::NO_BLOCK_TOGGLE
+                && entry != consts::LOAD_TOGGLE
+            {
                 bail!(
-                    "test.lanes.{name}.undeclared_toggles carries `{entry}`; valid toggles are `{FLASH_TOGGLE}` and `{NO_BLOCK_TOGGLE}`",
+                    "test.lanes.{name}.undeclared_toggles carries `{entry}`; valid toggles are `{FLASH_TOGGLE}`, `{NO_BLOCK_TOGGLE}` and `{LOAD_TOGGLE}`",
                     FLASH_TOGGLE = consts::FLASH_TOGGLE,
-                    NO_BLOCK_TOGGLE = consts::NO_BLOCK_TOGGLE
+                    NO_BLOCK_TOGGLE = consts::NO_BLOCK_TOGGLE,
+                    LOAD_TOGGLE = consts::LOAD_TOGGLE
                 );
             }
         }
@@ -127,6 +131,7 @@ pub(super) fn select_lane<'a>(
 pub(crate) struct LaneToggles {
     pub(crate) flash: bool,
     pub(crate) no_block: bool,
+    pub(crate) load: bool,
 }
 
 /// Resolve one toggle for a lane.
@@ -155,6 +160,7 @@ fn lane_toggles(
     lane: &TestLaneConfig,
     flash: Option<bool>,
     no_block: Option<bool>,
+    load: Option<bool>,
 ) -> LaneToggles {
     LaneToggles {
         flash: toggle(
@@ -162,14 +168,21 @@ fn lane_toggles(
             flash,
             lane.default_flash,
             lane,
-            config.flash.default,
+            config.flash.enabled,
         ),
         no_block: toggle(
             consts::NO_BLOCK_TOGGLE,
             no_block,
             lane.default_no_block,
             lane,
-            config.no_block.default,
+            config.no_block.enabled,
+        ),
+        load: toggle(
+            consts::LOAD_TOGGLE,
+            load,
+            lane.default_load,
+            lane,
+            config.load.enabled,
         ),
     }
 }
@@ -184,10 +197,13 @@ pub(super) fn lane_features(
     features.extend(config.features.iter().cloned());
     features.extend(lane.default_features.iter().cloned());
     if toggles.flash {
-        features.extend(config.flash.features.iter().cloned());
+        features.extend(config.flash.items.iter().cloned());
     }
     if toggles.no_block {
-        features.extend(config.no_block.features.iter().cloned());
+        features.extend(config.no_block.items.iter().cloned());
+    }
+    if toggles.load {
+        features.extend(config.load.items.iter().cloned());
     }
     let Some(backend) = config.net_backends.get(backend_name) else {
         let valid = config
@@ -216,6 +232,7 @@ pub(super) fn requested<'a>(
         request.and_then(|request| request.net_backend.as_deref()),
         request.and_then(|request| request.flash),
         request.and_then(|request| request.no_block),
+        request.and_then(|request| request.load),
     )
 }
 
@@ -227,8 +244,9 @@ pub(crate) fn toggled<'a>(
     lane_name: &'a str,
     flash: Option<bool>,
     no_block: Option<bool>,
+    load: Option<bool>,
 ) -> Result<LaneChoice<'a>> {
-    choice(test, lane_name, None, flash, no_block)
+    choice(test, lane_name, None, flash, no_block, load)
 }
 
 fn choice<'a>(
@@ -237,6 +255,7 @@ fn choice<'a>(
     backend: Option<&'a str>,
     flash: Option<bool>,
     no_block: Option<bool>,
+    load: Option<bool>,
 ) -> Result<LaneChoice<'a>> {
     let lane = test
         .lanes
@@ -247,6 +266,6 @@ fn choice<'a>(
             .or(lane.default_backend.as_deref())
             .unwrap_or(&test.default_backend),
         lane: lane_name,
-        toggles: lane_toggles(test, lane, flash, no_block),
+        toggles: lane_toggles(test, lane, flash, no_block, load),
     })
 }

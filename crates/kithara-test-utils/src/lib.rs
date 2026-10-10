@@ -24,6 +24,8 @@ pub mod flight;
 pub mod hang;
 #[cfg(all(feature = "http-server", not(target_arch = "wasm32")))]
 pub mod http_server;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod load;
 pub mod memory;
 #[cfg(feature = "mock")]
 pub mod mock;

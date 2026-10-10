@@ -29,7 +29,7 @@ fn warmup_request(
             .contains_rate(source_frames_per_output),
         "invariant: warmup rate stays inside the envelope"
     );
-    let output_frames = capabilities.latency().output_frames();
+    let output_frames = capabilities.latency().second();
     let source_frames = source_frames_at(source_frames_per_output, output_frames, false);
     ElasticRequest::new(source_frames, output_frames).expect("invariant: warmup request is valid")
 }
@@ -43,16 +43,12 @@ fn primed_playing_pair(stretch_pcm: &StretchPcm, backend: StretchKind) -> Primed
     assert_eq!(changed.capabilities(), capabilities);
     let latency = capabilities.latency();
     let warmup = warmup_request(capabilities, 1.0);
-    let history = indexed_markers(stretch_pcm, latency.source_frames(), 0);
-    let lookahead = indexed_markers(
-        stretch_pcm,
-        latency.source_frames(),
-        latency.source_frames(),
-    );
+    let history = indexed_markers(stretch_pcm, latency.first(), 0);
+    let lookahead = indexed_markers(stretch_pcm, latency.first(), latency.first());
     let warm_source = indexed_markers(
         stretch_pcm,
         warmup.source_frames(),
-        latency.source_frames().saturating_mul(2),
+        latency.first().saturating_mul(2),
     );
     let mut reference_discard = vec![0.0; warmup.output_frames() * CHANNELS];
     let mut changed_discard = vec![0.0; warmup.output_frames() * CHANNELS];
@@ -76,7 +72,7 @@ fn primed_playing_pair(stretch_pcm: &StretchPcm, backend: StretchKind) -> Primed
         .expect("changed engine primes");
 
     let continuation = latency
-        .source_frames()
+        .first()
         .saturating_mul(2)
         .saturating_add(warmup.source_frames());
     let source = indexed_markers(stretch_pcm, CONTROL_QUANTUM, continuation);
@@ -114,7 +110,7 @@ fn assert_control_response(
         .expect("the changed pitch is supported");
     let mut reference_position = continuation;
     let mut changed_position = continuation;
-    let mut remaining = capabilities.latency().output_frames();
+    let mut remaining = capabilities.latency().second();
     while remaining > 0 {
         let output_frames = remaining.min(CONTROL_QUANTUM);
         let reference_request = ElasticRequest::new(output_frames, output_frames)
@@ -159,7 +155,7 @@ fn history_and_output_warmup_remove_the_initial_gap(
 
     let mut engine = prepared_backend(backend, FRAMES * 2, FRAMES);
     let capabilities = engine.capabilities();
-    let history_frames = capabilities.latency().source_frames();
+    let history_frames = capabilities.latency().first();
     let history = stretch_pcm.quarter[..history_frames * CHANNELS].to_vec();
     let lookahead = stretch_pcm.quarter[..history.len()].to_vec();
     let warmup = warmup_request(capabilities, 1.0);
@@ -247,13 +243,9 @@ fn repeated_adjacent_rate_and_pitch_corrections_remain_continuous(
     let capabilities = engine.capabilities();
     let latency = capabilities.latency();
     let warmup = warmup_request(capabilities, 1.0);
-    let history = continuous_tone(stretch_pcm, latency.source_frames(), 0);
-    let lookahead = continuous_tone(
-        stretch_pcm,
-        latency.source_frames(),
-        latency.source_frames(),
-    );
-    let warm_offset = latency.source_frames().saturating_mul(2);
+    let history = continuous_tone(stretch_pcm, latency.first(), 0);
+    let lookahead = continuous_tone(stretch_pcm, latency.first(), latency.first());
+    let warm_offset = latency.first().saturating_mul(2);
     let warm_source = continuous_tone(stretch_pcm, warmup.source_frames(), warm_offset);
     let mut discarded = vec![0.0; warmup.output_frames() * CHANNELS];
     engine
@@ -325,13 +317,9 @@ fn sustained_pitch_alternation_renders_only_admitted_source(
     let mut engine = prepared_backend(backend, MAX_FRAMES, MAX_FRAMES);
     let latency = engine.capabilities().latency();
     let warmup = warmup_request(engine.capabilities(), 1.0);
-    let history = continuous_tone(stretch_pcm, latency.source_frames(), 0);
-    let lookahead = continuous_tone(
-        stretch_pcm,
-        latency.source_frames(),
-        latency.source_frames(),
-    );
-    let warm_offset = latency.source_frames().saturating_mul(2);
+    let history = continuous_tone(stretch_pcm, latency.first(), 0);
+    let lookahead = continuous_tone(stretch_pcm, latency.first(), latency.first());
+    let warm_offset = latency.first().saturating_mul(2);
     let warm_source = continuous_tone(stretch_pcm, warmup.source_frames(), warm_offset);
     let mut discarded = vec![0.0; warmup.output_frames() * CHANNELS];
     engine
@@ -381,17 +369,13 @@ fn source_history_conditions_the_cue_boundary(
     assert_eq!(zero_padded.capabilities(), capabilities);
     let latency = capabilities.latency();
     let warmup = warmup_request(capabilities, 1.0);
-    let history = continuous_tone(stretch_pcm, latency.source_frames(), 0);
+    let history = continuous_tone(stretch_pcm, latency.first(), 0);
     let empty_history = stretch_pcm.silence[..history.len()].to_vec();
-    let lookahead = continuous_tone(
-        stretch_pcm,
-        latency.source_frames(),
-        latency.source_frames(),
-    );
+    let lookahead = continuous_tone(stretch_pcm, latency.first(), latency.first());
     let warm_source = continuous_tone(
         stretch_pcm,
         warmup.source_frames(),
-        latency.source_frames().saturating_mul(2),
+        latency.first().saturating_mul(2),
     );
     let mut conditioned_discard = vec![0.0; warmup.output_frames() * CHANNELS];
     let mut zero_padded_discard = vec![0.0; warmup.output_frames() * CHANNELS];
@@ -414,12 +398,12 @@ fn source_history_conditions_the_cue_boundary(
         )
         .expect("zero-padded engine primes");
 
-    let quantum = latency.output_frames();
+    let quantum = latency.second();
     let source = continuous_tone(
         stretch_pcm,
         quantum,
         latency
-            .source_frames()
+            .first()
             .saturating_mul(2)
             .saturating_add(warmup.source_frames()),
     );
@@ -467,8 +451,8 @@ fn prime_accepts_declared_rate_edges(
 
     let mut engine = prepared_backend(backend, FRAMES * 2, FRAMES);
     let capabilities = engine.capabilities();
-    let history_frames = capabilities.latency().source_frames();
-    let output_frames = capabilities.latency().output_frames();
+    let history_frames = capabilities.latency().first();
+    let output_frames = capabilities.latency().second();
     let source_frames = source_frames_at(rate, output_frames, rate < 1.0);
     let request = ElasticRequest::new(source_frames, output_frames)
         .expect("the declared edge request is non-empty");
@@ -511,7 +495,7 @@ fn priming_hides_history_and_preserves_source_order(
 
     let mut engine = prepared_backend(backend, MAX_FRAMES, MAX_FRAMES);
     let capabilities = engine.capabilities();
-    let history_frames = capabilities.latency().source_frames();
+    let history_frames = capabilities.latency().first();
     let warmup = warmup_request(capabilities, source_frames_per_output);
     let history = stretch_pcm.nine[..history_frames * CHANNELS].to_vec();
     let lookahead = stretch_pcm.fifth[..history.len()].to_vec();
@@ -582,7 +566,7 @@ fn prime_rejects_every_ambiguous_buffer_count(
     let mut engine = prepared_backend(backend, 1024, 512);
     let capabilities = engine.capabilities();
     let warmup = warmup_request(capabilities, 1.0);
-    let history = stretch_pcm.quarter[..capabilities.latency().source_frames() * CHANNELS].to_vec();
+    let history = stretch_pcm.quarter[..capabilities.latency().first() * CHANNELS].to_vec();
     let lookahead = stretch_pcm.quarter[..history.len()].to_vec();
     let source = stretch_pcm.quarter[..warmup.source_frames() * CHANNELS].to_vec();
     let mut discarded = vec![0.0; warmup.output_frames() * CHANNELS];
@@ -667,7 +651,7 @@ fn reset_reprime_keeps_the_first_frame_aligned(
     let mut engine = prepared_backend(backend, SOURCE_FRAMES, OUTPUT_FRAMES);
     let capabilities = engine.capabilities();
     let warmup = warmup_request(capabilities, 1.2);
-    let history = stretch_pcm.quarter[..capabilities.latency().source_frames() * CHANNELS].to_vec();
+    let history = stretch_pcm.quarter[..capabilities.latency().first() * CHANNELS].to_vec();
     let lookahead = stretch_pcm.quarter[..history.len()].to_vec();
     let warm_source = stretch_pcm.quarter[..warmup.source_frames() * CHANNELS].to_vec();
     let source = stretch_pcm.quarter[..SOURCE_FRAMES * CHANNELS].to_vec();
@@ -713,7 +697,7 @@ fn prime_discards_previous_stream_state(
     let mut reused = prepared_backend(backend, FRAMES, FRAMES);
     let capabilities = fresh.capabilities();
     let warmup = warmup_request(capabilities, 1.0);
-    let history_frames = capabilities.latency().source_frames();
+    let history_frames = capabilities.latency().first();
     let history = indexed_markers(stretch_pcm, history_frames, 0);
     let lookahead = indexed_markers(stretch_pcm, history_frames, history_frames);
     let warm_source = indexed_markers(stretch_pcm, warmup.source_frames(), history_frames * 2);

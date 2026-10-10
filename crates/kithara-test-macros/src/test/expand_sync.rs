@@ -6,7 +6,7 @@ use super::{
     expand_async::{emit_async_runtime_test, emit_async_timeout_test},
     parse::TestArgs,
     shared::{
-        finalize_body, make_ambient_stmt, make_serial_attr, make_tracing_init,
+        finalize_body, make_ambient_stmt, make_serial_attr, make_test_setup,
         make_wasm_serial_guard, wrap_with_model, wrap_with_timeout,
     },
 };
@@ -23,12 +23,12 @@ pub(crate) fn emit_one_test(
     body_stmts: &[syn::Stmt],
     args: &TestArgs,
 ) -> TokenStream2 {
-    let tracing_init = make_tracing_init(args, remaining_attrs);
+    let test_setup = make_test_setup(args, remaining_attrs);
     let ambient = make_ambient_stmt(args);
     // Async-native emissions install mode per poll; wasm and sync emissions
     // hold both ambient and active scopes in the body.
-    let full_plain = quote! { #tracing_init #preamble #(#body_stmts)* };
-    let full_held = quote! { #tracing_init #preamble #ambient #(#body_stmts)* };
+    let full_plain = quote! { #preamble #(#body_stmts)* };
+    let full_held = quote! { #test_setup #preamble #ambient #(#body_stmts)* };
     let serial_attr = make_serial_attr(args);
     let wasm_serial_guard = make_wasm_serial_guard(args);
 

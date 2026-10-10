@@ -5,7 +5,6 @@ use crate::{
     render::Skin,
     shaping::TextContext,
     skin::{TelemetrySkin, TextRoleSkin},
-    solve::{Length, Size},
 };
 
 /// One formatted number, centred in its box and framed only when the document
@@ -18,7 +17,7 @@ pub(crate) struct Telemetry {
     format: ScalarFormat,
     metrics: TelemetrySkin,
     role: TextRoleSkin,
-    framed: bool,
+    pub(crate) framed: bool,
 }
 
 impl Telemetry {
@@ -32,15 +31,6 @@ impl Telemetry {
             role: metrics.text,
             stroke: skin.rgba(metrics.frame.border),
             text: skin.rgba(metrics.text.color),
-        }
-    }
-
-    /// A framed reading fills its row; a bare one is as wide as its digits.
-    pub(crate) const fn declared(&self) -> Size<Length> {
-        if self.framed {
-            Size::new(Length::Fill, Length::Fill)
-        } else {
-            Size::new(Length::Shrink, Length::Fill)
         }
     }
 
@@ -94,7 +84,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{ScalarFormat, Telemetry};
-    use crate::{builtin, solve::Length};
+    use crate::builtin;
 
     /// A percentage is padded so the row does not shuffle as the reading
     /// changes; a plain scalar is not.
@@ -115,26 +105,6 @@ mod tests {
         assert_eq!(
             plain.format(0.5).len() - dot - 1,
             skin.telemetry.scalar_precision
-        );
-    }
-
-    /// A bare reading is as wide as its digits, so it must ask to shrink; a
-    /// framed one owns its row.
-    #[kithara::test]
-    fn only_a_bare_reading_asks_to_shrink() {
-        let skin = builtin::skin();
-
-        assert_eq!(
-            Telemetry::new(ScalarFormat::Default, false, skin)
-                .declared()
-                .width,
-            Length::Shrink
-        );
-        assert_eq!(
-            Telemetry::new(ScalarFormat::Default, true, skin)
-                .declared()
-                .width,
-            Length::Fill
         );
     }
 }

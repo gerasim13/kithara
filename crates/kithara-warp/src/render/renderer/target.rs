@@ -89,14 +89,14 @@ where
                         .map(|engine| engine.capabilities())?;
                 {
                     let latency = capabilities.latency();
-                    history_frames = history_frames.max(latency.source_frames().saturating_mul(12));
+                    history_frames = history_frames.max(latency.first().saturating_mul(12));
                     let source_tail = Self::latency_source_tail(capabilities);
                     replacement_frames =
-                        replacement_frames.max(latency.output_frames().saturating_add(source_tail));
+                        replacement_frames.max(latency.second().saturating_add(source_tail));
                     let warm = Self::latency_warm_source(capabilities);
                     resident_frames = resident_frames.max(
                         latency
-                            .source_frames()
+                            .first()
                             .saturating_mul(2)
                             .saturating_add(warm)
                             .saturating_add(source_block_frames.get().saturating_mul(2)),
@@ -105,8 +105,8 @@ where
                         history_frames
                             .saturating_add(
                                 latency
-                                    .source_frames()
-                                    .saturating_add(latency.output_frames())
+                                    .first()
+                                    .saturating_add(latency.second())
                                     .saturating_mul(12),
                             )
                             .saturating_add(source_block_frames.get().saturating_mul(4)),
@@ -128,11 +128,11 @@ where
                 let channels = usize::from(spec.channels.max(1));
                 let latency = engine.capabilities().latency();
                 let projection_frames = latency
-                    .source_frames()
+                    .first()
                     .checked_mul(6)
                     .and_then(|history| {
                         latency
-                            .output_frames()
+                            .second()
                             .checked_mul(3)
                             .and_then(|future| history.checked_add(future))
                     })
@@ -150,7 +150,7 @@ where
                 let activation_samples = engine
                     .capabilities()
                     .latency()
-                    .output_frames()
+                    .second()
                     .checked_mul(channels)
                     .ok_or(ElasticError::SampleCountOverflow)?;
                 let activation_scratch =
@@ -214,11 +214,7 @@ where
     }
 
     fn latency_source_tail(capabilities: kithara_stretch::ElasticCapabilities) -> usize {
-        (capabilities
-            .latency()
-            .source_frames()
-            .to_f64()
-            .unwrap_or(f64::MAX)
+        (capabilities.latency().first().to_f64().unwrap_or(f64::MAX)
             / capabilities.rate_envelope().min_source_frames_per_output())
         .ceil()
         .to_usize()
@@ -226,11 +222,7 @@ where
     }
 
     fn latency_warm_source(capabilities: kithara_stretch::ElasticCapabilities) -> usize {
-        (capabilities
-            .latency()
-            .output_frames()
-            .to_f64()
-            .unwrap_or(f64::MAX)
+        (capabilities.latency().second().to_f64().unwrap_or(f64::MAX)
             * capabilities.rate_envelope().max_source_frames_per_output())
         .ceil()
         .to_usize()

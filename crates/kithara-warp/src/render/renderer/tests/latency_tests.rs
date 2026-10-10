@@ -56,7 +56,7 @@ fn prepared_engine_latency_is_visible_before_activation(#[case] backend: Stretch
         .expect("fixture engine is prepared")
         .capabilities()
         .latency()
-        .output_frames();
+        .second();
 
     assert!(!renderer.active);
     assert!(renderer.rendered_source_end.is_none());

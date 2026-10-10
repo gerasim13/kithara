@@ -22,9 +22,9 @@ mod elastic;
 pub use elastic::{
     BungeeConfig, BungeeConfigPatch, ElasticBackendConfig, ElasticBackendConfigPatch,
     ElasticBackendConfigPatchError, ElasticCapabilities, ElasticConfig, ElasticCursor,
-    ElasticDrain, ElasticEngine, ElasticError, ElasticLatency, ElasticRateEnvelope, ElasticRequest,
-    ElasticSpan, ElasticSpanConfig, ElasticSpanPlan, ElasticSpanRequest, SignalsmithConfig,
-    SignalsmithConfigPatch, SignalsmithConfigPatchError,
+    ElasticDrain, ElasticEngine, ElasticError, ElasticLatency, ElasticLatencyTag,
+    ElasticRateEnvelope, ElasticRequest, ElasticSpan, ElasticSpanConfig, ElasticSpanPlan,
+    ElasticSpanRequest, SignalsmithConfig, SignalsmithConfigPatch, SignalsmithConfigPatchError,
 };
 #[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;

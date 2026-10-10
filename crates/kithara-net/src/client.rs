@@ -21,12 +21,12 @@ use crate::{
     backend::{
         Client, RequestBuilder, Response, StatusCode, build_client, head_request, post_request,
     },
-    error::{NetError, NetResult, truncate_error_body},
+    error::{NetError, truncate_error_body},
     metrics::ConnectionMetrics,
     observe::Observer,
     range_response::{accepts_response_status, validate_range_response},
     resumable::{Refetch, Resumed, resumable_body},
-    retry::RetryNet,
+    retry::{RetryClient, RetryNet},
     traits::Net,
     types::{AcceptEncodingPolicy, Headers, NetOptions, RangeSpec, RetryPolicy},
 };
@@ -115,7 +115,7 @@ fn extract_headers(resp: &Response) -> Headers {
 /// behind [`HttpClient`]'s [`RetryNet`] decorator — exposed only via
 /// the [`Net`] trait, never constructed by callers directly.
 #[derive(Clone)]
-struct RawHttp {
+pub struct RawHttp {
     /// Master-derived cancel, captured by the self-healing body so a re-fetch
     /// loop exits promptly on teardown. Same token the `RetryNet` layer uses.
     cancel: CancelToken,
@@ -319,13 +319,9 @@ impl RawHttp {
 /// `options.retry_policy` — retryable errors (TLS-close, timeout,
 /// 5xx, IO) are re-issued with exponential backoff; non-retryable
 /// errors (HTTP 4xx, cancellation) propagate immediately.
-#[derive(Clone)]
-pub struct HttpClient {
-    net: Arc<RetryNet<RawHttp>>,
-    connection_metrics: ConnectionMetrics,
-}
+pub type HttpClient = RetryClient<RawHttp>;
 
-impl std::fmt::Debug for HttpClient {
+impl std::fmt::Debug for RetryClient<RawHttp> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HttpClient")
             .field("options", self.options())
@@ -333,7 +329,7 @@ impl std::fmt::Debug for HttpClient {
     }
 }
 
-impl HttpClient {
+impl RetryClient<RawHttp> {
     /// Build a retry-decorated HTTP client rooted on `cancel`. The
     /// `RetryNet` layer aborts pending retries when that token is
     /// cancelled. Callers MUST pass a token that lives in the
@@ -365,11 +361,6 @@ impl HttpClient {
             net,
             connection_metrics,
         }
-    }
-
-    #[must_use]
-    pub fn connection_count(&self) -> usize {
-        self.connection_metrics.connection_count()
     }
 
     #[must_use]
@@ -413,76 +404,6 @@ impl HttpClient {
             #[field(&options)]
             pub fn options(&self) -> &NetOptions;
         }
-        to self.net {
-            /// # Errors
-            ///
-            /// Returns [`NetError`] on HTTP failure, timeout, or network error.
-            pub async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> NetResult<Bytes>;
-            /// # Errors
-            ///
-            /// Returns [`NetError`] on HTTP failure or network error.
-            pub async fn get_range(
-                &self,
-                url: Url,
-                range: RangeSpec,
-                headers: Option<Headers>,
-            ) -> NetResult<crate::ByteStream>;
-            /// # Errors
-            ///
-            /// Returns [`NetError`] on HTTP failure or network error.
-            pub async fn head(&self, url: Url, headers: Option<Headers>) -> NetResult<Headers>;
-            /// # Errors
-            ///
-            /// Returns [`NetError`] on HTTP failure, timeout, or network error.
-            pub async fn post_bytes(
-                &self,
-                url: Url,
-                body: Bytes,
-                headers: Option<Headers>,
-            ) -> NetResult<Bytes>;
-            /// # Errors
-            ///
-            /// Returns [`NetError`] on HTTP failure or network error.
-            pub async fn stream(&self, url: Url, headers: Option<Headers>) -> NetResult<crate::ByteStream>;
-        }
-    }
-}
-
-#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
-#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-impl Net for HttpClient {
-    async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
-        self.net.get_bytes(url, headers).await
-    }
-
-    async fn get_range(
-        &self,
-        url: Url,
-        range: RangeSpec,
-        headers: Option<Headers>,
-    ) -> Result<crate::ByteStream, NetError> {
-        self.net.get_range(url, range, headers).await
-    }
-
-    async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
-        self.net.head(url, headers).await
-    }
-
-    async fn post_bytes(
-        &self,
-        url: Url,
-        body: Bytes,
-        headers: Option<Headers>,
-    ) -> Result<Bytes, NetError> {
-        self.net.post_bytes(url, body, headers).await
-    }
-
-    async fn stream(
-        &self,
-        url: Url,
-        headers: Option<Headers>,
-    ) -> Result<crate::ByteStream, NetError> {
-        self.net.stream(url, headers).await
     }
 }
 

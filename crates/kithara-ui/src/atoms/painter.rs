@@ -1,7 +1,7 @@
 use crate::{
     atoms::{
         bar::preset::{Preset, PresetData},
-        button::{Button, ButtonLabel, VisualState},
+        button::{ButtonLabel, VisualState},
         deck::summary::{Loaded, Summary},
         design::{
             fader::Fader,
@@ -12,10 +12,9 @@ use crate::{
         wave::face::{Drawn, Wave},
     },
     draw::{DrawListBuilder, Rect},
+    hosts::{icons::Mark, solve::Size},
     interact::Hit,
-    render::Mark,
     shaping::TextContext,
-    solve::{Length, Size, length},
 };
 
 /// Transient per-cell state owned by an indexed control adapter.
@@ -76,22 +75,12 @@ pub(crate) trait ControlPainter: Clone + PartialEq {
         hit.uniform_horizontal_index(count)
     }
 
-    /// The box it asks for when the skin, rather than the row it sits in,
-    /// settles an axis.
-    ///
-    /// A share of the row is the one length a document cannot state — `Dim` has
-    /// no portion, and the portions in this repository all come from the skin —
-    /// so it is said once here rather than once per host.
-    fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
-        Size::new(Length::Fill, Length::Fill)
-    }
-
     /// How big it actually is, on the axes it settles for itself.
     ///
     /// A zero on an axis means the painter has no opinion there and the row
     /// decides — which is what both hosts already do with a leaf that does not
-    /// measure. Only the painters whose [`Self::length`] can answer `Shrink` or
-    /// a measured `Fixed` need this; the rest fill what they are given.
+    /// measure. Only the painters whose host length can answer `Shrink` or a
+    /// measured `Fixed` need this; the rest fill what they are given.
     fn measure(&self, _text: &mut TextContext, _data: &Self::Data) -> Size {
         Size::ZERO
     }
@@ -129,13 +118,6 @@ impl ControlPainter for TabLarge {
         _state: VisualState,
     ) {
         self.paint(list, text, &data.label, data.active, bounds);
-    }
-
-    /// A tab is as wide as its own word: a strip of tabs is a row of headings,
-    /// not a set of equal columns, so a tab that filled its share would move
-    /// its neighbours whenever a word changed.
-    fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
-        Self::declared_length(self.height())
     }
 
     fn measure(&self, text: &mut TextContext, data: &Self::Data) -> Size {
@@ -176,27 +158,6 @@ impl ControlPainter for Fader {
 pub(crate) struct ButtonData {
     pub(crate) label: ButtonLabel<String>,
     pub(crate) active: bool,
-}
-
-impl ControlPainter for Button {
-    type Data = ButtonData;
-
-    const READS_POINTER: bool = true;
-
-    fn draw(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        data: &Self::Data,
-        bounds: Rect,
-        state: VisualState,
-    ) {
-        self.paint(list, text, &data.label, data.active, bounds, state);
-    }
-
-    fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
-        self.declared()
-    }
 }
 
 impl ControlPainter for StatusDot {
@@ -257,10 +218,6 @@ impl ControlPainter for Preset {
     fn index_at(&self, data: &Self::Data, hit: &Hit, _count: usize) -> Option<usize> {
         self.hit_index(data, hit.area(), hit.inside()?)
     }
-
-    fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
-        self.declared()
-    }
 }
 
 /// The naming panel steps aside while the pointer is on the waveform, so the
@@ -296,13 +253,6 @@ impl ControlPainter for Summary {
         self.paint(list, text, data, bounds);
     }
 
-    /// A deck's headline takes the box its skin names: it is as wide as the
-    /// words it holds, not a share of the row it stands in.
-    fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
-        let size = self.metrics().summary_size;
-        Size::new(length(size.w), length(size.h))
-    }
-
     /// Only the width: a headline fills the height of the panel it sits in.
     fn measure(&self, text: &mut TextContext, data: &Self::Data) -> Size {
         Size::new(self.intrinsic_width(text, data), 0.0)
@@ -321,10 +271,6 @@ impl ControlPainter for Telemetry {
         _state: VisualState,
     ) {
         self.paint(list, text, &self.format(*data), bounds);
-    }
-
-    fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
-        self.declared()
     }
 
     /// Only the width: a reading fills the height of the row it sits in.

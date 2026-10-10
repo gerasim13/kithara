@@ -7,8 +7,9 @@ mod chunk;
 mod coverage;
 mod error;
 mod fader;
+mod frame_pair;
+mod revision;
 mod sample;
-mod segment;
 mod session;
 mod spec;
 #[cfg(test)]
@@ -17,13 +18,14 @@ mod time;
 mod units;
 
 pub use buffer::{InterleavedView, PlanarBuffer, PlanarView};
-pub use chunk::{AudioChunk, AudioChunkInfo, SourceSpan};
+pub use chunk::{AudioChunk, AudioChunkInfo, SegmentId, SourceSpan};
 pub use coverage::{CoverageRead, CoverageWrite, FrameCoverage, FrameSpan};
 pub use error::SignalError;
 pub use fader::FaderValue;
+pub use frame_pair::FramePair;
+pub use revision::Revision;
 pub use sample::sanitize_sample;
-pub use segment::SegmentId;
 pub use session::{OutputContext, SessionEpoch, SessionFrame, TransportRevision};
 pub use spec::AudioSpec;
-pub use units::{FrameCount, SampleCount};
+pub use units::{Count, FrameCount, Frames, SampleCount, Samples};
 mod consts;

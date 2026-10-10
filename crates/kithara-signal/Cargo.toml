@@ -17,6 +17,7 @@ kithara-dsp = { workspace = true }
 kithara-platform = { workspace = true }
 
 delegate = { workspace = true }
+derive-where = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
 rangemap = { workspace = true }

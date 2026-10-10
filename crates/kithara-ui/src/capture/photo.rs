@@ -23,7 +23,7 @@ use iced_wgpu::{
 use kithara_ui_capture::Geometry;
 use num_traits::cast::AsPrimitive;
 
-use crate::render::fonts::{FONT_BYTES, SANS};
+use crate::iced::fonts::{FONT_BYTES, SANS};
 
 /// Photographs a page through iced with no window and no display.
 ///

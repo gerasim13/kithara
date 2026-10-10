@@ -1,11 +1,11 @@
 use std::fs;
 
 use anyhow::Result;
-use syn::{Expr, ExprMethodCall, ImplItem, ItemImpl, Stmt, visit, visit::Visit};
+use syn::{Expr, ExprMethodCall, ImplItem, ItemImpl, Stmt};
 
-use super::{Check, Context};
+use super::{Check, Context, derivable_support::check_impls};
 use crate::{
-    common::{parse::self_ty_name, violation::Violation, walker::relative_to},
+    common::{violation::Violation, walker::relative_to},
     idioms::config::DerivableSeverity,
 };
 
@@ -42,36 +42,9 @@ impl Check for DerivableControlPainter {
 }
 
 fn check_source(source: &str) -> Vec<(String, usize)> {
-    let Ok(file) = syn::parse_file(source) else {
-        return Vec::new();
-    };
-    let mut visitor = PainterVisitor::default();
-    visitor.visit_file(&file);
-    visitor.findings
-}
-
-#[derive(Default)]
-struct PainterVisitor {
-    findings: Vec<(String, usize)>,
-}
-
-impl<'ast> Visit<'ast> for PainterVisitor {
-    fn visit_item_impl(&mut self, implementation: &'ast ItemImpl) {
-        let is_painter = implementation
-            .trait_
-            .as_ref()
-            .and_then(|(path, _)| path.segments.last())
-            .is_some_and(|segment| segment.ident == "ControlPainter");
-        if is_painter
-            && implementation.attrs.is_empty()
-            && structural_painter(implementation)
-            && let Some(name) = self_ty_name(&implementation.self_ty)
-        {
-            self.findings
-                .push((name, implementation.impl_token.span.start().line));
-        }
-        visit::visit_item_impl(self, implementation);
-    }
+    check_impls(source, "ControlPainter", |implementation| {
+        implementation.attrs.is_empty() && structural_painter(implementation)
+    })
 }
 
 fn structural_painter(implementation: &ItemImpl) -> bool {

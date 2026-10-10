@@ -7,6 +7,9 @@ excluded_crates = [
   "kithara-test-macros",
 ]
 
+[gate]
+min_behavior = 0.9
+
 [[types.relations]]
 left = "Vec"
 right = "SmallVec"

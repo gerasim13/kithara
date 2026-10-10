@@ -20,7 +20,7 @@ mod error;
 pub use error::ElasticError;
 
 mod latency;
-pub use latency::ElasticLatency;
+pub use latency::{ElasticLatency, ElasticLatencyTag};
 
 mod rate;
 pub use rate::ElasticRateEnvelope;

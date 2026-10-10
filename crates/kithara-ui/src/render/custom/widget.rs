@@ -34,7 +34,6 @@ pub trait CustomWidget: 'static {
     /// Whether focusing this component should start a platform input-method
     /// session. Only the retained host opens one; iced owns that session in the
     /// immediate host, so the question is asked there.
-    #[cfg(feature = "masonry")]
     fn accepts_text_input(&self) -> bool {
         false
     }
@@ -72,5 +71,43 @@ pub trait CustomWidget: 'static {
     /// Declares whether the host should schedule animation frames.
     fn repaint(&self) -> Repaint {
         Repaint::None
+    }
+}
+pub(crate) struct MappedCustom<Widget, Map> {
+    map: Map,
+    widget: Widget,
+}
+
+impl<Widget, Map> MappedCustom<Widget, Map> {
+    pub(crate) const fn new(widget: Widget, map: Map) -> Self {
+        Self { map, widget }
+    }
+}
+
+impl<Action, Widget, Map> CustomWidget for MappedCustom<Widget, Map>
+where
+    Widget: CustomWidget,
+    Map: Fn(Widget::Action) -> Action + 'static,
+    Action: std::fmt::Debug + Send + 'static,
+{
+    type Action = Action;
+
+    delegate::delegate! {
+        to self.widget {
+            fn accepts_text_input(&self) -> bool;
+            fn measure(&mut self, text: &mut TextMeasurer<'_>, limits: SizeLimits) -> Size2;
+            #[expr($.map(&self.map))]
+            fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<Action>;
+            #[expr($.map(&self.map))]
+            fn frame(&mut self, elapsed: Duration) -> Option<Action>;
+            fn paint(
+                &mut self,
+                list: &mut DrawListBuilder,
+                text: &mut TextMeasurer<'_>,
+                bounds: Rect,
+                skin: &CustomSkin,
+            );
+            fn repaint(&self) -> Repaint;
+        }
     }
 }

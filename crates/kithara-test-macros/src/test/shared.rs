@@ -105,7 +105,10 @@ pub(crate) fn make_ambient_stmt(args: &TestArgs) -> TokenStream2 {
     }
 }
 
-pub(crate) fn make_tracing_init(args: &TestArgs, remaining_attrs: &[&Attribute]) -> TokenStream2 {
+/// Per-test process setup, spliced as statements into the test body's scope:
+/// the log subscriber, then the `load` feature's CPU contention held until
+/// the body ends.
+pub(crate) fn make_test_setup(args: &TestArgs, remaining_attrs: &[&Attribute]) -> TokenStream2 {
     let init = if let Some(filter) = &args.tracing_filter {
         quote! {
             ::kithara_test_utils::test::setup_tracing_with_filter(#filter);
@@ -115,15 +118,19 @@ pub(crate) fn make_tracing_init(args: &TestArgs, remaining_attrs: &[&Attribute])
             ::kithara_test_utils::test::setup_tracing();
         }
     };
-    if !expects_panic(remaining_attrs) {
-        return init;
-    }
     // `#[should_panic]` makes the panic the contract: the panic-dump hook must
     // not record it as evidence.
+    let expected_panic = expects_panic(remaining_attrs).then(|| {
+        quote! {
+            #[cfg(not(target_arch = "wasm32"))]
+            ::kithara_test_utils::hang::suppress_expected_panic_dumps();
+        }
+    });
     quote! {
         #init
+        #expected_panic
         #[cfg(not(target_arch = "wasm32"))]
-        ::kithara_test_utils::hang::suppress_expected_panic_dumps();
+        let _kithara_test_load = ::kithara_test_utils::load::LoadGuard::start();
     }
 }
 

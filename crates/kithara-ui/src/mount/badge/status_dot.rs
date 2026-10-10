@@ -1,28 +1,27 @@
-use bon::Builder;
-
-use crate::{expand::Binding, ids::InternId, module::Tone};
-
 /// A toned dot beside a word.
-#[derive(Builder, kithara_derive::ViewControl, kithara_derive::Control)]
+#[derive(kithara_derive::Control)]
 #[control(size = skin.status_dot.size)]
-#[derive(kithara_derive::NodeControl)]
-pub(crate) struct StatusDot<'a> {
-    pub(crate) label: InternId,
-    pub(crate) active: Option<&'a Binding>,
-    pub(crate) active_tone: Option<Tone>,
-    pub(crate) dot_size: Option<f32>,
-    pub(crate) tone: Tone,
-}
+pub(crate) struct StatusDot;
 
-#[cfg(feature = "render")]
-mod host {
-    use super::StatusDot;
+#[cfg(any(feature = "iced", feature = "masonry"))]
+pub(crate) mod host {
+    use bon::Builder;
+
+    use crate::{expand::Binding, ids::InternId, module::Tone};
+
+    #[derive(Builder)]
+    pub(crate) struct StatusDot<'a> {
+        pub(crate) label: InternId,
+        pub(crate) active: Option<&'a Binding>,
+        pub(crate) active_tone: Option<Tone>,
+        pub(crate) dot_size: Option<f32>,
+        pub(crate) tone: Tone,
+    }
+
     use crate::{
         atoms::design::status_dot::{StatusDot as Face, StatusDotData},
-        render::{
-            ReadValue, Skin,
-            controls::{Draws, Reading},
-        },
+        hosts::controls::{Draws, Reading},
+        render::{ReadValue, Skin},
     };
 
     impl Draws for StatusDot<'_> {

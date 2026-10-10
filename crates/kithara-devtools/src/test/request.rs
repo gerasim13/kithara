@@ -6,6 +6,7 @@ pub(super) struct TestRequest {
     pub(super) loom: Option<bool>,
     pub(super) net_backend: Option<String>,
     pub(super) no_block: Option<bool>,
+    pub(super) load: Option<bool>,
     /// Lanes named with `--lane`. One picks the lane to run; with `--touched`
     /// they name the lanes the touched paths may run, the default lane when
     /// none is named.
@@ -24,6 +25,7 @@ impl TestRequest {
             lanes: Vec::new(),
             net_backend: None,
             no_block: None,
+            load: None,
             loom: None,
             narrow: None,
             passthrough: Vec::new(),
@@ -48,6 +50,14 @@ impl TestRequest {
                         .next()
                         .ok_or_else(|| anyhow::anyhow!("--no-block requires a value"))?;
                     request.no_block = Some(parse_toggle("no-block", value)?);
+                }
+                "--load=off" | "--load=false" => request.load = Some(false),
+                "--load=on" | "--load=true" => request.load = Some(true),
+                "--load" => {
+                    let value = iter
+                        .next()
+                        .ok_or_else(|| anyhow::anyhow!("--load requires a value"))?;
+                    request.load = Some(parse_toggle("load", value)?);
                 }
                 "--touched" => request.touched = true,
                 "--loom=off" | "--loom=false" | "--no-loom" => request.loom = Some(false),
@@ -80,6 +90,10 @@ impl TestRequest {
                 _ if arg.starts_with("--no-block=") => {
                     let value = arg.trim_start_matches("--no-block=");
                     request.no_block = Some(parse_toggle("no-block", value)?);
+                }
+                _ if arg.starts_with("--load=") => {
+                    let value = arg.trim_start_matches("--load=");
+                    request.load = Some(parse_toggle("load", value)?);
                 }
                 _ if arg.starts_with("--loom=") => {
                     let value = arg.trim_start_matches("--loom=");

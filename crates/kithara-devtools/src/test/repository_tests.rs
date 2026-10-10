@@ -130,8 +130,12 @@ fn every_feature_a_lane_resolves_to_is_declared_by_its_build() {
         .into_iter()
         .map(|package| (package.name.as_str(), &package.features))
         .collect::<BTreeMap<_, _>>();
-    let toggled = TestRequest::parse(&["--flash=on".to_owned(), "--no-block=on".to_owned()])
-        .expect("parse request");
+    let toggled = TestRequest::parse(&[
+        "--flash=on".to_owned(),
+        "--no-block=on".to_owned(),
+        "--load=on".to_owned(),
+    ])
+    .expect("parse request");
     let declares = |member: &str, name: &str| {
         declared
             .get(member)

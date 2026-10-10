@@ -30,11 +30,11 @@ fn prime_stage(
 ) -> Result<(), ElasticError> {
     let latency = engine.capabilities().latency();
     let history = latency
-        .source_frames()
+        .first()
         .checked_mul(channels)
         .ok_or(ElasticError::SampleCountOverflow)?;
     let warm = latency
-        .output_frames()
+        .second()
         .checked_mul(channels)
         .ok_or(ElasticError::SampleCountOverflow)?;
     discarded
@@ -44,7 +44,7 @@ fn prime_stage(
     let (lookahead, future) = future.split_at(history);
     let (warm_input, source) = future.split_at(warm);
     engine.prime(
-        ElasticRequest::new(latency.output_frames(), latency.output_frames())?,
+        ElasticRequest::new(latency.second(), latency.second())?,
         history_input,
         lookahead,
         warm_input,
@@ -157,8 +157,8 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .latency();
         let stages = self.projection_stages()?;
         let lookahead = latency
-            .source_frames()
-            .checked_add(latency.output_frames())
+            .first()
+            .checked_add(latency.second())
             .and_then(|frames| frames.checked_mul(stages))
             .ok_or(ElasticError::SampleCountOverflow)?;
         if !self.active {
@@ -230,8 +230,8 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
             .capabilities()
             .latency();
-        let history = latency.source_frames();
-        let warm = latency.output_frames();
+        let history = latency.first();
+        let warm = latency.second();
         if history == 0 || warm == 0 {
             return Ok(());
         }
