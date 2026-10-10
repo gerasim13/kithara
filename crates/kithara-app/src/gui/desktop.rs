@@ -1,8 +1,11 @@
+use std::path::Path;
+
 use arc_swap::ArcSwap;
 use kithara::platform::{
     sync::Arc,
     tokio::{runtime::Handle, sync::mpsc},
 };
+use kithara_app_library::Registration;
 
 #[cfg(feature = "masonry")]
 use super::frontend::retained;
@@ -37,6 +40,8 @@ pub enum Host {
 /// loop fails.
 pub fn run(
     config: AppConfig,
+    config_path: Option<&Path>,
+    plugins: Vec<Registration>,
     host: Host,
     audio: AppHost,
     runtime: &Handle,
@@ -45,15 +50,14 @@ pub fn run(
     let (commands, receiver) = mpsc::unbounded_channel();
     let boot = Boot::builder()
         .maybe_package(config.ui_package.as_deref())
+        .maybe_config_path(config_path)
         .settings(&config.ui)
         .tracks(config.tracks.clone())
         .palette(config.palette)
         .snapshots(Arc::clone(&snapshots))
         .commands(commands)
         .runtime(runtime.clone())
-        .net(&config.net)
-        .sources(&config.sources)
-        .shutdown(&config.shutdown)
+        .plugins(plugins)
         .build()?;
     let shutdown = config.shutdown.clone();
     let driver = engine::spawn(

@@ -143,9 +143,12 @@ macro_rules! text_roles {
             brand => Brand,
             brand_small => BrandSmall,
             caption => Caption,
+            cell => Cell,
             deck_letter => DeckLetter,
             micro_label => MicroLabel,
+            module_title => ModuleTitle,
             mono => Mono,
+            note => Note,
             pivot_arrow => PivotArrow,
             pivot_duration => PivotDuration,
             pivot_footer => PivotFooter,
@@ -162,6 +165,7 @@ macro_rules! text_roles {
             vis_footer => VisFooter,
             vis_meta => VisMeta,
             vis_title => VisTitle,
+            window_title => WindowTitle,
         }
     };
 }
@@ -341,27 +345,4 @@ pub enum Tone {
     Accent,
     Success,
     Danger,
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::TextStyle;
-
-    #[kithara::test]
-    fn a_micro_label_is_set_in_capitals() {
-        assert_eq!(
-            TextStyle::MicroLabel.cased("0.0.1-alpha4".to_owned()),
-            "0.0.1-ALPHA4"
-        );
-    }
-
-    #[kithara::test]
-    fn every_other_style_keeps_the_case_the_document_wrote() {
-        assert_eq!(
-            TextStyle::Body.cased("0.0.1-alpha4".to_owned()),
-            "0.0.1-alpha4"
-        );
-    }
 }

@@ -10,10 +10,11 @@ use crate::{compile::CompiledUi, view::ViewState};
 /// than two.
 fn fits(view: &ViewState, ui: &CompiledUi) -> bool {
     let views = ui.views();
-    views
-        .pages()
-        .iter()
-        .all(|(state, at)| views.standing(view, state) == Some(at.shown.as_str()))
+    views.pages().iter().all(|(state, at)| {
+        at.shown
+            .as_deref()
+            .is_none_or(|shown| views.standing(view, state) == Some(shown))
+    })
 }
 
 /// The compiled screens one host keeps while its document turns between pages.

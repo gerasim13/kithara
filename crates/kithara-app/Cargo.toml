@@ -33,6 +33,9 @@ tls-native = ["kithara/tls-native"]
 # bar's phase machine compiles against a packager that has no stream values.
 broadcast = ["kithara/broadcast"]
 zvuk = ["dep:kithara-app-zvuk"]
+# Keep plugin secrets in the operating system's store instead of the
+# configuration overlay.
+keystore = ["kithara-app-library/keystore"]
 gui = ["dep:iced", "dep:image", "dep:rfd", "kithara/ui-iced"]
 # Draw the studio through the retained host (masonry + Vello) instead of the
 # immediate one. Both hosts read the same documents and the same state; only
@@ -162,7 +165,9 @@ kithara-encode = { workspace = true, default-features = false }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["usdt", "mock", "hang", "temp-dir"] }
 
+async-trait = { workspace = true }
 futures = { workspace = true }
+keyring-core = { workspace = true, features = ["sample"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 

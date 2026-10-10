@@ -10,6 +10,7 @@ use std::{
 
 use axum::{Router, http::StatusCode};
 use bytes::Bytes;
+use kithara_app_library::AccessToken;
 use kithara_net::{Headers, HttpClient, NetError, NetOptions, RetryPolicy, mock::NetMock};
 use kithara_platform::time::Duration;
 use kithara_test_utils::{TestHttpServer, bufpool::pools, cancel_token, kithara};
@@ -22,8 +23,11 @@ use crate::{Client, Config, Error, PlaylistId, TrackId};
 fn identity() -> Config {
     Config {
         user_agent: "synthetic-agent".to_owned(),
-        auth_token: "synthetic-test-token".to_owned(),
     }
+}
+
+fn token() -> AccessToken {
+    AccessToken::new("synthetic-test-token".to_owned())
 }
 
 fn mock_client(net: Unimock) -> Client<Unimock> {
@@ -46,10 +50,10 @@ fn failing(error: NetError) -> Unimock {
     )
 }
 
-/// The section's identity and the body type are the only headers a catalogue
-/// request carries.
+/// A catalogue request carries exactly the section's identity, the body type
+/// and the token its caller passes.
 #[kithara::test]
-async fn search_is_typed_and_carries_exactly_the_section_identity() {
+async fn search_is_typed_and_carries_the_identity_and_the_callers_token() {
     fn expected() -> Headers {
         Headers::from(HashMap::from([
             ("Content-Type".to_owned(), "application/json".to_owned()),
@@ -68,7 +72,11 @@ async fn search_is_typed_and_carries_exactly_the_section_identity() {
                 "../../tests/fixtures/search.json"
             )))),
     );
-    let tracks = mock_client(net).search("Mozart").await.unwrap().tracks;
+    let tracks = mock_client(net)
+        .search(&token(), "Mozart")
+        .await
+        .unwrap()
+        .tracks;
     assert_eq!(tracks[0].title, "Amber Field");
     assert_eq!(tracks[0].duration, 128);
     assert_eq!(
@@ -154,9 +162,13 @@ async fn each_page_reports_the_total_the_service_establishes() {
                 .returns(Ok(Bytes::from(body.clone()))),
         ));
         let page = match operation {
-            "search" => client.search("query").await,
-            "liked" => client.liked_tracks().await,
-            _ => client.playlist_tracks(&PlaylistId("1023".into())).await,
+            "search" => client.search(&token(), "query").await,
+            "liked" => client.liked_tracks(&token()).await,
+            _ => {
+                client
+                    .playlist_tracks(&token(), &PlaylistId("1023".into()))
+                    .await
+            }
         };
         let total = match page {
             Ok(page) => Ok(page.total),
@@ -175,7 +187,7 @@ async fn a_stream_batch_resolves_every_row_or_fails_whole() {
         .map(|id| TrackId(id.into()))
         .into();
     let streams = mock_client(reply(include_str!("../../tests/fixtures/streams.json")))
-        .streams(&ids)
+        .streams(&token(), &ids)
         .await
         .unwrap();
     assert_eq!(
@@ -189,7 +201,7 @@ async fn a_stream_batch_resolves_every_row_or_fails_whole() {
     }));
     assert!(
         mock_client(Unimock::new(()))
-            .streams(&[])
+            .streams(&token(), &[])
             .await
             .unwrap()
             .is_empty()
@@ -230,7 +242,7 @@ async fn a_stream_batch_resolves_every_row_or_fails_whole() {
         ("not json".to_owned(), Err(())),
     ] {
         let resolved = mock_client(reply(body.clone()))
-            .streams(&[TrackId("1000".into())])
+            .streams(&token(), &[TrackId("1000".into())])
             .await;
         let resolved = match &resolved {
             Ok(rows) => Ok(rows[0].stream_v3.as_ref().map(|stream| {
@@ -277,7 +289,10 @@ async fn a_failure_is_worded_by_its_cause() {
             "Zvuk HTTP transport failed: Network error: Synthetic disconnect",
         ),
     ] {
-        let error = mock_client(net).search("query").await.unwrap_err();
+        let error = mock_client(net)
+            .search(&token(), "query")
+            .await
+            .unwrap_err();
         let causes = iter::successors(Some(&error as &dyn std::error::Error), |cause| {
             cause.source()
         });
@@ -298,7 +313,7 @@ async fn a_failure_is_worded_by_its_cause() {
 async fn reads_and_reactions_use_their_own_transports_and_a_reaction_needs_its_confirmation() {
     async fn react(mutations: Unimock, liked: bool) -> Result<(), Error> {
         Client::with_transports(Unimock::new(()), mutations, &identity())
-            .set_liked(&TrackId("1000".into()), liked)
+            .set_liked(&token(), &TrackId("1000".into()), liked)
             .await
     }
     let reads = Client::with_transports(
@@ -306,7 +321,10 @@ async fn reads_and_reactions_use_their_own_transports_and_a_reaction_needs_its_c
         Unimock::new(()),
         &identity(),
     );
-    assert_eq!(reads.search("needle").await.unwrap().tracks.len(), 5);
+    assert_eq!(
+        reads.search(&token(), "needle").await.unwrap().tracks.len(),
+        5
+    );
     let like = Unimock::new(
         NetMock::post_bytes
             .next_call(matching!((_, request, _) if String::from_utf8_lossy(request).contains(r#"addItem(id: \"1000\""#)))
@@ -352,11 +370,11 @@ async fn a_lost_reaction_is_sent_once_and_a_lost_read_is_resent() {
 
     assert!(
         client
-            .set_liked(&TrackId("1000".into()), true)
+            .set_liked(&token(), &TrackId("1000".into()), true)
             .await
             .is_err()
     );
     assert_eq!(requests.swap(0, Ordering::SeqCst), 1);
-    assert!(client.search("query").await.is_err());
+    assert!(client.search(&token(), "query").await.is_err());
     assert!(requests.load(Ordering::SeqCst) > 1);
 }

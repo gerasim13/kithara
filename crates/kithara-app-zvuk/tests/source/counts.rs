@@ -13,7 +13,7 @@ async fn a_collection_filter_is_local_and_counts_against_the_service_total() {
             .next_call(matching!(_, _, _))
             .returns(Ok(stream_reply())),
     )));
-    let mut source = source(net.clone());
+    let mut source = source(net.clone()).await;
     source.select("playlist:1023");
     until(&mut *source, PageStatus::Ready).await;
     assert_eq!(source.read("count"), Some(ReadValue::Text("5 / 215")));

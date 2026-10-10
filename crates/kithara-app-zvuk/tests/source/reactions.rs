@@ -69,7 +69,7 @@ async fn unlike_on_liked_page_reloads_confirmed_collection_without_retargeting()
         NetMock::post_bytes.next_call(matching!((_, body, _) if String::from_utf8_lossy(body).contains("KitharaLiked"))).returns(Ok(Bytes::from(serde_json::to_vec(&reloaded).unwrap()))),
         NetMock::post_bytes.next_call(matching!(_, _, _)).returns(Ok(Bytes::from(serde_json::to_vec(&streams).unwrap()))),
     )));
-    let mut source = source(net.clone());
+    let mut source = source(net.clone()).await;
     source.select("liked");
     until(&mut *source, PageStatus::Ready).await;
     assert_eq!(source.row_key(0), Some("1000"));

@@ -3,14 +3,13 @@ use iced::{
     advanced::{
         Clipboard, Layout, Renderer as _, Shell, Widget,
         layout::{Limits, Node},
-        mouse::{self, Cursor, Interaction},
+        mouse::{Cursor, Interaction},
         overlay,
         overlay::Group,
         renderer::{self, Quad},
         widget::{Operation, Tree},
     },
     keyboard::{self, Key, key::Named},
-    touch,
 };
 
 use crate::{
@@ -162,19 +161,6 @@ fn rectangle(rect: Rect) -> Rectangle {
     Rectangle::new(Point::new(rect.x, rect.y), Size::new(rect.w, rect.h))
 }
 
-/// Whether the event closes the modal once the content has left it alone.
-fn closes(event: &Event, surface: Rectangle, cursor: Cursor) -> bool {
-    match event {
-        Event::Mouse(mouse::Event::ButtonPressed(_)) => !cursor.is_over(surface),
-        Event::Touch(touch::Event::FingerPressed { position, .. }) => !surface.contains(*position),
-        Event::Keyboard(keyboard::Event::KeyPressed {
-            key: Key::Named(Named::Escape),
-            ..
-        }) => true,
-        _ => false,
-    }
-}
-
 impl<Message> Surface<'_, '_, Message> {
     fn surface(&self, layout: Layout<'_>) -> Rectangle {
         layout
@@ -300,7 +286,13 @@ where
         if shell.is_event_captured() {
             return;
         }
-        if closes(event, surface, cursor) {
+        if matches!(
+            event,
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key: Key::Named(Named::Escape),
+                ..
+            })
+        ) {
             shell.publish(self.on_close.clone());
         }
         if matches!(

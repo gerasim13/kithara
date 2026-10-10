@@ -17,6 +17,7 @@ mod engine;
 pub mod logging;
 pub mod memory;
 pub mod mix;
+pub mod plugins;
 pub mod pools;
 pub mod recording;
 pub mod sources;

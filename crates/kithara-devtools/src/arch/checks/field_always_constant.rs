@@ -39,11 +39,12 @@ impl Check for FieldAlwaysConstant {
 
 fn emit(idx: &WorkspaceStructIndex, min_call_sites: usize, out: &mut Vec<Violation>) {
     let empty = Suppressions::default();
-    for (name, info) in &idx.structs {
+    for (identity, info) in &idx.structs {
+        let name = &info.name;
         if info.is_pub {
             continue;
         }
-        let Some(sites) = idx.literals.get(name) else {
+        let Some(sites) = idx.literals.get(identity) else {
             continue;
         };
         let full_sites = full_literal_sites(sites);
@@ -286,5 +287,138 @@ mod tests {
             fn c() -> E<A> { E { _phase: PhantomData, kind: 3 } }
         "#;
         assert_eq!(count(src, 3), 0);
+    }
+
+    #[test]
+    fn same_named_structs_keep_their_own_literal_sites() {
+        let src = r#"
+            mod first {
+                struct Meter { value: u32 }
+                fn a() -> Meter { Meter { value: 7 } }
+                fn b() -> Meter { Meter { value: 7 } }
+                fn c() -> Meter { Meter { value: 7 } }
+            }
+            mod second {
+                struct Meter { value: u32 }
+                fn a() -> Meter { Meter { value: 1 } }
+                fn b() -> Meter { Meter { value: 2 } }
+                fn c() -> Meter { Meter { value: 3 } }
+            }
+        "#;
+        assert_eq!(count(src, 3), 1);
+    }
+
+    #[test]
+    fn self_literals_belong_to_the_enclosing_impl() {
+        let src = r#"
+            struct Meter { value: u32 }
+            impl Meter {
+                fn a() -> Self { Self { value: 7 } }
+                fn b() -> Self { Self { value: 7 } }
+                fn c() -> Self { Self { value: 7 } }
+            }
+        "#;
+        assert_eq!(count(src, 3), 1);
+    }
+
+    #[test]
+    fn local_type_bindings_do_not_credit_a_module_declaration() {
+        let src = r#"
+            struct Meter { value: u32 }
+            fn a() { struct Meter { value: u32 } let x = Meter { value: 7 }; }
+            fn b() { struct Meter { value: u32 } let x = Meter { value: 7 }; }
+            fn c() { struct Meter { value: u32 } let x = Meter { value: 7 }; }
+        "#;
+        assert_eq!(count(src, 3), 0);
+    }
+
+    #[test]
+    fn explicit_paths_keep_identity_with_unknown_local_imports() {
+        let src = r#"
+            struct Meter { value: u32 }
+            mod unknown { pub struct Other; }
+            fn a() { use crate::unknown::*; let x = crate::Meter { value: 7 }; }
+            fn b() { use crate::unknown::*; let x = crate::Meter { value: 7 }; }
+            fn c() { use crate::unknown::*; let x = crate::Meter { value: 7 }; }
+        "#;
+        assert_eq!(count(src, 3), 1);
+    }
+
+    fn assert_opaque_literals_not_credited(source: &str) {
+        let idx = build_index_from_source(source);
+        assert!(idx.literals.values().all(Vec::is_empty));
+        let mut findings = Vec::new();
+        emit(&idx, 3, &mut findings);
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn opaque_free_function_body_does_not_credit_literal_sites() {
+        assert_opaque_literals_not_credited(
+            r#"
+            struct Meter { value: u32 }
+            #[rewrite]
+            fn three() {
+                let _ = crate::Meter { value: 7 };
+                let _ = crate::Meter { value: 7 };
+                let _ = crate::Meter { value: 7 };
+            }
+        "#,
+        );
+    }
+
+    #[test]
+    fn opaque_impl_body_does_not_credit_literal_sites() {
+        assert_opaque_literals_not_credited(
+            r#"
+            struct Meter { value: u32 }
+            struct Owner;
+            #[rewrite]
+            impl Owner {
+                fn three() {
+                    let _ = crate::Meter { value: 7 };
+                    let _ = crate::Meter { value: 7 };
+                    let _ = crate::Meter { value: 7 };
+                }
+            }
+        "#,
+        );
+    }
+
+    #[test]
+    fn opaque_method_body_does_not_credit_literal_sites() {
+        assert_opaque_literals_not_credited(
+            r#"
+            struct Meter { value: u32 }
+            struct Owner;
+            impl Owner {
+                #[rewrite]
+                fn three() {
+                    let _ = crate::Meter { value: 7 };
+                    let _ = crate::Meter { value: 7 };
+                    let _ = crate::Meter { value: 7 };
+                }
+            }
+        "#,
+        );
+    }
+
+    #[test]
+    fn ordinary_cfg_function_impl_and_method_keep_literal_sites() {
+        let src = r#"
+            struct Meter { value: u32 }
+            struct Owner;
+            #[cfg(feature = "optional")]
+            fn first() { let _ = crate::Meter { value: 7 }; }
+            #[cfg(feature = "optional")]
+            impl Owner {
+                #[cfg(feature = "optional")]
+                fn second() {
+                    let _ = crate::Meter { value: 7 };
+                    let _ = crate::Meter { value: 7 };
+                }
+            }
+        "#;
+        assert_eq!(count(src, 3), 1);
     }
 }

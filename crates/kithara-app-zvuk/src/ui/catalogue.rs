@@ -83,10 +83,15 @@ impl Catalogue {
         }
         self.mode = mode;
         self.query.clear();
+        self.clear();
+        Some(true)
+    }
+
+    /// Drops the loaded rows and their total.
+    pub(super) fn clear(&mut self) {
         self.rows.clear();
         self.total = None;
         self.filter();
-        Some(true)
     }
 
     pub(super) fn accept(&mut self, page: TrackPage, streams: Vec<MediaTrack>) {

@@ -826,7 +826,7 @@ fn model_binding_on_write_side_is_direction_error() {
 }
 
 /// A modal over a quiet surface, opening and shutting on state the view
-/// keeps; `close` is what Escape and a press on the scrim write.
+/// keeps; `close` is what Escape writes.
 fn modal(id: &str, close: &str, content: &str) -> String {
     format!(
         r#"Modal(id: "{id}", open: View(id: "settings"), close: {close},

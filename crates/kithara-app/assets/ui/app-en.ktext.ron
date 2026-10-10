@@ -17,5 +17,10 @@
         "library.status.error": "This folder cannot be read",
         "strip.eq.mode.three": "3 ПОЛОСЫ",
         "strip.eq.mode.four": "4 ПОЛОСЫ",
+        "settings.title": "SETTINGS",
+        "settings.config": "CONFIG:",
+        "settings.version": "KITHARA",
+        "settings.reset": "RESET",
+        "settings.done": "DONE",
     },
 )

@@ -15,6 +15,7 @@ use kithara::{
         },
     },
 };
+use kithara_app_library::KeyAccess;
 
 use crate::{
     config::AppConfig,
@@ -23,19 +24,20 @@ use crate::{
     pools::{AppPools, Pools},
 };
 
-/// Builds the engine on a Worker over the page's host and runs it there. The
-/// first receiver hears whether the build succeeded, with the client the
-/// engine's downloads ride, before the loop starts; the second closes once the
+/// Builds and runs the engine on a Worker. The first receiver hears whether
+/// the build succeeded before the loop starts; the second closes once the
 /// Worker is done with the engine.
 pub(super) fn spawn(
     document: Config,
     pools: Pools,
+    net: HttpClient,
+    grants: Vec<KeyAccess>,
     host: wasm::HostSender<AppPools>,
     snapshots: Arc<ArcSwap<EngineSnapshot>>,
     commands: UnboundedReceiver<Envelope>,
     shutdown: CancelToken,
 ) -> (
-    oneshot::Receiver<Result<HttpClient, EngineError>>,
+    oneshot::Receiver<Result<(), EngineError>>,
     oneshot::Receiver<Infallible>,
 ) {
     let (built_tx, built) = oneshot::channel();
@@ -48,6 +50,8 @@ pub(super) fn spawn(
                 let config = AppConfig::assemble()
                     .document(&document)
                     .pools(pools)
+                    .net(net)
+                    .grants(&grants)
                     .shutdown(shutdown)
                     .runtime(Handle::try_current()?)
                     .call()?;

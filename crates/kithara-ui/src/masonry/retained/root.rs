@@ -489,6 +489,9 @@ where
         else {
             return Ok(false);
         };
+        if matches!(popover.item.state.kind(), SurfaceKind::Modal) {
+            return Ok(false);
+        }
         let position = button.state.logical_position();
         let point = Point::new(position.x, position.y);
         if self.window_owns(point) || popover.item.state.surface().contains(point) {

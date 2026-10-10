@@ -59,13 +59,6 @@ pub(crate) enum Mark {
 }
 
 impl IconName {
-    pub(crate) fn lucide_glyph(self) -> Option<char> {
-        match source(self) {
-            IconSource::Lucide(icon) => Some(char::from(icon)),
-            IconSource::Svg(_) => None,
-        }
-    }
-
     /// What this icon draws, or nothing when its art could not be read.
     pub(crate) fn mark(self) -> Option<Mark> {
         match source(self) {
@@ -171,8 +164,8 @@ mod tests {
 
         for (icon, lucide) in table {
             assert_eq!(
-                icon.lucide_glyph(),
-                Some(char::from(lucide)),
+                icon.mark(),
+                Some(Mark::Glyph(char::from(lucide))),
                 "{icon:?} must render {lucide:?}"
             );
         }
@@ -197,15 +190,15 @@ mod tests {
 
         for (icon, wrong) in prohibited {
             assert_ne!(
-                icon.lucide_glyph(),
-                Some(char::from(wrong)),
+                icon.mark(),
+                Some(Mark::Glyph(char::from(wrong))),
                 "{icon:?} must not be substituted by {wrong:?}"
             );
         }
         for (icon, right) in canon {
             assert_eq!(
-                icon.lucide_glyph(),
-                Some(char::from(right)),
+                icon.mark(),
+                Some(Mark::Glyph(char::from(right))),
                 "{icon:?} must render {right:?}"
             );
         }
@@ -225,7 +218,10 @@ mod tests {
     #[kithara::test]
     fn svg_icons_do_not_cross_the_glyph_seam() {
         for icon in authored() {
-            assert_eq!(icon.lucide_glyph(), None, "{icon:?} draws its own art");
+            assert!(
+                !matches!(icon.mark(), Some(Mark::Glyph(_))),
+                "{icon:?} draws its own art"
+            );
         }
     }
 

@@ -5,7 +5,7 @@ use kithara_ui::{
     text::TextDoc,
 };
 
-use crate::LibrarySource;
+use crate::{KeyAccess, LibrarySource};
 
 /// A document a source brings into the package.
 #[derive(Clone, Copy)]
@@ -44,6 +44,7 @@ pub struct Registration {
     build: Build,
     page: SourcePage,
     fills: Vec<(String, FillDocument)>,
+    access: Option<KeyAccess>,
 }
 
 impl Registration {
@@ -55,7 +56,15 @@ impl Registration {
             page,
             build: Box::new(build),
             fills: Vec::new(),
+            access: None,
         }
+    }
+
+    /// Grants the source's token to key requests of `access`'s domain.
+    #[must_use]
+    pub fn key_access(mut self, access: KeyAccess) -> Self {
+        self.access = Some(access);
+        self
     }
 
     /// Adds a document to `<module id>/<collection>` under the source id.
@@ -76,6 +85,11 @@ impl Registration {
     #[must_use]
     pub const fn page(&self) -> &SourcePage {
         &self.page
+    }
+
+    #[must_use]
+    pub const fn granted(&self) -> Option<&KeyAccess> {
+        self.access.as_ref()
     }
 
     /// Collection addresses and documents in registration order.

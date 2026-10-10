@@ -60,7 +60,7 @@ impl Clock {
 /// it draws must not be tied to the reader that frame borrowed.
 #[derive(Clone, Copy, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, with)]
-pub struct Ctx<'a, 'r> {
+pub struct Ctx<'a: 'r, 'r> {
     /// The compiled document being walked.
     pub ui: &'a CompiledUi,
     /// The skin the layout pass consults.
@@ -150,8 +150,12 @@ impl<'a, 'r> Ctx<'a, 'r> {
     pub fn read(self, binding: &Binding) -> Option<ReadValue<'r>> {
         match binding.kind {
             BindingKind::Command => None,
-            BindingKind::Selects { ref keys, invert } => {
-                let named = match self.get(self.ui.resolve(binding.key)) {
+            BindingKind::Selects {
+                ref keys,
+                invert,
+                ref read,
+            } => {
+                let named = match self.read(read) {
                     Some(ReadValue::Text(read)) => {
                         keys.iter().any(|key| self.ui.resolve(*key) == read)
                     }
@@ -162,12 +166,17 @@ impl<'a, 'r> Ctx<'a, 'r> {
             BindingKind::View { invert, .. } => Some(ReadValue::Bool(
                 self.view.flag(self.ui.resolve(binding.key)) != invert,
             )),
-            BindingKind::Page { name } => Some(ReadValue::Bool(
+            BindingKind::Page { name: Some(name) } => Some(ReadValue::Bool(
                 self.ui
                     .views()
                     .standing(self.view, self.ui.resolve(binding.key))
                     == Some(self.ui.resolve(name)),
             )),
+            BindingKind::Page { name: None } => self
+                .ui
+                .views()
+                .standing(self.view, self.ui.resolve(binding.key))
+                .map(ReadValue::Text),
             _ => self.get(self.ui.resolve(binding.key)),
         }
     }

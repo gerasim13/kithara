@@ -4,8 +4,9 @@ use bytes::Bytes;
 use kithara::{
     drm::{KeyProcessor, KeyRequest, KeyRequestFactory, UniqueBinaryCipher},
     platform::sync::Arc,
-    play::policy::{DomainKeyPolicy, DomainKeyRule},
+    play::policy::{DomainKeyPolicy, DomainKeyRule, domain_holds, domain_matches},
 };
+use kithara_app_library::KeyAccess;
 use rand::{Rng as _, RngExt as _, distr::Alphanumeric};
 
 use super::schema::{Drm, DrmProvider, SeedAlphabet, SeedSpec};
@@ -23,6 +24,16 @@ mod consts {
 pub enum PolicyError {
     /// The document set the header the request factory generates.
     ReservedHeader { provider: String },
+    /// The document set the header a plugin's grant supplies.
+    GrantedHeader {
+        provider: String,
+        header: &'static str,
+    },
+    /// A provider a grant reaches also serves hosts outside the grant's domain.
+    ForeignHost {
+        provider: String,
+        domain: &'static str,
+    },
     /// A salt of no length leaves the cipher key unsalted.
     EmptySeed { provider: String },
     /// A hex salt of odd length cannot come from whole bytes.
@@ -36,6 +47,14 @@ impl fmt::Display for PolicyError {
                 f,
                 "provider `{provider}` must not set `{GENERATED_HEADER}` -- it is generated per request from the cipher key",
                 GENERATED_HEADER = consts::GENERATED_HEADER
+            ),
+            Self::GrantedHeader { provider, header } => write!(
+                f,
+                "provider `{provider}` must not set `{header}` -- a plugin grants it per request from its account"
+            ),
+            Self::ForeignHost { provider, domain } => write!(
+                f,
+                "provider `{provider}` must list only `{domain}` and its subdomains -- a plugin grants a token for `{domain}` alone"
             ),
             Self::EmptySeed { provider } => write!(
                 f,
@@ -54,19 +73,57 @@ impl fmt::Display for PolicyError {
 ///
 /// # Errors
 /// Returns the first provider that declares a policy no rule can honour.
-pub(crate) fn drm_policy(drm: &Drm) -> Result<DomainKeyPolicy, PolicyError> {
+pub(crate) fn drm_policy(drm: &Drm, grants: &[KeyAccess]) -> Result<DomainKeyPolicy, PolicyError> {
     let rules = drm
         .providers
         .iter()
-        .map(rule)
+        .map(|provider| rule(provider, granted(provider, grants)?))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(DomainKeyPolicy::new(rules))
 }
 
-fn rule(provider: &DrmProvider) -> Result<DomainKeyRule, PolicyError> {
+/// The grant whose domain holds every pattern of `provider`; a provider that
+/// reaches a grant's domain and hosts past it is refused.
+fn granted(provider: &DrmProvider, grants: &[KeyAccess]) -> Result<Option<KeyAccess>, PolicyError> {
+    grants
+        .iter()
+        .find(|grant| {
+            provider.domains.iter().any(|pattern| {
+                domain_holds(grant.domain(), pattern) || domain_matches(pattern, grant.domain())
+            })
+        })
+        .map(|grant| {
+            if provider
+                .domains
+                .iter()
+                .all(|pattern| domain_holds(grant.domain(), pattern))
+            {
+                Ok(grant.clone())
+            } else {
+                Err(PolicyError::ForeignHost {
+                    provider: provider.name.clone(),
+                    domain: grant.domain(),
+                })
+            }
+        })
+        .transpose()
+}
+
+fn rule(provider: &DrmProvider, grant: Option<KeyAccess>) -> Result<DomainKeyRule, PolicyError> {
     if provider.headers.contains_key(consts::GENERATED_HEADER) {
         return Err(PolicyError::ReservedHeader {
             provider: provider.name.clone(),
+        });
+    }
+    if let Some(grant) = &grant
+        && provider
+            .headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case(grant.header()))
+    {
+        return Err(PolicyError::GrantedHeader {
+            provider: provider.name.clone(),
+            header: grant.header(),
         });
     }
     if provider.seed.length == 0 {
@@ -87,10 +144,14 @@ fn rule(provider: &DrmProvider) -> Result<DomainKeyRule, PolicyError> {
         let salt = salt(&seed);
         let cipher = UniqueBinaryCipher::new(&format!("{cipher_key}{salt}"));
         let processor: KeyProcessor = Arc::new(move |key: Bytes| Ok(cipher.decrypt(&key)));
-        KeyRequest::new(
-            HashMap::from([(consts::GENERATED_HEADER.to_string(), salt)]),
-            processor,
-        )
+        let mut headers = HashMap::from([(consts::GENERATED_HEADER.to_string(), salt)]);
+        if let Some((header, token)) = grant
+            .as_ref()
+            .and_then(|grant| Some((grant.header(), grant.token()?)))
+        {
+            headers.insert(header.to_owned(), token);
+        }
+        KeyRequest::new(headers, processor)
     });
 
     Ok(DomainKeyRule::for_domains(&provider.domains, factory)
@@ -125,7 +186,10 @@ fn salt(seed: &SeedSpec) -> String {
 
 #[cfg(test)]
 mod tests {
-    use kithara::{drm::KeyRequestResolver as _, play::policy::DomainKeyPolicy};
+    use kithara::{
+        drm::KeyRequestResolver as _, platform::tokio::sync::watch, play::policy::DomainKeyPolicy,
+    };
+    use kithara_app_library::{AccessToken, KeyAccess};
     use url::Url;
 
     use super::{PolicyError, drm_policy};
@@ -145,7 +209,7 @@ mod tests {
 
     fn policy(source: &str) -> DomainKeyPolicy {
         let document: Document = serde_yaml_ng::from_str(source).expect("valid document");
-        drm_policy(&document.drm).expect("valid policy")
+        drm_policy(&document.drm, &[]).expect("valid policy")
     }
 
     fn url(text: &str) -> Url {
@@ -166,6 +230,76 @@ mod tests {
                 .any(|(name, value)| name == "X-Auth-Token" && value == "token"),
             "declared header missing from {headers:?}"
         );
+    }
+
+    /// A grant sets the current token on the key requests of a provider its
+    /// domain holds whole; a provider reaching past the domain is refused.
+    #[kithara::test(native, flash(false))]
+    fn a_grant_reaches_only_the_key_requests_of_a_provider_inside_its_domain() {
+        const HEADER: &str = "X-Auth-Token";
+        let drm = |domains: &str, declared: &str| -> Drm {
+            serde_yaml_ng::from_str::<Document>(&format!(
+                "drm:\n  providers:\n    - name: example\n      domains: [{domains}]\n      cipher_key: secret\n      headers:\n        User-Agent: agent\n{declared}"
+            ))
+            .expect("valid document")
+            .drm
+        };
+        let (sender, token) = watch::channel(None);
+        let grant = |domain| [KeyAccess::new(domain, HEADER, token.clone())];
+        let headers = |policy: &DomainKeyPolicy| {
+            let key = policy
+                .prepare(&url("https://example.com/drm/key.bin"))
+                .expect("the provider serves the key host")
+                .headers;
+            let resource = policy
+                .resource_headers(&url("https://example.com/drm/master.m3u8"))
+                .expect("the provider serves the playlist host");
+            let carried = resource
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(HEADER))
+                .map(|(_, value)| value.to_owned());
+            (key.get(HEADER).cloned(), carried)
+        };
+
+        let refused = drm_policy(
+            &drm("example.com", "        x-auth-token: declared\n"),
+            &grant("example.com"),
+        );
+        assert!(
+            matches!(&refused, Err(PolicyError::GrantedHeader { provider, .. }) if provider == "example"),
+            "{:?}",
+            refused.as_ref().err()
+        );
+        for domains in ["\"*\"", "example.com, other.test"] {
+            let leaking = drm_policy(&drm(domains, ""), &grant("example.com"));
+            assert!(
+                matches!(
+                    &leaking,
+                    Err(PolicyError::ForeignHost { provider, domain: "example.com" }) if provider == "example"
+                ),
+                "domains: [{domains}]: {:?}",
+                leaking.as_ref().err()
+            );
+        }
+        for domains in ["example.com", "Example.COM, \"*.example.com\""] {
+            let policy =
+                drm_policy(&drm(domains, ""), &grant("example.com")).expect("valid policy");
+            for current in [None, Some("first"), Some("second")] {
+                sender.send_replace(current.map(|value| AccessToken::new(value.to_owned())));
+                assert_eq!(
+                    headers(&policy),
+                    (current.map(str::to_owned), None),
+                    "domains: [{domains}]"
+                );
+            }
+        }
+        let outside = drm_policy(
+            &drm("example.com", "        X-Auth-Token: declared\n"),
+            &grant("other.test"),
+        )
+        .expect("valid policy");
+        let declared = Some("declared".to_owned());
+        assert_eq!(headers(&outside), (declared.clone(), declared));
     }
 
     #[kithara::test(native, flash(false))]
@@ -234,7 +368,8 @@ mod tests {
         ))
         .expect("valid document");
 
-        let error = drm_policy(&document.drm).expect_err("the header is generated per request");
+        let error =
+            drm_policy(&document.drm, &[]).expect_err("the header is generated per request");
 
         assert!(matches!(error, PolicyError::ReservedHeader { .. }));
     }
@@ -256,21 +391,22 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_hex_salt_of_no_length_is_refused() {
-        let error = drm_policy(&seed(0, "hex")).expect_err("an empty salt is not a salt");
+        let error = drm_policy(&seed(0, "hex"), &[]).expect_err("an empty salt is not a salt");
 
         assert!(matches!(error, PolicyError::EmptySeed { .. }), "{error}");
     }
 
     #[kithara::test(native, flash(false))]
     fn an_alphanumeric_salt_of_no_length_is_refused() {
-        let error = drm_policy(&seed(0, "alphanumeric")).expect_err("an empty salt is not a salt");
+        let error =
+            drm_policy(&seed(0, "alphanumeric"), &[]).expect_err("an empty salt is not a salt");
 
         assert!(matches!(error, PolicyError::EmptySeed { .. }), "{error}");
     }
 
     #[kithara::test(native, flash(false))]
     fn an_odd_hex_salt_length_is_refused() {
-        let error = drm_policy(&seed(7, "hex")).expect_err("hex needs whole bytes");
+        let error = drm_policy(&seed(7, "hex"), &[]).expect_err("hex needs whole bytes");
 
         assert!(matches!(error, PolicyError::OddHexSeed { length: 7, .. }));
     }
@@ -278,7 +414,7 @@ mod tests {
     fn shipped_salt(key_url: &str) -> String {
         let document: Document =
             serde_yaml_ng::from_str(BAKED_DOCUMENT).expect("the baked document parses");
-        let policy = drm_policy(&document.drm).expect("the shipped providers are valid");
+        let policy = drm_policy(&document.drm, &[]).expect("the shipped providers are valid");
         policy
             .prepare(&url(key_url))
             .expect("a shipped rule matches")
@@ -315,7 +451,7 @@ mod tests {
         let document: Document =
             serde_yaml_ng::from_str(BAKED_DOCUMENT).expect("the baked document parses");
 
-        let policy = drm_policy(&document.drm).expect("the shipped providers are valid");
+        let policy = drm_policy(&document.drm, &[]).expect("the shipped providers are valid");
 
         for provider in &document.drm.providers {
             for domain in &provider.domains {

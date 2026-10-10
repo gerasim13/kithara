@@ -1,0 +1,15 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "settings-nav-item",
+    chrome: Plain,
+    parameters: ["key", "title", "icon"],
+    root: NavItem(
+        id: "item",
+        label: "$title",
+        icon: "$icon",
+        style: Cell,
+        read: Page(id: "/settings-section", name: "$key"),
+        write: Page(id: "/settings-section", name: "$key"),
+    ),
+)

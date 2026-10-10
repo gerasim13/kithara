@@ -1,178 +1,139 @@
+use kithara_app_library::AccessToken;
 use kithara_net::Net;
-use kithara_platform::{
-    CancelToken,
-    maybe_send::MaybeSend,
-    time::Instant,
-    tokio::{self, task},
-};
+use kithara_platform::{maybe_send::MaybeSend, time::Instant};
 
-use super::core::{Active, Operation, Source, accept_playlists};
-use crate::{
-    Error,
-    ui::{
-        consts,
-        request::{Batch, Completed},
-    },
-};
+use super::core::{Faults, Load, Operation, Source, accept_playlists, playlists, unlist_playlists};
+use crate::{Client, Command, Error, TrackId, job::Job, ui::request::Batch};
 
 impl<N: Net + Clone + 'static> Source<N> {
-    pub(super) fn start(&mut self) {
-        if self.cancel.is_cancelled()
-            || self.active.is_some()
-            || !self.pending.is_some_and(|due| due <= Instant::now())
-        {
-            return;
-        }
-        let Some((mode, query)) = self.catalogue.request() else {
-            return;
+    /// Queues the current node's request for `due`, dropping the one in flight.
+    pub(super) fn queue(&mut self, due: Instant) {
+        self.load = if self.catalogue.request().is_some() {
+            Load::Due(due)
+        } else {
+            Load::Idle
         };
-        self.pending = None;
-        let generation = self.generation;
-        let cancel = self.cancel.child();
-        self.active = Some(Active {
-            generation,
-            cancel: cancel.clone(),
-        });
-        let client = self.client.clone();
-        self.spawn(
-            cancel,
-            async move { mode.load(&client, &query).await },
-            move |result| Completed::Catalogue(generation, result),
-        );
     }
 
-    /// Runs `work` until `cancel` fires and reports the outcome through `done`.
-    fn spawn<T, F, D>(&self, cancel: CancelToken, work: F, done: D)
+    pub(super) fn start(&mut self) {
+        let Load::Due(due) = self.load else {
+            return;
+        };
+        if due > Instant::now() {
+            return;
+        }
+        self.load = self
+            .catalogue
+            .request()
+            .and_then(|(mode, query)| {
+                self.spawn(
+                    move |client, token| async move { mode.load(&client, &token, &query).await },
+                )
+            })
+            .map_or(Load::Idle, Load::Running);
+    }
+
+    /// Runs `work` with the account's current token, if any; a refusal that
+    /// arrives before the job is dropped reaches the account.
+    fn spawn<T, W, F>(&self, work: W) -> Option<Job<Result<T, Error>>>
     where
         T: MaybeSend + 'static,
-        F: Future<Output = T> + MaybeSend + 'static,
-        D: FnOnce(Option<T>) -> Completed + MaybeSend + 'static,
+        W: FnOnce(Client<N>, AccessToken) -> F,
+        F: Future<Output = Result<T, Error>> + MaybeSend + 'static,
     {
-        let found = self.found.clone();
-        drop(task::spawn_on(&self.runtime, async move {
-            let result = tokio::select! { biased; _ = cancel.cancelled() => None, result = work => Some(result) };
-            let _ = found.send(done(result));
-        }));
-    }
-
-    fn fail(&mut self, operation: Operation, error: &Error) {
-        self.faults.set(operation, Some(error.to_string()));
-    }
-
-    /// Stops every request of the source until restart; its page shows the
-    /// rejection whichever operation met it.
-    fn reject_authentication(&mut self) {
-        self.cancel.cancel();
-        self.pending = None;
-        self.active = None;
-        self.fail(Operation::Page, &Error::AuthenticationRejected);
-    }
-
-    fn accept(&mut self, batch: Batch) {
-        let streams = match batch.streams {
-            Ok(streams) => {
-                self.faults.set(Operation::Page, None);
-                streams
+        let token = self.account.token.borrow().clone()?;
+        let commands = self.account.commands.clone();
+        let operation = work(self.client.clone(), token.clone());
+        Some(Job::spawn(&self.runtime, &self.cancel, async move {
+            let result = operation.await;
+            if let Err(Error::AuthenticationRejected) = result {
+                let _ = commands.send(Command::Rejected(token));
             }
-            Err(error) => {
-                self.fail(Operation::Page, &error);
-                Vec::new()
-            }
-        };
-        self.catalogue.accept(batch.page, streams);
+            result
+        }))
     }
 
-    pub(super) fn list_playlists(&mut self, node: &str) {
-        if node != consts::PLAYLISTS
-            || !self
-                .branch
-                .children
-                .iter()
-                .any(|child| child.key == consts::PLAYLISTS && child.unlisted)
-            || self.playlists_active
-            || self.cancel.is_cancelled()
-        {
-            return;
+    /// Drops the work of the previous token, then reloads the current node
+    /// and the expanded playlists; signed out, the page drops its rows.
+    pub(super) fn reconnect(&mut self) {
+        self.listing = None;
+        self.likes.clear();
+        unlist_playlists(&mut self.branch);
+        if !self.has_token {
+            self.catalogue.clear();
         }
-        let cancel = self.cancel.child();
-        self.playlists_active = true;
-        let client = self.client.clone();
-        self.spawn(
-            cancel,
-            async move { client.playlists().await },
-            Completed::Playlists,
-        );
+        self.faults = Faults::default();
+        self.queue(Instant::now());
+        if self.expanded {
+            self.list_playlists();
+        }
+    }
+
+    pub(super) fn list_playlists(&mut self) {
+        if self.listing.is_none() && playlists(&mut self.branch).is_some_and(|node| node.unlisted) {
+            self.listing =
+                self.spawn(|client, token| async move { client.playlists(&token).await });
+        }
     }
 
     pub(super) fn like(&mut self, id: &str) {
-        if self.cancel.is_cancelled() {
-            return;
-        }
         let Some((id, liked)) = self.catalogue.reaction(id) else {
             return;
         };
-        if !self.likes.insert(id.clone()) {
+        if self.likes.contains_key(&id) {
             return;
         }
-        let cancel = self.cancel.child();
-        let client = self.client.clone();
         let track = id.clone();
-        self.spawn(
-            cancel,
-            async move { client.set_liked(&track, liked).await },
-            move |result| Completed::Like(id, liked, result),
-        );
+        if let Some(job) = self.spawn(move |client, token| async move {
+            client
+                .set_liked(&token, &track, liked)
+                .await
+                .map(|()| liked)
+        }) {
+            self.likes.insert(id, job);
+        }
     }
 
-    pub(super) fn complete(&mut self, completion: Completed) {
-        if completion.rejects_authentication() {
-            self.reject_authentication();
-            return;
-        }
-        match completion {
-            Completed::Catalogue(generation, result) => {
-                if self
-                    .active
-                    .as_ref()
-                    .is_some_and(|active| active.generation == generation)
-                {
-                    self.active = None;
-                }
-                if generation != self.generation {
-                    return;
-                }
-                match result {
-                    Some(Ok(batch)) => self.accept(batch),
-                    Some(Err(error)) => self.fail(Operation::Page, &error),
-                    None => {}
-                }
-            }
-            Completed::Playlists(result) => {
-                self.playlists_active = false;
-                match result {
-                    Some(Ok(playlists)) => {
-                        self.faults.set(Operation::Playlists, None);
-                        accept_playlists(&mut self.branch, playlists);
-                    }
-                    Some(Err(error)) => self.fail(Operation::Playlists, &error),
-                    None => {}
-                }
-            }
-            Completed::Like(id, liked, result) => {
-                self.likes.remove(&id);
-                match result {
-                    Some(Ok(())) => {
-                        self.faults.set(Operation::Like, None);
-                        let reload_liked = self.catalogue.confirm_reaction(&id, liked);
-                        if reload_liked || self.active.is_some() {
-                            let due = self.pending.unwrap_or_else(Instant::now);
-                            self.queue(due);
-                        }
-                    }
-                    Some(Err(error)) => self.fail(Operation::Like, &error),
-                    None => {}
-                }
+    /// Takes the results of finished jobs; a reaction confirmed while the
+    /// page loads reloads the page, whose snapshot may predate it.
+    pub(super) fn settle(&mut self) {
+        let confirmed: Vec<(TrackId, Result<bool, Error>)> = self
+            .likes
+            .iter_mut()
+            .filter_map(|(id, job)| job.finished().map(|result| (id.clone(), result)))
+            .collect();
+        for (id, result) in confirmed {
+            self.likes.remove(&id);
+            let Some(liked) = self.faults.record(Operation::Like, result) else {
+                continue;
+            };
+            let reload = self.catalogue.confirm_reaction(&id, liked);
+            if matches!(self.load, Load::Running(_)) || (reload && matches!(self.load, Load::Idle))
+            {
+                self.queue(Instant::now());
             }
         }
+        if let Some(result) = self.listing.as_mut().and_then(Job::finished) {
+            self.listing = None;
+            if let Some(listed) = self.faults.record(Operation::Playlists, result) {
+                accept_playlists(&mut self.branch, listed);
+            }
+        }
+        if let Load::Running(job) = &mut self.load
+            && let Some(result) = job.finished()
+        {
+            self.load = Load::Idle;
+            if let Some(batch) = self.faults.record(Operation::Page, result) {
+                self.accept(batch);
+            }
+        }
+    }
+
+    fn accept(&mut self, batch: Batch) {
+        let streams = self
+            .faults
+            .record(Operation::Page, batch.streams)
+            .unwrap_or_default();
+        self.catalogue.accept(batch.page, streams);
     }
 }

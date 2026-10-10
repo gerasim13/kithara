@@ -1219,10 +1219,19 @@ mod tests {
                     mark,
                     label: "BUTTONS".to_owned(),
                 };
-                let iced = Paint::pooled(NavItem::new(skin), data(), skin, &DrawBuffers::default())
-                    .draw_list(&PaintState::default(), bounds, VisualState::Idle);
-                let mut masonry =
-                    Painted::pooled(NavItem::new(skin), data(), skin, &DrawBuffers::default());
+                let iced = Paint::pooled(
+                    NavItem::new(skin, None),
+                    data(),
+                    skin,
+                    &DrawBuffers::default(),
+                )
+                .draw_list(&PaintState::default(), bounds, VisualState::Idle);
+                let mut masonry = Painted::pooled(
+                    NavItem::new(skin, None),
+                    data(),
+                    skin,
+                    &DrawBuffers::default(),
+                );
 
                 assert_eq!(
                     iced,
@@ -1930,7 +1939,7 @@ mod pressed {
             .mark()
             .expect("the play icon must have a mark");
         let paint = Paint::pooled(
-            NavItem::new(skin),
+            NavItem::new(skin, None),
             NavData {
                 mark,
                 active: false,

@@ -54,11 +54,12 @@ macro_rules! controls {
                     .icon(*icon)
                     .style(*style)
                     .build();
-            NavItem {} { label, icon } => painted
+            NavItem {} { label, icon, style } => painted
                 $crate::mount::NavItem,
                 $crate::mount::press::nav_item::host::NavItem::builder()
                     .icon(*icon)
                     .label(*label)
+                    .maybe_style(*style)
                     .build();
             TabLarge {} { label } => painted
                 $crate::mount::Tab,

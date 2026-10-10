@@ -12,14 +12,14 @@ use cargo_metadata::Metadata;
 
 use super::{
     super::config::ArchConfig, arc_clone_hotspots, args_wrapper_struct, cancel_root_sites,
-    canonical_types, cfg_density, dead_exports, direction, duplicate_error_enums,
-    field_always_constant, field_always_equals_other_field, field_passthrough, file_density,
-    file_size, firewheel_dsp_facade, flat_directory, fn_arg_count, generic_param_count, god_module,
-    god_struct, god_trait, max_nesting, mixed_entities, module_fan_out, module_layers,
-    multi_constructor, no_lib_statics, platform_layer_hygiene, pub_struct_open_fields,
-    readme_presence, redundant_accessors, redundant_reexport, shared_state, single_impl_size,
-    single_word_filenames, smoothing_primitive_sites, stray_rs_files, tokio_dep_quarantine,
-    trait_impl_count,
+    canonical_types, cfg_density, dead_exports, declaration_index::DeclarationIndex, direction,
+    duplicate_error_enums, field_always_constant, field_always_equals_other_field,
+    field_passthrough, file_density, file_size, firewheel_dsp_facade, flat_directory, fn_arg_count,
+    generic_param_count, god_module, god_struct, god_trait, max_nesting, mixed_entities,
+    module_fan_out, module_layers, multi_constructor, no_lib_statics, platform_layer_hygiene,
+    pub_struct_open_fields, readme_presence, redundant_accessors, redundant_reexport, shared_state,
+    single_impl_size, single_word_filenames, smoothing_primitive_sites, stray_rs_files,
+    tokio_dep_quarantine, trait_impl_count,
 };
 use crate::common::{
     fix::FixOutcome, scope::Scope, violation::Violation, walker::workspace_rs_files_scoped,
@@ -35,16 +35,21 @@ enum FileSnapshot {
     Unreadable(std::io::Error),
 }
 
+struct FileSnapshots {
+    files: BTreeMap<PathBuf, OnceCell<FileSnapshot>>,
+    aliases: BTreeMap<PathBuf, PathBuf>,
+}
+
 struct ParsedFiles<'a> {
-    files: OnceCell<BTreeMap<PathBuf, FileSnapshot>>,
-    scope: &'a Scope,
+    files: OnceCell<FileSnapshots>,
+    scope: Scope,
     workspace_root: &'a Path,
     #[cfg(test)]
     parse_count: Cell<usize>,
 }
 
 impl<'a> ParsedFiles<'a> {
-    fn new(workspace_root: &'a Path, scope: &'a Scope) -> Self {
+    fn new(workspace_root: &'a Path, scope: Scope) -> Self {
         Self {
             scope,
             workspace_root,
@@ -54,32 +59,47 @@ impl<'a> ParsedFiles<'a> {
         }
     }
 
-    fn all(&self) -> Result<&BTreeMap<PathBuf, FileSnapshot>> {
+    fn all(&self) -> Result<&FileSnapshots> {
         if let Some(files) = self.files.get() {
             return Ok(files);
         }
-        let paths = workspace_rs_files_scoped(self.workspace_root, self.scope)?;
+        let paths = workspace_rs_files_scoped(self.workspace_root, &self.scope)?;
         Ok(self.files.get_or_init(|| {
-            paths
-                .into_iter()
-                .map(|path| {
-                    let snapshot = match fs::read_to_string(&path) {
-                        Ok(source) => {
-                            #[cfg(test)]
-                            self.parse_count.set(self.parse_count.get() + 1);
-                            let syntax = syn::parse_file(&source).ok();
-                            FileSnapshot::Loaded(ParsedSource { syntax, source })
-                        }
-                        Err(error) => FileSnapshot::Unreadable(error),
-                    };
-                    (path, snapshot)
-                })
-                .collect()
+            let mut files = BTreeMap::new();
+            let mut aliases = BTreeMap::new();
+            for path in paths {
+                let canonical = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+                let owner = aliases
+                    .entry(canonical)
+                    .or_insert_with(|| path.clone())
+                    .clone();
+                aliases.insert(path, owner.clone());
+                files.entry(owner).or_insert_with(OnceCell::new);
+            }
+            FileSnapshots { files, aliases }
         }))
     }
 
     fn get(&self, path: &Path) -> Result<Option<&FileSnapshot>> {
-        Ok(self.all()?.get(path))
+        let all = self.all()?;
+        let key = all.aliases.get(path).or_else(|| {
+            fs::canonicalize(path)
+                .ok()
+                .and_then(|path| all.aliases.get(&path))
+        });
+        Ok(key
+            .and_then(|key| all.files.get(key).map(|snapshot| (key, snapshot)))
+            .map(|(key, snapshot)| {
+                snapshot.get_or_init(|| match fs::read_to_string(key) {
+                    Ok(source) => {
+                        #[cfg(test)]
+                        self.parse_count.set(self.parse_count.get() + 1);
+                        let syntax = syn::parse_file(&source).ok();
+                        FileSnapshot::Loaded(ParsedSource { syntax, source })
+                    }
+                    Err(error) => FileSnapshot::Unreadable(error),
+                })
+            }))
     }
 
     #[cfg(test)]
@@ -123,6 +143,7 @@ pub(crate) struct Context<'a> {
     pub(crate) workspace_root: &'a Path,
     pub(crate) scope: &'a Scope,
     parsed_files: ParsedFiles<'a>,
+    declaration_index: OnceCell<DeclarationIndex>,
 }
 
 impl<'a> Context<'a> {
@@ -132,13 +153,35 @@ impl<'a> Context<'a> {
         workspace_root: &'a Path,
         scope: &'a Scope,
     ) -> Self {
+        let mut sources = Scope::default().with_workspace_sources();
+        sources.extra_roots.extend(scope.roots(workspace_root));
+        sources.extra_roots.extend(
+            metadata
+                .workspace_packages()
+                .into_iter()
+                .flat_map(|package| {
+                    package
+                        .targets
+                        .iter()
+                        .map(|target| target.src_path.as_std_path().to_path_buf())
+                }),
+        );
         Self {
             config,
             metadata,
             workspace_root,
             scope,
-            parsed_files: ParsedFiles::new(workspace_root, scope),
+            parsed_files: ParsedFiles::new(workspace_root, sources),
+            declaration_index: OnceCell::new(),
         }
+    }
+
+    pub(super) fn declaration_index(&self) -> Result<&DeclarationIndex> {
+        if let Some(index) = self.declaration_index.get() {
+            return Ok(index);
+        }
+        let index = DeclarationIndex::build(self)?;
+        Ok(self.declaration_index.get_or_init(|| index))
     }
 
     delegate::delegate! {
@@ -217,8 +260,7 @@ mod tests {
         fs::create_dir_all(path.parent().expect("fixture source directory"))
             .expect("create fixture source directory");
         fs::write(&path, "pub struct Fixture;\n").expect("write fixture");
-        let scope = Scope::default();
-        let files = ParsedFiles::new(dir.path(), &scope);
+        let files = ParsedFiles::new(dir.path(), Scope::default());
 
         assert!(files.parsed_file(&path).expect("first lookup").is_some());
         assert!(files.parsed_file(&path).expect("second lookup").is_some());
@@ -232,8 +274,7 @@ mod tests {
         fs::create_dir_all(path.parent().expect("fixture source directory"))
             .expect("create fixture source directory");
         fs::write(&path, "pub struct Before;\n").expect("write initial fixture");
-        let scope = Scope::default();
-        let files = ParsedFiles::new(dir.path(), &scope);
+        let files = ParsedFiles::new(dir.path(), Scope::default());
 
         let (source, syntax) = files
             .parsed_source(&path)
@@ -257,6 +298,65 @@ mod tests {
             syntax.items.first(),
             Some(syn::Item::Struct(item)) if item.ident == "Before"
         ));
+        assert_eq!(files.parse_count(), 1);
+    }
+
+    #[test]
+    fn parsed_files_keep_the_snapshot_after_source_removal() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let path = dir.path().join("source.rs");
+        fs::write(&path, "struct Before;").expect("initial source");
+        let files = ParsedFiles::new(dir.path(), Scope::new(Vec::new(), vec![path.clone()]));
+        assert!(files.parsed_file(&path).expect("initial lookup").is_some());
+        fs::remove_file(&path).expect("remove captured source");
+        let (source, syntax) = files
+            .parsed_source(&path)
+            .expect("cached lookup")
+            .expect("captured source");
+        assert_eq!(source, "struct Before;");
+        assert!(
+            matches!(syntax.items.first(), Some(syn::Item::Struct(item)) if item.ident == "Before")
+        );
+        assert_eq!(files.parse_count(), 1);
+    }
+
+    #[test]
+    fn source_file_keeps_a_read_error_after_source_removal() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let path = dir.path().join("source.rs");
+        fs::write(&path, [0xff]).expect("invalid UTF-8 source");
+        let files = ParsedFiles::new(dir.path(), Scope::new(Vec::new(), vec![path.clone()]));
+        let before = files
+            .source_file(&path)
+            .expect_err("read error")
+            .to_string();
+        fs::remove_file(&path).expect("remove unreadable source");
+        assert_eq!(
+            before,
+            files
+                .source_file(&path)
+                .expect_err("retained read error")
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn parsed_files_leave_output_directories_outside_source_roots() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let source = dir.path().join("crates/fixture/src/lib.rs");
+        let output = dir.path().join("target/generated.rs");
+        fs::create_dir_all(source.parent().expect("source parent")).expect("source directory");
+        fs::create_dir_all(output.parent().expect("output parent")).expect("output directory");
+        fs::write(&source, "struct Known;").expect("source");
+        fs::write(&output, [0xff]).expect("unreadable generated output");
+        let files = ParsedFiles::new(dir.path(), Scope::default().with_workspace_sources());
+        assert!(files.parsed_file(&source).expect("source lookup").is_some());
+        assert!(
+            files
+                .source_file(&output)
+                .expect("output is outside the cache")
+                .is_none()
+        );
         assert_eq!(files.parse_count(), 1);
     }
 }

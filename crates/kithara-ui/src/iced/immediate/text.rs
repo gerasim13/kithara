@@ -54,7 +54,7 @@ where
             .skin
             .text_role(self.style, self.color, self.active_color, self.active)
             .faced(self.font, self.weight);
-        let content = self.style.cased(value.to_owned());
+        let content = role.cased(value).into_owned();
         let padding_x = match self.style {
             TextStyle::VisFooter => self.skin.vis.footer_padding_x,
             TextStyle::VisMeta => self.skin.vis.index_padding_x,
