@@ -17,20 +17,20 @@ use kithara::{
     queue::TrackSource,
 };
 use kithara_app::{
-    config::{AppConfig, AppDrm},
-    document::Config,
+    config::AppConfig,
     pools::{PoolsSection, build as app_pools},
 };
 use kithara_integration_tests::{
     bufpool_ext::pools as test_pools,
     kithara,
-    offline::{OfflinePlayer, app_disk_asset_store, app_track_source},
+    offline::{OfflinePlayer, app_disk_asset_store, app_drm, app_track_source, prod_document},
 };
 use kithara_test_utils::TestTempDir;
 use tracing::info;
 
 /// Production zvuk DRM master from the on-device AAC->FLAC recreate trace.
-/// The baked `zvuk-prod` provider supplies the DRM keyserver headers.
+/// The `zvuk-prod` provider and the Zvuk source's token supply the DRM
+/// keyserver headers.
 const PROD_TRACK: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/125895892_2/master.m3u8";
 const TRACK_NAME: &str = "zvuk_prod_aac_to_flac_switch";
 const START_VARIANT: usize = 0;
@@ -136,7 +136,7 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
     let downloader = Downloader::new(DownloaderConfig::for_client(client.clone()).build());
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
-    let document = Config::load(None, None).expect("the shipped configuration loads");
+    let document = prod_document();
     let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
@@ -149,11 +149,7 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
             .build(),
     );
     let config = AppConfig::builder()
-        .drm(AppDrm::new(
-            document
-                .drm_policy()
-                .expect("the shipped providers are valid"),
-        ))
+        .drm(app_drm(&document, &client, &shutdown))
         .net(client)
         .downloader(downloader)
         .shutdown(shutdown)

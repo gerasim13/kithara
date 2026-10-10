@@ -183,95 +183,24 @@ mod tests {
 
 #[cfg(test)]
 mod library {
-    use std::rc::Rc;
-
-    use ::kithara::{
-        platform::{sync::Arc, tokio::sync::mpsc},
-        ui::{
-            app::{Config, Ui},
-            draw::{Pt, Rect},
-            interact::{Input, MOUSE, PointerInput, PointerPhase},
-        },
-    };
-    use arc_swap::ArcSwap;
+    use ::kithara::ui::app::Ui;
     use kithara_test_utils::kithara;
 
     use super::{Studio, window_size};
-    use crate::{engine::EngineSnapshot, gui::test_fixture};
-
-    fn studio() -> Studio {
-        studio_on(&test_fixture::config())
-    }
-
-    fn studio_on(config: &crate::config::AppConfig) -> Studio {
-        let runtime = test_fixture::runtime();
-        let snapshots = Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished()));
-        let (commands, _receiver) = mpsc::unbounded_channel();
-        Studio::new(test_fixture::boot(
-            runtime.handle(),
-            config,
-            snapshots,
-            commands,
-        ))
-    }
+    use crate::gui::test_fixture::{
+        self,
+        retained::{click, laid, studio, tree_row},
+    };
 
     fn mounted(check: impl FnOnce(&mut Ui<'_, Studio>)) {
-        mounted_on(studio(), check);
-    }
-
-    fn mounted_on(studio: Studio, check: impl FnOnce(&mut Ui<'_, Studio>)) {
-        let package = Rc::clone(&studio.state.ui.package);
-        let mut ui = Ui::new(
-            studio,
-            Config::builder()
-                .endpoints(package.registry())
-                .resolver(package.resolver())
-                .text(package.text())
-                .build(),
-            window_size(),
-            1.0,
-        )
-        .unwrap_or_else(|error| panic!("the studio must mount: {error}"));
-        check(&mut ui);
-    }
-
-    fn laid_out(ui: &mut Ui<'_, Studio>, path: &str) -> Option<Rect> {
-        ui.scene()
-            .unwrap_or_else(|error| panic!("the studio must draw: {error}"));
-        ui.rect_of(path).filter(|rect| rect.w > 0.0 && rect.h > 0.0)
+        studio(Vec::new(), window_size(), check);
     }
 
     fn shown(ui: &mut Ui<'_, Studio>) -> Vec<&'static str> {
         ["startup", "explorer"]
             .into_iter()
-            .filter(|source| laid_out(ui, &format!("library/pages/{source}/rows")).is_some())
+            .filter(|source| laid(ui, &format!("library/pages/{source}/rows")).is_some())
             .collect()
-    }
-
-    fn row(ui: &mut Ui<'_, Studio>, row: u8, chevron: bool) -> Pt {
-        let tree = laid_out(ui, "library/tree").expect("the library draws its tree");
-        let skin = &ui.app().state.ui.package.skin().tree;
-        let x = if chevron {
-            tree.x + skin.marker_width + skin.indent_base + skin.chevron_width / 2.0
-        } else {
-            tree.x + tree.w / 2.0
-        };
-        Pt {
-            x,
-            y: tree.y + skin.panel_padding_top + skin.row_height * (f32::from(row) + 0.5),
-        }
-    }
-
-    fn press(ui: &mut Ui<'_, Studio>, at: Pt) {
-        for phase in [PointerPhase::Move, PointerPhase::Down, PointerPhase::Up] {
-            ui.input(Input::Pointer(PointerInput::new(
-                MOUSE,
-                None,
-                phase,
-                Some(at),
-                1,
-            )));
-        }
     }
 
     fn labels(ui: &Ui<'_, Studio>) -> Vec<String> {
@@ -289,37 +218,32 @@ mod library {
         mounted(|ui| {
             assert_eq!(shown(ui), ["startup"], "Startup starts selected");
 
-            let explorer = row(ui, 3, false);
-            press(ui, explorer);
+            let explorer = tree_row(ui, 3);
+            click(ui, explorer);
             assert_eq!(shown(ui), ["explorer"]);
 
-            let startup = row(ui, 1, false);
-            press(ui, startup);
+            let startup = tree_row(ui, 1);
+            click(ui, startup);
             assert_eq!(shown(ui), ["startup"]);
         });
     }
 
-    #[cfg(feature = "zvuk")]
     #[kithara::test(native, flash(false))]
-    fn the_zvuk_page_stands_when_its_source_is_selected() {
-        let mut config = test_fixture::config();
-        let section = serde_yaml_ng::from_str("{auth_token: token, user_agent: agent}")
-            .unwrap_or_else(|error| panic!("the section parses: {error}"));
-        config.sources.insert("zvuk".to_owned(), section);
-        config.shutdown.cancel();
-        mounted_on(studio_on(&config), |ui| {
-            let zvuk = "library/pages/zvuk/query";
-            assert!(laid_out(ui, zvuk).is_none(), "Startup starts selected");
+    fn a_plugin_page_stands_when_its_source_is_selected() {
+        let (probe, _) = test_fixture::Probe::registered("menu.module.library");
+        studio(vec![probe], window_size(), |ui| {
+            let page = "library/pages/probe/rows";
+            assert!(laid(ui, page).is_none(), "Startup starts selected");
 
-            let search = labels(ui)
+            let label = labels(ui)
                 .iter()
-                .position(|label| label == "Search")
-                .unwrap_or_else(|| panic!("Zvuk lists Search: {:?}", labels(ui)));
-            let at = row(ui, u8::try_from(search).unwrap_or(u8::MAX), false);
-            press(ui, at);
+                .position(|label| label == "leaf")
+                .unwrap_or_else(|| panic!("the plugin is listed: {:?}", labels(ui)));
+            let at = tree_row(ui, u8::try_from(label).unwrap_or(u8::MAX));
+            click(ui, at);
 
-            assert_eq!(ui.app().state.library.page(), Some("zvuk"));
-            assert!(laid_out(ui, zvuk).is_some(), "the Zvuk page stands");
+            assert_eq!(ui.app().state.library.page(), Some("probe"));
+            assert!(laid(ui, page).is_some(), "the plugin page stands");
             assert_eq!(shown(ui), Vec::<&str>::new());
         });
     }
@@ -328,13 +252,13 @@ mod library {
     fn library_followup_section_label_toggles_without_selecting() {
         mounted(|ui| {
             let closed = labels(ui);
-            let chevron = row(ui, 0, false);
+            let chevron = tree_row(ui, 0);
 
-            press(ui, chevron);
+            click(ui, chevron);
             assert_eq!(labels(ui).len(), closed.len() - 1);
             assert_eq!(shown(ui), ["startup"]);
 
-            press(ui, chevron);
+            click(ui, chevron);
             assert_eq!(labels(ui), closed);
         });
     }

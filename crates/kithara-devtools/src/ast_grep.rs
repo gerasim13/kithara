@@ -48,6 +48,12 @@ struct Match {
     #[serde(rename = "ruleId")]
     rule_id: String,
     severity: String,
+    metadata: Option<RuleMetadata>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuleMetadata {
+    category: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,7 +130,7 @@ fn run_native(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
-/// Parse ast-grep `--json=stream` output into the per-rule grouping.
+/// Group scoped native rules under their declared report category.
 fn parse_into(stdout: &str, by_rule: &mut BTreeMap<String, RuleGroup>) -> Result<()> {
     for line in stdout.lines() {
         let line = line.trim();
@@ -132,13 +138,19 @@ fn parse_into(stdout: &str, by_rule: &mut BTreeMap<String, RuleGroup>) -> Result
             continue;
         }
         let m: Match = serde_json::from_str(line).context("parse ast-grep diagnostic")?;
-        let entry = by_rule
-            .entry(m.rule_id.clone())
-            .or_insert_with(|| RuleGroup {
-                severity: m.severity.clone(),
-                message: m.message.clone(),
-                hits: Vec::new(),
-            });
+        let rule_id = m
+            .metadata
+            .and_then(|metadata| metadata.category)
+            .unwrap_or(m.rule_id);
+        let entry = by_rule.entry(rule_id.clone()).or_insert_with(|| RuleGroup {
+            severity: m.severity.clone(),
+            message: m.message.clone(),
+            hits: Vec::new(),
+        });
+        ensure!(
+            entry.severity == m.severity,
+            "inconsistent severity for ast-grep category {rule_id}",
+        );
         entry.hits.push(Hit {
             byte_offset: m.range.byte_offset.start,
             file: m.file,
@@ -192,6 +204,7 @@ fn run_grouped(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
         .arg("scan")
         .arg("--config")
         .arg("sgconfig.yml")
+        .arg("--include-metadata")
         .arg("--json=stream");
     add_exclude_globs(&mut cmd, ctx);
     if args.strict {
@@ -216,6 +229,7 @@ fn run_grouped(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
             .arg("scan")
             .arg("--rule")
             .arg(&rule_file)
+            .arg("--include-metadata")
             .arg("--json=stream");
         if args.strict {
             rule_cmd.arg("--warning");
@@ -492,13 +506,20 @@ mod tests {
             .expect("create fixture directory");
         fs::write(&source_path, source).expect("write fixture");
 
-        let rule = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.config/ast-grep")
-            .join(rule_file);
+        let rules = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.config/ast-grep");
+        fs::write(
+            temp.path().join("sgconfig.yml"),
+            format!(
+                "ruleDirs: [{}]\n",
+                serde_json::to_string(&rules).expect("rule directory"),
+            ),
+        )
+        .expect("scan config");
+        let rule_id = rule_file.trim_end_matches(".yml").replace('.', "\\.");
         let output = Command::new("ast-grep")
             .current_dir(temp.path())
-            .args(["scan", "--rule"])
-            .arg(rule)
+            .args(["scan", "--config", "sgconfig.yml", "--filter"])
+            .arg(format!("^{rule_id}(\\.|$)"))
             .args(["--json=stream", relative_path])
             .output()
             .expect("run ast-grep");
@@ -557,26 +578,296 @@ mod tests {
     }
 
     #[test]
-    fn target_gate_rule_recognizes_platform_owners_and_keeps_business_gates() {
+    fn target_gate_rule_checks_business_code_next_to_abi_wiring() {
         let source = "#[cfg(target_os = \"android\")]\nfn gate() {}\n";
+        assert_eq!(
+            rule_hits_at(
+                "arch.no-target-os-outside-platform.yml",
+                "crates/kithara-platform/src/common/gate.rs",
+                source,
+            ),
+            0,
+        );
         for path in [
-            "crates/kithara-platform/src/common/gate.rs",
             "crates/kithara-android/src/lib.rs",
+            "crates/kithara-android/src/runtime.rs",
+            "crates/kithara-android/src/http/client.rs",
+            "crates/kithara-ffi/src/lib.rs",
+            "crates/kithara-ffi/src/native/mod.rs",
+            "crates/kithara-audio/src/gate.rs",
+        ] {
+            assert_eq!(
+                rule_hits_at("arch.no-target-os-outside-platform.yml", path, source),
+                1,
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn target_gate_rule_allows_only_existing_structural_abi_items() {
+        for (path, source) in [
+            (
+                "crates/kithara-android/src/lib.rs",
+                include_str!("../../kithara-android/src/lib.rs"),
+            ),
+            (
+                "crates/kithara-ffi/src/lib.rs",
+                include_str!("../../kithara-ffi/src/lib.rs"),
+            ),
+            (
+                "crates/kithara-ffi/src/native/mod.rs",
+                include_str!("../../kithara-ffi/src/native/mod.rs"),
+            ),
         ] {
             assert_eq!(
                 rule_hits_at("arch.no-target-os-outside-platform.yml", path, source),
                 0,
-                "{path}"
+                "{path}",
+            );
+            let with_business_gate =
+                format!("{source}\n#[cfg(not(target_arch = \"wasm32\"))]\nfn gate() {{}}");
+            assert_eq!(
+                rule_hits_at(
+                    "arch.no-target-os-outside-platform.yml",
+                    path,
+                    &with_business_gate,
+                ),
+                1,
+                "{path}",
+            );
+            assert!(
+                rule_hits_at(
+                    "arch.no-target-os-outside-platform.yml",
+                    "crates/kithara-audio/src/lib.rs",
+                    source,
+                ) > 0,
+                "ABI wiring outside its owner: {path}",
             );
         }
+    }
+
+    #[test]
+    fn target_gate_rule_does_not_extend_abi_allowances_to_other_items() {
+        for (path, source) in [
+            (
+                "crates/kithara-android/src/lib.rs",
+                "#[cfg(target_os = \"linux\")] mod buffer;",
+            ),
+            (
+                "crates/kithara-android/src/lib.rs",
+                "#[cfg(target_os = \"android\")] mod other;",
+            ),
+            (
+                "crates/kithara-android/src/lib.rs",
+                "#[cfg(target_os = \"android\")] mod buffer { fn gate() {} }",
+            ),
+            (
+                "crates/kithara-android/src/lib.rs",
+                "mod nested { #[cfg(target_os = \"android\")] mod buffer; }",
+            ),
+            (
+                "crates/kithara-android/src/media/sys.rs",
+                "#[cfg(target_os = \"android\")] mod buffer;",
+            ),
+            (
+                "crates/kithara-ffi/src/lib.rs",
+                "#[cfg(target_arch = \"wasm32\")] mod native;",
+            ),
+            (
+                "crates/kithara-ffi/src/lib.rs",
+                "#[cfg(not(target_arch = \"wasm32\"))] use other::Inner;",
+            ),
+            (
+                "crates/kithara-ffi/src/lib.rs",
+                "#[cfg(all(feature = \"uniffi\", not(target_arch = \"wasm32\")))] uniffi::other!();",
+            ),
+            (
+                "crates/kithara-ffi/src/native/mod.rs",
+                "#[cfg(target_os = \"android\")] fn android() {}",
+            ),
+        ] {
+            assert_eq!(
+                rule_hits_at("arch.no-target-os-outside-platform.yml", path, source),
+                1,
+                "{path}: {source}",
+            );
+        }
+        let with_attributes = "#[cfg(target_os = \"android\")]\n// ABI module\n#[doc = \"Buffer\"]\nmod buffer;\n#[cfg(target_os = \"android\")]\nfn gate() {}";
         assert_eq!(
             rule_hits_at(
                 "arch.no-target-os-outside-platform.yml",
-                "crates/kithara-audio/src/gate.rs",
-                source
+                "crates/kithara-android/src/lib.rs",
+                with_attributes,
             ),
             1,
         );
+    }
+
+    #[test]
+    fn target_gate_rule_reports_redirected_abi_modules() {
+        for (path, gate, declaration) in [
+            (
+                "crates/kithara-android/src/lib.rs",
+                "target_os = \"android\"",
+                "mod buffer;",
+            ),
+            (
+                "crates/kithara-ffi/src/lib.rs",
+                "not(target_arch = \"wasm32\")",
+                "mod native;",
+            ),
+            (
+                "crates/kithara-ffi/src/lib.rs",
+                "target_arch = \"wasm32\"",
+                "pub mod web;",
+            ),
+            (
+                "crates/kithara-ffi/src/native/mod.rs",
+                "target_os = \"android\"",
+                "pub(crate) mod android;",
+            ),
+        ] {
+            for redirect in [
+                "#[path = \"business.rs\"]",
+                "#[cfg_attr(feature = \"mock\", path = \"business.rs\")]",
+            ] {
+                for source in [
+                    format!("{redirect}\n#[cfg({gate})]\n{declaration}"),
+                    format!("#[cfg({gate})]\n{redirect}\n{declaration}"),
+                ] {
+                    assert_eq!(
+                        rule_hits_at("arch.no-target-os-outside-platform.yml", path, &source),
+                        1,
+                        "{path}: {source}",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn target_gate_rule_sees_nested_cfg_without_matching_feature_strings() {
+        for cfg in [
+            "all(feature = \"uniffi\", not(target_arch = \"wasm32\"))",
+            "any(feature = \"mock\", all(target_os = \"android\", not(target_arch = \"wasm32\")))",
+        ] {
+            assert_eq!(
+                rule_hits(
+                    "arch.no-target-os-outside-platform.yml",
+                    &format!("#[cfg({cfg})] fn gate() {{}}")
+                ),
+                1,
+                "{cfg}",
+            );
+        }
+        assert_eq!(
+            rule_hits(
+                "arch.no-target-os-outside-platform.yml",
+                "#[cfg(feature = \"target_os\")] fn gate() {}"
+            ),
+            0,
+        );
+    }
+
+    #[test]
+    fn target_gate_config_scan_preserves_one_category_and_its_severity() {
+        let (root, mut ctx, mut args) = grouped_fixture("", "warning");
+        fs::write(
+            root.path()
+                .join(".config/ast-grep/arch.no-target-os-outside-platform.yml"),
+            include_str!("../../../.config/ast-grep/arch.no-target-os-outside-platform.yml"),
+        )
+        .expect("target rules");
+        for path in [
+            "crates/kithara-audio/src/lib.rs",
+            "crates/kithara-android/src/lib.rs",
+            "crates/kithara-ffi/src/lib.rs",
+            "crates/kithara-ffi/src/native/mod.rs",
+        ] {
+            let path = root.path().join(path);
+            fs::create_dir_all(path.parent().expect("fixture parent")).expect("source directory");
+            fs::write(path, "#[cfg(target_os = \"android\")] fn gate() {}").expect("source");
+        }
+        let output = Command::new("ast-grep")
+            .current_dir(root.path())
+            .args([
+                "scan",
+                "--config",
+                "sgconfig.yml",
+                "--include-metadata",
+                "--json=stream",
+                "crates",
+            ])
+            .output()
+            .expect("config scan");
+        let mut groups = BTreeMap::new();
+        super::parse_output(&output, &mut groups).expect("registered scoped rules");
+        assert_eq!(groups.len(), 1);
+        let group = &groups["arch.no-target-os-outside-platform"];
+        assert_eq!(group.severity, "warning");
+        assert_eq!(group.hits.len(), 4);
+        assert!(run_grouped(&args, &ctx).is_ok());
+        args.strict = true;
+        for scan_all in [false, true] {
+            if scan_all {
+                ctx.config
+                    .lint_exclude
+                    .scan_all_rules
+                    .push("arch.no-target-os-outside-platform".to_owned());
+            }
+            let error = run_grouped(&args, &ctx).expect_err("strict warnings remain findings");
+            assert_eq!(
+                error
+                    .downcast_ref::<crate::verdict::NotClean>()
+                    .expect("lint verdict")
+                    .findings,
+                Some(4),
+                "scan_all: {scan_all}",
+            );
+        }
+    }
+
+    #[test]
+    fn grouped_scan_rejects_conflicting_category_severities() {
+        let (root, ctx, args) = grouped_fixture("fn value() -> u32 { 42 }", "warning");
+        let rule = root.path().join(".config/ast-grep/context.yml");
+        let source = fs::read_to_string(&rule).expect("rule");
+        fs::write(
+            rule,
+            format!("{source}\n---\nid: scoped-context\nlanguage: Rust\nmetadata:\n  category: context\nmessage: domain value\nseverity: error\nrule:\n  kind: integer_literal\n  regex: '^42$'\n"),
+        )
+        .expect("scoped rule");
+        let error = run_grouped(&args, &ctx).expect_err("category mismatch must fail");
+        assert_eq!(
+            error.to_string(),
+            "inconsistent severity for ast-grep category context",
+        );
+    }
+
+    #[test]
+    fn grouped_scan_preserves_native_messages_with_different_captures() {
+        let (root, ctx, mut args) = grouped_fixture("fn first() {} fn second() {}", "warning");
+        fs::write(
+            root.path().join(".config/ast-grep/context.yml"),
+            "id: context\nlanguage: Rust\nmessage: 'Function $NAME'\nseverity: warning\nrule:\n  pattern: 'fn $NAME() {}'\n",
+        )
+        .expect("capture rule");
+        for raw in [false, true] {
+            args.raw = raw;
+            args.strict = false;
+            assert!(run_grouped(&args, &ctx).is_ok(), "raw: {raw}");
+            args.strict = true;
+            let error = run_grouped(&args, &ctx).expect_err("both warnings remain findings");
+            assert_eq!(
+                error
+                    .downcast_ref::<crate::verdict::NotClean>()
+                    .expect("lint verdict")
+                    .findings,
+                Some(2),
+                "raw: {raw}",
+            );
+        }
     }
 
     fn module_root_hits(relative_path: &str, source: &str) -> usize {

@@ -8,6 +8,7 @@ use kithara_test_utils::{kithara, wait_until};
 use kithara_ui::render::{ReadValue, WriteValue};
 use unimock::{MockFn, Unimock, matching};
 
+mod account;
 mod counts;
 mod lifecycle;
 mod reaction_commands;
@@ -25,7 +26,7 @@ async fn a_query_is_debounced_and_resolves_one_batch() {
         NetMock::post_bytes.next_call(matching!((_, body, _) if serde_json::from_slice::<serde_json::Value>(body).unwrap()["variables"]["query"] == "needle")).returns(Ok(search_reply())),
         NetMock::post_bytes.next_call(matching!((_, body, _) if String::from_utf8_lossy(body).contains("mediaContents"))).returns(Ok(stream_reply())),
     )));
-    let mut source = source(net.clone());
+    let mut source = source(net.clone()).await;
     source.select("search");
     source.write("query", &WriteValue::Text("old".to_owned()));
     source.tick();
@@ -83,7 +84,7 @@ async fn playlist_navigation_is_loaded_once_by_the_source() {
                 "../fixtures/playlists.json"
             )))),
     ));
-    let mut source = source(net.clone());
+    let mut source = source(net.clone()).await;
     assert!(source.branch().children[2].unlisted);
     source.expand("playlists");
     wait_until(Duration::from_secs(2), "the playlists are listed", || {

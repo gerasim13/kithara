@@ -1,4 +1,4 @@
-use kithara_ui_shaping::{FontFamily, FontWeight, TextStyle};
+use kithara_ui_shaping::{Elision, FontFamily, FontWeight, TextStyle};
 use serde::{Deserialize, Serialize};
 
 use super::palette::ColorRole;
@@ -40,6 +40,17 @@ pub struct ToneColors {
     pub success: ColorRole,
 }
 
+/// The case a role sets its words in, whatever case the document wrote them.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum TextCase {
+    #[default]
+    AsWritten,
+    Upper,
+}
+
+/// A typographic role. A run set in it takes its `case`, and keeps to one
+/// line elided at `elide` when the role names one.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, kithara_derive::Mirror)]
 #[mirror(into = TextStyle)]
 #[serde(deny_unknown_fields)]
@@ -51,6 +62,12 @@ pub struct TextRoleSkin {
     pub weight: FontWeight,
     pub size: f32,
     pub spacing: f32,
+    #[mirror(skip)]
+    #[serde(default)]
+    pub case: TextCase,
+    #[mirror(skip)]
+    #[serde(default)]
+    pub elide: Option<Elision>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]

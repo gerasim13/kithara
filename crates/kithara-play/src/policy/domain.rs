@@ -28,3 +28,23 @@ impl DomainPattern {
         )
     }
 }
+
+/// Whether `host` falls under `pattern`, read the way policy rules read their
+/// domains: a bare host matches exactly, `*.domain` its subdomains, `*` any.
+#[must_use]
+pub fn domain_matches(pattern: &str, host: &str) -> bool {
+    DomainPattern::parse(pattern).matches(host)
+}
+
+/// Whether every host `pattern` matches is `domain` or one of its subdomains.
+#[must_use]
+pub fn domain_holds(domain: &str, pattern: &str) -> bool {
+    let domain = domain.to_ascii_lowercase();
+    let subdomains = DomainPattern::Wildcard(domain.clone());
+    match DomainPattern::parse(pattern) {
+        DomainPattern::All => false,
+        DomainPattern::Exact(host) | DomainPattern::Wildcard(host) => {
+            host == domain || subdomains.matches(&host)
+        }
+    }
+}

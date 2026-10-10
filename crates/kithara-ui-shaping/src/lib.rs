@@ -7,4 +7,4 @@ pub use shape::{
     FontId, FontPolicy, Glyph, GlyphFace, GlyphRun, GlyphSegment, TextContext, TextError,
     TextResources,
 };
-pub use style::{FontFamily, FontWeight, TextStyle};
+pub use style::{Elision, FontFamily, FontWeight, TextStyle};

@@ -54,9 +54,17 @@ pub(crate) fn load_module_graph(
         limits,
         set: ModuleSet::default(),
         stack: Vec::new(),
+        listed: BTreeMap::new(),
     };
     let uri = loader.load(base, rel, 0)?;
     loader.mount(&uri)?;
+    if let Some((address, Some(origin))) = loader
+        .listed
+        .into_iter()
+        .find(|(_, undrawn)| undrawn.is_some())
+    {
+        return Err(UiDocError::UndrawnCollection { origin, address });
+    }
     Ok((uri, loader.set))
 }
 
@@ -65,6 +73,9 @@ struct Loader<'a> {
     limits: &'a Limits,
     set: ModuleSet,
     stack: Vec<SourceUri>,
+    /// Each collection a slot shows, with where it was first shown while no
+    /// slot draws its fills.
+    listed: BTreeMap<String, Option<SourceUri>>,
 }
 
 impl Loader<'_> {
@@ -144,11 +155,15 @@ impl Loader<'_> {
         each: Option<&Include>,
         depth: usize,
     ) -> Result<(), UiDocError> {
-        if let Some(each) = each {
-            let template = self.load(Some(origin), &each.source, depth + 1)?;
-            if !self.set.holders.contains(&template) {
-                return Err(UiDocError::TemplateWithoutContent { origin: template });
-            }
+        let template = each
+            .map(|each| self.load(Some(origin), &each.source, depth + 1))
+            .transpose()?;
+        let undrawn = self
+            .listed
+            .entry(address.clone())
+            .or_insert_with(|| Some(origin.clone()));
+        if template.is_none_or(|template| self.set.holders.contains(&template)) {
+            *undrawn = None;
         }
         if self.set.collections.contains_key(&address) {
             return Ok(());

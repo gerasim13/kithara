@@ -64,16 +64,8 @@ impl Fixture {
         })
     }
 
-    /// The settings sheet is open in both captures, because a control only the
-    /// sheet carries is compared across the hosts on no page otherwise. Its two
-    /// sections cannot show at once, so each layout photographs one of them.
-    fn on(&self, endpoint: &str) -> bool {
-        match endpoint {
-            "deck.eq.three_band" | "ui.settings.open" => true,
-            "ui.settings.on_view" => self.layout == DeckLayout::Dual,
-            "ui.settings.on_audio" => self.layout == DeckLayout::Single,
-            _ => false,
-        }
+    fn on(endpoint: &str) -> bool {
+        endpoint == "deck.eq.three_band"
     }
 }
 
@@ -150,7 +142,7 @@ impl Reads for Fixture {
             return self.library.page().map(ReadValue::Text);
         }
         let value = match readable_kind(base)? {
-            ValueKind::Bool => ReadValue::Bool(self.on(base)),
+            ValueKind::Bool => ReadValue::Bool(Self::on(base)),
             ValueKind::Scalar => ReadValue::Scalar(Self::SCALAR),
             ValueKind::Stereo => ReadValue::Stereo(Self::LEVELS),
             ValueKind::Text => ReadValue::Text(text(base)),

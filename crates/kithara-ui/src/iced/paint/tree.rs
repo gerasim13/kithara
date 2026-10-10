@@ -71,6 +71,37 @@ mod tests {
         picture.row_commands(&mut text, viewport, offset, None)
     }
 
+    fn shapes(list: &DrawList, into: &mut Vec<Geom>) {
+        for command in list.commands() {
+            match command {
+                DrawCmd::Clip { list, .. } => shapes(list, into),
+                DrawCmd::Fill { geom, .. } | DrawCmd::Stroke { geom, .. } => {
+                    into.push(geom.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn the_zvuk_row_draws_the_zvuk_mark() {
+        let viewport = Rect {
+            h: 96.0,
+            w: 180.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let mut drawn = Vec::new();
+        shapes(&commands(0.0, viewport), &mut drawn);
+
+        let outlines = drawn.iter().filter(|geom| geom.is_outline()).count();
+        let arcs = drawn
+            .iter()
+            .filter(|geom| matches!(geom, Geom::Arc { .. }))
+            .count();
+        assert_eq!((outlines, arcs), (1, 0));
+    }
+
     #[kithara::test]
     fn scrolled_rows_are_nested_under_the_viewport_clip() {
         let skin = builtin::skin();
@@ -150,37 +181,6 @@ mod tests {
         assert_eq!(*region, viewport);
         assert!(list.commands().iter().any(|command| {
             matches!(command, DrawCmd::Text { content, .. } if content == "Second")
-        }));
-    }
-
-    #[kithara::test]
-    fn the_zvuk_row_stays_on_the_neutral_geometry_seam() {
-        let skin = builtin::skin();
-        let picture = Tree::new(&rows()[2..], None, skin);
-        let mut text = TextContext::from(skin.text_resources.as_ref());
-        let list = picture.row_commands(
-            &mut text,
-            Rect {
-                h: skin.tree.row_height,
-                w: 180.0,
-                x: 0.0,
-                y: 0.0,
-            },
-            0.0,
-            None,
-        );
-        let Some(DrawCmd::Clip { list, .. }) = list.commands().first() else {
-            panic!("the tree painter must retain a clip");
-        };
-
-        assert!(list.commands().iter().any(|command| {
-            matches!(
-                command,
-                DrawCmd::Stroke {
-                    geom: Geom::RoundedRect { .. } | Geom::Arc { .. },
-                    ..
-                }
-            )
         }));
     }
 }

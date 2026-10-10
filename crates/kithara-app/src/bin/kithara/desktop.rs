@@ -8,9 +8,10 @@ use kithara_app::{
     document::Config,
     gui,
     logging::init_tracing,
-    memory,
+    memory, plugins,
     pools::{self, AppHost},
 };
+use kithara_app_library::{Environment, Secrets};
 
 /// Kithara - audio player application.
 #[derive(Parser)]
@@ -59,6 +60,14 @@ fn config_beside_binary() -> Option<std::path::PathBuf> {
     Some(std::env::current_exe().ok()?.parent()?.join("kithara.yaml"))
 }
 
+/// The value `result` holds; its error is printed and ends the process.
+fn or_exit<T>(result: Result<T, impl std::fmt::Display>) -> T {
+    result.unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(1)
+    })
+}
+
 type AppError = Box<dyn std::error::Error + Send + Sync>;
 pub(super) type AppResult<T = ()> = Result<T, AppError>;
 
@@ -77,13 +86,10 @@ pub(super) fn main(shutdown: CancelToken) -> AppResult {
     suppress_macos_system_logs();
 
     let args = Args::parse();
-    let document = match Config::load(args.config.as_deref(), config_beside_binary().as_deref()) {
-        Ok(document) => document,
-        Err(error) => {
-            eprintln!("{error}");
-            std::process::exit(1);
-        }
-    };
+    let document = or_exit(Config::load(
+        args.config.as_deref(),
+        config_beside_binary().as_deref(),
+    ));
     if args.dump_config {
         println!("{}", document.dump());
         return Ok(());
@@ -97,21 +103,25 @@ pub(super) fn main(shutdown: CancelToken) -> AppResult {
     let runtime = tokio::runtime::Runtime::new()?;
     let _runtime_guard = runtime.enter();
 
-    let assembled = AppConfig::assemble()
-        .document(&document)
-        .pools(pools::build(&document.pools())?)
-        .shutdown(shutdown)
-        .runtime(runtime.handle().clone())
-        .is_insecure(args.insecure)
-        .maybe_ui_package(shipped_ui_package())
-        .call();
-    let mut config = match assembled {
-        Ok(config) => config,
-        Err(error) => {
-            eprintln!("{error}");
-            std::process::exit(1);
-        }
-    };
+    let pools = pools::build(&document.pools())?;
+    let net = AppConfig::client(&document, &pools, &shutdown, args.insecure);
+    let environment = Environment::new(
+        runtime.handle().clone(),
+        net.clone(),
+        Secrets::native(document.overlay()),
+    );
+    let registered = or_exit(plugins::mount(&document, &environment, &shutdown));
+    let mut config = or_exit(
+        AppConfig::assemble()
+            .document(&document)
+            .pools(pools)
+            .net(net)
+            .grants(&plugins::grants(&registered))
+            .shutdown(shutdown)
+            .runtime(runtime.handle().clone())
+            .maybe_ui_package(shipped_ui_package())
+            .call(),
+    );
     if !args.tracks.is_empty() {
         config.tracks = args.tracks;
     }
@@ -130,7 +140,14 @@ pub(super) fn main(shutdown: CancelToken) -> AppResult {
             .maybe_output_block_frames(config.output_block_frames)
             .build(),
     )?;
-    gui::run(config, args.host, host, runtime.handle())?;
+    gui::run(
+        config,
+        document.overlay(),
+        registered,
+        args.host,
+        host,
+        runtime.handle(),
+    )?;
 
     Ok(())
 }

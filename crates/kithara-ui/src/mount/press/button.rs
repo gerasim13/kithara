@@ -130,7 +130,7 @@ pub(crate) mod host {
         fn micro_primary_keeps_its_forced_lucide_icon() {
             assert!(matches!(
                 mark(ButtonStyle::MicroPrimary, Some(IconName::PlayReverse), false),
-                Some(Mark::Glyph(glyph)) if Some(glyph) == IconName::Play.lucide_glyph()
+                Some(glyph @ Mark::Glyph(_)) if IconName::Play.mark() == Some(glyph)
             ));
         }
 

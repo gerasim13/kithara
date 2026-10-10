@@ -7,7 +7,10 @@ use syn::{
     punctuated::Punctuated, spanned::Spanned,
 };
 
-use super::{Check, Context};
+use super::{
+    super::{Check, Context},
+    safety::{self, OrderSafety},
+};
 use crate::{
     common::{
         fix::{ExpansionError, FixOutcome, SourceRewriter, expand_blocks},
@@ -26,6 +29,7 @@ pub(crate) struct StructFieldOrder;
 impl Check for StructFieldOrder {
     fn fix(&self, ctx: &Context<'_>) -> Result<FixOutcome> {
         let cfg = &ctx.config.thresholds.struct_field_order;
+        let closed_root = safety::closed_workspace_root(ctx);
         let mut outcome = FixOutcome::default();
         for path in ctx.scan.rs_files(ctx.scope)?.iter() {
             let Some(src) = ctx.scan.source(path) else {
@@ -38,7 +42,15 @@ impl Check for StructFieldOrder {
                 .to_string_lossy()
                 .replace('\\', "/");
             let mut rw = SourceRewriter::new(&src);
-            fix_items(cfg, &rel, &src, &file.items, &mut rw, &mut outcome.skipped);
+            fix_items(
+                cfg,
+                &rel,
+                &src,
+                &file.items,
+                OrderSafety::new(closed_root.as_deref() == Some(path.as_path()), &file.attrs),
+                &mut rw,
+                &mut outcome.skipped,
+            );
             if !rw.is_empty() {
                 let new_src = rw.finish()?;
                 ctx.scan.write(path, new_src)?;
@@ -54,6 +66,7 @@ impl Check for StructFieldOrder {
 
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let cfg = &ctx.config.thresholds.struct_field_order;
+        let closed_root = safety::closed_workspace_root(ctx);
         let mut violations = Vec::new();
         for path in ctx.scan.rs_files(ctx.scope)?.iter() {
             let Ok(file) = ctx.scan.parse_file(path) else {
@@ -62,56 +75,65 @@ impl Check for StructFieldOrder {
             let rel = relative_to(ctx.workspace_root, path)
                 .to_string_lossy()
                 .replace('\\', "/");
-            scan_items(cfg, &rel, &file.items, &mut Vec::new(), &mut violations);
+            scan_items(
+                cfg,
+                &rel,
+                &file.items,
+                OrderSafety::new(closed_root.as_deref() == Some(path.as_path()), &file.attrs),
+                &mut Vec::new(),
+                &mut violations,
+            );
         }
         violations.sort_by(|a, b| a.key.cmp(&b.key));
         Ok(violations)
     }
 }
 
-fn fix_items<'src>(
+pub(super) fn fix_items<'src>(
     cfg: &StructFieldOrderConfig,
     rel: &str,
     src: &'src str,
     items: &[Item],
+    safety: OrderSafety,
     rw: &mut SourceRewriter<'src>,
     skipped: &mut Vec<String>,
 ) {
+    let safety = safety.items(items);
     for item in items {
         match item {
             Item::Struct(s) => {
                 if is_exempt(&s.attrs, cfg) {
                     continue;
                 }
-                if let Fields::Named(named) = &s.fields {
-                    let collected: Vec<&Field> = named.named.iter().collect();
-                    if let Err(reason) = fix_field_block(
+                if let Fields::Named(named) = &s.fields
+                    && let Err(reason) = fix_field_block(
                         cfg,
                         src,
                         named.brace_token.span.open().byte_range().end
                             ..named.brace_token.span.close().byte_range().start,
-                        &collected,
+                        &named.named,
+                        safety.attributes(&s.attrs).generics(&s.generics),
                         rw,
-                    ) {
-                        skipped.push(format!(
-                            "{rel}:{}: struct `{}`: {reason}",
-                            s.ident.span().start().line,
-                            s.ident
-                        ));
-                    }
+                    )
+                {
+                    skipped.push(format!(
+                        "{rel}:{}: struct `{}`: {reason}",
+                        s.ident.span().start().line,
+                        s.ident
+                    ));
                 }
             }
             Item::Union(u) => {
                 if is_exempt(&u.attrs, cfg) {
                     continue;
                 }
-                let collected: Vec<&Field> = u.fields.named.iter().collect();
                 if let Err(reason) = fix_field_block(
                     cfg,
                     src,
                     u.fields.brace_token.span.open().byte_range().end
                         ..u.fields.brace_token.span.close().byte_range().start,
-                    &collected,
+                    &u.fields.named,
+                    safety.attributes(&u.attrs).generics(&u.generics),
                     rw,
                 ) {
                     skipped.push(format!(
@@ -123,7 +145,15 @@ fn fix_items<'src>(
             }
             Item::Mod(m) => {
                 if let Some((_, inner)) = &m.content {
-                    fix_items(cfg, rel, src, inner, rw, skipped);
+                    fix_items(
+                        cfg,
+                        rel,
+                        src,
+                        inner,
+                        safety.attributes(&m.attrs),
+                        rw,
+                        skipped,
+                    );
                 }
             }
             _ => {}
@@ -135,33 +165,20 @@ fn fix_field_block<'src>(
     cfg: &StructFieldOrderConfig,
     src: &'src str,
     scope_bytes: Range<usize>,
-    fields: &[&Field],
+    named: &Punctuated<Field, Token![,]>,
+    safety: OrderSafety,
     rw: &mut SourceRewriter<'src>,
 ) -> Result<(), String> {
+    let fields: Vec<&Field> = named.iter().collect();
     if fields.len() < 2 {
         return Ok(());
     }
 
-    if has_heterogeneous_cfg(fields) {
+    if has_heterogeneous_cfg(&fields) {
         return Err("fields have heterogeneous `#[cfg(...)]` attributes".to_string());
     }
 
-    let order = build_visibility_order(&cfg.visibility_order);
-    let actual: Vec<FieldKey> = fields
-        .iter()
-        .enumerate()
-        .map(|(idx, f)| FieldKey {
-            idx,
-            builder_bucket: builder_bucket(&f.attrs),
-            vis_bucket: vis_bucket(&order, &f.vis),
-            type_key: type_sort_key(&f.ty),
-            name: f
-                .ident
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default(),
-        })
-        .collect();
+    let actual = field_keys(cfg, &fields);
     let mut expected = actual.clone();
     expected.sort_by(cmp_field_key);
     if actual
@@ -172,7 +189,22 @@ fn fix_field_block<'src>(
         return Ok(());
     }
 
-    let item_spans: Vec<Range<usize>> = fields.iter().map(|f| f.span().byte_range()).collect();
+    safety.permutation(
+        &fields,
+        &expected.iter().map(|field| field.idx).collect::<Vec<_>>(),
+    )?;
+
+    if !named.trailing_punct() {
+        return Err("last field has no trailing comma".to_string());
+    }
+
+    let item_spans: Vec<Range<usize>> = named
+        .pairs()
+        .filter_map(|pair| {
+            pair.punct()
+                .map(|comma| pair.value().span().byte_range().start..comma.span().byte_range().end)
+        })
+        .collect();
     let blocks = match expand_blocks(src, scope_bytes, &item_spans) {
         Ok(b) => b,
         Err(ExpansionError::FloatingComment { line, snippet }) => {
@@ -180,13 +212,6 @@ fn fix_field_block<'src>(
         }
         Err(other) => return Err(format!("engine error: {other:?}")),
     };
-
-    let last = blocks
-        .last()
-        .expect("invariant: fields.len() >= 2 checked above, blocks mirrors fields");
-    if !src[last.item_bytes.end..last.bytes.end].contains(',') {
-        return Err("last field has no trailing comma".to_string());
-    }
 
     let texts: Vec<String> = blocks
         .iter()
@@ -223,13 +248,15 @@ fn cfg_signature(attrs: &[Attribute]) -> String {
     sigs.join("|")
 }
 
-fn scan_items(
+pub(super) fn scan_items(
     cfg: &StructFieldOrderConfig,
     rel: &str,
     items: &[Item],
+    safety: OrderSafety,
     mod_path: &mut Vec<String>,
     out: &mut Vec<Violation>,
 ) {
+    let safety = safety.items(items);
     for item in items {
         match item {
             Item::Struct(s) => {
@@ -243,8 +270,8 @@ fn scan_items(
                         rel,
                         mod_path,
                         &s.ident.to_string(),
-                        "struct",
                         &collected,
+                        safety.attributes(&s.attrs).generics(&s.generics),
                         out,
                     );
                 }
@@ -259,15 +286,15 @@ fn scan_items(
                     rel,
                     mod_path,
                     &u.ident.to_string(),
-                    "union",
                     &collected,
+                    safety.attributes(&u.attrs).generics(&u.generics),
                     out,
                 );
             }
             Item::Mod(m) => {
                 if let Some((_, inner)) = &m.content {
                     mod_path.push(m.ident.to_string());
-                    scan_items(cfg, rel, inner, mod_path, out);
+                    scan_items(cfg, rel, inner, safety.attributes(&m.attrs), mod_path, out);
                     mod_path.pop();
                 }
             }
@@ -283,8 +310,8 @@ fn check_field_block(
     rel: &str,
     mod_path: &[String],
     type_name: &str,
-    type_kind: &str,
     fields: &[&Field],
+    safety: OrderSafety,
     out: &mut Vec<Violation>,
 ) {
     if fields.len() < 2 {
@@ -293,23 +320,7 @@ fn check_field_block(
     if has_heterogeneous_cfg(fields) {
         return;
     }
-    let order = build_visibility_order(&cfg.visibility_order);
-
-    let actual: Vec<FieldKey> = fields
-        .iter()
-        .enumerate()
-        .map(|(idx, f)| FieldKey {
-            idx,
-            builder_bucket: builder_bucket(&f.attrs),
-            vis_bucket: vis_bucket(&order, &f.vis),
-            type_key: type_sort_key(&f.ty),
-            name: f
-                .ident
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default(),
-        })
-        .collect();
+    let actual = field_keys(cfg, fields);
 
     let mut expected = actual.clone();
     expected.sort_by(cmp_field_key);
@@ -338,11 +349,46 @@ fn check_field_block(
         .map(|k| k.name.as_str())
         .collect::<Vec<_>>()
         .join(", ");
-    let msg = format!(
-        "{type_kind} `{type_name}` field order should be (visibility, type, name): \
-         expected [{expected_summary}], found [{actual_summary}]"
+    let refusal = safety
+        .permutation(
+            fields,
+            &expected.iter().map(|field| field.idx).collect::<Vec<_>>(),
+        )
+        .err();
+    let msg = refusal.map_or_else(
+        || {
+            format!(
+                "declaration `{type_name}` field order should be (visibility, type, name): \
+                 expected [{expected_summary}], found [{actual_summary}]"
+            )
+        },
+        |reason| {
+            format!(
+                "declaration `{type_name}` field order candidate (visibility, type, name): \
+                 canonical [{expected_summary}], found [{actual_summary}]; autofix refused: {reason}"
+            )
+        },
     );
     out.push(Violation::warn(consts::ID, key, msg));
+}
+
+fn field_keys(cfg: &StructFieldOrderConfig, fields: &[&Field]) -> Vec<FieldKey> {
+    let order = build_visibility_order(&cfg.visibility_order);
+    fields
+        .iter()
+        .enumerate()
+        .map(|(idx, field)| FieldKey {
+            idx,
+            builder_bucket: builder_bucket(&field.attrs),
+            vis_bucket: vis_bucket(&order, &field.vis),
+            type_key: type_sort_key(&field.ty),
+            name: field
+                .ident
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -521,327 +567,5 @@ fn type_sort_key(ty: &Type) -> String {
         Type::Macro(_) => "macro".to_string(),
         Type::Verbatim(_) => "?".to_string(),
         _ => "_".to_string(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use super::*;
-
-    fn default_cfg() -> StructFieldOrderConfig {
-        StructFieldOrderConfig {
-            visibility_order: vec![
-                "pub".to_string(),
-                "pub(crate)".to_string(),
-                "pub(super)".to_string(),
-                "pub(in)".to_string(),
-                "private".to_string(),
-            ],
-            exempt_attrs: vec!["repr".to_string()],
-            exempt_derives: vec!["uniffi::Record".to_string()],
-        }
-    }
-
-    fn run_fix(src: &str) -> (String, Vec<String>) {
-        let cfg = default_cfg();
-        let file = syn::parse_file(src).unwrap_or_else(|e| panic!("parse failed: {e}\n---\n{src}"));
-        let mut rw = SourceRewriter::new(src);
-        let mut skipped = Vec::new();
-        fix_items(&cfg, "fixture.rs", src, &file.items, &mut rw, &mut skipped);
-        let out = if rw.is_empty() {
-            src.to_string()
-        } else {
-            rw.finish().expect("rewriter finish")
-        };
-        (out, skipped)
-    }
-
-    fn comment_multiset(src: &str) -> BTreeMap<String, usize> {
-        let mut counts = BTreeMap::new();
-        for line in src.lines() {
-            let t = line.trim_start();
-            if t.starts_with("//") {
-                *counts.entry(t.trim_end().to_string()).or_insert(0) += 1;
-            }
-        }
-        counts
-    }
-
-    #[test]
-    fn pub_before_private() {
-        let src = "\
-struct S {
-    private_field: u32,
-    pub public_field: u32,
-}
-";
-        let (out, skipped) = run_fix(src);
-        assert!(skipped.is_empty(), "skipped: {skipped:?}");
-        let pub_pos = out.find("pub public_field").unwrap();
-        let priv_pos = out.find("private_field").unwrap();
-        assert!(pub_pos < priv_pos, "pub must precede private:\n{out}");
-    }
-
-    #[test]
-    fn already_ordered_is_no_op() {
-        let src = "\
-struct S {
-    pub a: u32,
-    private: u32,
-}
-";
-        let (out, _) = run_fix(src);
-        assert_eq!(out, src);
-    }
-
-    #[test]
-    fn repr_struct_is_skipped() {
-        let src = "\
-#[repr(C)]
-struct Layout {
-    z: u32,
-    a: u32,
-}
-";
-        let (out, _) = run_fix(src);
-        assert_eq!(out, src, "repr layout must not change");
-    }
-
-    #[test]
-    fn a_derived_foreign_record_is_skipped() {
-        let src = "\
-#[derive(Clone, uniffi::Record)]
-struct Direct {
-    z: u32,
-    a: u32,
-}
-
-#[cfg_attr(feature = \"uniffi\", derive(uniffi::Record))]
-struct Gated {
-    z: u32,
-    a: u32,
-}
-";
-        let (out, _) = run_fix(src);
-        assert_eq!(out, src, "a foreign binding's field order is its contract");
-    }
-
-    #[test]
-    fn bon_role_order_precedes_style_order() {
-        let src = "\
-struct S {
-    #[builder(default)]
-    a: u32,
-    #[builder(finish_fn)]
-    z: u32,
-    #[builder(field)]
-    y: u32,
-    #[builder(start_fn)]
-    x: u32,
-}
-";
-        let (out, skipped) = run_fix(src);
-        assert!(skipped.is_empty(), "skipped: {skipped:?}");
-        let start = out.find("x: u32").unwrap();
-        let field = out.find("y: u32").unwrap();
-        let finish = out.find("z: u32").unwrap();
-        let other = out.find("a: u32").unwrap();
-        assert!(start < field && field < finish && finish < other, "{out}");
-    }
-
-    /// `#[builder(start_fn)]` fields are the starting function's parameters, so
-    /// their declaration order is the call order every caller already wrote.
-    #[test]
-    fn positional_builder_fields_keep_their_declared_order() {
-        let src = "\
-struct S {
-    #[builder(start_fn)]
-    worker: Worker,
-    #[builder(start_fn)]
-    pools: PoolRegion,
-    #[builder(finish_fn)]
-    zone: Zone,
-    #[builder(finish_fn)]
-    area: Area,
-}
-";
-        let (out, skipped) = run_fix(src);
-        assert!(skipped.is_empty(), "skipped: {skipped:?}");
-        assert_eq!(out, src, "a positional signature must survive the fix");
-    }
-
-    #[test]
-    fn doc_comments_travel_with_field() {
-        let src = "\
-struct S {
-    /// docs for z
-    z: u32,
-    /// docs for a
-    a: u32,
-}
-";
-        let (out, skipped) = run_fix(src);
-        assert!(skipped.is_empty(), "skipped: {skipped:?}");
-        assert_eq!(comment_multiset(src), comment_multiset(&out));
-        let a_doc = out.find("/// docs for a").unwrap();
-        let a_field = out.find("a: u32,").unwrap();
-        let z_doc = out.find("/// docs for z").unwrap();
-        let z_field = out.find("z: u32,").unwrap();
-        assert!(
-            a_doc < a_field && a_field < z_doc && z_doc < z_field,
-            "docs must precede their fields:\n{out}"
-        );
-    }
-
-    #[test]
-    fn heterogeneous_cfg_is_skipped() {
-        let src = "\
-struct S {
-    z: u32,
-    #[cfg(feature = \"x\")]
-    a: u32,
-}
-";
-        let (out, skipped) = run_fix(src);
-        assert_eq!(out, src);
-        assert!(
-            skipped.iter().any(|s| s.contains("cfg")),
-            "skipped: {skipped:?}"
-        );
-    }
-
-    #[test]
-    fn missing_trailing_comma_is_skipped() {
-        let src = "\
-struct S {
-    z: u32,
-    a: u32
-}
-";
-        let (out, skipped) = run_fix(src);
-        assert_eq!(out, src);
-        assert!(
-            skipped.iter().any(|s| s.contains("trailing comma")),
-            "skipped: {skipped:?}"
-        );
-    }
-
-    #[test]
-    fn idempotent_run() {
-        let src = "\
-struct S {
-    z: u32,
-    a: u32,
-    pub p: u32,
-}
-";
-        let (after_first, _) = run_fix(src);
-        let (after_second, _) = run_fix(&after_first);
-        assert_eq!(after_first, after_second, "I2: idempotency violated");
-    }
-
-    #[test]
-    fn floating_comment_skipped() {
-        let src = "\
-struct S {
-    z: u32,
-
-    // floating
-
-    a: u32,
-}
-";
-        let (out, skipped) = run_fix(src);
-        assert_eq!(out, src, "must not modify");
-        assert!(
-            skipped.iter().any(|s| s.contains("floating")),
-            "skipped: {skipped:?}"
-        );
-    }
-
-    /// Run the detection scan over a snippet and return the violation keys.
-    fn detect(src: &str) -> Vec<String> {
-        let cfg = default_cfg();
-        let file = syn::parse_file(src).unwrap_or_else(|e| panic!("parse failed: {e}\n---\n{src}"));
-        let mut out = Vec::new();
-        scan_items(&cfg, "fixture.rs", &file.items, &mut Vec::new(), &mut out);
-        out.into_iter().map(|v| v.key).collect()
-    }
-
-    #[test]
-    fn out_of_order_visibility_is_flagged() {
-        let src = "\
-struct S {
-    private_field: u32,
-    pub public_field: u32,
-}
-";
-        assert_eq!(detect(src).len(), 1, "homogeneous struct must still fire");
-    }
-
-    #[test]
-    fn heterogeneous_cfg_is_not_flagged() {
-        let src = "\
-struct S {
-    z: u32,
-    #[cfg(feature = \"x\")]
-    a: u32,
-}
-";
-        assert!(
-            detect(src).is_empty(),
-            "reordering across a `#[cfg]` boundary is unsafe — must not flag"
-        );
-    }
-
-    #[test]
-    fn homogeneous_cfg_still_flagged() {
-        let src = "\
-struct S {
-    #[cfg(test)]
-    z: u32,
-    #[cfg(test)]
-    a: u32,
-}
-";
-        assert_eq!(
-            detect(src).len(),
-            1,
-            "uniform `#[cfg(test)]` on every field is safe to reorder — must still flag"
-        );
-    }
-
-    /// The starting and finishing functions take their parameters in
-    /// declaration order, so a caller reads that order, not a sorted one.
-    #[test]
-    fn a_positional_builder_signature_is_accepted_in_its_declared_order() {
-        let src = "\
-struct S {
-    #[builder(start_fn)]
-    worker: Worker,
-    #[builder(start_fn)]
-    pools: PoolRegion,
-    #[builder(finish_fn)]
-    zone: Zone,
-    #[builder(finish_fn)]
-    area: Area,
-}
-";
-        assert!(detect(src).is_empty(), "{:?}", detect(src));
-    }
-
-    #[test]
-    fn bon_role_order_is_accepted() {
-        let src = "\
-struct S {
-    #[builder(start_fn)]
-    z: u32,
-    #[builder(default)]
-    a: u32,
-}
-";
-        assert!(detect(src).is_empty());
     }
 }

@@ -1,4 +1,4 @@
-use std::{f32::consts::PI, ops::Range};
+use std::ops::Range;
 
 use num_traits::ToPrimitive;
 
@@ -227,22 +227,17 @@ impl Row {
         color: Rgba,
         skin: &Skin,
     ) {
-        if self.icon == IconName::Zvuk {
-            paint_zvuk(list, bounds, x, color, skin.tree.icon_size);
-            return;
-        }
-        let Some(glyph) = self.icon.lucide_glyph() else {
+        let Some(mark) = self.icon.mark() else {
             return;
         };
-        let content = glyph.to_string();
-        let run = text.shape_lucide(&content, skin.tree.icon_size);
-        list.text(
-            &run,
-            &content,
-            Transform::translate(Pt {
-                x: x + (skin.tree.icon_size - run.width()) / 2.0,
-                y: bounds.y + (bounds.h - run.height()) / 2.0,
-            }),
+        Marked::new(mark, skin.tree.icon_size).centred(
+            list,
+            text,
+            Rect {
+                x,
+                w: skin.tree.icon_size,
+                ..bounds
+            },
             color,
         );
     }
@@ -346,29 +341,4 @@ fn paint_scrollbar(
     };
     list.fill_rect(rail, skin.rgba(skin.tree.scrollbar_background));
     list.fill_rect(thumb, skin.rgba(skin.tree.scroller_color));
-}
-
-fn paint_zvuk(list: &mut DrawListBuilder, bounds: Rect, x: f32, color: Rgba, icon_size: f32) {
-    let top = bounds.y + (bounds.h - icon_size) / 2.0;
-    let inset = icon_size * 0.12;
-    let center = Pt {
-        x: x + inset * 2.0,
-        y: top + icon_size - inset * 2.0,
-    };
-    let width = (icon_size * 0.08).max(0.75);
-    list.stroke_rounded_rect(
-        Rect {
-            x,
-            h: icon_size,
-            w: icon_size,
-            y: top,
-        },
-        icon_size * 0.22,
-        color,
-        width,
-    );
-    list.fill_circle(center, width, color);
-    for radius in [icon_size * 0.28, icon_size * 0.5] {
-        list.stroke_arc(center, radius, -PI / 2.0, 0.0, color, width);
-    }
 }

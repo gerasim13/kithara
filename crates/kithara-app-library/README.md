@@ -18,10 +18,16 @@ these and routes reads and writes to the owning source.
 
 ## Usage
 
-A source exports a `Factory` that returns a `Registration`. It receives shared
-services in `Environment` and its configuration and cancellation token in
-`Context`. Use `Registration::fill` to add a page to `app-library/pages`.
-The app builds the source after loading the text catalog.
+A source exports a `Factory` that returns a `Registration`. It receives the
+services the app shares with plugins in `Environment`, and its configuration
+and cancellation token in `Context`. `Secrets::native` keeps secrets in the
+`secrets` section of the configuration overlay it is given, or with the
+`keystore` feature in the operating system's store; without either, such as in
+the browser, every call returns `SecretError::Unsupported`.
+
+Use `Registration::fill` to add a document to an app collection, and
+`Registration::key_access` to grant the source's token to key requests of one
+domain. The app builds the source after loading the text catalog.
 
 See [library sources](https://github.com/zvuk/kithara/wiki/kithara-app#library-sources)
 for the source contract.

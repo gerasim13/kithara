@@ -80,7 +80,7 @@ impl LibrarySource for StartupSource {
         self.listing = node == Self::ID;
     }
 
-    fn status(&self) -> PageStatus {
+    fn status(&self) -> PageStatus<'_> {
         if !self.listing || self.tracks.is_empty() {
             PageStatus::Empty
         } else {

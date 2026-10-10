@@ -26,13 +26,14 @@ static CTX: LazyAppQueueFixture = LazyAppQueueFixture::const_new();
 /// validates:
 ///
 /// 1. `zvuk-prod` DRM provider in baked `app.yaml` resolves the
-///    `zvuk.com` keyserver and supplies `X-Auth-Token` + `X-SP-ZV`.
+///    `zvuk.com` keyserver and supplies `X-SP-ZV`; the Zvuk source grants
+///    `X-Auth-Token` from `KITHARA_DRM_PROD_AUTH_TOKEN`.
 /// 2. HE-AAC v2 fragments decode through `symphonia-adapter-fdk-aac`.
 /// 3. `apply_commit`-via-dispatch shortcut from
 ///    `crates/kithara-hls/src/variant.rs` does not regress for
 ///    DRM-encrypted segments (PKCS7 post-decrypt size shrink).
 ///
-/// Requires production credentials baked at build time:
+/// Requires production credentials; the account token is read at run time:
 ///
 /// ```text
 /// KITHARA_DRM_PROD_KEY=... \
