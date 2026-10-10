@@ -145,6 +145,7 @@ lockbud_exclude = [
   "kithara-play-tests",
   "kithara-queue-tests",
   "kithara-stream-tests",
+  "kithara-sync-tests",
   "kithara-warp-tests",
   "kithara-test-macros",
   "kithara-test-utils",
@@ -628,6 +629,7 @@ cargo.packages = [
   "kithara-queue-tests",
   "kithara-stream-tests",
   "kithara-warp-tests",
+  "kithara-sync-tests",
 ]
 cargo.profile = "test-release"
 
@@ -676,6 +678,11 @@ cargo.packages = [
 ]
 cargo.profile = "test-release"
 
+
+[test.lanes.sync]
+owns = ["crates/kithara-sync/", "crates/kithara-link/", "tests/crates/sync/"]
+cargo.packages = ["kithara-sync", "kithara-link", "kithara-sync-tests"]
+cargo.profile = "test-release"
 
 [test.lanes.warp]
 default_backend = "none"
