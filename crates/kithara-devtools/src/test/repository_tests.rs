@@ -27,8 +27,11 @@ pub(crate) fn this_workspace() -> Metadata {
 fn engine_trace_consumers_do_not_build_devtools_commands() {
     let output = Command::new("cargo")
         .current_dir(root())
+        .env("CARGO_TERM_COLOR", "always")
         .args([
             "tree",
+            "--color",
+            "never",
             "--locked",
             "--offline",
             "-p",
