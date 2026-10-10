@@ -156,7 +156,7 @@ fn empty_host_drain_publishes_a_rendered_transport_commit() {
                 .declared_latency(Duration::ZERO)
                 .build(),
         )
-        .map(SessionStream::Offline)
+        .map(|stream| SessionStream::Offline(Box::new(stream)))
         .map_err(|error| error.to_string())
     });
     crate::session::state::ensure_ctx(&mut state).expect("active browser graph");

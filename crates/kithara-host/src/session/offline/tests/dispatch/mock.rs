@@ -157,7 +157,7 @@ pub(super) fn start_route_loss_stream(
             .declared_latency(Duration::ZERO)
             .build(),
     )
-    .map(SessionStream::Offline)
+    .map(|stream| SessionStream::Offline(Box::new(stream)))
     .map_err(|error| error.to_string())
 }
 

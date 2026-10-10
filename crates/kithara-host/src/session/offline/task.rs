@@ -156,7 +156,7 @@ where
                 .sample_rate(rate)
                 .build();
             OfflineStream::start(ctx, backend)
-                .map(SessionStream::Offline)
+                .map(|stream| SessionStream::Offline(Box::new(stream)))
                 .map_err(|error| error.to_string())
         };
         let state = SessionState::new(

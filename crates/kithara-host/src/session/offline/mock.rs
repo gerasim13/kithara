@@ -8,6 +8,6 @@ pub(crate) fn start(
         .declared_latency(kithara_platform::time::Duration::ZERO)
         .build();
     super::backend::OfflineStream::start(context, config)
-        .map(crate::session::state::SessionStream::Offline)
+        .map(|stream| crate::session::state::SessionStream::Offline(Box::new(stream)))
         .map_err(|error| error.to_string())
 }

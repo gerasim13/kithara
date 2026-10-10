@@ -10,7 +10,7 @@ use syn::{File, ImplItem, Item, TraitItem, spanned::Spanned, visit, visit::Visit
 use super::{Check, Context};
 use crate::{
     common::{
-        exclude::apply_lint_excludes,
+        exclude::{apply_lint_excludes, cfg_test_module_globs},
         fix::FixOutcome,
         parse::qualified,
         project::ProjectConfig,
@@ -124,6 +124,7 @@ fn reported_category_lines(ctx: &Context<'_>) -> Result<HashMap<String, HashSet<
         &mut report,
         &project.lint_exclude.paths,
         &project.lint_exclude.modules,
+        &cfg_test_module_globs(ctx.workspace_root),
         ctx.workspace_root,
     );
     let mut lines: HashMap<String, HashSet<usize>> = HashMap::new();

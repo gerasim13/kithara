@@ -16,7 +16,7 @@ use super::{
 };
 use crate::common::{
     baseline::{Baseline, RatchetDiff},
-    exclude::apply_lint_excludes,
+    exclude::{apply_lint_excludes, cfg_test_module_globs},
     project::ProjectConfig,
     report,
     scan::Scan,
@@ -206,6 +206,7 @@ fn run_checks(
     project: &ProjectConfig,
     workspace_root: &Path,
 ) -> Result<Vec<(Duration, Vec<Violation>)>> {
+    let test_module_paths = cfg_test_module_globs(workspace_root);
     selected
         .par_iter()
         .map(|check| {
@@ -218,6 +219,7 @@ fn run_checks(
                     &mut check_report,
                     &project.lint_exclude.paths,
                     &project.lint_exclude.modules,
+                    &test_module_paths,
                     workspace_root,
                 );
                 violations = check_report.violations;

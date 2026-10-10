@@ -14,7 +14,7 @@ use super::{
 };
 use crate::common::{
     baseline::{Baseline, RatchetDiff},
-    exclude::apply_lint_excludes,
+    exclude::{apply_lint_excludes, cfg_test_module_globs},
     project::ProjectConfig,
     report,
     scope::Scope,
@@ -137,6 +137,7 @@ pub(crate) fn run(args: &ArchArgs) -> Result<()> {
         &mut report,
         &project.lint_exclude.runtime_paths(),
         &project.lint_exclude.modules,
+        &cfg_test_module_globs(&workspace_root),
         &workspace_root,
     );
 

@@ -5,6 +5,7 @@ use syn::{Item, ItemMacro, Type};
 
 use super::{Check, Context};
 use crate::common::{
+    exclude::{attrs_are_test_only, item_is_test_only},
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
@@ -34,6 +35,9 @@ impl Check for NoLibStatics {
             let Some(file) = ctx.parsed_file(&path)? else {
                 continue;
             };
+            if attrs_are_test_only(&file.attrs) {
+                continue;
+            }
             let mut hits: Vec<String> = Vec::new();
             walk(&file.items, &mut hits);
 
@@ -54,6 +58,9 @@ impl Check for NoLibStatics {
 
 fn walk(items: &[Item], out: &mut Vec<String>) {
     for item in items {
+        if item_is_test_only(item) {
+            continue;
+        }
         match item {
             Item::Static(s) => {
                 out.push(format!("static {}", s.ident));
@@ -117,4 +124,48 @@ fn macro_label(m: &ItemMacro) -> String {
         .last()
         .map_or_else(|| "?".to_string(), |s| s.ident.to_string());
     format!("{name}!{{...}}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::walk;
+
+    #[test]
+    fn global_findings_follow_production_reachability() {
+        let file = syn::parse_file(
+            r#"
+static PRODUCTION: u8 = 0;
+#[cfg(all(
+    test,
+    feature = "fixtures",
+))]
+mod fixtures {
+    static FIXTURE: u8 = 0;
+    mod nested { static NESTED: u8 = 0; }
+}
+#[cfg(test)]
+static FIXTURE: u8 = 0;
+#[cfg(all(test, feature = "fixtures"))]
+const HELPER: OnceLock<u8> = OnceLock::new();
+#[cfg(test)]
+lazy_static! { static ref LAZY_FIXTURE: u8 = 0; }
+#[cfg(any(test, feature = "runtime"))]
+static RUNTIME: u8 = 0;
+#[cfg(not(test))]
+static PRODUCTION_BRANCH: u8 = 0;
+"#,
+        )
+        .expect("fixture parses");
+        let mut findings = Vec::new();
+        walk(&file.items, &mut findings);
+
+        assert_eq!(
+            findings,
+            [
+                "static PRODUCTION",
+                "static RUNTIME",
+                "static PRODUCTION_BRANCH"
+            ]
+        );
+    }
 }
