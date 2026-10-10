@@ -35,6 +35,8 @@ use kithara_integration_tests::{
     mixed_encrypted, mixed_plain,
     mock::LaneAudio,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_test_utils::pace;
 use kithara_test_utils::{TestTempDir, Xorshift64, temp_dir};
 use tracing::info;
 use url::Url;
@@ -220,7 +222,7 @@ fn warmup_to_variant(audio: &mut LiveAudio, variant: usize, label: &str) {
         }
         // Warmup stands in for a listener: do not outrun the network delivering
         // the switch, otherwise the transition races the read budget.
-        thread::sleep(
+        pace(
             chunk
                 .spec()
                 .duration_for(chunk.frames() as u64)

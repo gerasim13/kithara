@@ -4822,6 +4822,7 @@ name = "kithara-app-library"
 version = "0.0.1-alpha5"
 dependencies = [
  "apple-native-keyring-store",
+ "derive_more",
  "keyring-core",
  "kithara-net",
  "kithara-platform",

@@ -1,17 +1,8 @@
 id: arch.no-target-os-outside-platform
 message: |
-  `#[cfg(target_os = ...)]` or `#[cfg(target_arch = ...)]` outside the
-  platform layer. Move the conditional code into `kithara-platform` (or
-  `kithara-ffi/web` for browser-only logic), expose a stable trait/fn
-  from there, and call that abstraction from this crate.
-
-  Why: every business-logic file with a target gate is a place where the
-  wasm or apple build can silently regress. The platform crates exist
-  precisely to centralize these gates.
-
-  Suppress with `// ast-grep-ignore: arch.no-target-os-outside-platform`
-  only when the gate is on a `mod` that is itself a thin platform shim
-  (document the why on the owning crate wiki page).
+  Target-dependent behavior outside its platform owner. Move the implementation
+  into `kithara-platform` or its owning Android/FFI adapter and expose a stable
+  interface. Android/FFI module roots allow only the declared structural ABI wiring.
 severity: warning
 language: Rust
 files:
@@ -22,24 +13,226 @@ ignores:
   - "**/*_test.rs"
   - "**/*_tests.rs"
   - "**/tests.rs"
-  # `kithara-ffi/src/lib.rs` is the structural boundary for the
-  # browser/wasm split (`mod native;` / `pub mod web;` target_arch gates).
-  # Android JNI gates live one level down in `src/native/mod.rs`, alongside
-  # the native platform shims. Documented in [kithara-ffi contracts](https://github.com/zvuk/kithara/wiki/kithara-ffi).
+  # The platform primitive owner is the scope boundary of this rule.
+  - "crates/kithara-platform/src/**"
+  # These paths are checked by the item-specific branches below, under the same report category.
+  - "crates/kithara-android/src/lib.rs"
   - "crates/kithara-ffi/src/lib.rs"
-  # `kithara-ffi` hosts native-only platform shims one level below the
-  # `native`/`web` split in `src/lib.rs` (already exempted above): Android
-  # JNI module wiring lives in `src/native/mod.rs` alongside the other
-  # native shims, gated on `target_os = "android"`. Documented in
-  # [kithara-ffi contracts](https://github.com/zvuk/kithara/wiki/kithara-ffi).
   - "crates/kithara-ffi/src/native/mod.rs"
 rule:
-  any:
-    - pattern: "#[cfg(target_os = $_)]"
-    - pattern: "#[cfg(target_arch = $_)]"
-    - pattern: "#[cfg(any($$$, target_os = $_, $$$))]"
-    - pattern: "#[cfg(any($$$, target_arch = $_, $$$))]"
-    - pattern: "#[cfg(all($$$, target_os = $_, $$$))]"
-    - pattern: "#[cfg(all($$$, target_arch = $_, $$$))]"
-    - pattern: "#[cfg(not(target_os = $_))]"
-    - pattern: "#[cfg(not(target_arch = $_))]"
+  all:
+    - pattern: "#[cfg($$$)]"
+    - has:
+        kind: identifier
+        regex: '^target_(os|arch)$'
+        stopBy: end
+
+---
+id: arch.no-target-os-outside-platform.android-root
+metadata:
+  category: arch.no-target-os-outside-platform
+message: |
+  Target-dependent behavior outside its platform owner. Move the implementation
+  into `kithara-platform` or its owning Android/FFI adapter and expose a stable
+  interface. Android/FFI module roots allow only the declared structural ABI wiring.
+severity: warning
+language: Rust
+files:
+  - crates/kithara-android/src/lib.rs
+rule:
+  all:
+    - pattern: "#[cfg($$$)]"
+    - has:
+        kind: identifier
+        regex: '^target_(os|arch)$'
+        stopBy: end
+    - not:
+        all:
+          - inside:
+              kind: source_file
+          - pattern: '#[cfg(target_os = "android")]'
+          - precedes:
+              all:
+                - any:
+                    - pattern: 'mod buffer;'
+                    - pattern: 'mod http;'
+                    - pattern: 'pub mod media;'
+                    - pattern: 'mod method;'
+                - not:
+                    follows:
+                      all:
+                        - kind: attribute_item
+                        - has:
+                            kind: identifier
+                            regex: '^path$'
+                            stopBy: end
+                      stopBy:
+                        not:
+                          any:
+                            - kind: attribute_item
+                            - kind: line_comment
+                            - kind: block_comment
+              stopBy:
+                not:
+                  any:
+                    - kind: attribute_item
+                    - kind: line_comment
+                    - kind: block_comment
+
+---
+id: arch.no-target-os-outside-platform.ffi-root
+metadata:
+  category: arch.no-target-os-outside-platform
+message: |
+  Target-dependent behavior outside its platform owner. Move the implementation
+  into `kithara-platform` or its owning Android/FFI adapter and expose a stable
+  interface. Android/FFI module roots allow only the declared structural ABI wiring.
+severity: warning
+language: Rust
+files:
+  - crates/kithara-ffi/src/lib.rs
+rule:
+  all:
+    - pattern: "#[cfg($$$)]"
+    - has:
+        kind: identifier
+        regex: '^target_(os|arch)$'
+        stopBy: end
+    - not:
+        all:
+          - inside:
+              kind: source_file
+          - any:
+              - all:
+                  - pattern: '#[cfg(not(target_arch = "wasm32"))]'
+                  - precedes:
+                      all:
+                        - any:
+                            - pattern: 'mod native;'
+                            - pattern: 'pub(crate) use core::registry;'
+                            - pattern: 'pub(crate) use native::{EventBridge, FFI_RUNTIME, Inner, Router};'
+                            - pattern: 'pub use native::{asset, cipher, config, logging, salt};'
+                        - not:
+                            follows:
+                              all:
+                                - kind: attribute_item
+                                - has:
+                                    kind: identifier
+                                    regex: '^path$'
+                                    stopBy: end
+                              stopBy:
+                                not:
+                                  any:
+                                    - kind: attribute_item
+                                    - kind: line_comment
+                                    - kind: block_comment
+                      stopBy:
+                        not:
+                          any:
+                            - kind: attribute_item
+                            - kind: line_comment
+                            - kind: block_comment
+              - all:
+                  - pattern: '#[cfg(target_arch = "wasm32")]'
+                  - precedes:
+                      all:
+                        - any:
+                            - pattern: 'pub mod web;'
+                            - pattern: 'pub(crate) use web::inner::Inner;'
+                        - not:
+                            follows:
+                              all:
+                                - kind: attribute_item
+                                - has:
+                                    kind: identifier
+                                    regex: '^path$'
+                                    stopBy: end
+                              stopBy:
+                                not:
+                                  any:
+                                    - kind: attribute_item
+                                    - kind: line_comment
+                                    - kind: block_comment
+                      stopBy:
+                        not:
+                          any:
+                            - kind: attribute_item
+                            - kind: line_comment
+                            - kind: block_comment
+              - all:
+                  - pattern: '#[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]'
+                  - precedes:
+                      all:
+                        - any:
+                            - pattern: 'uniffi::setup_scaffolding!();'
+                            - pattern: 'use kithara::events::TrackId;'
+                            - pattern: 'uniffi::custom_type!(TrackId, u64, { remote });'
+                        - not:
+                            follows:
+                              all:
+                                - kind: attribute_item
+                                - has:
+                                    kind: identifier
+                                    regex: '^path$'
+                                    stopBy: end
+                              stopBy:
+                                not:
+                                  any:
+                                    - kind: attribute_item
+                                    - kind: line_comment
+                                    - kind: block_comment
+                      stopBy:
+                        not:
+                          any:
+                            - kind: attribute_item
+                            - kind: line_comment
+                            - kind: block_comment
+
+---
+id: arch.no-target-os-outside-platform.jni-root
+metadata:
+  category: arch.no-target-os-outside-platform
+message: |
+  Target-dependent behavior outside its platform owner. Move the implementation
+  into `kithara-platform` or its owning Android/FFI adapter and expose a stable
+  interface. Android/FFI module roots allow only the declared structural ABI wiring.
+severity: warning
+language: Rust
+files:
+  - crates/kithara-ffi/src/native/mod.rs
+rule:
+  all:
+    - pattern: "#[cfg($$$)]"
+    - has:
+        kind: identifier
+        regex: '^target_(os|arch)$'
+        stopBy: end
+    - not:
+        all:
+          - inside:
+              kind: source_file
+          - pattern: '#[cfg(target_os = "android")]'
+          - precedes:
+              all:
+                - any:
+                    - pattern: 'pub(crate) mod android;'
+                - not:
+                    follows:
+                      all:
+                        - kind: attribute_item
+                        - has:
+                            kind: identifier
+                            regex: '^path$'
+                            stopBy: end
+                      stopBy:
+                        not:
+                          any:
+                            - kind: attribute_item
+                            - kind: line_comment
+                            - kind: block_comment
+              stopBy:
+                not:
+                  any:
+                    - kind: attribute_item
+                    - kind: line_comment
+                    - kind: block_comment
