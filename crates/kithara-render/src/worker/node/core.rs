@@ -1,11 +1,8 @@
-use std::{
-    future::poll_fn,
-    task::{Context, Poll},
-};
+use std::task::{Context, Poll};
 
 use kithara_audio::{AudioSource, Fetch, TrackFailureKind, TrackStep, WaitingReason};
 use kithara_bufpool::{HasPool, PoolRegion};
-use kithara_platform::{sync::Arc, time::WallInstant};
+use kithara_platform::{CancelToken, sync::Arc, time::WallInstant};
 use kithara_signal::{AudioChunk, AudioChunkInfo, FrameCount, SegmentId};
 use kithara_stream::ActivityWriter;
 use kithara_test_utils::kithara;
@@ -16,7 +13,7 @@ use super::{
     super::{EngineLoad, PcmPacket, reader::PcmProducer},
     pending::PendingPacket,
 };
-use crate::{ServiceClass, WarpSource, dispatcher::LaneTask};
+use crate::{LoadRefusal, ServiceClass, WarpSource, dispatcher::LaneTask};
 
 /// Worker-owned source, rendering, ring producer and transport publisher.
 pub struct DecoderNode<T, S> {
@@ -30,6 +27,7 @@ pub struct DecoderNode<T, S> {
     last_output: AudioChunkInfo,
     pub(super) engine_load: Option<Arc<EngineLoad>>,
     pools: PoolRegion<S>,
+    cancel: Option<CancelToken>,
 }
 
 impl<T, S> DecoderNode<T, S>
@@ -44,6 +42,7 @@ where
         initial: AudioChunkInfo,
         engine_load: Option<Arc<EngineLoad>>,
         pools: PoolRegion<S>,
+        cancel: Option<CancelToken>,
     ) -> Self {
         Self {
             source,
@@ -56,27 +55,8 @@ where
             last_output: initial,
             engine_load,
             pools,
+            cancel,
         }
-    }
-
-    pub(in crate::worker) async fn preload(&mut self) -> Result<(), TrackFailureKind> {
-        self.warm_up();
-        poll_fn(|cx| {
-            let _ = self.source.poll_commands(cx);
-            self.recycle();
-            let result = self.tick();
-            if let Some(error) = self.load_error.take() {
-                return Poll::Ready(Err(error));
-            }
-            if self.source.is_preloaded() {
-                return Poll::Ready(Ok(()));
-            }
-            if result == TickResult::Progress {
-                cx.waker().wake_by_ref();
-            }
-            Poll::Pending
-        })
-        .await
     }
 
     pub(in crate::worker) fn engine_latency(&self) -> FrameCount {
@@ -148,7 +128,7 @@ where
                     self.last_output = meta;
                     if meta.segment == self.source.cursor().segment {
                         if let Some(end) = pending.source_end {
-                            self.source.commit_source_end(end);
+                            self.source.commit_source_end(end, meta);
                         }
                         if !meta.end_of_track && meta.frames > 0 {
                             self.source.admitted();
@@ -216,6 +196,16 @@ where
     fn poll_commands(&mut self, cx: &mut Context<'_>) -> Poll<()> {
         self.source.poll_commands(cx)
     }
+
+    fn preload_status(&mut self) -> Result<bool, LoadRefusal> {
+        if self.cancel.as_ref().is_some_and(CancelToken::is_cancelled) {
+            return Err(LoadRefusal::Cancelled);
+        }
+        if let Some(error) = self.load_error.take() {
+            return Err(LoadRefusal::Source(error));
+        }
+        Ok(self.source.is_preloaded())
+    }
 }
 
 impl<T, S> Task for DecoderNode<T, S>
@@ -253,7 +243,11 @@ where
             return self.admit();
         }
         if self.terminal == Some(Ok(self.source.cursor().segment)) {
-            return TickResult::Waiting;
+            kithara::probe_event!(
+                decoder_source_spent,
+                segment = self.source.cursor().segment.get()
+            );
+            return TickResult::Backpressured;
         }
         if matches!(self.terminal, Some(Err(_))) || self.port.forward.is_full() {
             return TickResult::Backpressured;
@@ -312,7 +306,7 @@ impl<T, S> Drop for DecoderNode<T, S> {
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
-mod ports_tests {
+mod tests {
     use kithara_signal::SegmentId;
     use kithara_test_utils::kithara;
     use kithara_worker::{Task, TickResult};
@@ -321,6 +315,7 @@ mod ports_tests {
         mock::{node_fixture::NodeFixture, pcm_fixture::chunk},
         worker::PcmPacket,
     };
+
     fn pop(fixture: &mut NodeFixture) -> Option<f32> {
         fixture.receiver.pop().map(|packet| {
             let PcmPacket::Chunk(chunk) = packet else {
@@ -329,12 +324,14 @@ mod ports_tests {
             chunk.samples[0]
         })
     }
+
     fn stage(fixture: &mut NodeFixture, value: f32) {
         fixture.stage(PcmPacket::Chunk(Box::new(chunk(
             SegmentId::FIRST,
             &[value],
         ))));
     }
+
     #[kithara::test(native, tokio)]
     async fn connect_push_pop() {
         let mut fixture = NodeFixture::new(2).await;
@@ -356,6 +353,7 @@ mod ports_tests {
         assert_eq!(pop(&mut fixture), Some(3.0));
         assert_eq!(pop(&mut fixture), None);
     }
+
     #[kithara::test(native, tokio)]
     async fn try_push_drains_overflow_first() {
         let mut fixture = NodeFixture::new(1).await;
@@ -371,6 +369,7 @@ mod ports_tests {
         assert_eq!(fixture.node.admit(), TickResult::Progress);
         assert_eq!(pop(&mut fixture), Some(3.0));
     }
+
     #[kithara::test(native, tokio)]
     async fn flush_returns_false_when_ring_full() {
         let mut fixture = NodeFixture::new(1).await;
@@ -384,6 +383,7 @@ mod ports_tests {
         assert_eq!(pop(&mut fixture), Some(2.0));
         assert_eq!(pop(&mut fixture), None);
     }
+
     #[kithara::test(native, tokio)]
     async fn direct_push_never_occupies_overflow() {
         let mut fixture = NodeFixture::new(1).await;

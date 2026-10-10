@@ -1,7 +1,7 @@
 use std::{
     convert::Infallible,
     fmt::{self, Debug},
-    future::poll_fn,
+    future::{Future, poll_fn},
     marker::PhantomData,
     num::NonZeroUsize,
     task::{Context, Poll, Waker},
@@ -9,7 +9,7 @@ use std::{
 
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture, stream::FuturesUnordered};
 use kithara_command::{Inbox, Protocol, Seq};
-use kithara_platform::{maybe_send::MaybeSendFuture, time::Duration, tokio::runtime::Handle};
+use kithara_platform::{time::Duration, tokio::runtime::Handle};
 use kithara_signal::FrameCount;
 use kithara_warp::{SpeedCurve, StretchKind};
 use kithara_worker::{Priority, Task, TickResult};
@@ -79,13 +79,20 @@ pub trait Open: Debug {
         position: Duration,
         start: LaneStart,
         inbox: Inbox<LaneProtocol>,
-    ) -> impl MaybeSendFuture<Output = OpenResult<Self::Opened, Self::Lane>>;
+    ) -> impl Future<Output = OpenResult<Self::Opened, Self::Lane>>;
 }
 
 /// Mutable lane state accessed only by the dispatcher that owns the task.
 pub trait LaneTask: Task {
     fn set_priority(&mut self, class: ServiceClass);
     fn poll_commands(&mut self, cx: &mut Context<'_>) -> Poll<()>;
+    /// Whether the lane holds its preload.
+    ///
+    /// # Errors
+    ///
+    /// Returns the refusal that ended the load: its cancellation or the
+    /// source error it hit while preloading.
+    fn preload_status(&mut self) -> Result<bool, LoadRefusal>;
 }
 
 #[derive(Debug)]
@@ -105,10 +112,16 @@ impl<I: Open> Protocol for DispatcherProtocol<I> {
 
 type Opening<O, L> = LocalBoxFuture<'static, (Seq, LaneId, OpenResult<O, L>)>;
 
+struct Resident<O, L> {
+    id: LaneId,
+    task: L,
+    admission: Option<(Seq, O, FrameCount)>,
+}
+
 struct DispatchState<I: Open> {
     inbox: Inbox<DispatcherProtocol<I>>,
     opening: FuturesUnordered<Opening<I::Opened, I::Lane>>,
-    lanes: Vec<(LaneId, I::Lane)>,
+    lanes: Vec<Resident<I::Opened, I::Lane>>,
     capacity: NonZeroUsize,
     outcome: TickResult,
 }
@@ -133,26 +146,30 @@ where
         let mut progress = false;
         while let Poll::Ready(Some((seq, lane, result))) = self.opening.poll_next_unpin(cx) {
             progress = true;
-            let Some(due) = self.inbox.resume(seq, (), ()) else {
-                continue;
-            };
             match result {
-                Ok((opened, task, engine_latency)) => {
-                    self.lanes.push((lane, task));
-                    due.apply(Dispatched::Loaded(Loaded {
-                        lane,
-                        opened,
-                        engine_latency,
-                    }));
+                Ok((opened, mut task, engine_latency)) => {
+                    task.warm_up();
+                    self.lanes.push(Resident {
+                        id: lane,
+                        task,
+                        admission: Some((seq, opened, engine_latency)),
+                    });
                 }
-                Err(refusal) => due.refuse(refusal),
+                Err(refusal) => {
+                    if let Some(due) = self.inbox.resume(seq, (), ()) {
+                        due.refuse(refusal);
+                    }
+                }
             }
         }
         let _ = self.inbox.poll_drain(cx);
         if self.inbox.is_closed() {
             return Poll::Ready(());
         }
-        while let Some(mut due) = self.inbox.next_due((), 1) {
+        loop {
+            let Some(mut due) = self.inbox.next_due((), 1) else {
+                break;
+            };
             progress = true;
             if due.commands().len() != 1 {
                 continue;
@@ -187,16 +204,24 @@ where
                     );
                 }
                 DispatcherCommand::Release(lane) => {
-                    if let Some(index) = self.lanes.iter().position(|(id, _)| *id == lane) {
-                        self.lanes.remove(index);
+                    if let Some(index) = self.lanes.iter().position(|resident| resident.id == lane)
+                    {
+                        let resident = self.lanes.remove(index);
                         due.apply(Dispatched::Released);
+                        if let Some((seq, _, _)) = resident.admission
+                            && let Some(load) = self.inbox.resume(seq, (), ())
+                        {
+                            load.refuse(LoadRefusal::Cancelled);
+                        }
                     } else {
                         due.commands_mut().push(DispatcherCommand::Release(lane));
                     }
                 }
                 DispatcherCommand::SetPriority(lane, class) => {
-                    if let Some((_, task)) = self.lanes.iter_mut().find(|(id, _)| *id == lane) {
-                        task.set_priority(class);
+                    if let Some(resident) =
+                        self.lanes.iter_mut().find(|resident| resident.id == lane)
+                    {
+                        resident.task.set_priority(class);
                         due.apply(Dispatched::Prioritized);
                     } else {
                         due.commands_mut()
@@ -205,23 +230,45 @@ where
                 }
             }
         }
-        self.lanes
-            .sort_unstable_by(|(left_id, left), (right_id, right)| {
-                right
-                    .priority()
-                    .cmp(&left.priority())
-                    .then_with(|| left_id.cmp(right_id))
-            });
-        let mut waiting = !self.opening.is_empty();
-        let mut upstream = false;
-        for (_, lane) in &mut self.lanes {
+        self.lanes.sort_unstable_by(|left, right| {
+            right
+                .task
+                .priority()
+                .cmp(&left.task.priority())
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        let mut waiting = false;
+        let mut upstream = !self.opening.is_empty();
+        self.lanes.retain_mut(|resident| {
+            let lane = &mut resident.task;
             let _ = lane.poll_commands(cx);
             lane.recycle();
             let result = lane.tick();
             progress |= result == TickResult::Progress;
             waiting |= result == TickResult::Waiting;
             upstream |= result == TickResult::UpstreamPending;
-        }
+            if resident.admission.is_some() {
+                let status = lane.preload_status();
+                if !matches!(status, Ok(false)) {
+                    progress = true;
+                    let keep = status.is_ok();
+                    if let Some((seq, opened, engine_latency)) = resident.admission.take()
+                        && let Some(due) = self.inbox.resume(seq, (), ())
+                    {
+                        match status {
+                            Ok(_) => due.apply(Dispatched::Loaded(Loaded {
+                                lane: resident.id,
+                                opened,
+                                engine_latency,
+                            })),
+                            Err(refusal) => due.refuse(refusal),
+                        }
+                    }
+                    return keep;
+                }
+            }
+            true
+        });
         self.outcome = if progress {
             TickResult::Progress
         } else if waiting {
@@ -240,7 +287,7 @@ where
     fn priority(&self) -> Option<Priority> {
         self.lanes
             .iter()
-            .filter_map(|(_, task)| task.priority())
+            .filter_map(|resident| resident.task.priority())
             .max()
     }
 }
@@ -294,8 +341,13 @@ where
     }
 
     fn on_cancel(&mut self) {
-        for (_, task) in &mut self.dispatcher.lanes {
-            task.on_cancel();
+        for resident in &mut self.dispatcher.lanes {
+            resident.task.on_cancel();
+            if let Some((seq, _, _)) = resident.admission.take()
+                && let Some(due) = self.dispatcher.inbox.resume(seq, (), ())
+            {
+                due.refuse(LoadRefusal::Cancelled);
+            }
         }
     }
 
@@ -339,6 +391,9 @@ mod tests {
         }
     }
     impl LaneTask for TestLane {
+        fn preload_status(&mut self) -> Result<bool, LoadRefusal> {
+            Ok(true)
+        }
         fn set_priority(&mut self, _class: ServiceClass) {}
         fn poll_commands(&mut self, _cx: &mut Context<'_>) -> Poll<()> {
             Poll::Pending
@@ -349,23 +404,137 @@ mod tests {
         type Opened = u32;
         type Lane = TestLane;
 
-        fn open(
+        async fn open(
             self,
             _position: Duration,
             _start: LaneStart,
             _inbox: Inbox<LaneProtocol>,
-        ) -> impl MaybeSendFuture<Output = Result<(u32, TestLane, FrameCount), LoadRefusal>>
-        {
-            async move {
-                self.0
-                    .await
-                    .expect("the test answers every open it lets run")
-                    .map(|value| (value, TestLane, FrameCount::new(0)))
-            }
+        ) -> Result<(u32, TestLane, FrameCount), LoadRefusal> {
+            self.0
+                .await
+                .expect("the test answers every open it lets run")
+                .map(|value| (value, TestLane, FrameCount::new(0)))
         }
     }
 
     type Protocol = DispatcherProtocol<Gate>;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[derive(Debug)]
+    struct ExternalSource {
+        input: std::sync::mpsc::Receiver<()>,
+        blocked: Option<oneshot::Sender<()>>,
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl kithara_audio::AudioSource for ExternalSource {
+        type Chunk = kithara_signal::AudioChunk;
+
+        fn seek(
+            &mut self,
+            target: Duration,
+        ) -> Result<kithara_audio::SeekOutcome, kithara_audio::AudioReadError> {
+            Ok(kithara_audio::SeekOutcome::Landed {
+                target,
+                landed_at: target,
+            })
+        }
+
+        fn set_host_sample_rate(&mut self, _rate: std::num::NonZeroU32) {}
+
+        fn host_sample_rate(&self) -> Option<std::num::NonZeroU32> {
+            None
+        }
+
+        fn step_track(&mut self) -> kithara_audio::TrackStep<Self::Chunk> {
+            if self.input.try_recv().is_ok() {
+                kithara_audio::TrackStep::Produced(kithara_audio::Fetch::data(
+                    crate::mock::pcm_fixture::chunk(kithara_signal::SegmentId::FIRST, &[1.0; 4096]),
+                ))
+            } else {
+                if let Some(blocked) = self.blocked.take() {
+                    blocked.send(()).expect("report first blocked decode");
+                }
+                kithara_audio::TrackStep::Blocked(kithara_audio::WaitingReason::Waiting)
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl Open for ExternalSource {
+        type Opened = crate::PcmReceiver;
+        type Lane = crate::DecoderNode<Self, crate::test_pools::TestPools>;
+
+        async fn open(
+            self,
+            _position: Duration,
+            _start: LaneStart,
+            _inbox: Inbox<LaneProtocol>,
+        ) -> OpenResult<Self::Opened, Self::Lane> {
+            let spec =
+                kithara_signal::AudioSpec::new(1, std::num::NonZeroU32::new(48_000).expect("rate"));
+            let (lane, pcm, _commands) = crate::worker::terminal_node(self, spec, true);
+            Ok((pcm, lane, FrameCount::new(0)))
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(tokio)]
+    async fn an_external_dispatcher_wake_completes_a_waiting_preload() {
+        use crate::{PlayWorker, PlayWorkerConfig, test_pools::pools};
+
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+        let (mut sender, inbox) =
+            channel::<DispatcherProtocol<ExternalSource>>(ChannelConfig::builder().build());
+        let _dispatcher = worker.start_dispatcher(inbox).expect("dispatcher starts");
+        let (input, source) = std::sync::mpsc::channel();
+        let (blocked, first_block) = oneshot::channel();
+        let seq = sender
+            .send(
+                When::Next,
+                Batch {
+                    basis: Vec::new(),
+                    commands: vec![DispatcherCommand::Load(Box::new(LoadRequest {
+                        item: ExternalSource {
+                            input: source,
+                            blocked: Some(blocked),
+                        },
+                        position: Duration::ZERO,
+                        start: LaneStart {
+                            speed: SpeedCurve::Constant(1.0),
+                            keylock: false,
+                            backend: StretchKind::default(),
+                        },
+                        inbox: worker.lane_channel().1,
+                    }))],
+                },
+            )
+            .expect("load batch");
+        first_block.await.expect("source blocks before producing");
+        assert!(sender.receipts().next().is_none(), "Load waits for preload");
+        input
+            .send(())
+            .expect("make upstream input available without a source waker");
+        worker.wake();
+        let receipt = kithara_platform::time::timeout(
+            Duration::from_secs(2),
+            poll_fn(|cx| {
+                sender.hold(cx.waker().clone());
+                sender.receipts().next().map_or(Poll::Pending, Poll::Ready)
+            }),
+        )
+        .await
+        .expect("dispatcher gate wake must complete preload");
+        sender.release();
+        assert_eq!(receipt.seq(), seq);
+        assert!(matches!(
+            receipt.outcome(),
+            Outcome::Applied {
+                data: Dispatched::Loaded(_),
+                ..
+            }
+        ));
+    }
 
     fn gate() -> (oneshot::Sender<Result<u32, LoadRefusal>>, Gate) {
         let (answer, opening) = oneshot::channel();
@@ -408,6 +577,88 @@ mod tests {
 
     fn receipts(sender: &mut Sender<Protocol>) -> Vec<Receipt<Protocol>> {
         sender.receipts().collect()
+    }
+
+    #[kithara::test]
+    fn unassembled_opens_are_upstream_pending() {
+        let (mut sender, inbox) = pair();
+        let (_answer, opening) = gate();
+        send(&mut sender, vec![opening]);
+        let mut dispatcher = DispatchState::new(inbox, NonZeroUsize::MIN);
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(dispatcher.poll(&mut context, true).is_pending());
+        assert!(dispatcher.poll(&mut context, true).is_pending());
+        assert_eq!(dispatcher.outcome, TickResult::UpstreamPending);
+        assert!(receipts(&mut sender).is_empty());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(tokio)]
+    async fn releasing_an_admitting_lane_refuses_its_load_and_frees_capacity() {
+        type Loads = DispatcherProtocol<ExternalSource>;
+
+        let (mut sender, inbox) = channel::<Loads>(ChannelConfig::builder().build());
+        let (_input, source) = std::sync::mpsc::channel();
+        let (blocked, _first_block) = oneshot::channel();
+        let seq = sender
+            .send(
+                When::Next,
+                Batch {
+                    basis: Vec::new(),
+                    commands: vec![DispatcherCommand::Load(Box::new(LoadRequest {
+                        item: ExternalSource {
+                            input: source,
+                            blocked: Some(blocked),
+                        },
+                        position: Duration::ZERO,
+                        start: LaneStart {
+                            speed: SpeedCurve::Constant(1.0),
+                            keylock: false,
+                            backend: StretchKind::default(),
+                        },
+                        inbox: channel(ChannelConfig::builder().build()).1,
+                    }))],
+                },
+            )
+            .expect("load batch");
+        let mut dispatcher = DispatchState::new(inbox, NonZeroUsize::MIN);
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(dispatcher.poll(&mut context, true).is_pending());
+        assert!(dispatcher.poll(&mut context, true).is_pending());
+        assert!(
+            sender.receipts().next().is_none(),
+            "admission retains the Load receipt"
+        );
+        assert_eq!(dispatcher.lanes.len(), 1, "admission occupies capacity");
+        let release = sender
+            .send(
+                When::Next,
+                Batch {
+                    basis: Vec::new(),
+                    commands: vec![DispatcherCommand::Release(LaneId(seq.get()))],
+                },
+            )
+            .expect("release admitting lane");
+        assert!(dispatcher.poll(&mut context, true).is_pending());
+        let answered: Vec<_> = sender.receipts().collect();
+        assert_eq!(answered.len(), 2);
+        assert!(answered.iter().any(|receipt| receipt.seq() == seq
+            && matches!(
+                receipt.outcome(),
+                Outcome::Rejected(Rejection::Refused(LoadRefusal::Cancelled))
+            )));
+        assert!(answered.iter().any(|receipt| receipt.seq() == release
+            && matches!(
+                receipt.outcome(),
+                Outcome::Applied {
+                    data: Dispatched::Released,
+                    ..
+                }
+            )));
+        assert!(
+            dispatcher.lanes.is_empty(),
+            "release frees the admission slot"
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]

@@ -1062,10 +1062,10 @@ undeclared_toggles = ["load"]
 cargo.packages = ["kithara-render"]
 cargo.profile = "test-release"
 cargo.lib = true
-runner.nextest.filter = "test(/worker::node::scheduler_tests::probed::/)"
+runner.nextest.filter = "test(/worker::node::tests::scheduler_tests::probed::/)"
 default_features = ["kithara-render/usdt"]
 default_flash = false
-owns = ["crates/kithara-render/src/worker/node.rs"]
+owns = ["crates/kithara-render/src/worker/node/"]
 
 [test.lanes.usdt-hls]
 cargo.packages = ["kithara-hls-tests"]

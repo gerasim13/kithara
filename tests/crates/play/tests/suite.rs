@@ -23,6 +23,7 @@ mod non_leading_track_completion;
 mod parameter_smoothing;
 mod player;
 mod quality_switch_continuity;
+#[cfg(not(target_arch = "wasm32"))]
 mod resource_regressions;
 mod seamless_queue_advance;
 mod track_replay_after_switch;

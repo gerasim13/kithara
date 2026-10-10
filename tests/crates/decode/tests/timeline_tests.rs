@@ -33,6 +33,7 @@ mod hls_timeline {
                     .segments_per_variant(SEGMENT_COUNT)
                     .segment_size(SawWav::DEFAULT.segment_size)
                     .segment_duration_secs(segment_duration)
+                    .codecs("wav".to_string())
                     .custom_data(Arc::new(wav)),
             )
             .await

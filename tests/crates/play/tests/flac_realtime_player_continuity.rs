@@ -6,7 +6,7 @@ use kithara::{
     abr::AbrMode,
     decode::DecoderBackend,
     host::{HostConfig, HostSettings},
-    platform::time::{Duration, Instant, sleep},
+    platform::time::{Duration, WallInstant, sleep},
     play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
     stream::AudioCodec,
 };
@@ -93,14 +93,14 @@ async fn render_into(
     let target_blocks =
         num_traits::cast::<f64, u32>((target_secs * f64::from(out_rate) / block_frames).ceil())
             .unwrap_or(u32::MAX);
-    let deadline = Instant::now() + Duration::from_millis(wall_budget_ms);
+    let deadline = WallInstant::now() + Duration::from_millis(wall_budget_ms);
     let mut rendered = 0u32;
     while rendered < target_blocks {
         for _ in 0..BATCH {
             out.extend_from_slice(&player.render(BLOCK_FRAMES).await);
             rendered += 1;
         }
-        if Instant::now() >= deadline {
+        if WallInstant::now() >= deadline {
             break;
         }
         sleep(Duration::from_millis(TICK_MS)).await;
@@ -150,7 +150,14 @@ async fn run_case(
             .build(),
     )
     .await;
-    player.load_config(cfg).await;
+    let id = player.load_config(cfg).await;
+    player
+        .render_until_current(
+            id,
+            512,
+            WallInstant::now() + kithara_integration_tests::offline::LOCAL_LOAD_DEADLINE,
+        )
+        .await;
     let abr = player.player().current_abr_handle();
 
     let chan = CHANNELS as usize;

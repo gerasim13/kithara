@@ -93,13 +93,20 @@ async fn prepare_tiny_ring_player(
             .build(),
     )
     .await;
-    player.load_config(config).await;
+    let id = player.load_config(config).await;
+    player
+        .render_until_current(
+            id,
+            BLOCK_FRAMES,
+            WallInstant::now() + kithara_integration_tests::offline::LOCAL_LOAD_DEADLINE,
+        )
+        .await;
     let abr = player
         .player()
         .current_abr_handle()
         .unwrap_or_else(|| panic!("{label} HLS audio must expose an ABR handle"));
 
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = WallInstant::now() + Duration::from_secs(15);
     let mut active_blocks = 0usize;
     let mut decoder_events = drain_decoder_events(&mut events, 0);
     loop {
@@ -120,7 +127,7 @@ async fn prepare_tiny_ring_player(
             break;
         }
         assert!(
-            Instant::now() <= deadline,
+            WallInstant::now() <= deadline,
             "timed out preparing {label}: initial={initial_variant}, current={:?}, position={:.3}",
             abr.current_variant_index(),
             player.position(),

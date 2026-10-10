@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use kithara_platform::time::Duration;
 #[cfg(any(test, feature = "mock"))]
 use kithara_signal::AudioChunk;
-use kithara_signal::AudioSpec;
+use kithara_signal::{AudioChunkInfo, AudioSpec};
 
 use crate::{AudioReadError, SeekOutcome, SourceEnd, TrackStep};
 
@@ -16,7 +16,7 @@ mod kithara {
 pub trait AudioSource: Send + 'static {
     type Chunk: Send + 'static;
     /// Commit the decoded-source boundary represented by admitted output.
-    fn commit_source_end(&mut self, _source_end: SourceEnd) {}
+    fn commit_source_end(&mut self, _source_end: SourceEnd, _meta: AudioChunkInfo) {}
     /// Seek within the open source on the owning thread.
     ///
     /// # Errors

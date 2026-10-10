@@ -253,5 +253,8 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating(
         .expect("host context"),
     )
     .expect("publish next host context");
-    assert_no_alloc(|| render(&mut deck, &info, &mut extra));
+    let dispatch = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    tracing::dispatcher::with_default(&dispatch, || {
+        assert_no_alloc(|| render(&mut deck, &info, &mut extra));
+    });
 }

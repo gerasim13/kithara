@@ -55,6 +55,7 @@ impl NodeFixture {
                 },
                 None,
                 pools,
+                None,
             ),
             receiver: fixture.receiver.take().expect("receiver owner"),
             activity,

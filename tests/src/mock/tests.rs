@@ -1,3 +1,5 @@
+#![cfg(all(feature = "all", not(target_arch = "wasm32")))]
+
 use std::num::NonZeroU32;
 
 use ::kithara::{audio::mock::TestPcmReader, signal::AudioSpec};
@@ -18,9 +20,13 @@ fn pcm_deck_preserves_rate_samples_and_file_lifetime() {
     assert_eq!(&bytes[22..24], &2u16.to_le_bytes());
     assert_eq!(&bytes[24..28], &48_000u32.to_le_bytes());
     assert_eq!(&bytes[34..36], &32u16.to_le_bytes());
-    assert_eq!(&bytes[40..44], &16u32.to_le_bytes());
-    assert_eq!(bytes.len(), 60);
-    for (encoded, sample) in bytes[44..].chunks_exact(4).zip(samples) {
+    assert_eq!(&bytes[40..44], &32u32.to_le_bytes());
+    assert_eq!(bytes.len(), 76);
+    assert_eq!(bytes[44..].len() / (2 * 4), samples.len());
+    for (encoded, sample) in bytes[44..]
+        .chunks_exact(4)
+        .zip(samples.into_iter().flat_map(|sample| [sample, sample]))
+    {
         assert_eq!(encoded, &sample.to_le_bytes());
     }
     assert!(path.exists());

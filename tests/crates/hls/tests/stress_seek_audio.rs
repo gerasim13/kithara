@@ -300,6 +300,7 @@ async fn wav_seek(wav_data: Vec<u8>, segment_count: usize) -> (TestServerHelper,
                 .segments_per_variant(segment_count)
                 .segment_size(consts::D.segment_size)
                 .segment_duration_secs(consts::D.segment_duration_secs())
+                .codecs("wav".to_string())
                 .custom_data(Arc::new(wav_data)),
         )
         .await

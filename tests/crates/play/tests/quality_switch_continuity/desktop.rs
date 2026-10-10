@@ -188,6 +188,21 @@ async fn render_paced(harness: &OfflinePlayer, frames: usize) -> Vec<f32> {
     block
 }
 
+async fn render_until_current(
+    harness: &OfflinePlayer,
+    id: kithara::events::TrackId,
+    block_frames: usize,
+    deadline: WallInstant,
+) {
+    while harness.player().current().map(|entry| entry.id) != Some(id) {
+        assert!(
+            WallInstant::now() < deadline,
+            "desktop queue did not commit current track {id:?} before the render deadline"
+        );
+        render_paced(harness, block_frames).await;
+    }
+}
+
 async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPrepared {
     kithara_integration_tests::apple_warmup::warm_if_apple(DecoderBackend::Apple);
 
@@ -225,13 +240,20 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
     .initial_abr_mode(AbrMode::manual(AAC_HIGH))
     .events(bus)
     .build();
-    harness.load_config(config).await;
+    let id = harness.load_config(config).await;
+    render_until_current(
+        &harness,
+        id,
+        BLOCK_FRAMES,
+        WallInstant::now() + kithara_integration_tests::offline::LOCAL_LOAD_DEADLINE,
+    )
+    .await;
     let abr = harness
         .player()
         .current_abr_handle()
         .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
 
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = WallInstant::now() + Duration::from_secs(20);
     let mut active_blocks = 0usize;
     let mut lifecycle = Lifecycle::default();
     drain_lifecycle(&mut events, 0, &mut lifecycle);
@@ -260,7 +282,7 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
             active_blocks = 0;
         }
         assert!(
-            Instant::now() <= deadline,
+            WallInstant::now() <= deadline,
             "timed out preparing {label}: current_variant={:?}, position={position:.3}",
             abr.current_variant_index(),
         );

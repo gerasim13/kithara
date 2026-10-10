@@ -6,6 +6,7 @@
 pub(crate) const MONO_OUTPUT_FRAMES: usize = 4;
 
 pub(crate) const AUDIO_EVENT_CAPACITY: usize = 64;
+pub(crate) const PROGRESS_EMIT_MIN_DELTA_MS: u64 = 100;
 
 /// The AAC decoder's post-seek onset transient outlasts 20 ms; 40 ms keeps that measured
 /// transition inside the existing linear generation join.

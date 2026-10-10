@@ -15,12 +15,7 @@ use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_command::{Inbox, Sender};
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::{EventBus, EventReceiver, EventSet};
-use kithara_platform::{
-    CancelToken,
-    maybe_send::{BoxFuture, MaybeSendFuture},
-    sync::Arc,
-    time::Duration,
-};
+use kithara_platform::{CancelToken, maybe_send::BoxFuture, sync::Arc, time::Duration};
 use kithara_render::{
     LaneProtocol, LaneStart, LoadRefusal, Open, PcmReceiver,
     rt::{
@@ -347,22 +342,19 @@ impl<S, B> Open for ResourceLoad<S, B> {
     type Lane = ResourceLane;
 
     /// Opens once with cancellation and concrete pool ownership captured at construction.
-    fn open(
+    async fn open(
         self,
         position: Duration,
         start: LaneStart,
         inbox: Inbox<LaneProtocol>,
-    ) -> impl MaybeSendFuture<Output = Result<(OpenedTrack, ResourceLane, FrameCount), LoadRefusal>>
-    {
-        async move {
-            let open = (self.opener)(position, start, inbox);
-            match self.cancel {
-                None => open.await,
-                Some(cancel) => match select(pin!(cancel.cancelled()), pin!(open)).await {
-                    Either::Left(((), _open)) => Err(LoadRefusal::Cancelled),
-                    Either::Right((opened, _cancel)) => opened,
-                },
-            }
+    ) -> Result<(OpenedTrack, ResourceLane, FrameCount), LoadRefusal> {
+        let open = (self.opener)(position, start, inbox);
+        match self.cancel {
+            None => open.await,
+            Some(cancel) => match select(pin!(cancel.cancelled()), pin!(open)).await {
+                Either::Left(((), _open)) => Err(LoadRefusal::Cancelled),
+                Either::Right((opened, _cancel)) => opened,
+            },
         }
     }
 }
@@ -719,6 +711,10 @@ mod tests {
     }
 
     impl LaneTask for EofReader {
+        fn preload_status(&mut self) -> Result<bool, LoadRefusal> {
+            Ok(true)
+        }
+
         fn set_priority(&mut self, _class: kithara_render::ServiceClass) {}
 
         fn poll_commands(&mut self, _context: &mut std::task::Context<'_>) -> std::task::Poll<()> {

@@ -101,7 +101,7 @@ pub(in crate::pipeline::source) fn initial_promotion_frontier(
 
 impl<T: StreamType> AudioSource for StreamAudioSource<T> {
     type Chunk = AudioChunk;
-    fn commit_source_end(&mut self, end: crate::SourceEnd) {
+    fn commit_source_end(&mut self, end: crate::SourceEnd, _meta: kithara_signal::AudioChunkInfo) {
         self.resume.commit_source_end(end);
     }
     fn discontinuity(&self) -> Option<crate::SourceDiscontinuity> {

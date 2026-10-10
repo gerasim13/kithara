@@ -190,6 +190,22 @@ fn hold(
 #[cfg(all(test, feature = "mock"))]
 pub(crate) use crate::worker::{mock as pcm_fixture, node_fixture};
 
+/// Wait on the receiver's off-RT gate in a test reader.
+pub fn wait_for_packet(receiver: &crate::PcmReceiver) {
+    receiver.wait_for_packet();
+}
+
+/// Keep a test receiver parkable while its reader applies the underrun policy.
+#[must_use]
+pub fn with_blocking_reads<T, B>(mut config: crate::TrackConfig<T, B>) -> crate::TrackConfig<T, B>
+where
+    T: kithara_stream::StreamType,
+    B: kithara_audio::ResamplerBackend,
+{
+    config.block_on_underrun = true;
+    config
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::{NonZeroU32, NonZeroUsize};

@@ -1,7 +1,7 @@
 use std::{collections::VecDeque, num::NonZeroU32};
 
 use kithara_decode::TrackMetadata;
-use kithara_events::EventBus;
+use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{CancelScope, sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stream::{ActivityWriter, PlayheadState};
@@ -50,7 +50,10 @@ fn fixture(spec: AudioSpec, chunks: Vec<AudioChunk>) -> Audio<()> {
         }),
         AudioContext {
             playhead: Arc::new(PlayheadState::new()),
-            bus: EventBus::default(),
+            emit: Arc::new(DeferredBus::new(
+                EventBus::default(),
+                crate::consts::AUDIO_EVENT_CAPACITY,
+            )),
             metadata: TrackMetadata::default(),
             abr: None,
             activity: activity.reader(),

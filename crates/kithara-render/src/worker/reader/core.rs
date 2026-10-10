@@ -59,6 +59,8 @@ pub struct PcmReceiver {
 }
 
 impl PcmReceiver {
+    /// The reverse ring fits forward capacity, the reader-held packet, and one
+    /// worker push between recycles, so returning an in-flight packet never fails.
     pub(in crate::worker) fn new<T>(
         capacity: NonZeroUsize,
         block_on_underrun: bool,
@@ -67,7 +69,7 @@ impl PcmReceiver {
         position: Duration,
     ) -> (Self, PcmProducer) {
         let (forward_tx, forward_rx) = HeapRb::new(capacity.get()).split();
-        let (reverse_tx, reverse_rx) = HeapRb::new(capacity.get()).split();
+        let (reverse_tx, reverse_rx) = HeapRb::new(capacity.get() + 2).split();
         let (playing_tx, playing_rx) = triple_buffer(&false);
         let ready = block_on_underrun.then(|| Arc::new(ThreadGate::default()));
         (
@@ -219,7 +221,11 @@ impl PcmReceiver {
     }
 
     fn notify(&self) {
-        self.wake.defer();
+        if self.ready.is_some() {
+            self.wake.wake();
+        } else {
+            self.wake.defer();
+        }
     }
 }
 

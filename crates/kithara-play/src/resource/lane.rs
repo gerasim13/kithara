@@ -54,6 +54,7 @@ impl Task for ResourceLane {
 impl LaneTask for ResourceLane {
     delegate::delegate! {
         to self.task {
+            fn preload_status(&mut self) -> Result<bool, kithara_render::LoadRefusal>;
             fn set_priority(&mut self, class: ServiceClass);
             fn poll_commands(&mut self, context: &mut Context<'_>) -> Poll<()>;
         }

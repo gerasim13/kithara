@@ -120,13 +120,35 @@ async fn a_nonblocking_poll_of_an_empty_ring_states_its_demand() {
 
 #[kithara::test(native, tokio)]
 async fn block_on_underrun_forces_immediate_off_rt_wakes() {
-    let fixture = PcmFixture::new(4, true).await;
+    let wake = kithara_worker::Wake::default();
+    let mut fixture = PcmFixture::with_wake(
+        4,
+        true,
+        crate::worker::scheduler::StreamWake::new(wake.clone()),
+    )
+    .await;
     assert!(fixture.receiver.as_ref().expect("receiver").ready.is_some());
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (0, false));
+    assert!(fixture.receiver.as_mut().expect("receiver").pop().is_none());
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (1, false));
+    fixture
+        .receiver
+        .as_mut()
+        .expect("receiver")
+        .recycle(PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[1.0]))))
+        .expect("return fits");
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (2, false));
 }
 
 #[kithara::test(native, tokio)]
 async fn an_adopted_mode_still_yields_to_blocking_reads() {
-    let fixture = PcmFixture::new(4, true).await;
+    let wake = kithara_worker::Wake::default();
+    let mut fixture = PcmFixture::with_wake(
+        4,
+        true,
+        crate::worker::scheduler::StreamWake::new(wake.clone()),
+    )
+    .await;
     assert!(fixture.receiver.as_ref().expect("receiver").ready.is_some());
     assert!(
         fixture
@@ -137,6 +159,74 @@ async fn an_adopted_mode_still_yields_to_blocking_reads() {
             .0
             .is_some()
     );
+    assert!(fixture.receiver.as_mut().expect("receiver").pop().is_none());
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (1, false));
+    let deferred = kithara_worker::Wake::default();
+    let mut nonblocking = PcmFixture::with_wake(
+        4,
+        false,
+        crate::worker::scheduler::StreamWake::new(deferred.clone()),
+    )
+    .await;
+    assert!(
+        nonblocking
+            .receiver
+            .as_mut()
+            .expect("receiver")
+            .pop()
+            .is_none()
+    );
+    nonblocking
+        .receiver
+        .as_mut()
+        .expect("receiver")
+        .recycle(PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[1.0]))))
+        .expect("return fits");
+    assert_eq!(kithara_worker::mock::wake_state(&deferred), (0, true));
+}
+
+#[kithara::test(native, tokio)]
+async fn every_in_flight_packet_fits_the_reverse_ring_without_recycling() {
+    let capacity = 4;
+    let mut fixture = PcmFixture::new(capacity, true).await;
+    for _ in 0..capacity {
+        fixture
+            .push(PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[1.0]))))
+            .expect("fill forward ring");
+    }
+    let held = fixture
+        .receiver
+        .as_mut()
+        .expect("receiver")
+        .pop()
+        .expect("held packet");
+    fixture
+        .push(PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[2.0]))))
+        .expect("worker fills freed slot before recycling");
+    fixture
+        .receiver
+        .as_mut()
+        .expect("receiver")
+        .recycle(held)
+        .expect("return held packet");
+    for _ in 0..capacity {
+        let packet = fixture
+            .receiver
+            .as_mut()
+            .expect("receiver")
+            .pop()
+            .expect("forward packet");
+        fixture
+            .receiver
+            .as_mut()
+            .expect("receiver")
+            .recycle(packet)
+            .expect("every return fits");
+    }
+    for _ in 0..=capacity {
+        assert!(fixture.returned().is_some());
+    }
+    assert!(fixture.returned().is_none());
 }
 
 #[kithara::test(native, tokio)]

@@ -167,14 +167,14 @@ impl<T: StreamType<Events = EventBus>> Audio<Stream<T>> {
                 backend: deps.decoder.backend(),
                 playback_resampler_backend: deps.decoder.resampler_backend_name(),
             },
-            emit,
+            Arc::clone(&emit),
             wake,
         );
         Ok(Self::new(
             Box::new(source),
             AudioContext {
                 playhead,
-                bus,
+                emit,
                 metadata,
                 abr,
                 activity,

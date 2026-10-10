@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use kithara_decode::TrackMetadata;
-use kithara_events::EventBus;
+use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{CancelScope, sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stream::{ActivityWriter, PlayheadState, PlayheadWrite};
@@ -74,7 +74,10 @@ fn audio() -> Audio<()> {
         }),
         AudioContext {
             playhead,
-            bus: EventBus::default(),
+            emit: Arc::new(DeferredBus::new(
+                EventBus::default(),
+                crate::consts::AUDIO_EVENT_CAPACITY,
+            )),
             metadata: TrackMetadata::default(),
             abr: None,
             activity: writer.reader(),

@@ -80,6 +80,7 @@ async fn create_server(wav_data: &Arc<Vec<u8>>) -> CreatedHls {
                 .segments_per_variant(consts::SEGMENT_COUNT)
                 .segment_size(SawWav::DEFAULT.segment_size)
                 .segment_duration_secs(SawWav::DEFAULT.segment_duration_secs())
+                .codecs("wav".to_string())
                 .custom_data(Arc::clone(wav_data)),
         )
         .await

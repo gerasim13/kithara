@@ -86,6 +86,7 @@ async fn spawn_hls_instance(
                 .segments_per_variant(consts::SEGMENT_COUNT)
                 .segment_size(SawWav::DEFAULT.segment_size)
                 .segment_duration_secs(SawWav::DEFAULT.segment_duration_secs())
+                .codecs("wav".to_string())
                 .custom_data(wav_data),
         )
         .await

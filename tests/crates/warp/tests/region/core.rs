@@ -1,53 +1,33 @@
-use std::num::{NonZero, NonZeroU32};
+use super::*;
 
-use kithara::{
-    platform::sync::Arc,
-    signal::{
-        AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, InterleavedView, OutputContext,
-        SessionEpoch, SessionFrame, TransportRevision,
-    },
-    stretch::StretchKind,
-    warp::{
-        AssetAxis, AssetExtent, Beat, BeatAlignment, BeatGridId, BeatGridQuery, BeatGridRevision,
-        BeatGridSnapshot, GridSegment, MapPoint, PresentationFrontier, RegionPlan, RegionPlanError,
-        RenderContext, SessionAnchor, SessionBeat, SpeedCurve, Warp, WarpConfig, WarpMap,
-        WarpMapRevision, mock::asset_grid,
-    },
-};
-use kithara_test_fixtures::unit_fixtures::{warp_clicks, warp_nominal_clicks, warp_sine};
-use kithara_test_utils::kithara::hang_watchdog;
-use num_traits::ToPrimitive;
-
-use crate::test_pools::{Pools, pools, sample_buffer};
-
-const SR: u32 = 44_100;
+pub(super) const SR: u32 = 44_100;
 pub(crate) const CH: usize = 2;
 /// Nominal bar length in source frames (0.5 s at 44.1 kHz).
-const NOMINAL: usize = 22_050;
+pub(super) const NOMINAL: usize = 22_050;
 /// Drifting bar lengths: region 1 runs fast, region 2 runs slow.
-const P1: usize = 19_845;
-const P2: usize = 24_255;
-const BARS: usize = 8;
-const BOUNDARY: usize = P1 * BARS;
-const TOTAL: usize = BOUNDARY + P2 * BARS;
+pub(super) const P1: usize = 19_845;
+pub(super) const P2: usize = 24_255;
+pub(super) const BARS: usize = 8;
+pub(super) const BOUNDARY: usize = P1 * BARS;
+pub(super) const TOTAL: usize = BOUNDARY + P2 * BARS;
 
-fn f32_of(x: f64) -> f32 {
+pub(super) fn f32_of(x: f64) -> f32 {
     num_traits::cast(x).unwrap_or_default()
 }
 
-fn f64_of(x: usize) -> f64 {
+pub(super) fn f64_of(x: usize) -> f64 {
     num_traits::cast(x).unwrap_or_default()
 }
 
-fn u64_of(x: usize) -> u64 {
+pub(super) fn u64_of(x: usize) -> u64 {
     u64::try_from(x).unwrap_or(u64::MAX)
 }
 
-fn seg(start: usize, end: usize, ratio: f64) -> GridSegment {
+pub(super) fn seg(start: usize, end: usize, ratio: f64) -> GridSegment {
     GridSegment::new(u64_of(start), u64_of(end), ratio)
 }
 
-fn spec() -> AudioSpec {
+pub(super) fn spec() -> AudioSpec {
     let Some(sample_rate) = NonZero::new(SR) else {
         panic!("test sample rate must be non-zero");
     };
@@ -57,7 +37,12 @@ fn spec() -> AudioSpec {
     }
 }
 
-fn chunk(pools: &Pools, spec: AudioSpec, samples: &[f32], frame_offset: u64) -> AudioChunk {
+pub(super) fn chunk(
+    pools: &Pools,
+    spec: AudioSpec,
+    samples: &[f32],
+    frame_offset: u64,
+) -> AudioChunk {
     let frames = samples.len() / CH;
     AudioChunk::new(
         AudioChunkInfo {
@@ -73,7 +58,12 @@ fn chunk(pools: &Pools, spec: AudioSpec, samples: &[f32], frame_offset: u64) -> 
 /// Render `source` through a key-locked renderer with `plan`, feeding
 /// 4096-frame chunks with advancing `frame_offset` (source frames).
 #[hang_watchdog]
-fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[f32]) -> Vec<f32> {
+pub(super) fn render(
+    backend: StretchKind,
+    speed: f32,
+    plan: Option<RegionPlan>,
+    source: &[f32],
+) -> Vec<f32> {
     let pools = pools();
     let config = WarpConfig::builder()
         .speed(speed)
@@ -97,8 +87,8 @@ fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[
         offset += u64_of(frames);
     }
     loop {
-        let output = fx.drain(usize::MAX).expect("drain renderer");
         fx.prepare(spec());
+        let output = fx.drain(usize::MAX).expect("drain renderer");
         let Some(o) = output else {
             break;
         };
@@ -112,7 +102,7 @@ pub(crate) fn mono(samples: &[f32]) -> Vec<f32> {
 }
 
 /// Cluster supra-threshold samples into clicks; position = cluster midpoint.
-fn click_positions(mono: &[f32]) -> Vec<usize> {
+pub(super) fn click_positions(mono: &[f32]) -> Vec<usize> {
     const GAP: usize = 5000;
     let mut runs: Vec<(usize, usize)> = Vec::new();
     for (i, s) in mono.iter().enumerate() {
@@ -127,7 +117,7 @@ fn click_positions(mono: &[f32]) -> Vec<usize> {
     runs.iter().map(|(a, b)| (a + b) / 2).collect()
 }
 
-fn max_step(window: &[f32]) -> f32 {
+pub(super) fn max_step(window: &[f32]) -> f32 {
     window
         .windows(2)
         .map(|w| (w[1] - w[0]).abs())
@@ -135,7 +125,7 @@ fn max_step(window: &[f32]) -> f32 {
 }
 
 /// (min, median) of non-overlapping RMS windows inside the audible body.
-fn rms_profile(mono: &[f32]) -> (f32, f32) {
+pub(super) fn rms_profile(mono: &[f32]) -> (f32, f32) {
     const WIN: usize = 2048;
     const EDGE_WINDOWS: usize = 4;
     const AUDIBLE: f32 = 1.0e-4;
@@ -173,7 +163,7 @@ fn rms_profile(mono: &[f32]) -> (f32, f32) {
 }
 
 #[kithara::test]
-fn plan_rejects_inverted_overlapping_and_bad_ratio_segments() {
+pub(super) fn plan_rejects_inverted_overlapping_and_bad_ratio_segments() {
     assert!(matches!(
         RegionPlan::new(vec![seg(10, 10, 1.0)]),
         Err(RegionPlanError::Inverted { index: 0 })
@@ -199,7 +189,7 @@ fn plan_rejects_inverted_overlapping_and_bad_ratio_segments() {
 }
 
 #[kithara::test]
-fn region_lookup_covers_segments_and_gaps() {
+pub(super) fn region_lookup_covers_segments_and_gaps() {
     let plan = RegionPlan::new(vec![seg(100, 200, 1.1), seg(300, 400, 0.9)]).expect("valid plan");
     let cases = [
         (0_u64, 0_u64, 100_u64, 1.0),
@@ -239,7 +229,7 @@ fn region_lookup_covers_segments_and_gaps() {
     ),
     case::bungee(StretchKind::Bungee)
 )]
-fn corrections_align_drifting_clicks_to_nominal_grid(
+pub(super) fn corrections_align_drifting_clicks_to_nominal_grid(
     #[case] backend: StretchKind,
     warp_clicks: Vec<f32>,
 ) {
@@ -299,7 +289,10 @@ fn corrections_align_drifting_clicks_to_nominal_grid(
     ),
     case::bungee(StretchKind::Bungee)
 )]
-fn ratio_change_boundary_has_no_transient_burst(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
+pub(super) fn ratio_change_boundary_has_no_transient_burst(
+    #[case] backend: StretchKind,
+    warp_sine: Vec<f32>,
+) {
     let src = warp_sine[..(TOTAL) * 2].to_vec();
     let plan = RegionPlan::new(vec![seg(0, BOUNDARY, 1.0), seg(BOUNDARY, TOTAL, 1.04)])
         .expect("valid plan");
@@ -333,7 +326,7 @@ fn ratio_change_boundary_has_no_transient_burst(#[case] backend: StretchKind, wa
     ),
     case::bungee(StretchKind::Bungee)
 )]
-fn equal_ratio_boundary_is_seamless(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
+pub(super) fn equal_ratio_boundary_is_seamless(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let src = warp_sine[..(TOTAL) * 2].to_vec();
     let merged = RegionPlan::new(vec![seg(0, TOTAL, 1.05)]).expect("valid plan");
     let split = RegionPlan::new(vec![seg(0, BOUNDARY, 1.05), seg(BOUNDARY, TOTAL, 1.05)])
@@ -367,7 +360,7 @@ fn equal_ratio_boundary_is_seamless(#[case] backend: StretchKind, warp_sine: Vec
     ),
     case::bungee(StretchKind::Bungee)
 )]
-fn empty_plan_matches_no_plan(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
+pub(super) fn empty_plan_matches_no_plan(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let src = warp_sine[..(TOTAL / 4) * 2].to_vec();
     let empty = RegionPlan::new(Vec::new()).expect("empty plan is valid");
     let with = render(backend, 0.5, Some(empty), &src);
@@ -384,12 +377,12 @@ fn empty_plan_matches_no_plan(#[case] backend: StretchKind, warp_sine: Vec<f32>)
     );
 }
 
-fn i64_of(x: usize) -> i64 {
+pub(super) fn i64_of(x: usize) -> i64 {
     i64::try_from(x).unwrap_or(i64::MAX)
 }
 
 #[kithara::test]
-fn activation_keeps_the_absolute_host_frame_rounding_phase() {
+pub(super) fn activation_keeps_the_absolute_host_frame_rounding_phase() {
     use kithara::warp::{
         Beat, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridSnapshot, MapPoint, MapPosition,
     };
@@ -444,7 +437,7 @@ fn activation_keeps_the_absolute_host_frame_rounding_phase() {
 }
 
 #[hang_watchdog]
-fn render_on_grid(
+pub(super) fn render_on_grid(
     backend: StretchKind,
     speed: f32,
     plan: Option<Projection>,
@@ -461,7 +454,7 @@ fn render_on_grid(
 }
 
 #[hang_watchdog]
-fn render_configured_grid(
+pub(super) fn render_configured_grid(
     config: WarpConfig,
     plan: Option<Projection>,
     source: &[f32],
@@ -671,8 +664,8 @@ pub(crate) fn render_configured_grid_with_updates(
         offset += u64_of(frames);
     }
     loop {
-        let output = fx.drain(usize::MAX).expect("drain renderer");
         fx.prepare(spec);
+        let output = fx.drain(usize::MAX).expect("drain renderer");
         let Some(o) = output else {
             break;
         };
@@ -684,333 +677,9 @@ pub(crate) fn render_configured_grid_with_updates(
     }
 }
 
-#[kithara::test]
-#[cfg_attr(
-    feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
-)]
-#[cfg_attr(
-    all(
-        not(target_os = "android"),
-        not(all(target_os = "windows", target_env = "msvc"))
-    ),
-    case::bungee(StretchKind::Bungee)
-)]
-fn rendered_clicks_follow_the_integral_of_the_tempo_ramp(
-    #[case] backend: StretchKind,
-    warp_nominal_clicks: Vec<f32>,
-) {
-    use kithara::warp::{BeatGridId, BeatGridRevision, BeatGridSnapshot};
-
-    let source_clicks = click_positions(&mono(&warp_nominal_clicks));
-    assert_eq!(
-        source_clicks.len(),
-        BARS,
-        "the fixture contains eight delayed attacks"
-    );
-    for target_bps in [1.0, 3.0] {
-        let anchor = SessionAnchor::new(
-            SessionFrame::new(0),
-            SessionBeat::default(),
-            2.0,
-            spec().sample_rate,
-        )
-        .expect("anchor")
-        .retarget(SessionFrame::new(0), target_bps, 0.5)
-        .expect("tempo ramp");
-        let target = BeatGridSnapshot::session(
-            BeatGridId::allocate().expect("grid id"),
-            BeatGridRevision::first(),
-            SessionEpoch::new(0),
-            anchor,
-            None,
-        );
-        let plan = plan_over(
-            asset_grid_over(
-                &[(0.0, f64_of(NOMINAL), i64_of(BARS))],
-                None,
-                spec().sample_rate,
-            ),
-            target,
-        );
-        for keylock in [false, true] {
-            let mut partitions = Vec::new();
-            for quantum in [64, 257] {
-                let config = WarpConfig::builder()
-                    .speed(2.0)
-                    .keylock(keylock)
-                    .backend(backend)
-                    .render_quantum_frames(NonZero::new(quantum).expect("quantum"))
-                    .build();
-                let output = render_configured_grid(
-                    config,
-                    Some(plan.clone()),
-                    &warp_nominal_clicks,
-                    Timeline::Anchored(anchor),
-                    None,
-                );
-                let clicks = click_positions(&mono(&output));
-                assert_eq!(
-                    clicks.len(),
-                    BARS,
-                    "every beat survives {target_bps}, keylock={keylock}"
-                );
-                for (ordinal, (actual, source)) in clicks.iter().zip(&source_clicks).enumerate() {
-                    let expected = anchor
-                        .frame_at(
-                            SessionBeat::new(f64_of(*source) / f64_of(NOMINAL)).expect("beat"),
-                        )
-                        .expect("beat frame");
-                    let expected = usize::try_from(i64::from(expected)).expect("positive frame");
-                    assert!(
-                        actual.abs_diff(expected) <= NOMINAL / 20,
-                        "ramp {target_bps}, keylock={keylock}, quantum={quantum}, beat {ordinal}: {actual} vs {expected}"
-                    );
-                }
-                partitions.push((output.len(), clicks));
-            }
-            assert_eq!(
-                partitions[0].0, partitions[1].0,
-                "partition-independent output duration"
-            );
-            for (left, right) in partitions[0].1.iter().zip(&partitions[1].1) {
-                assert!(
-                    left.abs_diff(*right) <= NOMINAL / 20,
-                    "partition-independent beat phase"
-                );
-            }
-        }
-    }
-}
-
-#[kithara::test]
-#[cfg_attr(
-    feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
-)]
-#[cfg_attr(
-    all(
-        not(target_os = "android"),
-        not(all(target_os = "windows", target_env = "msvc"))
-    ),
-    case::bungee(StretchKind::Bungee)
-)]
-fn rendered_beats_follow_deck_tempo_and_ignore_manual_speed(
-    #[case] backend: StretchKind,
-    warp_nominal_clicks: Vec<f32>,
-) {
-    let source = warp_nominal_clicks;
-    for (bps, interval) in [(2.0, NOMINAL), (1.5, NOMINAL * 4 / 3)] {
-        let plan = spaced_plan(
-            &[(0.0, f64_of(NOMINAL), i64_of(BARS))],
-            f64_of(interval),
-            spec().sample_rate,
-        );
-        let output = render_on_grid(backend, 0.5, Some(plan), &source, bps, None);
-        let clicks = click_positions(&mono(&output));
-        assert_eq!(
-            clicks.len(),
-            BARS,
-            "every source beat survives {bps} beats/s"
-        );
-        for pair in clicks.windows(2) {
-            let actual = pair[1] - pair[0];
-            assert!(
-                actual.abs_diff(interval) <= interval / 20,
-                "{bps} beats/s: beat interval {actual}, expected {interval}"
-            );
-        }
-    }
-}
-
-/// A span the beat pass never marked renders at the rate the projection
-/// prescribes, not at the listener's manual speed.
-///
-/// A pass that stops half way leaves a grid whose segments end before the axis
-/// the track declares, and the set answers the rest by extending them. The
-/// renderer must take that answer: reading its own target instead would let
-/// the recording change tempo at the frontier the pass happened to reach, and
-/// a manual speed that disagrees with the projection makes that audible.
-#[kithara::test]
-#[cfg_attr(
-    feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
-)]
-#[cfg_attr(
-    all(
-        not(target_os = "android"),
-        not(all(target_os = "windows", target_env = "msvc"))
-    ),
-    case::bungee(StretchKind::Bungee)
-)]
-fn an_unmarked_span_renders_at_the_projected_rate(
-    #[case] backend: StretchKind,
-    warp_nominal_clicks: Vec<f32>,
-) {
-    const MARKED: usize = BARS / 2;
-    let interval = NOMINAL * 4 / 3;
-    let projection = plan_over(
-        asset_grid_over(
-            &[(0.0, f64_of(NOMINAL), i64_of(MARKED))],
-            Some(u64_of(NOMINAL * BARS) + 1),
-            spec().sample_rate,
-        ),
-        session_grid_spaced(f64_of(interval), spec().sample_rate),
-    );
-    let output = render_on_grid(
-        backend,
-        2.0,
-        Some(projection),
-        &warp_nominal_clicks,
-        1.5,
-        None,
-    );
-    let clicks = click_positions(&mono(&output));
-    assert_eq!(
-        clicks.len(),
-        BARS,
-        "every source beat survives, marked by the pass or extended from it"
-    );
-    for (index, pair) in clicks.windows(2).enumerate() {
-        let actual = pair[1] - pair[0];
-        assert!(
-            actual.abs_diff(interval) <= interval / 20,
-            "beat {index} spans {actual} frames; the projection prescribes {interval}"
-        );
-    }
-}
-
-/// Each queue tempo reaches the Host grid: an asset declared at its own tempo
-/// renders beats at the Host beat interval scaled by `asset_bps / host_bps`,
-/// whatever the manual speed asks for.
-///
-/// The Host grid stands at `HOST_BPS`, and every case names an asset tempo the
-/// acceptance queue carries, so a rate derived from the wrong member's tempo
-/// moves the interval away from its case by more than the shared tolerance.
-#[kithara::test]
-#[cfg_attr(
-    feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
-)]
-#[cfg_attr(
-    all(
-        not(target_os = "android"),
-        not(all(target_os = "windows", target_env = "msvc"))
-    ),
-    case::bungee(StretchKind::Bungee)
-)]
-fn host_sync_stretches_each_asset_tempo_onto_the_host_grid(
-    #[case] backend: StretchKind,
-    warp_nominal_clicks: Vec<f32>,
-) {
-    const HOST_BPM: f64 = 100.0;
-    const HOST_BPS: f64 = 2.0;
-    const QUEUE_BPM: [f64; 5] = [124.0, 96.0, 132.0, 74.0, 140.0];
-
-    let source = warp_nominal_clicks;
-    for bpm in QUEUE_BPM {
-        let host_spacing = f64_of(NOMINAL) * bpm / HOST_BPM;
-        let plan = spaced_plan(
-            &[(0.0, f64_of(NOMINAL), i64_of(BARS))],
-            host_spacing,
-            spec().sample_rate,
-        );
-        let output = render_on_grid(backend, 0.5, Some(plan), &source, HOST_BPS, None);
-        let clicks = click_positions(&mono(&output));
-        assert_eq!(clicks.len(), BARS, "every source beat survives {bpm} BPM");
-        let interval = f64_of(NOMINAL) * bpm / HOST_BPM;
-        let tolerance = interval / 20.0;
-        for pair in clicks.windows(2) {
-            let actual = f64_of(pair[1] - pair[0]);
-            assert!(
-                (actual - interval).abs() <= tolerance,
-                "{bpm} BPM asset on a {HOST_BPM} BPM Host: beat interval {actual}, expected {interval}"
-            );
-        }
-    }
-}
-
-/// A renderer that takes a second plan renders the incoming tempo, not the one
-/// it held before: the beats fed after the swap keep the second plan's interval.
-///
-/// A slot outlives the item loaded into it, so the tempo of a departed item must
-/// not survive in the renderer that served it.
-#[kithara::test]
-#[cfg_attr(
-    feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
-)]
-#[cfg_attr(
-    all(
-        not(target_os = "android"),
-        not(all(target_os = "windows", target_env = "msvc"))
-    ),
-    case::bungee(StretchKind::Bungee)
-)]
-fn a_second_plan_through_one_renderer_keeps_only_its_own_tempo(
-    #[case] backend: StretchKind,
-    warp_nominal_clicks: Vec<f32>,
-) {
-    const HOST_BPM: f64 = 100.0;
-    const HOST_BPS: f64 = 2.0;
-    const LEAVING_BPM: f64 = 124.0;
-    const ARRIVING_BPM: f64 = 140.0;
-
-    let source = warp_nominal_clicks;
-    let switch_at = NOMINAL * BARS / 2;
-    let plan_of = |bpm: f64| {
-        spaced_plan(
-            &[(0.0, f64_of(NOMINAL), i64_of(BARS))],
-            f64_of(NOMINAL) * bpm / HOST_BPM,
-            spec().sample_rate,
-        )
-    };
-    let output = render_on_grid(
-        backend,
-        1.0,
-        Some(plan_of(LEAVING_BPM)),
-        &source,
-        HOST_BPS,
-        Some((switch_at, |source_frame, output_frame| {
-            let spacing = f64_of(NOMINAL) * ARRIVING_BPM / HOST_BPM;
-            plan_over_at(
-                asset_grid_over(
-                    &[(0.0, f64_of(NOMINAL), i64_of(BARS))],
-                    None,
-                    spec().sample_rate,
-                ),
-                session_grid_spaced(spacing, spec().sample_rate),
-                f64_of(usize::try_from(source_frame).expect("fixture source frame"))
-                    / f64_of(NOMINAL),
-                f64_of(output_frame) / spacing,
-                SessionFrame::new(i64_of(output_frame)),
-            )
-        })),
-    );
-    let clicks = click_positions(&mono(&output));
-    assert_eq!(
-        clicks.len(),
-        BARS,
-        "every source beat survives the plan swap"
-    );
-
-    let arriving = f64_of(NOMINAL) * ARRIVING_BPM / HOST_BPM;
-    let leaving = f64_of(NOMINAL) * LEAVING_BPM / HOST_BPM;
-    let tolerance = arriving / 20.0;
-    let fed_before_swap = switch_at / NOMINAL;
-    for (index, pair) in clicks.windows(2).enumerate().skip(fed_before_swap) {
-        let actual = f64_of(pair[1] - pair[0]);
-        assert!(
-            (actual - arriving).abs() <= tolerance,
-            "beat interval {index} after the swap is {actual}, expected {arriving} \
-             (the departed {LEAVING_BPM} BPM plan renders {leaving})"
-        );
-    }
-}
-
 pub(crate) type Projection = (WarpMap, SessionFrame, BeatGridSnapshot, BeatGridSnapshot);
 
-fn install_projection(
+pub(super) fn install_projection(
     renderer: &mut kithara::warp::WarpRenderer<kithara_test_utils::bufpool::TestPools>,
     projection: &Projection,
     source_frames: usize,
@@ -1027,40 +696,54 @@ fn install_projection(
     )) else {
         panic!("projection covers the fixture");
     };
-    let BeatGridQuery::Resolved(position) = projected_grid.position_at(*beat.value()) else {
-        panic!("projection covers the fixture");
-    };
-    let kithara::warp::MapPosition::Session(end) = *position.value().value() else {
-        panic!("projection covers the fixture");
-    };
-    let end = i64::from(end)
-        .to_usize()
-        .expect("nonnegative output endpoint")
-        + 1;
+    let last_beat = f64::from(*beat.value().value()).floor();
     let activation = i64::from(*activation)
         .to_usize()
         .expect("nonnegative activation")
         .max(output_frame);
-    let source_at = |frame: usize| {
-        let BeatGridQuery::Resolved(source) = map.source_at(SessionFrame::new(i64_of(frame)))
+    let BeatGridQuery::Resolved(first) = projected_grid.beat_at(MapPoint::new(
+        projected_grid.stamp(),
+        kithara::warp::MapPosition::Session(SessionFrame::new(i64_of(activation))),
+    )) else {
+        panic!("projection covers activation");
+    };
+    let source_at = |beat: Beat| {
+        let BeatGridQuery::Resolved(position) =
+            source_grid.position_at(MapPoint::new(source_grid.stamp(), beat))
         else {
-            panic!("projection covers output frame {frame}");
+            panic!("source grid covers projected beat");
         };
-        f64::from(source)
+        let kithara::warp::MapPosition::Asset(frame) = *position.value().value() else {
+            panic!("source grid uses asset frames");
+        };
+        f64::from(frame)
+    };
+    let session_at = |beat: Beat| {
+        let BeatGridQuery::Resolved(position) =
+            projected_grid.position_at(MapPoint::new(projected_grid.stamp(), beat))
+        else {
+            panic!("projection covers beat");
+        };
+        let kithara::warp::MapPosition::Session(frame) = *position.value().value() else {
+            panic!("projection uses session frames");
+        };
+        i64::from(frame)
     };
     let mut steps = Vec::new();
     if activation > output_frame {
         steps.push((0, manual_speed));
     }
-    let mut frame = activation;
-    while frame < end {
-        let next = frame + 1;
-        let speed = source_at(next) - source_at(frame);
-        let speed = speed.to_f32().expect("representable speed");
-        if steps.last().is_none_or(|(_, previous)| *previous != speed) {
-            steps.push((u64_of(frame - output_frame), speed));
-        }
-        frame = next;
+    let mut ordinal = f64::from(*first.value().value()).floor();
+    while ordinal < last_beat {
+        let beat = Beat::new(ordinal).expect("finite source beat");
+        let next = Beat::new(ordinal + 1.0).expect("finite next source beat");
+        let start = session_at(beat);
+        let end = session_at(next);
+        let speed = (source_at(next) - source_at(beat))
+            / (end - start).to_f64().expect("session beat interval");
+        let offset = start.to_usize().unwrap_or(0).max(activation) - output_frame;
+        steps.push((u64_of(offset), speed.to_f32().expect("representable speed")));
+        ordinal += 1.0;
     }
     assert!(!steps.is_empty(), "projection supplies a speed curve");
     renderer
@@ -1071,7 +754,7 @@ fn install_projection(
         .expect("projected speed is admissible");
 }
 
-fn asset_grid_over(
+pub(super) fn asset_grid_over(
     spans: &[(f64, f64, i64)],
     frames: Option<u64>,
     sample_rate: NonZeroU32,
@@ -1124,14 +807,17 @@ fn asset_grid_over(
     .expect("fixture model materializes on its declared axis")
 }
 
-fn session_grid_spaced(frames_per_beat: f64, sample_rate: NonZeroU32) -> BeatGridSnapshot {
+pub(super) fn session_grid_spaced(
+    frames_per_beat: f64,
+    sample_rate: NonZeroU32,
+) -> BeatGridSnapshot {
     kithara::warp::mock::session_grid(
         f64::from(sample_rate.get()) * 60.0 / frames_per_beat,
         sample_rate,
     )
 }
 
-fn plan_over(source: BeatGridSnapshot, target: BeatGridSnapshot) -> Projection {
+pub(super) fn plan_over(source: BeatGridSnapshot, target: BeatGridSnapshot) -> Projection {
     let beat = Beat::new(0.0).expect("fixture cue");
     let alignment = BeatAlignment::new(
         MapPoint::new(source.stamp(), beat),
@@ -1144,7 +830,7 @@ fn plan_over(source: BeatGridSnapshot, target: BeatGridSnapshot) -> Projection {
     (map, SessionFrame::new(0), source, grid)
 }
 
-fn spaced_plan(
+pub(super) fn spaced_plan(
     spans: &[(f64, f64, i64)],
     host_frames_per_beat: f64,
     sample_rate: NonZeroU32,
@@ -1155,7 +841,7 @@ fn spaced_plan(
     )
 }
 
-fn plan_over_at(
+pub(super) fn plan_over_at(
     source: BeatGridSnapshot,
     target: BeatGridSnapshot,
     source_beat: f64,

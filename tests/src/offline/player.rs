@@ -1,14 +1,16 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
+#[cfg(not(target_arch = "wasm32"))]
+use kithara::audio::AudioReader;
 use kithara::{
-    audio::AudioReader,
     decode::GaplessMode,
     effects::eq::EqBandConfig,
-    events::EventReceiver,
+    events::{EventReceiver, TrackId},
     host::{DeckControl, HostConfig, HostOwned, HostSettings},
     platform::{
         maybe_send::MaybeSend,
         sync::{Arc, Mutex},
+        time::WallInstant,
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{
@@ -41,6 +43,7 @@ pub struct OfflinePlayer<F: TrackFactory<TestPools> = PlayerFactory> {
     worker: PlayWorker<TestPools>,
     #[field(get = resource_prep)]
     prep: ResourcePrep<TestPools>,
+    #[cfg(not(target_arch = "wasm32"))]
     pcm_decks: Mutex<Vec<crate::mock::PcmDeck>>,
 }
 
@@ -187,6 +190,7 @@ where
             queue,
             worker,
             prep,
+            #[cfg(not(target_arch = "wasm32"))]
             pcm_decks: Mutex::new(Vec::new()),
         }
     }
@@ -197,6 +201,7 @@ where
         self.queue.control()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn pcm_deck(&self, reader: Box<dyn AudioReader>) -> TrackSource<TestPools> {
         let deck = crate::mock::PcmDeck::new(reader);
         let source = deck.source();
@@ -318,10 +323,8 @@ where
         .await;
     }
 
-    pub async fn load_config(
-        &self,
-        config: kithara::play::ResourceConfig<TestPools>,
-    ) -> kithara::events::TrackId {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn load_config(&self, config: kithara::play::ResourceConfig<TestPools>) -> TrackId {
         let mut events = self.player().subscribe();
         let id = self
             .with_queue(move |control| {
@@ -344,6 +347,23 @@ where
         .await
         .expect("configured fixture source is ready");
         id
+    }
+
+    /// Render until selection is committed by the queue, not merely prepared by its loader.
+    pub async fn render_until_current(
+        &self,
+        id: TrackId,
+        block_frames: usize,
+        deadline: WallInstant,
+    ) {
+        while self.player().current().map(|entry| entry.id) != Some(id) {
+            assert!(
+                WallInstant::now() < deadline,
+                "queue did not commit current track {id:?} before the render deadline"
+            );
+            self.render(block_frames).await;
+            let _ = self.tick_and_drain().await;
+        }
     }
 
     /// Seek through the product player. The product runtime owns segments.
@@ -403,6 +423,7 @@ where
             queue,
             worker,
             prep,
+            #[cfg(not(target_arch = "wasm32"))]
             pcm_decks,
             snapshot,
         } = self;
@@ -412,6 +433,7 @@ where
         drop(worker);
         host.close().await;
         drop(prep);
+        #[cfg(not(target_arch = "wasm32"))]
         drop(pcm_decks);
     }
 

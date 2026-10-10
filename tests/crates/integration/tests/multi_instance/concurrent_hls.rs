@@ -34,6 +34,7 @@ async fn create_hls_server(wav_data: Arc<Vec<u8>>, abr_variants: usize) -> Creat
         .segments_per_variant(consts::SEGMENT_COUNT)
         .segment_size(SawWav::DEFAULT.segment_size)
         .segment_duration_secs(SawWav::DEFAULT.segment_duration_secs())
+        .codecs("wav".to_string())
         .custom_data(wav_data);
     let ladder = if abr_variants > 1 {
         ladder.variant_bandwidths(vec![5_000_000, 1_000_000])

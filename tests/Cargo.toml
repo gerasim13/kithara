@@ -64,6 +64,7 @@ audio = [
     "kithara/net",
     "kithara/platform",
     "kithara/play",
+    "kithara/worker",
     "kithara/resample-rubato",
     "kithara/resampler",
     "kithara/signal",

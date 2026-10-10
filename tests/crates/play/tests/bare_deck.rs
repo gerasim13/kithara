@@ -37,6 +37,7 @@ async fn a_bare_deck_keeps_its_item_past_the_end() {
     let item = TrackId::allocate();
     let deck = constant_item(LEVEL);
     let source = deck.source();
+    let mut events = harness.player().subscribe();
     harness
         .with_queue(move |player| {
             player
@@ -48,6 +49,15 @@ async fn a_bare_deck_keeps_its_item_past_the_end() {
             player.play();
         })
         .await;
+
+    kithara_integration_tests::waits::wait_for_loader_done_event(
+        &mut events,
+        harness.player(),
+        item,
+        kithara_integration_tests::offline::LOCAL_LOAD_DEADLINE,
+    )
+    .await
+    .expect("the selected item is loaded");
 
     let mut peak = 0.0_f32;
     for _ in 0..BLOCKS {

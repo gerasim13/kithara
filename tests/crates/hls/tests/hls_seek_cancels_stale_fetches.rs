@@ -11,7 +11,7 @@ use kithara::{
     hls::HlsEvent,
     platform::{
         time,
-        time::{Duration, Instant},
+        time::{Duration, WallInstant},
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
@@ -224,7 +224,7 @@ async fn hls_seek_near_end_skips_prefix(
     // sits at an index past `pre_seek`.
     let pre_seek = probe_recorder.events().len();
 
-    let seek_at = Instant::now();
+    let seek_at = WallInstant::now();
     queue
         .run(move |q| q.seek(target_seconds))
         .await
@@ -298,10 +298,9 @@ async fn hls_seek_near_end_skips_prefix(
         Some(scheduler_variant),
         "the reader and the replacement fetch plan must name the same variant"
     );
-    assert!(
-        (u64::try_from(target_floor).expect("target floor fits u64")
-            ..=u64::try_from(target_segment).expect("target fits u64"))
-            .contains(&scheduler_segment),
+    assert_eq!(
+        scheduler_segment,
+        u64::try_from(target_floor).expect("target floor fits u64"),
         "the replacement fetch plan must start at the reader's seek target: {scheduler_segment} vs {target_segment}"
     );
     let reset_index = probe_events
@@ -404,7 +403,7 @@ async fn hls_seek_near_end_skips_prefix(
 
 async fn observe_post_seek(
     rx: &mut kithara::events::EventReceiver<TestEvent>,
-    _seek_at: Instant,
+    _seek_at: WallInstant,
     pre_seek_enqueued: &HashSet<RequestId>,
 ) -> PostSeekObservation {
     let mut obs = PostSeekObservation::default();

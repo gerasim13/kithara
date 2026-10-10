@@ -2,7 +2,12 @@
 
 use std::num::NonZeroU32;
 
-use kithara::{events::TrackId, play::PlayerEvent, signal::AudioSpec};
+use kithara::{
+    events::TrackId,
+    platform::time::{Duration, WallInstant},
+    play::PlayerEvent,
+    signal::AudioSpec,
+};
 use kithara_integration_tests::offline::{OfflinePlayer, OfflinePlayerOptions};
 use kithara_test_fixtures::integration_fixtures::constant_half;
 
@@ -46,11 +51,8 @@ async fn the_lane_keeps_source_and_player_clock_at_its_applied_rate(constant_hal
         .with_queue(move |player| player.set_default_rate(FAST_RATE))
         .await
         .expect("a finite rate is accepted");
-    let deadline =
-        kithara_platform::time::Instant::now() + kithara_platform::time::Duration::from_secs(5);
-    while oracle.player().default_rate() != FAST_RATE
-        && kithara_platform::time::Instant::now() < deadline
-    {
+    let deadline = WallInstant::now() + Duration::from_secs(5);
+    while oracle.player().default_rate() != FAST_RATE && WallInstant::now() < deadline {
         let _ = oracle.render(BLOCK_FRAMES).await;
         oracle.tick_and_drain().await;
         kithara::platform::time::sleep(kithara::platform::time::Duration::from_millis(5)).await;
@@ -128,17 +130,13 @@ async fn loaded_harness(constant_half: &'static [u8], rate: f32) -> OfflinePlaye
         })
         .await;
 
-    let deadline =
-        kithara_platform::time::Instant::now() + kithara_platform::time::Duration::from_secs(5);
+    let deadline = WallInstant::now() + Duration::from_secs(5);
     while !harness
         .player()
         .current()
         .is_some_and(|track| track.status == kithara::queue::TrackStatus::Loaded)
     {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "WAV lane becomes loaded"
-        );
+        assert!(WallInstant::now() < deadline, "WAV lane becomes loaded");
         let _ = harness.render(BLOCK_FRAMES).await;
         let _ = harness.tick_and_drain().await;
         kithara::platform::time::sleep(kithara::platform::time::Duration::from_millis(5)).await;

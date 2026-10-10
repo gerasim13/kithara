@@ -63,6 +63,7 @@ where
             },
             None,
             pools,
+            None,
         ),
         receiver,
         lane,
@@ -105,7 +106,7 @@ impl AudioSource for ScriptedSource {
     fn host_sample_rate(&self) -> Option<NonZeroU32> {
         None
     }
-    fn commit_source_end(&mut self, end: SourceEnd) {
+    fn commit_source_end(&mut self, end: SourceEnd, _meta: AudioChunkInfo) {
         self.commits.lock().push(end);
     }
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
@@ -140,7 +141,7 @@ async fn worker_preload_gate_fires_on_failure() {
     };
     let (mut node, _receiver, _lane) =
         prepared_node(ScriptedSource::new([TrackStep::Failed(failure)]), 32, 8).await;
-    let result = kithara_platform::time::timeout(Duration::from_secs(1), node.preload())
+    let result = kithara_platform::time::timeout(Duration::from_secs(1), preload(&mut node))
         .await
         .expect("decoder failure must complete the preload wait");
     assert_eq!(result, Err(failure));
@@ -230,7 +231,7 @@ async fn decoder_node_eof_under_backpressure() {
     assert_eq!(node.tick(), TickResult::Progress);
     assert!(node.terminal.is_some());
     assert!(matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if packet.meta.end_of_track));
-    assert_eq!(node.tick(), TickResult::Waiting);
+    assert_eq!(node.tick(), TickResult::Backpressured);
     assert!(
         receiver.pop().is_none(),
         "current-segment EOF publishes exactly once"
@@ -243,8 +244,8 @@ async fn decoder_node_does_not_republish_exhausted_warp_source_eof() {
     assert_eq!(node.tick(), TickResult::Progress);
     assert_eq!(node.tick(), TickResult::Progress);
     assert!(matches!(receiver.pop(), Some(PcmPacket::Chunk(packet)) if packet.meta.end_of_track));
-    assert_eq!(node.tick(), TickResult::Waiting);
-    assert_eq!(node.tick(), TickResult::Waiting);
+    assert_eq!(node.tick(), TickResult::Backpressured);
+    assert_eq!(node.tick(), TickResult::Backpressured);
     assert!(receiver.pop().is_none(), "one terminal packet");
 }
 

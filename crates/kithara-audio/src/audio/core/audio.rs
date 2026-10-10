@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara_decode::{DecodeError, TrackMetadata};
-use kithara_events::EventBus;
+use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stream::{Activity, ActivityWriter, PlayheadWrite};
@@ -26,7 +26,9 @@ use crate::{
 pub struct Audio<S> {
     source: Box<dyn AudioSource<Chunk = AudioChunk>>,
     playhead: Arc<dyn PlayheadWrite>,
-    bus: EventBus,
+    emit: Arc<DeferredBus<crate::AudioLaneEvent>>,
+    seek_pending: bool,
+    last_progress_emit: Option<u64>,
     metadata: TrackMetadata,
     abr: Option<kithara_abr::AbrHandle>,
     activity: Activity,
@@ -48,7 +50,9 @@ impl<S> Audio<S> {
         Self {
             source,
             playhead: context.playhead,
-            bus: context.bus,
+            emit: context.emit,
+            seek_pending: false,
+            last_progress_emit: None,
             metadata: context.metadata,
             abr: context.abr,
             activity: context.activity,
@@ -126,6 +130,8 @@ impl<S> Audio<S> {
     /// # Errors
     /// Returns a source or decoder failure without rebuilding for a seek failure.
     pub fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
+        self.seek_pending = false;
+        self.last_progress_emit = None;
         if let Some(failure) = self.failure {
             return Err(AudioReadError::Stream {
                 what: "seek decoded source",
@@ -208,8 +214,10 @@ impl<S> Audio<S> {
         if let ChunkOutcome::Chunk(chunk) = &outcome {
             self.cursor.begin_chunk(chunk);
             self.playhead.advance(&chunk_position(&chunk.meta));
-            self.source
-                .commit_source_end(source_end(&chunk.meta, u64::from(chunk.meta.frames))?);
+            self.source.commit_source_end(
+                source_end(&chunk.meta, u64::from(chunk.meta.frames))?,
+                chunk.meta,
+            );
         }
         Ok(outcome)
     }
@@ -288,8 +296,10 @@ impl<S> Audio<S> {
             let copied =
                 self.cursor
                     .copy_into(chunk, span, &mut output, written, self.playhead.as_ref())?;
-            self.source
-                .commit_source_end(source_end(&chunk.meta, self.cursor.consumed_frames())?);
+            self.source.commit_source_end(
+                source_end(&chunk.meta, self.cursor.consumed_frames())?,
+                chunk.meta,
+            );
             written += copied.count;
             output_frames = output_frames.saturating_add(copied.output_frames);
             source_span = match (source_span, copied.source_span) {
@@ -376,7 +386,7 @@ impl<S> AudioSession for Audio<S> {
     }
 
     fn event_bus(&self) -> &EventBus {
-        &self.bus
+        self.emit.bus()
     }
 }
 impl<S> AudioControl for Audio<S> {
@@ -391,14 +401,58 @@ impl<S> AudioControl for Audio<S> {
 impl<S: 'static> AudioSource for Audio<S> {
     type Chunk = AudioChunk;
 
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
+        let outcome = self.seek(position)?;
+        self.seek_pending = matches!(outcome, SeekOutcome::Landed { .. });
+        Ok(outcome)
+    }
+
+    fn commit_source_end(&mut self, end: SourceEnd, meta: AudioChunkInfo) {
+        self.source.commit_source_end(end, meta);
+        if meta.frames == 0 {
+            return;
+        }
+        self.playhead.advance(&chunk_position(&meta));
+        if self.seek_pending {
+            self.seek_pending = false;
+            self.emit.enqueue(crate::AudioEvent::SeekLifecycle {
+                stage: crate::SeekLifecycleStage::OutputCommitted,
+                location: crate::SegmentLocation::new(
+                    meta.variant_index,
+                    meta.segment_index,
+                    None,
+                    None,
+                ),
+            });
+            self.emit.enqueue(crate::AudioEvent::SeekComplete {
+                position: meta.timestamp,
+            });
+        }
+        let position_ms = u64::try_from(self.position().as_millis()).unwrap_or(u64::MAX);
+        if self.last_progress_emit.is_some_and(|last| {
+            position_ms.abs_diff(last) < crate::consts::PROGRESS_EMIT_MIN_DELTA_MS
+        }) {
+            return;
+        }
+        self.last_progress_emit = Some(position_ms);
+        let total_ms = self
+            .duration()
+            .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX));
+        let decoded_ms =
+            u64::try_from(self.playhead.decoded_frontier().as_millis()).unwrap_or(u64::MAX);
+        self.emit.enqueue(crate::AudioEvent::PlaybackProgress {
+            position_ms,
+            total_ms,
+            buffered_ms: Some(total_ms.map_or(decoded_ms, |total| decoded_ms.min(total))),
+        });
+    }
+
     delegate::delegate! {
         to self {
-            fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError>;
             fn set_host_sample_rate(&mut self, rate: NonZeroU32);
         }
         to self.source {
             fn host_sample_rate(&self) -> Option<NonZeroU32>;
-            fn commit_source_end(&mut self, end: SourceEnd);
             fn discontinuity(&self) -> Option<crate::SourceDiscontinuity>;
             fn finish_deferred(&mut self);
             fn prepare_deferred(&mut self) -> Option<AudioSpec>;
@@ -438,5 +492,135 @@ impl<S: 'static> AudioSource for Audio<S> {
             }
         }
         self.source.step_track()
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::mock::{prepared_audio, produced_audio};
+
+    #[kithara::test(native, tokio)]
+    async fn lane_seek_events_publish_once_in_commit_order_without_open_seek_completion() {
+        use crate::{AudioEvent, AudioSource, SeekLifecycleStage, SeekOutcome};
+
+        let mut audio = prepared_audio().await;
+        audio.warm_up();
+        let mut events = audio.events::<AudioEvent>();
+        audio.seek(Duration::ZERO).expect("open-time positioning");
+        let chunk = produced_audio(&mut audio);
+        let end = source_end(&chunk.meta, u64::from(chunk.meta.frames)).expect("source boundary");
+        audio.commit_source_end(end, chunk.meta);
+        audio.finish_deferred();
+        while let Ok(envelope) = events.try_recv() {
+            assert!(!matches!(envelope.event, AudioEvent::SeekComplete { .. }));
+            assert!(!matches!(
+                envelope.event,
+                AudioEvent::SeekLifecycle {
+                    stage: SeekLifecycleStage::OutputCommitted,
+                    ..
+                }
+            ));
+        }
+
+        for target in [Duration::from_millis(20), Duration::from_millis(40)] {
+            assert!(matches!(
+                AudioSource::seek(&mut audio, target),
+                Ok(SeekOutcome::Landed { .. })
+            ));
+            let chunk = produced_audio(&mut audio);
+            audio.finish_deferred();
+            let mut stages = Vec::new();
+            while let Ok(envelope) = events.try_recv() {
+                match envelope.event {
+                    AudioEvent::SeekLifecycle { stage, .. } => stages.push(stage),
+                    AudioEvent::SeekComplete { .. } => panic!("seek completed before admission"),
+                    _ => {}
+                }
+            }
+            assert_eq!(
+                stages,
+                [
+                    SeekLifecycleStage::SeekRequest,
+                    SeekLifecycleStage::SeekApplied
+                ]
+            );
+            let end =
+                source_end(&chunk.meta, u64::from(chunk.meta.frames)).expect("source boundary");
+            audio.commit_source_end(end, chunk.meta);
+            assert!(
+                events.try_recv().is_err(),
+                "commit is deferred until the shell flush"
+            );
+            audio.finish_deferred();
+            assert!(matches!(events.try_recv().expect("output commit").event,
+                AudioEvent::SeekLifecycle { stage: SeekLifecycleStage::OutputCommitted, location }
+                    if location.variant == chunk.meta.variant_index
+                        && location.segment_index == chunk.meta.segment_index));
+            assert!(matches!(events.try_recv().expect("seek complete").event,
+                AudioEvent::SeekComplete { position } if position == chunk.meta.timestamp));
+            stages.push(SeekLifecycleStage::OutputCommitted);
+            assert_eq!(
+                stages,
+                [
+                    SeekLifecycleStage::SeekRequest,
+                    SeekLifecycleStage::SeekApplied,
+                    SeekLifecycleStage::OutputCommitted,
+                ]
+            );
+            assert_eq!(audio.position(), chunk.meta.end_timestamp);
+            audio.commit_source_end(end, chunk.meta);
+            audio.finish_deferred();
+            while let Ok(envelope) = events.try_recv() {
+                assert!(!matches!(envelope.event, AudioEvent::SeekComplete { .. }));
+                assert!(!matches!(
+                    envelope.event,
+                    AudioEvent::SeekLifecycle {
+                        stage: SeekLifecycleStage::OutputCommitted,
+                        ..
+                    }
+                ));
+            }
+        }
+    }
+
+    #[kithara::test(native, tokio)]
+    async fn committed_progress_is_throttled_by_one_hundred_milliseconds() {
+        use crate::{AudioEvent, AudioSource, SourceEnd};
+
+        let mut audio = prepared_audio().await;
+        audio.warm_up();
+        let chunk = produced_audio(&mut audio);
+        audio.finish_deferred();
+        let mut events = audio.events::<AudioEvent>();
+        audio
+            .playhead
+            .set_duration(Some(Duration::from_millis(1_000)));
+        audio
+            .playhead
+            .set_decoded_frontier(Duration::from_millis(1_500));
+        for millis in [10, 50, 110] {
+            let mut meta = chunk.meta;
+            meta.frames = 1;
+            meta.end_timestamp = Duration::from_millis(millis);
+            let frame = meta
+                .spec
+                .frame_at(meta.end_timestamp)
+                .expect("committed frame");
+            audio.commit_source_end(SourceEnd::new(frame, meta.spec.sample_rate), meta);
+        }
+        assert!(events.try_recv().is_err(), "progress is deferred");
+        audio.finish_deferred();
+        for expected in [10, 110] {
+            assert!(matches!(events.try_recv().expect("progress").event,
+                AudioEvent::PlaybackProgress { position_ms, total_ms: Some(1_000), buffered_ms: Some(1_000) }
+                    if position_ms == expected));
+        }
+        assert!(
+            events.try_recv().is_err(),
+            "the middle commit stays throttled"
+        );
     }
 }

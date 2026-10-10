@@ -7,7 +7,7 @@ use kithara::{
     platform::{
         CancelToken,
         thread::{active_named_thread_count, sleep as thread_sleep},
-        time::{Duration, Instant},
+        time::{Duration, WallInstant},
     },
     play::{PlayWorker, PlayWorkerConfig},
 };
@@ -27,7 +27,7 @@ use tracing::info;
 const QUIESCE_WATCHDOG: Duration = Duration::from_secs(30);
 
 fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
-    let deadline = Instant::now() + timeout;
+    let deadline = WallInstant::now() + timeout;
 
     loop {
         let last_count = active_named_thread_count();
@@ -39,7 +39,7 @@ fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
             }
         }
 
-        if Instant::now() >= deadline {
+        if WallInstant::now() >= deadline {
             return last_count;
         }
 
@@ -174,7 +174,10 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         .initial_abr_mode(AbrMode::manual(0))
         .build();
     let config: AudioConfig<Hls<TestPools>> = AudioConfig::for_stream(hls_config).build();
-    let a1 = kithara_integration_tests::mock::load_audio(&shared_worker, config)
+    let mut loader = kithara_integration_tests::mock::LaneLoader::new(&shared_worker)
+        .expect("start shared-worker dispatcher");
+    let a1 = loader
+        .load(config)
         .await
         .expect("open first shared-worker track");
 
@@ -185,7 +188,8 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         .initial_abr_mode(AbrMode::manual(1))
         .build();
     let config: AudioConfig<Hls<TestPools>> = AudioConfig::for_stream(hls_config2).build();
-    let a2 = kithara_integration_tests::mock::load_audio(&shared_worker, config)
+    let a2 = loader
+        .load(config)
         .await
         .expect("open second shared-worker track");
 
@@ -196,7 +200,8 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         .initial_abr_mode(AbrMode::manual(0))
         .build();
     let config: AudioConfig<Hls<TestPools>> = AudioConfig::for_stream(drm_config).build();
-    let a3 = kithara_integration_tests::mock::load_audio(&shared_worker, config)
+    let a3 = loader
+        .load(config)
         .await
         .expect("open third shared-worker track");
 
@@ -218,6 +223,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     );
 
     drop(audios);
+    drop(loader);
     cancel.cancel();
     drop(shared_worker);
     drop(shared_hub);

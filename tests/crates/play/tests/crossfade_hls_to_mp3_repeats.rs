@@ -47,6 +47,7 @@ async fn hls_server(saw_segments: &'static [u8]) -> CreatedHls {
         .create_hls(
             HlsFixtureBuilder::new()
                 .custom_data(Arc::new(saw_segments.to_vec()))
+                .codecs("wav".to_string())
                 .segment_duration_secs(segment_duration)
                 .segment_size(HLS_SEGMENT_SIZE)
                 .segments_per_variant(HLS_SEGMENT_COUNT),

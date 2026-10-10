@@ -155,8 +155,8 @@ impl<S> PlayWorker<S> {
         inbox: Inbox<DispatcherProtocol<I>>,
     ) -> Result<TaskHandle, LoadRefusal>
     where
-        I: Open + Send + 'static,
-        I::Opened: Send + 'static,
+        I: Open + kithara_platform::maybe_send::MaybeSend + 'static,
+        I::Opened: kithara_platform::maybe_send::MaybeSend + 'static,
         I::Lane: LaneTask,
     {
         let capacity = self.0.capacity;
@@ -176,7 +176,7 @@ impl<S> PlayWorker<S>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    /// Open once, position synchronously, then preload the worker-owned lane.
+    /// Open once, position synchronously, and assemble the worker-owned lane.
     ///
     /// # Errors
     /// Returns cancellation, source/decoder, invalid ring geometry, or pool failures.
@@ -215,10 +215,7 @@ where
                 detail: "lane preload quota exceeds PCM ring capacity",
             }));
         }
-        // The assembly scope ends before the preload await, so the moved source,
-        // renderer, and decoder stay out of the callers' inline future state;
-        // only the boxed lane crosses it.
-        let (receiver, mut lane) = {
+        let (receiver, lane) = {
             let wake = StreamWake::new(self.0.dispatcher.wake_handle());
             // Keep cold source preparation out of the callers' inline future state.
             let mut audio = Box::pin(Audio::<Stream<T>>::prepare(
@@ -291,10 +288,10 @@ where
                 initial,
                 engine_load,
                 self.pools().clone(),
+                cancel.clone(),
             ));
             (receiver, lane)
         };
-        let preloaded = lane.preload().await;
         if self.0.dispatcher.is_cancelled()
             || cancel
                 .as_ref()
@@ -302,7 +299,6 @@ where
         {
             return Err(LoadRefusal::Cancelled);
         }
-        preloaded.map_err(LoadRefusal::Source)?;
         let latency = lane.engine_latency();
         Ok((receiver, *lane, latency))
     }

@@ -8,7 +8,7 @@ use kithara::{
     events::{EventBus, EventReceiver},
     host::{HostConfig, HostSettings},
     platform::{
-        time::{Duration, Instant, sleep},
+        time::{Duration, WallInstant, sleep},
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
@@ -341,7 +341,14 @@ async fn prepare_player(
         .set_volume(0.9)
         .await
         .expect("the player takes the volume");
-    player.load_config(config).await;
+    let id = player.load_config(config).await;
+    player
+        .render_until_current(
+            id,
+            BLOCK_FRAMES,
+            WallInstant::now() + kithara_integration_tests::offline::LOCAL_LOAD_DEADLINE,
+        )
+        .await;
     let abr = player
         .player()
         .current_abr_handle()
@@ -355,7 +362,7 @@ async fn prepare_player(
     // now asks for exactly the frames still missing, so it lands on
     // `capture_frame` whatever the pipeline did on the way there.
     let capture_frame = capture_frame_target();
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = WallInstant::now() + Duration::from_secs(15);
     let mut active_blocks = 0usize;
     let mut decoder_events = drain_decoder_events(&mut events, 0);
     loop {
@@ -381,7 +388,7 @@ async fn prepare_player(
             break;
         }
         assert!(
-            Instant::now() <= deadline,
+            WallInstant::now() <= deadline,
             "timed out preparing {label}: initial={initial_variant}, current={:?}, position={:.3}",
             abr.current_variant_index(),
             player.position(),

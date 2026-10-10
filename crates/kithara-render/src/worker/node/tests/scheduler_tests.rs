@@ -187,7 +187,7 @@ async fn worker_preload_gate_fires(
 ) {
     let (mut node, _receiver, _lane) =
         prepared_node(MockSource::new(pools(), chunks), 32, preload).await;
-    platform_timeout(Duration::from_secs(1), node.preload())
+    platform_timeout(Duration::from_secs(1), preload::preload(&mut node))
         .await
         .expect(message)
         .expect("preload succeeds");
@@ -198,7 +198,7 @@ async fn worker_preload_gate_fires(
 async fn worker_preload_reports_failure() {
     let (mut node, mut receiver, _lane) = prepared_node(FailingSource, 32, 8).await;
     assert!(
-        platform_timeout(Duration::from_secs(1), node.preload())
+        platform_timeout(Duration::from_secs(1), preload(&mut node))
             .await
             .expect("failure terminates preload")
             .is_err()
@@ -209,7 +209,7 @@ async fn worker_preload_reports_failure() {
 #[kithara::test(tokio)]
 async fn worker_preload_gate_reopens_after_seek() {
     let (mut node, _receiver, mut lane) = prepared_node(MockSource::new(pools(), 10), 32, 1).await;
-    platform_timeout(Duration::from_secs(1), node.preload())
+    platform_timeout(Duration::from_secs(1), preload(&mut node))
         .await
         .expect("initial preload")
         .expect("preload succeeds");
@@ -217,7 +217,7 @@ async fn worker_preload_gate_reopens_after_seek() {
     let id = segment(&mut lane);
     node.synchronize().expect("new segment");
     assert!(!node.source.is_preloaded());
-    platform_timeout(Duration::from_secs(1), node.preload())
+    platform_timeout(Duration::from_secs(1), preload(&mut node))
         .await
         .expect("post-segment preload")
         .expect("preload succeeds");
