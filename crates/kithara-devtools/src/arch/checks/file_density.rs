@@ -51,3 +51,71 @@ impl Check for FileDensity {
         Ok(violations)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use cargo_metadata::MetadataCommand;
+
+    use super::*;
+    use crate::{
+        arch::{
+            checks::{fn_arg_count::FnArgCount, no_lib_statics::NoLibStatics},
+            config::ArchConfig,
+        },
+        common::scope::Scope,
+    };
+
+    #[test]
+    fn checks_measure_only_production_items_before_aggregation() {
+        let dir = tempfile::tempdir().expect("temporary workspace");
+        let crate_root = dir.path().join("crates/fixture");
+        let src = crate_root.join("src");
+        fs::create_dir_all(&src).expect("create source directory");
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/fixture\"]\nresolver = \"2\"\n",
+        )
+        .expect("write workspace manifest");
+        fs::write(
+            crate_root.join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        )
+        .expect("write crate manifest");
+        fs::write(
+            src.join("lib.rs"),
+            r#"
+struct Real;
+impl Real { fn production(&self, a: u8) {} }
+#[cfg(test)]
+mod fixtures {
+    fn helper(a: u8, b: u8) {}
+    fn second() {}
+    static FIXTURE: u8 = 0;
+}
+"#,
+        )
+        .expect("write crate source");
+        fs::write(
+            src.join("fixture.rs"),
+            "#![cfg(test)]\nstatic FIXTURE: u8 = 0;\nfn helper(a: u8, b: u8) {}\nfn second() {}",
+        )
+        .expect("write test-only source");
+        let metadata = MetadataCommand::new()
+            .manifest_path(dir.path().join("Cargo.toml"))
+            .no_deps()
+            .exec()
+            .expect("fixture cargo metadata");
+        let mut config = ArchConfig::default();
+        config.thresholds.file_density.min_fns_to_evaluate = 2;
+        config.thresholds.file_density.warn_fns_per_type = 2.0;
+        config.thresholds.fn_arg_count.warn = 2;
+        let scope = Scope::default();
+        let ctx = Context::new(&config, &metadata, dir.path(), &scope);
+
+        assert!(FileDensity.run(&ctx).expect("density findings").is_empty());
+        assert!(FnArgCount.run(&ctx).expect("argument findings").is_empty());
+        assert!(NoLibStatics.run(&ctx).expect("global findings").is_empty());
+    }
+}
