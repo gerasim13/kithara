@@ -25,7 +25,7 @@ use super::{
     graph::tap,
     protocol::{SessionError, StartStreamFn},
     queue::HostProtocol,
-    transport::{SessionGridGeneration, TransportEvent, TransportObservation, install},
+    transport::{SessionGridGeneration, SessionInboxReturnNode, TransportObservation, install},
 };
 use crate::{
     DeckId,
@@ -108,7 +108,6 @@ struct RootSnapshot {
     decks: Box<[BeatGridId]>,
     grid: BeatGridSnapshot,
     settings: HostSettings,
-    transport_event: Option<TransportEvent>,
 }
 
 /// What the session last published: its decks, grid and settings, and the
@@ -127,7 +126,6 @@ impl RootView {
                 settings,
                 decks: Box::default(),
                 grid: root.grid.clone(),
-                transport_event: None,
             })),
             output: SessionOutputView::new(settings.sample_rate()),
         }
@@ -146,7 +144,6 @@ impl RootView {
             settings,
             decks: snapshot.decks.clone(),
             grid: root.grid.clone(),
-            transport_event: snapshot.transport_event.clone(),
         }));
         self.output.publish(sample_rate, stream_shape);
     }
@@ -158,19 +155,6 @@ impl RootView {
             decks,
             grid: snapshot.grid.clone(),
             settings: snapshot.settings,
-            transport_event: snapshot.transport_event.clone(),
-        }));
-    }
-
-    /// Publishes the latest transport fact in the shared root snapshot.
-    pub(crate) fn publish_transport_event(&self, event: &TransportEvent) {
-        let snapshot = self.root.load();
-        self.root.store(Arc::new(RootSnapshot {
-            applied: snapshot.applied,
-            decks: snapshot.decks.clone(),
-            grid: snapshot.grid.clone(),
-            settings: snapshot.settings,
-            transport_event: Some(event.clone()),
         }));
     }
 
@@ -192,9 +176,6 @@ impl RootView {
             #[call(load)]
             #[expr($.settings)]
             pub(crate) fn settings(&self) -> HostSettings;
-            #[call(load)]
-            #[expr($.transport_event.clone())]
-            pub(crate) fn transport_event(&self) -> Option<TransportEvent>;
         }
         to self.output {
             #[call(get)]
@@ -327,6 +308,16 @@ impl<T, S> SessionState<T, S> {
         };
         state.publish_root();
         state
+    }
+
+    pub(crate) fn begin_iteration(&mut self) {
+        self.iteration_clock = self.ctx.as_ref().and_then(|ctx| {
+            let _ = ctx.stream_info()?;
+            Some((
+                SessionFrame::new(ctx.audio_clock().samples.0),
+                self.delivery(),
+            ))
+        });
     }
 
     /// Rejects a timed change that cannot reach the render executor in this pass.
@@ -466,6 +457,7 @@ fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), Ses
     let session_id = add_graph_node(fw_ctx, MasterNode)?;
     let limiter_id = add_graph_node(fw_ctx, limiter)?;
     let metronome_id = add_graph_node(fw_ctx, metronome)?;
+    let inbox_return_id = add_graph_node(fw_ctx, SessionInboxReturnNode)?;
     let graph_out = fw_ctx.graph_out_node_id();
     fw_ctx
         .connect(session_id, limiter_id, &[(0, 0), (1, 1)], false)
@@ -478,9 +470,14 @@ fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), Ses
             SessionError::Graph(format!("connect limiter to metronome failed: {err}"))
         })?;
     fw_ctx
-        .connect(metronome_id, graph_out, &[(0, 0), (1, 1)], false)
+        .connect(metronome_id, inbox_return_id, &[(0, 0), (1, 1)], false)
         .map_err(|err| {
-            SessionError::Graph(format!("connect metronome to graph_out failed: {err}"))
+            SessionError::Graph(format!("connect metronome to inbox return failed: {err}"))
+        })?;
+    fw_ctx
+        .connect(inbox_return_id, graph_out, &[(0, 0), (1, 1)], false)
+        .map_err(|err| {
+            SessionError::Graph(format!("connect inbox return to graph_out failed: {err}"))
         })?;
     if let Err(err) = fw_ctx.update() {
         warn!("session graph update after output init failed: {err:?}");

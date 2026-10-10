@@ -1,7 +1,10 @@
 mod core;
+mod fade;
 mod feeder_tests;
+mod gate;
 mod resource_internal;
 mod ring_tests;
+mod state;
 mod terminal_tests;
 mod underrun_tests;
 

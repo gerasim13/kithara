@@ -5698,6 +5698,7 @@ dependencies = [
  "fieldwork",
  "firewheel",
  "firewheel-web-audio",
+ "kithara-assets",
  "kithara-audio",
  "kithara-bufpool",
  "kithara-command",
@@ -5705,6 +5706,7 @@ dependencies = [
  "kithara-dsp",
  "kithara-effects",
  "kithara-events",
+ "kithara-host",
  "kithara-output",
  "kithara-platform",
  "kithara-play",
@@ -6198,6 +6200,7 @@ dependencies = [
  "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "num-traits",
  "rangemap",
  "serde",
 ]

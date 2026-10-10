@@ -66,6 +66,7 @@ impl<T> GraphSession<T> {
     }
 
     pub(crate) fn tick(&mut self) -> Result<(), SessionError> {
+        self.state.begin_iteration();
         tick_session(&mut self.state)?;
         self.settle();
         Ok(())
@@ -120,6 +121,7 @@ impl<T> GraphSession<T> {
         change: HostSettingsChange,
         at: When<kithara_signal::SessionFrame>,
     ) -> Result<(), PlayError> {
+        self.state.begin_iteration();
         self.state.exec(change, at, &mut ())?;
         self.state
             .channel

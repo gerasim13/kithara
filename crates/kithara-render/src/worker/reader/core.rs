@@ -116,6 +116,20 @@ impl PcmReceiver {
         self.position
     }
 
+    pub(crate) fn frames_until_eof(&self, lane: crate::LaneFrame) -> Option<usize> {
+        let PcmPacket::Chunk(chunk) = self.forward.last()? else {
+            return None;
+        };
+        if !chunk.meta.end_of_track || chunk.meta.segment != lane.segment {
+            return None;
+        }
+        let end = chunk
+            .meta
+            .lane_frame
+            .checked_add(u64::try_from(chunk.frames()).ok()?)?;
+        usize::try_from(end.checked_sub(lane.frame)?).ok()
+    }
+
     #[must_use]
     pub fn decoded_frontier(&self) -> Duration {
         match self.forward.last() {

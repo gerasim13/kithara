@@ -64,8 +64,7 @@ fn packet(input: &'static [u8], frames: usize, source: u64, segment: SegmentId) 
         .take(frames * 2)
         .map(|bytes| f32::from_le_bytes(bytes.try_into().expect("sample bytes")))
         .collect();
-    let mut pcm = chunk(spec(), segment, 0, source, &samples);
-    pcm.meta.end_of_track = true;
+    let pcm = chunk(spec(), segment, 0, source, &samples);
     PcmPacket::Chunk(Box::new(pcm))
 }
 fn make_track_with(input: &'static [u8], seconds: f64, _slot: Slot) -> Fixture {
@@ -514,6 +513,9 @@ async fn read_outcome_partial_then_eof(constant_half: &'static [u8]) {
 async fn a_buffered_eof_corrects_an_overestimated_duration(constant_half: &'static [u8]) {
     let mut packets = PacketRing::new(spec(), Duration::from_secs(60), 4);
     packets.push(packet(constant_half, 900, 0, SegmentId::FIRST));
+    let mut terminal = chunk(spec(), SegmentId::FIRST, 900, 900, &[]);
+    terminal.meta.end_of_track = true;
+    packets.push(PcmPacket::Chunk(Box::new(terminal)));
     let resource = PlayerResource::new(
         PcmConsumer::new(packets.receiver.take().expect("receiver")),
         Arc::from("misreported.mp3"),

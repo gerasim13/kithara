@@ -133,6 +133,42 @@ impl<E: SessionInbox> DeckMixer<E> {
         }
     }
 
+    pub(super) fn render_block(
+        &mut self,
+        level: Option<LevelInbox<'_, DeckProtocol>>,
+        context: Option<&RenderContext>,
+        start: SessionFrame,
+        buffers: &mut ProcBuffers,
+        frames: usize,
+    ) -> bool {
+        for channel in buffers.outputs.iter_mut() {
+            channel.fill(0.0);
+        }
+        let mut sounded = false;
+        if !self.retired {
+            if let Some(mut level) = level {
+                sounded = self.render_block_in(&mut level, context, start, buffers, frames);
+                if level.is_closing() && self.deck.tails_quiet() {
+                    level.retire();
+                    self.retired = true;
+                }
+            } else {
+                self.retired = true;
+            }
+            if self.retired {
+                for (_, track) in self.deck.tracks.iter_mut() {
+                    track.shut();
+                }
+            }
+        }
+        self.blocks = self.blocks.saturating_add(1);
+        let end = SessionFrame::new(
+            i64::from(start).saturating_add(i64::try_from(frames).unwrap_or(i64::MAX)),
+        );
+        self.publish(end);
+        sounded
+    }
+
     pub(super) fn render_block_in(
         &mut self,
         level: &mut LevelInbox<'_, DeckProtocol>,
@@ -177,6 +213,11 @@ impl<E: SessionInbox> DeckMixer<E> {
                 .fold((frames - cursor).min(command_frames), usize::min)
                 .max(1);
             let end = cursor.saturating_add(span).min(frames);
+            let end = if cursor < self.capacity {
+                end.min(self.capacity)
+            } else {
+                end
+            };
             sounded |= self.deck.render_range(
                 context,
                 buffers,
@@ -339,9 +380,6 @@ impl<E: SessionInbox> AudioNodeProcessor for DeckMixer<E> {
         mut buffers: ProcBuffers,
         extra: &mut ProcExtra,
     ) -> ProcessStatus {
-        for channel in buffers.outputs.iter_mut() {
-            channel.fill(0.0);
-        }
         let start = SessionFrame::new(info.clock_samples.0);
         let geometry_valid = info.frames <= self.capacity
             && buffers.outputs.len() >= crate::consts::MIN_STEREO
@@ -357,38 +395,11 @@ impl<E: SessionInbox> AudioNodeProcessor for DeckMixer<E> {
             .ok()
             .filter(|_| geometry_valid)
             .cloned();
-        let mut sounded = false;
-        if !self.retired {
-            if let Some(mut level) = extra
-                .store
-                .try_get_mut::<E>()
-                .and_then(|session| session.scope(self.scope))
-            {
-                sounded = self.render_block_in(
-                    &mut level,
-                    context.as_ref(),
-                    start,
-                    &mut buffers,
-                    info.frames,
-                );
-                if level.is_closing() && self.deck.tails_quiet() {
-                    level.retire();
-                    self.retired = true;
-                }
-            } else {
-                self.retired = true;
-            }
-            if self.retired {
-                for (_, track) in self.deck.tracks.iter_mut() {
-                    track.shut();
-                }
-            }
-        }
-        self.blocks = self.blocks.saturating_add(1);
-        let end = SessionFrame::new(
-            i64::from(start).saturating_add(i64::try_from(info.frames).unwrap_or(i64::MAX)),
-        );
-        self.publish(end);
+        let level = extra
+            .store
+            .try_get_mut::<E>()
+            .and_then(|session| session.scope(self.scope));
+        let sounded = self.render_block(level, context.as_ref(), start, &mut buffers, info.frames);
         if sounded {
             ProcessStatus::OutputsModified
         } else {

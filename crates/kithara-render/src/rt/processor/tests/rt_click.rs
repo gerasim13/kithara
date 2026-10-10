@@ -141,7 +141,7 @@ fn block_from(processor: &mut TestMixer, start: SessionFrame) -> (Vec<f32>, bool
         outputs: &mut outputs,
     };
     processor.inbox.0.drain();
-    let mut level = processor
+    let level = processor
         .inbox
         .0
         .scope(processor.mixer.scope)
@@ -157,8 +157,8 @@ fn block_from(processor: &mut TestMixer, start: SessionFrame) -> (Vec<f32>, bool
         None,
     )
     .expect("context");
-    let read = processor.mixer.render_block_in(
-        &mut level,
+    let read = processor.mixer.render_block(
+        Some(level),
         Some(&context),
         start,
         &mut buffers,

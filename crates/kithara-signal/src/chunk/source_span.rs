@@ -4,6 +4,7 @@ use std::{
 };
 
 use kithara_platform::time::Duration;
+use num_traits::ToPrimitive;
 
 /// Decoded-source interval represented by a physical output interval.
 ///
@@ -55,6 +56,13 @@ fn fractional_nanos(numerator: u128, denominator: u128) -> u32 {
 }
 
 impl SourceSpan {
+    /// Source position in seconds at an output boundary, without nanosecond truncation.
+    #[must_use]
+    pub fn seconds_at(self, output_frame: u64) -> Option<f64> {
+        let (numerator, denominator) = self.source_ratio_at(output_frame)?;
+        Some(numerator.to_f64()? / denominator.get().to_f64()? / f64::from(self.sample_rate.get()))
+    }
+
     /// Source position at an output boundary, retaining rational phase.
     #[must_use]
     pub fn position_at(self, output_frame: u64) -> Option<Duration> {

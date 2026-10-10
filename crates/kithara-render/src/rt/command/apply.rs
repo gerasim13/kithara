@@ -124,7 +124,10 @@ impl Deck {
             DeckPart::Chain { from, to } => {
                 self.ended[to.index()] = false;
                 if let Some(track) = self.tracks.at_mut(to) {
-                    track.start(Fade::Declick);
+                    track.start(Fade::Crossfade(crate::CrossfadeSettings {
+                        duration: 0.0,
+                        ..Default::default()
+                    }));
                     track.snap_gate();
                 }
                 Some(DeckPart::Chain { from, to })

@@ -92,7 +92,7 @@ impl<R: Protocol, M: Protocol> ScopedInbox<R, M> {
         }
     }
 
-    /// With no running stream, drains and explicitly retires every closing scope.
+    /// With no executor turn in flight, drains and retires every closing scope.
     pub fn retire_closing(&mut self) {
         self.drain();
         for (index, scope) in (0..).zip(&mut self.scopes) {

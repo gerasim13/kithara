@@ -24,14 +24,21 @@ pub(crate) const DEFAULT_DECLICK: SmootherConfig = SmootherConfig {
 /// Frames of a replaced consumer a slot plays out of its tail.
 pub(crate) const DEFAULT_EVICT_FADE: FrameCount = FrameCount::new(512);
 
-/// Frames in one source chunk of a test lane.
-#[cfg(test)]
-pub(crate) const LANE_CHUNK_FRAMES: u32 = 4096;
-
 pub(crate) const ACTIVE_WAIT_TIMEOUT: Duration = Duration::from_millis(1);
 pub(crate) const BACKPRESSURE_POLL_INTERVAL: Duration = Duration::from_micros(250);
 
 pub(crate) const CAPACITY: NonZeroUsize = match NonZeroUsize::new(16) {
+    Some(value) => value,
+    None => unreachable!(),
+};
+
+pub(crate) const AUDIO_BUFFER_CHUNKS: NonZeroUsize =
+    match NonZeroUsize::new(if cfg!(target_arch = "wasm32") { 32 } else { 10 }) {
+        Some(value) => value,
+        None => unreachable!(),
+    };
+
+pub(crate) const PRELOAD_CHUNKS: NonZeroUsize = match NonZeroUsize::new(3) {
     Some(value) => value,
     None => unreachable!(),
 };

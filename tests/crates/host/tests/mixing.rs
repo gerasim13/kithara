@@ -54,6 +54,31 @@ const HARD_DUCKED: f32 = 0.04;
 /// More parts than a deck's ring holds between two blocks.
 const RING_OVERFILL: usize = 64;
 
+#[kithara::test(tokio)]
+async fn removing_a_non_last_offline_deck_settles_without_render_and_preserves_the_survivor(
+    constant_two: &'static [u8],
+) {
+    let mut harness = MixHarness::new(2).await;
+    harness.play(&[constant_two, constant_two]).await;
+    assert!(
+        harness.steady_peak().await > 0.1,
+        "both decks sound before removal"
+    );
+    let removed = harness.players.remove(0);
+    harness
+        .host
+        .with(move |host| host.remove(&removed))
+        .await
+        .expect("non-last removal settles without another render");
+    assert_eq!(harness.players.len(), 1);
+    let after = harness.steady().await;
+    assert!(
+        (peak(&after) - 0.2).abs() < TOL,
+        "the surviving deck still renders its own signal"
+    );
+    harness.close().await;
+}
+
 struct MixHarness {
     host: OfflineHostHarness<TestPools>,
     players: Vec<HostOwned<Queue<TestPools>>>,

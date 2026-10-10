@@ -3,8 +3,8 @@ use std::ops::Range;
 use kithara_audio::FailureSource;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_decode::TrackMetadata;
-use kithara_platform::{maybe_send::WasmSend, sync::Arc, time::Duration};
-use kithara_signal::{AudioChunk, AudioSpec, SegmentId, SessionFrame};
+use kithara_platform::{maybe_send::WasmSend, sync::Arc};
+use kithara_signal::{AudioChunk, AudioSpec, SegmentId, SessionFrame, SourceSpan};
 
 use super::PcmConsumer;
 use crate::{LaneFrame, bridge::SlotMark, worker::PcmPacket};
@@ -19,7 +19,7 @@ pub struct PlayerResource {
     pub(super) offset: usize,
     pub(super) lane: LaneFrame,
     #[field(get, vis = "pub(super)", copy)]
-    position: Duration,
+    position: Option<SourceSpan>,
     mapped: bool,
     awaiting_segment: bool,
     pub(super) eof: bool,
@@ -47,7 +47,6 @@ impl PlayerResource {
     where
         S: HasPool<f32>,
     {
-        let position = consumer.receiver.position();
         Ok(Self {
             src,
             consumer: WasmSend::new(consumer),
@@ -57,7 +56,7 @@ impl PlayerResource {
                 segment: SegmentId::FIRST,
                 frame: 0,
             },
-            position,
+            position: None,
             mapped: false,
             awaiting_segment: false,
             eof: false,
@@ -123,18 +122,7 @@ impl PlayerResource {
         if self.eof {
             return Some(0);
         }
-        let (packet, offset) = match self.packet.as_ref() {
-            Some(packet) => (packet, self.offset),
-            None => (self.consumer.get().receiver.peek()?, 0),
-        };
-        match packet {
-            PcmPacket::Chunk(chunk)
-                if chunk.meta.segment == self.lane.segment && chunk.meta.end_of_track =>
-            {
-                Some(chunk.frames().saturating_sub(offset))
-            }
-            PcmPacket::Chunk(_) | PcmPacket::Failed { .. } => None,
-        }
+        self.consumer.get().receiver.frames_until_eof(self.lane)
     }
 
     pub(super) fn set_playing(&mut self, playing: bool) {
@@ -145,7 +133,7 @@ impl PlayerResource {
         self.mapped.then_some(SlotMark {
             session,
             lane: self.lane,
-            position: self.position,
+            position: self.position?.position_at(0)?,
         })
     }
 
@@ -239,8 +227,8 @@ impl PlayerResource {
                     && chunk.frames() == 0 =>
             {
                 self.lane.frame = chunk.meta.lane_frame;
-                if let Some(position) = chunk_position(chunk, 0..0) {
-                    self.position = position;
+                if let Some(position) = chunk_position(chunk, 0) {
+                    self.position = Some(position);
                     self.mapped = true;
                 }
                 self.eof = true;
@@ -254,7 +242,9 @@ impl PlayerResource {
             }
             PcmPacket::Chunk(_) => return None,
         }
-        receiver.set_position(self.position);
+        if let Some(position) = self.position.and_then(|point| point.position_at(0)) {
+            receiver.set_position(position);
+        }
         self.packet = receiver.pop();
         let _ = self.return_packet();
         Some(self.failed.map_or(ReadOutcome::Eof, ReadOutcome::Failed))
@@ -273,17 +263,19 @@ impl PlayerResource {
                 .meta
                 .lane_frame
                 .checked_add(u64::try_from(offset).unwrap_or(u64::MAX))
-                .zip(chunk_position(chunk, offset..offset))
+                .zip(chunk_position(chunk, offset))
             {
                 self.lane.frame = frame;
-                self.position = position;
+                self.position = Some(position);
                 true
             } else {
                 false
             };
         }
-        if self.mapped {
-            self.consumer.get_mut().receiver.set_position(self.position);
+        if self.mapped
+            && let Some(position) = self.position.and_then(|point| point.position_at(0))
+        {
+            self.consumer.get_mut().receiver.set_position(position);
         }
     }
 
@@ -349,24 +341,25 @@ impl PlayerResource {
                 left[output] = chunk.samples[input];
                 right[output] = chunk.samples[input + usize::from(channels > 1)];
             }
-            let offset = self.offset;
             self.offset += count;
             written += count;
             self.mapped = if let Some((frame, position)) = chunk
                 .meta
                 .lane_frame
                 .checked_add(u64::try_from(self.offset).unwrap_or(u64::MAX))
-                .zip(chunk_position(chunk, offset..self.offset))
+                .zip(chunk_position(chunk, self.offset))
             {
                 self.lane.frame = frame;
-                self.position = position;
+                self.position = Some(position);
                 true
             } else {
                 false
             };
         }
-        if self.mapped {
-            self.consumer.get_mut().receiver.set_position(self.position);
+        if self.mapped
+            && let Some(position) = self.position.and_then(|point| point.position_at(0))
+        {
+            self.consumer.get_mut().receiver.set_position(position);
         }
         ReadOutcome::Full { frames: written }
     }
@@ -379,11 +372,8 @@ fn packet_segment(packet: &PcmPacket) -> SegmentId {
     }
 }
 
-fn chunk_position(chunk: &AudioChunk, range: Range<usize>) -> Option<Duration> {
+fn chunk_position(chunk: &AudioChunk, offset: usize) -> Option<SourceSpan> {
     let source = chunk.meta.source_span?;
-    let start = u64::try_from(range.start).ok()?;
-    let end = u64::try_from(range.end).ok()?;
-    source
-        .for_output_range(start..end)?
-        .position_at(end.checked_sub(start)?)
+    let offset = u64::try_from(offset).ok()?;
+    source.for_output_range(offset..offset)
 }

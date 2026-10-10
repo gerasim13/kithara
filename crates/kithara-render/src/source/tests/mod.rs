@@ -53,8 +53,9 @@ use kithara_warp::{SpeedCurve, StretchKind};
 use num_traits::AsPrimitive;
 
 use super::core::*;
-use crate::{LaneCommand, LaneFrame, LaneProtocol, LaneSetup, consts};
+use crate::{LaneCommand, LaneFrame, LaneProtocol, LaneSetup};
 
+mod consts;
 mod doubles;
 mod flow;
 mod lane;

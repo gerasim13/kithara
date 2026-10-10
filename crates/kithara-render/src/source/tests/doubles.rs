@@ -26,8 +26,8 @@ use kithara_warp::{SpeedCurve, StretchKind};
 ))]
 use num_traits::AsPrimitive;
 
-use super::*;
-use crate::{LaneCommand, LaneProtocol, consts};
+use super::{consts, *};
+use crate::{LaneCommand, LaneProtocol};
 
 #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 pub(in crate::source) fn keylock_backends() -> impl Iterator<Item = StretchKind> {

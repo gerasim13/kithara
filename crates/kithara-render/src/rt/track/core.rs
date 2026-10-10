@@ -77,7 +77,10 @@ impl PlayerTrack {
 
     #[must_use]
     pub fn position(&self) -> f64 {
-        self.resource.position().as_secs_f64()
+        self.resource
+            .position()
+            .and_then(|point| point.seconds_at(0))
+            .unwrap_or(0.0)
     }
 
     pub(crate) fn frames_until_boundary(&self) -> Option<usize> {
@@ -127,7 +130,10 @@ impl PlayerTrack {
         self.gap = 0;
         self.stop_resume = None;
         if self.state == SlotState::Playing {
-            self.fade.fade_out(self.settings(fade), self.sample_rate);
+            match fade {
+                Fade::Declick => self.fade.declick_out(self.settings(fade), self.sample_rate),
+                Fade::Crossfade(settings) => self.fade.fade_out(settings, self.sample_rate),
+            }
             let frames = i64::try_from(self.fade.remaining()).unwrap_or(i64::MAX);
             self.stop_at = Some(SessionFrame::new(i64::from(at).saturating_add(frames)));
             if self.fade.remaining() > 0 {
@@ -155,6 +161,10 @@ impl PlayerTrack {
         self.gap = 0;
         if ended {
             self.start(Fade::Declick);
+        } else if self.state == SlotState::Playing {
+            self.gate.steer(false);
+            self.gate.snap();
+            self.gate.steer(true);
         }
     }
 
@@ -205,91 +215,5 @@ impl PlayerTrack {
     pub fn into_resource(mut self) -> Box<PlayerResource> {
         self.resource.set_playing(false);
         self.resource
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_platform::time::Duration;
-    use kithara_signal::AudioSpec;
-    use kithara_test_utils::kithara;
-
-    use super::*;
-    use crate::{
-        rt::track::PcmConsumer,
-        test_pools::pools,
-        worker::{
-            PcmPacket,
-            packet_tests::{PacketRing, chunk},
-        },
-    };
-
-    #[kithara::test]
-    fn seek_targets_reject_unrepresentable_durations() {
-        assert!(Duration::try_from_secs_f64(f64::INFINITY).is_err());
-        assert!(Duration::try_from_secs_f64(f64::NAN).is_err());
-        assert_eq!(Duration::try_from_secs_f64(0.0), Ok(Duration::ZERO));
-        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
-        let mut ring = PacketRing::new(spec, Duration::from_secs(10), 1);
-        let resource = Box::new(
-            PlayerResource::new(
-                PcmConsumer::new(ring.receiver.take().expect("receiver")),
-                Arc::from("typed target"),
-                &pools(),
-            )
-            .expect("resource"),
-        );
-        let mut track = PlayerTrack::builder()
-            .sample_rate(spec.sample_rate)
-            .build(resource);
-        assert_eq!(track.mark(SessionFrame::new(0)), None);
-        ring.push(PcmPacket::Chunk(Box::new(chunk(
-            spec,
-            SegmentId::FIRST,
-            0,
-            0,
-            &[1.0; 2],
-        ))));
-        track.recycle_obsolete(&mut 1);
-        track.stop(Fade::Declick, SessionFrame::new(0));
-        assert_eq!(
-            track.stop_resume(),
-            Some(SlotMark {
-                session: SessionFrame::new(0),
-                lane: crate::LaneFrame {
-                    segment: SegmentId::FIRST,
-                    frame: 0
-                },
-                position: Duration::ZERO,
-            })
-        );
-    }
-
-    #[kithara::test]
-    #[case(SlotState::Playing, true)]
-    #[case(SlotState::Stopped, false)]
-    #[case(SlotState::Ended, false)]
-    fn slot_state_controls_receiver_activity(#[case] state: SlotState, #[case] expected: bool) {
-        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
-        let mut ring = PacketRing::new(spec, Duration::from_secs(1), 2);
-        let resource = Box::new(
-            PlayerResource::new(
-                PcmConsumer::new(ring.receiver.take().expect("receiver")),
-                Arc::from("activity"),
-                &pools(),
-            )
-            .expect("resource"),
-        );
-        let mut track = PlayerTrack::builder()
-            .sample_rate(spec.sample_rate)
-            .build(resource);
-        if state == SlotState::Playing {
-            track.start(Fade::Declick);
-        } else {
-            track.state = state;
-            track.shut();
-        }
-        assert_eq!(track.state(), state);
-        assert_eq!(ring.playing(), expected);
     }
 }

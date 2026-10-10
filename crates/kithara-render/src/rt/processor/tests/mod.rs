@@ -4,6 +4,7 @@ mod no_sync_deadline;
 mod player_processor_internal;
 mod rt_click;
 mod rt_metrics;
+mod transport;
 
 use std::num::{NonZeroU32, NonZeroUsize};
 

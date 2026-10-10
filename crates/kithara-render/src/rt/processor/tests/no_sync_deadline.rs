@@ -155,7 +155,7 @@ fn render_block(processor: &mut DeadlineMixer, out_l: &mut [f32], out_r: &mut [f
     )
     .expect("render context");
     processor.mixer.inbox.0.drain();
-    let mut level = processor
+    let level = processor
         .mixer
         .inbox
         .0
@@ -164,8 +164,7 @@ fn render_block(processor: &mut DeadlineMixer, out_l: &mut [f32], out_r: &mut [f
     processor
         .mixer
         .mixer
-        .render_block_in(&mut level, Some(&context), start, &mut buffers, frames);
-    processor.mixer.mixer.publish(end);
+        .render_block(Some(level), Some(&context), start, &mut buffers, frames);
 }
 
 fn assert_all_tracks_contributed(

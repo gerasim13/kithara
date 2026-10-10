@@ -503,13 +503,7 @@ where
     }
 
     fn begin_pass(&mut self) {
-        self.session.iteration_clock = self.session.ctx.as_ref().and_then(|ctx| {
-            let _ = ctx.stream_info()?;
-            Some((
-                SessionFrame::new(ctx.audio_clock().samples.0),
-                self.session.delivery(),
-            ))
-        });
+        self.session.begin_iteration();
         let (now, delivery) = self
             .clock()
             .unwrap_or((SessionFrame::new(0), FrameCount::new(0)));
@@ -611,20 +605,23 @@ where
         if let Err(error) = tick_session(&mut self.session) {
             tracing::warn!(%error, "host graph pass failed");
         }
-        self.publish_root();
         if let Some(channel) = &mut self.session.channel
             && let Err(error) = channel.publish()
         {
             tracing::warn!(%error, "host publication gate closed");
         }
-        if self.session.stream.is_none() {
-            self.retire_stopped_scopes();
-            if self.decks.0.is_empty()
-                && let Err(error) = graph::drop_idle_context(&mut self.session)
-            {
-                tracing::warn!(%error, "empty stopped host context could not retire");
-            }
+        self.retire_stopped_scopes();
+        let (now, delivery) = self
+            .clock()
+            .unwrap_or((SessionFrame::new(0), FrameCount::new(0)));
+        self.route_receipts(now, delivery);
+        if self.session.stream.is_none()
+            && self.decks.0.is_empty()
+            && let Err(error) = graph::drop_idle_context(&mut self.session)
+        {
+            tracing::warn!(%error, "empty stopped host context could not retire");
         }
+        self.publish_root();
         std::mem::take(&mut self.session.settled)
     }
 }
@@ -634,6 +631,13 @@ where
     D: ?Sized + HostedDeck<S>,
 {
     fn retire_stopped_scopes(&mut self) {
+        #[cfg(feature = "offline")]
+        if let Some(SessionStream::Offline(stream)) = &mut self.session.stream {
+            if let Err(error) = stream.retire_closing() {
+                tracing::error!(%error, "parked offline transport could not retire its scopes");
+            }
+            return;
+        }
         if self.session.stream.is_some() {
             return;
         }
@@ -643,8 +647,9 @@ where
             .as_mut()
             .and_then(|ctx| ctx.proc_store_mut())
             && let Some(transport) = store.try_get_mut::<TransportState>()
+            && let Err(error) = transport.retire_closing()
         {
-            transport.inbox.retire_closing();
+            tracing::error!(%error, "stopped transport could not retire its scopes");
         }
     }
 
@@ -857,7 +862,9 @@ impl<S, D: ?Sized + HostedDeck<S>> Drop for HostCore<S, D> {
                             }
                             if !retired && let Some(store) = context.proc_store_mut() {
                                 if let Some(transport) = store.try_get_mut::<TransportState>() {
-                                    transport.inbox.retire_closing();
+                                    if let Err(error) = transport.retire_closing() {
+                                        tracing::error!(%error, "stopped transport could not retire its scopes");
+                                    }
                                 }
                                 if let std::collections::hash_map::Entry::Occupied(entry) =
                                     store.entry::<TransportState>().boxed_entry

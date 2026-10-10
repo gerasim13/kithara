@@ -99,6 +99,16 @@ impl<T, S> HostSettingsExec<()> for SessionState<T, S> {
     }
 }
 
+pub(crate) fn settle_root_receipts<T, S>(state: &mut SessionState<T, S>) {
+    while let Some(receipt) = state
+        .channel
+        .as_mut()
+        .and_then(kithara_command::ScopedSender::root_receipt)
+    {
+        settle_receipt(state, &receipt);
+    }
+}
+
 /// Settles one root receipt the owner routed here. An applied change moves
 /// into the settings the Host reads; a tempo it changed is announced. A
 /// change for the next block the transport refused goes out again; any other

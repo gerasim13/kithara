@@ -91,7 +91,7 @@ pub(crate) fn prepare_route_restart<T, S>(
 }
 
 /// Once the stopped stream's processor is back, converges its grid while
-/// retaining its applied settings and every level of its channel.
+/// settling applied root changes before seeding its settings from the owner.
 fn finish_route_restart<T, S>(
     state: &mut SessionState<T, S>,
     target: SessionGridGeneration,
@@ -105,6 +105,8 @@ fn finish_route_restart<T, S>(
     {
         return Ok(RouteRestartStatus::Pending);
     }
+    crate::session::queue::settle_root_receipts(state);
+    let settings = *state.settings.config();
     let Some(store) = state
         .ctx
         .as_mut()
@@ -112,7 +114,7 @@ fn finish_route_restart<T, S>(
     else {
         return Ok(RouteRestartStatus::Pending);
     };
-    let actual = converge_transport_restart(store, target)
+    let actual = converge_transport_restart(store, settings, target)
         .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
     let promoted = target
         .promote(actual)
@@ -174,7 +176,9 @@ fn publish_committed<T, S>(state: &mut SessionState<T, S>, observation: &Transpo
 }
 
 pub(crate) fn publish_transport_event<T, S>(state: &SessionState<T, S>, event: &TransportEvent) {
-    if state.root_view.transport_event().as_ref() != Some(event) {
-        state.root_view.publish_transport_event(event);
+    for deck in &state.deck_nodes {
+        if let Some(bus) = &deck.bus {
+            bus.publish(event.clone());
+        }
     }
 }

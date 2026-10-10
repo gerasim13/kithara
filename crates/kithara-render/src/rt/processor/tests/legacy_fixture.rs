@@ -160,10 +160,16 @@ pub(in crate::rt) fn resource(
         .map(|bytes| f32::from_le_bytes(bytes.try_into().expect("sample bytes")))
         .collect::<Vec<_>>();
     let mut packets = PacketRing::new(spec, Duration::from_secs_f64(seconds), 8);
-    let mut packet = chunk(spec, SegmentId::FIRST, 0, 0, &samples);
-    packet.meta.end_of_track = f64::from(u32::try_from(frames).expect("fixture cap fits u32"))
+    let packet = chunk(spec, SegmentId::FIRST, 0, 0, &samples);
+    let ended = f64::from(u32::try_from(frames).expect("fixture cap fits u32"))
         >= seconds * f64::from(spec.sample_rate.get()) - 1.0;
     packets.push(PcmPacket::Chunk(Box::new(packet)));
+    if ended {
+        let frame = u64::try_from(frames).expect("fixture frame count");
+        let mut terminal = chunk(spec, SegmentId::FIRST, frame, frame, &[]);
+        terminal.meta.end_of_track = true;
+        packets.push(PcmPacket::Chunk(Box::new(terminal)));
+    }
     from_packets(src, packets)
 }
 
@@ -207,6 +213,14 @@ pub(in crate::rt) fn push(control: &mut Control, part: DeckPart) -> Seq {
     send(&mut control.ends, When::Next, vec![part])
 }
 
+pub(in crate::rt) fn chain(control: &mut Control, from: Slot, to: Slot) -> Seq {
+    send(
+        &mut control.ends,
+        When::Deferred,
+        vec![DeckPart::Chain { from, to }],
+    )
+}
+
 pub(in crate::rt) fn start(mixer: &mut TestMixer, slot: Slot) {
     mixer
         .mixer
@@ -240,7 +254,7 @@ pub(in crate::rt) fn render(mixer: &mut TestMixer, frames: usize) -> (bool, Vec<
         outputs: &mut outputs,
     };
     mixer.inbox.0.drain();
-    let mut level = mixer.inbox.0.scope(mixer.mixer.scope).expect("scope");
+    let level = mixer.inbox.0.scope(mixer.mixer.scope).expect("scope");
     let rate = mixer.mixer.deck.sample_rate;
     let context = RenderContext::new_linear(
         OutputContext::new(
@@ -253,8 +267,8 @@ pub(in crate::rt) fn render(mixer: &mut TestMixer, frames: usize) -> (bool, Vec<
         None,
     )
     .expect("linear render");
-    let rendered = mixer.mixer.render_block_in(
-        &mut level,
+    let rendered = mixer.mixer.render_block(
+        Some(level),
         Some(&context),
         SessionFrame::new(0),
         &mut buffers,

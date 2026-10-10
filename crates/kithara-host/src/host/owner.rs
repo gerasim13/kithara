@@ -42,14 +42,14 @@ impl<D: DeckControl> Deref for HostOwned<D> {
 
 /// A handle whose session drives one canonical owner, optionally decorated.
 pub struct Host<S, O: HostOwner<S> = HostCore<S>> {
-    pub(super) dispatcher: Arc<dyn HostDispatcher<O::Command>>,
-    pub(super) id: BeatGridId,
-    pub(super) root_view: RootView,
-    pub(super) _session: SessionRuntime<S, O>,
-    pub(super) owns_session: bool,
+    pub(in crate::host) dispatcher: Arc<dyn HostDispatcher<O::Command>>,
+    pub(in crate::host) id: BeatGridId,
+    pub(in crate::host) root_view: RootView,
+    pub(in crate::host) _session: SessionRuntime<S, O>,
+    pub(in crate::host) owns_session: bool,
 }
 
-pub(super) enum SessionRuntime<S, O: HostOwner<S>> {
+pub(in crate::host) enum SessionRuntime<S, O: HostOwner<S>> {
     Realtime {
         _platform: Platform<S, O>,
     },
@@ -65,14 +65,14 @@ type OfflineSessionMut<'a, S, O> = (&'a Platform<S, O>, &'a mut OfflineRuntime<S
 
 impl<S, O: HostOwner<S>> SessionRuntime<S, O> {
     #[cfg(feature = "offline")]
-    pub(super) const fn offline_mut(&mut self) -> Option<OfflineSessionMut<'_, S, O>> {
+    pub(in crate::host) const fn offline_mut(&mut self) -> Option<OfflineSessionMut<'_, S, O>> {
         match self {
             Self::Offline { platform, runtime } => Some((platform, runtime)),
             Self::Realtime { .. } => None,
         }
     }
     #[cfg(target_arch = "wasm32")]
-    pub(super) const fn platform(&self) -> &Platform<S, O> {
+    pub(in crate::host) const fn platform(&self) -> &Platform<S, O> {
         match self {
             Self::Realtime { _platform } => _platform,
             #[cfg(feature = "offline")]
@@ -81,10 +81,10 @@ impl<S, O: HostOwner<S>> SessionRuntime<S, O> {
     }
 }
 
-pub(super) struct SessionRoot {
-    pub(super) id: BeatGridId,
-    pub(super) root: HostRoot,
-    pub(super) view: RootView,
+pub(in crate::host) struct SessionRoot {
+    pub(in crate::host) id: BeatGridId,
+    pub(in crate::host) root: HostRoot,
+    pub(in crate::host) view: RootView,
 }
 
 impl<S, O: HostOwner<S>> Host<S, O> {
@@ -154,14 +154,14 @@ impl<S, O: HostOwner<S>> Host<S, O> {
         self.ask(HostCommand::Restart)
     }
 
-    pub(super) fn session_root(settings: HostSettings) -> Result<SessionRoot, PlayError> {
+    pub(in crate::host) fn session_root(settings: HostSettings) -> Result<SessionRoot, PlayError> {
         let id = BeatGridId::allocate().map_err(SessionError::from)?;
         let root = HostRoot::new(id, settings.sample_rate());
         let view = RootView::new(&root, settings);
         Ok(SessionRoot { id, root, view })
     }
 
-    pub(super) fn owner(
+    pub(in crate::host) fn owner(
         id: BeatGridId,
         root_view: RootView,
         dispatcher: Arc<dyn HostDispatcher<O::Command>>,
@@ -189,8 +189,8 @@ impl<S, O: HostOwner<S>> Host<S, O> {
     /// Closes and releases a deck on the canonical owner thread.
     ///
     /// Removing the last live deck stops the output and settles without a render.
-    /// On an offline session, removing a non-last deck waits for the next render
-    /// to apply its close on the processor.
+    /// An offline owner also settles non-last decks between processor turns,
+    /// without requiring another render; surviving decks remain available.
     ///
     /// # Errors
     /// Returns [`PlayError::ForeignSession`] for another host's deck, or
@@ -336,51 +336,5 @@ impl<S: Send + Sync + 'static, O: HostOwner<S>> BeatGrid for Host<S, O> {
     }
     fn snapshot(&self) -> kithara_warp::BeatGridSnapshot {
         self.root_view.grid()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::num::NonZeroU32;
-
-    use kithara_test_utils::{bufpool::TestPools, kithara};
-
-    use super::*;
-
-    #[kithara::test]
-    fn realtime_config_preserves_output_block_default_and_allows_override() {
-        let default = HostConfig::<TestPools>::builder().build();
-        let HostConfig::Realtime {
-            output_block_frames,
-            ..
-        } = default
-        else {
-            panic!("default Host config must be realtime");
-        };
-        assert_eq!(output_block_frames, None);
-
-        let frames = NonZeroU32::new(128).expect("test block size is non-zero");
-        let configured = HostConfig::<TestPools>::builder()
-            .output_block_frames(frames)
-            .build();
-        let HostConfig::Realtime {
-            output_block_frames,
-            ..
-        } = configured
-        else {
-            panic!("realtime builder must create realtime config");
-        };
-        assert_eq!(output_block_frames, Some(frames));
-    }
-
-    #[kithara::test]
-    fn host_root_owns_the_configured_sample_rate() {
-        let sample_rate = NonZeroU32::new(48_000).expect("test sample rate is non-zero");
-        let config = HostConfig::<TestPools>::builder()
-            .settings(HostSettings::builder().sample_rate(sample_rate).build())
-            .build();
-        let root = Host::<TestPools>::session_root(config.settings()).expect("host root");
-
-        assert_eq!(root.view.grid().axis().sample_rate(), sample_rate);
     }
 }

@@ -75,7 +75,13 @@ impl<C: MaybeSend + 'static> HostDispatcher<C> for OfflineSessionClient<C> {
         Ok(ticket)
     }
     fn shutdown(&self) {
-        drop(self.send(OfflineMsg::Shutdown));
+        let (completion, completed) = mpsc::channel();
+        if self.send(OfflineMsg::Shutdown(completion)).is_ok() {
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = completed.recv();
+            #[cfg(target_arch = "wasm32")]
+            drop(completed);
+        }
     }
 }
 

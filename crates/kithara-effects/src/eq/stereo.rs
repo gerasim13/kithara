@@ -12,7 +12,7 @@ use crate::GainDb;
 /// One band layout built for both channels of a stereo signal. It is built off the audio
 /// thread, so taking it in allocates nothing there.
 pub struct EqLayout {
-    left: IsolatorEq,
+    pub(super) left: IsolatorEq,
     right: IsolatorEq,
 }
 
@@ -84,7 +84,7 @@ pub struct StereoEq {
     active: Option<Box<EqLayout>>,
     retiring: Option<Box<EqLayout>>,
     update: Option<LayoutUpdate>,
-    crossover: MixDSP,
+    pub(super) crossover: MixDSP,
     sample_rate: NonZeroU32,
 }
 
@@ -103,6 +103,20 @@ impl StereoEq {
                 sample_rate,
             ),
             sample_rate,
+        }
+    }
+
+    /// A stereo EQ sounding `layout` immediately, without an initial crossover.
+    #[must_use]
+    pub fn with_layout<S>(
+        config: &EqConfig<S>,
+        sample_rate: NonZeroU32,
+        mut layout: Box<EqLayout>,
+    ) -> Self {
+        layout.update_sample_rate(sample_rate);
+        Self {
+            active: Some(layout),
+            ..Self::new(config, sample_rate)
         }
     }
 
@@ -223,67 +237,5 @@ fn render_stereo(
         }
         *left = wet_left[0];
         *right = wet_right[0];
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::*;
-    use crate::{
-        consts::TEST_RATE,
-        eq::generate_log_spaced_bands,
-        test_pools::{pools, pools_with_budget},
-    };
-
-    fn layout(bands: usize) -> Box<EqLayout> {
-        Box::new(
-            EqLayout::new(
-                &EqConfig::builder(pools()).build(),
-                &generate_log_spaced_bands(bands),
-                TEST_RATE,
-            )
-            .expect("a layout fits the test pool budget"),
-        )
-    }
-
-    #[kithara::test]
-    fn a_layout_the_pool_cannot_afford_is_refused_where_it_is_built() {
-        let config = EqConfig::builder(pools_with_budget(4)).build();
-        assert!(EqLayout::new(&config, &generate_log_spaced_bands(10), TEST_RATE).is_err());
-    }
-
-    /// Crosses over to the waiting layout and lets the crossover settle.
-    fn cross_over(eq: &mut StereoEq) {
-        let (mut left, mut right) = ([0.5; 64], [0.5; 64]);
-        eq.process(&mut left, &mut right);
-        while !eq.crossover.has_settled() {
-            eq.process(&mut left, &mut right);
-        }
-    }
-
-    fn bands(layout: Option<Box<EqLayout>>) -> Option<usize> {
-        layout.map(|layout| layout.left.band_count())
-    }
-
-    /// Every layout taken hands one back, the waiting one it displaces or the one the last
-    /// crossover retired, so the audio thread never frees a layout.
-    #[kithara::test]
-    fn a_layout_taken_hands_back_the_one_it_displaces() {
-        let mut eq = StereoEq::new(&EqConfig::builder(pools()).build(), TEST_RATE);
-
-        assert_eq!(bands(eq.take_layout(layout(3))), None);
-        assert_eq!(bands(eq.take_layout(layout(4))), Some(3), "the waiting one");
-        cross_over(&mut eq);
-        assert_eq!(bands(eq.take_layout(layout(5))), None);
-        cross_over(&mut eq);
-        assert_eq!(bands(eq.take_layout(layout(6))), None);
-        cross_over(&mut eq);
-        assert_eq!(
-            bands(eq.take_layout(layout(7))),
-            Some(4),
-            "the one the last crossover retired"
-        );
     }
 }

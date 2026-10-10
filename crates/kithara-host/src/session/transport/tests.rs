@@ -158,6 +158,40 @@ fn stop_stream(processor: &mut SessionTransportProcessor, extra: &mut ProcExtra)
     });
 }
 
+#[kithara::test]
+fn offline_inbox_returns_only_after_the_entire_render_turn() {
+    let (mut extra, _observation, _queue) = proc_extra();
+    let mut owner = extra
+        .store
+        .try_get_mut::<TransportState>()
+        .expect("transport state")
+        .park_offline_inbox()
+        .expect("park offline inbox");
+    let mut processor = SessionTransportProcessor;
+    let mut clock = 0;
+    for _turn in 0..2 {
+        owner.begin_render(21).expect("begin offline render");
+        for frames in [3, 7, 11] {
+            let mut info = proc_info_at(clock);
+            info.frames = frames;
+            process_node(&mut processor, &info, &mut extra);
+            extra
+                .store
+                .try_get_mut::<TransportState>()
+                .expect("transport state")
+                .return_inbox(frames)
+                .expect("finish graph block");
+            clock += i64::try_from(frames).expect("fixture frame count");
+        }
+        owner
+            .end_render()
+            .expect("inbox returns after the final block");
+        owner
+            .retire_closing()
+            .expect("owner holds the parked inbox");
+    }
+}
+
 fn send_tempo(
     queue: &mut ScopedSender<HostProtocol, DeckProtocol>,
     beats_per_minute: f64,
@@ -200,6 +234,9 @@ fn render(
     state: &mut SessionState<(), TestPools>,
     clock_samples: i64,
 ) -> Result<(), TransportProcessError> {
+    if let Some(channel) = state.channel.as_mut() {
+        channel.publish().expect("an open host channel publishes");
+    }
     let store = state
         .ctx
         .as_mut()
@@ -572,7 +609,10 @@ fn reserved_route_restart_promotes_a_change_rendered_before_stop() {
                 .revision()
     );
 
-    let converged = converge_transport_restart(&mut extra.store, reserved)
+    let settings = HostSettings::builder()
+        .tempo(Tempo::new(60.0).expect("fixture tempo"))
+        .build();
+    let converged = converge_transport_restart(&mut extra.store, settings, reserved)
         .expect("the reserved restart accepts a newer revision in its target epoch");
     assert_eq!(converged, stopped);
     assert_eq!(observation(&mut output).session_grid(), stopped);

@@ -36,8 +36,27 @@ use std::{
 
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
+use num_traits::ToPrimitive;
 
 use super::SourceSpan;
+
+#[kithara::test]
+fn seconds_retain_the_exact_source_point_instead_of_truncated_nanos() {
+    let frames = 431_797;
+    let rate = NonZeroU32::new(44_100).expect("rate");
+    let point = SourceSpan::new(frames, frames + 1, rate, 1)
+        .and_then(|span| span.for_output_range(0..0))
+        .expect("source point");
+    assert_eq!(
+        point.seconds_at(0),
+        Some(frames.to_f64().expect("frames") / f64::from(rate.get()))
+    );
+    assert_ne!(
+        point.seconds_at(0),
+        point.position_at(0).map(|position| position.as_secs_f64())
+    );
+    assert_eq!(point.seconds_at(1), None);
+}
 
 #[kithara::test]
 fn empty_source_mapping_slices_join_without_underflow() {

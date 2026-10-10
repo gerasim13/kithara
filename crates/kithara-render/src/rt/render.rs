@@ -33,15 +33,16 @@ impl RenderPass {
         S: HasPool<f32>,
     {
         let eq_config = EqConfig::builder(pools.clone()).build();
-        let mut eq = StereoEq::new(&eq_config, shape.sample_rate);
-        if config.eq_bands() > 0 {
+        let eq = if config.eq_bands() > 0 {
             let layout = EqLayout::new(
                 &eq_config,
                 &generate_log_spaced_bands(config.eq_bands()),
                 config.sample_rate(),
             )?;
-            eq.take_layout(Box::new(layout));
-        }
+            StereoEq::with_layout(&eq_config, shape.sample_rate, Box::new(layout))
+        } else {
+            StereoEq::new(&eq_config, shape.sample_rate)
+        };
         Ok(Self {
             gain: SmoothedParam::new(
                 gain,

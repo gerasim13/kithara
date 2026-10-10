@@ -116,13 +116,19 @@ impl<R: Protocol, M: Protocol> ScopedSender<R, M> {
         Ok(())
     }
 
-    /// Reads one receipt, root first, and settles the corresponding level's credits and basis.
-    pub fn receipt(&mut self) -> Option<ScopedReceipt<R, M>> {
+    /// Reads and settles one root receipt without consuming scope replies.
+    pub fn root_receipt(&mut self) -> Option<crate::Receipt<R>> {
         if let Some(holder) = &self.holder {
             self.answered.register(holder);
         }
-        if let Some(receipt) = self.root_receipts.try_pop() {
-            self.root.settle(&receipt);
+        let receipt = self.root_receipts.try_pop()?;
+        self.root.settle(&receipt);
+        Some(receipt)
+    }
+
+    /// Reads one receipt, root first, and settles the corresponding level's credits and basis.
+    pub fn receipt(&mut self) -> Option<ScopedReceipt<R, M>> {
+        if let Some(receipt) = self.root_receipt() {
             return Some(ScopedReceipt::Root(receipt));
         }
         let reply = self.scope_receipts.try_pop()?;

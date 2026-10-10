@@ -11,7 +11,7 @@ pub(crate) mod tests;
 pub(crate) mod transport;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod native;
+pub(crate) mod native_engine;
 #[cfg(feature = "offline")]
 pub(crate) mod offline;
 

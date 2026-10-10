@@ -8,6 +8,7 @@ use crate::CrossfadeSettings;
 enum Direction {
     In,
     Out,
+    DeclickOut,
 }
 
 #[derive(fieldwork::Fieldwork)]
@@ -49,6 +50,10 @@ impl TrackFade {
         self.start(Direction::Out, settings, sample_rate);
     }
 
+    pub(super) fn declick_out(&mut self, settings: CrossfadeSettings, sample_rate: NonZeroU32) {
+        self.start(Direction::DeclickOut, settings, sample_rate);
+    }
+
     fn frames(duration: f32, sample_rate: NonZeroU32) -> u64 {
         let sample_rate = cast::<u32, f32>(sample_rate.get()).unwrap_or(f32::MAX);
         (duration * sample_rate)
@@ -80,6 +85,10 @@ impl TrackFade {
         {
             let progress = if self.frames <= 1 {
                 1.0
+            } else if matches!(self.direction, Direction::DeclickOut) {
+                let frame = cast::<u64, f32>(self.frame.saturating_add(1)).unwrap_or(f32::MAX);
+                let frames = cast::<u64, f32>(self.frames).unwrap_or(f32::MAX);
+                (frame / frames).min(1.0)
             } else {
                 let frame = cast::<u64, f32>(self.frame).unwrap_or(f32::MAX);
                 let frames = cast::<u64, f32>(self.frames - 1).unwrap_or(f32::MAX);
@@ -89,6 +98,7 @@ impl TrackFade {
             let gain = match self.direction {
                 Direction::In => (1.0 - self.from).mul_add(into, self.from),
                 Direction::Out => self.from * out,
+                Direction::DeclickOut => self.from * (1.0 - progress),
             };
             self.gain = gain;
             if gain == 1.0 {
@@ -138,7 +148,7 @@ impl TrackFade {
 
     /// Whether the envelope is on its way down to silence.
     pub(super) const fn is_fading_out(&self) -> bool {
-        matches!(self.direction, Direction::Out) && !self.settled
+        matches!(self.direction, Direction::Out | Direction::DeclickOut) && !self.settled
     }
 
     /// Frames until the envelope settles.
@@ -156,91 +166,25 @@ impl TrackFade {
     }
 
     pub(super) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
-        let progress = if self.frames <= 1 {
+        let endpoint = match self.direction {
+            Direction::DeclickOut => 0,
+            Direction::In | Direction::Out => 1,
+        };
+        let steps = self.frames.saturating_sub(endpoint);
+        let progress = if steps == 0 {
             1.0
         } else {
             let frame = cast::<u64, f64>(self.frame).unwrap_or(f64::MAX);
-            let frames = cast::<u64, f64>(self.frames - 1).unwrap_or(f64::MAX);
-            frame / frames
+            let steps = cast::<u64, f64>(steps).unwrap_or(f64::MAX);
+            frame / steps
         };
         self.frames = Self::frames(self.settings.duration, sample_rate);
-        self.frame = if self.frames <= 1 {
+        let steps = self.frames.saturating_sub(endpoint);
+        self.frame = if steps == 0 {
             self.frames
         } else {
-            let frames = cast::<u64, f64>(self.frames - 1).unwrap_or(f64::MAX);
-            (progress * frames).round().to_u64().unwrap_or(u64::MAX)
+            let steps = cast::<u64, f64>(steps).unwrap_or(f64::MAX);
+            (progress * steps).round().to_u64().unwrap_or(u64::MAX)
         };
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::*;
-    use crate::CrossfadeCurve;
-
-    #[kithara::test]
-    fn rendered_linear_fade_reaches_both_exact_endpoints() {
-        let settings = CrossfadeSettings::new(0.004, CrossfadeCurve::Linear, 1.0, 0.5)
-            .expect("valid settings");
-        let mut fade = TrackFade::default();
-        fade.fade_in(settings, NonZeroU32::new(1_000).expect("nonzero"));
-        let mut input_l = [1.0; 4];
-        let mut input_r = [1.0; 4];
-        let mut output_l = [0.0; 4];
-        let mut output_r = [0.0; 4];
-        fade.mix_range(
-            &mut [&mut input_l, &mut input_r],
-            &mut [&mut output_l, &mut output_r],
-            0..4,
-            4,
-        );
-        assert_eq!(output_l[0], 0.0);
-        assert_eq!(output_l[3], 1.0);
-        assert_eq!(output_l, output_r);
-        assert!(fade.settled());
-    }
-
-    /// Frame `i` of a fade over `n` frames sounds `gains(i / (n − 1))` of its input: the incoming
-    /// gain on the way up from silence, the outgoing one on the way down from full level.
-    #[kithara::test]
-    fn a_fade_sounds_its_crossfade_gains_frame_by_frame() {
-        const LAW_FRAMES: usize = 16;
-
-        fn sounded(fade: &mut TrackFade) -> [f32; LAW_FRAMES] {
-            let mut input_l = [1.0; LAW_FRAMES];
-            let mut input_r = [1.0; LAW_FRAMES];
-            let mut output_l = [0.0; LAW_FRAMES];
-            let mut output_r = [0.0; LAW_FRAMES];
-            fade.mix_range(
-                &mut [&mut input_l, &mut input_r],
-                &mut [&mut output_l, &mut output_r],
-                0..LAW_FRAMES,
-                LAW_FRAMES,
-            );
-            output_l
-        }
-
-        let sample_rate = NonZeroU32::new(1_000).expect("nonzero");
-        let settings = CrossfadeSettings::new(0.016, CrossfadeCurve::EqualPower, 0.7, 0.3)
-            .expect("valid settings");
-        let law = |frame: usize| {
-            let frame = cast::<usize, f32>(frame).unwrap_or(f32::MAX);
-            let last = cast::<usize, f32>(LAW_FRAMES - 1).unwrap_or(f32::MAX);
-            settings.gains(frame / last)
-        };
-        let mut fade = TrackFade::default();
-
-        fade.fade_in(settings, sample_rate);
-        let rising = sounded(&mut fade);
-        fade.fade_out(settings, sample_rate);
-        let falling = sounded(&mut fade);
-
-        for frame in 0..LAW_FRAMES {
-            let (out, into) = law(frame);
-            assert_eq!(rising[frame], into, "fade-in frame {frame}");
-            assert_eq!(falling[frame], out, "fade-out frame {frame}");
-        }
     }
 }

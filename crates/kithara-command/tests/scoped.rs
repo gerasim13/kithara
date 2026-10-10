@@ -77,6 +77,36 @@ fn walk(level: &mut kithara_command::LevelInbox<'_, Test>, start: u64) -> Vec<(S
 }
 
 #[kithara::test]
+fn root_receipt_settles_root_and_preserves_scope_replies() {
+    let (mut sender, mut inbox) = pair(1, 1);
+    let id = sender.open(1).expect("scope");
+    let root_seq = sender.send(When::Next, batch(1)).expect("root room");
+    let scope_seq = scope_send(&mut sender, id, When::Next, 2);
+    sender.publish().expect("live");
+    inbox.drain();
+    walk(&mut inbox.scope(id).expect("scope"), 0);
+    walk(&mut inbox.root(), 0);
+    sender.close(id).expect("close scope");
+    sender.publish().expect("publish close");
+    inbox.retire_closing();
+
+    assert_eq!(sender.available(), 0);
+    let receipt = sender.root_receipt().expect("root receipt");
+    assert_eq!(receipt.seq(), root_seq);
+    assert_eq!(receipt.outcome(), &Outcome::Applied { at: 0, data: () });
+    assert_eq!(sender.available(), 1);
+    assert!(sender.root_receipt().is_none());
+    let Some(ScopedReceipt::Scope(received_id, receipt)) = sender.receipt() else {
+        panic!("the scope receipt remains queued");
+    };
+    assert_eq!(received_id, id);
+    assert_eq!(receipt.seq(), scope_seq);
+    assert_eq!(receipt.outcome(), &Outcome::Applied { at: 0, data: () });
+    assert!(matches!(sender.receipt(), Some(ScopedReceipt::Closed(closed)) if closed == id));
+    assert!(sender.receipt().is_none());
+}
+
+#[kithara::test]
 fn scoped_commit_eager_stales_and_completion_keeps_original_moment() {
     let (mut sender, mut inbox) = pair(3, 1);
     let id = sender.open(1).expect("scope");

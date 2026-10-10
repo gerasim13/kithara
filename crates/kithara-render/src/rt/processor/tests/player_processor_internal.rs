@@ -324,13 +324,7 @@ async fn render_audio_handover_fills_tail_from_next_playing_track(constant_half:
             duration: 0.0,
             ..Default::default()
         }));
-    push(
-        &mut control,
-        DeckPart::Chain {
-            from: short_id,
-            to: long_id,
-        },
-    );
+    legacy_fixture::chain(&mut control, short_id, long_id);
 
     let (rendered, out_l, out_r) = render(&mut processor, frames);
 
@@ -368,15 +362,8 @@ async fn render_audio_handover_promotes_preloading_track_without_silence(
         create_mock_player_resource(constant_half, "preload.mp3"),
         false,
     );
-    push(
-        &mut control,
-        DeckPart::Chain {
-            from: short_id,
-            to: preload_id,
-        },
-    );
-
     block(&mut processor);
+    legacy_fixture::chain(&mut control, short_id, preload_id);
 
     processor
         .mixer
@@ -432,15 +419,8 @@ async fn an_ending_track_starts_only_the_track_chained_to_it(constant_half: &'st
             false,
         );
     }
-    push(
-        &mut control,
-        DeckPart::Chain {
-            from: leading_id,
-            to: chained_id,
-        },
-    );
-
     block(&mut processor);
+    legacy_fixture::chain(&mut control, leading_id, chained_id);
     processor
         .mixer
         .deck
@@ -492,14 +472,13 @@ async fn render_audio_handover_continues_past_a_preload_that_ends_in_its_stitch_
             false,
         );
     }
+    block(&mut processor);
     for (from, to) in [
         (leading_id, short_preload_id),
         (short_preload_id, preload_id),
     ] {
-        push(&mut control, DeckPart::Chain { from, to });
+        legacy_fixture::chain(&mut control, from, to);
     }
-
-    block(&mut processor);
     processor
         .mixer
         .deck
@@ -556,15 +535,8 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail(constant_hal
         create_mock_player_resource(constant_half, "preload.mp3"),
         false,
     );
-    push(
-        &mut control,
-        DeckPart::Chain {
-            from: short_id,
-            to: preload_id,
-        },
-    );
-
     block(&mut processor);
+    legacy_fixture::chain(&mut control, short_id, preload_id);
 
     processor
         .mixer

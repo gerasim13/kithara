@@ -9,3 +9,6 @@ pub use config::EqConfig;
 pub use effect::EqEffect;
 pub use isolator::IsolatorEq;
 pub use stereo::{EqLayout, StereoEq};
+
+#[cfg(test)]
+mod tests;

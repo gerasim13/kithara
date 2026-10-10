@@ -27,19 +27,18 @@ use crate::{
         state::{HostRoot, RootView, SessionBufferConfig, SessionState, SessionStream},
     },
 };
-
 pub(crate) mod consts {
     pub(crate) const CHANNELS: usize = 2;
 }
 
-pub(super) enum OfflineMsg {
+pub(in crate::session::offline) enum OfflineMsg {
     Posted,
     Deck(DeckMsg),
     Request(OfflineRequest),
-    Shutdown,
+    Shutdown(mpsc::Sender<()>),
 }
 
-pub(super) enum OfflineRequest {
+pub(in crate::session::offline) enum OfflineRequest {
     Position(mpsc::Sender<u64>),
     Render {
         position: u64,
@@ -52,6 +51,8 @@ struct OfflineSessionTask<S, O: HostOwner<S>> {
     cmd_rx: mpsc::Receiver<OfflineMsg>,
     mailbox: HostMailbox<O::Command>,
     owner: O,
+    /// Dropped after the owner, acknowledging that retained controls are closed.
+    shutdown_completion: Option<mpsc::Sender<()>>,
     posts: OwnerPosts,
     position: u64,
     max_block_frames: NonZeroU32,
@@ -75,78 +76,6 @@ pub(crate) struct OfflineTaskConfig<S> {
     pub(crate) max_block_frames: NonZeroU32,
     #[config(skip = "transferred to the offline task")]
     pub(crate) pools: PoolRegion<S>,
-}
-
-impl<S, O: HostOwner<S>> Task for OfflineSessionTask<S, O>
-where
-    S: HasPool<f32> + Send + Sync + 'static,
-{
-    fn tick(&mut self) -> TickResult {
-        self.owner.begin_pass();
-        let mut progress = false;
-        let mut requests: Vec<OfflineRequest> = Vec::new();
-        let mut stopped = false;
-        loop {
-            match self.cmd_rx.try_recv() {
-                Ok(OfflineMsg::Posted) => {
-                    self.posts.drain(&mut self.owner, &mut self.mailbox);
-                    progress = true;
-                }
-                Ok(OfflineMsg::Deck(message)) => {
-                    message.run(&mut self.owner);
-                    progress = true;
-                }
-                Ok(OfflineMsg::Request(request)) => {
-                    requests.push(request);
-                    progress = true;
-                }
-                Ok(OfflineMsg::Shutdown) | Err(TryRecvError::Disconnected) => {
-                    stopped = true;
-                    break;
-                }
-                Err(TryRecvError::Empty) => break,
-                #[cfg(target_arch = "wasm32")]
-                Err(_) => break,
-            }
-        }
-        self.posts.drain(&mut self.owner, &mut self.mailbox);
-        let mut published = false;
-        for request in requests {
-            match request {
-                OfflineRequest::Position(answer) => {
-                    let _ = answer.send(self.position);
-                }
-                OfflineRequest::Render {
-                    position,
-                    frames,
-                    answer,
-                } => {
-                    let prepared = self.owner.prepare_offline();
-                    self.owner.begin_pass();
-                    self.posts.pass(&mut self.owner, true);
-                    published = true;
-                    let result = prepared
-                        .map_err(OfflineSessionError::Owner)
-                        .and_then(|()| self.render(position, frames));
-                    if result.is_ok() {
-                        self.owner.begin_pass();
-                        self.posts.pass(&mut self.owner, false);
-                    }
-                    drop(answer.send(result));
-                }
-            }
-        }
-        if !published {
-            self.posts.pass(&mut self.owner, false);
-        }
-        if stopped {
-            TickResult::Done
-        } else if progress {
-            TickResult::Progress
-        } else {
-            TickResult::Waiting
-        }
-    }
 }
 
 impl<S, O: HostOwner<S>> OfflineSessionTask<S, O>
@@ -246,6 +175,7 @@ where
             cmd_rx,
             mailbox,
             owner: layer(HostCore::new(state, inbox)),
+            shutdown_completion: None,
             posts: OwnerPosts::new(),
             position: 0,
             max_block_frames,
@@ -283,140 +213,79 @@ pub(crate) enum OfflineSessionError {
     TimelineOverflow,
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod tests {
-    use std::num::NonZeroUsize;
-
-    use kithara_effects::LimiterConfig;
-    use kithara_platform::thread::sleep;
-    use kithara_test_utils::{
-        bufpool::{TestPools, pools},
-        kithara,
-    };
-    use kithara_worker::{DispatcherConfig, Worker, WorkerConfig};
-
-    use super::*;
-    use crate::{
-        consts::{self, SESSION_PUMP_INTERVAL},
-        session::{
-            protocol::{HostDispatcher, ask},
-            tests::{
-                deck_probe::{Seen, next, probe, so_far, ticks},
-                graph::empty_root,
-            },
-        },
-    };
-
-    type BaseCommand = crate::HostCommand<TestPools, dyn kithara_play::HostedDeck<TestPools>>;
-
-    /// An offline session with no graph that holds probe decks, and the
-    /// worker it runs on.
-    struct DeckSession {
-        client: Arc<OfflineSessionClient<BaseCommand>>,
-        _task: OfflineTaskHandle,
-        _dispatcher: Dispatcher,
-        _worker: Worker,
-    }
-
-    impl DeckSession {
-        fn spawn() -> Self {
-            let sample_rate = NonZeroU32::new(48_000).expect("test sample rate");
-            let block = NonZeroU32::new(512).expect("test block");
-            let (root, root_view) = empty_root(sample_rate);
-            let worker = Worker::new(WorkerConfig::new());
-            let dispatcher = worker.dispatcher(
-                DispatcherConfig::builder()
-                    .name(consts::DECK_SESSION)
-                    .capacity(NonZeroUsize::MIN)
-                    .build(),
-            );
-            let (client, task) = spawn(
-                &dispatcher,
-                TaskConfig::new(),
-                root,
-                root_view,
-                OfflineTaskConfig::builder()
-                    .declared_latency(Duration::ZERO)
-                    .output(SessionOutput::new(LimiterConfig::default()))
-                    .settings(
-                        Live::new(HostSettings::builder().sample_rate(sample_rate).build())
-                            .expect("the fixture settings are valid"),
-                    )
-                    .declick_frames(block)
-                    .channel_config(crate::HostConfig::offline(pools()).build().channel_config())
-                    .max_block_frames(block)
-                    .pools(pools())
-                    .build(),
-                |owner: HostCore<TestPools>| owner,
-            )
-            .expect("the offline session starts");
-            Self {
-                client,
-                _task: task,
-                _dispatcher: dispatcher,
-                _worker: worker,
+impl<S, O: HostOwner<S>> Task for OfflineSessionTask<S, O>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    fn tick(&mut self) -> TickResult {
+        self.owner.begin_pass();
+        let mut progress = false;
+        let mut requests: Vec<OfflineRequest> = Vec::new();
+        let mut stopped = false;
+        loop {
+            match self.cmd_rx.try_recv() {
+                Ok(OfflineMsg::Posted) => {
+                    self.posts.drain(&mut self.owner, &mut self.mailbox);
+                    progress = true;
+                }
+                Ok(OfflineMsg::Deck(message)) => {
+                    message.run(&mut self.owner);
+                    progress = true;
+                }
+                Ok(OfflineMsg::Request(request)) => {
+                    requests.push(request);
+                    progress = true;
+                }
+                Ok(OfflineMsg::Shutdown(completion)) => {
+                    self.shutdown_completion = Some(completion);
+                    stopped = true;
+                    break;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    stopped = true;
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                #[cfg(target_arch = "wasm32")]
+                Err(_) => break,
             }
         }
-
-        /// Returns once the session ran everything sent to it before.
-        fn settle(&self) {
-            self.client.position().expect("the session answers");
+        self.posts.drain(&mut self.owner, &mut self.mailbox);
+        let mut published = false;
+        for request in requests {
+            match request {
+                OfflineRequest::Position(answer) => {
+                    let _ = answer.send(self.position);
+                }
+                OfflineRequest::Render {
+                    position,
+                    frames,
+                    answer,
+                } => {
+                    let prepared = self.owner.prepare_offline();
+                    self.owner.begin_pass();
+                    self.posts.pass(&mut self.owner, true);
+                    published = true;
+                    let result = prepared
+                        .map_err(OfflineSessionError::Owner)
+                        .and_then(|()| self.render(position, frames));
+                    if result.is_ok() {
+                        self.owner.begin_pass();
+                        self.posts.pass(&mut self.owner, false);
+                    }
+                    drop(answer.send(result));
+                }
+            }
         }
-    }
-
-    impl Drop for DeckSession {
-        fn drop(&mut self) {
-            self.client.shutdown();
+        if !published {
+            self.posts.pass(&mut self.owner, false);
         }
-    }
-
-    #[kithara::test]
-    fn an_offline_session_ticks_its_decks_only_ahead_of_a_block() {
-        let session = DeckSession::spawn();
-        let (id, deck, seen) = probe();
-
-        ask(&*session.client, crate::HostCommand::Register { id, deck })
-            .map_err(PlayError::from)
-            .expect("the session takes the deck");
-        sleep(SESSION_PUMP_INTERVAL * 3);
-        session.settle();
-        assert_eq!(ticks(&so_far(&seen)), 0, "no clock ticks an offline deck");
-
-        session
-            .client
-            .render(0, 512)
-            .expect("render the first block");
-        session.settle();
-        let ticked = so_far(&seen);
-        assert_eq!(ticks(&ticked), 1, "one tick ahead of the block");
-        assert!(
-            ticked.iter().any(
-                |seen| matches!(seen, Seen::Ticked(thread) if thread.as_deref() == Some(consts::DECK_SESSION))
-            ),
-            "the session task ticks its decks"
-        );
-    }
-
-    #[kithara::test]
-    fn an_offline_deck_drains_on_its_wake_with_no_block_rendered() {
-        let session = DeckSession::spawn();
-        let (id, deck, seen) = probe();
-        ask(&*session.client, crate::HostCommand::Register { id, deck })
-            .map_err(PlayError::from)
-            .expect("the session takes the deck");
-        let Seen::Held(waker) = next(&seen) else {
-            panic!("the session holds the deck before anything else");
-        };
-        assert!(
-            matches!(next(&seen), Seen::Drained(_)),
-            "drained as it is held"
-        );
-
-        waker.wake_by_ref();
-
-        assert!(
-            matches!(next(&seen), Seen::Drained(thread) if thread.as_deref() == Some(consts::DECK_SESSION)),
-            "a woken deck runs its commands on the session task before any tick"
-        );
+        if stopped {
+            TickResult::Done
+        } else if progress {
+            TickResult::Progress
+        } else {
+            TickResult::Waiting
+        }
     }
 }

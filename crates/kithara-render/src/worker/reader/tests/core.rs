@@ -75,12 +75,17 @@ pub(crate) fn chunk(
             end_timestamp: spec
                 .duration_for(source_frame + frames)
                 .expect("end timestamp"),
-            source_span: SourceSpan::new(
-                source_frame,
-                source_frame + frames,
-                spec.sample_rate,
-                frames,
-            ),
+            source_span: if frames == 0 {
+                SourceSpan::new(source_frame, source_frame + 1, spec.sample_rate, 1)
+                    .and_then(|span| span.for_output_range(0..0))
+            } else {
+                SourceSpan::new(
+                    source_frame,
+                    source_frame + frames,
+                    spec.sample_rate,
+                    frames,
+                )
+            },
             ..AudioChunkInfo::default()
         },
         sample_buffer(&pools(), samples),

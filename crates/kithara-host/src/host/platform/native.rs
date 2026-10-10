@@ -67,7 +67,7 @@ impl<S, O: HostOwner<S>> Platform<S, O> {
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
-        let session = crate::session::native::spawn::<S, O>(
+        let session = crate::session::native_engine::spawn::<S, O>(
             root,
             view,
             output_block_frames,

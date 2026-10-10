@@ -150,12 +150,10 @@ fn update_failed(err: &UpdateError) -> SessionError {
     SessionError::Graph(format!("{err:?}"))
 }
 
-/// A context that went inactive under a session that believes its stream is
-/// running lost that stream: Firewheel hands the processor back when it stops,
-/// and since 0.14 that is the only place the death shows up — it is no longer
-/// reported as an update error.
+/// An inactive context without a reserved stopped generation lost its stream.
+/// Firewheel returns the processor when it stops instead of reporting an update error.
 pub(super) fn stream_died<T, S>(state: &SessionState<T, S>) -> bool {
-    state.stream.is_some()
+    state.reserved_session_grid.is_none()
         && !state.stream_needs_restart
         && state.ctx.as_ref().is_some_and(|ctx| !ctx.is_active())
 }

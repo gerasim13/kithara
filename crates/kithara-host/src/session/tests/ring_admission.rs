@@ -9,6 +9,7 @@ use firewheel::{
         NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcessStatus,
     },
 };
+use kithara_assets::{AssetStore, StorageBackend};
 use kithara_command::When;
 use kithara_events::EventBus;
 #[cfg(feature = "no-block")]
@@ -18,9 +19,10 @@ use kithara_play::{
     DeckMixSettings, DeckPass, DeckSnapshot, HostedDeck, Outbox, PlayWorker, PlayWorkerConfig,
     Player, ResourcePrep, mock::DeckRig,
 };
-use kithara_queue::{Queue, QueueCommand, QueueConfig};
-use kithara_signal::{FrameCount, SessionFrame};
+use kithara_queue::{Queue, QueueCommand, QueueConfig, TrackId, Transition};
+use kithara_signal::{AudioSpec, FrameCount, SessionFrame};
 use kithara_test_utils::{
+    TestTempDir,
     bufpool::{TestPools, pools},
     kithara,
 };
@@ -70,14 +72,48 @@ fn remove_deck(session: &ManualRingSession, grid_id: BeatGridId) {
     }
 }
 
-fn seated_queue(session: &ManualRingSession) -> (Queue<TestPools>, DeckRig<TestPools>) {
+fn seated_queue(
+    session: &ManualRingSession,
+) -> (Queue<TestPools>, DeckRig<TestPools>, TestTempDir) {
     start_deck(session);
+    let directory = TestTempDir::new();
+    let path = directory.path().join("ring-clock.wav");
+    kithara_play::mock::write_pcm_wav(&path, &[0.5; 8_192], AudioSpec::new(2, session_rate()))
+        .expect("write seated queue fixture");
     let prep = ResourcePrep::builder()
         .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
         .build();
-    let queue = Queue::new(QueueConfig::builder().prep(prep).build());
-    let rig = DeckRig::new(kithara_play::DeckMixerConfig::default()).expect("queue scope");
-    (queue, rig)
+    let mut queue = Queue::new(
+        QueueConfig::builder()
+            .prep(prep)
+            .store(
+                AssetStore::builder(pools())
+                    .backend(StorageBackend::Memory)
+                    .build(),
+            )
+            .build(),
+    );
+    let mut rig = DeckRig::new(kithara_play::DeckMixerConfig::default()).expect("queue scope");
+    let id = TrackId::allocate();
+    apply_queue(
+        session,
+        &mut queue,
+        &mut rig,
+        QueueCommand::Append {
+            id,
+            source: format!("file://{}", path.display()).into(),
+        },
+    );
+    apply_queue(
+        session,
+        &mut queue,
+        &mut rig,
+        QueueCommand::Select {
+            id,
+            transition: Transition::None,
+        },
+    );
+    (queue, rig, directory)
 }
 
 fn apply_queue(
@@ -99,7 +135,7 @@ fn apply_queue(
     let mut scope = rig.ring.scope(rig.scope).expect("queue scope");
     let mut out = Outbox::new(&mut scope, &mut rig.dispatcher).in_pass(pass);
     HostedDeck::tick(queue, pass, &mut out);
-    Player::apply(queue, command, &mut out).expect("empty queue transport command");
+    Player::apply(queue, command, &mut out).expect("seated queue command");
 }
 
 #[kithara::test]
@@ -176,12 +212,12 @@ fn backend_starts_exactly_once() {
     assert_eq!(session.start_count().expect("backend start ledger"), 1);
 }
 
-#[kithara::test]
-fn clock_is_monotone_across_pause_and_graph_edits() {
+#[kithara::test(tokio)]
+async fn clock_is_monotone_across_pause_and_graph_edits() {
     let session = Arc::new(
         ManualRingSession::start(config(6)).expect("start manual ring session for player"),
     );
-    let (mut queue, mut rig) = seated_queue(&session);
+    let (mut queue, mut rig, _directory) = seated_queue(&session);
     apply_queue(
         &session,
         &mut queue,
