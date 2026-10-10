@@ -17,7 +17,7 @@ pub(crate) enum Error {
     /// The HTTP 401 token-rejection response.
     #[error("Zvuk rejected the authentication token")]
     AuthenticationRejected,
-    /// Any other non-success HTTP status; its body is not retained.
+    /// Any other non-success HTTP status.
     #[error("Zvuk HTTP {0}")]
     Status(NonZeroU16),
     /// The HTTP transport failed before returning a response.

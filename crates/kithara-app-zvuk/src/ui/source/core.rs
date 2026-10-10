@@ -1,17 +1,15 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap};
 
 use kithara_app_library::{
-    BranchNode, Cause, Context, Environment, Factory, LibrarySource, PAGES, PageStatus,
-    Registration, worded,
+    BranchNode, Cause, Context, Environment, Factory, KeyAccess, LibrarySource, PAGES, PageStatus,
+    Registration, SECTIONS, Secrets, worded,
 };
 use kithara_net::{HttpClient, Net};
 use kithara_platform::{
     CancelToken,
+    sync::Arc,
     time::{Duration, Instant},
-    tokio::{
-        runtime::Handle,
-        sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
-    },
+    tokio::runtime::Handle,
 };
 use kithara_ui::{
     error::UiDocError,
@@ -19,24 +17,35 @@ use kithara_ui::{
     render::{ReadValue, TableRow, WriteValue},
     text::TextDoc,
 };
+use url::Url;
 
 use crate::{
-    Client, Config, Playlist, TrackId,
-    ui::{catalogue::Catalogue, consts, page, request::Completed},
+    Account, Client, Config, Error, Opener, Playlist, TrackId,
+    job::Job,
+    ui::{
+        catalogue::Catalogue,
+        consts, page,
+        request::Batch,
+        section::{self, Section},
+    },
 };
 
-/// Lists the collection's playlists under the branch's Playlists node.
-pub(super) fn accept_playlists(branch: &mut BranchNode, playlists: Vec<Playlist>) {
-    let Some(node) = branch
+/// The branch's Playlists node.
+pub(super) fn playlists(branch: &mut BranchNode) -> Option<&mut BranchNode> {
+    branch
         .children
         .iter_mut()
         .find(|node| node.key == consts::PLAYLISTS)
-    else {
+}
+
+/// Lists the collection's playlists under the branch's Playlists node.
+pub(super) fn accept_playlists(branch: &mut BranchNode, listed: Vec<Playlist>) {
+    let Some(node) = playlists(branch) else {
         return;
     };
     node.unlisted = false;
-    node.count = u32::try_from(playlists.len()).ok();
-    node.children = playlists
+    node.count = u32::try_from(listed.len()).ok();
+    node.children = listed
         .into_iter()
         .map(|playlist| {
             BranchNode::new(
@@ -48,30 +57,49 @@ pub(super) fn accept_playlists(branch: &mut BranchNode, playlists: Vec<Playlist>
         .collect();
 }
 
-/// Owns the catalogue; tasks return results and never mutate this state.
+/// Forgets the listed playlists.
+pub(super) fn unlist_playlists(branch: &mut BranchNode) {
+    if let Some(node) = playlists(branch) {
+        node.unlisted = true;
+        node.count = None;
+        node.children.clear();
+    }
+}
+
+/// Owns the catalogue; its jobs return results and never mutate this state.
 pub struct Source<N> {
     pub(super) branch: BranchNode,
     pub(super) client: Client<N>,
     pub(super) runtime: Handle,
+    /// The plugin's cancellation, parent of every job.
     pub(super) cancel: CancelToken,
     pub(super) catalogue: Catalogue,
-    pub(super) generation: u64,
-    pub(super) pending: Option<Instant>,
-    pub(super) active: Option<Active>,
-    pub(super) playlists_active: bool,
-    /// Tracks whose reaction request is in flight.
-    pub(super) likes: HashSet<TrackId>,
+    pub(super) load: Load,
+    /// The Playlists node was expanded; a new token lists it again.
+    pub(super) expanded: bool,
+    pub(super) listing: Option<Job<Result<Vec<Playlist>, Error>>>,
+    /// Reactions in flight, by track; each confirms its reaction.
+    pub(super) likes: HashMap<TrackId, Job<Result<bool, Error>>>,
     pub(super) faults: Faults,
-    pub(super) found: UnboundedSender<Completed>,
-    arrivals: UnboundedReceiver<Completed>,
+    /// The account the catalogue reads its token from once per operation.
+    pub(super) account: Account,
+    section: Section,
+    /// Whether the account held a token at the last tick.
+    pub(super) has_token: bool,
+    /// What the page states while the account holds no token.
+    not_connected: String,
 }
 
-pub(super) struct Active {
-    pub(super) generation: u64,
-    pub(super) cancel: CancelToken,
+/// The current node's page request.
+pub(super) enum Load {
+    Idle,
+    /// Waits until the instant to start.
+    Due(Instant),
+    Running(Job<Result<Batch, Error>>),
 }
 
-#[derive(Clone, Copy)]
+/// An operation whose failure the page shows; in the order they are shown.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Operation {
     /// The current node's catalogue page and its stream batch.
     Page,
@@ -83,41 +111,44 @@ pub(super) enum Operation {
 /// stands beside the page's own.
 #[derive(Default)]
 pub(super) struct Faults {
-    like: Option<String>,
-    page: Option<String>,
-    playlists: Option<String>,
+    each: BTreeMap<Operation, String>,
     text: String,
 }
 
 impl Faults {
-    fn is_empty(&self) -> bool {
-        self.page.is_none() && self.playlists.is_none() && self.like.is_none()
-    }
-
-    pub(super) fn set(&mut self, operation: Operation, fault: Option<String>) {
-        *match operation {
-            Operation::Page => &mut self.page,
-            Operation::Playlists => &mut self.playlists,
-            Operation::Like => &mut self.like,
-        } = fault;
-        self.text = [&self.page, &self.playlists, &self.like]
-            .into_iter()
-            .flatten()
+    /// Keeps the failure of `result` as `operation`'s, or clears it, and
+    /// yields the value.
+    pub(super) fn record<T>(
+        &mut self,
+        operation: Operation,
+        result: Result<T, Error>,
+    ) -> Option<T> {
+        match &result {
+            Ok(_) => self.each.remove(&operation),
+            Err(error) => self.each.insert(operation, error.to_string()),
+        };
+        self.text = self
+            .each
+            .values()
             .map(String::as_str)
             .collect::<Vec<&str>>()
             .join("; ");
+        result.ok()
+    }
+
+    fn has(&self, operation: Operation) -> bool {
+        self.each.contains_key(&operation)
     }
 }
 
 impl<N: Net + Clone + 'static> Source<N> {
-    /// Derives the source's cancellation subtree from the supplied parent.
-    ///
     /// # Errors
     /// Returns an error if a source caption is absent from the text document.
     fn new(
         client: Client<N>,
         runtime: Handle,
-        cancel: &CancelToken,
+        cancel: CancelToken,
+        mut account: Account,
         text: &TextDoc,
     ) -> Result<Self, UiDocError> {
         let mut branch = BranchNode::new(
@@ -125,12 +156,6 @@ impl<N: Net + Clone + 'static> Source<N> {
             worded(text, "library.source.zvuk", consts::ID)?,
             IconName::Zvuk,
         );
-        let mut playlists = BranchNode::new(
-            consts::PLAYLISTS,
-            worded(text, "zvuk.node.playlists", consts::ID)?,
-            IconName::Folder,
-        );
-        playlists.unlisted = true;
         branch.children = vec![
             BranchNode::new(
                 consts::SEARCH,
@@ -142,40 +167,64 @@ impl<N: Net + Clone + 'static> Source<N> {
                 worded(text, "zvuk.node.liked", consts::ID)?,
                 IconName::Heart,
             ),
-            playlists,
+            BranchNode::new(
+                consts::PLAYLISTS,
+                worded(text, "zvuk.node.playlists", consts::ID)?,
+                IconName::Folder,
+            ),
         ];
-        let (found, arrivals) = mpsc::unbounded_channel();
+        unlist_playlists(&mut branch);
+        let section = Section::new(text, account.row.borrow_and_update().clone())?;
+        let has_token = account.token.borrow().is_some();
+        let not_connected = worded(text, "zvuk.status.not_connected", "source.status")?;
         Ok(Self {
             branch,
             client,
             runtime,
-            cancel: cancel.child(),
-            found,
-            arrivals,
+            cancel,
             catalogue: Catalogue::default(),
-            generation: 0,
-            pending: None,
-            active: None,
-            playlists_active: false,
-            likes: HashSet::new(),
+            load: Load::Idle,
+            expanded: false,
+            listing: None,
+            likes: HashMap::new(),
             faults: Faults::default(),
+            account,
+            section,
+            has_token,
+            not_connected,
         })
     }
+}
 
-    pub(super) fn queue(&mut self, due: Instant) {
-        self.generation = self.generation.wrapping_add(1);
-        if let Some(active) = &self.active {
-            active.cancel.cancel();
-        }
-        self.pending =
-            (!self.cancel.is_cancelled() && self.catalogue.request().is_some()).then_some(due);
-    }
-
-    /// Registers the source's page, built once the package's text catalog is known.
-    pub fn registered(client: Client<N>, runtime: Handle, cancel: CancelToken) -> Registration {
-        Registration::new(page::page(), move |text| {
-            Ok(Box::new(Self::new(client, runtime, &cancel, text)?))
+#[bon::bon]
+impl<N: Net + Clone + 'static> Source<N> {
+    /// Registers the source over the caller's services and starts its account.
+    ///
+    /// # Errors
+    /// Returns an error if a shipped document does not parse.
+    #[builder]
+    pub fn registered(
+        client: Client<N>,
+        secrets: Secrets,
+        open: Arc<dyn Opener>,
+        runtime: &Handle,
+        cancel: CancelToken,
+    ) -> Result<Registration, UiDocError> {
+        let catalogue = page::document()?;
+        let settings = page::section()?;
+        let account = Account::spawn(client.clone(), secrets, open, runtime, cancel.child());
+        let grant = KeyAccess::new(
+            crate::consts::KEY_DOMAIN,
+            crate::consts::AUTH_HEADER,
+            account.token.clone(),
+        );
+        let runtime = runtime.clone();
+        Ok(Registration::new(page::page(), move |text| {
+            Ok(Box::new(Self::new(client, runtime, cancel, account, text)?))
         })
+        .fill(PAGES, catalogue)
+        .fill(SECTIONS, settings)
+        .key_access(grant))
     }
 }
 
@@ -188,24 +237,26 @@ impl Source<HttpClient> {
 
     fn register(environment: &Environment, context: Context) -> Result<Registration, Cause> {
         let config: Config = context.section()?;
-        let page = page::document()?;
-        let registration = Self::registered(
-            Client::new(environment.net().clone(), &config),
-            environment.runtime().clone(),
-            context.cancel(),
-        );
-        Ok(registration.fill(PAGES, page))
+        let browser = environment.clone();
+        Ok(Self::registered()
+            .client(Client::new(environment.net().clone(), &config))
+            .secrets(environment.secrets().clone())
+            .open(Arc::new(move |url: &Url| browser.open_url(url)))
+            .runtime(environment.runtime())
+            .cancel(context.cancel())
+            .call()?)
     }
 }
 
 impl<N: Net + Clone + 'static> LibrarySource for Source<N> {
     fn read(&self, endpoint: &str) -> Option<ReadValue<'_>> {
-        if endpoint == "fault_hidden" {
-            Some(ReadValue::Bool(self.faults.is_empty()))
-        } else if endpoint == "fault" {
-            Some(ReadValue::Text(&self.faults.text))
-        } else {
-            self.catalogue.read(endpoint)
+        match endpoint {
+            "fault_hidden" => Some(ReadValue::Bool(self.faults.each.is_empty())),
+            "fault" => Some(ReadValue::Text(&self.faults.text)),
+            _ => self
+                .section
+                .read(endpoint)
+                .or_else(|| self.catalogue.read(endpoint)),
         }
     }
 
@@ -218,6 +269,11 @@ impl<N: Net + Clone + 'static> LibrarySource for Source<N> {
                 }
             }
             ("like_track", WriteValue::Text(id)) => self.like(id),
+            (endpoint, WriteValue::Trigger) => {
+                if let Some(command) = section::command(endpoint) {
+                    let _ = self.account.commands.send(command);
+                }
+            }
             _ => {}
         }
     }
@@ -236,7 +292,10 @@ impl<N: Net + Clone + 'static> LibrarySource for Source<N> {
 
     /// Loads collection playlist nodes when their parent is expanded.
     fn expand(&mut self, node: &str) {
-        self.list_playlists(node);
+        if node == consts::PLAYLISTS {
+            self.expanded = true;
+            self.list_playlists();
+        }
     }
 
     fn id(&self) -> &str {
@@ -248,12 +307,8 @@ impl<N: Net + Clone + 'static> LibrarySource for Source<N> {
         let Some(changed) = self.catalogue.select(node) else {
             return;
         };
-        if self.faults.page.is_some()
-            && self.active.is_none()
-            && self.pending.is_none()
-            && !self.cancel.is_cancelled()
-        {
-            self.faults.set(Operation::Page, None);
+        if matches!(self.load, Load::Idle) && self.faults.has(Operation::Page) {
+            self.faults.record(Operation::Page, Ok(()));
         } else if !changed {
             return;
         }
@@ -261,40 +316,31 @@ impl<N: Net + Clone + 'static> LibrarySource for Source<N> {
     }
 
     /// Projects the current page state without hiding errors alongside rows.
-    fn status(&self) -> PageStatus {
-        if self.pending.is_some()
-            || self
-                .active
-                .as_ref()
-                .is_some_and(|active| active.generation == self.generation)
-        {
+    fn status(&self) -> PageStatus<'_> {
+        if !self.has_token {
+            PageStatus::Unreadable(Some(&self.not_connected))
+        } else if !matches!(self.load, Load::Idle) {
             PageStatus::Loading
         } else if !self.catalogue.is_empty() {
             PageStatus::Ready
-        } else if self.faults.page.is_some() {
-            PageStatus::Unreadable
+        } else if self.faults.has(Operation::Page) {
+            PageStatus::Unreadable(None)
         } else {
             PageStatus::Empty
         }
     }
 
-    /// Drains asynchronous completions and starts due catalogue work.
+    /// Follows the account and takes the results of finished jobs, then
+    /// starts due catalogue work.
     fn tick(&mut self) {
-        if self.cancel.is_cancelled() {
-            return;
+        if matches!(self.account.row.has_changed(), Ok(true)) {
+            self.section.row = self.account.row.borrow_and_update().clone();
         }
-        while let Ok(completion) = self.arrivals.try_recv() {
-            self.complete(completion);
-            if self.cancel.is_cancelled() {
-                return;
-            }
+        if matches!(self.account.token.has_changed(), Ok(true)) {
+            self.has_token = self.account.token.borrow_and_update().is_some();
+            self.reconnect();
         }
+        self.settle();
         self.start();
-    }
-}
-
-impl<N> Drop for Source<N> {
-    fn drop(&mut self) {
-        self.cancel.cancel();
     }
 }

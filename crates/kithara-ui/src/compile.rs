@@ -477,7 +477,7 @@ impl Compiler<'_> {
                     origin: layout_uri,
                     pages: pages.keys().cloned().collect(),
                     path: &path,
-                    shown: standing,
+                    shown: Some(standing),
                     state: &state,
                 });
                 self.build(node, layout_uri)

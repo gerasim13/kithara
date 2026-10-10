@@ -32,7 +32,6 @@ use crate::{
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in)]
 pub(crate) struct Engine {
-    #[field(get, vis = "pub(super)")]
     config: AppConfig,
     analysis: AnalysisHandle,
     snapshots: Arc<ArcSwap<EngineSnapshot>>,

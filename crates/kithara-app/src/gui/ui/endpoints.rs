@@ -360,6 +360,12 @@ static ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         category: EndpointCategory::Model,
+        id: "ui.app.config_path",
+        value: ValueKind::Text,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
         id: "ui.app.version",
         value: ValueKind::Text,
         scopes: Endpoint::GLOBAL,

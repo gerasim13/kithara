@@ -13,7 +13,7 @@ use kithara_platform::sync::{Arc, Mutex};
 use kithara_storage::StorageError;
 use rkyv::rancor::Error;
 
-use super::core::{LruIndex, LruInner, LruState};
+use super::{core::LruIndex, inner::LruInner, state::LruState};
 use crate::{
     error::{AssetsError, AssetsResult},
     index::persistence::{IndexFile, schema::LruIndexFile},

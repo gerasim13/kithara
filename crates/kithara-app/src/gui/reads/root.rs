@@ -65,7 +65,12 @@ impl<'a> ReadRoot<'a> {
             player: PlayerNode::new(&snapshot.mix),
             tempo: TempoNode::new(&tempos),
             vis: VisNode::new(&cache.stage, &tempos),
-            ui: UiNode::new(cache.layout(), &cache.modules, &cache.window),
+            ui: UiNode::new(
+                cache.layout(),
+                &cache.modules,
+                &cache.window,
+                &state.config_path,
+            ),
         }
     }
 }
@@ -189,7 +194,7 @@ mod tests {
                 player: PlayerNode::new(&self.mix),
                 tempo: TempoNode::new(&tempos),
                 vis: VisNode::new(&self.stage, &tempos),
-                ui: UiNode::new(DeckLayout::Dual, &self.modules, &self.window),
+                ui: UiNode::new(DeckLayout::Dual, &self.modules, &self.window, ""),
             }
         }
 
@@ -269,6 +274,28 @@ mod tests {
                 .is_some()
         );
         assert_eq!(calls.borrow().rows, 1);
+    }
+
+    #[kithara::test]
+    fn a_source_names_why_its_page_cannot_be_read() {
+        const REASON: &str = "synthetic unreadable reason";
+        let mut fixture = Fixture::new(["+0.0%", "+0.0%"]);
+        fixture.library = test_fixture::mount(
+            None,
+            vec![
+                StartupSource::registered(Vec::new()),
+                Probe::unreadable("menu.module.library", REASON),
+            ],
+        )
+        .map(|(_, library)| library)
+        .expect("the shipped package mounts both sources");
+        let shown = fixture.shown();
+        let root = fixture.root(&shown);
+
+        assert_eq!(
+            Walk::new(&root).get(&format!("source.status@source={}", Probe::ID)),
+            Some(ReadValue::Text(REASON))
+        );
     }
 
     /// The waveform read is where a renderer learns what the analysis has not

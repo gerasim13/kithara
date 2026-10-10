@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs::{self, File, OpenOptions},
     path::Path,
 };
@@ -11,18 +12,29 @@ use super::{
     api::{Github, Gitlab},
     command::BridgeConfig,
     git::{GitRepo, Judged},
-    ledger::{Ledger, LedgerEntry},
+    ledger::{DefaultBranchStatus, Ledger, LedgerEntry},
     model::{
         Branches, Direction, PipelineObservation, PullRequest, VerificationState, direction_for,
         validate_sha,
     },
 };
+use crate::ci::run::PipelineKind;
 
 pub(super) struct Bridge {
     config: BridgeConfig,
     github: Github,
     gitlab: Gitlab,
     repo: GitRepo,
+}
+
+/// One verification attempt: a pull-request head judged merged with a
+/// default-branch commit, under the bridge configuration that names both
+/// sides and links the pipeline.
+struct VerificationAttempt<'a> {
+    head_sha: &'a str,
+    base_sha: &'a str,
+    attempt: u64,
+    config: &'a BridgeConfig,
 }
 
 struct ReconcileLock {
@@ -87,6 +99,17 @@ impl Bridge {
         let _lock = ReconcileLock::acquire(&self.config.state_dir)?;
         reconcile_main_first(
             || self.reconcile_main(),
+            |base_sha| {
+                let ledger = Ledger::new(&self.config.state_dir)?;
+                report_default_branch(
+                    base_sha,
+                    &self.config,
+                    &ledger,
+                    |sha| self.gitlab.default_branch_pipeline(sha),
+                    |id| self.gitlab.pipeline_observation(id, PipelineKind::Main),
+                    |sha, state, detail, url| self.github.report_status(sha, state, detail, url),
+                )
+            },
             |base_sha| self.verify_open_pulls(base_sha),
         )
     }
@@ -218,7 +241,7 @@ impl Bridge {
             &pull.head_sha,
             &entry,
             &changed_controls,
-            |sha, state, detail| self.github.report_status(sha, state, detail),
+            |sha, state, detail, url| self.github.report_status(sha, state, detail, url),
             |attempt, detail| ledger.reject(&pull.head_sha, base_sha, attempt, detail),
         )? {
             return Ok(());
@@ -227,6 +250,12 @@ impl Bridge {
             return Ok(());
         }
 
+        let attempt = VerificationAttempt {
+            head_sha: &pull.head_sha,
+            base_sha,
+            attempt: entry.attempt,
+            config: &self.config,
+        };
         let Some(pipeline_id) = entry.pipeline_id else {
             let reference = quarantine_ref(&pull.head_sha, base_sha, entry.attempt);
             // The base is merged in either way; trust decides only whether the
@@ -242,7 +271,9 @@ impl Bridge {
                         &pull.head_sha,
                         base_sha,
                         &entry,
-                        |sha, state, detail| self.github.report_status(sha, state, detail),
+                        |sha, state, detail, url| {
+                            self.github.report_status(sha, state, detail, url)
+                        },
                         |attempt, detail| ledger.reject(&pull.head_sha, base_sha, attempt, detail),
                     );
                 }
@@ -252,9 +283,9 @@ impl Bridge {
                 self.gitlab
                     .verification_pipelines(&reference, &pull.head_sha, base_sha)?;
             start_verification(
-                &pull.head_sha,
-                entry.attempt,
+                &attempt,
                 &discovered,
+                ledger.last_pass(&pull.head_sha, base_sha)?.as_deref(),
                 || {
                     self.gitlab
                         .create_pipeline(&reference, &pull.head_sha, base_sha)
@@ -262,7 +293,7 @@ impl Bridge {
                 |attempt, pipeline_id| {
                     ledger.attach(&pull.head_sha, base_sha, attempt, pipeline_id)
                 },
-                |sha, state, detail| self.github.report_status(sha, state, detail),
+                |sha, state, detail, url| self.github.report_status(sha, state, detail, url),
                 |attempt, pipeline_id| {
                     ledger.announce(&pull.head_sha, base_sha, attempt, pipeline_id)
                 },
@@ -271,17 +302,25 @@ impl Bridge {
         };
 
         if !entry.announced {
-            self.github
-                .report_status(&pull.head_sha, "pending", "GitLab verification running")?;
+            let last_pass = ledger.last_pass(&pull.head_sha, base_sha)?;
+            self.github.report_status(
+                &pull.head_sha,
+                "pending",
+                &pending_description(&self.config.github_branch, base_sha, last_pass.as_deref()),
+                Some(&self.config.gitlab_pipeline_url(pipeline_id)),
+            )?;
             ledger.announce(&pull.head_sha, base_sha, entry.attempt, pipeline_id)?;
             return Ok(());
         }
 
         observe_verification(
-            &pull.head_sha,
+            &attempt,
             pipeline_id,
-            |id| self.gitlab.pipeline_observation(id),
-            |sha, state, detail| self.github.report_status(sha, state, detail),
+            |id| {
+                self.gitlab
+                    .pipeline_observation(id, PipelineKind::Quarantine)
+            },
+            |sha, state, detail, url| self.github.report_status(sha, state, detail, url),
             |id, state, detail| {
                 ledger.finish(&pull.head_sha, base_sha, entry.attempt, id, state, detail)
             },
@@ -290,16 +329,135 @@ impl Bridge {
     }
 }
 
+/// Report and verify only while both default branches name the same commit:
+/// otherwise the pipeline verdict could be attached to a different head.
 fn reconcile_main_first(
     reconcile_main: impl FnOnce() -> Result<Option<String>>,
+    report_default: impl FnOnce(&str) -> Result<()>,
     verify_pulls: impl FnOnce(&str) -> Result<()>,
 ) -> Result<()> {
-    if let Some(base) = reconcile_main()?
-        && let Err(error) = verify_pulls(&base)
-    {
-        warn!(%error, %base, "pull-request verification tick failed");
+    if let Some(base) = reconcile_main()? {
+        if let Err(error) = report_default(&base) {
+            warn!(%error, %base, "default-branch status tick failed");
+        }
+        if let Err(error) = verify_pulls(&base) {
+            warn!(%error, %base, "pull-request verification tick failed");
+        }
     }
     Ok(())
+}
+
+/// The ledger dedupes verdicts because statuses are append-only and capped per commit.
+/// A commit stays watched after it stops being the head until its pipeline finishes,
+/// so its pending status still resolves.
+fn report_default_branch(
+    head: &str,
+    config: &BridgeConfig,
+    ledger: &Ledger,
+    pipeline: impl FnOnce(&str) -> Result<Option<u64>>,
+    mut observe: impl FnMut(u64) -> Result<PipelineObservation>,
+    mut report: impl FnMut(&str, &str, &str, Option<&str>) -> Result<()>,
+) -> Result<()> {
+    let posted = ledger.default_branch_statuses()?;
+    let mut watched = posted
+        .iter()
+        .filter(|(_, status)| status.state == "pending")
+        .map(|(sha, status)| (sha.as_str(), status.pipeline_id))
+        .collect::<BTreeMap<_, _>>();
+    if let Some(pipeline_id) = pipeline(head)? {
+        watched.insert(head, pipeline_id);
+    }
+    for (sha, pipeline_id) in watched {
+        if let Err(error) = settle_default_branch_commit(
+            sha,
+            pipeline_id,
+            config,
+            ledger,
+            posted.get(sha),
+            &mut observe,
+            &mut report,
+        ) {
+            warn!(%error, %sha, pipeline_id, "default-branch commit reporting failed");
+        }
+    }
+    for (sha, status) in posted {
+        if status.state != "pending" && sha != head {
+            ledger.forget_default_branch(&sha)?;
+        }
+    }
+    Ok(())
+}
+
+fn settle_default_branch_commit(
+    sha: &str,
+    pipeline_id: u64,
+    config: &BridgeConfig,
+    ledger: &Ledger,
+    posted: Option<&DefaultBranchStatus>,
+    observe: &mut impl FnMut(u64) -> Result<PipelineObservation>,
+    report: &mut impl FnMut(&str, &str, &str, Option<&str>) -> Result<()>,
+) -> Result<()> {
+    let (state, description) =
+        default_branch_verdict(pipeline_id, observe(pipeline_id)?, &config.gitlab_branch);
+    let status = DefaultBranchStatus {
+        pipeline_id,
+        state: state.into(),
+        description,
+    };
+    if posted != Some(&status) {
+        report(
+            sha,
+            &status.state,
+            &status.description,
+            Some(&config.gitlab_pipeline_url(pipeline_id)),
+        )?;
+        ledger.record_default_branch(sha, status)?;
+    }
+    Ok(())
+}
+
+fn default_branch_verdict(
+    pipeline_id: u64,
+    observation: PipelineObservation,
+    gitlab_branch: &str,
+) -> (&'static str, String) {
+    match observation {
+        PipelineObservation::Running => (
+            "pending",
+            format!("GitLab pipeline {pipeline_id} on {gitlab_branch} running"),
+        ),
+        PipelineObservation::Succeeded => (
+            "success",
+            format!("GitLab pipeline {pipeline_id} on {gitlab_branch} passed"),
+        ),
+        PipelineObservation::Failed(status) => (
+            if status == "failed" {
+                "failure"
+            } else {
+                "error"
+            },
+            format!("GitLab pipeline {pipeline_id} on {gitlab_branch} finished with {status}"),
+        ),
+        PipelineObservation::Cancelled => (
+            "error",
+            format!("GitLab pipeline {pipeline_id} on {gitlab_branch} was stopped"),
+        ),
+        PipelineObservation::Invalid(detail) => ("error", detail),
+    }
+}
+
+fn pending_description(github_branch: &str, base_sha: &str, last_pass: Option<&str>) -> String {
+    let base = abbreviate(base_sha);
+    last_pass.map_or_else(
+        || format!("GitLab verification of the merge with {github_branch} {base} running"),
+        |old| {
+            let old = abbreviate(old);
+            format!(
+                "Merging now is at risk: {github_branch} moved to {base} after the pass on {old}; \
+                 re-checking the merge"
+            )
+        },
+    )
 }
 
 /// Branch a verification runs on.
@@ -411,18 +569,23 @@ fn recover_or_create(pipeline_ids: &[u64], create: impl FnOnce() -> Result<u64>)
 }
 
 fn start_verification(
-    head_sha: &str,
-    attempt: u64,
+    attempt: &VerificationAttempt<'_>,
     pipeline_ids: &[u64],
+    last_pass: Option<&str>,
     create: impl FnOnce() -> Result<u64>,
     attach: impl FnOnce(u64, u64) -> Result<()>,
-    report: impl FnOnce(&str, &str, &str) -> Result<()>,
+    report: impl FnOnce(&str, &str, &str, Option<&str>) -> Result<()>,
     announce: impl FnOnce(u64, u64) -> Result<()>,
 ) -> Result<()> {
     let pipeline_id = recover_or_create(pipeline_ids, create)?;
-    attach(attempt, pipeline_id)?;
-    report(head_sha, "pending", "GitLab verification running")?;
-    announce(attempt, pipeline_id)
+    attach(attempt.attempt, pipeline_id)?;
+    report(
+        attempt.head_sha,
+        "pending",
+        &pending_description(&attempt.config.github_branch, attempt.base_sha, last_pass),
+        Some(&attempt.config.gitlab_pipeline_url(pipeline_id)),
+    )?;
+    announce(attempt.attempt, pipeline_id)
 }
 
 /// A branch that will not merge into the base cannot be verified against it,
@@ -434,14 +597,14 @@ fn reject_unmergeable(
     head_sha: &str,
     base_sha: &str,
     entry: &LedgerEntry,
-    report: impl FnOnce(&str, &str, &str) -> Result<()>,
+    report: impl FnOnce(&str, &str, &str, Option<&str>) -> Result<()>,
     reject: impl FnOnce(u64, String) -> Result<()>,
 ) -> Result<()> {
     let detail = format!(
         "GitHub PR #{pull_number} does not merge into the verified base {base_sha}. Merge the \
          default branch into it and push; the verification runs the merge, not the head alone"
     );
-    report(head_sha, "failure", &detail)?;
+    report(head_sha, "failure", &detail, None)?;
     reject(entry.attempt, detail)
 }
 
@@ -450,7 +613,7 @@ fn reject_control_changes(
     head_sha: &str,
     entry: &LedgerEntry,
     paths: &[String],
-    report: impl FnOnce(&str, &str, &str) -> Result<()>,
+    report: impl FnOnce(&str, &str, &str, Option<&str>) -> Result<()>,
     reject: impl FnOnce(u64, String) -> Result<()>,
 ) -> Result<bool> {
     if paths.is_empty() {
@@ -464,7 +627,7 @@ fn reject_control_changes(
         "GitHub PR #{pull_number} weakens the trusted CI judge in {}: an entry that already existed was changed or removed. Port these changes through a reviewed GitLab merge request",
         paths.join(", ")
     );
-    report(head_sha, "failure", &detail)?;
+    report(head_sha, "failure", &detail, None)?;
     if entry.state == VerificationState::Verified {
         bail!(
             "verification {head_sha} attempt {} was already verified before its protected control-path change was rejected",
@@ -484,38 +647,46 @@ fn reject_control_changes(
 /// unverified, which is what the pull request is told while the next attempt
 /// opens.
 fn observe_verification(
-    head_sha: &str,
+    attempt: &VerificationAttempt<'_>,
     pipeline_id: u64,
-    mut observe: impl FnMut(u64) -> Result<PipelineObservation>,
-    mut report: impl FnMut(&str, &str, &str) -> Result<()>,
+    observe: impl FnOnce(u64) -> Result<PipelineObservation>,
+    mut report: impl FnMut(&str, &str, &str, Option<&str>) -> Result<()>,
     mut finish: impl FnMut(u64, VerificationState, Option<String>) -> Result<()>,
     release: impl FnOnce(u64) -> Result<()>,
 ) -> Result<()> {
+    let url = attempt.config.gitlab_pipeline_url(pipeline_id);
+    let branch = &attempt.config.github_branch;
+    let base = abbreviate(attempt.base_sha);
     match observe(pipeline_id)? {
         PipelineObservation::Running => Ok(()),
         PipelineObservation::Succeeded => {
-            let detail = format!("GitLab pipeline {pipeline_id} passed");
-            report(head_sha, "success", &detail)?;
+            let detail =
+                format!("GitLab pipeline {pipeline_id} passed merged with {branch} {base}");
+            report(attempt.head_sha, "success", &detail, Some(&url))?;
             finish(pipeline_id, VerificationState::Verified, Some(detail))
         }
         PipelineObservation::Cancelled => {
-            let detail =
-                format!("GitLab pipeline {pipeline_id} was stopped; a new run will be started");
-            report(head_sha, "pending", &detail)?;
+            let detail = format!(
+                "GitLab pipeline {pipeline_id} was stopped; a new run against {branch} {base} \
+                 will be started"
+            );
+            report(attempt.head_sha, "pending", &detail, Some(&url))?;
             release(pipeline_id)
         }
         PipelineObservation::Failed(status) => {
-            let detail = format!("GitLab pipeline {pipeline_id} finished with {status}");
+            let detail = format!(
+                "GitLab pipeline {pipeline_id} finished with {status} merged with {branch} {base}"
+            );
             let github_state = if status == "failed" {
                 "failure"
             } else {
                 "error"
             };
-            report(head_sha, github_state, &detail)?;
+            report(attempt.head_sha, github_state, &detail, Some(&url))?;
             finish(pipeline_id, VerificationState::Rejected, Some(detail))
         }
         PipelineObservation::Invalid(detail) => {
-            report(head_sha, "error", &detail)?;
+            report(attempt.head_sha, "error", &detail, Some(&url))?;
             finish(pipeline_id, VerificationState::Rejected, Some(detail))
         }
     }
@@ -562,11 +733,606 @@ fn require_sha(owner: &str, sha: &str) -> Result<()> {
 mod tests {
     use std::{
         cell::{Cell, RefCell},
+        collections::BTreeMap,
         rc::Rc,
     };
 
-    use super::*;
+    use super::{super::ledger::DefaultBranchStatus, *};
     use crate::consts;
+
+    fn status_config() -> BridgeConfig {
+        let mut config: BridgeConfig = toml::from_str(include_str!(
+            "../../../../.config/bridge/config.example.toml"
+        ))
+        .unwrap();
+        config.github_branch = "release".into();
+        config.gitlab_branch = "stable".into();
+        config.gitlab_url = "https://gitlab.example/".parse().unwrap();
+        config.gitlab_project_path = "team/audio".into();
+        config
+    }
+
+    #[test]
+    fn pending_without_an_older_pass_names_the_branch_and_abbreviated_base() {
+        assert_eq!(
+            pending_description("release", consts::STATUS_BASE, None),
+            "GitLab verification of the merge with release 0123456789ab running"
+        );
+    }
+
+    #[test]
+    fn pending_after_an_older_pass_explains_the_moved_base_and_merge_risk() {
+        assert_eq!(
+            pending_description(
+                "release",
+                consts::STATUS_BASE,
+                Some(consts::STATUS_OLD_BASE)
+            ),
+            "Merging now is at risk: release moved to 0123456789ab after the pass on 89abcdef0123; re-checking the merge"
+        );
+    }
+
+    #[test]
+    fn starting_or_recovering_a_pipeline_reports_the_current_merge_base_and_url() {
+        for discovered in [Vec::new(), vec![42]] {
+            let reports = RefCell::new(Vec::new());
+            start_verification(
+                &VerificationAttempt {
+                    head_sha: "head",
+                    base_sha: consts::STATUS_BASE,
+                    attempt: 1,
+                    config: &status_config(),
+                },
+                &discovered,
+                None,
+                || {
+                    assert!(discovered.is_empty());
+                    Ok(42)
+                },
+                |attempt, id| {
+                    assert_eq!((attempt, id), (1, 42));
+                    Ok(())
+                },
+                |sha, state, description, url| {
+                    reports.borrow_mut().push((
+                        sha.to_owned(),
+                        state.to_owned(),
+                        description.to_owned(),
+                        url.map(str::to_owned),
+                    ));
+                    Ok(())
+                },
+                |attempt, id| {
+                    assert_eq!((attempt, id), (1, 42));
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+            assert_eq!(
+                *reports.borrow(),
+                [(
+                    "head".into(),
+                    "pending".into(),
+                    "GitLab verification of the merge with release 0123456789ab running".into(),
+                    Some(consts::STATUS_URL.into()),
+                )]
+            );
+        }
+    }
+
+    #[test]
+    fn starting_or_recovering_a_pipeline_reports_the_older_pass_and_merge_risk() {
+        for discovered in [Vec::new(), vec![42]] {
+            let reports = RefCell::new(Vec::new());
+            start_verification(
+                &VerificationAttempt {
+                    head_sha: "head",
+                    base_sha: consts::STATUS_BASE,
+                    attempt: 1,
+                    config: &status_config(),
+                },
+                &discovered,
+                Some(consts::STATUS_OLD_BASE),
+                || {
+                    assert!(discovered.is_empty());
+                    Ok(42)
+                },
+                |_, _| Ok(()),
+                |sha, state, description, url| {
+                    reports.borrow_mut().push((
+                        sha.to_owned(),
+                        state.to_owned(),
+                        description.to_owned(),
+                        url.map(str::to_owned),
+                    ));
+                    Ok(())
+                },
+                |_, _| Ok(()),
+            )
+            .unwrap();
+
+            assert_eq!(
+                *reports.borrow(),
+                [(
+                    "head".into(),
+                    "pending".into(),
+                    "Merging now is at risk: release moved to 0123456789ab after the pass on 89abcdef0123; re-checking the merge".into(),
+                    Some(consts::STATUS_URL.into()),
+                )]
+            );
+        }
+    }
+
+    fn observed_pr_reports(
+        observation: PipelineObservation,
+    ) -> Vec<(String, String, String, Option<String>)> {
+        let mut reports = Vec::new();
+        observe_verification(
+            &VerificationAttempt {
+                head_sha: "head",
+                base_sha: consts::STATUS_BASE,
+                attempt: 1,
+                config: &status_config(),
+            },
+            42,
+            |_| Ok(observation),
+            |sha, state, description, url| {
+                reports.push((
+                    sha.to_owned(),
+                    state.to_owned(),
+                    description.to_owned(),
+                    url.map(str::to_owned),
+                ));
+                Ok(())
+            },
+            |_, _, _| Ok(()),
+            |_| Ok(()),
+        )
+        .unwrap();
+        reports
+    }
+
+    #[test]
+    fn a_pr_pass_names_the_merge_base_and_links_the_pipeline() {
+        assert_eq!(
+            observed_pr_reports(PipelineObservation::Succeeded),
+            [(
+                "head".into(),
+                "success".into(),
+                "GitLab pipeline 42 passed merged with release 0123456789ab".into(),
+                Some(consts::STATUS_URL.into()),
+            )]
+        );
+    }
+
+    #[test]
+    fn a_pr_failure_names_the_merge_base_and_links_the_pipeline() {
+        assert_eq!(
+            observed_pr_reports(PipelineObservation::Failed("failed".into())),
+            [(
+                "head".into(),
+                "failure".into(),
+                "GitLab pipeline 42 finished with failed merged with release 0123456789ab".into(),
+                Some(consts::STATUS_URL.into()),
+            )]
+        );
+    }
+
+    #[test]
+    fn other_terminal_pr_statuses_remain_errors_and_name_the_merge_base() {
+        for status in ["skipped", "manual"] {
+            assert_eq!(
+                observed_pr_reports(PipelineObservation::Failed(status.into())),
+                [(
+                    "head".into(),
+                    "error".into(),
+                    format!(
+                        "GitLab pipeline 42 finished with {status} merged with release 0123456789ab"
+                    ),
+                    Some(consts::STATUS_URL.into()),
+                )]
+            );
+        }
+    }
+
+    #[test]
+    fn a_stopped_pr_pipeline_names_the_next_merge_base_and_stays_pending() {
+        assert_eq!(
+            observed_pr_reports(PipelineObservation::Cancelled),
+            [(
+                "head".into(),
+                "pending".into(),
+                "GitLab pipeline 42 was stopped; a new run against release 0123456789ab will be started".into(),
+                Some(consts::STATUS_URL.into()),
+            )]
+        );
+    }
+
+    #[test]
+    fn invalid_pr_proof_preserves_the_detail_and_links_the_pipeline() {
+        assert_eq!(
+            observed_pr_reports(PipelineObservation::Invalid("missing child".into())),
+            [(
+                "head".into(),
+                "error".into(),
+                "missing child".into(),
+                Some(consts::STATUS_URL.into()),
+            )]
+        );
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    enum DefaultBranchAction {
+        Pipeline(String),
+        Observe(u64),
+        Report(String, String, String, Option<String>),
+    }
+
+    fn default_branch_actions(
+        head: &str,
+        config: &BridgeConfig,
+        ledger: &Ledger,
+        pipeline: Option<u64>,
+        mut observe: impl FnMut(u64) -> Result<PipelineObservation>,
+    ) -> Result<Vec<DefaultBranchAction>> {
+        let actions = RefCell::new(Vec::new());
+        report_default_branch(
+            head,
+            config,
+            ledger,
+            |sha| {
+                actions
+                    .borrow_mut()
+                    .push(DefaultBranchAction::Pipeline(sha.into()));
+                Ok(pipeline)
+            },
+            |id| {
+                actions.borrow_mut().push(DefaultBranchAction::Observe(id));
+                observe(id)
+            },
+            |sha, state, description, url| {
+                actions.borrow_mut().push(DefaultBranchAction::Report(
+                    sha.into(),
+                    state.into(),
+                    description.into(),
+                    url.map(str::to_owned),
+                ));
+                Ok(())
+            },
+        )?;
+        Ok(actions.into_inner())
+    }
+
+    #[test]
+    fn default_branch_verdicts_map_each_observation_with_its_url() {
+        let config = status_config();
+        let pipeline_id = 42;
+        let gitlab_branch = &config.gitlab_branch;
+        for (observation, state, description) in [
+            (
+                PipelineObservation::Failed("failed".into()),
+                "failure",
+                format!("GitLab pipeline {pipeline_id} on {gitlab_branch} finished with failed"),
+            ),
+            (
+                PipelineObservation::Failed("skipped".into()),
+                "error",
+                format!("GitLab pipeline {pipeline_id} on {gitlab_branch} finished with skipped"),
+            ),
+            (
+                PipelineObservation::Cancelled,
+                "error",
+                format!("GitLab pipeline {pipeline_id} on {gitlab_branch} was stopped"),
+            ),
+            (
+                PipelineObservation::Invalid("missing child".into()),
+                "error",
+                "missing child".into(),
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let ledger = Ledger::new(directory.path()).unwrap();
+            assert_eq!(
+                default_branch_actions("a", &config, &ledger, Some(pipeline_id), |_| {
+                    Ok(observation.clone())
+                })
+                .unwrap(),
+                [
+                    DefaultBranchAction::Pipeline("a".into()),
+                    DefaultBranchAction::Observe(pipeline_id),
+                    DefaultBranchAction::Report(
+                        "a".into(),
+                        state.into(),
+                        description,
+                        Some(config.gitlab_pipeline_url(pipeline_id)),
+                    ),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn a_running_head_is_posted_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        let config = status_config();
+        let mut actions = Vec::new();
+        for _ in 0..2 {
+            actions.extend(
+                default_branch_actions("a", &config, &ledger, Some(1), |_| {
+                    Ok(PipelineObservation::Running)
+                })
+                .unwrap(),
+            );
+        }
+
+        assert_eq!(
+            actions,
+            [
+                DefaultBranchAction::Pipeline("a".into()),
+                DefaultBranchAction::Observe(1),
+                DefaultBranchAction::Report(
+                    "a".into(),
+                    "pending".into(),
+                    "GitLab pipeline 1 on stable running".into(),
+                    Some(config.gitlab_pipeline_url(1)),
+                ),
+                DefaultBranchAction::Pipeline("a".into()),
+                DefaultBranchAction::Observe(1),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_head_verdict_follows_its_pending() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        let config = status_config();
+        let mut actions = default_branch_actions("a", &config, &ledger, Some(1), |_| {
+            Ok(PipelineObservation::Running)
+        })
+        .unwrap();
+        actions.extend(
+            default_branch_actions("a", &config, &ledger, Some(1), |_| {
+                Ok(PipelineObservation::Succeeded)
+            })
+            .unwrap(),
+        );
+
+        assert_eq!(
+            actions,
+            [
+                DefaultBranchAction::Pipeline("a".into()),
+                DefaultBranchAction::Observe(1),
+                DefaultBranchAction::Report(
+                    "a".into(),
+                    "pending".into(),
+                    "GitLab pipeline 1 on stable running".into(),
+                    Some(config.gitlab_pipeline_url(1)),
+                ),
+                DefaultBranchAction::Pipeline("a".into()),
+                DefaultBranchAction::Observe(1),
+                DefaultBranchAction::Report(
+                    "a".into(),
+                    "success".into(),
+                    "GitLab pipeline 1 on stable passed".into(),
+                    Some(config.gitlab_pipeline_url(1)),
+                ),
+            ]
+        );
+        assert_eq!(
+            ledger.default_branch_statuses().unwrap(),
+            BTreeMap::from([(
+                "a".into(),
+                DefaultBranchStatus {
+                    pipeline_id: 1,
+                    state: "success".into(),
+                    description: "GitLab pipeline 1 on stable passed".into(),
+                },
+            )])
+        );
+    }
+
+    #[test]
+    fn a_commit_that_stopped_being_the_head_still_gets_its_verdict() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        let config = status_config();
+        default_branch_actions("a", &config, &ledger, Some(1), |_| {
+            Ok(PipelineObservation::Running)
+        })
+        .unwrap();
+        let actions = default_branch_actions("b", &config, &ledger, Some(2), |id| {
+            Ok(if id == 1 {
+                PipelineObservation::Failed("failed".into())
+            } else {
+                PipelineObservation::Running
+            })
+        })
+        .unwrap();
+
+        assert_eq!(
+            actions,
+            [
+                DefaultBranchAction::Pipeline("b".into()),
+                DefaultBranchAction::Observe(1),
+                DefaultBranchAction::Report(
+                    "a".into(),
+                    "failure".into(),
+                    "GitLab pipeline 1 on stable finished with failed".into(),
+                    Some(config.gitlab_pipeline_url(1)),
+                ),
+                DefaultBranchAction::Observe(2),
+                DefaultBranchAction::Report(
+                    "b".into(),
+                    "pending".into(),
+                    "GitLab pipeline 2 on stable running".into(),
+                    Some(config.gitlab_pipeline_url(2)),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_settled_commit_off_the_head_is_forgotten_unobserved() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        let config = status_config();
+        default_branch_actions("a", &config, &ledger, Some(1), |_| {
+            Ok(PipelineObservation::Running)
+        })
+        .unwrap();
+        default_branch_actions("b", &config, &ledger, Some(2), |id| {
+            Ok(if id == 1 {
+                PipelineObservation::Failed("failed".into())
+            } else {
+                PipelineObservation::Running
+            })
+        })
+        .unwrap();
+        let actions = default_branch_actions("b", &config, &ledger, Some(2), |_| {
+            Ok(PipelineObservation::Running)
+        })
+        .unwrap();
+
+        assert_eq!(
+            actions,
+            [
+                DefaultBranchAction::Pipeline("b".into()),
+                DefaultBranchAction::Observe(2),
+            ]
+        );
+        assert_eq!(
+            ledger.default_branch_statuses().unwrap(),
+            BTreeMap::from([(
+                "b".into(),
+                DefaultBranchStatus {
+                    pipeline_id: 2,
+                    state: "pending".into(),
+                    description: "GitLab pipeline 2 on stable running".into(),
+                },
+            )])
+        );
+    }
+
+    #[test]
+    fn a_new_pipeline_on_the_same_head_is_posted_again() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        let config = status_config();
+        let mut actions = Vec::new();
+        for pipeline_id in [1, 2] {
+            actions.extend(
+                default_branch_actions("a", &config, &ledger, Some(pipeline_id), |_| {
+                    Ok(PipelineObservation::Running)
+                })
+                .unwrap(),
+            );
+        }
+
+        assert_eq!(
+            actions,
+            [
+                DefaultBranchAction::Pipeline("a".into()),
+                DefaultBranchAction::Observe(1),
+                DefaultBranchAction::Report(
+                    "a".into(),
+                    "pending".into(),
+                    "GitLab pipeline 1 on stable running".into(),
+                    Some(config.gitlab_pipeline_url(1)),
+                ),
+                DefaultBranchAction::Pipeline("a".into()),
+                DefaultBranchAction::Observe(2),
+                DefaultBranchAction::Report(
+                    "a".into(),
+                    "pending".into(),
+                    "GitLab pipeline 2 on stable running".into(),
+                    Some(config.gitlab_pipeline_url(2)),
+                ),
+            ]
+        );
+        assert_eq!(
+            ledger.default_branch_statuses().unwrap().get("a"),
+            Some(&DefaultBranchStatus {
+                pipeline_id: 2,
+                state: "pending".into(),
+                description: "GitLab pipeline 2 on stable running".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn one_broken_commit_does_not_hide_the_head() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        let config = status_config();
+        let pending = DefaultBranchStatus {
+            pipeline_id: 1,
+            state: "pending".into(),
+            description: "GitLab pipeline 1 on stable running".into(),
+        };
+        ledger.record_default_branch("a", pending.clone()).unwrap();
+        let result = default_branch_actions("b", &config, &ledger, Some(2), |id| {
+            if id == 1 {
+                bail!("old pipeline observation failed");
+            }
+            Ok(PipelineObservation::Succeeded)
+        });
+
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            [
+                DefaultBranchAction::Pipeline("b".into()),
+                DefaultBranchAction::Observe(1),
+                DefaultBranchAction::Observe(2),
+                DefaultBranchAction::Report(
+                    "b".into(),
+                    "success".into(),
+                    "GitLab pipeline 2 on stable passed".into(),
+                    Some(config.gitlab_pipeline_url(2)),
+                ),
+            ]
+        );
+        assert_eq!(
+            ledger.default_branch_statuses().unwrap().get("a"),
+            Some(&pending)
+        );
+    }
+
+    #[test]
+    fn no_pipeline_and_nothing_posted_does_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        assert_eq!(
+            default_branch_actions("a", &status_config(), &ledger, None, |_| {
+                Ok(PipelineObservation::Running)
+            })
+            .unwrap(),
+            [DefaultBranchAction::Pipeline("a".into())]
+        );
+    }
+
+    #[test]
+    fn a_default_branch_reporting_error_still_runs_pull_verification_on_the_same_tick() {
+        let actions = RefCell::new(Vec::new());
+        let result = reconcile_main_first(
+            || Ok(Some("base".into())),
+            |base| {
+                assert_eq!(base, "base");
+                actions.borrow_mut().push("default");
+                bail!("temporary default-branch API error")
+            },
+            |base| {
+                assert_eq!(base, "base");
+                actions.borrow_mut().push("pulls");
+                Ok(())
+            },
+        );
+        assert!(result.is_ok());
+        assert_eq!(*actions.borrow(), ["default", "pulls"]);
+    }
 
     #[derive(Debug, Eq, PartialEq)]
     enum ImportAction {
@@ -595,6 +1361,7 @@ mod tests {
                 actions.borrow_mut().push("main");
                 Ok(None)
             },
+            |_| panic!("a fast-forward tick must not report the default branch"),
             |_| {
                 actions.borrow_mut().push("verification");
                 Ok(())
@@ -613,6 +1380,7 @@ mod tests {
                 actions.borrow_mut().push("main");
                 Ok(Some("base".into()))
             },
+            |_| Ok(()),
             |base| {
                 assert_eq!(base, "base");
                 actions.borrow_mut().push("verification");
@@ -628,6 +1396,7 @@ mod tests {
     fn verifier_errors_do_not_fail_completed_main_reconciliation() {
         reconcile_main_first(
             || Ok(Some("base".into())),
+            |_| Ok(()),
             |_| bail!("transient GitHub error"),
         )
         .unwrap();
@@ -656,9 +1425,14 @@ mod tests {
         let head = "0123456789abcdef0123456789abcdef01234567";
         let actions = RefCell::new(Vec::new());
         start_verification(
-            head,
-            3,
+            &VerificationAttempt {
+                head_sha: head,
+                base_sha: "base",
+                attempt: 3,
+                config: &status_config(),
+            },
             &[],
+            None,
             || {
                 actions.borrow_mut().push(VerificationAction::Create);
                 Ok(42)
@@ -669,7 +1443,7 @@ mod tests {
                     .push(VerificationAction::Attach(attempt, id));
                 Ok(())
             },
-            |sha, state, _| {
+            |sha, state, _, _| {
                 assert_eq!(sha, head);
                 actions
                     .borrow_mut()
@@ -700,14 +1474,19 @@ mod tests {
     fn one_later_tick_observes_once_and_running_keeps_testing() {
         let calls = RefCell::new(0);
         observe_verification(
-            "head",
+            &VerificationAttempt {
+                head_sha: "head",
+                base_sha: "base",
+                attempt: 1,
+                config: &status_config(),
+            },
             42,
             |id| {
                 assert_eq!(id, 42);
                 *calls.borrow_mut() += 1;
                 Ok(PipelineObservation::Running)
             },
-            |_, _, _| panic!("running is not a new commit-status transition"),
+            |_, _, _, _| panic!("running is not a new commit-status transition"),
             |_, _, _| panic!("running must stay Testing"),
             |_| panic!("a running pipeline was not stopped"),
         )
@@ -719,13 +1498,18 @@ mod tests {
     fn success_is_posted_before_verified() {
         let actions = RefCell::new(Vec::new());
         observe_verification(
-            "head",
+            &VerificationAttempt {
+                head_sha: "head",
+                base_sha: "base",
+                attempt: 1,
+                config: &status_config(),
+            },
             42,
             |id| {
                 actions.borrow_mut().push(VerificationAction::Observe(id));
                 Ok(PipelineObservation::Succeeded)
             },
-            |sha, state, _| {
+            |sha, state, _, _| {
                 actions
                     .borrow_mut()
                     .push(VerificationAction::Report(sha.into(), state.into()));
@@ -760,10 +1544,15 @@ mod tests {
         ] {
             let actions = RefCell::new(Vec::new());
             observe_verification(
-                "head",
+                &VerificationAttempt {
+                    head_sha: "head",
+                    base_sha: "base",
+                    attempt: 1,
+                    config: &status_config(),
+                },
                 42,
                 |_| Ok(observation.clone()),
-                |_, state, _| {
+                |_, state, _, _| {
                     actions
                         .borrow_mut()
                         .push(VerificationAction::Report("head".into(), state.into()));
@@ -794,13 +1583,18 @@ mod tests {
     fn a_cancelled_pipeline_reopens_the_verification_instead_of_rejecting_it() {
         let actions = RefCell::new(Vec::new());
         observe_verification(
-            "head",
+            &VerificationAttempt {
+                head_sha: "head",
+                base_sha: "base",
+                attempt: 1,
+                config: &status_config(),
+            },
             42,
             |id| {
                 actions.borrow_mut().push(VerificationAction::Observe(id));
                 Ok(PipelineObservation::Cancelled)
             },
-            |sha, state, _| {
+            |sha, state, _, _| {
                 actions
                     .borrow_mut()
                     .push(VerificationAction::Report(sha.into(), state.into()));
@@ -827,10 +1621,15 @@ mod tests {
     #[test]
     fn transient_observation_errors_do_not_manufacture_rejection() {
         let error = observe_verification(
-            "head",
+            &VerificationAttempt {
+                head_sha: "head",
+                base_sha: "base",
+                attempt: 1,
+                config: &status_config(),
+            },
             42,
             |_| bail!("temporary GitLab API failure"),
-            |_, _, _| panic!("an API error is not a verdict"),
+            |_, _, _, _| panic!("an API error is not a verdict"),
             |_, _, _| panic!("an API error must leave Testing unchanged"),
             |_| panic!("an API error did not stop the pipeline"),
         )
@@ -927,7 +1726,7 @@ mod tests {
             "head",
             &entry,
             &[".gitlab-ci.yml".into()],
-            |sha, state, _| {
+            |sha, state, _, _| {
                 actions
                     .borrow_mut()
                     .push(VerificationAction::Report(sha.into(), state.into()));
@@ -967,7 +1766,7 @@ mod tests {
                 "head",
                 &entry,
                 &[],
-                |_, _, _| panic!("product-only changes must not report a policy failure"),
+                |_, _, _, _| panic!("product-only changes must not report a policy failure"),
                 |_, _| panic!("product-only changes must not be rejected"),
             )
             .unwrap()
@@ -1105,7 +1904,7 @@ mod tests {
             "head",
             "base",
             &entry,
-            |sha, state, detail| {
+            |sha, state, detail, _| {
                 assert!(detail.contains("does not merge"), "{detail}");
                 assert!(detail.contains("Merge the default branch"), "{detail}");
                 actions

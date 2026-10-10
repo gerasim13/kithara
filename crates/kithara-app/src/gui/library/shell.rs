@@ -51,12 +51,12 @@ impl StatusWords {
         })
     }
 
-    fn of(&self, status: PageStatus) -> &str {
+    fn of<'a>(&'a self, status: PageStatus<'a>) -> &'a str {
         match status {
             PageStatus::Ready => "",
             PageStatus::Loading => &self.loading,
             PageStatus::Empty => &self.empty,
-            PageStatus::Unreadable => &self.unreadable,
+            PageStatus::Unreadable(reason) => reason.unwrap_or(&self.unreadable),
         }
     }
 }
@@ -201,7 +201,7 @@ impl Library {
         self.shown().into_iter().map(|shown| shown.row).collect()
     }
 
-    pub(in crate::gui) fn status_words(&self, status: PageStatus) -> &str {
+    pub(in crate::gui) fn status_words<'a>(&'a self, status: PageStatus<'a>) -> &'a str {
         self.statuses.of(status)
     }
 

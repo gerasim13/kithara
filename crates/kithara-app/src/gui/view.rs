@@ -72,7 +72,7 @@ mod tests {
         let (commands, _receiver) = mpsc::unbounded_channel();
         let window = Id::unique();
         let mut state = Kithara::mounted(
-            test_fixture::boot(runtime.handle(), &config, snapshots, commands),
+            test_fixture::boot(runtime.handle(), &config, snapshots, commands, Vec::new()),
             window,
         );
 

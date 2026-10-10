@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeMap,
     fmt,
     num::{NonZeroU32, NonZeroUsize},
     path::PathBuf,
@@ -24,7 +23,6 @@ use kithara::{
 };
 use kithara_config::Config;
 use kithara_derive::Patch;
-use serde_yaml_ng::Value;
 use url::Url;
 
 #[cfg(feature = "broadcast")]
@@ -86,10 +84,6 @@ pub struct AppConfig {
     /// The one HTTP client the downloader and the library sources share.
     #[config(skip = "shared by the downloader and the library sources", patch(skip))]
     pub net: HttpClient,
-    /// The document's `sources` entries, references resolved; each library
-    /// source reads its own.
-    #[config(skip = "read by the library sources", builder(default), patch(skip))]
-    pub sources: BTreeMap<String, Value>,
     /// App-wide shared asset store.
     #[config(skip = "owned by the app asset store", patch(skip))]
     pub store: AppStore,
@@ -162,9 +156,6 @@ pub struct AppConfig {
         patch(skip)
     )]
     pub tracks: Vec<String>,
-    /// Accept invalid TLS certificates. Test servers only.
-    #[config(builder(default = false), patch(skip))]
-    pub should_accept_invalid_certs: bool,
     /// Complete live-broadcast construction config for this app session. The
     /// document's `broadcast:` section is applied to it in `main`, where the
     /// worker and pools it is built from exist; nothing here carries a second
@@ -225,10 +216,6 @@ impl fmt::Debug for AppConfig {
             .field(
                 "base_worker_cancelled",
                 &self.base_worker.as_ref().map(Worker::is_cancelled),
-            )
-            .field(
-                "should_accept_invalid_certs",
-                &self.should_accept_invalid_certs,
             )
             .field("broadcast", &self.broadcast)
             .field("waveform_max_buckets", &self.waveform_max_buckets)

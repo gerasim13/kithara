@@ -23,10 +23,22 @@ pub(super) struct LedgerEntry {
     updated_at: u64,
 }
 
+/// What the bridge last posted on one default-branch commit.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct DefaultBranchStatus {
+    pub(super) pipeline_id: u64,
+    pub(super) state: String,
+    pub(super) description: String,
+}
+
 #[derive(Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct LedgerData {
     verifications: BTreeMap<String, LedgerEntry>,
+    /// Older ledgers have no such field, meaning nothing has been posted yet.
+    #[serde(default)]
+    default_branch: BTreeMap<String, DefaultBranchStatus>,
 }
 
 pub(super) struct Ledger {
@@ -44,6 +56,28 @@ impl Ledger {
         })
     }
 
+    pub(super) fn default_branch_statuses(&self) -> Result<BTreeMap<String, DefaultBranchStatus>> {
+        self.with_locked_data(|data| Ok(data.default_branch.clone()))
+    }
+
+    pub(super) fn record_default_branch(
+        &self,
+        sha: &str,
+        status: DefaultBranchStatus,
+    ) -> Result<()> {
+        self.with_locked_data(|data| {
+            data.default_branch.insert(sha.to_owned(), status);
+            self.write(data)
+        })
+    }
+
+    pub(super) fn forget_default_branch(&self, sha: &str) -> Result<()> {
+        self.with_locked_data(|data| {
+            data.default_branch.remove(sha);
+            self.write(data)
+        })
+    }
+
     #[cfg(test)]
     pub(super) fn get(&self, head_sha: &str, base_sha: &str) -> Result<Option<LedgerEntry>> {
         self.with_locked_data(|data| {
@@ -51,6 +85,23 @@ impl Ledger {
                 .verifications
                 .get(&ledger_key(head_sha, base_sha))
                 .cloned())
+        })
+    }
+
+    /// The most recently updated pass for this head against a different base.
+    /// Equal timestamps choose the lexicographically later ledger key.
+    pub(super) fn last_pass(&self, head_sha: &str, base_sha: &str) -> Result<Option<String>> {
+        self.with_locked_data(|data| {
+            Ok(data
+                .verifications
+                .iter()
+                .filter(|(_, entry)| entry.state == VerificationState::Verified)
+                .filter_map(|(key, entry)| {
+                    let (head, base) = key.split_once(':')?;
+                    (head == head_sha && base != base_sha).then_some((entry.updated_at, key, base))
+                })
+                .max_by_key(|(updated_at, key, _)| (*updated_at, *key))
+                .map(|(_, _, base)| base.to_owned()))
         })
     }
 
@@ -362,6 +413,130 @@ fn unix_time() -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_branch_statuses_round_trip() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        let pending = DefaultBranchStatus {
+            pipeline_id: 1,
+            state: "pending".into(),
+            description: "GitLab pipeline 1 on stable running".into(),
+        };
+        let passed = DefaultBranchStatus {
+            pipeline_id: 2,
+            state: "success".into(),
+            description: "GitLab pipeline 2 on stable passed".into(),
+        };
+
+        ledger.record_default_branch("a", pending).unwrap();
+        ledger.record_default_branch("b", passed.clone()).unwrap();
+        ledger.forget_default_branch("a").unwrap();
+
+        let reopened = Ledger::new(directory.path()).unwrap();
+        assert_eq!(
+            reopened.default_branch_statuses().unwrap(),
+            BTreeMap::from([("b".into(), passed)])
+        );
+    }
+
+    #[test]
+    fn a_ledger_without_default_branch_statuses_loads_empty() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(
+            directory.path().join("verification-ledger.json"),
+            r#"{"verifications":{}}"#,
+        )
+        .unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        assert!(ledger.read().unwrap().default_branch.is_empty());
+        assert!(ledger.default_branch_statuses().unwrap().is_empty());
+        let pending = DefaultBranchStatus {
+            pipeline_id: 1,
+            state: "pending".into(),
+            description: "GitLab pipeline 1 on stable running".into(),
+        };
+
+        ledger.record_default_branch("a", pending.clone()).unwrap();
+
+        assert_eq!(
+            ledger.default_branch_statuses().unwrap(),
+            BTreeMap::from([("a".into(), pending)])
+        );
+    }
+
+    fn finish_entry(ledger: &Ledger, head: &str, base: &str, state: VerificationState) {
+        let entry = ledger.reserve(head, base).unwrap();
+        ledger.attach(head, base, entry.attempt, 42).unwrap();
+        ledger
+            .finish(head, base, entry.attempt, 42, state, None)
+            .unwrap();
+    }
+
+    #[test]
+    fn last_pass_selects_the_latest_of_two_older_verified_bases() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        finish_entry(&ledger, "head", "base-one", VerificationState::Verified);
+        finish_entry(&ledger, "head", "base-two", VerificationState::Verified);
+
+        assert_eq!(
+            ledger.last_pass("head", "base-current").unwrap(),
+            Some("base-two".into())
+        );
+    }
+
+    #[test]
+    fn last_pass_ignores_a_later_rejected_entry() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        finish_entry(&ledger, "head", "base-one", VerificationState::Verified);
+        finish_entry(&ledger, "head", "base-two", VerificationState::Rejected);
+
+        assert_eq!(
+            ledger.last_pass("head", "base-current").unwrap(),
+            Some("base-one".into())
+        );
+    }
+
+    #[test]
+    fn last_pass_ignores_the_current_verified_base() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        finish_entry(&ledger, "head", "base-one", VerificationState::Verified);
+        finish_entry(&ledger, "head", "base-two", VerificationState::Verified);
+
+        assert_eq!(
+            ledger.last_pass("head", "base-two").unwrap(),
+            Some("base-one".into())
+        );
+    }
+
+    #[test]
+    fn last_pass_ignores_another_heads_later_verified_entry() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        finish_entry(&ledger, "head-one", "base-one", VerificationState::Verified);
+        finish_entry(&ledger, "head-two", "base-two", VerificationState::Verified);
+
+        assert_eq!(
+            ledger.last_pass("head-one", "base-current").unwrap(),
+            Some("base-one".into())
+        );
+    }
+
+    #[test]
+    fn last_pass_ignores_a_later_testing_entry() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        finish_entry(&ledger, "head", "base-one", VerificationState::Verified);
+        ledger.reserve("head", "base-two").unwrap();
+
+        assert_eq!(
+            ledger.last_pass("head", "base-current").unwrap(),
+            Some("base-one".into())
+        );
+    }
 
     #[test]
     fn exact_head_and_base_reuse_one_durable_reservation() {

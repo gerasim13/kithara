@@ -143,6 +143,14 @@ impl BridgeConfig {
     pub(super) fn gitlab_origin(&self) -> String {
         self.gitlab_url.as_str().trim_end_matches('/').to_string()
     }
+
+    pub(super) fn gitlab_pipeline_url(&self, pipeline_id: u64) -> String {
+        format!(
+            "{}/{}/-/pipelines/{pipeline_id}",
+            self.gitlab_origin(),
+            self.gitlab_project_path
+        )
+    }
 }
 
 /// The secrets a bridge configuration points at, for the installer that has to
@@ -201,6 +209,18 @@ mod tests {
             .unwrap()
             .join(".config/bridge/config.example.toml");
         std::fs::read_to_string(path).unwrap()
+    }
+
+    #[test]
+    fn pipeline_url_has_one_slash_after_a_trailing_slash_origin() {
+        let mut config = toml::from_str::<BridgeConfig>(&example()).unwrap();
+        config.gitlab_url = "https://gitlab.example/".parse().unwrap();
+        config.gitlab_project_path = "team/audio".into();
+
+        assert_eq!(
+            config.gitlab_pipeline_url(42),
+            "https://gitlab.example/team/audio/-/pipelines/42"
+        );
     }
 
     /// The list lives in the host's configuration and nowhere else. A pull

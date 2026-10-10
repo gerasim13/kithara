@@ -17,14 +17,13 @@ use kithara::{
     queue::TrackSource,
 };
 use kithara_app::{
-    config::{AppConfig, AppDrm},
-    document::Config,
+    config::AppConfig,
     pools::{PoolsSection, build as app_pools},
 };
 use kithara_integration_tests::{
     bufpool_ext::pools as test_pools,
     kithara,
-    offline::{OfflinePlayer, app_disk_asset_store, app_track_source},
+    offline::{OfflinePlayer, app_disk_asset_store, app_drm, app_track_source, prod_document},
     swallow_detector::assert_no_committed_swallow,
     usdt_trace,
 };
@@ -71,7 +70,8 @@ const MAX_COMMITTED_STEP_SECS: f64 = 1.5;
 /// segments are large enough that `wait_range` legitimately budget-exceeds; a
 /// synthetic sine fixture compresses too small to reproduce it.
 ///
-/// Requires production credentials baked at build time + VPN, and the
+/// Requires production credentials (the Zvuk account token from
+/// `KITHARA_DRM_PROD_AUTH_TOKEN` at run time) + VPN, and the
 /// `usdt-probes` feature (probe capture):
 ///
 /// ```text
@@ -96,7 +96,7 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
     let downloader = Downloader::new(DownloaderConfig::for_client(client.clone()).build());
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
-    let document = Config::load(None, None).expect("the shipped configuration loads");
+    let document = prod_document();
     let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
@@ -109,11 +109,7 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
             .build(),
     );
     let config = AppConfig::builder()
-        .drm(AppDrm::new(
-            document
-                .drm_policy()
-                .expect("the shipped providers are valid"),
-        ))
+        .drm(app_drm(&document, &client, &shutdown))
         .net(client)
         .downloader(downloader)
         .shutdown(shutdown)

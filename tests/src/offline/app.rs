@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use keyring_core::sample::Store;
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     audio::{AudioDecoderConfig, DecoderResamplerSettings},
@@ -15,13 +16,36 @@ use kithara::{
 use kithara_app::{
     config::{AppConfig, AppDrm},
     document::Config,
+    plugins,
     pools::{
         AppPools, AppResourceConfig, AppStore, AppTrackSource, PoolsSection, build as app_pools,
     },
+    secret,
 };
+use kithara_app_library::{Environment, Secrets};
 use kithara_test_utils::TestTempDir;
 
 use super::{OfflineQueue, QueueTicker, RENDER_PACE};
+
+/// The DRM policy the binary builds: the plugins `document` configures
+/// register over `client` with the Zvuk account token from
+/// `KITHARA_DRM_PROD_AUTH_TOKEN`, when set, in their secret store, and the key
+/// access they grant reaches the key requests.
+#[must_use]
+pub fn app_drm(document: &Config, client: &HttpClient, shutdown: &CancelToken) -> AppDrm {
+    let secrets = Secrets::new(Store::new());
+    if let Some(token) = secret("KITHARA_DRM_PROD_AUTH_TOKEN") {
+        secrets.set("zvuk", &token).expect("the store writes");
+    }
+    let environment = Environment::new(tokio::runtime::Handle::current(), client.clone(), secrets);
+    let registered =
+        plugins::mount(document, &environment, shutdown).expect("the configured plugins register");
+    AppDrm::new(
+        document
+            .drm_policy(&plugins::grants(&registered))
+            .expect("the shipped providers are valid"),
+    )
+}
 
 #[non_exhaustive]
 pub struct AppQueueFixture {
@@ -59,9 +83,15 @@ impl LazyAppQueueFixture {
     }
 }
 
+/// The shipped document, which mounts the Zvuk source.
+#[must_use]
+pub fn prod_document() -> Config {
+    Config::load(None, None).expect("the production configuration loads")
+}
+
 /// Build a product offline queue for tests that reach insecure HTTP fixtures.
 pub async fn insecure_app_queue() -> AppQueueFixture {
-    app_queue(Config::load(None, None).expect("the shipped configuration loads")).await
+    app_queue(prod_document()).await
 }
 
 pub async fn app_queue(document: Config) -> AppQueueFixture {
@@ -84,11 +114,7 @@ pub async fn app_queue(document: Config) -> AppQueueFixture {
     );
     let session_pools = worker.pools().clone();
     let config = AppConfig::builder()
-        .drm(AppDrm::new(
-            document
-                .drm_policy()
-                .expect("the shipped providers are valid"),
-        ))
+        .drm(app_drm(&document, &client, &shutdown))
         .net(client)
         .downloader(downloader)
         .shutdown(shutdown)

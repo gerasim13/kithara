@@ -2755,8 +2755,8 @@ fn a_tabs_compiles_the_page_it_stands_at() {
     .unwrap();
 
     assert_eq!(
-        ui.views().pages()["shown"].shown,
-        "one",
+        ui.views().pages()["shown"].shown.as_deref(),
+        Some("one"),
         "a state standing nowhere must show the page the document calls initial"
     );
     let mut view = ViewState::new();

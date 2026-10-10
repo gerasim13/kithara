@@ -8,6 +8,7 @@ pub(super) struct UiNode<'a> {
     modules: &'a Modules,
     window: &'a WindowState,
     layout: DeckLayout,
+    config_path: &'a str,
 }
 
 impl<'a> UiNode<'a> {
@@ -15,18 +16,22 @@ impl<'a> UiNode<'a> {
         layout: DeckLayout,
         modules: &'a Modules,
         window: &'a WindowState,
+        config_path: &'a str,
     ) -> Self {
         Self {
             modules,
             window,
             layout,
+            config_path,
         }
     }
 }
 
 impl_child_node!(UiNode<'a>, |this, segment, _scope| {
     let node: Box<dyn Node<'a> + 'a> = match segment {
-        "app" => Box::new(AppNode),
+        "app" => Box::new(AppNode {
+            config_path: this.config_path,
+        }),
         "layout" => Box::new(LayoutNode {
             layout: this.layout,
         }),
@@ -48,17 +53,18 @@ impl_child_node!(UiNode<'a>, |this, segment, _scope| {
 });
 
 #[derive(Clone, Copy)]
-struct AppNode;
-
-impl<'a> Node<'a> for AppNode {
-    fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
-        let value = match segment {
-            "version" => ReadValue::Text(env!("CARGO_PKG_VERSION")),
-            _ => return None,
-        };
-        Some(Box::new(Value(value)))
-    }
+struct AppNode<'a> {
+    config_path: &'a str,
 }
+
+impl_child_node!(AppNode<'a>, |this, segment, _scope| {
+    let value = match segment {
+        "version" => ReadValue::Text(env!("CARGO_PKG_VERSION")),
+        "config_path" => ReadValue::Text(this.config_path),
+        _ => return None,
+    };
+    Some(Box::new(Value(value)))
+});
 
 #[derive(Clone, Copy)]
 struct WindowNode<'a> {

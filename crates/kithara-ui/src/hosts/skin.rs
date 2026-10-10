@@ -1,8 +1,11 @@
+use std::borrow::Cow;
+
 use crate::{
     draw::{Rgba, TRANSPARENT},
     module::{TextStyle, Tone, text_roles},
     render::Skin,
-    skin::{ColorRole, FontFamily, FontWeight, TextRoleSkin, TextSkin, ToneColors},
+    shaping::{GlyphRun, TextContext},
+    skin::{ColorRole, FontFamily, FontWeight, TextCase, TextRoleSkin, TextSkin, ToneColors},
 };
 
 /// The one rule that picks between a node's own colour and its active one.
@@ -60,23 +63,37 @@ impl Skin {
     }
 }
 
-impl TextStyle {
-    /// The words this style sets, which are not always the words the document
-    /// wrote: a micro label is small capitals, so it is set in capitals whatever
-    /// case it was given.
+impl TextRoleSkin {
+    /// The words this role sets, in its case.
     ///
     /// Every host asks here rather than deciding for itself, because the case a
     /// run is set in changes how wide it is, and two hosts that answered
     /// separately would lay the same document out differently.
-    pub(crate) fn cased(self, content: String) -> String {
-        match self {
-            Self::MicroLabel => content.to_uppercase(),
-            _ => content,
+    pub(crate) fn cased(self, content: &str) -> Cow<'_, str> {
+        match self.case {
+            TextCase::Upper => Cow::Owned(content.to_uppercase()),
+            TextCase::AsWritten => Cow::Borrowed(content),
         }
     }
-}
 
-impl TextRoleSkin {
+    /// The line this role sets in `max_width`. A layout box is whole pixels, so
+    /// a line less than a pixel wider than its box was snapped down from its
+    /// natural size and stays whole.
+    pub(crate) fn fit<'a>(
+        self,
+        text: &mut TextContext,
+        content: &'a str,
+        max_width: f32,
+    ) -> (Cow<'a, str>, GlyphRun) {
+        match self.elide {
+            Some(at) => text.shape_elided(content, self, max_width + 1.0, at),
+            None => (
+                Cow::Borrowed(content),
+                text.shape(content, self, Some(max_width)),
+            ),
+        }
+    }
+
     /// This role set in the face a run names, keeping the skin's where it
     /// names none.
     pub(crate) fn faced(self, font: Option<FontFamily>, weight: Option<FontWeight>) -> Self {
@@ -109,6 +126,30 @@ mod tests {
 
     use super::*;
     use crate::{builtin, module::TextStyle, skin::ColorRole};
+
+    #[kithara::test]
+    fn a_role_sets_its_words_in_the_case_the_skin_names() {
+        let skin = builtin::skin();
+
+        assert_eq!(skin.text.micro_label.cased("0.0.1-alpha4"), "0.0.1-ALPHA4");
+        assert_eq!(skin.text.cell.cased("Zvuk"), "ZVUK");
+        assert_eq!(skin.text.body.cased("0.0.1-alpha4"), "0.0.1-alpha4");
+    }
+
+    #[kithara::test]
+    fn an_eliding_role_keeps_a_long_line_to_one_line_in_its_box() {
+        let skin = builtin::skin();
+        let mut text = TextContext::from(skin.text_resources.as_ref());
+        let path = "/Users/someone/Library/Application Support/kithara/config.toml";
+        let width = text.shape(path, skin.text.note, None).width() / 2.0;
+
+        let (shown, run) = skin.text.note.fit(&mut text, path, width);
+        assert!(run.width() <= width + 1.0);
+        assert_eq!(run.height(), text.shape("~", skin.text.note, None).height());
+        assert!(shown.ends_with("config.toml"), "{shown}");
+        let (_, wrapped) = skin.text.body.fit(&mut text, path, width);
+        assert!(wrapped.height() > run.height());
+    }
 
     #[kithara::test]
     fn a_node_colour_stands_in_for_the_one_the_role_carries() {

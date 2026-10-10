@@ -356,6 +356,9 @@ anyhow = "1"
 # FFI
 ape-decoder = "0.3.2"
 
+# The macOS native secret store for keyring-core.
+apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
+
 # fuzzing
 arbitrary = { version = "1", features = ["derive"] }
 
@@ -447,6 +450,8 @@ image = { version = "0.25.10", default-features = false, features = ["jpeg", "pn
 inventory = "0.3"
 jni = "0.22"
 js-sys = "0.3"
+# The OS secret store API.
+keyring-core = "1.0.0"
 # Curve geometry and the SVG path grammar (kithara-ui reads authored icons
 # through it). Pinned to the version peniko already resolves so the graph keeps
 # one kurbo.
@@ -563,7 +568,11 @@ wasm-bindgen-test = "=0.3.70"
 wasm_safe_thread = "0.1.1"
 web-sys = { version = "0.3", features = ["AudioData", "AudioDataCopyToOptions", "AudioDecoder", "AudioDecoderConfig", "AudioDecoderInit", "AudioDecoderSupport", "AudioSampleFormat", "Blob", "BroadcastChannel", "console", "DedicatedWorkerGlobalScope", "Document", "Element", "EncodedAudioChunk", "EncodedAudioChunkInit", "EncodedAudioChunkType", "Event", "EventTarget", "File", "FileList", "FileReader", "HtmlElement", "HtmlInputElement", "MessageChannel", "MessageEvent", "MessagePort", "Window"] }
 web-time = "1.1"
+# `hardened` opens only http and https URLs.
+webbrowser = { version = "1.2.4", features = ["hardened"] }
 window_clipboard = "0.5.1"
+# The Windows native secret store for keyring-core.
+windows-native-keyring-store = "1.1.0"
 # The Windows thread scheduling calls kithara-platform makes (MMCSS).
 windows-sys = "0.61"
 # Dev-only: the gallery example drives the Masonry host in a real window. iced
@@ -571,6 +580,8 @@ windows-sys = "0.61"
 winit = "0.30"
 wreq = "=6.0.0-rc.31"
 wreq-util = "=3.0.0-rc.14"
+# The Linux secret-service store for keyring-core.
+zbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rust"] }
 
 # Optimise CPU-heavy audio dependencies in debug builds so the audio
 # worker thread can keep up with real-time playback.  Without this,

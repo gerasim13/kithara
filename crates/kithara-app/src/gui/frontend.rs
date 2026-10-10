@@ -1,21 +1,19 @@
-use std::{collections::BTreeMap, error::Error, path::Path};
+use std::{error::Error, path::Path};
 
 use arc_swap::ArcSwap;
 use iced::{Size, window::Settings};
 use kithara::{
-    net::HttpClient,
     platform::{
-        CancelToken,
         sync::{Arc, Mutex},
         tokio::sync::mpsc::UnboundedSender,
     },
     ui::{render::fonts, source::UiConfig},
 };
-use serde_yaml_ng::Value;
+use kithara_app_library::Registration;
 
 use super::{
     app::Kithara,
-    library::{FACTORIES, Library, SourceAdditions, StartupSource, configured},
+    library::{Library, SourceAdditions, StartupSource},
     ui::{AppUi, package::Package, window::consts::WINDOW_SIZE},
     update, view,
 };
@@ -83,6 +81,7 @@ pub(crate) struct Boot {
     #[cfg(feature = "masonry")]
     pub(super) settings: UiConfig,
     pub(super) commands: UnboundedSender<Envelope>,
+    pub(super) config_path: String,
 }
 
 #[bon::bon]
@@ -96,10 +95,9 @@ impl Boot {
         snapshots: Arc<ArcSwap<EngineSnapshot>>,
         commands: UnboundedSender<Envelope>,
         runtime: kithara::platform::tokio::runtime::Handle,
-        net: &HttpClient,
-        sources: &BTreeMap<String, Value>,
-        shutdown: &CancelToken,
+        #[builder(default)] plugins: Vec<Registration>,
         #[builder(default)] chrome_hidden: bool,
+        config_path: Option<&Path>,
     ) -> Result<Self, FrontendError> {
         #[cfg(not(target_arch = "wasm32"))]
         let (explorer, picker) =
@@ -109,10 +107,7 @@ impl Boot {
             #[cfg(not(target_arch = "wasm32"))]
             explorer,
         ];
-        let registered: Vec<_> = registered
-            .into_iter()
-            .chain(configured(FACTORIES, sources, net, &runtime, shutdown)?)
-            .collect();
+        let registered: Vec<_> = registered.into_iter().chain(plugins).collect();
         let package = Package::load(package, SourceAdditions::new(&registered), &settings.limits)?;
         let library = Library::new(registered, package.text())?;
         let mut ui = AppUi::new(package, settings, runtime)?;
@@ -127,6 +122,9 @@ impl Boot {
             commands,
             #[cfg(feature = "masonry")]
             settings: settings.clone(),
+            config_path: config_path
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
         })
     }
 }
@@ -143,11 +141,10 @@ mod tests {
     use super::*;
     use crate::gui::{reads::ReadRoot, test_fixture};
 
-    fn booted(chrome_hidden: bool) -> Kithara {
+    fn booted(chrome_hidden: bool, config_path: Option<&Path>) -> Kithara {
         let snapshots = Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished()));
         let (commands, _) = mpsc::unbounded_channel();
         let runtime = test_fixture::runtime();
-        let config = test_fixture::config();
         let boot = Boot::builder()
             .settings(&UiConfig::default())
             .tracks(Vec::new())
@@ -155,10 +152,8 @@ mod tests {
             .snapshots(snapshots)
             .commands(commands)
             .runtime(runtime.handle().clone())
-            .net(&config.net)
-            .sources(&config.sources)
-            .shutdown(&config.shutdown)
             .chrome_hidden(chrome_hidden)
+            .maybe_config_path(config_path)
             .build()
             .unwrap();
         Kithara::mounted(boot, Id::unique())
@@ -181,9 +176,20 @@ mod tests {
     }
 
     #[kithara::test]
+    fn the_app_reads_the_configuration_path_it_booted_with() {
+        let state = booted(false, Some(Path::new("/opt/kithara/kithara.yaml")));
+        let root = ReadRoot::new(&state);
+
+        assert_eq!(
+            Walk::new(&root).get("ui.app.config_path"),
+            Some(ReadValue::Text("/opt/kithara/kithara.yaml")),
+        );
+    }
+
+    #[kithara::test]
     fn the_root_decides_whether_the_window_chrome_is_hidden() {
         for chrome_hidden in [true, false] {
-            let state = booted(chrome_hidden);
+            let state = booted(chrome_hidden, None);
             let root = ReadRoot::new(&state);
             let reads = Walk::new(&root);
 

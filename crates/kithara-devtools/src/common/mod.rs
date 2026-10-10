@@ -11,6 +11,7 @@
 pub mod baseline;
 pub mod exclude;
 pub mod fix;
+pub(crate) mod imports;
 mod libtest;
 pub mod parse;
 pub(crate) mod process;

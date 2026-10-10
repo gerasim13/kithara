@@ -17,7 +17,7 @@ flash = ["kithara/flash", "kithara-integration-tests/flash"]
 load = ["kithara-integration-tests/load"]
 no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
 usdt = ["kithara/usdt", "kithara-integration-tests/usdt"]
-network = []
+network = ["kithara-app/zvuk"]
 network-manual = []
 
 [dependencies]

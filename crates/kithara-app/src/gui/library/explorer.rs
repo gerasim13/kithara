@@ -213,13 +213,13 @@ impl LibrarySource for Explorer {
         }
     }
 
-    fn status(&self) -> PageStatus {
+    fn status(&self) -> PageStatus<'_> {
         let Some(folder) = &self.shown else {
             return PageStatus::Empty;
         };
         match self.listings.get(folder) {
             None => PageStatus::Loading,
-            Some(Listing::Failed) => PageStatus::Unreadable,
+            Some(Listing::Failed) => PageStatus::Unreadable(None),
             Some(Listing::Listed(listed)) if listed.tracks.is_empty() => PageStatus::Empty,
             Some(Listing::Listed(_)) => PageStatus::Ready,
         }

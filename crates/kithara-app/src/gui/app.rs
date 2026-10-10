@@ -37,6 +37,8 @@ pub(crate) struct Kithara {
     #[cfg(not(target_arch = "wasm32"))]
     pub(in crate::gui) picker: FolderPicker,
     pub(crate) palette: gui::GuiPalette,
+    /// Where the configuration overlay was read from or is looked for.
+    pub(in crate::gui) config_path: String,
     /// The app window; window-chrome commands execute against it.
     pub(crate) window_id: window::Id,
     published: Arc<EngineSnapshot>,
@@ -70,6 +72,7 @@ impl Kithara {
             picker: boot.picker,
             ui: boot.ui,
             palette: boot.palette.into(),
+            config_path: boot.config_path,
             window_id,
             overlay: Overlay::default(),
             seq: 0,

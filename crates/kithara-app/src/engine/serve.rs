@@ -1,28 +1,21 @@
-use kithara::{
-    net::HttpClient,
-    platform::{
-        CancelToken,
-        tokio::sync::{mpsc::UnboundedReceiver, oneshot},
-    },
+use kithara::platform::{
+    CancelToken,
+    tokio::sync::{mpsc::UnboundedReceiver, oneshot},
 };
 use tracing::warn;
 
 use super::{Engine, EngineError, Envelope, run};
 
-/// Builds the engine, reports the outcome on `built` with the client the
-/// engine's downloads ride, and runs the loop over a built engine once the
-/// root took the report.
+/// Builds the engine, reports the outcome on `built`, and runs the loop over
+/// a built engine once the root took the report.
 pub(crate) async fn serve(
     build: impl FnOnce() -> Result<Engine, EngineError>,
-    built: oneshot::Sender<Result<HttpClient, EngineError>>,
+    built: oneshot::Sender<Result<(), EngineError>>,
     commands: UnboundedReceiver<Envelope>,
     cancel: CancelToken,
 ) {
     let (engine, report) = match build() {
-        Ok(engine) => {
-            let net = engine.config().net.clone();
-            (Some(engine), Ok(net))
-        }
+        Ok(engine) => (Some(engine), Ok(())),
         Err(error) => (None, Err(error)),
     };
     if built.send(report).is_ok()

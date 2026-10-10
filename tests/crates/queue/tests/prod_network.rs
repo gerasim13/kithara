@@ -3,7 +3,8 @@
 
 //! The user-simulation scenarios that drive real production tracks: HE-AAC v2
 //! behind AES-128 with per-segment key signing, reached over the live CDN with
-//! credentials baked at build time. Reproduces by script what the user
+//! the production DRM credentials and the Zvuk account token from
+//! `KITHARA_DRM_PROD_AUTH_TOKEN`. Reproduces by script what the user
 //! reproduces by hand in the GUI.
 //!
 //! Compiled only into `suite_network`, which needs the `network` feature.
@@ -24,13 +25,15 @@ use kithara::{
     queue::{Queue, QueueConfig, TrackSource, Transition},
 };
 use kithara_app::{
-    config::{AppConfig, AppDrm},
-    document::Config,
+    config::AppConfig,
     pools::{AppPools, PoolsSection, build as app_pools},
 };
 use kithara_integration_tests::{
     kithara,
-    offline::{OfflineQueue, QueueTicker, RENDER_PACE, app_disk_asset_store, app_track_source},
+    offline::{
+        OfflineQueue, QueueTicker, RENDER_PACE, app_disk_asset_store, app_drm, app_track_source,
+        prod_document,
+    },
     user_sim::{actions::Action, scenarios},
 };
 use kithara_test_utils::TestTempDir;
@@ -46,8 +49,8 @@ const PROD_DRM_TRACK: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/18008255
 const PROD_DRM_TRACK_ALT: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/5807750_3/master.m3u8";
 
 /// Build a prod-DRM track via the same `kithara-app` source resolver
-/// the binary uses. The resolver picks up baked credentials and the
-/// `zvuk-prod` keyserver provider.
+/// the binary uses. The `zvuk-prod` keyserver provider signs key requests
+/// and the Zvuk source grants them its account token.
 fn prod_drm_spec(url: &str, ctx: &ProdCtx) -> TrackSource<AppPools> {
     app_track_source(
         url,
@@ -71,7 +74,7 @@ fn build_prod_ctx() -> ProdCtx {
     let downloader = Downloader::new(DownloaderConfig::for_client(client.clone()).build());
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
-    let document = Config::load(None, None).expect("the shipped configuration loads");
+    let document = prod_document();
     let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
@@ -84,11 +87,7 @@ fn build_prod_ctx() -> ProdCtx {
             .build(),
     );
     let config = AppConfig::builder()
-        .drm(AppDrm::new(
-            document
-                .drm_policy()
-                .expect("the shipped providers are valid"),
-        ))
+        .drm(app_drm(&document, &client, &shutdown))
         .net(client)
         .downloader(downloader)
         .shutdown(shutdown)

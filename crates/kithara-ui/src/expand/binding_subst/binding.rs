@@ -164,7 +164,10 @@ pub(crate) fn substitute_binding(
         let id = substitute(args, origin, &id.0, path)?;
         return Ok(BindingRef::Page {
             id: StateId(scoped_state(instance, &id)),
-            name: substitute(args, origin, name, path)?,
+            name: name
+                .as_deref()
+                .map(|name| substitute(args, origin, name, path))
+                .transpose()?,
         });
     }
     let (BindingRef::Command { id, with }
@@ -275,7 +278,10 @@ pub(crate) fn intern_binding(
         });
     }
     if let BindingRef::Page { id, name } = binding {
-        let name = interner.intern(name, origin)?;
+        let name = name
+            .as_deref()
+            .map(|name| interner.intern(name, origin))
+            .transpose()?;
         let id = interner.intern(&id.0, origin)?;
         return Ok(Binding {
             with: BTreeMap::new(),

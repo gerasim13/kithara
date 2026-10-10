@@ -47,7 +47,7 @@ fn the_shipped_document_configures_the_application() {
         "the shipped document accepts test-server certificates"
     );
     config
-        .drm_policy()
+        .drm_policy(&[])
         .expect("the shipped providers are valid");
 }
 
@@ -106,9 +106,12 @@ async fn the_document_reaches_the_stretch_backend_geometry() {
 
     let cancel = kithara_test_utils::cancel_token();
     let document_pools = pools::build(&config.pools()).expect("document pools");
+    let net = AppConfig::client(&config, &document_pools, &cancel, false);
     let app = AppConfig::assemble()
         .document(&config)
         .pools(document_pools.clone())
+        .net(net)
+        .grants(&[])
         .shutdown(cancel.clone())
         .runtime(Handle::current())
         .call()

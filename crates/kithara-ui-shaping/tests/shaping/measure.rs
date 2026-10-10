@@ -1,5 +1,5 @@
 use kithara_test_utils::kithara;
-use kithara_ui_shaping::{FontFamily, FontId, FontWeight, GlyphFace, TextContext};
+use kithara_ui_shaping::{Elision, FontFamily, FontId, FontWeight, GlyphFace, TextContext};
 
 use crate::support::{DISPLAY, style};
 
@@ -90,16 +90,17 @@ fn elided_text_stays_on_one_line_and_fits_measured_width() {
     let title = "Big Man, Little Dignity (Re: DOM & JD BECK)";
     let full = context.shape(title, DISPLAY, None);
     let width = full.width() / 2.0;
-    let (content, run) = context.shape_elided(title, DISPLAY, width);
+    let (content, run) = context.shape_elided(title, DISPLAY, width, Elision::End);
 
     assert!(content.ends_with('\u{2026}'));
     assert!(title.starts_with(content.trim_end_matches('\u{2026}')));
     assert!(run.width() <= width);
     assert_eq!(run.height(), full.height());
-    let (unchanged, exact) = context.shape_elided(title, DISPLAY, full.width());
+    let (unchanged, exact) = context.shape_elided(title, DISPLAY, full.width(), Elision::End);
     assert_eq!(unchanged, title);
     assert_eq!(exact, full);
-    let (joined, run) = context.shape_elided("Title\nArtist\u{2028}Album", DISPLAY, 500.0);
+    let (joined, run) =
+        context.shape_elided("Title\nArtist\u{2028}Album", DISPLAY, 500.0, Elision::End);
     assert_eq!(joined, "Title Artist Album");
     assert_eq!(run, context.shape("Title Artist Album", DISPLAY, None));
 }
@@ -109,15 +110,35 @@ fn elision_keeps_combining_graphemes_and_handles_a_tiny_box() {
     let mut context = TextContext::new().unwrap();
     let title = "e\u{301}e\u{301}e\u{301}e\u{301}";
     let width = context.shape("e\u{301}\u{2026}", DISPLAY, None).width();
-    let (content, run) = context.shape_elided(title, DISPLAY, width);
+    let (content, run) = context.shape_elided(title, DISPLAY, width, Elision::End);
 
     assert_eq!(content, "e\u{301}\u{2026}");
     assert!(run.width() <= width);
     for width in [0.0, 1.0] {
-        let (content, run) = context.shape_elided(title, DISPLAY, width);
+        let (content, run) = context.shape_elided(title, DISPLAY, width, Elision::End);
         assert!(content.is_empty());
         assert_eq!(run.width(), 0.0);
     }
+}
+
+#[kithara::test]
+fn middle_elision_keeps_both_ends_of_the_line() {
+    let mut context = TextContext::new().unwrap();
+    let path = "/Users/someone/Library/Application Support/kithara/config.toml";
+    let width = context.shape(path, DISPLAY, None).width() / 2.0;
+    let (content, run) = context.shape_elided(path, DISPLAY, width, Elision::Middle);
+
+    let (head, tail) = content
+        .split_once('\u{2026}')
+        .unwrap_or_else(|| panic!("the line carries an ellipsis: {content}"));
+    assert!(path.starts_with(head) && path.ends_with(tail));
+    assert!(head.len().abs_diff(tail.len()) <= 1, "{content}");
+    assert!(run.width() <= width);
+    let wider = context.shape(&format!("{head}x\u{2026}x{tail}"), DISPLAY, None);
+    assert!(
+        wider.width() > width,
+        "the line keeps as much as fits: {content}"
+    );
 }
 
 #[kithara::test]

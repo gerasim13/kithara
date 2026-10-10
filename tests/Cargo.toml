@@ -29,7 +29,9 @@ all = [
     "dep:kithara-encode",
     "dep:kithara-record",
     "dep:kithara-app",
+    "dep:kithara-app-library",
     "dep:kithara-devtools",
+    "dep:keyring-core",
     "kithara/queue",
     "kithara/backend-cpal",
     "kithara-app/analysis-waveform",
@@ -181,7 +183,10 @@ kithara = { workspace = true, default-features = false, optional = true }
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara = { workspace = true, default-features = false, optional = true, features = ["full", "encode", "fdk-aac", "ffmpeg", "symphonia", "opus", "ape", "client-reqwest", "tls-rustls"] }
 kithara-app = { workspace = true, default-features = false, optional = true }
+kithara-app-library = { workspace = true, optional = true }
 kithara-devtools = { workspace = true, optional = true }
+
+keyring-core = { workspace = true, optional = true, features = ["sample"] }
 
 # `bungee-sys` fails through `cmake`/MSVC and its build script refuses Android
 # by target triple. Android stretches through Signalsmith, the backend

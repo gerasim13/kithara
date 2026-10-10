@@ -173,8 +173,8 @@ pub enum ControlNode {
         content: Box<Self>,
     },
     /// Covers the whole window with a scrim and centres `content` above it
-    /// while `open` reads true, taking all input. Escape and a press on the
-    /// scrim write `close`. It takes no room in flow.
+    /// while `open` reads true, taking all input. Escape writes `close`; a
+    /// press on the scrim writes nothing. It takes no room in flow.
     Modal {
         id: NodeId,
         open: BindingRef,
@@ -414,6 +414,8 @@ pub enum ControlNode {
         write: Option<BindingRef>,
         label: String,
         icon: Param<IconName>,
+        #[serde(default)]
+        style: Option<TextStyle>,
     },
     TabLarge {
         id: NodeId,

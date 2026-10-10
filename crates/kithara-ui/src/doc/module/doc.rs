@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::{binding::BindingRef, node::ControlNode};
@@ -32,6 +34,10 @@ pub struct ModuleDoc {
     pub assign: Vec<String>,
     #[serde(default)]
     pub parameters: Vec<String>,
+    /// The values this document gives the item template that draws it as a
+    /// fill.
+    #[serde(default)]
+    pub item: BTreeMap<String, String>,
     pub version: u32,
 }
 
@@ -51,6 +57,7 @@ impl ModuleDoc {
             schema: "kithara.module".to_owned(),
             assign: Vec::new(),
             parameters: Vec::new(),
+            item: BTreeMap::new(),
             version: envelope::MODULE_VERSION,
         }
     }
