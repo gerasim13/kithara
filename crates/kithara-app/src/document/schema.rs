@@ -223,14 +223,10 @@ mod tests {
     }
 
     #[kithara::test(native)]
-    fn the_removed_background_loader_cap_is_rejected_and_named() {
-        let error = serde_yaml_ng::from_str::<Document>("queue:\n  max_concurrent_loads: 5\n")
-            .expect_err("a single-deck queue has no eager background loader cap");
-
-        assert!(
-            error.to_string().contains("max_concurrent_loads"),
-            "{error}"
-        );
+    fn a_document_names_the_background_load_cap() {
+        let document: Document = serde_yaml_ng::from_str("queue:\n  max_concurrent_loads: 5\n")
+            .expect("the background load cap is valid");
+        assert_eq!(document.queue.max_concurrent_loads, NonZeroUsize::new(5));
     }
 
     #[kithara::test(native)]
@@ -271,6 +267,10 @@ mod tests {
         );
         assert!(
             document.queue.mixer.slots.is_none(),
+            "a document naming no queue section leaves the crate default standing"
+        );
+        assert!(
+            document.queue.max_concurrent_loads.is_none(),
             "a document naming no queue section leaves the crate default standing"
         );
         assert!(

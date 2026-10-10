@@ -514,6 +514,7 @@ impl<S: 'static> DeckRig<S> {
                 Batch {
                     basis: Vec::new(),
                     commands: vec![DispatcherCommand::Load(Box::new(LoadRequest {
+                        class: kithara_render::ServiceClass::Warm,
                         item,
                         position,
                         start: TrackSettings::default().lane_start(),

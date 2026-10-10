@@ -1,5 +1,6 @@
 use kithara_bufpool::HasPool;
 use kithara_command::{Seq, When};
+use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_play::{
     Bound, Outbox, OutputSnapshot, PlayError, Player, TrackCommand, TrackFactory,
@@ -14,6 +15,15 @@ use super::super::{
     types::Target,
 };
 use crate::{AdvanceReason, QueueError, QueueEvent, RepeatMode, TrackStatus};
+
+#[derive(Clone, Copy)]
+pub(in crate::queue) struct TransitionRequest {
+    pub(in crate::queue) id: TrackId,
+    pub(in crate::queue) transition: Transition,
+    pub(in crate::queue) reason: AdvanceReason,
+    pub(in crate::queue) auto: bool,
+    pub(in crate::queue) playing: bool,
+}
 
 impl<S, F> Queue<S, F>
 where
@@ -40,6 +50,7 @@ where
         transition: Transition,
         reason: AdvanceReason,
         auto: bool,
+        playing: bool,
         output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, QueueError> {
@@ -48,19 +59,33 @@ where
         self.navigation
             .next(&ids, auto, wrap)
             .map_or(Ok(None), |id| {
-                self.request_transition(id, transition, reason, auto, output, out)
+                self.request_transition(
+                    TransitionRequest {
+                        id,
+                        transition,
+                        reason,
+                        auto,
+                        playing,
+                    },
+                    output,
+                    out,
+                )
             })
     }
 
     pub(in crate::queue) fn request_transition(
         &mut self,
-        id: TrackId,
-        transition: Transition,
-        reason: AdvanceReason,
-        auto: bool,
+        request: TransitionRequest,
         output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, QueueError> {
+        let TransitionRequest {
+            id,
+            transition,
+            reason,
+            auto,
+            playing,
+        } = request;
         let settings = transition
             .settings(self.config.settings.crossfade())
             .validate()
@@ -75,7 +100,14 @@ where
                 .target
                 .is_some_and(|target| target.to == id && !target.auto)
         {
-            self.target.as_mut().ok_or(PlayError::NotReady)?.playing = true;
+            let target = self.target.as_mut().ok_or(PlayError::NotReady)?;
+            target.playing = playing;
+            target.settings = settings;
+            target.transition = transition;
+            target.reason = reason;
+            if reason != AdvanceReason::InitialLoad {
+                self.navigation.select(id, &self.track_ids());
+            }
             return self.transition_loaded(out).map_err(Into::into);
         }
         let bound = if auto {
@@ -85,7 +117,7 @@ where
         };
         self.cancel_target(out)?;
         self.target = Some(Target {
-            playing: true,
+            playing,
             to: id,
             bound,
             settings,
@@ -97,7 +129,7 @@ where
             repeat: None,
             chained: false,
         });
-        if !auto {
+        if !auto && reason != AdvanceReason::InitialLoad {
             self.navigation.select(id, &self.track_ids());
         }
         match self.load_track(id, Role::Incoming { batch: None }, output, out) {
@@ -199,7 +231,13 @@ where
         let id = active.item;
         let metadata = active.track.snapshot().as_ref().metadata.clone();
         active.load = Some(LoadState::Attaching(seq));
-        if !self.tracks.loaded(id, &metadata) {
+        if active.role != Role::Leaving {
+            self.announce_loaded(id, &metadata);
+        }
+    }
+
+    pub(in crate::queue) fn announce_loaded(&mut self, id: TrackId, metadata: &TrackMetadata) {
+        if !self.tracks.loaded(id, metadata) {
             return;
         }
         if let Some(position) = self

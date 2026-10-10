@@ -128,6 +128,7 @@ fn load(worker: &PlayWorker<TestPools>, dir: &TestTempDir, name: &str) -> Batch<
     Batch {
         basis: Vec::new(),
         commands: vec![DispatcherCommand::Load(Box::new(LoadRequest {
+            class: ServiceClass::Warm,
             item: ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay())),
             position: Duration::ZERO,
             start,

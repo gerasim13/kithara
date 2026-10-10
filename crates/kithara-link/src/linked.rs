@@ -517,7 +517,9 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
             }
             TrackCommand::Supersede => self.inner.apply(TrackCommand::Supersede, out),
             TrackCommand::Release => self.inner.apply(TrackCommand::Release, out),
-            TrackCommand::Evict { at } => self.inner.apply(TrackCommand::Evict { at }, out),
+            TrackCommand::Seat { slot, at } => {
+                self.inner.apply(TrackCommand::Seat { slot, at }, out)
+            }
         }
     }
 
@@ -528,7 +530,7 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
         let underrun = track.attached
             && matches!(track.status, TrackStatus::Playing { .. })
             && matches!(&receipt,
-                TrackReceipt::Event(DeckEvent::Underrun { slot: named, .. }) if *named == slot
+                TrackReceipt::Event(DeckEvent::Underrun { slot: named, .. }) if Some(*named) == slot
             );
         let mut settled = self.inner.settle(receipt, out);
         if let Settled::Rejected {

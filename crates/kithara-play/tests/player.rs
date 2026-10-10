@@ -22,7 +22,7 @@ fn player() -> PlayerImpl<TestPools> {
     PlayerFactory
         .track(PlayerConfig {
             item: TrackId::allocate(),
-            slot: Slot::new(0),
+            slot: Some(Slot::new(0)),
             settings: TrackSettings::default(),
         })
         .expect("default track settings are valid")

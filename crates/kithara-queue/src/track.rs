@@ -237,15 +237,19 @@ where
         }
     }
 
-    /// `id`'s track opened and stands in its slot: the token passes to its
+    /// `id`'s track opened on the deck or in the background: the token passes to its
     /// resource, the metadata the caller left unset fills from the decoder's
     /// tags, and the track is `Loaded`. `false` when the load was cancelled
     /// meanwhile: the cancel is the last word on it, and the track is left
-    /// `Cancelled` for the queue to let go.
+    /// `Cancelled` for the queue to let go. An already `Loaded` record also
+    /// returns `false` without announcing another status change.
     pub(crate) fn loaded(&mut self, id: TrackId, metadata: &TrackMetadata) -> bool {
         let Some(record) = self.record_mut(id) else {
             return false;
         };
+        if record.status == TrackStatus::Loaded {
+            return false;
+        }
         if record.load_cancelled() {
             self.set_status(id, TrackStatus::Cancelled);
             return false;

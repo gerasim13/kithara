@@ -69,11 +69,7 @@ impl<S> PlayerImpl<S> {
         self.segment_speed = speed;
         self.ready = None;
         self.mark = None;
-        if self
-            .loading
-            .as_ref()
-            .is_some_and(|loading| loading.evict == Some(When::Next))
-        {
+        if self.slot.is_none() && self.loading.is_some() {
             self.status = TrackStatus::Loading;
         }
         if attached {
@@ -81,7 +77,7 @@ impl<S> PlayerImpl<S> {
                 .deck_owned(
                     When::Next,
                     vec![DeckPart::Adopt {
-                        slot: self.slot,
+                        slot: self.seat()?,
                         segment,
                     }],
                 )
@@ -190,18 +186,20 @@ impl<S> PlayerImpl<S> {
         for part in &batch.commands {
             match part {
                 DeckPart::Start { slot, .. } | DeckPart::Chain { to: slot, .. }
-                    if *slot == self.slot =>
+                    if Some(*slot) == self.slot =>
                 {
                     self.status = TrackStatus::Playing { since: at };
                     self.resume = None;
                 }
-                DeckPart::Returned(Returned::Stopped { slot, resume }) if *slot == self.slot => {
+                DeckPart::Returned(Returned::Stopped { slot, resume })
+                    if Some(*slot) == self.slot =>
+                {
                     self.position = resume.position;
                     self.resume = Some(*resume);
                     self.status = TrackStatus::Paused { at: self.position };
                 }
                 DeckPart::Returned(Returned::Pcm { slot, .. })
-                    if *slot == self.slot && attaching.is_none() =>
+                    if Some(*slot) == self.slot && attaching.is_none() =>
                 {
                     self.status = TrackStatus::Released;
                     self.mark = None;
@@ -227,10 +225,13 @@ impl<S> PlayerImpl<S> {
         if out.deck_available() == 0 {
             return;
         }
+        let Some(slot) = self.slot else {
+            return;
+        };
         match out.deck_owned(
             When::Next,
             vec![DeckPart::Adopt {
-                slot: self.slot,
+                slot,
                 segment: self.segment,
             }],
         ) {

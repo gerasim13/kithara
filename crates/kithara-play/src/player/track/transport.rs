@@ -20,6 +20,49 @@ use super::{
 use crate::PlayError;
 
 impl<S> PlayerImpl<S> {
+    pub(super) fn release_track(
+        &mut self,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, PlayError> {
+        self.play = None;
+        self.playback_commands.clear();
+        if let Some(attaching) = self.attaching.as_mut() {
+            attaching.play = None;
+        }
+        if self.status == TrackStatus::Released {
+            self.release_lane(out)?;
+            return Ok(None);
+        }
+        if self
+            .attaching
+            .is_some_and(|attach| attach.replacement && attach.seq.is_some())
+        {
+            if !self.releasing {
+                out.supersede(self.seat()?)?;
+                self.releasing = true;
+            }
+            return Ok(None);
+        }
+        if self.attached() {
+            return self.send_playback(
+                When::Next,
+                vec![DeckPart::Detach { slot: self.seat()? }],
+                out,
+            );
+        }
+        self.status = TrackStatus::Released;
+        self.release_lane(out)?;
+        Ok(None)
+    }
+
+    pub(super) fn retry_detach(&mut self, out: &mut Outbox<'_, S>) {
+        if let Some(slot) = self.slot
+            && let Err(error) = self.send_playback(When::Next, vec![DeckPart::Detach { slot }], out)
+        {
+            warn!(%error, "released replacement waits to detach");
+        }
+    }
+
     pub(super) fn play(
         &mut self,
         at: When<SessionFrame>,
@@ -51,7 +94,7 @@ impl<S> PlayerImpl<S> {
         self.send_playback(
             at,
             vec![DeckPart::Start {
-                slot: self.slot,
+                slot: self.seat()?,
                 fade: Fade::Declick,
             }],
             out,

@@ -1,9 +1,16 @@
-//! The tracks a queue keeps on its deck's mixer, one slot each.
+//! The tracks a queue holds on its mixer, staged, and in the background.
 
 use kithara_command::Seq;
 use kithara_events::TrackId;
 use kithara_play::{DeckSnapshot, Slot};
 use kithara_signal::SessionFrame;
+
+/// A track loaded in the background: it holds a decoder lane and no slot.
+pub(super) struct Parked<T> {
+    pub(super) item: TrackId,
+    pub(super) track: T,
+    pub(super) load: Option<LoadState>,
+}
 
 /// What an active track is to the queue.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,9 +51,10 @@ impl LoadState {
     }
 }
 
-/// The slot owners and prepared replacements waiting off-slot for their receipts.
+/// Slot owners, staged replacements, and background tracks waiting off the deck.
 pub(super) struct Slots<T> {
     capacity: usize,
+    parked: Vec<Parked<T>>,
     active: Vec<Active<T>>,
     staged: Vec<Active<T>>,
     fades: Vec<Option<SessionFrame>>,
@@ -56,6 +64,7 @@ impl<T> Slots<T> {
     pub(super) fn new(capacity: usize) -> Self {
         Self {
             capacity,
+            parked: Vec::new(),
             active: Vec::with_capacity(capacity),
             staged: Vec::new(),
             fades: vec![None; capacity],
@@ -194,6 +203,41 @@ impl<T> Slots<T> {
 
     pub(super) fn len(&self) -> usize {
         self.active.len() + self.staged.len()
+    }
+
+    delegate::delegate! {
+        to self.parked {
+            #[call(push)]
+            pub(super) fn park(&mut self, parked: Parked<T>);
+            #[call(len)]
+            pub(super) fn parked_len(&self) -> usize;
+            #[call(get_mut)]
+            pub(super) fn parked_get_mut(&mut self, index: usize) -> Option<&mut Parked<T>>;
+            #[call(remove)]
+            pub(super) fn take_parked(&mut self, index: usize) -> Parked<T>;
+            #[call(iter)]
+            pub(super) fn parked_iter(&self) -> impl Iterator<Item = &Parked<T>>;
+            #[call(iter_mut)]
+            pub(super) fn parked_iter_mut(&mut self) -> impl Iterator<Item = &mut Parked<T>>;
+        }
+    }
+
+    pub(super) fn parked_position(&self, find: impl Fn(&Parked<T>) -> bool) -> Option<usize> {
+        self.parked.iter().position(find)
+    }
+
+    pub(super) fn tracks(&self) -> impl Iterator<Item = &T> {
+        self.iter()
+            .map(|active| &active.track)
+            .chain(self.parked_iter().map(|parked| &parked.track))
+    }
+
+    pub(super) fn tracks_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.active
+            .iter_mut()
+            .chain(self.staged.iter_mut())
+            .map(|active| &mut active.track)
+            .chain(self.parked.iter_mut().map(|parked| &mut parked.track))
     }
 }
 

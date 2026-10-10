@@ -232,7 +232,7 @@ impl Player<TestPools> for ScriptedTrack {
             TrackCommand::Supersede
             | TrackCommand::Fade { .. }
             | TrackCommand::PlayAfter { .. }
-            | TrackCommand::Evict { .. } => {
+            | TrackCommand::Seat { .. } => {
                 panic!("unexpected command in synchronization fixture")
             }
         };
@@ -528,7 +528,7 @@ pub(super) fn deck(host: TempoTrajectory) -> (Deck, Control) {
     let control = Control(Arc::new(Mutex::new(Script {
         snapshot: TrackSnapshot {
             item: TrackId::allocate(),
-            slot: Slot::new(0),
+            slot: Some(Slot::new(0)),
             status: TrackStatus::Loaded,
             speed: 1.0,
             position: Position::ZERO,

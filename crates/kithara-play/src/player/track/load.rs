@@ -1,8 +1,8 @@
 use kithara_command::{Outcome, Receipt, Rejection, Seq, Target, When};
 use kithara_config::ConfigOwner;
 use kithara_render::{
-    Dispatched, DispatcherProtocol, LoadRequest,
-    bridge::{DeckPart, Fade, SlotState},
+    Dispatched, DispatcherProtocol, LoadRequest, ServiceClass,
+    bridge::{DeckPart, Fade, Slot, SlotState},
 };
 use kithara_signal::{SegmentId, SessionFrame};
 use tracing::warn;
@@ -29,8 +29,14 @@ impl<S> PlayerImpl<S> {
         }
         let (lane, inbox) = item.lane_channel()?;
         let (ring_depth, declick) = item.lane_geometry()?;
+        self.class = if self.slot.is_some() {
+            ServiceClass::Warm
+        } else {
+            ServiceClass::Idle
+        };
         let seq = out.load(LoadRequest {
             item,
+            class: self.class,
             position,
             start: self.settings.config().lane_start(),
             inbox,
@@ -39,11 +45,7 @@ impl<S> PlayerImpl<S> {
         self.ring_depth = ring_depth;
         self.declick = declick;
         self.position = position;
-        self.loading = Some(Loading {
-            seq,
-            evict: None,
-            opened: None,
-        });
+        self.loading = Some(Loading { seq, opened: None });
         self.status = TrackStatus::Loading;
         Ok(Some(seq))
     }
@@ -102,6 +104,9 @@ impl<S> PlayerImpl<S> {
                         reason: Rejection::Refused(error),
                     };
                 }
+                if let Err(error) = self.promote(out) {
+                    warn!(%error, "a seated lane waits to leave the background class");
+                }
                 Settled::Pending
             }
             Outcome::Rejected(refused) => {
@@ -152,19 +157,18 @@ impl<S> PlayerImpl<S> {
         let Some(loading) = self.loading.as_mut() else {
             return Ok(());
         };
-        if loading.evict.is_some() {
-            return Ok(());
-        }
-        let Some(opened) = loading.opened.take() else {
+        let Some(slot) = self.slot else {
             return Ok(());
         };
         if out.deck_available() == 0 {
             return Err(PlayError::Full("deck"));
         }
+        let Some(opened) = loading.opened.take() else {
+            return Ok(());
+        };
         let OpenedTrack { pcm, .. } = opened;
         let seq = loading.seq;
         let at = When::Next;
-        let slot = self.slot;
         let mut parts = vec![DeckPart::Attach {
             slot,
             pcm,
@@ -188,8 +192,8 @@ impl<S> PlayerImpl<S> {
                 });
                 Ok(())
             }
-            Err((error, parts)) => {
-                drop(parts);
+            Err((error, mut parts)) => {
+                self.restore_attachment(&mut parts);
                 Err(error)
             }
         }
@@ -201,7 +205,7 @@ impl<S> PlayerImpl<S> {
         };
         let Some(index) = parts.iter().position(|part| {
             matches!(part,
-                DeckPart::Attach { slot, .. } | DeckPart::Replace { slot, .. } if *slot == self.slot
+                DeckPart::Attach { slot, .. } | DeckPart::Replace { slot, .. } if Some(*slot) == self.slot
             )
         }) else {
             return false;
@@ -220,29 +224,53 @@ impl<S> PlayerImpl<S> {
     }
 
     pub(super) fn reserved_ready(&mut self) {
-        if self.ready == Some(self.segment)
-            && self.loading.as_ref().is_some_and(|loading| {
-                loading.evict == Some(When::Next) && loading.opened.is_some()
-            })
+        if self.slot.is_none()
+            && self.ready == Some(self.segment)
+            && self
+                .loading
+                .as_ref()
+                .is_some_and(|loading| loading.opened.is_some())
         {
             self.status = TrackStatus::Loaded;
         }
     }
 
-    pub(super) fn evict(
+    pub(super) fn seat_at(
         &mut self,
+        slot: Slot,
         at: When<SessionFrame>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
         if matches!(at, When::Deferred) {
             return Err(PlayError::Internal(
-                "a replacement needs a timed deck batch".into(),
+                "a seat needs a timed deck batch".into(),
             ));
         }
+        if self.slot.is_some() {
+            return Err(PlayError::Internal("a track is seated once".into()));
+        }
         if at == When::Next {
-            let loading = self.loading.as_mut().ok_or(PlayError::NotReady)?;
-            loading.evict = Some(When::Next);
-            self.reserved_ready();
+            if self
+                .loading
+                .as_ref()
+                .is_none_or(|loading| loading.opened.is_none())
+            {
+                self.slot = Some(slot);
+                return Ok(None);
+            }
+            if out.deck_available() == 0 {
+                return Err(PlayError::Full("deck"));
+            }
+            self.slot = Some(slot);
+            self.status = TrackStatus::Loading;
+            if let Err(error) = self.attach(out) {
+                self.slot = None;
+                self.reserved_ready();
+                return Err(error);
+            }
+            if let Err(error) = self.promote(out) {
+                warn!(%error, "a seated lane waits to leave the background class");
+            }
             return Ok(None);
         }
         if self.attaching.is_some() || self.ready != Some(self.segment) {
@@ -252,7 +280,7 @@ impl<S> PlayerImpl<S> {
         if !pass
             .deck
             .slots
-            .get(self.slot.index())
+            .get(slot.index())
             .is_some_and(|slot| slot.state != SlotState::Empty)
         {
             return Err(PlayError::NotReady);
@@ -268,13 +296,13 @@ impl<S> PlayerImpl<S> {
         match out.deck_owned(
             at,
             vec![DeckPart::Replace {
-                slot: self.slot,
+                slot,
                 pcm,
                 segment: self.segment,
             }],
         ) {
             Ok(seq) => {
-                loading.evict = Some(at);
+                self.slot = Some(slot);
                 self.attaching = Some(Attaching {
                     seq,
                     caller: seq.map_or(loading.seq, |seq| seq),
@@ -282,11 +310,16 @@ impl<S> PlayerImpl<S> {
                     replacement: true,
                     play: self.play.take(),
                 });
+                if let Err(error) = self.promote(out) {
+                    warn!(%error, "a seated lane waits to leave the background class");
+                }
                 Ok(seq)
             }
             Err((error, parts)) => {
                 if let Some(pcm) = parts.into_iter().find_map(|part| match part {
-                    DeckPart::Replace { slot, pcm, .. } if slot == self.slot => Some(pcm),
+                    DeckPart::Replace {
+                        slot: named, pcm, ..
+                    } if named == slot => Some(pcm),
                     _ => None,
                 }) {
                     loading.opened = Some(OpenedTrack {
@@ -295,15 +328,26 @@ impl<S> PlayerImpl<S> {
                         abr,
                         metadata,
                     });
-                    loading.evict = Some(When::Next);
                 } else {
                     return Err(PlayError::Internal(
                         "replacement refusal did not return its original PCM".into(),
                     ));
                 }
+                self.slot = None;
                 self.reserved_ready();
                 Err(error)
             }
         }
+    }
+
+    pub(super) fn promote(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError> {
+        if self.slot.is_some()
+            && self.class == ServiceClass::Idle
+            && let Some(lane) = self.lane_id
+        {
+            out.prioritize(lane, ServiceClass::Warm)?;
+            self.class = ServiceClass::Warm;
+        }
+        Ok(())
     }
 }

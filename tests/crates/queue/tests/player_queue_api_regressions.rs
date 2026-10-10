@@ -1,16 +1,16 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara::{
+use ::kithara::{
     platform::time::{self, Duration, WallInstant},
     play::{PlayerEvent, ResourceConfig, ResourceSrc},
     queue::{QueueControl, TrackSource},
 };
 use kithara_integration_tests::{
-    TestServerHelper, kithara,
+    TestServerHelper,
     offline::{OfflinePlayer, OfflinePlayerOptions, TimedPlayerEvent},
 };
 use kithara_test_fixtures::SignalAsset;
-use kithara_test_utils::{TestTempDir, temp_dir};
+use kithara_test_utils::{TestTempDir, kithara, temp_dir};
 use url::Url;
 
 #[kithara::fixture]
@@ -31,6 +31,7 @@ const BLOCK_FRAMES: usize = 512;
 const STARTUP_CLEAR_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn auto_advance_starts_next_track_without_explicit_play(
     temp_dir: TestTempDir,
     #[future(awt)] queue_sources: (TestServerHelper, [Url; 2]),
@@ -67,10 +68,21 @@ async fn auto_advance_starts_next_track_without_explicit_play(
     let mut rendered_frames = 0usize;
     let mut second_current_item_changed = None;
     let mut first_item_finished = None;
+    let mut observed = (None, None, 0);
 
     while WallInstant::now() <= deadline {
+        hang_tick!();
         let block = harness.render(BLOCK_FRAMES).await;
         let drained = harness.tick_and_drain().await;
+        let progress = (
+            harness.player().current_index(),
+            harness.player().position_seconds(),
+            events.len() + drained.len(),
+        );
+        if progress != observed {
+            observed = progress;
+            hang_reset!();
+        }
         rendered_frames = rendered_frames.saturating_add(block.len() / 2);
         events.extend(
             drained

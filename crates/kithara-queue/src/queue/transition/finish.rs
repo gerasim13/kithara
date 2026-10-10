@@ -10,11 +10,14 @@ use kithara_play::{
 };
 use kithara_signal::{AudioSpec, FrameCount, SessionFrame};
 
-use super::super::{
-    Queue, Transition,
-    command::play_error,
-    slots::{LoadState, Role},
-    types::Target,
+use super::{
+    super::{
+        Queue, Transition,
+        command::play_error,
+        slots::{LoadState, Role},
+        types::Target,
+    },
+    TransitionRequest,
 };
 use crate::{ActionAtItemEnd, AdvanceReason, QueueError, RepeatMode, TrackStatus};
 
@@ -168,10 +171,13 @@ where
         });
         if ready || self.earliest()? >= end - duration {
             self.request_transition(
-                id,
-                Transition::Crossfade,
-                AdvanceReason::NaturalEof,
-                true,
+                TransitionRequest {
+                    id,
+                    transition: Transition::Crossfade,
+                    reason: AdvanceReason::NaturalEof,
+                    auto: true,
+                    playing: true,
+                },
                 output,
                 out,
             )?;

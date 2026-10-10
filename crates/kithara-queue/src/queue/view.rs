@@ -115,13 +115,10 @@ where
         let track = self
             .current_track()
             .map(|track| track.snapshot().as_ref().clone());
-        let slot = track.as_ref().and_then(|track| {
-            self.deck
-                .mixer
-                .slots
-                .get(usize::from(track.slot.get()))
-                .copied()
-        });
+        let slot = track
+            .as_ref()
+            .and_then(|track| track.slot)
+            .and_then(|slot| self.deck.mixer.slots.get(usize::from(slot.get())).copied());
         let published = self.view.read();
         let rows = if published.revision == self.tracks.revision() {
             Arc::clone(&published.rows)

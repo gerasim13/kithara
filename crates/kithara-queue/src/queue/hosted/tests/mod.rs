@@ -1,5 +1,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod admission_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod background_tests;
 #[cfg(not(target_arch = "wasm32"))]
 mod engine_event_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]

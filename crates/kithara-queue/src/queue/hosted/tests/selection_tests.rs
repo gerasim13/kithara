@@ -45,6 +45,7 @@ async fn advance_to_next_on_empty_emits_queue_ended() {
                 Transition::Crossfade,
                 AdvanceReason::NaturalEof,
                 true,
+                true,
                 Some(&output),
                 out,
             )
@@ -97,6 +98,7 @@ async fn advance_to_next_cycles_then_emits_queue_ended() {
                 Transition::Crossfade,
                 AdvanceReason::NaturalEof,
                 true,
+                true,
                 Some(&output),
                 out,
             )
@@ -121,6 +123,7 @@ async fn admitted_pending_successor_becomes_navigation_authority() {
         queue.next_target(
             Transition::Crossfade,
             AdvanceReason::NaturalEof,
+            true,
             true,
             Some(&output),
             out,

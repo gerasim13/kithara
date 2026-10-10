@@ -293,6 +293,7 @@ fn selected_second() -> (TestQueue, TrackId, TrackId) {
         prep: None,
         cancel: None,
         store: None,
+        max_concurrent_loads: std::num::NonZeroUsize::new(3).expect("default load cap"),
         runtime: None,
         should_autoplay: false,
         max_history_size: 100,
@@ -317,7 +318,7 @@ fn selected_second() -> (TestQueue, TrackId, TrackId) {
             .factory
             .track(PlayerConfig {
                 item: id,
-                slot,
+                slot: Some(slot),
                 settings: TrackSettings::default(),
             })
             .expect("snapshot track");

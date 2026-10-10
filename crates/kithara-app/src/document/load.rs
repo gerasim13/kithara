@@ -598,11 +598,19 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn the_queue_section_survives_the_load_pipeline() {
         let dir = tempdir();
-        let path = write(&dir, "queue", "queue:\n  mixer:\n    slots: 5\n");
+        let path = write(
+            &dir,
+            "queue",
+            "queue:\n  max_concurrent_loads: 5\n  mixer:\n    slots: 5\n",
+        );
 
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
 
         assert_eq!(config.queue().mixer.slots.map(NonZeroUsize::get), Some(5));
+        assert_eq!(
+            config.queue().max_concurrent_loads.map(NonZeroUsize::get),
+            Some(5)
+        );
         assert!(
             config.queue().max_history_size.is_none(),
             "a knob the document does not name reaches the app empty"

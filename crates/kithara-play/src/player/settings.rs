@@ -78,7 +78,9 @@ pub struct PlayerConfig {
     pub item: TrackId,
     #[config(value)]
     #[patch(skip)]
-    pub slot: Slot,
+    /// The mixer slot its deck seats it in at build; `None` for a background load
+    /// that a later `TrackCommand::Seat` seats.
+    pub slot: Option<Slot>,
     #[config(nested)]
     #[patch(nested, fallible)]
     pub settings: TrackSettings,

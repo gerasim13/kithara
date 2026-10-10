@@ -5,14 +5,17 @@ use kithara_play::{
     Outbox, OutputSnapshot, PlayError, Player, PlayerConfig, Position, Slot, Track, TrackCommand,
     TrackFactory, TrackStatus as PlayingStatus,
 };
+use tracing::warn;
 
 use super::{
     Queue, Transition,
-    slots::{Active, Role},
+    slots::{Active, LoadState, Parked, Role},
+    transition::TransitionRequest,
     types::{Placement, extract_track_name},
 };
 use crate::{
-    AdvanceReason, NavigationState, QueueError, QueueEvent, TrackSource, track::TrackRecord,
+    AdvanceReason, NavigationState, QueueError, QueueEvent, TrackSource, TrackStatus, consts,
+    track::TrackRecord,
 };
 
 impl<S, F> Queue<S, F>
@@ -42,25 +45,29 @@ where
         self.announce(QueueEvent::TrackAdded { id, index });
     }
 
-    pub(super) fn autoplay(
+    pub(super) fn arm_initial_load(
         &mut self,
         output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
-    ) -> Result<(), QueueError> {
-        if self.config.should_autoplay
-            && self.current.is_none()
-            && self.target.is_none()
-            && self.navigation.current().is_none()
+    ) {
+        if self.clock.is_none()
+            || output.is_none()
+            || self.current.is_some()
+            || self.target.is_some()
+            || self.navigation.current().is_some()
         {
-            self.next_target(
-                Transition::None,
-                AdvanceReason::InitialLoad,
-                false,
-                output,
-                out,
-            )?;
+            return;
         }
-        Ok(())
+        if let Err(error) = self.next_target(
+            Transition::None,
+            AdvanceReason::InitialLoad,
+            false,
+            self.config.should_autoplay,
+            output,
+            out,
+        ) {
+            warn!(%error, "the initial load could not start");
+        }
     }
 
     pub(super) fn remove_entry(
@@ -97,15 +104,25 @@ where
         }) {
             sent = self.release_track(active_index, out)?.or(sent);
         }
+        for parked in self
+            .active
+            .parked_iter_mut()
+            .filter(|parked| parked.item == id)
+        {
+            sent = parked.track.apply(TrackCommand::Release, out)?.or(sent);
+        }
         drop(self.tracks.records_mut().remove(index));
         self.navigation.reconcile(&self.track_ids());
         self.announce(QueueEvent::TrackRemoved { id });
         if let Some(replacement) = replacement {
             return self.request_transition(
-                replacement,
-                Transition::None,
-                AdvanceReason::RemovedCurrent,
-                false,
+                TransitionRequest {
+                    id: replacement,
+                    transition: Transition::None,
+                    reason: AdvanceReason::RemovedCurrent,
+                    auto: false,
+                    playing: true,
+                },
                 output,
                 out,
             );
@@ -147,28 +164,73 @@ where
         }) {
             let active = self.active.get_mut(index).ok_or(QueueError::NotReady(id))?;
             active.role = role;
-            return Ok(active.load.map(super::slots::LoadState::seq));
+            return Ok(active.load.map(LoadState::seq));
         }
-        let Some(slot) = self.active.free_slot() else {
-            return self.evict_for(id, role, output, out);
-        };
-        let active = self.prepare_track(id, slot, role, output, out)?;
-        let seq = active.load.map(super::slots::LoadState::seq);
-        self.active.push(active);
-        Ok(seq)
-    }
-
-    fn prepare_track(
-        &mut self,
-        id: TrackId,
-        slot: Slot,
-        role: Role,
-        output: Option<&OutputSnapshot>,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Active<F::Track>, QueueError> {
         if out.deck_available() == 0 {
             return Err(PlayError::Full("deck").into());
         }
+        let taken = self
+            .active
+            .parked_position(|parked| {
+                parked.item == id
+                    && parked.track.snapshot().as_ref().status != PlayingStatus::Released
+            })
+            .map(|index| self.active.take_parked(index));
+        let Some(slot) = self.active.free_slot() else {
+            return self.evict_for(id, role, taken, output, out);
+        };
+        let (track, load) = if let Some(mut parked) = taken {
+            let result = (|| {
+                if let Some(to) = self.held_position {
+                    parked.track.apply(TrackCommand::Seek { to }, out)?;
+                    self.held_position = None;
+                }
+                parked.track.apply(
+                    TrackCommand::Seat {
+                        slot,
+                        at: When::Next,
+                    },
+                    out,
+                )
+            })();
+            if let Err(error) = result {
+                if let Err(error) = parked.track.apply(TrackCommand::Release, out) {
+                    warn!(%error, "a refused background seat waits to release");
+                }
+                self.active.park(parked);
+                return Err(error.into());
+            }
+            (parked.track, parked.load)
+        } else {
+            let (track, seq) = self.open_track(
+                id,
+                Some(slot),
+                self.held_position.unwrap_or(Position::ZERO),
+                output,
+                out,
+            )?;
+            self.held_position = None;
+            (track, seq.map(LoadState::Opening))
+        };
+        let seq = load.map(LoadState::seq);
+        self.active.push(Active {
+            item: id,
+            slot,
+            track,
+            role,
+            load,
+        });
+        Ok(seq)
+    }
+
+    fn open_track(
+        &mut self,
+        id: TrackId,
+        slot: Option<Slot>,
+        position: Position,
+        output: Option<&OutputSnapshot>,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<(F::Track, Option<Seq>), QueueError> {
         if out.dispatcher_available() == 0 {
             return Err(PlayError::Full("dispatcher").into());
         }
@@ -192,54 +254,90 @@ where
             .loader
             .as_ref()
             .ok_or_else(|| PlayError::InvalidConfiguration {
-                reason: "a hosted queue requires resource preparation and an asset store".into(),
+                reason: "a hosted queue requires resource preparation".into(),
             })?;
         let output = output.ok_or(PlayError::NotReady)?;
         let (item, load) = loader.start(id, source, observer, output)?;
-        let position = self.held_position.unwrap_or(Position::ZERO);
         let seq = track.apply(TrackCommand::Load { item, position }, out)?;
-        self.held_position = None;
         self.tracks.begin_load(id, load);
-        Ok(Active {
-            item: id,
-            slot,
-            track,
-            role,
-            load: seq.map(super::slots::LoadState::Opening),
-        })
+        Ok((track, seq))
     }
 
     fn evict_for(
         &mut self,
         id: TrackId,
         role: Role,
+        taken: Option<Parked<F::Track>>,
         output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, QueueError> {
-        if let Some(index) = self.active.replacement_index() {
-            self.release_track(index, out)?;
-            self.reap_released();
-        }
-        let victim = self
-            .active
-            .quietest(&self.deck.mixer, |_| true)
-            .ok_or_else(|| PlayError::InvalidConfiguration {
-                reason: "a mixer must have at least one slot".into(),
-            })?;
-        let slot = self
-            .active
-            .get(victim)
-            .ok_or(QueueError::NotReady(id))?
-            .slot;
-        let mut replacement = self.prepare_track(id, slot, role, output, out)?;
-        replacement
-            .track
-            .apply(TrackCommand::Evict { at: When::Next }, out)?;
-        let seq = replacement.load.map(super::slots::LoadState::seq);
-        self.active.stage(replacement);
+        let staging = (|| {
+            if let Some(index) = self.active.replacement_index() {
+                self.release_track(index, out)?;
+                self.reap_released();
+            }
+            let victim = self
+                .active
+                .quietest(&self.deck.mixer, |_| true)
+                .ok_or_else(|| PlayError::InvalidConfiguration {
+                    reason: "a mixer must have at least one slot".into(),
+                })?;
+            Ok::<_, QueueError>(
+                self.active
+                    .get(victim)
+                    .ok_or(QueueError::NotReady(id))?
+                    .slot,
+            )
+        })();
+        let slot = match staging {
+            Ok(slot) => slot,
+            Err(error) => {
+                if let Some(parked) = taken {
+                    self.active.park(parked);
+                }
+                return Err(error);
+            }
+        };
+        let (track, load) = if let Some(mut parked) = taken {
+            if let Some(to) = self.held_position {
+                if let Err(error) = parked.track.apply(TrackCommand::Seek { to }, out) {
+                    if let Err(error) = parked.track.apply(TrackCommand::Release, out) {
+                        warn!(%error, "a refused background seek waits to release");
+                    }
+                    self.active.park(parked);
+                    return Err(error.into());
+                }
+                self.held_position = None;
+            }
+            (parked.track, parked.load)
+        } else {
+            let (track, seq) = self.open_track(
+                id,
+                None,
+                self.held_position.unwrap_or(Position::ZERO),
+                output,
+                out,
+            )?;
+            self.held_position = None;
+            (track, seq.map(LoadState::Opening))
+        };
+        let seq = load.map(LoadState::seq);
+        self.active.stage(Active {
+            item: id,
+            slot,
+            track,
+            role,
+            load,
+        });
         Ok(seq)
     }
+}
 
+impl<S, F> Queue<S, F>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    F: TrackFactory<S>,
+{
     pub(super) fn release_track(
         &mut self,
         index: usize,
@@ -261,7 +359,7 @@ where
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
         let mut detach = false;
-        let mut dispatcher = 0;
+        let mut dispatcher = self.active.parked_len();
         for active in self.active.iter() {
             if active.track.snapshot().as_ref().attached {
                 detach = true;
@@ -278,6 +376,9 @@ where
         let mut release = |out: &mut Outbox<'_, S>| {
             for active in self.active.iter_mut() {
                 active.track.apply(TrackCommand::Release, out)?;
+            }
+            for parked in self.active.parked_iter_mut() {
+                parked.track.apply(TrackCommand::Release, out)?;
             }
             Ok::<(), PlayError>(())
         };
@@ -306,9 +407,20 @@ where
     }
 
     pub(super) fn reap_released(&mut self) {
+        for index in (0..self.active.parked_len()).rev() {
+            if self.active.parked_get_mut(index).is_some_and(|parked| {
+                parked.track.snapshot().as_ref().status == PlayingStatus::Released
+                    && !matches!(parked.load, Some(LoadState::Opening(_)))
+            }) {
+                self.active.take_parked(index);
+            }
+        }
         for index in self
             .active
-            .indices(|active| active.track.snapshot().as_ref().status == PlayingStatus::Released)
+            .indices(|active| {
+                active.track.snapshot().as_ref().status == PlayingStatus::Released
+                    && !matches!(active.load, Some(LoadState::Opening(_)))
+            })
             .into_iter()
             .rev()
         {
@@ -319,6 +431,41 @@ where
             {
                 self.current = None;
                 self.announce(QueueEvent::CurrentTrackChanged { id: None });
+            }
+        }
+    }
+
+    pub(super) fn pump_loads(&mut self, output: Option<&OutputSnapshot>, out: &mut Outbox<'_, S>) {
+        if self.shutdown.is_cancelled() || output.is_none() {
+            return;
+        }
+        while self.active.parked_len() < self.config.max_concurrent_loads.get()
+            && out.dispatcher_available() > consts::SELECT_DISPATCH_RESERVE
+        {
+            let Some(id) = self
+                .tracks
+                .records()
+                .iter()
+                .find(|record| record.status == TrackStatus::Pending)
+                .map(|record| record.id)
+            else {
+                break;
+            };
+            match self.open_track(id, None, Position::ZERO, output, out) {
+                Ok((track, load)) => self.active.park(Parked {
+                    item: id,
+                    track,
+                    load: load.map(LoadState::Opening),
+                }),
+                Err(QueueError::Play(PlayError::Full(_) | PlayError::Closed)) => break,
+                Err(error) => {
+                    self.tracks.fail(id, &error);
+                    self.announce(QueueEvent::TrackLoadFailed {
+                        id,
+                        reason: error.to_string(),
+                        auto_skipped: false,
+                    });
+                }
             }
         }
     }
@@ -352,7 +499,7 @@ where
         self.active
             .get_mut(index)
             .ok_or(PlayError::NoActiveSlot)?
-            .load = seq.map(super::slots::LoadState::Opening);
+            .load = seq.map(LoadState::Opening);
         self.tracks.begin_load(id, load);
         Ok(())
     }

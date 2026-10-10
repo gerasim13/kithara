@@ -157,10 +157,16 @@ pub(super) fn track(slot: Slot) -> Track {
         .build();
     PlayerImpl::new(PlayerConfig {
         item: TrackId::allocate(),
-        slot,
+        slot: Some(slot),
         settings,
     })
     .expect("unity speed is a valid track speed")
+}
+
+fn unseated_track() -> Track {
+    let mut held = track(A);
+    held.slot = None;
+    held
 }
 
 pub(super) fn item() -> ResourceLoad<TestPools> {
@@ -1872,11 +1878,9 @@ fn an_evicting_track_takes_the_slot_over_on_its_frame() {
     let mut receipts = rig.block(frame(0), 0.0);
     settle(&mut old, &mut rig, &mut receipts);
 
-    let mut new = track(A);
+    let mut new = unseated_track();
     load(&mut new, &mut rig, Position::ZERO);
-    rig.with_outbox(|out| new.apply(TrackCommand::Evict { at: When::Next }, out))
-        .expect("live deck scope")
-        .expect("the load is in flight");
+
     let opened = opened_fixture(&mut rig, "new");
     let receipt = rig.open(Ok(opened)).expect("one open");
     rig.with_outbox(|out| new.settle(TrackReceipt::Loaded(receipt), out))
@@ -1907,7 +1911,7 @@ fn an_evicting_track_takes_the_slot_over_on_its_frame() {
         let mut out = Outbox::new(&mut scope, &mut rig.deck.dispatcher).in_pass(pass);
         let at = When::At(frame(1_024));
         let result = out.together_owned(at, |out| {
-            new.apply(TrackCommand::Evict { at }, out)?;
+            new.apply(TrackCommand::Seat { slot: A, at }, out)?;
             new.apply(
                 TrackCommand::Fade {
                     at,
@@ -2066,11 +2070,9 @@ fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
         });
         return;
     }
-    let mut new = track(A);
+    let mut new = unseated_track();
     load(&mut new, &mut rig, Position::ZERO);
-    rig.with_outbox(|out| new.apply(TrackCommand::Evict { at: When::Next }, out))
-        .expect("deck scope")
-        .expect("stage replacement");
+
     let opened = opened_fixture(&mut rig, "new");
     let receipt = rig.open(Ok(opened)).expect("replacement load");
     rig.with_outbox(|out| new.settle(TrackReceipt::Loaded(receipt), out))
@@ -2096,7 +2098,7 @@ fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
         let at = When::At(frame(1_024));
         let (_, seq) = out
             .together(at, |out| {
-                new.apply(TrackCommand::Evict { at }, out)?;
+                new.apply(TrackCommand::Seat { slot: A, at }, out)?;
                 new.apply(
                     TrackCommand::Fade {
                         at,
@@ -2631,7 +2633,7 @@ fn failed_deck_event_preserves_item_identity_and_the_first_terminal_cause() {
     .expect("live deck scope");
     let terminal = player.snapshot();
     assert_eq!(terminal.item, item);
-    assert_eq!(terminal.slot, A);
+    assert_eq!(terminal.slot, Some(A));
     assert_eq!(
         terminal.status,
         TrackStatus::Failed {

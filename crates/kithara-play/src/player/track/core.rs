@@ -7,7 +7,7 @@ use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_render::{
-    LaneCommand, LaneFrame, LaneId, LaneProtocol,
+    LaneCommand, LaneFrame, LaneId, LaneProtocol, ServiceClass,
     bridge::{DeckPart, Fade, Slot, SlotMark},
 };
 use kithara_signal::{FrameCount, SegmentId, SessionFrame};
@@ -26,7 +26,8 @@ use crate::PlayError;
 /// The sole segment issuer and command producer for one track.
 pub struct PlayerImpl<S> {
     pub(super) item: TrackId,
-    pub(super) slot: Slot,
+    pub(super) slot: Option<Slot>,
+    pub(super) class: ServiceClass,
     pub(super) lane: Option<Sender<LaneProtocol>>,
     pub(super) lane_id: Option<LaneId>,
     pub(super) settings: Live<TrackSettings, LaneProtocol>,
@@ -65,6 +66,7 @@ impl<S> PlayerImpl<S> {
         Ok(Self {
             item: config.item,
             slot: config.slot,
+            class: ServiceClass::default(),
             lane: None,
             lane_id: None,
             settings: Live::new(config.settings)?,
@@ -103,6 +105,10 @@ impl<S> PlayerImpl<S> {
         self.status
     }
 
+    pub(super) fn seat(&self) -> Result<Slot, PlayError> {
+        self.slot.ok_or(PlayError::NoActiveSlot)
+    }
+
     #[must_use]
     pub fn attached(&self) -> bool {
         self.attaching.is_some()
@@ -117,8 +123,9 @@ impl<S> PlayerImpl<S> {
         if self.loading.is_some() {
             return;
         }
-        if let Some(pass) = out.pass()
-            && let Some(slot) = pass.deck.slots.get(self.slot.index())
+        if let Some(seat) = self.slot
+            && let Some(pass) = out.pass()
+            && let Some(slot) = pass.deck.slots.get(seat.index())
         {
             self.mark = slot.mark;
             if slot.position.is_finite() && slot.position >= 0.0 {
@@ -280,7 +287,7 @@ impl<S> PlayerImpl<S> {
         self.send_playback(
             at,
             vec![DeckPart::Stop {
-                slot: self.slot,
+                slot: self.seat()?,
                 fade: Fade::Declick,
             }],
             out,

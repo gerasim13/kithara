@@ -58,7 +58,7 @@ where
                     .get_mut(incoming)
                     .ok_or(PlayError::NoActiveSlot)?;
                 if replacement {
-                    active.track.apply(TrackCommand::Evict { at }, out)?;
+                    active.track.apply(TrackCommand::Seat { slot, at }, out)?;
                 }
                 active.track.apply(
                     TrackCommand::Fade {
@@ -162,7 +162,7 @@ where
             .role = Role::Current;
         self.active.activate_replacement(index);
         self.current = Some(target.to);
-        if target.auto {
+        if target.auto || target.reason == AdvanceReason::InitialLoad {
             self.navigation.select(target.to, &self.track_ids());
         }
         self.target = None;
@@ -217,6 +217,9 @@ where
         }
         if active.load.is_some_and(|load| load.seq() == seq) {
             let id = active.item;
+            let wanted = self
+                .target
+                .is_some_and(|target| self.incoming_index(target.to) == Some(index));
             if applied && self.finish_load(index)? {
                 self.transition_loaded(out)?;
             } else if !applied {
@@ -242,10 +245,10 @@ where
                     });
                 }
                 self.release_track(index, out)?;
-                if self.target.is_some_and(|target| target.to == id) {
+                if wanted {
                     self.target = None;
                 }
-            } else {
+            } else if wanted {
                 self.cancel_target(out).map_err(play_error)?;
             }
             return Ok(());

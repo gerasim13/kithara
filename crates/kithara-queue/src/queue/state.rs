@@ -1,3 +1,4 @@
+use kithara_assets::{AssetStore, StorageBackend};
 use kithara_bufpool::HasPool;
 use kithara_command::mailbox;
 use kithara_events::{EventBus, TrackId};
@@ -67,18 +68,23 @@ where
             .as_ref()
             .map_or_else(EventBus::default, |prep| prep.bus.clone());
         let (postbox, mailbox) = mailbox();
-        let loader = match (&config.prep, &config.store) {
-            (Some(prep), Some(store)) => Some(Loader::new(
+        let loader = config.prep.as_ref().map(|prep| {
+            let store = config.store.clone().unwrap_or_else(|| {
+                AssetStore::builder(prep.worker.pools().clone())
+                    .backend(StorageBackend::default())
+                    .cancel(shutdown.child())
+                    .build()
+            });
+            Loader::new(
                 prep.clone(),
-                store.clone(),
+                store,
                 config
                     .runtime
                     .clone()
                     .or_else(|| RuntimeHandle::try_current().ok()),
                 postbox.clone(),
-            )),
-            _ => None,
-        };
+            )
+        });
         let mut navigation = NavigationState::new(config.max_history_size);
         navigation.set_playback_order(config.playback_order, &[]);
         let tracks = Tracks::default();
@@ -123,13 +129,11 @@ where
 
     delegate::delegate! {
         to self.active {
-            /// Every active track, including preloaded and outgoing tracks.
-            #[expr($.map(|active| &mut active.track))]
-            #[call(iter_mut)]
+            /// Every track the queue holds: on the deck, staged, and loaded in the background.
+            #[call(tracks_mut)]
             pub fn tracks_mut(&mut self) -> impl Iterator<Item = &mut F::Track>;
-            /// Every active track, including both sides of an unfinished transition.
-            #[expr($.map(|active| &active.track))]
-            #[call(iter)]
+            /// Every track the queue holds: on the deck, staged, and loaded in the background.
+            #[call(tracks)]
             pub fn tracks_active(&self) -> impl Iterator<Item = &F::Track>;
         }
         to self.config {

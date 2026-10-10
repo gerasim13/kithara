@@ -29,6 +29,8 @@ pub enum DispatcherCommand<I> {
 
 pub struct LoadRequest<I> {
     pub item: I,
+    /// The lane starts Idle for a background load, or Warm for a seated track.
+    pub class: ServiceClass,
     pub position: Duration,
     pub start: LaneStart,
     pub inbox: Inbox<LaneProtocol>,
@@ -39,6 +41,7 @@ impl<I: Debug> Debug for LoadRequest<I> {
         formatter
             .debug_struct("LoadRequest")
             .field("item", &self.item)
+            .field("class", &self.class)
             .field("position", &self.position)
             .field("start", &self.start)
             .finish_non_exhaustive()
@@ -110,10 +113,11 @@ impl<I: Open> Protocol for DispatcherProtocol<I> {
     }
 }
 
-type Opening<O, L> = LocalBoxFuture<'static, (Seq, LaneId, OpenResult<O, L>)>;
+type Opening<O, L> = LocalBoxFuture<'static, (Seq, LaneId, ServiceClass, OpenResult<O, L>)>;
 
 struct Resident<O, L> {
     id: LaneId,
+    class: ServiceClass,
     task: L,
     admission: Option<(Seq, O, FrameCount)>,
 }
@@ -122,7 +126,9 @@ struct DispatchState<I: Open> {
     inbox: Inbox<DispatcherProtocol<I>>,
     opening: FuturesUnordered<Opening<I::Opened, I::Lane>>,
     lanes: Vec<Resident<I::Opened, I::Lane>>,
+    /// Bounds seated-serving lanes; the queue owns the bound on Idle lanes.
     capacity: NonZeroUsize,
+    playing_opens: usize,
     outcome: TickResult,
 }
 
@@ -138,19 +144,25 @@ where
             opening: FuturesUnordered::new(),
             lanes: Vec::with_capacity(capacity.get()),
             capacity,
+            playing_opens: 0,
             outcome: TickResult::Waiting,
         }
     }
 
-    fn poll(&mut self, cx: &mut Context<'_>, runtime_ready: bool) -> Poll<()> {
+    fn poll_openings(&mut self, cx: &mut Context<'_>) -> bool {
         let mut progress = false;
-        while let Poll::Ready(Some((seq, lane, result))) = self.opening.poll_next_unpin(cx) {
+        while let Poll::Ready(Some((seq, lane, class, result))) = self.opening.poll_next_unpin(cx) {
             progress = true;
+            if class != ServiceClass::Idle {
+                self.playing_opens = self.playing_opens.saturating_sub(1);
+            }
             match result {
                 Ok((opened, mut task, engine_latency)) => {
                     task.warm_up();
+                    task.set_priority(class);
                     self.lanes.push(Resident {
                         id: lane,
+                        class,
                         task,
                         admission: Some((seq, opened, engine_latency)),
                     });
@@ -162,6 +174,11 @@ where
                 }
             }
         }
+        progress
+    }
+
+    fn poll(&mut self, cx: &mut Context<'_>, runtime_ready: bool) -> Poll<()> {
+        let mut progress = self.poll_openings(cx);
         let _ = self.inbox.poll_drain(cx);
         if self.inbox.is_closed() {
             return Poll::Ready(());
@@ -184,7 +201,15 @@ where
                         due.refuse(LoadRefusal::NoRuntime);
                         continue;
                     }
-                    if self.lanes.len() + self.opening.len() >= self.capacity.get() {
+                    if request.class != ServiceClass::Idle
+                        && self
+                            .lanes
+                            .iter()
+                            .filter(|resident| resident.class != ServiceClass::Idle)
+                            .count()
+                            + self.playing_opens
+                            >= self.capacity.get()
+                    {
                         due.refuse(LoadRefusal::Capacity {
                             capacity: self.capacity.get(),
                         });
@@ -192,13 +217,16 @@ where
                     }
                     let seq = due.defer();
                     let lane = LaneId(seq.get());
+                    if request.class != ServiceClass::Idle {
+                        self.playing_opens += 1;
+                    }
                     self.opening.push(
                         async move {
                             let result = request
                                 .item
                                 .open(request.position, request.start, request.inbox)
                                 .await;
-                            (seq, lane, result)
+                            (seq, lane, request.class, result)
                         }
                         .boxed_local(),
                     );
@@ -222,6 +250,7 @@ where
                         self.lanes.iter_mut().find(|resident| resident.id == lane)
                     {
                         resident.task.set_priority(class);
+                        resident.class = class;
                         due.apply(Dispatched::Prioritized);
                     } else {
                         due.commands_mut()
@@ -419,6 +448,63 @@ mod tests {
 
     type Protocol = DispatcherProtocol<Gate>;
 
+    #[kithara::test]
+    fn an_idle_open_never_takes_a_playing_open_s_capacity() {
+        let (mut sender, inbox) = channel::<Protocol>(ChannelConfig::builder().build());
+        let mut dispatcher = DispatchState::new(inbox, NonZeroUsize::MIN);
+        let mut answers = Vec::new();
+        let mut sequences = Vec::new();
+        for class in [
+            ServiceClass::Warm,
+            ServiceClass::Idle,
+            ServiceClass::Idle,
+            ServiceClass::Warm,
+        ] {
+            let (answer, input) = oneshot::channel();
+            answers.push(answer);
+            sequences.push(
+                sender
+                    .send(
+                        When::Next,
+                        Batch {
+                            basis: Vec::new(),
+                            commands: vec![DispatcherCommand::Load(Box::new(LoadRequest {
+                                item: Gate(input),
+                                class,
+                                position: Duration::ZERO,
+                                start: LaneStart {
+                                    speed: SpeedCurve::Constant(1.0),
+                                    keylock: false,
+                                    backend: StretchKind::default(),
+                                },
+                                inbox: channel(ChannelConfig::builder().build()).1,
+                            }))],
+                        },
+                    )
+                    .expect("load channel room"),
+            );
+            let mut context = Context::from_waker(Waker::noop());
+            assert!(dispatcher.poll(&mut context, true).is_pending());
+        }
+        assert_eq!(
+            dispatcher.opening.len(),
+            3,
+            "one Warm and two Idle opens are admitted"
+        );
+        assert_eq!(dispatcher.playing_opens, 1);
+        let refused = sender.receipts().next().expect("second Warm is refused");
+        assert_eq!(refused.seq(), sequences[3]);
+        assert!(matches!(
+            refused.outcome(),
+            Outcome::Rejected(Rejection::Refused(LoadRefusal::Capacity { capacity: 1 }))
+        ));
+        assert!(
+            sender.receipts().next().is_none(),
+            "all admitted opens stay pending"
+        );
+        drop(answers);
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[derive(Debug)]
     struct ExternalSource {
@@ -499,6 +585,7 @@ mod tests {
                             input: source,
                             blocked: Some(blocked),
                         },
+                        class: ServiceClass::Warm,
                         position: Duration::ZERO,
                         start: LaneStart {
                             speed: SpeedCurve::Constant(1.0),
@@ -560,6 +647,7 @@ mod tests {
                         .map(|item| {
                             DispatcherCommand::Load(Box::new(LoadRequest {
                                 item,
+                                class: ServiceClass::Warm,
                                 position: Duration::ZERO,
                                 start: LaneStart {
                                     speed: SpeedCurve::Constant(1.0),
@@ -610,6 +698,7 @@ mod tests {
                             input: source,
                             blocked: Some(blocked),
                         },
+                        class: ServiceClass::Warm,
                         position: Duration::ZERO,
                         start: LaneStart {
                             speed: SpeedCurve::Constant(1.0),

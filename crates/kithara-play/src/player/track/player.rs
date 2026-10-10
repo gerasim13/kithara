@@ -32,7 +32,6 @@ impl<S> Player<S> for PlayerImpl<S> {
     ) -> Result<Option<Seq>, PlayError> {
         self.observe(out);
         self.settle_lane();
-        let slot = self.slot;
         match command {
             TrackCommand::Load { item, position } => self.load(item, position, out),
             TrackCommand::Play { at } => self.play(at, out),
@@ -62,6 +61,7 @@ impl<S> Player<S> for PlayerImpl<S> {
             TrackCommand::Configure(change, at) => self.configure(change, at, out),
             TrackCommand::SetSpeed { speed, at } => self.set_speed(speed, at, out),
             TrackCommand::Fade { at, settings, dir } => {
+                let slot = self.seat()?;
                 let staged = dir == FadeDir::In
                     && out.is_grouped()
                     && self.attaching.is_some_and(|attach| {
@@ -84,7 +84,8 @@ impl<S> Player<S> for PlayerImpl<S> {
                 };
                 self.send_playback(at, vec![part], out)
             }
-            TrackCommand::PlayAfter { track } if track == slot => {
+            TrackCommand::PlayAfter { track } if Some(track) == self.slot => {
+                let slot = self.seat()?;
                 if out.is_grouped() {
                     return Err(PlayError::Internal(
                         "a repeat adoption cannot join a timed group".into(),
@@ -126,7 +127,7 @@ impl<S> Player<S> for PlayerImpl<S> {
                 When::Deferred,
                 vec![DeckPart::Chain {
                     from: track,
-                    to: slot,
+                    to: self.seat()?,
                 }],
                 out,
             ),
@@ -139,7 +140,7 @@ impl<S> Player<S> for PlayerImpl<S> {
                 {
                     return Err(PlayError::Full("lane"));
                 }
-                out.supersede(slot)?;
+                out.supersede(self.seat()?)?;
                 for adoption in &mut self.adopting {
                     if adoption.parked.is_some() {
                         adoption.cancelled = true;
@@ -149,34 +150,8 @@ impl<S> Player<S> for PlayerImpl<S> {
                 self.repeat = false;
                 Ok(None)
             }
-            TrackCommand::Release => {
-                self.play = None;
-                self.playback_commands.clear();
-                if let Some(attaching) = self.attaching.as_mut() {
-                    attaching.play = None;
-                }
-                if self.status == TrackStatus::Released {
-                    self.release_lane(out)?;
-                    return Ok(None);
-                }
-                if self
-                    .attaching
-                    .is_some_and(|attach| attach.replacement && attach.seq.is_some())
-                {
-                    if !self.releasing {
-                        out.supersede(slot)?;
-                        self.releasing = true;
-                    }
-                    return Ok(None);
-                }
-                if self.attached() {
-                    return self.send_playback(When::Next, vec![DeckPart::Detach { slot }], out);
-                }
-                self.status = TrackStatus::Released;
-                self.release_lane(out)?;
-                Ok(None)
-            }
-            TrackCommand::Evict { at } => self.evict(at, out),
+            TrackCommand::Release => self.release_track(out),
+            TrackCommand::Seat { slot, at } => self.seat_at(slot, at, out),
         }
     }
 
@@ -190,7 +165,7 @@ impl<S> Player<S> for PlayerImpl<S> {
                 seq,
                 outcome,
                 batch,
-            } if batch.basis.iter().any(|&(slot, _)| slot == self.slot) => {
+            } if batch.basis.iter().any(|&(slot, _)| Some(slot) == self.slot) => {
                 let attaching = self.attaching.is_some_and(|attach| attach.seq == Some(seq));
                 let adopting = self.adopting.iter().any(|adopt| adopt.seq == seq);
                 let playback = self.playback_commands.iter().position(|operation| {
@@ -207,7 +182,7 @@ impl<S> Player<S> for PlayerImpl<S> {
                         && self.status != TrackStatus::Released
                         && batch.commands.iter().any(|part| {
                             matches!(part, DeckPart::Returned(Returned::Pcm { slot, .. })
-                                if *slot == self.slot)
+                                if Some(*slot) == self.slot)
                         })
                     {
                         self.status = TrackStatus::Released;
@@ -236,21 +211,21 @@ impl<S> Player<S> for PlayerImpl<S> {
                     return Settled::Pending;
                 }
                 match event {
-                    DeckEvent::Failed { slot, at, fault } if slot == self.slot => {
+                    DeckEvent::Failed { slot, at, fault } if Some(slot) == self.slot => {
                         if let TrackStatus::Playing { since } = self.status
                             && at.frames_since(since).is_some()
                         {
                             self.status = TrackStatus::Failed { at, fault };
                         }
                     }
-                    DeckEvent::Ended { slot, at } if slot == self.slot && !self.repeat => {
+                    DeckEvent::Ended { slot, at } if Some(slot) == self.slot && !self.repeat => {
                         self.status = TrackStatus::Ended { at }
                     }
-                    DeckEvent::Faded { slot, at } if slot == self.slot => {
+                    DeckEvent::Faded { slot, at } if Some(slot) == self.slot => {
                         self.status = TrackStatus::Faded { at }
                     }
                     DeckEvent::Underrun { slot, .. }
-                        if slot == self.slot && self.loading.is_none() =>
+                        if Some(slot) == self.slot && self.loading.is_none() =>
                     {
                         self.mark = out
                             .pass()
@@ -268,16 +243,15 @@ impl<S> Player<S> for PlayerImpl<S> {
         self.observe(out);
         self.settle_lane();
         self.retry_adopt(out);
+        if let Err(error) = self.promote(out) {
+            warn!(%error, "a seated lane waits to leave the background class");
+        }
         if self.status == TrackStatus::Released {
             if let Err(error) = self.release_lane(out) {
                 warn!(%error, "lane release waits for room");
             }
         } else if self.releasing && self.attaching.is_none() && self.playback_commands.is_empty() {
-            if let Err(error) =
-                self.send_playback(When::Next, vec![DeckPart::Detach { slot: self.slot }], out)
-            {
-                warn!(%error, "released replacement waits to detach");
-            }
+            self.retry_detach(out);
         } else if self.attached()
             && self.ready == Some(self.segment)
             && let Some(at) = self.play

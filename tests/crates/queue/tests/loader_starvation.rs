@@ -8,6 +8,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
+use std::num::NonZeroUsize;
+
 use kithara::{
     abr::AbrMode,
     events::TrackId,
@@ -119,7 +121,10 @@ async fn hung_loads_must_not_starve_user_selected_track(
         store,
         ticker: mut tick_handle,
         ..
-    } = DiskQueue::builder(temp.path()).open().await;
+    } = DiskQueue::builder(temp.path())
+        .max_concurrent_loads(NonZeroUsize::new(consts::CAP).expect("loader cap is non-zero"))
+        .open()
+        .await;
 
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
@@ -129,25 +134,28 @@ async fn hung_loads_must_not_starve_user_selected_track(
             .build()
     };
 
+    // Saturate every permit: each hung append parks in `Resource::new`.
     let mut hung_ids = Vec::new();
     for url in &hung_urls {
-        let id = queue
-            .run({
-                let source = TrackSource::Config(Box::new(mk_cfg(url)));
-                move |q| q.append(source)
-            })
-            .await
-            .expect("append hung track");
-        queue
-            .run(move |q| q.select(id, Transition::None))
-            .await
-            .expect("select hung target");
+        hung_ids.push(
+            queue
+                .run({
+                    let source = TrackSource::Config(Box::new(mk_cfg(url)));
+                    move |q| q.append(source)
+                })
+                .await
+                .expect("append hung track"),
+        );
+    }
+
+    // Gate: select only after every hung track holds a permit (Loading).
+    for &id in &hung_ids {
         wait_until_loading(&queue, id, consts::GATE_DEADLINE)
             .await
             .unwrap_or_else(|e| panic!("hung track gate: {e}"));
-        hung_ids.push(id);
     }
 
+    // Reachable track: its load queues behind the saturated semaphore.
     let fast_id = queue
         .run({
             let source = TrackSource::Config(Box::new(mk_cfg(&fast_url)));
@@ -162,24 +170,19 @@ async fn hung_loads_must_not_starve_user_selected_track(
 
     let load_result = wait_for_loader_done(&queue, fast_id, consts::FAST_DEADLINE).await;
 
-    // Every abandoned target must release its load before the reachable target settles.
-    let superseded: Vec<TrackId> = hung_ids
+    // Linchpin: hung tracks still hold permits, else it isn't starvation.
+    let hung_still_loading: Vec<TrackId> = hung_ids
         .iter()
         .copied()
-        .filter(|&id| {
-            matches!(
-                queue.track(id).map(|track| track.status),
-                Some(TrackStatus::Cancelled)
-            )
-        })
+        .filter(|&id| is_loading(&queue, id))
         .collect();
 
     tick_handle.stop().await;
 
     assert_eq!(
-        superseded.len(),
-        consts::HUNG_TRACKS,
-        "every superseded target must be cancelled; \
+        hung_still_loading.len(),
+        consts::HUNG_TRACKS - 1,
+        "the initial pending load is superseded while the other hung load still holds a permit; \
          statuses={:?}",
         hung_ids
             .iter()

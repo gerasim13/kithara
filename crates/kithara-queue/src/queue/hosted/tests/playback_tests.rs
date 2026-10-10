@@ -152,12 +152,15 @@ async fn play_promotes_the_initial_pending_prefetch() {
 }
 
 fn attempt_selected(queue: &Queue<TestPools>, id: TrackId) -> bool {
-    queue.active.iter().any(|active| {
-        active.item == id
-            && matches!(active.role, Role::Incoming { .. })
-            && matches!(
-                active.load,
-                Some(crate::queue::slots::LoadState::Opening(_))
-            )
-    })
+    queue
+        .target
+        .is_some_and(|target| target.to == id && target.playing)
+        && queue.active.iter().any(|active| {
+            active.item == id
+                && matches!(active.role, Role::Incoming { .. })
+                && matches!(
+                    active.load,
+                    Some(crate::queue::slots::LoadState::Opening(_))
+                )
+        })
 }
