@@ -652,6 +652,7 @@ cargo.packages = [
   "kithara-host",
   "kithara-host-tests",
   "kithara-integration-tests",
+  "kithara-link",
   "kithara-mp4",
   "kithara-mpa",
   "kithara-net",
