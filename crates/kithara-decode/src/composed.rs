@@ -451,13 +451,28 @@ where
             return Ok(outcome);
         }
         let outcome = self.decode_prepared()?;
+        if matches!(outcome, DecoderChunkOutcome::Pending(_)) {
+            self.prefill = Prefill::Needed;
+        }
         self.emit_chunk_signal(&outcome);
         Ok(outcome)
     }
 
+    fn has_prepared_result(&self) -> bool {
+        matches!(
+            self.prefill,
+            Prefill::Buffered(
+                Ok(DecoderChunkOutcome::Chunk(_) | DecoderChunkOutcome::Eof) | Err(_)
+            )
+        ) || matches!(self.output, Some(Err(_)))
+    }
+
     fn prepare_next_chunk(&mut self) {
-        if matches!(self.prefill, Prefill::Buffered(_)) {
+        if self.has_prepared_result() {
             return;
+        }
+        if matches!(self.prefill, Prefill::Buffered(_)) {
+            self.prefill = Prefill::Needed;
         }
         if let Err(error) = self.demuxer.prepare_frame() {
             self.output = Some(Err(error));
@@ -475,6 +490,9 @@ where
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
         let outcome = self.seek_inner(pos)?;
         self.prefill = Prefill::Needed;
+        if matches!(self.output, Some(Err(_))) {
+            self.output = None;
+        }
         self.emit_seek_signal(&outcome);
         Ok(outcome)
     }
@@ -679,6 +697,7 @@ mod default_priming_tests {
         prepared.output = Some(Err(DecodeError::InvalidData {
             detail: "output preparation failed",
         }));
+        assert!(prepared.has_prepared_result());
         assert!(matches!(
             prepared.next_chunk_prepared(),
             Err(DecodeError::InvalidData {
@@ -697,6 +716,26 @@ mod default_priming_tests {
             let expected = pcm_prefix(|| regular.next_chunk().expect("regular decode"));
             assert_eq!(actual, expected);
         }
+    }
+
+    #[kithara::test]
+    fn successful_seek_discards_a_deferred_output_error(tone_mp3: &'static [u8]) {
+        let mut decoder = build_mp3_decoder(tone_mp3);
+        let mut reference = build_mp3_decoder(tone_mp3);
+        decoder.output = Some(Err(DecodeError::InvalidData {
+            detail: "old output preparation failed",
+        }));
+        assert!(decoder.has_prepared_result());
+        let target = Duration::from_millis(250);
+        decoder.seek(target).expect("new seek");
+        reference.seek(target).expect("reference seek");
+        assert!(!decoder.has_prepared_result());
+        let actual = pcm_prefix(|| {
+            decoder.prepare_next_chunk();
+            decoder.next_chunk_prepared().expect("new seek PCM")
+        });
+        let expected = pcm_prefix(|| reference.next_chunk().expect("reference PCM"));
+        assert_eq!(actual, expected);
     }
 
     #[cfg(feature = "symphonia")]
@@ -2032,6 +2071,60 @@ mod hook_tests {
         let mut decoder = build(&trim_silence, demuxer, Arc::clone(&log));
         let _ = decoder.next_chunk().unwrap();
         assert_eq!(log.lock().unwrap().chunks, vec![expected_signal]);
+    }
+
+    #[kithara::test]
+    fn a_direct_pending_rearms_prefill_for_deferred_pcm(
+        trim_silence: Vec<f32>,
+        zero_packet: &'static [u8],
+    ) {
+        let log = Arc::new(Mutex::new(CallLog::default()));
+        let reason = PendingReason::NotReady(NotReadyCause::SourcePending);
+        let frame_duration = Duration::from_micros(23);
+        let demuxer = StubDemuxer::with_outcomes(
+            zero_packet,
+            vec![
+                StubOutcome::Frame {
+                    pts: Duration::from_millis(20),
+                    duration: frame_duration,
+                },
+                StubOutcome::Pending(reason),
+                StubOutcome::Frame {
+                    pts: Duration::ZERO,
+                    duration: frame_duration,
+                },
+            ],
+            Vec::new(),
+        );
+        let mut decoder = build(&trim_silence, demuxer, Arc::clone(&log));
+        assert!(matches!(
+            decoder.next_chunk().expect("initial chunk"),
+            DecoderChunkOutcome::Chunk(_)
+        ));
+        decoder.prepare_next_chunk();
+        assert!(matches!(
+            decoder.next_chunk_prepared().expect("direct pending"),
+            DecoderChunkOutcome::Pending(actual) if actual == reason
+        ));
+        assert_eq!(decoder.demuxer.next.len(), 1);
+        decoder.prepare_next_chunk();
+        assert!(decoder.has_prepared_result());
+        assert!(
+            decoder.demuxer.next.is_empty(),
+            "deferred preparation owns the next PCM"
+        );
+        decoder.prepare_next_chunk();
+        let DecoderChunkOutcome::Chunk(output) =
+            decoder.next_chunk_prepared().expect("deferred PCM")
+        else {
+            panic!("deferred PCM must remain available");
+        };
+        assert_eq!(output.meta.timestamp, Duration::from_millis(20));
+        assert_eq!(output.frames(), 1);
+        assert_eq!(
+            log.lock().expect("hook log").chunks,
+            ["chunk", "pending", "chunk"]
+        );
     }
 
     #[kithara::test]
