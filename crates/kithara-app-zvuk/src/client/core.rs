@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use bytes::Bytes;
+use kithara_app_library::AccessToken;
 use kithara_config::Config as _;
 use kithara_net::{Headers, HttpClient, Net, RetryPolicy};
 use serde::de::DeserializeOwned;
@@ -18,8 +19,8 @@ use crate::{
 /// Reads retain the configured retry policy; mutations use a single attempt.
 #[derive(Clone)]
 pub struct Client<N> {
-    net: N,
-    mutations: N,
+    pub(crate) net: N,
+    pub(crate) mutations: N,
     pub(super) endpoint: Url,
     headers: Headers,
 }
@@ -41,16 +42,13 @@ impl Client<HttpClient> {
 
 impl<N: Net> Client<N> {
     /// Supplies read and mutation transports; mutations must use one attempt.
-    /// Every request carries the configured identity and a JSON body type.
     ///
     /// # Panics
     ///
     /// Panics if the constant service endpoint fails to parse as a URL.
     pub fn with_transports(net: N, mutations: N, config: &Config) -> Self {
         let mut headers = Headers::default();
-        headers.insert("Content-Type", "application/json");
         headers.insert("User-Agent", config.user_agent.as_str());
-        headers.insert("X-Auth-Token", config.auth_token.as_str());
         Self {
             net,
             mutations,
@@ -63,13 +61,17 @@ impl<N: Net> Client<N> {
     /// # Errors
     ///
     /// Returns authentication, transport, `GraphQL` or protocol errors.
-    pub(crate) async fn search(&self, query: &str) -> Result<TrackPage, Error> {
+    pub(crate) async fn search(
+        &self,
+        token: &AccessToken,
+        query: &str,
+    ) -> Result<TrackPage, Error> {
         let track_fields = consts::TRACK_FIELDS;
         let operation = format!(
             "query KitharaSearch($query: String!) {{ search(query: $query) {{ tracks(limit: 100) {{ items {{ {track_fields} }} page {{ total }} }} }} }}"
         );
         let data = self
-            .execute(&self.net, &operation, json!({ "query": query }))
+            .execute(&self.net, token, &operation, json!({ "query": query }))
             .await?;
         Ok(TrackPage {
             tracks: decode(&data, "/search/tracks/items")?,
@@ -81,12 +83,14 @@ impl<N: Net> Client<N> {
     /// # Errors
     ///
     /// Returns authentication, transport, `GraphQL` or protocol errors.
-    pub(crate) async fn liked_tracks(&self) -> Result<TrackPage, Error> {
+    pub(crate) async fn liked_tracks(&self, token: &AccessToken) -> Result<TrackPage, Error> {
         let track_fields = consts::TRACK_FIELDS;
         let operation = format!(
             "query KitharaLiked {{ collectionCount {{ tracks }} paginatedCollection {{ tracks(pagination: {{ first: 100 }}) {{ items {{ {track_fields} }} page {{ hasNextPage }} }} }} }}"
         );
-        let data = self.execute(&self.net, &operation, json!({})).await?;
+        let data = self
+            .execute(&self.net, token, &operation, json!({}))
+            .await?;
         let tracks: Vec<Track> = decode(&data, "/paginatedCollection/tracks/items")?;
         let total = decode_count(&data, "/collectionCount/tracks")?.or_else(|| {
             (data.pointer("/paginatedCollection/tracks/page/hasNextPage")
@@ -99,10 +103,11 @@ impl<N: Net> Client<N> {
     /// # Errors
     ///
     /// Returns authentication, transport, `GraphQL` or protocol errors.
-    pub(crate) async fn playlists(&self) -> Result<Vec<Playlist>, Error> {
+    pub(crate) async fn playlists(&self, token: &AccessToken) -> Result<Vec<Playlist>, Error> {
         let data = self
             .execute(
                 &self.net,
+                token,
                 "query KitharaPlaylists { collection { playlists { id title } } }",
                 json!({}),
             )
@@ -114,13 +119,19 @@ impl<N: Net> Client<N> {
     /// # Errors
     ///
     /// Returns authentication, transport, `GraphQL` or protocol errors.
-    pub(crate) async fn playlist_tracks(&self, id: &PlaylistId) -> Result<TrackPage, Error> {
+    pub(crate) async fn playlist_tracks(
+        &self,
+        token: &AccessToken,
+        id: &PlaylistId,
+    ) -> Result<TrackPage, Error> {
         let ids = encode(&[id])?;
         let track_fields = consts::TRACK_FIELDS;
         let operation = format!(
             "query KitharaPlaylist {{ playlists(ids: {ids}) {{ id trackCount tracks(limit: 100, offset: 0) {{ {track_fields} }} }} }}"
         );
-        let data = self.execute(&self.net, &operation, json!({})).await?;
+        let data = self
+            .execute(&self.net, token, &operation, json!({}))
+            .await?;
         let playlists = data
             .get("playlists")
             .and_then(Value::as_array)
@@ -140,7 +151,11 @@ impl<N: Net> Client<N> {
     /// # Errors
     ///
     /// Returns authentication, transport, `GraphQL` or protocol errors.
-    pub(crate) async fn streams(&self, ids: &[TrackId]) -> Result<Vec<MediaTrack>, Error> {
+    pub(crate) async fn streams(
+        &self,
+        token: &AccessToken,
+        ids: &[TrackId],
+    ) -> Result<Vec<MediaTrack>, Error> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -149,7 +164,9 @@ impl<N: Net> Client<N> {
         let operation = format!(
             "query KitharaStreams {{ mediaContents(ids: {encoded_ids}) {{ {media_fields} }} }}"
         );
-        let data = self.execute(&self.net, &operation, json!({})).await?;
+        let data = self
+            .execute(&self.net, token, &operation, json!({}))
+            .await?;
         let rows: Vec<MediaTrack> = decode(&data, "/mediaContents")?;
         let returned: HashSet<&TrackId> = rows.iter().map(|row| &row.id).collect();
         let requested: HashSet<&TrackId> = ids.iter().collect();
@@ -171,13 +188,20 @@ impl<N: Net> Client<N> {
     /// # Errors
     ///
     /// Returns authentication, transport, `GraphQL` or protocol errors.
-    pub(crate) async fn set_liked(&self, id: &TrackId, liked: bool) -> Result<(), Error> {
+    pub(crate) async fn set_liked(
+        &self,
+        token: &AccessToken,
+        id: &TrackId,
+        liked: bool,
+    ) -> Result<(), Error> {
         let field = if liked { "addItem" } else { "removeItem" };
         let encoded_id = encode(id)?;
         let operation = format!(
             "mutation KitharaReaction {{ collection {{ {field}(id: {encoded_id}, type: track) }} }}"
         );
-        let data = self.execute(&self.mutations, &operation, json!({})).await?;
+        let data = self
+            .execute(&self.mutations, token, &operation, json!({}))
+            .await?;
         let confirmation = data
             .get("collection")
             .and_then(|collection| collection.get(field))
@@ -188,15 +212,28 @@ impl<N: Net> Client<N> {
         Ok(())
     }
 
-    async fn execute(&self, net: &N, query: &str, variables: Value) -> Result<Value, Error> {
+    /// The client identity, carrying `token` when one is given.
+    pub(crate) fn headers(&self, token: Option<&AccessToken>) -> Headers {
+        let mut headers = self.headers.clone();
+        if let Some(token) = token {
+            headers.insert(consts::AUTH_HEADER, token.expose());
+        }
+        headers
+    }
+
+    async fn execute(
+        &self,
+        net: &N,
+        token: &AccessToken,
+        query: &str,
+        variables: Value,
+    ) -> Result<Value, Error> {
         let body = serde_json::to_vec(&json!({ "query": query, "variables": variables }))
             .map_err(|_| Error::Protocol("request encoding failed"))?;
+        let mut headers = self.headers(Some(token));
+        headers.insert("Content-Type", "application/json");
         let response = net
-            .post_bytes(
-                self.endpoint.clone(),
-                Bytes::from(body),
-                Some(self.headers.clone()),
-            )
+            .post_bytes(self.endpoint.clone(), Bytes::from(body), Some(headers))
             .await?;
         let envelope: Value = serde_json::from_slice(&response)
             .map_err(|_| Error::Protocol("invalid JSON envelope"))?;

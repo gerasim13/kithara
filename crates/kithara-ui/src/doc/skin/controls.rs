@@ -740,6 +740,7 @@ impl ButtonSkin {
 #[non_exhaustive]
 pub struct NavSkin {
     pub header_icon_color: ColorRole,
+    pub idle_icon_color: ColorRole,
     pub idle_text_color: ColorRole,
     pub marker_color: ColorRole,
     /// What the row the reader is on paints behind itself, and the bar it
@@ -749,6 +750,8 @@ pub struct NavSkin {
     pub header_height: f32,
     pub header_icon_size: f32,
     pub header_text_size: f32,
+    /// The square the icon is centred in, ahead of the gap to the label.
+    pub icon_box: f32,
     pub icon_gap: f32,
     pub icon_size: f32,
     pub item_height: f32,
@@ -766,8 +769,10 @@ pub struct NavPatch {
     pub header_icon_color: Option<ColorRole>,
     pub header_icon_size: Option<f32>,
     pub header_text_size: Option<f32>,
+    pub icon_box: Option<f32>,
     pub icon_gap: Option<f32>,
     pub icon_size: Option<f32>,
+    pub idle_icon_color: Option<ColorRole>,
     pub idle_text_color: Option<ColorRole>,
     pub item_height: Option<f32>,
     pub marker_color: Option<ColorRole>,
@@ -785,6 +790,7 @@ impl NavSkin {
         super::patch::patch_field(&mut self.header_height, patch.header_height);
         super::patch::patch_field(&mut self.header_icon_size, patch.header_icon_size);
         super::patch::patch_field(&mut self.header_text_size, patch.header_text_size);
+        super::patch::patch_field(&mut self.icon_box, patch.icon_box);
         super::patch::patch_field(&mut self.icon_gap, patch.icon_gap);
         super::patch::patch_field(&mut self.icon_size, patch.icon_size);
         super::patch::patch_field(&mut self.item_height, patch.item_height);
@@ -794,6 +800,7 @@ impl NavSkin {
         super::patch::patch_field(&mut self.text, patch.text);
         super::patch::patch_field(&mut self.selected_fill, patch.selected_fill);
         super::patch::patch_field(&mut self.marker_color, patch.marker_color);
+        super::patch::patch_field(&mut self.idle_icon_color, patch.idle_icon_color);
         super::patch::patch_field(&mut self.idle_text_color, patch.idle_text_color);
     }
 }

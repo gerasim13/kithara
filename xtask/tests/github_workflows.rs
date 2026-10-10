@@ -18,6 +18,8 @@ const STRESS_EXECUTE_COMMAND: &str = r#"args=(
   --output "$RUNNER_TEMP/kithara-stress/raw"
   --expected-controller-sha "$CONTROLLER_SHA"
   --expected-subject-sha "$SUBJECT_SHA"
+  --shard-index "$SHARD_INDEX"
+  --shard-count 3
 )
 [[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
 [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
@@ -28,7 +30,9 @@ for mode in $MODE; do args+=(--mode "$mode"); done
 for lane in $LANE; do args+=(--lane "$lane"); done
 just ci stress "${args[@]}""#;
 const STRESS_REPORT_COMMAND: &str = r#"args=(
-  --raw "$GITHUB_WORKSPACE/raw"
+  --raw "$GITHUB_WORKSPACE/raw/shard-0"
+  --raw "$GITHUB_WORKSPACE/raw/shard-1"
+  --raw "$GITHUB_WORKSPACE/raw/shard-2"
   --output "$GITHUB_WORKSPACE/target/stress-report.md"
   --expected-controller-sha "$CONTROLLER_SHA"
   --expected-subject-sha "$SUBJECT_SHA"
@@ -1075,19 +1079,27 @@ fn stress_execute_runs_the_portable_command_on_the_subject() {
         mapping_field(execute, "timeout-minutes").as_u64(),
         Some(configured_timeout)
     );
-    let execute_outputs = mapping_field(execute, "outputs")
+    let strategy = mapping_field(execute, "strategy")
         .as_mapping()
-        .expect("execute outputs are a mapping");
+        .expect("stress must shard independent checkouts");
     assert_eq!(
-        mapping_field(execute_outputs, "artifact-name").as_str(),
-        Some("${{ steps.artifact-name.outputs.name }}")
+        mapping_field(strategy, "fail-fast").as_bool(),
+        Some(false),
+        "one failed shard must not cancel the other repetitions"
+    );
+    assert_eq!(mapping_field(strategy, "max-parallel").as_u64(), Some(3));
+    let matrix = mapping_field(strategy, "matrix")
+        .as_mapping()
+        .expect("stress matrix is a mapping");
+    assert_eq!(
+        mapping_field(matrix, "shard"),
+        &Value::Sequence((0_u64..3).map(Value::from).collect())
     );
     assert_eq!(
         job_step_names(execute),
         BTreeSet::from([
             "Checkout controller".to_owned(),
             "Checkout subject".to_owned(),
-            "Export artifact identity".to_owned(),
             "Execute the stress run".to_owned(),
             "Upload the raw stress evidence".to_owned(),
         ])
@@ -1119,7 +1131,7 @@ fn stress_execute_runs_the_portable_command_on_the_subject() {
     let stress_env = mapping_field(run, "env")
         .as_mapping()
         .expect("run environment is a mapping");
-    assert_eq!(stress_env.len(), 6);
+    assert_eq!(stress_env.len(), 7);
     for (name, expected) in [
         ("CONTROLLER_SHA", "${{ job.workflow_sha }}"),
         ("COUNT", "${{ inputs.count || vars.KITHARA_STRESS_COUNT }}"),
@@ -1127,6 +1139,7 @@ fn stress_execute_runs_the_portable_command_on_the_subject() {
         ("LANE", "${{ inputs.lane }}"),
         ("MODE", "${{ inputs.mode }}"),
         ("SUBJECT_SHA", "${{ inputs.revision || github.sha }}"),
+        ("SHARD_INDEX", "${{ matrix.shard }}"),
     ] {
         assert_eq!(mapping_field(stress_env, name).as_str(), Some(expected));
     }
@@ -1144,7 +1157,7 @@ fn stress_execute_runs_the_portable_command_on_the_subject() {
         .expect("raw upload inputs are a mapping");
     assert_eq!(
         mapping_field(raw_upload_inputs, "name").as_str(),
-        Some("stress-raw-${{ github.run_id }}-${{ github.run_attempt }}")
+        Some("stress-raw-${{ github.run_id }}-${{ github.run_attempt }}-shard-${{ matrix.shard }}")
     );
     assert_eq!(
         mapping_field(raw_upload_inputs, "retention-days").as_u64(),
@@ -1154,17 +1167,6 @@ fn stress_execute_runs_the_portable_command_on_the_subject() {
         mapping_field(raw_upload_inputs, "if-no-files-found").as_str(),
         Some("error")
     );
-    let artifact_name = named_step(execute, "Export artifact identity");
-    assert_always(artifact_name);
-    assert_eq!(
-        mapping_field(artifact_name, "id").as_str(),
-        Some("artifact-name")
-    );
-    let artifact_script = mapping_field(artifact_name, "run")
-        .as_str()
-        .expect("artifact identity command is a script");
-    assert!(artifact_script.contains("[[ \"$UPLOAD_OUTCOME\" == success ]] || exit 1"));
-    assert!(artifact_script.contains("name=stress-raw-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"));
 }
 
 #[test]
@@ -1191,7 +1193,9 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
         BTreeSet::from([
             "Add the stress summary".to_owned(),
             "Checkout controller".to_owned(),
-            "Download the raw stress evidence".to_owned(),
+            "Download shard 0 evidence".to_owned(),
+            "Download shard 1 evidence".to_owned(),
+            "Download shard 2 evidence".to_owned(),
             "Install just".to_owned(),
             "Install the audio headers the renderer links".to_owned(),
             "Upload the stress evidence".to_owned(),
@@ -1205,16 +1209,28 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
         "${{ job.workflow_repository }}",
         "${{ job.workflow_sha }}",
     );
-    let download = named_step(report, "Download the raw stress evidence");
-    assert_action_repository(download, "actions/download-artifact");
-    let download_inputs = mapping_field(download, "with")
-        .as_mapping()
-        .expect("artifact download inputs are a mapping");
-    assert_eq!(
-        mapping_field(download_inputs, "name").as_str(),
-        Some("${{ needs.execute.outputs.artifact-name }}")
-    );
-    assert_eq!(mapping_field(download_inputs, "path").as_str(), Some("raw"));
+    let mut artifact_names = BTreeSet::new();
+    let mut artifact_roots = BTreeSet::new();
+    for shard in 0..3 {
+        let download = named_step(report, &format!("Download shard {shard} evidence"));
+        assert_always(download);
+        assert_action_repository(download, "actions/download-artifact");
+        let inputs = mapping_field(download, "with")
+            .as_mapping()
+            .expect("artifact download inputs are a mapping");
+        let name = format!(
+            "stress-raw-${{{{ github.run_id }}}}-${{{{ github.run_attempt }}}}-shard-{shard}"
+        );
+        let path = format!("raw/shard-{shard}");
+        assert_eq!(mapping_field(inputs, "name").as_str(), Some(name.as_str()));
+        assert_eq!(mapping_field(inputs, "path").as_str(), Some(path.as_str()));
+        assert!(artifact_names.insert(name));
+        assert!(artifact_roots.insert(path));
+        assert!(
+            inputs.get("merge-multiple").is_none(),
+            "artifact roots must remain separate so duplicate units cannot overwrite evidence"
+        );
+    }
 
     let report_install = named_step(report, "Install just");
     assert_always(report_install);

@@ -11,8 +11,8 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use super::resources::FaceBlobs;
 use crate::{
-    FontId, FontPolicy, FontWeight, Glyph, GlyphRun, GlyphSegment, TextError, TextResources,
-    TextStyle,
+    Elision, FontId, FontPolicy, FontWeight, Glyph, GlyphRun, GlyphSegment, TextError,
+    TextResources, TextStyle,
 };
 
 /// Owns a policy-selected font collection and Parley shaping scratch space.
@@ -121,7 +121,8 @@ impl TextContext {
         self.shape_run(content, FaceStyle::from(style.into()), max_width)
     }
 
-    /// Shapes one line, replacing overflowing graphemes with an ellipsis.
+    /// Shapes one line, replacing overflowing graphemes with an ellipsis at
+    /// the place `at` names.
     ///
     /// Line separators become spaces. If even the ellipsis does not fit,
     /// returns an empty line.
@@ -131,6 +132,7 @@ impl TextContext {
         content: &'a str,
         style: S,
         max_width: f32,
+        at: Elision,
     ) -> (Cow<'a, str>, GlyphRun) {
         let style = FaceStyle::from(style.into());
         let content = if content.contains(['\r', '\n', '\u{2028}', '\u{2029}']) {
@@ -146,28 +148,35 @@ impl TextContext {
         if ellipsis.width() > max_width {
             return (Cow::Borrowed(""), self.shape_run("", style, None));
         }
-        let mut boundaries = content.grapheme_indices(true);
-        let mut remaining = boundaries.clone().count();
-        let mut fitted = String::from("\u{2026}");
-        let mut fitted_run = ellipsis;
-        loop {
-            let middle = remaining / 2;
-            let mut tail = boundaries.clone();
-            let Some((boundary, _)) = tail.by_ref().take(remaining).nth(middle) else {
-                break;
-            };
-            let candidate = format!("{}\u{2026}", &content[..boundary]);
+        let count = content.graphemes(true).count();
+        let boundary = |graphemes: usize| {
+            content
+                .grapheme_indices(true)
+                .nth(graphemes)
+                .map_or(content.len(), |(index, _)| index)
+        };
+        let kept = |graphemes: usize| match at {
+            Elision::End => format!("{}\u{2026}", &content[..boundary(graphemes)]),
+            Elision::Middle => format!(
+                "{}\u{2026}{}",
+                &content[..boundary(graphemes.div_ceil(2))],
+                &content[boundary(count - graphemes / 2)..]
+            ),
+        };
+        let mut fitted = (String::from("\u{2026}"), ellipsis);
+        let (mut low, mut high) = (0, count.saturating_sub(1));
+        while low < high {
+            let middle = (low + high).div_ceil(2);
+            let candidate = kept(middle);
             let candidate_run = self.shape_run(&candidate, style, None);
             if candidate_run.width() <= max_width {
-                fitted = candidate;
-                fitted_run = candidate_run;
-                boundaries = tail;
-                remaining -= middle + 1;
+                fitted = (candidate, candidate_run);
+                low = middle;
             } else {
-                remaining = middle;
+                high = middle - 1;
             }
         }
-        (Cow::Owned(fitted), fitted_run)
+        (Cow::Owned(fitted.0), fitted.1)
     }
 
     /// Shapes one editable line and returns the caret offset of every

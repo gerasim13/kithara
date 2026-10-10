@@ -24,6 +24,14 @@ pub(super) fn expand_slot(
     machine: &mut Expander<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
     machine.budget.charge(&context.origin)?;
+    let fills = match from {
+        Some(from) => context
+            .set
+            .collections
+            .get(&collection_address(context.module()?, from))
+            .map_or(&[][..], Vec::as_slice),
+        None => &[],
+    };
     let select = match select {
         Some(select) => {
             let path = child_path(&context.prefix, id);
@@ -31,6 +39,7 @@ pub(super) fn expand_slot(
             machine.visit(
                 ControlSite {
                     read: Some(&select),
+                    fills,
                     ..ControlSite::new(node, &path)
                 },
                 &context.origin,
@@ -40,14 +49,6 @@ pub(super) fn expand_slot(
         None => None,
     };
     let content = context.content.filter(|_| id.0 == CONTENT);
-    let fills = match from {
-        Some(from) => context
-            .set
-            .collections
-            .get(&collection_address(context.module()?, from))
-            .map_or(&[][..], Vec::as_slice),
-        None => &[],
-    };
     let children = match (each, &select, content) {
         (Some(each), _, _) if !fills.is_empty() => {
             expand_fills(context, id, each, fills, depth, machine)?
@@ -112,7 +113,11 @@ fn expand_selection(
 
 fn selecting(select: &Binding, keys: Box<[InternId]>, invert: bool) -> Binding {
     Binding {
-        kind: BindingKind::Selects { keys, invert },
+        kind: BindingKind::Selects {
+            keys,
+            invert,
+            read: Box::new(select.clone()),
+        },
         ..select.clone()
     }
 }
@@ -134,24 +139,37 @@ fn expand_fills<'a>(
 ) -> Result<Vec<ExpandedNode>, UiDocError> {
     let template = resolve_uri(Some(&context.origin), &each.source)?;
     let slot = child_path(&context.prefix, id);
-    let mut children: Vec<ExpandedNode> = Vec::with_capacity(fills.len());
-    for (index, fill) in fills.iter().enumerate() {
-        let frame = Frame {
-            named: BTreeMap::new(),
-            passed: fill_args(context, fill),
-            prefix: format!("{slot}/{}", fill.key),
-            content: Some(&fill.uri),
-        };
-        children.push(include_at(
-            context,
-            &template,
-            frame,
-            &[index],
-            depth,
-            machine,
-        )?);
-    }
-    Ok(children)
+    let declared = &context.set.def(&template)?.parameters;
+    fills
+        .iter()
+        .enumerate()
+        .map(|(index, fill)| {
+            let passed = fill_args(context, fill);
+            let item = &context.set.def(&fill.uri)?.item;
+            let refuse = |name: &String, reason| UiDocError::ItemValue {
+                reason,
+                fill: fill.uri.clone(),
+                template: template.clone(),
+                name: name.clone(),
+            };
+            if let Some(name) = item.keys().find(|name| !declared.contains(*name)) {
+                return Err(refuse(name, "is not declared by"));
+            }
+            if let Some(name) = declared
+                .iter()
+                .find(|name| !item.contains_key(*name) && !passed.contains_key(*name))
+            {
+                return Err(refuse(name, "is missing for"));
+            }
+            let frame = Frame {
+                passed,
+                named: item.clone(),
+                prefix: format!("{slot}/{}", fill.key),
+                content: Some(&fill.uri),
+            };
+            include_at(context, &template, frame, &[index], depth, machine)
+        })
+        .collect()
 }
 
 fn expand_content(

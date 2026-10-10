@@ -10,6 +10,7 @@ use crate::{
         TableColumn, TableFrame, TextAlign, TextStyle, Tone, ViewSet, WaveStyle,
         WindowControlsStyle,
     },
+    resolve::Filled,
     shader::ShaderSpec,
     size::{BlockNode, SizeSpec},
     skin::{ColorRole, FontFamily, FontWeight},
@@ -189,6 +190,7 @@ pub enum ControlSpec {
     NavItem {
         label: InternId,
         icon: IconName,
+        style: Option<TextStyle>,
     },
     TabLarge {
         label: InternId,
@@ -323,21 +325,23 @@ pub enum BindingKind {
     },
     /// One page of a `Tabs` body, by the state that says which page stands. A
     /// read answers whether the state stands at this page, a write stands it
-    /// here.
+    /// here. Without a page name a read answers the page the state stands at.
     Page {
-        name: InternId,
+        name: Option<InternId>,
     },
-    /// Tests whether a text read matches `keys`; `invert` negates the result.
+    /// Tests whether the text `read` answers matches `keys`; `invert` negates
+    /// the result.
     Selects {
         keys: Box<[InternId]>,
         invert: bool,
+        read: Box<Binding>,
     },
 }
 
 /// Compiled endpoint reference. `id` is the bare endpoint; `key` is the
 /// canonical scope-qualified form `<id>@<scope>=<value>[,...]` (equal to `id`
 /// when the binding has no scope). Renderers and hosts address reads by `key`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Binding {
     pub with: BTreeMap<InternId, InternId>,
@@ -606,6 +610,8 @@ pub(crate) struct ControlSite<'a> {
     pub(crate) writes: SlotWrites<'a>,
     /// What opens the popover a write from this site shuts.
     pub(crate) shuts: Option<&'a BindingRef>,
+    /// The fills a `select` slot chooses between.
+    pub(crate) fills: &'a [Filled],
 }
 
 impl<'a> ControlSite<'a> {
@@ -625,6 +631,7 @@ impl<'a> ControlSite<'a> {
             zoom: None,
             writes: SlotWrites::default(),
             shuts: None,
+            fills: &[],
         }
     }
 }

@@ -464,7 +464,11 @@ mod tests {
         root: &Path,
         cache: &VerdictCache,
     ) -> (Findings, Findings) {
-        let metadata = MetadataCommand::new().exec().unwrap();
+        let metadata = MetadataCommand::new()
+            .manifest_path(root.join("Cargo.toml"))
+            .no_deps()
+            .exec()
+            .unwrap();
         let config = IdiomsConfig::default();
         let scope = Scope::default();
         let scan = Scan::new(root);
@@ -517,6 +521,15 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, source).unwrap();
         };
+        write((
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"crates/one\"]\nresolver = \"2\"\n",
+        ));
+        write((
+            "crates/one/Cargo.toml",
+            "[package]\nname = \"one\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        ));
+        write(("crates/one/src/lib.rs", ""));
         files.iter().copied().for_each(write);
         let cache = VerdictCache::open(
             &dir.path().join("target"),
@@ -555,18 +568,25 @@ mod tests {
         );
     }
 
-    /// A getter is redundant when a public field of the same type name,
-    /// declared in any file, already exposes it.
+    /// A getter is redundant when its declaration's public field already
+    /// exposes it, even when that declaration lives in another module.
     #[test]
     fn a_getter_is_judged_with_the_fields_that_already_expose_it() {
         use checks::derivable_getter::DerivableGetter;
 
         the_driver_follows_a_neighbour(
             &DerivableGetter,
-            &[(
-                "crates/one/src/a.rs",
-                "pub struct User {\n    name: String,\n}\nimpl User { pub fn name(&self) -> &str { &self.name } }\n",
-            )],
+            &[
+                ("crates/one/src/lib.rs", "mod a;\nmod b;\n"),
+                (
+                    "crates/one/src/a.rs",
+                    "use crate::b::User;\nimpl User { pub fn name(&self) -> &str { &self.name } }\n",
+                ),
+                (
+                    "crates/one/src/b.rs",
+                    "pub struct User {\n    pub(super) name: String,\n}\n",
+                ),
+            ],
             (
                 "crates/one/src/b.rs",
                 "pub struct User {\n    pub name: String,\n}\n",

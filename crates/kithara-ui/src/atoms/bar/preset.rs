@@ -392,6 +392,7 @@ mod tests {
             size: skin.global_bar.chip_text.size,
             spacing: 0.0,
             weight: skin.global_bar.chip_text.weight,
+            ..skin.global_bar.chip_text
         };
         let mut shaper = TextContext::from(skin.text_resources.as_ref());
         assert_eq!(text[0].0, "MICRO");

@@ -207,7 +207,6 @@ impl TableFace {
                 text,
                 &self.status,
                 Rect {
-                    h: self.skin.table.row_height,
                     x: body.x + self.frame.padding_left,
                     w: (body.w - self.frame.padding_left - self.frame.padding_right).max(0.0),
                     ..body
@@ -216,7 +215,7 @@ impl TableFace {
                     &self.skin,
                     self.skin.text.caption,
                     self.skin.table.cell_padding_x,
-                    TextAlign::Left,
+                    TextAlign::Center,
                 ),
             );
         }
@@ -813,6 +812,41 @@ mod tests {
             .expect("Row must paint its title inside the body");
         assert_eq!(color, muted.skin.rgba(ColorRole::Muted));
         assert_ne!(commands, normal.commands(&mut text, bounds, &drawn));
+    }
+
+    #[kithara::test]
+    fn a_status_without_rows_is_centred_in_the_body_under_the_header() {
+        let (base, mut text, bounds, drawn) = fixture();
+        let picture = TableFace::new(Vec::new(), drawn.columns.clone(), &base.skin, base.frame)
+            .with_status(Some(ReadValue::Text("No playable files")));
+        let body = table_body(bounds, picture.metrics());
+        let commands = picture.commands(&mut text, bounds, &drawn);
+        let (run, transform) = commands
+            .commands()
+            .iter()
+            .find_map(|command| match command {
+                DrawCmd::Clip { region, list } if *region == body => {
+                    list.commands().iter().find_map(|command| match command {
+                        DrawCmd::Text { run, transform, .. } => Some((run.clone(), *transform)),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .expect("the status is painted inside the body");
+
+        let centre = (
+            transform.dx + run.width() / 2.0,
+            transform.dy + run.height() / 2.0,
+        );
+        assert!(
+            (centre.0 - (body.x + body.w / 2.0)).abs() < 0.5,
+            "{centre:?} in {body:?}"
+        );
+        assert!(
+            (centre.1 - (body.y + body.h / 2.0)).abs() < 0.5,
+            "{centre:?} in {body:?}"
+        );
     }
 
     fn fixture() -> (TableFace, TextContext, Rect, Drawn) {

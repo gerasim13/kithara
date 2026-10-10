@@ -24,6 +24,7 @@ macro_rules! color_roles {
             text => Text,
             text_dim => TextDim,
             muted => Muted,
+            icon => Icon,
             accent => Accent,
             accent_strong => AccentStrong,
             accent_soft => AccentSoft,
@@ -138,7 +139,7 @@ mod tests {
             .map(|(role, _)| role)
             .collect();
 
-        assert_eq!(roles.len(), 26);
+        assert_eq!(roles.len(), 27);
         for role in &roles {
             assert_eq!(roles.iter().filter(|other| *other == role).count(), 1);
         }

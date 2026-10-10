@@ -216,7 +216,7 @@ fn faded(role_: ColorRole, alpha: f32) -> Rgba {
 #[derive(Default)]
 struct Page {
     open: bool,
-    /// Whether the close the modal writes shuts it.
+    /// Whether the close the modal writes, or its header's press, shuts it.
     shuts: bool,
     published: Vec<UiEvent>,
     query: String,
@@ -271,7 +271,7 @@ impl App for Page {
             self.query.clone_from(query);
             self.open = true;
         }
-        if self.shuts && event == trigger("fixture.close") {
+        if self.shuts && [trigger("fixture.close"), trigger("fixture.shut")].contains(&event) {
             self.open = false;
         }
         self.published.push(event);
@@ -715,9 +715,9 @@ fn oversize_content_shrinks_to_the_window_with_its_shadow_whole() {
     assert_retained_draws(Holds::OVERSIZE, oversize::CONTENT);
 }
 
-/// A gesture on the scrim reaches nothing under it, in a plain module and in
-/// one whose input an engine owns: a press or a drag writes the modal's close
-/// binding and the wheel writes nothing, though with the modal shut each
+/// A gesture on the scrim reaches nothing under it and leaves the modal open,
+/// in a plain module and in one whose input an engine owns, though with the
+/// modal shut each
 /// reaches the control it lands on.
 #[kithara::test]
 fn a_gesture_on_the_scrim_reaches_nothing_under_it() {
@@ -726,15 +726,14 @@ fn a_gesture_on_the_scrim_reaches_nothing_under_it() {
         x: dial.x,
         y: dial.y - 20.0,
     };
-    let close = trigger("fixture.close");
-    let gestures: [(&str, Step, &str, &[UiEvent]); 3] = [
-        ("press", Step::Click(face), "fixture.page", &[close.clone()]),
-        ("drag", Step::Drag(dial, up), "fixture.dial", &[close]),
-        ("wheel", Step::Wheel(dial, -2.0), "fixture.dial", &[]),
+    let gestures: [(&str, Step, &str); 3] = [
+        ("press", Step::Click(face), "fixture.page"),
+        ("drag", Step::Drag(dial, up), "fixture.dial"),
+        ("wheel", Step::Wheel(dial, -2.0), "fixture.dial"),
     ];
     for holds in [Holds::SMALL, Holds::HostedListing] {
         let resolver = holds.documents();
-        for (name, step, under, expected) in &gestures {
+        for (name, step, under) in &gestures {
             let [retained, immediate] = both(&resolver, Page::default, &[*step]);
             assert!(
                 wrote(&retained, under) && wrote(&immediate, under),
@@ -745,7 +744,7 @@ fn a_gesture_on_the_scrim_reaches_nothing_under_it() {
                 &resolver,
                 true,
                 &[*step],
-                expected,
+                &[],
                 &format!("{name} in {holds:?}"),
             );
         }
@@ -947,10 +946,10 @@ fn hover_over_the_scrim_shows_nothing_of_the_controls_under_it() {
     }
 }
 
-/// A finger on the scrim closes the modal as a press there does, and a finger
-/// inside the content does not.
+/// A finger on the scrim leaves the modal open as a press there does, and a
+/// finger inside the content belongs to the content.
 #[kithara::test]
-fn a_touch_on_the_scrim_closes_the_modal_on_the_immediate_host() {
+fn a_touch_on_the_scrim_leaves_the_modal_open_on_the_immediate_host() {
     let (face, _) = page_points();
     let resolver = Holds::SMALL.documents();
     let inside = with_retained(&resolver, Page::open(), |ui| {
@@ -966,7 +965,7 @@ fn a_touch_on_the_scrim_closes_the_modal_on_the_immediate_host() {
         "a touch inside belongs to the content"
     );
     host.touch_at(face);
-    assert_eq!(host.app().published, [trigger("fixture.close")]);
+    assert_eq!(host.app().published, []);
 }
 
 /// Where a modal stands in the strip of the flow page.
@@ -1110,13 +1109,12 @@ fn titled(order: Titled) -> MemResolver {
 
 /// A title bar and window controls drawn by the document lie under the scrim
 /// whatever their place in it: the retained host paints the strip before the
-/// scrim, a press on one closes the modal and moves, shrinks or closes no
+/// scrim, a press on one reaches nothing and moves, shrinks or closes no
 /// window, and hover over one shows the cursor a quiet part of the scrim shows.
 #[kithara::test]
 fn a_drawn_title_strip_lies_under_the_modal_whatever_its_order() {
     let title_ink = packed(role(builtin::skin().window.titlebar_text.color));
     let scrim = packed(faded(ColorRole::BgDeep, look::SCRIM_ALPHA));
-    let closed = [trigger("fixture.close")];
     for order in [Titled::Before, Titled::After] {
         let resolver = titled(order);
         let picture = with_retained(&resolver, Page::open(), drawn);
@@ -1146,7 +1144,7 @@ fn a_drawn_title_strip_lies_under_the_modal_whatever_its_order() {
                 &resolver,
                 true,
                 &[Step::Click(at)],
-                &closed,
+                &[],
                 &format!("press on the {target}, modal {order:?} it"),
             );
             assert_eq!(
@@ -1159,8 +1157,8 @@ fn a_drawn_title_strip_lies_under_the_modal_whatever_its_order() {
 }
 
 /// A menu standing after the modal in the document lies under it like the
-/// rest of the page: a press on the menu's row closes the modal and reaches
-/// nothing of the menu, and hover over the row shows what the scrim shows.
+/// rest of the page: a press on the menu's row reaches nothing of the menu
+/// and leaves the modal open, and hover over the row shows what the scrim shows.
 #[kithara::test]
 fn a_menu_after_the_modal_lies_under_it() {
     let menu = r#"Popover(id: "menu", open: Model(id: "fixture.open"), align: Start,
@@ -1177,13 +1175,7 @@ fn a_menu_after_the_modal_lies_under_it() {
         centre(laid(ui, "demo/menu-face"))
     });
 
-    assert_both(
-        &resolver,
-        true,
-        &[Step::Click(row)],
-        &[trigger("fixture.close")],
-        "the menu row",
-    );
+    assert_both(&resolver, true, &[Step::Click(row)], &[], "the menu row");
     assert_eq!(
         cursors(&resolver, true, row),
         cursors(&resolver, true, Pt { x: 300.0, y: 250.0 }),
@@ -1236,25 +1228,27 @@ fn an_unsized_stage_takes_the_room_of_its_first_child_in_the_flow() {
 }
 
 /// A modifier pressed while the modal stands reaches the page all the same,
-/// since it types nothing: once a press on the scrim shuts the modal, a
+/// since it types nothing: once a press on its header shuts the modal, a
 /// shift-press just before the first letter of the field typed into before it
 /// opened selects what it typed, and the next key replaces it.
 #[kithara::test]
 fn a_modifier_held_under_the_modal_reaches_the_page_once_it_shuts() {
     use iced::keyboard::key::Code;
 
-    let resolver = Holds::SMALL.documents();
+    let resolver = Holds::Listing.documents();
     let field = with_retained(&resolver, Page::default(), |ui| laid(ui, "demo/query"));
+    let header = with_retained(&resolver, Page::open(), |ui| {
+        centre(laid(ui, "demo/header-face"))
+    });
     let start = Pt {
         x: field.x + 40.0,
         y: field.y + field.h / 2.0,
     };
-    let (scrim, _) = page_points();
     let steps = [
         Step::Click(centre(field)),
         Step::Type("a", Code::KeyA),
         Step::Shift,
-        Step::Click(scrim),
+        Step::Click(header),
         Step::Click(start),
         Step::Type("b", Code::KeyB),
     ];
@@ -1263,7 +1257,7 @@ fn a_modifier_held_under_the_modal_reaches_the_page_once_it_shuts() {
         ..Page::default()
     };
     let [retained, immediate] = both(&resolver, page, &steps);
-    let expected = [query("a"), trigger("fixture.close"), query("b")];
+    let expected = [query("a"), trigger("fixture.shut"), query("b")];
     assert_eq!(retained, expected, "the retained host");
     assert_eq!(immediate, expected, "the immediate host");
 }

@@ -28,6 +28,7 @@ use kithara::{
     worker::{DispatcherConfigPatch, WorkerConfigPatch},
 };
 use kithara_app_document::merge;
+use kithara_app_library::{KeyAccess, Secrets};
 use serde_yaml_ng::Value;
 
 use super::{
@@ -54,6 +55,7 @@ mod consts {
 pub struct Config {
     #[debug(skip)]
     document: Document,
+    overlay: Option<PathBuf>,
     /// The merged document before expansion. Kept so a dump can print
     /// references rather than the secrets behind them.
     source: Value,
@@ -170,14 +172,14 @@ impl Config {
         self.document.downloader.clone()
     }
 
-    /// The DRM policy the key registry resolves through.
+    /// The DRM policy the key registry resolves through, with each plugin
+    /// grant added to the key requests of the provider its domain holds.
     ///
     /// # Errors
-    /// Returns an error when a provider declares a policy that cannot be
-    /// honoured -- a reserved header, a salt of zero length, or a hex salt
-    /// of odd length.
-    pub fn drm_policy(&self) -> Result<DomainKeyPolicy, PolicyError> {
-        drm_policy(&self.document.drm)
+    /// Returns [`PolicyError`] when a provider declares a policy that cannot
+    /// be honoured.
+    pub fn drm_policy(&self, grants: &[KeyAccess]) -> Result<DomainKeyPolicy, PolicyError> {
+        drm_policy(&self.document.drm, grants)
     }
 
     /// The effective configuration as a document. Printed before expansion, so
@@ -236,7 +238,10 @@ impl Config {
         if let Some(path) = overlay_path.as_deref() {
             match Self::read(path)? {
                 Value::Null => {}
-                over @ Value::Mapping(_) => merge(&mut source, over),
+                Value::Mapping(mut over) => {
+                    over.remove(Secrets::SECTION);
+                    merge(&mut source, Value::Mapping(over));
+                }
                 _ => {
                     return Err(LoadError::Schema {
                         resource: path.display().to_string(),
@@ -265,13 +270,25 @@ impl Config {
             detail: schema_detail(&source),
         })?;
 
-        Ok(Self { document, source })
+        let overlay = overlay_path.or_else(|| beside.map(Path::to_path_buf));
+        Ok(Self {
+            document,
+            overlay,
+            source,
+        })
     }
 
     /// The HTTP options the document names.
     #[must_use]
     pub fn net(&self) -> NetOptionsPatch {
         self.document.net.clone()
+    }
+
+    /// The overlay this configuration was read with, or the place one is
+    /// looked for when none was found.
+    #[must_use]
+    pub fn overlay(&self) -> Option<&Path> {
+        self.overlay.as_deref()
     }
 
     fn overlay_path(
@@ -393,15 +410,23 @@ mod tests {
         hls::SizeProbeMethod,
         host::{HostConfig, HostSettings},
         net::{Compression, NetOptions},
-        platform::{CancelToken, time::Duration, tokio::runtime::Handle},
+        platform::{
+            CancelToken,
+            time::Duration,
+            tokio::{runtime::Handle, sync::watch},
+        },
+        ui::{error::UiDocError, ids::SourceUri},
         worker::ComputePool,
     };
+    use kithara_app_library::{AccessToken, KeyAccess, Registration, SourcePage};
     use kithara_config::Config as _;
     use tempfile::TempDir;
+    use url::Url;
 
     use super::{Config, LoadError, StorageBackend, consts::BAKED_PATH};
     use crate::{
         config::AppConfig,
+        plugins,
         pools::{self, AppPools},
         theme::{Palette, Rgb},
     };
@@ -421,7 +446,6 @@ mod tests {
     fn env(name: &str) -> Option<String> {
         match name {
             "KITHARA_DRM_PROD_KEY"
-            | "KITHARA_DRM_PROD_AUTH_TOKEN"
             | "KITHARA_DRM_PROD_SP_ZV_TOKEN"
             | "KITHARA_DRM_STAGE_KEY"
             | "KITHARA_DRM_STAGE_AUTH_TOKEN" => Some("test-value".to_string()),
@@ -471,6 +495,20 @@ mod tests {
         assert_eq!(store.backend, Some(StorageBackend::Memory));
         assert_eq!(store.cache_capacity.map(NonZeroUsize::get), Some(128));
         assert_eq!(store.max_bytes, Some(128 * 1024 * 1024));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn the_configuration_names_the_overlay_it_read_or_the_place_it_looked() {
+        let dir = tempdir();
+        let named = write(&dir, "named", "hls:\n  size_probe_method: head\n");
+        let absent = dir.path().join("kithara.yaml");
+
+        let read = Config::load_with(Some(&named), Some(&absent), &env).expect("the overlay loads");
+        let looked =
+            Config::load_with(None, Some(&absent), &env).expect("the baked document loads");
+
+        assert_eq!(read.overlay(), Some(named.as_path()));
+        assert_eq!(looked.overlay(), Some(absent.as_path()));
     }
 
     #[kithara::test(native, flash(false))]
@@ -806,16 +844,26 @@ mod tests {
         assert_eq!(host.settings().sample_rate().get(), 48_000);
     }
 
-    fn assembled(dir: &TempDir, name: &str, app: &str, shutdown: &CancelToken) -> AppConfig {
+    fn assembled(
+        dir: &TempDir,
+        name: &str,
+        app: &str,
+        grants: &[KeyAccess],
+        shutdown: &CancelToken,
+    ) -> AppConfig {
         let path = write(
             dir,
             name,
             &format!("assets_store:\n  backend:\n    kind: memory\n{app}"),
         );
         let document = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
+        let pools = pools::build(&document.pools()).expect("valid app pool policy");
+        let net = AppConfig::client(&document, &pools, shutdown, false);
         AppConfig::assemble()
             .document(&document)
-            .pools(pools::build(&document.pools()).expect("valid app pool policy"))
+            .pools(pools)
+            .net(net)
+            .grants(grants)
             .shutdown(shutdown.child())
             .runtime(Handle::current())
             .ui_package(PathBuf::from("/shipped/ui"))
@@ -835,6 +883,7 @@ mod tests {
                 "app:\n  ui_package: /document/ui\n  sample_rate: 48000\n",
                 "  palette:\n    accent: [10, 20, 30]\n",
             ),
+            &[],
             &shutdown,
         );
         assert_eq!(named.ui_package, Some(PathBuf::from("/document/ui")));
@@ -842,11 +891,53 @@ mod tests {
         assert_eq!(named.palette.bg, Palette::default().bg);
         assert_eq!(named.sample_rate, NonZeroU32::new(48_000));
 
-        let silent = assembled(&dir, "silent", "", &shutdown);
+        let silent = assembled(&dir, "silent", "", &[], &shutdown);
         assert_eq!(silent.ui_package, Some(PathBuf::from("/shipped/ui")));
         assert_eq!(silent.palette.accent, Palette::default().accent);
         assert_eq!(silent.sample_rate, None);
 
+        shutdown.cancel();
+    }
+
+    /// A registered plugin's grant reaches the key requests of its provider.
+    #[kithara::test(native, tokio, flash(false))]
+    async fn a_plugin_grant_reaches_the_assembled_key_requests() {
+        let dir = tempdir();
+        let shutdown = CancelToken::root();
+        let (_sender, token) = watch::channel(Some(AccessToken::new("synthetic-token".to_owned())));
+        let page = SourcePage {
+            id: "probe",
+            endpoints: Vec::new(),
+            texts: Vec::new(),
+        };
+        let registered = Registration::new(page, |_| {
+            Err(UiDocError::NotFound {
+                origin: SourceUri("probe".to_owned()),
+                rel: String::new(),
+            })
+        })
+        .key_access(KeyAccess::new("example.com", "X-Auth-Token", token));
+
+        let config = assembled(
+            &dir,
+            "granted",
+            concat!(
+                "drm:\n  providers:\n    - name: example\n",
+                "      domains: [example.com]\n      cipher_key: secret\n",
+            ),
+            &plugins::grants(&[registered]),
+            &shutdown,
+        );
+
+        let key = config
+            .drm
+            .registry()
+            .prepare(&Url::parse("https://example.com/key.bin").expect("valid url"))
+            .expect("the provider serves the key host");
+        assert_eq!(
+            key.headers.get("X-Auth-Token").map(String::as_str),
+            Some("synthetic-token")
+        );
         shutdown.cancel();
     }
 
@@ -996,6 +1087,24 @@ mod tests {
             dump.contains("$KITHARA_DRM_PROD_KEY"),
             "the dump prints the reference, not what it resolves to"
         );
+    }
+
+    /// The overlay's `secrets` section belongs to the secret store: it is no
+    /// configuration, and neither a dump nor a debug render shows it.
+    #[kithara::test(native, flash(false))]
+    fn the_overlay_secrets_section_stays_out_of_the_configuration() {
+        let dir = tempdir();
+        let path = write(
+            &dir,
+            "secrets",
+            "secrets:\n  zvuk: synthetic-stored-secret\nhls:\n  size_probe_method: head\n",
+        );
+
+        let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
+
+        assert_eq!(config.hls().size_probe_method, Some(SizeProbeMethod::Head));
+        let shown = format!("{}\n{config:?}", config.dump());
+        assert!(!shown.contains("synthetic-stored-secret"), "{shown}");
     }
 
     #[kithara::test(native, flash(false))]

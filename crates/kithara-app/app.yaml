@@ -65,7 +65,8 @@ playlist:
 # Everything else goes through `headers` — values starting with `$`
 # are env references (obfuscated like `cipher_key`); literal values
 # pass through unchanged. `X-Encrypted-Key` is reserved (generated
-# per request from the cipher_key).
+# per request from the cipher_key), and so is a header a library source
+# grants on key requests to a provider's domain.
 drm:
   providers:
     - name: zvuk-prod
@@ -79,7 +80,6 @@ drm:
         alphabet: hex
       headers:
         User-Agent: &zvuk_user_agent OpenPlay - com.zvooq.openplay/4.30.0 (iPhone; iOS 17.5; Scale/3.00)
-        X-Auth-Token: $KITHARA_DRM_PROD_AUTH_TOKEN
         X-SP-ZV: $KITHARA_DRM_PROD_SP_ZV_TOKEN
     - name: zvuk-stage
       domains: [zvq.me, "*.zvq.me"]
@@ -95,10 +95,8 @@ drm:
         User-Agent: OpenPlay - com.zvooq.openplay/4.30.0 (iPhone; iOS 17.5; Scale/3.00)
         X-Auth-Token: $KITHARA_DRM_STAGE_AUTH_TOKEN
 
-# Library sources by id; each source owns the schema of its entry. The Zvuk
-# catalogue identifies itself like the iOS client and authenticates with the
-# production account's token.
+# Library sources by id; each source owns the schema of its entry.
 sources:
   zvuk:
+    # The catalogue identifies itself like the iOS client.
     user_agent: *zvuk_user_agent
-    auth_token: $KITHARA_DRM_PROD_AUTH_TOKEN

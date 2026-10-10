@@ -364,7 +364,7 @@ impl<S: HostedState> HostedControlPlan<S> {
                 let plan = SearchPlan::new(path, query, read, Resolving { skin, ctx });
                 Some(Self::Search(Box::new(plan)))
             }
-            (ControlSpec::Button { .. }, _)
+            (ControlSpec::Button { .. } | ControlSpec::SettingsButton, _)
             | (
                 ControlSpec::Checkbox
                 | ControlSpec::Chip { .. }

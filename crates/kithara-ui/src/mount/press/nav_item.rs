@@ -9,12 +9,16 @@ pub(crate) struct NavItem;
 pub(crate) mod host {
     use bon::Builder;
 
-    use crate::{ids::InternId, module::IconName};
+    use crate::{
+        ids::InternId,
+        module::{IconName, TextStyle},
+    };
 
     #[derive(Builder)]
     pub(crate) struct NavItem {
         pub(crate) icon: IconName,
         pub(crate) label: InternId,
+        pub(crate) style: Option<TextStyle>,
     }
 
     use crate::{
@@ -45,7 +49,7 @@ pub(crate) mod host {
         }
 
         fn painter(&self, skin: &Skin) -> Face {
-            Face::new(skin)
+            Face::new(skin, self.style)
         }
     }
 }
