@@ -79,13 +79,14 @@ pub(crate) fn rebase_source(
             .checked_sub(output_frame(*end, spec)?)
             .ok_or_else(mapping_error)?;
         let start = u128::from(end.frame()) * output_rate + u128::from(offset) * source_rate;
-        let span = SourceSpan::from_rational(
+        let span = SourceSpan::try_from((
             start,
             source_rate,
             NonZeroU128::from(spec.sample_rate),
             end.sample_rate(),
             u64::from(chunk.meta.frames),
-        )
+        ))
+        .ok()
         .ok_or_else(mapping_error)?
         .with_mapping_revision(end.mapping_revision())
         .with_render_revision(chunk.meta.render_revision);

@@ -9,10 +9,7 @@ use kithara::{
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration, tokio},
-    play::{
-        PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, ResourcePrep,
-        ResourceSrc,
-    },
+    play::{PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend, ResourcePrep, ResourceSrc},
     queue::{Queue, QueueConfig},
 };
 use kithara_app::{
@@ -102,7 +99,12 @@ pub async fn app_queue(document: Config) -> AppQueueFixture {
     let prep = ResourcePrep::builder().worker(worker).build();
     let queue = OfflineQueue::paced(
         session_config,
-        Queue::new(QueueConfig::builder().prep(prep).store(config.store.clone()).build()),
+        Queue::new(
+            QueueConfig::builder()
+                .prep(prep)
+                .store(config.store.clone())
+                .build(),
+        ),
         RENDER_PACE,
     )
     .await

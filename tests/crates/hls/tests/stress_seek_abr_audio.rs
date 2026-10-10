@@ -6,11 +6,11 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_integration_tests::mock::LaneAudio;
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::{DelayRule, PcmPattern},
+    mock::LaneAudio,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::{
@@ -465,10 +465,13 @@ async fn stress_seek_abr_audio(
         .initial_abr_mode(auto(0))
         .build();
 
-    let config = kithara::play::TrackConfig::for_audio(AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .media_info(fixture.media_info()).build())
-        .block_on_underrun(true)
-        .build();
+    let config = kithara::play::TrackConfig::for_audio(
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+            .media_info(fixture.media_info())
+            .build(),
+    )
+    .block_on_underrun(true)
+    .build();
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");

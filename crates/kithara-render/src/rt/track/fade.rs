@@ -128,9 +128,12 @@ impl TrackFade {
         self.settled = self.frames == 0;
     }
 
-    /// Gain the envelope applied to the last mixed frame.
-    pub(super) const fn gain(&self) -> f32 {
-        self.gain
+    delegate::delegate! {
+        to self {
+            #[expr(self.gain)]
+            /// Gain the envelope applied to the last mixed frame.
+            pub(super) const fn gain(&self) -> f32;
+        }
     }
 
     /// Whether the envelope is on its way down to silence.

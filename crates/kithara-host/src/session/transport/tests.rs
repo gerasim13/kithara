@@ -11,10 +11,15 @@ use firewheel::{
         ProcStreamCtx, ProcessStatus, StreamStatus,
     },
 };
-use kithara_command::{Batch, ChannelConfig, Outcome, Rejection, Sender, When, channel};
+use kithara_command::{
+    Batch, Outcome, Port, Rejection, ScopedReceipt, ScopedSender, When, scoped_channel,
+};
 use kithara_config::{Config, ConfigOwner};
 use kithara_platform::time::Duration;
-use kithara_render::rt::{install_render_context, read_render_context};
+use kithara_render::{
+    bridge::DeckProtocol,
+    rt::{install_render_context, read_render_context},
+};
 use kithara_signal::{SessionEpoch, SessionFrame};
 use kithara_test_utils::{bufpool::TestPools, kithara};
 use kithara_warp::{Beat, BeatGridId, BeatGridQuery, BeatsPerMinute, MapPoint, MapPosition};
@@ -24,8 +29,7 @@ use super::{
     commit::{SessionGridGeneration, TransportObservation, TransportProcessError},
     node::SessionTransportProcessor,
     process::{
-        TransportObservationInput, TransportState, applied_spans, converge_transport_restart,
-        process_transport,
+        TransportObservationInput, TransportState, converge_transport_restart, process_transport,
     },
 };
 use crate::{
@@ -33,7 +37,7 @@ use crate::{
     consts,
     host::{HostSettings, HostSettingsChange, HostSettingsExec},
     session::{
-        queue::{HostPart, HostProtocol, settle_receipts},
+        queue::{HostPart, HostProtocol, settle_receipt},
         state::{SessionState, ensure_ctx},
         tests::graph,
     },
@@ -43,7 +47,7 @@ type Harness = (
     SessionTransportProcessor,
     ProcExtra,
     Output<TransportObservation>,
-    Sender<HostProtocol>,
+    ScopedSender<HostProtocol, DeckProtocol>,
 );
 
 fn sample_rate() -> NonZeroU32 {
@@ -91,7 +95,7 @@ fn block_frame(blocks: usize) -> i64 {
 fn proc_extra() -> (
     ProcExtra,
     Output<TransportObservation>,
-    Sender<HostProtocol>,
+    ScopedSender<HostProtocol, DeckProtocol>,
 ) {
     let (logger, _logger_rx) = realtime_logger(RealtimeLoggerConfig::default());
     let session_grid = SessionGridGeneration::new(
@@ -99,8 +103,10 @@ fn proc_extra() -> (
     );
     let initial = TransportObservation::new(None, session_grid);
     let (observation_input, observation_output) = triple_buffer(&initial);
-    let config = ChannelConfig::builder().build();
-    let (queue, inbox) = channel(config);
+    let config = crate::HostConfig::<TestPools>::builder()
+        .build()
+        .channel_config();
+    let (queue, inbox) = scoped_channel(config);
     let mut store = ProcStore::with_capacity(3);
     assert!(install_render_context(&mut store).is_ok());
     assert!(
@@ -109,7 +115,7 @@ fn proc_extra() -> (
                 inbox,
                 HostSettings::default(),
                 session_grid,
-                config.values().capacity.get(),
+                config.values().root.values().capacity.get(),
             ))
             .is_ok()
     );
@@ -152,7 +158,11 @@ fn stop_stream(processor: &mut SessionTransportProcessor, extra: &mut ProcExtra)
     });
 }
 
-fn send_tempo(queue: &mut Sender<HostProtocol>, beats_per_minute: f64, when: When<SessionFrame>) {
+fn send_tempo(
+    queue: &mut ScopedSender<HostProtocol, DeckProtocol>,
+    beats_per_minute: f64,
+    when: When<SessionFrame>,
+) {
     let batch = Batch {
         basis: Vec::new(),
         commands: vec![HostPart::Settings(HostSettingsChange::Tempo(tempo(
@@ -160,13 +170,16 @@ fn send_tempo(queue: &mut Sender<HostProtocol>, beats_per_minute: f64, when: Whe
         )))],
     };
     assert!(queue.send(when, batch).is_ok());
+    queue.publish().expect("publish transport command");
 }
 
-fn outcome(queue: &mut Sender<HostProtocol>) -> Outcome<HostProtocol> {
+fn outcome(queue: &mut ScopedSender<HostProtocol, DeckProtocol>) -> Outcome<HostProtocol> {
     let receipt = queue
-        .receipts()
-        .next()
+        .receipt()
         .expect("invariant: the transport answered the batch");
+    let ScopedReceipt::Root(receipt) = receipt else {
+        panic!("the transport answers on the root channel");
+    };
     let (outcome, _batch) = receipt.into();
     outcome
 }
@@ -193,7 +206,12 @@ fn render(
         .and_then(FirewheelContext::proc_store_mut)
         .expect("invariant: a context never started keeps its store");
     let result = process_transport(&proc_info_at(clock_samples), store).map(drop);
-    settle_receipts(state);
+    while let Some(receipt) = state.channel.as_mut().and_then(ScopedSender::receipt) {
+        let ScopedReceipt::Root(receipt) = receipt else {
+            panic!("transport-only graph returns root receipts");
+        };
+        settle_receipt(state, &receipt);
+    }
     result
 }
 
@@ -341,7 +359,7 @@ fn a_tempo_change_waits_for_its_frame_and_moves_anchor_and_grid_stamp_together()
     assert_eq!(waiting.anchor(), before.anchor());
     assert_eq!(waiting.session_grid_stamp(), before.session_grid_stamp());
     assert_eq!(waiting.revision(), TransportRevision::first());
-    assert_eq!(queue.receipts().count(), 0);
+    assert_eq!(std::iter::from_fn(|| queue.receipt()).count(), 0);
 
     process_node(&mut processor, &proc_info_at(block_frame(2)), &mut extra);
     assert!(matches!(
@@ -554,11 +572,7 @@ fn reserved_route_restart_promotes_a_change_rendered_before_stop() {
                 .revision()
     );
 
-    let settings = applied_spans(&extra.store, consts::TRANSPORT_BLOCK_FRAMES)
-        .and_then(Iterator::last)
-        .map(|(_, span)| span.settings())
-        .expect("the transport is installed");
-    let converged = converge_transport_restart(&mut extra.store, reserved, settings)
+    let converged = converge_transport_restart(&mut extra.store, reserved)
         .expect("the reserved restart accepts a newer revision in its target epoch");
     assert_eq!(converged, stopped);
     assert_eq!(observation(&mut output).session_grid(), stopped);
@@ -688,7 +702,7 @@ fn a_restart_refuses_a_change_waiting_on_the_old_axis_and_keeps_the_next_one() {
         );
     }
     assert!(matches!(outcome(&mut queue), Outcome::Applied { .. }));
-    assert!(queue.receipts().next().is_none());
+    assert!(queue.receipt().is_none());
     assert_eq!(snapshot(&mut output).tempo(), tempo(90.0));
 }
 

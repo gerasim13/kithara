@@ -226,7 +226,8 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
     .events(bus)
     .build();
     harness.load_config(config).await;
-    let abr = harness.player()
+    let abr = harness
+        .player()
         .current_abr_handle()
         .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
 
@@ -272,7 +273,11 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
     );
     assert_initial_apple_decoder(&lifecycle.decoders, label);
     assert_eq!(
-        lifecycle.resamplers.first().expect("resource publishes its PCM resampler").output_rate,
+        lifecycle
+            .resamplers
+            .first()
+            .expect("resource publishes its PCM resampler")
+            .output_rate,
         HOST_SAMPLE_RATE,
         "{label} resource must expose the host-rate PCM contract",
     );

@@ -57,7 +57,11 @@ fn detect_chunk_direction(chunk: &AudioChunk) -> Direction {
 fn format_meta(meta: &AudioChunkInfo, pcm_len: usize) -> String {
     format!(
         "frame_offset={}, samples={}, segment={:?}, variant={:?}, epoch={}",
-        meta.frame_offset, pcm_len, meta.segment_index, meta.variant_index, meta.segment.get()
+        meta.frame_offset,
+        pcm_len,
+        meta.segment_index,
+        meta.variant_index,
+        meta.segment.get()
     )
 }
 

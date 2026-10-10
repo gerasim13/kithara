@@ -84,11 +84,10 @@ async fn transient_failure_does_not_kill_the_track(
         })
         .build();
     let player = kithara::play::ResourcePrep::builder()
-            
-            .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build();
+        .worker(kithara::play::PlayWorker::new(
+            kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
+        ))
+        .build();
     let queue = OfflineQueue::paced(
         HostConfig::offline(pools).build(),
         Queue::new(

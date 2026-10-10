@@ -119,11 +119,10 @@ async fn commands_still_work_after_a_switch_storm(tone_mp3: &'static [u8], temp_
         })
         .build();
     let player = kithara::play::ResourcePrep::builder()
-            
-            .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build();
+        .worker(kithara::play::PlayWorker::new(
+            kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
+        ))
+        .build();
     let queue = OfflineQueue::paced(
         HostConfig::offline(pools).build(),
         Queue::new(

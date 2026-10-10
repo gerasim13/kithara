@@ -16,10 +16,7 @@ use kithara::{
         time::{Duration, Instant, sleep, timeout},
         tokio::{sync::broadcast::error::RecvError, task, task::yield_now},
     },
-    play::{
-        PlayWorker, PlayWorkerConfig, PlayerEvent,
-        ResourceConfig, ResourceSrc,
-    },
+    play::{PlayWorker, PlayWorkerConfig, PlayerEvent, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
@@ -179,7 +176,10 @@ async fn observe_playback(
 }
 
 async fn seek_and_require_read(queue: &OfflineQueue<TestPools>, stage: &str, target: f64) {
-    let previous = queue.deck_snapshot().slots.iter()
+    let previous = queue
+        .deck_snapshot()
+        .slots
+        .iter()
         .find_map(|slot| slot.mark)
         .unwrap_or_else(|| panic!("{stage}: playing slot must have a committed mark"));
     let trace = usdt_trace::scope();
@@ -190,7 +190,11 @@ async fn seek_and_require_read(queue: &OfflineQueue<TestPools>, stage: &str, tar
 
     timeout(consts::RATE_SEEK_PROGRESS_BUDGET, async {
         let first = loop {
-            if let Some(mark) = queue.deck_snapshot().slots.iter().find_map(|slot| slot.mark)
+            if let Some(mark) = queue
+                .deck_snapshot()
+                .slots
+                .iter()
+                .find_map(|slot| slot.mark)
                 && mark.lane.segment != previous.lane.segment
                 && mark.lane.frame > 0
                 && mark.position.as_secs_f64() >= target
@@ -201,11 +205,17 @@ async fn seek_and_require_read(queue: &OfflineQueue<TestPools>, stage: &str, tar
         };
         let output_index = trace.events().len();
         loop {
-            let progressed = queue.deck_snapshot().slots.iter().filter_map(|slot| slot.mark)
-                .any(|mark| mark.lane.segment == first.lane.segment
-                    && mark.lane.frame > first.lane.frame
-                    && mark.session > first.session
-                    && mark.position > first.position);
+            let progressed = queue
+                .deck_snapshot()
+                .slots
+                .iter()
+                .filter_map(|slot| slot.mark)
+                .any(|mark| {
+                    mark.lane.segment == first.lane.segment
+                        && mark.lane.frame > first.lane.frame
+                        && mark.session > first.session
+                        && mark.position > first.position
+                });
             let sink_progress = trace.events()[output_index..].iter().any(|event| {
                 event.target == "kithara_stream_probe" && event.probe == "write_playhead"
             });
@@ -426,10 +436,9 @@ async fn hls_rate_seek_stress_keeps_playback_live(
         .build(),
     );
     let player = kithara::play::ResourcePrep::builder()
-            
-            .worker(worker)
-            .cancel(shutdown_token.child())
-            .build();
+        .worker(worker)
+        .cancel(shutdown_token.child())
+        .build();
     let queue = OfflineQueue::paced(
         HostConfig::offline(pools).build(),
         Queue::new(

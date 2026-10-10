@@ -110,12 +110,12 @@ async fn create_delayed_gapless_hls_resource(
     cache_dir: &Path,
 ) -> ResourceConfig<TestPools> {
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let config = ResourceConfig::<TestPools>::for_src(
+
+    ResourceConfig::<TestPools>::for_src(
         ResourceSrc::parse(master.as_str()).expect("valid HLS master URL"),
     )
     .store(store)
-    .build();
-    config
+    .build()
 }
 
 /// Head segments arrive late.

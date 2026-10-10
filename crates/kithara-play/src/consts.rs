@@ -1,27 +1,9 @@
-#[cfg(test)]
-use kithara_events::TrackId;
-
-#[cfg(test)]
-use crate::api::SlotId;
-
-#[cfg(test)]
-pub(crate) const BACKGROUND: TrackId = TrackId(9);
-
-#[cfg(test)]
-pub(crate) const OUTGOING: TrackId = TrackId(7);
-
-#[cfg(test)]
-pub(crate) const PROMOTED: TrackId = TrackId(8);
-
 pub(crate) const DISCRIMINATOR_DOMAIN: &[u8] = b"kithara.play.query-discriminator.v1\0";
 pub(crate) const HASH_BYTES: usize = 16;
 pub(crate) const IDENTITY_DOMAIN: &[u8] = b"kithara.play.query-identity.v1\0";
 
 #[cfg(test)]
 pub(crate) const BLOCK_FRAMES: usize = 512;
-
-#[cfg(test)]
-pub(crate) const DECK_SLOT: SlotId = SlotId::new(0);
 
 #[cfg(test)]
 pub(crate) const SAMPLE_RATE: u32 = 44_100;
@@ -34,3 +16,11 @@ pub(crate) const DROPPED_BEFORE_CANCEL: u8 = 1;
 
 #[cfg(test)]
 pub(crate) const NOT_DROPPED: u8 = 0;
+
+#[cfg(test)]
+pub(crate) const RATE_RING_PACKETS: usize = 16;
+
+/// Upper bound on the ticks that fill a lane; a filled ring stops progress far
+/// sooner, so the bound only turns a livelock into a failure.
+#[cfg(test)]
+pub(crate) const FILL_TICKS: usize = 1_024;

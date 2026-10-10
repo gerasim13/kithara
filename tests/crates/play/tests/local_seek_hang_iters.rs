@@ -286,7 +286,8 @@ async fn local_seek_middle_hang_iters(
         .await;
         let mut iteration_samples: Vec<f32> = Vec::new();
 
-        let (resource, mut events) = build_resource(&master, &downloader, &iter_label, store, backend, abr).await;
+        let (resource, mut events) =
+            build_resource(&master, &downloader, &iter_label, store, backend, abr).await;
         // Subscribe before the resource moves into the player so no
         // `PlaybackProgress` event is missed once the render pull starts.
         player.load_config(resource).await;

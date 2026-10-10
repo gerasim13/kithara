@@ -1,5 +1,3 @@
-//! Dispatcher-thread ownership of open sources and resident render lanes.
-
 use std::{
     convert::Infallible,
     fmt::{self, Debug},
@@ -24,7 +22,7 @@ pub struct LaneId(u64);
 
 #[derive(Debug)]
 pub enum DispatcherCommand<I> {
-    Load(LoadRequest<I>),
+    Load(Box<LoadRequest<I>>),
     Release(LaneId),
     SetPriority(LaneId, ServiceClass),
 }
@@ -68,6 +66,9 @@ pub enum Dispatched<O> {
     Prioritized,
 }
 
+/// Opened receiver, worker-owned lane, and prepared engine latency, or a load refusal.
+pub type OpenResult<O, L> = Result<(O, L, FrameCount), LoadRefusal>;
+
 /// One source open yielding its receiver and its actual worker-owned lane.
 pub trait Open: Debug {
     type Opened: Debug;
@@ -78,7 +79,7 @@ pub trait Open: Debug {
         position: Duration,
         start: LaneStart,
         inbox: Inbox<LaneProtocol>,
-    ) -> impl MaybeSendFuture<Output = Result<(Self::Opened, Self::Lane, FrameCount), LoadRefusal>>;
+    ) -> impl MaybeSendFuture<Output = OpenResult<Self::Opened, Self::Lane>>;
 }
 
 /// Mutable lane state accessed only by the dispatcher that owns the task.
@@ -102,8 +103,7 @@ impl<I: Open> Protocol for DispatcherProtocol<I> {
     }
 }
 
-type Opening<O, L> =
-    LocalBoxFuture<'static, (Seq, LaneId, Result<(O, L, FrameCount), LoadRefusal>)>;
+type Opening<O, L> = LocalBoxFuture<'static, (Seq, LaneId, OpenResult<O, L>)>;
 
 struct DispatchState<I: Open> {
     inbox: Inbox<DispatcherProtocol<I>>,
@@ -162,6 +162,7 @@ where
             };
             match command {
                 DispatcherCommand::Load(request) => {
+                    let request = *request;
                     if !runtime_ready {
                         due.refuse(LoadRefusal::NoRuntime);
                         continue;
@@ -276,7 +277,7 @@ where
     ) -> Self {
         Self {
             dispatcher: DispatchState::new(inbox, capacity),
-            waker: Waker::from(std::sync::Arc::new(StreamWake::new(wake))),
+            waker: Waker::from(kithara_platform::sync::Arc::new(StreamWake::new(wake))),
             runtime,
         }
     }
@@ -388,7 +389,7 @@ mod tests {
                     commands: items
                         .into_iter()
                         .map(|item| {
-                            DispatcherCommand::Load(LoadRequest {
+                            DispatcherCommand::Load(Box::new(LoadRequest {
                                 item,
                                 position: Duration::ZERO,
                                 start: LaneStart {
@@ -397,7 +398,7 @@ mod tests {
                                     backend: StretchKind::default(),
                                 },
                                 inbox: channel(ChannelConfig::builder().build()).1,
-                            })
+                            }))
                         })
                         .collect(),
                 },
@@ -417,10 +418,12 @@ mod tests {
         assert!(Handle::try_current().is_err());
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         let (mut sender, inbox) = pair();
-        let _task = worker.start_dispatcher(inbox).expect("the dispatcher starts");
+        let _task = worker
+            .start_dispatcher(inbox)
+            .expect("the dispatcher starts");
         let (_answer, opening) = gate();
         let seq = send(&mut sender, vec![opening]);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = kithara_platform::time::WallInstant::now() + Duration::from_secs(5);
 
         loop {
             if let Some(receipt) = sender.receipts().next() {
@@ -431,7 +434,10 @@ mod tests {
                 ));
                 break;
             }
-            assert!(std::time::Instant::now() < deadline, "the load must settle");
+            assert!(
+                kithara_platform::time::WallInstant::now() < deadline,
+                "the load must settle"
+            );
             kithara_platform::thread::sleep(Duration::from_millis(1));
         }
     }

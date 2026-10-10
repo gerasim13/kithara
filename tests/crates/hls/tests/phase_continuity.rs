@@ -191,7 +191,6 @@ async fn run_case_paced(
                 .backend(backend)
                 .build(),
         )
-
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, audio_config)

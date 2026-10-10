@@ -227,7 +227,7 @@ async fn analyze_track(
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .hint("mp3".to_owned())
         .build();
-    let reader = kithara_integration_tests::mock::load_audio(&play_worker, config)
+    let reader = kithara_integration_tests::mock::load_audio(play_worker, config)
         .await
         .unwrap_or_else(|error| panic!("analysis benchmark reader failed to open: {error}"));
     let rate = reader.spec().sample_rate;

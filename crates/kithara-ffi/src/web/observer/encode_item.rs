@@ -163,15 +163,11 @@ pub(crate) fn encode_item_event(event: &FfiItemEvent) -> JsValue {
             set_f64(&obj, "new_channels", f64::from(*new_channels));
             set_f64(&obj, "new_sample_rate", f64::from(*new_sample_rate));
         }
-        FfiItemEvent::SeekComplete {
-            position_seconds,
-        } => {
+        FfiItemEvent::SeekComplete { position_seconds } => {
             set_str(&obj, KIND, "SeekComplete");
             set_f64(&obj, "position_seconds", *position_seconds);
         }
-        FfiItemEvent::SeekRejected {
-            target_seconds,
-        } => {
+        FfiItemEvent::SeekRejected { target_seconds } => {
             set_str(&obj, KIND, "SeekRejected");
             set_f64(&obj, "target_seconds", *target_seconds);
         }

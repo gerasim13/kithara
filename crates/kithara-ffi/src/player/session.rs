@@ -2,7 +2,7 @@ use super::AudioPlayer;
 use crate::types::FfiInterruptionKind;
 
 /// Platform audio-session signals the player answers: interruptions.
-#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[cfg_attr(all(feature = "uniffi", not(target_arch = "wasm32")), uniffi::export)]
 impl AudioPlayer {
     /// Notify the native player that the platform interrupted, or released,
     /// the audio output.

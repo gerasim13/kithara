@@ -60,11 +60,12 @@ pub(super) enum SessionRuntime<S, O: HostOwner<S>> {
     },
 }
 
+#[cfg(feature = "offline")]
+type OfflineSessionMut<'a, S, O> = (&'a Platform<S, O>, &'a mut OfflineRuntime<S, O>);
+
 impl<S, O: HostOwner<S>> SessionRuntime<S, O> {
     #[cfg(feature = "offline")]
-    pub(super) const fn offline_mut(
-        &mut self,
-    ) -> Option<(&Platform<S, O>, &mut OfflineRuntime<S, O>)> {
+    pub(super) const fn offline_mut(&mut self) -> Option<OfflineSessionMut<'_, S, O>> {
         match self {
             Self::Offline { platform, runtime } => Some((platform, runtime)),
             Self::Realtime { .. } => None,
@@ -101,6 +102,9 @@ impl<S, O: HostOwner<S>> Host<S, O> {
 
     /// Posts an owner command and returns its ticket number without waiting.
     /// The owner answers after checks and sending; effects publish on receipts.
+    ///
+    /// # Errors
+    /// Returns [`PlayError::SessionGone`] if the owner no longer accepts posts.
     pub fn send(&self, command: O::Command) -> Result<Seq, PlayError> {
         self.dispatcher
             .dispatch(command)
@@ -109,12 +113,12 @@ impl<S, O: HostOwner<S>> Host<S, O> {
     }
 
     /// Allocates a fresh identity for a deck registered through this handle.
-    #[must_use]
-    pub fn deck_id(&self) -> DeckId {
-        match DeckId::allocate() {
-            Ok(id) => id,
-            Err(error) => panic!("deck identity space exhausted: {error}"),
-        }
+    ///
+    /// # Errors
+    /// Returns [`PlayError::Session`] with [`SessionError::BeatGridIdAllocation`]
+    /// when the identity space is exhausted.
+    pub fn deck_id(&self) -> Result<DeckId, PlayError> {
+        DeckId::allocate().map_err(|error| SessionError::from(error).into())
     }
 
     fn ask(&self, command: HostCommand<S, O::Deck>) -> Result<(), PlayError> {
@@ -122,16 +126,29 @@ impl<S, O: HostOwner<S>> Host<S, O> {
     }
 
     /// Attaches one output group to a session tap.
+    ///
+    /// # Errors
+    /// Returns [`PlayError::Session`] with [`SessionError::TapActive`] when the
+    /// tap already has a consumer, or [`SessionError::Graph`] on graph failure.
+    /// Returns [`PlayError::SessionGone`] if the owner stops or drops the post.
     pub fn attach_outputs(&self, tap: Tap, outputs: OutputGroup) -> Result<(), PlayError> {
         self.ask(HostCommand::AttachOutputs { tap, outputs })
     }
 
     /// Detaches the output group of a session tap.
+    ///
+    /// # Errors
+    /// Returns [`PlayError::SessionGone`] if the owner stops or drops the post.
     pub fn detach_outputs(&self, tap: Tap) -> Result<(), PlayError> {
         self.ask(HostCommand::DetachOutputs { tap })
     }
 
     /// Restarts the owner's route while retaining its held decks.
+    ///
+    /// # Errors
+    /// Returns [`PlayError::Session`] with [`SessionError::RestartFailed`] if
+    /// the backend or graph fails to restart. Returns [`PlayError::SessionGone`]
+    /// if the owner stops or drops the post.
     pub fn invalidate_audio_route<R: Into<String>>(&self, reason: R) -> Result<(), PlayError> {
         tracing::debug!(reason = %reason.into(), "host route restart requested");
         self.ask(HostCommand::Restart)
@@ -174,6 +191,14 @@ impl<S, O: HostOwner<S>> Host<S, O> {
     /// Removing the last live deck stops the output and settles without a render.
     /// On an offline session, removing a non-last deck waits for the next render
     /// to apply its close on the processor.
+    ///
+    /// # Errors
+    /// Returns [`PlayError::ForeignSession`] for another host's deck, or
+    /// [`PlayError::Session`] with [`SessionError::DeckNotFound`] for a missing
+    /// deck. Propagates the deck's close refusal, [`PlayError::Closed`] for a
+    /// retired channel, [`PlayError::Internal`] for scope retirement failure,
+    /// and session graph errors when stopping the final deck. Returns
+    /// [`PlayError::SessionGone`] if the owner stops or drops the post.
     pub fn remove<D: DeckControl>(&mut self, deck: &HostOwned<D>) -> Result<(), PlayError> {
         self.validate_removal(deck)?;
         self.ask(HostCommand::Release(deck.id()))
@@ -186,10 +211,17 @@ where
     O: HostOwner<S>,
 {
     /// Creates a Host whose session drives the decorated base owner.
-    pub fn layered(
-        config: HostConfig<S>,
-        layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
-    ) -> Result<Self, PlayError> {
+    ///
+    /// # Errors
+    /// Returns [`PlayError::InvalidParameter`] for invalid settings and
+    /// [`PlayError::Session`] with [`SessionError::BeatGridIdAllocation`] when
+    /// identities are exhausted. Browser graph or stream startup failures also
+    /// return [`PlayError::Session`]; offline task reservation or startup failures
+    /// return [`PlayError::Internal`].
+    pub fn layered<L>(config: HostConfig<S>, layer: L) -> Result<Self, PlayError>
+    where
+        L: FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
+    {
         let channel_config = config.channel_config();
         match config {
             HostConfig::Realtime {
@@ -240,11 +272,22 @@ where
     S: HasPool<f32> + Send + Sync + 'static,
 {
     /// Creates a realtime or offline Host with its base owner.
+    ///
+    /// # Errors
+    /// Returns [`PlayError::InvalidParameter`] for invalid settings,
+    /// [`PlayError::Session`] for exhausted identities or browser startup
+    /// failures, and [`PlayError::Internal`] for offline task reservation or
+    /// startup failures.
     pub fn new(config: HostConfig<S>) -> Result<Self, PlayError> {
         Self::layered(config, |core| core)
     }
 
     /// Transfers a fully constructed deck, retaining only its public control handle.
+    ///
+    /// # Errors
+    /// Returns [`PlayError::Internal`] when deck identities are exhausted.
+    /// Propagates the registration errors described by [`HostOwner::register`],
+    /// or [`PlayError::SessionGone`] if the owner stops or drops the post.
     pub fn insert<D>(&mut self, deck: D) -> Result<HostOwned<D>, PlayError>
     where
         D: HostedDeck<S> + DeckControl,

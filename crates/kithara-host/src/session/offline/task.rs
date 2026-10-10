@@ -24,7 +24,7 @@ use crate::{
         dispatch::OwnerPosts,
         protocol::HostMailbox,
         queue::HostProtocol,
-        state::{HostRoot, RootView, SessionState, SessionStream},
+        state::{HostRoot, RootView, SessionBufferConfig, SessionState, SessionStream},
     },
 };
 
@@ -84,7 +84,7 @@ where
     fn tick(&mut self) -> TickResult {
         self.owner.begin_pass();
         let mut progress = false;
-        let mut requests = Vec::new();
+        let mut requests: Vec<OfflineRequest> = Vec::new();
         let mut stopped = false;
         loop {
             match self.cmd_rx.try_recv() {
@@ -186,6 +186,8 @@ where
     }
 }
 
+type StartedOfflineTask<C> = (Arc<OfflineSessionClient<C>>, OfflineTaskHandle);
+
 pub(crate) fn spawn<S, O>(
     dispatcher: &Dispatcher,
     task_config: TaskConfig,
@@ -193,7 +195,7 @@ pub(crate) fn spawn<S, O>(
     root_view: RootView,
     config: OfflineTaskConfig<S>,
     layer: impl FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
-) -> Result<(Arc<OfflineSessionClient<O::Command>>, OfflineTaskHandle), PlayError>
+) -> Result<StartedOfflineTask<O::Command>, PlayError>
 where
     S: HasPool<f32> + Send + Sync + 'static,
     O: HostOwner<S>,
@@ -215,42 +217,48 @@ where
     let route = OfflineTaskRoute::new(&pending);
     let client = Arc::new(OfflineSessionClient::new(postbox, cmd_tx, route.clone()));
     let inbox: Arc<dyn DeckInbox> = client.clone();
-    let task = route
-        .start(pending, move |_| {
-            let start = move |ctx: &mut firewheel::FirewheelContext, rate: u32| {
-                let rate = NonZeroU32::new(rate)
-                    .ok_or_else(|| "offline sample rate must be non-zero".to_owned())?;
-                let backend = BackendConfig::builder()
-                    .block_frames(max_block_frames)
-                    .declared_latency(declared_latency)
-                    .sample_rate(rate)
-                    .build();
-                OfflineStream::start(ctx, backend)
-                    .map(SessionStream::Offline)
-                    .map_err(|error| error.to_string())
-            };
-            let state = SessionState::new(
-                root,
-                root_view,
-                Some(max_block_frames),
-                Some(declick_frames),
-                output,
-                settings,
-                channel_config,
-                start,
-            );
-            OfflineSessionTask {
-                cmd_rx,
-                mailbox,
-                owner: layer(HostCore::new(state, inbox)),
-                posts: OwnerPosts::new(),
-                position: 0,
-                max_block_frames,
-                pools,
-                marker: PhantomData,
-            }
-        })
-        .map_err(|error| PlayError::Internal(format!("offline session task start: {error}")))?;
+    let factory = move |_| {
+        let start = move |ctx: &mut firewheel::FirewheelContext, rate: u32| {
+            let rate = NonZeroU32::new(rate)
+                .ok_or_else(|| "offline sample rate must be non-zero".to_owned())?;
+            let backend = BackendConfig::builder()
+                .block_frames(max_block_frames)
+                .declared_latency(declared_latency)
+                .sample_rate(rate)
+                .build();
+            OfflineStream::start(ctx, backend)
+                .map(SessionStream::Offline)
+                .map_err(|error| error.to_string())
+        };
+        let state = SessionState::new(
+            root,
+            root_view,
+            SessionBufferConfig {
+                max_block_frames: Some(max_block_frames),
+                declick_frames: Some(declick_frames),
+            },
+            output,
+            settings,
+            channel_config,
+            start,
+        );
+        OfflineSessionTask {
+            cmd_rx,
+            mailbox,
+            owner: layer(HostCore::new(state, inbox)),
+            posts: OwnerPosts::new(),
+            position: 0,
+            max_block_frames,
+            pools,
+            marker: PhantomData,
+        }
+    };
+    #[cfg(target_arch = "wasm32")]
+    let task = route.start(pending, factory);
+    #[cfg(not(target_arch = "wasm32"))]
+    let task = OfflineTaskRoute::start(pending, factory);
+    let task =
+        task.map_err(|error| PlayError::Internal(format!("offline session task start: {error}")))?;
     Ok((client, task))
 }
 #[derive(Debug, Error)]
@@ -291,8 +299,7 @@ mod tests {
     use crate::{
         consts::{self, SESSION_PUMP_INTERVAL},
         session::{
-            decks::SessionDecks,
-            protocol::ask,
+            protocol::{HostDispatcher, ask},
             tests::{
                 deck_probe::{Seen, next, probe, so_far, ticks},
                 graph::empty_root,
@@ -300,11 +307,12 @@ mod tests {
         },
     };
 
+    type BaseCommand = crate::HostCommand<TestPools, dyn kithara_play::HostedDeck<TestPools>>;
+
     /// An offline session with no graph that holds probe decks, and the
     /// worker it runs on.
     struct DeckSession {
-        client: Arc<OfflineSessionClient<TestPools>>,
-        decks: SessionDecks,
+        client: Arc<OfflineSessionClient<BaseCommand>>,
         _task: OfflineTaskHandle,
         _dispatcher: Dispatcher,
         _worker: Worker,
@@ -335,15 +343,15 @@ mod tests {
                             .expect("the fixture settings are valid"),
                     )
                     .declick_frames(block)
+                    .channel_config(crate::HostConfig::offline(pools()).build().channel_config())
                     .max_block_frames(block)
                     .pools(pools())
                     .build(),
+                |owner: HostCore<TestPools>| owner,
             )
             .expect("the offline session starts");
-            let decks = SessionDecks::new(client.clone());
             Self {
                 client,
-                decks,
                 _task: task,
                 _dispatcher: dispatcher,
                 _worker: worker,
@@ -358,7 +366,7 @@ mod tests {
 
     impl Drop for DeckSession {
         fn drop(&mut self) {
-            assert!(ask(&*self.client, HostCmd::Shutdown).is_ok());
+            self.client.shutdown();
         }
     }
 
@@ -367,15 +375,17 @@ mod tests {
         let session = DeckSession::spawn();
         let (id, deck, seen) = probe();
 
-        session
-            .decks
-            .hold(id, deck)
+        ask(&*session.client, crate::HostCommand::Register { id, deck })
+            .map_err(PlayError::from)
             .expect("the session takes the deck");
         sleep(SESSION_PUMP_INTERVAL * 3);
         session.settle();
         assert_eq!(ticks(&so_far(&seen)), 0, "no clock ticks an offline deck");
 
-        session.decks.tick_block();
+        session
+            .client
+            .render(0, 512)
+            .expect("render the first block");
         session.settle();
         let ticked = so_far(&seen);
         assert_eq!(ticks(&ticked), 1, "one tick ahead of the block");
@@ -391,9 +401,8 @@ mod tests {
     fn an_offline_deck_drains_on_its_wake_with_no_block_rendered() {
         let session = DeckSession::spawn();
         let (id, deck, seen) = probe();
-        session
-            .decks
-            .hold(id, deck)
+        ask(&*session.client, crate::HostCommand::Register { id, deck })
+            .map_err(PlayError::from)
             .expect("the session takes the deck");
         let Seen::Held(waker) = next(&seen) else {
             panic!("the session holds the deck before anything else");

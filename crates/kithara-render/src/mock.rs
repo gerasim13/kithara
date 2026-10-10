@@ -8,7 +8,9 @@ use ringbuf::traits::Producer;
 
 use crate::{
     LaneFrame,
-    bridge::{DeckEvent, DeckPart, DeckProtocol, DeckRefusal, MixerInputs, Returned, Slot, SlotMark},
+    bridge::{
+        DeckEvent, DeckPart, DeckProtocol, DeckRefusal, MixerInputs, Returned, Slot, SlotMark,
+    },
     rt::track::PlayerResource,
 };
 
@@ -50,7 +52,11 @@ impl MockDeck {
             .take(inputs.config.slots().get())
             .collect();
         let armed = vec![None; inputs.config.slots().get()];
-        Self { inputs, held, armed }
+        Self {
+            inputs,
+            held,
+            armed,
+        }
     }
 
     /// Applies every batch due by `at` on its own frame; a `Stop` reports the slot at
@@ -93,12 +99,7 @@ impl MockDeck {
     }
 
     /// Applies the batch armed on `slot` at its end frame, as `Deck::fire_ended` does.
-    pub fn end(
-        &mut self,
-        level: &mut LevelInbox<'_, DeckProtocol>,
-        slot: Slot,
-        at: SessionFrame,
-    ) {
+    pub fn end(&mut self, level: &mut LevelInbox<'_, DeckProtocol>, slot: Slot, at: SessionFrame) {
         let Some(seq) = self.armed[slot.index()].take() else {
             return;
         };
@@ -186,6 +187,9 @@ fn hold(
     }
 }
 
+#[cfg(all(test, feature = "mock"))]
+pub(crate) use crate::worker::{mock as pcm_fixture, node_fixture};
+
 #[cfg(test)]
 mod tests {
     use std::num::{NonZeroU32, NonZeroUsize};
@@ -210,7 +214,11 @@ mod tests {
         let config = DeckMixerConfig::default();
         let (mut sender, mut inbox) = scoped_channel::<DeckProtocol, DeckProtocol>(
             ScopedConfig::builder()
-                .scope(ChannelConfig::builder().targets(config.slots().get()).build())
+                .scope(
+                    ChannelConfig::builder()
+                        .targets(config.slots().get())
+                        .build(),
+                )
                 .build(),
         );
         let scope = sender.open(config.slots().get()).expect("scope");
@@ -218,14 +226,28 @@ mod tests {
         let mut deck = MockDeck::new(inputs);
         let from = Slot::new(0);
         let to = Slot::new(1);
-        let seq = sender.scope(scope).expect("scope").send(
-            When::Deferred,
-            Batch { basis: Vec::new(), commands: vec![DeckPart::Chain { from, to }] },
-        ).expect("deferred chain");
+        let seq = sender
+            .scope(scope)
+            .expect("scope")
+            .send(
+                When::Deferred,
+                Batch {
+                    basis: Vec::new(),
+                    commands: vec![DeckPart::Chain { from, to }],
+                },
+            )
+            .expect("deferred chain");
         sender.publish().expect("publish");
         inbox.drain();
-        deck.block(&mut inbox.scope(scope).expect("borrowed level"), SessionFrame::new(0), 0.0);
-        assert!(sender.receipt().is_none(), "the chain waits for the leading slot");
+        deck.block(
+            &mut inbox.scope(scope).expect("borrowed level"),
+            SessionFrame::new(0),
+            0.0,
+        );
+        assert!(
+            sender.receipt().is_none(),
+            "the chain waits for the leading slot"
+        );
         let at = SessionFrame::new(4_096);
         deck.end(&mut inbox.scope(scope).expect("borrowed level"), from, at);
         let Some(ScopedReceipt::Scope(answered_scope, receipt)) = sender.receipt() else {
@@ -233,7 +255,9 @@ mod tests {
         };
         assert_eq!(answered_scope, scope);
         assert_eq!(receipt.seq(), seq);
-        assert!(matches!(receipt.outcome(), Outcome::Applied { at: applied, .. } if *applied == at));
+        assert!(
+            matches!(receipt.outcome(), Outcome::Applied { at: applied, .. } if *applied == at)
+        );
         assert!(matches!(receipt.batch().commands.as_slice(),
             [DeckPart::Chain { from: leading, to: following }] if *leading == from && *following == to));
         assert!(sender.receipt().is_none(), "exactly one terminal receipt");

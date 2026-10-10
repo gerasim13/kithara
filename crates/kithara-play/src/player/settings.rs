@@ -273,7 +273,10 @@ mod tests {
             LaneCommand::from,
         );
         if rate.is_nan() {
-            assert!(matches!(result, Err(LiveError::Invalid(PlayError::InvalidParameter { .. }))));
+            assert!(matches!(
+                result,
+                Err(LiveError::Invalid(PlayError::InvalidParameter { .. }))
+            ));
             assert!(execute(&mut inbox, 0).is_empty());
             assert_eq!(live.config().speed(), 1.0);
             assert_eq!(live.projected().speed(), 1.0);

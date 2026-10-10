@@ -2,7 +2,7 @@
 
 use std::{fs, path::PathBuf};
 
-use kithara::{play::ResourcePrep, platform::tokio::runtime::Handle};
+use kithara::{platform::tokio::runtime::Handle, play::ResourcePrep};
 use kithara_app::{config::AppConfig, document::Config, pools};
 use kithara_config::Config as _;
 use tempfile::TempDir;

@@ -117,17 +117,16 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     /// Starts a queue configuration with the bare-track factory.
-    #[must_use]
     pub fn builder() -> QueueConfigBuilder<S, PlayerFactory> {
         Self::with_factory(PlayerFactory)
     }
 }
 #[cfg(test)]
 mod tests {
+    use kithara_play::{PlayWorker, PlayWorkerConfig};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use kithara_play::{PlayWorker, PlayWorkerConfig};
     use crate::test_pools::pools;
 
     pub(super) fn config() -> QueueConfig<crate::test_pools::TestPools> {
@@ -163,7 +162,7 @@ mod document_tests {
         let mut config = config();
         config.max_history_size = 37;
 
-        config.apply(patch);
+        config.apply(patch).expect("the document patch is valid");
 
         assert_eq!(config.playback_order, PlaybackOrder::Shuffle);
         assert_eq!(

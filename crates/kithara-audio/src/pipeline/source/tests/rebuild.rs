@@ -47,42 +47,38 @@ use crate::{
     traits::AudioSource,
 };
 
-pub(super) fn produced_data(fetch: Fetch<AudioChunk>) -> AudioChunk {
+pub(in crate::pipeline::source) fn produced_data(fetch: Fetch<AudioChunk>) -> AudioChunk {
     let Fetch::Data { data, .. } = fetch else {
         panic!("TrackStep::Produced must carry PCM data");
     };
     data
 }
 
-pub(super) fn spec(sample_rate: u32) -> AudioSpec {
+pub(in crate::pipeline::source) fn spec(sample_rate: u32) -> AudioSpec {
     AudioSpec::new(
         consts::REBUILD_CHANNELS,
         NonZeroU32::new(sample_rate).expect("test sample rate is non-zero"),
     )
 }
 
-pub(super) struct TestDecoder {
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, with)]
+pub(in crate::pipeline::source) struct TestDecoder {
     drops: Arc<Mutex<Vec<u64>>>,
     preparations: Arc<AtomicU64>,
     id: u64,
+    #[field(with, option_set_some, vis = "pub(in crate::pipeline::source)")]
     seek_error: Option<DecodeError>,
 }
 
 impl TestDecoder {
-    pub(super) fn new(id: u64, drops: Arc<Mutex<Vec<u64>>>) -> Self {
+    pub(in crate::pipeline::source) fn new(id: u64, drops: Arc<Mutex<Vec<u64>>>) -> Self {
         Self {
             drops,
             id,
             preparations: Arc::new(AtomicU64::new(0)),
             seek_error: None,
         }
-    }
-}
-
-impl TestDecoder {
-    pub(super) fn with_seek_error(mut self, error: DecodeError) -> Self {
-        self.seek_error = Some(error);
-        self
     }
 }
 
@@ -405,7 +401,7 @@ impl Decoder for RouteSignalDecoder {
     fn update_byte_len(&self, _len: u64) {}
 }
 
-pub(super) struct TestControl {
+pub(in crate::pipeline::source) struct TestControl {
     byte_map_enabled: AtomicBool,
     demand_in_flight: AtomicBool,
     exact_reader_ready: AtomicBool,
@@ -424,7 +420,7 @@ pub(super) struct TestControl {
 }
 
 impl TestControl {
-    pub(super) fn new(media_info: MediaInfo) -> Self {
+    pub(in crate::pipeline::source) fn new(media_info: MediaInfo) -> Self {
         Self {
             aborted_transition: Mutex::new(None),
             byte_map_enabled: AtomicBool::new(false),
@@ -444,46 +440,46 @@ impl TestControl {
         }
     }
 
-    pub(super) fn aborted_transition(&self) -> Option<VariantTransition> {
+    pub(in crate::pipeline::source) fn aborted_transition(&self) -> Option<VariantTransition> {
         *self.aborted_transition.lock()
     }
 
-    pub(super) fn enable_byte_map(&self) {
+    pub(in crate::pipeline::source) fn enable_byte_map(&self) {
         self.byte_map_enabled.store(true, Ordering::Release);
     }
 
-    pub(super) fn landing(&self) -> Option<Duration> {
+    pub(in crate::pipeline::source) fn landing(&self) -> Option<Duration> {
         *self.landing.lock()
     }
 
-    pub(super) fn plan_calls(&self) -> u64 {
+    pub(in crate::pipeline::source) fn plan_calls(&self) -> u64 {
         self.plan_calls.load(Ordering::Acquire)
     }
 
-    pub(super) fn prepare_calls(&self) -> u64 {
+    pub(in crate::pipeline::source) fn prepare_calls(&self) -> u64 {
         self.prepare_calls.load(Ordering::Acquire)
     }
 
-    pub(super) fn prepared_profile(&self) -> Option<ReaderProfile> {
+    pub(in crate::pipeline::source) fn prepared_profile(&self) -> Option<ReaderProfile> {
         *self.prepared_profile.lock()
     }
 
-    pub(super) fn promote_calls(&self) -> u64 {
+    pub(in crate::pipeline::source) fn promote_calls(&self) -> u64 {
         self.promote_calls.load(Ordering::Acquire)
     }
 
-    pub(super) fn set_demand_in_flight(&self, in_flight: bool) {
+    pub(in crate::pipeline::source) fn set_demand_in_flight(&self, in_flight: bool) {
         self.demand_in_flight.store(in_flight, Ordering::Release);
     }
 
-    pub(super) fn set_exact_plan(&self, plan: VariantReaderPlan) {
+    pub(in crate::pipeline::source) fn set_exact_plan(&self, plan: VariantReaderPlan) {
         *self.exact_plan.lock() = Some(plan);
         *self.prepared_profile.lock() = None;
         self.exact_reader_ready.store(false, Ordering::Release);
         self.exact_reader_taken.store(false, Ordering::Release);
     }
 
-    pub(super) fn set_exact_reader_ready(&self) {
+    pub(in crate::pipeline::source) fn set_exact_reader_ready(&self) {
         self.exact_reader_ready.store(true, Ordering::Release);
     }
 
@@ -493,11 +489,11 @@ impl TestControl {
         *self.media_info.lock() = Some(media_info);
     }
 
-    pub(super) fn set_promotion(&self, promotion: VariantPromotion) {
+    pub(in crate::pipeline::source) fn set_promotion(&self, promotion: VariantPromotion) {
         *self.promotion.lock() = promotion;
     }
 
-    pub(super) fn take_calls(&self) -> u64 {
+    pub(in crate::pipeline::source) fn take_calls(&self) -> u64 {
         self.take_calls.load(Ordering::Acquire)
     }
 }
@@ -602,7 +598,7 @@ impl VariantControl for TestControl {
 /// enters `Source::wait_range` under the `SharedStream` mutex and stays
 /// there until data lands. Disarmed by default — no other test changes.
 #[derive(Default)]
-pub(super) struct WaitPark {
+pub(in crate::pipeline::source) struct WaitPark {
     armed: AtomicBool,
     condvar: Condvar,
     state: Mutex<WaitParkState>,
@@ -616,7 +612,7 @@ struct WaitParkState {
 }
 
 impl WaitPark {
-    pub(super) fn arm(&self) {
+    pub(in crate::pipeline::source) fn arm(&self) {
         self.armed.store(true, Ordering::Release);
     }
 
@@ -633,7 +629,7 @@ impl WaitPark {
         drop(state);
     }
 
-    pub(super) fn release(&self) {
+    pub(in crate::pipeline::source) fn release(&self) {
         let mut state = self.state.lock();
         state.released = true;
         drop(state);
@@ -642,7 +638,7 @@ impl WaitPark {
 
     /// Wait until the holder is inside `wait_range` — i.e. the control
     /// mutex is held by a parked blocking read.
-    pub(super) async fn wait_entered(&self) {
+    pub(in crate::pipeline::source) async fn wait_entered(&self) {
         while !self.state.lock().entered {
             self.entered.notified().await;
         }
@@ -651,7 +647,7 @@ impl WaitPark {
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, with)]
-pub(super) struct TestSource {
+pub(in crate::pipeline::source) struct TestSource {
     byte_map: Arc<TestByteMap>,
     control: Arc<TestControl>,
     park: Arc<WaitPark>,
@@ -661,12 +657,12 @@ pub(super) struct TestSource {
     activity: Activity,
     writer: Option<ActivityWriter>,
     waits: Arc<Mutex<Vec<Range<u64>>>>,
-    #[field(with = with_peer_wake, option_set_some, vis = "pub(super)")]
+    #[field(with = with_peer_wake, option_set_some, vis = "pub(in crate::pipeline::source)")]
     peer: Option<Arc<DeferredWake>>,
 }
 
 impl TestSource {
-    pub(super) fn new(control: Arc<TestControl>) -> Self {
+    pub(in crate::pipeline::source) fn new(control: Arc<TestControl>) -> Self {
         let writer = ActivityWriter::new();
         Self {
             activity: writer.reader(),
@@ -682,11 +678,11 @@ impl TestSource {
         }
     }
 
-    pub(super) fn park_handle(&self) -> Arc<WaitPark> {
+    pub(in crate::pipeline::source) fn park_handle(&self) -> Arc<WaitPark> {
         Arc::clone(&self.park)
     }
 
-    pub(super) fn phase_handle(&self) -> Arc<Mutex<SourcePhase>> {
+    pub(in crate::pipeline::source) fn phase_handle(&self) -> Arc<Mutex<SourcePhase>> {
         Arc::clone(&self.phase)
     }
 
@@ -695,7 +691,7 @@ impl TestSource {
         Self::new(control)
     }
 
-    pub(super) fn waits_handle(&self) -> Arc<Mutex<Vec<Range<u64>>>> {
+    pub(in crate::pipeline::source) fn waits_handle(&self) -> Arc<Mutex<Vec<Range<u64>>>> {
         Arc::clone(&self.waits)
     }
 }
@@ -881,8 +877,8 @@ impl ByteMap for TestByteMap {
     }
 }
 
-pub(super) struct TestConfig {
-    pub(super) source: TestSource,
+pub(in crate::pipeline::source) struct TestConfig {
+    pub(in crate::pipeline::source) source: TestSource,
 }
 
 impl Default for TestConfig {
@@ -893,7 +889,7 @@ impl Default for TestConfig {
     }
 }
 
-pub(super) struct TestStream;
+pub(in crate::pipeline::source) struct TestStream;
 
 impl StreamType for TestStream {
     type Config = TestConfig;
@@ -905,7 +901,7 @@ impl StreamType for TestStream {
     }
 }
 
-pub(super) fn media_info(variant: u32) -> MediaInfo {
+pub(in crate::pipeline::source) fn media_info(variant: u32) -> MediaInfo {
     let mut info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::AacLc))
         .maybe_container(Some(ContainerFormat::Fmp4))
@@ -922,22 +918,22 @@ fn recreate_state(variant: u32) -> RecreateState {
     }
 }
 
-pub(super) struct RebuildFixture {
-    pub(super) control: Arc<TestControl>,
-    pub(super) drops: Arc<Mutex<Vec<u64>>>,
-    pub(super) pools: Pools,
-    pub(super) source: StreamAudioSource<TestStream>,
+pub(in crate::pipeline::source) struct RebuildFixture {
+    pub(in crate::pipeline::source) control: Arc<TestControl>,
+    pub(in crate::pipeline::source) drops: Arc<Mutex<Vec<u64>>>,
+    pub(in crate::pipeline::source) pools: Pools,
+    pub(in crate::pipeline::source) source: StreamAudioSource<TestStream>,
 }
 
-pub(super) struct RouteFixture {
-    pub(super) control: Arc<TestControl>,
-    pub(super) drops: Arc<Mutex<Vec<u64>>>,
-    pub(super) phase: Arc<Mutex<SourcePhase>>,
-    pub(super) pools: Pools,
-    pub(super) source: StreamAudioSource<TestStream>,
+pub(in crate::pipeline::source) struct RouteFixture {
+    pub(in crate::pipeline::source) control: Arc<TestControl>,
+    pub(in crate::pipeline::source) drops: Arc<Mutex<Vec<u64>>>,
+    pub(in crate::pipeline::source) phase: Arc<Mutex<SourcePhase>>,
+    pub(in crate::pipeline::source) pools: Pools,
+    pub(in crate::pipeline::source) source: StreamAudioSource<TestStream>,
 }
 
-pub(super) async fn test_source(variant: u32) -> RebuildFixture {
+pub(in crate::pipeline::source) async fn test_source(variant: u32) -> RebuildFixture {
     test_source_with_mode(variant, GaplessMode::Disabled).await
 }
 
@@ -1032,7 +1028,7 @@ struct RouteParams {
     incoming_timeline_gap: u64,
 }
 
-pub(super) async fn route_signal_source(
+pub(in crate::pipeline::source) async fn route_signal_source(
     route_pcm: &RoutePcm,
     initial_host_rate: u32,
 ) -> RouteFixture {
@@ -1051,7 +1047,7 @@ pub(super) async fn route_signal_source(
     .await
 }
 
-pub(super) async fn route_signal_source_with_eof(
+pub(in crate::pipeline::source) async fn route_signal_source_with_eof(
     route_pcm: &RoutePcm,
     initial_host_rate: u32,
     chunks_before_eof: usize,
@@ -1071,7 +1067,7 @@ pub(super) async fn route_signal_source_with_eof(
     .await
 }
 
-pub(super) async fn route_signal_source_with_gapless(
+pub(in crate::pipeline::source) async fn route_signal_source_with_gapless(
     route_pcm: &RoutePcm,
     initial_host_rate: u32,
     gapless: GaplessInfo,
@@ -1091,7 +1087,7 @@ pub(super) async fn route_signal_source_with_gapless(
     .await
 }
 
-pub(super) async fn route_signal_source_with_gapless_eof(
+pub(in crate::pipeline::source) async fn route_signal_source_with_gapless_eof(
     route_pcm: &RoutePcm,
     initial_host_rate: u32,
     gapless: GaplessInfo,
@@ -1117,7 +1113,7 @@ pub(super) async fn route_signal_source_with_gapless_eof(
 /// Two variants of one track end together, so an incoming that lands at the container origin
 /// stages to the very frame the outgoing frontier stops at. Which decoder reports its exhaustion
 /// first is then a race, and this fixture pins the order the race can take.
-pub(super) async fn route_signal_source_with_finite_sides(
+pub(in crate::pipeline::source) async fn route_signal_source_with_finite_sides(
     route_pcm: &RoutePcm,
     initial_host_rate: u32,
     chunks_before_eof: usize,
@@ -1138,7 +1134,7 @@ pub(super) async fn route_signal_source_with_finite_sides(
     .await
 }
 
-pub(super) async fn route_signal_source_with_finite_incoming(
+pub(in crate::pipeline::source) async fn route_signal_source_with_finite_incoming(
     route_pcm: &RoutePcm,
     initial_host_rate: u32,
     incoming_chunks_before_eof: usize,
@@ -1254,7 +1250,7 @@ async fn route_source(route_pcm: &RoutePcm, params: RouteParams) -> RouteFixture
     }
 }
 
-pub(super) async fn route_signal_source_with_gaps(
+pub(in crate::pipeline::source) async fn route_signal_source_with_gaps(
     route_pcm: &RoutePcm,
     active_timeline_gap: u64,
     incoming_timeline_gap: u64,
@@ -1419,7 +1415,10 @@ fn install_route_factory(
 }
 
 fn assert_replacement_decodes(source: &mut StreamAudioSource<TestStream>) {
-    assert!(matches!(source.phase, super::super::OwnerPhase::Decoding));
+    assert!(matches!(
+        source.phase,
+        super::super::core::OwnerPhase::Decoding
+    ));
     assert_eq!(
         source
             .decode
@@ -1582,7 +1581,10 @@ async fn rebuilding_decoder_completion_waits_for_shell_routing() {
     let RebuildFixture {
         drops, mut source, ..
     } = test_source(1).await;
-    assert!(matches!(source.phase, super::super::OwnerPhase::Decoding));
+    assert!(matches!(
+        source.phase,
+        super::super::core::OwnerPhase::Decoding
+    ));
     assert_eq!(
         source
             .decode
@@ -1594,7 +1596,10 @@ async fn rebuilding_decoder_completion_waits_for_shell_routing() {
     assert!(drops.lock().is_empty());
     install_test_factory(&mut source, 2, drops.clone());
     enter_rebuilding(&mut source, recreate_state(1));
-    assert!(matches!(source.phase, super::super::OwnerPhase::Decoding));
+    assert!(matches!(
+        source.phase,
+        super::super::core::OwnerPhase::Decoding
+    ));
     assert_eq!(
         source
             .decode
@@ -1627,7 +1632,10 @@ async fn rebuild_prepares_generation_profiles_before_rt_install() {
     enter_rebuilding(&mut source, recreate_state(1));
     assert_eq!(profile_reads.load(Ordering::Acquire), 1);
     source.finish_deferred();
-    assert!(matches!(source.phase, super::super::OwnerPhase::Decoding));
+    assert!(matches!(
+        source.phase,
+        super::super::core::OwnerPhase::Decoding
+    ));
     assert_eq!(profile_reads.load(Ordering::Acquire), 1);
 }
 
@@ -1638,7 +1646,10 @@ async fn rebuilding_decoder_completion_installs_once() {
     } = test_source(1).await;
     install_test_factory(&mut source, 2, drops.clone());
     enter_rebuilding(&mut source, recreate_state(1));
-    assert!(matches!(source.phase, super::super::OwnerPhase::Decoding));
+    assert!(matches!(
+        source.phase,
+        super::super::core::OwnerPhase::Decoding
+    ));
     assert_eq!(
         source
             .decode
@@ -1691,7 +1702,10 @@ async fn format_boundary_rebuild_rebases_decode_head_to_rendered_source(route_pc
             Some(SourceEnd::new(rendered_frame, chunk.meta.spec.sample_rate)),
         )
         .expect("replacement at rendered frontier");
-    assert!(matches!(source.phase, super::super::OwnerPhase::Decoding));
+    assert!(matches!(
+        source.phase,
+        super::super::core::OwnerPhase::Decoding
+    ));
     assert_eq!(source.resume.decode_head(), Some(rendered));
     assert_eq!(
         source
@@ -1725,7 +1739,10 @@ async fn rebuilding_decoder_completion_emits_decoder_changed_cause() {
     let mut events = bus.subscribe();
     source.emit = Arc::new(DeferredBus::new(bus, 16));
     enter_rebuilding(&mut source, recreate_state(1));
-    assert!(matches!(source.phase, super::super::OwnerPhase::Decoding));
+    assert!(matches!(
+        source.phase,
+        super::super::core::OwnerPhase::Decoding
+    ));
     assert!(events.try_recv().is_err());
     source.finish_deferred();
     assert!(matches!(
@@ -1782,7 +1799,10 @@ async fn route_change_host_rate_delta_starts_decoder_recreate(route_pcm: RoutePc
     let origin = source.decode.active().base_offset();
     let position = source.playhead.position();
     source.set_host_sample_rate(NonZeroU32::new(48_000).expect("host rate"));
-    assert!(matches!(source.phase, super::super::OwnerPhase::Decoding));
+    assert!(matches!(
+        source.phase,
+        super::super::core::OwnerPhase::Decoding
+    ));
     assert_eq!(source.host_sample_rate().map(NonZeroU32::get), Some(48_000));
     assert_eq!(source.playhead.position(), position);
     assert_eq!(
@@ -1833,7 +1853,10 @@ async fn route_change_resumes_from_the_rendered_source_frontier(route_pcm: Route
     ));
 
     source.set_host_sample_rate(NonZeroU32::new(consts::ROUTE_SAMPLE_RATE).expect("host rate"));
-    assert!(matches!(source.phase, super::super::OwnerPhase::Decoding));
+    assert!(matches!(
+        source.phase,
+        super::super::core::OwnerPhase::Decoding
+    ));
     let chunk = next_decoded_chunk(&mut source, &mut route_recreated);
     assert_eq!(
         chunk.meta.timestamp, rendered,
@@ -1964,7 +1987,10 @@ async fn route_change_recreate_roots_the_demuxer_at_the_container_origin(route_p
     );
 
     source.set_host_sample_rate(NonZeroU32::new(consts::ROUTE_SAMPLE_RATE).expect("host rate"));
-    assert!(matches!(source.phase, super::super::OwnerPhase::Decoding));
+    assert!(matches!(
+        source.phase,
+        super::super::core::OwnerPhase::Decoding
+    ));
     assert_eq!(
         source.host_sample_rate().map(NonZeroU32::get),
         Some(consts::ROUTE_SAMPLE_RATE)
@@ -1996,7 +2022,10 @@ async fn equal_host_rate_does_not_start_route_recreate() {
     } = test_source(0).await;
     source.set_host_sample_rate(NonZeroU32::new(consts::SAMPLE_RATE).expect("host rate"));
     assert!(drops.lock().is_empty());
-    assert!(matches!(source.phase, super::super::OwnerPhase::Decoding));
+    assert!(matches!(
+        source.phase,
+        super::super::core::OwnerPhase::Decoding
+    ));
 }
 
 #[kithara::test(tokio)]
@@ -2010,7 +2039,10 @@ async fn first_matching_host_rate_latches_without_route_recreate(route_pcm: Rout
         source.host_sample_rate().map(NonZeroU32::get),
         Some(consts::SAMPLE_RATE)
     );
-    assert!(matches!(source.phase, super::super::OwnerPhase::Decoding));
+    assert!(matches!(
+        source.phase,
+        super::super::core::OwnerPhase::Decoding
+    ));
 }
 
 #[kithara::test(tokio)]
@@ -2024,7 +2056,10 @@ async fn first_mismatched_host_rate_still_starts_route_recreate(route_pcm: Route
         source.decode.output_spec().sample_rate.get(),
         consts::ROUTE_SAMPLE_RATE
     );
-    assert!(matches!(source.phase, super::super::OwnerPhase::Decoding));
+    assert!(matches!(
+        source.phase,
+        super::super::core::OwnerPhase::Decoding
+    ));
 }
 
 #[kithara::test(tokio)]
@@ -2052,7 +2087,10 @@ async fn rebuilding_decoder_seek_epoch_supersedes_completion() {
     );
     assert_eq!(drops.lock().as_slice(), &[1]);
     source.finish_deferred();
-    assert!(matches!(source.phase, super::super::OwnerPhase::Decoding));
+    assert!(matches!(
+        source.phase,
+        super::super::core::OwnerPhase::Decoding
+    ));
 }
 
 #[kithara::test(tokio)]
@@ -2092,7 +2130,7 @@ async fn completed_seek_is_consumed_when_landing_bytes_are_no_longer_ready(route
     assert_eq!(fixture.source.playhead.position(), target);
     assert!(matches!(
         fixture.source.phase,
-        super::super::OwnerPhase::Decoding
+        super::super::core::OwnerPhase::Decoding
     ));
 }
 
@@ -2124,7 +2162,10 @@ async fn rebuilding_decoder_variant_change_supersedes_completion() {
     );
     assert_eq!(drops.lock().as_slice(), &[1, 2]);
     source.finish_deferred();
-    assert!(matches!(source.phase, super::super::OwnerPhase::Decoding));
+    assert!(matches!(
+        source.phase,
+        super::super::core::OwnerPhase::Decoding
+    ));
 }
 
 #[kithara::test(tokio)]
@@ -2155,7 +2196,10 @@ async fn rebuilding_decoder_variant_change_preserves_inflight_seek() {
     );
     assert_eq!(drops.lock().as_slice(), &[1, 2]);
     source.finish_deferred();
-    assert!(matches!(source.phase, super::super::OwnerPhase::Decoding));
+    assert!(matches!(
+        source.phase,
+        super::super::core::OwnerPhase::Decoding
+    ));
 }
 
 #[kithara::test(tokio)]
@@ -2179,7 +2223,10 @@ async fn stale_rebuild_completion_retires_decoder_shell_side() {
     assert!(rejected.is_some());
     drop(rejected);
     assert_eq!(drops.lock().as_slice(), &[3]);
-    assert!(matches!(source.phase, super::super::OwnerPhase::Decoding));
+    assert!(matches!(
+        source.phase,
+        super::super::core::OwnerPhase::Decoding
+    ));
     assert_eq!(source.decode.incoming_transition(), None);
 }
 
@@ -2196,7 +2243,7 @@ async fn rebuild_factory_panic_fails_track_without_hang() {
     source.set_host_sample_rate(NonZeroU32::new(consts::ROUTE_SAMPLE_RATE).expect("host rate"));
     assert!(matches!(
         source.phase,
-        super::super::OwnerPhase::Failed {
+        super::super::core::OwnerPhase::Failed {
             failure: TrackFailureKind::RecreateFailed { offset: 0 },
             error: Some(DecodeError::InvalidData {
                 detail: "decoder factory panicked"
@@ -2210,7 +2257,7 @@ async fn rebuild_factory_panic_fails_track_without_hang() {
     source.finish_deferred();
     assert!(matches!(
         source.phase,
-        super::super::OwnerPhase::Failed {
+        super::super::core::OwnerPhase::Failed {
             failure: TrackFailureKind::RecreateFailed { offset: 0 },
             error: None
         }

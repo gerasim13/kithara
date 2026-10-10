@@ -29,19 +29,22 @@ pub use api::{
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::SeekOutcome;
-pub use kithara_effects::eq::EqBandConfig;
-pub use kithara_effects::GainDb;
+pub use kithara_effects::{GainDb, eq::EqBandConfig};
 pub use kithara_net::Headers;
 pub use kithara_render::{
-    CrossfadeCurve, CrossfadeSettings, CrossfadeSettingsPatch, CrossfadeSettingsPatchError, DispatcherProtocol, EngineLoad, EngineLoadSnapshot,
-    InvalidCrossfade, LoadRefusal, PlayWorker, PlayWorkerConfig, PlayWorkerConfigPatch,
-    ServiceClass, TrackConfig,
+    CrossfadeCurve, CrossfadeSettings, CrossfadeSettingsPatch, CrossfadeSettingsPatchError,
+    DispatcherProtocol, EngineLoad, EngineLoadSnapshot, InvalidCrossfade, LoadRefusal, PlayWorker,
+    PlayWorkerConfig, PlayWorkerConfigPatch, ServiceClass, TrackConfig,
     bridge::{
-        DeckEqChange, DeckEvent, DeckMixSettings, DeckMixSettingsChange, DeckPart, DeckProtocol, DeckRefusal, DeckSnapshot, EqSnapshot, FadeDir, MixTapWriter,
-        PlaybackFault, RtMetricsSnapshot, Slot, SlotSnapshot,
+        DeckEqChange, DeckEvent, DeckMixSettings, DeckMixSettingsChange, DeckPart, DeckProtocol,
+        DeckRefusal, DeckSnapshot, EqSnapshot, FadeDir, MixTapWriter, PlaybackFault,
+        RtMetricsSnapshot, Slot, SlotSnapshot,
     },
     dispatch,
-    rt::{BufferGeometryError, DeckMixerConfig, DeckMixerConfigPatch, DeckMixerConfigPatchError, PlayerNode, StreamShape},
+    rt::{
+        BufferGeometryError, DeckMixerConfig, DeckMixerConfigPatch, DeckMixerConfigPatchError,
+        PlayerNode, StreamShape,
+    },
 };
 pub use kithara_warp::{BeatGrid, BeatGridId, BeatGridSnapshot, MIN_SPEED};
 pub use player::{

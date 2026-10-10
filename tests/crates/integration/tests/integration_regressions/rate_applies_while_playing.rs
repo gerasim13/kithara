@@ -2,11 +2,7 @@
 
 use std::num::NonZeroU32;
 
-use kithara::{
-    events::TrackId,
-    play::PlayerEvent,
-    signal::AudioSpec,
-};
+use kithara::{events::TrackId, play::PlayerEvent, signal::AudioSpec};
 use kithara_integration_tests::offline::{OfflinePlayer, OfflinePlayerOptions};
 use kithara_test_fixtures::integration_fixtures::constant_half;
 
@@ -20,7 +16,10 @@ const CLOCK_BLOCKS: usize = 32;
 const MEASURE_BLOCKS: usize = 200;
 const FAST_RATE: f32 = 2.0;
 
-fn make_reader(constant_half: &'static [u8], duration_secs: f64) -> Box<dyn kithara::audio::AudioReader> {
+fn make_reader(
+    constant_half: &'static [u8],
+    duration_secs: f64,
+) -> Box<dyn kithara::audio::AudioReader> {
     Box::new(kithara::audio::mock::TestPcmReader::with_pcm(
         AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
         duration_secs,
@@ -47,8 +46,11 @@ async fn the_lane_keeps_source_and_player_clock_at_its_applied_rate(constant_hal
         .with_queue(move |player| player.set_default_rate(FAST_RATE))
         .await
         .expect("a finite rate is accepted");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while oracle.player().default_rate() != FAST_RATE && std::time::Instant::now() < deadline {
+    let deadline =
+        kithara_platform::time::Instant::now() + kithara_platform::time::Duration::from_secs(5);
+    while oracle.player().default_rate() != FAST_RATE
+        && kithara_platform::time::Instant::now() < deadline
+    {
         let _ = oracle.render(BLOCK_FRAMES).await;
         oracle.tick_and_drain().await;
         kithara::platform::time::sleep(kithara::platform::time::Duration::from_millis(5)).await;
@@ -117,16 +119,26 @@ async fn loaded_harness(constant_half: &'static [u8], rate: f32) -> OfflinePlaye
         .with_queue(move |player| {
             player.set_default_rate(rate).expect("initial lane speed");
             let deck_id = TrackId::allocate();
-            player.append_with_id(deck_id, deck_source).expect("append PCM deck");
+            player
+                .append_with_id(deck_id, deck_source)
+                .expect("append PCM deck");
             player
                 .select(deck_id, kithara::queue::Transition::None)
                 .expect("select the item");
         })
         .await;
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !harness.player().current().is_some_and(|track| track.status == kithara::queue::TrackStatus::Loaded) {
-        assert!(std::time::Instant::now() < deadline, "WAV lane becomes loaded");
+    let deadline =
+        kithara_platform::time::Instant::now() + kithara_platform::time::Duration::from_secs(5);
+    while !harness
+        .player()
+        .current()
+        .is_some_and(|track| track.status == kithara::queue::TrackStatus::Loaded)
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "WAV lane becomes loaded"
+        );
         let _ = harness.render(BLOCK_FRAMES).await;
         let _ = harness.tick_and_drain().await;
         kithara::platform::time::sleep(kithara::platform::time::Duration::from_millis(5)).await;

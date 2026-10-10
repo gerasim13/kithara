@@ -378,30 +378,48 @@ async fn passthrough_player(
 ) -> OfflinePlayer<InjectedFactory> {
     let factory = InjectedFactory::default();
     let player = OfflinePlayer::with_factory(
-        OfflinePlayerOptions::builder().crossfade_duration(0.0).warp(warp.clone()).build(),
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .warp(warp.clone())
+            .build(),
         HostConfig::offline(pools())
-            .settings(HostSettings::builder()
-                .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
-                .build()).build(),
+            .settings(
+                HostSettings::builder()
+                    .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"))
+                    .build(),
+            )
+            .build(),
         factory.clone(),
-    ).await;
+    )
+    .await;
     let load = kithara::play::mock::track_load(
-        audio_config(source, warp, effects), Arc::from("fixture.wav"), player.worker().clone(),
+        audio_config(source, warp, effects),
+        Arc::from("fixture.wav"),
+        player.worker().clone(),
         NonZeroU32::new(SAMPLE_RATE).expect("sample rate is non-zero"),
-        |worker, config, position, start, inbox| Box::pin(async move {
-            worker.load(config, position, start, inbox).await
-        }),
+        |worker, config, position, start, inbox| {
+            Box::pin(async move { worker.load(config, position, start, inbox).await })
+        },
     );
     let mut events = player.player().subscribe();
-    let id = player.run(player.player(), move |queue| {
-        let id = queue.append("fixture.wav").expect("append explicit source fixture");
-        factory.insert(id, load);
-        queue.select(id, Transition::None).expect("select explicit source fixture");
-        id
-    }).await;
+    let id = player
+        .run(player.player(), move |queue| {
+            let id = queue
+                .append("fixture.wav")
+                .expect("append explicit source fixture");
+            factory.insert(id, load);
+            queue
+                .select(id, Transition::None)
+                .expect("select explicit source fixture");
+            id
+        })
+        .await;
     wait_for_loader_done_event(&mut events, player.player(), id, Duration::from_secs(5))
-        .await.expect("audio preload gate must open");
-    player.run(player.player(), kithara::queue::QueueControl::play).await;
+        .await
+        .expect("audio preload gate must open");
+    player
+        .run(player.player(), kithara::queue::QueueControl::play)
+        .await;
     player
 }
 
@@ -424,8 +442,14 @@ async fn render_passthrough(
     let load_probe = Arc::new(LoadProbe::new());
     let target = passthrough_player(source, warp_config(stretch), Vec::new()).await;
     let mut load = if with_load {
-        Some(passthrough_player(source, warp_config(None),
-            vec![Box::new(BurstLoadEffect::new(Arc::clone(&load_probe)))]).await)
+        Some(
+            passthrough_player(
+                source,
+                warp_config(None),
+                vec![Box::new(BurstLoadEffect::new(Arc::clone(&load_probe)))],
+            )
+            .await,
+        )
     } else {
         None
     };
@@ -498,7 +522,9 @@ async fn render_queue_passthrough(stretch: Option<(StretchKind, f32)>) -> Vec<f3
     .await;
     let queue = harness
         .insert_control(Queue::new(
-            QueueConfig::builder().prep(harness.resource_prep().clone()).build(),
+            QueueConfig::builder()
+                .prep(harness.resource_prep().clone())
+                .build(),
         ))
         .await;
     let mut events = queue.subscribe::<QueueEvent>();

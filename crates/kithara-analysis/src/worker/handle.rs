@@ -9,8 +9,8 @@ use kithara_platform::{
 };
 use kithara_resampler::ResamplerBackend;
 use kithara_worker::{
-    Dispatcher, DispatcherConfig, OwnedPoolConfig, TaskConfig, TaskError, TaskHandle, Worker,
-    Wake, WorkerConfig,
+    Dispatcher, DispatcherConfig, OwnedPoolConfig, TaskConfig, TaskError, TaskHandle, Wake, Worker,
+    WorkerConfig,
 };
 use tracing::warn;
 

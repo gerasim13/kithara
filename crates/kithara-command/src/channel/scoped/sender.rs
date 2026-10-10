@@ -193,12 +193,11 @@ impl<R: Protocol, M: Protocol> Port<R> for ScopedSender<R, M> {
         )
     }
 
-    fn basis(&self, target: R::Target, when: When<R::Clock>) -> Option<Seq> {
-        self.root.basis(target, when)
-    }
-
-    fn available(&self) -> usize {
-        self.root.available()
+    delegate::delegate! {
+        to self.root {
+            fn basis(&self, target: R::Target, when: When<R::Clock>) -> Option<Seq>;
+            fn available(&self) -> usize;
+        }
     }
 }
 
@@ -220,14 +219,12 @@ impl<R: Protocol, M: Protocol> Port<M> for ScopeSender<'_, R, M> {
         )
     }
 
-    fn basis(&self, target: M::Target, when: When<M::Clock>) -> Option<Seq> {
-        self.sender.slots[usize::from(self.index)]
-            .book
-            .basis(target, when)
-    }
-
-    fn available(&self) -> usize {
-        self.sender.slots[usize::from(self.index)].book.available()
+    delegate::delegate! {
+        to self.sender.slots[usize::from(self.index)]
+            .book {
+            fn basis(&self, target: M::Target, when: When<M::Clock>) -> Option<Seq>;
+            fn available(&self) -> usize;
+        }
     }
 }
 

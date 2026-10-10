@@ -1,7 +1,7 @@
 use std::task::{Context, Poll};
 
-use kithara_render::{LaneTask, ServiceClass};
 use kithara_platform::{CancelToken, CancelWakerGuard, sync::Arc};
+use kithara_render::{LaneTask, ServiceClass};
 use kithara_worker::{Priority, Task, TickResult};
 
 /// The actual decoder lane retained by the dispatcher until release.
@@ -17,7 +17,11 @@ impl ResourceLane {
         cancel: Option<CancelToken>,
         cancel_link: Option<Arc<CancelWakerGuard>>,
     ) -> Self {
-        Self { task: Box::new(lane), cancel, _cancel_link: cancel_link }
+        Self {
+            task: Box::new(lane),
+            cancel,
+            _cancel_link: cancel_link,
+        }
     }
 }
 
@@ -37,29 +41,21 @@ impl Task for ResourceLane {
         self.task.on_cancel();
     }
 
-    fn priority(&self) -> Option<Priority> {
-        self.task.priority()
-    }
-
-    fn recycle(&mut self) {
-        self.task.recycle();
-    }
-
-    fn tick(&mut self) -> TickResult {
-        self.task.tick()
-    }
-
-    fn warm_up(&mut self) {
-        self.task.warm_up();
+    delegate::delegate! {
+        to self.task {
+            fn priority(&self) -> Option<Priority>;
+            fn recycle(&mut self);
+            fn tick(&mut self) -> TickResult;
+            fn warm_up(&mut self);
+        }
     }
 }
 
 impl LaneTask for ResourceLane {
-    fn set_priority(&mut self, class: ServiceClass) {
-        self.task.set_priority(class);
-    }
-
-    fn poll_commands(&mut self, context: &mut Context<'_>) -> Poll<()> {
-        self.task.poll_commands(context)
+    delegate::delegate! {
+        to self.task {
+            fn set_priority(&mut self, class: ServiceClass);
+            fn poll_commands(&mut self, context: &mut Context<'_>) -> Poll<()>;
+        }
     }
 }

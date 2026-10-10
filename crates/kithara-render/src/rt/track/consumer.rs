@@ -37,7 +37,7 @@ mod tests {
             for (lane, from, until) in [(0, 0, first), (4, first, first + second)] {
                 let mut packet = chunk(spec, SegmentId::FIRST, lane, from, &[0.5; 8]);
                 packet.meta.source_span = SourceSpan::new(from, until, spec.sample_rate, 4);
-                ring.push(PcmPacket::Chunk(packet));
+                ring.push(PcmPacket::Chunk(Box::new(packet)));
             }
             let mut resource = PlayerResource::new(
                 PcmConsumer::new(ring.receiver.take().expect("receiver")),

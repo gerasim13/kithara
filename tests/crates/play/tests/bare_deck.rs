@@ -5,15 +5,8 @@
 
 use std::num::NonZeroU32;
 
-use kithara::{
-    audio::mock::TestPcmReader,
-    events::TrackId,
-    queue::Transition,
-    signal::AudioSpec,
-};
-use kithara_integration_tests::offline::{
-    OfflinePlayer, OfflinePlayerOptions,
-};
+use kithara::{audio::mock::TestPcmReader, events::TrackId, queue::Transition, signal::AudioSpec};
+use kithara_integration_tests::offline::{OfflinePlayer, OfflinePlayerOptions};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -25,7 +18,10 @@ const LEVEL: f32 = 0.25;
 
 fn constant_item(value: f32) -> kithara_integration_tests::mock::PcmDeck {
     let spec = AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate"));
-    kithara_integration_tests::mock::PcmDeck::new(Box::new(TestPcmReader::with_samples(spec, vec![value; ITEM_FRAMES])))
+    kithara_integration_tests::mock::PcmDeck::new(Box::new(TestPcmReader::with_samples(
+        spec,
+        vec![value; ITEM_FRAMES],
+    )))
 }
 
 #[kithara::test(tokio)]

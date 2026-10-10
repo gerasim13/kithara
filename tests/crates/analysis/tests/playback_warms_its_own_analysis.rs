@@ -44,9 +44,8 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays(
     let session_config = HostConfig::offline(pools.clone()).build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let player = kithara::play::ResourcePrep::builder()
-            
-            .worker(worker)
-            .build();
+        .worker(worker)
+        .build();
     let queue = OfflineQueue::paced(
         session_config,
         Queue::new(

@@ -212,11 +212,10 @@ async fn run_seek_scenario(ladders: &[Ladder], select_index: usize, temp: TestTe
 
     let session = HostConfig::offline(pools.clone()).build();
     let player = kithara::play::ResourcePrep::builder()
-            
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build();
+        .worker(PlayWorker::new(
+            PlayWorkerConfig::builder(pools.clone()).build(),
+        ))
+        .build();
     let queue = OfflineQueue::paced(
         session,
         Queue::new(QueueConfig::builder().prep(player).build()),

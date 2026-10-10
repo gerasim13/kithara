@@ -12,9 +12,7 @@ pub(super) struct ReaderRuntime {
 
 impl ReaderRuntime {
     pub(super) fn new() -> Self {
-        Self {
-            wait_end: AtomicU64::new(consts::NO_WAIT),
-        }
+        Self::default()
     }
 
     pub(super) fn clear_wait(&self) {
@@ -29,6 +27,14 @@ impl ReaderRuntime {
         match self.wait_end.load(Ordering::Acquire) {
             consts::NO_WAIT => None,
             end => Some(end),
+        }
+    }
+}
+
+impl Default for ReaderRuntime {
+    fn default() -> Self {
+        Self {
+            wait_end: AtomicU64::new(consts::NO_WAIT),
         }
     }
 }

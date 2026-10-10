@@ -43,7 +43,10 @@ fn make_resource(constant_half: &'static [u8], duration_secs: f64) -> Resource {
     ))
 }
 
-fn file_resource(path: &Path, store_dir: &Path) -> ResourceConfig<kithara_integration_tests::bufpool_ext::TestPools> {
+fn file_resource(
+    path: &Path,
+    store_dir: &Path,
+) -> ResourceConfig<kithara_integration_tests::bufpool_ext::TestPools> {
     let config: ResourceConfig<_> = ResourceConfig::for_src(
         ResourceSrc::parse(path.to_str().expect("utf-8 fixture path"))
             .expect("local media path is a valid resource src"),
@@ -76,7 +79,9 @@ async fn offline_harness_smoke(constant_half: &'static [u8]) {
     harness
         .with_queue(move |player| {
             let deck_id = TrackId::allocate();
-            player.append_with_id(deck_id, deck_source).expect("append PCM deck");
+            player
+                .append_with_id(deck_id, deck_source)
+                .expect("append PCM deck");
             player
                 .select(deck_id, kithara::queue::Transition::None)
                 .expect("select the item");

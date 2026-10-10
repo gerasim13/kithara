@@ -64,6 +64,7 @@ workspace-members = [
   "kithara-play-tests",
   "kithara-queue-tests",
   "kithara-stream-tests",
+  "kithara-sync-tests",
   "kithara-test-dylib",
   "kithara-test-utils",
   "kithara-ui",

@@ -201,7 +201,7 @@ fn sync_off_keeps_inherited_speed_and_stops_following_host_retimes() {
             &trajectory(126.0, 4),
             SessionFrame::new(48_000),
             out,
-        )
+        );
     });
     assert_eq!(deck.snapshot().sync, SyncStatus::Off);
     assert_eq!(deck.snapshot().as_ref().speed, before);
@@ -273,7 +273,7 @@ fn a_synced_deck_reports_the_speed_of_the_current_host_observation() {
             &trajectory(180.0, 4),
             SessionFrame::new(48_000),
             out,
-        )
+        );
     });
     let commands = control.commands();
     assert_eq!(commands.len(), 1);
@@ -318,7 +318,7 @@ fn sync_off_holds_instantaneous_speed_not_a_pending_target() {
             &trajectory(180.0, 4),
             SessionFrame::new(96_000),
             out,
-        )
+        );
     });
     let pending = control.commands();
     assert_eq!(pending.len(), 1);
@@ -328,7 +328,7 @@ fn sync_off_holds_instantaneous_speed_not_a_pending_target() {
         .expect("off mid-change");
     for at in [48_000, 96_000, 480_000] {
         rig.run(|out| {
-            LinkedPlayer::retime(&mut deck, &trajectory(180.0, 4), SessionFrame::new(at), out)
+            LinkedPlayer::retime(&mut deck, &trajectory(180.0, 4), SessionFrame::new(at), out);
         });
         assert_eq!(deck.snapshot().as_ref().speed, 1.25);
     }

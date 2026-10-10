@@ -1,6 +1,5 @@
 use std::num::NonZeroUsize;
 
-use kithara_integration_tests::mock::LaneAudio;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
@@ -14,6 +13,7 @@ use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::PcmPattern,
+    mock::LaneAudio,
     usdt_trace::{self, ProbeEvent},
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -741,15 +741,18 @@ async fn stress_seek_audio_hls(
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let config = kithara::play::TrackConfig::for_audio(AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .media_info(fixture.media_info())
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(backend)
-                .build(),
-        ).build())
-        .block_on_underrun(true)
-        .build();
+    let config = kithara::play::TrackConfig::for_audio(
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+            .media_info(fixture.media_info())
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
+            .build(),
+    )
+    .block_on_underrun(true)
+    .build();
     let trace = usdt_trace::scope();
 
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)

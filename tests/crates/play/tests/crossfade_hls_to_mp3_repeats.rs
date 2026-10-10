@@ -6,15 +6,11 @@ use std::num::NonZeroU32;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     host::{HostConfig, HostSettings},
-    platform::{
-        sync::Arc,
-        time::Duration,
-    },
+    platform::{sync::Arc, time::Duration},
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
-    CreatedHls, HlsFixtureBuilder, TestServerHelper,
-    offline::OfflinePlayer,
+    CreatedHls, HlsFixtureBuilder, TestServerHelper, offline::OfflinePlayer,
     output_continuity::render_offline_window,
 };
 use kithara_test_fixtures::{fixtures::tone_mp3, integration_fixtures::saw_segments};

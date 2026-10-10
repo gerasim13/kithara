@@ -65,7 +65,8 @@ where
         B: Clone + Default,
     {
         let bus = config.bus.or_else(|| Some(self.bus.scoped()));
-        let cancel = CancelScope::new(config.cancel.clone().or_else(|| self.cancel.clone())).token();
+        let cancel =
+            CancelScope::new(config.cancel.clone().or_else(|| self.cancel.clone())).token();
         let cancel_link = self.cancel.as_ref().map(|parent| {
             let track = cancel.clone();
             Arc::new(parent.on_cancel(move || track.cancel()))
@@ -124,9 +125,8 @@ mod tests {
     use std::num::NonZeroUsize;
 
     use kithara_assets::AssetStore;
-    use kithara_test_utils::TestTempDir;
     use kithara_render::rt::{BufferGeometryError, StreamShape};
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{TestTempDir, kithara};
     use kithara_warp::WarpConfig;
 
     use super::*;
@@ -162,14 +162,22 @@ mod tests {
 
     #[kithara::test]
     fn prepare_config_applies_player_gapless_mode() {
-        let prep = ResourcePrep { gapless_mode: GaplessMode::Disabled, ..prep(WarpConfig::builder().build()) };
-        let config = prep.prepare(
-            resource_config("https://example.com/song.mp3"),
-            &mock::output(None).get(),
-        ).expect("test output answers stream-shape queries");
+        let prep = ResourcePrep {
+            gapless_mode: GaplessMode::Disabled,
+            ..prep(WarpConfig::builder().build())
+        };
+        let config = prep
+            .prepare(
+                resource_config("https://example.com/song.mp3"),
+                &mock::output(None).get(),
+            )
+            .expect("test output answers stream-shape queries");
 
         assert_eq!(config.decoder.gapless_mode(), GaplessMode::Disabled);
-        assert!(config.cancel.is_some(), "prepare_config must inject a per-track cancel child");
+        assert!(
+            config.cancel.is_some(),
+            "prepare_config must inject a per-track cancel child"
+        );
     }
 
     #[kithara::test(native)]
@@ -178,10 +186,12 @@ mod tests {
             .expect("the document types");
         let mut prep = prep(WarpConfig::builder().build());
         prep.apply(patch);
-        let config = prep.prepare(
-            resource_config("https://example.com/song.mp3"),
-            &mock::output(None).get(),
-        ).expect("test output answers stream-shape queries");
+        let config = prep
+            .prepare(
+                resource_config("https://example.com/song.mp3"),
+                &mock::output(None).get(),
+            )
+            .expect("test output answers stream-shape queries");
 
         assert_eq!(config.decoder.gapless_mode(), GaplessMode::Disabled);
     }
@@ -193,14 +203,19 @@ mod tests {
         let mut prep = prep(WarpConfig::builder().build());
         prep.warp = WarpConfig::builder().speed(2.5).build();
         prep.apply(patch);
-        let config = prep.prepare(
-            resource_config("https://example.com/song.mp3"),
-            &mock::output(None).get(),
-        ).expect("test output answers stream-shape queries");
+        let config = prep
+            .prepare(
+                resource_config("https://example.com/song.mp3"),
+                &mock::output(None).get(),
+            )
+            .expect("test output answers stream-shape queries");
 
         assert_eq!(prep.gapless_mode, GaplessMode::Disabled);
         assert_eq!(config.decoder.gapless_mode(), GaplessMode::Disabled);
-        assert!((prep.warp.speed() - 2.5).abs() < f32::EPSILON, "a sibling field must survive the patch");
+        assert!(
+            (prep.warp.speed() - 2.5).abs() < f32::EPSILON,
+            "a sibling field must survive the patch"
+        );
         assert!((config.warp.speed() - 2.5).abs() < f32::EPSILON);
     }
 
@@ -283,11 +298,11 @@ mod tests {
             prepared.warp.render_quantum_frames().map(NonZeroUsize::get),
             expected
         );
+        assert_eq!(prepared.preload_chunks.map(NonZeroUsize::get), Some(7));
         assert_eq!(
-            prepared.preload_chunks.map(NonZeroUsize::get),
-            Some(7)
+            prepared.audio_buffer_chunks.map(NonZeroUsize::get),
+            Some(11)
         );
-        assert_eq!(prepared.audio_buffer_chunks.map(NonZeroUsize::get), Some(11));
         assert!(prepared.decoder.resampler().is_none());
     }
 
@@ -323,7 +338,10 @@ mod tests {
     async fn prepare_config_carries_the_sessions_rate_and_wake_mode() {
         let prep = prep(WarpConfig::builder().build());
         let prepared = prep
-            .prepare(resource_config("https://example.com/song.mp3"), &mock::output(None).get())
+            .prepare(
+                resource_config("https://example.com/song.mp3"),
+                &mock::output(None).get(),
+            )
             .expect("unmeasured preparation");
 
         assert_eq!(
@@ -331,8 +349,14 @@ mod tests {
             Some(mock::SAMPLE_RATE.get())
         );
         let dir = TestTempDir::new();
-        mock::assert_prepared_render_off_bus(&prep, &mock::output(None).get(), &pools(), &dir.path().join("prepared.wav"))
-            .await.expect("player-prepared lane renders off the bus");
+        mock::assert_prepared_render_off_bus(
+            &prep,
+            &mock::output(None).get(),
+            &pools(),
+            &dir.path().join("prepared.wav"),
+        )
+        .await
+        .expect("player-prepared lane renders off the bus");
     }
 
     #[kithara::test]
@@ -354,7 +378,10 @@ mod tests {
             prepared.preload_chunks.map(NonZeroUsize::get),
             Some(expected_preload)
         );
-        assert_eq!(prepared.audio_buffer_chunks.map(NonZeroUsize::get), Some(expected_ring));
+        assert_eq!(
+            prepared.audio_buffer_chunks.map(NonZeroUsize::get),
+            Some(expected_ring)
+        );
     }
 
     #[kithara::test]

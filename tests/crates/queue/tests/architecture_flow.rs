@@ -51,10 +51,14 @@ async fn queue_playback_architecture(#[future(awt)] served_mp3: (TestServerHelpe
             QueueConfig::builder()
                 .prep(harness.resource_prep().clone())
                 .store(store.clone())
-                .settings(kithara::queue::QueueSettings::builder().crossfade(kithara::play::CrossfadeSettings {
-                    duration: 0.0,
-                    ..kithara::play::CrossfadeSettings::default()
-                }).build())
+                .settings(
+                    kithara::queue::QueueSettings::builder()
+                        .crossfade(kithara::play::CrossfadeSettings {
+                            duration: 0.0,
+                            ..kithara::play::CrossfadeSettings::default()
+                        })
+                        .build(),
+                )
                 .build(),
         ))
         .await;

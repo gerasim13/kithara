@@ -146,11 +146,10 @@ async fn played_tracks_land_in_the_disk_cache(tone_mp3: &'static [u8], temp_dir:
         .build(),
     );
     let player = kithara::play::ResourcePrep::builder()
-            
-            .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build();
+        .worker(kithara::play::PlayWorker::new(
+            kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
+        ))
+        .build();
     let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().to_path_buf(),

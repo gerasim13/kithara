@@ -90,10 +90,17 @@ impl<P: Protocol> Inbox<P> {
         !self.pending.write_is_held()
     }
 
-    /// Frames until the earliest timed batch, excluding arrivals and parked batches.
-    #[must_use]
-    pub fn frames_until_due(&self, start: P::Clock) -> Option<u64> {
-        self.docket.frames_until_due(start)
+    delegate::delegate! {
+        to self.docket {
+            /// Frames until the earliest timed batch, excluding arrivals and parked batches.
+            #[must_use]
+            pub fn frames_until_due(&self, start: P::Clock) -> Option<u64>;
+            /// Whether the batch remains parked in this level.
+            #[must_use]
+            pub fn is_parked(&self, seq: Seq) -> bool;
+            /// Edits a committed batch in place while the inbox retains it and its credit.
+            pub fn committed_mut(&mut self, seq: Seq) -> Option<&mut [P::Command]>;
+        }
     }
 
     /// The next due batch, in time then send order, with Late and Stale answered on the way.
@@ -109,17 +116,6 @@ impl<P: Protocol> Inbox<P> {
     /// Resumes a parked batch at `at`, judging its basis and measuring its offset from `start`.
     pub fn resume(&mut self, seq: Seq, start: P::Clock, at: P::Clock) -> Option<Due<'_, P>> {
         self.level().take_parked(seq, start, at)
-    }
-
-    /// Whether the batch remains parked in this level.
-    #[must_use]
-    pub fn is_parked(&self, seq: Seq) -> bool {
-        self.docket.is_parked(seq)
-    }
-
-    /// Edits a committed batch in place while the inbox retains it and its credit.
-    pub fn committed_mut(&mut self, seq: Seq) -> Option<&mut [P::Command]> {
-        self.docket.committed_mut(seq)
     }
 
     /// Answers a committed batch at its original moment, without judging its basis again.

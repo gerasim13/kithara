@@ -8,13 +8,11 @@ use kithara::{
         SeekOutcome,
     },
     decode::{
-        GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer,
-        SilenceTrimParams, TrackMetadata,
+        GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer, SilenceTrimParams,
+        TrackMetadata,
     },
     events::{EventBus, TrackId},
-    platform::{
-        time::{self, Duration},
-    },
+    platform::time::{self, Duration},
     play::{PlayerEvent, ResourceConfig, ResourceSrc},
     queue::{TrackSource, Transition},
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
@@ -814,7 +812,10 @@ async fn render_synthetic_fused_deficit_seam(
         .expect("set the mix level");
     let first_frames = synthetic_tail_trimmed_first_frames(tail_compensation, stereo);
     let first_frame_count = first_frames.len();
-    let first = harness.pcm_deck(Box::new(SyntheticPcmReader::new(first_frames, first_frame_count)));
+    let first = harness.pcm_deck(Box::new(SyntheticPcmReader::new(
+        first_frames,
+        first_frame_count,
+    )));
     let second = harness.pcm_deck(Box::new(SyntheticPcmReader::new(
         pcm[FUSED_FIXTURE_IDEAL_DEVICE_FRAMES..].to_vec(),
         FUSED_FIXTURE_IDEAL_DEVICE_FRAMES,
@@ -905,17 +906,22 @@ async fn load_tagged_queue<const N: usize>(
     let first = items.next().map(Into::into);
     let second = items.next().map(Into::into);
     assert!(items.next().is_none(), "the deck holds at most two items");
-    harness.with_queue(move |queue| {
-        let mut ids = Vec::new();
-        for item in first.into_iter().chain(second) {
-            ids.push(queue.append(item).expect("append gapless queue item"));
-        }
-        if let Some(id) = ids.first() {
-            queue.select(*id, Transition::None).expect("select first queue item");
-            queue.play();
-        }
-        ids.try_into().unwrap_or_else(|_| panic!("queue must retain every item identity"))
-    }).await
+    harness
+        .with_queue(move |queue| {
+            let mut ids = Vec::new();
+            for item in first.into_iter().chain(second) {
+                ids.push(queue.append(item).expect("append gapless queue item"));
+            }
+            if let Some(id) = ids.first() {
+                queue
+                    .select(*id, Transition::None)
+                    .expect("select first queue item");
+                queue.play();
+            }
+            ids.try_into()
+                .unwrap_or_else(|_| panic!("queue must retain every item identity"))
+        })
+        .await
 }
 
 struct SyntheticSeamRender {

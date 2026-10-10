@@ -223,6 +223,12 @@ pub(crate) struct DeckNode {
     pub(crate) bus: Option<EventBus>,
 }
 
+#[derive(Clone, Copy, Default)]
+pub(crate) struct SessionBufferConfig {
+    pub(crate) max_block_frames: Option<NonZeroU32>,
+    pub(crate) declick_frames: Option<NonZeroU32>,
+}
+
 pub(crate) struct SessionState<T, S> {
     pub(crate) settled: Vec<crate::HostSettled>,
     /// The single clock read and delivery lead for the current owner pass.
@@ -275,17 +281,13 @@ impl<T, S> Drop for SessionState<T, S> {
 }
 
 impl<T, S> SessionState<T, S> {
-    #[cfg(test)]
-    pub(crate) const DEFAULT_SAMPLE_RATE: u32 = 44_100;
-
     /// Creates session state with its own musical-grid topology, asking for
     /// the output at the sample rate its settings name.
     #[must_use]
     pub(crate) fn new<F>(
         root: HostRoot,
         root_view: RootView,
-        requested_max_block_frames: Option<NonZeroU32>,
-        requested_declick_frames: Option<NonZeroU32>,
+        buffers: SessionBufferConfig,
         output: SessionOutput,
         settings: Live<HostSettings, HostProtocol>,
         channel_config: ScopedConfig,
@@ -300,8 +302,8 @@ impl<T, S> SessionState<T, S> {
         let state = Self {
             settings,
             channel_config,
-            requested_max_block_frames,
-            requested_declick_frames,
+            requested_max_block_frames: buffers.max_block_frames,
+            requested_declick_frames: buffers.declick_frames,
             output,
             session_metronome_node_id: None,
             root,

@@ -96,11 +96,10 @@ async fn stalled_master_playlist_fails_load(
 
     let session = HostConfig::offline(pools.clone()).build();
     let player = kithara::play::ResourcePrep::builder()
-            
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build();
+        .worker(PlayWorker::new(
+            PlayWorkerConfig::builder(pools.clone()).build(),
+        ))
+        .build();
     let queue = OfflineQueue::paced(
         session,
         Queue::new(QueueConfig::builder().prep(player).build()),

@@ -11,7 +11,7 @@ pub struct GridAnswer {
 }
 
 /// Analysis cannot supply a usable grid for this load.
-#[derive(Clone, Debug, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("beat-grid analysis refused: {reason}")]
 pub struct GridRefusal {
     pub reason: String,

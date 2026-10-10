@@ -169,6 +169,7 @@ kithara = { workspace = true, default-features = false, features = [
     "hls",
     "host",
     "resample-rubato",
+    "stretch-glide",
     "symphonia",
     "webcodecs",
 ] }
@@ -207,6 +208,7 @@ kithara-apple = { workspace = true, features = ["foundation"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara = { workspace = true, features = ["usdt", "audio", "download", "net", "offline", "signal"] }
+kithara-platform = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["wav"] }
 kithara-test-utils = { workspace = true, features = ["usdt", "mock", "hang"] }
 

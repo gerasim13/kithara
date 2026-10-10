@@ -1,5 +1,9 @@
 pub(crate) mod backend;
 mod client;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod dispatch_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) mod mock;
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 mod task;

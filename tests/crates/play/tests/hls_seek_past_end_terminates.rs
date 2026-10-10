@@ -73,7 +73,6 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
             .store(store)
             .build();
 
-
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
             .settings(

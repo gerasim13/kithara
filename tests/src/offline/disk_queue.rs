@@ -77,7 +77,11 @@ impl DiskQueue {
             QueueConfig::builder()
                 .prep(prep)
                 .store(store.clone())
-                .settings(QueueSettings::builder().crossfade(crossfade_settings).build())
+                .settings(
+                    QueueSettings::builder()
+                        .crossfade(crossfade_settings)
+                        .build(),
+                )
                 .build(),
         );
         let queue = match pacing {

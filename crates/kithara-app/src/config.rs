@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, fmt, num::{NonZeroU32, NonZeroUsize}, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    num::{NonZeroU32, NonZeroUsize},
+    path::PathBuf,
+};
 
 #[cfg(feature = "gui")]
 use kithara::ui::source::UiConfig;

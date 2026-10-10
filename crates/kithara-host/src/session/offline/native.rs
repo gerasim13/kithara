@@ -1,7 +1,6 @@
 use kithara_platform::maybe_send::MaybeSend;
-use kithara_worker::{PendingTask, Task, TaskContext, TaskControl, TaskError};
-
 pub(crate) use kithara_worker::TaskHandle as OfflineTaskHandle;
+use kithara_worker::{PendingTask, Task, TaskContext, TaskControl, TaskError};
 
 #[derive(Clone)]
 pub(crate) struct OfflineTaskRoute(TaskControl);
@@ -12,7 +11,6 @@ impl OfflineTaskRoute {
     }
 
     pub(super) fn start<T: Task>(
-        self,
         pending: PendingTask,
         factory: impl FnOnce(TaskContext) -> T + MaybeSend + 'static,
     ) -> Result<OfflineTaskHandle, TaskError> {

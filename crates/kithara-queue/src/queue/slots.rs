@@ -109,7 +109,9 @@ impl<T> Slots<T> {
     }
 
     pub(super) fn replacement_index(&self) -> Option<usize> {
-        self.staged.iter().position(|active| active.role != Role::Leaving)
+        self.staged
+            .iter()
+            .position(|active| active.role != Role::Leaving)
             .map(|index| self.active.len() + index)
     }
 

@@ -168,10 +168,7 @@ mod tests {
     use std::num::NonZeroUsize;
 
     use kithara_assets::AssetStore;
-    use kithara_audio::{
-        DecoderResamplerSettings, ResamplerBackend,
-        ResamplerOptions,
-    };
+    use kithara_audio::{DecoderResamplerSettings, ResamplerBackend, ResamplerOptions};
     use kithara_decode::DecodeError;
     use kithara_stream::StreamType;
     use kithara_test_utils::kithara;
@@ -299,8 +296,11 @@ mod tests {
         let dir = TestTempDir::new();
         let path = dir.path().join("direct.wav");
         crate::mock::write_pcm_wav(
-            &path, &vec![0.5; 8_192], kithara_signal::AudioSpec::new(2, crate::mock::SAMPLE_RATE),
-        ).expect("direct float WAV");
+            &path,
+            &vec![0.5; 8_192],
+            kithara_signal::AudioSpec::new(2, crate::mock::SAMPLE_RATE),
+        )
+        .expect("direct float WAV");
         let file_bus = EventBus::new(32);
         let mut file_events = file_bus.subscribe::<DecoderEvent>();
         let file: ResourceConfig<TestPools> =
@@ -308,10 +308,23 @@ mod tests {
                 .store(store())
                 .events(file_bus)
                 .build();
-        let _file = Audio::prepare(file.build_file_config(&worker, None), Arc::new(NoopWorkerWake), pools())
-            .await.expect("direct file builds");
-        assert!(matches!(file_events.try_recv().expect("build publishes inline").event,
-            DecoderEvent::DecoderChanged { cause: DecoderChangeCause::Initial, .. }));
+        let _file = Audio::prepare(
+            file.build_file_config(&worker, None),
+            Arc::new(NoopWorkerWake),
+            pools(),
+        )
+        .await
+        .expect("direct file builds");
+        assert!(matches!(
+            file_events
+                .try_recv()
+                .expect("build publishes inline")
+                .event,
+            DecoderEvent::DecoderChanged {
+                cause: DecoderChangeCause::Initial,
+                ..
+            }
+        ));
 
         let wav = std::fs::read(path).expect("generated segment");
         let server = TestHttpServer::new(Router::new()
@@ -333,10 +346,21 @@ mod tests {
                 .events(hls_bus)
                 .hint("wav")
                 .build();
-        let _hls = Audio::prepare(hls.build_hls_config(&worker, None).expect("valid HLS config"),
-            Arc::new(NoopWorkerWake), pools()).await.expect("direct HLS builds");
-        assert!(matches!(hls_events.try_recv().expect("build publishes inline").event,
-            DecoderEvent::DecoderChanged { cause: DecoderChangeCause::Initial, .. }));
+        let _hls = Audio::prepare(
+            hls.build_hls_config(&worker, None)
+                .expect("valid HLS config"),
+            Arc::new(NoopWorkerWake),
+            pools(),
+        )
+        .await
+        .expect("direct HLS builds");
+        assert!(matches!(
+            hls_events.try_recv().expect("build publishes inline").event,
+            DecoderEvent::DecoderChanged {
+                cause: DecoderChangeCause::Initial,
+                ..
+            }
+        ));
     }
 
     #[kithara::test]

@@ -4,11 +4,25 @@ use kithara_signal::SessionFrame;
 use crate::LaneFrame;
 
 /// The next lane frame and source position at a point on the session timeline.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SlotMark {
     pub session: SessionFrame,
     pub lane: LaneFrame,
     pub position: Duration,
+}
+
+impl SlotMark {
+    /// Maps a playing, uninterrupted session frame onto this mark's segment.
+    #[must_use]
+    pub fn lane_at(self, session: SessionFrame) -> Option<LaneFrame> {
+        Some(LaneFrame {
+            segment: self.lane.segment,
+            frame: self
+                .lane
+                .frame
+                .checked_add(session.frames_since(self.session)?)?,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -44,19 +58,5 @@ mod mapping_tests {
             ..mark
         };
         assert_eq!(overflow.lane_at(SessionFrame::new(1_001)), None);
-    }
-}
-
-impl SlotMark {
-    /// Maps a playing, uninterrupted session frame onto this mark's segment.
-    #[must_use]
-    pub fn lane_at(self, session: SessionFrame) -> Option<LaneFrame> {
-        Some(LaneFrame {
-            segment: self.lane.segment,
-            frame: self
-                .lane
-                .frame
-                .checked_add(session.frames_since(self.session)?)?,
-        })
     }
 }

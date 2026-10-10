@@ -42,12 +42,11 @@ impl EqLayout {
         self.right.set_gain(band, gain_db);
     }
 
-    fn band_count(&self) -> usize {
-        self.left.band_count()
-    }
-
-    fn target_gain(&self, band: usize) -> Option<GainDb> {
-        self.left.target_gain(band)
+    delegate::delegate! {
+        to self.left {
+            fn band_count(&self) -> usize;
+            fn target_gain(&self, band: usize) -> Option<GainDb>;
+        }
     }
 
     fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
@@ -135,7 +134,9 @@ impl StereoEq {
             Some(LayoutUpdate::Pending(layout)) => Some(layout),
             _ => self.active.as_ref(),
         };
-        let Some(layout) = layout else { return 0; };
+        let Some(layout) = layout else {
+            return 0;
+        };
         for (band, gain) in gains.iter_mut().enumerate().take(layout.band_count()) {
             if let Some(target) = layout.target_gain(band) {
                 *gain = target;

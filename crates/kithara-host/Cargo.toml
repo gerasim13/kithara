@@ -87,6 +87,7 @@ send_wrapper = { workspace = true }
 kithara-audio = { workspace = true, features = ["usdt", "mock"] }
 kithara-bufpool = { workspace = true }
 kithara-effects = { workspace = true, features = ["mock"] }
+kithara-queue = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "subscriber"] }
 wasm-bindgen-test = { workspace = true }
 

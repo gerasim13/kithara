@@ -128,14 +128,17 @@ impl Config {
         self.document.audio.pipeline.clone()
     }
 
+    #[must_use]
     pub fn preload_chunks(&self) -> Option<NonZeroUsize> {
         self.document.audio.preload_chunks
     }
 
+    #[must_use]
     pub fn audio_buffer_chunks(&self) -> Option<NonZeroUsize> {
         self.document.audio.audio_buffer_chunks
     }
 
+    #[must_use]
     pub fn warp(&self) -> WarpConfigPatch {
         self.document.warp.clone()
     }
@@ -561,10 +564,7 @@ mod tests {
 
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
 
-        assert_eq!(
-            config.queue().mixer.slots.map(NonZeroUsize::get),
-            Some(5)
-        );
+        assert_eq!(config.queue().mixer.slots.map(NonZeroUsize::get), Some(5));
         assert!(
             config.queue().max_history_size.is_none(),
             "a knob the document does not name reaches the app empty"

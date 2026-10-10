@@ -14,10 +14,10 @@ use kithara_test_utils::{flight, kithara};
 
 use crate::{
     DecodeErrorKind, DecoderEvent, consts,
-    pipeline::source::{
+    pipeline::source::tests::{
         AudioEvent, AudioLaneEvent, AudioSource, DecoderFactory, DecoderGeneration, OwnerPhase,
         RecreateCause, RecreateState, TrackFailureKind, TrackStep, WaitingReason,
-        tests::rebuild::{
+        rebuild::{
             media_info, produced_data, route_signal_source, route_signal_source_with_gapless_eof,
             test_source,
         },

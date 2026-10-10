@@ -35,9 +35,24 @@ fn relocation_entry_respects_the_frame_after_the_audible_frontier() {
 #[kithara::test]
 fn an_uncovered_relocation_cue_has_no_entry() {
     let host = host(120.0, 4);
-    let grid = grid(480_000, 192_000, 24_000, 0, Some((4, 0)), BeatGridState::Provisional);
+    let grid = grid(
+        480_000,
+        192_000,
+        24_000,
+        0,
+        Some((4, 0)),
+        BeatGridState::Provisional,
+    );
     let cue = position(300_000);
 
     assert!(!covers(&grid, cue));
-    assert_eq!(entry(&host, &grid, cue, Bound::AtOrAfter(SessionFrame::new(96_000))), None);
+    assert_eq!(
+        entry(
+            &host,
+            &grid,
+            cue,
+            Bound::AtOrAfter(SessionFrame::new(96_000))
+        ),
+        None
+    );
 }

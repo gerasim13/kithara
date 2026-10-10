@@ -364,13 +364,14 @@ impl Trajectory {
         frames: usize,
     ) -> Result<SourceSpan, ElasticError> {
         let position = self.source_position(start)?;
-        SourceSpan::from_rational(
+        SourceSpan::try_from((
             position.numerator,
             position.denominator.get(),
             position.denominator,
             sample_rate,
             u64::try_from(frames).map_err(|_| ElasticError::SampleCountOverflow)?,
-        )
+        ))
+        .ok()
         .ok_or(ElasticError::SampleCountOverflow)
     }
 
@@ -492,7 +493,7 @@ impl Trajectory {
                 .checked_mul(2)
                 .ok_or(ElasticError::SampleCountOverflow)?;
         }
-        SourceSpan::from_ramp(
+        SourceSpan::try_from((
             position
                 .at(denominator)
                 .ok_or(ElasticError::SampleCountOverflow)?,
@@ -501,7 +502,8 @@ impl Trajectory {
             NonZeroU128::new(denominator).ok_or(ElasticError::SampleCountOverflow)?,
             sample_rate,
             u64::try_from(frames).map_err(|_| ElasticError::SampleCountOverflow)?,
-        )
+        ))
+        .ok()
         .ok_or(ElasticError::SampleCountOverflow)
     }
 

@@ -1,10 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{
-    future::poll_fn,
-    num::NonZeroUsize,
-    task::Poll,
-};
+use std::{future::poll_fn, num::NonZeroUsize, task::Poll};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
@@ -15,11 +11,11 @@ use kithara::{
         DispatcherProtocol, LoadRefusal, PlayWorker, PlayWorkerConfig, ResourceConfig,
         ResourceLoad, ResourceSrc,
     },
+    warp::{SpeedCurve, WarpConfig},
 };
 use kithara_command::{Batch, ChannelConfig, Outcome, Receipt, Rejection, Sender, When, channel};
-use kithara_render::{DispatcherCommand, LaneStart, LoadRequest};
-use kithara::warp::{SpeedCurve, WarpConfig};
 use kithara_integration_tests::usdt_trace::{self, Scope};
+use kithara_render::{DispatcherCommand, LaneStart, LoadRequest};
 use kithara_test_fixtures::fixtures::tone_mp3;
 use kithara_test_utils::{TestTempDir, temp_dir};
 
@@ -61,12 +57,15 @@ async fn a_load_opens_its_source_once_and_a_load_past_capacity_opens_nothing(
     );
     let trace = usdt_trace::scope();
 
-    let held = kithara_integration_tests::mock::load_audio(&worker, mp3(&worker, &temp_dir, "a.mp3"))
-        .await
-        .expect("the first load fits the worker");
+    let held =
+        kithara_integration_tests::mock::load_audio(&worker, mp3(&worker, &temp_dir, "a.mp3"))
+            .await
+            .expect("the first load fits the worker");
     assert_eq!(opened(&trace), 1, "a load opens its source once");
 
-    let refused = kithara_integration_tests::mock::load_audio(&worker, mp3(&worker, &temp_dir, "b.mp3")).await;
+    let refused =
+        kithara_integration_tests::mock::load_audio(&worker, mp3(&worker, &temp_dir, "b.mp3"))
+            .await;
     assert!(
         matches!(refused, Err(LoadRefusal::Capacity { capacity: 1 })),
         "a load past capacity is refused for capacity"
@@ -78,9 +77,10 @@ async fn a_load_opens_its_source_once_and_a_load_past_capacity_opens_nothing(
     );
 
     drop(held);
-    let _reloaded = kithara_integration_tests::mock::load_audio(&worker, mp3(&worker, &temp_dir, "c.mp3"))
-        .await
-        .expect("a released lane frees its slot");
+    let _reloaded =
+        kithara_integration_tests::mock::load_audio(&worker, mp3(&worker, &temp_dir, "c.mp3"))
+            .await
+            .expect("a released lane frees its slot");
     assert_eq!(opened(&trace), 2, "the next load opens its own source");
 }
 
@@ -107,12 +107,12 @@ fn load(worker: &PlayWorker<TestPools>, dir: &TestTempDir, name: &str) -> Batch<
         .build();
     Batch {
         basis: Vec::new(),
-        commands: vec![DispatcherCommand::Load(LoadRequest {
+        commands: vec![DispatcherCommand::Load(Box::new(LoadRequest {
             item: ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay())),
             position: Duration::ZERO,
             start,
             inbox: worker.lane_channel().1,
-        })],
+        }))],
     }
 }
 
@@ -124,7 +124,13 @@ async fn answered(sender: &mut Sender<Loads>) -> Receipt<Loads> {
     })
     .await;
     let barrier = sender
-        .send(When::Next, Batch { basis: Vec::new(), commands: Vec::new() })
+        .send(
+            When::Next,
+            Batch {
+                basis: Vec::new(),
+                commands: Vec::new(),
+            },
+        )
         .expect("the live dispatcher accepts the next batch");
     let live = poll_fn(|cx| {
         sender.hold(cx.waker().clone());
@@ -150,7 +156,9 @@ async fn the_dispatcher_opens_each_load_once_and_answers_a_load_past_capacity_fo
     );
     let trace = usdt_trace::scope();
     let (mut sender, inbox) = channel::<Loads>(ChannelConfig::builder().build());
-    let _dispatcher = worker.start_dispatcher(inbox).expect("the worker owns its dispatcher");
+    let _dispatcher = worker
+        .start_dispatcher(inbox)
+        .expect("the worker owns its dispatcher");
 
     let first = sender
         .send(When::Next, load(&worker, &temp_dir, "a.mp3"))

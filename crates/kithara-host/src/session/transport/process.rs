@@ -306,7 +306,7 @@ impl TransportState {
         self.closed.clear();
         self.current.offset = 0;
         let anchor = self.anchor_block(info);
-        let continuity = anchor.and(self.validate_frame(info));
+        let continuity = anchor.and_then(|_| self.validate_frame(info));
         self.apply_due(info, continuity);
         continuity?;
         let anchor = self

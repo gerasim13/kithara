@@ -1,5 +1,7 @@
 use kithara::platform::sync::Arc;
-use kithara_integration_tests::{HlsFixtureBuilder, TestServerHelper, hls_server::aes128_encryption};
+use kithara_integration_tests::{
+    HlsFixtureBuilder, TestServerHelper, hls_server::aes128_encryption,
+};
 use kithara_test_fixtures::{
     asset::Asset,
     assets::{

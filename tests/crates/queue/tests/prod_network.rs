@@ -104,9 +104,8 @@ fn build_prod_ctx() -> ProdCtx {
 async fn prod_queue(prod: &ProdCtx, pacing: Option<Duration>) -> OfflineQueue<AppPools> {
     let session = HostConfig::offline(prod.config.worker.pools().clone()).build();
     let player = kithara::play::ResourcePrep::builder()
-            
-            .worker(prod.config.worker.clone())
-            .build();
+        .worker(prod.config.worker.clone())
+        .build();
     let queue = Queue::new(QueueConfig::builder().prep(player).build());
     match pacing {
         Some(interval) => OfflineQueue::paced(session, queue, interval).await,

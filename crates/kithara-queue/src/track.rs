@@ -213,10 +213,17 @@ where
         }
     }
 
-    /// What reaches `id`'s decoder from the observers attached to it.
-    pub(crate) fn observer(&self, id: TrackId) -> Option<Box<dyn AudioObserver>> {
-        self.find(id)
-            .map(|record| Box::new(record.observer.relay()) as Box<dyn AudioObserver>)
+    delegate::delegate! {
+        to self {
+            /// What reaches `id`'s decoder from the observers attached to it.
+            #[expr($.map(|record| Box::new(record.observer.relay()) as Box<dyn AudioObserver>))]
+            #[call(find)]
+            pub(crate) fn observer(&self, id: TrackId) -> Option<Box<dyn AudioObserver>>;
+            /// Original source for `id`, if still queued.
+            #[expr($.map(|record| record.source.clone()))]
+            #[call(find)]
+            pub(crate) fn source(&self, id: TrackId) -> Option<TrackSource<S>>;
+        }
     }
 
     /// `id` loads under `load`: a load it replaces is cancelled.
@@ -367,11 +374,6 @@ where
         for id in loading {
             self.set_status(id, TrackStatus::Cancelled);
         }
-    }
-
-    /// Original source for `id`, if still queued.
-    pub(crate) fn source(&self, id: TrackId) -> Option<TrackSource<S>> {
-        self.find(id).map(|record| record.source.clone())
     }
 }
 #[cfg(test)]

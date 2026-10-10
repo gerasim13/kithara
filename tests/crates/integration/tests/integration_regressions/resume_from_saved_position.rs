@@ -27,11 +27,10 @@ const SAVE_AFTER_SECS: f64 = 4.0;
 
 async fn new_queue(pools: &Pools, store: AssetStore<TestPools>) -> OfflineQueue<TestPools> {
     let player = kithara::play::ResourcePrep::builder()
-            
-            .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build();
+        .worker(kithara::play::PlayWorker::new(
+            kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
+        ))
+        .build();
     OfflineQueue::paced(
         HostConfig::offline(pools.clone()).build(),
         Queue::new(QueueConfig::builder().prep(player).store(store).build()),

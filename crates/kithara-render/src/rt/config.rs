@@ -47,10 +47,7 @@ impl DeckMixerConfig {
     }
 }
 
-pub(crate) fn declick_frame_count(
-    declick: SmootherConfig,
-    sample_rate: NonZeroU32,
-) -> FrameCount {
+pub(crate) fn declick_frame_count(declick: SmootherConfig, sample_rate: NonZeroU32) -> FrameCount {
     let rate = sample_rate.get().to_f32().unwrap_or(f32::MAX);
     FrameCount::new(
         (declick.smooth_seconds.max(0.0) * rate)

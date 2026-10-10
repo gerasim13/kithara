@@ -1,6 +1,5 @@
 use std::num::NonZeroUsize;
 
-use kithara_integration_tests::mock::LaneAudio;
 use kithara::{
     self,
     assets::{AssetStore, StorageBackend},
@@ -11,7 +10,10 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
     stream::Stream,
 };
-use kithara_integration_tests::bufpool_ext::{TestPools, pools};
+use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
+    mock::LaneAudio,
+};
 use kithara_test_fixtures::integration_fixtures::origin_tone;
 use url::Url;
 

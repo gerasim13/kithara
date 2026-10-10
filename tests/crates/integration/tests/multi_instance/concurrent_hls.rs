@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use kithara_integration_tests::mock::LaneAudio;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::AudioConfig,
@@ -12,6 +11,7 @@ use kithara::{
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
+    mock::LaneAudio,
     reads::{ReadLimit, read_for_concurrency_check},
 };
 use kithara_test_fixtures::integration_fixtures::concurrent_wav;
@@ -76,10 +76,13 @@ async fn create_hls_audio(
         .build();
     // Park on ring underrun instead of surfacing Pending, so the blocking
     // readers never spin against the virtual clock.
-    let config = kithara::play::TrackConfig::for_audio(AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .media_info(wav_info).build())
-        .block_on_underrun(true)
-        .build();
+    let config = kithara::play::TrackConfig::for_audio(
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+            .media_info(wav_info)
+            .build(),
+    )
+    .block_on_underrun(true)
+    .build();
 
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     kithara_integration_tests::mock::load_audio(&worker, config)

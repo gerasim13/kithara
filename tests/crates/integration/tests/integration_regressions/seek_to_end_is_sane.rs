@@ -111,11 +111,10 @@ async fn run_case(
     )
     .expect("fixture block size must be non-zero");
     let player = kithara::play::ResourcePrep::builder()
-            
-            .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build();
+        .worker(kithara::play::PlayWorker::new(
+            kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
+        ))
+        .build();
     let queue = OfflineQueue::new(
         HostConfig::offline(pools)
             .settings(HostSettings::builder().sample_rate(sample_rate).build())

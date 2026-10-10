@@ -56,3 +56,5 @@ pub(crate) const TASK_BURST: NonZeroU32 = match NonZeroU32::new(32) {
 pub(crate) const LOAD_ALPHA: f32 = 0.2;
 
 pub(crate) const MS_PER_SEC: f64 = 1000.0;
+pub(crate) const MIN_STEREO: usize = 2;
+pub(crate) const EVENTS_PER_SLOT: usize = 16;

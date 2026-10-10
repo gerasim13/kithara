@@ -35,12 +35,12 @@ pub const MIN_SIGNAL_AMP: f64 = 0.1;
 /// = 2.9 ms post-seek read budget — well within decoder warm-up.
 pub const READ_FRAMES_AFTER_SEEK: usize = 128;
 pub const READ_PENDING_RETRIES: usize = 4096;
+/// Retry budget for the post-seek segment readiness, in `READ_PENDING_POLL` steps.
+pub use crate::mock::PRELOAD_READY_RETRIES;
 /// Cadence between re-reads of a pending outcome, shared by both read twins
 /// and by the preload wait. One millisecond keeps `READ_PENDING_RETRIES`
 /// worth of retries (≈4 s) well inside every scan budget.
 pub use crate::mock::READ_PENDING_POLL;
-/// Retry budget for the post-seek segment readiness, in `READ_PENDING_POLL` steps.
-pub use crate::mock::PRELOAD_READY_RETRIES;
 pub const E2E_SCAN_INTERVAL_FRAMES: u64 = SAMPLE_RATE as u64 / 8;
 pub const SAFETY_END_MARGIN_FRAMES: u64 = 4096;
 

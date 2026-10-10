@@ -26,10 +26,7 @@ use kithara::{
     host::{HostConfig, HostSettings},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
-    play::{
-        PlayWorker, PlayWorkerConfig, PlayerEvent, ResourcePrep, ResourceConfig,
-        ResourceSrc,
-    },
+    play::{PlayWorker, PlayWorkerConfig, PlayerEvent, ResourceConfig, ResourcePrep, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
 use kithara_integration_tests::{
@@ -97,11 +94,7 @@ impl Harness {
             .expect("create product offline Host");
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
         let prep = ResourcePrep::builder().worker(worker.clone()).build();
-        Self {
-            prep,
-            worker,
-            host,
-        }
+        Self { prep, worker, host }
     }
 
     async fn render(&self, frames: usize) -> Vec<f32> {
@@ -122,11 +115,7 @@ impl Harness {
     }
 
     async fn close(self) {
-        let Self {
-            prep,
-            worker,
-            host,
-        } = self;
+        let Self { prep, worker, host } = self;
         drop(prep);
         drop(worker);
         host.close().await;
@@ -195,6 +184,24 @@ async fn immediate_seek(
     run_case(gated_source, mode).await;
 }
 
+async fn warm_up(
+    harness: &Harness,
+    queue: &QueueControl<TestPools>,
+    gate: &SegmentGateHandle,
+    mode: GateMode,
+) {
+    for _ in 0..WARMUP_BLOCKS {
+        let _ = harness.run(queue, QueueControl::tick).await;
+        let _ = harness.render(BLOCK_FRAMES).await;
+    }
+    assert_eq!(
+        gate.head_requested(),
+        0,
+        "segment-aware fMP4 must not HEAD-probe the gated segment at startup \
+         (mode={mode:?})"
+    );
+}
+
 async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode) {
     let (hls, gate) = gated_source;
     // A registered gate parks the body by default. Apply the requested mode.
@@ -222,7 +229,7 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
         .build(),
     );
 
-    let mut harness = Harness::new(pools).await;
+    let harness = Harness::new(pools).await;
 
     // Track 0 = the gated HLS track. Track 1 = a second HLS track so a forward
     // auto-advance has somewhere to land (observable as current_index 0 -> 1).
@@ -234,10 +241,14 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
         .insert_control(Queue::new(
             QueueConfig::builder()
                 .prep(harness.prep.clone())
-                .settings(kithara::queue::QueueSettings::builder().crossfade(kithara::play::CrossfadeSettings {
-                    duration: 0.0,
-                    ..kithara::play::CrossfadeSettings::default()
-                }).build())
+                .settings(
+                    kithara::queue::QueueSettings::builder()
+                        .crossfade(kithara::play::CrossfadeSettings {
+                            duration: 0.0,
+                            ..kithara::play::CrossfadeSettings::default()
+                        })
+                        .build(),
+                )
                 .build(),
         ))
         .await
@@ -268,16 +279,7 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
 
     // Warm up: render some blocks so segment 0 decodes and the track is
     // genuinely playing before the seek arrives.
-    for _ in 0..WARMUP_BLOCKS {
-        let _ = harness.run(&queue, QueueControl::tick).await;
-        let _ = harness.render(BLOCK_FRAMES).await;
-    }
-    assert_eq!(
-        gate.head_requested(),
-        0,
-        "segment-aware fMP4 must not HEAD-probe the gated segment at startup \
-         (mode={mode:?})"
-    );
+    warm_up(&harness, &queue, &gate, mode).await;
 
     // The user taps the slider immediately: seek into the gated segment's time
     // region while exact size is unavailable and the body may still be withheld.

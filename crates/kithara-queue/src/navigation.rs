@@ -51,13 +51,6 @@ impl NavigationState {
         Self::with_rng(history_limit, StdRng::from_rng(&mut rand::rng()))
     }
 
-    #[cfg(test)]
-    pub(crate) fn finish(&mut self) {
-        if let Some(current) = self.current.take() {
-            self.push_history(current);
-        }
-    }
-
     fn fresh_cycle(&mut self, tracks: &[TrackId], avoid_first: Option<TrackId>) {
         self.bag.clear();
         self.bag.extend_from_slice(tracks);

@@ -25,18 +25,17 @@ use super::{
 };
 use crate::{host::HostSettings, session::queue::HostProtocol};
 
+type InstalledTransport = (
+    ScopedSender<HostProtocol, DeckProtocol>,
+    Output<TransportObservation>,
+);
+
 pub(crate) fn install(
     ctx: &mut FirewheelContext,
     session_grid: SessionGridGeneration,
     settings: HostSettings,
     config: ScopedConfig,
-) -> Result<
-    (
-        ScopedSender<HostProtocol, DeckProtocol>,
-        Output<TransportObservation>,
-    ),
-    &'static str,
-> {
+) -> Result<InstalledTransport, &'static str> {
     let initial = TransportObservation::new(None, session_grid);
     let (observation_input, observation_output) = triple_buffer(&initial);
     let (channel, inbox) = scoped_channel::<HostProtocol, DeckProtocol>(config);

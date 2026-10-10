@@ -114,7 +114,11 @@ async fn playing_deck(
         session(),
     )
     .await;
-    let queue = Queue::new(QueueConfig::builder().prep(harness.resource_prep().clone()).build());
+    let queue = Queue::new(
+        QueueConfig::builder()
+            .prep(harness.resource_prep().clone())
+            .build(),
+    );
     let queue = harness.insert(queue).await;
     harness
         .run(queue.control(), |q| q.set_default_rate(START_SPEED))

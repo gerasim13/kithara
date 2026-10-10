@@ -160,9 +160,12 @@ struct RunningCorrection {
 
 impl<P> Linked<P> {
     fn synced_speed(&self, change: TrackSettingsChange) -> Result<(), PlayError> {
-        if self.mode == SyncMode::On && let TrackSettingsChange::Speed(speed) = change {
+        if self.mode == SyncMode::On
+            && let TrackSettingsChange::Speed(speed) = change
+        {
             return Err(PlayError::InvalidParameter {
-                name: "speed while synchronized".into(), value: speed,
+                name: "speed while synchronized".into(),
+                value: speed,
             });
         }
         Ok(())
@@ -636,49 +639,38 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
 }
 
 impl<S, P: Track<S>> Track<S> for Linked<P> {
-    fn admit(&mut self, change: TrackSettingsChange, at: When<SessionFrame>, out: &Outbox<'_, S>) -> Result<(), PlayError> {
+    fn admit(
+        &mut self,
+        change: TrackSettingsChange,
+        at: When<SessionFrame>,
+        out: &Outbox<'_, S>,
+    ) -> Result<(), PlayError> {
         self.synced_speed(change)?;
         self.inner.admit(change, at, out)
     }
 
-    fn projected(&self) -> TrackSettings {
-        self.inner.projected()
-    }
-
-    fn planned(
-        &self,
-        at: SessionFrame,
-        sample_rate: std::num::NonZeroU32,
-    ) -> Result<(Position, f32), PlayError> {
-        self.inner.planned(at, sample_rate)
-    }
-
-    fn planned_end(
-        &self,
-        sample_rate: std::num::NonZeroU32,
-    ) -> Result<Option<SessionFrame>, PlayError> {
-        self.inner.planned_end(sample_rate)
-    }
-
-    fn speed_receipt(&mut self) -> Option<Settled> {
-        self.inner.speed_receipt()
-    }
-
-    fn speed_applied(&mut self, seq: Seq) -> Option<bool> {
-        self.inner.speed_applied(seq)
-    }
-
-    fn finish_group(&mut self, result: Result<Seq, &mut Vec<DeckPart>>) {
-        self.inner.finish_group(result);
-    }
-
-    fn cue(
-        &mut self,
-        position: Position,
-        speed: f32,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Option<Seq>, PlayError> {
-        self.inner.cue(position, speed, out)
+    delegate::delegate! {
+        to self.inner {
+            fn projected(&self) -> TrackSettings;
+            fn planned(
+                &self,
+                at: SessionFrame,
+                sample_rate: std::num::NonZeroU32,
+            ) -> Result<(Position, f32), PlayError>;
+            fn planned_end(
+                &self,
+                sample_rate: std::num::NonZeroU32,
+            ) -> Result<Option<SessionFrame>, PlayError>;
+            fn speed_receipt(&mut self) -> Option<Settled>;
+            fn speed_applied(&mut self, seq: Seq) -> Option<bool>;
+            fn finish_group(&mut self, result: Result<Seq, &mut Vec<DeckPart>>);
+            fn cue(
+                &mut self,
+                position: Position,
+                speed: f32,
+                out: &mut Outbox<'_, S>,
+            ) -> Result<Option<Seq>, PlayError>;
+        }
     }
 }
 
@@ -694,20 +686,16 @@ impl<S, P> HostedDeck<S> for Linked<P>
 where
     P: Track<S> + HostedDeck<S>,
 {
-    fn worker(&self) -> Option<&PlayWorker<S>> {
-        self.inner.worker()
-    }
-
-    fn resource_prep(&self) -> Option<&kithara_play::ResourcePrep<S>> {
-        self.inner.resource_prep()
-    }
-
-    fn mixer_config(&self) -> DeckMixerConfig {
-        self.inner.mixer_config()
-    }
-
-    fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
-        self.inner.drain(pass, out);
+    delegate::delegate! {
+        to self.inner {
+            fn worker(&self) -> Option<&PlayWorker<S>>;
+            fn resource_prep(&self) -> Option<&kithara_play::ResourcePrep<S>>;
+            fn mixer_config(&self) -> DeckMixerConfig;
+            fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>);
+            fn close(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError>;
+            fn hold(&mut self, waker: Waker);
+            fn release(&mut self);
+        }
     }
 
     fn settle(
@@ -721,18 +709,6 @@ where
 
     fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
         Player::tick(self, pass.now, out);
-    }
-
-    fn close(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError> {
-        self.inner.close(out)
-    }
-
-    fn hold(&mut self, waker: Waker) {
-        self.inner.hold(waker);
-    }
-
-    fn release(&mut self) {
-        self.inner.release();
     }
 }
 

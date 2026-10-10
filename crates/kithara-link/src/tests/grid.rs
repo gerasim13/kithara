@@ -21,7 +21,7 @@ fn foreign_grid_answers_preserve_the_current_load() {
                 model: Ok(grid(32_000, 0, None, 960_000)),
             },
             out,
-        )
+        );
     });
     assert!(control.commands().is_empty());
     assert_eq!(deck.snapshot().sync, before.sync);

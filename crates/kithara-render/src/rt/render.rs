@@ -23,14 +23,23 @@ impl RenderPass {
     /// A deck's gain runs from silence to unity.
     const GAIN_SPAN: f32 = 1.0;
 
-    pub(crate) fn new<S>(pools: &PoolRegion<S>, shape: StreamShape, gain: f32, config: super::DeckMixerConfig) -> Result<Self, PoolError>
+    pub(crate) fn new<S>(
+        pools: &PoolRegion<S>,
+        shape: StreamShape,
+        gain: f32,
+        config: super::DeckMixerConfig,
+    ) -> Result<Self, PoolError>
     where
         S: HasPool<f32>,
     {
         let eq_config = EqConfig::builder(pools.clone()).build();
         let mut eq = StereoEq::new(&eq_config, shape.sample_rate);
         if config.eq_bands() > 0 {
-            let layout = EqLayout::new(&eq_config, &generate_log_spaced_bands(config.eq_bands()), config.sample_rate())?;
+            let layout = EqLayout::new(
+                &eq_config,
+                &generate_log_spaced_bands(config.eq_bands()),
+                config.sample_rate(),
+            )?;
             eq.take_layout(Box::new(layout));
         }
         Ok(Self {
@@ -60,16 +69,14 @@ impl RenderPass {
         self.eq.process(left, right);
     }
 
-    /// Nothing sounded in a range: the output gain moves to its target at once.
-    pub(crate) fn idle(&mut self) {
-        self.gain.reset_to_target();
-    }
-
     delegate::delegate! {
         to self.gain {
             /// Ramp the deck's output gain to `gain` from the next frame rendered.
             #[call(set_value)]
             pub(crate) fn set_gain(&mut self, gain: f32);
+            /// Nothing sounded in a range: the output gain moves to its target at once.
+            #[call(reset_to_target)]
+            pub(crate) fn idle(&mut self);
         }
         to self.eq {
             #[call(read_gains)]

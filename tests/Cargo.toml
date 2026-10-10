@@ -121,8 +121,8 @@ usdt = ["dep:kithara", "kithara/usdt"]
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
 kithara-command = { workspace = true, optional = true }
-kithara-render = { workspace = true, optional = true }
 kithara-events = { workspace = true }
+kithara-render = { workspace = true, optional = true }
 kithara-test-utils = { workspace = true, features = ["usdt", "mock", "hang", "http-server", "subscriber", "temp-dir"] }
 
 # Crypto (for HLS encryption tests)

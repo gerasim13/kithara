@@ -11,11 +11,12 @@ use kithara_beat::{BeatGridModel, BeatGridState, GridBeat, GridDownbeat, Meter, 
 use kithara_command::{
     Batch, ChannelConfig, Inbox, Outcome, Rejection, Sender, Seq, When, channel,
 };
+use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_play::{
-    Bound, DeckPass, HostedDeck, Outbox, OutputSnapshot, PlayError, PlayWorker, Player, Position, ResourceConfig,
-    ResourceLoad, ResourceSrc, Settled, Track, TrackCommand, TrackReceipt, TrackSettings,
-    TrackSettingsChange, TrackSnapshot, TrackStatus, mock::DeckRig,
+    Bound, DeckMixSettings, DeckPass, HostedDeck, Outbox, OutputSnapshot, PlayError, PlayWorker,
+    Player, Position, ResourceConfig, ResourceLoad, ResourceSrc, Settled, Track, TrackCommand,
+    TrackReceipt, TrackSettings, TrackSettingsChange, TrackSnapshot, TrackStatus, mock::DeckRig,
 };
 use kithara_render::{
     bridge::{DeckPart, DeckProtocol, DeckSnapshot, Slot},
@@ -24,6 +25,7 @@ use kithara_render::{
 use kithara_signal::{FrameCount, SessionFrame};
 use kithara_test_utils::bufpool::{TestPools, pools};
 use kithara_warp::{SessionBeat, SpeedCurve};
+use num_traits::AsPrimitive;
 
 use crate::{GridAnswer, LinkConfig, Linked, LinkedPlayer, TempoStep, TempoTrajectory};
 
@@ -339,7 +341,12 @@ impl Player<TestPools> for ScriptedTrack {
 }
 
 impl Track<TestPools> for ScriptedTrack {
-    fn admit(&mut self, _change: kithara_play::TrackSettingsChange, _at: When<SessionFrame>, _out: &Outbox<'_, TestPools>) -> Result<(), PlayError> {
+    fn admit(
+        &mut self,
+        _change: TrackSettingsChange,
+        _at: When<SessionFrame>,
+        _out: &Outbox<'_, TestPools>,
+    ) -> Result<(), PlayError> {
         Ok(())
     }
 
@@ -358,14 +365,13 @@ impl Track<TestPools> for ScriptedTrack {
         if !track.attached {
             return Err(PlayError::NotReady);
         }
-        let since = match track.status {
-            TrackStatus::Playing { since } => since,
-            _ => return Ok((track.position, track.speed)),
+        let TrackStatus::Playing { since } = track.status else {
+            return Ok((track.position, track.speed));
         };
         let frames = at.frames_since(since).ok_or(PlayError::Late)?;
-        let elapsed = Position::from_secs_f64(
-            frames as f64 * f64::from(track.speed) / f64::from(sample_rate.get()),
-        );
+        let frames: f64 = frames.as_();
+        let elapsed =
+            Position::from_secs_f64(frames * f64::from(track.speed) / f64::from(sample_rate.get()));
         Ok((track.position + elapsed, track.speed))
     }
 
@@ -469,7 +475,9 @@ impl Rig {
             .ring
             .scope(self.queues.scope)
             .expect("live deck scope");
-        let pass = DeckPass { mix: Default::default(), suspended: false,
+        let pass = DeckPass {
+            mix: DeckMixSettings::default(),
+            suspended: false,
             now: self.now,
             delivery: self.delivery,
             output: &self.output,
@@ -485,7 +493,7 @@ impl Rig {
         &mut self,
         deck: &mut Deck,
         seq: Seq,
-        outcome: Outcome<DeckProtocol>,
+        outcome: &Outcome<DeckProtocol>,
     ) -> Settled {
         let mut batch = Batch {
             basis: vec![(Slot::new(0), None)],
@@ -496,7 +504,7 @@ impl Rig {
                 deck,
                 TrackReceipt::Deck {
                     seq,
-                    outcome: &outcome,
+                    outcome,
                     batch: &mut batch,
                 },
                 out,
@@ -508,7 +516,7 @@ impl Rig {
         self.settle(
             deck,
             seq,
-            Outcome::Applied {
+            &Outcome::Applied {
                 at: SessionFrame::new(frame),
                 data: (),
             },
@@ -526,7 +534,7 @@ pub(super) fn deck(host: TempoTrajectory) -> (Deck, Control) {
             position: Position::ZERO,
             duration: None,
             abr: None,
-            metadata: Default::default(),
+            metadata: TrackMetadata::default(),
             mark: None,
             engine_latency: FrameCount::new(0),
             ring_depth: FrameCount::new(0),
@@ -579,7 +587,7 @@ pub(super) fn answer(deck: &mut Deck, rig: &mut Rig, load: Seq, model: BeatGridM
                 model: Ok(model),
             },
             out,
-        )
+        );
     });
 }
 

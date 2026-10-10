@@ -159,7 +159,7 @@ fn refused_tempo_preserves_committed_mode_and_trajectory() {
         assert!(matches!(
             observation.snapshot.sync,
             SyncStatus::On | SyncStatus::Correcting { .. }
-        ))
+        ));
     });
 }
 
@@ -323,7 +323,7 @@ fn route_restart_preserves_modes_and_media_grids_on_a_new_rate() {
         assert!(matches!(
             observation.snapshot.sync,
             SyncStatus::On | SyncStatus::Correcting { .. }
-        ))
+        ));
     });
     off_probe.read(|observation| assert_eq!(observation.snapshot.sync, SyncStatus::Off));
     assert!(off_control.commands().is_empty());

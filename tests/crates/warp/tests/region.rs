@@ -1,7 +1,5 @@
 use std::num::{NonZero, NonZeroU32};
 
-use num_traits::ToPrimitive;
-
 use kithara::{
     platform::sync::Arc,
     signal::{
@@ -10,14 +8,15 @@ use kithara::{
     },
     stretch::StretchKind,
     warp::{
-        GridSegment, PresentationFrontier, RegionPlan, RegionPlanError, RenderContext,
-        SessionAnchor, SessionBeat, Warp, WarpConfig, WarpMapRevision, WarpMap,
-        AssetAxis, AssetExtent, BeatAlignment, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridQuery, Beat, MapPoint, SpeedCurve,
-        mock::asset_grid,
+        AssetAxis, AssetExtent, Beat, BeatAlignment, BeatGridId, BeatGridQuery, BeatGridRevision,
+        BeatGridSnapshot, GridSegment, MapPoint, PresentationFrontier, RegionPlan, RegionPlanError,
+        RenderContext, SessionAnchor, SessionBeat, SpeedCurve, Warp, WarpConfig, WarpMap,
+        WarpMapRevision, mock::asset_grid,
     },
 };
 use kithara_test_fixtures::unit_fixtures::{warp_clicks, warp_nominal_clicks, warp_sine};
 use kithara_test_utils::kithara::hang_watchdog;
+use num_traits::ToPrimitive;
 
 use crate::test_pools::{Pools, pools, sample_buffer};
 
@@ -568,8 +567,19 @@ pub(crate) fn render_configured_grid_with_updates(
         if swap.as_ref().is_some_and(|(at, _)| offset >= u64_of(*at))
             && let Some((_, plan)) = swap.take()
         {
-            let projection = plan(fx.rendered_source_end().expect("presented source frontier").0, out.len() / CH);
-            install_projection(&mut fx, &projection, source.len() / CH, out.len() / CH, config.speed());
+            let projection = plan(
+                fx.rendered_source_end()
+                    .expect("presented source frontier")
+                    .0,
+                out.len() / CH,
+            );
+            install_projection(
+                &mut fx,
+                &projection,
+                source.len() / CH,
+                out.len() / CH,
+                config.speed(),
+            );
         }
         let mut consumed = carried;
         while consumed < frames {
@@ -598,7 +608,13 @@ pub(crate) fn render_configured_grid_with_updates(
                         .build(),
                 );
                 if let Some(plan) = plan {
-                    install_projection(&mut fx, &plan, source.len() / CH, output_frontier, config.speed());
+                    install_projection(
+                        &mut fx,
+                        &plan,
+                        source.len() / CH,
+                        output_frontier,
+                        config.speed(),
+                    );
                 }
             }
             fx.prepare(spec);
@@ -992,8 +1008,7 @@ fn a_second_plan_through_one_renderer_keeps_only_its_own_tempo(
     }
 }
 
-
-pub(crate) type Projection = (WarpMap, SessionFrame);
+pub(crate) type Projection = (WarpMap, SessionFrame, BeatGridSnapshot, BeatGridSnapshot);
 
 fn install_projection(
     renderer: &mut kithara::warp::WarpRenderer<kithara_test_utils::bufpool::TestPools>,
@@ -1003,17 +1018,40 @@ fn install_projection(
     manual_speed: f32,
 ) {
     use num_traits::ToPrimitive;
-    let (map, activation) = projection;
-    let end_source = kithara::warp::AssetFrame::new(f64_of(source_frames.saturating_sub(1))).expect("source endpoint");
-    let BeatGridQuery::Resolved(end) = map.output_at(end_source) else { panic!("projection covers the fixture"); };
-    let end = i64::from(end).to_usize().expect("nonnegative output endpoint") + 1;
-    let activation = i64::from(*activation).to_usize().expect("nonnegative activation").max(output_frame);
+    let (map, activation, source_grid, projected_grid) = projection;
+    let end_source = kithara::warp::AssetFrame::new(f64_of(source_frames.saturating_sub(1)))
+        .expect("source endpoint");
+    let BeatGridQuery::Resolved(beat) = source_grid.beat_at(MapPoint::new(
+        source_grid.stamp(),
+        kithara::warp::MapPosition::Asset(end_source),
+    )) else {
+        panic!("projection covers the fixture");
+    };
+    let BeatGridQuery::Resolved(position) = projected_grid.position_at(*beat.value()) else {
+        panic!("projection covers the fixture");
+    };
+    let kithara::warp::MapPosition::Session(end) = *position.value().value() else {
+        panic!("projection covers the fixture");
+    };
+    let end = i64::from(end)
+        .to_usize()
+        .expect("nonnegative output endpoint")
+        + 1;
+    let activation = i64::from(*activation)
+        .to_usize()
+        .expect("nonnegative activation")
+        .max(output_frame);
     let source_at = |frame: usize| {
-        let BeatGridQuery::Resolved(source) = map.source_at(SessionFrame::new(i64_of(frame))) else { panic!("projection covers output frame {frame}"); };
+        let BeatGridQuery::Resolved(source) = map.source_at(SessionFrame::new(i64_of(frame)))
+        else {
+            panic!("projection covers output frame {frame}");
+        };
         f64::from(source)
     };
     let mut steps = Vec::new();
-    if activation > output_frame { steps.push((0, manual_speed)); }
+    if activation > output_frame {
+        steps.push((0, manual_speed));
+    }
     let mut frame = activation;
     while frame < end {
         let next = frame + 1;
@@ -1025,7 +1063,11 @@ fn install_projection(
         frame = next;
     }
     assert!(!steps.is_empty(), "projection supplies a speed curve");
-    renderer.set_speed(SpeedCurve::Steps(Arc::from(steps)), u64::from(map.revision()))
+    renderer
+        .set_speed(
+            SpeedCurve::Steps(Arc::from(steps)),
+            u64::from(map.revision()),
+        )
         .expect("projected speed is admissible");
 }
 
@@ -1095,9 +1137,11 @@ fn plan_over(source: BeatGridSnapshot, target: BeatGridSnapshot) -> Projection {
         MapPoint::new(source.stamp(), beat),
         MapPoint::new(target.stamp(), beat),
     );
-    let map = WarpMap::projected(source, target, alignment, WarpMapRevision::first())
+    let grid = BeatGridSnapshot::projection(source.clone(), target.clone(), alignment)
         .expect("fixture projection");
-    (map, SessionFrame::new(0))
+    let map = WarpMap::projected(source.clone(), target, alignment, WarpMapRevision::first())
+        .expect("fixture projection");
+    (map, SessionFrame::new(0), source, grid)
 }
 
 fn spaced_plan(
@@ -1125,7 +1169,9 @@ fn plan_over_at(
     let revision = WarpMapRevision::first()
         .checked_next()
         .expect("replacement revision");
-    let map =
-        WarpMap::projected(source, target, alignment, revision).expect("replacement projection");
-    (map, output)
+    let grid = BeatGridSnapshot::projection(source.clone(), target.clone(), alignment)
+        .expect("replacement projection");
+    let map = WarpMap::projected(source.clone(), target, alignment, revision)
+        .expect("replacement projection");
+    (map, output, source, grid)
 }

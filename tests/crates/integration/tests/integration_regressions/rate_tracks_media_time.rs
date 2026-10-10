@@ -29,7 +29,11 @@ const DRAIN_BLOCK_BUDGET: usize = 4_000;
 const DRAIN_SHARE_NUM: usize = 3;
 const DRAIN_SHARE_DEN: usize = 4;
 
-async fn file_resource(harness: &OfflinePlayer, path: &Path, store_dir: &Path) -> ResourceConfig<TestPools> {
+async fn file_resource(
+    harness: &OfflinePlayer,
+    path: &Path,
+    store_dir: &Path,
+) -> ResourceConfig<TestPools> {
     let pools = harness.worker().pools().clone();
     let config: ResourceConfig<_> = ResourceConfig::for_src(
         ResourceSrc::parse(path.to_str().expect("utf-8 fixture path"))

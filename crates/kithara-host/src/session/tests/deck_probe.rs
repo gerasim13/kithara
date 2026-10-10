@@ -5,10 +5,12 @@ use kithara_platform::{
     thread,
     time::{Duration, Instant},
 };
-use kithara_play::{PlayError, player::Player};
+use kithara_play::{
+    DeckMixerConfig, DeckPass, HostedDeck, Outbox, PlayError, PlayWorker, PlayWorkerConfig,
+    TrackReceipt,
+};
+use kithara_test_utils::bufpool::{TestPools, pools};
 use kithara_warp::BeatGridId;
-
-use crate::session::decks::Deck;
 
 /// What a holder did to a [`Probe`].
 pub(crate) enum Seen {
@@ -23,7 +25,7 @@ pub(crate) enum Seen {
 
 /// A deck that reports every call its holder makes, and its drop. A test may
 /// stop watching before the holder lets the deck go.
-struct Probe(mpsc::Sender<Seen>);
+struct Probe(mpsc::Sender<Seen>, PlayWorker<TestPools>);
 
 impl Probe {
     fn report(&self, seen: Seen) {
@@ -37,12 +39,28 @@ impl Drop for Probe {
     }
 }
 
-impl Player for Probe {
-    fn close(&mut self) -> Result<(), PlayError> {
+impl HostedDeck<TestPools> for Probe {
+    fn worker(&self) -> Option<&PlayWorker<TestPools>> {
+        Some(&self.1)
+    }
+
+    fn mixer_config(&self) -> DeckMixerConfig {
+        DeckMixerConfig::default()
+    }
+
+    fn settle(
+        &mut self,
+        _receipt: TrackReceipt<'_, TestPools>,
+        _pass: DeckPass<'_>,
+        _out: &mut Outbox<'_, TestPools>,
+    ) {
+    }
+
+    fn close(&mut self, _out: &mut Outbox<'_, TestPools>) -> Result<(), PlayError> {
         Ok(())
     }
 
-    fn drain(&mut self) {
+    fn drain(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_, TestPools>) {
         self.report(Seen::Drained(here()));
     }
 
@@ -54,9 +72,8 @@ impl Player for Probe {
         self.report(Seen::Released);
     }
 
-    fn tick(&mut self) -> Result<(), PlayError> {
+    fn tick(&mut self, _pass: DeckPass<'_>, _out: &mut Outbox<'_, TestPools>) {
         self.report(Seen::Ticked(here()));
-        Ok(())
     }
 }
 
@@ -65,10 +82,21 @@ fn here() -> Option<String> {
 }
 
 /// A probe deck under a fresh id, and what it sees.
-pub(crate) fn probe() -> (BeatGridId, Deck, mpsc::Receiver<Seen>) {
+pub(crate) fn probe() -> (
+    BeatGridId,
+    Box<dyn HostedDeck<TestPools>>,
+    mpsc::Receiver<Seen>,
+) {
     let (seen_tx, seen_rx) = mpsc::channel();
     let id = BeatGridId::allocate().expect("fixture grid id");
-    (id, Box::new(Probe(seen_tx)), seen_rx)
+    (
+        id,
+        Box::new(Probe(
+            seen_tx,
+            PlayWorker::new(PlayWorkerConfig::builder(pools()).build()),
+        )),
+        seen_rx,
+    )
 }
 
 /// The next call the probe sees.

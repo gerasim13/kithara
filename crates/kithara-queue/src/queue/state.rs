@@ -11,9 +11,7 @@ use super::{
     types::Target,
     view::{DeckObservation, QueueView},
 };
-use crate::{
-    QueueConfig, QueueEvent, loader::Loader, navigation::NavigationState, track::Tracks,
-};
+use crate::{QueueConfig, QueueEvent, loader::Loader, navigation::NavigationState, track::Tracks};
 
 /// Cloneable command capability and the queue's published state.
 /// Commands answer after the owner accepts and sends them; executor effects
@@ -123,25 +121,26 @@ where
         }
     }
 
-    /// Every active track, including preloaded and outgoing tracks.
-    pub fn tracks_mut(&mut self) -> impl Iterator<Item = &mut F::Track> {
-        self.active.iter_mut().map(|active| &mut active.track)
-    }
-
-    /// Every active track, including both sides of an unfinished transition.
-    pub fn tracks_active(&self) -> impl Iterator<Item = &F::Track> {
-        self.active.iter().map(|active| &active.track)
-    }
-
-    /// The factory a track decorator configures for subsequent loads.
-    pub fn factory_mut(&mut self) -> &mut F {
-        &mut self.config.factory
-    }
-
-    /// The factory whose configuration subsequent tracks inherit.
-    #[must_use]
-    pub fn factory(&self) -> &F {
-        &self.config.factory
+    delegate::delegate! {
+        to self.active {
+            /// Every active track, including preloaded and outgoing tracks.
+            #[expr($.map(|active| &mut active.track))]
+            #[call(iter_mut)]
+            pub fn tracks_mut(&mut self) -> impl Iterator<Item = &mut F::Track>;
+            /// Every active track, including both sides of an unfinished transition.
+            #[expr($.map(|active| &active.track))]
+            #[call(iter)]
+            pub fn tracks_active(&self) -> impl Iterator<Item = &F::Track>;
+        }
+        to self.config {
+            /// The factory a track decorator configures for subsequent loads.
+            #[field(&mut factory)]
+            pub fn factory_mut(&mut self) -> &mut F;
+            /// The factory whose configuration subsequent tracks inherit.
+            #[must_use]
+            #[field(&factory)]
+            pub fn factory(&self) -> &F;
+        }
     }
 
     /// The sounding track, chosen only when its transition applies.
@@ -185,10 +184,13 @@ where
         let mix = snapshot.deck.mix;
         self.view.publish(snapshot);
         if previous.volume() != mix.volume() {
-            self.bus.publish(PlayerEvent::VolumeChanged { volume: f32::from(mix.volume()) });
+            self.bus.publish(PlayerEvent::VolumeChanged {
+                volume: f32::from(mix.volume()),
+            });
         }
         if previous.muted() != mix.muted() {
-            self.bus.publish(PlayerEvent::MuteChanged { muted: mix.muted() });
+            self.bus
+                .publish(PlayerEvent::MuteChanged { muted: mix.muted() });
         }
         for event in self.events.drain(..) {
             self.bus.publish(event);
@@ -217,28 +219,30 @@ where
 #[cfg(test)]
 pub(crate) mod tests {
     use std::{
-        sync::mpsc,
+        sync::{Arc, mpsc},
         task::{Wake, Waker},
     };
 
+    use kithara_assets::{AssetStore, StorageBackend};
+    use kithara_command::{Seq, When};
     use kithara_config::Config;
-    use kithara_events::{Envelope, EventReceiver};
+    use kithara_events::{Envelope, EventReceiver, TrackId};
     use kithara_platform::{
         thread,
-        time::{Duration, Instant, timeout},
+        time::{Duration, WallInstant, timeout},
         tokio::sync::mpsc::{UnboundedSender, unbounded_channel},
     };
     use kithara_play::{
-        PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, SessionBinding,
-        mock::SessionMock,
-        player::{Player, PlayerControlSource},
+        DeckMixerConfig, DeckPass, HostedDeck, Outbox, PlayError, PlayWorker, PlayWorkerConfig,
+        Player, ResourcePrep,
+        mock::{self, DeckRig},
     };
+    use kithara_signal::{FrameCount, SessionFrame};
     use kithara_test_utils::kithara;
-    use kithara_warp::BeatGridId;
 
-    use super::*;
+    use super::{super::QueueCommand, *};
     use crate::{
-        consts,
+        QueueSettingsChange,
         event::{QueueEvent, QueueRepeatMode, TrackStatus},
         navigation::{ActionAtItemEnd, PlaybackOrder, RepeatMode},
         test_pools::{TestPools, pools},
@@ -257,32 +261,50 @@ pub(crate) mod tests {
     /// A queue the mock session holds, seated the way a Host's insert seats it.
     /// A queue its Host has seated on a deck slot, with the mock that answers
     /// as the slot's audio thread.
-    pub(in crate::queue) fn make_queue() -> (Queue<TestPools>, Arc<SessionMock>) {
+    pub(in crate::queue) fn make_queue() -> (Queue<TestPools>, DeckRig<TestPools>) {
         let mut queue = Queue::new(queue_config());
-        let audio_thread = kithara_play::mock::insert(&mut queue);
+        queue.clock = Some((SessionFrame::new(0), FrameCount::new(128)));
+        queue.deck.mixer.sample_rate = mock::SAMPLE_RATE.get();
+        let audio_thread = DeckRig::new(DeckMixerConfig::default()).expect("deck scope");
         (queue, audio_thread)
     }
 
-    pub(crate) fn test_session() -> SessionBinding {
-        kithara_play::mock::session()
-    }
-
     fn queue_config() -> QueueConfig<TestPools> {
-        let player = player();
-        let store = AssetStore::builder(player.pools().clone())
-            .backend(StorageBackend::Memory)
-            .build();
-        QueueConfig::builder().player(player).store(store).build()
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+        QueueConfig::builder()
+            .prep(ResourcePrep::builder().worker(worker).build())
+            .store(make_store())
+            .build()
     }
 
-    fn player() -> PlayerImpl<TestPools> {
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
-        PlayerImpl::new(
-            PlayerConfig::builder()
-                .sample_rate(consts::TEST_SAMPLE_RATE)
-                .worker(worker)
-                .build(),
-        )
+    pub(in crate::queue) fn with_outbox<Value>(
+        queue: &mut Queue<TestPools>,
+        rig: &mut DeckRig<TestPools>,
+        run: impl FnOnce(&mut Queue<TestPools>, DeckPass<'_>, &mut Outbox<'_, TestPools>) -> Value,
+    ) -> Value {
+        let output = mock::output(None).get();
+        let deck = queue.deck.mixer.clone();
+        let pass = DeckPass {
+            mix: queue.deck.mix,
+            suspended: false,
+            now: SessionFrame::new(0),
+            delivery: FrameCount::new(128),
+            output: &output,
+            deck: &deck,
+        };
+        let mut scope = rig.ring.scope(rig.scope).expect("deck scope");
+        let mut out = Outbox::new(&mut scope, &mut rig.dispatcher).in_pass(pass);
+        run(queue, pass, &mut out)
+    }
+
+    pub(in crate::queue) fn apply(
+        queue: &mut Queue<TestPools>,
+        rig: &mut DeckRig<TestPools>,
+        command: QueueCommand<TestPools>,
+    ) -> Result<Option<Seq>, PlayError> {
+        with_outbox(queue, rig, |queue, _, out| {
+            Player::apply(queue, command, out)
+        })
     }
 
     pub(in crate::queue) async fn wait_for_queue_event<F>(
@@ -293,9 +315,9 @@ pub(crate) mod tests {
     where
         F: FnMut(&QueueEvent) -> bool,
     {
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        let deadline = WallInstant::now() + Duration::from_millis(timeout_ms);
         loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
+            let remaining = deadline.saturating_duration_since(WallInstant::now());
             if remaining.is_zero() {
                 return false;
             }
@@ -325,21 +347,19 @@ pub(crate) mod tests {
 
     #[kithara::test]
     fn queue_registers_its_resident_players_deck_with_the_session() {
-        let grid_id = BeatGridId::allocate().expect("fixture grid id");
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
-        let player = PlayerImpl::new(
-            PlayerConfig::builder()
-                .grid_id(grid_id)
-                .sample_rate(consts::TEST_SAMPLE_RATE)
-                .worker(worker)
-                .build(),
-        );
-        let mut queue = Queue::new(QueueConfig::builder().player(player).build());
-
-        let deck = queue
-            .attach_session(test_session())
-            .expect("the queue binds its session");
-        assert_eq!(deck.grid_id, grid_id);
+        let mut host = kithara_host::Host::new(kithara_host::HostConfig::offline(pools()).build())
+            .expect("offline host");
+        let deck = host
+            .insert(Queue::new(queue_config()))
+            .expect("host registers the queue");
+        let deck_id = deck.id();
+        assert!(!deck.is_closed());
+        host.remove(&deck)
+            .expect("the owning host releases the queue");
+        assert!(deck.is_closed());
+        assert!(matches!(host.remove(&deck),
+            Err(PlayError::Session(kithara_play::SessionError::DeckNotFound(refused)))
+                if refused == deck_id));
     }
 
     /// A holder's waker that reports each wake.
@@ -353,10 +373,10 @@ pub(crate) mod tests {
 
     #[kithara::test]
     fn a_control_command_runs_when_the_holder_drains_the_queue() {
-        let (mut queue, _audio_thread) = make_queue();
+        let (mut queue, mut rig) = make_queue();
         let control = queue.control();
         let (woke_tx, woke_rx) = mpsc::channel();
-        Player::hold(&mut queue, Waker::from(Arc::new(Wakes(woke_tx))));
+        HostedDeck::hold(&mut queue, Waker::from(Arc::new(Wakes(woke_tx))));
 
         let append = thread::spawn(move || {
             let appended = control.append("https://example.com/a.mp3");
@@ -366,14 +386,19 @@ pub(crate) mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("a post wakes the holder");
         assert!(
-            queue.is_empty(),
+            queue.control().is_empty(),
             "the command waits for the holder to drain"
         );
 
-        Player::drain(&mut queue);
+        with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+            HostedDeck::drain(queue, pass, out);
+        });
         let (control, appended) = append.join().expect("append thread must not panic");
         let id = appended.expect("an open queue appends");
-        assert_eq!(queue.tracks().first().map(|track| track.id), Some(id));
+        assert_eq!(
+            queue.control().tracks().first().map(|track| track.id),
+            Some(id)
+        );
 
         drop(queue);
         assert!(matches!(
@@ -396,17 +421,46 @@ pub(crate) mod tests {
     /// until the executor holding the queue drains it.
     #[kithara::test(tokio)]
     async fn a_load_reaches_its_track_only_when_the_holder_drains_the_queue() {
-        let (mut queue, _audio_thread) = make_queue();
+        let (mut queue, mut rig) = make_queue();
         let (woke_tx, mut woke_rx) = unbounded_channel();
-        Player::hold(&mut queue, Waker::from(Arc::new(WakesTask(woke_tx))));
-        let id = queue
-            .append("/kithara/missing-track.wav")
-            .expect("an open queue appends");
-        let status =
-            |queue: &Queue<TestPools>| queue.track(id).expect("the track stays queued").status;
+        rig.dispatcher
+            .hold(Waker::from(Arc::new(WakesTask(woke_tx))));
+        let id = TrackId::allocate();
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Append {
+                id,
+                source: "/kithara/missing-track.wav".into(),
+            },
+        )
+        .expect("an open queue appends");
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Select {
+                id,
+                transition: super::super::Transition::None,
+            },
+        )
+        .expect("select queues the load");
+        let status = |queue: &Queue<TestPools>| {
+            queue
+                .control()
+                .track(id)
+                .expect("the track stays queued")
+                .status
+        };
 
         loop {
             let left = status(&queue);
+            let receipt = rig
+                .open(Err(kithara_play::LoadRefusal::Source(
+                    kithara_audio::TrackFailureKind::Decode {
+                        kind: kithara_audio::DecodeErrorKind::Io,
+                    },
+                )))
+                .expect("the dispatcher answers the load");
             timeout(Duration::from_secs(5), woke_rx.recv())
                 .await
                 .expect("the load reports to the holder");
@@ -415,7 +469,14 @@ pub(crate) mod tests {
                 left,
                 "a load's report waits for the holder to drain the queue"
             );
-            Player::drain(&mut queue);
+            with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+                HostedDeck::settle(
+                    queue,
+                    kithara_play::TrackReceipt::Loaded(receipt),
+                    pass,
+                    out,
+                );
+            });
             if matches!(status(&queue), TrackStatus::Failed(_)) {
                 break;
             }
@@ -424,34 +485,60 @@ pub(crate) mod tests {
 
     #[kithara::test]
     fn a_closed_queue_rejects_mutation() {
-        let (mut queue, _audio_thread) = make_queue();
+        let (mut queue, mut rig) = make_queue();
 
-        Player::close(&mut queue).expect("unstarted fixture must close");
+        with_outbox(&mut queue, &mut rig, |queue, _, out| {
+            HostedDeck::close(queue, out)
+        })
+        .expect("unstarted fixture must close");
 
         assert!(queue.shutdown.is_cancelled());
         assert!(matches!(
-            queue.append("https://example.com/a.mp3"),
-            Err(crate::QueueError::Play(PlayError::Closed))
+            apply(
+                &mut queue,
+                &mut rig,
+                QueueCommand::Append {
+                    id: TrackId::allocate(),
+                    source: "https://example.com/a.mp3".into(),
+                }
+            ),
+            Err(PlayError::Closed)
         ));
-        assert!(queue.is_empty());
+        assert!(queue.control().is_empty());
     }
 
     #[kithara::test]
     fn retained_config_follows_live_queue_controls() {
-        let (mut queue, _audio_thread) = make_queue();
-        queue.set_action_at_item_end(ActionAtItemEnd::Pause);
-        queue.set_playback_order(PlaybackOrder::Shuffle);
-        let mut crossfade = queue.crossfade_settings();
+        let (mut queue, mut rig) = make_queue();
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::SetActionAtItemEnd(ActionAtItemEnd::Pause),
+        )
+        .expect("action");
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::SetPlaybackOrder(PlaybackOrder::Shuffle),
+        )
+        .expect("order");
+        let mut crossfade = queue.control().crossfade_settings();
         crossfade.duration = 2.0;
-        queue
-            .set_crossfade_settings(crossfade)
-            .expect("valid crossfade settings");
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::ConfigureQueue(QueueSettingsChange::Crossfade(crossfade), When::Next),
+        )
+        .expect("valid crossfade settings");
 
         let values = queue.config.values();
         assert_eq!(values.action_at_item_end, ActionAtItemEnd::Pause);
         assert_eq!(values.playback_order, PlaybackOrder::Shuffle);
-        assert_eq!(values.crossfade_settings, crossfade);
-        assert_eq!(queue.player.crossfade_duration(), crossfade.duration);
+        assert_eq!(values.settings.crossfade(), crossfade);
+        assert_eq!(
+            queue.control().crossfade_settings().duration,
+            crossfade.duration
+        );
     }
 
     /// A queue event is heard only with the view that shows it, in the order
@@ -459,19 +546,31 @@ pub(crate) mod tests {
     /// that change.
     #[kithara::test]
     fn a_queue_event_is_heard_with_the_view_that_shows_it() {
-        let (mut queue, _audio_thread) = make_queue();
+        let (mut queue, mut rig) = make_queue();
         let control = queue.control();
-        let id = queue
-            .append("https://example.com/a.mp3")
-            .expect("an open queue appends");
-        let mut events = queue.subscribe::<QueueEvent>();
+        let id = TrackId::allocate();
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Append {
+                id,
+                source: "https://example.com/a.mp3".into(),
+            },
+        )
+        .expect("an open queue appends");
+        let mut events = queue.bus.subscribe::<QueueEvent>();
 
         queue.tracks.set_status(id, TrackStatus::Consumed);
         assert!(
             events.try_recv().is_err(),
             "a change is not heard before the queue publishes it"
         );
-        queue.set_repeat(RepeatMode::All);
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::SetRepeat(RepeatMode::All),
+        )
+        .expect("repeat");
 
         let heard: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
             .map(|envelope| envelope.event)
@@ -501,13 +600,16 @@ pub(crate) mod tests {
     #[kithara::test]
     fn cached_position_unknown_after_construction() {
         let (queue, _audio_thread) = make_queue();
-        assert_eq!(queue.position_seconds(), None);
+        assert_eq!(
+            queue.queue_snapshot().track.map(|track| track.position),
+            None
+        );
         assert_eq!(queue.control().position_seconds(), None);
     }
 
     #[kithara::test]
     fn select_phase_idle_after_construction() {
         let (queue, _audio_thread) = make_queue();
-        assert!(matches!(queue.pending_select, SelectPhase::Idle));
+        assert!(queue.target.is_none());
     }
 }

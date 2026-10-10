@@ -10,18 +10,16 @@ use kithara::{
         MetronomeConfigControl, Tap,
     },
     platform::time::{self, Duration},
-    play::{
-        PlayError, PlayWorker, PlayWorkerConfig, ResourcePrep, SessionDuckingMode,
-    },
-    signal::{AudioSpec, SessionFrame},
+    play::{PlayError, PlayWorker, PlayWorkerConfig, ResourcePrep, SessionDuckingMode},
     queue::{Queue, QueueConfig, QueueControl, QueueError, QueueSettings, Transition},
+    signal::{AudioSpec, SessionFrame},
 };
 use kithara_command::When;
 use kithara_config::Configure;
 use kithara_integration_tests::{
     audio_artifact::{AudioArtifactTap, artifact_label},
-    offline::OfflineHostHarness,
     mock::PcmDeck,
+    offline::OfflineHostHarness,
 };
 use kithara_test_fixtures::{
     analysis_beat_fixtures::sine_440_long,
@@ -30,8 +28,10 @@ use kithara_test_fixtures::{
     },
     signal::peak,
 };
-use kithara_test_utils::bufpool::{TestPools, pools};
-use kithara_test_utils::TestTempDir;
+use kithara_test_utils::{
+    TestTempDir,
+    bufpool::{TestPools, pools},
+};
 use num_traits::AsPrimitive;
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -68,7 +68,9 @@ impl MixHarness {
         let pools = pools();
         let store_dir = TestTempDir::new();
         let store = AssetStore::builder(pools.clone())
-            .backend(StorageBackend::Disk { root: store_dir.path().to_path_buf() })
+            .backend(StorageBackend::Disk {
+                root: store_dir.path().to_path_buf(),
+            })
             .build();
         let sample_rate = NonZeroU32::new(SAMPLE_RATE).expect("fixture sample rate is non-zero");
         let host = OfflineHostHarness::new(
@@ -82,17 +84,30 @@ impl MixHarness {
         for _ in 0..count {
             let config = QueueConfig::builder()
                 .store(store.clone())
-                .prep(ResourcePrep::builder()
-                    .worker(PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build()))
-                    .build())
-                .settings(QueueSettings::builder().crossfade(kithara::play::CrossfadeSettings {
-                    duration: 0.0,
-                    ..Default::default()
-                }).build())
+                .prep(
+                    ResourcePrep::builder()
+                        .worker(PlayWorker::new(
+                            PlayWorkerConfig::builder(pools.clone()).build(),
+                        ))
+                        .build(),
+                )
+                .settings(
+                    QueueSettings::builder()
+                        .crossfade(kithara::play::CrossfadeSettings {
+                            duration: 0.0,
+                            ..Default::default()
+                        })
+                        .build(),
+                )
                 .build();
             players.push(host.insert(Queue::new(config)).await.expect("insert deck"));
         }
-        Self { host, players, pcm_decks: Mutex::new(Vec::new()), _store_dir: store_dir }
+        Self {
+            host,
+            players,
+            pcm_decks: Mutex::new(Vec::new()),
+            _store_dir: store_dir,
+        }
     }
 
     async fn set_ducking(&self, mode: SessionDuckingMode) {
@@ -118,19 +133,30 @@ impl MixHarness {
             .iter()
             .map(|player| player.control().clone())
             .collect();
-        let decks: Vec<_> = readers.into_iter().map(|reader| PcmDeck::new(Box::new(reader))).collect();
+        let decks: Vec<_> = readers
+            .into_iter()
+            .map(|reader| PcmDeck::new(Box::new(reader)))
+            .collect();
         let sources: Vec<_> = decks.iter().map(PcmDeck::source).collect();
-        self.pcm_decks.lock().expect("PCM deck retention").extend(decks);
-        let selected = self.host.run(move || {
-            let mut selected = Vec::new();
-            for (player, source) in players.iter().zip(sources) {
-                let id = player.append(source).expect("append PCM deck");
-                player.select(id, Transition::None).expect("select PCM deck");
-                player.play();
-                selected.push((player.clone(), id));
-            }
-            selected
-        }).await;
+        self.pcm_decks
+            .lock()
+            .expect("PCM deck retention")
+            .extend(decks);
+        let selected = self
+            .host
+            .run(move || {
+                let mut selected = Vec::new();
+                for (player, source) in players.iter().zip(sources) {
+                    let id = player.append(source).expect("append PCM deck");
+                    player
+                        .select(id, Transition::None)
+                        .expect("select PCM deck");
+                    player.play();
+                    selected.push((player.clone(), id));
+                }
+                selected
+            })
+            .await;
         for (player, id) in selected {
             kithara_integration_tests::waits::wait_for_loader_done(
                 &player,
@@ -202,7 +228,12 @@ impl MixHarness {
     }
 
     async fn close(self) {
-        let Self { host, players, pcm_decks, _store_dir } = self;
+        let Self {
+            host,
+            players,
+            pcm_decks,
+            _store_dir,
+        } = self;
         drop(players);
         host.close().await;
         drop(pcm_decks);
@@ -233,22 +264,32 @@ async fn a_deck_mix_shows_once_its_mixer_applies_it() {
     let player = harness.players[0].control().clone();
     let mut events = player.subscribe::<kithara::play::PlayerEvent>();
     let control = player.clone();
-    harness.host.run(move || {
-        control.set_volume(0.5).expect("send volume");
-        control.set_muted(true).expect("send mute");
-    }).await;
+    harness
+        .host
+        .run(move || {
+            control.set_volume(0.5).expect("send volume");
+            control.set_muted(true).expect("send mute");
+        })
+        .await;
     assert_eq!(player.volume(), 1.0);
     assert!(!player.is_muted());
     harness.render_block().await;
     assert_eq!(player.volume(), 0.5);
     assert!(player.is_muted());
-    assert!(matches!(events.try_recv().expect("volume event").event,
-        kithara::play::PlayerEvent::VolumeChanged { volume: 0.5 }));
-    assert!(matches!(events.try_recv().expect("mute event").event,
-        kithara::play::PlayerEvent::MuteChanged { muted: true }));
+    assert!(matches!(
+        events.try_recv().expect("volume event").event,
+        kithara::play::PlayerEvent::VolumeChanged { volume: 0.5 }
+    ));
+    assert!(matches!(
+        events.try_recv().expect("mute event").event,
+        kithara::play::PlayerEvent::MuteChanged { muted: true }
+    ));
     let control = player.clone();
     let error = harness.host.run(move || control.set_level(2.0)).await;
-    assert!(matches!(error, Err(QueueError::Play(PlayError::MixLevel { level: 2.0 }))));
+    assert!(matches!(
+        error,
+        Err(QueueError::Play(PlayError::MixLevel { level: 2.0 }))
+    ));
     harness.render_block().await;
     assert_eq!(player.volume(), 0.5);
     harness.close().await;
@@ -261,11 +302,15 @@ async fn an_eq_layout_and_gain_show_once_the_mixer_applies_them() {
     assert_eq!(player.eq_band_count(), 10);
     assert_eq!(player.eq_gain(0), Some(0.0));
     let control = player.clone();
-    harness.host.run(move || {
-        control.set_eq_layout(kithara::effects::eq::generate_log_spaced_bands(3))
-            .expect("send layout");
-        control.set_eq_gain(1, -6.0).expect("send gain");
-    }).await;
+    harness
+        .host
+        .run(move || {
+            control
+                .set_eq_layout(kithara::effects::eq::generate_log_spaced_bands(3))
+                .expect("send layout");
+            control.set_eq_gain(1, -6.0).expect("send gain");
+        })
+        .await;
     assert_eq!(player.eq_band_count(), 10);
     assert_eq!(player.eq_gain(1), Some(0.0));
     harness.render_block().await;
@@ -274,9 +319,18 @@ async fn an_eq_layout_and_gain_show_once_the_mixer_applies_them() {
     assert_eq!(player.eq_gain(3), None);
     let control = player.clone();
     let error = harness.host.run(move || control.set_eq_gain(5, 0.0)).await;
-    assert!(matches!(error, Err(QueueError::Play(PlayError::EqBandOutOfRange { band: 5, bands: 3 }))));
+    assert!(matches!(
+        error,
+        Err(QueueError::Play(PlayError::EqBandOutOfRange {
+            band: 5,
+            bands: 3
+        }))
+    ));
     let control = player.clone();
-    harness.host.run(move || control.reset_eq().expect("send reset")).await;
+    harness
+        .host
+        .run(move || control.reset_eq().expect("send reset"))
+        .await;
     harness.render_block().await;
     assert_eq!(player.eq_gain(1), Some(0.0));
     harness.close().await;

@@ -127,7 +127,11 @@ mod hls_timeline {
                     "variant_index should be 0 at chunk {chunk_count}"
                 );
 
-                assert_eq!(meta.segment.get(), 0, "epoch should stay 0 at chunk {chunk_count}");
+                assert_eq!(
+                    meta.segment.get(),
+                    0,
+                    "epoch should stay 0 at chunk {chunk_count}"
+                );
 
                 prev_frame_end = meta.frame_offset + chunk.frames() as u64;
                 chunk_count += 1;

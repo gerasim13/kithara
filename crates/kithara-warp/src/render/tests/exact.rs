@@ -427,7 +427,7 @@ fn a_failed_large_mapping_cannot_leak_scratch_into_a_smaller_quantum(#[case] bac
         .get();
     let prepared = renderer.prepared_quantum.as_mut().expect("cached quantum");
     prepared.source_span = Some(
-        kithara_signal::SourceSpan::from_rational(0, 1, NonZeroU128::MIN, spec().sample_rate, 1024)
+        kithara_signal::SourceSpan::try_from((0, 1, NonZeroU128::MIN, spec().sample_rate, 1024))
             .expect("large mapping"),
     );
     let mut input = chunk(&renderer.pools, &vec![0.25; count * 2]);

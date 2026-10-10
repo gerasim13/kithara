@@ -87,7 +87,6 @@ async fn hls_seek_middle_repeated_seeks_stress(
             )
             .build();
 
-
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
             .settings(

@@ -219,7 +219,7 @@ fn rejected_jump_keeps_active_playback_and_cannot_be_resurrected() {
         rig.settle(
             &mut deck,
             seq,
-            kithara_command::Outcome::Rejected(Rejection::Refused(
+            &kithara_command::Outcome::Rejected(Rejection::Refused(
                 kithara_render::bridge::DeckRefusal::Occupied {
                     slot: kithara_render::bridge::Slot::new(0)
                 }
@@ -256,7 +256,7 @@ fn retime_owns_the_replacement_start_and_ignores_the_withdrawn_receipt() {
             &trajectory(90.0, 4),
             SessionFrame::new(48_000),
             out,
-        )
+        );
     });
     let commands = control.commands();
     assert_eq!(commands.len(), 2);

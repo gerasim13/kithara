@@ -134,7 +134,11 @@ impl NativeInner {
             .cancel(cancel.child())
             .build();
         let queue_config = QueueConfig::builder()
-            .mixer(DeckMixerConfig::builder().eq_bands(eq_band_count as usize).build())
+            .mixer(
+                DeckMixerConfig::builder()
+                    .eq_bands(eq_band_count as usize)
+                    .build(),
+            )
             .prep(prep)
             .track(track)
             .cancel(cancel.child())

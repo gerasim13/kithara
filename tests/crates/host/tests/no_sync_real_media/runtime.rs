@@ -5,14 +5,18 @@ use kithara::{
     file::FileEvent,
     hls::HlsEvent,
     host::HostOwned,
-    platform::tokio::sync::broadcast::error::TryRecvError,
+    platform::{
+        sync::{Arc, Mutex},
+        tokio::sync::broadcast::error::TryRecvError,
+    },
     play::{DeckSnapshot, PlayError, PlayerEvent, SessionError},
-    queue::Queue,
-    platform::sync::{Arc, Mutex},
-    queue::ItemEvent,
-    signal::{TransportRevision, SegmentId},
+    queue::{ItemEvent, Queue},
+    signal::{SegmentId, TransportRevision},
 };
-use kithara_integration_tests::{event::TestEvent, offline::{OfflineHostHarness, host::ObservedDeck}};
+use kithara_integration_tests::{
+    event::TestEvent,
+    offline::{OfflineHostHarness, host::ObservedDeck},
+};
 use kithara_test_utils::bufpool::TestPools;
 use serde::Serialize;
 
@@ -73,7 +77,9 @@ pub(super) fn drain_all_events(
             if let Some(mark) = mark {
                 if mark.lane.segment == requested && mark.lane.frame > 0 {
                     if deck.seek_complete_segment.is_none() {
-                        deck.observation.seek_positions_secs.push(mark.position.as_secs_f64());
+                        deck.observation
+                            .seek_positions_secs
+                            .push(mark.position.as_secs_f64());
                     }
                     deck.seek_complete_segment = Some(mark.lane.segment);
                 } else if mark.lane.segment > requested {
@@ -201,17 +207,17 @@ fn observe_audio_event(
     match event {
         AudioEvent::SeekRejected { target } => {
             deck.seek_terminal = true;
-            failures.push(format!("deck {deck_index} ({}) rejected seek to {:.3}s during {phase}", deck.observation.label, target.as_secs_f64()));
+            failures.push(format!(
+                "deck {deck_index} ({}) rejected seek to {:.3}s during {phase}",
+                deck.observation.label,
+                target.as_secs_f64()
+            ));
         }
         AudioEvent::UnderrunStarted { .. } => {
             if matches!(policy, EventPolicy::MutedSeekSetup)
-                && deck.seek_request_segment.is_some()
+                && let Some(segment) = deck.seek_request_segment
             {
-                if deck
-                    .muted_seek_underrun_segment
-                    .replace(deck.seek_request_segment.expect("muted seek requested a segment"))
-                    .is_some()
-                {
+                if deck.muted_seek_underrun_segment.replace(segment).is_some() {
                     failures.push(format!(
                         "deck {deck_index} ({}) reported duplicate muted seek underrun during {phase}",
                         deck.observation.label,

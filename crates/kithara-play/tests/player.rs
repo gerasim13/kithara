@@ -3,9 +3,9 @@ use kithara_command::When;
 use kithara_events::{EventBus, TrackId, TryRecvError};
 use kithara_platform::time::Duration;
 use kithara_play::{
-    DeckMixerConfig, PlayWorker, PlayWorkerConfig, Player, PlayerConfig, PlayerEvent, PlayerFactory,
-    PlayerImpl, Position, ResourceConfig, ResourcePrep, ResourceSrc, Slot, TrackCommand, TrackFactory,
-    TrackSettings, TrackSettingsChange, TrackStatus, mock,
+    DeckMixerConfig, PlayWorker, PlayWorkerConfig, Player, PlayerConfig, PlayerEvent,
+    PlayerFactory, PlayerImpl, Position, ResourceConfig, ResourcePrep, ResourceSrc, Slot,
+    TrackCommand, TrackFactory, TrackSettings, TrackSettingsChange, TrackStatus, mock,
 };
 #[cfg(all(test, target_os = "android"))]
 use kithara_test_dylib as _;
@@ -34,7 +34,12 @@ fn rig() -> mock::DeckRig<TestPools> {
 
 #[kithara::test]
 fn an_empty_deck_rig_runs_its_mixer_block() {
-    assert!(rig().block(kithara_signal::SessionFrame::new(0), 0.0).expect("mock block").is_empty());
+    assert!(
+        rig()
+            .block(kithara_signal::SessionFrame::new(0), 0.0)
+            .expect("mock block")
+            .is_empty()
+    );
 }
 
 fn prepared(prep: &ResourcePrep<TestPools>) -> ResourceConfig<TestPools> {
@@ -106,11 +111,15 @@ fn position_seconds_idle_is_none() {
 fn set_rate_without_rt_does_not_emit_rate_changed() {
     let mut player = player();
     let mut rig = rig();
-    let sent = rig.with_outbox(|out| {
-        player.apply(TrackCommand::Configure(TrackSettingsChange::Speed(2.0), When::Next), out)
-    })
-    .expect("live deck scope")
-    .expect("idle speed change succeeds");
+    let sent = rig
+        .with_outbox(|out| {
+            player.apply(
+                TrackCommand::Configure(TrackSettingsChange::Speed(2.0), When::Next),
+                out,
+            )
+        })
+        .expect("live deck scope")
+        .expect("idle speed change succeeds");
     assert!(sent.is_none(), "idle speed changes send no RT command");
     assert_eq!(player.snapshot().speed, 2.0);
     assert!(rig.events.drain().next().is_none());
@@ -120,10 +129,7 @@ fn set_rate_without_rt_does_not_emit_rate_changed() {
 fn player_keeps_explicit_worker_and_shared_pools() {
     let worker = worker();
     let player = ResourcePrep::builder().worker(worker.clone()).build();
-    assert!(std::ptr::eq(
-        player.worker.pools(),
-        worker.pools(),
-    ));
+    assert!(std::ptr::eq(player.worker.pools(), worker.pools(),));
 }
 
 #[kithara::test]
@@ -147,9 +153,16 @@ fn held_start_position_keeps_the_latest_target() {
     rig.with_outbox(|out| player.apply(TrackCommand::Seek { to: Position::ZERO }, out))
         .expect("live deck scope")
         .expect("must accept");
-    rig.with_outbox(|out| player.apply(TrackCommand::Seek { to: Position::from_secs(30) }, out))
-        .expect("live deck scope")
-        .expect("must accept");
+    rig.with_outbox(|out| {
+        player.apply(
+            TrackCommand::Seek {
+                to: Position::from_secs(30),
+            },
+            out,
+        )
+    })
+    .expect("live deck scope")
+    .expect("must accept");
 
     assert_eq!(player.snapshot().position.as_secs_f64(), 30.0);
 }

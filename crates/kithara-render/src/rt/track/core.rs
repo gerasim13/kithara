@@ -54,30 +54,6 @@ impl PlayerTrack {
         self.state
     }
 
-    #[must_use]
-    pub fn segment(&self) -> SegmentId {
-        self.resource.segment()
-    }
-
-    #[must_use]
-    pub fn mark(&self, session: SessionFrame) -> Option<SlotMark> {
-        self.resource.mark(session)
-    }
-
-    #[must_use]
-    pub fn position(&self) -> f64 {
-        self.resource.position().as_secs_f64()
-    }
-
-    #[must_use]
-    pub fn gain(&self) -> f32 {
-        if self.state == SlotState::Playing {
-            self.fade.gain()
-        } else {
-            0.0
-        }
-    }
-
     delegate::delegate! {
         to self.resource {
             #[must_use]
@@ -88,6 +64,38 @@ impl PlayerTrack {
             pub fn cached_span(&self) -> f64;
             #[must_use]
             pub fn src(&self) -> &Arc<str>;
+            #[must_use]
+            pub fn segment(&self) -> SegmentId;
+            #[must_use]
+            pub fn mark(&self, session: SessionFrame) -> Option<SlotMark>;
+        }
+        to self {
+            #[expr(self.stop_resume)]
+            pub(crate) fn stop_resume(&self) -> Option<SlotMark>;
+        }
+    }
+
+    #[must_use]
+    pub fn position(&self) -> f64 {
+        self.resource.position().as_secs_f64()
+    }
+
+    pub(crate) fn frames_until_boundary(&self) -> Option<usize> {
+        let packet = self.resource.frames_until_boundary();
+        if self.fade.is_fading_out() {
+            let fade = usize::try_from(self.fade.remaining()).unwrap_or(usize::MAX);
+            Some(packet.map_or(fade, |frames| frames.min(fade)))
+        } else {
+            packet
+        }
+    }
+
+    #[must_use]
+    pub fn gain(&self) -> f32 {
+        if self.state == SlotState::Playing {
+            self.fade.gain()
+        } else {
+            0.0
         }
     }
 
@@ -142,11 +150,10 @@ impl PlayerTrack {
     }
 
     pub(crate) fn adopt(&mut self, segment: SegmentId) {
-        let playing = self.state == SlotState::Playing || self.state == SlotState::Ended;
+        let ended = self.state == SlotState::Ended;
         self.resource.select_segment(segment);
         self.gap = 0;
-        if playing {
-            self.fade.stop(self.sample_rate);
+        if ended {
             self.start(Fade::Declick);
         }
     }
@@ -156,10 +163,6 @@ impl PlayerTrack {
         if self.state == SlotState::Stopped && self.stop_at.is_some() {
             self.settle_stop();
         }
-    }
-
-    pub(crate) fn stop_resume(&self) -> Option<SlotMark> {
-        self.stop_resume
     }
 
     pub(crate) fn clear_stop(&mut self) {
@@ -240,13 +243,13 @@ mod tests {
             .sample_rate(spec.sample_rate)
             .build(resource);
         assert_eq!(track.mark(SessionFrame::new(0)), None);
-        ring.push(PcmPacket::Chunk(chunk(
+        ring.push(PcmPacket::Chunk(Box::new(chunk(
             spec,
             SegmentId::FIRST,
             0,
             0,
             &[1.0; 2],
-        )));
+        ))));
         track.recycle_obsolete(&mut 1);
         track.stop(Fade::Declick, SessionFrame::new(0));
         assert_eq!(

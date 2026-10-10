@@ -102,15 +102,18 @@ async fn startup_issues_no_eager_size_probe_storm(
         .initial_abr_mode(AbrMode::manual(ACTIVE_VARIANT))
         .build();
 
-    let config = kithara::play::TrackConfig::for_audio(AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .media_info(fixture.media_info())
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(DecoderBackend::default())
-                .build(),
-        ).build())
-        .block_on_underrun(true)
-        .build();
+    let config = kithara::play::TrackConfig::for_audio(
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+            .media_info(fixture.media_info())
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(DecoderBackend::default())
+                    .build(),
+            )
+            .build(),
+    )
+    .block_on_underrun(true)
+    .build();
 
     // NOTE: this is the historical storm seam. Keep creation and first-frame
     // decode ahead of the counter read so both construction-time and startup

@@ -12,8 +12,7 @@ use kithara::{
     storage::WaitOutcome,
     stream::{
         Activity, ActivityWriter, ByteMap, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome,
-        Source, SourceError, SourcePhase, SourceProbe, Stream,
-        StreamResult, StreamType,
+        Source, SourceError, SourcePhase, SourceProbe, Stream, StreamResult, StreamType,
     },
 };
 

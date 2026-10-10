@@ -205,7 +205,6 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
         }
     };
 
-
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
             .settings(

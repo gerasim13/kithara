@@ -36,7 +36,7 @@ impl Default for BackendConfig {
 /// processor itself, one requested block at a time, so a caller pulls audio at
 /// whatever pace it likes instead of a sound card setting it.
 pub(crate) struct OfflineStream {
-    processor: FirewheelProcessor,
+    processor: Box<FirewheelProcessor>,
     sample_rate: NonZeroU32,
 }
 
@@ -87,7 +87,7 @@ impl OfflineStream {
             })
             .map_err(|error| OfflineSessionError::Graph(error.to_string()))?;
         Ok(Self {
-            processor,
+            processor: Box::new(processor),
             sample_rate: config.sample_rate,
         })
     }

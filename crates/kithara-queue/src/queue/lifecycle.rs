@@ -2,8 +2,8 @@ use kithara_bufpool::HasPool;
 use kithara_command::{Seq, When};
 use kithara_events::TrackId;
 use kithara_play::{
-    Outbox, OutputSnapshot, PlayError, Player, PlayerConfig, Position, Slot, Track, TrackCommand, TrackFactory,
-    TrackStatus as PlayingStatus,
+    Outbox, OutputSnapshot, PlayError, Player, PlayerConfig, Position, Slot, Track, TrackCommand,
+    TrackFactory, TrackStatus as PlayingStatus,
 };
 
 use super::{
@@ -42,13 +42,23 @@ where
         self.announce(QueueEvent::TrackAdded { id, index });
     }
 
-    pub(super) fn autoplay(&mut self, output: Option<&OutputSnapshot>, out: &mut Outbox<'_, S>) -> Result<(), QueueError> {
+    pub(super) fn autoplay(
+        &mut self,
+        output: Option<&OutputSnapshot>,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<(), QueueError> {
         if self.config.should_autoplay
             && self.current.is_none()
             && self.target.is_none()
             && self.navigation.current().is_none()
         {
-            self.next_target(Transition::None, AdvanceReason::InitialLoad, false, output, out)?;
+            self.next_target(
+                Transition::None,
+                AdvanceReason::InitialLoad,
+                false,
+                output,
+                out,
+            )?;
         }
         Ok(())
     }
@@ -139,9 +149,8 @@ where
             active.role = role;
             return Ok(active.load.map(super::slots::LoadState::seq));
         }
-        let slot = match self.active.free_slot() {
-            Some(slot) => slot,
-            None => return self.evict_for(id, role, output, out),
+        let Some(slot) = self.active.free_slot() else {
+            return self.evict_for(id, role, output, out);
         };
         let active = self.prepare_track(id, slot, role, output, out)?;
         let seq = active.load.map(super::slots::LoadState::seq);
@@ -179,19 +188,16 @@ where
             slot,
             settings,
         })?;
-        let loader = self.loader.as_ref().ok_or_else(|| PlayError::InvalidConfiguration {
-            reason: "a hosted queue requires resource preparation and an asset store".into(),
-        })?;
+        let loader = self
+            .loader
+            .as_ref()
+            .ok_or_else(|| PlayError::InvalidConfiguration {
+                reason: "a hosted queue requires resource preparation and an asset store".into(),
+            })?;
         let output = output.ok_or(PlayError::NotReady)?;
         let (item, load) = loader.start(id, source, observer, output)?;
         let position = self.held_position.unwrap_or(Position::ZERO);
-        let seq = track.apply(
-            TrackCommand::Load {
-                item,
-                position,
-            },
-            out,
-        )?;
+        let seq = track.apply(TrackCommand::Load { item, position }, out)?;
         self.held_position = None;
         self.tracks.begin_load(id, load);
         Ok(Active {
@@ -214,12 +220,12 @@ where
             self.release_track(index, out)?;
             self.reap_released();
         }
-        let victim =
-            self.active
-                .quietest(&self.deck.mixer, |_| true)
-                .ok_or(PlayError::InvalidConfiguration {
-                    reason: "a mixer must have at least one slot".into(),
-                })?;
+        let victim = self
+            .active
+            .quietest(&self.deck.mixer, |_| true)
+            .ok_or_else(|| PlayError::InvalidConfiguration {
+                reason: "a mixer must have at least one slot".into(),
+            })?;
         let slot = self
             .active
             .get(victim)
@@ -342,13 +348,7 @@ where
             .get_mut(index)
             .ok_or(PlayError::NoActiveSlot)?
             .track
-            .apply(
-                TrackCommand::Load {
-                    item,
-                    position,
-                },
-                out,
-            )?;
+            .apply(TrackCommand::Load { item, position }, out)?;
         self.active
             .get_mut(index)
             .ok_or(PlayError::NoActiveSlot)?
@@ -361,10 +361,9 @@ where
 mod tests {
     use kithara_assets::{AssetStore, StorageBackend};
     use kithara_host::{Host, HostConfig, HostOwned};
-    use kithara_platform::sync::Arc;
     use kithara_platform::tokio::task::spawn_blocking;
     use kithara_play::{
-        ItemRole, PlayWorker, PlayWorkerConfig, PlayerEvent, ResourcePrep, SlotId, TrackRef,
+        DeckEvent, HostedDeck, PlayWorker, PlayWorkerConfig, ResourcePrep, Slot, TrackReceipt,
     };
     use kithara_test_utils::kithara;
 
@@ -372,7 +371,10 @@ mod tests {
     use crate::{
         QueueConfig, QueueControl,
         event::QueueEvent,
-        queue::state::tests::{make_queue, wait_for_queue_event},
+        queue::{
+            QueueCommand,
+            state::tests::{apply, make_queue, wait_for_queue_event, with_outbox},
+        },
         test_pools::{TestPools, pools},
     };
 
@@ -389,8 +391,8 @@ mod tests {
                         .build(),
                 )
                 .build();
-            let mut host = Host::new(HostConfig::offline(pools()).build())
-                .expect("fixture offline Host");
+            let mut host =
+                Host::new(HostConfig::offline(pools()).build()).expect("fixture offline Host");
             let queue = host
                 .insert(Queue::new(config))
                 .expect("insert fixture queue");
@@ -488,35 +490,43 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn clear_discards_old_eof_before_reinsert() {
-        let (mut queue, _audio_thread) = make_queue();
-        let old = queue
-            .append("https://example.com/old.mp3")
-            .expect("open queue accepts a track");
+        let (mut queue, mut rig) = make_queue();
+        let old = TrackId::allocate();
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Append {
+                id: old,
+                source: "https://example.com/old.mp3".into(),
+            },
+        )
+        .expect("open queue accepts a track");
         queue.navigation.select(old, &[old]);
-        queue.player.bus().publish(PlayerEvent::ItemDidPlayToEnd {
-            item: ItemRole::Leading(TrackRef::new(
-                old,
-                SlotId::new(0),
-                Arc::from(format!("test://memory/{}", old.as_u64())),
-            )),
+        let ended = DeckEvent::Ended {
+            slot: Slot::new(0),
+            at: kithara_signal::SessionFrame::new(0),
+        };
+
+        apply(&mut queue, &mut rig, QueueCommand::RemoveAll)
+            .expect("the idle deck takes the clear");
+        let replacement = TrackId::allocate();
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Append {
+                id: replacement,
+                source: "https://example.com/replacement.mp3".into(),
+            },
+        )
+        .expect("open queue accepts a replacement track");
+        queue.navigation.select(replacement, &[replacement]);
+        with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+            HostedDeck::settle(queue, TrackReceipt::Event(ended), pass, out);
+            HostedDeck::tick(queue, pass, out);
         });
 
-        queue.clear().expect("the idle deck takes the clear");
-        let replacement = queue
-            .append("https://example.com/replacement.mp3")
-            .expect("open queue accepts a replacement track");
-        queue.navigation.select(replacement, &[replacement]);
-        queue
-            .resident
-            .set_rate(1.0)
-            .expect("a finite rate is accepted");
-
-        queue
-            .tick()
-            .expect("tick must accept a freshly reinserted queue");
-
         assert_eq!(
-            queue.current().map(|entry| entry.id),
+            queue.control().current().map(|entry| entry.id),
             Some(replacement),
             "an EOF queued before clear must not end the replacement queue"
         );

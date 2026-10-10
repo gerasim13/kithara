@@ -8,11 +8,11 @@ pub(crate) enum ResumeTarget {
     Source(crate::SourceEnd),
 }
 
-impl ResumeTarget {
-    pub(crate) fn position(self) -> DecodeResult<Duration> {
-        match self {
-            Self::Position(position) => Ok(position),
-            Self::Source(end) => {
+impl From<ResumeTarget> for DecodeResult<Duration> {
+    fn from(target: ResumeTarget) -> Self {
+        match target {
+            ResumeTarget::Position(position) => Ok(position),
+            ResumeTarget::Source(end) => {
                 Ok(AudioSpec::new(1, end.sample_rate()).duration_for(end.frame())?)
             }
         }

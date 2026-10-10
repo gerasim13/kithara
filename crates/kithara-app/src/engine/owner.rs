@@ -399,7 +399,10 @@ impl Drop for Engine {
 mod tests {
     use std::convert::Infallible;
 
-    use ::kithara::platform::{CancelToken, time::Instant};
+    use ::kithara::{
+        platform::{CancelToken, time::Instant},
+        queue::QueueControl,
+    };
     use kithara_test_utils::{kithara, off_thread::OffThread};
 
     use crate::{analysis::fixtures::tone_mp3, gui::rig::Rig};
@@ -420,7 +423,7 @@ mod tests {
         );
         assert_eq!(applied.len(), 1, "closing the window queues one shutdown");
         assert!(
-            rig.queues.iter().all(|queue| queue.is_closed()),
+            rig.queues.iter().all(QueueControl::is_closed),
             "every deck left the host"
         );
         assert!(

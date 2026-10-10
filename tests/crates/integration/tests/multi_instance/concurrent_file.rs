@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use kithara_integration_tests::mock::LaneAudio;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::AudioConfig,
@@ -12,6 +11,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
+    mock::LaneAudio,
     reads::{ReadLimit, read_for_concurrency_check},
 };
 use kithara_test_fixtures::SignalAsset;

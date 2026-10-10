@@ -7,7 +7,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use kithara_integration_tests::mock::LaneAudio;
 use std::{
     num::NonZeroU32,
     sync::atomic::{AtomicUsize, Ordering},
@@ -28,6 +27,7 @@ use kithara_app::{
     pools::{AppPools, AppResourceConfig, AppStore, AppWorker, PoolsSection, build},
     waveform::TrackAnalysisRunner,
 };
+use kithara_integration_tests::mock::LaneAudio;
 use kithara_test_fixtures::integration_fixtures::audio_wav_44100;
 use kithara_test_utils::TestHttpServer;
 
@@ -92,13 +92,16 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
     // Player consumer of the same URL through the same shared store. Built
     // with `block_on_underrun(true)` so the drain parks on the virtual clock
     // until the worker delivers, instead of sleep-polling on `Pending`.
-    let player_cfg = kithara::play::TrackConfig::for_audio(AudioConfig::<File<AppPools>>::for_stream(
-        FileConfig::for_src(FileSrc::Remote(url.clone()))
-            .store(store)
-            .pools(pools.clone())
-            .build(),
-    ).build())
-        .block_on_underrun(true)
+    let player_cfg = kithara::play::TrackConfig::for_audio(
+        AudioConfig::<File<AppPools>>::for_stream(
+            FileConfig::for_src(FileSrc::Remote(url.clone()))
+                .store(store)
+                .pools(pools.clone())
+                .build(),
+        )
+        .build(),
+    )
+    .block_on_underrun(true)
     .build();
 
     // Run both concurrently so they cooperate on one download.
@@ -122,7 +125,9 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
         )
         .expect("the pass opens");
 
-    let player = kithara_integration_tests::mock::load_audio(&worker, player_cfg).await.expect("open player audio");
+    let player = kithara_integration_tests::mock::load_audio(&worker, player_cfg)
+        .await
+        .expect("open player audio");
     let player_drain = spawn_blocking(move || {
         let mut player = player;
         player.preload().expect("player preload");

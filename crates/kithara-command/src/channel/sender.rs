@@ -98,16 +98,15 @@ impl<P: Protocol> Sender<P> {
         })
     }
 
-    /// The last projected shift of `target` at `when`.
-    #[must_use]
-    pub fn basis(&self, target: P::Target, when: When<P::Clock>) -> Option<Seq> {
-        self.book.basis(target, when)
-    }
-
-    /// Batches still available before the channel returns [`SendError::Full`].
-    #[must_use]
-    pub fn available(&self) -> usize {
-        self.book.available()
+    delegate::delegate! {
+        to self.book {
+            /// The last projected shift of `target` at `when`.
+            #[must_use]
+            pub fn basis(&self, target: P::Target, when: When<P::Clock>) -> Option<Seq>;
+            /// Batches still available before the channel returns [`SendError::Full`].
+            #[must_use]
+            pub fn available(&self) -> usize;
+        }
     }
 
     /// Sends `batch` to apply at `when`, wakes an executor waiting on its

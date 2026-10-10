@@ -15,8 +15,6 @@ use super::{DeckEvent, DeckProtocol, DeckSnapshot};
 use crate::rt::DeckMixerConfig;
 
 /// Events a deck's mixer can hold for its owner per slot before it counts an overflow.
-const EVENTS_PER_SLOT: usize = 16;
-
 /// The scope identity and observation ends of one deck's mixer.
 #[non_exhaustive]
 pub struct DeckEnds {
@@ -53,7 +51,8 @@ impl DeckEvents {
 #[must_use]
 pub fn scope_channels(scope: ScopeId, config: DeckMixerConfig) -> (DeckEnds, MixerInputs) {
     let slots = config.slots().get();
-    let (events_tx, events_rx) = HeapRb::<DeckEvent>::new(slots * EVENTS_PER_SLOT).split();
+    let (events_tx, events_rx) =
+        HeapRb::<DeckEvent>::new(slots * crate::consts::EVENTS_PER_SLOT).split();
     let initial = DeckSnapshot::new(config);
     let (snapshot_in, snapshot_out) = triple_buffer(&initial);
     (

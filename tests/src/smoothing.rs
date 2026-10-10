@@ -12,9 +12,7 @@ use kithara::{
     effects::{GainDb, eq::FilterKind},
     host::{HostConfig, HostSettings},
     platform::time::{self, Duration},
-    play::{
-        EqBandConfig, PlayWorker, PlayWorkerConfig, ResourceConfig, ResourcePrep, ResourceSrc,
-    },
+    play::{EqBandConfig, PlayWorker, PlayWorkerConfig, ResourceConfig, ResourcePrep, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
 };
 use kithara_dsp::param::{MIN_SETTLE_RATIO, SmoothingFilterCoeff};

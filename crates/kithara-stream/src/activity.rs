@@ -24,11 +24,7 @@ impl ActivityWriter {
     /// Create an inactive snapshot and its sole publisher.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            activity: Activity {
-                snapshot: Arc::new(ArcSwap::from_pointee(false)),
-            },
-        }
+        Self::default()
     }
 
     /// Clone a read-only loader end.
@@ -47,6 +43,10 @@ impl ActivityWriter {
 
 impl Default for ActivityWriter {
     fn default() -> Self {
-        Self::new()
+        Self {
+            activity: Activity {
+                snapshot: Arc::new(ArcSwap::from_pointee(false)),
+            },
+        }
     }
 }

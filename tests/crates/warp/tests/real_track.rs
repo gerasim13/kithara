@@ -322,8 +322,10 @@ fn plan(
         MapPoint::new(source.stamp(), beat),
         MapPoint::new(target.stamp(), beat),
     );
+    let grid = BeatGridSnapshot::projection(source.clone(), target.clone(), alignment)
+        .expect("projection");
     let map = WarpMap::projected(source.clone(), target, alignment, revision).expect("projection");
-    (map, activation.max(anchor.frame()))
+    (map, activation.max(anchor.frame()), source.clone(), grid)
 }
 
 fn render(

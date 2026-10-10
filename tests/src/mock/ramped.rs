@@ -1,11 +1,19 @@
-use std::num::{NonZeroU32, NonZeroU64};
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    num::{NonZeroU32, NonZeroU64},
+};
 
 use kithara::{
-    platform::time::Duration,
     events::TrackId,
-    platform::sync::{Arc, Mutex},
-    play::{Bound, Outbox, PlayError, Player, PlayerConfig, PlayerFactory, PlayerImpl, ResourceLoad, Settled, Track, TrackCommand, TrackFactory, TrackReceipt, TrackSettings, TrackSettingsChange, TrackSnapshot},
+    platform::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    },
+    play::{
+        Bound, Outbox, PlayError, Player, PlayerConfig, PlayerFactory, PlayerImpl, ResourceLoad,
+        Settled, Track, TrackCommand, TrackFactory, TrackReceipt, TrackSettings,
+        TrackSettingsChange, TrackSnapshot,
+    },
     signal::SessionFrame,
     warp::SpeedCurve,
 };
@@ -21,7 +29,10 @@ pub struct InjectedFactory(Arc<Mutex<BTreeMap<TrackId, ResourceLoad<TestPools>>>
 
 impl InjectedFactory {
     pub fn insert(&self, id: TrackId, load: ResourceLoad<TestPools>) {
-        assert!(self.0.lock().insert(id, load).is_none(), "one explicit fixture load per item");
+        assert!(
+            self.0.lock().insert(id, load).is_none(),
+            "one explicit fixture load per item"
+        );
     }
 }
 
@@ -29,7 +40,12 @@ impl TrackFactory<TestPools> for InjectedFactory {
     type Track = RampedTrack;
 
     fn track(&self, config: PlayerConfig) -> Result<Self::Track, PlayError> {
-        Ok(RampedTrack { item: config.item, inner: PlayerFactory.track(config)?, frames: None, loads: Some(self.clone()) })
+        Ok(RampedTrack {
+            item: config.item,
+            inner: PlayerFactory.track(config)?,
+            frames: None,
+            loads: Some(self.clone()),
+        })
     }
 }
 
@@ -44,7 +60,12 @@ impl TrackFactory<TestPools> for RampedFactory {
     type Track = RampedTrack;
 
     fn track(&self, config: PlayerConfig) -> Result<Self::Track, PlayError> {
-        Ok(RampedTrack { item: config.item, inner: PlayerFactory.track(config)?, frames: Some(self.0), loads: None })
+        Ok(RampedTrack {
+            item: config.item,
+            inner: PlayerFactory.track(config)?,
+            frames: Some(self.0),
+            loads: None,
+        })
     }
 }
 
@@ -52,11 +73,23 @@ impl Player<TestPools> for RampedTrack {
     type Command = TrackCommand<TestPools>;
     type Snapshot = TrackSnapshot;
 
-    fn apply(&mut self, command: Self::Command, out: &mut Outbox<'_, TestPools>) -> Result<Option<Seq>, PlayError> {
+    fn apply(
+        &mut self,
+        command: Self::Command,
+        out: &mut Outbox<'_, TestPools>,
+    ) -> Result<Option<Seq>, PlayError> {
         let command = match (command, self.frames) {
-            (TrackCommand::Configure(TrackSettingsChange::Speed(to), at)
-            | TrackCommand::SetSpeed { speed: SpeedCurve::Constant(to), at }, Some(frames)) =>
-                TrackCommand::SetSpeed { speed: SpeedCurve::Ramp { to, frames }, at },
+            (
+                TrackCommand::Configure(TrackSettingsChange::Speed(to), at)
+                | TrackCommand::SetSpeed {
+                    speed: SpeedCurve::Constant(to),
+                    at,
+                },
+                Some(frames),
+            ) => TrackCommand::SetSpeed {
+                speed: SpeedCurve::Ramp { to, frames },
+                at,
+            },
             (TrackCommand::Load { item, position }, _) => {
                 let item = match &self.loads {
                     Some(loads) => loads.0.lock().remove(&self.item).unwrap_or(item),

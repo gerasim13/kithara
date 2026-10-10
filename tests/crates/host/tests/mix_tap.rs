@@ -43,7 +43,9 @@ pub(super) async fn play_resource(
     let deck_id = harness
         .with_queue(move |player| {
             let deck_id = TrackId::allocate();
-            player.append_with_id(deck_id, deck_source).expect("append PCM deck");
+            player
+                .append_with_id(deck_id, deck_source)
+                .expect("append PCM deck");
             player
                 .select(deck_id, kithara::queue::Transition::None)
                 .expect("select the item");
@@ -139,7 +141,9 @@ async fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for(constant_hal
     let deck_id = harness
         .with_queue(move |player| {
             let deck_id = TrackId::allocate();
-            player.append_with_id(deck_id, deck_source).expect("append PCM deck");
+            player
+                .append_with_id(deck_id, deck_source)
+                .expect("append PCM deck");
             player
                 .select(deck_id, kithara::queue::Transition::None)
                 .expect("select the item");

@@ -307,13 +307,20 @@ async fn build_queue(
     .await;
     let config = QueueConfig::builder()
         .prep(harness.resource_prep().clone())
-        .settings(kithara::queue::QueueSettings::builder().crossfade(kithara::play::CrossfadeSettings {
-            duration: seam.crossfade_seconds(),
-            ..kithara::play::CrossfadeSettings::default()
-        }).build())
+        .settings(
+            kithara::queue::QueueSettings::builder()
+                .crossfade(kithara::play::CrossfadeSettings {
+                    duration: seam.crossfade_seconds(),
+                    ..kithara::play::CrossfadeSettings::default()
+                })
+                .build(),
+        )
         .build();
     let queue: QueueControl<TestPools> = harness.insert_control(Queue::new(config)).await;
-    harness.run(&queue, |control| control.set_level(CENSUS_LEVEL)).await.expect("set the mix level");
+    harness
+        .run(&queue, |control| control.set_level(CENSUS_LEVEL))
+        .await
+        .expect("set the mix level");
 
     let mut tracks = Vec::with_capacity(sources.len());
     let mut rejected = 0;

@@ -204,7 +204,9 @@ where
         } = config.into();
         let cancel = audio.cancel().cloned();
         if self.0.dispatcher.is_cancelled()
-            || cancel.as_ref().is_some_and(|cancel| cancel.is_cancelled())
+            || cancel
+                .as_ref()
+                .is_some_and(kithara_platform::CancelToken::is_cancelled)
         {
             return Err(LoadRefusal::Cancelled);
         }
@@ -227,7 +229,9 @@ where
             .await
             .map_err(decode_refusal)?;
             if self.0.dispatcher.is_cancelled()
-                || cancel.as_ref().is_some_and(|cancel| cancel.is_cancelled())
+                || cancel
+                    .as_ref()
+                    .is_some_and(kithara_platform::CancelToken::is_cancelled)
             {
                 return Err(LoadRefusal::Cancelled);
             }
@@ -274,9 +278,11 @@ where
                 drain,
                 spec,
                 self.pools().clone(),
-                inbox,
-                preload_chunks,
-                declick,
+                crate::LaneSetup {
+                    inbox,
+                    preload_chunks,
+                    declick,
+                },
             );
             let lane = Box::new(DecoderNode::new(
                 source,
@@ -290,7 +296,9 @@ where
         };
         let preloaded = lane.preload().await;
         if self.0.dispatcher.is_cancelled()
-            || cancel.as_ref().is_some_and(|cancel| cancel.is_cancelled())
+            || cancel
+                .as_ref()
+                .is_some_and(kithara_platform::CancelToken::is_cancelled)
         {
             return Err(LoadRefusal::Cancelled);
         }

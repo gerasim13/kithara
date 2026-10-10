@@ -31,9 +31,11 @@ impl DeckSnapshot {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get, get_mut)]
 pub struct EqSnapshot {
     bands: usize,
+    #[field(get_mut, vis = "pub(crate)")]
     gains: Vec<GainDb>,
 }
 
@@ -46,10 +48,6 @@ impl EqSnapshot {
     #[must_use]
     pub fn gain(&self, band: usize) -> Option<GainDb> {
         self.gains.get(band).copied().filter(|_| band < self.bands)
-    }
-
-    pub(crate) fn gains_mut(&mut self) -> &mut [GainDb] {
-        &mut self.gains
     }
 
     pub(crate) fn set_bands(&mut self, bands: usize) {

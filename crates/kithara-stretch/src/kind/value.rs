@@ -18,10 +18,10 @@ bitflags::bitflags! {
 #[display("{self:?}")]
 pub enum StretchKind {
     /// `signalsmith-stretch` (C++). Feature `stretch-signalsmith`.
-    #[cfg(feature = "stretch-signalsmith")]
+    #[cfg(all(feature = "stretch-signalsmith", not(target_arch = "wasm32")))]
     Signalsmith,
     /// `bungee` (C++). Feature `stretch-bungee`.
-    #[cfg(feature = "stretch-bungee")]
+    #[cfg(all(feature = "stretch-bungee", not(target_arch = "wasm32")))]
     Bungee,
     /// Pure-Rust Glide resampler. Changes pitch with playback rate.
     #[cfg(feature = "stretch-glide")]

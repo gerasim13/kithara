@@ -235,10 +235,7 @@ mod tests {
     use kithara_events::EventBus;
     use kithara_platform::time::Duration;
     use kithara_signal::{SessionEpoch, SessionFrame};
-    use kithara_test_utils::{
-        bufpool::{TestPools, pools},
-        kithara,
-    };
+    use kithara_test_utils::kithara;
     use kithara_warp::{
         Beat, BeatGridId, BeatGridQuery, BeatGridRevision, BeatGridState, BeatGridUnavailable,
         MapAxis, MapPoint, MapPosition, SessionAxis,
@@ -251,8 +248,7 @@ mod tests {
         host::{HostSettingsChange, HostSettingsExec},
         session::{
             dispatch::{invalidate_audio_route, tick_session},
-            protocol::{DeckRegistration, HostCmd},
-            tests::graph::{ask, attach, committed_transport, state as test_state},
+            tests::graph::{GraphSession, committed_transport, state as test_state},
         },
     };
 
@@ -280,7 +276,7 @@ mod tests {
         stream: u64,
     }
 
-    type TestState = SessionState<TestStream, TestPools>;
+    type TestState = GraphSession<TestStream>;
 
     impl Drop for TestStream {
         fn drop(&mut self) {
@@ -303,10 +299,7 @@ mod tests {
             dev.next_stream += 1;
             dev.next_stream
         });
-        let sample_rate = NonZeroU32::new(sample_rate).unwrap_or(
-            NonZeroU32::new(TestState::DEFAULT_SAMPLE_RATE)
-                .expect("invariant: fixture default sample rate is non-zero"),
-        );
+        let sample_rate = NonZeroU32::new(sample_rate).unwrap_or(TestState::DEFAULT_SAMPLE_RATE);
         let max_block_frames =
             NonZeroU32::new(512).expect("invariant: fixture block size is non-zero");
         let processor = ctx
@@ -365,14 +358,7 @@ mod tests {
     /// Attaches a deck, which the session registers and starts.
     fn insert(state: &mut TestState) -> BeatGridId {
         let grid_id = BeatGridId::allocate().expect("fixture grid id");
-        let mut registration = DeckRegistration::new(
-            grid_id,
-            EventBus::default(),
-            pools(),
-            kithara_play::DeckMixerConfig::default(),
-        );
-        registration.response_budget_frames = NonZeroUsize::new(448);
-        match ask(state, attach(registration)) {
+        match state.install(grid_id, EventBus::default()) {
             Ok(_) => grid_id,
             Err(err) => panic!("the deck failed to start: {err}"),
         }
@@ -380,7 +366,7 @@ mod tests {
 
     /// Stops the deck `grid_id` and removes it from the session.
     fn remove(state: &mut TestState, grid_id: BeatGridId) {
-        match ask(state, HostCmd::Detach { grid_id }) {
+        match state.remove(grid_id) {
             Ok(()) => {}
             Err(err) => panic!("the deck failed to leave: {err}"),
         }
@@ -388,10 +374,10 @@ mod tests {
 
     fn slot_node(state: &TestState, grid_id: BeatGridId) -> NodeID {
         state
-            .graph
-            .decks()
-            .find(|deck| deck.grid_id == grid_id)
-            .and_then(|deck| deck.slot_node)
+            .deck_nodes
+            .iter()
+            .find(|deck| deck.id == grid_id)
+            .map(|deck| deck.node)
             .expect("a started deck has its slot node")
     }
 
@@ -532,8 +518,7 @@ mod tests {
         assert_eq!(
             initial.axis(),
             MapAxis::Session(SessionAxis::new(
-                NonZeroU32::new(TestState::DEFAULT_SAMPLE_RATE)
-                    .expect("the fixture sample rate is non-zero"),
+                TestState::DEFAULT_SAMPLE_RATE,
                 SessionEpoch::new(0),
             ))
         );
@@ -591,8 +576,7 @@ mod tests {
         assert_eq!(
             unavailable.axis(),
             MapAxis::Session(SessionAxis::new(
-                NonZeroU32::new(TestState::DEFAULT_SAMPLE_RATE)
-                    .expect("the fixture sample rate is non-zero"),
+                TestState::DEFAULT_SAMPLE_RATE,
                 SessionEpoch::new(2),
             ))
         );

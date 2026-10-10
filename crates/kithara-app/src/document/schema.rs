@@ -97,7 +97,10 @@ impl<'de> Deserialize<'de> for Audio {
             .transpose()
             .map_err(serde::de::Error::custom)?;
         let pipeline = serde_yaml_ng::from_value(Value::Mapping(
-            fields.into_iter().map(|(key, value)| (Value::String(key), value)).collect(),
+            fields
+                .into_iter()
+                .map(|(key, value)| (Value::String(key), value))
+                .collect(),
         ))
         .map_err(serde::de::Error::custom)?;
         Ok(Self {
@@ -221,12 +224,13 @@ mod tests {
 
     #[kithara::test(native)]
     fn the_removed_background_loader_cap_is_rejected_and_named() {
-        let error = serde_yaml_ng::from_str::<Document>(
-            "queue:\n  max_concurrent_loads: 5\n",
-        )
-        .expect_err("a single-deck queue has no eager background loader cap");
+        let error = serde_yaml_ng::from_str::<Document>("queue:\n  max_concurrent_loads: 5\n")
+            .expect_err("a single-deck queue has no eager background loader cap");
 
-        assert!(error.to_string().contains("max_concurrent_loads"), "{error}");
+        assert!(
+            error.to_string().contains("max_concurrent_loads"),
+            "{error}"
+        );
     }
 
     #[kithara::test(native)]

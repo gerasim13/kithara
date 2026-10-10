@@ -12,30 +12,34 @@ use kithara::{
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{
-        CrossfadeSettings, HostedDeck, PlayWorker, PlayWorkerConfig, PlayerEvent, Resource,
-        ResourcePrep, PlayerFactory, TrackFactory, TrackSettings,
+        CrossfadeSettings, HostedDeck, PlayWorker, PlayWorkerConfig, PlayerEvent, PlayerFactory,
+        Resource, ResourcePrep, TrackFactory, TrackSettings,
     },
     queue::{Queue, QueueConfig, QueueControl, QueueError, QueueSettings, TrackSource, Transition},
     warp::WarpConfig,
 };
+use kithara_render::bridge::{DeckSnapshot, RtMetricsSnapshot};
 
-use super::{OfflineHostHarness, host::offline_pools};
+use super::{
+    OfflineHostHarness,
+    host::{ObservedDeck, offline_pools},
+};
 use crate::{
     assets_ext::memory_asset_store,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
 };
 
-use kithara_render::bridge::{DeckSnapshot, RtMetricsSnapshot};
-use super::host::ObservedDeck;
-
 /// Product queue on an offline Host, rendered deterministically by the test.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct OfflinePlayer<F: TrackFactory<TestPools> = PlayerFactory> {
     events: Mutex<EventReceiver<TestEvent>>,
     host: OfflineHostHarness<TestPools>,
     queue: HostOwned<ObservedDeck<Queue<TestPools, F>>>,
     snapshot: Arc<Mutex<DeckSnapshot>>,
     worker: PlayWorker<TestPools>,
+    #[field(get = resource_prep)]
     prep: ResourcePrep<TestPools>,
     pcm_decks: Mutex<Vec<crate::mock::PcmDeck>>,
 }
@@ -126,10 +130,16 @@ where
     ) -> Self {
         let pools = offline_pools(&session).clone();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-        let track = options.warp.as_ref().map_or_else(TrackSettings::default, |warp| {
-            TrackSettings::builder().speed(warp.speed()).keylock(warp.keylock())
-                .backend(warp.backend()).build()
-        });
+        let track = options
+            .warp
+            .as_ref()
+            .map_or_else(TrackSettings::default, |warp| {
+                TrackSettings::builder()
+                    .speed(warp.speed())
+                    .keylock(warp.keylock())
+                    .backend(warp.backend())
+                    .build()
+            });
         let prep = ResourcePrep::builder()
             .worker(worker.clone())
             .gapless_mode(options.gapless_mode)
@@ -158,10 +168,16 @@ where
             .unwrap_or_else(|error| panic!("create product offline Host: {error}"));
 
         let snapshot = Arc::new(Mutex::new(DeckSnapshot::default()));
-        let queue = host.insert(ObservedDeck { inner: queue, snapshot: snapshot.clone() }).await
+        let queue = host
+            .insert(ObservedDeck {
+                inner: queue,
+                snapshot: snapshot.clone(),
+            })
+            .await
             .unwrap_or_else(|error| panic!("insert product offline queue: {error}"));
         if let Some(layout) = options.eq_layout {
-            queue.set_eq_layout(layout)
+            queue
+                .set_eq_layout(layout)
                 .unwrap_or_else(|error| panic!("configure product offline queue EQ: {error}"));
         }
         Self {
@@ -179,10 +195,6 @@ where
     #[must_use]
     pub fn player(&self) -> &QueueControl<TestPools> {
         self.queue.control()
-    }
-
-    pub fn resource_prep(&self) -> &ResourcePrep<TestPools> {
-        &self.prep
     }
 
     pub fn pcm_deck(&self, reader: Box<dyn AudioReader>) -> TrackSource<TestPools> {
@@ -211,7 +223,9 @@ where
                 duration: seconds,
                 ..control.crossfade_settings()
             })
-        }).await.unwrap_or_else(|error| panic!("configure offline crossfade: {error}"));
+        })
+        .await
+        .unwrap_or_else(|error| panic!("configure offline crossfade: {error}"));
     }
 
     /// Set the player volume used by subsequent offline renders.
@@ -293,25 +307,42 @@ where
     pub async fn load_and_fadein(&self, source: impl Into<TrackSource<TestPools>>) {
         let source = source.into();
         self.with_queue(move |control| {
-            let id = control.append(source)
+            let id = control
+                .append(source)
                 .unwrap_or_else(|error| panic!("append offline queue item: {error}"));
-            control.select(id, Transition::Crossfade)
+            control
+                .select(id, Transition::Crossfade)
                 .unwrap_or_else(|error| panic!("select offline queue item: {error}"));
             control.play();
-        }).await;
+        })
+        .await;
     }
 
-    pub async fn load_config(&self, config: kithara::play::ResourceConfig<TestPools>) -> kithara::events::TrackId {
+    pub async fn load_config(
+        &self,
+        config: kithara::play::ResourceConfig<TestPools>,
+    ) -> kithara::events::TrackId {
         let mut events = self.player().subscribe();
-        let id = self.with_queue(move |control| {
-            let id = control.append(TrackSource::Config(Box::new(config)))
-                .expect("append configured fixture source");
-            control.select(id, Transition::Crossfade).expect("select configured fixture source");
-            control.play();
-            id
-        }).await;
-        crate::waits::wait_for_loader_done_event(&mut events, self.player(), id, super::loader::LOCAL_LOAD_DEADLINE)
-            .await.expect("configured fixture source is ready");
+        let id = self
+            .with_queue(move |control| {
+                let id = control
+                    .append(TrackSource::Config(Box::new(config)))
+                    .expect("append configured fixture source");
+                control
+                    .select(id, Transition::Crossfade)
+                    .expect("select configured fixture source");
+                control.play();
+                id
+            })
+            .await;
+        crate::waits::wait_for_loader_done_event(
+            &mut events,
+            self.player(),
+            id,
+            super::loader::LOCAL_LOAD_DEADLINE,
+        )
+        .await
+        .expect("configured fixture source is ready");
         id
     }
 
@@ -399,7 +430,8 @@ where
 
     /// Settles receipts and publishes observations through the queue owner.
     async fn tick_player(&self) {
-        self.with_queue(QueueControl::tick).await
+        self.with_queue(QueueControl::tick)
+            .await
             .unwrap_or_else(|error| panic!("tick offline queue: {error}"));
     }
 }

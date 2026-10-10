@@ -1,7 +1,6 @@
 use kithara_signal::{SessionEpoch, TransportRevision};
-use kithara_warp::{BeatGridSnapshot, BeatGridStamp, SessionAnchor, SessionBeat};
-
 pub use kithara_sync::{Tempo, TempoError};
+use kithara_warp::{BeatGridSnapshot, BeatGridStamp, SessionAnchor, SessionBeat};
 
 /// The last session transport position processed by the audio graph.
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]

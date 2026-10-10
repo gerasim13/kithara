@@ -207,7 +207,9 @@ async fn streamed_mp3_plays_to_the_length_it_was_built_to(
                 .build(),
         )
         .build();
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config).await.expect("open the streamed track");
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("open the streamed track");
 
     let (position, eof, waits) = spawn_blocking(move || {
         let mut buf = [0.0f32; 4096];
@@ -416,7 +418,9 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe(tone_mp3: &
         .pools(pools)
         .build();
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config).build();
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config).await.unwrap();
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .unwrap();
 
     let (samples_read, position, eof) = spawn_blocking(move || {
         let mut total = 0usize;

@@ -63,11 +63,10 @@ async fn build_session(cache_path: &Path) -> Session {
         .flush_hub(Arc::clone(&flush_hub))
         .build();
     let player = kithara::play::ResourcePrep::builder()
-            
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build();
+        .worker(PlayWorker::new(
+            PlayWorkerConfig::builder(pools.clone()).build(),
+        ))
+        .build();
     let queue = OfflineQueue::paced(
         HostConfig::offline(pools.clone()).build(),
         Queue::new(

@@ -367,9 +367,8 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: PreparedTrack, #[c
     .build();
     let session_config = HostConfig::offline(pools).build();
     let player = kithara::play::ResourcePrep::builder()
-            
-            .worker(worker)
-            .build();
+        .worker(worker)
+        .build();
     let queue = OfflineQueue::paced(
         session_config,
         Queue::new(QueueConfig::builder().prep(player).build()),

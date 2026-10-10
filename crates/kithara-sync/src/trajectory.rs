@@ -118,18 +118,6 @@ impl TempoTrajectory {
         self.markers(from, 1.0)
     }
 
-    /// Reanchors a restarted route while continuing the beat count at its stop.
-    pub fn reaxis(&mut self, stopped: SessionFrame, start: SessionFrame) {
-        let beat = self.beat_at(stopped);
-        let tempo = self.tempo_at(stopped);
-        self.steps.clear();
-        self.steps.push(TempoStep {
-            frame: start,
-            beat,
-            tempo,
-        });
-    }
-
     /// Reanchors the trajectory on observed session geometry and tempo.
     pub fn reaxis_observed(&mut self, anchor: SessionAnchor, tempo: Tempo) {
         self.sample_rate = anchor.sample_rate();
@@ -292,13 +280,20 @@ mod tests {
             }
             let played = host.tempo_at(at).beats_per_minute();
 
-            assert!((115.999..=124.001).contains(&played), "step {step}: tempo {played} left the knob range");
+            assert!(
+                (115.999..=124.001).contains(&played),
+                "step {step}: tempo {played} left the knob range"
+            );
             assert_eq!(played, target);
             assert_eq!(host.beat_at(at), before);
         }
         for step in 0..16_i64 {
             let target = if step % 2 == 0 { 124.0 } else { 116.0 };
-            assert_eq!(host.tempo_at(SessionFrame::new(step * 128)).beats_per_minute(), target);
+            assert_eq!(
+                host.tempo_at(SessionFrame::new(step * 128))
+                    .beats_per_minute(),
+                target
+            );
         }
     }
 
@@ -316,7 +311,10 @@ mod tests {
 
         assert_eq!(f64::from(host.beat_at(SessionFrame::new(48_000))), 0.0);
         assert_eq!(f64::from(host.beat_at(SessionFrame::new(96_000))), 2.0);
-        assert_eq!(host.tempo_at(SessionFrame::new(48_000)).beats_per_minute(), 120.0);
+        assert_eq!(
+            host.tempo_at(SessionFrame::new(48_000)).beats_per_minute(),
+            120.0
+        );
     }
 
     #[kithara::test]
@@ -333,11 +331,18 @@ mod tests {
 
         for frame in [-1, 0] {
             let frame = SessionFrame::new(frame);
-            assert_eq!(host.push(frame, Tempo::DEFAULT), Err(TrajectoryError::BeforeAnchor { frame }));
+            assert_eq!(
+                host.push(frame, Tempo::DEFAULT),
+                Err(TrajectoryError::BeforeAnchor { frame })
+            );
         }
         let frame = SessionFrame::new(96_000);
-        host.push(frame, Tempo::new(60.0).expect("valid tempo")).expect("unoccupied frame");
-        assert_eq!(host.push(frame, Tempo::DEFAULT), Err(TrajectoryError::Occupied { frame }));
+        host.push(frame, Tempo::new(60.0).expect("valid tempo"))
+            .expect("unoccupied frame");
+        assert_eq!(
+            host.push(frame, Tempo::DEFAULT),
+            Err(TrajectoryError::Occupied { frame })
+        );
         assert_eq!(host.tempo_at(frame).beats_per_minute(), 60.0);
         assert_eq!(f64::from(host.beat_at(frame)), 4.0);
     }

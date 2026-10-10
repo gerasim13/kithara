@@ -7,9 +7,7 @@ use kithara::{
     hls::AbrMode,
     host::{HostConfig, HostSettings, Tap},
     platform::time::{self, Duration},
-    play::{
-        CrossfadeSettings, PlayWorker, PlayWorkerConfig, ResourcePrep, TrackSettings,
-    },
+    play::{CrossfadeSettings, PlayWorker, PlayWorkerConfig, ResourcePrep, TrackSettings},
     queue::{Queue, QueueConfig, QueueControl, QueueError, QueueSettings, TrackSource, Transition},
     signal::TransportRevision,
     warp::{StretchKind, WarpConfig},
@@ -527,7 +525,8 @@ async fn capture_pass(
     }
     command_decks(host, &*decks, |queue| {
         queue.tick().expect("tick a captured deck");
-    }).await;
+    })
+    .await;
     runtime::drain_all_events(
         decks,
         &format!("{label} final drain"),
@@ -670,11 +669,16 @@ async fn request_capture_seeks(
     for (deck_index, (deck, seek)) in decks.iter_mut().zip(seeks).enumerate() {
         match seek {
             Ok(()) => {
-                deck.seek_request_segment = deck.snapshot.lock().slots.iter()
+                deck.seek_request_segment = deck
+                    .snapshot
+                    .lock()
+                    .slots
+                    .iter()
                     .find_map(|slot| slot.mark.map(|mark| mark.lane.segment.next()));
                 if let Some(duration) = deck
                     .player
-                    .control().duration_seconds()
+                    .control()
+                    .duration_seconds()
                     .filter(|duration| deck.capture_target_secs >= *duration)
                 {
                     requested = false;
@@ -971,14 +975,25 @@ async fn load_decks(
     for (deck_index, (deck, source)) in decks.iter().zip(items).enumerate() {
         let player = deck.player.control().clone();
         let mut events = player.subscribe();
-        let id = host.run(move || {
-            let id = player.append(source)?;
-            player.select(id, Transition::None)?;
-            player.pause();
-            Ok::<_, QueueError>(id)
-        }).await.unwrap_or_else(|error| panic!("{} deck {deck_index}: select source: {error}", case.label));
-        kithara_integration_tests::waits::wait_for_loader_done_event(&mut events, deck.player.control(), id, PRELOAD_TIMEOUT)
-            .await.expect("real media loads through its deck");
+        let id = host
+            .run(move || {
+                let id = player.append(source)?;
+                player.select(id, Transition::None)?;
+                player.pause();
+                Ok::<_, QueueError>(id)
+            })
+            .await
+            .unwrap_or_else(|error| {
+                panic!("{} deck {deck_index}: select source: {error}", case.label)
+            });
+        kithara_integration_tests::waits::wait_for_loader_done_event(
+            &mut events,
+            deck.player.control(),
+            id,
+            PRELOAD_TIMEOUT,
+        )
+        .await
+        .expect("real media loads through its deck");
     }
 }
 
@@ -1025,40 +1040,95 @@ async fn prepare_deck(
     host: &OfflineHostHarness<TestPools>,
 ) -> (Deck, TrackSource<TestPools>) {
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pool_region.clone()).build());
-    let prep = ResourcePrep::builder().worker(worker.clone())
-        .warp(WarpConfig::builder().backend(StretchKind::Signalsmith).keylock(true).build())
-        .block_on_underrun(true).build();
+    let prep = ResourcePrep::builder()
+        .worker(worker.clone())
+        .warp(
+            WarpConfig::builder()
+                .backend(StretchKind::Signalsmith)
+                .keylock(true)
+                .build(),
+        )
+        .block_on_underrun(true)
+        .build();
     let store = AssetStore::builder(pool_region.clone())
         .backend(StorageBackend::Disk {
-            root: media_dir.path().join(format!("{}-deck-{deck_index}-assets", case.label)),
+            root: media_dir
+                .path()
+                .join(format!("{}-deck-{deck_index}-assets", case.label)),
         })
         .build();
-    let player = Queue::new(QueueConfig::builder().prep(prep).store(store)
-        .track(TrackSettings::builder().backend(StretchKind::Signalsmith).keylock(true).build())
-        .settings(QueueSettings::builder().crossfade(CrossfadeSettings { duration: 0.0, ..Default::default() }).build())
-        .build());
+    let player = Queue::new(
+        QueueConfig::builder()
+            .prep(prep)
+            .store(store)
+            .track(
+                TrackSettings::builder()
+                    .backend(StretchKind::Signalsmith)
+                    .keylock(true)
+                    .build(),
+            )
+            .settings(
+                QueueSettings::builder()
+                    .crossfade(CrossfadeSettings {
+                        duration: 0.0,
+                        ..Default::default()
+                    })
+                    .build(),
+            )
+            .build(),
+    );
     let src = match media {
-        Media::Mp3(asset) => media_dir.path().join(format!("{}.{}", asset.name(), asset.ext()))
-            .to_str().expect("temporary media path is UTF-8").to_owned(),
+        Media::Mp3(asset) => media_dir
+            .path()
+            .join(format!("{}.{}", asset.name(), asset.ext()))
+            .to_str()
+            .expect("temporary media path is UTF-8")
+            .to_owned(),
         Media::Hls => hls.to_string(),
     };
     let bus = EventBus::new(16_384);
     let events = bus.subscribe();
-    let source = TrackSource::Config(Box::new(kithara::play::ResourceConfig::for_src(
-        kithara::play::ResourceSrc::parse(&src).expect("real media source"))
-        .store(memory_asset_store()).events(bus)
+    let source = TrackSource::Config(Box::new(
+        kithara::play::ResourceConfig::for_src(
+            kithara::play::ResourceSrc::parse(&src).expect("real media source"),
+        )
+        .store(memory_asset_store())
+        .events(bus)
         .initial_abr_mode(AbrMode::manual(0))
-        .discriminator(format!("{}-deck-{deck_index}-playback", case.label)).build()));
-    let reference = super::reference::open_reference(&worker, &src, matches!(media, Media::Hls), case.host_rate).await;
+        .discriminator(format!("{}-deck-{deck_index}-playback", case.label))
+        .build(),
+    ));
+    let reference = super::reference::open_reference(
+        &worker,
+        &src,
+        matches!(media, Media::Hls),
+        case.host_rate,
+    )
+    .await;
     let reference_events = reference.subscribe();
-    let (player, snapshot) = host.insert_observed(player).await.expect("insert real media deck");
+    let (player, snapshot) = host
+        .insert_observed(player)
+        .await
+        .expect("insert real media deck");
     let deck_offset: f64 = deck_index.as_();
     let capture_target_secs = deck_offset.mul_add(CAPTURE_START_STEP_SECS, CAPTURE_START_SECS);
     let deck = Deck {
-        player, snapshot, reference, reference_events, events,
-        seek_request_segment: None, seek_complete_segment: None,
-        muted_seek_underrun_segment: None, seek_terminal: false, capture_target_secs,
-        observation: DeckObservation { hls: matches!(media, Media::Hls), label: media.label(), capture_target_secs, ..DeckObservation::default() },
+        player,
+        snapshot,
+        reference,
+        reference_events,
+        events,
+        seek_request_segment: None,
+        seek_complete_segment: None,
+        muted_seek_underrun_segment: None,
+        seek_terminal: false,
+        capture_target_secs,
+        observation: DeckObservation {
+            hls: matches!(media, Media::Hls),
+            label: media.label(),
+            capture_target_secs,
+            ..DeckObservation::default()
+        },
     };
     (deck, source)
 }

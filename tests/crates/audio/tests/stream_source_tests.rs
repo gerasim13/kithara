@@ -1,12 +1,11 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara_integration_tests::mock::LaneAudio;
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     audio::{
-        AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome,
-        DecoderChangeCause, DecoderEvent, ReadOutcome, RubatoBackend,
+        AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome, DecoderChangeCause,
+        DecoderEvent, ReadOutcome, RubatoBackend,
     },
     platform::time::{self, Duration, Instant},
     play::{PlayWorker, PlayWorkerConfig, TrackConfig},
@@ -19,6 +18,7 @@ use kithara_integration_tests::{
     event::TestEvent,
     kithara,
     memory_source::{MemStream, MemStreamConfig, MemorySource},
+    mock::LaneAudio,
     reads::{blocking_audio, read_to_eof, read_until_samples},
 };
 use kithara_test_fixtures::integration_fixtures::{
@@ -73,7 +73,9 @@ async fn basic_decode_to_eof(audio_wav_8000: &'static [u8]) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let config = wav_stream(audio_wav_8000);
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config).await.expect("audio construction");
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("audio construction");
 
     let (_audio, frames) = blocking_audio(audio, read_to_eof).await;
     assert!(
@@ -142,7 +144,9 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
         .build();
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config).await.expect("audio construction");
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("audio construction");
     let mut events = audio.event_bus().subscribe();
     let mut audio = audio;
     kithara_integration_tests::mock::wait_for_preload(&mut audio, "non-unity source").await;
@@ -219,9 +223,13 @@ async fn seek_during_active_decode_completes_without_hang(audio_wav_132300: &'st
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let config = wav_stream(audio_wav_132300);
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config).await.expect("audio construction");
-    let (audio, _initial_frames) = blocking_audio(audio, |audio| read_until_samples(audio, 1)).await;
-    let (mut audio, seek_result) = blocking_audio(audio, |audio| audio.seek(Duration::from_secs_f64(1.5))).await;
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("audio construction");
+    let (audio, _initial_frames) =
+        blocking_audio(audio, |audio| read_until_samples(audio, 1)).await;
+    let (mut audio, seek_result) =
+        blocking_audio(audio, |audio| audio.seek(Duration::from_secs_f64(1.5))).await;
     seek_result.expect("seek");
     let expected_segment = audio.segment();
     kithara_integration_tests::mock::wait_for_preload(&mut audio, "active decode seek").await;
@@ -230,12 +238,20 @@ async fn seek_during_active_decode_completes_without_hang(audio_wav_132300: &'st
     while Instant::now() < deadline && !saw_complete {
         let (next_audio, outcome) = pump_once(audio).await;
         audio = next_audio;
-        if matches!(outcome, ReadOutcome::Pending { .. }) { time::sleep(Duration::from_millis(20)).await; }
+        if matches!(outcome, ReadOutcome::Pending { .. }) {
+            time::sleep(Duration::from_millis(20)).await;
+        }
         saw_complete = audio.committed_segment() == Some(expected_segment);
     }
-    assert!(saw_complete, "matching committed segment must arrive after seek");
+    assert!(
+        saw_complete,
+        "matching committed segment must arrive after seek"
+    );
     let (_audio, frames_after) = blocking_audio(audio, |audio| read_until_samples(audio, 1)).await;
-    assert!(frames_after > 0, "audio must keep producing frames after seek");
+    assert!(
+        frames_after > 0,
+        "audio must keep producing frames after seek"
+    );
 }
 
 #[kithara::test(
@@ -249,7 +265,9 @@ async fn rapid_seeks_via_timeline_all_complete(audio_wav_176400: &'static [u8]) 
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let config = wav_stream(audio_wav_176400);
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config).await.expect("audio construction");
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("audio construction");
     let (next_audio, _) = blocking_audio(audio, |audio| read_until_samples(audio, 1)).await;
     audio = next_audio;
     let mut expected_segments = Vec::with_capacity(SEEK_COUNT);
@@ -257,7 +275,8 @@ async fn rapid_seeks_via_timeline_all_complete(audio_wav_176400: &'static [u8]) 
     let mut turns = 0usize;
     for index in 0..SEEK_COUNT {
         let target = Duration::from_millis(200 + (index as u64) * 250);
-        let (next_audio, seek_result) = blocking_audio(audio, move |audio| audio.seek(target)).await;
+        let (next_audio, seek_result) =
+            blocking_audio(audio, move |audio| audio.seek(target)).await;
         audio = next_audio;
         seek_result.expect("seek");
         let expected = audio.segment();
@@ -266,14 +285,22 @@ async fn rapid_seeks_via_timeline_all_complete(audio_wav_176400: &'static [u8]) 
         let (next_audio, _) = blocking_audio(audio, |audio| read_until_samples(audio, 1)).await;
         audio = next_audio;
         turns += 1;
-        let observed = audio.committed_segment().expect("seek produced committed PCM");
+        let observed = audio
+            .committed_segment()
+            .expect("seek produced committed PCM");
         assert_eq!(observed, expected, "each seek commits only its own segment");
         committed.push(observed);
     }
-    let highest_expected = *expected_segments.iter().max().expect("at least one segment");
+    let highest_expected = *expected_segments
+        .iter()
+        .max()
+        .expect("at least one segment");
     let last_complete: Option<SegmentId> = audio.committed_segment();
-    assert_eq!(last_complete, Some(highest_expected),
-        "last committed segment must match the highest requested segment; requested {expected_segments:?}, output-committed {committed:?}, {turns} read turn(s)");
+    assert_eq!(
+        last_complete,
+        Some(highest_expected),
+        "last committed segment must match the highest requested segment; requested {expected_segments:?}, output-committed {committed:?}, {turns} read turn(s)"
+    );
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
@@ -290,7 +317,9 @@ async fn truncated_wav_surfaces_decode_error_or_eof(audio_wav_44100: &'static [u
     .hint("wav".to_string())
     .build();
 
-    let audio = kithara_integration_tests::mock::load_audio(&worker, config).await.expect("audio construction");
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("audio construction");
 
     let (_audio, saw_terminal) = blocking_audio(audio, |audio| {
         let mut buf = [0.0f32; 4096];

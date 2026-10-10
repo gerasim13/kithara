@@ -1,13 +1,14 @@
-use std::{num::NonZeroU16, num::NonZeroU32, time::Duration};
+use std::num::{NonZeroU16, NonZeroU32};
 
 use kithara_beat::{BeatGridModel, BeatGridState, GridBeat, GridDownbeat, Meter, RawBeatGrid};
+use kithara_platform::time::Duration;
 use kithara_signal::SessionFrame;
 use kithara_warp::SessionBeat;
 use num_traits::ToPrimitive;
 
 use crate::{Tempo, TempoStep, TempoTrajectory};
 
-pub(super) fn host(bpm: f64, beats_per_bar: u16) -> TempoTrajectory {
+pub(crate) fn host(bpm: f64, beats_per_bar: u16) -> TempoTrajectory {
     TempoTrajectory::new(
         TempoStep {
             frame: SessionFrame::new(0),
@@ -19,11 +20,11 @@ pub(super) fn host(bpm: f64, beats_per_bar: u16) -> TempoTrajectory {
     )
 }
 
-pub(super) fn position(frames: u64) -> Duration {
+pub(crate) fn position(frames: u64) -> Duration {
     Duration::from_secs_f64(frames.to_f64().expect("fixture frame count fits f64") / 48_000.0)
 }
 
-pub(super) fn grid(
+pub(crate) fn grid(
     extent: u64,
     covered: u64,
     beat_frames: u64,
@@ -76,7 +77,7 @@ pub(super) fn grid(
 
 /// The last phase boundary at or before a position: a bar line, or a beat
 /// when the grid proves no meter.
-pub(super) fn boundary_at_or_before(grid: &BeatGridModel, position: Duration) -> Option<Duration> {
+pub(crate) fn boundary_at_or_before(grid: &BeatGridModel, position: Duration) -> Option<Duration> {
     let raw = grid.as_raw();
     let metered = raw.meter.is_some();
     raw.downbeats

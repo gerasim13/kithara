@@ -8,11 +8,11 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
     stream::Stream,
 };
-use kithara_integration_tests::mock::LaneAudio;
 use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
+    mock::LaneAudio,
 };
 use kithara_test_fixtures::SignalAsset;
 use kithara_test_utils::{TestTempDir, temp_dir};
@@ -54,7 +54,10 @@ async fn open_test_audio(
         .maybe_events(events)
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    kithara_integration_tests::fixtures::assert_fixture_open(asset, kithara_integration_tests::mock::load_audio(&worker, config).await)
+    kithara_integration_tests::fixtures::assert_fixture_open(
+        asset,
+        kithara_integration_tests::mock::load_audio(&worker, config).await,
+    )
 }
 
 /// Nonblocking re-poll loop: these tests are browser-portable (async body,

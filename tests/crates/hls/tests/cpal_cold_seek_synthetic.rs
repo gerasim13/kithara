@@ -42,9 +42,8 @@ async fn cold_seek_far_segment_hls_offline(
     let downloader = create_test_downloader();
 
     let player = kithara::play::ResourcePrep::builder()
-            
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-            .build();
+        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+        .build();
     let queue = OfflineQueue::paced(
         HostConfig::offline(pools()).build(),
         Queue::new(QueueConfig::builder().prep(player).build()),

@@ -1,20 +1,14 @@
-//! The owner a session drives and the commands its handle posts.
-
 use std::{marker::PhantomData, num::NonZeroU32};
 
 use kithara_bufpool::HasPool;
 use kithara_command::{
-    Batch, ChannelConfig, Outcome, Port, Rejection, ScopedReceipt, Sender,
-    Seq, When, channel,
+    Batch, ChannelConfig, Outcome, Port, Rejection, ScopedReceipt, Sender, Seq, When, channel,
 };
-use kithara_platform::maybe_send::MaybeSend;
 use kithara_config::ConfigOwner;
+use kithara_platform::maybe_send::MaybeSend;
 pub use kithara_play::DeckControl;
 use kithara_play::{DeckPass, HostedDeck, Outbox, PlayError, ResourceLoad, TrackReceipt};
-use kithara_render::{
-    DispatcherProtocol,
-    bridge::DeckPart,
-};
+use kithara_render::{DispatcherProtocol, bridge::DeckPart};
 use kithara_signal::{FrameCount, SessionFrame};
 use kithara_worker::TaskHandle;
 
@@ -33,6 +27,12 @@ use crate::{
 /// The existing identity used for decks and their beat grids.
 pub type DeckId = kithara_warp::BeatGridId;
 
+/// A visit to one held deck during its owner's current pass.
+type DeckVisit<'a, S, D> = &'a mut (dyn FnMut(&mut D, &mut Outbox<'_, S>, DeckPass<'_>) + 'a);
+/// A visit that also receives the held deck's identity.
+type EachDeckVisit<'a, S, D> =
+    &'a mut (dyn FnMut(DeckId, &mut D, &mut Outbox<'_, S>, DeckPass<'_>) + 'a);
+
 /// What the session thread drives, including decorators over its base owner.
 pub trait HostOwner<S>:
     HostSettingsExec<(), At = When<SessionFrame>, Output = Result<Option<Seq>, PlayError>> + 'static
@@ -43,25 +43,50 @@ pub trait HostOwner<S>:
     type Deck: ?Sized + HostedDeck<S>;
 
     /// Runs a command and returns the batch it sent, if any.
+    ///
+    /// # Errors
+    /// Propagates registration and deck-close refusals; returns
+    /// [`PlayError::Late`] or [`PlayError::Untimed`] for inadmissible timing,
+    /// [`PlayError::InvalidParameter`] for invalid settings, and
+    /// [`PlayError::Session`] for graph, tap, backend, or
+    /// [`SessionError::HostQueueFull`] admission failures.
+    /// Returns [`PlayError::Internal`] for an invalid marker command or owner
+    /// setup failure, and [`PlayError::Closed`] for a retired command channel.
     fn apply(&mut self, command: Self::Command) -> Result<Option<Seq>, PlayError>;
     /// Builds and holds a deck's mixer and owner record.
+    ///
+    /// # Errors
+    /// Returns [`PlayError::Session`] for duplicate deck identities, missing
+    /// context, invalid buffer geometry, graph edits, or backend startup failure.
+    /// Returns [`PlayError::Internal`] for a missing worker, dispatcher startup,
+    /// scope allocation failure, or invalid mixer settings. Returns
+    /// [`PlayError::Closed`] for a retired channel or deck scope.
     fn register(&mut self, id: DeckId, deck: Box<Self::Deck>) -> Result<(), PlayError>;
     /// Lends each deck its outbox and current pass.
-    fn each_deck(
-        &mut self,
-        visit: &mut dyn FnMut(DeckId, &mut Self::Deck, &mut Outbox<'_, S>, DeckPass<'_>),
-    );
+    fn each_deck(&mut self, visit: EachDeckVisit<'_, S, Self::Deck>);
     /// Lends the named deck its outbox and current pass.
+    ///
+    /// # Errors
+    /// Returns [`PlayError::Session`] with [`SessionError::DeckNotFound`] if the
+    /// deck is absent, or [`PlayError::Closed`] if its channel or scope is retired.
     fn with_deck(
         &mut self,
         id: DeckId,
-        visit: &mut dyn FnMut(&mut Self::Deck, &mut Outbox<'_, S>, DeckPass<'_>),
+        visit: DeckVisit<'_, S, Self::Deck>,
     ) -> Result<(), PlayError>;
     /// Current frame and delivery lead, absent before a render graph exists.
     fn clock(&self) -> Option<(SessionFrame, FrameCount)>;
     /// Prepares the offline stream before the block's owner publication.
+    ///
+    /// # Errors
+    /// Returns [`PlayError::Session`] on graph or backend startup failure, or
+    /// [`PlayError::Internal`] when offline support is absent or the host is realtime.
     fn prepare_offline(&mut self) -> Result<(), PlayError>;
     /// Processes one offline block after the owner has published its commands.
+    ///
+    /// # Errors
+    /// Returns [`PlayError::Internal`] if offline support or the prepared stream
+    /// is absent, or if the timeline or output buffer geometry is invalid.
     fn render_offline(
         &mut self,
         position: u64,
@@ -201,14 +226,12 @@ where
     type At = When<SessionFrame>;
     type Output = Result<Option<Seq>, PlayError>;
 
-    fn exec_sample_rate(&mut self, value: NonZeroU32, at: Self::At, cx: &mut ()) -> Self::Output {
-        self.session.exec_sample_rate(value, at, cx)
-    }
-    fn exec_tempo(&mut self, value: crate::api::Tempo, at: Self::At, cx: &mut ()) -> Self::Output {
-        self.session.exec_tempo(value, at, cx)
-    }
-    fn exec_live(&mut self, change: HostSettingsChange, at: Self::At, cx: &mut ()) -> Self::Output {
-        self.session.exec_live(change, at, cx)
+    delegate::delegate! {
+        to self.session {
+            fn exec_sample_rate(&mut self, value: NonZeroU32, at: Self::At, cx: &mut ()) -> Self::Output;
+            fn exec_tempo(&mut self, value: crate::api::Tempo, at: Self::At, cx: &mut ()) -> Self::Output;
+            fn exec_live(&mut self, change: HostSettingsChange, at: Self::At, cx: &mut ()) -> Self::Output;
+        }
     }
 }
 
@@ -271,9 +294,8 @@ where
             PlayError::Internal("a hosted deck requires its resource worker".into())
         })?;
         if let Some(delay) = &mut self.session.delivery_delay {
-            *delay = (*delay).max(
-                crate::consts::SESSION_PUMP_INTERVAL.saturating_add(worker.wake_allowance()),
-            );
+            *delay = (*delay)
+                .max(crate::consts::SESSION_PUMP_INTERVAL.saturating_add(worker.wake_allowance()));
         }
         let pools = worker.pools().clone();
         if let Some(inbox) = self.dispatcher_inbox.take() {
@@ -288,8 +310,17 @@ where
             .channel
             .as_mut()
             .ok_or(PlayError::Closed)?
-            .open(deck.mixer_config().slots().get())
-            .map_err(|error| PlayError::Internal(error.to_string()))?;
+            .open(deck.mixer_config().slots().get());
+        let scope = match scope {
+            Ok(scope) => scope,
+            Err(error) => {
+                if self.decks.0.is_empty() {
+                    graph::idle(&mut self.session)?;
+                    graph::drop_idle_context(&mut self.session)?;
+                }
+                return Err(PlayError::Internal(error.to_string()));
+            }
+        };
         let (mut record, inputs) = Deck::new(deck, scope)?;
         if let Err(error) = graph::install_deck(&mut self.session, id, inputs, pools, bus) {
             if let Some(channel) = &mut self.session.channel {
@@ -299,8 +330,11 @@ where
             self.decks.0.push((id, record));
             return Err(error.into());
         }
-        record.deck.hold(DeckWake::waker(&self.inbox, DeckMsg::Drain(id)));
-        self.dispatcher.hold(DeckWake::waker(&self.inbox, DeckMsg::Receipts));
+        record
+            .deck
+            .hold(DeckWake::waker(&self.inbox, DeckMsg::Drain(id)));
+        self.dispatcher
+            .hold(DeckWake::waker(&self.inbox, DeckMsg::Receipts));
         self.decks.0.push((id, record));
         self.with_deck(id, &mut |deck, out, pass| deck.drain(pass, out))?;
         Ok(())
@@ -317,7 +351,9 @@ where
             return;
         };
         for (id, record) in &mut self.decks.0 {
-            let suspended = record.suspended_at.is_some_and(|at| record.snapshot.read().blocks <= at.saturating_add(1));
+            let suspended = record
+                .suspended_at
+                .is_some_and(|at| record.snapshot.read().blocks <= at.saturating_add(1));
             let pass = DeckPass {
                 mix: *record.mix.config(),
                 suspended,
@@ -331,7 +367,11 @@ where
             };
             let mut out = Outbox::new(&mut port, &mut self.dispatcher)
                 .lend_mix(&mut record.mix)
-                .lend_session(&mut record.suspended_at, &record.session_bus, pass.deck.blocks)
+                .lend_session(
+                    &mut record.suspended_at,
+                    &record.session_bus,
+                    pass.deck.blocks,
+                )
                 .track_dispatches(&mut record.dispatches);
             if clock.is_some() {
                 out = out.in_pass(pass);
@@ -350,10 +390,12 @@ where
         let (now, delivery) = clock.unwrap_or((SessionFrame::new(0), FrameCount::new(0)));
         let output = self.session.root_view.output.get();
         let record = &mut self.decks.0[index].1;
-        let suspended = record.suspended_at.is_some_and(|at| record.snapshot.read().blocks <= at.saturating_add(1));
-            let pass = DeckPass {
-                mix: *record.mix.config(),
-                suspended,
+        let suspended = record
+            .suspended_at
+            .is_some_and(|at| record.snapshot.read().blocks <= at.saturating_add(1));
+        let pass = DeckPass {
+            mix: *record.mix.config(),
+            suspended,
             now,
             delivery,
             output: &output,
@@ -366,10 +408,14 @@ where
             .ok_or(PlayError::Closed)?
             .scope(record.scope)
             .ok_or(PlayError::Closed)?;
-        let mut out =
-            Outbox::new(&mut port, &mut self.dispatcher).lend_mix(&mut record.mix)
-                .lend_session(&mut record.suspended_at, &record.session_bus, pass.deck.blocks)
-                .track_dispatches(&mut record.dispatches);
+        let mut out = Outbox::new(&mut port, &mut self.dispatcher)
+            .lend_mix(&mut record.mix)
+            .lend_session(
+                &mut record.suspended_at,
+                &record.session_bus,
+                pass.deck.blocks,
+            )
+            .track_dispatches(&mut record.dispatches);
         if clock.is_some() {
             out = out.in_pass(pass);
         }
@@ -502,7 +548,9 @@ where
             };
             let record = &mut self.decks.0[index].1;
             record.dispatches.retain(|seq| *seq != receipt.seq());
-            let suspended = record.suspended_at.is_some_and(|at| record.snapshot.read().blocks <= at.saturating_add(1));
+            let suspended = record
+                .suspended_at
+                .is_some_and(|at| record.snapshot.read().blocks <= at.saturating_add(1));
             let pass = DeckPass {
                 mix: *record.mix.config(),
                 suspended,
@@ -519,8 +567,12 @@ where
             {
                 let mut out = Outbox::new(&mut port, &mut self.dispatcher)
                     .lend_mix(&mut record.mix)
-                .lend_session(&mut record.suspended_at, &record.session_bus, pass.deck.blocks)
-                .track_dispatches(&mut record.dispatches);
+                    .lend_session(
+                        &mut record.suspended_at,
+                        &record.session_bus,
+                        pass.deck.blocks,
+                    )
+                    .track_dispatches(&mut record.dispatches);
                 if self.session.iteration_clock.is_some() {
                     out = out.in_pass(pass);
                 }
@@ -603,13 +655,13 @@ where
                 .session
                 .channel
                 .as_mut()
-                .and_then(|channel| channel.receipt())
+                .and_then(kithara_command::ScopedSender::receipt)
             else {
                 break;
             };
             match receipt {
                 ScopedReceipt::Root(receipt) => {
-                    crate::session::queue::settle_receipt(&mut self.session, &receipt)
+                    crate::session::queue::settle_receipt(&mut self.session, &receipt);
                 }
                 ScopedReceipt::Scope(scope, receipt) => {
                     let Some(index) = self
@@ -633,13 +685,14 @@ where
                     if mix || eq {
                         let outcome = match receipt.outcome() {
                             Outcome::Applied { at, .. } => Ok(*at),
-                            Outcome::Rejected(reason) => Err(map_deck_rejection(reason)),
+                            Outcome::Rejected(reason) => Err(map_deck_rejection(*reason)),
                         };
                         self.session.settled.push(HostSettled::Batch {
                             seq: receipt.seq(),
                             outcome,
                         });
-                    } else if let Some(mut port) = self
+                    }
+                    if let Some(mut port) = self
                         .session
                         .channel
                         .as_mut()
@@ -647,10 +700,12 @@ where
                     {
                         let seq = receipt.seq();
                         let (outcome, mut batch) = receipt.into();
-                        let suspended = record.suspended_at.is_some_and(|at| record.snapshot.read().blocks <= at.saturating_add(1));
-            let pass = DeckPass {
-                mix: *record.mix.config(),
-                suspended,
+                        let suspended = record.suspended_at.is_some_and(|at| {
+                            record.snapshot.read().blocks <= at.saturating_add(1)
+                        });
+                        let pass = DeckPass {
+                            mix: *record.mix.config(),
+                            suspended,
                             now,
                             delivery,
                             output: &output,
@@ -658,8 +713,12 @@ where
                         };
                         let mut out = Outbox::new(&mut port, &mut self.dispatcher)
                             .lend_mix(&mut record.mix)
-                .lend_session(&mut record.suspended_at, &record.session_bus, pass.deck.blocks)
-                .track_dispatches(&mut record.dispatches);
+                            .lend_session(
+                                &mut record.suspended_at,
+                                &record.session_bus,
+                                pass.deck.blocks,
+                            )
+                            .track_dispatches(&mut record.dispatches);
                         if self.session.iteration_clock.is_some() {
                             out = out.in_pass(pass);
                         }
@@ -705,10 +764,12 @@ where
             && let Some(channel) = &mut self.session.channel
         {
             for (_, record) in &mut self.decks.0 {
-                let suspended = record.suspended_at.is_some_and(|at| record.snapshot.read().blocks <= at.saturating_add(1));
-            let pass = DeckPass {
-                mix: *record.mix.config(),
-                suspended,
+                let suspended = record
+                    .suspended_at
+                    .is_some_and(|at| record.snapshot.read().blocks <= at.saturating_add(1));
+                let pass = DeckPass {
+                    mix: *record.mix.config(),
+                    suspended,
                     now,
                     delivery,
                     output: &output,
@@ -720,8 +781,12 @@ where
                 let mut out = Outbox::new(&mut port, &mut self.dispatcher)
                     .in_pass(pass)
                     .lend_mix(&mut record.mix)
-                .lend_session(&mut record.suspended_at, &record.session_bus, pass.deck.blocks)
-                .track_dispatches(&mut record.dispatches);
+                    .lend_session(
+                        &mut record.suspended_at,
+                        &record.session_bus,
+                        pass.deck.blocks,
+                    )
+                    .track_dispatches(&mut record.dispatches);
                 for event in record.receipts.drain() {
                     record
                         .deck
@@ -733,13 +798,13 @@ where
 }
 
 fn map_deck_rejection(
-    reason: &Rejection<kithara_render::bridge::DeckRefusal>,
+    reason: Rejection<kithara_render::bridge::DeckRefusal>,
 ) -> Rejection<PlayError> {
     match reason {
         Rejection::Late => Rejection::Late,
         Rejection::Stale => Rejection::Stale,
         Rejection::Unanswered => Rejection::Unanswered,
-        Rejection::Refused(reason) => Rejection::Refused(PlayError::Deck(reason.clone())),
+        Rejection::Refused(reason) => Rejection::Refused(PlayError::Deck(reason)),
     }
 }
 
@@ -748,7 +813,8 @@ impl<S, D: ?Sized + HostedDeck<S>> Drop for HostCore<S, D> {
         for (_, record) in &mut self.decks.0 {
             if let Some(channel) = &mut self.session.channel {
                 if let Some(mut port) = channel.scope(record.scope) {
-                    let mut out = Outbox::new(&mut port, &mut self.dispatcher).lend_mix(&mut record.mix);
+                    let mut out =
+                        Outbox::new(&mut port, &mut self.dispatcher).lend_mix(&mut record.mix);
                     if let Err(error) = record.deck.close(&mut out) {
                         tracing::warn!(%error, "host deck close failed during shutdown");
                     }
@@ -764,7 +830,9 @@ impl<S, D: ?Sized + HostedDeck<S>> Drop for HostCore<S, D> {
         self.session.stream = None;
         if let Some(ctx) = &mut self.session.ctx {
             #[cfg(not(target_arch = "wasm32"))]
-            if let Err(error) = ctx.deactivate_blocking(std::time::Duration::from_secs(3)) {
+            if let Err(error) =
+                ctx.deactivate_blocking(kithara_platform::time::Duration::from_secs(3))
+            {
                 tracing::error!(?error, "host processor did not return during shutdown");
                 return;
             }

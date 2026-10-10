@@ -18,17 +18,23 @@ use crate::{
 /// facade only owns the object identity and (on native) the `Drop`
 /// shutdown pulse. The JS control surface lives in
 /// `crate::web::surface`.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
+#[cfg_attr(
+    all(feature = "uniffi", not(target_arch = "wasm32")),
+    derive(uniffi::Object)
+)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct AudioPlayer {
     pub(crate) inner: Inner,
 }
 
 /// Methods exported across the FFI boundary.
-#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[cfg_attr(all(feature = "uniffi", not(target_arch = "wasm32")), uniffi::export)]
 impl AudioPlayer {
     #[cfg(not(target_arch = "wasm32"))]
-    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
+    #[cfg_attr(
+        all(feature = "uniffi", not(target_arch = "wasm32")),
+        uniffi::constructor
+    )]
     /// # Errors
     /// Returns an error when the player configuration cannot be created,
     /// including a playing rate that is not a finite number.

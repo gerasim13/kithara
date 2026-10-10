@@ -1,7 +1,4 @@
-use std::{
-    io::{self, Error as IoError, ErrorKind, Read},
-    ops::Range,
-};
+use std::io::{self, Error as IoError, ErrorKind, Read};
 
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
@@ -10,10 +7,7 @@ use kithara_test_utils::kithara;
 use super::{
     Stream, StreamPending, StreamReadError, StreamReadOutcome, StreamType, VariantChangeError,
 };
-use crate::{
-    NotReadyCause, PendingReason, ReadOutcome, Source, SourceError, StreamError, StreamResult,
-    consts,
-};
+use crate::{NotReadyCause, PendingReason, ReadOutcome, Source, SourceError, StreamError, consts};
 
 /// Per-probe wait policy threaded into [`Stream::try_read_with`]. Internal
 /// plumbing, NOT a public knob — it selects the `Source::wait_range` timeout
@@ -215,21 +209,6 @@ impl<T: StreamType> Stream<T> {
             }
             Err(StreamReadError::Source(e)) => Err(e),
         }
-    }
-
-    /// Single wake-free readiness probe for `range` that also files it as
-    /// reader demand ([`Source::wait_range`] with a zero budget). The demand
-    /// side is the point: dispatch budgets follow the ranges the source knows
-    /// a reader waits on, and a phase snapshot alone leaves a parked reader
-    /// invisible. Never blocks — the audio worker's readiness gate calls it
-    /// from the produce core when a phase poll parks the decoder.
-    ///
-    /// # Errors
-    ///
-    /// A not-ready range surfaces as the source's typed budget-exceeded
-    /// error; cancel and storage failures pass through unchanged.
-    pub fn probe_wait(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome> {
-        self.source.wait_range(range, Some(Duration::ZERO))
     }
 }
 

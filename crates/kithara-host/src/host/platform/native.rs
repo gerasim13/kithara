@@ -22,6 +22,8 @@ type StartedPlatform<S, O> = (
     Platform<S, O>,
 );
 
+type PlatformMarker<S, O> = PhantomData<fn() -> (S, O)>;
+
 impl<S, O: HostOwner<S>> PlatformResult<Self> for StartedPlatform<S, O> {
     fn resolve(self) -> Result<Self, PlayError> {
         Ok(self)
@@ -29,7 +31,7 @@ impl<S, O: HostOwner<S>> PlatformResult<Self> for StartedPlatform<S, O> {
 }
 
 pub(in crate::host) struct Platform<S, O: HostOwner<S>> {
-    marker: PhantomData<fn() -> (S, O)>,
+    marker: PlatformMarker<S, O>,
 }
 
 impl<S, O: HostOwner<S>> Platform<S, O> {

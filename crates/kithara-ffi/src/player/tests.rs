@@ -3,9 +3,10 @@ use kithara::platform::sync::mpsc;
 use crate::{config::FfiPlayerConfig, player::AudioPlayer, types::FfiError};
 
 fn wait_for_publication(mut published: impl FnMut() -> bool) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !published() && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(5));
+    let deadline =
+        kithara_platform::time::Instant::now() + kithara_platform::time::Duration::from_secs(5);
+    while !published() && kithara_platform::time::Instant::now() < deadline {
+        kithara_platform::thread::sleep(kithara_platform::time::Duration::from_millis(5));
     }
 }
 

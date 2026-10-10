@@ -1,5 +1,5 @@
 use std::{
-    num::{NonZeroU32, NonZeroUsize},
+    num::NonZeroU32,
     ops::ControlFlow,
     task::{Context, Poll},
 };
@@ -9,15 +9,13 @@ use kithara_audio::{
     TrackFailureKind, TrackStep, WaitingReason,
 };
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
-use kithara_command::Inbox;
-use kithara_dsp::param::SmootherConfig;
 use kithara_effects::{AudioEffect, EffectDrain, EffectDrainStep, apply_effects, reset_effects};
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount};
 use kithara_warp::WarpRenderError;
 
 use crate::{
-    LaneFrame, LaneProtocol,
+    LaneFrame, LaneSetup,
     lane::{Lane, LaneChange},
 };
 
@@ -61,7 +59,7 @@ where
     S: HasPool<f32>,
 {
     /// Builds the stage over a decoded source, its Warp renderer, and the
-    /// effect chain with the drain that flushes it; `inbox` brings the lane
+    /// effect chain with the drain that flushes it; `lane` brings the lane
     /// commands it executes at frames of its output.
     pub fn new(
         source: T,
@@ -70,9 +68,7 @@ where
         drain: EffectDrain,
         spec: AudioSpec,
         pools: PoolRegion<S>,
-        inbox: Inbox<LaneProtocol>,
-        preload_chunks: NonZeroUsize,
-        declick: SmootherConfig,
+        lane: LaneSetup,
     ) -> Self {
         let discontinuity = source.discontinuity();
         Self {
@@ -83,7 +79,7 @@ where
             discontinuity,
             spec,
             pools,
-            lane: Lane::new(inbox, preload_chunks, declick),
+            lane: Lane::new(lane.inbox, lane.preload_chunks, lane.declick),
             drain_state: DrainState::Open,
             pending_input: None,
             staged_meta: None,
@@ -95,16 +91,25 @@ where
         }
     }
 
-    /// Current segment-relative output frame.
-    #[must_use]
-    pub const fn cursor(&self) -> LaneFrame {
-        self.lane.cursor()
-    }
-
-    /// Exact source position represented by the lane output cursor, when established.
-    #[must_use]
-    pub const fn position(&self) -> Option<Duration> {
-        self.lane.position()
+    delegate::delegate! {
+        to self.lane {
+            /// Current segment-relative output frame.
+            #[must_use]
+            pub const fn cursor(&self) -> LaneFrame;
+            /// Exact source position represented by the lane output cursor, when established.
+            #[must_use]
+            pub const fn position(&self) -> Option<Duration>;
+            /// Records successful admission of the current segment's chunk.
+            pub fn admitted(&mut self);
+            pub(crate) fn upstream_parked(&mut self);
+            pub(crate) fn finish_preload(&mut self);
+            pub(crate) fn finish_segment(&mut self);
+            /// Whether admission has made the current segment ready for playback.
+            #[must_use]
+            pub fn is_preloaded(&self) -> bool;
+            /// Registers the owning task's wake for lane command arrivals.
+            pub fn poll_commands(&mut self, context: &mut Context<'_>) -> Poll<()>;
+        }
     }
 
     /// Exact output latency of the prepared engine.
@@ -117,34 +122,6 @@ where
     #[must_use]
     pub fn declick_frames(&self) -> FrameCount {
         self.lane.declick_frames(self.spec.sample_rate)
-    }
-
-    /// Records successful admission of the current segment's chunk.
-    pub fn admitted(&mut self) {
-        self.lane.admitted();
-    }
-
-    pub(crate) fn upstream_parked(&mut self) {
-        self.lane.upstream_parked();
-    }
-
-    pub(crate) fn finish_preload(&mut self) {
-        self.lane.finish_preload();
-    }
-
-    pub(crate) fn finish_segment(&mut self) {
-        self.lane.finish_segment();
-    }
-
-    /// Whether admission has made the current segment ready for playback.
-    #[must_use]
-    pub fn is_preloaded(&self) -> bool {
-        self.lane.is_preloaded()
-    }
-
-    /// Registers the owning task's wake for lane command arrivals.
-    pub fn poll_commands(&mut self, context: &mut Context<'_>) -> Poll<()> {
-        self.lane.poll_commands(context)
     }
 
     /// Executes commands at the output cursor before producing more samples.
@@ -391,12 +368,9 @@ where
 
     fn drain_step(&mut self) -> Option<TrackStep<AudioChunk>> {
         if let DrainState::LiveWarp = self.drain_state {
-            let chunk = match self.warp.drain(self.lane.output_limit()) {
-                Ok(chunk) => chunk,
-                Err(_) => {
-                    self.quantum_failed = true;
-                    return Some(TrackStep::StateChanged);
-                }
+            let Ok(chunk) = self.warp.drain(self.lane.output_limit()) else {
+                self.quantum_failed = true;
+                return Some(TrackStep::StateChanged);
             };
             if !self.warp.transition_pending() {
                 self.drain_state = DrainState::Open;
@@ -410,13 +384,11 @@ where
         }
 
         if let DrainState::Warp = self.drain_state {
-            if let Some(chunk) = match self.warp.drain(self.lane.output_limit()) {
-                Ok(chunk) => chunk,
-                Err(_) => {
-                    self.quantum_failed = true;
-                    return Some(TrackStep::StateChanged);
-                }
-            } {
+            let Ok(chunk) = self.warp.drain(self.lane.output_limit()) else {
+                self.quantum_failed = true;
+                return Some(TrackStep::StateChanged);
+            };
+            if let Some(chunk) = chunk {
                 return Some(
                     apply_effects(&mut self.effects, chunk)
                         .and_then(|output| self.fetch(output))
@@ -715,7 +687,9 @@ where
                 });
                 TrackStep::StateChanged
             }
-            TrackStep::Produced(Fetch::Failure { failure }) => self.fail(failure),
+            TrackStep::Produced(Fetch::Failure { failure }) | TrackStep::Failed(failure) => {
+                self.fail(failure)
+            }
             TrackStep::Produced(fetch) => TrackStep::Produced(fetch),
             TrackStep::Eof => {
                 self.begin_drain();
@@ -736,7 +710,6 @@ where
                 TrackStep::StateChanged
             }
             TrackStep::Blocked(reason) => TrackStep::Blocked(reason),
-            TrackStep::Failed(failure) => self.fail(failure),
         }
     }
 
@@ -762,7 +735,7 @@ mod tests {
 
     use kithara_audio::{Fetch, TrackStep, WaitingReason};
     use kithara_bufpool::PoolRegion;
-    use kithara_command::{Batch, ChannelConfig, Outcome, Rejection, Sender, When, channel};
+    use kithara_command::{Batch, ChannelConfig, Inbox, Outcome, Rejection, Sender, When, channel};
     use kithara_effects::held_source_frames;
     use kithara_platform::sync::{
         Arc, Mutex,
@@ -864,9 +837,11 @@ mod tests {
             drain,
             spec,
             pools.clone(),
-            idle_inbox(),
-            NonZeroUsize::new(1).expect("preload"),
-            consts::DEFAULT_DECLICK,
+            LaneSetup {
+                inbox: idle_inbox(),
+                preload_chunks: NonZeroUsize::new(1).expect("preload"),
+                declick: consts::DEFAULT_DECLICK,
+            },
         )
     }
 
@@ -990,9 +965,11 @@ mod tests {
             drain,
             spec,
             pools.clone(),
-            idle_inbox(),
-            NonZeroUsize::MIN,
-            consts::DEFAULT_DECLICK,
+            LaneSetup {
+                inbox: idle_inbox(),
+                preload_chunks: NonZeroUsize::MIN,
+                declick: consts::DEFAULT_DECLICK,
+            },
         );
         flush_deferred(&mut source);
         assert_eq!(source.warp.requires_staging(), staged);
@@ -1049,9 +1026,11 @@ mod tests {
             drain,
             spec,
             pools.clone(),
-            idle_inbox(),
-            NonZeroUsize::MIN,
-            consts::DEFAULT_DECLICK,
+            LaneSetup {
+                inbox: idle_inbox(),
+                preload_chunks: NonZeroUsize::MIN,
+                declick: consts::DEFAULT_DECLICK,
+            },
         );
         let mut staged_prefix_seen = false;
         let mut produced_nonzero_pcm = false;
@@ -1740,9 +1719,11 @@ mod tests {
                 drain,
                 spec,
                 pools.clone(),
-                inbox,
-                NonZeroUsize::new(1).expect("preload"),
-                consts::DEFAULT_DECLICK,
+                LaneSetup {
+                    inbox,
+                    preload_chunks: NonZeroUsize::new(1).expect("preload"),
+                    declick: consts::DEFAULT_DECLICK,
+                },
             );
 
             let initial = feed_whole_chunk(&mut source);
@@ -1905,9 +1886,11 @@ mod tests {
             drain,
             spec,
             pools.clone(),
-            idle_inbox(),
-            NonZeroUsize::new(1).expect("preload"),
-            consts::DEFAULT_DECLICK,
+            LaneSetup {
+                inbox: idle_inbox(),
+                preload_chunks: NonZeroUsize::new(1).expect("preload"),
+                declick: consts::DEFAULT_DECLICK,
+            },
         );
         let mut produced = 0;
         for _ in 0..128 {
@@ -2033,9 +2016,11 @@ mod tests {
                 drain,
                 spec,
                 target_pools.clone(),
-                idle_inbox(),
-                NonZeroUsize::new(1).expect("preload"),
-                consts::DEFAULT_DECLICK,
+                LaneSetup {
+                    inbox: idle_inbox(),
+                    preload_chunks: NonZeroUsize::new(1).expect("preload"),
+                    declick: consts::DEFAULT_DECLICK,
+                },
             );
 
             for _ in 0..3 {
@@ -2259,9 +2244,11 @@ mod tests {
             drain,
             spec,
             pools.clone(),
-            inbox,
-            NonZeroUsize::new(1).expect("preload"),
-            consts::DEFAULT_DECLICK,
+            LaneSetup {
+                inbox,
+                preload_chunks: NonZeroUsize::new(1).expect("preload"),
+                declick: consts::DEFAULT_DECLICK,
+            },
         );
         (source, lane)
     }
@@ -2875,9 +2862,11 @@ mod tests {
             drain,
             spec,
             pools.clone(),
-            inbox,
-            NonZeroUsize::new(1).expect("preload"),
-            consts::DEFAULT_DECLICK,
+            LaneSetup {
+                inbox,
+                preload_chunks: NonZeroUsize::new(1).expect("preload"),
+                declick: consts::DEFAULT_DECLICK,
+            },
         );
         for (index, pointer) in pointers.into_iter().enumerate() {
             if index == 1 {

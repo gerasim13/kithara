@@ -34,8 +34,11 @@ impl ChunkCursor {
         self.current_chunk_consumed_frames = 0;
     }
 
-    pub(super) const fn consumed_frames(&self) -> u64 {
-        self.current_chunk_consumed_frames
+    delegate::delegate! {
+        to self {
+            #[expr(self.current_chunk_consumed_frames)]
+            pub(super) const fn consumed_frames(&self) -> u64;
+        }
     }
 
     pub(super) const fn clear(&mut self) {

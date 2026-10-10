@@ -1019,13 +1019,13 @@ fn repeated_terminal_padding_keeps_the_decoded_eof_and_resident_extent() {
         .expect("decoded source admission");
     let padded_length = resident.samples.len();
     renderer.terminal_source_end = Some(32);
-    let span = kithara_signal::SourceSpan::from_rational(
+    let span = kithara_signal::SourceSpan::try_from((
         32,
         1,
         std::num::NonZeroU128::MIN,
         spec().sample_rate,
         32,
-    )
+    ))
     .expect("terminal lookahead mapping");
     renderer.render_projected(span).expect("terminal lookahead");
     renderer

@@ -1,6 +1,8 @@
 use std::ops::Range;
 
+use kithara_test_macros as kithara;
 use kithara_warp::RenderContext;
+use num_traits::ToPrimitive;
 
 use super::{PlayerTrack, ReadOutcome, RtSink};
 use crate::bridge::{DeckEvent, PlaybackFault, RtMetrics, SlotState};
@@ -68,6 +70,12 @@ impl PlayerTrack {
         true
     }
 
+    #[kithara::probe(
+        track_id = u64::from(sink.slot.get()),
+        output_base = context.map(|context| i64::from(context.output().output_frames().start)),
+        range_start = range.start,
+        range_end = range.end
+    )]
     pub(crate) fn render(
         &mut self,
         context: Option<&RenderContext>,
@@ -77,6 +85,9 @@ impl PlayerTrack {
         budget: &mut usize,
         sink: &mut RtSink<'_>,
     ) -> TrackReadOutcome {
+        if self.state == SlotState::Ended {
+            return TrackReadOutcome::Eof;
+        }
         if self.state != SlotState::Playing || self.gate.is_shut() {
             return TrackReadOutcome::Full {
                 position: self.position(),
@@ -143,14 +154,22 @@ impl PlayerTrack {
                     .saturating_add(u32::try_from(limit - frames).unwrap_or(u32::MAX));
             }
         }
-        TrackReadOutcome::Full {
-            position: self.position(),
-            frames,
-            duration: self.duration(),
-            frames_until_eof: None,
+        match outcome {
+            ReadOutcome::Partial { .. } => TrackReadOutcome::Partial {
+                frames,
+                duration: self.duration(),
+            },
+            ReadOutcome::Full { .. } => TrackReadOutcome::Full {
+                position: self.position(),
+                frames,
+                duration: self.duration(),
+                frames_until_eof: self.resource.frames_until_eof(),
+            },
+            ReadOutcome::Eof | ReadOutcome::Failed(_) => unreachable!(),
         }
     }
 
+    /// Reads a fading tail; `usize` frame counts fit within `f32`'s finite range.
     pub(crate) fn read_tail(
         &mut self,
         left: &mut [f32],
@@ -176,7 +195,7 @@ impl PlayerTrack {
             let progress = if length <= 1 {
                 1.0
             } else {
-                index as f32 / (length - 1) as f32
+                index.to_f32().unwrap_or(f32::MAX) / (length - 1).to_f32().unwrap_or(f32::MAX)
             };
             let level = gain * (1.0 - progress);
             *left *= level;
@@ -220,13 +239,13 @@ mod tests {
 
         let spec = AudioSpec::new(2, context.output().sample_rate());
         let mut ring = PacketRing::new(spec, Duration::from_secs(1), 1);
-        ring.push(PcmPacket::Chunk(chunk(
+        ring.push(PcmPacket::Chunk(Box::new(chunk(
             spec,
             SegmentId::FIRST,
             8_000,
             8_000,
             &[0.5; 2],
-        )));
+        ))));
         let mut resource = PlayerResource::new(
             PcmConsumer::new(ring.receiver.take().expect("receiver")),
             Arc::from("publication"),

@@ -57,20 +57,20 @@ mod tests {
     use kithara_test_utils::{bufpool::TestPools, kithara};
 
     use super::*;
+    use crate::HostCommand;
+
+    type BaseCommand = HostCommand<TestPools, dyn kithara_play::HostedDeck<TestPools>>;
 
     /// A session that drains each post as it lands and answers it with what
     /// `outcome` gives, or drops it unanswered for `None`.
     struct Session {
-        postbox: HostPostbox<TestPools>,
-        mailbox: Mutex<HostMailbox<TestPools>>,
+        postbox: HostPostbox<BaseCommand>,
+        mailbox: Mutex<HostMailbox<BaseCommand>>,
         outcome: fn() -> Option<Result<(), PlayError>>,
     }
 
-    impl HostDispatcher<TestPools> for Session {
-        fn dispatch(
-            &self,
-            cmd: HostCmd<TestPools>,
-        ) -> Result<Ticket<PlayError>, HostDispatchError> {
+    impl HostDispatcher<BaseCommand> for Session {
+        fn dispatch(&self, cmd: BaseCommand) -> Result<Ticket<PlayError>, HostDispatchError> {
             let ticket = self.postbox.post(cmd).map_err(not_taken)?;
             for Post { answer, .. } in self.mailbox.lock().drain() {
                 if let Some(outcome) = (self.outcome)() {
@@ -79,6 +79,8 @@ mod tests {
             }
             Ok(ticket)
         }
+
+        fn shutdown(&self) {}
     }
 
     fn session(outcome: fn() -> Option<Result<(), PlayError>>) -> Session {
@@ -92,14 +94,17 @@ mod tests {
 
     #[kithara::test]
     fn a_post_the_session_drops_reads_unanswered() {
-        let asked = ask(&session(|| None), HostCmd::Shutdown);
+        let asked = ask(&session(|| None), HostCommand::Restart);
 
         assert!(matches!(asked, Err(HostDispatchError::Unanswered)));
     }
 
     #[kithara::test]
     fn the_session_refusal_reaches_the_caller() {
-        let asked = ask(&session(|| Some(Err(PlayError::Late))), HostCmd::Shutdown);
+        let asked = ask(
+            &session(|| Some(Err(PlayError::Late))),
+            HostCommand::Restart,
+        );
 
         assert!(matches!(
             asked,

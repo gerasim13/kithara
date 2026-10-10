@@ -28,10 +28,12 @@ impl TaskConfig {
         Self::default()
     }
 
-    #[must_use]
-    pub fn with_priority(mut self, priority: Priority) -> Self {
-        self.priority = priority;
-        self
+    delegate::delegate! {
+        to self {
+            #[expr({ self.priority = priority; self })]
+            #[must_use]
+            pub fn with_priority(mut self, priority: Priority) -> Self;
+        }
     }
 }
 

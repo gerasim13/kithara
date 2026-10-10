@@ -4,6 +4,7 @@ use kithara_events::TrackId;
 use kithara_play::{
     CrossfadeSettings, EqBandConfig, InterruptionKind, PlayError, Position, TrackSettingsChange,
 };
+use num_traits::ToPrimitive;
 
 use super::{QueueCommand, QueueControl, Transition};
 use crate::{
@@ -75,9 +76,12 @@ where
     /// # Errors
     /// Returns an invalid position, the track's refusal or a closed mailbox.
     pub fn seek(&self, seconds: f64) -> Result<(), QueueError> {
+        let value = seconds.to_f32().ok_or_else(|| {
+            PlayError::Internal("position diagnostic cannot be represented as f32".into())
+        })?;
         let to = Position::try_from_secs_f64(seconds).map_err(|_| PlayError::InvalidParameter {
             name: "position".into(),
-            value: seconds as f32,
+            value,
         })?;
         self.call(QueueCommand::Seek { to })
     }
@@ -226,6 +230,12 @@ where
         self.call(QueueCommand::ResetEq)
     }
 
+    /// Posts an interruption to the deck owner.
+    ///
+    /// # Errors
+    /// Returns [`QueueError::Play`] with [`PlayError::Closed`] if the queue or
+    /// mailbox is closed, or with [`PlayError::NotReady`] if the outbox has no
+    /// host session binding.
     pub fn notify_interruption(&self, kind: InterruptionKind) -> Result<(), QueueError> {
         self.call(QueueCommand::NotifyInterruption(kind))
     }

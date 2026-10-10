@@ -34,10 +34,14 @@ const MAX_BLOCKS: usize = 1024;
 fn queue_config(harness: &OfflinePlayer, duration: f32) -> QueueConfig<TestPools> {
     QueueConfig::builder()
         .prep(harness.resource_prep().clone())
-        .settings(kithara::queue::QueueSettings::builder().crossfade(kithara::play::CrossfadeSettings {
-            duration,
-            ..kithara::play::CrossfadeSettings::default()
-        }).build())
+        .settings(
+            kithara::queue::QueueSettings::builder()
+                .crossfade(kithara::play::CrossfadeSettings {
+                    duration,
+                    ..kithara::play::CrossfadeSettings::default()
+                })
+                .build(),
+        )
         .build()
 }
 
@@ -206,7 +210,9 @@ async fn selecting_a_loaded_track_starts_playback_from_a_stopped_transport() {
     .await;
     let queue = harness
         .insert_control(Queue::new(
-            QueueConfig::builder().prep(harness.resource_prep().clone()).build(),
+            QueueConfig::builder()
+                .prep(harness.resource_prep().clone())
+                .build(),
         ))
         .await;
     let one = assets::constant_wav_three_1s();
@@ -523,10 +529,14 @@ async fn a_successor_the_deck_had_no_room_for_reloads_and_meets_its_predecessor(
     .await;
     let config = QueueConfig::builder()
         .prep(harness.resource_prep().clone())
-        .settings(kithara::queue::QueueSettings::builder().crossfade(kithara::play::CrossfadeSettings {
-            duration: 0.0,
-            ..kithara::play::CrossfadeSettings::default()
-        }).build())
+        .settings(
+            kithara::queue::QueueSettings::builder()
+                .crossfade(kithara::play::CrossfadeSettings {
+                    duration: 0.0,
+                    ..kithara::play::CrossfadeSettings::default()
+                })
+                .build(),
+        )
         .preload_lead(Duration::from_secs_f32(LEAD_SECS))
         .build();
     let queue = harness.insert_control(Queue::new(config)).await;
@@ -558,10 +568,7 @@ async fn a_successor_the_deck_had_no_room_for_reloads_and_meets_its_predecessor(
             .run(&queue, |q| (0..FLOOD).find_map(|_| q.set_volume(1.0).err()))
             .await;
         assert!(
-            matches!(
-                refused,
-                Some(QueueError::Play(PlayError::Full(_)))
-            ),
+            matches!(refused, Some(QueueError::Play(PlayError::Full(_)))),
             "the flood fills the deck's ring, so it refuses a volume, not {refused:?}"
         );
         pcm.extend(harness.render(BLOCK_FRAMES).await);
@@ -1099,10 +1106,14 @@ async fn a_consumed_successor_reloads_its_lead_in_session_time_before_the_end() 
     .await;
     let config = QueueConfig::builder()
         .prep(harness.resource_prep().clone())
-        .settings(kithara::queue::QueueSettings::builder().crossfade(kithara::play::CrossfadeSettings {
-            duration: 0.0,
-            ..kithara::play::CrossfadeSettings::default()
-        }).build())
+        .settings(
+            kithara::queue::QueueSettings::builder()
+                .crossfade(kithara::play::CrossfadeSettings {
+                    duration: 0.0,
+                    ..kithara::play::CrossfadeSettings::default()
+                })
+                .build(),
+        )
         .preload_lead(Duration::from_secs_f32(LEAD_SECS))
         .build();
     let queue = harness.insert_control(Queue::new(config)).await;
@@ -1399,10 +1410,14 @@ async fn autoplay_queue(harness: &OfflinePlayer) -> QueueControl<TestPools> {
             QueueConfig::builder()
                 .prep(harness.resource_prep().clone())
                 .should_autoplay(true)
-                .settings(kithara::queue::QueueSettings::builder().crossfade(kithara::play::CrossfadeSettings {
-                    duration: 0.0,
-                    ..kithara::play::CrossfadeSettings::default()
-                }).build())
+                .settings(
+                    kithara::queue::QueueSettings::builder()
+                        .crossfade(kithara::play::CrossfadeSettings {
+                            duration: 0.0,
+                            ..kithara::play::CrossfadeSettings::default()
+                        })
+                        .build(),
+                )
                 .build(),
         ))
         .await

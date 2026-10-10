@@ -3,9 +3,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     play::{PlayWorker, PlayWorkerConfig},
 };
-use kithara_integration_tests::{
-    CreatedHls, TestServerHelper, fixture_protocol::DelayRule,
-};
+use kithara_integration_tests::{CreatedHls, TestServerHelper, fixture_protocol::DelayRule};
 
 use super::*;
 use crate::bufpool_ext::pools;
@@ -70,20 +68,21 @@ async fn prepare_tiny_ring_player(
         })
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-    let config = kithara::play::ResourceConfig::for_src(
-        kithara::play::ResourceSrc::Url(master_url.clone()),
-    )
-        .store(store)
-        .worker(worker)
-        .initial_abr_mode(AbrMode::manual(initial_variant))
-        .decoder(
-            kithara::audio::AudioDecoderConfig::builder()
-                .backend(backend)
-                .build(),
-        )
-        .events(bus)
-        .audio_buffer_chunks(std::num::NonZeroUsize::new(OUTPUT_RING_CHUNKS).expect("output ring depth"))
-        .build();
+    let config =
+        kithara::play::ResourceConfig::for_src(kithara::play::ResourceSrc::Url(master_url.clone()))
+            .store(store)
+            .worker(worker)
+            .initial_abr_mode(AbrMode::manual(initial_variant))
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
+            .events(bus)
+            .audio_buffer_chunks(
+                std::num::NonZeroUsize::new(OUTPUT_RING_CHUNKS).expect("output ring depth"),
+            )
+            .build();
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools)
             .settings(
@@ -95,7 +94,9 @@ async fn prepare_tiny_ring_player(
     )
     .await;
     player.load_config(config).await;
-    let abr = player.player().current_abr_handle()
+    let abr = player
+        .player()
+        .current_abr_handle()
         .unwrap_or_else(|| panic!("{label} HLS audio must expose an ABR handle"));
 
     let deadline = Instant::now() + Duration::from_secs(15);

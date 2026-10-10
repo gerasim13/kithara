@@ -16,15 +16,11 @@ pub trait Port<P: Protocol> {
 }
 
 impl<P: Protocol> Port<P> for Sender<P> {
-    fn send(&mut self, when: When<P::Clock>, batch: Batch<P>) -> Result<Seq, SendError<P>> {
-        self.send(when, batch)
-    }
-
-    fn basis(&self, target: P::Target, when: When<P::Clock>) -> Option<Seq> {
-        self.basis(target, when)
-    }
-
-    fn available(&self) -> usize {
-        self.available()
+    delegate::delegate! {
+        to self {
+            fn send(&mut self, when: When<P::Clock>, batch: Batch<P>) -> Result<Seq, SendError<P>>;
+            fn basis(&self, target: P::Target, when: When<P::Clock>) -> Option<Seq>;
+            fn available(&self) -> usize;
+        }
     }
 }

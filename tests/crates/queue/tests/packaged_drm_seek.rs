@@ -139,9 +139,8 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
 
     let session_config = HostConfig::offline(session_pools).build();
     let player = kithara::play::ResourcePrep::builder()
-            
-            .worker(worker)
-            .build();
+        .worker(worker)
+        .build();
     let queue = OfflineQueue::paced(
         session_config,
         Queue::new(QueueConfig::builder().prep(player).build()),

@@ -140,7 +140,6 @@ async fn run_case(
             .initial_abr_mode(initial_mode)
             .build();
 
-
     let mut player = OfflinePlayer::new(
         HostConfig::offline(pools())
             .settings(

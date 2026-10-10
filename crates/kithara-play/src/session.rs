@@ -1,5 +1,3 @@
-//! Lower player-to-host session protocol.
-
 mod wire {
     use kithara_render::rt::BufferGeometryError;
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
@@ -131,8 +129,7 @@ pub use wire::{PlayerId, SessionError, SessionSampleRate};
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_test_utils::{TestTempDir, bufpool::pools};
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{TestTempDir, bufpool::pools, kithara};
 
     use super::{SessionOutputView, SessionSampleRate};
 
@@ -157,14 +154,23 @@ mod tests {
         let pools = pools();
         let dir = TestTempDir::new();
         let prep = crate::ResourcePrep::builder()
-            .worker(crate::PlayWorker::new(crate::PlayWorkerConfig::builder(pools.clone()).build()))
+            .worker(crate::PlayWorker::new(
+                crate::PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .build();
-        crate::mock::assert_prepared_render_off_bus(&prep, &view.get(), &pools, &dir.path().join("session.wav"))
-            .await.expect("session-prepared lane renders off the bus");
+        crate::mock::assert_prepared_render_off_bus(
+            &prep,
+            &view.get(),
+            &pools,
+            &dir.path().join("session.wav"),
+        )
+        .await
+        .expect("session-prepared lane renders off the bus");
     }
 
     #[kithara::test(native, tokio)]
     async fn session_handle_delegates_explicit_consumer_wake_mode() {
-        assert_session_render_off_bus(&SessionOutputView::new(sample_rate())).await;
+        let view = SessionOutputView::new(sample_rate());
+        assert_session_render_off_bus(&view).await;
     }
 }

@@ -12,15 +12,19 @@ use kithara::{
         CancelScope,
         maybe_send::MaybeSend,
         sync::{
-            Arc,
+            Arc, Mutex,
             atomic::{AtomicU64, Ordering},
         },
         time::Duration,
     },
-    play::{HostedDeck, MixTapWriter, PlayError},
+    play::{DeckPass, HostedDeck, MixTapWriter, Outbox, PlayError, PlayWorker, TrackReceipt},
     queue::Queue,
     signal::AudioSpec,
     warp::{BeatGrid, BeatGridSnapshot},
+};
+use kithara_render::{
+    bridge::{DeckSnapshot, RtMetricsSnapshot},
+    rt::DeckMixerConfig,
 };
 use ringbuf::{
     HeapCons, HeapRb,
@@ -28,9 +32,6 @@ use ringbuf::{
 };
 
 use super::owner::HostOwner;
-use kithara::platform::sync::Mutex;
-use kithara::play::{DeckPass, Outbox, PlayWorker, TrackReceipt};
-use kithara_render::{bridge::{DeckSnapshot, RtMetricsSnapshot}, rt::DeckMixerConfig};
 
 pub struct ObservedDeck<P: DeckControl> {
     pub(super) inner: P,
@@ -55,7 +56,12 @@ where
         self.inner.drain(pass, out);
     }
 
-    fn settle(&mut self, receipt: TrackReceipt<'_, S>, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
+    fn settle(
+        &mut self,
+        receipt: TrackReceipt<'_, S>,
+        pass: DeckPass<'_>,
+        out: &mut Outbox<'_, S>,
+    ) {
         *self.snapshot.lock() = pass.deck.clone();
         self.inner.settle(receipt, pass, out);
     }
@@ -75,7 +81,6 @@ where
         }
     }
 }
-
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::usdt_trace;
@@ -159,7 +164,11 @@ where
 
     async fn open(host: OfflineHostHarness<S>, player: P) -> Result<Self, PlayError> {
         let (member, snapshot) = host.insert_observed(player).await?;
-        Ok(Self { host, member, snapshot })
+        Ok(Self {
+            host,
+            member,
+            snapshot,
+        })
     }
 
     pub async fn render(&self, frames: usize) -> Vec<f32> {
@@ -200,7 +209,11 @@ where
 
     /// Drops the resident before waiting for Host session teardown.
     pub async fn close(self) {
-        let Self { host, member, snapshot } = self;
+        let Self {
+            host,
+            member,
+            snapshot,
+        } = self;
         drop(snapshot);
         drop(member);
         host.close().await;
@@ -324,13 +337,21 @@ where
         self.off.call(move |state| state.host.insert(player)).await
     }
 
-    pub async fn insert_observed<P>(&self, player: P) -> Result<(HostOwned<ObservedDeck<P>>, Arc<Mutex<DeckSnapshot>>), PlayError>
+    pub async fn insert_observed<P>(
+        &self,
+        player: P,
+    ) -> Result<(HostOwned<ObservedDeck<P>>, Arc<Mutex<DeckSnapshot>>), PlayError>
     where
         P: DeckControl + HostedDeck<S> + MaybeSend + 'static,
         P::Control: MaybeSend,
     {
         let snapshot = Arc::new(Mutex::new(DeckSnapshot::default()));
-        let member = self.insert(ObservedDeck { inner: player, snapshot: snapshot.clone() }).await?;
+        let member = self
+            .insert(ObservedDeck {
+                inner: player,
+                snapshot: snapshot.clone(),
+            })
+            .await?;
         Ok((member, snapshot))
     }
 

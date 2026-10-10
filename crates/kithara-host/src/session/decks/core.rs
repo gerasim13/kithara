@@ -27,7 +27,9 @@ impl<S, D: ?Sized + HostedDeck<S>> Deck<S, D> {
         let mix =
             Live::new(config.mix()).map_err(|error| PlayError::Internal(error.to_string()))?;
         let (ends, inputs) = scope_channels(scope, config);
-        let session_bus = deck.resource_prep().map_or_else(kithara_events::EventBus::default, |prep| prep.bus.clone());
+        let session_bus = deck
+            .resource_prep()
+            .map_or_else(kithara_events::EventBus::default, |prep| prep.bus.clone());
         Ok((
             Self {
                 deck,

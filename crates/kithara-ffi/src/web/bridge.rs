@@ -119,7 +119,9 @@ impl WorkerBridge {
     /// Current item duration (seconds) read from the deck's published
     /// snapshot. `0.0` when unknown.
     pub(crate) fn duration_secs(&self) -> f64 {
-        self.queue().and_then(FfiQueueControl::duration_seconds).unwrap_or(0.0)
+        self.queue()
+            .and_then(FfiQueueControl::duration_seconds)
+            .unwrap_or(0.0)
     }
 
     /// Boot the engine worker once. Idempotent: subsequent calls return
@@ -149,9 +151,22 @@ impl WorkerBridge {
         std::mem::forget(worker);
     }
 
-    /// Whether the deck's published snapshot is currently playing.
-    pub(crate) fn is_playing(&self) -> bool {
-        self.queue().is_some_and(FfiQueueControl::is_playing)
+    delegate::delegate! {
+        to self {
+            /// Whether the deck's published snapshot is currently playing.
+            #[expr($.is_some_and(FfiQueueControl::is_playing))]
+            #[call(queue)]
+            pub(crate) fn is_playing(&self) -> bool;
+            /// Audio-thread process calls served so far. Monotonic, so a caller
+            /// samples twice and reads the delta.
+            #[expr($.map_or(0, FfiQueueControl::mixer_blocks))]
+            #[call(queue)]
+            pub(crate) fn process_calls(&self) -> u64;
+            /// Underruns the audio thread has recorded so far.
+            #[expr($.map_or(0, |queue| queue.mixer_metrics().underruns()))]
+            #[call(queue)]
+            pub(crate) fn underruns(&self) -> u64;
+        }
     }
 
     fn lock_cmd_tx(&self) -> MutexGuard<'_, Option<mpsc::Sender<WorkerCmd>>> {
@@ -161,13 +176,9 @@ impl WorkerBridge {
     /// Live playback position (seconds) read from the deck's published
     /// snapshot. `0.0` when no item is loaded.
     pub(crate) fn position_secs(&self) -> f64 {
-        self.queue().and_then(FfiQueueControl::position_seconds).unwrap_or(0.0)
-    }
-
-    /// Audio-thread process calls served so far. Monotonic, so a caller
-    /// samples twice and reads the delta.
-    pub(crate) fn process_calls(&self) -> u64 {
-        self.queue().map_or(0, FfiQueueControl::mixer_blocks)
+        self.queue()
+            .and_then(FfiQueueControl::position_seconds)
+            .unwrap_or(0.0)
     }
 
     /// Forward a command to the worker.
@@ -187,10 +198,5 @@ impl WorkerBridge {
             .ok_or_else(|| JsValue::from_str("command channel not ready"))?;
         tx.send(cmd)
             .map_err(|_| JsValue::from_str("worker channel closed"))
-    }
-
-    /// Underruns the audio thread has recorded so far.
-    pub(crate) fn underruns(&self) -> u64 {
-        self.queue().map_or(0, |queue| queue.mixer_metrics().underruns())
     }
 }

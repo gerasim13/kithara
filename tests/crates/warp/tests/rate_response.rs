@@ -31,8 +31,9 @@ fn response_source() -> PathBuf {
         .expect("generated sine fixture is stored on disk")
 }
 
-use crate::bufpool_ext::TestPools;
 use kithara_integration_tests::mock::RampedFactory;
+
+use crate::bufpool_ext::TestPools;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -378,8 +379,11 @@ async fn playing_queue(
     .await;
     let frames = NonZeroU64::new(u64::try_from(case.smooth_frames).expect("smoothing fits u64"))
         .expect("smoothing is nonzero");
-    let queue = Queue::new(QueueConfig::with_factory(RampedFactory(frames))
-        .prep(harness.resource_prep().clone()).build());
+    let queue = Queue::new(
+        QueueConfig::with_factory(RampedFactory(frames))
+            .prep(harness.resource_prep().clone())
+            .build(),
+    );
     let queue = harness.insert(queue).await;
     harness
         .run(queue.control(), move |q| {

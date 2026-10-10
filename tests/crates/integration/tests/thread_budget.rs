@@ -105,7 +105,9 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config).await.expect("create hls audio");
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("create hls audio");
     audio.preload().expect("preload must succeed");
     // Spawn side: the named-thread increment is eager/synchronous at each
     // `spawn_named` call site, so once `preload()` returns the count already

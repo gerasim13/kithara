@@ -12,11 +12,7 @@ use kithara_render::rt::DeckMixerConfig;
 use kithara_signal::AudioSpec;
 use kithara_worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig};
 
-use super::{
-    Host, HostConfig,
-    config::{DECK_CAPACITY, MAX_DECKS},
-    platform::Platform,
-};
+use super::{Host, HostConfig, platform::Platform};
 use crate::{
     HostCore, HostOwner, HostSettings,
     rt::SessionOutput,
@@ -68,8 +64,8 @@ impl<S> HostConfig<S> {
         #[builder(default = consts::BLOCK_FRAMES)] max_block_frames: NonZeroU32,
         #[builder(default = consts::BLOCK_FRAMES)] declick_frames: NonZeroU32,
         #[builder(default = Duration::ZERO)] declared_latency: Duration,
-        #[builder(default = MAX_DECKS)] max_decks: NonZeroU16,
-        #[builder(default = DECK_CAPACITY)] deck_capacity: NonZeroUsize,
+        #[builder(default = crate::consts::MAX_DECKS)] max_decks: NonZeroU16,
+        #[builder(default = crate::consts::DECK_CAPACITY)] deck_capacity: NonZeroUsize,
         #[builder(default = DeckMixerConfig::default().slots())] max_deck_slots: NonZeroUsize,
         #[builder(default)] limiter: LimiterConfig,
         #[builder(default)] settings: HostSettings,

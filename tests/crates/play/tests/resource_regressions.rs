@@ -17,10 +17,7 @@ use kithara::{
         sync::Arc,
         time::{Duration, Instant, sleep, timeout},
     },
-    play::{
-        PlayWorker, PlayWorkerConfig, Resource,
-        ResourceConfig, ResourceSrc,
-    },
+    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -152,7 +149,7 @@ async fn open_resource(
     backend: DecoderBackend,
 ) -> Resource {
     let config = resource_config(url, store, backend, Some("mp3"), worker);
-    kithara_integration_tests::mock::open_resource(config)
+    kithara_integration_tests::mock::open_resource(&config)
         .await
         .unwrap_or_else(|err| panic!("resource should open for {}: {err}", url))
 }
@@ -404,7 +401,7 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
     drop(ok);
 
     for attempt in 0..2 {
-        let result = kithara_integration_tests::mock::open_resource(resource_config(
+        let result = kithara_integration_tests::mock::open_resource(&resource_config(
             &bad_url,
             store.clone(),
             backend,
@@ -566,7 +563,7 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     );
 
     for attempt in 0..2 {
-        let result = kithara_integration_tests::mock::open_resource(resource_config(
+        let result = kithara_integration_tests::mock::open_resource(&resource_config(
             &bad_url,
             store.clone(),
             backend,
@@ -1123,7 +1120,7 @@ async fn resource_mp3_no_hint_decodes_with_duration(
     let path = url.as_str();
 
     let config = resource_config(&url, store, backend, None, play_worker(&region));
-    let mut resource = kithara_integration_tests::mock::open_resource(config)
+    let mut resource = kithara_integration_tests::mock::open_resource(&config)
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed for path={path}: {e}"));
 
@@ -1228,7 +1225,7 @@ async fn local_resource_decodes_with_duration(
             .worker(play_worker(&region))
             .build();
 
-    let mut resource = kithara_integration_tests::mock::open_resource(config)
+    let mut resource = kithara_integration_tests::mock::open_resource(&config)
         .await
         .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
 

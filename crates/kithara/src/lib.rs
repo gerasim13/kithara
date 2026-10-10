@@ -227,9 +227,8 @@ pub mod prelude {
     pub use kithara_host::{Host, HostConfig, TransportEvent};
     #[cfg(feature = "play")]
     pub use kithara_play::{
-        ArtifactSource, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig,
-        PlaybackResamplerBackend, PlayerConfig, PlayerImpl, Resource, ResourceConfig, ResourceSrc,
-        ServiceClass, SourceType,
+        ArtifactSource, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend,
+        PlayerConfig, PlayerImpl, Resource, ResourceConfig, ResourceSrc, ServiceClass, SourceType,
     };
     #[cfg(feature = "queue")]
     pub use kithara_queue::{Queue, QueueConfig, QueueEvent, TrackEntry, TrackSource};

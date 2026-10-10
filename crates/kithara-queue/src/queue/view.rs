@@ -4,8 +4,9 @@ use kithara_bufpool::HasPool;
 use kithara_events::{EventReceiver, EventSet, TrackId};
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    DeckMixSettings, DeckMixerConfig, DeckSnapshot, EngineLoadSnapshot, Player, PlayerStatus, Position, SlotSnapshot, TrackFactory, TrackSettings,
-    TrackSnapshot, TrackStatus as PlayingStatus,
+    DeckMixSettings, DeckMixerConfig, DeckSnapshot, EngineLoadSnapshot, Player, PlayerStatus,
+    Position, SlotSnapshot, TrackFactory, TrackSettings, TrackSnapshot,
+    TrackStatus as PlayingStatus,
 };
 
 use super::{PlaybackView, Queue, QueueControl};
@@ -24,7 +25,11 @@ pub(super) struct DeckObservation {
 
 impl DeckObservation {
     pub(super) fn new(config: DeckMixerConfig) -> Self {
-        Self { mix: config.mix(), mixer: DeckSnapshot::new(config), suspended: false }
+        Self {
+            mix: config.mix(),
+            mixer: DeckSnapshot::new(config),
+            suspended: false,
+        }
     }
 }
 
@@ -110,9 +115,13 @@ where
         let track = self
             .current_track()
             .map(|track| track.snapshot().as_ref().clone());
-        let slot = track
-            .as_ref()
-            .and_then(|track| self.deck.mixer.slots.get(usize::from(track.slot.get())).copied());
+        let slot = track.as_ref().and_then(|track| {
+            self.deck
+                .mixer
+                .slots
+                .get(usize::from(track.slot.get()))
+                .copied()
+        });
         let published = self.view.read();
         let rows = if published.revision == self.tracks.revision() {
             Arc::clone(&published.rows)
@@ -133,7 +142,13 @@ where
             sample_rate: self.deck.mixer.sample_rate,
             held_position: self.held_position,
             deck: self.deck.clone(),
-            engine_load: self.config.prep.as_ref().map_or_else(EngineLoadSnapshot::default, |prep| prep.engine_load.snapshot()),
+            engine_load: self
+                .config
+                .prep
+                .as_ref()
+                .map_or_else(EngineLoadSnapshot::default, |prep| {
+                    prep.engine_load.snapshot()
+                }),
         }
     }
 
@@ -241,29 +256,62 @@ where
         &self.bus
     }
 
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.view.read().rows.len()
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.view.read().rows.is_empty()
-    }
-
-    #[must_use]
-    pub fn playback_order(&self) -> PlaybackOrder {
-        self.view.read().order
-    }
-
-    #[must_use]
-    pub fn repeat_mode(&self) -> RepeatMode {
-        self.view.read().repeat
-    }
-
-    #[must_use]
-    pub fn action_at_item_end(&self) -> ActionAtItemEnd {
-        self.view.read().action
+    delegate::delegate! {
+        to self.view.read().rows {
+            #[must_use]
+            pub fn len(&self) -> usize;
+            #[must_use]
+            pub fn is_empty(&self) -> bool;
+        }
+        to self.view {
+            #[must_use]
+            #[expr($.order)]
+            #[call(read)]
+            pub fn playback_order(&self) -> PlaybackOrder;
+            #[must_use]
+            #[expr($.repeat)]
+            #[call(read)]
+            pub fn repeat_mode(&self) -> RepeatMode;
+            #[must_use]
+            #[expr($.action)]
+            #[call(read)]
+            pub fn action_at_item_end(&self) -> ActionAtItemEnd;
+            #[must_use]
+            #[expr($.sample_rate)]
+            #[call(read)]
+            pub fn sample_rate(&self) -> u32;
+            /// Blocks rendered by this deck's mixer, published by its Host pass.
+            #[must_use]
+            #[expr($.deck.mixer.blocks)]
+            #[call(read)]
+            pub fn mixer_blocks(&self) -> u64;
+            /// Real-time counters from the same published mixer observation.
+            #[must_use]
+            #[expr($.deck.mixer.metrics)]
+            #[call(read)]
+            pub fn mixer_metrics(&self) -> kithara_play::RtMetricsSnapshot;
+            #[must_use]
+            #[expr($.engine_load)]
+            #[call(read)]
+            pub fn engine_load(&self) -> EngineLoadSnapshot;
+        }
+        to self.view.read().deck.mix {
+            #[must_use]
+            #[expr(f32::from($))]
+            pub fn volume(&self) -> f32;
+            #[must_use]
+            #[call(muted)]
+            pub fn is_muted(&self) -> bool;
+        }
+        to self.view.read().deck.mixer.eq {
+            #[must_use]
+            #[call(bands)]
+            pub fn eq_band_count(&self) -> usize;
+            #[must_use]
+            #[expr($.map(f32::from))]
+            #[call(gain)]
+            pub fn eq_gain(&self, band: usize) -> Option<f32>;
+        }
     }
 
     #[must_use]
@@ -272,23 +320,21 @@ where
     }
 
     #[must_use]
-    pub fn sample_rate(&self) -> u32 {
-        self.view.read().sample_rate
-    }
-
-    #[must_use]
     pub fn is_playing(&self) -> bool {
         let snapshot = self.view.read();
-        !snapshot.deck.suspended && snapshot
-            .track
-            .as_ref()
-            .is_some_and(|track| matches!(track.status, PlayingStatus::Playing { .. }))
+        !snapshot.deck.suspended
+            && snapshot
+                .track
+                .as_ref()
+                .is_some_and(|track| matches!(track.status, PlayingStatus::Playing { .. }))
     }
 
     #[must_use]
     pub fn rate(&self) -> f32 {
         let snapshot = self.view.read();
-        if snapshot.deck.suspended { return 0.0; }
+        if snapshot.deck.suspended {
+            return 0.0;
+        }
         snapshot
             .track
             .as_ref()
@@ -302,7 +348,7 @@ where
         snapshot
             .track
             .as_ref()
-            .map_or(snapshot.initial.speed(), |track| track.speed)
+            .map_or_else(|| snapshot.initial.speed(), |track| track.speed)
     }
 
     #[must_use]
@@ -312,7 +358,11 @@ where
             .track
             .as_ref()
             .map(|track| track.position.as_secs_f64())
-            .or_else(|| snapshot.held_position.map(|position| position.as_secs_f64()))
+            .or_else(|| {
+                snapshot
+                    .held_position
+                    .map(|position| position.as_secs_f64())
+            })
     }
 
     #[must_use]
@@ -370,44 +420,8 @@ where
             buffered: snapshot.slot.map(|slot| slot.frontier.max(slot.cached)),
             duration: track.duration.map(|duration| duration.as_secs_f64()),
             position: Some(track.position.as_secs_f64()),
-            playing: !snapshot.deck.suspended && matches!(track.status, PlayingStatus::Playing { .. }),
+            playing: !snapshot.deck.suspended
+                && matches!(track.status, PlayingStatus::Playing { .. }),
         }
-    }
-
-    /// Blocks rendered by this deck's mixer, published by its Host pass.
-    #[must_use]
-    pub fn mixer_blocks(&self) -> u64 {
-        self.view.read().deck.mixer.blocks
-    }
-
-    /// Real-time counters from the same published mixer observation.
-    #[must_use]
-    pub fn mixer_metrics(&self) -> kithara_play::RtMetricsSnapshot {
-        self.view.read().deck.mixer.metrics
-    }
-
-    #[must_use]
-    pub fn engine_load(&self) -> EngineLoadSnapshot {
-        self.view.read().engine_load
-    }
-
-    #[must_use]
-    pub fn volume(&self) -> f32 {
-        f32::from(self.view.read().deck.mix.volume())
-    }
-
-    #[must_use]
-    pub fn is_muted(&self) -> bool {
-        self.view.read().deck.mix.muted()
-    }
-
-    #[must_use]
-    pub fn eq_band_count(&self) -> usize {
-        self.view.read().deck.mixer.eq.bands()
-    }
-
-    #[must_use]
-    pub fn eq_gain(&self, band: usize) -> Option<f32> {
-        self.view.read().deck.mixer.eq.gain(band).map(f32::from)
     }
 }

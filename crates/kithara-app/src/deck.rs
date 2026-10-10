@@ -117,11 +117,11 @@ impl Deck {
             .cancel(cancel.clone())
             .mixer(DeckMixerConfig::builder().eq_bands(config.eq_bands).build())
             .build();
-        queue_config
-            .apply(config.queue.clone())
-            .map_err(|error| PlayError::InvalidConfiguration {
+        queue_config.apply(config.queue.clone()).map_err(|error| {
+            PlayError::InvalidConfiguration {
                 reason: error.to_string(),
-            })?;
+            }
+        })?;
         let queue = AppQueue::new(queue_config);
         let queue = host.insert(queue)?;
 
@@ -290,11 +290,7 @@ impl Drop for DeckSet {
 
 #[cfg(test)]
 mod tests {
-    use kithara::{
-        host::HostConfig,
-        play::PlayWorkerConfig,
-        queue::QueueConfig,
-    };
+    use kithara::{host::HostConfig, play::PlayWorkerConfig, queue::QueueConfig};
 
     use super::*;
     use crate::pools::{self, AppWorker};

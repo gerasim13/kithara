@@ -1,9 +1,7 @@
 use kithara_stretch::ElasticError;
 use num_traits::ToPrimitive;
 
-use super::renderer_residency::SourceResidency;
-
-pub(super) const SOURCE_RADIUS: u64 = 16;
+use super::renderer::residency::SourceResidency;
 
 pub(super) fn source_sample(
     resident: &SourceResidency,
@@ -58,7 +56,8 @@ pub(super) fn source_sample(
             fraction,
         ));
     }
-    let radius = i64::try_from(SOURCE_RADIUS).map_err(|_| ElasticError::SampleCountOverflow)?;
+    let radius = i64::try_from(crate::consts::SOURCE_RADIUS)
+        .map_err(|_| ElasticError::SampleCountOverflow)?;
     let cutoff = speed.recip();
     let mut total = 0.0;
     let mut weights = 0.0;

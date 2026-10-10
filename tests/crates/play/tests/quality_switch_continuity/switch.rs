@@ -342,7 +342,9 @@ async fn prepare_player(
         .await
         .expect("the player takes the volume");
     player.load_config(config).await;
-    let abr = player.player().current_abr_handle()
+    let abr = player
+        .player()
+        .current_abr_handle()
         .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
 
     // Render to a capture point fixed in *frames*, not to whichever frame the

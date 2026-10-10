@@ -1,19 +1,27 @@
+use std::num::NonZeroU32;
+
 use kithara::{
-    audio::{AudioConfig, AudioControl, AudioRead, AudioReadError, AudioSession, AudioEvent, DecoderEvent, ReadOutcome},
+    audio::{
+        AudioConfig, AudioControl, AudioEvent, AudioRead, AudioReadError, AudioSession,
+        DecoderEvent, ReadOutcome,
+    },
     events::EventReceiver,
+    file::{File, FileConfig},
+    hls::{AbrMode, Hls, HlsConfig},
     platform::{
         time::{self, Duration},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayWorker, PlaybackResamplerBackend, TrackConfig, SeekOutcome},
-    file::{File, FileConfig},
-    hls::{Hls, HlsConfig, AbrMode},
+    play::{PlayWorker, PlaybackResamplerBackend, SeekOutcome, TrackConfig},
     signal::{AudioSpec, SegmentId},
     stream::Stream,
 };
-use kithara_integration_tests::{event::TestEvent, memory_asset_store, mock::{LaneAudio, load_audio, wait_for_preload}};
+use kithara_integration_tests::{
+    event::TestEvent,
+    memory_asset_store,
+    mock::{LaneAudio, load_audio, wait_for_preload},
+};
 use kithara_test_utils::bufpool::TestPools;
-use std::num::NonZeroU32;
 
 pub(super) enum ReferenceAudio {
     File(LaneAudio<Stream<File<TestPools>>, TestPools>),
@@ -22,48 +30,105 @@ pub(super) enum ReferenceAudio {
 
 impl ReferenceAudio {
     pub(super) fn subscribe(&self) -> EventReceiver<TestEvent> {
-        match self { Self::File(audio) => audio.event_bus().subscribe(), Self::Hls(audio) => audio.event_bus().subscribe() }
+        match self {
+            Self::File(audio) => audio.event_bus().subscribe(),
+            Self::Hls(audio) => audio.event_bus().subscribe(),
+        }
     }
     fn spec(&self) -> AudioSpec {
-        match self { Self::File(audio) => audio.spec(), Self::Hls(audio) => audio.spec() }
+        match self {
+            Self::File(audio) => audio.spec(),
+            Self::Hls(audio) => audio.spec(),
+        }
     }
     fn segment(&self) -> SegmentId {
-        match self { Self::File(audio) => audio.segment(), Self::Hls(audio) => audio.segment() }
+        match self {
+            Self::File(audio) => audio.segment(),
+            Self::Hls(audio) => audio.segment(),
+        }
     }
     fn committed_segment(&self) -> Option<SegmentId> {
-        match self { Self::File(audio) => audio.committed_segment(), Self::Hls(audio) => audio.committed_segment() }
+        match self {
+            Self::File(audio) => audio.committed_segment(),
+            Self::Hls(audio) => audio.committed_segment(),
+        }
     }
     fn seek(&mut self, target: Duration) -> Result<SeekOutcome, AudioReadError> {
-        match self { Self::File(audio) => audio.seek(target), Self::Hls(audio) => audio.seek(target) }
+        match self {
+            Self::File(audio) => audio.seek(target),
+            Self::Hls(audio) => audio.seek(target),
+        }
     }
     async fn preload(&mut self) -> Result<(), AudioReadError> {
         match self {
-            Self::File(audio) => { wait_for_preload(audio, "file reference").await; audio.preload() }
-            Self::Hls(audio) => { wait_for_preload(audio, "HLS reference").await; audio.preload() }
+            Self::File(audio) => {
+                wait_for_preload(audio, "file reference").await;
+                audio.preload()
+            }
+            Self::Hls(audio) => {
+                wait_for_preload(audio, "HLS reference").await;
+                audio.preload()
+            }
         }
     }
-    fn read_planar<'a>(&mut self, output: &'a mut [&'a mut [f32]]) -> Result<ReadOutcome, AudioReadError> {
-        match self { Self::File(audio) => audio.read_planar(output), Self::Hls(audio) => audio.read_planar(output) }
+    fn read_planar<'a>(
+        &mut self,
+        output: &'a mut [&'a mut [f32]],
+    ) -> Result<ReadOutcome, AudioReadError> {
+        match self {
+            Self::File(audio) => audio.read_planar(output),
+            Self::Hls(audio) => audio.read_planar(output),
+        }
     }
 }
 
 #[kithara_integration_tests::kithara::flash(io)]
-pub(super) async fn open_reference(worker: &PlayWorker<TestPools>, src: &str, hls: bool, rate: u32) -> ReferenceAudio {
+pub(super) async fn open_reference(
+    worker: &PlayWorker<TestPools>,
+    src: &str,
+    hls: bool,
+    rate: u32,
+) -> ReferenceAudio {
     let sample_rate = NonZeroU32::new(rate).expect("reference rate");
     let bus = kithara::events::EventBus::new(16_384);
     if hls {
         let stream = HlsConfig::for_url(url::Url::parse(src).expect("HLS source URL"))
-            .store(memory_asset_store()).pools(worker.pools().clone())
-            .events(bus).initial_abr_mode(AbrMode::manual(0)).build();
-        let config = TrackConfig::for_audio(AudioConfig::<Hls<TestPools>, PlaybackResamplerBackend>::for_stream(stream)
-            .host_sample_rate(sample_rate).build()).block_on_underrun(true).build();
-        ReferenceAudio::Hls(load_audio(worker, config).await.expect("HLS reference lane"))
+            .store(memory_asset_store())
+            .pools(worker.pools().clone())
+            .events(bus)
+            .initial_abr_mode(AbrMode::manual(0))
+            .build();
+        let config = TrackConfig::for_audio(
+            AudioConfig::<Hls<TestPools>, PlaybackResamplerBackend>::for_stream(stream)
+                .host_sample_rate(sample_rate)
+                .build(),
+        )
+        .block_on_underrun(true)
+        .build();
+        ReferenceAudio::Hls(
+            load_audio(worker, config)
+                .await
+                .expect("HLS reference lane"),
+        )
     } else {
         let stream = FileConfig::for_src(kithara::file::FileSrc::Local(src.into()))
-            .store(memory_asset_store()).pools(worker.pools().clone()).events(bus).build();
-        let config = TrackConfig::for_audio(AudioConfig::<File<TestPools>, PlaybackResamplerBackend>::for_stream(stream)
-            .host_sample_rate(sample_rate).hint("mp3".to_owned()).build()).block_on_underrun(true).build();
-        ReferenceAudio::File(load_audio(worker, config).await.expect("file reference lane"))
+            .store(memory_asset_store())
+            .pools(worker.pools().clone())
+            .events(bus)
+            .build();
+        let config = TrackConfig::for_audio(
+            AudioConfig::<File<TestPools>, PlaybackResamplerBackend>::for_stream(stream)
+                .host_sample_rate(sample_rate)
+                .hint("mp3".to_owned())
+                .build(),
+        )
+        .block_on_underrun(true)
+        .build();
+        ReferenceAudio::File(
+            load_audio(worker, config)
+                .await
+                .expect("file reference lane"),
+        )
     }
 }
 
@@ -197,7 +262,10 @@ async fn read_reference_pcm(
             ReadOutcome::Frames { count, .. } => {
                 drain_reference_seek_events(events)?;
                 if pcm.is_empty() {
-                    validate_reference_seek_barrier(Some(requested_segment), resource.committed_segment())?;
+                    validate_reference_seek_barrier(
+                        Some(requested_segment),
+                        resource.committed_segment(),
+                    )?;
                 }
                 let count = count.get();
                 for frame in 0..count {
@@ -222,7 +290,8 @@ fn validate_reference_seek_barrier(
     requested_segment: Option<SegmentId>,
     completion: Option<SegmentId>,
 ) -> Result<(), String> {
-    let requested_segment = requested_segment.ok_or_else(|| "reference seek request missing".to_owned())?;
+    let requested_segment =
+        requested_segment.ok_or_else(|| "reference seek request missing".to_owned())?;
     let completed_segment = completion.ok_or_else(|| {
         format!("reference seek segment {requested_segment:?} did not complete with its first PCM")
     })?;
@@ -242,13 +311,24 @@ fn drain_reference_seek_events(events: &mut EventReceiver<TestEvent>) -> Result<
     loop {
         match events.try_recv() {
             Ok(envelope) => match envelope.event {
-                TestEvent::Audio(AudioEvent::SeekRejected { target }) => return Err(format!("reference rejected seek to {:.9}s", target.as_secs_f64())),
-                TestEvent::Audio(AudioEvent::TrackFailed { failure, .. }) => return Err(format!("reference track failed: {failure:?}")),
-                TestEvent::Decoder(DecoderEvent::DecodeError { detail, .. }) => return Err(format!("reference decode failed: {detail}")),
+                TestEvent::Audio(AudioEvent::SeekRejected { target }) => {
+                    return Err(format!(
+                        "reference rejected seek to {:.9}s",
+                        target.as_secs_f64()
+                    ));
+                }
+                TestEvent::Audio(AudioEvent::TrackFailed { failure, .. }) => {
+                    return Err(format!("reference track failed: {failure:?}"));
+                }
+                TestEvent::Decoder(DecoderEvent::DecodeError { detail, .. }) => {
+                    return Err(format!("reference decode failed: {detail}"));
+                }
                 _ => {}
             },
             Err(TryRecvError::Empty) => return Ok(()),
-            Err(TryRecvError::Lagged(count)) => return Err(format!("reference event receiver lost {count} events")),
+            Err(TryRecvError::Lagged(count)) => {
+                return Err(format!("reference event receiver lost {count} events"));
+            }
             Err(TryRecvError::Closed) => return Err("reference event receiver closed".to_owned()),
         }
     }

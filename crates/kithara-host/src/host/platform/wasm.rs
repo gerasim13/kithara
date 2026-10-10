@@ -118,7 +118,6 @@ where
             owns_session: false,
         }
     }
-
 }
 
 #[cfg(test)]

@@ -23,6 +23,8 @@ kithara-render = { workspace = true }
 kithara-signal = { workspace = true }
 kithara-sync = { workspace = true }
 kithara-warp = { workspace = true }
+
+delegate = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
@@ -32,8 +34,10 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 [dev-dependencies]
 kithara-assets = { workspace = true }
 kithara-audio = { workspace = true }
+kithara-decode = { workspace = true, default-features = false }
 kithara-play = { workspace = true, features = ["mock", "symphonia", "stretch-identity"] }
 kithara-test-utils = { workspace = true }
+num-traits = { workspace = true }
 
 [lints]
 workspace = true

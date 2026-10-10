@@ -20,7 +20,7 @@ use crate::{
     DecoderChangeCause, DecoderEvent, consts,
     pipeline::{
         decode::{DecoderGeneration, transition::OutgoingFrontier},
-        source::OwnerPhase,
+        source::core::OwnerPhase,
         track::TrackStep,
     },
     traits::AudioSource,

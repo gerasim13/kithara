@@ -67,12 +67,16 @@ impl ObservedDeck {
 }
 
 impl HostedDeck<TestPools> for ObservedDeck {
-    fn worker(&self) -> Option<&PlayWorker<TestPools>> {
-        self.inner.worker()
+    delegate::delegate! {
+        to self.inner {
+            fn worker(&self) -> Option<&PlayWorker<TestPools>>;
+            fn mixer_config(&self) -> DeckMixerConfig;
+            fn close(&mut self, out: &mut Outbox<'_, TestPools>) -> Result<(), PlayError>;
+            fn hold(&mut self, waker: Waker);
+            fn release(&mut self);
+        }
     }
-    fn mixer_config(&self) -> DeckMixerConfig {
-        self.inner.mixer_config()
-    }
+
     fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, TestPools>) {
         for command in self
             .probe
@@ -95,15 +99,6 @@ impl HostedDeck<TestPools> for ObservedDeck {
     fn tick(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, TestPools>) {
         HostedDeck::tick(&mut self.inner, pass, out);
         self.publish();
-    }
-    fn close(&mut self, out: &mut Outbox<'_, TestPools>) -> Result<(), PlayError> {
-        self.inner.close(out)
-    }
-    fn hold(&mut self, waker: Waker) {
-        self.inner.hold(waker);
-    }
-    fn release(&mut self) {
-        self.inner.release();
     }
 }
 
@@ -218,7 +213,7 @@ impl HostControl {
                 seq,
                 change: HostSettingsChange::Tempo(Tempo::new(bpm).expect("receipt tempo")),
                 outcome,
-            })
+            });
         });
     }
 }

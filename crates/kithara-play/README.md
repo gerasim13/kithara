@@ -15,7 +15,7 @@
 # kithara-play
 
 The playback orchestration crate behind Kithara. It provides concrete player,
-engine, resource, and session surfaces for queue, FFI, app, and test-harness
+worker, resource, and session surfaces for queue, FFI, app, and test-harness
 crates; the real-time deck it drives lives in `kithara-render`. Enable `mock` for the `Equalizer` unimock helper.
 Enable `perf` on native profiling builds for permanent `hotpath` timing at the
 playback worker boundary; ordinary builds compile the probes out.
@@ -102,8 +102,8 @@ resource.read(&mut buf);
 
 - `PlayWorker` owns playback pools and a dedicated dispatcher derived from an
   optional shared `kithara-worker` base.
-- `EngineImpl` owns session dispatch, the deck's slot while it runs, and
-  master output state.
+- `HostedDeck` and `DeckPass` transfer deck custody between the player and
+  its Host; `SessionOutputView` exposes the Host output snapshot.
 - `PlayerImpl` owns playlist and parameter state, transport flow, status, item
   handover, and one clone of its explicitly supplied `PlayWorker`.
 - `Resource` opens file, HLS, and reader sources from `ResourceConfig`.
@@ -118,7 +118,7 @@ resource.read(&mut buf);
 - **Lifecycle:** a Host seats the deck on the slot it builds as it takes the
   deck; attach a player item and play; the Host drops the slot as it hands the
   deck back.
-- **Configuration:** `PlayerConfig`, `EngineConfig`, and `ResourceConfig` expose
+- **Configuration:** `PlayerConfig`, `PlayWorkerConfig`, and `ResourceConfig` expose
   builders while their fields remain crate-private.
 - **Tempo and key-lock:** `PlayerConfig::builder().warp(...)` supplies the
   `WarpConfig` every track's renderer starts from, with its key-lock and
@@ -129,7 +129,7 @@ resource.read(&mut buf);
   supplied. This optional application constraint retains admission checks
   against the actual Host output shape.
 - **Events:** `tokio::sync::broadcast` via `player.subscribe()` /
-  `engine.subscribe()` (`PlayerEvent`, `EngineEvent`,
+  the Host subscriptions (`PlayerEvent`, `EngineEvent`,
   `SessionEvent`, `DjEvent`).
 - **Successors:** a player never advances on its own. Its owner arms the next
   item (`arm_next`) and commits it (`commit_next`); `kithara-queue::Queue` does
@@ -140,8 +140,8 @@ resource.read(&mut buf);
 File and HLS pipelines are unconditional; cpal output is the default backend.
 Enable `mock` for `EqualizerMock`.
 
-The role-first source tree is organized as `api/`, `engine/`,
-`player/{state,flow}/`, `resource/`, `session`, and `worker/`, plus the
+The role-first source tree is organized as `api/`, `player/`, `resource/`, and
+`session`, plus the
 target-gated `wasm` surface. Concrete output-session state,
 graph dispatch, and platform clients live in `kithara-host`.
 

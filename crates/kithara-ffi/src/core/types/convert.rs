@@ -42,7 +42,7 @@ impl From<QueueError> for FfiError {
     }
 }
 
-#[cfg(feature = "uniffi")]
+#[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
 impl From<uniffi::UnexpectedUniFFICallbackError> for FfiError {
     fn from(e: uniffi::UnexpectedUniFFICallbackError) -> Self {
         Self::Internal {

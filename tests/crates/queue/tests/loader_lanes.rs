@@ -126,9 +126,7 @@ async fn select_pending_track_parked_behind_hung_load_promotes(tone_mp3: &'stati
         store,
         ticker: mut tick_handle,
         ..
-    } = DiskQueue::builder(temp.path())
-        .open()
-        .await;
+    } = DiskQueue::builder(temp.path()).open().await;
 
     let hung_id = queue
         .run({
@@ -193,9 +191,7 @@ async fn superseded_hung_selection_frees_lane_for_next_select(tone_mp3: &'static
         store,
         ticker: mut tick_handle,
         ..
-    } = DiskQueue::builder(temp.path())
-        .open()
-        .await;
+    } = DiskQueue::builder(temp.path()).open().await;
     let mut events = queue.subscribe();
 
     let hung_id = queue

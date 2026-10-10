@@ -37,10 +37,8 @@ where
     }
 
     fn synced(&self) -> bool {
-        match self.current_track() {
-            Some(track) => track.synced(),
-            None => self.factory().synced(),
-        }
+        self.current_track()
+            .map_or_else(|| self.factory().synced(), LinkedPlayer::synced)
     }
 
     fn lead(&self, delivery: FrameCount) -> Option<FrameCount> {

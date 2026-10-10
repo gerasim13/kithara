@@ -288,7 +288,9 @@ async fn hls_seek_near_end_skips_prefix(
         consts::MAX_CONCURRENT,
     );
 
-    let reset = post_seek_resets.first().expect("post-seek fetch plan rebuild");
+    let reset = post_seek_resets
+        .first()
+        .expect("post-seek fetch plan rebuild");
     let scheduler_variant = reset.field("variant").expect("fetch plan variant");
     let scheduler_segment = reset.field("from_seg").expect("fetch plan target");
     assert_eq!(
@@ -298,10 +300,13 @@ async fn hls_seek_near_end_skips_prefix(
     );
     assert!(
         (u64::try_from(target_floor).expect("target floor fits u64")
-            ..=u64::try_from(target_segment).expect("target fits u64")).contains(&scheduler_segment),
+            ..=u64::try_from(target_segment).expect("target fits u64"))
+            .contains(&scheduler_segment),
         "the replacement fetch plan must start at the reader's seek target: {scheduler_segment} vs {target_segment}"
     );
-    let reset_index = probe_events.iter().position(|event| std::ptr::eq(event, *reset))
+    let reset_index = probe_events
+        .iter()
+        .position(|event| std::ptr::eq(event, *reset))
         .expect("recorded rebuild belongs to this seek's probe window");
     let post_reset_events = &probe_events[reset_index + 1..];
 

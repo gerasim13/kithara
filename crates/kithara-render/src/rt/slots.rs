@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 
 use kithara_command::Target;
 
-use super::track::PlayerTrack;
+use super::track::{PlayerResource, PlayerTrack};
 use crate::bridge::Slot;
 
 /// The tracks a mixer holds, one per slot its owner assigns.
@@ -27,14 +27,18 @@ impl TrackSlots {
         self.slots.get_mut(slot.index())?.as_mut()
     }
 
-    /// Returns ownership intact if the slot is occupied or outside the deck.
-    pub(crate) fn put(&mut self, slot: Slot, track: PlayerTrack) -> Result<(), PlayerTrack> {
+    /// Returns the resource if the slot is occupied or outside the deck.
+    pub(crate) fn put(
+        &mut self,
+        slot: Slot,
+        track: PlayerTrack,
+    ) -> Result<(), Box<PlayerResource>> {
         let Some(entry) = self
             .slots
             .get_mut(slot.index())
             .filter(|entry| entry.is_none())
         else {
-            return Err(track);
+            return Err(track.into_resource());
         };
         *entry = Some(track);
         Ok(())
@@ -49,9 +53,9 @@ impl TrackSlots {
         &mut self,
         slot: Slot,
         track: PlayerTrack,
-    ) -> Result<PlayerTrack, PlayerTrack> {
+    ) -> Result<PlayerTrack, Box<PlayerResource>> {
         let Some(current) = self.slots.get_mut(slot.index()).and_then(Option::as_mut) else {
-            return Err(track);
+            return Err(track.into_resource());
         };
         Ok(std::mem::replace(current, track))
     }

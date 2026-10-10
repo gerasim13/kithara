@@ -45,11 +45,10 @@ async fn play_issued_before_the_load_lands_still_starts_the_track(
     let session_pools = pools();
     let session = HostConfig::offline(session_pools.clone()).build();
     let player = kithara::play::ResourcePrep::builder()
-            
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::builder(session_pools.clone()).build(),
-            ))
-            .build();
+        .worker(PlayWorker::new(
+            PlayWorkerConfig::builder(session_pools.clone()).build(),
+        ))
+        .build();
     let queue = OfflineQueue::paced(
         session,
         Queue::new(

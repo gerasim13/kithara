@@ -1,6 +1,5 @@
 use std::{fs, num::NonZeroUsize, path::Path, sync::Mutex};
 
-use kithara_integration_tests::mock::LaneAudio;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
@@ -21,6 +20,7 @@ use kithara_integration_tests::{
     TestServerHelper,
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
+    mock::LaneAudio,
     served_mp3,
 };
 use kithara_test_utils::{TestTempDir, Xorshift64, temp_dir};
@@ -180,7 +180,8 @@ fn phase4_sequential_after_burst(audio: &mut TestAudio) {
             .unwrap_or_else(|| panic!("sequential read stopped early at chunk {idx}"));
         if let Some(epoch) = seq_epoch {
             assert_eq!(
-                chunk.meta.segment.get(), epoch,
+                chunk.meta.segment.get(),
+                epoch,
                 "sequential read changed epoch unexpectedly after final seek"
             );
         } else {
@@ -259,12 +260,18 @@ async fn live_stress_real_mp3_seek_read_cache(
         .events(EventBus::default())
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, kithara::play::TrackConfig::for_audio(AudioConfig::<File<TestPools>>::for_stream(file_config)
-                .hint(("mp3").to_string()).build())
+    let mut audio = kithara_integration_tests::mock::load_audio(
+        &worker,
+        kithara::play::TrackConfig::for_audio(
+            AudioConfig::<File<TestPools>>::for_stream(file_config)
+                .hint(("mp3").to_string())
+                .build(),
+        )
         .block_on_underrun(true)
-                .build())
-        .await
-        .expect("audio creation");
+        .build(),
+    )
+    .await
+    .expect("audio creation");
     let stats = Arc::new(Mutex::new(LiveStats::default()));
     let stats_bg = Arc::clone(&stats);
     let mut events = audio.event_bus().subscribe();

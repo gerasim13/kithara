@@ -119,9 +119,7 @@ async fn hung_loads_must_not_starve_user_selected_track(
         store,
         ticker: mut tick_handle,
         ..
-    } = DiskQueue::builder(temp.path())
-        .open()
-        .await;
+    } = DiskQueue::builder(temp.path()).open().await;
 
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
@@ -168,7 +166,12 @@ async fn hung_loads_must_not_starve_user_selected_track(
     let superseded: Vec<TrackId> = hung_ids
         .iter()
         .copied()
-        .filter(|&id| matches!(queue.track(id).map(|track| track.status), Some(TrackStatus::Cancelled)))
+        .filter(|&id| {
+            matches!(
+                queue.track(id).map(|track| track.status),
+                Some(TrackStatus::Cancelled)
+            )
+        })
         .collect();
 
     tick_handle.stop().await;

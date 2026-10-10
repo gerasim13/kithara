@@ -101,11 +101,10 @@ async fn progressive_download_fills_the_buffer_bar(tone_mp3: &'static [u8], temp
         })
         .build();
     let player = kithara::play::ResourcePrep::builder()
-            
-            .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
-            ))
-            .build();
+        .worker(kithara::play::PlayWorker::new(
+            kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
+        ))
+        .build();
     let queue = OfflineQueue::paced(
         HostConfig::offline(pools).build(),
         Queue::new(

@@ -1,7 +1,7 @@
 use super::WarpCursor;
 use crate::{
     AssetFrame, BeatAlignment, BeatGridQuery, BeatGridSnapshot, BeatGridUnavailable,
-    GridProjectionError, MapAxis, MapPoint, MapPosition, SessionFrame, WarpMapRevision,
+    GridProjectionError, MapPoint, MapPosition, SessionFrame, WarpMapRevision,
 };
 
 /// One immutable session-output-to-source map revision.
@@ -29,34 +29,6 @@ impl WarpMap {
             revision,
             projection: None,
         }
-    }
-
-    /// Session position of an absolute recording endpoint.
-    pub fn output_at(&self, source: AssetFrame) -> BeatGridQuery<SessionFrame> {
-        let Some(projection) = &self.projection else {
-            return BeatGridQuery::Unavailable(BeatGridUnavailable::NoGeometry);
-        };
-        projection
-            .source
-            .beat_at(MapPoint::new(
-                projection.source.stamp(),
-                MapPosition::Asset(source),
-            ))
-            .and_then(|beat| projection.grid.position_at(*beat.value()))
-            .and_then(|position| match *position.value().value() {
-                MapPosition::Session(frame) => BeatGridQuery::Resolved(frame),
-                MapPosition::Asset(_) => {
-                    BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch)
-                }
-            })
-    }
-
-    /// The session axis of a projected map.
-    #[must_use]
-    pub fn output_axis(&self) -> Option<MapAxis> {
-        self.projection
-            .as_ref()
-            .map(|projection| projection.grid.axis())
     }
 
     /// Freezes a recording projected onto a session grid using stamped alignment.
@@ -102,14 +74,6 @@ impl WarpMap {
             projection.grid.stamp(),
             MapPosition::Session(output),
         ))
-    }
-
-    /// The source axis of a projected map; identity maps have no fixed axis.
-    #[must_use]
-    pub fn source_axis(&self) -> Option<MapAxis> {
-        self.projection
-            .as_ref()
-            .map(|projection| projection.source.axis())
     }
 }
 

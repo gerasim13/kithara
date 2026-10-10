@@ -13,16 +13,7 @@ use {
     kithara_worker::{DispatcherConfig, TaskConfig, WorkerConfig},
 };
 
-use crate::HostSettings;
-
-pub(super) const MAX_DECKS: NonZeroU16 = match NonZeroU16::new(8) {
-    Some(value) => value,
-    None => unreachable!(),
-};
-pub(super) const DECK_CAPACITY: NonZeroUsize = match NonZeroUsize::new(32) {
-    Some(value) => value,
-    None => unreachable!(),
-};
+use crate::{HostSettings, consts};
 
 /// Configuration for the shared output session owned by `Host`.
 #[cfg_attr(not(feature = "offline"), derive_where::derive_where(Clone, Copy))]
@@ -86,8 +77,8 @@ impl<S> HostConfig<S> {
     )]
     fn new(
         output_block_frames: Option<NonZeroU32>,
-        #[builder(default = MAX_DECKS)] max_decks: NonZeroU16,
-        #[builder(default = DECK_CAPACITY)] deck_capacity: NonZeroUsize,
+        #[builder(default = consts::MAX_DECKS)] max_decks: NonZeroU16,
+        #[builder(default = consts::DECK_CAPACITY)] deck_capacity: NonZeroUsize,
         #[builder(default = DeckMixerConfig::default().slots())] max_deck_slots: NonZeroUsize,
         #[builder(default)] limiter: LimiterConfig,
         #[builder(default)] settings: HostSettings,

@@ -9,7 +9,7 @@ use super::rebuild::{
 use crate::{
     consts,
     pipeline::{
-        source::OwnerPhase,
+        source::core::OwnerPhase,
         track::{TrackStep, WaitingReason},
     },
     traits::AudioSource,

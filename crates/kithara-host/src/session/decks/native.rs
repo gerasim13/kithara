@@ -21,7 +21,8 @@ impl DeckMsg {
         match self {
             Self::Receipts => owner.begin_pass(),
             Self::Drain(id) => {
-                if let Err(error) = owner.with_deck(id, &mut |deck, out, pass| deck.drain(pass, out))
+                if let Err(error) =
+                    owner.with_deck(id, &mut |deck, out, pass| deck.drain(pass, out))
                 {
                     tracing::warn!(?id, %error, "host deck drain failed");
                 }

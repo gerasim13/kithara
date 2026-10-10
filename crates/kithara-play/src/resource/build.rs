@@ -290,7 +290,8 @@ mod tests {
         let mut config = config("https://example.com/live.m3u8");
         config.preload_chunks = NonZeroUsize::new(9);
 
-        let audio = config.clone()
+        let audio = config
+            .clone()
             .build_hls_config(&worker(), None)
             .expect("valid HLS config");
         let built = config.build_track_config(audio);
@@ -319,7 +320,8 @@ mod tests {
         let mut config = config("https://example.com/live.m3u8");
         config.audio_buffer_chunks = NonZeroUsize::new(24);
 
-        let audio = config.clone()
+        let audio = config
+            .clone()
             .build_hls_config(&worker(), None)
             .expect("valid HLS config");
         let built = config.build_track_config(audio);
@@ -337,7 +339,8 @@ mod tests {
         let mut config = config("https://example.com/live.m3u8");
         config.block_on_underrun = true;
 
-        let audio = config.clone()
+        let audio = config
+            .clone()
             .build_hls_config(&worker(), None)
             .expect("valid HLS config");
         let built = config.build_track_config(audio);

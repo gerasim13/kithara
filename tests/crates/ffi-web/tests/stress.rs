@@ -1,6 +1,5 @@
 use std::num::NonZeroUsize;
 
-use kithara_integration_tests::mock::LaneAudio;
 use gloo_timers::future::TimeoutFuture;
 use js_sys::{Date, Promise};
 use kithara::{
@@ -20,6 +19,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     fixture_protocol::DataMode,
+    mock::LaneAudio,
 };
 use kithara_test_fixtures::signal;
 use kithara_test_utils::Xorshift64;
@@ -100,7 +100,9 @@ async fn create_pipeline_with_url(url: Url) -> LaneAudio<Stream<Hls<TestPools>>,
         .media_info(wav_info)
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config).await.unwrap();
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .unwrap();
     audio
         .preload()
         .expect("start preloading the stress fixture");

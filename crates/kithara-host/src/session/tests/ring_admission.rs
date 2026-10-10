@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroU32;
 
 use firewheel::{
     channel_config::{ChannelConfig, ChannelCount},
@@ -9,28 +9,28 @@ use firewheel::{
         NodeError, ProcBuffers, ProcExtra, ProcInfo, ProcessStatus,
     },
 };
+use kithara_command::When;
 use kithara_events::EventBus;
 #[cfg(feature = "no-block")]
 use kithara_platform::no_block::force_panic_mode;
 use kithara_platform::sync::Arc;
 use kithara_play::{
-    DeckRegistration, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
-    player::PlayerControlSource,
+    DeckMixSettings, DeckPass, DeckSnapshot, HostedDeck, Outbox, PlayWorker, PlayWorkerConfig,
+    Player, ResourcePrep, mock::DeckRig,
 };
+use kithara_queue::{Queue, QueueCommand, QueueConfig};
+use kithara_signal::{FrameCount, SessionFrame};
 use kithara_test_utils::{
     bufpool::{TestPools, pools},
     kithara,
 };
 use kithara_warp::BeatGridId;
 
-use super::{
-    graph::attach,
-    ring::{
-        CountingNode, CountingProbe, DeterministicToneNode, ManualRingConfig, ManualRingSession,
-        RingRenderError, RingSessionError, fixtures::install_stereo_source,
-    },
+use super::ring::{
+    CountingNode, CountingProbe, DeterministicToneNode, ManualRingConfig, ManualRingSession,
+    RingRenderError, RingSessionError, fixtures::install_stereo_source,
 };
-use crate::{consts, session::protocol::HostCmd};
+use crate::consts;
 
 fn session_rate() -> NonZeroU32 {
     NonZeroU32::new(consts::RING_ADMISSION_SAMPLE_RATE).expect("test sample rate is non-zero")
@@ -55,49 +55,51 @@ fn tone_session(capacity_blocks: usize) -> ManualRingSession {
 
 fn start_deck(session: &ManualRingSession) -> BeatGridId {
     let grid_id = BeatGridId::allocate().expect("fixture grid id");
-    let mut registration = DeckRegistration::new(
-        grid_id,
-        EventBus::default(),
-        pools(),
-        kithara_play::DeckMixerConfig::default(),
-    );
-    registration.response_budget_frames = NonZeroUsize::new(448);
     if let Err(error) = session
-        .ask(attach(registration))
-        .expect("attach deck command")
+        .install(grid_id, EventBus::default())
+        .expect("install graph deck")
     {
-        panic!("the session failed to start the deck: {error}");
+        panic!("the graph failed to install the deck: {error}");
     }
     grid_id
 }
 
 fn remove_deck(session: &ManualRingSession, grid_id: BeatGridId) {
-    if let Err(error) = session
-        .ask(HostCmd::Detach { grid_id })
-        .expect("detach deck command")
-    {
+    if let Err(error) = session.remove(grid_id).expect("detach deck command") {
         panic!("the session failed to remove the deck: {error}");
     }
 }
 
-/// An empty player the session holds, seated the way the Host seats a deck.
-fn seated_player(session: &Arc<ManualRingSession>) -> PlayerImpl<TestPools> {
-    let mut player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-            .crossfade_duration(0.0)
-            .sample_rate(session_rate())
-            .build(),
-    );
-    let registration = player
-        .attach_session(session.binding())
-        .expect("the player binds the session");
-    let (command, slot) = HostCmd::attach(registration);
-    if let Err(error) = session.ask(command).expect("attach player command") {
-        panic!("the session refused the player: {error}");
-    }
-    player.seat(slot);
-    player
+fn seated_queue(session: &ManualRingSession) -> (Queue<TestPools>, DeckRig<TestPools>) {
+    start_deck(session);
+    let prep = ResourcePrep::builder()
+        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+        .build();
+    let queue = Queue::new(QueueConfig::builder().prep(prep).build());
+    let rig = DeckRig::new(kithara_play::DeckMixerConfig::default()).expect("queue scope");
+    (queue, rig)
+}
+
+fn apply_queue(
+    session: &ManualRingSession,
+    queue: &mut Queue<TestPools>,
+    rig: &mut DeckRig<TestPools>,
+    command: QueueCommand<TestPools>,
+) {
+    let output = session.binding().get();
+    let deck = DeckSnapshot::new(kithara_play::DeckMixerConfig::default());
+    let pass = DeckPass {
+        mix: DeckMixSettings::default(),
+        suspended: false,
+        now: SessionFrame::new(0),
+        delivery: FrameCount::new(128),
+        output: &output,
+        deck: &deck,
+    };
+    let mut scope = rig.ring.scope(rig.scope).expect("queue scope");
+    let mut out = Outbox::new(&mut scope, &mut rig.dispatcher).in_pass(pass);
+    HostedDeck::tick(queue, pass, &mut out);
+    Player::apply(queue, command, &mut out).expect("empty queue transport command");
 }
 
 #[kithara::test]
@@ -179,11 +181,13 @@ fn clock_is_monotone_across_pause_and_graph_edits() {
     let session = Arc::new(
         ManualRingSession::start(config(6)).expect("start manual ring session for player"),
     );
-    let player = seated_player(&session);
-    player
-        .ensure_slot()
-        .expect("allocate deterministic player slot");
-    player.play();
+    let (mut queue, mut rig) = seated_queue(&session);
+    apply_queue(
+        &session,
+        &mut queue,
+        &mut rig,
+        QueueCommand::Play { at: When::Next },
+    );
 
     let initial = session.clock_samples().expect("initial clock");
     session.credit(1).expect("credit playing block");
@@ -192,14 +196,24 @@ fn clock_is_monotone_across_pause_and_graph_edits() {
         initial + u64::from(consts::RING_ADMISSION_BLOCK_FRAMES)
     );
 
-    player.pause();
+    apply_queue(
+        &session,
+        &mut queue,
+        &mut rig,
+        QueueCommand::Pause { at: When::Next },
+    );
     session.credit(1).expect("credit paused block");
     assert_eq!(
         session.clock_samples().expect("paused clock"),
         initial + 2 * u64::from(consts::RING_ADMISSION_BLOCK_FRAMES)
     );
 
-    player.play();
+    apply_queue(
+        &session,
+        &mut queue,
+        &mut rig,
+        QueueCommand::Play { at: When::Next },
+    );
     session.credit(1).expect("credit resumed block");
     let before_edit = session.clock_samples().expect("resumed clock");
     assert_eq!(

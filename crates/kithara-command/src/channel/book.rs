@@ -1,6 +1,9 @@
 use crate::{Batch, Outcome, Protocol, Receipt, Seq, Target, When};
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(super) struct Book<P: Protocol> {
+    #[field(get = available, vis = "pub(super)")]
     credits: usize,
     targets: usize,
     applied: Vec<Option<Seq>>,
@@ -28,10 +31,6 @@ impl<P: Protocol> Book<P> {
             .basis
             .iter()
             .all(|&(target, _)| target.index() < self.targets)
-    }
-
-    pub(super) fn available(&self) -> usize {
-        self.credits
     }
 
     pub(super) fn spend(

@@ -118,12 +118,14 @@ mod tests {
         }
     }
 
-    fn make_node() -> (
+    type NodeFixture = (
         PlayerNode<TestPools, TestInbox>,
         DeckEnds,
         ScopedSender<DeckProtocol, DeckProtocol>,
         TestInbox,
-    ) {
+    );
+
+    fn make_node() -> NodeFixture {
         let config = DeckMixerConfig::default();
         let (mut sender, inbox) = scoped_channel(
             ScopedConfig::builder()

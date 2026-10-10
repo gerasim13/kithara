@@ -31,15 +31,14 @@ async fn render_no_switch_control(constant_half: &'static [u8]) -> Vec<f32> {
         SAMPLE_RATE,
     )
     .await;
-    let deck_source = harness.pcm_deck((resource_from_reader(TestPcmReader::with_pcm(
-                        spec,
-                        3.0,
-                        constant_half,
-                    ))).into());
+    let deck_source = harness
+        .pcm_deck((resource_from_reader(TestPcmReader::with_pcm(spec, 3.0, constant_half))).into());
     harness
         .with_queue(move |player| {
             let deck_id = TrackId::allocate();
-            player.append_with_id(deck_id, deck_source).expect("append PCM deck");
+            player
+                .append_with_id(deck_id, deck_source)
+                .expect("append PCM deck");
             player
                 .select(deck_id, kithara::queue::Transition::None)
                 .expect("select no-switch control item");

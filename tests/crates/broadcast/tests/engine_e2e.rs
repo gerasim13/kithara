@@ -44,7 +44,9 @@ async fn playing_harness(broadcast_tone: Vec<f32>) -> OfflinePlayer {
     harness
         .with_queue(move |player| {
             let deck_id = TrackId::allocate();
-            player.append_with_id(deck_id, deck_source).expect("append PCM deck");
+            player
+                .append_with_id(deck_id, deck_source)
+                .expect("append PCM deck");
             player
                 .select(deck_id, kithara::queue::Transition::None)
                 .expect("select tone");

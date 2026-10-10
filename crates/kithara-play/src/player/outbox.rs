@@ -1,6 +1,6 @@
-//! What a player sends through and what comes back to it.
-
-use kithara_command::{Batch, Live, LiveError, Outcome, Port, Receipt, Rejection, SendError, Sender, Seq, When};
+use kithara_command::{
+    Batch, Live, LiveError, Outcome, Port, Receipt, Rejection, SendError, Sender, Seq, When,
+};
 use kithara_render::{
     DispatcherCommand, DispatcherProtocol, LaneId, LoadRequest,
     bridge::{DeckEvent, DeckPart, DeckProtocol, Slot},
@@ -8,7 +8,10 @@ use kithara_render::{
 use kithara_signal::SessionFrame;
 pub use kithara_sync::Bound;
 
-use crate::{DeckEqChange, DeckMixSettings, DeckMixSettingsChange, DeckPass, InterruptionKind, PlayError, ResourceLoad, SessionEvent};
+use crate::{
+    DeckEqChange, DeckMixSettings, DeckMixSettingsChange, DeckPass, InterruptionKind, PlayError,
+    ResourceLoad, SessionEvent,
+};
 
 /// One loaded track or a deck built of them: it changes its own state on the
 /// owner's thread and reaches the executors only through the [`Outbox`] it is
@@ -68,6 +71,8 @@ struct Group {
     parts: Vec<DeckPart>,
 }
 
+type GroupResult<R> = Result<(R, Option<Seq>), (PlayError, Vec<DeckPart>)>;
+
 impl<'a, S> Outbox<'a, S> {
     #[must_use]
     pub fn new(
@@ -86,6 +91,7 @@ impl<'a, S> Outbox<'a, S> {
     }
 
     /// Borrows the observations and clock of the owner's current iteration.
+    #[must_use]
     pub fn in_pass(mut self, pass: DeckPass<'a>) -> Self {
         self.pass = Some(pass);
         self
@@ -102,27 +108,46 @@ impl<'a, S> Outbox<'a, S> {
         self
     }
 
-    pub fn lend_session(mut self, suspended_at: &'a mut Option<u64>, bus: &'a kithara_events::EventBus, blocks: u64) -> Self {
+    pub fn lend_session(
+        mut self,
+        suspended_at: &'a mut Option<u64>,
+        bus: &'a kithara_events::EventBus,
+        blocks: u64,
+    ) -> Self {
         self.session = Some((suspended_at, bus, blocks));
         self
     }
 
-    pub fn mix(&mut self, at: When<SessionFrame>, change: DeckMixSettingsChange) -> Result<Seq, PlayError> {
+    pub fn mix(
+        &mut self,
+        at: When<SessionFrame>,
+        change: DeckMixSettingsChange,
+    ) -> Result<Seq, PlayError> {
         self.check_when(at)?;
-        let mix = self.mix.as_mut().ok_or_else(|| PlayError::Internal("deck mix change outside its owner's pass".into()))?;
-        mix.send(&mut *self.deck, at, change, DeckPart::Mix).map_err(|error| match error {
-            LiveError::Invalid(error) => PlayError::from(error),
-            LiveError::Send(SendError::Full(_)) => PlayError::Full("deck"),
-            LiveError::Send(SendError::Closed(_)) => PlayError::Closed,
-            LiveError::Send(SendError::Target(_)) => PlayError::Internal("a deck mix batch names a slot".into()),
-        })
+        let mix = self.mix.as_mut().ok_or_else(|| {
+            PlayError::Internal("deck mix change outside its owner's pass".into())
+        })?;
+        mix.send(&mut *self.deck, at, change, DeckPart::Mix)
+            .map_err(|error| match error {
+                LiveError::Invalid(error) => PlayError::from(error),
+                LiveError::Send(SendError::Full(_)) => PlayError::Full("deck"),
+                LiveError::Send(SendError::Closed(_)) => PlayError::Closed,
+                LiveError::Send(SendError::Target(_)) => {
+                    PlayError::Internal("a deck mix batch names a slot".into())
+                }
+            })
     }
 
     pub fn eq(&mut self, parts: Vec<DeckEqChange>) -> Result<Option<Seq>, PlayError> {
         self.deck(When::Next, parts.into_iter().map(DeckPart::Eq).collect())
     }
 
-    pub fn eq_layout(&mut self, pools: &kithara_bufpool::PoolRegion<S>, bands: &[crate::EqBandConfig], rate: std::num::NonZeroU32) -> Result<Option<Seq>, PlayError>
+    pub fn eq_layout(
+        &mut self,
+        pools: &kithara_bufpool::PoolRegion<S>,
+        bands: &[crate::EqBandConfig],
+        rate: std::num::NonZeroU32,
+    ) -> Result<Option<Seq>, PlayError>
     where
         S: kithara_bufpool::HasPool<f32>,
     {
@@ -141,6 +166,7 @@ impl<'a, S> Outbox<'a, S> {
     }
 
     /// The current iteration's observations, when a host owns this outbox.
+    #[must_use]
     pub fn pass(&self) -> Option<DeckPass<'_>> {
         self.pass
     }
@@ -149,10 +175,17 @@ impl<'a, S> Outbox<'a, S> {
         self.group.is_some()
     }
 
-    pub fn deck_available(&self) -> usize {
-        self.deck.available()
+    delegate::delegate! {
+        to self.deck {
+            #[must_use]
+            #[call(available)]
+            pub fn deck_available(&self) -> usize;
+            #[call(basis)]
+            pub(crate) fn deck_basis(&self, slot: Slot, at: When<SessionFrame>) -> Option<Seq>;
+        }
     }
 
+    #[must_use]
     pub fn dispatcher_available(&self) -> usize {
         self.dispatcher.available()
     }
@@ -179,10 +212,14 @@ impl<'a, S> Outbox<'a, S> {
             }
             return Ok(());
         }
-        deck_sent(self.deck.send(When::Next, Batch {
-            basis: vec![basis],
-            commands: Vec::new(),
-        })).map(drop)
+        deck_sent(self.deck.send(
+            When::Next,
+            Batch {
+                basis: vec![basis],
+                commands: Vec::new(),
+            },
+        ))
+        .map(drop)
     }
 
     /// Runs `send` with every deck part it sends collected into one batch
@@ -193,21 +230,23 @@ impl<'a, S> Outbox<'a, S> {
     ///
     /// Returns the refusal of `send`, or the deck's when it has no room for the
     /// batch; nothing was sent then.
-    pub fn together<R>(
+    pub fn together<R, F>(
         &mut self,
         at: When<SessionFrame>,
-        send: impl FnOnce(&mut Self) -> Result<R, PlayError>,
-    ) -> Result<(R, Option<Seq>), PlayError> {
+        send: F,
+    ) -> Result<(R, Option<Seq>), PlayError>
+    where
+        F: FnOnce(&mut Self) -> Result<R, PlayError>,
+    {
         self.together_owned(at, send)
             .map_err(|(error, _parts)| error)
     }
 
     /// Collects one batch and returns its original parts if staging or sending fails.
-    pub fn together_owned<R>(
-        &mut self,
-        at: When<SessionFrame>,
-        send: impl FnOnce(&mut Self) -> Result<R, PlayError>,
-    ) -> Result<(R, Option<Seq>), (PlayError, Vec<DeckPart>)> {
+    pub fn together_owned<R, F>(&mut self, at: When<SessionFrame>, send: F) -> GroupResult<R>
+    where
+        F: FnOnce(&mut Self) -> Result<R, PlayError>,
+    {
         if self.group.is_some() || matches!(at, When::Deferred) {
             return Err((
                 PlayError::Internal("a deferred or nested group is not a timed batch".into()),
@@ -229,7 +268,9 @@ impl<'a, S> Outbox<'a, S> {
             Ok(value) => value,
             Err(error) => return Err((error, group.map_or_else(Vec::new, |group| group.parts))),
         };
-        let Some(Group { at, basis, parts }) = group.filter(|group| !group.parts.is_empty() || !group.basis.is_empty()) else {
+        let Some(Group { at, basis, parts }) =
+            group.filter(|group| !group.parts.is_empty() || !group.basis.is_empty())
+        else {
             return Ok((value, None));
         };
         let seq = deck_sent_owned(self.deck.send(
@@ -256,10 +297,6 @@ impl<'a, S> Outbox<'a, S> {
         parts: Vec<DeckPart>,
     ) -> Result<Option<Seq>, PlayError> {
         self.deck_owned(at, parts).map_err(|(error, _parts)| error)
-    }
-
-    pub(crate) fn deck_basis(&self, slot: Slot, at: When<SessionFrame>) -> Option<Seq> {
-        self.deck.basis(slot, at)
     }
 
     pub(crate) fn deck_owned(
@@ -317,7 +354,7 @@ impl<'a, S> Outbox<'a, S> {
     ///
     /// Returns [`PlayError::Full`] when the dispatcher has no room.
     pub(crate) fn load(&mut self, request: LoadRequest<ResourceLoad<S>>) -> Result<Seq, PlayError> {
-        self.dispatch(DispatcherCommand::Load(request))
+        self.dispatch(DispatcherCommand::Load(Box::new(request)))
     }
 
     pub(crate) fn release(&mut self, lane: LaneId) -> Result<Seq, PlayError> {
@@ -352,7 +389,7 @@ impl<'a, S> Outbox<'a, S> {
                 "an end-marker operation cannot join a timed batch".into(),
             ));
         }
-        let mut basis = Vec::new();
+        let mut basis: Vec<(Slot, Option<Seq>)> = Vec::new();
         for slot in parts.iter().flat_map(slots) {
             if !basis.iter().any(|&(named, _)| named == slot) {
                 basis.push((slot, self.deck.basis(slot, When::Deferred)));

@@ -1,6 +1,5 @@
 use std::{fs::File as FsFile, io::Write};
 
-use kithara_integration_tests::mock::LaneAudio;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
@@ -10,7 +9,10 @@ use kithara::{
     signal::AudioSpec,
     stream::Stream,
 };
-use kithara_integration_tests::bufpool_ext::{TestPools, pools};
+use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
+    mock::LaneAudio,
+};
 use kithara_test_fixtures::fixtures::stress_wav;
 use kithara_test_utils::{TestTempDir, Xorshift64};
 use tempfile::NamedTempFile;
@@ -211,7 +213,9 @@ async fn stress_random_seek_read_synthetic_wav(#[future(awt)] wav_file: NamedTem
         .hint("wav".to_string())
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config).await.expect("create audio pipeline");
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("create audio pipeline");
 
     let total_duration = audio.duration().expect("WAV should report known duration");
     let total_secs = total_duration.as_secs_f64();

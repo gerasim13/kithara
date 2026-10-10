@@ -5,20 +5,13 @@ use std::num::NonZeroU32;
 use kithara_command::When;
 use kithara_events::{EventBus, EventReceiver};
 use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
-use kithara_play::{DeckRegistration, SessionTransportSnapshot, Tempo};
+use kithara_play::{SessionTransportSnapshot, Tempo};
 use kithara_signal::SessionFrame;
-use kithara_test_utils::{bufpool::pools, kithara};
+use kithara_test_utils::kithara;
 use kithara_warp::BeatGridId;
 
-use super::{
-    graph::attach,
-    ring::{ManualRingConfig, ManualRingSession},
-};
-use crate::{
-    consts,
-    host::HostSettingsChange,
-    session::{HostCmd, TransportEvent},
-};
+use super::ring::{ManualRingConfig, ManualRingSession};
+use crate::{consts, host::HostSettingsChange, session::TransportEvent};
 
 fn session(block_frames: u32, capacity_blocks: usize) -> ManualRingSession {
     let rate = NonZeroU32::new(consts::RING_ADMISSION_SAMPLE_RATE)
@@ -30,17 +23,11 @@ fn session(block_frames: u32, capacity_blocks: usize) -> ManualRingSession {
 fn register_transport_events(session: &ManualRingSession) -> EventReceiver<TransportEvent> {
     let bus = EventBus::default();
     let events = bus.subscribe();
-    let registration = DeckRegistration::new(
-        BeatGridId::allocate().expect("fixture grid id"),
-        bus,
-        pools(),
-        kithara_play::DeckMixerConfig::default(),
-    );
     if let Err(error) = session
-        .ask(attach(registration))
-        .expect("invariant: the deck reaches the session")
+        .install(BeatGridId::allocate().expect("fixture grid id"), bus)
+        .expect("the deck reaches the graph")
     {
-        panic!("the session refused the deck: {error}");
+        panic!("the graph refused the deck: {error}");
     }
     events
 }
@@ -60,10 +47,7 @@ fn drain_transport_events(events: &mut EventReceiver<TransportEvent>) -> Vec<Tra
 fn set_tempo_at(session: &ManualRingSession, beats_per_minute: f64, at: When<SessionFrame>) {
     let tempo = Tempo::new(beats_per_minute).expect("invariant: test tempo is valid");
     if let Err(error) = session
-        .ask(HostCmd::Configure {
-            at,
-            change: HostSettingsChange::Tempo(tempo),
-        })
+        .configure(HostSettingsChange::Tempo(tempo), at)
         .expect("invariant: tempo command reaches the session")
     {
         panic!("tempo command failed: {error}");

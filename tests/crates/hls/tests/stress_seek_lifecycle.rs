@@ -1,6 +1,5 @@
 use std::num::NonZeroUsize;
 
-use kithara_integration_tests::mock::LaneAudio;
 use kithara::{
     abr::AbrHandle,
     assets::{AssetStore, StorageBackend},
@@ -15,6 +14,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
     hls_test_helpers::pin_abr_variant,
+    mock::LaneAudio,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::{
@@ -505,11 +505,16 @@ async fn stress_seek_lifecycle_with_zero_reset(
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = kithara::play::TrackConfig::for_audio(AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-        .media_info(wav_info).build())
-        .block_on_underrun(true)
-        .build();
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config).await.expect("create Audio pipeline");
+    let config = kithara::play::TrackConfig::for_audio(
+        AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
+            .media_info(wav_info)
+            .build(),
+    )
+    .block_on_underrun(true)
+    .build();
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("create Audio pipeline");
 
     let spec = audio.spec();
     info!(

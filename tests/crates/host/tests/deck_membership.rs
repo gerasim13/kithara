@@ -13,8 +13,8 @@ use kithara::{
         thread,
     },
     play::{
-        BufferGeometryError, DeckControl, DeckMixerConfig, DeckPass, HostedDeck, Outbox,
-        PlayError, PlayWorker, PlayWorkerConfig, ResourcePrep, SessionError, SessionEvent, TrackReceipt,
+        BufferGeometryError, DeckControl, DeckMixerConfig, DeckPass, HostedDeck, Outbox, PlayError,
+        PlayWorker, PlayWorkerConfig, ResourcePrep, SessionError, SessionEvent, TrackReceipt,
     },
     queue::{Queue, QueueConfig},
     warp::WarpConfig,
@@ -48,15 +48,21 @@ async fn failed_deck_preparation_releases_host_membership() {
     let region = pools();
     let host = offline_host(&region).await;
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
-    let invalid = Queue::new(QueueConfig::builder().prep(ResourcePrep::builder()
-            .worker(worker.clone())
-            .warp(
-                WarpConfig::builder()
-                    .render_quantum_frames(NonZeroUsize::new(32).expect("quantum"))
+    let invalid = Queue::new(
+        QueueConfig::builder()
+            .prep(
+                ResourcePrep::builder()
+                    .worker(worker.clone())
+                    .warp(
+                        WarpConfig::builder()
+                            .render_quantum_frames(NonZeroUsize::new(32).expect("quantum"))
+                            .build(),
+                    )
+                    .response_budget_frames(NonZeroUsize::new(1).expect("budget"))
                     .build(),
             )
-            .response_budget_frames(NonZeroUsize::new(1).expect("budget"))
-            .build()).build());
+            .build(),
+    );
     assert!(matches!(
         host.insert(invalid).await,
         Err(PlayError::Session(SessionError::BufferGeometry(
@@ -71,15 +77,18 @@ async fn failed_deck_preparation_releases_host_membership() {
         );
     })
     .await;
-    let valid = Queue::new(QueueConfig::builder().prep(ResourcePrep::builder()
-            .worker(worker)
-            .build()).build());
+    let valid = Queue::new(
+        QueueConfig::builder()
+            .prep(ResourcePrep::builder().worker(worker).build())
+            .build(),
+    );
     let deck = host
         .insert(valid)
         .await
         .expect("host can prepare the next deck");
     let control = deck.control().clone();
-    host.run(move || control.set_eq_gain(0, -6.0).expect("configure idle EQ")).await;
+    host.run(move || control.set_eq_gain(0, -6.0).expect("configure idle EQ"))
+        .await;
     host.render(consts::BLOCK_FRAMES).await;
     host.with(move |host| {
         assert_eq!(deck.eq_gain(0), Some(-6.0));
@@ -100,9 +109,11 @@ async fn a_deck_runs_from_its_insert_to_its_remove() {
     let host = offline_host(&region).await;
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let deck = host
-        .insert(Queue::new(QueueConfig::builder().prep(ResourcePrep::builder()
-                .worker(worker)
-                .build()).build()))
+        .insert(Queue::new(
+            QueueConfig::builder()
+                .prep(ResourcePrep::builder().worker(worker).build())
+                .build(),
+        ))
         .await
         .expect("the Host takes the deck");
     host.with(move |host| {
@@ -129,9 +140,11 @@ async fn a_route_change_reaches_every_deck_the_host_holds() {
     let mut decks = Vec::new();
     for _ in 0..2 {
         let deck = host
-            .insert(Queue::new(QueueConfig::builder().prep(ResourcePrep::builder()
-                    .worker(worker.clone())
-                    .build()).build()))
+            .insert(Queue::new(
+                QueueConfig::builder()
+                    .prep(ResourcePrep::builder().worker(worker.clone()).build())
+                    .build(),
+            ))
             .await
             .expect("the Host takes the deck");
         decks.push((deck.subscribe::<SessionEvent>(), deck));
@@ -236,9 +249,15 @@ async fn probed_host(
     let host = OfflineHostHarness::new(config).await.expect("offline host");
     let deck = host
         .insert(ThreadProbe {
-            inner: Queue::new(QueueConfig::builder().prep(ResourcePrep::builder()
-                    .worker(PlayWorker::new(PlayWorkerConfig::builder(region).build()))
-                    .build()).build()),
+            inner: Queue::new(
+                QueueConfig::builder()
+                    .prep(
+                        ResourcePrep::builder()
+                            .worker(PlayWorker::new(PlayWorkerConfig::builder(region).build()))
+                            .build(),
+                    )
+                    .build(),
+            ),
             seen: Arc::clone(seen),
         })
         .await

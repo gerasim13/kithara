@@ -108,7 +108,12 @@ impl std::task::Wake for OfflineDeckWake {
     }
 
     fn wake_by_ref(self: &Arc<Self>) {
-        if self.cmd_tx.lock().send(OfflineMsg::Deck(self.message)).is_ok() {
+        if self
+            .cmd_tx
+            .lock()
+            .send(OfflineMsg::Deck(self.message))
+            .is_ok()
+        {
             self.control.wake();
         }
     }

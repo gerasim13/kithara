@@ -1,6 +1,5 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use kithara_integration_tests::mock::LaneAudio;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
@@ -18,6 +17,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     event::TestEvent,
     mixed_encrypted, mixed_plain,
+    mock::LaneAudio,
 };
 use kithara_test_utils::{TestTempDir, temp_dir};
 use tracing::info;
@@ -124,7 +124,9 @@ async fn stress_seek_during_abr_switch_real_decoder(
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build();
 
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config).await.expect("audio creation");
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("audio creation");
 
     let mut events_rx = audio.event_bus().subscribe::<TestEvent>();
 
@@ -222,7 +224,9 @@ async fn seek_sequence_from_log_real_stream(
         .initial_abr_mode(auto(0))
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build();
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config).await.expect("audio creation");
+    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+        .await
+        .expect("audio creation");
 
     let result = spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];

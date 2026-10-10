@@ -188,7 +188,7 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
     }
 
     fn settle_tempos(&mut self, settled: Vec<HostSettled>) -> Vec<HostSettled> {
-        let mut answers = Vec::with_capacity(settled.len());
+        let mut answers: Vec<HostSettled> = Vec::with_capacity(settled.len());
         for answer in settled {
             let (seq, value, outcome) = match answer {
                 HostSettled::Settings {
@@ -196,10 +196,6 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
                     change: HostSettingsChange::Tempo(value),
                     outcome,
                 } => (seq, value, outcome),
-                answer @ (HostSettled::Batch { .. } | HostSettled::Closed { .. }) => {
-                    answers.push(answer);
-                    continue;
-                }
                 answer => {
                     answers.push(answer);
                     continue;
@@ -304,44 +300,28 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> HostOwner<S> for Lin
         })
     }
 
-    fn each_deck(
-        &mut self,
-        visit: &mut dyn FnMut(DeckId, &mut Self::Deck, &mut Outbox<'_, S>, DeckPass<'_>),
-    ) {
-        self.inner.each_deck(visit);
-    }
-
-    fn with_deck(
-        &mut self,
-        id: DeckId,
-        visit: &mut dyn FnMut(&mut Self::Deck, &mut Outbox<'_, S>, DeckPass<'_>),
-    ) -> Result<(), PlayError> {
-        self.inner.with_deck(id, visit)
-    }
-
-    fn clock(&self) -> Option<(SessionFrame, FrameCount)> {
-        self.inner.clock()
-    }
-
-    fn prepare_offline(&mut self) -> Result<(), PlayError> {
-        self.inner.prepare_offline()
-    }
-
-    fn render_offline(
-        &mut self,
-        position: u64,
-        frames: usize,
-        output: &mut [f32],
-    ) -> Result<(), PlayError> {
-        self.inner.render_offline(position, frames, output)
-    }
-
-    fn transport(&mut self) -> Option<SessionTransportSnapshot> {
-        self.inner.transport()
-    }
-
-    fn host_room(&self) -> usize {
-        self.inner.host_room()
+    delegate::delegate! {
+        to self.inner {
+            fn each_deck(
+                &mut self,
+                visit: &mut dyn FnMut(DeckId, &mut Self::Deck, &mut Outbox<'_, S>, DeckPass<'_>),
+            );
+            fn with_deck(
+                &mut self,
+                id: DeckId,
+                visit: &mut dyn FnMut(&mut Self::Deck, &mut Outbox<'_, S>, DeckPass<'_>),
+            ) -> Result<(), PlayError>;
+            fn clock(&self) -> Option<(SessionFrame, FrameCount)>;
+            fn prepare_offline(&mut self) -> Result<(), PlayError>;
+            fn render_offline(
+                &mut self,
+                position: u64,
+                frames: usize,
+                output: &mut [f32],
+            ) -> Result<(), PlayError>;
+            fn transport(&mut self) -> Option<SessionTransportSnapshot>;
+            fn host_room(&self) -> usize;
+        }
     }
 
     fn begin_pass(&mut self) {
@@ -393,8 +373,11 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> HostSettingsExec<()>
     type At = When<SessionFrame>;
     type Output = Result<Option<Seq>, PlayError>;
 
-    fn exec_sample_rate(&mut self, value: NonZeroU32, at: Self::At, cx: &mut ()) -> Self::Output {
-        self.inner.exec_sample_rate(value, at, cx)
+    delegate::delegate! {
+        to self.inner {
+            fn exec_sample_rate(&mut self, value: NonZeroU32, at: Self::At, cx: &mut ()) -> Self::Output;
+            fn exec_live(&mut self, change: HostSettingsChange, at: Self::At, cx: &mut ()) -> Self::Output;
+        }
     }
 
     fn exec_tempo(&mut self, value: Tempo, at: Self::At, cx: &mut ()) -> Self::Output {
@@ -436,9 +419,5 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> HostSettingsExec<()>
             retry: false,
         });
         Ok(Some(seq))
-    }
-
-    fn exec_live(&mut self, change: HostSettingsChange, at: Self::At, cx: &mut ()) -> Self::Output {
-        self.inner.exec_live(change, at, cx)
     }
 }

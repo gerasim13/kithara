@@ -87,3 +87,5 @@ pub(crate) const N: usize = 1 << 14;
 #[cfg(feature = "render")]
 #[cfg(test)]
 pub(crate) const SR: u32 = 44_100;
+
+pub(crate) const SOURCE_RADIUS: u64 = 16;

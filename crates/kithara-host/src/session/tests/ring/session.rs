@@ -1,30 +1,22 @@
-use std::{
-    any::Any,
-    num::{NonZeroU32, NonZeroUsize},
-    sync::OnceLock,
-};
+use std::{any::Any, num::NonZeroU32, sync::OnceLock};
 
 use firewheel::FirewheelContext;
+use kithara_command::When;
 use kithara_events::EventBus;
 use kithara_platform::{
     sync::{Mutex, mpsc},
     thread::{JoinHandle, spawn_named},
 };
-use kithara_play::{
-    DeckRegistration, PlayError, SessionError, SessionOutputView, SessionTransportSnapshot,
-};
-use kithara_test_utils::{
-    bufpool::{TestPools, pools},
-    kithara,
-};
+use kithara_play::{PlayError, SessionError, SessionOutputView, SessionTransportSnapshot};
+use kithara_signal::SessionFrame;
+use kithara_test_utils::{bufpool::pools, kithara};
 use kithara_warp::{BeatGridId, BeatGridIdAllocationError};
 
 use super::{
-    super::graph::{GraphSession, attach},
-    MasterRing, RingBackend, RingBackendConfig, RingBackendProbe, RingLayout, RingReader,
-    RingRenderError,
+    super::graph::GraphSession, MasterRing, RingBackend, RingBackendConfig, RingBackendProbe,
+    RingLayout, RingReader, RingRenderError,
 };
-use crate::session::{protocol::HostCmd, state::RootView};
+use crate::{HostSettingsChange, session::state::RootView};
 
 type RingSetup =
     Box<dyn FnOnce(&mut FirewheelContext) -> Result<(), RingSessionError> + Send + 'static>;
@@ -32,16 +24,26 @@ type RingSetup =
 #[kithara::test(native, tokio)]
 async fn ring_binding_keeps_resource_events_off_the_render_thread() {
     let session = ManualRingSession::start(ManualRingConfig::new(
-        kithara_play::mock::SAMPLE_RATE, 128, 4,
-    )).expect("offline session starts");
+        kithara_play::mock::SAMPLE_RATE,
+        128,
+        4,
+    ))
+    .expect("offline session starts");
     let pools = pools();
     let dir = kithara_test_utils::TestTempDir::new();
     let prep = kithara_play::ResourcePrep::builder()
-        .worker(kithara_play::PlayWorker::new(kithara_play::PlayWorkerConfig::builder(pools.clone()).build()))
+        .worker(kithara_play::PlayWorker::new(
+            kithara_play::PlayWorkerConfig::builder(pools.clone()).build(),
+        ))
         .build();
     kithara_play::mock::assert_prepared_render_off_bus(
-        &prep, &session.binding().get(), &pools, &dir.path().join("session.wav"),
-    ).await.expect("session-prepared lane renders off the bus");
+        &prep,
+        &kithara_play::mock::output(None).get(),
+        &pools,
+        &dir.path().join("session.wav"),
+    )
+    .await
+    .expect("session-prepared lane renders off the bus");
     session.shutdown().expect("offline session stops");
 }
 
@@ -110,8 +112,18 @@ enum RingMsg {
     Tick {
         reply_tx: mpsc::Sender<Result<(), SessionError>>,
     },
-    Host {
-        cmd: HostCmd<TestPools>,
+    Install {
+        id: BeatGridId,
+        bus: EventBus,
+        reply_tx: mpsc::Sender<Result<(), PlayError>>,
+    },
+    Remove {
+        id: BeatGridId,
+        reply_tx: mpsc::Sender<Result<(), PlayError>>,
+    },
+    Configure {
+        change: HostSettingsChange,
+        at: When<SessionFrame>,
         reply_tx: mpsc::Sender<Result<(), PlayError>>,
     },
     Credit {
@@ -222,16 +234,40 @@ impl ManualRingSession {
 
     /// Runs `cmd` and waits for whether it applied; call from a blocking
     /// control thread.
-    pub(crate) fn ask(
+    pub(crate) fn install(
         &self,
-        cmd: HostCmd<TestPools>,
+        id: BeatGridId,
+        bus: EventBus,
+    ) -> Result<Result<(), PlayError>, RingSessionError> {
+        self.post(|reply_tx| RingMsg::Install { id, bus, reply_tx })
+    }
+
+    pub(crate) fn remove(&self, id: BeatGridId) -> Result<Result<(), PlayError>, RingSessionError> {
+        self.post(|reply_tx| RingMsg::Remove { id, reply_tx })
+    }
+
+    pub(crate) fn configure(
+        &self,
+        change: HostSettingsChange,
+        at: When<SessionFrame>,
+    ) -> Result<Result<(), PlayError>, RingSessionError> {
+        self.post(|reply_tx| RingMsg::Configure {
+            change,
+            at,
+            reply_tx,
+        })
+    }
+
+    fn post(
+        &self,
+        message: impl FnOnce(mpsc::Sender<Result<(), PlayError>>) -> RingMsg,
     ) -> Result<Result<(), PlayError>, RingSessionError> {
         self.ensure_available()?;
         let (reply_tx, reply_rx) = mpsc::channel();
         let Some(cmd_tx) = self.cmd_tx.lock().clone() else {
             return self.worker_failure();
         };
-        if cmd_tx.send(RingMsg::Host { cmd, reply_tx }).is_err() {
+        if cmd_tx.send(message(reply_tx)).is_err() {
             return self.worker_failure();
         }
         reply_rx.recv().map_or_else(|_| self.worker_failure(), Ok)
@@ -395,9 +431,8 @@ fn ring_session_thread(
     setup: RingSetup,
 ) {
     let mut backend_config = Some(backend_config);
-    let mut state = GraphSession::<RingBackend, TestPools>::with_sample_rate(
-        session_rate,
-        move |ctx, _sample_rate| {
+    let mut state =
+        GraphSession::<RingBackend>::with_sample_rate(session_rate, move |ctx, _sample_rate| {
             let config = backend_config
                 .take()
                 .ok_or_else(|| String::from("ring backend cannot be restarted"))?;
@@ -411,8 +446,7 @@ fn ring_session_thread(
             }
             backend.arm();
             Ok(backend)
-        },
-    );
+        });
     let ready = bootstrap(&mut state, setup)
         .and_then(|()| snapshot(&mut state))
         .map(|snapshot| (snapshot, state.view()));
@@ -425,8 +459,18 @@ fn ring_session_thread(
             RingMsg::Tick { reply_tx } => {
                 let _ = reply_tx.send(state.tick());
             }
-            RingMsg::Host { cmd, reply_tx } => {
-                let _ = reply_tx.send(state.ask(cmd));
+            RingMsg::Install { id, bus, reply_tx } => {
+                let _ = reply_tx.send(state.install(id, bus));
+            }
+            RingMsg::Remove { id, reply_tx } => {
+                let _ = reply_tx.send(state.remove(id));
+            }
+            RingMsg::Configure {
+                change,
+                at,
+                reply_tx,
+            } => {
+                let _ = reply_tx.send(state.configure(change, at));
             }
             RingMsg::Credit { blocks, reply_tx } => {
                 let _ = reply_tx.send(credit_blocks(&mut state, blocks));
@@ -440,24 +484,17 @@ fn ring_session_thread(
 }
 
 fn bootstrap(
-    state: &mut GraphSession<RingBackend, TestPools>,
+    state: &mut GraphSession<RingBackend>,
     setup: RingSetup,
 ) -> Result<(), RingSessionError> {
-    let mut registration = DeckRegistration::new(
-        BeatGridId::allocate()?,
-        EventBus::default(),
-        pools(),
-        kithara_play::DeckMixerConfig::default(),
-    );
-    registration.response_budget_frames = NonZeroUsize::new(448);
     state
-        .ask(attach(registration))
+        .install(BeatGridId::allocate()?, EventBus::default())
         .map_err(|error| RingSessionError::Setup(error.to_string()))?;
     let ctx = state.ctx_mut().ok_or(RingSessionError::NotStarted)?;
     setup(ctx)
 }
 
-fn credit_blocks(state: &mut GraphSession<RingBackend, TestPools>, blocks: usize) -> CreditReply {
+fn credit_blocks(state: &mut GraphSession<RingBackend>, blocks: usize) -> CreditReply {
     let mut latest = match snapshot(state) {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -491,7 +528,7 @@ fn credit_blocks(state: &mut GraphSession<RingBackend, TestPools>, blocks: usize
 }
 
 fn render_transaction(
-    state: &mut GraphSession<RingBackend, TestPools>,
+    state: &mut GraphSession<RingBackend>,
 ) -> Result<RingSnapshot, RingSessionError> {
     let raw_clock = {
         let ctx = state.ctx_mut().ok_or(RingSessionError::NotStarted)?;
@@ -508,9 +545,7 @@ fn render_transaction(
     snapshot(state)
 }
 
-fn snapshot(
-    state: &mut GraphSession<RingBackend, TestPools>,
-) -> Result<RingSnapshot, RingSessionError> {
+fn snapshot(state: &mut GraphSession<RingBackend>) -> Result<RingSnapshot, RingSessionError> {
     let committed_frames = state
         .stream_mut()
         .ok_or(RingSessionError::NotStarted)?
