@@ -75,6 +75,7 @@ impl PreparedActivation {
 /// Unity speed without a region plan is a byte-identical passthrough.
 #[non_exhaustive]
 pub struct WarpRenderer<S> {
+    pub(in crate::render) terminal_error: Option<ElasticError>,
     pub(in crate::render) trajectory: Trajectory,
     pub(in crate::render) mapped_render: bool,
     pub(in crate::render) terminal_source_end: Option<u64>,
@@ -195,21 +196,14 @@ where
                 ..PreparedTarget::default()
             })
         } else {
-            Self::prepare_target(
-                (current_kind, current_keylock),
-                config.backends(),
-                config.source_block_frames(),
-                spec,
-                &pools,
-                PreparedTarget::default(),
-                true,
-            )
+            Self::prepare_target(config, spec, &pools, PreparedTarget::default(), true)
         }
         .unwrap_or_else(|error| {
             warn!(%current_kind, %error, "time-stretch engine preparation failed");
             PreparedTarget::default()
         });
         Self {
+            terminal_error: None,
             trajectory: Trajectory::new(speed),
             mapped_render: false,
             terminal_source_end: None,
@@ -293,6 +287,9 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         &mut self,
         spec: AudioSpec,
     ) -> Result<FrameCount, WarpRenderError> {
+        if self.terminal_error.is_some() {
+            return Err(WarpRenderError::Terminated);
+        }
         self.prepare(spec);
         if self.pending_unity_meta.is_some() {
             return Err(WarpRenderError::NeedsService);
@@ -321,7 +318,8 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     /// Whether the renderer can accept another source chunk without dropping it.
     #[must_use]
     pub fn accepts_input(&self) -> bool {
-        !self.transition_pending()
+        self.terminal_error.is_none()
+            && !self.transition_pending()
             && (self.unity_passthrough(self.rate.speed())
                 || (self.engine.is_some()
                     && self.pending_source.is_some()
@@ -348,6 +346,16 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         }
         self.pending_meta = None;
         self.pending_unity_meta = None;
+    }
+
+    pub(in crate::render) fn rebase_source(&mut self, meta: AudioChunkInfo) {
+        if self
+            .residency
+            .as_ref()
+            .is_some_and(|resident| resident.end.is_some_and(|end| end != meta.frame_offset))
+        {
+            self.reset();
+        }
     }
 
     pub(in crate::render) fn clear_render_state(&mut self) {
@@ -610,6 +618,13 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .position_at(span.output_frames())
             .ok_or(ElasticError::SampleCountOverflow)?;
         output.meta.source_span = Some(span);
+        self.record_mapping(span)
+    }
+
+    pub(in crate::render) fn record_mapping(
+        &mut self,
+        span: SourceSpan,
+    ) -> Result<(), ElasticError> {
         self.residency
             .as_mut()
             .ok_or(ElasticError::PoolCapacity)?

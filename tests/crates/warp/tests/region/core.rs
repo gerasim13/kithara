@@ -576,6 +576,7 @@ pub(crate) fn render_configured_grid_with_updates(
         }
         let mut consumed = carried;
         while consumed < frames {
+            hang_tick!();
             let source_frontier = fx.rendered_source_end().map_or(0, |frontier| frontier.0);
             let output_frontier = out.len() / CH;
             if let Some((anchor, revision, plan)) = updates(source_frontier, output_frontier) {
@@ -621,12 +622,7 @@ pub(crate) fn render_configured_grid_with_updates(
             let planned = match fx.prepare_quantum(meta, remaining, usize::MAX) {
                 Ok(frames) => frames.get(),
                 Err(kithara::warp::WarpRenderError::NeedsService) => {
-                    while fx.transition_pending() {
-                        if let Some(output) = fx.drain(usize::MAX).expect("drain renderer") {
-                            present(&mut out, output);
-                        }
-                        fx.prepare(spec);
-                    }
+                    fx.prepare_engine_latency(spec).expect("service renderer");
                     continue;
                 }
                 Err(error) => panic!(
@@ -659,17 +655,20 @@ pub(crate) fn render_configured_grid_with_updates(
                 present(&mut out, output);
             }
             consumed += planned;
+            hang_reset!();
         }
         carried = consumed.saturating_sub(frames);
         offset += u64_of(frames);
     }
     loop {
+        hang_tick!();
         fx.prepare(spec);
         let output = fx.drain(usize::MAX).expect("drain renderer");
         let Some(o) = output else {
             break;
         };
         present(&mut out, o);
+        hang_reset!();
     }
     Presented {
         samples: out,
@@ -679,6 +678,7 @@ pub(crate) fn render_configured_grid_with_updates(
 
 pub(crate) type Projection = (WarpMap, SessionFrame, BeatGridSnapshot, BeatGridSnapshot);
 
+#[hang_watchdog]
 pub(super) fn install_projection(
     renderer: &mut kithara::warp::WarpRenderer<kithara_test_utils::bufpool::TestPools>,
     projection: &Projection,
@@ -701,49 +701,61 @@ pub(super) fn install_projection(
         .to_usize()
         .expect("nonnegative activation")
         .max(output_frame);
-    let BeatGridQuery::Resolved(first) = projected_grid.beat_at(MapPoint::new(
-        projected_grid.stamp(),
-        kithara::warp::MapPosition::Session(SessionFrame::new(i64_of(activation))),
-    )) else {
-        panic!("projection covers activation");
+    let last = Beat::new(last_beat).expect("finite last source beat");
+    let BeatGridQuery::Resolved(position) =
+        projected_grid.position_at(MapPoint::new(projected_grid.stamp(), last))
+    else {
+        panic!("projection covers beat");
     };
-    let source_at = |beat: Beat| {
-        let BeatGridQuery::Resolved(position) =
-            source_grid.position_at(MapPoint::new(source_grid.stamp(), beat))
-        else {
-            panic!("source grid covers projected beat");
-        };
-        let kithara::warp::MapPosition::Asset(frame) = *position.value().value() else {
-            panic!("source grid uses asset frames");
-        };
-        f64::from(frame)
+    let kithara::warp::MapPosition::Session(end) = *position.value().value() else {
+        panic!("projection uses session frames");
     };
-    let session_at = |beat: Beat| {
-        let BeatGridQuery::Resolved(position) =
-            projected_grid.position_at(MapPoint::new(projected_grid.stamp(), beat))
-        else {
-            panic!("projection covers beat");
+    let end = i64::from(end)
+        .to_usize()
+        .expect("nonnegative projection end")
+        .saturating_sub(1);
+    let source_at = |frame: usize| {
+        let query = map.source_at(SessionFrame::new(i64_of(frame)));
+        let BeatGridQuery::Resolved(source) = query else {
+            panic!("projection covers activation: frame={frame}, end={end}, query={query:?}");
         };
-        let kithara::warp::MapPosition::Session(frame) = *position.value().value() else {
-            panic!("projection uses session frames");
-        };
-        i64::from(frame)
+        f64::from(source)
     };
     let mut steps = Vec::new();
     if activation > output_frame {
         steps.push((0, manual_speed));
     }
-    let mut ordinal = f64::from(*first.value().value()).floor();
-    while ordinal < last_beat {
-        let beat = Beat::new(ordinal).expect("finite source beat");
-        let next = Beat::new(ordinal + 1.0).expect("finite next source beat");
-        let start = session_at(beat);
-        let end = session_at(next);
-        let speed = (source_at(next) - source_at(beat))
-            / (end - start).to_f64().expect("session beat interval");
-        let offset = start.to_usize().unwrap_or(0).max(activation) - output_frame;
-        steps.push((u64_of(offset), speed.to_f32().expect("representable speed")));
-        ordinal += 1.0;
+    let mut frame = activation;
+    while frame < end {
+        hang_tick!();
+        let BeatGridQuery::Resolved(beat) = projected_grid.beat_at(MapPoint::new(
+            projected_grid.stamp(),
+            kithara::warp::MapPosition::Session(SessionFrame::new(i64_of(frame))),
+        )) else {
+            panic!("projection covers speed interval");
+        };
+        let next_beat =
+            Beat::new(f64::from(*beat.value().value()).floor() + 1.0).expect("finite next beat");
+        let BeatGridQuery::Resolved(position) =
+            projected_grid.position_at(MapPoint::new(projected_grid.stamp(), next_beat))
+        else {
+            panic!("projection covers speed boundary");
+        };
+        let kithara::warp::MapPosition::Session(boundary) = *position.value().value() else {
+            panic!("projection uses session frames");
+        };
+        let boundary = i64::from(boundary)
+            .to_usize()
+            .expect("nonnegative speed boundary")
+            .max(frame + 1);
+        let next = frame.saturating_add(256).min(boundary).min(end);
+        let speed = (source_at(next) - source_at(frame)) / f64_of(next - frame);
+        let speed = speed.to_f32().expect("representable speed");
+        if steps.last().is_none_or(|&(_, previous)| previous != speed) {
+            steps.push((u64_of(frame - output_frame), speed));
+        }
+        frame = next;
+        hang_reset!();
     }
     assert!(!steps.is_empty(), "projection supplies a speed curve");
     renderer

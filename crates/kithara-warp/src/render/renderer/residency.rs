@@ -2,7 +2,7 @@ use std::{collections::VecDeque, num::NonZeroU128};
 
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_signal::{AudioChunkInfo, SourceSpan};
-use kithara_stretch::ElasticError;
+use kithara_stretch::{ElasticError, ElasticLatency};
 use num_traits::ToPrimitive;
 
 use super::core::WarpRenderer;
@@ -25,6 +25,26 @@ pub(in crate::render) struct SourceResidency {
 }
 
 impl SourceResidency {
+    pub(in crate::render) fn required_frames(
+        history: usize,
+        latency: ElasticLatency,
+        source: usize,
+        expansion: f64,
+    ) -> Result<usize, ElasticError> {
+        latency
+            .first()
+            .checked_add(latency.second())
+            .and_then(|lead| lead.checked_mul(12))
+            .and_then(|lead| lead.checked_add(history))
+            .and_then(|frames| frames.checked_add(source))
+            .and_then(|frames| frames.to_f64())
+            .and_then(|frames| (frames * expansion).ceil().to_usize())
+            .and_then(|frames| {
+                frames.checked_add(usize::try_from(crate::consts::SOURCE_RADIUS).ok()?)
+            })
+            .ok_or(ElasticError::SampleCountOverflow)
+    }
+
     /// Only the portion before the physical recording is known silence.
     pub(in crate::render) fn append(
         &mut self,
@@ -248,13 +268,17 @@ impl SourceResidency {
         end: u64,
         channels: usize,
     ) -> Result<std::ops::Range<usize>, ElasticError> {
+        if start < self.start {
+            return Err(ElasticError::SourceHistoryLost {
+                requested: start,
+                resident: self.start,
+            });
+        }
         let first = start
             .checked_sub(self.start)
             .and_then(|frames| usize::try_from(frames).ok())
             .and_then(|frames| frames.checked_mul(channels))
-            .ok_or(ElasticError::EnginePreparation(
-                "required source history is no longer resident",
-            ))?;
+            .ok_or(ElasticError::SampleCountOverflow)?;
         let first = first
             .checked_add(self.offset)
             .ok_or(ElasticError::SampleCountOverflow)?;
@@ -276,9 +300,24 @@ impl SourceResidency {
     }
 
     pub(in crate::render) fn retain_from(&mut self, source: u64, channels: usize) {
-        let first = i64::try_from(source)
+        let mut first = i64::try_from(source)
             .unwrap_or(i64::MAX)
             .saturating_sub(i64::try_from(self.history_frames).unwrap_or(i64::MAX));
+        let history = u64::try_from(self.history_frames / 4).unwrap_or(u64::MAX);
+        let mapped = match self.history_position(history) {
+            Some(position) => Some(position),
+            None => self
+                .mappings
+                .front()
+                .and_then(|span| span.source_ratio_at(0)),
+        };
+        if let Some((numerator, denominator)) = mapped {
+            let source = i64::try_from(numerator / denominator.get()).unwrap_or(i64::MAX);
+            first =
+                first.min(source.saturating_sub(
+                    i64::try_from(crate::consts::SOURCE_RADIUS).unwrap_or(i64::MAX),
+                ));
+        }
         let remove = usize::try_from(first.saturating_sub(self.start).max(0))
             .unwrap_or(usize::MAX)
             .saturating_mul(channels)
@@ -301,7 +340,10 @@ impl SourceResidency {
         }
         let frames = input.len() / channels;
         let skip = frames.saturating_sub(self.samples.capacity() / channels);
-        if skip > 0 || self.end.is_some_and(|end| end != meta.frame_offset) {
+        if self.end.is_some_and(|end| end != meta.frame_offset) {
+            self.clear();
+        }
+        if skip > 0 {
             self.samples.clear();
             self.offset = 0;
             meta.frame_offset = meta

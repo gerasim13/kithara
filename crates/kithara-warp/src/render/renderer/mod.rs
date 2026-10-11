@@ -2,6 +2,7 @@ mod activation;
 mod core;
 mod lifecycle;
 mod mapping;
+mod native;
 mod projected;
 mod render;
 pub(in crate::render) mod residency;

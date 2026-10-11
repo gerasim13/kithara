@@ -145,6 +145,9 @@ where
         remaining: usize,
         output_limit: usize,
     ) -> Result<FrameCount, crate::WarpRenderError> {
+        if self.terminal_error.is_some() {
+            return Err(crate::WarpRenderError::Terminated);
+        }
         if let Some(prepared) = self.prepared_quantum {
             if prepared.source_start != meta.frame_offset {
                 return Err(crate::WarpRenderError::OutstandingQuantum);
@@ -156,6 +159,7 @@ where
             }
             self.prepared_quantum = None;
         }
+        self.rebase_source(meta);
         if self.transition_pending() || self.engine_outdated() {
             return Err(crate::WarpRenderError::NeedsService);
         }

@@ -233,7 +233,7 @@ impl Trajectory {
     }
 
     pub(super) fn requires_quanta(&self) -> bool {
-        !matches!(self.curve, SpeedCurve::Constant(_))
+        !matches!(&self.curve, SpeedCurve::Constant(_))
     }
 
     pub(super) fn unity_interval(&self) -> bool {
@@ -254,9 +254,8 @@ impl Trajectory {
         match &self.curve {
             SpeedCurve::Constant(speed) => Fraction::speed(*speed),
             SpeedCurve::Steps(steps) => steps
-                .iter()
-                .rev()
-                .find(|(frame, _)| *frame <= self.elapsed)
+                [..steps.partition_point(|(frame, _)| *frame <= self.elapsed)]
+                .last()
                 .map_or(Ok(self.origin_speed), |(_, speed)| Fraction::speed(*speed)),
             SpeedCurve::Ramp { to, frames } => {
                 let target = Fraction::speed(*to)?;
@@ -342,8 +341,7 @@ impl Trajectory {
     pub(super) fn output_limit(&self, budget: usize) -> usize {
         let next = match &self.curve {
             SpeedCurve::Steps(steps) => steps
-                .iter()
-                .find(|(frame, _)| *frame > self.elapsed)
+                .get(steps.partition_point(|(frame, _)| *frame <= self.elapsed))
                 .map(|(frame, _)| *frame),
             SpeedCurve::Ramp { frames, .. } if self.elapsed < frames.get() => Some(frames.get()),
             _ => None,
@@ -416,19 +414,32 @@ impl Trajectory {
         offset: u64,
     ) -> Result<(u128, NonZeroU128), ElasticError> {
         let mut cursor = self.clone();
+        if offset > 0 {
+            cursor.advance_by(start, rate, offset)?;
+        }
+        let position = cursor.source_position(start)?;
+        Ok((position.numerator, position.denominator))
+    }
+
+    #[kithara_test_macros::hang_watchdog]
+    pub(super) fn advance_by(
+        &mut self,
+        start: u64,
+        rate: NonZeroU32,
+        offset: u64,
+    ) -> Result<(), ElasticError> {
         let mut remaining = offset;
         while remaining > 0 {
-            let frames = cursor.output_limit(
+            hang_tick!();
+            let frames = self.output_limit(
                 usize::try_from(remaining).map_err(|_| ElasticError::SampleCountOverflow)?,
             );
-            let span = cursor.span(start, rate, frames)?;
-            cursor.advance(span)?;
+            let span = self.span(start, rate, frames)?;
+            self.advance(span)?;
             remaining -= span.output_frames();
+            hang_reset!();
         }
-        cursor
-            .span(start, rate, 1)?
-            .source_ratio_at(0)
-            .ok_or(ElasticError::SampleCountOverflow)
+        Ok(())
     }
 
     pub(super) fn span(

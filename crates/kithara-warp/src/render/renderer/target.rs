@@ -44,14 +44,15 @@ where
     }
 
     pub(in crate::render) fn prepare_target(
-        (kind, keylock): (StretchKind, bool),
-        backends: ElasticBackendConfig,
-        source_block_frames: NonZeroUsize,
+        config: &crate::WarpConfig,
         spec: AudioSpec,
         pools: &PoolRegion<S>,
         reusable: PreparedTarget,
         measure_capabilities: bool,
     ) -> Result<PreparedTarget, ElasticError> {
+        let (kind, keylock) = Self::stretch_for(config.backend(), config.keylock());
+        let backends = config.backends();
+        let source_block_frames = config.source_block_frames();
         if keylock && !kind.capabilities().contains(BackendCapabilities::KEYLOCK) {
             return Err(ElasticError::EnginePreparation(
                 "selected backend does not support keylock",
@@ -68,6 +69,11 @@ where
         drop(reusable_projection);
         drop(reusable_engine);
         let channels = usize::from(spec.channels.max(1));
+        let expansion = config.region_plan().as_deref().map_or(1.0, |plan| {
+            plan.segments().iter().fold(1.0_f64, |expansion, segment| {
+                expansion.max(segment.ratio_correction().recip())
+            })
+        });
         let mut history_frames = reusable_residency
             .as_ref()
             .map_or(0, |resident| resident.history_frames)
@@ -101,21 +107,21 @@ where
                             .saturating_add(warm)
                             .saturating_add(source_block_frames.get().saturating_mul(2)),
                     );
-                    resident_frames = resident_frames.max(
-                        history_frames
-                            .saturating_add(
-                                latency
-                                    .first()
-                                    .saturating_add(latency.second())
-                                    .saturating_mul(12),
-                            )
-                            .saturating_add(source_block_frames.get().saturating_mul(4)),
-                    );
+                    let source_frames = SourceResidency::required_frames(
+                        history_frames,
+                        latency,
+                        source_block_frames
+                            .get()
+                            .checked_mul(4)
+                            .ok_or(ElasticError::SampleCountOverflow)?,
+                        expansion,
+                    )?;
+                    resident_frames = resident_frames.max(source_frames);
                 }
             }
             Ok(())
         })();
-        let result = measured
+        measured
             .and_then(|()| Self::config_for(kind, backends, source_block_frames, spec, pools))
             .and_then(|config| {
                 if keylock || !kind.capabilities().contains(BackendCapabilities::RATE) {
@@ -127,6 +133,16 @@ where
             .and_then(|engine| {
                 let channels = usize::from(spec.channels.max(1));
                 let latency = engine.capabilities().latency();
+                let source_frames = SourceResidency::required_frames(
+                    history_frames,
+                    latency,
+                    source_block_frames
+                        .get()
+                        .checked_mul(2)
+                        .ok_or(ElasticError::SampleCountOverflow)?,
+                    expansion,
+                )?;
+                resident_frames = resident_frames.max(source_frames);
                 let projection_frames = latency
                     .first()
                     .checked_mul(6)
@@ -175,27 +191,15 @@ where
                         )
                     })
                     .transpose()?;
-                Ok((
-                    engine,
-                    pending,
-                    scratch,
-                    activation_scratch,
-                    residency,
-                    projection,
-                ))
-            });
-        result.map(
-            |(engine, pending, scratch, activation_scratch, residency, projection)| {
-                PreparedTarget {
+                Ok(PreparedTarget {
                     projection,
                     residency: Some(residency),
                     activation_scratch: Some(activation_scratch),
                     engine: Some(engine),
                     pending_source: Some(pending),
                     scratch: Some(scratch),
-                }
-            },
-        )
+                })
+            })
     }
 
     pub(in crate::render) fn prepare_buffer(
@@ -242,6 +246,7 @@ where
         let second = Self::config_for(kind, backends, source_block_frames, spec, pools)
             .and_then(build_engine)?;
         let samples = projection_frames
+            .max(source_block_frames.get())
             .checked_mul(usize::from(spec.channels.max(1)))
             .ok_or(ElasticError::SampleCountOverflow)?;
         let mut first_buffer = Self::prepare_buffer(pools, None, samples)?;
@@ -256,6 +261,8 @@ where
             engines: [first, second],
             buffers: [first_buffer, second_buffer],
             stages: 1,
+            feed: None,
+            offset: 0,
         })
     }
 
@@ -358,19 +365,19 @@ where
             if spec != self.spec {
                 reusable = PreparedTarget::default();
             }
-            let target = Self::prepare_target(
-                (kind, keylock),
-                self.backends,
-                self.source_block_frames,
-                spec,
-                &self.pools,
-                reusable,
-                spec != self.spec,
-            )
-            .unwrap_or_else(|error| {
-                warn!(%kind, %error, "time-stretch engine preparation failed");
-                PreparedTarget::default()
-            });
+            let config = crate::WarpConfig::builder()
+                .backend(kind)
+                .keylock(keylock)
+                .backends(self.backends)
+                .source_block_frames(self.source_block_frames)
+                .maybe_region_plan(self.plan.clone())
+                .build();
+            let target =
+                Self::prepare_target(&config, spec, &self.pools, reusable, spec != self.spec)
+                    .unwrap_or_else(|error| {
+                        warn!(%kind, %error, "time-stretch engine preparation failed");
+                        PreparedTarget::default()
+                    });
             self.residency = target.residency;
             self.projection = target.projection;
             self.activation_scratch = target.activation_scratch;

@@ -2,6 +2,9 @@
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum WarpRenderError {
+    /// Rendering stopped after an unrecoverable source mapping failure.
+    #[error("renderer terminated after an unrecoverable source mapping failure")]
+    Terminated,
     /// The previous producer must finish draining or retire outside the render core.
     #[error("renderer requires deferred service or transition drain")]
     NeedsService,
