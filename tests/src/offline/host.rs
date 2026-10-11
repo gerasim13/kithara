@@ -211,9 +211,9 @@ where
     }
 
     /// Drops the resident before waiting for Host session teardown.
-    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     pub async fn close(self) {
-        hang_tick!();
+        hang_tick!("resident close: dropping member before Host teardown".to_owned());
         let Self {
             host,
             member,
@@ -221,10 +221,10 @@ where
         } = self;
         drop(snapshot);
         drop(member);
-        kithara::platform::time::timeout(Duration::from_secs(5), host.close())
+        kithara::platform::time::timeout(__hang_detector.remaining(), host.close())
             .await
             .expect("offline resident teardown completes within its liveness budget");
-        hang_tick!();
+        hang_tick!("resident close: Host teardown completed".to_owned());
         hang_reset!();
     }
 }
@@ -287,6 +287,7 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     O: Owner<S> + 'static,
 {
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     pub async fn layered<L>(
         config: HostConfig<S>,
         #[cfg(not(target_arch = "wasm32"))] pacing: Option<Duration>,
@@ -308,18 +309,26 @@ where
                 position: owned,
             })
         };
-        #[cfg(target_arch = "wasm32")]
-        let off = HostOwner::spawn("offline-host", start).await?;
-        #[cfg(not(target_arch = "wasm32"))]
-        let off = match pacing {
-            None => HostOwner::spawn("offline-host", start).await?,
-            Some(interval) => {
-                HostOwner::spawn_paced("offline-host", start, interval, move |state| {
-                    render_forward_on(state, block, block);
-                })
-                .await?
-            }
-        };
+        hang_tick!("layered: awaiting Host owner initialization".to_owned());
+        let off = kithara::platform::time::timeout(__hang_detector.remaining(), async {
+            #[cfg(target_arch = "wasm32")]
+            let off = HostOwner::spawn("offline-host", start).await?;
+            #[cfg(not(target_arch = "wasm32"))]
+            let off = match pacing {
+                None => HostOwner::spawn("offline-host", start).await?,
+                Some(interval) => {
+                    HostOwner::spawn_paced("offline-host", start, interval, move |state| {
+                        render_forward_on(state, block, block);
+                    })
+                    .await?
+                }
+            };
+            Ok::<_, PlayError>(off)
+        })
+        .await;
+        hang_tick!("layered: awaiting Host owner initialization".to_owned());
+        let off = off.expect("offline Host initializes within its liveness budget")?;
+        hang_reset!();
         Ok(Self {
             off,
             position,
@@ -328,25 +337,25 @@ where
     }
 
     /// Waits until the owner drops Host and session teardown completes.
-    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     pub async fn close(self) {
-        hang_tick!();
+        hang_tick!("Host close: awaiting owner and session teardown".to_owned());
         let completed =
-            kithara::platform::time::timeout(Duration::from_secs(5), self.off.close()).await;
-        hang_tick!();
+            kithara::platform::time::timeout(__hang_detector.remaining(), self.off.close()).await;
+        hang_tick!("Host close: checking owner teardown answer".to_owned());
         completed.expect("offline Host teardown completes within its liveness budget");
         hang_reset!();
     }
 
-    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     async fn call<R>(&self, job: impl FnOnce(&mut HostState<S, O>) -> R + MaybeSend + 'static) -> R
     where
         R: MaybeSend + 'static,
     {
-        hang_tick!();
+        hang_tick!("Host call: awaiting owner-thread operation answer".to_owned());
         let answer =
-            kithara::platform::time::timeout(Duration::from_secs(5), self.off.call(job)).await;
-        hang_tick!();
+            kithara::platform::time::timeout(__hang_detector.remaining(), self.off.call(job)).await;
+        hang_tick!("Host call: checking owner-thread operation answer".to_owned());
         let answer = answer.expect("offline Host operation completes within its liveness budget");
         hang_reset!();
         answer
@@ -485,7 +494,7 @@ where
 /// Renders `frames` forward from the cursor the owner thread keeps, in `block`
 /// quanta. Every render of this session runs on that thread, so the session's
 /// own cursor and this one never disagree and a request never needs re-anchoring.
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 fn render_forward_on<S, O: Owner<S>>(state: &mut HostState<S, O>, block: u64, frames: u64) -> u64
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
@@ -495,7 +504,9 @@ where
     let mut cursor = state.position.load(Ordering::Relaxed);
     let mut rendered = 0;
     while rendered < frames {
-        hang_tick!();
+        hang_tick!(format!(
+            "Host render: {rendered}/{frames} frames complete, cursor {cursor}, block {block}"
+        ));
         let end = cursor
             .checked_add(block.min(frames - rendered))
             .expect("offline render timeline fits u64");

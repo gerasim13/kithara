@@ -25,14 +25,14 @@ struct Capture {
     failures: Vec<String>,
 }
 
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn render_solo(
     case: SyncCase,
     provider: &PreparedSources,
     start: Start,
     audible_deck: usize,
 ) -> Capture {
-    hang_tick!();
+    hang_tick!("render_solo: waiting for progress".to_owned());
     let mut harness = ProductHarness::new(case, provider, start, Audible::Deck(audible_deck)).await;
     hang_reset!();
     harness.seek_staggered(case).await;
@@ -45,14 +45,14 @@ async fn render_solo(
     }
 }
 
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn render_mix(
     case: SyncCase,
     provider: &PreparedSources,
     start: Start,
     target_bpm: Option<f64>,
 ) -> Capture {
-    hang_tick!();
+    hang_tick!("render_mix: waiting for progress".to_owned());
     let mut harness = ProductHarness::new(case, provider, start, Audible::Mix).await;
     hang_reset!();
     harness.seek_staggered(case).await;
@@ -64,7 +64,7 @@ async fn render_mix(
         let mut pcm = Vec::with_capacity(CAPTURE_FRAMES * usize::from(CHANNELS));
         let mut rendered = 0;
         for step in 1..=RIDE_STEPS {
-            hang_tick!();
+            hang_tick!("render_mix: waiting for progress".to_owned());
             let (step_f, steps): (f64, f64) = (step.as_(), RIDE_STEPS.as_());
             let progress = step_f / steps;
             harness
@@ -85,7 +85,7 @@ async fn render_mix(
     }
 }
 
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 pub(super) async fn render_frames(
     harness: &mut ProductHarness,
     case: SyncCase,
@@ -94,7 +94,7 @@ pub(super) async fn render_frames(
     let mut pcm = Vec::with_capacity(frames * usize::from(CHANNELS));
     let mut rendered = 0;
     while rendered < frames {
-        hang_tick!();
+        hang_tick!("render_frames: waiting for progress".to_owned());
         let block_frames = (frames - rendered).min(BLOCK_FRAMES);
         let block = harness.render(case, block_frames).await;
         assert_eq!(
@@ -113,7 +113,7 @@ pub(super) async fn render_frames(
 #[case::tunnel(tunnel_sources().await, Start::bar(0))]
 #[case::newtechno(newtechno_sources().await, NEWTECHNO_PHRASE)]
 #[case::tunnel_weak_beat(tunnel_sources().await, WEAK_BEAT)]
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
     #[case] provider: PreparedSources,
     #[case] start: Start,
@@ -121,7 +121,9 @@ async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
     let case = REAL_TRACK_SYNC;
     let mut decks = Vec::with_capacity(case.decks());
     for deck in 0..case.decks() {
-        hang_tick!();
+        hang_tick!(
+            "sync_listening_mix_is_not_quieter_than_a_solo_deck: waiting for progress".to_owned()
+        );
         let capture = render_solo(case, &provider, start, deck).await;
         decks.push(CochleaReport::measure(
             &capture.pcm,
@@ -154,7 +156,7 @@ async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
 #[case::newtechno_ride_to_127(newtechno_sources().await, NEWTECHNO_PHRASE, REAL_TRACK_SYNC, Some(127.0))]
 #[case::newtechno_ride_to_145(newtechno_sources().await, NEWTECHNO_PHRASE, REAL_TRACK_SYNC, Some(145.0))]
 #[case::newtechno_four_deck_host_120(newtechno_sources().await, NEWTECHNO_PHRASE, REAL_TRACK_FOUR_DECK_SYNC, None)]
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn record_sync_listening_wavs(
     #[case] provider: PreparedSources,
     #[case] start: Start,
@@ -168,7 +170,7 @@ async fn record_sync_listening_wavs(
     let mut deck_reports = Vec::with_capacity(case.decks());
     let mut failures = Vec::new();
     for deck in 0..case.decks() {
-        hang_tick!();
+        hang_tick!("record_sync_listening_wavs: waiting for progress".to_owned());
         let capture = render_solo(case, &provider, start, deck).await;
         deck_reports.push(CochleaReport::measure(
             &capture.pcm,

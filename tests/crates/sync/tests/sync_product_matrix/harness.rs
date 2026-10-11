@@ -19,12 +19,50 @@ pub(crate) struct ProductHarness {
     output_frames: u64,
     paced: bool,
     provider: Provider,
+    worker: PlayWorker<TestPools>,
+    trajectory: TempoTrajectory,
     /// The second each deck's start opens it at, before its stagger.
     cues: Vec<f64>,
     /// Every rendered block as `graph_out` plays it, metronome included,
     /// when artifacts are on.
     #[cfg(not(target_os = "android"))]
     tap: Option<kithara_integration_tests::audio_artifact::AudioArtifactTap>,
+    #[cfg(not(target_os = "android"))]
+    metronome_delta_peak: f32,
+}
+
+fn linked_queue(
+    case: SyncCase,
+    worker: &PlayWorker<TestPools>,
+    trajectory: &TempoTrajectory,
+    observation: &Arc<Mutex<LinkObservation>>,
+    block_frames: usize,
+) -> kithara_integration_tests::offline::linked::LinkedQueue<TestPools> {
+    Queue::new(
+        QueueConfig::with_factory(LinkedFactory::new(
+            ObservedFactory::new(observation.clone()),
+            LinkConfig::default(),
+            trajectory.clone(),
+        ))
+        .should_autoplay(false)
+        .prep(
+            ResourcePrep::builder()
+                .worker(worker.clone())
+                .block_on_underrun(true)
+                .warp(
+                    kithara::warp::WarpConfig::builder()
+                        .render_quantum_frames(
+                            NonZeroUsize::new(block_frames.min(128))
+                                .expect("fixture render quantum"),
+                        )
+                        .build(),
+                )
+                .maybe_response_budget_frames(case.response_budget)
+                .build(),
+        )
+        .store(memory_asset_store())
+        .build(),
+    )
 }
 
 /// Which decks a harness run hears.
@@ -104,7 +142,7 @@ impl ProductHarness {
         Self::build(case, prepared, start, audible, block_frames, true).await
     }
 
-    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     async fn build(
         case: SyncCase,
         prepared: &PreparedSources,
@@ -175,33 +213,10 @@ impl ProductHarness {
         let mut decks = Vec::with_capacity(sources.len());
         let mut ids = Vec::with_capacity(sources.len());
         for (index, source) in sources.into_iter().enumerate() {
-            hang_tick!();
+            hang_tick!(format!("{}: creating deck {index}", case.id));
             // Ruling: PlayerImpl-backed Host deck → Queue<LinkedFactory<ObservedFactory>> on LinkedHost — spec §4.4–§4.6, §11.2.
             let observation = Arc::new(Mutex::new(LinkObservation::default()));
-            let queue = Queue::new(
-                QueueConfig::with_factory(LinkedFactory::new(
-                    ObservedFactory::new(observation.clone()),
-                    LinkConfig::default(),
-                    trajectory.clone(),
-                ))
-                .should_autoplay(false)
-                .prep(
-                    ResourcePrep::builder()
-                        .worker(worker.clone())
-                        .warp(
-                            kithara::warp::WarpConfig::builder()
-                                .render_quantum_frames(
-                                    NonZeroUsize::new(block_frames.min(128))
-                                        .expect("fixture render quantum"),
-                                )
-                                .build(),
-                        )
-                        .maybe_response_budget_frames(case.response_budget)
-                        .build(),
-                )
-                .store(memory_asset_store())
-                .build(),
-            );
+            let queue = linked_queue(case, &worker, &trajectory, &observation, block_frames);
             let deck = host
                 .insert_linked(queue, observation)
                 .await
@@ -237,15 +252,19 @@ impl ProductHarness {
             output_frames: 0,
             paced,
             provider,
+            worker,
+            trajectory,
             cues: (0..case.decks)
                 .map(|deck| provider.start_seconds(deck, start))
                 .collect(),
             #[cfg(not(target_os = "android"))]
             tap: artifact::open_tap(case, provider, audible),
+            #[cfg(not(target_os = "android"))]
+            metronome_delta_peak: 0.0,
             _trace: trace,
         };
         for (index, (deck, id)) in harness.decks.iter().zip(ids.iter().copied()).enumerate() {
-            hang_tick!();
+            hang_tick!(format!("{}: selecting {id:?} on deck {index}", case.id));
             let control = deck.control().clone();
             harness
                 .host
@@ -268,14 +287,42 @@ impl ProductHarness {
         harness
     }
 
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
+    pub(crate) async fn add_seated_deck(&mut self, case: SyncCase) -> usize {
+        let index = self.decks.len();
+        hang_tick!(format!(
+            "{}: inserting capacity contender deck {index}",
+            case.id
+        ));
+        let observation = Arc::new(Mutex::new(LinkObservation::default()));
+        let queue = linked_queue(
+            case,
+            &self.worker,
+            &self.trajectory,
+            &observation,
+            self.block_frames,
+        );
+        let deck = self
+            .host
+            .insert_linked(queue, observation)
+            .await
+            .unwrap_or_else(|error| panic!("{}: insert capacity contender: {error}", case.id));
+        hang_reset!();
+        self.decks.push(deck);
+        index
+    }
+
     /// Render a fixed span so PCM comparisons start on the same frame, then
     /// require a loaded track, its dispatcher receipt and an applied renderer receipt.
-    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     async fn warm_up_transport(&mut self, case: SyncCase) {
         let frames = u64::try_from(WARM_UP_BLOCKS * self.block_frames)
             .expect("fixture transport warm-up span");
         while self.output_frames < frames {
-            hang_tick!();
+            hang_tick!(format!(
+                "{}: warming frame {} to {frames}",
+                case.id, self.output_frames
+            ));
             let _ = self.render(case, self.block_frames).await;
             hang_reset!();
         }
@@ -317,12 +364,15 @@ impl ProductHarness {
         }
     }
 
-    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     async fn wait_loaded(&mut self, case: SyncCase, ids: &[kithara::events::TrackId]) {
         let deadline = Instant::now() + LOAD_TIMEOUT;
         let mut completed = 0;
         loop {
-            hang_tick!();
+            hang_tick!(format!(
+                "{}: awaiting loads {ids:?}, {completed} ready",
+                case.id
+            ));
             self.tick_all(case).await;
             let mut loaded = true;
             let mut ready = 0;
@@ -376,9 +426,12 @@ impl ProductHarness {
             .await;
     }
 
-    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     pub(crate) async fn render(&mut self, case: SyncCase, frames: usize) -> Vec<f32> {
-        hang_tick!();
+        hang_tick!(format!(
+            "{}: rendering {frames} frames from {}",
+            case.id, self.output_frames
+        ));
         let started = Instant::now();
         self.tick_all(case).await;
         let start = self.output_frames;
@@ -409,6 +462,18 @@ impl ProductHarness {
             frames * usize::from(CHANNELS),
             "the master tap sees every rendered frame"
         );
+        #[cfg(not(target_os = "android"))]
+        if let Some(tap) = self.tap.as_mut() {
+            self.metronome_delta_peak = samples
+                .iter()
+                .zip(&master)
+                .map(|(output, master)| (output - master).abs())
+                .fold(self.metronome_delta_peak, f32::max);
+            tap.evidence(
+                "metronome_output_delta_peak",
+                serde_json::json!(self.metronome_delta_peak),
+            );
+        }
         master
     }
 
@@ -420,10 +485,13 @@ impl ProductHarness {
         }
     }
 
-    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     pub(crate) async fn settle(&mut self, case: SyncCase, blocks: usize) {
         for _ in 0..blocks {
-            hang_tick!();
+            hang_tick!(format!(
+                "{}: settling at frame {}",
+                case.id, self.output_frames
+            ));
             let _ = self.render(case, self.block_frames).await;
             hang_reset!();
         }
@@ -444,17 +512,20 @@ impl ProductHarness {
             .await;
     }
 
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     async fn start_staggered(&mut self, case: SyncCase) {
         let stagger_frames: usize = (f64::from(case.sample_rate) * 3.0 / 8.0 * 60.0
             / case.start_bpm())
         .round()
         .as_();
         for index in 0..self.decks.len() {
+            hang_tick!(format!("start_staggered: deck {index}"));
             let control = self.decks[index].control().clone();
             self.host.run(move || control.play()).await;
             if index + 1 < self.decks.len() {
                 let _ = self.render(case, stagger_frames).await;
             }
+            hang_reset!();
         }
         self.settle(case, 2).await;
     }
@@ -468,11 +539,11 @@ impl ProductHarness {
         }
     }
 
-    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     pub(crate) async fn seek_staggered(&mut self, case: SyncCase) {
         let stagger_seconds = 3.0 / 8.0 * 60.0 / case.start_bpm();
         for (index, deck) in self.decks.iter().enumerate() {
-            hang_tick!();
+            hang_tick!(format!("{}: seeking deck {index}", case.id));
             let stagger: f64 = index.as_();
             let seconds = stagger.mul_add(stagger_seconds, self.cues[index]);
             let control = deck.control().clone();
@@ -506,9 +577,11 @@ impl ProductHarness {
         }
     }
 
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     async fn deliver_grids(&self, case: SyncCase) {
         // Ruling: SyncOperation source/load grid topology → item/load-scoped GridAnswer — spec §4.8, §11.2.
         for (index, deck) in self.decks.iter().enumerate() {
+            hang_tick!(format!("deliver_grids: deck {index}"));
             let item = deck.current().expect("selected item").id;
             let load = deck
                 .observe(|observation| {
@@ -537,6 +610,7 @@ impl ProductHarness {
                 })
                 .await
                 .unwrap_or_else(|error| panic!("{}: deliver grid {index}: {error}", case.id));
+            hang_reset!();
         }
     }
 
@@ -544,6 +618,7 @@ impl ProductHarness {
         self.request_sync_intent(case, SyncRequest::On).await;
     }
 
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     pub(crate) async fn request_sync_intent(&mut self, case: SyncCase, intent: SyncRequest) {
         // Ruling: SyncIntent::Enable → LinkedHostCommand::Sync{on:true} — spec §4.5–§4.6.
         // Ruling: SyncIntent::Disable → LinkedHostCommand::Sync{on:false} — spec §4.5–§4.6.
@@ -552,6 +627,7 @@ impl ProductHarness {
         #[cfg(not(target_os = "android"))]
         self.mark(&format!("sync {intent:?}"));
         for index in 0..self.decks.len() {
+            hang_tick!(format!("request_sync_intent: deck {index}, {intent:?}"));
             let target = self.decks[index].id();
             let on = !matches!(intent, SyncRequest::Off);
             self.host
@@ -561,11 +637,14 @@ impl ProductHarness {
             if matches!(case.order, OperationOrder::SequentialSync) {
                 let _ = self.render(case, self.block_frames).await;
             }
+            hang_reset!();
         }
     }
 
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     pub(crate) async fn run_operations(&mut self, case: SyncCase) {
         for operation in case.order.operations() {
+            hang_tick!(format!("run_operations: {operation:?}"));
             match operation {
                 Operation::Play => {
                     self.play_all().await;
@@ -574,10 +653,11 @@ impl ProductHarness {
                 Operation::Seek => self.seek_staggered(case).await,
                 Operation::Sync => self.request_sync(case).await,
             }
+            hang_reset!();
         }
     }
 
-    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     pub(crate) async fn ride_tempo(&mut self, case: SyncCase) {
         let steps_per_leg = (case.updates_hz / 2).max(1);
         let mut start = case.start_bpm();
@@ -585,7 +665,10 @@ impl ProductHarness {
         let mut update = 0_u64;
         for &target in case.ride.points() {
             for step in 1..=steps_per_leg {
-                hang_tick!();
+                hang_tick!(format!(
+                    "{}: tempo step {step}/{steps_per_leg} toward {target}",
+                    case.id
+                ));
                 let fraction = f64::from(step) / f64::from(steps_per_leg);
                 let bpm = start + (target - start) * fraction;
                 self.set_tempo(case, bpm, false).await;
@@ -634,7 +717,7 @@ impl ProductHarness {
             .await
     }
 
-    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     async fn capture_blocks(
         &mut self,
         case: SyncCase,
@@ -645,9 +728,12 @@ impl ProductHarness {
         let capture_kind = if paced { "paced" } else { "product" };
         let mut pcm = Vec::with_capacity(capture_frames * usize::from(CHANNELS));
         while pcm.len() < capture_frames * usize::from(CHANNELS) {
-            hang_tick!();
             let remaining_frames =
                 (capture_frames * usize::from(CHANNELS) - pcm.len()) / usize::from(CHANNELS);
+            hang_tick!(format!(
+                "{}: capturing at frame {} with {remaining_frames} frames remaining",
+                case.id, self.output_frames
+            ));
             let frames = remaining_frames.min(block_frames);
             let started = paced.then(Instant::now);
             let block = self.render(case, frames).await;

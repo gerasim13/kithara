@@ -29,7 +29,7 @@ struct AlignedRun {
     control: Vec<f32>,
 }
 
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn tempo_retarget_run(
     block_frames: usize,
     warm_blocks: usize,
@@ -42,7 +42,10 @@ async fn tempo_retarget_run(
     harness.request_sync(ONE_DECK).await;
     let warm_frames = warm_blocks * BLOCK_FRAMES;
     for _ in 0..warm_frames.div_ceil(block_frames) {
-        hang_tick!();
+        hang_tick!(format!(
+            "tempo retarget: warming {block_frames}-frame blocks at frame {}",
+            harness.host.position()
+        ));
         let _ = harness.render(ONE_DECK, block_frames).await;
         hang_reset!();
     }
@@ -65,7 +68,7 @@ async fn tempo_retarget_run(
     }
 }
 
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn running_sync_run(
     block_frames: usize,
     issue_sync: bool,
@@ -80,7 +83,7 @@ async fn running_sync_run(
     let lead_frames: f64 = (settled_frames + pre_frames).as_();
     let seek_seconds = command_at_seconds - lead_frames / f64::from(ONE_DECK.sample_rate);
     let control = harness.decks[0].control().clone();
-    hang_tick!();
+    hang_tick!(format!("running SYNC: seeking to {seek_seconds}s"));
     harness
         .host
         .run(move || control.seek(seek_seconds))
@@ -220,13 +223,15 @@ fn append_run_failures(label: &str, run: &CommandRun, failures: &mut Vec<String>
 }
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms(
     #[future(awt)] sweep_sources: PreparedSources,
 ) {
     for (phase, warm_blocks) in [("early", 47), ("middle", 94), ("late", 140)] {
         for block_frames in [128, 256, 512] {
-            hang_tick!();
+            hang_tick!(format!(
+                "tempo retarget: {phase} phase, {block_frames}-frame control"
+            ));
             let control =
                 tempo_retarget_run(block_frames, warm_blocks, false, &sweep_sources).await;
             hang_reset!();
@@ -272,12 +277,14 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms(
 }
 
 #[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn running_sync_command_changes_audible_pcm_within_one_block(
     #[future(awt)] synthetic_sources: PreparedSources,
 ) {
     for block_frames in [128, 256, 512] {
-        hang_tick!();
+        hang_tick!(format!(
+            "running SYNC: {block_frames}-frame control and candidate"
+        ));
         let control = running_sync_run(block_frames, false, &synthetic_sources).await;
         hang_reset!();
         let candidate = running_sync_run(block_frames, true, &synthetic_sources).await;
@@ -315,14 +322,14 @@ async fn running_sync_command_changes_audible_pcm_within_one_block(
     }
 }
 
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn capture_intent_sequence(
     intents: &[SyncRequest],
     prepared: &PreparedSources,
 ) -> CommandRun {
     let mut harness = ProductHarness::new(ONE_DECK, prepared, CUE, Audible::Deck(0)).await;
     let control = harness.decks[0].control().clone();
-    hang_tick!();
+    hang_tick!(format!("latest target: preparing {intents:?}"));
     harness
         .host
         .run(move || control.seek(5.25))
@@ -331,7 +338,11 @@ async fn capture_intent_sequence(
     hang_reset!();
     harness.settle(ONE_DECK, 96).await;
     for &intent in intents {
-        hang_tick!();
+        hang_tick!(format!("capture_intent_sequence: submitting {intent:?}"));
+        if matches!(intent, SyncRequest::Align) {
+            harness.set_tempo(ONE_DECK, 132.0, false).await;
+            hang_reset!();
+        }
         harness.request_sync_intent(ONE_DECK, intent).await;
         hang_reset!();
     }
@@ -413,8 +424,21 @@ async fn bound_sync_render_is_rtsan_clean(#[future(awt)] sweep_sources: Prepared
     );
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn shared_worker_capture(case: SyncCase, prepared: &PreparedSources) -> CommandRun {
     let mut harness = ProductHarness::new(case, prepared, CUE, Audible::Deck(0)).await;
+    let operations_frame = u64::from(case.sample_rate) * 2;
+    while harness.host.position() < operations_frame {
+        hang_tick!(format!(
+            "{}: advancing setup frame {} to {operations_frame}",
+            case.id(),
+            harness.host.position()
+        ));
+        let remaining = usize::try_from(operations_frame - harness.host.position())
+            .expect("fixture setup frame distance fits usize");
+        let _ = harness.render(case, remaining.min(BLOCK_FRAMES)).await;
+        hang_reset!();
+    }
     harness.run_operations(case).await;
     harness.ride_tempo(case).await;
     if harness

@@ -42,6 +42,7 @@ pub const SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
 ///
 /// # Errors
 /// Returns an invalid WAV geometry or the destination's write failure.
+#[kithara_test_utils::kithara::hang_watchdog(timeout = kithara_platform::time::Duration::from_secs(5), ctx = String)]
 pub fn write_pcm_wav(
     path: &std::path::Path,
     samples: &[f32],
@@ -49,6 +50,8 @@ pub fn write_pcm_wav(
 ) -> std::io::Result<()> {
     use std::io::{BufWriter, Error, ErrorKind, Write};
 
+    let _io = kithara_platform::flash::real_io();
+    hang_tick!("write_pcm_wav: writing fixture PCM".to_owned());
     let invalid = || {
         Error::new(
             ErrorKind::InvalidInput,
@@ -83,8 +86,17 @@ pub fn write_pcm_wav(
     file.write_all(&32_u16.to_le_bytes())?;
     file.write_all(b"data")?;
     file.write_all(&data_bytes.to_le_bytes())?;
-    for sample in samples {
-        file.write_all(&sample.to_le_bytes())?;
+    hang_reset!();
+    let mut bytes = [0_u8; 4096];
+    for (index, chunk) in samples.chunks(bytes.len() / 4).enumerate() {
+        hang_tick!(format!("write_pcm_wav: {path:?}, chunk {index}"));
+        let encoded = &mut bytes[..chunk.len() * 4];
+        encoded
+            .chunks_exact_mut(4)
+            .zip(chunk)
+            .for_each(|(target, sample)| target.copy_from_slice(&sample.to_le_bytes()));
+        file.write_all(encoded)?;
+        hang_reset!();
     }
     file.flush()
 }
@@ -105,6 +117,7 @@ pub fn output(shape: Option<StreamShape>) -> SessionOutputView {
 /// # Panics
 /// Panics if the prepared fixture fails to play, advance, produce PCM, or keep
 /// render-side events off the source event bus.
+#[kithara_test_utils::kithara::hang_watchdog(timeout = kithara_platform::time::Duration::from_secs(5), ctx = String)]
 pub async fn assert_prepared_render_off_bus<S>(
     prep: &crate::ResourcePrep<S>,
     output: &crate::OutputSnapshot,
@@ -115,8 +128,12 @@ where
     S: kithara_bufpool::HasPool<u8> + kithara_bufpool::HasPool<f32> + Send + Sync + 'static,
 {
     use kithara_events::TryRecvError;
-    use kithara_render::bridge::{Fade, Slot, SlotState};
+    use kithara_render::{
+        LaneTask,
+        bridge::{Fade, Slot, SlotState},
+    };
     use kithara_signal::{AudioSpec, SegmentId};
+    use kithara_worker::Task;
 
     #[derive(Debug, kithara_events::EventSet)]
     enum RenderEvents {
@@ -128,6 +145,7 @@ where
         Player(crate::PlayerEvent),
     }
 
+    let _io = kithara_platform::flash::real_io();
     let rate = NonZeroU32::new(output.sample_rate.output()).ok_or(PlayError::Closed)?;
     let frames = NonZeroU32::new(128).ok_or(PlayError::Closed)?;
     let shape = StreamShape::new(frames, rate);
@@ -152,14 +170,46 @@ where
         Box::new(kithara_audio::AudioObserverSlot::default().relay()),
     );
     let (_control, inbox) = load.lane_channel()?;
-    let (opened, _lane, _) = load
-        .open(
+    hang_tick!("assert_prepared_render_off_bus: opening fixture PCM".to_owned());
+    let opened = kithara_platform::time::timeout(
+        __hang_detector.remaining(),
+        load.open(
             kithara_platform::time::Duration::ZERO,
             TrackSettings::default().lane_start(),
             inbox,
-        )
-        .await
+        ),
+    )
+    .await;
+    hang_tick!("assert_prepared_render_off_bus: opening fixture PCM".to_owned());
+    let (opened, mut lane, _) = opened
+        .map_err(|error| PlayError::Internal(error.to_string()))?
         .map_err(|error| PlayError::Internal(format!("{error:?}")))?;
+    hang_reset!();
+    lane.warm_up();
+    let required_span = f64::from(frames.get() * 2) / f64::from(rate.get());
+    let mut buffered = opened.pcm.cached_span();
+    while buffered < required_span {
+        hang_tick!(format!(
+            "assert_prepared_render_off_bus: buffering fixture PCM {buffered}/{required_span} seconds"
+        ));
+        {
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            let _ = lane.poll_commands(&mut context);
+        }
+        lane.recycle();
+        let _ = lane.tick();
+        lane.preload_status()
+            .map_err(|error| PlayError::Internal(format!("{error:?}")))?;
+        kithara_platform::time::sleep(
+            kithara_platform::time::Duration::from_millis(1).min(__hang_detector.remaining()),
+        )
+        .await;
+        let available = opened.pcm.cached_span();
+        if available > buffered {
+            hang_reset!();
+        }
+        buffered = available;
+    }
     let mut mixer = MixerRig::new(DeckMixerConfig::default(), shape, pools)?;
     let slot = Slot::new(0);
     mixer.send(
@@ -177,9 +227,15 @@ where
             fade: Fade::Declick,
         },
     )?;
-    while events.try_recv().is_ok() {}
+    while events.try_recv().is_ok() {
+        hang_tick!("assert_prepared_render_off_bus: draining render events".to_owned());
+        hang_reset!();
+    }
     let mut position = 0.0;
     for block in 0..2 {
+        hang_tick!(format!(
+            "assert_prepared_render_off_bus: rendering block {block}"
+        ));
         let mut pcm = [[0.0; 128]; 2];
         let [left, right] = &mut pcm;
         mixer.block(
@@ -192,6 +248,7 @@ where
         assert!(snapshot.slots[0].position > position);
         assert!(pcm.iter().flatten().any(|sample| *sample != 0.0));
         position = snapshot.slots[0].position;
+        hang_reset!();
     }
     Ok(())
 }
@@ -512,11 +569,13 @@ impl<S: 'static> DeckRig<S> {
     ///
     /// # Errors
     /// Returns the source, lane, or dispatcher admission failure.
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = kithara_platform::time::Duration::from_secs(5), ctx = String)]
     pub async fn load_fixture(
         &mut self,
         item: ResourceLoad<S>,
         position: kithara_platform::time::Duration,
     ) -> Result<Loaded<OpenedTrack>, PlayError> {
+        let _io = kithara_platform::flash::real_io();
         let (lane_sender, lane) = item.lane_channel()?;
         let dispatcher = self.fixture_dispatcher.get_or_insert_with(|| {
             let (sender, inbox) =
@@ -542,15 +601,23 @@ impl<S: 'static> DeckRig<S> {
                 },
             )
             .map_err(|error| PlayError::Internal(error.to_string()))?;
-        let receipt = futures::future::poll_fn(|context| {
-            let _ = dispatcher.driver.as_mut().poll(context);
-            dispatcher
-                .sender
-                .receipts()
-                .next()
-                .map_or(Poll::Pending, Poll::Ready)
-        })
+        let remaining = __hang_detector.remaining();
+        let receipt = kithara_platform::time::timeout(
+            remaining,
+            futures::future::poll_fn(|context| {
+                hang_tick!("load_fixture: awaiting dispatcher Load receipt".to_owned());
+                let _ = dispatcher.driver.as_mut().poll(context);
+                dispatcher
+                    .sender
+                    .receipts()
+                    .next()
+                    .map_or(Poll::Pending, Poll::Ready)
+            }),
+        )
         .await;
+        hang_tick!("load_fixture: awaiting dispatcher Load receipt".to_owned());
+        let receipt = receipt.map_err(|error| PlayError::Internal(error.to_string()))?;
+        hang_reset!();
         let (outcome, _) = receipt.into();
         match outcome {
             Outcome::Applied {

@@ -357,9 +357,24 @@ impl Track<TestPools> for ScriptedTrack {
     }
 
     fn projected(&self) -> TrackSettings {
-        TrackSettings::builder()
-            .speed(self.snapshot().speed)
-            .build()
+        self.control.edit(|script| {
+            let speed = script
+                .pending
+                .iter()
+                .rev()
+                .filter(|(_, _, current)| *current)
+                .flat_map(|(_, commands, _)| commands.iter().rev())
+                .find_map(|command| match command {
+                    Command::Speed(SpeedCurve::Constant(speed), _)
+                    | Command::ConfigureSpeed(speed, _) => Some(*speed),
+                    Command::Speed(SpeedCurve::Steps(steps), _) => {
+                        Some(steps.last().expect("nonempty speed curve").1)
+                    }
+                    _ => None,
+                })
+                .unwrap_or(script.snapshot.speed);
+            TrackSettings::builder().speed(speed).build()
+        })
     }
 
     fn planned(

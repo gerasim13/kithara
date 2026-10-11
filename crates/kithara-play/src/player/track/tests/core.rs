@@ -3,7 +3,7 @@ pub(super) use kithara_audio::AudioObserverSlot;
 pub(super) use kithara_command::{ChannelConfig, Inbox, Port, channel};
 pub(super) use kithara_platform::sync::Arc;
 pub(super) use kithara_render::{
-    DispatcherCommand, LaneFrame, LoadRefusal, Loaded, Open,
+    DispatcherCommand, LaneFrame, LoadRefusal, Loaded,
     bridge::{DeckEvent, DeckMixSettings, SlotSnapshot},
     rt::DeckMixerConfig,
 };
@@ -411,7 +411,9 @@ fn entering_arms_the_member_that_reached_presentation() {
 }
 
 #[kithara::test]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 fn a_rejected_launch_leaves_the_member_silent() {
+    let _io = kithara_platform::flash::real_io();
     let mut rig = rig();
     let (mut track, _inbox) = prepared_track();
     let pools = pools();
@@ -438,11 +440,13 @@ fn a_rejected_launch_leaves_the_member_silent() {
         )
         .expect("prepared source");
     let load = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
-    let (_control, inbox) = load.lane_channel().expect("lane channel");
-    let (opened, _lane, _) = rig
+    hang_tick!("rejected launch: opening audible fixture".to_owned());
+    let opened = rig
         .runtime
-        .block_on(load.open(Duration::ZERO, TrackSettings::default().lane_start(), inbox))
-        .expect("URI source opens");
+        .block_on(rig.deck.load_fixture(load, Position::ZERO))
+        .expect("dispatcher prepares the audible source")
+        .opened;
+    hang_reset!();
     let shape = kithara_render::rt::StreamShape::new(
         NonZeroU32::new(128).expect("block frames"),
         mock::SAMPLE_RATE,
@@ -2212,6 +2216,7 @@ fn repeat_wav_load(
     (worker, item)
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 pub(super) async fn a_cancelled_repeat_reaches_its_original_end(frames: usize) {
     use kithara_render::rt::StreamShape;
 
@@ -2240,7 +2245,9 @@ pub(super) async fn a_cancelled_repeat_reaches_its_original_end(frames: usize) {
     .expect("load");
     let deadline = kithara_platform::time::WallInstant::now() + Duration::from_secs(5);
     let receipt = loop {
+        hang_tick!(format!("repeat: waiting for load of {frames} frames"));
         if let Some(receipt) = dispatcher.receipts().next() {
+            hang_reset!();
             break receipt;
         }
         assert!(
@@ -2270,6 +2277,10 @@ pub(super) async fn a_cancelled_repeat_reaches_its_original_end(frames: usize) {
     .expect("park repeat");
     let deadline = kithara_platform::time::WallInstant::now() + Duration::from_secs(5);
     while frames == 441 && track.ready != Some(track.segment) {
+        hang_tick!(format!(
+            "repeat: awaiting segment {:?}, ready {:?}",
+            track.segment, track.ready
+        ));
         track.settle_lane();
         assert!(
             kithara_platform::time::WallInstant::now() < deadline,
@@ -2277,6 +2288,7 @@ pub(super) async fn a_cancelled_repeat_reaches_its_original_end(frames: usize) {
         );
         kithara_platform::tokio::task::yield_now().await;
     }
+    hang_reset!();
     kithara_platform::time::sleep(Duration::from_millis(10)).await;
     with_mixer(&mut mixer, &mut dispatcher, frame(128), |out| {
         track.apply(TrackCommand::Supersede, out)
@@ -2286,6 +2298,9 @@ pub(super) async fn a_cancelled_repeat_reaches_its_original_end(frames: usize) {
     let blocks = frames.div_ceil(64) + 32;
     let mut tail_audible = false;
     for block in 2..blocks {
+        hang_tick!(format!(
+            "repeat: rendering original tail block {block}/{blocks}"
+        ));
         let at = frame(i64::try_from(block * 64).expect("test frame"));
         let [left, right] = &mut pcm;
         mixer.block(at, [left, right]).expect("original tail block");
@@ -2313,6 +2328,7 @@ pub(super) async fn a_cancelled_repeat_reaches_its_original_end(frames: usize) {
             });
         }
         kithara_platform::time::sleep(Duration::from_millis(1)).await;
+        hang_reset!();
     }
     assert!(ended, "the original segment publishes Ended");
     assert!(matches!(track.snapshot().status, TrackStatus::Ended { .. }));

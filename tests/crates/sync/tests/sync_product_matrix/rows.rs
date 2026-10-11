@@ -1,6 +1,6 @@
 use super::{cases::*, harness::*, imports::*, providers::*};
 
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn run(case: SyncCase, prepared: PreparedSources, start: Start) {
     let provider = prepared.0;
     let expected_frames: usize = (f64::from(case.sample_rate) * 60.0 / case.ride.final_bpm() * 6.0)
@@ -10,7 +10,10 @@ async fn run(case: SyncCase, prepared: PreparedSources, start: Start) {
     let mut tracks = Vec::with_capacity(case.decks);
     let mut request_failures = Vec::new();
     for audible_deck in 0..case.decks {
-        hang_tick!();
+        hang_tick!(format!(
+            "{} {provider:?}: capturing deck {audible_deck}",
+            case.id
+        ));
         let mut harness =
             ProductHarness::new(case, &prepared, start, Audible::Deck(audible_deck)).await;
         harness.run_operations(case).await;

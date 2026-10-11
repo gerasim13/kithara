@@ -22,7 +22,7 @@ struct TempoOperation {
     pending: PendingTempo,
     caller: Seq,
     epoch: Option<SessionEpoch>,
-    retry: bool,
+    awaiting_admission: bool,
 }
 
 /// Owner commands for a linked Host and the decks it holds.
@@ -154,7 +154,7 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
         Ok(frame)
     }
 
-    fn retry_tempo(&mut self, operation: &mut TempoOperation) -> Result<bool, PlayError> {
+    fn reschedule_tempo(&mut self, operation: &mut TempoOperation) -> Result<bool, PlayError> {
         let Some((now, delivery)) = self.inner.clock() else {
             return Ok(false);
         };
@@ -182,7 +182,7 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
         operation.pending.seq = seq;
         operation.pending.frame = frame;
         operation.epoch = self.epoch;
-        operation.retry = false;
+        operation.awaiting_admission = false;
         self.retime(frame);
         Ok(true)
     }
@@ -201,11 +201,9 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
                     continue;
                 }
             };
-            let Some(index) = self
-                .tempo
-                .iter()
-                .position(|operation| operation.pending.seq == seq && !operation.retry)
-            else {
+            let Some(index) = self.tempo.iter().position(|operation| {
+                operation.pending.seq == seq && !operation.awaiting_admission
+            }) else {
                 answers.push(HostSettled::Settings {
                     seq,
                     change: HostSettingsChange::Tempo(value),
@@ -221,8 +219,12 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
                 let newer = self.tempo[index..]
                     .iter()
                     .any(|pending| pending.pending.at == When::Next);
-                if operation.pending.at == When::Next && !newer {
-                    operation.retry = true;
+                let awaiting_admission = matches!(
+                    &outcome,
+                    Err(Rejection::Late | Rejection::Refused(PlayError::Full(_)))
+                );
+                if awaiting_admission && operation.pending.at == When::Next && !newer {
+                    operation.awaiting_admission = true;
                     self.tempo.insert(index, operation);
                     continue;
                 }
@@ -240,15 +242,15 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
         answers
     }
 
-    fn retry_tempos(&mut self) {
+    fn resume_tempos(&mut self) {
         let mut index = 0;
         while index < self.tempo.len() {
-            if !self.tempo[index].retry {
+            if !self.tempo[index].awaiting_admission {
                 index += 1;
                 continue;
             }
             let mut operation = self.tempo.remove(index);
-            if let Err(error) = self.retry_tempo(&mut operation) {
+            if let Err(error) = self.reschedule_tempo(&mut operation) {
                 tracing::warn!(%error, seq = ?operation.caller, "tempo replan refused");
                 self.answers.push(HostSettled::Settings {
                     seq: operation.caller,
@@ -334,7 +336,7 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> HostOwner<S> for Lin
         let settled = std::mem::take(&mut self.settled);
         let answers = self.settle_tempos(settled);
         self.answers.extend(answers);
-        self.retry_tempos();
+        self.resume_tempos();
     }
 
     fn release_id(command: &Self::Command) -> Option<DeckId> {
@@ -360,7 +362,7 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> HostOwner<S> for Lin
         for answer in settled {
             if matches!(&answer, HostSettled::Settings {
                 seq, change: HostSettingsChange::Tempo(_), ..
-            } if self.tempo.iter().any(|operation| operation.pending.seq == *seq && !operation.retry))
+            } if self.tempo.iter().any(|operation| operation.pending.seq == *seq && !operation.awaiting_admission))
             {
                 self.settled.push(answer);
             } else {
@@ -420,7 +422,7 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> HostSettingsExec<()>
             },
             caller: seq,
             epoch: self.epoch,
-            retry: false,
+            awaiting_admission: false,
         });
         Ok(Some(seq))
     }

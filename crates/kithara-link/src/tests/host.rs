@@ -457,6 +457,36 @@ fn rejected_at_tempo_withdraws_the_step_and_restores_decks(#[case] reason: Rejec
 }
 
 #[kithara::test]
+fn a_terminal_next_tempo_refusal_settles_without_readmission() {
+    let (mut host, clock) = host();
+    let (deck, control, _, _) = sounding();
+    let (_, probe) = register(&mut host, deck, &control);
+    let caller = host
+        .apply(
+            HostCommand::Configure(
+                HostSettingsChange::Tempo(Tempo::new(180.0).expect("tempo")),
+                When::Next,
+            )
+            .into(),
+        )
+        .expect("tempo")
+        .expect("sequence");
+    clock.answer(caller, 180.0, Err(Rejection::Refused(PlayError::Closed)));
+    assert!(matches!(
+        finish(&mut host).as_slice(),
+        [HostSettled::Settings {
+            seq,
+            outcome: Err(Rejection::Refused(PlayError::Closed)),
+            ..
+        }] if *seq == caller
+    ));
+    assert_eq!(clock.edit(|script| script.sent.len()), 1);
+    assert_eq!(bpm(&probe, 48_000), 120.0);
+    host.begin_pass();
+    assert_eq!(clock.edit(|script| script.sent.len()), 1);
+}
+
+#[kithara::test]
 fn rejected_next_tempo_replans_with_lane_lead_and_keeps_the_caller() {
     let (mut host, clock) = host();
     let (deck, control, _, _) = sounding();
