@@ -1,4 +1,6 @@
-use super::{DecoderNode, PcmPacket, PcmReceiver};
+#[cfg(test)]
+use super::PcmPacket;
+use super::{DecoderNode, PcmReceiver};
 
 #[cfg(test)]
 pub(crate) fn terminal_ring(
@@ -14,8 +16,11 @@ pub(crate) fn terminal_ring(
     })
 }
 
-#[cfg(test)]
-pub(crate) fn terminal_node<T>(
+/// Creates a decoder node with an empty effect chain and terminal packet ring.
+///
+/// # Panics
+/// Panics if fixture pools or the empty effect drain cannot be allocated.
+pub fn terminal_node<T>(
     source: T,
     spec: kithara_signal::AudioSpec,
     blocking: bool,
@@ -27,8 +32,8 @@ pub(crate) fn terminal_node<T>(
 where
     T: kithara_audio::AudioSource<Chunk = kithara_signal::AudioChunk>,
 {
-    let pools = crate::test_pools::pools();
-    let (receiver, producer) = super::reader::packet_fixture(blocking, spec);
+    let pools = kithara_test_utils::bufpool::pools();
+    let (receiver, producer) = super::reader::mock::packet_fixture(blocking, spec);
     let (sender, inbox) =
         kithara_command::channel(kithara_command::ChannelConfig::builder().build());
     let config = kithara_warp::WarpConfig::builder().build();

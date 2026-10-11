@@ -5,6 +5,7 @@ use kithara_signal::{AudioSpec, SegmentId, SessionFrame};
 use kithara_test_utils::kithara;
 
 use crate::{
+    CrossfadeSettings,
     bridge::{Fade, SlotMark, SlotState},
     rt::track::{PcmConsumer, PlayerResource, core::*},
     test_pools::pools,
@@ -13,6 +14,53 @@ use crate::{
         packet_tests::{PacketRing, chunk},
     },
 };
+
+#[kithara::test]
+fn track_state_is_playing() {
+    let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
+    let mut ring = PacketRing::new(spec, Duration::from_secs(1), 2);
+    let resource = Box::new(
+        PlayerResource::new(
+            PcmConsumer::new(ring.receiver.take().expect("receiver")),
+            Arc::from("activity"),
+            &pools(),
+        )
+        .expect("resource"),
+    );
+    let mut track = PlayerTrack::builder()
+        .sample_rate(spec.sample_rate)
+        .build(resource);
+    assert_ne!(track.state(), SlotState::Playing);
+    assert!(!ring.playing(), "preloading is not audible");
+
+    track.start(Fade::Crossfade(CrossfadeSettings {
+        duration: 0.0,
+        ..Default::default()
+    }));
+    assert_eq!(track.state(), SlotState::Playing);
+    assert!(ring.playing());
+
+    let fade = Fade::Crossfade(CrossfadeSettings {
+        duration: 1.0,
+        ..Default::default()
+    });
+    track.start(fade);
+    assert_eq!(track.state(), SlotState::Playing);
+    assert!(ring.playing(), "fading in is audible");
+    track.stop(fade, SessionFrame::new(0));
+    assert_eq!(track.state(), SlotState::Playing);
+    assert!(ring.playing(), "fading out is audible");
+
+    track.stop(
+        Fade::Crossfade(CrossfadeSettings {
+            duration: 0.0,
+            ..Default::default()
+        }),
+        SessionFrame::new(0),
+    );
+    assert_ne!(track.state(), SlotState::Playing);
+    assert!(!ring.playing(), "a finished fade is not audible");
+}
 
 #[kithara::test]
 fn seek_targets_reject_unrepresentable_durations() {

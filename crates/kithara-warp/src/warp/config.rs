@@ -160,4 +160,24 @@ mod tests {
         assert_eq!(config.backends().signalsmith().block_frames(), None);
         assert_eq!(config.backends().signalsmith().interval_frames(), None);
     }
+
+    #[kithara::test]
+    fn rejected_warp_geometry_preserves_player_settings() {
+        let mut config = WarpConfig::builder().build();
+        let previous_source_limit = config.source_block_frames();
+        let mut patch = WarpConfigPatch {
+            source_block_frames: NonZeroUsize::new(previous_source_limit.get() + 1),
+            ..WarpConfigPatch::default()
+        };
+        patch.backends.signalsmith.block_frames = NonZeroUsize::new(16);
+        patch.backends.signalsmith.interval_frames = NonZeroUsize::new(32);
+
+        assert!(matches!(
+            config.apply(patch),
+            Err(WarpConfigPatchError::Backends(_))
+        ));
+        assert_eq!(config.source_block_frames(), previous_source_limit);
+        assert_eq!(config.backends().signalsmith().block_frames(), None);
+        assert_eq!(config.backends().signalsmith().interval_frames(), None);
+    }
 }

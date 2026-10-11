@@ -1,14 +1,23 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::{
+    future::{Future, poll_fn},
+    num::{NonZeroU32, NonZeroUsize},
+    pin::pin,
+    task::Poll,
+};
 
 use kithara_assets::{AssetStore, StorageBackend};
 use kithara_audio::{Audio, AudioConfig, NoResamplerBackend};
 use kithara_file::{File, FileConfig, FileSrc};
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::{
+    sync::Arc,
+    time::{Duration, timeout},
+};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId, SourceSpan};
 use kithara_stream::mock::NoopWorkerWake;
 use kithara_test_fixtures::assets;
+use kithara_test_utils::kithara;
 use ringbuf::traits::{Consumer, Producer};
 
 use super::{PcmPacket, PcmReceiver, reader::PcmProducer, scheduler::StreamWake};
@@ -30,6 +39,7 @@ impl PcmFixture {
         .await
     }
 
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     pub(crate) async fn with_wake(capacity: usize, blocking: bool, wake: StreamWake) -> Self {
         let pools = pools();
         let path = assets::audio_wav_frames_44100()
@@ -44,9 +54,25 @@ impl PcmFixture {
             .pools(pools.clone())
             .build();
         let config = AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(file).build();
-        let audio = Audio::prepare(config, Arc::new(NoopWorkerWake), pools)
-            .await
-            .expect("prepare test source");
+        let mut preparation = pin!(Audio::prepare(config, Arc::new(NoopWorkerWake), pools));
+        let audio = loop {
+            hang_tick!();
+            let result = timeout(
+                Duration::from_millis(10),
+                poll_fn(|context| {
+                    let mut result = Poll::Pending;
+                    hang_park!(|_remaining: Duration| {
+                        result = preparation.as_mut().poll(context);
+                    });
+                    result
+                }),
+            )
+            .await;
+            if let Ok(result) = result {
+                hang_reset!();
+                break result.expect("prepare test source");
+            }
+        };
         let (receiver, producer) = PcmReceiver::new(
             NonZeroUsize::new(capacity).expect("nonzero ring capacity"),
             blocking,

@@ -41,7 +41,7 @@ async fn spurious_item_did_play_to_end_is_filtered() {
 
 #[kithara::test(tokio)]
 async fn eof_after_queue_end_does_not_restart_from_first_track() {
-    let (mut queue, first, second, mut rig, dir) = player_internal::selected().await;
+    let (mut queue, first, second, mut rig, dir) = crate::mock::selected().await;
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(
             queue,
@@ -54,7 +54,7 @@ async fn eof_after_queue_end_does_not_restart_from_first_track() {
     })
     .expect("select last");
     answer_load(&mut queue, &mut rig, &dir).await;
-    player_internal::finish(&mut queue, &mut rig);
+    crate::mock::finish(&mut queue, &mut rig);
     queue.navigation.select(second, &[first, second]);
     queue.current = None;
     queue.navigation = crate::NavigationState::new(queue.navigation.history_limit());

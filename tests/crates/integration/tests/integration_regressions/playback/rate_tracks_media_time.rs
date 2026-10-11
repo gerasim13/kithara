@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::path::Path;
+use std::{future::Future, path::Path};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
@@ -50,27 +50,45 @@ async fn file_resource(
     config
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+async fn completed<Output>(operation: impl Future<Output = Output>) -> Output {
+    let mut operation = std::pin::pin!(operation);
+    loop {
+        hang_tick!();
+        if let Ok(output) = time::timeout(Duration::from_millis(10), operation.as_mut()).await {
+            hang_reset!();
+            return output;
+        }
+    }
+}
+
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn render_blocks(harness: &OfflinePlayer, blocks: usize) {
     for _ in 0..blocks {
-        let _ = harness.render(BLOCK_FRAMES).await;
-        let _ = harness.tick_and_drain().await;
+        hang_tick!();
+        let _ = completed(harness.render(BLOCK_FRAMES)).await;
+        let _ = completed(harness.tick_and_drain()).await;
+        hang_reset!();
         time::sleep(Duration::from_millis(1)).await;
     }
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn media_advance(harness: &OfflinePlayer, blocks: usize) -> f64 {
     let start = harness.player().position_seconds().unwrap_or(0.0);
     render_blocks(harness, blocks).await;
+    hang_reset!();
     harness.player().position_seconds().unwrap_or(0.0) - start
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn blocks_until_end(drain_tone: &'static [u8], temp_dir: &TestTempDir, rate: f32) -> usize {
-    let harness = OfflinePlayer::with_sample_rate(
+    let harness = completed(OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
-    )
+    ))
     .await;
     let tag = format!("rate-{rate}");
     let path = temp_dir.path().join(format!("{tag}.wav"));
@@ -81,48 +99,55 @@ async fn blocks_until_end(drain_tone: &'static [u8], temp_dir: &TestTempDir, rat
         &temp_dir.path().join(format!("store-{tag}")),
     )
     .await;
-    harness.load_and_fadein(resource).await;
-    harness
-        .with_queue(move |player| player.set_default_rate(rate))
+    completed(harness.load_and_fadein(resource)).await;
+    completed(harness.with_queue(move |player| player.set_default_rate(rate)))
         .await
         .expect("a finite rate is accepted");
 
     let mut blocks = 0usize;
     let mut ended_at = None;
+    let mut previous_position = harness.player().position_seconds();
     for _ in 0..DRAIN_BLOCK_BUDGET {
-        let _ = harness.render(BLOCK_FRAMES).await;
+        hang_tick!();
+        let _ = completed(harness.render(BLOCK_FRAMES)).await;
         blocks += 1;
-        let ended = harness
-            .tick_and_drain()
+        let ended = completed(harness.tick_and_drain())
             .await
             .iter()
             .any(|event| matches!(event, PlayerEvent::ItemDidPlayToEnd { .. }));
         if ended {
+            hang_reset!();
             ended_at = Some(blocks);
             break;
+        }
+        let position = harness.player().position_seconds();
+        if position != previous_position {
+            hang_reset!();
+            previous_position = position;
         }
         time::sleep(Duration::from_millis(1)).await;
     }
     let blocks = ended_at.unwrap_or_else(|| {
         panic!("the {rate}x track never reached end-of-stream within {DRAIN_BLOCK_BUDGET} blocks")
     });
-    harness.close().await;
+    completed(harness.close()).await;
     blocks
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn media_time_advances_with_the_playing_rate(tone_mp3: &'static [u8], temp_dir: TestTempDir) {
-    let harness = OfflinePlayer::with_sample_rate(
+    let harness = completed(OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
-    )
+    ))
     .await;
     let path = temp_dir.path().join("rate.mp3");
     std::fs::write(&path, tone_mp3).expect("write mp3 fixture");
     let resource = file_resource(&harness, &path, &temp_dir.path().join("store")).await;
-    harness.load_and_fadein(resource).await;
+    completed(harness.load_and_fadein(resource)).await;
 
     render_blocks(&harness, SETTLE_BLOCKS).await;
     let baseline = media_advance(&harness, MEASURE_BLOCKS).await;
@@ -131,8 +156,7 @@ async fn media_time_advances_with_the_playing_rate(tone_mp3: &'static [u8], temp
         "precondition: media time must advance at rate 1.0, got {baseline}s"
     );
 
-    harness
-        .with_queue(move |player| player.set_default_rate(FAST_RATE))
+    completed(harness.with_queue(move |player| player.set_default_rate(FAST_RATE)))
         .await
         .expect("a finite rate is accepted");
     render_blocks(&harness, SETTLE_BLOCKS).await;
@@ -144,13 +168,15 @@ async fn media_time_advances_with_the_playing_rate(tone_mp3: &'static [u8], temp
          {accelerated}s at rate {FAST_RATE} versus {baseline}s at rate 1.0 — \
          the reported clock is on the output scale, not the media scale"
     );
-    harness.close().await;
+    completed(harness.close()).await;
+    hang_reset!();
 }
 
 /// The other half of the same contract: the faster media clock has to be
 /// backed by the source actually draining faster. Without this, scaling the
 /// clock alone would satisfy the trap above while the audio kept its speed.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn a_faster_rate_drains_the_real_source_sooner(
     drain_tone: &'static [u8],
     temp_dir: TestTempDir,
@@ -164,4 +190,5 @@ async fn a_faster_rate_drains_the_real_source_sooner(
          materially fewer rendered output blocks than at rate 1.0, got \
          {accelerated} versus {baseline}"
     );
+    hang_reset!();
 }

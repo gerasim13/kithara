@@ -1,7 +1,7 @@
 mod config;
 mod core;
-#[cfg(test)]
-mod fixture;
+#[cfg(any(test, feature = "mock"))]
+pub(crate) mod fixture;
 mod load;
 #[cfg(all(test, feature = "mock"))]
 pub(crate) mod mock;
@@ -9,6 +9,10 @@ pub(crate) mod mock;
 pub(crate) use node::mock as node_fixture;
 mod node;
 mod reader;
+#[cfg(any(test, feature = "mock"))]
+pub(crate) use node::fixture as source_fixture;
+#[cfg(any(test, feature = "mock"))]
+pub(crate) use reader::mock as packet_mock;
 #[cfg(test)]
 pub(crate) use reader::tests as packet_tests;
 pub(crate) mod scheduler;

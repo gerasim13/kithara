@@ -10,18 +10,27 @@ use firewheel::{
         StreamStatus,
     },
 };
+use futures::future::poll_fn;
+use kithara_assets::{AssetStore, StorageBackend};
+use kithara_audio::AudioObserverSlot;
 use kithara_command::{
     Batch, ChannelConfig, Inbox, OpenError, Outcome, Receipt, ScopeId, ScopedConfig, ScopedInbox,
     ScopedReceipt, ScopedSender, Sender, When, channel, scoped_channel,
 };
+use kithara_platform::{
+    time::{Duration, timeout},
+    tokio::task::yield_now,
+};
 use kithara_render::{
     Dispatched, DispatcherCommand, DispatcherProtocol, LoadRefusal, LoadRequest, Loaded, Open,
-    bridge::{DeckEvents, DeckPart, DeckProtocol, SessionInbox, Slot, scope_channels},
+    bridge::{DeckEnds, DeckEvents, DeckPart, DeckProtocol, SessionInbox, Slot, scope_channels},
     mock::MockDeck,
     rt::{DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context},
 };
 use kithara_signal::{FrameCount, OutputContext, SessionEpoch, SessionFrame};
+use kithara_test_utils::kithara;
 use kithara_warp::RenderContext;
+use num_traits::ToPrimitive;
 
 use crate::{
     DeckPass, OpenedTrack, PlayError, ResourceLoad, TrackSettings, player::Outbox,
@@ -37,6 +46,17 @@ pub const SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
     Some(sample_rate) => sample_rate,
     None => unreachable!(),
 };
+
+/// Observes the cancellation subtree and output rate passed to a fixture open.
+#[must_use]
+pub fn prepared_resource_context<S>(
+    config: &crate::ResourceConfig<S>,
+) -> (Option<kithara_platform::CancelToken>, Option<NonZeroU32>)
+where
+    S: kithara_bufpool::HasPool<u8> + Send + Sync + 'static,
+{
+    (config.cancel.clone(), config.host_sample_rate)
+}
 
 /// Writes generated PCM as a float WAV for tests opening a real URI source.
 ///
@@ -105,7 +125,7 @@ pub fn output(shape: Option<StreamShape>) -> SessionOutputView {
 /// # Panics
 /// Panics if the prepared fixture fails to play, advance, produce PCM, or keep
 /// render-side events off the source event bus.
-#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 pub async fn assert_prepared_render_off_bus<S>(
     prep: &crate::ResourcePrep<S>,
     output: &crate::OutputSnapshot,
@@ -115,9 +135,58 @@ pub async fn assert_prepared_render_off_bus<S>(
 where
     S: kithara_bufpool::HasPool<u8> + kithara_bufpool::HasPool<f32> + Send + Sync + 'static,
 {
+    use kithara_signal::AudioSpec;
+
+    let rate = NonZeroU32::new(output.sample_rate.output()).ok_or(PlayError::Closed)?;
+    write_pcm_wav(path, &[0.5; 8_192], AudioSpec::new(2, rate))
+        .map_err(|error| PlayError::Internal(error.to_string()))?;
+    let config: crate::ResourceConfig<S> =
+        crate::ResourceConfig::for_src(crate::ResourceSrc::Path(path.to_owned()))
+            .store(
+                AssetStore::builder(pools.clone())
+                    .backend(StorageBackend::Memory)
+                    .build(),
+            )
+            .build();
+    let prepared = prep.prepare(config, output)?;
+    let bus = prepared.bus.clone().ok_or(PlayError::Closed)?;
+    let item = ResourceLoad::new(prepared, Box::new(AudioObserverSlot::default().relay()));
+    let (_control, inbox) = item.lane_channel()?;
+    assert_requested_render_off_bus(
+        LoadRequest {
+            item,
+            class: kithara_render::ServiceClass::Warm,
+            inbox,
+            position: Duration::ZERO,
+            start: TrackSettings::default().lane_start(),
+        },
+        &bus,
+        output,
+        pools,
+    )
+    .await
+}
+
+/// Renders the exact load request emitted by an owner and checks its source bus.
+///
+/// # Errors
+/// Returns source-open or offline mixer failures.
+///
+/// # Panics
+/// Panics if either block is silent, stopped, stationary, or publishes source events.
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+pub async fn assert_requested_render_off_bus<S>(
+    request: LoadRequest<ResourceLoad<S>>,
+    bus: &kithara_events::EventBus,
+    output: &crate::OutputSnapshot,
+    pools: &kithara_bufpool::PoolRegion<S>,
+) -> Result<(), PlayError>
+where
+    S: kithara_bufpool::HasPool<u8> + kithara_bufpool::HasPool<f32> + Send + Sync + 'static,
+{
     use kithara_events::TryRecvError;
     use kithara_render::bridge::{Fade, Slot, SlotState};
-    use kithara_signal::{AudioSpec, SegmentId};
+    use kithara_signal::SegmentId;
 
     #[derive(Debug, kithara_events::EventSet)]
     enum RenderEvents {
@@ -132,43 +201,21 @@ where
     let rate = NonZeroU32::new(output.sample_rate.output()).ok_or(PlayError::Closed)?;
     let frames = NonZeroU32::new(128).ok_or(PlayError::Closed)?;
     let shape = StreamShape::new(frames, rate);
-    write_pcm_wav(path, &[0.5; 8_192], AudioSpec::new(2, rate))
-        .map_err(|error| PlayError::Internal(error.to_string()))?;
-    let config: crate::ResourceConfig<S> =
-        crate::ResourceConfig::for_src(crate::ResourceSrc::Path(path.to_owned()))
-            .store(
-                kithara_assets::AssetStore::builder(pools.clone())
-                    .backend(kithara_assets::StorageBackend::Memory)
-                    .build(),
-            )
-            .build();
-    let prepared = prep.prepare(config, output)?;
-    let mut events = prepared
-        .bus
-        .as_ref()
-        .ok_or(PlayError::Closed)?
-        .subscribe::<RenderEvents>();
-    let load = ResourceLoad::new(
-        prepared,
-        Box::new(kithara_audio::AudioObserverSlot::default().relay()),
-    );
-    let (_control, inbox) = load.lane_channel()?;
+    let mut events = bus.subscribe::<RenderEvents>();
+    let mut opening = std::pin::pin!(request.item.open(
+        request.position,
+        request.start,
+        request.inbox
+    ));
     let (opened, _lane, _) = {
         // WHY: Source reads run on real threads, so their watchdog must not leap in virtual time.
         let _real_io = kithara_platform::flash::real_io();
-        hang_tick!("prepared fixture awaits its source".to_owned());
-        let opened = load.open(
-            kithara_platform::time::Duration::ZERO,
-            TrackSettings::default().lane_start(),
-            inbox,
-        );
-        kithara_platform::time::timeout(__hang_detector.remaining(), opened)
-            .await
-            .map_err(|error| {
-                hang_tick!("prepared fixture awaits its source".to_owned());
-                PlayError::Internal(error.to_string())
-            })?
-            .map_err(|error| PlayError::Internal(format!("{error:?}")))?
+        loop {
+            hang_tick!();
+            if let Ok(opened) = timeout(Duration::from_millis(10), opening.as_mut()).await {
+                break opened.map_err(|error| PlayError::Internal(format!("{error:?}")))?;
+            }
+        }
     };
     hang_reset!();
     let mut mixer = MixerRig::new(DeckMixerConfig::default(), shape, pools)?;
@@ -189,11 +236,12 @@ where
         },
     )?;
     while events.try_recv().is_ok() {
-        hang_tick!("draining prepared source events".to_owned());
+        hang_tick!();
     }
     hang_reset!();
     let mut position = 0.0;
     for block in 0..2 {
+        hang_tick!();
         let mut pcm = [[0.0; 128]; 2];
         let [left, right] = &mut pcm;
         mixer.block(
@@ -206,6 +254,7 @@ where
         assert!(snapshot.slots[0].position > position);
         assert!(pcm.iter().flatten().any(|sample| *sample != 0.0));
         position = snapshot.slots[0].position;
+        hang_reset!();
     }
     Ok(())
 }
@@ -223,7 +272,7 @@ impl SessionInbox for MixerInbox {
 pub struct MixerRig {
     pub ring: ScopedSender<DeckProtocol, DeckProtocol>,
     pub scope: ScopeId,
-    pub ends: kithara_render::bridge::DeckEnds,
+    pub ends: DeckEnds,
     mixer: DeckMixer<MixerInbox>,
     extra: ProcExtra,
     shape: StreamShape,
@@ -280,30 +329,6 @@ impl MixerRig {
         })
     }
 
-    /// Admits one deck part on the requested session frame.
-    ///
-    /// # Errors
-    /// Returns a closed or full scoped command channel.
-    pub fn send(
-        &mut self,
-        at: When<SessionFrame>,
-        part: DeckPart,
-    ) -> Result<kithara_command::Seq, PlayError> {
-        use kithara_command::Port;
-
-        self.ring
-            .scope(self.scope)
-            .ok_or(PlayError::Closed)?
-            .send(
-                at,
-                Batch {
-                    basis: Vec::new(),
-                    commands: vec![part],
-                },
-            )
-            .map_err(|error| PlayError::Internal(error.to_string()))
-    }
-
     /// Processes one host block into the caller's stereo PCM storage.
     ///
     /// # Errors
@@ -358,8 +383,8 @@ impl MixerRig {
             .0
             .drain();
         let info = ProcInfo {
-            sample_rate: self.shape.sample_rate,
             frames,
+            sample_rate: self.shape.sample_rate,
             in_silence_mask: SilenceMask::default(),
             out_silence_mask: SilenceMask::default(),
             in_constant_mask: ConstantMask::default(),
@@ -372,8 +397,8 @@ impl MixerRig {
             last_marker_instant: InstantSamples(start),
             sample_rate_recip: f64::from(self.shape.sample_rate.get()).recip(),
             clock_samples: InstantSamples(start),
-            duration_since_stream_start: kithara_platform::time::Duration::try_from_secs_f64(
-                num_traits::ToPrimitive::to_f64(&start)
+            duration_since_stream_start: Duration::try_from_secs_f64(
+                ToPrimitive::to_f64(&start)
                     .ok_or_else(|| PlayError::Internal("mock block time exceeds f64".into()))?
                     / f64::from(self.shape.sample_rate.get()),
             )
@@ -393,6 +418,30 @@ impl MixerRig {
             &mut self.extra,
         );
         Ok(())
+    }
+
+    /// Admits one deck part on the requested session frame.
+    ///
+    /// # Errors
+    /// Returns a closed or full scoped command channel.
+    pub fn send(
+        &mut self,
+        at: When<SessionFrame>,
+        part: DeckPart,
+    ) -> Result<kithara_command::Seq, PlayError> {
+        use kithara_command::Port;
+
+        self.ring
+            .scope(self.scope)
+            .ok_or(PlayError::Closed)?
+            .send(
+                at,
+                Batch {
+                    basis: Vec::new(),
+                    commands: vec![part],
+                },
+            )
+            .map_err(|error| PlayError::Internal(error.to_string()))
     }
 }
 
@@ -433,50 +482,15 @@ impl<S> DeckRig<S> {
             ring,
             scope,
             inbox,
-            mixer: MockDeck::new(inputs),
-            events: ends.events,
             dispatcher,
             opens,
+            mixer: MockDeck::new(inputs),
+            events: ends.events,
             fixture_dispatcher: None,
             fixture_lanes: Vec::new(),
             now: SessionFrame::new(0),
             observation,
         })
-    }
-
-    /// The queues a player sends to, lent for one pass.
-    pub fn with_outbox<R, F>(&mut self, run: F) -> Result<R, PlayError>
-    where
-        F: FnOnce(&mut Outbox<'_, S>) -> R,
-    {
-        let mut scope = self.ring.scope(self.scope).ok_or(PlayError::Closed)?;
-        let output = output(None).get();
-        let pass = DeckPass {
-            mix: crate::DeckMixSettings::default(),
-            suspended: false,
-            now: self.now,
-            delivery: FrameCount::new(0),
-            output: &output,
-            deck: &self.observation,
-        };
-        Ok(run(
-            &mut Outbox::new(&mut scope, &mut self.dispatcher).in_pass(pass)
-        ))
-    }
-
-    /// Answers the oldest open the dispatcher holds with `opened` and returns
-    /// its receipt; `None` when no open is waiting.
-    pub fn open(
-        &mut self,
-        opened: Result<Loaded<OpenedTrack>, LoadRefusal>,
-    ) -> Option<Receipt<DispatcherProtocol<ResourceLoad<S>>>> {
-        self.opens.drain();
-        let due = self.opens.next_due((), 1)?;
-        match opened {
-            Ok(opened) => due.apply(Dispatched::Loaded(opened)),
-            Err(refusal) => due.refuse(refusal),
-        }
-        self.dispatcher.receipts().next()
     }
 
     /// Plays the deck's block at `at` and returns the receipts of the batches
@@ -499,6 +513,22 @@ impl<S> DeckRig<S> {
         self.pass(|mixer, level| mixer.end(level, slot, at))
     }
 
+    /// Answers the oldest open the dispatcher holds with `opened` and returns
+    /// its receipt; `None` when no open is waiting.
+    pub fn open(
+        &mut self,
+        opened: Result<Loaded<OpenedTrack>, LoadRefusal>,
+    ) -> Option<Receipt<DispatcherProtocol<ResourceLoad<S>>>> {
+        self.opens.drain();
+        let due = self.opens.next_due((), 1)?;
+        match opened {
+            Ok(opened) => due.apply(Dispatched::Loaded(opened)),
+            Err(refusal) => due.refuse(refusal),
+        }
+        self.dispatcher.receipts().next()
+    }
+
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     fn pass(
         &mut self,
         run: impl FnOnce(&mut MockDeck, &mut kithara_command::LevelInbox<'_, DeckProtocol>),
@@ -511,13 +541,35 @@ impl<S> DeckRig<S> {
         run(&mut self.mixer, &mut level);
         let mut receipts: Vec<Receipt<DeckProtocol>> = Vec::new();
         while let Some(receipt) = self.ring.receipt() {
+            hang_tick!();
             let ScopedReceipt::Scope(scope, receipt) = receipt else {
                 panic!("expected a deck receipt");
             };
             assert_eq!(scope, self.scope);
             receipts.push(receipt);
+            hang_reset!();
         }
         Ok(receipts)
+    }
+
+    /// The queues a player sends to, lent for one pass.
+    pub fn with_outbox<R, F>(&mut self, run: F) -> Result<R, PlayError>
+    where
+        F: FnOnce(&mut Outbox<'_, S>) -> R,
+    {
+        let mut scope = self.ring.scope(self.scope).ok_or(PlayError::Closed)?;
+        let output = output(None).get();
+        let pass = DeckPass {
+            mix: crate::DeckMixSettings::default(),
+            suspended: false,
+            now: self.now,
+            delivery: FrameCount::new(0),
+            output: &output,
+            deck: &self.observation,
+        };
+        Ok(run(
+            &mut Outbox::new(&mut scope, &mut self.dispatcher).in_pass(pass)
+        ))
     }
 }
 
@@ -526,13 +578,35 @@ impl<S: 'static> DeckRig<S> {
     ///
     /// # Errors
     /// Returns the source, lane, or dispatcher admission failure.
-    #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     pub async fn load_fixture(
         &mut self,
         item: ResourceLoad<S>,
-        position: kithara_platform::time::Duration,
+        position: Duration,
     ) -> Result<Loaded<OpenedTrack>, PlayError> {
         let (lane_sender, lane) = item.lane_channel()?;
+        let loaded = self
+            .load_request_fixture(LoadRequest {
+                item,
+                class: kithara_render::ServiceClass::Warm,
+                position,
+                start: TrackSettings::default().lane_start(),
+                inbox: lane,
+            })
+            .await?;
+        self.fixture_lanes.push(lane_sender);
+        Ok(loaded)
+    }
+
+    /// Opens an owner's actual request without replacing its source or lane inbox.
+    ///
+    /// # Errors
+    /// Returns source, lane, or dispatcher admission failure.
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    pub async fn load_request_fixture(
+        &mut self,
+        request: LoadRequest<ResourceLoad<S>>,
+    ) -> Result<Loaded<OpenedTrack>, PlayError> {
         let dispatcher = self.fixture_dispatcher.get_or_insert_with(|| {
             let (sender, inbox) =
                 channel::<DispatcherProtocol<ResourceLoad<S>>>(ChannelConfig::builder().build());
@@ -541,41 +615,33 @@ impl<S: 'static> DeckRig<S> {
                 driver: Box::pin(kithara_render::dispatch(inbox)),
             }
         });
-        let seq = dispatcher
+        dispatcher
             .sender
             .send(
                 When::Next,
                 Batch {
                     basis: Vec::new(),
-                    commands: vec![DispatcherCommand::Load(Box::new(LoadRequest {
-                        class: kithara_render::ServiceClass::Warm,
-                        item,
-                        position,
-                        start: TrackSettings::default().lane_start(),
-                        inbox: lane,
-                    }))],
+                    commands: vec![DispatcherCommand::Load(Box::new(request))],
                 },
             )
             .map_err(|error| PlayError::Internal(error.to_string()))?;
+        let mut awaiting = std::pin::pin!(poll_fn(|context| {
+            let _ = dispatcher.driver.as_mut().poll(context);
+            dispatcher
+                .sender
+                .receipts()
+                .next()
+                .map_or(Poll::Pending, Poll::Ready)
+        }));
         let receipt = {
             // WHY: The dispatcher opens disk fixtures on real threads outside Flash's task count.
             let _real_io = kithara_platform::flash::real_io();
-            let budget = __hang_detector.remaining();
-            let receipt = futures::future::poll_fn(|context| {
-                hang_tick!(format!("fixture dispatcher load {seq:?} awaits its source"));
-                let _ = dispatcher.driver.as_mut().poll(context);
-                dispatcher
-                    .sender
-                    .receipts()
-                    .next()
-                    .map_or(Poll::Pending, Poll::Ready)
-            });
-            kithara_platform::time::timeout(budget, receipt)
-                .await
-                .map_err(|error| {
-                    hang_tick!(format!("fixture dispatcher load {seq:?} awaits its source"));
-                    PlayError::Internal(error.to_string())
-                })?
+            loop {
+                hang_tick!();
+                if let Ok(receipt) = timeout(Duration::from_millis(10), awaiting.as_mut()).await {
+                    break receipt;
+                }
+            }
         };
         hang_reset!();
         let (outcome, _) = receipt.into();
@@ -583,13 +649,26 @@ impl<S: 'static> DeckRig<S> {
             Outcome::Applied {
                 data: Dispatched::Loaded(opened),
                 ..
-            } => {
-                self.fixture_lanes.push(lane_sender);
-                Ok(opened)
-            }
+            } => Ok(opened),
             outcome => Err(PlayError::Internal(format!(
                 "fixture load refused: {outcome:?}"
             ))),
         }
+    }
+
+    /// Gives the retained fixture decoder executor one scheduling turn.
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    pub async fn poll_fixture(&mut self) {
+        hang_tick!();
+        poll_fn(|context| {
+            if let Some(dispatcher) = &mut self.fixture_dispatcher {
+                let _ = dispatcher.driver.as_mut().poll(context);
+            }
+            Poll::Ready(())
+        })
+        .await;
+        hang_reset!();
+        yield_now().await;
+        hang_reset!();
     }
 }

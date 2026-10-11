@@ -364,7 +364,7 @@ async fn the_first_append_arms_a_paused_initial_load() {
     );
     let loaded = loaded_fixture(&mut rig, &dir).await;
     answer(&mut queue, &mut rig, seq, loaded);
-    player_internal::finish(&mut queue, &mut rig);
+    crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.current, Some(id));
     assert!(matches!(
         queue
@@ -375,7 +375,7 @@ async fn the_first_append_arms_a_paused_initial_load() {
         PlayingStatus::Paused { .. }
     ));
     select(&mut queue, &mut rig, id);
-    player_internal::finish(&mut queue, &mut rig);
+    crate::mock::finish(&mut queue, &mut rig);
     assert!(matches!(
         queue
             .current_track()
@@ -398,7 +398,7 @@ async fn the_first_append_plays_with_autoplay() {
     );
     let loaded = loaded_fixture(&mut rig, &dir).await;
     answer(&mut queue, &mut rig, seq, loaded);
-    player_internal::finish(&mut queue, &mut rig);
+    crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.current, Some(id));
     assert!(matches!(
         queue
@@ -506,7 +506,7 @@ async fn a_selected_background_track_announces_loaded_once() {
     let loaded = loaded_fixture(&mut rig, &dir).await;
     answer(&mut queue, &mut rig, seq, loaded);
     select(&mut queue, &mut rig, ids[1]);
-    player_internal::finish(&mut queue, &mut rig);
+    crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.current, Some(ids[1]));
     let metadata = queue
         .current_track()
@@ -615,7 +615,7 @@ async fn a_stale_load_completion_does_not_cancel_the_live_target() {
     let seq = load_seq(&queue, ids[1]);
     let loaded = loaded_fixture(&mut rig, &dir).await;
     answer(&mut queue, &mut rig, seq, loaded);
-    player_internal::finish(&mut queue, &mut rig);
+    crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.current, Some(ids[1]));
 }
 

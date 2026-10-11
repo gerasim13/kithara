@@ -1,6 +1,7 @@
 mod activity_tests;
 mod core;
 mod preload;
+mod readiness_contracts;
 mod scheduler_tests;
 
 use kithara_audio::TrackFailureKind;

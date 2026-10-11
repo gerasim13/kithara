@@ -123,4 +123,37 @@ mod tests {
         assert!(tracks.at(second).is_some());
         assert!(tracks.at(Slot::new(2)).is_none(), "past the mixer's slots");
     }
+
+    #[kithara::test]
+    fn identical_sources_are_addressed_by_track_id() {
+        let src: Arc<str> = Arc::from("same.mp3");
+        let first = Slot::new(0);
+        let second = Slot::new(1);
+        let first_segment = kithara_signal::SegmentId::FIRST.next();
+        let second_segment = first_segment.next();
+        let mut first_track = track(Arc::clone(&src));
+        first_track.adopt(first_segment);
+        let mut second_track = track(src);
+        second_track.adopt(second_segment);
+        let mut tracks = TrackSlots::new(NonZeroUsize::new(2).expect("two slots"));
+
+        assert!(tracks.put(first, first_track).is_ok());
+        assert!(tracks.put(second, second_track).is_ok());
+        assert_eq!(
+            tracks.at(first).map(PlayerTrack::segment),
+            Some(first_segment)
+        );
+        assert_eq!(
+            tracks.at(second).map(PlayerTrack::segment),
+            Some(second_segment)
+        );
+
+        let removed = tracks.take(first).map(|track| track.segment());
+        assert_eq!(removed, Some(first_segment));
+        assert!(tracks.at(first).is_none());
+        assert_eq!(
+            tracks.at(second).map(PlayerTrack::segment),
+            Some(second_segment)
+        );
+    }
 }

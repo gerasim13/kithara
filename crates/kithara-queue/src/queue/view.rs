@@ -440,3 +440,128 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use kithara_platform::time::Duration;
+    use kithara_play::{
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerFactory, PlayerImpl, ResourcePrep, Slot,
+        TrackFactory,
+    };
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        QueueConfig,
+        test_pools::{TestPools, pools},
+    };
+
+    fn view_of(frontier: f64, cached: f64) -> PlaybackView {
+        let prep = ResourcePrep::builder()
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+            .build();
+        let queue = Queue::new(QueueConfig::builder().prep(prep).build());
+        let player: PlayerImpl<TestPools> = PlayerFactory
+            .track(PlayerConfig {
+                item: TrackId::allocate(),
+                slot: Some(Slot::new(0)),
+                settings: TrackSettings::default(),
+            })
+            .expect("valid track settings");
+        let mut snapshot = (*queue.view.read()).clone();
+        let mut track = player.snapshot();
+        track.duration = Some(Duration::from_secs(200));
+        snapshot.track = Some(track);
+        snapshot.slot = Some(SlotSnapshot {
+            duration: 200.0,
+            frontier,
+            cached,
+            ..SlotSnapshot::default()
+        });
+        queue.view.publish(snapshot);
+        queue.control().playback_view()
+    }
+
+    #[kithara::test]
+    fn buffered_covers_the_cached_span() {
+        assert_eq!(view_of(4.0, 120.0).buffered, Some(120.0));
+    }
+
+    #[kithara::test]
+    fn buffered_never_falls_behind_the_decoded_frontier() {
+        assert_eq!(view_of(90.0, 12.0).buffered, Some(90.0));
+    }
+
+    #[kithara::test]
+    fn buffered_is_zero_when_nothing_is_available() {
+        assert_eq!(view_of(0.0, 0.0).buffered, Some(0.0));
+    }
+
+    #[kithara::test]
+    fn playback_shared_defaults() {
+        let prep = ResourcePrep::builder()
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+            .build();
+        let queue: Queue<TestPools> = Queue::new(QueueConfig::builder().prep(prep).build());
+        let control = queue.control();
+        let snapshot = control.view.read();
+
+        assert!(!control.is_playing());
+        assert!(
+            snapshot
+                .track
+                .as_ref()
+                .and_then(|track| track.mark)
+                .is_none()
+        );
+        assert_eq!(control.position_seconds(), None);
+        assert_eq!(control.duration_seconds(), None);
+        assert_eq!(control.rate(), 0.0);
+        assert_eq!(snapshot.sample_rate, 0);
+    }
+
+    #[kithara::test]
+    fn snapshot_reads_all_fields_at_once() {
+        let prep = ResourcePrep::builder()
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+            .build();
+        let queue: Queue<TestPools> = Queue::new(QueueConfig::builder().prep(prep).build());
+        let player: PlayerImpl<TestPools> = PlayerFactory
+            .track(PlayerConfig {
+                item: TrackId::allocate(),
+                slot: Some(Slot::new(0)),
+                settings: TrackSettings::default(),
+            })
+            .expect("valid track settings");
+        let mut published = (*queue.view.read()).clone();
+        let mut track = player.snapshot();
+        track.status = PlayingStatus::Playing {
+            since: kithara_signal::SessionFrame::new(0),
+        };
+        track.position = Duration::from_secs(12);
+        track.duration = Some(Duration::from_secs(180));
+        track.speed = 1.25;
+        published.track = Some(track);
+        published.slot = Some(SlotSnapshot {
+            position: 12.0,
+            frontier: 20.0,
+            duration: 180.0,
+            ..SlotSnapshot::default()
+        });
+        published.sample_rate = 48_000;
+        queue.view.publish(published);
+
+        let snapshot = queue.control().view.read();
+        let track = snapshot.track.as_ref().expect("published track");
+        let slot = snapshot.slot.expect("published mixer slot");
+        assert!(!snapshot.deck.suspended && matches!(track.status, PlayingStatus::Playing { .. }));
+        assert!((track.position.as_secs_f64() - 12.0).abs() < f64::EPSILON);
+        assert!((slot.frontier - 20.0).abs() < f64::EPSILON);
+        assert!(
+            (track.duration.expect("published duration").as_secs_f64() - 180.0).abs()
+                < f64::EPSILON
+        );
+        assert!((track.speed - 1.25).abs() < f32::EPSILON);
+        assert_eq!(snapshot.sample_rate, 48_000);
+    }
+}

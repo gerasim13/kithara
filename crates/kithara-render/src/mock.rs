@@ -13,6 +13,18 @@ use crate::{
     },
     rt::track::PlayerResource,
 };
+pub use crate::{
+    rt::processor_fixture::{
+        DeckReply, PreparedSeek, SeekSource, TestEnds, TestMixer, TestSessionInbox,
+        apply_initial_batch, assert_applied_at, mixer, mixer_with_config, mixer_with_shape,
+        outcome_of, pcm_samples, prepared_seek, receipts, send, send_on, shape,
+    },
+    worker::{
+        fixture::terminal_node,
+        packet_mock::{PacketRing, chunk, wait_for_packet},
+        source_fixture::{ScriptedSource, prepared_node},
+    },
+};
 
 /// Take the batches the deck's inbox holds, each as its parts, and apply them on `at`, as the
 /// mixer does at its next block.
@@ -198,11 +210,6 @@ fn hold(
 
 #[cfg(all(test, feature = "mock"))]
 pub(crate) use crate::worker::{mock as pcm_fixture, node_fixture};
-
-/// Wait on the receiver's off-RT gate in a test reader.
-pub fn wait_for_packet(receiver: &crate::PcmReceiver) {
-    receiver.wait_for_packet();
-}
 
 /// Keep a test receiver parkable while its reader applies the underrun policy.
 #[must_use]

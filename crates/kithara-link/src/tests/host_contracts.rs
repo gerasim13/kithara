@@ -20,6 +20,64 @@ fn assert_track_unchanged(actual: &TrackSnapshot, expected: &TrackSnapshot) {
     assert_eq!(actual.attached, expected.attached);
 }
 
+#[kithara::test]
+fn a_host_is_a_session_root_and_refuses_every_parent_fact() {
+    let (mut host, clock) = host();
+    clock.axis(1, 0, 0.0, 120.0, 48_000);
+    host.begin_pass();
+    let root = host.transport().expect("Host session axis");
+    assert!(matches!(
+        root.session_grid().axis(),
+        kithara_warp::MapAxis::Session(_)
+    ));
+    let (deck, control, _, load) = loaded(grid(24_000, 0, Some((4, 0)), 960_000));
+    let (id, probe) = register(&mut host, deck, &control);
+    let item = probe.read(|observation| observation.snapshot.as_ref().item);
+    let canonical = format!("{:?}", probe.trajectory());
+    probe.clear();
+
+    for model in [
+        Ok(grid(32_000, 0, Some((4, 0)), 960_000)),
+        Ok(grid(24_000, 12_000, Some((4, 0)), 960_000)),
+        Err(crate::GridRefusal {
+            reason: "foreign parent withdrawn".into(),
+        }),
+    ] {
+        assert!(matches!(
+            host.apply(LinkedHostCommand::Grid {
+                deck: id,
+                answer: crate::GridAnswer { item, load, model },
+            }),
+            Ok(None)
+        ));
+        assert_eq!(host.transport(), Some(root));
+        probe.read(|observation| assert!(observation.trajectories.is_empty()));
+        assert!(clock.edit(|script| script.sent.is_empty()));
+        assert!(control.commands().is_empty());
+        let (observer, observer_control) = new_deck(trajectory(90.0, 3));
+        let (_, observed) = register(&mut host, observer, &observer_control);
+        assert_eq!(format!("{:?}", observed.trajectory()), canonical);
+        assert_eq!(observed.trajectory().sample_rate().get(), 48_000);
+        assert_eq!(
+            f64::from(observed.trajectory().beat_at(SessionFrame::new(48_000))),
+            2.0
+        );
+        assert_eq!(
+            observed
+                .trajectory()
+                .tempo_at(SessionFrame::new(0))
+                .beats_per_minute(),
+            120.0
+        );
+    }
+    assert_eq!(
+        host.transport()
+            .expect("unchanged Host")
+            .session_grid_stamp(),
+        root.session_grid_stamp()
+    );
+}
+
 // Ruling: spec 4.6 routes synchronization by registered DeckId, not topology membership.
 #[kithara::test]
 fn a_member_absent_from_the_group_is_not_prepared() {

@@ -61,7 +61,7 @@ async fn admission_fills_unset_metadata_from_the_decoder(cancel_token: CancelTok
         let mut loaded = loaded_fixture(&mut rig, &dir).await;
         loaded.opened.metadata.title = Some("Mock".to_owned());
         answer_loaded(&mut queue, &mut rig, loaded);
-        player_internal::finish(&mut queue, &mut rig);
+        crate::mock::finish(&mut queue, &mut rig);
         assert!(matches!(
             track(&queue, id).status,
             TrackStatus::Loaded | TrackStatus::Consumed

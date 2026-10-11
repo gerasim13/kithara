@@ -14,6 +14,8 @@ pub use context::{
     install_render_context, invalidate_render_context, publish_render_context, read_render_context,
 };
 pub use node::PlayerNode;
+#[cfg(any(test, feature = "mock"))]
+pub(crate) use processor::mock as processor_fixture;
 pub use processor::{BufferGeometryError, DeckMixer, StreamShape};
 pub(crate) use render::RenderPass;
 pub(crate) use slots::TrackSlots;

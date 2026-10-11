@@ -34,24 +34,29 @@ use ringbuf::{HeapRb, traits::Split};
 
 use super::super::backend::{BackendConfig, OfflineStream};
 use crate::{
-    HostCommand, HostCore, HostOwner, HostSettingsExec,
+    HostCommand, HostOwner, HostSettingsExec,
     api::{SessionDuckingMode, Tap},
     bridge::MixTapWriter,
     host::HostSettingsChange,
     rt::MetronomeConfigChange,
     session::{
         applied_spans,
-        decks::{DeckInbox, DeckMsg},
         dispatch::{OwnerPosts, tick_session},
         protocol::{SessionError, SessionSampleRate},
-        state::{DeckNode, SessionState, SessionStream, TapSlot, add_graph_node},
+        state::{DeckNode, SessionStream, TapSlot, add_graph_node},
     },
 };
 
+mod legacy_engine_contracts;
 mod membership;
 #[cfg(feature = "mock")]
-pub mod mock;
+mod mock;
 mod restart;
+mod restored_engine_config;
+mod restored_graph;
+mod restored_identity;
+mod restored_lifecycle;
+mod restored_mix;
 mod settings;
 
 use mock::*;

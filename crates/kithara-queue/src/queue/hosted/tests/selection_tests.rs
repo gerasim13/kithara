@@ -75,7 +75,7 @@ async fn manual_next_at_exhaustion_does_not_emit_queue_ended() {
 
 #[kithara::test(tokio)]
 async fn advance_to_next_cycles_then_emits_queue_ended() {
-    let (mut queue, first, second, mut rig, dir) = player_internal::selected().await;
+    let (mut queue, first, second, mut rig, dir) = crate::mock::selected().await;
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(
             queue,
@@ -88,7 +88,7 @@ async fn advance_to_next_cycles_then_emits_queue_ended() {
     })
     .expect("select last track");
     answer_load(&mut queue, &mut rig, &dir).await;
-    player_internal::finish(&mut queue, &mut rig);
+    crate::mock::finish(&mut queue, &mut rig);
     queue.navigation.select(second, &[first, second]);
     let mut rx = queue.subscribe::<QueueEvent>();
     assert!(
@@ -114,7 +114,7 @@ async fn advance_to_next_cycles_then_emits_queue_ended() {
 
 #[kithara::test(tokio)]
 async fn admitted_pending_successor_becomes_navigation_authority() {
-    let (mut queue, first, second, mut rig, _dir) = player_internal::selected().await;
+    let (mut queue, first, second, mut rig, _dir) = crate::mock::selected().await;
     queue.navigation.select(first, &[first, second]);
     queue.tracks.set_status(first, TrackStatus::Consumed);
     queue.tracks.set_status(second, TrackStatus::Pending);

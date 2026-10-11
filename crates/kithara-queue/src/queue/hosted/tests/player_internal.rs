@@ -2,7 +2,10 @@ use kithara_events::EventReceiver;
 use kithara_play::{PlayerStatus, mock};
 
 use super::*;
-use crate::{QueueError, Transition};
+use crate::{
+    QueueError, Transition,
+    mock::{finish, selected},
+};
 
 fn apply(
     queue: &mut Queue<TestPools>,
@@ -10,47 +13,6 @@ fn apply(
     command: QueueCommand<TestPools>,
 ) -> Result<Option<Seq>, PlayError> {
     with_outbox(queue, rig, |queue, out| Player::apply(queue, command, out))
-}
-
-pub(in crate::queue) fn settle(
-    queue: &mut Queue<TestPools>,
-    rig: &mut mock::DeckRig<TestPools>,
-    at: SessionFrame,
-) {
-    for receipt in rig.block(at, 0.0).expect("deck block") {
-        let seq = receipt.seq();
-        let (outcome, mut batch) = receipt.into();
-        with_outbox(queue, rig, |queue, out| {
-            Player::settle(
-                queue,
-                TrackReceipt::Deck {
-                    seq,
-                    outcome: &outcome,
-                    batch: &mut batch,
-                },
-                out,
-            )
-        });
-    }
-}
-
-pub(in crate::queue) fn finish(queue: &mut Queue<TestPools>, rig: &mut mock::DeckRig<TestPools>) {
-    for at in [0, 128, 256] {
-        settle(queue, rig, SessionFrame::new(at));
-    }
-}
-
-pub(super) async fn selected() -> (
-    Queue<TestPools>,
-    TrackId,
-    TrackId,
-    mock::DeckRig<TestPools>,
-    TestTempDir,
-) {
-    let (mut queue, first, second, mut rig, dir) = pending_selection();
-    answer_load(&mut queue, &mut rig, &dir).await;
-    finish(&mut queue, &mut rig);
-    (queue, first, second, rig, dir)
 }
 
 async fn pending_successor() -> (
@@ -330,9 +292,14 @@ async fn unarm_next_preserves_activated_current() {
 }
 
 #[kithara::test(tokio)]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn selecting_another_item_unarms_the_successor() {
+    hang_tick!();
     let (mut queue, _, second, mut rig, dir) = pending_successor().await;
+    hang_reset!();
+    hang_tick!();
     answer_load(&mut queue, &mut rig, &dir).await;
+    hang_reset!();
     let third = TrackId::allocate();
     apply(
         &mut queue,

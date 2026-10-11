@@ -1,12 +1,22 @@
+#[cfg(feature = "offline")]
 use kithara_command::{Seq, When};
+#[cfg(feature = "offline")]
 use kithara_effects::LimiterConfig;
+#[cfg(feature = "offline")]
 use kithara_platform::{thread::JoinHandle, time::Duration};
+#[cfg(feature = "offline")]
 use kithara_play::{DeckPass, HostedDeck, Outbox};
+#[cfg(feature = "offline")]
 use kithara_signal::{FrameCount, SessionFrame};
-use kithara_test_utils::{bufpool::TestPools, kithara, wait_until};
+use kithara_test_utils::kithara;
+#[cfg(feature = "offline")]
+use kithara_test_utils::{bufpool::TestPools, wait_until};
+#[cfg(feature = "offline")]
 use kithara_warp::BeatGridState;
 
+#[cfg(feature = "offline")]
 use super::*;
+#[cfg(feature = "offline")]
 use crate::{
     DeckId, HostCommand, HostSettingsChange, HostSettingsExec, HostSettled, MetronomeConfigChange,
     session::{
@@ -18,7 +28,9 @@ use crate::{
     },
 };
 
+#[cfg(feature = "offline")]
 type BaseCommand = HostCommand<TestPools, dyn HostedDeck<TestPools>>;
+#[cfg(feature = "offline")]
 enum Command {
     Host(BaseCommand),
     Render {
@@ -26,12 +38,15 @@ enum Command {
         reply: mpsc::Sender<Vec<f32>>,
     },
 }
+#[cfg(feature = "offline")]
 impl From<BaseCommand> for Command {
     fn from(command: BaseCommand) -> Self {
         Self::Host(command)
     }
 }
+#[cfg(feature = "offline")]
 struct RigOwner(HostCore<TestPools>);
+#[cfg(feature = "offline")]
 impl HostSettingsExec<()> for RigOwner {
     type At = When<SessionFrame>;
     type Output = Result<Option<Seq>, PlayError>;
@@ -59,6 +74,7 @@ impl HostSettingsExec<()> for RigOwner {
         }
     }
 }
+#[cfg(feature = "offline")]
 impl HostOwner<TestPools> for RigOwner {
     type Command = Command;
     type Deck = dyn HostedDeck<TestPools>;
@@ -121,6 +137,7 @@ impl HostOwner<TestPools> for RigOwner {
     }
 }
 
+#[cfg(feature = "offline")]
 fn deck_session() -> (Arc<SessionClient<Command>>, JoinHandle<()>, RootView) {
     let sample_rate = NonZeroU32::new(48_000).expect("test sample rate");
     let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -155,15 +172,18 @@ fn deck_session() -> (Arc<SessionClient<Command>>, JoinHandle<()>, RootView) {
     (client, worker, view)
 }
 
+#[cfg(feature = "offline")]
 fn shut_down(client: &SessionClient<Command>, worker: JoinHandle<()>) {
     client.shutdown();
     assert!(worker.join().is_ok());
 }
 
+#[cfg(feature = "offline")]
 fn ask(client: &SessionClient<Command>, command: Command) -> Result<(), &'static str> {
     dispatch(client, command).map_err(|_| "native command refused")
 }
 
+#[cfg(feature = "offline")]
 fn render(client: &SessionClient<Command>, position: u64) -> Vec<f32> {
     let (reply, receiver) = mpsc::channel();
     ask(client, Command::Render { position, reply }).expect("native owner renders");
@@ -173,6 +193,7 @@ fn render(client: &SessionClient<Command>, position: u64) -> Vec<f32> {
 /// Commands posted before the deck was held woke no one, so the session
 /// thread runs them as soon as it holds the deck.
 #[kithara::test]
+#[cfg(feature = "offline")]
 fn the_session_thread_drains_a_deck_as_it_takes_it() {
     let (client, worker, _view) = deck_session();
     let (id, deck, seen) = probe();
@@ -189,6 +210,7 @@ fn the_session_thread_drains_a_deck_as_it_takes_it() {
 }
 
 #[kithara::test]
+#[cfg(feature = "offline")]
 fn the_session_thread_ticks_a_held_deck_until_it_is_released() {
     let (client, worker, _view) = deck_session();
     let (id, deck, seen) = probe();
@@ -217,6 +239,7 @@ fn the_session_thread_ticks_a_held_deck_until_it_is_released() {
 }
 
 #[kithara::test]
+#[cfg(feature = "offline")]
 fn a_deck_the_session_lets_go_is_released_before_it_is_handed_back() {
     let (client, worker, _view) = deck_session();
     let (id, deck, seen) = probe();
@@ -238,6 +261,7 @@ fn a_deck_the_session_lets_go_is_released_before_it_is_handed_back() {
 /// The session lets go of its decks on its own thread as it shuts down:
 /// each is released, then dropped, before the shutdown answers.
 #[kithara::test]
+#[cfg(feature = "offline")]
 fn shutdown_lets_go_of_every_deck_before_it_answers() {
     let (client, worker, _view) = deck_session();
     let (id, deck, seen) = probe();
@@ -256,6 +280,7 @@ fn shutdown_lets_go_of_every_deck_before_it_answers() {
 }
 
 #[kithara::test]
+#[cfg(feature = "offline")]
 fn a_woken_deck_drains_on_the_session_thread() {
     let (client, worker, _view) = deck_session();
     let (id, deck, seen) = probe();
@@ -286,6 +311,8 @@ fn a_woken_deck_drains_on_the_session_thread() {
 
 #[kithara::test]
 fn output_block_override_preserves_the_backend_default_or_sets_128() {
+    use super::{NonZeroU32, cpal_config};
+
     let inherited = cpal_config(44_100, None);
     assert_eq!(
         inherited.output.desired_block_frames,
@@ -298,6 +325,7 @@ fn output_block_override_preserves_the_backend_default_or_sets_128() {
 }
 
 #[kithara::test]
+#[cfg(feature = "offline")]
 fn idle_native_worker_publishes_rendered_transport_without_a_deck_tick() {
     let runtime = kithara_platform::tokio::runtime::Builder::new_current_thread()
         .enable_time()

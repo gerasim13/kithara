@@ -212,7 +212,7 @@ fn drm_key_schema_omits_absent_optional_fields() {
 }
 
 #[wasm_bindgen_test]
-fn track_failure_preserves_kind_and_offset_without_epoch() {
+fn track_failure_preserves_kind_offset_and_epoch() {
     let cases = [
         (
             FfiTrackFailureKind::Decode {
