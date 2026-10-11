@@ -63,6 +63,26 @@ impl<S> PlayerImpl<S> {
         }
     }
 
+    pub(super) fn align(
+        &mut self,
+        to: Position,
+        speed: f32,
+        at: SessionFrame,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, PlayError> {
+        let change = TrackSettings::check(TrackSettingsChange::Speed(speed))?;
+        let when = self.jump_when(at, out)?;
+        let seq = self.send_lane_batch(
+            vec![
+                LaneCommand::SetSpeed(SpeedCurve::Constant(speed)),
+                LaneCommand::Jump { to },
+            ],
+            when,
+        )?;
+        self.settings.track(seq, when, change);
+        Ok(Some(seq))
+    }
+
     pub(super) fn play(
         &mut self,
         at: When<SessionFrame>,
@@ -210,13 +230,13 @@ impl<S> PlayerImpl<S> {
         };
         for receipt in lane.receipts() {
             self.settings.settle(&receipt);
-            let operation = self
+            let operations = self
                 .lane_commands
-                .iter()
-                .position(|operation| operation.seq == receipt.seq());
+                .iter_mut()
+                .filter(|operation| operation.seq == receipt.seq());
             if let Outcome::Applied { at, data } = receipt.outcome() {
-                if let Some(index) = operation {
-                    let operation = &mut self.lane_commands[index];
+                let mut speed_session = None;
+                for operation in operations {
                     let session = match operation.when {
                         When::At(requested) if requested == *at => operation.session,
                         _ => self.mark.and_then(|mark| session_at(mark, *at)),
@@ -224,24 +244,38 @@ impl<S> PlayerImpl<S> {
                     operation.when = When::At(*at);
                     operation.applied = Some(true);
                     if matches!(&operation.command, LaneCommand::SetSpeed(_)) {
-                        self.speed_answers
-                            .push_back((receipt.seq(), Ok((*at, session))));
+                        speed_session = Some(session);
                     }
+                    if let LaneCommand::Segment { id, from, .. } = operation.command
+                        && data.ready == Some(id)
+                        && id == self.segment
+                        && !matches!(self.status, TrackStatus::Playing { .. })
+                    {
+                        self.position = from;
+                        if matches!(self.status, TrackStatus::Paused { .. }) {
+                            self.status = TrackStatus::Paused { at: from };
+                        }
+                    }
+                }
+                if let Some(session) = speed_session {
+                    self.speed_answers
+                        .push_back((receipt.seq(), Ok((*at, session))));
                 }
                 self.engine_latency = data.engine_latency;
                 if let Some(ready) = data.ready {
                     self.ready = Some(ready);
                 }
             } else if let Outcome::Rejected(reason) = receipt.outcome() {
-                if let Some(index) = operation {
-                    let operation = &mut self.lane_commands[index];
+                let mut speed = false;
+                for operation in operations {
                     operation.applied = Some(false);
-                    if matches!(operation.command, LaneCommand::SetSpeed(_)) {
-                        self.speed_answers.push_back((
-                            receipt.seq(),
-                            Err(rejection(reason, |never| match *never {})),
-                        ));
-                    }
+                    speed |= matches!(operation.command, LaneCommand::SetSpeed(_));
+                }
+                if speed {
+                    self.speed_answers.push_back((
+                        receipt.seq(),
+                        Err(rejection(reason, |never| match *never {})),
+                    ));
                 }
                 warn!(?reason, "lane command was rejected");
             }

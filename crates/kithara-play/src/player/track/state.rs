@@ -38,6 +38,12 @@ pub enum TrackCommand<S> {
         to: Position,
         at: SessionFrame,
     },
+    /// Sets speed and lands the jump on `at` as one lane batch.
+    Align {
+        to: Position,
+        speed: f32,
+        at: SessionFrame,
+    },
     Configure(TrackSettingsChange, When<SessionFrame>),
     SetSpeed {
         speed: SpeedCurve,

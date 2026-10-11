@@ -1,7 +1,7 @@
 use std::{collections::VecDeque, marker::PhantomData};
 
 use kithara_abr::AbrHandle;
-use kithara_command::{Batch, Live, Sender, Seq, Target, When};
+use kithara_command::{Live, Sender, Seq, Target, When};
 use kithara_config::LiveConfig;
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
@@ -128,7 +128,12 @@ impl<S> PlayerImpl<S> {
             && let Some(slot) = pass.deck.slots.get(seat.index())
         {
             self.mark = slot.mark;
-            if slot.position.is_finite() && slot.position >= 0.0 {
+            if slot
+                .mark
+                .is_some_and(|mark| mark.lane.segment == self.segment)
+                && slot.position.is_finite()
+                && slot.position >= 0.0
+            {
                 self.position = Position::from_secs_f64(slot.position);
             }
             if slot.duration.is_finite() && slot.duration > 0.0 {
@@ -233,6 +238,14 @@ impl<S> PlayerImpl<S> {
         command: LaneCommand,
         when: When<LaneFrame>,
     ) -> Result<Seq, PlayError> {
+        self.send_lane_batch(vec![command], when)
+    }
+
+    pub(super) fn send_lane_batch(
+        &mut self,
+        commands: Vec<LaneCommand>,
+        when: When<LaneFrame>,
+    ) -> Result<Seq, PlayError> {
         if self.adopting.iter().any(|adoption| adoption.cancelled) {
             return Err(PlayError::NotReady);
         }
@@ -241,24 +254,32 @@ impl<S> PlayerImpl<S> {
             When::Next | When::Deferred => None,
         };
         let lane = self.lane.as_mut().ok_or(PlayError::NotReady)?;
-        let seq = lane
-            .send(
+        let seq = Outbox::<S>::lane(lane, when, commands.clone())?;
+        self.lane_commands
+            .extend(commands.into_iter().map(|command| LaneOperation {
+                seq,
                 when,
-                Batch {
-                    basis: Vec::new(),
-                    commands: vec![command.clone()],
-                },
-            )
-            .map_err(|error| lane_refusal(&error))?;
-        self.lane_commands.push(LaneOperation {
-            seq,
-            when,
-            segment: self.segment,
-            session,
-            command,
-            applied: None,
-        });
+                segment: self.segment,
+                session,
+                command,
+                applied: None,
+            }));
         Ok(seq)
+    }
+
+    pub(super) fn jump_when(
+        &self,
+        at: SessionFrame,
+        out: &Outbox<'_, S>,
+    ) -> Result<When<LaneFrame>, PlayError> {
+        let start = i64::from(at)
+            .checked_sub(
+                i64::try_from(self.declick.get())
+                    .map_err(|error| PlayError::Internal(error.to_string()))?,
+            )
+            .map(SessionFrame::new)
+            .ok_or(PlayError::Late)?;
+        self.lane_when(When::At(start), out)
     }
 
     pub(super) fn pause(

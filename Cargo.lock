@@ -6315,12 +6315,17 @@ dependencies = [
 name = "kithara-sync-tests"
 version = "0.0.1-alpha5"
 dependencies = [
+ "delegate",
  "futures",
  "kithara",
+ "kithara-app",
+ "kithara-command",
  "kithara-integration-tests",
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
+ "num-traits",
+ "serde_json",
 ]
 
 [[package]]

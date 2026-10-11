@@ -1325,6 +1325,14 @@ fn an_epoch_adopted_before_it_is_published_reports_the_audio_thread() {
         slots: vec![SlotSnapshot {
             position: 1.5,
             duration: 162.0,
+            mark: Some(SlotMark {
+                session: frame(0),
+                lane: LaneFrame {
+                    segment: track.segment,
+                    frame: 0,
+                },
+                position: Duration::from_secs_f64(1.5),
+            }),
             ..SlotSnapshot::default()
         }],
         ..crate::DeckSnapshot::default()
@@ -2573,7 +2581,7 @@ fn an_unchanged_speed_target_still_cancels_a_ramp() {
 fn a_change_at_a_frame_is_refused_as_untimed(#[case] attached: bool) {
     let mut rig = rig();
     let (mut track, mut inbox) = if attached {
-        loaded(&mut rig, A, "track")
+        prepared_track()
     } else {
         (track(A), lane().1)
     };

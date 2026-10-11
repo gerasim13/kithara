@@ -10,13 +10,13 @@ use kithara_play::{
     Slot, Track, TrackCommand, TrackFactory, TrackReceipt, TrackSettings, TrackSettingsChange,
     TrackSnapshot, TrackStatus as PlayerTrackStatus,
 };
-use kithara_signal::{FrameCount, SessionFrame};
+use kithara_signal::{AudioSpec, FrameCount, SessionFrame};
 use kithara_test_utils::kithara;
 
 use super::*;
 use crate::{
     CrossfadeSettings, ItemEvent, PlaybackOrder, QueueConfig, QueueSettings, TrackSource,
-    queue::slots::Active, test_pools::TestPools, track::TrackRecord,
+    Transition, queue::slots::Active, test_pools::TestPools, track::TrackRecord,
 };
 
 struct SnapshotTrack(
@@ -122,8 +122,16 @@ impl Track<TestPools> for SnapshotTrack {
         panic!("terminal-event fixture does not project a render lane")
     }
 
-    fn planned_end(&self, _sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError> {
-        panic!("terminal-event fixture does not project a render lane")
+    fn planned_end(&self, sample_rate: NonZeroU32) -> Result<Option<SessionFrame>, PlayError> {
+        let Some(duration) = self.0.duration else {
+            return Ok(None);
+        };
+        let frames = AudioSpec::new(1, sample_rate)
+            .frames_for(duration)
+            .expect("fixture duration fits frames");
+        Ok(Some(SessionFrame::new(
+            i64::try_from(frames.get()).expect("fixture end fits i64"),
+        )))
     }
 
     fn speed_receipt(&mut self) -> Option<Settled> {
@@ -243,7 +251,7 @@ fn a_speed_change_on_the_current_track_withdraws_a_sent_automatic_transition(#[c
         to: incoming,
         bound: Bound::AtOrBefore(SessionFrame::new(512)),
         settings: CrossfadeSettings::default(),
-        transition: super::super::super::Transition::None,
+        transition: Transition::None,
         reason: crate::AdvanceReason::NaturalEof,
         playing: true,
         auto,
@@ -574,4 +582,118 @@ fn failed_playback_stopped_notification_carries_the_role() {
             ..
         }
     ));
+}
+
+// Ruling: CrossfadeArm → pending auto transition for the current item; an outgoing predecessor does not arm its successor — spec §4.4, §6 scenario 9.
+// Ruling: should_arm_crossfade → tick_deadlines creates one future transition; zero crossfade waits until the end, without pre-arming — spec §4.4, §6 scenario 9.
+#[kithara::test]
+#[case::remaining_equals_crossfade(162.0, 157.0, 5.0, None, true)]
+#[case::remaining_below_crossfade(162.0, 160.0, 5.0, None, true)]
+#[case::far_from_end(162.0, 100.0, 5.0, None, false)]
+#[case::already_armed_for_same_track(162.0, 160.0, 5.0, Some(true), false)]
+#[case::armed_for_different_track_still_arms(162.0, 160.0, 5.0, Some(false), true)]
+#[case::crossfade_zero_at_tail_no_pre_arm(162.0, 161.9, 0.0, None, false)]
+#[case::crossfade_zero_quiet_middle(162.0, 161.0, 0.0, None, false)]
+#[case::zero_position_rejected(162.0, 0.0, 5.0, None, false)]
+#[case::zero_duration_rejected(0.0, 10.0, 5.0, None, false)]
+fn should_arm_crossfade_cases(
+    #[case] duration: f64,
+    #[case] position: f64,
+    #[case] crossfade: f32,
+    #[case] armed_for_current: Option<bool>,
+    #[case] expected: bool,
+) {
+    let (mut queue, outgoing, current) = selected_second();
+    let rate = NonZeroU32::new(10_000).expect("fixture sample rate");
+    let spec = AudioSpec::new(1, rate);
+    let now = SessionFrame::new(
+        i64::try_from(
+            spec.frames_for(Duration::from_secs_f64(position))
+                .expect("fixture position")
+                .get(),
+        )
+        .expect("fixture clock"),
+    );
+    queue.deck.mixer.sample_rate = rate.get();
+    queue.clock = Some((now, FrameCount::new(0)));
+    queue.config.action_at_item_end = ActionAtItemEnd::Advance;
+    let settings = CrossfadeSettings {
+        duration: crossfade,
+        ..CrossfadeSettings::default()
+    };
+    queue.config.settings = QueueSettings::builder().crossfade(settings).build();
+    let track = queue
+        .active
+        .iter_mut()
+        .find(|active| active.item == current)
+        .expect("current fixture track");
+    track.track.0.position = Duration::from_secs_f64(position);
+    track.track.0.duration = Some(Duration::from_secs_f64(duration));
+    let incoming = TrackId::allocate();
+    queue.tracks.records_mut().push(TrackRecord::new(
+        incoming,
+        "next".to_owned(),
+        TrackSource::from("https://example.com/next.mp3"),
+    ));
+    let mut track = queue
+        .config
+        .factory
+        .track(PlayerConfig {
+            item: incoming,
+            slot: Some(Slot::new(2)),
+            settings: TrackSettings::default(),
+        })
+        .expect("pending fixture track");
+    track.0.status = PlayerTrackStatus::Loading;
+    queue.active.push(Active {
+        item: incoming,
+        slot: Slot::new(2),
+        track,
+        role: Role::Preloaded,
+        load: Some(crate::queue::slots::LoadState::Opening(fixture_seq())),
+    });
+    let track_ids = queue.track_ids();
+    queue.navigation.select(current, &track_ids);
+    if armed_for_current == Some(true) {
+        queue.target = Some(crate::queue::types::Target {
+            to: incoming,
+            bound: queue
+                .auto_bound(settings)
+                .expect("auto bound")
+                .expect("known duration"),
+            settings,
+            transition: Transition::Crossfade,
+            reason: crate::AdvanceReason::NaturalEof,
+            playing: true,
+            auto: true,
+            stale: None,
+            retry: None,
+            repeat: None,
+            chained: false,
+        });
+    } else if armed_for_current == Some(false) {
+        assert!(
+            queue
+                .active
+                .iter()
+                .any(|active| active.item == outgoing && active.role == Role::Outgoing)
+        );
+    }
+    let before = queue.target.map(|target| target.to);
+    let (mut deck, _deck_inbox) = channel(ChannelConfig::builder().build());
+    let (mut dispatcher, _dispatcher_inbox) = channel(ChannelConfig::builder().build());
+    queue
+        .tick_deadlines(now, None, &mut Outbox::new(&mut deck, &mut dispatcher))
+        .expect("automatic transition admission");
+    assert_eq!(before.is_none() && queue.target.is_some(), expected);
+    if expected {
+        let target = queue.target.expect("one auto transition");
+        assert_eq!(target.to, incoming);
+        assert!(target.auto);
+        let sent = target.bound;
+        queue
+            .tick_deadlines(now, None, &mut Outbox::new(&mut deck, &mut dispatcher))
+            .expect("repeat deadline tick");
+        assert_eq!(queue.target.expect("same transition").bound, sent);
+    }
 }
