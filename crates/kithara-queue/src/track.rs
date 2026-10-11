@@ -620,6 +620,60 @@ mod tests {
         assert!(token.is_cancelled(), "dropping the record aborts the load");
     }
 
+    #[kithara::test]
+    fn begin_replaces_cancelled_unwinding_attempt() {
+        let mut tracks = tracks_with(TrackId(1));
+        let first = begin(&mut tracks, TrackId(1));
+        let old_watch = tracks.records()[0]
+            .load
+            .as_ref()
+            .expect("live load")
+            .watch()
+            .clone();
+        tracks.set_status(TrackId(1), TrackStatus::Cancelled);
+        assert!(first.is_cancelled(), "Cancelled must abort the load");
+        let second = begin(&mut tracks, TrackId(1));
+        tracks.apply_report(LoadReport::Slow {
+            id: TrackId(1),
+            watch: old_watch,
+        });
+        assert_eq!(
+            status(&tracks),
+            TrackStatus::Loading,
+            "replaced ticket loses claim"
+        );
+        let new_watch = tracks.records()[0]
+            .load
+            .as_ref()
+            .expect("replacement load")
+            .watch()
+            .clone();
+        tracks.apply_report(LoadReport::Slow {
+            id: TrackId(1),
+            watch: new_watch,
+        });
+        assert_eq!(status(&tracks), TrackStatus::Slow);
+        assert!(!second.is_cancelled());
+    }
+
+    #[kithara::test]
+    fn an_unselected_attempt_is_not_asked_again() {
+        let mut tracks = tracks_with(TrackId(1));
+        begin(&mut tracks, TrackId(1));
+        let refused = kithara_play::LoadRefusal::Open(kithara_decode::DecodeError::Io {
+            source: std::io::Error::other(kithara_net::NetError::Network(
+                "connection refused".to_string(),
+            )),
+        });
+        let error = QueueError::Resource(refused.to_string());
+        assert!(!tracks.refused(
+            TrackId(1),
+            &error,
+            crate::loader::asks_again(&refused),
+            false
+        ));
+    }
+
     /// The caller's cancel reached the load's token while its open's answer
     /// was on its way to the queue. The load is over, and its track says so
     /// instead of loading forever.

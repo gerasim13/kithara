@@ -7,12 +7,13 @@ use super::*;
 #[kithara::test]
 fn realtime_config_preserves_output_block_default_and_allows_override() {
     let default = HostConfig::<TestPools>::builder().build();
-    let HostConfig::Realtime {
-        output_block_frames,
-        ..
-    } = default
-    else {
-        panic!("default Host config must be realtime");
+    let output_block_frames = match default {
+        HostConfig::Realtime {
+            output_block_frames,
+            ..
+        } => output_block_frames,
+        #[cfg(feature = "offline")]
+        HostConfig::Offline { .. } => panic!("default Host config must be realtime"),
     };
     assert_eq!(output_block_frames, None);
 
@@ -20,12 +21,13 @@ fn realtime_config_preserves_output_block_default_and_allows_override() {
     let configured = HostConfig::<TestPools>::builder()
         .output_block_frames(frames)
         .build();
-    let HostConfig::Realtime {
-        output_block_frames,
-        ..
-    } = configured
-    else {
-        panic!("realtime builder must create realtime config");
+    let output_block_frames = match configured {
+        HostConfig::Realtime {
+            output_block_frames,
+            ..
+        } => output_block_frames,
+        #[cfg(feature = "offline")]
+        HostConfig::Offline { .. } => panic!("realtime builder must create realtime config"),
     };
     assert_eq!(output_block_frames, Some(frames));
 }

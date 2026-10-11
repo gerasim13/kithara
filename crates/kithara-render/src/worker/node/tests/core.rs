@@ -1,74 +1,20 @@
 pub(super) use std::num::{NonZeroU32, NonZeroUsize};
 
-pub(super) use kithara_audio::{
-    AudioSource, Fetch, SeekOutcome, SourceEnd, TrackStep, WaitingReason,
-};
-pub(super) use kithara_command::{Batch, ChannelConfig, Sender, When, channel};
-pub(super) use kithara_effects::EffectDrain;
-pub(super) use kithara_platform::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
-pub(super) use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId};
+pub(super) use kithara_audio::{Fetch, SourceEnd, TrackStep, WaitingReason};
+pub(super) use kithara_command::{Batch, Sender, When};
+pub(super) use kithara_platform::{sync::Arc, time::Duration};
+pub(super) use kithara_signal::{AudioChunk, AudioSpec, SegmentId};
 pub(super) use kithara_test_fixtures::unit_fixtures::eq_silence as node_silence;
 pub(super) use kithara_test_utils::kithara;
 pub(super) use kithara_worker::{Task, TickResult};
 
 use super::*;
 pub(super) use crate::{
-    LaneCommand, LaneProtocol, WarpSource,
+    LaneCommand, LaneProtocol,
+    mock::prepared_node,
     test_pools::{Pools, TestPools, pools},
-    worker::{
-        EngineLoad, PcmReceiver,
-        packet_tests::{PacketRing, chunk},
-    },
+    worker::{EngineLoad, packet_tests::chunk},
 };
-
-pub(in crate::worker) async fn prepared_node<T>(
-    source: T,
-    capacity: usize,
-    preload: usize,
-) -> (DecoderNode<T, TestPools>, PcmReceiver, Sender<LaneProtocol>)
-where
-    T: AudioSource<Chunk = AudioChunk>,
-{
-    let pools = pools();
-    let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
-    let (lane, inbox) = channel(ChannelConfig::builder().build());
-    let config = kithara_warp::WarpConfig::builder()
-        .source_block_frames(NonZeroUsize::new(65_536).expect("source block"))
-        .build();
-    let source = WarpSource::new(
-        source,
-        kithara_warp::Warp::new((), &config).renderer(spec, pools.clone()),
-        Vec::new(),
-        EffectDrain::new(0, &pools).expect("drain"),
-        spec,
-        pools.clone(),
-        crate::LaneSetup {
-            inbox,
-            preload_chunks: NonZeroUsize::new(preload).expect("preload"),
-            declick: crate::consts::DEFAULT_DECLICK,
-        },
-    );
-    let (receiver, producer) = PacketRing::new(spec, Duration::from_secs(1), capacity).into_ends();
-    (
-        DecoderNode::new(
-            source,
-            producer,
-            None,
-            AudioChunkInfo {
-                spec,
-                ..AudioChunkInfo::default()
-            },
-            None,
-            pools,
-            None,
-        ),
-        receiver,
-        lane,
-    )
-}
 
 pub(in crate::worker) fn empty_chunk(_pools: &Pools) -> AudioChunk {
     chunk(
@@ -80,39 +26,7 @@ pub(in crate::worker) fn empty_chunk(_pools: &Pools) -> AudioChunk {
     )
 }
 
-pub(in crate::worker) struct ScriptedSource {
-    pub(in crate::worker) steps: std::collections::VecDeque<TrackStep<AudioChunk>>,
-    commits: Arc<Mutex<Vec<SourceEnd>>>,
-}
-
-impl ScriptedSource {
-    pub(in crate::worker) fn new(steps: impl IntoIterator<Item = TrackStep<AudioChunk>>) -> Self {
-        Self {
-            steps: steps.into_iter().collect(),
-            commits: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-}
-
-impl AudioSource for ScriptedSource {
-    type Chunk = AudioChunk;
-    fn seek(&mut self, target: Duration) -> Result<SeekOutcome, kithara_audio::AudioReadError> {
-        Ok(SeekOutcome::Landed {
-            target,
-            landed_at: target,
-        })
-    }
-    fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
-    fn host_sample_rate(&self) -> Option<NonZeroU32> {
-        None
-    }
-    fn commit_source_end(&mut self, end: SourceEnd, _meta: AudioChunkInfo) {
-        self.commits.lock().push(end);
-    }
-    fn step_track(&mut self) -> TrackStep<AudioChunk> {
-        self.steps.pop_front().unwrap_or(TrackStep::Eof)
-    }
-}
+pub(super) use crate::mock::ScriptedSource;
 
 pub(super) fn produced() -> TrackStep<AudioChunk> {
     TrackStep::Produced(Fetch::data(empty_chunk(&pools())))

@@ -1,4 +1,6 @@
 mod core;
+#[cfg(any(test, feature = "mock"))]
+pub(crate) mod mock;
 mod packet;
 
 pub(in crate::worker) use core::PcmProducer;

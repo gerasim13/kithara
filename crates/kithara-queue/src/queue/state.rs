@@ -242,7 +242,7 @@ pub(crate) mod tests {
 
     use super::{super::QueueCommand, *};
     use crate::{
-        QueueSettingsChange,
+        QueueError, QueueSettingsChange,
         event::{QueueEvent, QueueRepeatMode, TrackStatus},
         navigation::{ActionAtItemEnd, PlaybackOrder, RepeatMode},
         test_pools::{TestPools, pools},
@@ -403,7 +403,7 @@ pub(crate) mod tests {
         drop(queue);
         assert!(matches!(
             control.append("https://example.com/b.mp3"),
-            Err(crate::QueueError::Play(PlayError::Closed))
+            Err(QueueError::Play(PlayError::Closed))
         ));
     }
 
@@ -611,5 +611,269 @@ pub(crate) mod tests {
     fn select_phase_idle_after_construction() {
         let (queue, _audio_thread) = make_queue();
         assert!(queue.target.is_none());
+    }
+
+    fn armed_queue(id: TrackId) -> (Queue<TestPools>, DeckRig<TestPools>, Seq, Seq) {
+        let (mut queue, mut rig) = make_queue();
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Append {
+                id,
+                source: "/kithara/missing-track.wav".into(),
+            },
+        )
+        .expect("append transition fixture");
+        let seq = apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Select {
+                id,
+                transition: super::super::Transition::None,
+            },
+        )
+        .expect("select queues its load")
+        .expect("load sequence");
+        let index = queue.incoming_index(id).expect("incoming track");
+        queue.active.get_mut(index).expect("active incoming").role =
+            Role::Incoming { batch: Some(seq) };
+        let other = TrackId(id.0 + 1);
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Append {
+                id: other,
+                source: "/kithara/other-missing-track.wav".into(),
+            },
+        )
+        .expect("append unrelated track");
+        let unrelated = with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+            queue.load_track(other, Role::Preloaded, Some(pass.output), out)
+        })
+        .expect("preload unrelated track")
+        .expect("unrelated load sequence");
+        assert_ne!(seq, unrelated);
+        (queue, rig, seq, unrelated)
+    }
+
+    #[kithara::test]
+    fn atomic_track_id_disarmed_loads_disarmed() {
+        let (queue, _rig) = make_queue();
+        assert_eq!(queue.target.map(|target| target.to), None);
+    }
+
+    #[kithara::test(tokio)]
+    async fn atomic_track_id_take_if_matches_only_disarms_matching_track() {
+        let (mut queue, _rig, seq, unrelated) = armed_queue(TrackId(7));
+        assert_eq!(queue.target.map(|target| target.to), Some(TrackId(7)));
+        queue
+            .transition_applied(unrelated, SessionFrame::new(128))
+            .expect("stale receipt");
+        assert_eq!(queue.target.map(|target| target.to), Some(TrackId(7)));
+        assert_eq!(queue.current, None);
+        queue
+            .transition_applied(seq, SessionFrame::new(128))
+            .expect("matching receipt");
+        assert_eq!(queue.current, Some(TrackId(7)));
+        assert!(queue.target.is_none());
+    }
+
+    #[kithara::test]
+    fn atomic_cached_position_unknown_loads_none() {
+        let (queue, _rig) = make_queue();
+        assert_eq!(queue.control().position_seconds(), None);
+    }
+
+    #[kithara::test]
+    fn atomic_cached_position_round_trip_zero() {
+        let (mut queue, mut rig) = make_queue();
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Seek { to: Position::ZERO },
+        )
+        .expect("seek to zero");
+        queue.publish();
+        assert_eq!(queue.control().position_seconds(), Some(0.0));
+    }
+
+    #[kithara::test(tokio)]
+    async fn crossfade_arm_is_armed_for_matches_track() {
+        let (queue, _rig, _, _) = armed_queue(TrackId(2));
+        assert!(queue.target.is_some_and(|target| target.to == TrackId(2)));
+        assert!(!queue.target.is_some_and(|target| target.to == TrackId(3)));
+    }
+
+    #[kithara::test]
+    fn cached_position_round_trips_through_queue() {
+        let (mut queue, mut rig) = make_queue();
+        apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Seek {
+                to: Position::try_from_secs_f64(12.5).expect("finite position"),
+            },
+        )
+        .expect("seek to held position");
+        queue.publish();
+        assert_eq!(queue.control().position_seconds(), Some(12.5));
+    }
+
+    #[kithara::test]
+    fn crossfade_arm_disarmed_after_construction() {
+        let (queue, _rig) = make_queue();
+        assert_eq!(queue.target.map(|target| target.to), None);
+    }
+
+    #[kithara::test(tokio)]
+    async fn crossfade_arm_take_only_disarms_matching_track() {
+        let (mut queue, _rig, seq, unrelated) = armed_queue(TrackId(9));
+        queue
+            .transition_applied(unrelated, SessionFrame::new(128))
+            .expect("unrelated receipt");
+        assert_eq!(queue.target.map(|target| target.to), Some(TrackId(9)));
+        assert_eq!(queue.current, None);
+        queue
+            .transition_applied(seq, SessionFrame::new(128))
+            .expect("matching receipt");
+        assert_eq!(queue.current, Some(TrackId(9)));
+        assert!(queue.target.is_none());
+    }
+
+    #[kithara::test]
+    fn the_configured_prefetch_lead_reaches_the_player() {
+        let mut config = queue_config();
+        config.preload_lead = Duration::from_secs(8);
+        let queue = Queue::new(config);
+        assert!((queue.config.preload_lead.as_secs_f32() - 8.0).abs() < f32::EPSILON);
+    }
+
+    #[kithara::test(native)]
+    fn queue_hands_its_session_the_resident_players_sync_attachment() {
+        use kithara_host::{DeckId, Host, HostConfig, HostOwner};
+
+        let expected = DeckId::allocate().expect("fixture deck id");
+        let queue = Queue::new(queue_config());
+        let control = queue.control();
+        let append = control
+            .postbox
+            .post(QueueCommand::Append {
+                id: TrackId(42),
+                source: "https://example.com/attachment.mp3".into(),
+            })
+            .expect("post to the queue being registered");
+        let _host = Host::layered(HostConfig::offline(pools()).build(), move |mut core| {
+            core.register(expected, Box::new(queue))
+                .expect("register the queue");
+            answered(append).expect("registration drains the same queue's control");
+            let mut attachments = Vec::new();
+            core.each_deck(&mut |id, deck, _, _| {
+                attachments.push(id);
+                assert_eq!(deck.tracks.records().len(), 1);
+                assert_eq!(deck.tracks.records()[0].id, TrackId(42));
+            });
+            assert_eq!(attachments, [expected]);
+            core.with_deck(expected, &mut |deck, _, _| {
+                assert_eq!(deck.tracks.records()[0].id, TrackId(42));
+                assert_eq!(control.tracks().len(), 1);
+            })
+            .expect("the exact registration identity routes back to the same queue");
+            core
+        })
+        .expect("offline session attachment");
+    }
+
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    fn answered(
+        ticket: kithara_command::Ticket<QueueError>,
+    ) -> Result<(), kithara_command::Refused<QueueError>> {
+        let answer = std::thread::spawn(move || ticket.wait());
+        while !answer.is_finished() {
+            hang_park!(|remaining: Duration| {
+                thread::sleep(remaining.min(Duration::from_millis(1)));
+            });
+        }
+        let result = answer.join().expect("ticket answer worker must not panic");
+        hang_reset!();
+        result
+    }
+
+    #[kithara::test]
+    fn queue_control_rejects_mutation_after_close() {
+        let (mut queue, mut rig) = make_queue();
+        let control = queue.control();
+        let close = control
+            .postbox
+            .post(QueueCommand::Close)
+            .expect("post close");
+        with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+            HostedDeck::drain(queue, pass, out);
+        });
+        answered(close).expect("unstarted fixture must close");
+        assert!(queue.shutdown.is_cancelled());
+        let append = control
+            .postbox
+            .post(QueueCommand::Append {
+                id: TrackId(1),
+                source: "https://example.com/a.mp3".into(),
+            })
+            .expect("owner still holds the closed queue's mailbox");
+        with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+            HostedDeck::drain(queue, pass, out);
+        });
+        assert!(matches!(
+            answered(append),
+            Err(kithara_command::Refused::Owner(QueueError::Play(
+                PlayError::Closed
+            )))
+        ));
+        assert!(control.is_empty());
+        assert!(queue.tracks.records().is_empty());
+    }
+
+    #[kithara::test]
+    fn close_waits_for_an_admitted_queue_mutation() {
+        let (mut queue, mut rig) = make_queue();
+        let control = queue.control();
+        let mutation = control
+            .postbox
+            .post(QueueCommand::Append {
+                id: TrackId(1),
+                source: "https://example.com/a.mp3".into(),
+            })
+            .expect("admit mutation");
+        let mut admitted = queue.mailbox.drain();
+        let post = admitted.next().expect("one admitted mutation");
+        assert!(admitted.next().is_none());
+        let close = control
+            .postbox
+            .post(QueueCommand::Close)
+            .expect("post close after admission");
+        assert!(mutation.seq() < close.seq());
+        assert!(
+            !queue.shutdown.is_cancelled(),
+            "close cannot overtake the admitted mutation"
+        );
+        assert!(queue.tracks.records().is_empty());
+
+        let result = with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+            queue.apply_command(post.command, Some(pass.output), out)
+        });
+        assert!(result.is_ok());
+        post.answer.answer(result.map(|_| ()));
+        answered(mutation).expect("admitted mutation remains open");
+        assert_eq!(queue.tracks.records().len(), 1);
+        assert_eq!(queue.tracks.records()[0].id, TrackId(1));
+        assert!(
+            !queue.shutdown.is_cancelled(),
+            "mutation completes before close"
+        );
+
+        with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+            HostedDeck::drain(queue, pass, out);
+        });
+        answered(close).expect("unstarted fixture must close");
+        assert!(queue.shutdown.is_cancelled());
+        assert!(matches!(queue.ensure_open(), Err(PlayError::Closed)));
     }
 }

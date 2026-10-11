@@ -1,4 +1,9 @@
 use super::*;
+pub(super) use crate::mock::{
+    Command, TestState, ask, constant_fixture, deck_snapshot, fixture_command, fixture_pass,
+    mix_registration, occupied_slots, play_fixture, probe_owner, registration, render_block,
+    test_state,
+};
 
 #[derive(Default)]
 pub(super) struct RouteLossProbe {
@@ -19,74 +24,6 @@ thread_local! {
 
 pub(super) fn route_loss<R>(f: impl FnOnce(&RouteLossProbe) -> R) -> R {
     ROUTE_LOSS.with(f)
-}
-
-pub(super) type Command = HostCommand<TestPools, Queue<TestPools>>;
-
-pub(super) struct Inbox(
-    pub(super) kithara_platform::sync::Mutex<kithara_platform::sync::mpsc::Sender<DeckMsg>>,
-);
-impl DeckInbox for Inbox {
-    fn post(&self, message: DeckMsg) -> Result<(), PlayError> {
-        self.0.lock().send(message).map_err(|_| PlayError::Closed)
-    }
-}
-
-pub(super) struct TestState {
-    pub(super) owner: HostCore<TestPools, Queue<TestPools>>,
-    pub(super) messages: kithara_platform::sync::mpsc::Receiver<DeckMsg>,
-}
-impl TestState {
-    pub(super) const DEFAULT_SAMPLE_RATE: u32 = 44_100;
-}
-impl std::ops::Deref for TestState {
-    type Target = SessionState<SessionStream, TestPools>;
-    fn deref(&self) -> &Self::Target {
-        &self.owner.session
-    }
-}
-impl std::ops::DerefMut for TestState {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.owner.session
-    }
-}
-
-pub(super) fn test_state(
-    start: impl FnMut(&mut FirewheelContext, u32) -> Result<SessionStream, String> + Send + 'static,
-) -> TestState {
-    let state = crate::session::tests::graph::state_for(
-        NonZeroU32::new(TestState::DEFAULT_SAMPLE_RATE).expect("fixture rate"),
-        start,
-    );
-    let (tx, messages) = kithara_platform::sync::mpsc::channel();
-    let inbox = Arc::new(Inbox(kithara_platform::sync::Mutex::new(tx)));
-    TestState {
-        owner: HostCore::new(state, inbox),
-        messages,
-    }
-}
-
-pub(super) fn ask(state: &mut TestState, command: Command) -> Result<(), PlayError> {
-    state.owner.begin_pass();
-    for message in state.messages.try_iter() {
-        message.run(&mut state.owner);
-    }
-    state.owner.apply(command)?;
-    state.owner.pass();
-    state.owner.begin_pass();
-    state.owner.pass();
-    Ok(())
-}
-
-pub(super) fn render_block(state: &mut TestState, clock: u64) -> Vec<f32> {
-    let mut block = vec![0.0; 1024];
-    let SessionStream::Offline(stream) = state.stream.as_mut().expect("stream") else {
-        panic!("offline fixture")
-    };
-    stream
-        .render(clock, 512, &mut block)
-        .expect("offline render");
-    block
 }
 
 pub(super) fn render_left(state: &mut TestState, clock: &mut u64, blocks: usize) -> Vec<f32> {
@@ -159,10 +96,6 @@ pub(super) fn start_route_loss_stream(
     )
     .map(|stream| SessionStream::Offline(Box::new(stream)))
     .map_err(|error| error.to_string())
-}
-
-pub(super) fn registration(grid_id: BeatGridId) -> Command {
-    configured_registration(grid_id, None, None)
 }
 
 pub(super) fn configured_registration(

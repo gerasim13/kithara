@@ -144,6 +144,19 @@ mod tests {
         assert_eq!(cfg.preload_lead, Duration::from_millis(3_500));
         assert!(!cfg.settings.gapless());
     }
+
+    #[kithara::test]
+    fn debug_output_excludes_injected_fields() {
+        let config = config();
+        let rendered = format!("{config:#?}");
+
+        assert!(!rendered.contains("    grid_id:"));
+        assert!(!rendered.contains("    cancel:"));
+        assert!(!rendered.contains("    abr:"));
+        assert!(!rendered.contains("    factory:"));
+        assert!(!rendered.contains("    prep:"));
+        assert!(!rendered.contains("    store:"));
+    }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -179,5 +192,37 @@ mod document_tests {
             .expect_err("a typo must not be silently ignored");
 
         assert!(error.to_string().contains("concurrent_load_cap"), "{error}");
+    }
+
+    #[kithara::test(native)]
+    #[kithara::hang_watchdog(timeout = kithara_platform::time::Duration::from_secs(1))]
+    fn zero_event_bus_capacity_is_rejected() {
+        hang_tick!();
+        let error = serde_yaml_ng::from_str::<QueueConfigPatch>("event_bus_capacity: 0\n")
+            .expect_err("a document cannot construct a zero-capacity event bus");
+        hang_reset!();
+
+        assert!(error.to_string().contains("event_bus_capacity"), "{error}");
+        assert!(
+            !error.to_string().contains("unknown field"),
+            "zero capacity must fail validation, not disappear from the document schema: {error}"
+        );
+    }
+
+    #[kithara::test(native)]
+    fn a_patch_writes_only_the_crossfade_it_names() {
+        let patch: QueueConfigPatch =
+            serde_yaml_ng::from_str("settings:\n  crossfade:\n    duration: 2.0\n")
+                .expect("the document types");
+        let mut config = config();
+        config.track = kithara_play::TrackSettings::builder().speed(2.5).build();
+
+        config.apply(patch).expect("valid queue document patch");
+
+        assert!((config.settings.crossfade().duration - 2.0).abs() < f32::EPSILON);
+        assert!(
+            (config.track.speed() - 2.5).abs() < f32::EPSILON,
+            "a silent field must keep its seeded value, not reset to default"
+        );
     }
 }

@@ -9,6 +9,8 @@ mod navigation;
 mod queue;
 #[cfg(test)]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
+#[cfg(all(not(target_arch = "wasm32"), any(test, feature = "mock")))]
+pub use queue::mock;
 mod track;
 
 pub use config::{QueueConfig, QueueConfigPatch, QueueSettings, QueueSettingsChange};

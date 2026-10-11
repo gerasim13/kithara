@@ -47,6 +47,162 @@ fn settle_deck(host: &mut Host, id: kithara_host::DeckId, seq: Seq, frame: i64) 
 }
 
 #[kithara::test]
+fn registration_projects_the_canonical_member_grid() {
+    let (mut host, clock) = host();
+    clock.axis(1, 0, 0.0, 120.0, 48_000);
+    host.begin_pass();
+    let root = host.transport().expect("canonical Host transport");
+    let model = super::fixtures::grid(24_000, 0, Some((4, 0)), 960_000);
+    let (deck, control, _, load) = super::fixtures::loaded(model.clone());
+    let (id, probe) = register(&mut host, deck, &control);
+    let synced = host
+        .apply(LinkedHostCommand::Sync { deck: id, on: true })
+        .expect("synchronize canonical grid")
+        .expect("grid cue sequence");
+    assert_eq!(
+        control.commands(),
+        vec![
+            (
+                synced,
+                Command::Speed(SpeedCurve::Constant(1.0), When::Next)
+            ),
+            (synced, Command::Seek(position(0))),
+        ]
+    );
+    settle_deck(&mut host, id, synced, 0);
+    control.clear();
+    let registered = probe.read(|observation| observation.snapshot.clone());
+    let identity = (registered.as_ref().item, registered.as_ref().slot);
+    let canonical = format!("{:?}", probe.trajectory());
+    let mut members = Vec::new();
+    host.each_deck(&mut |held, _, _, _| members.push(held));
+    assert_eq!(members, vec![id]);
+
+    assert!(matches!(
+        host.apply(LinkedHostCommand::Grid {
+            deck: id,
+            answer: crate::GridAnswer {
+                item: identity.0,
+                load,
+                model: Ok(model.clone()),
+            },
+        }),
+        Ok(None)
+    ));
+    assert!(control.commands().is_empty());
+
+    probe.send(TrackCommand::Play {
+        at: When::At(SessionFrame::new(96_000)),
+    });
+    host.with_deck(id, &mut |deck, out, pass| deck.drain(pass, out))
+        .expect("start registered canonical grid");
+    let start = control.commands();
+    assert_eq!(start.len(), 1);
+    assert_eq!(
+        start[0].1,
+        Command::Play(When::At(SessionFrame::new(96_000)))
+    );
+    settle_deck(&mut host, id, start[0].0, 96_000);
+    probe.read(|observation| {
+        assert_eq!(
+            observation.snapshot.as_ref().status,
+            kithara_play::TrackStatus::Playing {
+                since: SessionFrame::new(96_000)
+            }
+        );
+        assert_eq!(
+            (
+                observation.snapshot.as_ref().item,
+                observation.snapshot.as_ref().slot
+            ),
+            identity
+        );
+    });
+    assert_eq!(format!("{:?}", probe.trajectory()), canonical);
+    assert_eq!(host.transport(), Some(root));
+
+    control.clear();
+    assert!(matches!(
+        host.apply(LinkedHostCommand::Sync {
+            deck: id,
+            on: false
+        }),
+        Ok(None)
+    ));
+    probe.read(|observation| {
+        assert_eq!(observation.snapshot.sync, SyncStatus::Off);
+        assert_eq!(
+            (
+                observation.snapshot.as_ref().item,
+                observation.snapshot.as_ref().slot
+            ),
+            identity
+        );
+        assert_eq!(
+            observation.snapshot.as_ref().status,
+            kithara_play::TrackStatus::Playing {
+                since: SessionFrame::new(96_000)
+            }
+        );
+    });
+    members.clear();
+    host.each_deck(&mut |held, _, _, _| members.push(held));
+    assert_eq!(members, vec![id]);
+    assert_eq!(host.transport(), Some(root));
+    assert!(control.commands().is_empty());
+    clock.at(96_000);
+    host.begin_pass();
+    let enabled = host
+        .apply(LinkedHostCommand::Sync { deck: id, on: true })
+        .expect("retained canonical grid")
+        .expect("retained grid alignment sequence");
+    let alignment = control.commands();
+    assert_eq!(alignment.len(), 2);
+    assert_eq!(
+        alignment[0].1,
+        Command::Speed(
+            SpeedCurve::Constant(1.0),
+            When::At(SessionFrame::new(96_128))
+        )
+    );
+    assert_eq!(
+        alignment[1],
+        (
+            enabled,
+            Command::Jump(position(128), SessionFrame::new(96_128))
+        )
+    );
+    assert_ne!(alignment[0].0, enabled);
+    settle_deck(&mut host, id, alignment[0].0, 96_128);
+    settle_deck(&mut host, id, enabled, 96_128);
+    control.clear();
+    assert!(matches!(
+        host.apply(LinkedHostCommand::Grid {
+            deck: id,
+            answer: crate::GridAnswer {
+                item: identity.0,
+                load,
+                model: Ok(model)
+            },
+        }),
+        Ok(None)
+    ));
+    assert!(control.commands().is_empty());
+    probe.read(|observation| {
+        assert_eq!(observation.snapshot.sync, SyncStatus::On);
+        assert_eq!(
+            (
+                observation.snapshot.as_ref().item,
+                observation.snapshot.as_ref().slot
+            ),
+            identity
+        );
+    });
+    assert_eq!(format!("{:?}", probe.trajectory()), canonical);
+    assert_eq!(host.transport(), Some(root));
+}
+
+#[kithara::test]
 fn route_axis_reanchors_at_the_observed_stop_beat() {
     let (mut host, clock) = host();
     let (deck, control) = new_deck(trajectory(120.0, 4));

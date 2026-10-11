@@ -494,3 +494,105 @@ fn create_session_output<T, S>(state: &mut SessionState<T, S>) -> Result<(), Ses
     );
     Ok(())
 }
+
+#[cfg(all(
+    test,
+    feature = "offline",
+    feature = "mock",
+    not(target_arch = "wasm32")
+))]
+mod tests {
+    use std::num::NonZeroU16;
+
+    use kithara_config::Config;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        HostCommand, HostOwner,
+        mock::{TestState, ask, registration, test_state},
+    };
+
+    fn canonical_decks(state: &mut TestState) -> Vec<BeatGridId> {
+        let mut decks = Vec::new();
+        state.owner.each_deck(&mut |id, _, _, _| decks.push(id));
+        decks
+    }
+
+    #[kithara::test]
+    fn root_view_publishes_the_canonical_topology() {
+        let mut state = test_state(crate::session::offline::mock::start);
+        let id = BeatGridId::allocate().expect("fixture deck id");
+        assert!(matches!(ask(&mut state, registration(id)), Ok(())));
+
+        let canonical = canonical_decks(&mut state);
+        let published = state.root_view.root.load();
+        assert_eq!(published.decks.as_ref(), canonical.as_slice());
+        assert_eq!(published.grid, *state.root.grid());
+        assert_eq!(published.decks.len(), 1);
+        assert_eq!(published.decks[0], id);
+    }
+
+    #[kithara::test]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    fn exhausted_player_identity_preserves_the_canonical_root() {
+        hang_tick!();
+        let mut state = test_state(crate::session::offline::mock::start);
+        state.channel_config = ScopedConfig::builder().scopes(NonZeroU16::MIN).build();
+        let first = BeatGridId::allocate().expect("first fixture deck id");
+        assert!(matches!(ask(&mut state, registration(first)), Ok(())));
+        hang_reset!();
+        let before = state.root_view.root.load_full();
+        let id = BeatGridId::allocate().expect("refused fixture deck id");
+
+        assert!(matches!(
+            ask(&mut state, registration(id)),
+            Err(PlayError::Internal(reason)) if reason == kithara_command::OpenError::Exhausted.to_string()
+        ));
+        assert_eq!(state.channel_config.values().scopes, NonZeroU16::MIN);
+        assert_eq!(state.deck_nodes.len(), 1);
+        assert!(!state.deck_nodes.iter().any(|deck| deck.id == id));
+        assert_eq!(canonical_decks(&mut state), vec![first]);
+        let after = state.root_view.root.load_full();
+        assert_eq!(after.decks, before.decks);
+        assert_eq!(after.grid, before.grid);
+        assert!(state.reserved_session_grid.is_some());
+    }
+
+    #[kithara::test]
+    fn owner_side_topology_commands_resolve_the_base_when_executed() {
+        let mut state = test_state(crate::session::offline::mock::start);
+        state.channel_config = ScopedConfig::builder()
+            .scopes(NonZeroU16::new(2).expect("two decks"))
+            .build();
+        let first = BeatGridId::allocate().expect("first fixture deck id");
+        let second = BeatGridId::allocate().expect("second fixture deck id");
+        assert!(matches!(ask(&mut state, registration(first)), Ok(())));
+        assert!(matches!(ask(&mut state, registration(second)), Ok(())));
+        let before = state.root_view.root.load_full();
+
+        assert!(matches!(ask(&mut state, HostCommand::Close(first)), Ok(())));
+        let SessionStream::Offline(stream) = state.stream.as_mut().expect("remaining deck runs")
+        else {
+            panic!("offline fixture")
+        };
+        stream
+            .render(0, 512, &mut [0.0; 1024])
+            .expect("retire first scope");
+        state.owner.begin_pass();
+        state.owner.pass();
+        let after_first = state.root_view.root.load_full();
+        assert_ne!(after_first.decks, before.decks);
+        assert_eq!(after_first.decks.as_ref(), &[second]);
+
+        assert!(matches!(
+            ask(&mut state, HostCommand::Close(second)),
+            Ok(())
+        ));
+        let canonical = canonical_decks(&mut state);
+        let after_second = state.root_view.root.load_full();
+        assert_ne!(after_second.decks, after_first.decks);
+        assert!(after_second.decks.is_empty());
+        assert_eq!(after_second.decks.as_ref(), canonical.as_slice());
+    }
+}

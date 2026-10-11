@@ -3,10 +3,7 @@ pub(super) use firewheel::{
     mask::{ConnectedMask, ConstantMask, SilenceMask},
     node::{ProcStore, StreamStatus},
 };
-pub(super) use kithara_command::{
-    Batch, ChannelConfig, Outcome, Port, Rejection, ScopedConfig, ScopedInbox, ScopedReceipt,
-    ScopedSender, When, scoped_channel,
-};
+pub(super) use kithara_command::{Batch, Outcome, Port, Rejection, When};
 pub(super) use kithara_effects::{
     GainDb,
     eq::{EqBandConfig, EqConfig, EqLayout},
@@ -22,9 +19,7 @@ pub(super) use num_traits::{ToPrimitive, cast};
 use super::*;
 pub(super) use crate::{
     CrossfadeCurve, CrossfadeSettings,
-    bridge::{
-        DeckEnds, DeckEqChange, DeckPart, DeckRefusal, Fade, FadeDir, Returned, scope_channels,
-    },
+    bridge::{DeckEqChange, DeckPart, DeckRefusal, Fade, FadeDir, Returned},
     rt::{
         DeckMixerConfig,
         track::{PcmConsumer, PlayerResource},
@@ -42,7 +37,7 @@ pub(super) const LEVEL: f32 = 0.5;
 pub(super) const A: Slot = Slot::new(0);
 pub(super) const B: Slot = Slot::new(1);
 
-pub(super) type DeckReply = (Seq, Outcome<DeckProtocol>, Vec<DeckPart>);
+pub(super) use crate::mock::DeckReply;
 
 #[kithara::test]
 fn application_deadline_is_optional_but_explicit_geometry_is_enforced() {
@@ -66,54 +61,7 @@ fn application_deadline_is_optional_but_explicit_geometry_is_enforced() {
     ));
 }
 
-pub(super) fn shape() -> StreamShape {
-    StreamShape {
-        sample_rate: NonZeroU32::new(RATE).expect("static sample rate"),
-        max_block_frames: NonZeroU32::new(512).expect("static block size"),
-    }
-}
-
-pub(super) struct TestSessionInbox(pub(super) ScopedInbox<DeckProtocol, DeckProtocol>);
-
-impl SessionInbox for TestSessionInbox {
-    fn scope(&mut self, id: ScopeId) -> Option<LevelInbox<'_, DeckProtocol>> {
-        self.0.scope(id)
-    }
-}
-
-pub(super) struct TestMixer {
-    pub(super) mixer: DeckMixer<TestSessionInbox>,
-    pub(super) inbox: TestSessionInbox,
-}
-
-impl std::ops::Deref for TestMixer {
-    type Target = DeckMixer<TestSessionInbox>;
-    fn deref(&self) -> &Self::Target {
-        &self.mixer
-    }
-}
-
-pub(super) struct TestEnds {
-    pub(super) ring: ScopedSender<DeckProtocol, DeckProtocol>,
-    pub(super) deck: DeckEnds,
-}
-
-impl std::ops::Deref for TestEnds {
-    type Target = DeckEnds;
-    fn deref(&self) -> &Self::Target {
-        &self.deck
-    }
-}
-
-impl std::ops::DerefMut for TestEnds {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.deck
-    }
-}
-
-pub(super) fn mixer() -> (TestMixer, TestEnds) {
-    mixer_with_config(DeckMixerConfig::default(), 64)
-}
+pub(super) use crate::mock::{TestEnds, TestMixer, mixer, shape};
 
 pub(super) fn mixer_without_declick() -> (TestMixer, TestEnds) {
     mixer_with_config(
@@ -136,43 +84,7 @@ fn an_empty_deck_counts_every_block_it_renders() {
     assert_eq!(ends.deck.snapshot.read().blocks, 3);
 }
 
-pub(super) fn apply_initial_batch(mixer: &mut TestMixer) {
-    mixer.inbox.0.drain();
-    let mut level = mixer.inbox.scope(mixer.mixer.scope).expect("live scope");
-    let due = level.next_due(frame_at(0), 1).expect("initial batch");
-    mixer.mixer.deck.take_due(due, true);
-}
-
-pub(super) fn mixer_with_config(config: DeckMixerConfig, capacity: usize) -> (TestMixer, TestEnds) {
-    mixer_with_shape(config, capacity, shape())
-}
-
-pub(super) fn mixer_with_shape(
-    config: DeckMixerConfig,
-    capacity: usize,
-    shape: StreamShape,
-) -> (TestMixer, TestEnds) {
-    let (mut ring, inbox) = scoped_channel(
-        ScopedConfig::builder()
-            .scope(
-                ChannelConfig::builder()
-                    .targets(config.slots().get())
-                    .capacity(NonZeroUsize::new(capacity).expect("capacity"))
-                    .build(),
-            )
-            .build(),
-    );
-    let scope = ring.open(config.slots().get()).expect("deck scope");
-    let (deck, inputs) = scope_channels(scope, config);
-    let mixer = DeckMixer::new(inputs, shape, &pools()).expect("mixer pools");
-    (
-        TestMixer {
-            mixer,
-            inbox: TestSessionInbox(inbox),
-        },
-        TestEnds { ring, deck },
-    )
-}
+pub(super) use crate::mock::{mixer_with_config, mixer_with_shape};
 
 pub(super) fn proc_info() -> ProcInfo {
     ProcInfo {
@@ -242,68 +154,7 @@ pub(super) fn pcm(constant_half: &'static [u8], src: &str, seconds: f64) -> Box<
     pcm_samples(src, seconds, &samples, frames == total)
 }
 
-pub(super) fn pcm_samples(
-    src: &str,
-    seconds: f64,
-    samples: &[f32],
-    ended: bool,
-) -> Box<PlayerResource> {
-    let spec = AudioSpec::new(2, NonZeroU32::new(RATE).expect("sample rate"));
-    let mut ring = PacketRing::new(spec, Duration::from_secs_f64(seconds), 2);
-    ring.push(PcmPacket::Chunk(Box::new(chunk(
-        spec,
-        SegmentId::FIRST,
-        0,
-        0,
-        samples,
-    ))));
-    if ended {
-        let mut end = chunk(
-            spec,
-            SegmentId::FIRST,
-            (samples.len() / 2) as u64,
-            (samples.len() / 2) as u64,
-            &[],
-        );
-        end.meta.end_of_track = true;
-        ring.push(PcmPacket::Chunk(Box::new(end)));
-    }
-    Box::new(
-        PlayerResource::new(
-            PcmConsumer::new(ring.receiver.take().expect("receiver")),
-            Arc::from(src),
-            &pools(),
-        )
-        .expect("resource"),
-    )
-}
-
-pub(super) fn send(ring: &mut TestEnds, when: When<SessionFrame>, parts: Vec<DeckPart>) -> Seq {
-    send_on(ring, when, &[], parts)
-}
-
-pub(super) fn send_on(
-    ring: &mut TestEnds,
-    when: When<SessionFrame>,
-    basis: &[(Slot, Option<Seq>)],
-    commands: Vec<DeckPart>,
-) -> Seq {
-    let scope = ring.deck.scope;
-    let seq = ring
-        .ring
-        .scope(scope)
-        .expect("live scope")
-        .send(
-            when,
-            Batch {
-                basis: basis.to_vec(),
-                commands,
-            },
-        )
-        .expect("the deck ring has room");
-    ring.ring.publish().expect("publish batch");
-    seq
-}
+pub(super) use crate::mock::{pcm_samples, send, send_on};
 
 pub(super) const fn at(frame: usize) -> When<SessionFrame> {
     When::At(frame_at(frame))
@@ -350,32 +201,7 @@ pub(super) fn render_frames(mixer: &mut TestMixer, start: usize, frames: usize) 
     left
 }
 
-pub(super) fn receipts(ends: &mut TestEnds) -> Vec<DeckReply> {
-    let mut receipts = Vec::new();
-    while let Some(receipt) = ends.ring.receipt() {
-        if let ScopedReceipt::Scope(scope, receipt) = receipt {
-            assert_eq!(scope, ends.deck.scope);
-            let seq = receipt.seq();
-            let (outcome, batch): (Outcome<DeckProtocol>, Batch<DeckProtocol>) = receipt.into();
-            receipts.push((seq, outcome, batch.commands));
-        }
-    }
-    receipts
-}
-
-pub(super) fn outcome_of(receipts: &[DeckReply], seq: Seq) -> &Outcome<DeckProtocol> {
-    receipts
-        .iter()
-        .find_map(|(answered, outcome, _)| (*answered == seq).then_some(outcome))
-        .expect("the batch is answered")
-}
-
-pub(super) fn assert_applied_at(outcome: &Outcome<DeckProtocol>, frame: usize) {
-    assert!(
-        matches!(outcome, Outcome::Applied { at, data: () } if *at == frame_at(frame)),
-        "expected applied at {frame}, got {outcome:?}"
-    );
-}
+pub(super) use crate::mock::{assert_applied_at, outcome_of, receipts};
 
 pub(super) fn eq_layout(gains: &[GainDb]) -> Box<EqLayout> {
     let bands: Vec<_> = gains

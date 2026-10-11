@@ -108,7 +108,7 @@ fn the_published_sample_rate_separates_the_measured_stream_from_the_request() {
     );
     assert_eq!(
         before.output(),
-        TestState::DEFAULT_SAMPLE_RATE,
+        44_100,
         "until a stream exists the resampler is built for the requested rate"
     );
 
@@ -169,7 +169,7 @@ fn the_published_stream_shape_prefers_measurement_over_an_explicit_request() {
         .stream_shape
         .expect("the explicit output block is published before stream start");
     assert_eq!(requested.max_block_frames.get(), 128);
-    assert_eq!(requested.sample_rate.get(), TestState::DEFAULT_SAMPLE_RATE);
+    assert_eq!(requested.sample_rate.get(), 44_100);
 
     let player_id = insert(&mut state);
     let measured = state
@@ -179,7 +179,7 @@ fn the_published_stream_shape_prefers_measurement_over_an_explicit_request() {
         .stream_shape
         .expect("the running stream publishes its measured output shape");
     assert_eq!(measured.max_block_frames.get(), 512);
-    assert_eq!(measured.sample_rate.get(), TestState::DEFAULT_SAMPLE_RATE);
+    assert_eq!(measured.sample_rate.get(), 44_100);
     configure_sample_rate(&mut state, 48_000);
     assert_eq!(
         state

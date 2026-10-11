@@ -7,6 +7,208 @@ use kithara_test_utils::kithara;
 use super::fixtures::{answer, grid, load, loaded, position, sounding};
 use crate::{GridAnswer, LinkedPlayer, SyncStatus};
 
+fn served_grid() -> BeatGridModel {
+    use kithara_beat::{GridBeat, RawBeatGrid, SCHEMA_VERSION};
+
+    BeatGridModel::try_from(RawBeatGrid {
+        schema_version: SCHEMA_VERSION,
+        model_id: "served".to_owned(),
+        revision: 1,
+        state: BeatGridState::Final,
+        duration: Some(2.0),
+        bpm: 120.0,
+        beats: vec![
+            GridBeat {
+                at: 0.0,
+                ordinal: 0,
+                confidence: Some(0.9),
+            },
+            GridBeat {
+                at: 0.5,
+                ordinal: 1,
+                confidence: Some(0.9),
+            },
+        ],
+        downbeats: Vec::new(),
+        meter: None,
+    })
+    .expect("the fixture grid holds together")
+}
+
+#[kithara::test]
+fn a_player_publishes_no_geometry_before_it_loads_anything() {
+    let (mut deck, _) = super::fixtures::deck(super::fixtures::trajectory(120.0, 4));
+    let mut rig = super::fixtures::Rig::new(0);
+    assert!(
+        rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
+            .expect("sync")
+            .is_none()
+    );
+    assert_eq!(deck.entry(Bound::AtOrAfter(SessionFrame::new(0))), None);
+    assert_eq!(
+        deck.snapshot().sync,
+        SyncStatus::WaitingForGrid {
+            required: kithara_play::Position::ZERO,
+        },
+        "an empty track waits for geometry on its media position"
+    );
+    assert_eq!(
+        deck.snapshot().as_ref().position,
+        kithara_play::Position::ZERO
+    );
+}
+
+#[kithara::test]
+fn a_supplied_grid_reaches_the_decoded_axis_in_media_seconds() {
+    let (mut deck, _, mut rig, _) = loaded(served_grid());
+    let seq = rig
+        .run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync")
+        .expect("prepared cue");
+    rig.apply(&mut deck, seq, 0);
+    assert_eq!(
+        deck.entry(Bound::AtOrAfter(SessionFrame::new(0))),
+        Some(SessionFrame::new(0)),
+        "beat zero sits at the start of the output axis"
+    );
+    assert_eq!(
+        deck.entry(Bound::AtOrAfter(SessionFrame::new(1))),
+        Some(SessionFrame::new(24_000)),
+        "a beat at 0.5 media seconds is frame 24000 at unity speed and 48 kHz"
+    );
+}
+
+#[kithara::test]
+fn a_rate_change_reprojects_the_model_it_already_holds() {
+    use std::num::NonZeroU16;
+
+    use kithara_warp::SessionBeat;
+
+    let (mut deck, control, mut rig, _) = loaded(served_grid());
+    let seq = rig
+        .run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync")
+        .expect("prepared cue");
+    rig.apply(&mut deck, seq, 0);
+    let first = deck.entry(Bound::AtOrAfter(SessionFrame::new(1)));
+    let doubled = crate::TempoTrajectory::new(
+        crate::TempoStep {
+            frame: SessionFrame::new(0),
+            beat: SessionBeat::default(),
+            tempo: kithara_host::api::Tempo::new(120.0).expect("tempo"),
+        },
+        NonZeroU16::new(4).expect("meter"),
+        super::fixtures::rate(96_000),
+    );
+    control.clear();
+    rig.run(|out| LinkedPlayer::retime(&mut deck, &doubled, SessionFrame::new(0), out));
+    assert_eq!(
+        first,
+        Some(SessionFrame::new(24_000)),
+        "48 kHz places the second beat at 24000"
+    );
+    assert_eq!(
+        deck.entry(Bound::AtOrAfter(SessionFrame::new(1))),
+        Some(SessionFrame::new(48_000)),
+        "96 kHz places the very same beat at 48000"
+    );
+    assert!(
+        control.commands().iter().any(|(later, _)| *later > seq),
+        "a later geometry sends a later cue"
+    );
+}
+
+#[kithara::test]
+fn a_source_that_answers_late_reaches_the_load_that_asked() {
+    let (mut deck, control) = super::fixtures::deck(super::fixtures::trajectory(120.0, 4));
+    let mut rig = super::fixtures::Rig::new(0);
+    let loading = load(&mut deck, &mut rig, 0);
+    rig.apply(&mut deck, loading, 0);
+    rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync");
+    let pending = deck.snapshot();
+    assert_eq!(
+        deck.entry(Bound::AtOrAfter(SessionFrame::new(1))),
+        None,
+        "a load still reading its source publishes no geometry"
+    );
+    control.clear();
+    answer(&mut deck, &mut rig, loading, served_grid());
+    let answered = deck.snapshot();
+    assert_eq!(
+        deck.entry(Bound::AtOrAfter(SessionFrame::new(1))),
+        Some(SessionFrame::new(24_000)),
+        "the answer takes effect on the next observation"
+    );
+    assert!(
+        control.commands().iter().any(|(later, _)| *later > loading),
+        "the answer sends a later cue for this grid"
+    );
+    assert_eq!(
+        answered.as_ref().item,
+        pending.as_ref().item,
+        "the identity is the player's and does not move"
+    );
+}
+
+#[kithara::test]
+fn an_unchanged_slot_does_not_move_the_revision() {
+    let (mut deck, control, mut rig, loading) = loaded(served_grid());
+    let seq = rig
+        .run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync")
+        .expect("prepared cue");
+    rig.apply(&mut deck, seq, 0);
+    let first = deck.entry(Bound::AtOrAfter(SessionFrame::new(1)));
+    control.clear();
+    answer(&mut deck, &mut rig, loading, served_grid());
+    assert_eq!(
+        first,
+        deck.entry(Bound::AtOrAfter(SessionFrame::new(1))),
+        "nothing changed, so nothing was republished"
+    );
+    assert!(
+        control.commands().is_empty(),
+        "an unchanged model issues no new cue"
+    );
+}
+
+#[kithara::test]
+fn releasing_a_track_leaves_the_grid_unavailable() {
+    let (mut deck, control, mut rig, _) = loaded(served_grid());
+    let seq = rig
+        .run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync")
+        .expect("prepared cue");
+    rig.apply(&mut deck, seq, 0);
+    assert_eq!(
+        deck.entry(Bound::AtOrAfter(SessionFrame::new(1))),
+        Some(SessionFrame::new(24_000))
+    );
+    let released = rig
+        .run(|out| deck.apply(TrackCommand::Release, out))
+        .expect("release")
+        .expect("release sequence");
+    rig.apply(&mut deck, released, 0);
+    assert!(
+        released > seq,
+        "letting go is a later command, never a rewind"
+    );
+    assert_eq!(
+        deck.entry(Bound::AtOrAfter(SessionFrame::new(1))),
+        None,
+        "a player holding nothing states no geometry"
+    );
+    assert!(
+        control
+            .commands()
+            .iter()
+            .any(|(seq, command)| *seq == released
+                && matches!(command, super::fixtures::Command::Release)),
+        "letting go is a later command, never a rewind"
+    );
+}
+
 #[kithara::test]
 fn foreign_grid_answers_preserve_the_current_load() {
     let (mut deck, control, mut rig, load) = sounding();

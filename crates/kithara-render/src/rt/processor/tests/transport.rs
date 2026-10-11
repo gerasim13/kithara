@@ -201,7 +201,10 @@ async fn a_chain_starts_its_slot_on_the_frame_after_the_end(constant_half: &'sta
             },
         ],
     );
-    apply_initial_batch(&mut mixer);
+    assert!(crate::mock::apply_initial_batch(
+        &mut mixer.mixer,
+        &mut mixer.inbox.0
+    ));
     let chain = send_on(
         &mut ends,
         When::Deferred,
@@ -255,7 +258,10 @@ async fn a_chain_whose_slot_shifted_comes_back_stale(constant_half: &'static [u8
             },
         ],
     );
-    apply_initial_batch(&mut mixer);
+    assert!(crate::mock::apply_initial_batch(
+        &mut mixer.mixer,
+        &mut mixer.inbox.0
+    ));
     let chain = send_on(
         &mut ends,
         When::Deferred,
@@ -305,7 +311,10 @@ async fn a_detached_slot_refuses_the_chain_behind_it(constant_half: &'static [u8
             },
         ],
     );
-    apply_initial_batch(&mut mixer);
+    assert!(crate::mock::apply_initial_batch(
+        &mut mixer.mixer,
+        &mut mixer.inbox.0
+    ));
     let chain = send(
         &mut ends,
         When::Deferred,

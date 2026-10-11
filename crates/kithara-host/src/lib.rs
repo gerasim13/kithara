@@ -23,13 +23,8 @@ pub use host::{
 pub use kithara_play::SessionSampleRate;
 pub use rt::{MetronomeConfig, MetronomeConfigChange, MetronomeConfigControl};
 pub use session::TransportEvent;
-#[cfg(all(
-    test,
-    feature = "offline",
-    feature = "mock",
-    not(target_arch = "wasm32")
-))]
-pub use session::offline::tests::dispatch::mock;
 mod consts;
+#[cfg(all(feature = "offline", feature = "mock", not(target_arch = "wasm32")))]
+pub mod mock;
 
 pub use owner::{DeckControl, DeckId, HostCommand, HostCore, HostOwner, HostSettled};

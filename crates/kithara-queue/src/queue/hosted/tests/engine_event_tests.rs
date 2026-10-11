@@ -5,9 +5,12 @@ use super::*;
 use crate::{AdvanceReason, queue::state::tests::wait_for_queue_event};
 
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn pause_and_none_suppress_natural_eof_progression() {
     for action in [ActionAtItemEnd::Pause, ActionAtItemEnd::None] {
-        let (mut queue, first, _second, mut rig, _dir) = player_internal::selected().await;
+        hang_tick!();
+        let (mut queue, first, _second, mut rig, _dir) = crate::mock::selected().await;
+        hang_reset!();
         with_outbox(&mut queue, &mut rig, |queue, out| {
             Player::apply(queue, QueueCommand::SetActionAtItemEnd(action), out)
         })
@@ -47,7 +50,7 @@ async fn pause_and_none_suppress_natural_eof_progression() {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn a_tick_pauses_at_the_natural_end_it_drains() {
-    let (mut queue, first, _, mut rig, _dir) = player_internal::selected().await;
+    let (mut queue, first, _, mut rig, _dir) = crate::mock::selected().await;
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(
             queue,
@@ -78,7 +81,7 @@ async fn a_tick_pauses_at_the_natural_end_it_drains() {
 
 #[kithara::test(tokio)]
 async fn the_deck_leading_on_past_a_failed_track_advances_for_the_failure() {
-    let (mut queue, failed, successor, mut rig, dir) = player_internal::selected().await;
+    let (mut queue, failed, successor, mut rig, dir) = crate::mock::selected().await;
     let slot = queue
         .active
         .iter()
@@ -97,7 +100,7 @@ async fn the_deck_leading_on_past_a_failed_track_advances_for_the_failure() {
         .expect("source failure");
     tick_fixture(&mut queue, &mut rig);
     answer_load(&mut queue, &mut rig, &dir).await;
-    player_internal::finish(&mut queue, &mut rig);
+    crate::mock::finish(&mut queue, &mut rig);
     let advanced = wait_for_queue_event(
         &mut events,
         |event| {
@@ -116,7 +119,7 @@ async fn the_deck_leading_on_past_a_failed_track_advances_for_the_failure() {
 
 #[kithara::test(tokio)]
 async fn lag_recovery_keeps_an_ended_queue_ended() {
-    let (mut queue, last, _, mut rig, _dir) = player_internal::selected().await;
+    let (mut queue, last, _, mut rig, _dir) = crate::mock::selected().await;
     queue.navigation.select(last, &queue.track_ids());
     queue.current = None;
     queue.navigation = crate::NavigationState::new(queue.navigation.history_limit());
@@ -136,19 +139,27 @@ async fn lag_recovery_keeps_an_ended_queue_ended() {
 }
 
 #[kithara::test(tokio)]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn lagged_player_events_resynchronize_current_track() {
-    let (mut queue, id, _, mut rig, _dir) = player_internal::selected().await;
+    hang_tick!();
+    let (mut queue, id, _, mut rig, _dir) = crate::mock::selected().await;
+    hang_reset!();
     let unrelated = DeckEvent::Ended {
         slot: Slot::new(3),
         at: SessionFrame::new(128),
     };
-    while rig.mixer.report(unrelated).is_ok() {}
+    while rig.mixer.report(unrelated).is_ok() {
+        hang_tick!();
+        hang_reset!();
+    }
     rig.events.drain().for_each(drop);
     let mut events = queue.subscribe::<QueueEvent>();
     tick_fixture(&mut queue, &mut rig);
+    hang_tick!();
     let saw_current_track = wait_for_queue_event(&mut events, |event| {
         matches!(event, QueueEvent::CurrentTrackChanged { id: Some(current_id) } if *current_id == id)
     }, 200).await;
+    hang_reset!();
     assert!(
         saw_current_track,
         "lag recovery should re-announce the current track"

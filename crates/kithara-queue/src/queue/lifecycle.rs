@@ -597,4 +597,258 @@ mod tests {
             "surviving track still resolves to its own source by id"
         );
     }
+
+    #[kithara::test(tokio)]
+    async fn begin_dedupes_live_attempt() {
+        let (mut queue, mut rig) = make_queue();
+        queue.insert_entry(TrackId(1), "/kithara/missing.wav".into(), Placement::Append);
+        let first = with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+            queue.load_track(TrackId(1), Role::Preloaded, Some(pass.output), out)
+        })
+        .expect("first load")
+        .expect("new load has a sequence");
+        let second = with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+            queue.load_track(TrackId(1), Role::Preloaded, Some(pass.output), out)
+        })
+        .expect("duplicate load reuses the open");
+        assert_eq!(second, Some(first));
+        assert_eq!(queue.active.iter().count(), 1);
+        assert_eq!(
+            rig.open(Err(kithara_play::LoadRefusal::Cancelled))
+                .expect("one open")
+                .seq(),
+            first
+        );
+        assert!(
+            rig.open(Err(kithara_play::LoadRefusal::Cancelled))
+                .is_none(),
+            "no duplicate open"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn selection_reflects_only_the_requested_live_attempt() {
+        let (mut queue, mut rig) = make_queue();
+        for id in [TrackId(1), TrackId(2)] {
+            queue.insert_entry(id, "/kithara/missing.wav".into(), Placement::Append);
+        }
+        assert!(!queue.target.is_some_and(|target| target.to == TrackId(1)));
+        assert!(
+            with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+                queue.load_track(TrackId(1), Role::Preloaded, Some(pass.output), out)
+            })
+            .expect("prefetch")
+            .is_some()
+        );
+        assert!(
+            apply(
+                &mut queue,
+                &mut rig,
+                QueueCommand::Select {
+                    id: TrackId(2),
+                    transition: Transition::None,
+                }
+            )
+            .expect("selected load")
+            .is_some()
+        );
+        assert!(!queue.target.is_some_and(|target| target.to == TrackId(1)));
+        assert!(queue.target.is_some_and(|target| target.to == TrackId(2)));
+        assert!(
+            queue
+                .active
+                .iter()
+                .any(|active| active.item == TrackId(1) && active.role == Role::Preloaded)
+        );
+        assert!(queue.active.iter().any(
+            |active| active.item == TrackId(2) && active.role == Role::Incoming { batch: None }
+        ));
+    }
+
+    #[kithara::test(tokio)]
+    async fn promote_replaces_waiting_and_cancels_it() {
+        let (mut queue, mut rig) = make_queue();
+        queue.insert_entry(TrackId(1), "/kithara/missing.wav".into(), Placement::Append);
+        let queued = with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+            queue.load_track(TrackId(1), Role::Preloaded, Some(pass.output), out)
+        })
+        .expect("queued preload")
+        .expect("open sequence");
+        let token = queue.tracks.records()[0]
+            .load
+            .as_ref()
+            .expect("queued load")
+            .token()
+            .clone();
+        let parked = queue.tracks.records()[0]
+            .load
+            .as_ref()
+            .expect("queued load")
+            .watch()
+            .clone();
+        let promoted = apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Select {
+                id: TrackId(1),
+                transition: Transition::None,
+            },
+        )
+        .expect("select promotes the queued preload");
+        assert!(token.is_cancelled(), "parked attempt must abort");
+        assert!(
+            parked.is_cancelled(),
+            "the replaced attempt loses its claim"
+        );
+        let replacement = queue.tracks.records()[0]
+            .load
+            .as_ref()
+            .expect("promoted load");
+        assert!(
+            !replacement.watch().is_cancelled(),
+            "the promoted attempt owns its claim"
+        );
+        assert!(!replacement.token().is_cancelled());
+        assert_ne!(promoted, Some(queued));
+        assert!(queue.incoming_index(TrackId(1)).is_some());
+        assert!(
+            !queue
+                .active
+                .iter()
+                .any(|active| active.role == Role::Preloaded)
+        );
+        assert_eq!(
+            rig.open(Err(kithara_play::LoadRefusal::Cancelled))
+                .expect("superseded open")
+                .seq(),
+            queued
+        );
+        assert_eq!(
+            Some(
+                rig.open(Err(kithara_play::LoadRefusal::Cancelled))
+                    .expect("promoted open")
+                    .seq()
+            ),
+            promoted
+        );
+        assert!(
+            rig.open(Err(kithara_play::LoadRefusal::Cancelled))
+                .is_none()
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn promote_keeps_attempt_holding_permit() {
+        let (mut queue, mut rig) = make_queue();
+        queue.insert_entry(TrackId(1), "/kithara/missing.wav".into(), Placement::Append);
+        let first = with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+            queue.load_track(TrackId(1), Role::Preloaded, Some(pass.output), out)
+        })
+        .expect("preloaded open")
+        .expect("open sequence");
+        rig.opens.drain();
+        let token = queue.tracks.records()[0]
+            .load
+            .as_ref()
+            .expect("admitted load")
+            .token()
+            .clone();
+        let promoted = apply(
+            &mut queue,
+            &mut rig,
+            QueueCommand::Select {
+                id: TrackId(1),
+                transition: Transition::None,
+            },
+        )
+        .expect("promote admitted open");
+        assert_eq!(
+            promoted,
+            Some(first),
+            "an attempt past the permit gate keeps its download"
+        );
+        assert!(!token.is_cancelled());
+        assert_eq!(queue.active.iter().count(), 1);
+        assert_eq!(
+            rig.open(Err(kithara_play::LoadRefusal::Cancelled))
+                .expect("one open")
+                .seq(),
+            first
+        );
+        assert!(
+            rig.open(Err(kithara_play::LoadRefusal::Cancelled))
+                .is_none()
+        );
+    }
+
+    #[kithara::test]
+    fn promote_vacant_is_noop() {
+        let (mut queue, mut rig) = make_queue();
+        queue.insert_entry(TrackId(1), "/kithara/missing.wav".into(), Placement::Append);
+        assert!(
+            with_outbox(&mut queue, &mut rig, |queue, _, out| {
+                queue.transition_loaded(out)
+            })
+            .expect("no transition to promote")
+            .is_none()
+        );
+        assert!(queue.tracks.records()[0].load.is_none());
+        assert_eq!(queue.active.iter().count(), 0);
+        assert!(
+            rig.open(Err(kithara_play::LoadRefusal::Cancelled))
+                .is_none()
+        );
+    }
+
+    #[kithara::test]
+    fn config_failure_without_runtime_updates_tracks_synchronously() {
+        use kithara_events::Envelope;
+
+        let (mut queue, mut rig) = make_queue();
+        let source: TrackSource<TestPools> = "not a url".into();
+        for id in [TrackId(42), TrackId(43)] {
+            queue.insert_entry(id, source.clone(), Placement::Append);
+        }
+        queue.publish();
+        let output = kithara_play::mock::output(None).get();
+        let Err(expected) =
+            queue
+                .loader
+                .as_ref()
+                .expect("loader")
+                .build_config(TrackId(42), source, &output)
+        else {
+            panic!("fixture source must be rejected");
+        };
+        assert!(matches!(expected, QueueError::InvalidUrl(_)));
+        let reason = expected.to_string();
+        let mut events = queue.subscribe::<QueueEvent>();
+        for (index, id) in [TrackId(42), TrackId(43)].into_iter().enumerate() {
+            assert!(matches!(
+                with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+                    queue.request_transition(
+                        id,
+                        Transition::None,
+                        AdvanceReason::UserSelect,
+                        false,
+                        Some(pass.output),
+                        out,
+                    )
+                }),
+                Err(QueueError::InvalidUrl(_))
+            ));
+            assert_eq!(
+                queue.tracks.records()[index].status,
+                crate::TrackStatus::Failed(reason.clone())
+            );
+            queue.publish();
+            assert!(matches!(events.try_recv(), Ok(Envelope {
+                event: QueueEvent::TrackStatusChanged { id: changed, status }, ..
+            }) if changed == id && status == crate::TrackStatus::Failed(reason.clone())));
+        }
+        assert!(
+            events.try_recv().is_err(),
+            "config failure must not emit Loading"
+        );
+    }
 }

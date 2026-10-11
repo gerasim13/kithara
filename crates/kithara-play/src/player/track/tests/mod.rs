@@ -1,4 +1,5 @@
 mod core;
+mod legacy_lifecycle;
 mod legacy_metrics;
 mod legacy_rate;
 

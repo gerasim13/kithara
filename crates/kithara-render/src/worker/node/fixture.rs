@@ -1,0 +1,102 @@
+use std::num::{NonZeroU32, NonZeroUsize};
+
+use kithara_audio::{AudioSource, SeekOutcome, SourceEnd, TrackStep};
+use kithara_command::{ChannelConfig, Sender, channel};
+use kithara_effects::EffectDrain;
+use kithara_platform::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+use kithara_test_utils::bufpool::{TestPools, pools};
+use kithara_warp::{Warp, WarpConfig};
+
+use super::DecoderNode;
+use crate::{LaneProtocol, WarpSource, mock::PacketRing, worker::PcmReceiver};
+
+/// Creates a decoder node with the specified packet capacity and preload count.
+///
+/// # Panics
+/// Panics if capacity or preload is zero, or fixture pool allocation fails.
+pub async fn prepared_node<T>(
+    source: T,
+    capacity: usize,
+    preload: usize,
+) -> (DecoderNode<T, TestPools>, PcmReceiver, Sender<LaneProtocol>)
+where
+    T: AudioSource<Chunk = AudioChunk>,
+{
+    let pools = pools();
+    let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("rate"));
+    let (lane, inbox) = channel(ChannelConfig::builder().build());
+    let config = WarpConfig::builder()
+        .source_block_frames(NonZeroUsize::new(65_536).expect("source block"))
+        .build();
+    let source = WarpSource::new(
+        source,
+        Warp::new((), &config).renderer(spec, pools.clone()),
+        Vec::new(),
+        EffectDrain::new(0, &pools).expect("drain"),
+        spec,
+        pools.clone(),
+        crate::LaneSetup {
+            inbox,
+            preload_chunks: NonZeroUsize::new(preload).expect("preload"),
+            declick: crate::consts::DEFAULT_DECLICK,
+        },
+    );
+    let (receiver, producer) = PacketRing::new(spec, Duration::from_secs(1), capacity).into_ends();
+    (
+        DecoderNode::new(
+            source,
+            producer,
+            None,
+            AudioChunkInfo {
+                spec,
+                ..AudioChunkInfo::default()
+            },
+            None,
+            pools,
+            None,
+        ),
+        receiver,
+        lane,
+    )
+}
+
+pub struct ScriptedSource {
+    pub(crate) steps: std::collections::VecDeque<TrackStep<AudioChunk>>,
+    pub(crate) commits: Arc<Mutex<Vec<SourceEnd>>>,
+}
+
+impl ScriptedSource {
+    pub fn new<Steps>(steps: Steps) -> Self
+    where
+        Steps: IntoIterator<Item = TrackStep<AudioChunk>>,
+    {
+        Self {
+            steps: steps.into_iter().collect(),
+            commits: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
+impl AudioSource for ScriptedSource {
+    type Chunk = AudioChunk;
+    fn commit_source_end(&mut self, end: SourceEnd, _meta: AudioChunkInfo) {
+        self.commits.lock().push(end);
+    }
+    fn host_sample_rate(&self) -> Option<NonZeroU32> {
+        None
+    }
+    fn seek(&mut self, target: Duration) -> Result<SeekOutcome, kithara_audio::AudioReadError> {
+        Ok(SeekOutcome::Landed {
+            target,
+            landed_at: target,
+        })
+    }
+    fn set_host_sample_rate(&mut self, _rate: NonZeroU32) {}
+    fn step_track(&mut self) -> TrackStep<AudioChunk> {
+        self.steps.pop_front().unwrap_or(TrackStep::Eof)
+    }
+}

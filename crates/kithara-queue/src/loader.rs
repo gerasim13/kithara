@@ -266,11 +266,358 @@ fn net_cause<'e>(error: &'e (dyn StdError + 'static)) -> Option<&'e NetError> {
 }
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU16;
+    use std::{
+        future::Future,
+        num::{NonZeroU16, NonZeroU64},
+        pin::pin,
+        task::{Context, Waker},
+    };
 
-    use kithara_test_utils::kithara;
+    use kithara_assets::StorageBackend;
+    use kithara_audio::AudioObserverSlot;
+    use kithara_command::{ChannelConfig, Mailbox, channel, mailbox};
+    use kithara_download::RequestId;
+    use kithara_events::EventBus;
+    use kithara_platform::time::{Duration, WallInstant, sleep, timeout};
+    use kithara_play::{ArtifactSource, PlayWorker, PlayWorkerConfig, mock};
+    use kithara_render::{LaneProtocol, LaneStart, Open};
+    use kithara_test_utils::{TestTempDir, kithara, temp_dir};
+    use kithara_warp::{SpeedCurve, StretchKind};
 
     use super::*;
+    use crate::{
+        QueueEvent, TrackStatus,
+        test_pools::{TestPools, pools},
+        track::{TrackRecord, Tracks},
+    };
+
+    fn fixture() -> (
+        Loader<TestPools>,
+        Mailbox<QueueCommand<TestPools>, QueueError>,
+    ) {
+        let (postbox, mailbox) = mailbox();
+        let prep = ResourcePrep::builder()
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+            .build();
+        let store = AssetStore::builder(pools())
+            .backend(StorageBackend::Memory)
+            .build();
+        (
+            Loader::new(prep, store, RuntimeHandle::try_current().ok(), postbox),
+            mailbox,
+        )
+    }
+
+    #[kithara::test(tokio)]
+    async fn build_config_preserves_caller_supplied_config() {
+        let (loader, _mailbox) = fixture();
+        let supplied_store = AssetStore::builder(pools())
+            .backend(StorageBackend::Memory)
+            .build();
+        let given = ResourceConfig::for_src(
+            ResourceSrc::parse("https://example.com/a.mp3").expect("valid url"),
+        )
+        .store(supplied_store.clone())
+        .preferred_peak_bitrate(321.0)
+        .build();
+        let returned = loader
+            .build_config(
+                TrackId(1),
+                TrackSource::Config(Box::new(given)),
+                &mock::output(None).get(),
+            )
+            .expect("build_config should succeed");
+        assert!(
+            (returned.preferred_peak_bitrate() - 321.0).abs() < f64::EPSILON,
+            "caller-set fields must be preserved"
+        );
+        assert!(returned.store().is_same(&supplied_store));
+        assert!(!returned.store().is_same(&loader.store));
+    }
+
+    #[kithara::test(tokio)]
+    async fn build_config_forwards_a_prepared_artifact() {
+        let (loader, _mailbox) = fixture();
+        let src = ResourceSrc::parse("https://example.com/a.mp3").expect("valid url");
+        let grid = ResourceSrc::parse("https://example.com/a.grid").expect("valid artifact url");
+        let given = ResourceConfig::for_src(src)
+            .store(AssetStore::builder(pools()).build())
+            .beat_grid(ArtifactSource::from(grid.clone()))
+            .waveform(ArtifactSource::Value(Arc::default()))
+            .build();
+        let returned = loader
+            .build_config(
+                TrackId(7),
+                TrackSource::Config(Box::new(given)),
+                &mock::output(None).get(),
+            )
+            .expect("build_config should succeed");
+        assert!(
+            matches!(returned.beat_grid(), Some(ArtifactSource::Source(src)) if *src == grid),
+            "a grid source must reach the resource untouched"
+        );
+        assert!(
+            matches!(returned.waveform(), Some(ArtifactSource::Value(_))),
+            "a caller-held waveform must reach the resource untouched"
+        );
+    }
+
+    #[kithara::test(tokio)]
+    async fn build_config_labels_default_bus_with_track_id() {
+        let (loader, _mailbox) = fixture();
+        let mut rx = loader.prep.bus.subscribe::<QueueEvent>();
+        let config = loader
+            .build_config(
+                TrackId(42),
+                TrackSource::Uri("https://example.com/a.mp3".into()),
+                &mock::output(None).get(),
+            )
+            .expect("build_config should succeed");
+        let bus = config
+            .bus()
+            .expect("build_config must inject a per-track bus");
+        assert!(config.store().is_same(&loader.store));
+        bus.publish(QueueEvent::QueueEnded);
+        let envelope = rx
+            .try_recv()
+            .expect("scoped publish must reach the root subscriber");
+        assert_eq!(envelope.meta.track, Some(TrackId(42)));
+    }
+
+    #[kithara::test(tokio)]
+    async fn build_config_invalid_uri_errors() {
+        let (loader, _mailbox) = fixture();
+        let Err(err) = loader.build_config(
+            TrackId(1),
+            TrackSource::Uri("not-a-url".into()),
+            &mock::output(None).get(),
+        ) else {
+            panic!("should reject relative path");
+        };
+        assert!(matches!(err, QueueError::InvalidUrl(_)));
+    }
+
+    #[kithara::test(tokio)]
+    async fn cancellation_wakes_an_attempt_waiting_for_admission() {
+        let (loader, _mailbox) = fixture();
+        let id = TrackId::allocate();
+        let source: TrackSource<TestPools> = "https://example.com/pending.mp3".into();
+        let mut tracks: Tracks<TestPools> = Tracks::default();
+        tracks
+            .records_mut()
+            .push(TrackRecord::new(id, "pending".into(), source.clone()));
+        let (item, load) = loader
+            .start(
+                id,
+                source,
+                Box::new(AudioObserverSlot::default().relay()),
+                &mock::output(None).get(),
+            )
+            .expect("fresh track prepares one unadmitted open");
+        tracks.begin_load(id, load);
+        assert!(
+            tracks
+                .records()
+                .iter()
+                .any(|record| record.id == id && record.load.is_some())
+        );
+        tracks.cancel_loads();
+        let result = open(item).await;
+        assert!(matches!(result, Err(LoadRefusal::Cancelled)));
+        assert_eq!(tracks.records()[0].id, id);
+        assert_eq!(tracks.records()[0].status, TrackStatus::Cancelled);
+    }
+
+    #[kithara::test(native)]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    fn a_slow_watch_survives_a_bus_that_dropped_a_burst() {
+        hang_tick!();
+        let capacity = 4;
+        let bus = EventBus::new(capacity);
+        let (postbox, mut mailbox) = mailbox::<QueueCommand<TestPools>, QueueError>();
+        let id = TrackId::allocate();
+        let mut tracks: Tracks<TestPools> = Tracks::default();
+        tracks.records_mut().push(TrackRecord::new(
+            id,
+            "slow".into(),
+            TrackSource::Uri("https://example.com/slow.mp3".into()),
+        ));
+        let cancel = CancelToken::never().child();
+        let config = ResourceConfig::for_src(
+            ResourceSrc::parse("https://example.com/slow.mp3").expect("valid URL"),
+        )
+        .store(AssetStore::builder(pools()).build())
+        .cancel(cancel)
+        .build();
+        let load = TrackLoad::new(&config).expect("track token");
+        let mut watch = pin!(slow_transfer(
+            id,
+            load.watch().clone(),
+            bus.subscribe(),
+            postbox
+        ));
+        tracks.begin_load(id, load);
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(
+            watch.as_mut().poll(&mut cx).is_pending(),
+            "the watch must subscribe before the burst it has to survive"
+        );
+        let request_id = RequestId::new(NonZeroU64::MIN);
+        for _ in 0..=capacity {
+            hang_tick!();
+            bus.publish(DownloaderEvent::RequestStarted {
+                request_id,
+                wait_in_queue: Duration::ZERO,
+            });
+            hang_reset!();
+        }
+        bus.publish(DownloaderEvent::LoadSlow {
+            request_id,
+            elapsed: Duration::ZERO,
+        });
+        assert!(
+            watch.as_mut().poll(&mut cx).is_pending(),
+            "the watch never completes: it ends only with the resource it races"
+        );
+        for post in mailbox.drain() {
+            hang_tick!();
+            let QueueCommand::Load(report) = post.command else {
+                panic!("a slow watch reports a load");
+            };
+            tracks.apply_report(report);
+            hang_reset!();
+        }
+        assert_eq!(
+            tracks.records()[0].status,
+            TrackStatus::Slow,
+            "a dropped burst must not deafen the watch to the `LoadSlow` behind it"
+        );
+    }
+
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    async fn open(item: ResourceLoad<TestPools>) -> Result<(), LoadRefusal> {
+        let (_sender, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
+        let mut opened = pin!(item.open(
+            Duration::ZERO,
+            LaneStart {
+                speed: SpeedCurve::Constant(1.0),
+                keylock: false,
+                backend: StretchKind::default(),
+            },
+            inbox,
+        ));
+        loop {
+            hang_tick!();
+            if let Ok(result) = timeout(Duration::from_millis(10), opened.as_mut()).await {
+                hang_reset!();
+                return result.map(|_| ());
+            }
+        }
+    }
+
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    async fn cover_report(
+        mailbox: &mut Mailbox<QueueCommand<TestPools>, QueueError>,
+        tracks: &mut Tracks<TestPools>,
+        bus: &EventBus,
+    ) -> TrackId {
+        let deadline = WallInstant::now() + Duration::from_secs(2);
+        loop {
+            hang_tick!();
+            for post in mailbox.drain() {
+                let QueueCommand::Load(report) = post.command else {
+                    panic!("cover task reports a load");
+                };
+                tracks.apply_report(report);
+                for event in tracks.drain_events() {
+                    hang_tick!();
+                    let changed = match &event {
+                        QueueEvent::TrackMetadataChanged { id } => Some(*id),
+                        _ => None,
+                    };
+                    bus.publish(event);
+                    hang_reset!();
+                    if let Some(id) = changed {
+                        hang_reset!();
+                        return id;
+                    }
+                }
+            }
+            assert!(
+                WallInstant::now() < deadline,
+                "the current attempt's cover lands"
+            );
+            sleep(Duration::from_millis(1)).await;
+        }
+    }
+
+    #[kithara::test(native, tokio)]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    async fn only_the_current_attempt_places_its_cover(temp_dir: TestTempDir) {
+        let (loader, mut mailbox) = fixture();
+        let id = TrackId::allocate();
+        let audio = ResourceSrc::Path(temp_dir.path().join("missing.mp3"));
+        let covered = |name: &str, cover: &[u8]| -> TrackSource<TestPools> {
+            ResourceConfig::for_src(audio.clone())
+                .store(loader.store.clone())
+                .artwork(ResourceSrc::Path(temp_dir.write(name, cover)))
+                .build()
+                .into()
+        };
+        let superseded = covered("superseded.jpg", b"superseded cover");
+        let current = covered("current.jpg", b"current cover");
+        let mut tracks = Tracks::default();
+        tracks
+            .records_mut()
+            .push(TrackRecord::new(id, "covered".into(), current.clone()));
+        let bus = loader.prep.bus.clone();
+        let mut events = bus.subscribe::<QueueEvent>();
+        let output = mock::output(None).get();
+        let observer = || Box::new(AudioObserverSlot::default().relay()) as Box<dyn AudioObserver>;
+        let (first, load) = loader
+            .start(id, superseded, observer(), &output)
+            .expect("fresh load");
+        tracks.begin_load(id, load);
+        tracks.set_status(id, TrackStatus::Cancelled);
+        assert!(matches!(open(first).await, Err(LoadRefusal::Cancelled)));
+        let (second, load) = loader
+            .start(id, current, observer(), &output)
+            .expect("replacement load");
+        tracks.begin_load(id, load);
+        drop(tracks.drain_events());
+        let changed = cover_report(&mut mailbox, &mut tracks, &bus).await;
+        assert_eq!(changed, id);
+        assert!(open(second).await.is_err(), "the audio is missing");
+        let entry = tracks.records()[0].entry();
+        assert_eq!(
+            entry.metadata().artwork.as_deref().map(Vec::as_slice),
+            Some(b"current cover".as_slice())
+        );
+        let changed = events
+            .try_recv()
+            .expect("the current attempt's cover lands");
+        assert!(
+            matches!(changed.event, QueueEvent::TrackMetadataChanged { id: changed } if changed == id)
+        );
+        for post in mailbox.drain() {
+            if let QueueCommand::Load(report) = post.command {
+                tracks.apply_report(report);
+            }
+        }
+        for event in tracks.drain_events() {
+            hang_tick!();
+            bus.publish(event);
+            hang_reset!();
+        }
+        while let Ok(envelope) = events.try_recv() {
+            hang_tick!();
+            assert!(
+                !matches!(envelope.event, QueueEvent::TrackMetadataChanged { .. }),
+                "the superseded attempt's cover landed"
+            );
+            hang_reset!();
+        }
+    }
 
     /// A spent budget over a refusal keeps the resource askable: the load is
     /// repeated while the selection wants it, which is how a track chosen during

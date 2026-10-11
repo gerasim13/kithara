@@ -1,15 +1,74 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara_platform::sync::Arc;
-use kithara_signal::SegmentId;
+use std::num::NonZeroU32;
+
+use kithara_platform::{sync::Arc, time::Duration};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SegmentId, SourceSpan};
 use kithara_test_utils::kithara;
 
 use super::super::{PcmConsumer, PlayerResource, ReadOutcome};
 use crate::{
     mock::pcm_fixture::{PcmFixture, chunk},
-    test_pools::pools,
+    test_pools::{pools, sample_buffer},
     worker::PcmPacket,
 };
+
+#[kithara::test(native, tokio)]
+#[case(44_100, 8_820)]
+#[case(48_000, 9_600)]
+#[case(96_000, 19_200)]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+async fn scratch_holds_200ms_of_frames(#[case] sample_rate: u32, #[case] expected: usize) {
+    hang_tick!();
+    let mut fixture = PcmFixture::new(4, false).await;
+    hang_reset!();
+    let spec = AudioSpec::new(2, NonZeroU32::new(sample_rate).expect("fixture rate"));
+    let duration = Duration::from_millis(200);
+    let frames = spec.frames_for(duration).expect("200 ms input geometry");
+    let samples = [0.25, -0.5].repeat(frames.get());
+    let packet = AudioChunk::new(
+        AudioChunkInfo {
+            spec,
+            frames: u32::try_from(frames.get()).expect("fixture frame count"),
+            segment: SegmentId::FIRST,
+            end_timestamp: duration,
+            source_span: SourceSpan::new(
+                0,
+                frames.get() as u64,
+                spec.sample_rate,
+                frames.get() as u64,
+            ),
+            ..AudioChunkInfo::default()
+        },
+        sample_buffer(&pools(), &samples),
+    );
+    fixture
+        .push(PcmPacket::Chunk(Box::new(packet)))
+        .expect("200 ms packet fits the ring");
+    let receiver = fixture.receiver.take().expect("packet receiver");
+    let mut resource =
+        PlayerResource::new(PcmConsumer::new(receiver), Arc::from("200ms"), &pools())
+            .expect("packet-backed resource");
+    let mut left = vec![0.0; expected];
+    let mut right = vec![0.0; expected];
+    let split = expected / 2;
+    let mut budget = 4;
+    let ReadOutcome::Full { frames: first } =
+        resource.read(&mut [&mut left, &mut right], 0..split, &mut budget)
+    else {
+        panic!("the first read must consume the packet prefix")
+    };
+    assert_eq!(first, split);
+    let ReadOutcome::Full { frames: second } =
+        resource.read(&mut [&mut left, &mut right], split..expected, &mut budget)
+    else {
+        panic!("the second read must consume the held packet remainder")
+    };
+    assert_eq!(FrameCount::new(first + second), FrameCount::new(expected));
+    assert_eq!(resource.lane.frame, expected as u64);
+    assert_eq!(left, vec![0.25; expected]);
+    assert_eq!(right, vec![-0.5; expected]);
+}
 
 #[kithara::test(native, tokio)]
 async fn epoch_validator_keeps_matching_chunks() {

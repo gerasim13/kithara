@@ -1,4 +1,6 @@
 mod core;
+#[cfg(any(test, feature = "mock"))]
+pub(crate) mod mock;
 mod shape;
 
 pub(in crate::rt) use core::Deck;

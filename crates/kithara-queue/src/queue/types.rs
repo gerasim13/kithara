@@ -139,4 +139,28 @@ mod tests {
         assert_eq!(target.reason, AdvanceReason::UserSelect);
         assert!(!target.auto);
     }
+
+    #[kithara::test]
+    fn select_phase_pending_carries_captured_policy() {
+        let target = Target {
+            to: TrackId(5),
+            bound: Bound::AtOrAfter(kithara_signal::SessionFrame::new(64)),
+            settings: CrossfadeSettings {
+                duration: 0.0,
+                ..CrossfadeSettings::default()
+            },
+            transition: Transition::None,
+            playing: true,
+            reason: AdvanceReason::UserSelect,
+            auto: false,
+            stale: None,
+            retry: None,
+            repeat: None,
+            chained: false,
+        };
+        assert_eq!(target.to, TrackId(5));
+        assert_eq!(target.settings.duration, 0.0);
+        assert!(target.playing);
+        assert_eq!(target.reason, AdvanceReason::UserSelect);
+    }
 }
