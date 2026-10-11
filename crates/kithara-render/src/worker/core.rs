@@ -155,8 +155,8 @@ impl<S> PlayWorker<S> {
         inbox: Inbox<DispatcherProtocol<I>>,
     ) -> Result<TaskHandle, LoadRefusal>
     where
-        I: Open + kithara_platform::maybe_send::MaybeSend + 'static,
-        I::Opened: kithara_platform::maybe_send::MaybeSend + 'static,
+        I: Open + Send + 'static,
+        I::Opened: Send + 'static,
         I::Lane: LaneTask,
     {
         let capacity = self.0.capacity;
