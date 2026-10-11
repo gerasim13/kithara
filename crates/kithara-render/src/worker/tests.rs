@@ -3,7 +3,7 @@ use kithara_audio::{AudioConfig, NoResamplerBackend};
 use kithara_file::{File, FileConfig, FileSrc};
 use kithara_test_utils::kithara;
 
-use super::TrackConfig;
+use super::{TrackConfig, TrackConfigPatch};
 use crate::test_pools::{TestPools, pools};
 
 fn file_config() -> FileConfig<TestPools> {
@@ -49,10 +49,13 @@ fn the_document_names_both_live_keys() {
 fn an_absent_key_stays_unset_rather_than_defaulting() {
     let audio =
         AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(file_config()).build();
-    let config = TrackConfig::for_audio(audio)
-        .preload_chunks(std::num::NonZeroUsize::new(8).expect("preload"))
-        .maybe_audio_buffer_chunks(None)
+    let mut config = TrackConfig::for_audio(audio)
+        .audio_buffer_chunks(crate::consts::CAPACITY)
         .build();
+    let patch: TrackConfigPatch =
+        serde_yaml_ng::from_str("preload_chunks: 8\n").expect("the document types");
+    assert!(patch.audio_buffer_chunks.is_none());
+    config.apply(patch);
     assert_eq!(
         config.preload_chunks(),
         std::num::NonZeroUsize::new(8).expect("preload")

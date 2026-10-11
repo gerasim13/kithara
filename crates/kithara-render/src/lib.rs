@@ -31,5 +31,5 @@ pub use priority::ServiceClass;
 pub use source::WarpSource;
 pub use worker::{
     DecoderNode, EngineLoad, EngineLoadSnapshot, LoadRefusal, PcmPacket, PcmReceiver, PlayWorker,
-    PlayWorkerConfig, PlayWorkerConfigPatch, StreamWake, TrackConfig,
+    PlayWorkerConfig, PlayWorkerConfigPatch, StreamWake, TrackConfig, TrackConfigPatch,
 };
