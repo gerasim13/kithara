@@ -1,0 +1,119 @@
+use kithara_command::{Seq, When};
+use kithara_config::Config;
+use kithara_play::{Outbox, PlayError, Player, Position, TrackSnapshot};
+use kithara_signal::{FrameCount, SessionFrame};
+
+use crate::{GridAnswer, LinkError, TempoTrajectory};
+
+/// A player that can align itself and receive the Host's planned tempo trajectory.
+pub trait LinkedPlayer<S>: Player<S> {
+    /// Enables alignment, including an explicit phase jump while sounding;
+    /// disabling alignment sends nothing and preserves in-flight speeds.
+    ///
+    /// # Errors
+    /// Returns the refusal of the speed or jump batch, if one is sent.
+    fn sync(&mut self, on: bool, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError>;
+
+    /// Replaces the Host trajectory, changing sounding lanes on `at`, silent
+    /// lanes on Next, and withdrawing and replanning any waiting start.
+    fn retime(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>);
+
+    /// Accepts analysis for the current load only: resumes grid waits, applies
+    /// silent refinements immediately, and corrects sounding phase without a jump.
+    fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_, S>);
+
+    /// Whether the Host should send this player tempo changes.
+    fn synced(&self) -> bool;
+
+    /// The lane's required lead while sounding in SYNC; silent players return None.
+    fn lead(&self, delivery: FrameCount) -> Option<FrameCount>;
+
+    /// Available room in all lane queues that a retime would send to.
+    fn lane_room(&self) -> usize;
+
+    /// Scope batches needed to reopen silent tracks during a retime.
+    fn scope_parts(&self) -> usize;
+
+    /// Whether any speed batch for this retime has applied; None awaits a verdict.
+    fn retime_applied(&mut self, at: SessionFrame) -> Option<bool>;
+
+    /// Replaces the trajectory and closes phase using only bounded speed steps.
+    fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>);
+}
+
+/// Maximum adjacent speed step used for inaudible phase correction.
+#[derive(Clone, Copy, Debug, PartialEq, Config)]
+#[config(default, check(error = LinkError), fields(value, get(copy)))]
+pub struct LinkConfig {
+    #[config(check = check_epsilon, builder(default = 0.001))]
+    epsilon: f32,
+}
+
+fn check_epsilon(epsilon: f32) -> Result<f32, LinkError> {
+    if epsilon.is_finite() && epsilon > 0.0 {
+        Ok(epsilon)
+    } else {
+        Err(LinkError::Epsilon { epsilon })
+    }
+}
+
+/// Whether Host synchronization owns speed and phase for this track.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SyncMode {
+    Off,
+    On,
+    /// Analysis refused; playback continues without synchronization.
+    Unsyncable,
+}
+
+/// Synchronization progress beside the underlying track snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SyncStatus {
+    Off,
+    On,
+    WaitingForGrid { required: Position },
+    Unsyncable,
+    Correcting { remaining: FrameCount },
+}
+
+/// An owner command waiting for a grid that covers its media position.
+#[derive(Clone, Copy, Debug)]
+pub enum Waiting {
+    Load {
+        required: Position,
+    },
+    Play {
+        required: Position,
+        at: When<SessionFrame>,
+    },
+    Sync {
+        required: Position,
+    },
+    Seek {
+        required: Position,
+    },
+}
+
+impl Waiting {
+    pub(super) fn required(self) -> Position {
+        match self {
+            Self::Load { required }
+            | Self::Play { required, .. }
+            | Self::Sync { required }
+            | Self::Seek { required } => required,
+        }
+    }
+}
+
+/// Track state and its synchronization admission or correction state.
+#[derive(Clone, Debug)]
+pub struct LinkedSnapshot<T> {
+    pub track: T,
+    pub sync: SyncStatus,
+}
+
+impl<T: AsRef<TrackSnapshot>> AsRef<TrackSnapshot> for LinkedSnapshot<T> {
+    fn as_ref(&self) -> &TrackSnapshot {
+        self.track.as_ref()
+    }
+}
