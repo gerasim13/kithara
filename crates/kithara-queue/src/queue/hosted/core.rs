@@ -2,12 +2,12 @@ use std::{num::NonZeroU32, task::Waker};
 
 use kithara_bufpool::HasPool;
 use kithara_command::{Outcome, Receipt, Rejection, Seq};
-use kithara_events::TrackId;
-use kithara_platform::maybe_send::MaybeSend;
+use kithara_events::{SlotId, TrackId};
+use kithara_platform::{maybe_send::MaybeSend, sync::Arc};
 use kithara_play::{
-    DeckEvent, DeckMixerConfig, DeckPass, HostedDeck, LoadRefusal, Outbox, OutputSnapshot,
-    PlayError, PlayWorker, Player, Settled, TrackCommand, TrackFactory, TrackReceipt,
-    TrackStatus as PlayingStatus,
+    DeckEvent, DeckMixerConfig, DeckPass, HostedDeck, ItemRole, LoadRefusal, Outbox,
+    OutputSnapshot, PlayError, PlayWorker, Player, PlayerEvent, Settled, TrackCommand,
+    TrackFactory, TrackReceipt, TrackRef, TrackStatus as PlayingStatus,
 };
 use kithara_signal::SessionFrame;
 use tracing::warn;
@@ -472,11 +472,26 @@ where
             }
             return;
         }
-        if let DeckEvent::Ended { slot, .. } = event {
-            let current = self
-                .active
-                .iter()
-                .any(|active| active.slot == slot && active.role == Role::Current);
+        if let DeckEvent::Ended { slot, at } = event {
+            let Some(active) = self.active.iter().find(|active| active.slot == slot) else {
+                return;
+            };
+            let current = active.role == Role::Current;
+            if active.track.snapshot().as_ref().status == (PlayingStatus::Ended { at })
+                && let Some(entry) = self.track(active.item)
+            {
+                let track = TrackRef::new(
+                    active.item,
+                    SlotId::new(u64::from(slot.get())),
+                    Arc::from(entry.url.as_deref().unwrap_or(&entry.name)),
+                );
+                let item = match active.role {
+                    Role::Current => ItemRole::Leading(track),
+                    Role::Outgoing => ItemRole::Outgoing(track),
+                    _ => ItemRole::Background(track),
+                };
+                self.bus.publish(PlayerEvent::ItemDidPlayToEnd { item });
+            }
             if current
                 && self.target.is_none()
                 && self.config.action_at_item_end == ActionAtItemEnd::Advance
