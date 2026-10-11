@@ -393,6 +393,94 @@ fn segment_aware_seek_alias_routes_tail_by_segment_index() {
 }
 
 #[kithara::test]
+fn segment_aware_seek_descriptors_keep_the_readers_coordinates_after_prefix_growth() {
+    let ctx = test_ctx(3);
+    let variant = VariantParts {
+        init: None,
+        segments: (0..4)
+            .map(|idx| make_placeholder_seg(idx, 100, &ctx.scope))
+            .collect(),
+        codec: Some(AudioCodec::Flac),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    let anchor = variant
+        .prepare_seek_time_anchor(Duration::from_secs(4))
+        .expect("seek anchor")
+        .expect("segmented seek");
+    variant.apply_resolved_size(SizeDemand::Segment(0), 200);
+
+    let descriptor = variant.descriptor(2).expect("target segment");
+    assert_eq!(
+        descriptor.byte_range,
+        anchor.byte_offset..anchor.byte_offset + 100
+    );
+    assert_eq!(
+        variant.find_at_offset(descriptor.byte_range.start),
+        Some((2, descriptor.byte_range.start, 100))
+    );
+    assert_eq!(
+        variant.descriptor(3).expect("next segment").byte_range,
+        anchor.byte_offset + 100..anchor.byte_offset + 200
+    );
+    assert_eq!(
+        variant
+            .descriptor_after_byte(anchor.byte_offset + 1)
+            .expect("next descriptor")
+            .byte_range,
+        anchor.byte_offset + 100..anchor.byte_offset + 200
+    );
+    assert_eq!(
+        variant
+            .descriptor_at_time(Duration::from_secs(4))
+            .expect("target time")
+            .byte_range,
+        descriptor.byte_range
+    );
+    assert_eq!(variant.segment_byte_offset(2), Some(300));
+}
+
+#[kithara::test]
+#[case::byte_window(Some(150), None, 250)]
+#[case::segment_window(None, Some(2), 300)]
+fn dispatch_windows_follow_seek_alias_after_prefix_growth(
+    #[case] byte_window: Option<u64>,
+    #[case] segment_window: Option<usize>,
+    #[case] resume_byte: u64,
+) {
+    let mut ctx = test_ctx(5);
+    Arc::get_mut(&mut ctx.config)
+        .expect("unshared test config")
+        .look_ahead_bytes = byte_window;
+    ctx.look_ahead_segments = segment_window;
+    let variant = VariantParts {
+        init: None,
+        segments: (0..5)
+            .map(|idx| make_placeholder_seg(idx, 100, &ctx.scope))
+            .collect(),
+        codec: Some(AudioCodec::Flac),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    let anchor = variant
+        .prepare_seek_time_anchor(Duration::from_secs(4))
+        .expect("seek anchor")
+        .expect("segmented seek");
+    variant.apply_resolved_size(SizeDemand::Segment(0), 400);
+    variant.rebuild(&ctx, 2);
+    let session = active_session(&variant, &ctx, anchor.byte_offset);
+
+    let commands = session.dispatch(&ctx, 5);
+    let urls: Vec<_> = commands
+        .iter()
+        .map(|command| command.url().clone())
+        .collect();
+    assert_eq!(urls, vec![segment_url(2), segment_url(3)]);
+    assert!(!variant.take_prefetch_resume_at(resume_byte - 1));
+    assert!(variant.take_prefetch_resume_at(resume_byte));
+}
+
+#[kithara::test]
 fn position_starts_at_zero() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400], &ctx);
@@ -1769,6 +1857,50 @@ fn an_exact_seek_on_a_segment_addressed_container_probes_nothing() {
     let probed = exact_seek_probe_urls(Some(AudioCodec::Flac), Some(ContainerFormat::Fmp4), false);
 
     assert!(probed.is_empty(), "fMP4 resolves by index: {probed:?}");
+}
+
+#[kithara::test]
+#[case::known_init(true)]
+#[case::unknown_init(false)]
+fn exact_byte_seek_inside_init_does_not_wait_for_media_sizes(#[case] init_known: bool) {
+    let ctx = test_ctx(10);
+    let variant = VariantParts {
+        init: if init_known {
+            make_init(44, &ctx.scope)
+        } else {
+            Some(make_placeholder_init(64, &ctx.scope))
+        },
+        segments: (0..3)
+            .map(|index| make_placeholder_seg(index, 256, &ctx.scope))
+            .collect(),
+        codec: Some(AudioCodec::Pcm),
+        container: Some(ContainerFormat::Wav),
+    }
+    .into_variant(0, &ctx);
+    variant.register_session_seek(0, true);
+    assert_eq!(
+        variant.exact_byte_metadata_phase(),
+        if init_known {
+            None
+        } else {
+            Some(SourcePhase::WaitingDemand)
+        }
+    );
+    let session = active_session(&variant, &ctx, 0);
+    let probed: Vec<Url> = session
+        .dispatch(&ctx, 10)
+        .iter()
+        .map(|command| command.url().clone())
+        .collect();
+    assert_eq!(probed, if init_known { vec![] } else { vec![init_url()] });
+    variant.apply_resolved_size(SizeDemand::Init, 44);
+    assert_eq!(variant.exact_byte_metadata_phase(), None);
+    assert!(
+        variant
+            .segments()
+            .iter()
+            .all(|segment| !segment.size().is_exact())
+    );
 }
 
 fn exact_seek_session() -> (Arc<HlsVariant>, HlsSession, u64) {
