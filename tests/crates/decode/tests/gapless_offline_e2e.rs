@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 use kithara_integration_tests::mock::gapless::*;
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
