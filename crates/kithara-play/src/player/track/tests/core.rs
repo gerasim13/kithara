@@ -2388,6 +2388,7 @@ pub(super) async fn a_cancelled_repeat_reaches_its_original_end(frames: usize) {
     drop(driver);
 }
 
+#[kithara::hang_watchdog]
 pub(super) fn settle_mixer(
     track: &mut Track,
     mixer: &mut mock::MixerRig,
@@ -2395,6 +2396,8 @@ pub(super) fn settle_mixer(
     now: SessionFrame,
 ) {
     while let Some(receipt) = mixer.ring.receipt() {
+        hang_tick!();
+        hang_reset!();
         let kithara_command::ScopedReceipt::Scope(_, receipt) = receipt else {
             continue;
         };
@@ -2436,12 +2439,14 @@ fn a_track_whose_slot_faded_out_reports_it() {
 }
 
 #[kithara::test]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 fn a_load_the_deck_has_no_room_for_leaves_the_lane_untouched() {
     let mut rig = rig();
     {
         let deck = &mut rig.deck;
         let mut scope = deck.ring.scope(deck.scope).expect("live deck scope");
         let error = loop {
+            hang_tick!();
             if let Err(error) = scope.send(
                 When::Next,
                 Batch {
@@ -2449,6 +2454,7 @@ fn a_load_the_deck_has_no_room_for_leaves_the_lane_untouched() {
                     commands: Vec::new(),
                 },
             ) {
+                hang_reset!();
                 break error;
             }
         };

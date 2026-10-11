@@ -456,6 +456,7 @@ async fn seek_after_terminal_failure_returns_the_first_cause() {
 }
 
 #[kithara::test(tokio)]
+#[kithara::hang_watchdog]
 async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks(
     route_pcm: RoutePcm,
 ) {
@@ -500,12 +501,16 @@ async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks(
     // Drain while the deferred transition is in flight until the source
     // exhausts; EOF must stay held for the transition and never surface.
     while !fixture.source.decode.active().is_source_exhausted() {
+        hang_tick!();
         match fixture.source.step_track() {
             TrackStep::Produced(fetch) => {
                 let chunk = produced_data(fetch);
                 assert_eq!(chunk.meta.frame_offset, next_offset);
                 next_offset = next_offset.saturating_add(u64::from(chunk.meta.frames));
                 frames = frames.saturating_add(chunk.frames());
+                if chunk.frames() != 0 {
+                    hang_reset!();
+                }
             }
             TrackStep::StateChanged | TrackStep::Blocked(_) => {}
             TrackStep::Eof => panic!("EOF must stay held while a transition is in flight"),
@@ -519,13 +524,18 @@ async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks(
     // incoming, releasing the held EOF so it can finalize and flush the
     // gapless boundary exactly once.
     fixture.control.set_promotion(VariantPromotion::Stale);
+    hang_reset!();
     loop {
+        hang_tick!();
         match fixture.source.step_track() {
             TrackStep::Produced(fetch) => {
                 let chunk = produced_data(fetch);
                 assert_eq!(chunk.meta.frame_offset, next_offset);
                 next_offset = next_offset.saturating_add(u64::from(chunk.meta.frames));
                 frames = frames.saturating_add(chunk.frames());
+                if chunk.frames() != 0 {
+                    hang_reset!();
+                }
             }
             TrackStep::StateChanged | TrackStep::Blocked(_) => {}
             TrackStep::Eof => break,

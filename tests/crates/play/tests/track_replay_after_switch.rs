@@ -181,6 +181,7 @@ async fn replay_track_after_switch_does_not_hang_loader(
         .crossfade_seconds(0.0)
         .open()
         .await;
+    let mut events = queue.subscribe();
 
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
@@ -212,7 +213,6 @@ async fn replay_track_after_switch_does_not_hang_loader(
         .await
         .unwrap_or_else(|e| panic!("[{mode:?}] initial load B: {e}"));
 
-    let mut events = queue.subscribe();
     queue
         .run(move |q| q.select(id_a, Transition::None))
         .await

@@ -30,7 +30,7 @@ use kithara_integration_tests::{
     event::TestEvent,
     mixed_plain,
     mock::LaneAudio,
-    reads::{blocking_audio, read_to_eof, read_until_samples},
+    reads::blocking_audio,
     waits::wait_for_event,
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -219,26 +219,42 @@ impl EventCollector {
         self.dropped_events.load(Ordering::Relaxed)
     }
 
+    #[kithara::flash(io)]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(3))]
     async fn finish_read<A>(&self, (audio, total): (A, u64), bus: &EventBus) -> u64 {
         let mut rx = bus.subscribe();
         self.drain();
-        if !self.request_map.lock().is_empty() {
-            wait_for_event(
-                &mut rx,
-                "all collected segment GETs reaching a terminal downloader event",
-                |_| {
-                    self.drain();
-                    self.request_map.lock().is_empty()
-                },
-                Duration::from_secs(20),
+        let mut pending = self.request_map.lock().len();
+        while pending > 0 {
+            hang_tick!();
+            kithara::platform::time::timeout(
+                __hang_detector.remaining(),
+                wait_for_event(
+                    &mut rx,
+                    "all collected segment GETs reaching a terminal downloader event",
+                    |_| {
+                        self.drain();
+                        self.request_map.lock().len() < pending
+                    },
+                    Duration::from_secs(20),
+                ),
             )
             .await
+            .unwrap_or_else(|_| {
+                hang_tick!();
+                panic!(
+                    "segment GET completion stopped: {:?}",
+                    *self.request_map.lock()
+                );
+            })
             .unwrap_or_else(|error| {
                 panic!(
                     "GETs must settle before dropping the stream owner: {error}; pending={:?}",
                     *self.request_map.lock()
                 );
             });
+            pending = self.request_map.lock().len();
+            hang_reset!();
         }
         assert_eq!(
             self.dropped_events(),
@@ -568,6 +584,10 @@ fn read_phase_until_samples<S: StreamType>(
     read_phase_until(audio, target_samples, label, || true)
 }
 
+fn read_to_eof<S: StreamType>(audio: &mut LaneAudio<Stream<S>, TestPools>) -> u64 {
+    read_phase_until_samples(audio, u64::MAX, "read to EOF").samples
+}
+
 /// Pump until the sample target is met *and* `settled` holds.
 ///
 /// A sample target alone does not bound a phase that is meant to observe a
@@ -589,7 +609,8 @@ fn read_phase_until_samples<S: StreamType>(
 /// was asking for something the transition cannot do at any landing. Pacing the
 /// wait gives the switch the same opportunity it has in production; the
 /// assertion itself is unchanged.
-#[kithara::flash(true)]
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 fn read_phase_until<S: StreamType>(
     audio: &mut LaneAudio<Stream<S>, TestPools>,
     target_samples: u64,
@@ -605,6 +626,7 @@ fn read_phase_until<S: StreamType>(
     let mut consumed = Duration::ZERO;
 
     while stats.samples < target_samples || !settled() {
+        hang_tick!();
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Frames {
                 count, position, ..
@@ -613,6 +635,7 @@ fn read_phase_until<S: StreamType>(
                     pace(position.saturating_sub(consumed));
                 }
                 consumed = position;
+                hang_reset!();
                 let n = count.get();
                 for &sample in &buf[..n] {
                     assert!(
@@ -627,6 +650,7 @@ fn read_phase_until<S: StreamType>(
             }
             Ok(ReadOutcome::Pending { .. }) => {
                 stats.pending += 1;
+                hang_park!(|remaining: Duration| pace(remaining.min(Duration::from_micros(500))));
             }
             Ok(ReadOutcome::Eof { .. }) => {
                 stats.saw_eof = true;
@@ -653,8 +677,9 @@ where
     S: StreamType + 'static,
     LaneAudio<Stream<S>, TestPools>: Send + 'static,
 {
+    let read_label = label.to_owned();
     spawn_blocking(move || {
-        let samples = read_until_samples(&mut audio, target_samples);
+        let samples = read_phase_until(&mut audio, target_samples, &read_label, || true).samples;
         (audio, samples)
     })
     .await
@@ -678,40 +703,51 @@ where
     let read_label = label.to_owned();
     let join_label = read_label.clone();
     spawn_blocking(move || {
-        let mut buf = vec![0f32; 4096];
-        loop {
-            match audio.read(&mut buf) {
-                Ok(ReadOutcome::Pending { .. }) => continue,
-                Ok(ReadOutcome::Frames { count, .. }) => {
-                    let n = count.get();
-                    for &sample in &buf[..n] {
-                        assert!(sample.is_finite(), "{read_label}: non-finite sample");
-                    }
-                    return (
-                        audio,
-                        BlockingReadStep {
-                            samples: n as u64,
-                            saw_eof: false,
-                        },
-                    );
-                }
-                Ok(ReadOutcome::Eof { .. }) => {
-                    return (
-                        audio,
-                        BlockingReadStep {
-                            samples: 0,
-                            saw_eof: true,
-                        },
-                    );
-                }
-                Err(err) => panic!("{read_label}: decode error: {err}"),
-            }
-        }
+        let step = read_one_chunk(&mut audio, &read_label);
+        (audio, step)
     })
     .await
     .unwrap_or_else(|err| panic!("{join_label}: spawn_blocking failed: {err}"))
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+fn read_one_chunk<S: StreamType>(
+    audio: &mut LaneAudio<Stream<S>, TestPools>,
+    read_label: &str,
+) -> BlockingReadStep {
+    let mut buf = vec![0f32; 4096];
+    loop {
+        hang_tick!();
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Pending { .. }) => {
+                hang_park!(|remaining: Duration| pace(remaining.min(Duration::from_micros(500))));
+            }
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                hang_reset!();
+                let n = count.get();
+                for &sample in &buf[..n] {
+                    assert!(sample.is_finite(), "{read_label}: non-finite sample");
+                }
+                return BlockingReadStep {
+                    samples: n as u64,
+                    saw_eof: false,
+                };
+            }
+            Ok(ReadOutcome::Eof { .. }) => {
+                hang_reset!();
+                return BlockingReadStep {
+                    samples: 0,
+                    saw_eof: true,
+                };
+            }
+            Err(err) => panic!("{read_label}: decode error: {err}"),
+        }
+    }
+}
+
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn read_until_manual_applied<S>(
     mut audio: LaneAudio<Stream<S>, TestPools>,
     collector: &EventCollector,
@@ -731,9 +767,13 @@ where
     while !collector.applied_transitions()[applied_before..]
         .contains(&(target, AbrReason::ManualOverride))
     {
+        hang_tick!();
         let (next, step) = read_one_chunk_blocking(audio, label).await;
         audio = next;
         stats.samples = stats.samples.saturating_add(step.samples);
+        if step.samples > 0 {
+            hang_reset!();
+        }
         if step.saw_eof {
             stats.saw_eof = true;
             break;
@@ -949,6 +989,27 @@ async fn vod_manual_switch_affects_future_segments(
     );
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+async fn wait_for_stalled_event(
+    events: &mut EventReceiver<TestEvent>,
+    label: &str,
+    predicate: impl FnMut(&TestEvent) -> bool,
+) {
+    hang_tick!();
+    let result = kithara::platform::time::timeout(
+        __hang_detector.remaining(),
+        wait_for_event(events, label, predicate, Duration::from_secs(20)),
+    )
+    .await;
+    let result = result.unwrap_or_else(|_| {
+        hang_tick!();
+        panic!("stalled event wait exhausted its liveness budget: {label}");
+    });
+    result.expect(label);
+    hang_reset!();
+}
+
 /// Regression for escaping a stalled reader at a clean segment boundary.
 ///
 /// V0's segment 5 body is withheld, so the reader parks at its start. Once the
@@ -1015,7 +1076,7 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
 
     let mut stalled_requests = HashSet::new();
     let mut saw_load_slow = false;
-    wait_for_event(
+    wait_for_stalled_event(
         &mut rescue_rx,
         "LoadSlow for the gated V0 segment",
         |event| {
@@ -1036,10 +1097,8 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
             }
             saw_load_slow
         },
-        Duration::from_secs(20),
     )
-    .await
-    .expect("LoadSlow for the gated V0 segment");
+    .await;
     assert!(
         gate.requested() > 0,
         "the gated V0 segment body must be parked before reading"
@@ -1047,7 +1106,7 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
 
     let read = spawn(blocking_audio(audio, read_to_eof));
     let mut saw_escape = false;
-    wait_for_event(
+    wait_for_stalled_event(
         &mut rescue_rx,
         "stalled-boundary EscapeStalled rescue",
         |event| {
@@ -1063,10 +1122,8 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant(
             }
             saw_escape
         },
-        Duration::from_secs(20),
     )
-    .await
-    .expect("stalled-boundary EscapeStalled rescue");
+    .await;
     gate.release();
 
     let total = collector.finish_read(read.await.expect("read"), &bus).await;
