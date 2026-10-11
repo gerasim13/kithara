@@ -55,6 +55,7 @@ pub fn track_load<T, B, S, L, F>(
 ) -> ResourceLoad<S>
 where
     T: StreamType<Events = EventBus> + 'static,
+    T::Config: Send,
     B: Default + ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     L: kithara_render::LaneTask + 'static,
