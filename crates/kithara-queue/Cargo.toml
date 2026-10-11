@@ -18,7 +18,6 @@ ignored = ["serde"]
 default = ["symphonia", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
 mock = [
     "dep:kithara-render",
-    "dep:kithara-test-utils",
     "kithara-play/mock",
     "kithara-test-utils/temp-dir",
 ]
@@ -56,7 +55,7 @@ kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false }
 kithara-render = { workspace = true, optional = true, default-features = false }
 kithara-signal = { workspace = true }
-kithara-test-utils = { workspace = true, optional = true }
+kithara-test-utils = { workspace = true }
 
 arc-swap = { workspace = true }
 delegate = { workspace = true }

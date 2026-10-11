@@ -23,8 +23,8 @@ use kithara_platform::{
 };
 use kithara_render::{
     Dispatched, DispatcherCommand, DispatcherProtocol, LoadRefusal, LoadRequest, Loaded, Open,
-    bridge::{DeckEnds, DeckEvents, DeckPart, DeckProtocol, SessionInbox, Slot, scope_channels},
-    mock::MockDeck,
+    bridge::{DeckEnds, DeckEvents, DeckPart, DeckProtocol, Slot, scope_channels},
+    mock::{MockDeck, TestSessionInbox},
     rt::{DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context},
 };
 use kithara_signal::{FrameCount, OutputContext, SessionEpoch, SessionFrame};
@@ -259,21 +259,12 @@ where
     Ok(())
 }
 
-/// The scoped command inbox installed in a mock audio-thread processor store.
-pub struct MixerInbox(pub ScopedInbox<DeckProtocol, DeckProtocol>);
-
-impl SessionInbox for MixerInbox {
-    fn scope(&mut self, scope: ScopeId) -> Option<kithara_command::LevelInbox<'_, DeckProtocol>> {
-        self.0.scope(scope)
-    }
-}
-
 /// A real offline mixer driven by exact host blocks and scoped deck commands.
 pub struct MixerRig {
     pub ring: ScopedSender<DeckProtocol, DeckProtocol>,
     pub scope: ScopeId,
     pub ends: DeckEnds,
-    mixer: DeckMixer<MixerInbox>,
+    mixer: DeckMixer<TestSessionInbox>,
     extra: ProcExtra,
     shape: StreamShape,
 }
@@ -306,7 +297,7 @@ impl MixerRig {
         let frames = usize::try_from(shape.max_block_frames.get())
             .map_err(|error| PlayError::Internal(error.to_string()))?;
         let mut store = ProcStore::with_capacity(2);
-        if store.insert(MixerInbox(inbox)).is_err() {
+        if store.insert(TestSessionInbox(inbox)).is_err() {
             return Err(PlayError::Internal(
                 "mock session inbox store is full".into(),
             ));
@@ -378,7 +369,7 @@ impl MixerRig {
             .map_err(|error| PlayError::Internal(error.to_string()))?;
         self.extra
             .store
-            .try_get_mut::<MixerInbox>()
+            .try_get_mut::<TestSessionInbox>()
             .ok_or(PlayError::Closed)?
             .0
             .drain();
