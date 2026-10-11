@@ -944,6 +944,7 @@ mod tests {
             .send(
                 When::Next,
                 DeckPart::Attach {
+                    item_id: kithara_events::TrackId::allocate(),
                     slot,
                     pcm: opened.pcm,
                     segment: SegmentId::FIRST,
@@ -1025,6 +1026,7 @@ mod tests {
             .send(
                 When::Next,
                 DeckPart::Attach {
+                    item_id: kithara_events::TrackId::allocate(),
                     slot: first_slot,
                     pcm: first.pcm,
                     segment: SegmentId::FIRST,
@@ -1088,6 +1090,7 @@ mod tests {
             .send(
                 When::Next,
                 DeckPart::Attach {
+                    item_id: kithara_events::TrackId::allocate(),
                     slot: next_slot,
                     pcm: next.pcm,
                     segment: SegmentId::FIRST,
@@ -1342,6 +1345,7 @@ mod tests {
             .send(
                 When::Next,
                 DeckPart::Attach {
+                    item_id: kithara_events::TrackId::allocate(),
                     slot,
                     pcm: opened.pcm,
                     segment: SegmentId::FIRST,

@@ -97,6 +97,7 @@ fn load_tracks(
             When::Next,
             vec![
                 DeckPart::Attach {
+                    item_id: kithara_events::TrackId::allocate(),
                     slot,
                     pcm: Box::new(pcm),
                     segment: SegmentId::FIRST,

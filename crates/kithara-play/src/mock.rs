@@ -224,6 +224,7 @@ where
     mixer.send(
         When::Next,
         DeckPart::Attach {
+            item_id: kithara_events::TrackId::allocate(),
             slot,
             pcm: opened.pcm,
             segment: SegmentId::FIRST,

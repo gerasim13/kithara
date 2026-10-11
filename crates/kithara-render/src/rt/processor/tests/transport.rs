@@ -9,6 +9,7 @@ async fn a_started_slot_sounds_from_its_frame(constant_half: &'static [u8]) {
         &mut ends,
         When::Next,
         vec![DeckPart::Attach {
+            item_id: kithara_events::TrackId::allocate(),
             slot: A,
             pcm: pcm(constant_half, "a", 60.0),
             segment: SegmentId::FIRST,
@@ -43,6 +44,7 @@ async fn a_crossfade_start_follows_the_incoming_gains(constant_half: &'static [u
         When::Next,
         vec![
             DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
                 slot: A,
                 pcm: pcm(constant_half, "a", 60.0),
                 segment: SegmentId::FIRST,
@@ -80,6 +82,7 @@ async fn a_fade_to_silence_stops_the_slot_and_reports_faded(constant_half: &'sta
         When::Next,
         vec![
             DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
                 slot: A,
                 pcm: pcm(constant_half, "a", 60.0),
                 segment: SegmentId::FIRST,
@@ -128,6 +131,7 @@ async fn a_replace_plays_the_old_consumer_out_of_the_tail(constant_half: &'stati
         When::Next,
         vec![
             DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
                 slot: A,
                 pcm: pcm(constant_half, "old", 60.0),
                 segment: SegmentId::FIRST,
@@ -144,6 +148,7 @@ async fn a_replace_plays_the_old_consumer_out_of_the_tail(constant_half: &'stati
         at(REPLACE_AT),
         &[(A, None)],
         vec![DeckPart::Replace {
+            item_id: kithara_events::TrackId::allocate(),
             slot: A,
             pcm: pcm(constant_half, "new", 60.0),
             segment: SegmentId::FIRST,
@@ -186,11 +191,13 @@ async fn a_chain_starts_its_slot_on_the_frame_after_the_end(constant_half: &'sta
         &[(A, None), (B, None)],
         vec![
             DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
                 slot: A,
                 pcm: pcm(constant_half, "ending", 0.005),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
                 slot: B,
                 pcm: pcm(constant_half, "next", 60.0),
                 segment: SegmentId::FIRST,
@@ -243,11 +250,13 @@ async fn a_chain_whose_slot_shifted_comes_back_stale(constant_half: &'static [u8
         When::Next,
         vec![
             DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
                 slot: A,
                 pcm: pcm(constant_half, "ending", 0.005),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
                 slot: B,
                 pcm: pcm(constant_half, "next", 60.0),
                 segment: SegmentId::FIRST,
@@ -300,11 +309,13 @@ async fn a_detached_slot_refuses_the_chain_behind_it(constant_half: &'static [u8
         When::Next,
         vec![
             DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
                 slot: A,
                 pcm: pcm(constant_half, "ending", 0.005),
                 segment: SegmentId::FIRST,
             },
             DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
                 slot: B,
                 pcm: pcm(constant_half, "next", 60.0),
                 segment: SegmentId::FIRST,
@@ -326,6 +337,7 @@ async fn a_detached_slot_refuses_the_chain_behind_it(constant_half: &'static [u8
         When::Next,
         vec![
             DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
                 slot: B,
                 pcm: pcm(constant_half, "next", 60.0),
                 segment: SegmentId::FIRST,
@@ -358,6 +370,7 @@ async fn an_attach_to_an_occupied_slot_is_refused(constant_half: &'static [u8]) 
         &mut ends,
         When::Next,
         vec![DeckPart::Attach {
+            item_id: kithara_events::TrackId::allocate(),
             slot: A,
             pcm: pcm(constant_half, "held", 60.0),
             segment: SegmentId::FIRST,
@@ -367,6 +380,7 @@ async fn an_attach_to_an_occupied_slot_is_refused(constant_half: &'static [u8]) 
         &mut ends,
         When::Next,
         vec![DeckPart::Attach {
+            item_id: kithara_events::TrackId::allocate(),
             slot: A,
             pcm: pcm(constant_half, "refused", 60.0),
             segment: SegmentId::FIRST,
@@ -394,6 +408,7 @@ async fn a_band_cut_lowers_the_deck_output_in_the_next_block(constant_half: &'st
         When::Next,
         vec![
             DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
                 slot: A,
                 pcm: pcm(constant_half, "eq", 60.0),
                 segment: SegmentId::FIRST,
@@ -439,6 +454,7 @@ async fn a_full_event_ring_counts_its_overflows(constant_half: &'static [u8]) {
             When::Next,
             vec![
                 DeckPart::Attach {
+                    item_id: kithara_events::TrackId::allocate(),
                     slot: A,
                     pcm: pcm(constant_half, "short", 0.001),
                     segment: SegmentId::FIRST,

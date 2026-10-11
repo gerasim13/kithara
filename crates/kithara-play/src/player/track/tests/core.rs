@@ -473,6 +473,7 @@ fn a_rejected_launch_leaves_the_member_silent() {
         .send(
             When::Next,
             DeckPart::Attach {
+                item_id: TrackId::allocate(),
                 slot: A,
                 pcm: opened.pcm,
                 segment: SegmentId::FIRST,
