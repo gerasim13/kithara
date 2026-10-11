@@ -6,7 +6,8 @@ use crate::{
     detector::{BeatDetectError, BeatDetector},
     mark::RawBeats,
     nn::{
-        config::BeatConfig, inference::BeatPredictor, mel::MelExtractor, postprocess::PeakPicker,
+        backend::BeatBackend, config::BeatConfig, inference::BeatPredictor, mel::MelExtractor,
+        postprocess::PeakPicker,
     },
 };
 
@@ -19,6 +20,9 @@ pub enum BeatError {
     Inference { reason: String },
     #[error("buffer allocation failed: {0}")]
     Buffer(#[from] PoolError),
+    #[cfg(feature = "cuda")]
+    #[error("CUDA runtime failed: {0}")]
+    Cuda(#[from] ort::Error),
 }
 
 /// `beat_this` NN detector: mel, chunked inference, then peak picking.
@@ -37,21 +41,23 @@ impl<S> BeatThis<S>
 where
     S: HasPool<f32>,
 {
-    /// Models from mel and beat ONNX bytes, decoded with `config`.
+    /// Models from ONNX bytes, decoded with `config` using the selected backend.
     ///
     /// # Errors
     /// [`BeatError::ModelLoad`] when either model fails to parse.
+    /// With `cuda`, runtime/provider errors are returned as `BeatError::Cuda`.
     #[builder]
     pub fn new(
         mel_model: &[u8],
         beat_model: &[u8],
         pools: PoolRegion<S>,
         #[builder(default)] config: BeatConfig,
+        #[builder(default)] backend: BeatBackend,
     ) -> Result<Self, BeatError> {
         Ok(Self {
             pools,
             mel: MelExtractor::try_from(mel_model)?,
-            predictor: BeatPredictor::try_from(beat_model)?,
+            predictor: BeatPredictor::try_from((backend, beat_model))?,
             picker: PeakPicker::new(config),
         })
     }

@@ -14,7 +14,7 @@
 
 # kithara-beat
 
-Beat / downbeat detection: pure-Rust NN inference. A port of the `beat_this`
+Beat / downbeat detection: CPU NN inference with optional native CUDA prediction. A port of the `beat_this`
 pipeline (CPJKU, ISMIR 2024) via `danigb/beat-this-rs` @ `089b509`. Code and
 model weights of both upstreams are MIT-licensed; this crate keeps that
 attribution.
@@ -37,6 +37,13 @@ let raw: RawBeats = bt.analyze(&mono_22050)?;
 - `BeatThis::builder()` — load models from bytes (caller chooses embed vs file
   vs download), inject a sample-capable pool facade, and pick the decoding policy.
 - `BeatThis::analyze(&mono_22050)` — run the mel, inference and peak-pick pipeline.
+- `BeatBackend` — select the beat predictor runtime through `.backend(...)`.
+  `Cpu` is the default. With `cuda`, use `BeatBackend::Cuda { device_id: 0 }`.
+  Mel extraction remains RTen CPU because its FFT model is unchanged; peak
+  picking and output buffers also remain on CPU. CUDA provider registration
+  errors are returned without switching the predictor to CPU. ONNX Runtime
+  may place shape/control operators on CPU; model kernel placement and complete
+  analysis latency must be measured before claiming acceleration.
 - `BeatConfig` — peak threshold, max-pool half-width, dedup width. The defaults
   are the values the golden fixtures are held to; see [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-beat) before moving
   them.
@@ -58,6 +65,12 @@ let raw: RawBeats = bt.analyze(&mono_22050)?;
 
 ## Features
 
+- `cuda` — optional ONNX Runtime GPU predictor using the same ONNX model bytes.
+  Supply compatible native ONNX Runtime, CUDA and cuDNN libraries; configure
+  `ORT_DYLIB_PATH` before the first runtime call when it is outside the dynamic
+  library search path. No runtime binary is downloaded by this feature. Each
+  detector owns one session and serializes its CUDA model calls. CPU-only
+  builds retain the existing RTen path and require no ONNX Runtime library.
 - `embed-small-model`, `embed-full-model`, `embed-full-int8-model` — exactly one
   of these exposes `MEL_MODEL_BYTES` / `BEAT_MODEL_BYTES` / `BEAT_MODEL_TAG`, so
   FFI/mobile builds need no asset plumbing. Off by default. The build script

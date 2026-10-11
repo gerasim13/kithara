@@ -4,8 +4,11 @@ use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use num_traits::cast::ToPrimitive;
 use smallvec::smallvec;
 
+#[cfg(feature = "cuda")]
+use crate::nn::cuda::CudaModel;
 use crate::nn::{
     api::BeatError,
+    backend::BeatBackend,
     consts,
     runtime::{RtenModel, Tensor},
 };
@@ -23,16 +26,30 @@ fn as_usize(x: i64) -> usize {
 /// The beat model was trained on 1500-frame segments; longer audio is split
 /// into overlapping chunks aggregated `keep_first` (earlier chunks win).
 pub(crate) struct BeatPredictor {
-    model: RtenModel,
+    model: PredictorModel,
+}
+
+enum PredictorModel {
+    Cpu(Box<RtenModel>),
+    #[cfg(feature = "cuda")]
+    Cuda(CudaModel),
 }
 
 /// Load the beat model from ONNX bytes.
-impl TryFrom<&[u8]> for BeatPredictor {
+impl TryFrom<(BeatBackend, &[u8])> for BeatPredictor {
     type Error = BeatError;
 
-    fn try_from(bytes: &[u8]) -> Result<Self, BeatError> {
+    fn try_from((backend, bytes): (BeatBackend, &[u8])) -> Result<Self, BeatError> {
         Ok(Self {
-            model: RtenModel::try_from(("beat", bytes))?,
+            model: match backend {
+                BeatBackend::Cpu => {
+                    PredictorModel::Cpu(Box::new(RtenModel::try_from(("beat", bytes))?))
+                }
+                #[cfg(feature = "cuda")]
+                BeatBackend::Cuda { device_id } => {
+                    PredictorModel::Cuda(CudaModel::try_from((bytes, device_id))?)
+                }
+            },
         })
     }
 }
@@ -70,10 +87,23 @@ impl BeatPredictor {
             let chunk = extract_chunk(mel, start, pools)?;
             let chunk_time = chunk.shape[1];
 
-            let mut outputs = self.model.run(&[("spectrogram", &chunk)], pools)?;
+            let mut outputs = match &self.model {
+                PredictorModel::Cpu(model) => model.run(&[("spectrogram", &chunk)], pools)?,
+                #[cfg(feature = "cuda")]
+                PredictorModel::Cuda(model) => model.run(&chunk, pools)?,
+            };
 
             let beat = extract_output(&mut outputs, "beat", "beat_logits")?;
             let downbeat = extract_output(&mut outputs, "downbeat", "downbeat_logits")?;
+            if beat.data.len() != chunk_time || downbeat.data.len() != chunk_time {
+                return Err(BeatError::Inference {
+                    reason: format!(
+                        "expected {chunk_time} beat/downbeat logits, got {}/{}",
+                        beat.data.len(),
+                        downbeat.data.len()
+                    ),
+                });
+            }
 
             let valid_beat = &beat.data[border..chunk_time - border];
             let valid_downbeat = &downbeat.data[border..chunk_time - border];
