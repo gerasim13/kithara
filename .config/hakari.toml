@@ -45,6 +45,7 @@ platforms = [
 workspace-members = [
   "kithara-analysis-tests",
   "kithara-app-tests",
+  "kithara-arch-trace",
   "kithara-audio-tests",
   "kithara-broadcast-tests",
   "kithara-core-test-fixtures",

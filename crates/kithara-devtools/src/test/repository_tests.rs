@@ -47,7 +47,7 @@ fn engine_trace_consumers_do_not_build_devtools_commands() {
             "--prefix",
             "none",
             "--format",
-            "{p}|{f}",
+            "{p}",
         ])
         .output()
         .expect("resolve engine dependency features");
@@ -57,19 +57,16 @@ fn engine_trace_consumers_do_not_build_devtools_commands() {
         String::from_utf8_lossy(&output.stderr)
     );
     let tree = String::from_utf8(output.stdout).expect("Cargo dependency tree is UTF-8");
-    let features = tree
+    let packages = tree
         .lines()
-        .filter(|line| line.starts_with("kithara-devtools "))
-        .flat_map(|line| {
-            line.split_once('|')
-                .expect("formatted dependency features")
-                .1
-                .trim_end_matches(" (*)")
-                .split(',')
-        })
+        .filter_map(|line| line.split_whitespace().next())
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(features, BTreeSet::from(["trace"]));
+    assert!(
+        !packages.contains("kithara-devtools"),
+        "engine trace consumers must not compile the command crate"
+    );
+    assert!(packages.contains("kithara-arch-trace"));
 }
 
 /// A member's directory relative to the workspace root, with a trailing

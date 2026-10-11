@@ -1,28 +1,31 @@
 use std::path::Path;
 
 use anyhow::Result;
-use kithara_devtools::viz::trace::{TraceRecord, TraceRecordKind, TraceSource, TraceWriter};
+use kithara_arch_trace::{TRACE_SCHEMA_VERSION, TraceRecord, TraceRecordKind, TraceWriter};
+use serde_json::{Value, json};
 
 use crate::usdt_trace::Scope;
 
 /// Writes `records`, then every probe firing `probes` recorded, in firing order.
-pub fn write(
-    path: &Path,
-    records: impl IntoIterator<Item = TraceRecord>,
-    probes: &Scope,
-) -> Result<()> {
+pub fn write(path: &Path, records: impl IntoIterator<Item = Value>, probes: &Scope) -> Result<()> {
     let mut writer = TraceWriter::create(path)?;
     for record in records {
-        writer.write(&record)?;
+        writer.write(&serde_json::from_value(record)?)?;
     }
     for (index, event) in probes.events().into_iter().enumerate() {
         let sequence = 10_000 + index as u64;
-        let mut record = TraceRecord::new(sequence, TraceRecordKind::Event, event.probe);
-        if let (Some(path), Some(line)) = (event.file, event.line) {
-            record =
-                record.with_source(TraceSource::new(workspace_relative(path), line as usize, 0));
-        }
-        writer.write(&record.with_thread(format!("{:?}", event.thread)))?;
+        let source = match (event.file, event.line) {
+            (Some(path), Some(line)) => {
+                json!({ "path": workspace_relative(path), "line": line, "column": 0 })
+            }
+            _ => Value::Null,
+        };
+        let record: TraceRecord = serde_json::from_value(json!({
+            "schema_version": TRACE_SCHEMA_VERSION, "sequence": sequence,
+            "kind": TraceRecordKind::Event, "name": event.probe,
+            "source": source, "thread_id": format!("{:?}", event.thread)
+        }))?;
+        writer.write(&record)?;
     }
     writer.finish()
 }
