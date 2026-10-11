@@ -13,8 +13,9 @@ use crate::{GridSegment, RegionPlan, SpeedCurve, WarpConfig};
 #[case::resample(StretchKind::Glide)]
 #[case::signalsmith(StretchKind::Signalsmith)]
 #[case::bungee(StretchKind::Bungee)]
+#[kithara::hang_watchdog]
 fn region_boundaries_publish_exact_phase_under_every_output_budget(#[case] backend: StretchKind) {
-    let render = |budgets: &[usize]| {
+    let mut render = |budgets: &[usize]| {
         let mut renderer = renderer(
             &WarpConfig::builder()
                 .backend(backend)
@@ -28,6 +29,7 @@ fn region_boundaries_publish_exact_phase_under_every_output_budget(#[case] backe
         let mut frame = 0;
         let mut samples = Vec::new();
         while frame < 32 {
+            hang_tick!();
             let budget = budgets[frame % budgets.len()].min(32 - frame);
             let output = mapped_render(&mut renderer, &mut source, budget);
             assert!(output.frames() <= budget);
@@ -43,6 +45,9 @@ fn region_boundaries_publish_exact_phase_under_every_output_budget(#[case] backe
                 assert_eq!(numerator * 5, expected as u128 * denominator.get());
             }
             frame += output.frames();
+            if output.frames() > 0 {
+                hang_reset!();
+            }
             samples.extend_from_slice(&output.samples);
         }
         samples
@@ -86,6 +91,7 @@ fn fractional_region_crossing_is_an_exact_single_frame_run(#[case] backend: Stre
 #[case::resample(StretchKind::Glide)]
 #[case::signalsmith(StretchKind::Signalsmith)]
 #[case::bungee(StretchKind::Bungee)]
+#[kithara::hang_watchdog]
 fn a_ramp_in_a_region_keeps_the_exact_scaled_integral(#[case] backend: StretchKind) {
     let mut renderer = renderer(
         &WarpConfig::builder()
@@ -109,6 +115,7 @@ fn a_ramp_in_a_region_keeps_the_exact_scaled_integral(#[case] backend: StretchKi
     let mut source = 0;
     let mut frame = 0;
     while frame < 32 {
+        hang_tick!();
         let output = mapped_render(&mut renderer, &mut source, 7.min(32 - frame));
         let span = output.meta.source_span.expect("region ramp mapping");
         for offset in 0..=output.frames() {
@@ -120,12 +127,16 @@ fn a_ramp_in_a_region_keeps_the_exact_scaled_integral(#[case] backend: StretchKi
             );
         }
         frame += output.frames();
+        if output.frames() > 0 {
+            hang_reset!();
+        }
     }
 }
 
 #[kithara::test]
+#[kithara::hang_watchdog]
 fn interrupted_backend_crossfades_keep_the_current_curve_and_phase() {
-    let render = |budgets: &[usize]| {
+    let mut render = |budgets: &[usize]| {
         let mut renderer = renderer(
             &WarpConfig::builder()
                 .backend(StretchKind::Signalsmith)
@@ -137,6 +148,7 @@ fn interrupted_backend_crossfades_keep_the_current_curve_and_phase() {
         let mut frame = 0;
         let mut samples = Vec::new();
         while frame < 64 {
+            hang_tick!();
             if frame == 7 {
                 renderer.set_backend(StretchKind::Bungee);
             }
@@ -213,6 +225,9 @@ fn interrupted_backend_crossfades_keep_the_current_curve_and_phase() {
                 }
             });
             frame += output.frames();
+            if output.frames() > 0 {
+                hang_reset!();
+            }
             samples.extend_from_slice(&output.samples);
         }
         samples
@@ -778,8 +793,9 @@ fn switching_to_keylock_retains_the_full_reprime_history(#[case] backend: Stretc
 }
 
 #[kithara::test]
+#[kithara::hang_watchdog]
 fn native_replacement_is_source_aligned_and_quantum_independent() {
-    let render = |budgets: &[usize]| {
+    let mut render = |budgets: &[usize]| {
         let mut renderer = renderer(
             &WarpConfig::builder()
                 .backend(StretchKind::Signalsmith)
@@ -797,6 +813,7 @@ fn native_replacement_is_source_aligned_and_quantum_independent() {
         let mut frame = 0;
         let mut samples = Vec::new();
         while frame < 257 {
+            hang_tick!();
             let output = mapped_render(
                 &mut renderer,
                 &mut source,
@@ -804,6 +821,9 @@ fn native_replacement_is_source_aligned_and_quantum_independent() {
             );
             assert_positions(&output, 0, |offset| 15.5 + frame_f64(frame + offset) * 0.5);
             frame += output.frames();
+            if output.frames() > 0 {
+                hang_reset!();
+            }
             samples.extend_from_slice(&output.samples);
         }
         samples
@@ -852,6 +872,7 @@ fn ramp_integral(frame: usize) -> f64 {
     0.5 * ramp + ramp * ramp / 64.0 + frame_f64(frame.saturating_sub(32)) * 1.5
 }
 
+#[kithara::hang_watchdog]
 fn curve_output_for(
     backend: StretchKind,
     curve: SpeedCurve,
@@ -877,6 +898,7 @@ fn curve_output_for(
     let mut positions = Vec::new();
     let mut samples = Vec::new();
     while frame < 64 {
+        hang_tick!();
         let budget = budgets[frame % budgets.len()].min(64 - frame);
         let output = mapped_render(&mut renderer, &mut source, budget);
         assert!(output.frames() <= budget);
@@ -893,6 +915,9 @@ fn curve_output_for(
         );
         samples.extend_from_slice(&output.samples);
         frame += output.frames();
+        if output.frames() > 0 {
+            hang_reset!();
+        }
     }
     assert_eq!(positions.len(), 64);
     (positions, samples)
@@ -1059,6 +1084,7 @@ fn ramp_integral_is_exact_and_partition_independent() {
 }
 
 #[kithara::test]
+#[kithara::hang_watchdog]
 fn replacing_a_ramp_preserves_its_exact_current_speed_and_position() {
     let config = WarpConfig::builder()
         .backend(StretchKind::Glide)
@@ -1089,6 +1115,7 @@ fn replacing_a_ramp_preserves_its_exact_current_speed_and_position() {
         .expect("replacement");
     let mut frame = 0;
     while frame < 12 {
+        hang_tick!();
         let output = mapped_render(&mut renderer, &mut source, (12 - frame).min(3));
         assert_positions(&output, frame, |offset| {
             let ramp = frame_f64(offset.min(8));
@@ -1098,6 +1125,9 @@ fn replacing_a_ramp_preserves_its_exact_current_speed_and_position() {
                 + frame_f64(offset.saturating_sub(8))
         });
         frame += output.frames();
+        if output.frames() > 0 {
+            hang_reset!();
+        }
     }
 }
 

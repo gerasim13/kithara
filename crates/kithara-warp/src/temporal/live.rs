@@ -38,9 +38,18 @@ impl RenderCell {
     }
 
     fn load(&self) -> Option<RenderSnapshot> {
+        if self.version.load(Ordering::Acquire) == 0 {
+            return None;
+        }
+        self.load_published()
+    }
+
+    #[kithara::hang_watchdog]
+    fn load_published(&self) -> Option<RenderSnapshot> {
         const SEQLOCK_PHASES: u64 = 2;
 
         loop {
+            hang_tick!();
             let before = self.version.load(Ordering::Acquire);
             if before == 0 {
                 return None;
@@ -70,6 +79,7 @@ impl RenderCell {
             };
             fence(Ordering::Acquire);
             if self.version.load(Ordering::Acquire) == before {
+                hang_reset!();
                 return raw.build();
             }
             spin_loop();

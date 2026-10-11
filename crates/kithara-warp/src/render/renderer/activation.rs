@@ -188,14 +188,17 @@ where
         remaining: usize,
         output_limit: usize,
     ) -> Result<PreparedQuantum, ElasticError> {
-        let outputs = self
-            .trajectory
-            .output_limit(output_limit)
-            .min(self.source_block_frames.get())
-            .min(
-                self.render_quantum_frames
-                    .map_or(remaining, |limit| limit.get().min(remaining)),
-            );
+        let outputs = if self.requires_staging() {
+            self.trajectory
+                .output_limit(output_limit)
+                .min(self.source_block_frames.get())
+                .min(
+                    self.render_quantum_frames
+                        .map_or(remaining, |limit| limit.get().min(remaining)),
+                )
+        } else {
+            remaining.min(output_limit)
+        };
         if outputs == 0 {
             return Err(ElasticError::EmptyOutput);
         }
@@ -286,6 +289,7 @@ where
     }
 
     /// Shrink a prepared source span at true EOF without sampling controls again.
+    #[kithara::hang_watchdog]
     pub fn prepare_terminal_quantum(&mut self, frames: usize) -> Option<FrameCount> {
         let mut prepared = self.prepared_quantum.take()?;
         if frames == 0 || frames > prepared.frames {
@@ -298,11 +302,13 @@ where
         if let Some(span) = prepared.source_span {
             let mut outputs = span.output_frames();
             while outputs > 0 {
+                hang_tick!();
                 let (numerator, denominator) = span.source_ratio_at(outputs - 1)?;
                 if numerator / denominator.get() < u128::from(end) {
                     break;
                 }
                 outputs -= 1;
+                hang_reset!();
             }
             prepared.source_span = Some(span.for_output_range(0..outputs)?);
             prepared.landing_frames = Some(usize::try_from(outputs).ok()?);
