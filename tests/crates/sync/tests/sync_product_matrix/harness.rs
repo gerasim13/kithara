@@ -263,20 +263,8 @@ impl ProductHarness {
             metronome_delta_peak: 0.0,
             _trace: trace,
         };
-        for (index, (deck, id)) in harness.decks.iter().zip(ids.iter().copied()).enumerate() {
-            hang_tick!(format!("{}: selecting {id:?} on deck {index}", case.id));
-            let control = deck.control().clone();
-            harness
-                .host
-                .run(move || {
-                    let selected = control.select(id, Transition::None);
-                    control.pause();
-                    selected
-                })
-                .await
-                .unwrap_or_else(|error| panic!("{}: select deck {index}: {error}", case.id));
-            hang_reset!();
-        }
+        let _ = harness.render(case, block_frames).await;
+        hang_reset!();
         harness.wait_loaded(case, &ids).await;
         harness.deliver_grids(case).await;
         harness.set_tempo(case, case.start_bpm(), true).await;

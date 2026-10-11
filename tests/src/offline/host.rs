@@ -221,6 +221,7 @@ where
         } = self;
         drop(snapshot);
         drop(member);
+        let _real_io = kithara::platform::flash::real_io();
         kithara::platform::time::timeout(__hang_detector.remaining(), host.close())
             .await
             .expect("offline resident teardown completes within its liveness budget");
@@ -310,6 +311,7 @@ where
             })
         };
         hang_tick!("layered: awaiting Host owner initialization".to_owned());
+        let _real_io = kithara::platform::flash::real_io();
         let off = kithara::platform::time::timeout(__hang_detector.remaining(), async {
             #[cfg(target_arch = "wasm32")]
             let off = HostOwner::spawn("offline-host", start).await?;
@@ -340,6 +342,7 @@ where
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     pub async fn close(self) {
         hang_tick!("Host close: awaiting owner and session teardown".to_owned());
+        let _real_io = kithara::platform::flash::real_io();
         let completed =
             kithara::platform::time::timeout(__hang_detector.remaining(), self.off.close()).await;
         hang_tick!("Host close: checking owner teardown answer".to_owned());
@@ -353,6 +356,7 @@ where
         R: MaybeSend + 'static,
     {
         hang_tick!("Host call: awaiting owner-thread operation answer".to_owned());
+        let _real_io = kithara::platform::flash::real_io();
         let answer =
             kithara::platform::time::timeout(__hang_detector.remaining(), self.off.call(job)).await;
         hang_tick!("Host call: checking owner-thread operation answer".to_owned());

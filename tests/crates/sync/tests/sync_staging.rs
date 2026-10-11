@@ -267,6 +267,7 @@ async fn prepare_incoming(
             "{}: incoming Load not dispatched",
             case.id()
         );
+        let _real_io = kithara::platform::flash::real_io();
         kithara::platform::time::sleep(Duration::from_millis(1)).await;
     }
 }
@@ -312,7 +313,10 @@ async fn schedule_start(harness: &mut ProductHarness, case: SyncCase) -> Operati
         .expect("schedule exact-frame start");
     let deadline = Instant::now() + RECEIPT_TIMEOUT;
     loop {
-        hang_tick!("schedule_start: waiting for progress".to_owned());
+        hang_tick!(format!(
+            "schedule_start: item {item:?}, requested {at:?}, snapshot {:?}",
+            harness.decks[0].track_snapshot(item)
+        ));
         if let Some(seq) = harness.decks[0].observe(|observation| {
             observation
                 .commands
@@ -328,6 +332,7 @@ async fn schedule_start(harness: &mut ProductHarness, case: SyncCase) -> Operati
             "{}: no scheduled start",
             case.id()
         );
+        let _real_io = kithara::platform::flash::real_io();
         kithara::platform::time::sleep(Duration::from_millis(1)).await;
     }
 }
