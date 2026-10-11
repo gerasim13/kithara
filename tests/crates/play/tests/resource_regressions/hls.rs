@@ -402,6 +402,7 @@ async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session(
     target_os = "android",
     case::flac_android(AudioCodec::Flac, DecoderBackend::Android, flac_source().await)
 )]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn packaged_hls_single_variant_continuity_is_stable(
     #[case] codec: AudioCodec,
     #[case] backend: DecoderBackend,
@@ -431,6 +432,10 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     let mut pending_reads = 0u64;
     let mut saw_eof = false;
     while WallInstant::now() < deadline && progress_probe.progress_events < 10 {
+        hang_tick!(
+            "packaged_hls_single_variant_continuity_is_stable waits for playback progress"
+                .to_owned()
+        );
         progress_audio.preload().expect("preload must succeed");
         let read_count = match progress_audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) => count.get(),
@@ -451,6 +456,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
         }
         frame_reads += 1;
         total_samples += read_count as u64;
+        hang_reset!();
     }
     progress_probe.drain(&mut progress_rx);
     progress_probe.observe_idle();
@@ -516,6 +522,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
         steady.max_silence_run
     );
     player.close().await;
+    hang_reset!();
 }
 
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(5))]

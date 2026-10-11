@@ -411,6 +411,7 @@ fn entering_arms_the_member_that_reached_presentation() {
 }
 
 #[kithara::test]
+#[kithara::hang_watchdog(ctx = String)]
 fn a_rejected_launch_leaves_the_member_silent() {
     let mut rig = rig();
     let (mut track, _inbox) = prepared_track();
@@ -439,10 +440,26 @@ fn a_rejected_launch_leaves_the_member_silent() {
         .expect("prepared source");
     let load = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
     let (_control, inbox) = load.lane_channel().expect("lane channel");
-    let (opened, _lane, _) = rig
-        .runtime
-        .block_on(load.open(Duration::ZERO, TrackSettings::default().lane_start(), inbox))
-        .expect("URI source opens");
+    let (opened, _lane, _) = {
+        // WHY: Disk source preparation needs a real-time budget, not a collapsed virtual deadline.
+        let _real_io = kithara_platform::flash::real_io();
+        hang_tick!("rejected launch fixture awaits its source".to_owned());
+        let budget = __hang_detector.remaining();
+        let (opened, _lane, _latency) = rig.runtime.block_on(async {
+            kithara_platform::time::timeout(
+                budget,
+                load.open(Duration::ZERO, TrackSettings::default().lane_start(), inbox),
+            )
+            .await
+            .unwrap_or_else(|error| {
+                hang_tick!("rejected launch fixture awaits its source".to_owned());
+                panic!("source open did not progress: {error}");
+            })
+            .expect("URI source opens")
+        });
+        (opened, _lane, _latency)
+    };
+    hang_reset!();
     let shape = kithara_render::rt::StreamShape::new(
         NonZeroU32::new(128).expect("block frames"),
         mock::SAMPLE_RATE,
@@ -831,6 +848,8 @@ fn player_phase_kind_exhaustive() {
     let receipt = rig.open(Ok(opened)).expect("one opened source");
     rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
         .expect("live scope");
+    let (sender, mut inbox) = lane();
+    track.lane = Some(sender);
     let mut receipts = rig.block(frame(0), 0.0);
     settle(&mut track, &mut rig, &mut receipts);
     assert_eq!(track.snapshot().status, TrackStatus::Loaded);
@@ -908,6 +927,22 @@ fn player_phase_kind_exhaustive() {
                 at: When::At(frame(0)),
             },
         );
+        inbox.drain();
+        while let Some(due) = inbox.next_due(
+            LaneFrame {
+                segment: track.segment,
+                frame: 0,
+            },
+            1,
+        ) {
+            due.apply(kithara_render::LaneApplied {
+                engine_latency: FrameCount::new(0),
+                ready: Some(track.segment),
+            });
+        }
+        let mut receipts = rig.block(frame(0), 0.0);
+        settle(&mut track, &mut rig, &mut receipts);
+        in_pass(&mut rig, frame(0), |out| track.tick(frame(0), out));
         let mut receipts = rig.block(frame(0), 0.0);
         settle(&mut track, &mut rig, &mut receipts);
         assert_eq!(track.status(), TrackStatus::Playing { since: frame(0) });
@@ -2204,6 +2239,7 @@ fn repeat_wav_load(
     (worker, item)
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 pub(super) async fn a_cancelled_repeat_reaches_its_original_end(frames: usize) {
     use kithara_render::rt::StreamShape;
 
@@ -2230,16 +2266,22 @@ pub(super) async fn a_cancelled_repeat_reaches_its_original_end(frames: usize) {
         )
     })
     .expect("load");
-    let deadline = kithara_platform::time::WallInstant::now() + Duration::from_secs(5);
-    let receipt = loop {
-        if let Some(receipt) = dispatcher.receipts().next() {
-            break receipt;
+    let receipt = {
+        // WHY: The repeat source is prepared by an uncounted real worker.
+        let _real_io = kithara_platform::flash::real_io();
+        let deadline = kithara_platform::time::WallInstant::now() + Duration::from_secs(5);
+        loop {
+            hang_tick!("waiting for the repeat lane to open".to_owned());
+            if let Some(receipt) = dispatcher.receipts().next() {
+                hang_reset!();
+                break receipt;
+            }
+            assert!(
+                kithara_platform::time::WallInstant::now() < deadline,
+                "real lane opens"
+            );
+            kithara_platform::tokio::task::yield_now().await;
         }
-        assert!(
-            kithara_platform::time::WallInstant::now() < deadline,
-            "real lane opens"
-        );
-        kithara_platform::tokio::task::yield_now().await;
     };
     with_mixer(&mut mixer, &mut dispatcher, frame(0), |out| {
         track.settle(TrackReceipt::Loaded(receipt), out)
@@ -2260,15 +2302,21 @@ pub(super) async fn a_cancelled_repeat_reaches_its_original_end(frames: usize) {
         track.apply(TrackCommand::PlayAfter { track: A }, out)
     })
     .expect("park repeat");
-    let deadline = kithara_platform::time::WallInstant::now() + Duration::from_secs(5);
-    while frames == 441 && track.ready != Some(track.segment) {
-        track.settle_lane();
-        assert!(
-            kithara_platform::time::WallInstant::now() < deadline,
-            "lane switches to the repeated segment"
-        );
-        kithara_platform::tokio::task::yield_now().await;
+    {
+        // WHY: The repeat epoch's PCM is produced outside Flash's task count.
+        let _real_io = kithara_platform::flash::real_io();
+        let deadline = kithara_platform::time::WallInstant::now() + Duration::from_secs(5);
+        while frames == 441 && track.ready != Some(track.segment) {
+            hang_tick!(format!("waiting for repeated segment {:?}", track.segment));
+            track.settle_lane();
+            assert!(
+                kithara_platform::time::WallInstant::now() < deadline,
+                "lane switches to the repeated segment"
+            );
+            kithara_platform::tokio::task::yield_now().await;
+        }
     }
+    hang_reset!();
     kithara_platform::time::sleep(Duration::from_millis(10)).await;
     with_mixer(&mut mixer, &mut dispatcher, frame(128), |out| {
         track.apply(TrackCommand::Supersede, out)

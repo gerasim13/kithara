@@ -31,7 +31,7 @@ const BLOCK_FRAMES: usize = 512;
 const STARTUP_CLEAR_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn auto_advance_starts_next_track_without_explicit_play(
     temp_dir: TestTempDir,
     #[future(awt)] queue_sources: (TestServerHelper, [Url; 2]),
@@ -71,7 +71,9 @@ async fn auto_advance_starts_next_track_without_explicit_play(
     let mut observed = (None, None, 0);
 
     while WallInstant::now() <= deadline {
-        hang_tick!();
+        hang_tick!(format!(
+            "automatic successor after {first_id:?}: {observed:?}"
+        ));
         let block = harness.render(BLOCK_FRAMES).await;
         let drained = harness.tick_and_drain().await;
         let progress = (

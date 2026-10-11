@@ -43,6 +43,8 @@ async fn render(
 }
 
 /// Renders one block at a time until `done` holds, failing after `within`.
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+#[kithara_test_utils::kithara::flash(io)]
 async fn render_until(
     harness: &OfflinePlayer,
     queue: &QueueControl<TestPools>,
@@ -52,8 +54,13 @@ async fn render_until(
 ) {
     let deadline = time::Instant::now() + within;
     loop {
+        hang_tick!(format!(
+            "{what}: current={:?}",
+            queue.current().map(|track| track.id)
+        ));
         render(harness, queue, 1).await;
         if done(queue) {
+            hang_reset!();
             return;
         }
         assert!(
@@ -67,10 +74,13 @@ async fn render_until(
     }
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 fn current_changed_to(events: &mut EventReceiver<QueueEvent>, id: TrackId) -> bool {
     let mut seen = false;
     while let Ok(event) = events.try_recv() {
+        hang_tick!(format!("draining changes while waiting for track {id:?}"));
         seen |= matches!(event.event, QueueEvent::CurrentTrackChanged { id: Some(current) } if current == id);
+        hang_reset!();
     }
     seen
 }

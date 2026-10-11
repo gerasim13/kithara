@@ -137,6 +137,7 @@ where
     ) -> Result<Option<Seq>, QueueError> {
         let sent = self.release_all(out)?;
         self.target = None;
+        self.current = None;
         self.held_position = None;
         let ids = self.track_ids();
         self.tracks.records_mut().clear();
@@ -165,6 +166,14 @@ where
             let active = self.active.get_mut(index).ok_or(QueueError::NotReady(id))?;
             active.role = role;
             return Ok(active.load.map(LoadState::seq));
+        }
+        if self
+            .tracks
+            .records()
+            .iter()
+            .any(|record| record.id == id && record.status == TrackStatus::Consumed)
+        {
+            self.tracks.set_status(id, TrackStatus::Pending);
         }
         if out.deck_available() == 0 {
             return Err(PlayError::Full("deck").into());
@@ -470,7 +479,7 @@ where
         }
     }
 
-    pub(super) fn retry_load(
+    pub(super) fn reopen_requested_load(
         &mut self,
         index: usize,
         output: Option<&OutputSnapshot>,

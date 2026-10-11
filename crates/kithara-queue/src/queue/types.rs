@@ -50,18 +50,16 @@ impl Transition {
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Target {
     pub(super) to: TrackId,
-    pub(super) bound: Bound,
+    pub(super) bound: Option<Bound>,
     pub(super) settings: CrossfadeSettings,
     pub(super) transition: Transition,
     pub(super) reason: AdvanceReason,
     pub(super) playing: bool,
-    /// Scheduled ahead of the current track's end rather than pressed: the
-    /// navigation cursor moves once it applies, and it gives way when nothing
-    /// sounds by the time it enters.
+    /// Scheduled ahead of the current track's end rather than pressed.
     pub(super) auto: bool,
     /// The withdrawn transition whose stale receipt permits recomputation.
     pub(super) stale: Option<Seq>,
-    pub(super) retry: Option<Seq>,
+    pub(super) continued: Option<Seq>,
     pub(super) repeat: Option<Seq>,
     pub(super) chained: bool,
 }
@@ -119,7 +117,7 @@ mod tests {
 
     #[kithara::test]
     fn a_target_carries_its_transition_and_reason() {
-        let bound = Bound::AtOrAfter(kithara_signal::SessionFrame::new(64));
+        let bound = Some(Bound::AtOrAfter(kithara_signal::SessionFrame::new(64)));
         let target = Target {
             playing: true,
             to: TrackId(5),
@@ -129,7 +127,7 @@ mod tests {
             reason: AdvanceReason::UserSelect,
             auto: false,
             stale: None,
-            retry: None,
+            continued: None,
             repeat: None,
             chained: false,
         };

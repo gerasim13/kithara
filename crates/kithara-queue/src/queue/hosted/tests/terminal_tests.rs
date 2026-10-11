@@ -241,14 +241,14 @@ fn a_speed_change_on_the_current_track_withdraws_a_sent_automatic_transition(#[c
     queue.active.get_mut(1).expect("current").track.0.lane_room = 4;
     queue.target = Some(super::super::super::types::Target {
         to: incoming,
-        bound: Bound::AtOrBefore(SessionFrame::new(512)),
+        bound: Some(Bound::AtOrBefore(SessionFrame::new(512))),
         settings: CrossfadeSettings::default(),
         transition: super::super::super::Transition::None,
         reason: crate::AdvanceReason::NaturalEof,
         playing: true,
         auto,
         stale: None,
-        retry: None,
+        continued: None,
         repeat: None,
         chained: false,
     });

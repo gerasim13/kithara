@@ -191,6 +191,7 @@ where
 /// queue, which turns the track [`TrackStatus::Slow`](crate::TrackStatus::Slow),
 /// unless `watch` ends first. A `Lagged` bus dropped the oldest envelopes and
 /// keeps delivering, so the watch survives the gap; only `Closed` ends it.
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn slow_transfer<S>(
     id: TrackId,
     watch: CancelToken,
@@ -201,7 +202,16 @@ async fn slow_transfer<S>(
 {
     let slow = async {
         loop {
-            match events.recv().await {
+            hang_tick!(format!("load {id:?} awaits downloader progress"));
+            let answer =
+                kithara_platform::time::timeout(__hang_detector.remaining(), events.recv())
+                    .await
+                    .unwrap_or_else(|_| {
+                        hang_tick!(format!("load {id:?} awaits downloader progress"));
+                        panic!("load {id:?} downloader watch stopped progressing")
+                    });
+            hang_reset!();
+            match answer {
                 Ok(Envelope {
                     event: DownloaderEvent::LoadSlow { .. },
                     ..

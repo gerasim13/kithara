@@ -273,6 +273,7 @@ fn gapless_hls_config(master: &Url, cache_dir: &std::path::Path) -> ResourceConf
 
 /// Starts the queue at `first` and renders until both items have ended,
 /// stamping every player event the queue saw with the frame it arrived by.
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn render_until_second_item_end(
     harness: &OfflinePlayer,
     queue: &QueueControl<TestPools>,
@@ -297,17 +298,24 @@ async fn render_until_second_item_end(
 
     let mut post_roll = None;
 
+    // WHY: The decode worker producing these blocks is uncounted real work.
+    let _real_io = kithara::platform::flash::real_io();
     loop {
+        hang_tick!("render_until_second_item_end waits for playback progress".to_owned());
         let _ = harness.run(queue, QueueControl::tick).await;
         let block = harness.render(BLOCK_FRAMES as usize).await;
         rendered.extend_from_slice(&block);
         rendered_frames = rendered_frames.saturating_add(BLOCK_FRAMES as usize);
         loop {
+            hang_tick!("render_until_second_item_end waits for playback progress".to_owned());
             match rx.try_recv().map(|envelope| envelope.event) {
                 Ok(TestEvent::Player(event)) => {
+                    hang_reset!();
                     events.push(TimedPlayerEvent::new(rendered_frames, event));
                 }
-                Ok(_) | Err(TryRecvError::Lagged(_)) => {}
+                Ok(_) | Err(TryRecvError::Lagged(_)) => {
+                    hang_reset!();
+                }
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             }
         }
@@ -317,6 +325,7 @@ async fn render_until_second_item_end(
         }
         if let Some(blocks) = post_roll.as_mut() {
             if *blocks == 0 {
+                hang_reset!();
                 return (rendered, events);
             }
             *blocks -= 1;

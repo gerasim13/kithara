@@ -70,6 +70,7 @@ impl SessionInbox for TestSessionInbox {
 }
 
 #[kithara::test(tokio)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating(
     constant_half: &'static [u8],
 ) {
@@ -115,14 +116,24 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating(
         Box::new(AudioObserverSlot::default().relay()),
     );
     let (_sender, lane_inbox) = worker.lane_channel();
-    let (opened, _lane, _latency) = load
-        .open(
-            Duration::ZERO,
-            TrackSettings::default().lane_start(),
-            lane_inbox,
+    let (opened, _lane, _latency) = {
+        // WHY: Disk preparation runs on a real worker, outside the virtual scheduler.
+        let _real_io = kithara_platform::flash::real_io();
+        hang_tick!("allocation fixture awaits its source open".to_owned());
+        let (opened, _lane, _latency) = kithara_platform::time::timeout(
+            __hang_detector.remaining(),
+            load.open(
+                Duration::ZERO,
+                TrackSettings::default().lane_start(),
+                lane_inbox,
+            ),
         )
         .await
+        .expect("allocation fixture opens within the watchdog budget")
         .expect("URI source opens");
+        (opened, _lane, _latency)
+    };
+    hang_reset!();
     let held = Slot::new(0);
     let mut store = ProcStore::with_capacity(2);
     assert!(

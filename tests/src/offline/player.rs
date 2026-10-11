@@ -350,6 +350,7 @@ where
     }
 
     /// Render until selection is committed by the queue, not merely prepared by its loader.
+    #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
     pub async fn render_until_current(
         &self,
         id: TrackId,
@@ -357,6 +358,7 @@ where
         deadline: WallInstant,
     ) {
         while self.player().current().map(|entry| entry.id) != Some(id) {
+            hang_tick!("render_until_current waits for playback progress".to_owned());
             assert!(
                 WallInstant::now() < deadline,
                 "queue did not commit current track {id:?} before the render deadline"
@@ -364,6 +366,7 @@ where
             self.render(block_frames).await;
             let _ = self.tick_and_drain().await;
         }
+        hang_reset!();
     }
 
     /// Seek through the product player. The product runtime owns segments.

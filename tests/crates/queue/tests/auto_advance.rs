@@ -348,6 +348,7 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
 /// announces it and sounds it while the Host renders, with no caller ticking
 /// the queue.
 #[kithara::test(tokio)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn a_queue_the_host_holds_moves_on_with_no_caller_ticking_it() {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -374,10 +375,12 @@ async fn a_queue_the_host_holds_moves_on_with_no_caller_ticking_it() {
     for _ in 0..MAX_BLOCKS {
         pcm.extend(harness.render(BLOCK_FRAMES).await);
         while let Ok(envelope) = events.try_recv() {
+            hang_tick!("draining automatic-advance events".to_owned());
             announced |= matches!(
                 envelope.event,
                 TestEvent::Queue(QueueEvent::CurrentTrackChanged { id }) if id == Some(id_b)
             );
+            hang_reset!();
         }
         if announced {
             break;
@@ -407,6 +410,7 @@ async fn a_queue_the_host_holds_moves_on_with_no_caller_ticking_it() {
 /// current one's last with no silence between them, and it becomes current
 /// by the current track's natural end, never by a crossfade.
 #[kithara::test(tokio)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn a_gapless_queue_meets_its_next_track_without_a_gap() {
     /// `constant_wav_*_1_5s`: 1.5 s at 44.1 kHz.
     const TRACK_FRAMES: usize = 66_150;
@@ -445,6 +449,7 @@ async fn a_gapless_queue_meets_its_next_track_without_a_gap() {
         let _ = harness.run(&queue, QueueControl::tick).await;
         pcm.extend(harness.render(BLOCK_FRAMES).await);
         while let Ok(envelope) = events.try_recv() {
+            hang_tick!("draining gapless-advance events".to_owned());
             match envelope.event {
                 TestEvent::Queue(QueueEvent::CurrentTrackAdvance {
                     id: Some(id),
@@ -453,6 +458,7 @@ async fn a_gapless_queue_meets_its_next_track_without_a_gap() {
                 TestEvent::Queue(QueueEvent::CrossfadeStarted { .. }) => crossfades += 1,
                 _ => {}
             }
+            hang_reset!();
         }
     }
 
@@ -505,6 +511,7 @@ async fn a_gapless_queue_meets_its_next_track_without_a_gap() {
 /// the attach the deck refused, so the queue reloads it, and it still meets
 /// the current track without a gap.
 #[kithara::test(tokio)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn a_successor_the_deck_had_no_room_for_reloads_and_meets_its_predecessor() {
     /// `constant_wav_*_1_5s`: 1.5 s at 44.1 kHz.
     const TRACK_FRAMES: usize = 66_150;
@@ -559,6 +566,7 @@ async fn a_successor_the_deck_had_no_room_for_reloads_and_meets_its_predecessor(
     // that first finds A's end inside the lead has no room to arm B. An arm
     // that went through would leave B loaded and A ending.
     while queue.track(id_b).map(|entry| entry.status) != Some(TrackStatus::Consumed) {
+        hang_tick!("a_successor_the_deck_had_no_room_for_reloads_and_meets_its_predecessor waits for playback progress".to_owned());
         assert!(
             pcm.len() < TRACK_FRAMES * usize::from(CHANNELS),
             "B's resource went with the attach the deck refused, so B must reload \
@@ -607,6 +615,7 @@ async fn a_successor_the_deck_had_no_room_for_reloads_and_meets_its_predecessor(
     );
     drop(queue);
     harness.close().await;
+    hang_reset!();
 }
 
 /// Blocks rendered with ticks after a gapless queue starts its first track,
@@ -821,6 +830,7 @@ async fn reselecting_the_playing_track_keeps_its_successor_armed() {
 /// A track inserted after the playing one while a successor is armed is the
 /// one that follows it; the successor it displaced plays after it.
 #[kithara::test(tokio)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn a_track_inserted_after_the_playing_one_follows_it_before_the_armed_successor() {
     use kithara::{platform::tokio::sync::broadcast::error::TryRecvError, queue::QueueEvent};
 
@@ -851,6 +861,7 @@ async fn a_track_inserted_after_the_playing_one_follows_it_before_the_armed_succ
     for _ in 0..2 * TRACK_FRAMES / BLOCK_FRAMES {
         pcm.extend(render_loop(&queue, &harness, 1).await);
         loop {
+            hang_tick!("a_track_inserted_after_the_playing_one_follows_it_before_the_armed_successor waits for playback progress".to_owned());
             match events.try_recv().map(|envelope| envelope.event) {
                 Ok(TestEvent::Queue(QueueEvent::TrackStatusChanged {
                     id,
@@ -884,6 +895,7 @@ async fn a_track_inserted_after_the_playing_one_follows_it_before_the_armed_succ
     );
     drop(queue);
     harness.close().await;
+    hang_reset!();
 }
 
 /// cf>0: queue.tick sees the crossfade window open and commits the
@@ -1032,6 +1044,7 @@ async fn a_crossfade_at_double_speed_starts_its_duration_before_the_outgoing_end
 /// the first track reaches the bus during a cf>0 cycle — purely event-level,
 /// but pinned to the real `Queue::tick` path.
 #[kithara::test(tokio)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
     use kithara::{platform::tokio::sync::broadcast::error::TryRecvError, play::PlayerEvent};
 
@@ -1061,12 +1074,17 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
     let mut item_end_seen = false;
 
     for _ in 0..MAX_BLOCKS {
+        hang_tick!("queue waits for ItemDidPlayToEnd".to_owned());
         let _ = harness.run(&queue, QueueControl::tick).await;
         let _ = harness.render(BLOCK_FRAMES).await;
 
         loop {
+            hang_tick!("queue end event drain".to_owned());
             match rx.try_recv().map(|env| env.event) {
-                Ok(TestEvent::Player(PlayerEvent::ItemDidPlayToEnd { .. })) => item_end_seen = true,
+                Ok(TestEvent::Player(PlayerEvent::ItemDidPlayToEnd { .. })) => {
+                    hang_reset!();
+                    item_end_seen = true;
+                }
                 Ok(_) => {}
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
                 Err(TryRecvError::Lagged(_)) => continue,

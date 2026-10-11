@@ -1285,6 +1285,7 @@ async fn append_loaded(
 }
 
 #[kithara::flash(true)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn render_until_b_with_postroll(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayer,
@@ -1296,6 +1297,11 @@ async fn render_until_b_with_postroll(
     let mut expected_a_frames: Option<usize> = None;
 
     for _ in 0..BLOCK_BUDGET {
+        hang_tick!(format!(
+            "track B postroll after {} frames",
+            progress.rendered_frames()
+        ));
+        let before = (queue.current_index(), queue.position_seconds());
         let _ = harness.run(queue, QueueControl::tick).await;
         let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, class_tolerance, Some(0));
@@ -1309,6 +1315,10 @@ async fn render_until_b_with_postroll(
 
         time::sleep(block_duration).await;
 
+        if (queue.current_index(), queue.position_seconds()) != before {
+            hang_reset!();
+        }
+
         if progress.has_b_postroll() {
             break;
         }
@@ -1321,6 +1331,7 @@ async fn render_until_b_with_postroll(
 }
 
 #[kithara::flash(true)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn render_until_b_with_late_variant_switch(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayer,
@@ -1333,6 +1344,11 @@ async fn render_until_b_with_late_variant_switch(
     let mut committed_variant: Option<usize> = None;
 
     for _ in 0..BLOCK_BUDGET {
+        hang_tick!(format!(
+            "variant switch and track B after {} frames",
+            progress.rendered_frames()
+        ));
+        let before = (queue.current_index(), queue.position_seconds());
         let _ = harness.run(queue, QueueControl::tick).await;
         let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, ASCENDING_TOL, Some(0));
@@ -1374,6 +1390,9 @@ async fn render_until_b_with_late_variant_switch(
         );
 
         time::sleep(block_duration).await;
+        if (queue.current_index(), queue.position_seconds()) != before {
+            hang_reset!();
+        }
         drain_variant_applied_events(
             &mut events,
             &mut committed_variant,
@@ -1394,6 +1413,7 @@ async fn render_until_b_with_late_variant_switch(
 }
 
 #[kithara::flash(true)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn render_crossfade_until_b_with_postroll(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayer,
@@ -1404,6 +1424,11 @@ async fn render_crossfade_until_b_with_postroll(
     let mut expected_a_end_frame: Option<usize> = None;
 
     for _ in 0..CROSSFADE_BLOCK_BUDGET {
+        hang_tick!(format!(
+            "crossfade to track B after {} frames",
+            progress.rendered_frames()
+        ));
+        let before = (queue.current_index(), queue.position_seconds());
         let _ = harness.run(queue, QueueControl::tick).await;
         let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, ASCENDING_TOL, Some(0));
@@ -1416,6 +1441,9 @@ async fn render_crossfade_until_b_with_postroll(
         }
 
         time::sleep(block_duration).await;
+        if (queue.current_index(), queue.position_seconds()) != before {
+            hang_reset!();
+        }
 
         if expected_a_end_frame.is_some() && progress.has_b_postroll() {
             break;
@@ -1444,6 +1472,7 @@ async fn render_app_layer_crossfade_until_b_with_postroll(
 }
 
 #[kithara::flash(true)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn render_app_layer_crossfade_until_b_with_postroll_config(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayer,
@@ -1457,6 +1486,11 @@ async fn render_app_layer_crossfade_until_b_with_postroll_config(
     let mut auto_advanced_index: Option<usize> = None;
 
     for _ in 0..block_budget {
+        hang_tick!(format!(
+            "app crossfade to track B after {} frames",
+            progress.rendered_frames()
+        ));
+        let before = (queue.current_index(), queue.position_seconds());
         let _ = harness.run(queue, QueueControl::tick).await;
         drive_app_layer_crossfade_advance(harness, queue, &mut auto_advanced_index).await;
 
@@ -1471,6 +1505,9 @@ async fn render_app_layer_crossfade_until_b_with_postroll_config(
         }
 
         time::sleep(block_duration).await;
+        if (queue.current_index(), queue.position_seconds()) != before {
+            hang_reset!();
+        }
 
         if expected_a_end_frame.is_some() && progress.has_b_postroll() {
             break;
@@ -1525,6 +1562,7 @@ fn drain_variant_applied_events(
 }
 
 #[kithara::flash(true)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn render_seek_near_end_until_b_with_postroll(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayer,
@@ -1538,9 +1576,15 @@ async fn render_seek_near_end_until_b_with_postroll(
     let mut seek_duration: Option<f64> = None;
 
     for _ in 0..BLOCK_BUDGET {
+        hang_tick!(format!(
+            "seek and track B after {} frames",
+            progress.rendered_frames()
+        ));
+        let before = (queue.current_index(), queue.position_seconds());
         let _ = harness.run(queue, QueueControl::tick).await;
 
         loop {
+            hang_tick!("seek completion events".to_owned());
             match events.try_recv().map(|envelope| envelope.event) {
                 Ok(TestEvent::Audio(AudioEvent::SeekComplete { .. }))
                     if seek_issue_frame.is_some() =>
@@ -1571,6 +1615,9 @@ async fn render_seek_near_end_until_b_with_postroll(
         }
 
         time::sleep(block_duration).await;
+        if (queue.current_index(), queue.position_seconds()) != before {
+            hang_reset!();
+        }
 
         if progress.has_b_postroll() && seek_complete_frame.is_some() {
             break;
@@ -1586,6 +1633,7 @@ async fn render_seek_near_end_until_b_with_postroll(
 }
 
 #[kithara::flash(true)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn render_until_tone_b_with_postroll(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayer,
@@ -1596,6 +1644,11 @@ async fn render_until_tone_b_with_postroll(
     let mut track_duration: Option<f64> = None;
 
     for _ in 0..BLOCK_BUDGET {
+        hang_tick!(format!(
+            "tone B postroll after {} frames",
+            progress.rendered_frames()
+        ));
+        let before = (queue.current_index(), queue.position_seconds());
         let _ = harness.run(queue, QueueControl::tick).await;
         let block = harness.render(BLOCK_FRAMES).await;
         progress.push_block(&block, render_sample_rate);
@@ -1608,6 +1661,9 @@ async fn render_until_tone_b_with_postroll(
         }
 
         time::sleep(block_duration).await;
+        if (queue.current_index(), queue.position_seconds()) != before {
+            hang_reset!();
+        }
 
         if progress.has_b_postroll() {
             break;

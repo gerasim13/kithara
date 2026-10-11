@@ -443,7 +443,8 @@ pub(super) fn queue_with_load_settings(
 pub(super) fn tick_fixture(queue: &mut Queue<TestPools>, rig: &mut mock::DeckRig<TestPools>) {
     let events = rig.events.drain().collect::<Vec<_>>();
     let output = mock::output(None).get();
-    let deck = queue.deck.mixer.clone();
+    let mut deck = queue.deck.mixer.clone();
+    deck.metrics = rig.mixer.metrics();
     let pass = DeckPass {
         mix: DeckMixSettings::default(),
         suspended: false,

@@ -113,7 +113,17 @@ where
 {
     pub(super) fn queue_snapshot(&self) -> QueueSnapshot<S> {
         let track = self
-            .current_track()
+            .active_current_index()
+            .or_else(|| {
+                self.target.and_then(|target| {
+                    self.active.position(|active| {
+                        active.item == target.to
+                            && matches!(active.role, super::slots::Role::Incoming { .. })
+                    })
+                })
+            })
+            .and_then(|index| self.active.get(index))
+            .map(|active| &active.track)
             .map(|track| track.snapshot().as_ref().clone());
         let slot = track
             .as_ref()
@@ -126,7 +136,15 @@ where
             self.tracks.rows()
         };
         QueueSnapshot {
-            current: self.current,
+            current: if self.current.is_none()
+                && self
+                    .target
+                    .is_some_and(|target| target.reason == crate::AdvanceReason::InitialLoad)
+            {
+                self.navigation.current()
+            } else {
+                self.current
+            },
             track,
             settings: self.config.settings,
             rows,
@@ -156,7 +174,7 @@ where
 
     #[must_use]
     pub fn current_index(&self) -> Option<usize> {
-        let id = self.current?;
+        let id = self.current_track()?.snapshot().as_ref().item;
         self.tracks
             .records()
             .iter()
@@ -205,7 +223,7 @@ where
     #[must_use]
     pub fn current_index(&self) -> Option<usize> {
         let snapshot = self.view.read();
-        let id = snapshot.current?;
+        let id = snapshot.track.as_ref()?.item;
         snapshot.rows.iter().position(|row| row.entry.id == id)
     }
 

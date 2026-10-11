@@ -80,6 +80,7 @@ pub struct PcmDeck {
 
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 impl PcmDeck {
+    #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
     pub fn new(mut reader: Box<dyn kithara::audio::AudioReader>) -> Self {
         use std::io::{Seek, SeekFrom, Write};
 
@@ -111,6 +112,7 @@ impl PcmDeck {
         let mut samples = vec![0.0; usize::from(spec.channels) * 4096];
         let mut bytes = 0u32;
         loop {
+            hang_tick!(format!("writing PCM fixture after {bytes} bytes"));
             match reader.read(&mut samples).expect("read PCM deck samples") {
                 ReadOutcome::Frames { count, .. } => {
                     for sample in &samples[..count.get()] {
@@ -122,6 +124,9 @@ impl PcmDeck {
                         .checked_mul(4)
                         .expect("WAV sample bytes");
                     bytes = bytes.checked_add(written).expect("PCM deck fits RIFF");
+                    if count.get() > 0 {
+                        hang_reset!();
+                    }
                 }
                 ReadOutcome::Pending { .. } => {
                     panic!("PCM deck reader must provide samples synchronously");
@@ -191,6 +196,7 @@ where
     B: Default + ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
     pub async fn load<C>(&mut self, config: C) -> Result<LaneAudio<Stream<T>, S>, LoadRefusal>
     where
         C: Into<TrackConfig<T, B>>,
@@ -236,15 +242,25 @@ where
                 ))
             })?;
         worker.wake();
-        let receipt = poll_fn(|context| {
-            let mut owner = self.owner.lock();
-            let loads = &mut owner.sender;
-            loads.hold(context.waker().clone());
-            let found = loads.receipts().find(|receipt| receipt.seq() == seq);
-            drop(owner);
-            found.map_or(Poll::Pending, Poll::Ready)
-        })
-        .await;
+        let receipt = {
+            // WHY: The worker's disk open runs outside Flash's counted async tasks.
+            let _real_io = kithara::platform::flash::real_io();
+            let answered = poll_fn(|context| {
+                let mut owner = self.owner.lock();
+                let loads = &mut owner.sender;
+                loads.hold(context.waker().clone());
+                let found = loads.receipts().find(|receipt| receipt.seq() == seq);
+                drop(owner);
+                found.map_or(Poll::Pending, Poll::Ready)
+            });
+            kithara::platform::time::timeout(__hang_detector.remaining(), answered)
+                .await
+                .unwrap_or_else(|_| {
+                    hang_tick!(format!("dispatcher load {seq:?} has no answer"));
+                    panic!("dispatcher load {seq:?} has no answer");
+                })
+        };
+        hang_reset!();
         self.owner.lock().sender.release();
         let (outcome, _) = receipt.into();
         let loaded = match outcome {
@@ -303,15 +319,19 @@ pub async fn wait_for_preload<T, S>(audio: &mut LaneAudio<T, S>, label: &str) {
 }
 
 impl<T, S> LaneAudio<T, S> {
+    #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
     fn service(&mut self) {
         while self.pcm.peek().is_some_and(|packet| match packet {
             PcmPacket::Chunk(chunk) => chunk.meta.segment != self.segment,
             PcmPacket::Failed { segment, .. } => *segment != self.segment,
         }) {
+            hang_tick!(format!("discarding PCM before segment {:?}", self.segment));
             let packet = self.pcm.pop().expect("peeked stale packet");
             self.pcm.recycle(packet).expect("recycle stale packet");
+            hang_reset!();
         }
         for receipt in self.sender.receipts() {
+            hang_reset!();
             if let Outcome::Applied { data, .. } = receipt.outcome() {
                 if data.ready == Some(self.segment) {
                     self.ready = data.ready;
@@ -322,8 +342,16 @@ impl<T, S> LaneAudio<T, S> {
         }
     }
 
+    #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
     async fn wait_ready(&mut self, label: &str) {
-        poll_fn(|context| {
+        // WHY: PCM preparation is produced by a real worker thread.
+        let _real_io = kithara::platform::flash::real_io();
+        let budget = __hang_detector.remaining();
+        let ready = poll_fn(|context| {
+            hang_tick!(format!(
+                "{label}: lane waits for segment {:?}",
+                self.segment
+            ));
             self.sender.hold(context.waker().clone());
             self.service();
             if self.ready == Some(self.segment) {
@@ -335,8 +363,18 @@ impl<T, S> LaneAudio<T, S> {
                 );
                 Poll::Pending
             }
-        })
-        .await;
+        });
+        if kithara::platform::time::timeout(budget, ready)
+            .await
+            .is_err()
+        {
+            hang_tick!(format!(
+                "{label}: lane waits for segment {:?}",
+                self.segment
+            ));
+            panic!("{label}: lane waits for segment {:?}", self.segment);
+        }
+        hang_reset!();
         self.sender.release();
     }
 
@@ -365,6 +403,7 @@ impl<T, S> LaneAudio<T, S> {
         Ok(())
     }
 
+    #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
     fn pull(&mut self) -> Result<ChunkOutcome, AudioReadError> {
         if !self.current_segment_ready() {
             futures::executor::block_on(self.wait_ready("read"));
@@ -382,6 +421,7 @@ impl<T, S> LaneAudio<T, S> {
             });
         }
         loop {
+            hang_tick!(format!("reading test lane segment {:?}", self.segment));
             let Some(packet) = self.pcm.pop() else {
                 if self.block_on_underrun && !self.pcm.is_closed() {
                     kithara_render::mock::wait_for_packet(&self.pcm);
@@ -413,7 +453,10 @@ impl<T, S> LaneAudio<T, S> {
                         source: FailureSource::Producer { failure },
                     });
                 }
-                packet => self.pcm.recycle(packet).expect("return stale packet"),
+                packet => {
+                    self.pcm.recycle(packet).expect("return stale packet");
+                    hang_reset!();
+                }
             }
         }
     }
