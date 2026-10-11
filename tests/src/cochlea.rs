@@ -1,7 +1,5 @@
-use cochlea_features::{
-    Audio, ProbeOpts, SegmentOpts, TempoOpts, estimate_tempo, probe, segment_timeline,
-};
-use num_traits::cast;
+use cochlea_features::{Audio, ProbeOpts, SegmentOpts, probe, segment_timeline};
+use num_traits::{AsPrimitive, cast};
 use serde::Serialize;
 
 const BEAT_MARKER_RATIO: f32 = 0.65;
@@ -261,20 +259,14 @@ fn synchronization_failures_with(
             continue;
         };
         if estimate {
-            let tempo = estimate_tempo(
-                &Audio {
-                    samples: samples.to_vec(),
-                    channels,
-                    sample_rate,
-                },
-                &TempoOpts::default(),
-            );
-            match tempo.bpm {
+            match pulse_tempo(&markers, sample_rate) {
                 Some(actual) if (actual - target_bpm).abs() <= TEMPO_TOLERANCE_BPM => {}
                 Some(actual) => failures.push(format!(
                     "{label}: track {index} estimated tempo is {actual:.3} BPM, expected {target_bpm:.3} +/- {TEMPO_TOLERANCE_BPM:.3}; markers={marker_debug:?}",
                 )),
-                None => failures.push(format!("{label}: track {index} has no detected tempo")),
+                None => failures.push(format!(
+                    "{label}: track {index} has no detected tempo: beat markers do not form a regular pulse lattice",
+                )),
             }
         } else {
             let marker_bpm = f64::from(sample_rate) * SECONDS_PER_MINUTE / marker_period as f64;
@@ -323,6 +315,46 @@ fn synchronization_failures_with(
         }
     }
     failures
+}
+
+/// Fit a pulse lattice, including missing events, without folding its metrical level.
+fn pulse_tempo(markers: &[usize], sample_rate: u32) -> Option<f64> {
+    if markers.len() < 4 {
+        return None;
+    }
+    let first = *markers.first()?;
+    let spacing: f64 = markers
+        .windows(2)
+        .map(|pair| pair[1] - pair[0])
+        .min()?
+        .as_();
+    let ordinals: Vec<_> = markers
+        .iter()
+        .map(|frame| {
+            let elapsed: f64 = (*frame - first).as_();
+            (elapsed / spacing).round()
+        })
+        .collect();
+    let count: f64 = markers.len().as_();
+    let center = ordinals.iter().sum::<f64>() / count;
+    let mean = markers
+        .iter()
+        .map(|frame| -> f64 { frame.as_() })
+        .sum::<f64>()
+        / count;
+    let (mut covariance, mut variance) = (0.0, 0.0);
+    for (ordinal, frame) in ordinals.iter().zip(markers) {
+        let ordinal = ordinal - center;
+        let frame: f64 = frame.as_();
+        covariance += ordinal * (frame - mean);
+        variance += ordinal * ordinal;
+    }
+    let period = covariance / variance;
+    let uniform = markers.iter().zip(&ordinals).all(|(frame, ordinal)| {
+        let frame: f64 = frame.as_();
+        (frame - mean - (ordinal - center) * period).abs() <= f64::from(sample_rate) / 1_000.0
+    });
+    uniform.then_some(f64::from(sample_rate) * SECONDS_PER_MINUTE / period)
 }
 
 /// Whether any analysis window before `frame` sits at or below Cochlea's silence floor.

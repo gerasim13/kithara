@@ -1,6 +1,130 @@
 use super::{cases::*, harness::*, imports::*, providers::*};
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
+async fn provider_tempo_control(
+    source: String,
+    sample_rate: u32,
+    native_bpm: f64,
+    target_bpm: f64,
+    start: f64,
+) -> Vec<f32> {
+    use kithara_integration_tests::offline::{OfflinePlayer, OfflinePlayerOptions};
+    let harness = OfflinePlayer::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .block_on_underrun(true)
+            .warp(
+                kithara::warp::WarpConfig::builder()
+                    .backend(kithara::warp::StretchKind::Glide)
+                    .build(),
+            )
+            .build(),
+        sample_rate,
+    )
+    .await;
+    let _ = harness.render(BLOCK_FRAMES).await;
+    harness
+        .with_queue(move |control| control.set_default_rate((target_bpm / native_bpm).as_()))
+        .await
+        .expect("control rate");
+    let config = ResourceConfig::for_src(ResourceSrc::parse(&source).expect("control source"))
+        .store(memory_asset_store())
+        .initial_abr_mode(AbrMode::manual(0))
+        .build();
+    let id = harness.load_config(config).await;
+    harness
+        .render_until_current(
+            id,
+            BLOCK_FRAMES,
+            time::WallInstant::now() + Duration::from_secs(5),
+        )
+        .await;
+    harness.seek(start).await;
+    let capture_frames: usize = (f64::from(sample_rate) * 60.0 / target_bpm * 6.0)
+        .round()
+        .as_();
+    for block in 0..(capture_frames / 12).div_ceil(BLOCK_FRAMES) {
+        hang_tick!(format!(
+            "provider control {target_bpm}: settling block {block}"
+        ));
+        let _ = harness.render(BLOCK_FRAMES).await;
+        let _ = harness.tick_and_drain().await;
+        hang_reset!();
+    }
+    let mut captured = Vec::with_capacity(capture_frames * usize::from(CHANNELS));
+    while captured.len() < capture_frames * usize::from(CHANNELS) {
+        hang_tick!(format!(
+            "provider control {source} at {target_bpm}: {} samples",
+            captured.len()
+        ));
+        captured.extend(harness.render(BLOCK_FRAMES).await);
+        let _ = harness.tick_and_drain().await;
+        hang_reset!();
+    }
+    captured.truncate(capture_frames * usize::from(CHANNELS));
+    harness.close().await;
+    captured
+}
+
+#[kithara::test(native, tokio, multi_thread, serial)]
+#[case::synthetic(synthetic_sources().await, CUE)]
+#[case::mp3_same(source_mp3_same().await, CUE)]
+#[case::mp3_distinct(source_mp3_distinct().await, CUE)]
+#[case::hls_plain(source_hls_same_plain().await, CUE)]
+#[case::hls_drm(source_hls_same_drm().await, CUE)]
+#[case::hls_mp3(source_hls_mp3_plain().await, CUE)]
+#[case::hls_mp3_drm(source_hls_mp3_drm().await, CUE)]
+#[case::ambient_trip_hop(source_ambient_trip_hop_provider().await, CUE)]
+#[case::downtempo_house(source_downtempo_house_provider().await, CUE)]
+#[case::techno_breakbeat(source_techno_breakbeat_provider().await, CUE)]
+#[case::cross_style(source_cross_style_provider().await, CUE)]
+#[case::tunnel(tunnel_sources().await, TUNNEL_CUE)]
+#[case::newtechno(newtechno_sources().await, NEWTECHNO_PHRASE)]
+#[case::library(prepared_sources(Provider::Library(crate::providers::LIBRARY)).await, CUE)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
+async fn provider_tempo_controls_measure_without_sync(
+    #[case] prepared: PreparedSources,
+    #[case] start: Start,
+) {
+    let mut failures = Vec::new();
+    for (deck, source) in prepared.2.iter().enumerate() {
+        if prepared.2[..deck].contains(source) {
+            continue;
+        }
+        let ArtifactSource::Value(grid) = prepared.0.beat_grid(deck) else {
+            panic!("control has a known fixture grid");
+        };
+        let native_bpm = grid.as_raw().bpm;
+        for target in [native_bpm, 108.0, 120.0, 127.0, 132.0] {
+            hang_tick!(format!(
+                "{:?}: deck {deck}, native {native_bpm}, target {target}",
+                prepared.0
+            ));
+            let pcm = provider_tempo_control(
+                source.clone(),
+                48_000,
+                native_bpm,
+                target,
+                prepared.0.start_seconds(deck, start),
+            )
+            .await;
+            let label = format!(
+                "{:?} deck {deck} native {native_bpm} target {target}",
+                prepared.0
+            );
+            let measured = synchronization_failures(&label, &[&pcm], CHANNELS, 48_000, target);
+            eprintln!("ORACLE_CONTROL {label}: {measured:?}");
+            failures.extend(measured);
+            hang_reset!();
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "provider tempo controls failed: {failures:?}"
+    );
+}
+
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn run(case: SyncCase, prepared: PreparedSources, start: Start) {
     let provider = prepared.0;
     let expected_frames: usize = (f64::from(case.sample_rate) * 60.0 / case.ride.final_bpm() * 6.0)
@@ -52,7 +176,7 @@ async fn run(case: SyncCase, prepared: PreparedSources, start: Start) {
     failures.extend(request_failures);
     assert!(
         failures.is_empty(),
-        "ignored-red product synchronization assertion failed for {} {provider:?}:\n{}",
+        "product synchronization assertion failed for {} {provider:?}:\n{}",
         case.id,
         failures.join("\n"),
     );

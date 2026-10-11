@@ -54,6 +54,7 @@ async fn tempo_retarget_run(
         .await;
     let command_index = samples.len() / usize::from(CHANNELS);
     if retarget {
+        record_command_lead(&harness, "tempo", block_frames);
         harness.set_tempo(ONE_DECK, 132.0, false).await;
     }
     samples.extend(
@@ -98,6 +99,7 @@ async fn running_sync_run(
         .await;
     let command_index = samples.len() / usize::from(CHANNELS);
     if issue_sync {
+        record_command_lead(&harness, "SYNC", block_frames);
         harness.request_sync(ONE_DECK).await;
     }
     samples.extend(
@@ -110,6 +112,21 @@ async fn running_sync_run(
         failures: harness.failures,
         samples,
     }
+}
+
+fn record_command_lead(harness: &ProductHarness, label: &str, block_frames: usize) {
+    let item = harness.decks[0].current().expect("selected PCM control").id;
+    let snapshot = harness.decks[0]
+        .track_snapshot(item)
+        .expect("published PCM control");
+    eprintln!(
+        "PCM_COMMAND {label} block={block_frames} frame={} mark={:?} ring_depth={} engine_latency={} declick={}",
+        harness.host.position(),
+        snapshot.track.mark,
+        snapshot.track.ring_depth.get(),
+        snapshot.track.engine_latency.get(),
+        snapshot.track.declick.get()
+    );
 }
 
 fn frame_deltas<'a>(candidate: &'a [f32], control: &'a [f32]) -> impl Iterator<Item = f32> + 'a {
