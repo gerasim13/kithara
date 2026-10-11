@@ -5,6 +5,8 @@ use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_decode::TrackMetadata;
 use kithara_platform::{maybe_send::WasmSend, sync::Arc};
 use kithara_signal::{AudioChunk, AudioSpec, SegmentId, SessionFrame, SourceSpan};
+use kithara_test_macros as kithara;
+use kithara_warp::{PresentationFrontier, RenderContext, WarpMapRevision};
 
 use super::PcmConsumer;
 use crate::{LaneFrame, bridge::SlotMark, worker::PcmPacket};
@@ -139,6 +141,9 @@ impl PlayerResource {
 
     pub(super) fn select_segment(&mut self, segment: SegmentId) {
         if self.lane.segment != segment {
+            if let Some(publisher) = &self.consumer.get().receiver.render_publisher {
+                publisher.clear();
+            }
             self.lane = LaneFrame { segment, frame: 0 };
             self.mapped = false;
             self.eof = false;
@@ -279,8 +284,10 @@ impl PlayerResource {
         }
     }
 
+    #[kithara::hang_watchdog]
     pub(super) fn read(
         &mut self,
+        context: Option<&RenderContext>,
         buffers: &mut [&mut [f32]],
         range: Range<usize>,
         budget: &mut usize,
@@ -299,6 +306,7 @@ impl PlayerResource {
         right[range.start..range.start + requested].fill(0.0);
         let mut written = 0;
         while written < requested {
+            hang_tick!();
             self.recycle_obsolete(budget);
             if self.packet.is_none() && !self.eof && self.failed.is_none() {
                 self.consumer.get().receiver.wait_for_packet();
@@ -335,6 +343,26 @@ impl PlayerResource {
             if count == 0 {
                 break;
             }
+            let presented = context.and_then(|context| {
+                let start = u64::try_from(self.offset).ok()?;
+                let end = start.checked_add(u64::try_from(count).ok()?)?;
+                let source = chunk.meta.source_span?.for_output_range(start..end)?;
+                let offset = i64::try_from(range.start.checked_add(written)?).ok()?;
+                let output_start =
+                    i64::from(context.output().output_frames().start).checked_add(offset)?;
+                let output_end = output_start.checked_add(i64::try_from(count).ok()?)?;
+                if let Some(publisher) = &self.consumer.get().receiver.render_publisher {
+                    publisher.publish(
+                        context,
+                        PresentationFrontier::builder()
+                            .source(source.start())
+                            .output(SessionFrame::new(output_start))
+                            .maybe_warp_map(source.mapping_revision().map(WarpMapRevision::from))
+                            .build(),
+                    );
+                }
+                Some((source, output_start, output_end))
+            });
             for frame in 0..count {
                 let input = (self.offset + frame) * channels;
                 let output = range.start + written + frame;
@@ -343,6 +371,17 @@ impl PlayerResource {
             }
             self.offset += count;
             written += count;
+            if let Some((source, output_start, output_end)) = presented {
+                kithara::probe_event!(
+                    pcm_consumed,
+                    render_revision = source.render_revision(),
+                    output_start,
+                    output_end,
+                    source_start = source.start(),
+                    source_end = source.end()
+                );
+            }
+            hang_reset!();
             self.mapped = if let Some((frame, position)) = chunk
                 .meta
                 .lane_frame
