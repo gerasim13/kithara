@@ -207,6 +207,7 @@ async fn local_run_case(source: (SignalAsset, TestTempDir, PathBuf), backend: De
     let mut audio = open_audio(audio_config, &pools)
         .await
         .expect("create local Audio<Stream<File>>");
+    audio = kithara_integration_tests::mock::with_blocking_reads(audio);
 
     let total_secs = audio
         .duration()

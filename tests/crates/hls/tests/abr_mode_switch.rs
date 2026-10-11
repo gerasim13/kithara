@@ -35,7 +35,7 @@ use kithara_integration_tests::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::{hls_saw_6, hls_saw_8, hls_saw_15, hls_saw_30};
-use kithara_test_utils::{TestTempDir, pace, wait_until};
+use kithara_test_utils::{TestTempDir, kithara as watchdog, pace, wait_until};
 use num_traits::AsPrimitive;
 use tracing::info;
 use url::Url;
@@ -667,8 +667,51 @@ struct BlockingReadStep {
     saw_eof: bool,
 }
 
-async fn read_one_chunk_blocking<S>(
+#[watchdog::hang_watchdog(timeout = Duration::from_secs(1))]
+fn read_one_chunk<S>(
     mut audio: LaneAudio<Stream<S>, TestPools>,
+    read_label: &str,
+) -> (LaneAudio<Stream<S>, TestPools>, BlockingReadStep)
+where
+    S: StreamType + 'static,
+{
+    let mut buf = vec![0f32; 4096];
+    loop {
+        hang_tick!();
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Pending { .. }) => continue,
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                let count = count.get();
+                for &sample in &buf[..count] {
+                    hang_tick!();
+                    assert!(sample.is_finite(), "{read_label}: non-finite sample");
+                }
+                hang_reset!();
+                return (
+                    audio,
+                    BlockingReadStep {
+                        samples: count as u64,
+                        saw_eof: false,
+                    },
+                );
+            }
+            Ok(ReadOutcome::Eof { .. }) => {
+                hang_reset!();
+                return (
+                    audio,
+                    BlockingReadStep {
+                        samples: 0,
+                        saw_eof: true,
+                    },
+                );
+            }
+            Err(err) => panic!("{read_label}: decode error: {err}"),
+        }
+    }
+}
+
+async fn read_one_chunk_blocking<S>(
+    audio: LaneAudio<Stream<S>, TestPools>,
     label: &str,
 ) -> (LaneAudio<Stream<S>, TestPools>, BlockingReadStep)
 where
@@ -677,41 +720,12 @@ where
 {
     let read_label = label.to_owned();
     let join_label = read_label.clone();
-    spawn_blocking(move || {
-        let mut buf = vec![0f32; 4096];
-        loop {
-            match audio.read(&mut buf) {
-                Ok(ReadOutcome::Pending { .. }) => continue,
-                Ok(ReadOutcome::Frames { count, .. }) => {
-                    let n = count.get();
-                    for &sample in &buf[..n] {
-                        assert!(sample.is_finite(), "{read_label}: non-finite sample");
-                    }
-                    return (
-                        audio,
-                        BlockingReadStep {
-                            samples: n as u64,
-                            saw_eof: false,
-                        },
-                    );
-                }
-                Ok(ReadOutcome::Eof { .. }) => {
-                    return (
-                        audio,
-                        BlockingReadStep {
-                            samples: 0,
-                            saw_eof: true,
-                        },
-                    );
-                }
-                Err(err) => panic!("{read_label}: decode error: {err}"),
-            }
-        }
-    })
-    .await
-    .unwrap_or_else(|err| panic!("{join_label}: spawn_blocking failed: {err}"))
+    spawn_blocking(move || read_one_chunk(audio, &read_label))
+        .await
+        .unwrap_or_else(|err| panic!("{join_label}: spawn_blocking failed: {err}"))
 }
 
+#[watchdog::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn read_until_manual_applied<S>(
     mut audio: LaneAudio<Stream<S>, TestPools>,
     collector: &EventCollector,
@@ -731,9 +745,13 @@ where
     while !collector.applied_transitions()[applied_before..]
         .contains(&(target, AbrReason::ManualOverride))
     {
+        hang_tick!();
         let (next, step) = read_one_chunk_blocking(audio, label).await;
         audio = next;
         stats.samples = stats.samples.saturating_add(step.samples);
+        if step.samples > 0 {
+            hang_reset!();
+        }
         if step.saw_eof {
             stats.saw_eof = true;
             break;

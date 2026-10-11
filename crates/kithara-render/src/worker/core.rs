@@ -232,12 +232,16 @@ where
             {
                 return Err(LoadRefusal::Cancelled);
             }
-            let position = match audio.seek(position).map_err(|error| match error {
-                AudioReadError::Decode(error) => decode_refusal(error),
-                error => LoadRefusal::Source(TrackFailureKind::from(&error)),
-            })? {
-                SeekOutcome::Landed { landed_at, .. } => landed_at,
-                SeekOutcome::PastEof { duration, .. } => duration,
+            let position = if position.is_zero() {
+                position
+            } else {
+                match audio.seek(position).map_err(|error| match error {
+                    AudioReadError::Decode(error) => decode_refusal(error),
+                    error => LoadRefusal::Source(TrackFailureKind::from(&error)),
+                })? {
+                    SeekOutcome::Landed { landed_at, .. } => landed_at,
+                    SeekOutcome::PastEof { duration, .. } => duration,
+                }
             };
             let spec = audio.spec();
             let initial = AudioChunkInfo {

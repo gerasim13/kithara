@@ -1,4 +1,5 @@
 use kithara_signal::{AudioChunk, AudioSpec};
+use kithara_test_utils::kithara;
 
 use super::generation::{
     DecoderGeneration, Holdback, StageFailure, StageOutput, StageProgress, StageResult,
@@ -67,8 +68,10 @@ impl DecoderGeneration {
         self.drain_holdback()
     }
 
+    #[kithara::hang_watchdog]
     fn pump_holdback(&mut self) -> StageResult {
         loop {
+            hang_tick!();
             let progress = self.holdback_progress();
             if matches!(progress, StageProgress::Ready) {
                 return StageResult::Ready;
@@ -79,6 +82,7 @@ impl DecoderGeneration {
             if let Some(failure) = self.push_holdback_chunk(chunk) {
                 return StageResult::Invalid(Box::new(failure));
             }
+            hang_reset!();
         }
     }
 

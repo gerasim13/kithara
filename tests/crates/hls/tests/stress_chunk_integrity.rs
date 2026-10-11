@@ -7,13 +7,7 @@ use kithara::{
     platform::{
         CancelToken,
         sync::Arc,
-        // The warmup budget below asks "have we waited long enough for a
-        // switch to show up" — a question about the caller's own wall clock.
-        // The alias is what asks it there: the flash rewriter matches
-        // `Instant::now` lexically, so a name it does not recognise keeps the
-        // platform clock unvirtualised. Measured on virtual time the budget
-        // expires while the run is still seconds of real work from a switch.
-        time::{Duration, Instant, Instant as RealInstant, sleep},
+        time::{Duration, WallInstant, sleep},
     },
     play::{PlayWorker, PlayWorkerConfig},
     signal::{AudioChunk, AudioChunkInfo},
@@ -87,21 +81,26 @@ fn intra_chunk_breaks(chunk: &AudioChunk) -> usize {
     breaks
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn next_chunk_with_timeout<R: AudioRead>(
     audio: &mut R,
     timeout: Duration,
     stage: &str,
 ) -> Option<AudioChunk> {
-    let deadline = Instant::now() + timeout;
+    let deadline = WallInstant::now() + timeout;
     loop {
+        hang_tick!();
         match AudioRead::next_chunk(audio) {
-            Ok(ChunkOutcome::Chunk(chunk)) => return Some(*chunk),
+            Ok(ChunkOutcome::Chunk(chunk)) => {
+                hang_reset!();
+                return Some(*chunk);
+            }
             Ok(ChunkOutcome::Eof { .. }) => return None,
             Ok(ChunkOutcome::Pending { .. }) => {}
             Err(e) => panic!("next_chunk decode error at stage='{stage}': {e}"),
         }
         assert!(
-            Instant::now() <= deadline,
+            WallInstant::now() <= deadline,
             "next_chunk timeout at stage='{stage}'"
         );
         sleep(Duration::from_micros(500)).await;
@@ -159,6 +158,7 @@ async fn audio_server(
 )]
 #[case::mmap(false)]
 #[case::ephemeral(true)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case] ephemeral: bool) {
     let server = audio_server;
     let segment_duration = server.spec().segment_duration_secs;
@@ -216,12 +216,13 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
 
     info!("Phase 1: waiting for ABR switch (ascending -> descending) via chunks...");
 
-    let warmup_start = RealInstant::now();
+    let warmup_start = WallInstant::now();
     let warmup_timeout = Duration::from_secs(consts::WARMUP_TIMEOUT_SECS);
     let mut warmup_ascending = 0u64;
     let mut warmup_unknown = 0u64;
 
     loop {
+        hang_tick!();
         if warmup_start.elapsed() > warmup_timeout {
             panic!(
                 "ABR switch not detected within {}s (ascending={}, unknown={})",
@@ -244,6 +245,7 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
             );
         };
 
+        hang_reset!();
         let dir = detect_chunk_direction(&chunk);
         match dir {
             Direction::Ascending => {
@@ -557,6 +559,7 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
     let mut remaining_chunks = 0u64;
     let mut remaining_samples = 0u64;
     loop {
+        hang_tick!();
         let Some(chunk) = next_chunk_with_timeout(
             &mut audio,
             Duration::from_millis(consts::NEXT_CHUNK_TIMEOUT_MS),
@@ -567,6 +570,7 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
             break;
         };
         remaining_chunks += 1;
+        hang_reset!();
         remaining_samples += chunk.samples.len() as u64;
         for &sample in chunk.samples.iter() {
             assert!(

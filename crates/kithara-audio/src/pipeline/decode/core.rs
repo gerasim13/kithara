@@ -102,7 +102,7 @@ pub(crate) struct ActiveDecode {
     gapless_mode: GaplessMode,
     observer: Option<Box<dyn AudioObserver>>,
     stage_error: Option<DecodeError>,
-    discontinuity_revision: u64,
+    pub(super) discontinuity_revision: u64,
 }
 
 pub(crate) struct DecodeCtx<'a, T: StreamType> {
@@ -223,8 +223,8 @@ impl ActiveDecode {
         self.active.blender_profile().spec()
     }
 
-    pub(crate) fn prepare_deferred(&mut self) {
-        self.active.prepare_deferred(true);
+    pub(crate) fn prepare_deferred(&mut self, prepare_input: bool) {
+        self.active.prepare_deferred(prepare_input);
         self.active.decoder_mut().flush_reader_signals();
         self.flush_incoming_reader_signals();
     }
@@ -993,6 +993,50 @@ mod tests {
 
         assert!(output.is_some(), "the prior join must keep consuming PCM");
         assert!(decode.blender.is_steady(), "the prior join must finish");
+    }
+
+    #[kithara::test]
+    fn promotion_resets_render_geometry_only_when_decoder_coordinates_change() {
+        use crate::pipeline::decode::transition::{PreparedPromotion, PromotionJoin};
+
+        let pools = pools();
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+        abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        let claim = abr
+            .claim_pending_decision(VariantIndex::new(0))
+            .expect("transition claim");
+        let transition = VariantTransition::new(
+            VariantTransitionId::new(claim.ticket()),
+            VariantIndex::new(0),
+            VariantIndex::new(1),
+        );
+        let mut decode = active_decode(&pools, generation(spec), GaplessMode::MediaOnly);
+        let initial = decode.discontinuity().revision();
+        drop(decode.commit_prepared_promotion(PreparedPromotion {
+            generation: generation(spec),
+            transition,
+            join: PromotionJoin::HardCut,
+        }));
+        assert_eq!(decode.discontinuity().revision(), initial);
+
+        let mut incoming = generation(spec);
+        incoming.align_timeline_gap(1_024);
+        drop(decode.commit_prepared_promotion(PreparedPromotion {
+            generation: incoming,
+            transition,
+            join: PromotionJoin::HardCut,
+        }));
+        assert_ne!(decode.discontinuity().revision(), initial);
+        let shifted = decode.discontinuity().revision();
+        let incoming_spec = AudioSpec::new(1, NonZeroU32::new(48_000).expect("incoming rate"));
+        drop(decode.commit_prepared_promotion(PreparedPromotion {
+            generation: generation(incoming_spec),
+            transition,
+            join: PromotionJoin::HardCut,
+        }));
+        assert_eq!(decode.discontinuity().spec(), &incoming_spec);
+        assert_ne!(decode.discontinuity().revision(), shifted);
     }
 
     #[kithara::test]

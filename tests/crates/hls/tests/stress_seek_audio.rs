@@ -481,6 +481,7 @@ impl SeekCheck {
 
 /// Seek to `SEEK_ITERATIONS` random positions and check the chunk each one
 /// reads back. Returns the churn snapshot taken after `WARMUP_K` seeks.
+#[kithara_test_utils::kithara::hang_watchdog]
 fn random_seek_reads(
     audio: &mut HlsAudio,
     buf: &mut [f32],
@@ -499,12 +500,16 @@ fn random_seek_reads(
 
     let mut warmup_churn = None;
     for (i, &pos_secs) in seek_positions.iter().enumerate() {
+        hang_tick!();
         audio
             .seek(Duration::from_secs_f64(pos_secs))
             .unwrap_or_else(|e| panic!("seek #{i} to {pos_secs:.4}s failed: {e}"));
 
         let n = match audio.read(buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => count.get(),
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                hang_reset!();
+                count.get()
+            }
             Ok(ReadOutcome::Pending { .. }) => {
                 panic!("read returned 0 after seek #{i} to {pos_secs:.4}s");
             }
@@ -534,6 +539,7 @@ fn random_seek_reads(
 
 /// A seek near the end reads valid samples through to EOF without ever
 /// reporting `Pending`.
+#[kithara_test_utils::kithara::hang_watchdog]
 fn drain_tail_to_eof(audio: &mut HlsAudio, buf: &mut [f32], final_seek_secs: f64) {
     info!(final_seek_secs, "Final seek near end");
 
@@ -543,12 +549,14 @@ fn drain_tail_to_eof(audio: &mut HlsAudio, buf: &mut [f32], final_seek_secs: f64
 
     let mut remaining_samples = 0u64;
     loop {
+        hang_tick!();
         match audio.read(buf) {
             Ok(ReadOutcome::Pending { .. }) => {
                 panic!("final tail read returned Pending with block_on_underrun");
             }
             Ok(ReadOutcome::Frames { count, .. }) => {
                 remaining_samples += count.get() as u64;
+                hang_reset!();
                 assert!(
                     first_invalid_sample(&buf[..count.get()]).is_none(),
                     "invalid sample in final tail read",

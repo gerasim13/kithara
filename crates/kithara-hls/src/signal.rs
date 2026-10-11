@@ -9,8 +9,6 @@ use kithara_storage::WaitOutcome;
 use kithara_stream::{DeferredWake, SourceError, StreamError, StreamResult, WorkerWake};
 use kithara_test_utils::kithara;
 
-use crate::consts;
-
 /// Late-bound audio-worker data-arrival wake, shared across the coord, every
 /// variant, and each `FetchCmd` it emits. Created empty in `Hls::create` and
 /// filled once by `HlsSource::set_worker_wake` after the audio worker exists;
@@ -126,7 +124,7 @@ impl SizeSignal {
     /// though the probe predicate and the gate sit under different locks
     /// (mirrors `kithara-storage` `wait_range_inner`). A genuine wedge (no
     /// signal at all) trips the hang watchdog rather than parking forever.
-    #[kithara::hang_watchdog(timeout = consts::WAIT_HANG_TIMEOUT)]
+    #[kithara::hang_watchdog]
     pub(crate) fn wait_range_blocking(
         &self,
         cancel: &CancelToken,
@@ -140,15 +138,19 @@ impl SizeSignal {
             hang_tick!();
             let since = self.current();
             match probe() {
-                Ok(WaitOutcome::Ready) => return Ok(WaitOutcome::Ready),
-                Ok(WaitOutcome::Eof) => return Ok(WaitOutcome::Eof),
+                Ok(WaitOutcome::Ready) => {
+                    hang_reset!();
+                    return Ok(WaitOutcome::Ready);
+                }
+                Ok(WaitOutcome::Eof) => {
+                    hang_reset!();
+                    return Ok(WaitOutcome::Eof);
+                }
                 Ok(WaitOutcome::Interrupted) => return Ok(WaitOutcome::Interrupted),
                 Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {}
                 Err(e) => return Err(e),
             }
-            if self.wait_timeout(since, Self::READER_REAIM_INTERVAL) {
-                hang_reset!();
-            } else {
+            if !self.wait_timeout(since, Self::READER_REAIM_INTERVAL) {
                 return Err(StreamError::Source(SourceError::WaitBudgetExceeded));
             }
         }

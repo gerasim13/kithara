@@ -1,3 +1,5 @@
+use kithara_test_utils::kithara;
+
 use super::*;
 
 pub(in crate::pipeline::source) async fn route_signal_source(
@@ -296,11 +298,13 @@ pub(in crate::pipeline::source) fn next_test_chunk(
     chunk
 }
 
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 pub(in crate::pipeline::source) fn next_decoded_chunk(
     source: &mut StreamAudioSource<TestStream>,
     route_recreated: &mut bool,
 ) -> AudioChunk {
     loop {
+        hang_tick!();
         run_pending_rebuild_inline(source);
         *route_recreated |=
             source.decode.output_spec().sample_rate.get() == consts::ROUTE_SAMPLE_RATE;

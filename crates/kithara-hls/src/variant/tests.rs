@@ -2217,11 +2217,31 @@ fn raw_byte_seek_registers_lazy_exact_demand_only_after_cursor_moves() {
     assert_eq!(cmds[0].url().clone(), v.segments()[0].url().clone());
     assert_eq!(cmds[1].url().clone(), v.segments()[1].url().clone());
     assert_eq!(cmds[2].url().clone(), v.segments()[2].url().clone());
+    session.rearm_fetches();
+    for command in &cmds {
+        assert!(
+            !command
+                .cancel()
+                .expect("size probe cancellation")
+                .is_cancelled(),
+            "seek rearming must preserve in-flight exact size discovery"
+        );
+    }
     let cmds = session.dispatch(&ctx, 3);
     assert_eq!(cmds.len(), 3);
     assert_eq!(cmds[0].url().clone(), v.segments()[3].url().clone());
     assert_eq!(cmds[1].url().clone(), v.segments()[4].url().clone());
     assert_eq!(cmds[2].url().clone(), v.segments()[5].url().clone());
+    session.abort();
+    for command in &cmds {
+        assert!(
+            command
+                .cancel()
+                .expect("size probe cancellation")
+                .is_cancelled(),
+            "size discovery must still stop with its owning session"
+        );
+    }
 }
 
 #[kithara::test]
@@ -2239,6 +2259,22 @@ fn on_evict_returns_minus_one_for_init() {
         v.segments()[1].state().is_loaded(),
         "init eviction must not touch segment states"
     );
+}
+
+#[kithara::test]
+fn reader_demand_replans_a_prefix_outside_the_forward_window() {
+    let ctx = test_ctx(3);
+    let variant = make_var(0, 0, &[100; 6], &ctx);
+    variant.rebuild(&ctx, 3);
+    let session = active_session(&variant, &ctx, 12);
+
+    assert!(matches!(
+        session.wait_range(12..22, Some(Duration::ZERO)),
+        Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+    ));
+    let commands = session.dispatch(&ctx, 1);
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].url(), variant.segments()[0].url());
 }
 
 #[kithara::test]
@@ -2273,6 +2309,29 @@ fn rebuild_fills_forward_window_from_seg() {
     assert_eq!(queue_seg_indices(&v), vec![2, 3, 4, 5, 6, 7, 8, 9]);
 }
 
+#[kithara::test]
+fn rebuild_keeps_the_satisfied_plan_when_queued_prefix_is_cached() {
+    let ctx = test_ctx(3);
+    let variant = make_var(0, 0, &[100; 10], &ctx);
+    for segment in variant.segments() {
+        segment.state().mark_loaded();
+    }
+    push_planned(&variant, 2);
+    push_planned(&variant, 3);
+
+    assert!(
+        variant.queue_matches_plan(8),
+        "loaded prefix entries cannot dispatch work outside the satisfied target window"
+    );
+    variant.rebuild(&ctx, 8);
+    assert_eq!(queue_seg_indices(&variant), vec![2, 3]);
+    assert!(
+        active_session(&variant, &ctx, 800)
+            .dispatch(&ctx, 3)
+            .is_empty()
+    );
+}
+
 /// A rebuild whose forward window is already cached must still drop the
 /// fetches a previous epoch left *behind* the new target.
 ///
@@ -2285,7 +2344,7 @@ fn rebuild_fills_forward_window_from_seg() {
 fn rebuild_drops_prefix_fetches_when_forward_window_is_cached() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100; 10], &ctx);
-    for segment in v.segments() {
+    for segment in v.segments().iter().skip(8) {
         segment.state().mark_loaded();
     }
     push_planned(&v, 2);
@@ -2892,6 +2951,32 @@ fn eof_mints_at_the_anchored_frame_end_despite_a_late_prefix_settle() {
         "wait at the anchored frame end must report EOF, not park on a \
          phantom gap opened by the parked prefix size"
     );
+}
+
+#[kithara::test]
+fn post_seek_readahead_settle_preserves_the_consumed_target_cursor() {
+    let (ctx, variant, session, anchor) = drifting_seek_session();
+    settle_seg(&variant, &ctx, 10, 100);
+    session.advance(64);
+    settle_seg(&variant, &ctx, 9, 600);
+
+    assert_eq!(session.position(), anchor + 64);
+    assert_eq!(
+        variant
+            .find_at_offset(session.position())
+            .map(|(index, ..)| index),
+        Some(10),
+        "a late preroll commit must not reinterpret consumed target bytes as prefix bytes"
+    );
+    settle_seg(&variant, &ctx, 11, 100);
+    session.advance(136);
+    assert_eq!(variant.total_bytes(), anchor + 200);
+    assert!(matches!(
+        variant
+            .read_at(session.position(), &mut [0_u8; 1])
+            .expect("tail read"),
+        ReadOutcome::Eof
+    ));
 }
 
 #[kithara::test]

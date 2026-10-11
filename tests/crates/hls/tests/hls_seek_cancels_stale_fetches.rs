@@ -5,14 +5,12 @@ use std::collections::{HashMap, HashSet};
 
 use kithara::{
     abr::AbrMode,
-    audio::AudioEvent,
     decode::DecoderBackend,
     download::{DownloaderEvent, RequestId},
     hls::HlsEvent,
     platform::{
         time,
         time::{Duration, WallInstant},
-        tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
     play::{ResourceConfig, ResourceSrc},
@@ -127,6 +125,7 @@ struct PostSeekObservation {
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)
 )]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(3))]
 async fn hls_seek_near_end_skips_prefix(
     #[future(awt)] prepared_hls: (TestServerHelper, Url),
     #[case] backend: DecoderBackend,
@@ -180,35 +179,28 @@ async fn hls_seek_near_end_skips_prefix(
 
     let mut pre_seek_enqueued: HashSet<RequestId> = HashSet::new();
 
-    let _ = time::timeout(consts::LOAD_DEADLINE, async {
-        loop {
-            match rx.recv().await.map(|env| env.event) {
-                Ok(TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
-                    request_id, ..
-                })) => {
-                    pre_seek_enqueued.insert(request_id);
-                }
-                Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. }))
-                    if position_ms > 0 =>
-                {
-                    break;
-                }
-                Ok(_) => {}
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => break,
-            }
-        }
-    })
-    .await;
+    hang_reset!();
+    while !queue
+        .position_seconds()
+        .is_some_and(|position| position > 0.0)
+    {
+        hang_tick!();
+        time::sleep(Duration::from_millis(2)).await;
+    }
+    hang_reset!();
 
     // Drain any events still buffered after steady playback so the pre-seek
     // enqueued baseline is complete before the seek fires.
     loop {
+        hang_tick!();
         match rx.try_recv().map(|env| env.event) {
             Ok(TestEvent::Downloader(DownloaderEvent::RequestEnqueued { request_id, .. })) => {
                 pre_seek_enqueued.insert(request_id);
+                hang_reset!();
             }
-            Ok(_) => {}
+            Ok(_) => {
+                hang_reset!();
+            }
             Err(TryRecvError::Lagged(_)) => continue,
             Err(_) => break,
         }
@@ -230,17 +222,7 @@ async fn hls_seek_near_end_skips_prefix(
         .await
         .expect("seek");
 
-    let (observation, _reset_evt) = tokio::join!(
-        observe_post_seek(&mut rx, seek_at, &pre_seek_enqueued),
-        time::timeout(
-            consts::POST_SEEK_OBSERVATION,
-            probe_recorder.wait_for(|events| {
-                events[pre_seek..]
-                    .iter()
-                    .any(|e| e.target == "kithara_hls_probe" && e.probe == "rebuild")
-            }),
-        ),
-    );
+    let observation = observe_post_seek(&mut rx, seek_at, &pre_seek_enqueued).await;
 
     tick_handle.stop().await;
 
@@ -401,6 +383,8 @@ async fn hls_seek_near_end_skips_prefix(
     drop(probe_recorder);
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(3))]
+#[kithara_test_utils::kithara::flash(io)]
 async fn observe_post_seek(
     rx: &mut kithara::events::EventReceiver<TestEvent>,
     _seek_at: WallInstant,
@@ -411,75 +395,63 @@ async fn observe_post_seek(
     let mut enqueue_url: HashMap<RequestId, String> = HashMap::new();
     let mut target_segment: Option<usize> = None;
 
-    // Collect until the two discriminating facts are observed — ReaderSeek and
-    // the first post-seek SegmentReadStart — then exit immediately, picking up
-    // the diagnostic-only RequestStarted on the way if it arrives first.
-    //
-    // `POST_SEEK_OBSERVATION` is a give-up budget, not a measurement. It does
-    // NOT collapse on the flash clock the way an earlier revision claimed:
-    // `time::timeout` is virtual only while flash is on, and the `--flash=off`
-    // lane runs it against the wall — which is exactly the lane that can
-    // observe this test's contract at all, since flash collapses the fixture's
-    // per-segment delay and with it the queue ordering the seek path is
-    // supposed to get right. A genuinely broken seek that never populates a
-    // field still terminates here with a partial `obs`; the discriminating
-    // panics live in the caller and fire on the missing field, so this give-up
-    // never silently passes an assertion.
-    let _ = time::timeout(consts::POST_SEEK_OBSERVATION, async {
-        loop {
-            match rx.recv().await {
-                Ok(env) => match &env.event {
-                    TestEvent::Hls(HlsEvent::ReaderSeek { segment_index, .. }) => {
-                        if obs.reader_seek.is_none() {
-                            target_segment = *segment_index;
-                            obs.reader_seek = Some(env.event.clone());
+    loop {
+        hang_tick!();
+        let Ok(event) = time::timeout(__hang_detector.remaining(), rx.recv()).await else {
+            hang_tick!();
+            break;
+        };
+        match event {
+            Ok(env) => match &env.event {
+                TestEvent::Hls(HlsEvent::ReaderSeek { segment_index, .. }) => {
+                    if obs.reader_seek.is_none() {
+                        target_segment = *segment_index;
+                        obs.reader_seek = Some(env.event.clone());
+                        hang_reset!();
+                    }
+                }
+                TestEvent::Hls(HlsEvent::SegmentReadStart { .. }) => {
+                    if obs.reader_seek.is_some() && obs.first_segment_read_start.is_none() {
+                        obs.first_segment_read_start = Some(env.event.clone());
+                        hang_reset!();
+                    }
+                }
+                TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
+                    request_id, url, ..
+                }) => {
+                    if !pre_seek_enqueued.contains(request_id) {
+                        new_epoch_enqueued.insert(*request_id);
+                        enqueue_url.insert(*request_id, url.to_string());
+                        if let (Some(target), Some((_v, seg_idx))) =
+                            (target_segment, parse_segment_url(url.as_str()))
+                            && seg_idx + consts::WARMUP_TOLERANCE < target
+                        {
+                            obs.prefix_enqueued_after_seek.insert(*request_id);
                         }
                     }
-                    TestEvent::Hls(HlsEvent::SegmentReadStart { .. }) => {
-                        if obs.reader_seek.is_some() && obs.first_segment_read_start.is_none() {
-                            obs.first_segment_read_start = Some(env.event.clone());
-                        }
-                    }
-                    TestEvent::Downloader(DownloaderEvent::RequestEnqueued {
-                        request_id,
-                        url,
-                        ..
-                    }) => {
-                        if !pre_seek_enqueued.contains(request_id) {
-                            new_epoch_enqueued.insert(*request_id);
-                            enqueue_url.insert(*request_id, url.to_string());
-                            if let (Some(target), Some((_v, seg_idx))) =
-                                (target_segment, parse_segment_url(url.as_str()))
-                                && seg_idx + consts::WARMUP_TOLERANCE < target
-                            {
-                                obs.prefix_enqueued_after_seek.insert(*request_id);
-                            }
-                        }
-                    }
-                    TestEvent::Downloader(DownloaderEvent::RequestStarted {
-                        request_id,
-                        wait_in_queue,
-                    }) if obs.target_started_wait.is_none()
-                        && new_epoch_enqueued.contains(request_id) =>
-                    {
-                        obs.target_started_wait = Some(*wait_in_queue);
-                    }
-                    _ => {}
-                },
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => break,
-            }
-
-            // Exit on the facts the assertions read. `target_started_wait` is
-            // diagnostic only, so waiting for it made termination depend on
-            // something no assertion requires — a healthy run that never
-            // produced it sat here until the deadline.
-            if obs.reader_seek.is_some() && obs.first_segment_read_start.is_some() {
-                break;
-            }
+                }
+                TestEvent::Downloader(DownloaderEvent::RequestStarted {
+                    request_id,
+                    wait_in_queue,
+                }) if obs.target_started_wait.is_none()
+                    && new_epoch_enqueued.contains(request_id) =>
+                {
+                    obs.target_started_wait = Some(*wait_in_queue);
+                    hang_reset!();
+                }
+                _ => {}
+            },
+            Err(RecvError::Lagged(_)) => continue,
+            Err(RecvError::Closed) => break,
         }
-    })
-    .await;
+
+        if obs.reader_seek.is_some()
+            && obs.first_segment_read_start.is_some()
+            && obs.target_started_wait.is_some()
+        {
+            break;
+        }
+    }
 
     obs
 }

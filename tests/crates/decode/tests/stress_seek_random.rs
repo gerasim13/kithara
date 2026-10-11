@@ -5,7 +5,7 @@ use kithara::{
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     file::{File, FileConfig, FileSrc},
     platform::{time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     signal::AudioSpec,
     stream::Stream,
 };
@@ -70,6 +70,7 @@ impl SeekStats {
     }
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 fn run_seek_iterations(
     audio: &mut LaneAudio<Stream<File<TestPools>>, TestPools>,
     buf: &mut [f32],
@@ -84,6 +85,7 @@ fn run_seek_iterations(
     } = SeekStats::default();
 
     for (i, &pos_secs) in seek_positions.iter().enumerate() {
+        hang_tick!();
         let position = Duration::from_secs_f64(pos_secs);
 
         audio.seek(position).unwrap_or_else(|e| {
@@ -132,6 +134,7 @@ fn run_seek_iterations(
         }
 
         successful_reads += 1;
+        hang_reset!();
         total_samples_read += n as u64;
 
         if (i + 1) % 200 == 0 {
@@ -150,6 +153,7 @@ fn run_seek_iterations(
     }
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 fn read_final_tail(
     audio: &mut LaneAudio<Stream<File<TestPools>>, TestPools>,
     buf: &mut [f32],
@@ -164,10 +168,12 @@ fn read_final_tail(
     let mut remaining_samples = 0u64;
     let mut saw_final_eof = false;
     loop {
+        hang_tick!();
         match audio.read(buf) {
             Ok(ReadOutcome::Pending { .. }) => break,
             Ok(ReadOutcome::Frames { count, .. }) => {
                 remaining_samples += count.get() as u64;
+                hang_reset!();
                 for &sample in &buf[..count.get()] {
                     assert!(
                         sample.is_finite() && (-1.0..=1.0).contains(&sample),
@@ -211,6 +217,9 @@ async fn stress_random_seek_read_synthetic_wav(#[future(awt)] wav_file: NamedTem
         .build();
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .hint("wav".to_string())
+        .build();
+    let config = TrackConfig::for_audio(config)
+        .block_on_underrun(true)
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)

@@ -4,7 +4,7 @@ use crate::variant::DispatchTokens;
 
 /// Cancel hierarchy of one session: `root` → `fetch` → `lookahead`.
 ///
-/// `fetch` covers every fetch the session issues and rotates on seek
+/// Exact size discovery rides `root`; `fetch` covers body fetches and rotates on seek
 /// ([`Self::rearm`]). `lookahead` is its child and covers only prefetches
 /// past the owed window, so a variant transition can retire them
 /// ([`Self::retire_lookahead`]) without touching owed work — while a seek's
@@ -28,6 +28,7 @@ impl SessionCancel {
 
     pub(super) fn dispatch_tokens(&self) -> DispatchTokens {
         DispatchTokens {
+            metadata: self.root.clone(),
             fetch: self.fetch.read().clone(),
             lookahead: self.lookahead.read().clone(),
         }

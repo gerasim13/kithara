@@ -5,6 +5,7 @@ use std::{
 
 use kithara_bufpool::ByteBuffer;
 use kithara_stream::{ByteMap, PendingReason, StreamReadError};
+use kithara_test_utils::kithara;
 
 use crate::{
     error::{DecodeError, DecodeResult},
@@ -130,12 +131,14 @@ impl<'a> LiveRange<'a> {
 /// bytes from the next segment (or from the seg-0 moof after the init).
 /// `re_mp4` then parses the trailing splice as a malformed box and
 /// errors with "failed to fill whole buffer".
+#[kithara::hang_watchdog]
 pub(crate) fn fill_segment_buffer(
     source: &mut BoxedSource,
     state: &mut SegmentReadState,
     live: LiveRange<'_>,
 ) -> DecodeResult<FillStatus> {
     loop {
+        hang_tick!();
         refresh_range(state, live);
         if state.sync_buffer_ready()? {
             return Ok(FillStatus::Ready);
@@ -157,7 +160,10 @@ pub(crate) fn fill_segment_buffer(
             .try_read(&mut state.buffer[state.filled..])
             .map_err(map_stream_err)?
         {
-            InputReadOutcome::Bytes(n) => state.filled += n.get(),
+            InputReadOutcome::Bytes(n) => {
+                state.filled += n.get();
+                hang_reset!();
+            }
             InputReadOutcome::Pending(reason) => return Ok(FillStatus::Pending(reason)),
             InputReadOutcome::Eof => {
                 if state.filled == state.total() {

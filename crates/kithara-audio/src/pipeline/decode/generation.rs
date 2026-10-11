@@ -200,10 +200,13 @@ impl DecoderGeneration {
         self.gapless.flush();
     }
 
+    #[kithara::hang_watchdog]
     pub(crate) fn finish_staging(&mut self) {
         self.finish();
         while let Some(chunk) = self.gapless.next() {
+            hang_tick!();
             self.staged.push_back(chunk);
+            hang_reset!();
         }
     }
 
@@ -305,11 +308,14 @@ impl DecoderGeneration {
         self.staged.push_front(chunk);
     }
 
+    #[kithara::hang_watchdog]
     pub(crate) fn stage(&mut self, chunk: AudioChunk) {
         self.holdback = None;
         self.gapless.push(chunk);
         while let Some(chunk) = self.gapless.next() {
+            hang_tick!();
             self.staged.push_back(chunk);
+            hang_reset!();
         }
     }
 
@@ -549,6 +555,7 @@ mod tests {
         3,
         "AAC would buy back its tapered frame, so the trim stays whole"
     )]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     fn finish_installs_the_tail_compensation_the_decoder_resolved_while_decoding(
         #[case] codec: Option<kithara_stream::AudioCodec>,
         #[case] expected_frames: u64,
@@ -582,7 +589,9 @@ mod tests {
 
         let mut frames = 0u64;
         while let Some(next) = generation.next() {
+            hang_tick!();
             frames = frames.saturating_add(u64::from(next.meta.frames));
+            hang_reset!();
         }
 
         assert_eq!(frames, expected_frames, "{label}");
@@ -730,6 +739,7 @@ mod tests {
     }
 
     #[kithara::test]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     fn holdback_pumps_surplus_gapless_pending_without_decoder_input(decode_quarter: Vec<f32>) {
         const TRAILING_FRAMES: u64 = 10;
         const JOIN_FRAMES: u64 = 2;
@@ -765,6 +775,7 @@ mod tests {
 
         let mut offsets = Vec::new();
         loop {
+            hang_tick!();
             let next = match generation.next_with_holdback() {
                 StageOutput::Output(next) => next,
                 StageOutput::Invalid(failure) => {
@@ -775,6 +786,7 @@ mod tests {
                 break;
             };
             offsets.push(chunk.meta.frame_offset);
+            hang_reset!();
             assert_eq!(generation.staged.capacity(), capacity);
         }
 

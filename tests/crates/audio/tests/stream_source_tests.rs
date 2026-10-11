@@ -7,7 +7,7 @@ use kithara::{
         AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome, DecoderChangeCause,
         DecoderEvent, ReadOutcome, RubatoBackend,
     },
-    platform::time::{self, Duration, Instant},
+    platform::time::{self, Duration, WallInstant},
     play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     signal::{AudioChunk, SegmentId},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
@@ -24,6 +24,7 @@ use kithara_integration_tests::{
 use kithara_test_fixtures::integration_fixtures::{
     audio_wav_8000, audio_wav_44100, audio_wav_132300, audio_wav_176400, audio_wav_1323000,
 };
+use kithara_test_utils::{kithara as watchdog, wait_until};
 
 fn wav_stream(wav: &[u8]) -> AudioConfig<MemStream> {
     let source = MemorySource::new(wav.to_vec());
@@ -36,12 +37,14 @@ fn wav_stream(wav: &[u8]) -> AudioConfig<MemStream> {
         .build()
 }
 
+#[watchdog::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn wait_for_chunk(
     mut audio: LaneAudio<Stream<MemStream>, TestPools>,
     budget: Duration,
 ) -> (LaneAudio<Stream<MemStream>, TestPools>, AudioChunk) {
-    let deadline = Instant::now() + budget;
-    while Instant::now() < deadline {
+    let deadline = WallInstant::now() + budget;
+    while WallInstant::now() < deadline {
+        hang_tick!();
         let (next_audio, outcome) = blocking_audio(audio, AudioRead::next_chunk).await;
         audio = next_audio;
         match outcome.expect("decode while waiting for a PCM chunk") {
@@ -95,6 +98,7 @@ async fn basic_decode_to_eof(audio_wav_8000: &'static [u8]) {
 /// reading, so the rebuild needs that read to make progress at all, and it can
 /// be the chunk the rebuild lands in.
 #[kithara::test(tokio, timeout(Duration::from_secs(15)), hang_timeout_secs(5))]
+#[watchdog::hang_watchdog(timeout = Duration::from_secs(1))]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
     all(
@@ -107,8 +111,8 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
     audio_wav_1323000: &'static [u8],
     #[case] backend: StretchKind,
 ) {
-    const PRELOAD_CHUNKS: usize = 32;
-    const RING_CHUNKS: usize = 48;
+    const PRELOAD_CHUNKS: usize = 64;
+    const RING_CHUNKS: usize = 96;
     const SOURCE_RATE: u32 = 44_100;
     const TARGET_RATE: u32 = 48_000;
 
@@ -120,6 +124,7 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
         event_bus: None,
     };
     let audio = AudioConfig::<MemStream, RubatoBackend>::for_stream(stream)
+        .events(kithara::events::EventBus::default())
         .media_info(
             MediaInfo::builder()
                 .channels(2)
@@ -148,7 +153,7 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
         .await
         .expect("audio construction");
     let mut events = audio.event_bus().subscribe();
-    let mut audio = audio;
+    let mut audio = kithara_integration_tests::mock::with_blocking_reads(audio);
     kithara_integration_tests::mock::wait_for_preload(&mut audio, "non-unity source").await;
 
     let (mut audio, first) = wait_for_chunk(audio, Duration::from_secs(2)).await;
@@ -161,6 +166,14 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
         "source chunk span must be non-zero"
     );
     let committed = audio.position();
+    wait_until(
+        Duration::from_secs(1),
+        "admitted PCM ahead of the consumer",
+        || audio.decoded_frontier().saturating_sub(committed) > Duration::from_millis(250),
+    )
+    .await
+    .expect("the fixture must admit PCM before the route change");
+    hang_reset!();
     let decoded_frontier = audio.decoded_frontier();
     assert!(
         decoded_frontier < audio.duration().expect("finite WAV duration"),
@@ -178,33 +191,38 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
     audio.set_host_sample_rate(target_rate);
     let (mut audio, candidate) = wait_for_chunk(audio, Duration::from_secs(2)).await;
 
-    loop {
-        let envelope = events.recv().await.expect("decoder event bus remains open");
-        if matches!(
-            envelope.event,
-            TestEvent::Decoder(DecoderEvent::DecoderChanged {
-                cause: DecoderChangeCause::HostRateChange,
-                ..
-            })
-        ) {
-            break;
-        }
-    }
-
     let rebuilt = if candidate.meta.spec.sample_rate == target_rate {
         candidate
     } else {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = WallInstant::now() + Duration::from_secs(5);
         loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
+            hang_tick!();
+            let remaining = deadline.saturating_duration_since(WallInstant::now());
             assert!(!remaining.is_zero(), "timed out waiting for rebuilt PCM");
             let (next_audio, chunk) = wait_for_chunk(audio, remaining).await;
             audio = next_audio;
+            hang_reset!();
             if chunk.meta.spec.sample_rate == target_rate {
                 break chunk;
             }
         }
     };
+    hang_reset!();
+    loop {
+        hang_tick!();
+        if let Ok(envelope) = events.try_recv()
+            && matches!(
+                envelope.event,
+                TestEvent::Decoder(DecoderEvent::DecoderChanged {
+                    cause: DecoderChangeCause::HostRateChange,
+                    ..
+                })
+            )
+        {
+            break;
+        }
+        time::sleep(Duration::from_millis(5)).await;
+    }
     assert!(
         rebuilt.meta.timestamp >= committed_at_route.saturating_add(resume_margin),
         "route recreation must resume from admitted Warp progress, not the \
@@ -219,6 +237,7 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
     timeout(Duration::from_secs(10)),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
+#[watchdog::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn seek_during_active_decode_completes_without_hang(audio_wav_132300: &'static [u8]) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
@@ -233,11 +252,15 @@ async fn seek_during_active_decode_completes_without_hang(audio_wav_132300: &'st
     seek_result.expect("seek");
     let expected_segment = audio.segment();
     kithara_integration_tests::mock::wait_for_preload(&mut audio, "active decode seek").await;
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = WallInstant::now() + Duration::from_secs(5);
     let mut saw_complete = false;
-    while Instant::now() < deadline && !saw_complete {
+    while WallInstant::now() < deadline && !saw_complete {
+        hang_tick!();
         let (next_audio, outcome) = pump_once(audio).await;
         audio = next_audio;
+        if matches!(outcome, ReadOutcome::Frames { .. }) {
+            hang_reset!();
+        }
         if matches!(outcome, ReadOutcome::Pending { .. }) {
             time::sleep(Duration::from_millis(20)).await;
         }
@@ -321,20 +344,26 @@ async fn truncated_wav_surfaces_decode_error_or_eof(audio_wav_44100: &'static [u
         .await
         .expect("audio construction");
 
-    let (_audio, saw_terminal) = blocking_audio(audio, |audio| {
-        let mut buf = [0.0f32; 4096];
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline {
-            match audio.read(&mut buf) {
-                Ok(ReadOutcome::Eof { .. }) | Err(_) => return true,
-                Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Pending { .. }) => {}
-            }
-        }
-        false
-    })
-    .await;
+    let (_audio, saw_terminal) = blocking_audio(audio, read_truncated_to_terminal).await;
     assert!(
         saw_terminal,
         "truncated WAV must surface either Eof or DecodeError"
     );
+}
+
+#[watchdog::hang_watchdog(timeout = Duration::from_secs(1))]
+fn read_truncated_to_terminal(audio: &mut LaneAudio<Stream<MemStream>, TestPools>) -> bool {
+    let mut buf = [0.0f32; 4096];
+    let deadline = WallInstant::now() + Duration::from_secs(5);
+    while WallInstant::now() < deadline {
+        hang_tick!();
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Eof { .. }) | Err(_) => return true,
+            Ok(ReadOutcome::Frames { .. }) => {
+                hang_reset!();
+            }
+            Ok(ReadOutcome::Pending { .. }) => {}
+        }
+    }
+    false
 }

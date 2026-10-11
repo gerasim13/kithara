@@ -80,6 +80,7 @@ pub struct PcmDeck {
 
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 impl PcmDeck {
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     pub fn new(mut reader: Box<dyn kithara::audio::AudioReader>) -> Self {
         use std::io::{Seek, SeekFrom, Write};
 
@@ -111,8 +112,10 @@ impl PcmDeck {
         let mut samples = vec![0.0; usize::from(spec.channels) * 4096];
         let mut bytes = 0u32;
         loop {
+            hang_tick!();
             match reader.read(&mut samples).expect("read PCM deck samples") {
                 ReadOutcome::Frames { count, .. } => {
+                    hang_reset!();
                     for sample in &samples[..count.get()] {
                         file.write_all(&sample.to_le_bytes())
                             .expect("write PCM sample");
@@ -191,6 +194,8 @@ where
     B: Default + ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
+    #[kithara_test_utils::kithara::flash(io)]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(3))]
     pub async fn load<C>(&mut self, config: C) -> Result<LaneAudio<Stream<T>, S>, LoadRefusal>
     where
         C: Into<TrackConfig<T, B>>,
@@ -236,15 +241,27 @@ where
                 ))
             })?;
         worker.wake();
-        let receipt = poll_fn(|context| {
-            let mut owner = self.owner.lock();
-            let loads = &mut owner.sender;
-            loads.hold(context.waker().clone());
-            let found = loads.receipts().find(|receipt| receipt.seq() == seq);
-            drop(owner);
-            found.map_or(Poll::Pending, Poll::Ready)
-        })
+        let receipt = kithara::platform::time::timeout(
+            __hang_detector.remaining(),
+            poll_fn(|context| {
+                hang_tick!();
+                let mut owner = self.owner.lock();
+                let loads = &mut owner.sender;
+                loads.hold(context.waker().clone());
+                let found = loads.receipts().find(|receipt| {
+                    hang_tick!();
+                    hang_reset!();
+                    receipt.seq() == seq
+                });
+                drop(owner);
+                found.map_or(Poll::Pending, Poll::Ready)
+            }),
+        )
         .await;
+        let Ok(receipt) = receipt else {
+            hang_tick!();
+            panic!("test lane load did not publish its receipt");
+        };
         self.owner.lock().sender.release();
         let (outcome, _) = receipt.into();
         let loaded = match outcome {
@@ -302,16 +319,26 @@ pub async fn wait_for_preload<T, S>(audio: &mut LaneAudio<T, S>, label: &str) {
     audio.wait_ready(label).await;
 }
 
+pub fn with_blocking_reads<T, S>(mut audio: LaneAudio<T, S>) -> LaneAudio<T, S> {
+    audio.block_on_underrun = true;
+    audio
+}
+
 impl<T, S> LaneAudio<T, S> {
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     fn service(&mut self) {
         while self.pcm.peek().is_some_and(|packet| match packet {
             PcmPacket::Chunk(chunk) => chunk.meta.segment != self.segment,
             PcmPacket::Failed { segment, .. } => *segment != self.segment,
         }) {
+            hang_tick!();
             let packet = self.pcm.pop().expect("peeked stale packet");
             self.pcm.recycle(packet).expect("recycle stale packet");
+            hang_reset!();
         }
         for receipt in self.sender.receipts() {
+            hang_tick!();
+            hang_reset!();
             if let Outcome::Applied { data, .. } = receipt.outcome() {
                 if data.ready == Some(self.segment) {
                     self.ready = data.ready;
@@ -322,21 +349,31 @@ impl<T, S> LaneAudio<T, S> {
         }
     }
 
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    #[kithara_test_utils::kithara::flash(io)]
     async fn wait_ready(&mut self, label: &str) {
-        poll_fn(|context| {
-            self.sender.hold(context.waker().clone());
-            self.service();
-            if self.ready == Some(self.segment) {
-                Poll::Ready(())
-            } else {
-                assert!(
-                    !self.pcm.is_closed(),
-                    "{label}: lane closed before segment preload"
-                );
-                Poll::Pending
-            }
-        })
+        let receipt = kithara::platform::time::timeout(
+            __hang_detector.remaining(),
+            poll_fn(|context| {
+                hang_tick!();
+                self.sender.hold(context.waker().clone());
+                self.service();
+                if self.ready == Some(self.segment) {
+                    Poll::Ready(())
+                } else {
+                    assert!(
+                        !self.pcm.is_closed(),
+                        "{label}: lane closed before segment preload"
+                    );
+                    Poll::Pending
+                }
+            }),
+        )
         .await;
+        if receipt.is_err() {
+            hang_tick!();
+            panic!("{label}: lane did not finish segment preload");
+        }
         self.sender.release();
     }
 
@@ -365,9 +402,13 @@ impl<T, S> LaneAudio<T, S> {
         Ok(())
     }
 
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     fn pull(&mut self) -> Result<ChunkOutcome, AudioReadError> {
-        if !self.current_segment_ready() {
-            futures::executor::block_on(self.wait_ready("read"));
+        if !self.block_on_underrun && !self.current_segment_ready() {
+            return Ok(ChunkOutcome::Pending {
+                reason: PendingReason::Buffering,
+                position: self.pcm.position(),
+            });
         }
         self.service();
         if let Some(failure) = self.failure {
@@ -382,9 +423,13 @@ impl<T, S> LaneAudio<T, S> {
             });
         }
         loop {
+            hang_tick!();
             let Some(packet) = self.pcm.pop() else {
                 if self.block_on_underrun && !self.pcm.is_closed() {
                     kithara_render::mock::wait_for_packet(&self.pcm);
+                    if self.pcm.peek().is_some() || self.pcm.is_closed() {
+                        hang_reset!();
+                    }
                     continue;
                 }
                 return Ok(ChunkOutcome::Pending {
@@ -392,6 +437,7 @@ impl<T, S> LaneAudio<T, S> {
                     position: self.pcm.position(),
                 });
             };
+            hang_reset!();
             match packet {
                 PcmPacket::Chunk(chunk) if chunk.meta.segment == self.segment => {
                     if chunk.meta.end_of_track {

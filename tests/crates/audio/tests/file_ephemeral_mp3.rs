@@ -7,7 +7,7 @@ use kithara::{
     decode::DecoderBackend,
     file::{File, FileConfig},
     platform::{sync::Arc, thread, time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper,
@@ -58,6 +58,7 @@ use crate::common::test_defaults::consts;
     any(target_os = "macos", target_os = "ios"),
     case::hw_no_ext(None, None, DecoderBackend::Apple)
 )]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn audio_file_mp3_decodes_with_duration(
     tone_mp3: &'static [u8],
     #[case] suffix: Option<&str>,
@@ -94,6 +95,9 @@ async fn audio_file_mp3_decodes_with_duration(
         )
         .maybe_hint(hint.map(str::to_owned))
         .build();
+    let config = TrackConfig::for_audio(config)
+        .block_on_underrun(true)
+        .build();
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .unwrap_or_else(|e| panic!("probe failed for url={url} hint={hint:?}: {e}"));
@@ -116,10 +120,12 @@ async fn audio_file_mp3_decodes_with_duration(
         let mut saw_eof = false;
 
         for _ in 0..600 {
+            hang_tick!();
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Pending { .. }) => break,
                 Ok(ReadOutcome::Frames { count, .. }) => {
                     total += count.get();
+                    hang_reset!();
                 }
                 Ok(ReadOutcome::Eof { .. }) => {
                     saw_eof = true;
@@ -164,6 +170,7 @@ async fn audio_file_mp3_decodes_with_duration(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)
 )]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn streamed_mp3_plays_to_the_length_it_was_built_to(
     tone_mp3: &'static [u8],
     #[case] backend: DecoderBackend,
@@ -216,6 +223,7 @@ async fn streamed_mp3_plays_to_the_length_it_was_built_to(
         let mut saw_eof = false;
         let mut waits = 0usize;
         loop {
+            hang_tick!();
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Pending { .. }) => {
                     waits += 1;
@@ -224,7 +232,9 @@ async fn streamed_mp3_plays_to_the_length_it_was_built_to(
                     }
                     thread::sleep(Duration::from_millis(5));
                 }
-                Ok(ReadOutcome::Frames { .. }) => {}
+                Ok(ReadOutcome::Frames { .. }) => {
+                    hang_reset!();
+                }
                 Ok(ReadOutcome::Eof { .. }) => {
                     saw_eof = true;
                     break;
@@ -266,6 +276,7 @@ async fn streamed_mp3_plays_to_the_length_it_was_built_to(
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)
 )]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn headerless_mp3_whose_bitrate_changes_plays_past_its_opening_estimate(
     #[case] backend: DecoderBackend,
 ) {
@@ -325,6 +336,7 @@ async fn headerless_mp3_whose_bitrate_changes_plays_past_its_opening_estimate(
         audio.seek(SEEK).expect("seek inside the track");
         let mut buf = [0.0f32; 4096];
         for _ in 0..MAX_PENDING_WAITS {
+            hang_tick!();
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Pending { .. }) => thread::sleep(Duration::from_millis(5)),
                 Ok(outcome) => return outcome,
@@ -398,6 +410,7 @@ async fn mp3_duration_correct_before_decode(tone_mp3: &'static [u8], #[case] hin
 }
 
 #[kithara::test(tokio)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn audio_file_extensionless_mp3_without_hint_uses_native_probe(tone_mp3: &'static [u8]) {
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {
@@ -418,6 +431,9 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe(tone_mp3: &
         .pools(pools)
         .build();
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config).build();
+    let config = TrackConfig::for_audio(config)
+        .block_on_underrun(true)
+        .build();
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .unwrap();
@@ -428,10 +444,12 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe(tone_mp3: &
         let mut saw_eof = false;
 
         for _ in 0..600 {
+            hang_tick!();
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Pending { .. }) => break,
                 Ok(ReadOutcome::Frames { count, .. }) => {
                     total += count.get();
+                    hang_reset!();
                 }
                 Ok(ReadOutcome::Eof { .. }) => {
                     saw_eof = true;

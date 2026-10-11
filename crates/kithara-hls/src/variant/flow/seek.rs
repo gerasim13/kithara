@@ -151,12 +151,11 @@ where
     /// RT-reachable lock-free clear: safe because the base is single-writer (on-core), so the `Some
     /// -> None` store never races a concurrent base writer.
     pub(crate) fn retire_seek_projection_if_moved(&self, pos: u64) {
-        if self
-            .seek
-            .alias
-            .load()
-            .is_some_and(|alias| !alias.covers_position(pos))
-        {
+        if self.seek.alias.load().is_some_and(|alias| {
+            !alias.covers_position(pos)
+                && (needs_exact_byte_sizes(self.profile.codec, self.profile.container)
+                    || pos < alias.anchor)
+        }) {
             self.seek.alias.clear();
             self.clear_exact_seek();
         }

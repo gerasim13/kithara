@@ -67,10 +67,15 @@ async fn open_test_audio(
 /// deadline. `flash(true)` keeps the re-poll sleep on the virtual clock
 /// when called from a flash test.
 #[kithara::flash(true)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn next_chunk(audio: &mut LaneAudio<Stream<File<TestPools>>, TestPools>, stage: &str) {
     loop {
+        hang_tick!();
         match AudioRead::next_chunk(audio) {
-            Ok(ChunkOutcome::Chunk(_)) => return,
+            Ok(ChunkOutcome::Chunk(_)) => {
+                hang_reset!();
+                return;
+            }
             Ok(ChunkOutcome::Eof { .. }) => {
                 panic!("unexpected EOF while waiting for {stage}");
             }
@@ -1409,6 +1414,7 @@ async fn decoder_file_seek_multiple(
     not(target_arch = "wasm32"),
     case(SignalAsset::PROFILE_TAGGED_WAVE_MP3_ID3)
 )]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn decoder_file_seek_emits_events(#[case] asset: SignalAsset, temp_dir: TestTempDir) {
     let (_server, url) = source(asset).await;
     let bus = EventBus::new(64);
@@ -1428,7 +1434,10 @@ async fn decoder_file_seek_emits_events(#[case] asset: SignalAsset, temp_dir: Te
     let mut buf = [0.0_f32; 1024];
 
     loop {
+        hang_tick!();
         while let Ok(ev) = events_rx.try_recv().map(|env| env.event) {
+            hang_tick!();
+            hang_reset!();
             match ev {
                 TestEvent::Audio(AudioEvent::FormatDetected { .. }) => {
                     got_format = true;
@@ -1449,7 +1458,9 @@ async fn decoder_file_seek_emits_events(#[case] asset: SignalAsset, temp_dir: Te
                 decoder.preload().expect("preload must succeed");
                 time::sleep(Duration::from_millis(10)).await;
             }
-            Ok(ReadOutcome::Frames { .. }) => {}
+            Ok(ReadOutcome::Frames { .. }) => {
+                hang_reset!();
+            }
             Ok(ReadOutcome::Eof { .. }) => {
                 panic!("unexpected EOF while waiting for seek events");
             }

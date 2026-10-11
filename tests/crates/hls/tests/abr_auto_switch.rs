@@ -1,17 +1,11 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use kithara::{
+    abr::AbrEvent,
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioSession},
-    events::EventBus,
+    events::{EventBus, TryRecvError},
     hls::{Hls, HlsConfig},
-    platform::{
-        CancelToken,
-        sync::Arc,
-        time::Duration,
-        tokio::task::{spawn, spawn_blocking},
-    },
-    play::{PlayWorker, PlayWorkerConfig},
+    platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
@@ -99,26 +93,7 @@ async fn abr_auto_switch_during_playback(
     );
 
     let bus = EventBus::new(32);
-    let switches = Arc::new(AtomicUsize::new(0));
-    let switches_bg = switches.clone();
     let mut events_rx = bus.subscribe::<TestEvent>();
-    spawn(async move {
-        use kithara::platform::tokio::sync::broadcast::error::RecvError;
-        loop {
-            match events_rx.recv().await {
-                Ok(env) => {
-                    let ev = env.event;
-                    let ev_str = format!("{ev:?}");
-                    if ev_str.contains("VariantApplied") {
-                        switches_bg.fetch_add(1, Ordering::Relaxed);
-                        info!("ABR switch: {ev_str}");
-                    }
-                }
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => break,
-            }
-        }
-    });
 
     let hls_config = HlsConfig::for_url(url)
         .store(
@@ -142,6 +117,9 @@ async fn abr_auto_switch_during_playback(
         .events(bus)
         .media_info(wav_info)
         .build();
+    let config = TrackConfig::for_audio(config)
+        .block_on_underrun(true)
+        .build();
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create Audio<Stream<Hls>>");
@@ -156,7 +134,27 @@ async fn abr_auto_switch_during_playback(
     .await
     .expect("spawn_blocking");
 
-    let switch_count = switches.load(Ordering::Relaxed);
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    fn count_switches(events: &mut kithara::events::EventReceiver<TestEvent>) -> usize {
+        let mut count = 0;
+        loop {
+            hang_tick!();
+            match events.try_recv() {
+                Ok(envelope) => {
+                    hang_reset!();
+                    if matches!(
+                        envelope.event,
+                        TestEvent::Abr(AbrEvent::VariantApplied { .. })
+                    ) {
+                        count += 1;
+                    }
+                }
+                Err(TryRecvError::Lagged(_)) => {}
+                Err(TryRecvError::Empty | TryRecvError::Closed) => return count,
+            }
+        }
+    }
+    let switch_count = count_switches(&mut events_rx);
     let final_variant = abr.and_then(|h| h.current_variant_index());
     info!(
         switch_count,

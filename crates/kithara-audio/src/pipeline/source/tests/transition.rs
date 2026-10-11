@@ -511,6 +511,7 @@ async fn same_spec_priming_retains_the_full_join_after_the_emitted_frontier(rout
 }
 
 #[kithara::test(tokio)]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn exact_primed_generation_promotes_once_at_outgoing_frontier(route_pcm: RoutePcm) {
     let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
     let plan = incoming_plan();
@@ -555,6 +556,7 @@ async fn exact_primed_generation_promotes_once_at_outgoing_frontier(route_pcm: R
     let mut expected_offset = chunk_frames;
     let mut post_cut_frames = 0usize;
     while post_cut_frames < 1_024 {
+        hang_tick!();
         let TrackStep::Produced(incoming) = fixture.source.step_track() else {
             panic!("promoted incoming must keep emitting its staged PCM");
         };
@@ -562,6 +564,9 @@ async fn exact_primed_generation_promotes_once_at_outgoing_frontier(route_pcm: R
         assert_route_signal(&incoming, expected_offset);
         expected_offset = expected_offset.saturating_add(u64::from(incoming.meta.frames));
         post_cut_frames = post_cut_frames.saturating_add(incoming.frames());
+        if incoming.frames() > 0 {
+            hang_reset!();
+        }
         fixture.source.prepare_deferred();
         fixture.source.finish_deferred();
         assert_eq!(fixture.control.promote_calls(), 1);
@@ -1093,6 +1098,7 @@ async fn stale_prepared_promotion_returns_incoming_for_shell_retirement(route_pc
 }
 
 #[kithara::test(tokio)]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks(
     route_pcm: RoutePcm,
 ) {
@@ -1123,12 +1129,16 @@ async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks(
     // Drain while the deferred transition is in flight until the source
     // exhausts; EOF must stay held for the transition and never surface.
     while !fixture.source.decode.active().is_source_exhausted() {
+        hang_tick!();
         match fixture.source.step_track() {
             TrackStep::Produced(fetch) => {
                 let chunk = produced_data(fetch);
                 assert_eq!(chunk.meta.frame_offset, next_offset);
                 next_offset = next_offset.saturating_add(u64::from(chunk.meta.frames));
                 frames = frames.saturating_add(chunk.frames());
+                if chunk.frames() > 0 {
+                    hang_reset!();
+                }
             }
             TrackStep::StateChanged | TrackStep::Blocked(_) => {}
             TrackStep::Eof => panic!("EOF must stay held while a transition is in flight"),
@@ -1143,12 +1153,16 @@ async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks(
     // gapless boundary exactly once.
     fixture.control.set_promotion(VariantPromotion::Stale);
     loop {
+        hang_tick!();
         match fixture.source.step_track() {
             TrackStep::Produced(fetch) => {
                 let chunk = produced_data(fetch);
                 assert_eq!(chunk.meta.frame_offset, next_offset);
                 next_offset = next_offset.saturating_add(u64::from(chunk.meta.frames));
                 frames = frames.saturating_add(chunk.frames());
+                if chunk.frames() > 0 {
+                    hang_reset!();
+                }
             }
             TrackStep::StateChanged | TrackStep::Blocked(_) => {}
             TrackStep::Eof => break,
@@ -1290,6 +1304,7 @@ async fn incoming_media_facts_choose_reader_profile(route_pcm: RoutePcm) {
 }
 
 #[kithara::test(tokio)]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn exact_promotion_emits_variant_switch_decoder_event(route_pcm: RoutePcm) {
     let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
     let bus = EventBus::new(16);
@@ -1322,6 +1337,7 @@ async fn exact_promotion_emits_variant_switch_decoder_event(route_pcm: RoutePcm)
 
     let mut changed = false;
     while let Ok(envelope) = events.try_recv() {
+        hang_tick!();
         changed |= matches!(
             envelope.event,
             DecoderEvent::DecoderChanged {
@@ -1330,6 +1346,7 @@ async fn exact_promotion_emits_variant_switch_decoder_event(route_pcm: RoutePcm)
                 ..
             }
         );
+        hang_reset!();
     }
     assert!(changed);
 }

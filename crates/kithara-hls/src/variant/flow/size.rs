@@ -82,7 +82,9 @@ where
     fn exact_byte_position_ready(&self, byte: u64) -> bool {
         self.layout
             .try_published(|| {
-                let ready = if self.sizes_complete() && self.exact_init_complete() {
+                let ready = if self.exact_init_complete()
+                    && (self.init_descriptor_at(byte).is_some() || self.sizes_complete())
+                {
                     true
                 } else {
                     self.find_at_offset(byte)

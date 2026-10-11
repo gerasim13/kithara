@@ -361,6 +361,8 @@ where
     delegate::delegate! {
         to self.cancel {
             pub(crate) fn abort(&self);
+            #[call(rearm)]
+            pub(crate) fn rearm_fetches(&self);
             /// Retire this session's look-ahead fetches — queued and in
             /// flight — while keeping the owed window live. Called when an
             /// incoming variant slot is installed: the capacity those fetches

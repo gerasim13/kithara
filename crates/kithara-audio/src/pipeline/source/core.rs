@@ -9,8 +9,8 @@ use kithara_events::DeferredBus;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::AudioChunk;
 use kithara_stream::{
-    MediaInfo, OpenedReader, OpenedVariantReader, OutgoingDisposition, PlayheadWrite, StreamType,
-    VariantControl, VariantTransition, WorkerWake,
+    MediaInfo, OpenedReader, OpenedVariantReader, OutgoingDisposition, PlayheadWrite, SourcePhase,
+    StreamType, VariantControl, VariantTransition, WorkerWake,
 };
 use tracing::warn;
 
@@ -66,6 +66,8 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     pub(in crate::pipeline::source) emit: Arc<DeferredBus<AudioLaneEvent>>,
     pub(in crate::pipeline::source) variant_control: Option<Arc<dyn VariantControl>>,
     pub(in crate::pipeline::source) phase: OwnerPhase,
+    pub(in crate::pipeline::source) waiting_for_source: bool,
+    seek_abr: Option<kithara_abr::AbrHandle>,
     pub(in crate::pipeline::source) failure_logged: bool,
     pub(in crate::pipeline::source) resume: ResumeCursor,
     pub(in crate::pipeline::source) shared_stream: SharedStream<T>,
@@ -103,12 +105,13 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
     type Chunk = AudioChunk;
     fn commit_source_end(&mut self, end: crate::SourceEnd, _meta: kithara_signal::AudioChunkInfo) {
         self.resume.commit_source_end(end);
+        self.release_seek_abr();
     }
     fn discontinuity(&self) -> Option<crate::SourceDiscontinuity> {
         Some(self.decode.discontinuity())
     }
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, crate::AudioReadError> {
-        if self.shared_stream.phase() == kithara_stream::SourcePhase::Cancelled {
+        if self.shared_stream.phase() == SourcePhase::Cancelled {
             self.fail(TrackFailureKind::SourceCancelled, None);
         }
         if let OwnerPhase::Failed { failure, .. } = self.phase {
@@ -199,7 +202,8 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
     fn prepare_deferred(&mut self) -> Option<kithara_signal::AudioSpec> {
         self.progress_variant_transition();
         if matches!(self.phase, OwnerPhase::Decoding) {
-            self.decode.prepare_deferred();
+            self.decode
+                .prepare_deferred(self.source_wait_reason().is_none());
         }
         Some(self.decode.output_spec())
     }
@@ -209,9 +213,13 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
             OwnerPhase::Failed { failure, .. } => return TrackStep::Failed(*failure),
             OwnerPhase::Decoding => {}
         }
-        if self.shared_stream.phase() == kithara_stream::SourcePhase::Cancelled {
+        if self.shared_stream.phase() == SourcePhase::Cancelled {
             return TrackStep::Failed(self.fail(TrackFailureKind::SourceCancelled, None));
         }
+        if let Some(reason) = self.source_wait_reason() {
+            return TrackStep::Blocked(reason);
+        }
+        self.waiting_for_source = false;
         let action = tick(
             &mut self.decode,
             DecodeCtx {
@@ -227,7 +235,10 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
                 self.wake.wake();
                 TrackStep::StateChanged
             }
-            DecodeAction::Pending(reason) => TrackStep::Blocked(reason),
+            DecodeAction::Pending(reason) => {
+                self.waiting_for_source = true;
+                TrackStep::Blocked(reason)
+            }
             DecodeAction::TransitionPending => TrackStep::Blocked(self.transition_wait_reason()),
             DecodeAction::StartRecreate(recreate) => {
                 let offset = recreate.offset;
@@ -243,6 +254,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
                 }
             }
             DecodeAction::Eof => {
+                self.release_seek_abr();
                 if !matches!(self.phase, OwnerPhase::Failed { .. }) {
                     self.phase = OwnerPhase::AtEof;
                 }
@@ -264,6 +276,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
 
 impl<T: StreamType> Drop for StreamAudioSource<T> {
     fn drop(&mut self) {
+        self.release_seek_abr();
         self.abandon_incoming();
         self.finish_deferred();
     }
@@ -291,8 +304,30 @@ impl<T: StreamType> StreamAudioSource<T> {
             emit,
             variant_control,
             phase: OwnerPhase::Decoding,
+            waiting_for_source: false,
+            seek_abr: None,
             failure_logged: false,
             resume: ResumeCursor::default(),
+        }
+    }
+
+    fn source_wait_reason(&self) -> Option<crate::pipeline::track::WaitingReason> {
+        use crate::pipeline::track::WaitingReason;
+
+        if !self.waiting_for_source {
+            return None;
+        }
+        match self.shared_stream.phase() {
+            SourcePhase::Waiting => Some(WaitingReason::Waiting),
+            SourcePhase::WaitingDemand => Some(WaitingReason::WaitingDemand),
+            SourcePhase::WaitingMetadata => Some(WaitingReason::WaitingMetadata),
+            _ => None,
+        }
+    }
+
+    fn release_seek_abr(&mut self) {
+        if let Some(abr) = self.seek_abr.take() {
+            abr.unlock();
         }
     }
 
@@ -304,6 +339,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         if let OwnerPhase::Failed { failure, .. } = self.phase {
             return failure;
         }
+        self.release_seek_abr();
         self.phase = OwnerPhase::Failed { failure, error };
         self.emit.enqueue(AudioEvent::TrackFailed { failure });
         failure
@@ -430,6 +466,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         drop(self.decode.replace_active(generation));
         self.decode.reset();
         self.resume.clear();
+        self.waiting_for_source = false;
         if let Some(landing) = landing {
             self.resume.rebase(landing);
         }
@@ -473,10 +510,17 @@ impl<T: StreamType> StreamAudioSource<T> {
         &mut self,
         position: Duration,
     ) -> Result<SeekOutcome, crate::AudioReadError> {
+        if self.seek_abr.is_none()
+            && let Some(abr) = self.shared_stream.abr_handle()
+        {
+            abr.lock();
+            self.seek_abr = Some(abr);
+        }
         self.discard_local_incoming();
         drop(self.decode.notify_seek());
         self.decode.reset();
         self.resume.clear();
+        self.waiting_for_source = false;
         if let Some(duration) = self
             .playhead
             .duration()
@@ -492,6 +536,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             if !matches!(self.phase, OwnerPhase::Failed { .. }) {
                 self.phase = OwnerPhase::AtEof;
             }
+            self.release_seek_abr();
             return Ok(SeekOutcome::PastEof {
                 target: position,
                 duration,
@@ -532,6 +577,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 })
             }
             DecoderSeekOutcome::PastEof { duration } => {
+                self.release_seek_abr();
                 if !matches!(self.phase, OwnerPhase::Failed { .. }) {
                     self.phase = OwnerPhase::AtEof;
                 }
