@@ -182,6 +182,7 @@ pub async fn load_audio<T, B, S, C>(
 ) -> Result<LaneAudio<Stream<T>, S>, LoadRefusal>
 where
     T: StreamType<Events = EventBus>,
+    T::Config: Send + 'static,
     B: Default + ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     C: Into<TrackConfig<T, B>>,

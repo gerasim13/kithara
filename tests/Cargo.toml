@@ -85,6 +85,7 @@ wasm = [
     "dep:kithara-render",
     "dep:kithara",
     "kithara/full",
+    "kithara/worker",
     "kithara/download",
     "kithara/queue",
     "kithara/mock",

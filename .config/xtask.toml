@@ -1616,6 +1616,7 @@ steps = [
     "wasm",
     "chrome",
     "webcodecs",
+    "include",
   ], label = "Chromium WebCodecs tests" },
 ]
 role = "gate"
@@ -1632,7 +1633,15 @@ label = "Web browser"
 os = "linux"
 tools = ["firefox", "geckodriver", "just"]
 program = "just"
-steps = [{ args = ["test", "wasm", "firefox"], label = "Firefox WASM tests" }]
+steps = [
+  { args = [
+    "test",
+    "wasm",
+    "firefox",
+    "all",
+    "include",
+  ], label = "Firefox WASM tests" },
+]
 role = "gate"
 kinds = ["platforms", "main", "nightly"]
 kinds_github = ["nightly"]
@@ -2958,7 +2967,15 @@ label = "Safari WASM"
 os = "macos"
 tools = ["cargo", "just"]
 program = "just"
-steps = [{ args = ["test", "wasm", "safari"], label = "Safari WASM tests" }]
+steps = [
+  { args = [
+    "test",
+    "wasm",
+    "safari",
+    "all",
+    "include",
+  ], label = "Safari WASM tests" },
+]
 role = "platforms"
 kinds = ["nightly"]
 timeout_minutes = 60

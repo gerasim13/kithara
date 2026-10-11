@@ -94,6 +94,9 @@ kithara-queue = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["usdt", "hang", "mock", "subscriber"] }
 wasm-bindgen-test = { workspace = true }
 
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+kithara-host = { workspace = true, default-features = false, features = ["offline"] }
+
 [target.'cfg(target_os = "android")'.dev-dependencies]
 kithara-test-dylib = { workspace = true }
 

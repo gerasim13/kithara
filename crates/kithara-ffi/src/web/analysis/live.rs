@@ -340,7 +340,7 @@ mod runs {
         }
         config.set_cancel(cancel.child());
         config.set_host_sample_rate(rate);
-        let mut resource = Resource::new(config)
+        let mut resource = Resource::open(config, kithara::worker::Wake::default())
             .await
             .map_err(|error| format!("resource open failed: {error}"))?;
         resource
