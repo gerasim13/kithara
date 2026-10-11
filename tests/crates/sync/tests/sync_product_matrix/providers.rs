@@ -74,8 +74,22 @@ fn library_grid(name: &str) -> BeatGridModel {
 
 pub(crate) type PreparedSources = (Provider, TestServerHelper, Vec<String>);
 
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 pub(crate) async fn prepared_sources(provider: Provider) -> PreparedSources {
-    let server = TestServerHelper::new().await;
-    let paths = sources(provider, 4, &server).await;
+    let _io = kithara::platform::flash::real_io();
+    hang_tick!(format!(
+        "prepared_sources: starting server for {provider:?}"
+    ));
+    let server = time::timeout(__hang_detector.remaining(), TestServerHelper::new()).await;
+    hang_tick!(format!(
+        "prepared_sources: starting server for {provider:?}"
+    ));
+    let server = server.expect("fixture server starts within its liveness budget");
+    hang_reset!();
+    hang_tick!(format!("prepared_sources: materialising {provider:?}"));
+    let paths = time::timeout(__hang_detector.remaining(), sources(provider, 4, &server)).await;
+    hang_tick!(format!("prepared_sources: materialising {provider:?}"));
+    let paths = paths.expect("fixture sources arrive within their liveness budget");
+    hang_reset!();
     (provider, server, paths)
 }

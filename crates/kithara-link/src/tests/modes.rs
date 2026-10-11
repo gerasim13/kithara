@@ -1,4 +1,4 @@
-use kithara_command::{Batch, Port, When};
+use kithara_command::{Batch, Outcome, Port, Rejection, When};
 use kithara_play::{Bound, PlayError, Player, TrackCommand, TrackSettingsChange, TrackStatus};
 use kithara_signal::SessionFrame;
 use kithara_test_utils::kithara;
@@ -43,6 +43,97 @@ fn rejected_sync_on_preserves_mode_and_playing_speed() {
     assert!(!LinkedPlayer::synced(&deck));
     assert_eq!(deck.snapshot().as_ref().speed, 0.75);
     assert!(control.commands().is_empty());
+}
+
+#[kithara::test]
+fn a_late_audible_alignment_replans_from_the_batch_receipt() {
+    let (mut deck, control, mut rig, _) = sounding();
+    let seq = rig
+        .run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("audible alignment admitted")
+        .expect("alignment batch");
+    let original = control.commands();
+    assert_eq!(original.len(), 2);
+    assert_eq!(original[0].0, seq);
+    assert_eq!(original[1].0, seq);
+    rig.settle(&mut deck, seq, &Outcome::Rejected(Rejection::Late));
+    rig.run(|out| deck.tick(SessionFrame::new(0), out));
+    let commands = control.commands();
+    assert_eq!(commands.len(), 4);
+    assert_ne!(commands[2].0, seq);
+    assert!(matches!(commands[2].1, Command::Speed(_, When::At(_))));
+    assert_eq!(commands[2].0, commands[3].0);
+    assert!(matches!(commands[3].1, Command::Jump(_, _)));
+    assert_eq!(deck.snapshot().sync, SyncStatus::On);
+    rig.run(|out| deck.tick(SessionFrame::new(0), out));
+    assert_eq!(control.commands().len(), 4);
+}
+
+#[kithara::test]
+fn a_seek_completes_the_host_speed_of_a_grid_waiting_sync() {
+    let (mut deck, control, mut rig, _) = loaded(grid(24_000, 24_000, None, 480_000));
+    rig.run(|out| deck.retime(&trajectory(180.0, 4), SessionFrame::new(0), out));
+    control.edit(|script| {
+        script.snapshot.status = TrackStatus::Playing {
+            since: SessionFrame::new(0),
+        };
+        script.snapshot.position = position(12_000);
+    });
+    assert_eq!(
+        rig.run(|out| deck.sync(true, out)).expect("waiting sync"),
+        None
+    );
+    assert!(control.commands().is_empty());
+    let seq = rig
+        .run(|out| {
+            deck.apply(
+                TrackCommand::Seek {
+                    to: position(60_000),
+                },
+                out,
+            )
+        })
+        .expect("seek completes sync")
+        .expect("alignment batch");
+    let commands = control.commands();
+    assert_eq!(commands.len(), 2);
+    assert_eq!(
+        commands[0],
+        (
+            seq,
+            Command::Speed(SpeedCurve::Constant(1.5), When::At(SessionFrame::new(128)))
+        )
+    );
+    assert_eq!(commands[1].0, seq);
+    assert!(matches!(commands[1].1, Command::Jump(_, at) if at == SessionFrame::new(128)));
+    assert_eq!(deck.snapshot().sync, SyncStatus::On);
+    rig.settle(&mut deck, seq, &Outcome::Rejected(Rejection::Late));
+    rig.run(|out| deck.tick(SessionFrame::new(0), out));
+    let commands = control.commands();
+    assert_eq!(commands.len(), 4);
+    assert_ne!(commands[2].0, seq);
+    assert_eq!(commands[2].0, commands[3].0);
+    assert_eq!(commands[3].1, commands[1].1);
+}
+
+#[kithara::test]
+fn a_grid_waiting_sync_follows_the_live_source_into_coverage() {
+    let (mut deck, control, mut rig, _) = loaded(grid(24_000, 24_000, None, 480_000));
+    control.edit(|script| {
+        script.snapshot.status = TrackStatus::Playing {
+            since: SessionFrame::new(0),
+        }
+    });
+    assert_eq!(
+        rig.run(|out| deck.sync(true, out)).expect("waiting sync"),
+        None
+    );
+    control.edit(|script| script.snapshot.position = position(30_000));
+    rig.run(|out| deck.tick(SessionFrame::new(0), out));
+    let commands = control.commands();
+    assert_eq!(commands.len(), 2);
+    assert_eq!(commands[0].0, commands[1].0);
+    assert_eq!(deck.snapshot().sync, SyncStatus::On);
 }
 
 #[kithara::test]

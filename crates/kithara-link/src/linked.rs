@@ -144,8 +144,9 @@ pub struct Linked<P> {
     waiting: Option<Waiting>,
     correction: Option<RunningCorrection>,
     alignment: Option<bool>,
-    speeds: Vec<(Seq, bool)>,
+    speeds: Vec<(Seq, SpeedOperation)>,
     start: Option<Seq>,
+    start_caller: Option<Seq>,
     withdrawn: Vec<Seq>,
     retimes: Vec<(SessionFrame, Seq)>,
     cue: Option<Position>,
@@ -154,6 +155,12 @@ pub struct Linked<P> {
 struct RunningCorrection {
     at: SessionFrame,
     frames: FrameCount,
+}
+
+enum SpeedOperation {
+    Correction { commanded: bool },
+    Alignment,
+    Relocation { to: Position },
 }
 
 impl<P> Linked<P> {
@@ -184,6 +191,7 @@ impl<P> Linked<P> {
             alignment: None,
             speeds: Vec::new(),
             start: None,
+            start_caller: None,
             withdrawn: Vec::new(),
             retimes: Vec::new(),
             cue: None,
@@ -267,7 +275,8 @@ impl<P> Linked<P> {
             out,
         )?;
         if let Some(seq) = sent {
-            self.speeds.push((seq, commanded));
+            self.speeds
+                .push((seq, SpeedOperation::Correction { commanded }));
             self.correction = Some(RunningCorrection { at, frames });
         }
         Ok(sent)
@@ -307,12 +316,19 @@ impl<P> Linked<P> {
         {
             return;
         }
+        let required = match waiting {
+            Waiting::Sync { .. } => track.position,
+            _ => waiting.required(),
+        };
         if self.synced()
             && self
                 .grid
                 .as_ref()
-                .is_none_or(|grid| !covers(grid, waiting.required()))
+                .is_none_or(|grid| !covers(grid, required))
         {
+            if matches!(waiting, Waiting::Sync { .. }) {
+                self.waiting = Some(Waiting::Sync { required });
+            }
             return;
         }
         self.waiting = None;
@@ -432,6 +448,7 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
             self.alignment = None;
             self.speeds.clear();
             self.start = None;
+            self.start_caller = None;
             self.withdrawn.clear();
             self.retimes.clear();
             self.cue = self.synced().then_some(position);
@@ -500,8 +517,24 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
                     return Ok(None);
                 };
                 let at = self.jump_frame(out)?;
-                let to = jump_target(to, phase_error(&self.host, grid, to, at));
-                self.inner.apply(TrackCommand::Jump { to, at }, out)
+                let target = jump_target(to, phase_error(&self.host, grid, to, at));
+                let speed = speed(&self.host, grid, at);
+                let synchronized = self.inner.projected().speed() == speed;
+                let command = if synchronized {
+                    TrackCommand::Jump { to: target, at }
+                } else {
+                    TrackCommand::Align {
+                        to: target,
+                        speed,
+                        at,
+                    }
+                };
+                let sent = self.inner.apply(command, out)?;
+                if !synchronized && let Some(seq) = sent {
+                    self.speeds.push((seq, SpeedOperation::Relocation { to }));
+                }
+                self.waiting = None;
+                Ok(sent)
             }
             TrackCommand::Pause { at } => {
                 self.waiting = None;
@@ -540,7 +573,7 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
             && matches!(&receipt,
                 TrackReceipt::Event(DeckEvent::Underrun { slot: named, .. }) if Some(*named) == slot
             );
-        let settled = self.inner.settle(receipt, out);
+        let mut settled = self.inner.settle(receipt, out);
         if let Settled::Rejected {
             seq,
             reason: Rejection::Stale,
@@ -555,6 +588,14 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
                 if self.start == Some(*seq)
         ) {
             self.start = None;
+            if let Some(caller) = self.start_caller.take() {
+                match &mut settled {
+                    Settled::Applied { seq, .. } | Settled::Rejected { seq, .. } => {
+                        *seq = caller;
+                    }
+                    Settled::Pending => {}
+                }
+            }
         }
         if self.synced() && underrun {
             self.alignment = Some(false);
@@ -577,7 +618,7 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
                 else {
                     continue;
                 };
-                let (_, commanded) = self.speeds.remove(index);
+                let (_, operation) = self.speeds.remove(index);
                 if self.synced()
                     && matches!(
                         receipt,
@@ -588,7 +629,19 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
                     )
                 {
                     self.correction = None;
-                    self.alignment = Some(commanded);
+                    match operation {
+                        SpeedOperation::Correction { commanded } => {
+                            self.alignment = Some(commanded);
+                        }
+                        SpeedOperation::Alignment => {
+                            self.waiting = Some(Waiting::Sync {
+                                required: self.inner.snapshot().as_ref().position,
+                            });
+                        }
+                        SpeedOperation::Relocation { to } => {
+                            self.waiting = Some(Waiting::Seek { required: to });
+                        }
+                    }
                 }
             }
         }
@@ -766,6 +819,9 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
         match self.inner.cue(required, speed(&self.host, grid, at), out) {
             Ok(Some(seq)) => {
                 self.retimes.push((at, seq));
+                if let Some(start) = self.start {
+                    self.start_caller.get_or_insert(start);
+                }
                 self.withdraw_start(required);
             }
             Ok(None) => {}
@@ -922,6 +978,9 @@ impl<P> Linked<P> {
                 },
                 out,
             )?;
+            if let Some(seq) = sent {
+                self.speeds.push((seq, SpeedOperation::Alignment));
+            }
             self.correction = None;
             self.waiting = None;
             return Ok(sent);

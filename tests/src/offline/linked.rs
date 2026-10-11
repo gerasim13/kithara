@@ -42,7 +42,7 @@ pub enum LinkProbeCommand<S: HasPool<u8> + Send + Sync + 'static> {
     Incoming {
         item: TrackId,
         source: TrackSource<S>,
-        cue: Position,
+        cue: Option<Position>,
     },
 }
 
@@ -325,14 +325,16 @@ where
                             out,
                         )
                         .expect("select incoming track");
-                    let track = self
-                        .inner
-                        .tracks_mut()
-                        .find(|track| track.snapshot().track.item == item)
-                        .expect("selected incoming track");
-                    track
-                        .apply(TrackCommand::Seek { to: cue }, out)
-                        .expect("incoming cue waits for its grid");
+                    if let Some(cue) = cue {
+                        let track = self
+                            .inner
+                            .tracks_mut()
+                            .find(|track| track.snapshot().track.item == item)
+                            .expect("selected incoming track");
+                        track
+                            .apply(TrackCommand::Seek { to: cue }, out)
+                            .expect("incoming cue waits for its grid");
+                    }
                 }
             }
         }

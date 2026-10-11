@@ -84,39 +84,49 @@ struct Delivered {
 
 fn delivered(harness: &ProductHarness, operations: &[Operation]) -> Vec<Delivered> {
     // Ruling: sync_receipt_delivered codes and accepted bit → executor-qualified Seq: owner-visible Ready state for Cue, native returned Outcome for Load/Start — spec §11.2–§11.3.
-    harness.decks[0].observe(|observation| {
-        operations
-            .iter()
-            .flat_map(|operation| {
-                let verdicts = match operation {
-                    Operation::Cue { item, seq } => observation
-                        .ready_cues
-                        .iter()
-                        .filter_map(|&(owner, applied)| {
-                            (owner == *item && applied == *seq).then_some(INSTALLED)
+    harness
+        .decks
+        .iter()
+        .flat_map(|deck| {
+            deck.observe(|observation| {
+                operations
+                    .iter()
+                    .flat_map(|operation| {
+                        let verdicts = match operation {
+                            Operation::Cue { item, seq } => observation
+                                .ready_cues
+                                .iter()
+                                .filter_map(|&(owner, applied)| {
+                                    (owner == *item && applied == *seq).then_some(INSTALLED)
+                                })
+                                .collect::<Vec<_>>(),
+                            Operation::Load { seq, .. } => observation
+                                .dispatcher
+                                .iter()
+                                .filter_map(|&(answered, verdict)| {
+                                    (answered == *seq).then_some(verdict)
+                                })
+                                .collect(),
+                            Operation::Start { seq, .. } => observation
+                                .deck
+                                .iter()
+                                .filter_map(|&(answered, verdict)| {
+                                    (answered == *seq).then_some(verdict)
+                                })
+                                .collect(),
+                        };
+                        verdicts.into_iter().map(|rejected| Delivered {
+                            operation: *operation,
+                            rejected,
                         })
-                        .collect::<Vec<_>>(),
-                    Operation::Load { seq, .. } => observation
-                        .dispatcher
-                        .iter()
-                        .filter_map(|&(answered, verdict)| (answered == *seq).then_some(verdict))
-                        .collect(),
-                    Operation::Start { seq, .. } => observation
-                        .deck
-                        .iter()
-                        .filter_map(|&(answered, verdict)| (answered == *seq).then_some(verdict))
-                        .collect(),
-                };
-                verdicts.into_iter().map(|rejected| Delivered {
-                    operation: *operation,
-                    rejected,
-                })
+                    })
+                    .collect::<Vec<_>>()
             })
-            .collect()
-    })
+        })
+        .collect()
 }
 
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn render_until(
     harness: &mut ProductHarness,
     case: SyncCase,
@@ -126,8 +136,10 @@ async fn render_until(
     let deadline = Instant::now() + RECEIPT_TIMEOUT;
     let mut received = 0;
     loop {
-        hang_tick!();
         let receipts = delivered(harness, &[operation]);
+        hang_tick!(format!(
+            "render_until: awaiting {code:?} for {operation:?}; received {receipts:?}"
+        ));
         if receipts.len() > received {
             received = receipts.len();
             hang_reset!();
@@ -147,7 +159,7 @@ async fn render_until(
     }
 }
 
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn prepare_cue(
     harness: &mut ProductHarness,
     case: SyncCase,
@@ -178,14 +190,14 @@ async fn prepare_cue(
         .track_snapshot(item)
         .is_some_and(|snapshot| snapshot.track.pending_lane)
     {
-        hang_tick!();
+        hang_tick!("prepare_cue: waiting for progress".to_owned());
         let _ = harness.render(case, BLOCK_FRAMES).await;
     }
     hang_reset!();
     harness.request_sync_intent(case, SyncRequest::On).await;
     let deadline = Instant::now() + RECEIPT_TIMEOUT;
     loop {
-        hang_tick!();
+        hang_tick!("prepare_cue: waiting for progress".to_owned());
         if let Some(seq) = harness.decks[0].observe(|observation| {
             observation
                 .cues
@@ -205,12 +217,14 @@ async fn prepare_cue(
     }
 }
 
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn prepare_incoming(
     harness: &mut ProductHarness,
     case: SyncCase,
     rate: f64,
     cue: Start,
+    deck_index: usize,
+    prepare_cue: bool,
 ) -> Operation {
     let seconds = harness.start_seconds(0, cue);
     assert!((seconds * rate).is_finite(), "fixture cue is finite");
@@ -224,12 +238,13 @@ async fn prepare_incoming(
         .initial_abr_mode(AbrMode::manual(0))
         .build();
     let item = TrackId::allocate();
-    harness.decks[0].probe(LinkProbeCommand::Incoming {
+    harness.decks[deck_index].probe(LinkProbeCommand::Incoming {
         item,
         source: TrackSource::Config(Box::new(source)),
-        cue: Position::try_from_secs_f64(seconds).expect("finite incoming cue"),
+        cue: prepare_cue
+            .then_some(Position::try_from_secs_f64(seconds).expect("finite incoming cue")),
     });
-    let control = harness.decks[0].control().clone();
+    let control = harness.decks[deck_index].control().clone();
     harness
         .host
         .run(move || control.tick())
@@ -237,8 +252,8 @@ async fn prepare_incoming(
         .expect("drain incoming request without rendering");
     let deadline = Instant::now() + RECEIPT_TIMEOUT;
     loop {
-        hang_tick!();
-        if let Some(seq) = harness.decks[0].observe(|observation| {
+        hang_tick!("prepare_incoming: waiting for progress".to_owned());
+        if let Some(seq) = harness.decks[deck_index].observe(|observation| {
             observation
                 .loads
                 .iter()
@@ -280,7 +295,7 @@ async fn release_incoming_grid(harness: &ProductHarness, operation: Operation) {
         .expect("incoming grid delivery");
 }
 
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn schedule_start(harness: &mut ProductHarness, case: SyncCase) -> Operation {
     let item = harness.decks[0].current().expect("loaded current track").id;
     let at = SessionFrame::new(i64::try_from(harness.host.position()).expect("Host cursor"))
@@ -297,7 +312,7 @@ async fn schedule_start(harness: &mut ProductHarness, case: SyncCase) -> Operati
         .expect("schedule exact-frame start");
     let deadline = Instant::now() + RECEIPT_TIMEOUT;
     loop {
-        hang_tick!();
+        hang_tick!("schedule_start: waiting for progress".to_owned());
         if let Some(seq) = harness.decks[0].observe(|observation| {
             observation
                 .commands
@@ -338,7 +353,7 @@ async fn schedule_start(harness: &mut ProductHarness, case: SyncCase) -> Operati
     NEWTECHNO_PHRASE,
     STAGED_UNDER_LOOSE_DEADLINE
 )]
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn a_cued_sync_installs_mapped_pcm_before_anything_sounds(
     #[case] sources: PreparedSources,
     #[case] rate: f64,
@@ -401,7 +416,10 @@ async fn a_cued_sync_installs_mapped_pcm_before_anything_sounds(
     let mut pcm = Vec::new();
     let deadline = Instant::now() + RECEIPT_TIMEOUT;
     let since = loop {
-        hang_tick!();
+        hang_tick!(
+            "a_cued_sync_installs_mapped_pcm_before_anything_sounds: waiting for progress"
+                .to_owned()
+        );
         pcm.extend(harness.render(case, BLOCK_FRAMES).await);
         let snapshot = harness.decks[0]
             .track_snapshot(item)
@@ -506,8 +524,9 @@ async fn a_lane_the_worker_cannot_hold_is_refused_for_capacity(
 ) {
     let case = STAGED_WITHOUT_CAPACITY;
     let mut harness = ProductHarness::new(case, &sources, cue, Audible::Deck(0)).await;
-    // Ruling: prepared-lane capacity refusal → additional incoming Load beyond configured worker capacity — spec §11.3.
-    let operation = prepare_incoming(&mut harness, case, rate, cue).await;
+    // Ruling: spec §11.3 Capacity needs a seated Warm load; an unseated Idle load does not consume the worker's foreground capacity.
+    let contender = harness.add_seated_deck(case).await;
+    let operation = prepare_incoming(&mut harness, case, rate, cue, contender, false).await;
 
     let receipts = render_until(&mut harness, case, operation, CAPACITY).await;
     assert!(
@@ -542,7 +561,7 @@ async fn a_lane_the_worker_cannot_hold_is_refused_for_capacity(
     NEWTECHNO_PHRASE,
     NEWTECHNO_SUPERSEDING_CUE
 )]
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
     #[case] sources: PreparedSources,
     #[case] rate: f64,
@@ -577,9 +596,9 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
     );
     harness.mark("staged cue, then a superseding cue");
     // Ruling: superseded prepared lanes → two rapid selections of incoming linked tracks waiting for Grid, without touching the sounding track — spec §6 scenario 11, §11.3.
-    let superseded = prepare_incoming(&mut harness, case, rate, cue).await;
+    let superseded = prepare_incoming(&mut harness, case, rate, cue, 0, true).await;
     let candidate_staged = Window::read(&harness, case);
-    let successor = prepare_incoming(&mut harness, case, rate, superseding).await;
+    let successor = prepare_incoming(&mut harness, case, rate, superseding, 0, true).await;
     let candidate_superseded = Window::read(&harness, case);
     assert_eq!(
         (candidate_staged, candidate_superseded),
@@ -604,7 +623,10 @@ async fn the_sounding_lane_plays_on_while_its_staged_lane_is_superseded(
     };
     let deadline = Instant::now() + RECEIPT_TIMEOUT;
     loop {
-        hang_tick!();
+        hang_tick!(
+            "the_sounding_lane_plays_on_while_its_staged_lane_is_superseded: waiting for progress"
+                .to_owned()
+        );
         if let Some(seq) = harness.decks[0].observe(|observation| {
             observation
                 .cues
@@ -779,7 +801,7 @@ impl fmt::Display for Window {
 /// flight ring inside one holds a fraction of a second of probes; a loss first
 /// named six seconds after it happened has already fallen out of the ring that
 /// would have shown it happen.
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn render_window(
     harness: &mut ProductHarness,
     case: SyncCase,
@@ -789,7 +811,7 @@ async fn render_window(
     let mut pcm = Vec::with_capacity(LISTEN_FRAMES * usize::from(CHANNELS));
     let mut trace = Vec::with_capacity(blocks);
     while trace.len() < blocks {
-        hang_tick!();
+        hang_tick!("render_window: waiting for progress".to_owned());
         let rendered = pcm.len() / usize::from(CHANNELS);
         let step = (LISTEN_FRAMES - rendered).min(BLOCK_FRAMES);
         pcm.extend_from_slice(&render_frames(harness, case, step).await);
@@ -827,11 +849,11 @@ async fn render_window(
 /// steps past the lead, which is a different frame, and the caller's assertion
 /// on the two openings is what reports it. Measured: a deck 359 frames off the
 /// block grid opened on 8551 against the other's 8192.
-#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn open_window(harness: &mut ProductHarness, case: SyncCase) -> Window {
     let mut previous = Window::read(harness, case).frames;
     for _ in 0..WINDOW_BLOCK_BUDGET {
-        hang_tick!();
+        hang_tick!("open_window: waiting for progress".to_owned());
         let window = Window::read(harness, case);
         if window.frames > previous {
             previous = window.frames;
