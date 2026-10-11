@@ -1333,7 +1333,11 @@ mod tests {
         let mut mixer = crate::mock::MixerRig::new(DeckMixerConfig::default(), shape, &pools())
             .expect("offline mixer");
         let slot = Slot::new(0);
-        let (opened, _lane, _control, _dir) = warped_player_resource(1.0, "seek", &half[..2]).await;
+        let (opened, mut lane, _control, _dir) =
+            warped_player_resource(1.0, "seek", &half[..2]).await;
+        crate::mock::preload_lane(&mut lane)
+            .await
+            .expect("preloaded lane");
         mixer
             .send(
                 When::Next,

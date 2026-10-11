@@ -440,7 +440,7 @@ fn a_rejected_launch_leaves_the_member_silent() {
         .expect("prepared source");
     let load = ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay()));
     let (_control, inbox) = load.lane_channel().expect("lane channel");
-    let (opened, _lane, _) = {
+    let (opened, mut lane, _) = {
         // WHY: Disk source preparation needs a real-time budget, not a collapsed virtual deadline.
         let _real_io = kithara_platform::flash::real_io();
         hang_tick!("rejected launch fixture awaits its source".to_owned());
@@ -460,6 +460,9 @@ fn a_rejected_launch_leaves_the_member_silent() {
         (opened, _lane, _latency)
     };
     hang_reset!();
+    rig.runtime
+        .block_on(mock::preload_lane(&mut lane))
+        .expect("preloaded lane");
     let shape = kithara_render::rt::StreamShape::new(
         NonZeroU32::new(128).expect("block frames"),
         mock::SAMPLE_RATE,

@@ -207,7 +207,7 @@ where
         request.start,
         request.inbox
     ));
-    let (opened, _lane, _) = {
+    let (opened, mut lane, _) = {
         // WHY: Source reads run on real threads, so their watchdog must not leap in virtual time.
         let _real_io = kithara_platform::flash::real_io();
         loop {
@@ -218,6 +218,7 @@ where
         }
     };
     hang_reset!();
+    preload_lane(&mut lane).await?;
     let mut mixer = MixerRig::new(DeckMixerConfig::default(), shape, pools)?;
     let slot = Slot::new(0);
     mixer.send(
@@ -257,6 +258,35 @@ where
         hang_reset!();
     }
     Ok(())
+}
+
+/// Drives a directly opened lane through the dispatcher's preload admission.
+///
+/// # Errors
+/// Returns the refusal that prevents the lane from becoming ready.
+#[kithara::hang_watchdog]
+pub async fn preload_lane<Lane>(lane: &mut Lane) -> Result<(), PlayError>
+where
+    Lane: kithara_render::LaneTask,
+{
+    let _real_io = kithara_platform::flash::real_io();
+    lane.warm_up();
+    loop {
+        hang_tick!();
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        let _ = lane.poll_commands(&mut context);
+        lane.recycle();
+        if lane.tick() == kithara_worker::TickResult::Progress {
+            hang_reset!();
+        }
+        if lane
+            .preload_status()
+            .map_err(|error| PlayError::Internal(format!("{error:?}")))?
+        {
+            return Ok(());
+        }
+        yield_now().await;
+    }
 }
 
 /// The scoped command inbox installed in a mock audio-thread processor store.

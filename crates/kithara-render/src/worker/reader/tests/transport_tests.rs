@@ -15,6 +15,33 @@ fn pop_blocking(reader: &mut PcmReceiver) -> Option<PcmPacket> {
     reader.pop()
 }
 
+#[kithara::test(native, tokio)]
+#[case::nonblocking(false)]
+#[case::offline(true)]
+async fn playback_publication_is_deferred_even_for_an_offline_receiver(#[case] blocking: bool) {
+    let wake = kithara_worker::Wake::default();
+    let mut fixture = PcmFixture::with_wake(
+        4,
+        blocking,
+        crate::worker::scheduler::StreamWake::new(wake.clone()),
+    )
+    .await;
+    let receiver = fixture.receiver.as_mut().expect("receiver");
+    receiver.set_playing(true);
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (0, true));
+    assert!(
+        *fixture.producer.as_mut().expect("producer").playing.read(),
+        "the worker observes playback on its next scheduled pass"
+    );
+    fixture
+        .receiver
+        .as_mut()
+        .expect("receiver")
+        .set_playing(false);
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (0, true));
+    assert!(!*fixture.producer.as_mut().expect("producer").playing.read());
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[kithara::test(hang_timeout_secs(1))]
 #[should_panic(expected = "wait_for_packet")]
