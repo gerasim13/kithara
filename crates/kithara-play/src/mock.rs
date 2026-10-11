@@ -20,11 +20,12 @@ use kithara_render::{
     mock::MockDeck,
     rt::{DeckMixer, DeckMixerConfig, StreamShape, install_render_context, publish_render_context},
 };
-use kithara_signal::{OutputContext, SessionEpoch, SessionFrame};
+use kithara_signal::{FrameCount, OutputContext, SessionEpoch, SessionFrame};
 use kithara_warp::RenderContext;
 
 use crate::{
-    OpenedTrack, PlayError, ResourceLoad, TrackSettings, player::Outbox, session::SessionOutputView,
+    DeckPass, OpenedTrack, PlayError, ResourceLoad, TrackSettings, player::Outbox,
+    session::SessionOutputView,
 };
 pub use crate::{
     api::equalizer::EqualizerMock,
@@ -393,6 +394,8 @@ pub struct DeckRig<S> {
     pub opens: Inbox<DispatcherProtocol<ResourceLoad<S>>>,
     fixture_dispatcher: Option<FixtureDispatcher<S>>,
     fixture_lanes: Vec<Sender<kithara_render::LaneProtocol>>,
+    now: SessionFrame,
+    observation: kithara_render::bridge::DeckSnapshot,
 }
 
 struct FixtureDispatcher<S> {
@@ -409,7 +412,8 @@ impl<S> DeckRig<S> {
                 .build(),
         );
         let scope = ring.open(targets)?;
-        let (ends, inputs) = scope_channels(scope, config);
+        let (mut ends, inputs) = scope_channels(scope, config);
+        let observation = ends.snapshot.read().clone();
         let (dispatcher, opens) = channel(ChannelConfig::builder().build());
         Ok(Self {
             ring,
@@ -421,6 +425,8 @@ impl<S> DeckRig<S> {
             opens,
             fixture_dispatcher: None,
             fixture_lanes: Vec::new(),
+            now: SessionFrame::new(0),
+            observation,
         })
     }
 
@@ -430,7 +436,18 @@ impl<S> DeckRig<S> {
         F: FnOnce(&mut Outbox<'_, S>) -> R,
     {
         let mut scope = self.ring.scope(self.scope).ok_or(PlayError::Closed)?;
-        Ok(run(&mut Outbox::new(&mut scope, &mut self.dispatcher)))
+        let output = output(None).get();
+        let pass = DeckPass {
+            mix: crate::DeckMixSettings::default(),
+            suspended: false,
+            now: self.now,
+            delivery: FrameCount::new(0),
+            output: &output,
+            deck: &self.observation,
+        };
+        Ok(run(
+            &mut Outbox::new(&mut scope, &mut self.dispatcher).in_pass(pass)
+        ))
     }
 
     /// Answers the oldest open the dispatcher holds with `opened` and returns
@@ -455,6 +472,7 @@ impl<S> DeckRig<S> {
         at: SessionFrame,
         stopped_at: f64,
     ) -> Result<Vec<Receipt<DeckProtocol>>, PlayError> {
+        self.now = at;
         self.pass(|mixer, level| mixer.block(level, at, stopped_at))
     }
 
@@ -463,6 +481,7 @@ impl<S> DeckRig<S> {
         slot: Slot,
         at: SessionFrame,
     ) -> Result<Vec<Receipt<DeckProtocol>>, PlayError> {
+        self.now = at;
         self.pass(|mixer, level| mixer.end(level, slot, at))
     }
 

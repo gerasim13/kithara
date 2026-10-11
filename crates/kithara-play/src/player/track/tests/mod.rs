@@ -1,3 +1,4 @@
+mod batch;
 mod core;
 mod legacy_metrics;
 mod legacy_rate;

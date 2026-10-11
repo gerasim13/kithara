@@ -278,7 +278,11 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> HostOwner<S> for Lin
             LinkedHostCommand::Host(command) => self.inner.apply(H::Command::from(command)),
             LinkedHostCommand::Sync { deck, on } => {
                 let mut sent = Ok(None);
-                self.inner.with_deck(deck, &mut |deck, out, _pass| {
+                let trajectory = &self.trajectory;
+                self.inner.with_deck(deck, &mut |deck, out, pass| {
+                    if on && !deck.synced() {
+                        deck.retime(trajectory, pass.now, out);
+                    }
                     sent = deck.sync(on, out);
                 })?;
                 sent

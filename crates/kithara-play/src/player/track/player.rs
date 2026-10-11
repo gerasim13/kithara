@@ -46,19 +46,10 @@ impl<S> Player<S> for PlayerImpl<S> {
             }
             TrackCommand::SetHostRate { rate } => self.segment(self.position, Some(rate), out),
             TrackCommand::Jump { to, at } => {
-                let start = i64::from(at)
-                    .checked_sub(
-                        i64::try_from(self.declick.get())
-                            .map_err(|error| PlayError::Internal(error.to_string()))?,
-                    )
-                    .map(SessionFrame::new)
-                    .ok_or(PlayError::Late)?;
-                let When::At(frame) = self.lane_when(When::At(start), out)? else {
-                    return Err(PlayError::Untimed);
-                };
-                self.send_lane(LaneCommand::Jump { to }, When::At(frame))
-                    .map(Some)
+                let when = self.jump_when(at, out)?;
+                self.send_lane(LaneCommand::Jump { to }, when).map(Some)
             }
+            TrackCommand::Align { to, speed, at } => self.align(to, speed, at, out),
             TrackCommand::Configure(change, at) => self.configure(change, at, out),
             TrackCommand::SetSpeed { speed, at } => self.set_speed(speed, at, out),
             TrackCommand::Fade { at, settings, dir } => {

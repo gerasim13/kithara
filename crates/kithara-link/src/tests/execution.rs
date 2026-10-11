@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
 use kithara_assets::AssetStore;
+use kithara_audio::AudioObserverSlot;
 use kithara_command::{Batch, Outcome, Receipt, Rejection, When};
 use kithara_host::HostOwner;
 use kithara_play::{
     PlayWorker, PlayWorkerConfig, Player, PlayerConfig, PlayerFactory, PlayerImpl, ResourceConfig,
-    ResourceSrc, TrackCommand, TrackFactory, TrackReceipt, TrackSettings, TrackStatus,
+    ResourceLoad, ResourceSrc, TrackCommand, TrackFactory, TrackReceipt, TrackSettings,
+    TrackStatus,
     mock::{self, DeckRig},
 };
 use kithara_render::{
@@ -20,7 +22,7 @@ use kithara_test_utils::{
 };
 
 use super::{
-    fixtures::{answer, grid, load, loaded, position, resource, sounding, trajectory},
+    fixtures::{answer, grid, load, loaded, position, sounding, trajectory},
     host_fixture::{host, register},
 };
 use crate::{LinkConfig, Linked, SyncStatus};
@@ -83,7 +85,7 @@ async fn a_lane_dropped_before_its_turn_is_reported_only_by_its_cancellation() {
     rig.with_outbox(|out| {
         deck.apply(
             TrackCommand::Load {
-                item: resource(),
+                item: ResourceLoad::new(config, Box::new(AudioObserverSlot::default().relay())),
                 position: position(0),
             },
             out,
@@ -234,10 +236,13 @@ fn an_attached_group_owns_its_track_geometry_as_its_only_member() {
 // Ruling: spec 4.6 removes recursive groups; a receipt routed by DeckId updates only the registered issuing player.
 #[kithara::test]
 fn a_receipt_reaches_the_nested_group_that_issued_it() {
-    let (mut host, _) = host();
+    let (mut host, clock) = host();
     let (deck, control, _, _) = sounding();
-    control.edit(|script| script.snapshot.status = TrackStatus::Loaded);
     let (id, probe) = register(&mut host, deck, &control);
+    clock.at(24_000);
+    host.with_deck(id, &mut |deck, out, pass| deck.tick(pass, out))
+        .expect("registration pass");
+    control.edit(|script| script.snapshot.status = TrackStatus::Loaded);
     let (sibling, sibling_control, _, _) = loaded(grid(24_000, 0, Some((4, 0)), 960_000));
     let (_, sibling_probe) = register(&mut host, sibling, &sibling_control);
     let sibling_before = sibling_probe.read(|observation| observation.snapshot.clone());

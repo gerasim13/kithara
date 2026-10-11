@@ -1,17 +1,9 @@
-use kithara_command::SendError;
-use kithara_render::{LaneFrame, LaneProtocol, bridge::SlotMark};
+use kithara_render::{LaneFrame, bridge::SlotMark};
 use kithara_signal::SessionFrame;
 use kithara_warp::SpeedCurve;
 use num_traits::ToPrimitive;
 
 use crate::PlayError;
-
-pub(super) fn lane_refusal(error: &SendError<LaneProtocol>) -> PlayError {
-    match error {
-        SendError::Full(_) => PlayError::Full("lane"),
-        SendError::Target(_) | SendError::Closed(_) => PlayError::Closed,
-    }
-}
 
 pub(super) fn session_at(mark: SlotMark, lane: LaneFrame) -> Option<SessionFrame> {
     if lane.segment != mark.lane.segment {

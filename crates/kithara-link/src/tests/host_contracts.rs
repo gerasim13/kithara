@@ -1,6 +1,6 @@
 use kithara_host::{DeckId, HostOwner};
 use kithara_play::{PlayError, TrackSnapshot, TrackStatus};
-use kithara_signal::SessionFrame;
+use kithara_signal::{FrameCount, SessionFrame};
 use kithara_test_utils::kithara;
 
 use super::{
@@ -39,6 +39,36 @@ fn a_member_absent_from_the_group_is_not_prepared() {
         assert_eq!(observation.snapshot.sync, before.sync);
         assert_track_unchanged(observation.snapshot.as_ref(), before.as_ref());
     });
+}
+
+#[kithara::test]
+fn enabling_sync_observes_tempo_changes_made_while_unlinked() {
+    let (mut host, clock) = host();
+    let (deck, control, _, _) = sounding();
+    let (id, probe) = register(&mut host, deck, &control);
+    host.apply(LinkedHostCommand::Sync {
+        deck: id,
+        on: false,
+    })
+    .expect("disable synchronization");
+    tempo(&mut host, 132.0, 48_000).expect("tempo while unlinked");
+    clock.at(48_000);
+    host.begin_pass();
+    control.clear();
+    host.apply(LinkedHostCommand::Sync { deck: id, on: true })
+        .expect("enable synchronization");
+    assert_eq!(
+        probe
+            .trajectory()
+            .tempo_at(SessionFrame::new(48_000))
+            .beats_per_minute(),
+        132.0
+    );
+    assert!(control.commands().iter().any(|(_, command)| matches!(
+        command,
+        super::fixtures::Command::Speed(kithara_warp::SpeedCurve::Constant(value), _)
+            if *value == 1.1
+    )));
 }
 
 // Ruling: spec 4.6 removes track-grid command targets; foreign DeckId routing returns NotReady without changing playback.
@@ -122,7 +152,10 @@ fn rejected_parent_anchor_preserves_the_committed_grid_and_anchor() {
 // Ruling: spec 4.5/4.6 replaces Off/LocalSync/HostSync with off-held/off-manual/on; only on lanes receive tempo.
 #[kithara::test]
 fn parent_tempo_reaches_only_a_host_synced_group() {
-    let (mut host, _) = host();
+    let (mut host, clock) = host();
+    clock.axis(0, -96_000, -4.0, 120.0, 48_000);
+    host.begin_pass();
+    clock.edit(|script| script.clock = Some((SessionFrame::new(0), FrameCount::new(0))));
     let mut decks = Vec::new();
     for synced in [false, false, true] {
         let (mut deck, control, mut rig, _) = sounding();
@@ -159,7 +192,10 @@ fn parent_tempo_reaches_only_a_host_synced_group() {
 // Ruling: spec 4.6 deletes intermediate groups; every formerly nested on deck receives the same Host trajectory.
 #[kithara::test]
 fn a_session_publication_reaches_host_synced_descendants_on_every_level() {
-    let (mut host, _) = host();
+    let (mut host, clock) = host();
+    clock.axis(0, -96_000, -4.0, 120.0, 48_000);
+    host.begin_pass();
+    clock.edit(|script| script.clock = Some((SessionFrame::new(0), FrameCount::new(0))));
     let mut decks = Vec::new();
     for synced in [true, true, false] {
         let (mut deck, control, mut rig, _) = sounding();
@@ -201,6 +237,7 @@ fn a_session_publication_reaches_host_synced_descendants_on_every_level() {
 #[kithara::test]
 fn a_child_refusing_the_segment_leaves_the_whole_tree_unchanged() {
     let (mut host, clock) = host();
+    clock.edit(|script| script.clock = Some((SessionFrame::new(0), FrameCount::new(0))));
     let mut decks = Vec::new();
     for room in [32, 0] {
         let (deck, control, _, _) = sounding();
@@ -276,6 +313,9 @@ fn a_physical_epoch_invalidates_every_mode() {
 #[kithara::test]
 fn a_new_session_axis_reaches_every_descendant_in_every_mode() {
     let (mut host, clock) = host();
+    clock.axis(0, -96_000, -4.0, 120.0, 48_000);
+    host.begin_pass();
+    clock.edit(|script| script.clock = Some((SessionFrame::new(0), FrameCount::new(0))));
     let mut probes = Vec::new();
     for synced in [true, false] {
         let (mut deck, control, mut rig, _) = sounding();
@@ -377,8 +417,8 @@ fn a_route_boundary_drops_the_preparation_planned_on_the_previous_axis() {
     clock.axis(0, 0, 0.0, 120.0, 44_100);
     host.begin_pass();
     let (deck, control, _, _) = sounding();
-    control.edit(|script| script.snapshot.status = TrackStatus::Loaded);
     let (id, probe) = register(&mut host, deck, &control);
+    control.edit(|script| script.snapshot.status = TrackStatus::Loaded);
     probe.send(TrackCommand::Play {
         at: When::At(SessionFrame::new(88_200)),
     });

@@ -277,7 +277,7 @@ where
         if !matches!(snapshot.status, PlayingStatus::Playing { .. }) {
             return None;
         }
-        snapshot.duration?;
+        snapshot.duration.filter(|duration| !duration.is_zero())?;
         let sample_rate = NonZeroU32::new(self.deck.mixer.sample_rate)?;
         track.planned_end(sample_rate).ok().flatten()
     }

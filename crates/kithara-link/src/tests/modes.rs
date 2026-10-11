@@ -33,7 +33,7 @@ fn rejected_sync_on_preserves_mode_and_playing_speed() {
         script.snapshot.status = TrackStatus::Playing {
             since: SessionFrame::new(0),
         };
-        script.snapshot.lane_room = 1;
+        script.snapshot.lane_room = 0;
     });
     assert!(matches!(
         rig.run(|out| LinkedPlayer::sync(&mut deck, true, out)),

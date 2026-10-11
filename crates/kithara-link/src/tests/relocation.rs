@@ -8,6 +8,47 @@ use super::fixtures::{Command, answer, grid, load, loaded, position, sounding, t
 use crate::{LinkedPlayer, SyncStatus};
 
 #[kithara::test]
+fn aligned_seek_uses_the_committed_host_tempo_at_its_landing() {
+    let (mut deck, control, mut rig, _) = sounding();
+    let mut host = trajectory(120.0, 4);
+    host.push(
+        SessionFrame::new(96_000),
+        kithara_host::api::Tempo::new(130.0).expect("tempo"),
+    )
+    .expect("step");
+    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, SessionFrame::new(96_000), out));
+    control.clear();
+    rig.now = SessionFrame::new(48_000);
+    rig.delivery = FrameCount::new(352_000);
+    control.edit(|script| {
+        script.snapshot.position = position(48_000);
+        script.snapshot.status = TrackStatus::Playing { since: rig.now };
+    });
+    let seq = rig
+        .run(|out| {
+            deck.apply(
+                TrackCommand::Seek {
+                    to: position(240_000),
+                },
+                out,
+            )
+        })
+        .expect("seek")
+        .expect("jump");
+    // Ruling: spec 4.5 keeps the 96000 anchor at beat 4; F has phase 31/18, so nearest to beat 10 is 175/18, or 233333 1/3 frames.
+    assert_eq!(
+        control.commands(),
+        [(
+            seq,
+            Command::Jump(
+                kithara_play::Position::from_nanos(4_861_111_111),
+                SessionFrame::new(400_000)
+            )
+        )]
+    );
+}
+
+#[kithara::test]
 fn aligned_seek_preserves_playback_until_its_receipt() {
     let (mut deck, control, mut rig, _) = sounding();
     rig.now = SessionFrame::new(48_000);
@@ -520,7 +561,8 @@ fn a_tempo_commit_withdraws_the_relocation_and_retargets_under_a_new_operation()
         control.commands(),
         [(
             relocation,
-            Command::Jump(position(256_000), SessionFrame::new(400_000))
+            // Ruling: spec 4.5 uses bar phase at F: before the commit, (400000 / 24000) mod 4 = 2/3; nearest to 240000 is 208000.
+            Command::Jump(position(208_000), SessionFrame::new(400_000))
         )]
     );
     let mut host = trajectory(120.0, 4);

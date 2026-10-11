@@ -42,6 +42,7 @@ all = [
 # selects this crate: its artifact carries no analysis, and the composition
 # check rejects a test build whose closure exceeds the shipped product.
 analysis = ["audio", "kithara/analysis-beat"]
+link = ["audio", "kithara/link", "kithara/queue"]
 # Helpers used by `kithara-audio-tests`. Cross-component recording and offline
 # player coverage lives in this crate's full integration suite, so this closure
 # excludes the app, analysis, queue and user-simulation support.

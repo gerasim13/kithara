@@ -4,6 +4,8 @@
     feature = "stretch-glide"
 ))]
 mod backend;
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-glide"))]
+mod entry;
 mod exact;
 mod fixtures;
 #[cfg(feature = "stretch-identity")]

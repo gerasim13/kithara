@@ -215,6 +215,12 @@ impl Player<TestPools> for ScriptedTrack {
         _out: &mut Outbox<'_, TestPools>,
     ) -> Result<Option<Seq>, PlayError> {
         let command = match command {
+            TrackCommand::Align { to, speed, at } => {
+                return self.send(vec![
+                    Command::Speed(SpeedCurve::Constant(speed), When::At(at)),
+                    Command::Jump(to, at),
+                ]);
+            }
             TrackCommand::Load { position, .. } => Command::Load(position),
             TrackCommand::Play { at } => Command::Play(at),
             TrackCommand::Pause { at } => Command::Pause(at),

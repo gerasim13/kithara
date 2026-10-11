@@ -6,7 +6,10 @@ use std::{num::NonZeroU32, ops::Deref};
 use kithara::play::{SessionError, TransportRevision};
 use kithara::{
     bufpool::{HasPool, PoolRegion},
-    host::{DeckControl, Host, HostConfig, HostOwned, HostSettingsControl, Tap},
+    host::{
+        DeckControl, Host, HostConfig, HostCore, HostOwned, HostOwner as Owner,
+        HostSettingsControl, Tap,
+    },
     output::{OfflineRenderRequest, OfflineRenderer, OutputGroup, RenderSink, RenderSinkError},
     platform::{
         CancelScope,
@@ -112,20 +115,20 @@ pub(super) const fn offline_pools<S>(config: &HostConfig<S>) -> &PoolRegion<S> {
     }
 }
 
-struct HostState<S>
+struct HostState<S, O: Owner<S>>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    host: Host<S>,
+    host: Host<S, O>,
     position: Arc<AtomicU64>,
 }
 
 /// Test owner for the product offline Host and its monotonic render cursor.
-pub struct OfflineHostHarness<S>
+pub struct OfflineHostHarness<S, O: Owner<S> = HostCore<S>>
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    off: HostOwner<HostState<S>>,
+    off: HostOwner<HostState<S, O>>,
     position: Arc<AtomicU64>,
     max_block_frames: NonZeroU32,
 }
@@ -208,7 +211,9 @@ where
     }
 
     /// Drops the resident before waiting for Host session teardown.
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
     pub async fn close(self) {
+        hang_tick!();
         let Self {
             host,
             member,
@@ -216,7 +221,11 @@ where
         } = self;
         drop(snapshot);
         drop(member);
-        host.close().await;
+        kithara::platform::time::timeout(Duration::from_secs(5), host.close())
+            .await
+            .expect("offline resident teardown completes within its liveness budget");
+        hang_tick!();
+        hang_reset!();
     }
 }
 
@@ -263,6 +272,29 @@ where
         config: HostConfig<S>,
         #[cfg(not(target_arch = "wasm32"))] pacing: Option<Duration>,
     ) -> Result<Self, PlayError> {
+        Self::layered(
+            config,
+            #[cfg(not(target_arch = "wasm32"))]
+            pacing,
+            |core| core,
+        )
+        .await
+    }
+}
+
+impl<S, O> OfflineHostHarness<S, O>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    O: Owner<S> + 'static,
+{
+    pub async fn layered<L>(
+        config: HostConfig<S>,
+        #[cfg(not(target_arch = "wasm32"))] pacing: Option<Duration>,
+        layer: L,
+    ) -> Result<Self, PlayError>
+    where
+        L: FnOnce(HostCore<S, O::Deck>) -> O + MaybeSend + 'static,
+    {
         let max_block_frames = config
             .max_block_frames()
             .expect("offline Host config must have a render block size");
@@ -271,7 +303,7 @@ where
         let position = Arc::new(AtomicU64::new(0));
         let owned = Arc::clone(&position);
         let start = move || {
-            Host::new(config).map(|host| HostState {
+            Host::layered(config, layer).map(|host| HostState {
                 host,
                 position: owned,
             })
@@ -296,16 +328,36 @@ where
     }
 
     /// Waits until the owner drops Host and session teardown completes.
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
     pub async fn close(self) {
-        self.off.close().await;
+        hang_tick!();
+        let completed =
+            kithara::platform::time::timeout(Duration::from_secs(5), self.off.close()).await;
+        hang_tick!();
+        completed.expect("offline Host teardown completes within its liveness budget");
+        hang_reset!();
     }
 
-    /// Runs an arbitrary Host operation on the owner thread.
-    pub async fn with<R>(&self, f: impl FnOnce(&mut Host<S>) -> R + MaybeSend + 'static) -> R
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+    async fn call<R>(&self, job: impl FnOnce(&mut HostState<S, O>) -> R + MaybeSend + 'static) -> R
     where
         R: MaybeSend + 'static,
     {
-        self.off.call(move |state| f(&mut state.host)).await
+        hang_tick!();
+        let answer =
+            kithara::platform::time::timeout(Duration::from_secs(5), self.off.call(job)).await;
+        hang_tick!();
+        let answer = answer.expect("offline Host operation completes within its liveness budget");
+        hang_reset!();
+        answer
+    }
+
+    /// Runs an arbitrary Host operation on the owner thread.
+    pub async fn with<R>(&self, f: impl FnOnce(&mut Host<S, O>) -> R + MaybeSend + 'static) -> R
+    where
+        R: MaybeSend + 'static,
+    {
+        self.call(move |state| f(&mut state.host)).await
     }
 
     /// Runs a control call on the owner thread, the way product callers issue
@@ -314,7 +366,7 @@ where
     where
         R: MaybeSend + 'static,
     {
-        self.off.call(move |_| f()).await
+        self.call(move |_| f()).await
     }
 
     /// Samples an observation and the render cursor between completed blocks.
@@ -323,72 +375,33 @@ where
     where
         R: MaybeSend + 'static,
     {
-        self.off
-            .call(move |state| (sample(), state.position.load(Ordering::Relaxed)))
+        self.call(move |state| (sample(), state.position.load(Ordering::Relaxed)))
             .await
-    }
-
-    /// Transfer one configured player facade into the product Host.
-    pub async fn insert<P>(&self, player: P) -> Result<HostOwned<P>, PlayError>
-    where
-        P: DeckControl + HostedDeck<S> + MaybeSend + 'static,
-        P::Control: MaybeSend,
-    {
-        self.off.call(move |state| state.host.insert(player)).await
-    }
-
-    pub async fn insert_observed<P>(
-        &self,
-        player: P,
-    ) -> Result<(HostOwned<ObservedDeck<P>>, Arc<Mutex<DeckSnapshot>>), PlayError>
-    where
-        P: DeckControl + HostedDeck<S> + MaybeSend + 'static,
-        P::Control: MaybeSend,
-    {
-        let snapshot = Arc::new(Mutex::new(DeckSnapshot::default()));
-        let member = self
-            .insert(ObservedDeck {
-                inner: player,
-                snapshot: snapshot.clone(),
-            })
-            .await?;
-        Ok((member, snapshot))
-    }
-
-    pub async fn insert_control<P>(&self, player: P) -> Result<P::Control, PlayError>
-    where
-        P: DeckControl + HostedDeck<S> + MaybeSend + 'static,
-        P::Control: Clone + MaybeSend,
-    {
-        self.insert(player)
-            .await
-            .map(|owned| owned.control().clone())
     }
 
     /// Render the next finite block through the product offline protocol.
     pub async fn render(&self, frames: usize) -> Vec<f32> {
         let frames = u64::try_from(frames).expect("offline render frame count fits u64");
-        self.off
-            .call(move |state| {
-                let spec = output_spec(&state.host);
-                let start = state.position.load(Ordering::Relaxed);
-                let end = start
-                    .checked_add(frames)
-                    .expect("offline render timeline fits u64");
-                let request = OfflineRenderRequest::builder()
-                    .spec(spec)
-                    .frames(start..end)
-                    .build();
-                let cancel = CancelScope::new(None);
-                let mut sink = VecSink::default();
-                state
-                    .host
-                    .render(&request, &cancel.token(), &mut sink)
-                    .unwrap_or_else(|error| panic!("render product offline Host: {error}"));
-                state.position.store(end, Ordering::Relaxed);
-                sink.samples
-            })
-            .await
+        self.call(move |state| {
+            let spec = output_spec(&state.host);
+            let start = state.position.load(Ordering::Relaxed);
+            let end = start
+                .checked_add(frames)
+                .expect("offline render timeline fits u64");
+            let request = OfflineRenderRequest::builder()
+                .spec(spec)
+                .frames(start..end)
+                .build();
+            let cancel = CancelScope::new(None);
+            let mut sink = VecSink::default();
+            state
+                .host
+                .render(&request, &cancel.token(), &mut sink)
+                .unwrap_or_else(|error| panic!("render product offline Host: {error}"));
+            state.position.store(end, Ordering::Relaxed);
+            sink.samples
+        })
+        .await
     }
 
     /// Render `frames` forward from the renderer's own cursor through the
@@ -396,8 +409,7 @@ where
     /// the frames the timeline advanced.
     pub async fn render_forward(&self, frames: u64) -> u64 {
         let block = u64::from(self.max_block_frames.get());
-        self.off
-            .call(move |state| render_forward_on(state, block, frames))
+        self.call(move |state| render_forward_on(state, block, frames))
             .await
     }
 
@@ -409,7 +421,7 @@ where
 
     /// Product offline output format at the rate the session renders now.
     pub async fn spec(&self) -> AudioSpec {
-        self.off.call(|state| output_spec(&state.host)).await
+        self.call(|state| output_spec(&state.host)).await
     }
 
     /// Configured product render quantum.
@@ -428,15 +440,12 @@ where
     }
 
     pub async fn attach_outputs(&self, tap: Tap, outputs: OutputGroup) -> Result<(), PlayError> {
-        self.off
-            .call(move |state| state.host.attach_outputs(tap, outputs))
+        self.call(move |state| state.host.attach_outputs(tap, outputs))
             .await
     }
 
     pub async fn detach_tap(&self, tap: Tap) -> Result<(), PlayError> {
-        self.off
-            .call(move |state| state.host.detach_outputs(tap))
-            .await
+        self.call(move |state| state.host.detach_outputs(tap)).await
     }
 
     /// The callback transport revision after a renderer commit was recorded.
@@ -457,20 +466,18 @@ where
     }
 
     pub async fn set_sample_rate(&self, sample_rate: NonZeroU32) -> Result<(), PlayError> {
-        self.off
-            .call(move |state| state.host.set_sample_rate(sample_rate))
+        self.call(move |state| state.host.set_sample_rate(sample_rate))
             .await
     }
 
     /// The session grid the Host publishes as its own beat grid.
     pub async fn session_grid(&self) -> BeatGridSnapshot {
-        self.off.call(|state| state.host.snapshot()).await
+        self.call(|state| state.host.snapshot()).await
     }
 
     pub async fn invalidate_audio_route(&self, reason: impl Into<String>) -> Result<(), PlayError> {
         let reason = reason.into();
-        self.off
-            .call(move |state| state.host.invalidate_audio_route(reason))
+        self.call(move |state| state.host.invalidate_audio_route(reason))
             .await
     }
 }
@@ -478,7 +485,8 @@ where
 /// Renders `frames` forward from the cursor the owner thread keeps, in `block`
 /// quanta. Every render of this session runs on that thread, so the session's
 /// own cursor and this one never disagree and a request never needs re-anchoring.
-fn render_forward_on<S>(state: &mut HostState<S>, block: u64, frames: u64) -> u64
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5))]
+fn render_forward_on<S, O: Owner<S>>(state: &mut HostState<S, O>, block: u64, frames: u64) -> u64
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
@@ -487,6 +495,7 @@ where
     let mut cursor = state.position.load(Ordering::Relaxed);
     let mut rendered = 0;
     while rendered < frames {
+        hang_tick!();
         let end = cursor
             .checked_add(block.min(frames - rendered))
             .expect("offline render timeline fits u64");
@@ -500,6 +509,9 @@ where
             .unwrap_or_else(|error| panic!("render product offline Host forward: {error}"));
         cursor = end;
         rendered += report.frames;
+        if report.frames > 0 {
+            hang_reset!();
+        }
     }
     state.position.store(cursor, Ordering::Relaxed);
     rendered
@@ -577,7 +589,7 @@ pub fn assert_playhead_tracks_renderer(gain: f64, frames: u64, spec: AudioSpec, 
 }
 
 /// The output format the session renders at now; a rate change moves it.
-fn output_spec<S>(host: &Host<S>) -> AudioSpec
+fn output_spec<S, O: Owner<S>>(host: &Host<S, O>) -> AudioSpec
 where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
@@ -586,4 +598,46 @@ where
         CHANNELS,
         NonZeroU32::new(rate).expect("product offline Host renders at a non-zero rate"),
     )
+}
+
+impl<S> OfflineHostHarness<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    /// Transfer one configured player facade into the product Host.
+    pub async fn insert<P>(&self, player: P) -> Result<HostOwned<P>, PlayError>
+    where
+        P: DeckControl + HostedDeck<S> + MaybeSend + 'static,
+        P::Control: MaybeSend,
+    {
+        self.call(move |state| state.host.insert(player)).await
+    }
+
+    pub async fn insert_observed<P>(
+        &self,
+        player: P,
+    ) -> Result<(HostOwned<ObservedDeck<P>>, Arc<Mutex<DeckSnapshot>>), PlayError>
+    where
+        P: DeckControl + HostedDeck<S> + MaybeSend + 'static,
+        P::Control: MaybeSend,
+    {
+        let snapshot = Arc::new(Mutex::new(DeckSnapshot::default()));
+        let member = self
+            .insert(ObservedDeck {
+                inner: player,
+                snapshot: snapshot.clone(),
+            })
+            .await?;
+        Ok((member, snapshot))
+    }
+
+    pub async fn insert_control<P>(&self, player: P) -> Result<P::Control, PlayError>
+    where
+        P: DeckControl + HostedDeck<S> + MaybeSend + 'static,
+        P::Control: Clone + MaybeSend,
+    {
+        self.insert(player)
+            .await
+            .map(|owned| owned.control().clone())
+    }
 }

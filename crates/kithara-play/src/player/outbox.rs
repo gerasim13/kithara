@@ -2,7 +2,8 @@ use kithara_command::{
     Batch, Live, LiveError, Outcome, Port, Receipt, Rejection, SendError, Sender, Seq, When,
 };
 use kithara_render::{
-    DispatcherCommand, DispatcherProtocol, LaneId, LoadRequest,
+    DispatcherCommand, DispatcherProtocol, LaneCommand, LaneFrame, LaneId, LaneProtocol,
+    LoadRequest,
     bridge::{DeckEvent, DeckPart, DeckProtocol, Slot},
 };
 use kithara_signal::SessionFrame;
@@ -74,6 +75,25 @@ struct Group {
 type GroupResult<R> = Result<(R, Option<Seq>), (PlayError, Vec<DeckPart>)>;
 
 impl<'a, S> Outbox<'a, S> {
+    pub(crate) fn lane(
+        sender: &mut Sender<LaneProtocol>,
+        at: When<LaneFrame>,
+        commands: Vec<LaneCommand>,
+    ) -> Result<Seq, PlayError> {
+        sender
+            .send(
+                at,
+                Batch {
+                    basis: Vec::new(),
+                    commands,
+                },
+            )
+            .map_err(|error| match error {
+                SendError::Full(_) => PlayError::Full("lane"),
+                SendError::Target(_) | SendError::Closed(_) => PlayError::Closed,
+            })
+    }
+
     #[must_use]
     pub fn new(
         deck: &'a mut dyn Port<DeckProtocol>,

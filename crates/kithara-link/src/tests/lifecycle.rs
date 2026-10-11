@@ -512,6 +512,7 @@ fn stale_host_seek_owner_grid_stamp_commits_nothing_without_topology_change() {
 #[kithara::test]
 fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
     let (mut deck, control, mut rig, loading) = sounding();
+    rig.now = SessionFrame::new(12_000);
     let applied = deck.snapshot();
     rig.run(|out| {
         LinkedPlayer::retime(
