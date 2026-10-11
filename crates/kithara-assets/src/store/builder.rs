@@ -5,29 +5,27 @@ use std::env;
 use std::{num::NonZeroUsize, path::PathBuf};
 
 use dashmap::DashMap;
-use kithara_bufpool::{ByteBuffer, HasPool, PoolRegion};
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_events::EventBus;
 use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::Duration};
 use serde::{Deserialize, Deserializer};
 
+#[cfg(not(target_arch = "wasm32"))]
+use super::disk::{DiskStoreSetup, fresh_temp_root, open_disk_backend};
 use super::{
     OnInvalidatedFn,
     chain::StoreChain,
     handle::{AssetStore, AssetStoreInner, StoreBackendInner},
 };
-#[cfg(not(target_arch = "wasm32"))]
-use crate::backend::{DiskAssetDeleter, DiskAssetStore, indexed_path};
 use crate::{
     backend::{AssetDeleter, MemAssetDeleter, MemAssetStore, MemStoreSetup},
     decorator::{
         Assets, ByteRecorder, CachedAssets, Capabilities, EvictAssets, EvictDeps, EvictionEvents,
         EvictionRouter, LeaseAssets, LeaseEvents, ProcessingAssets,
     },
-    index::{
-        AvailabilityIndex, FlushHub, FlushPolicy, PendingResourceIndex, ResourceTransactionIndex,
-    },
+    index::{AvailabilityIndex, FlushHub, PendingResourceIndex, ResourceTransactionIndex},
     layout::{AssetLayoutRegistry, ResourceKey},
 };
 
@@ -176,7 +174,7 @@ where
         AssetStoreConfig::for_pools(pools)
     }
 
-    fn decorate_backend<A>(
+    pub(super) fn decorate_backend<A>(
         inner: Arc<A>,
         deps: EvictDeps<S>,
         on_invalidated: Option<OnInvalidatedFn>,
@@ -213,11 +211,9 @@ where
     #[must_use]
     pub fn open(config: AssetStoreConfig<S>) -> Self {
         let config = Arc::new(config);
-        let pools = config.pools.clone();
         let backend = config.backend.clone();
         let cancel = config.cancel.clone();
         let event_bus = config.event_bus.clone();
-        let flush_hub = config.flush_hub.clone();
         let layouts = config.layouts.clone();
 
         let availability = AvailabilityIndex::new();
@@ -249,8 +245,8 @@ where
                     config: Arc::clone(&config),
                     root_dir,
                     cancel,
-                    flush_hub,
-                    pools,
+                    flush_hub: config.flush_hub.clone(),
+                    pools: config.pools.clone(),
                     event_bus,
                     availability: availability.clone(),
                 }),
@@ -309,135 +305,6 @@ where
     }
 }
 
-/// Everything [`AssetStore::open`] resolved before it picked the disk
-/// branch. Mirrors [`MemStoreSetup`] on the memory side: one bundle so the
-/// branch is a function instead of another sixty lines in the builder.
-#[cfg(not(target_arch = "wasm32"))]
-struct DiskStoreSetup<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    config: Arc<AssetStoreConfig<S>>,
-    availability: AvailabilityIndex,
-    cancel: Option<CancelToken>,
-    event_bus: Option<EventBus>,
-    flush_hub: Option<Arc<FlushHub>>,
-    root_dir: PathBuf,
-    pools: PoolRegion<S>,
-}
-
-/// Assemble the disk decorator chain: evict over the disk store, processing
-/// over that, the memory cache over that, leases on top.
-///
-/// Disk bytes survive LRU displacement, so the disk store needs no invalidation hook, unlike memory
-/// bytes.
-#[cfg(not(target_arch = "wasm32"))]
-fn open_disk_backend<S>(setup: DiskStoreSetup<S>) -> StoreBackendInner<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    let DiskStoreSetup {
-        config,
-        root_dir,
-        cancel,
-        flush_hub,
-        pools,
-        event_bus,
-        availability,
-    } = setup;
-    let cancel = CancelScope::new(cancel).token();
-    let hub = flush_hub.unwrap_or_else(|| FlushHub::new(cancel.child(), FlushPolicy::default()));
-
-    let pins = open_disk_pins_index(&root_dir, pools.get::<u8>());
-    let lru = open_disk_lru_index(&root_dir, pools.get::<u8>());
-    pins.attach_to(&hub);
-    lru.attach_to(&hub);
-
-    let deleter: Arc<dyn AssetDeleter> = Arc::new(DiskAssetDeleter::new(
-        root_dir.clone(),
-        availability.clone(),
-        pins.clone(),
-        lru.clone(),
-    ));
-
-    if let Some(path) = lazy_index_path(&root_dir, "availability.bin") {
-        availability.enable_persistence(path, pools.get::<u8>());
-        availability
-            .retain(|root, rel| indexed_path(&root_dir, root, rel).is_some_and(|p| p.exists()));
-    }
-    availability.attach_to(&hub);
-
-    let disk = Arc::new(DiskAssetStore::with_config(
-        root_dir,
-        cancel.clone(),
-        availability,
-        Arc::clone(&deleter),
-        Arc::clone(&config),
-    ));
-    let base = Arc::clone(&disk);
-    let store = AssetStore::<S>::decorate_backend(
-        disk,
-        EvictDeps {
-            lru,
-            deleter,
-            config,
-            cancel,
-            events: EvictionEvents::new(event_bus),
-            pins,
-        },
-        None,
-        false,
-    );
-
-    StoreBackendInner::Disk {
-        store,
-        base: Some(base),
-    }
-}
-
-/// Unique throwaway disk root used when the builder gets no backend.
-#[cfg(not(target_arch = "wasm32"))]
-fn fresh_temp_root() -> PathBuf {
-    tempfile::tempdir()
-        .expect("BUG: failed to create AssetStore temp dir")
-        .keep()
-}
-
-/// Open `_index/pins.bin` as a disk-backed [`crate::index::PinsIndex`]; on path
-/// failure falls back to an ephemeral index (best-effort, lazily materialised).
-#[cfg(not(target_arch = "wasm32"))]
-fn open_disk_pins_index(root_dir: &std::path::Path, buffer: ByteBuffer) -> crate::index::PinsIndex {
-    let Some(path) = lazy_index_path(root_dir, "pins.bin") else {
-        return crate::index::PinsIndex::ephemeral();
-    };
-    crate::index::PinsIndex::with_persist_at(path, buffer)
-}
-
-/// Open `_index/lru.bin` as a disk-backed [`crate::index::LruIndex`].
-/// Same fallback policy and lazy-materialisation contract as
-/// [`open_disk_pins_index`].
-#[cfg(not(target_arch = "wasm32"))]
-fn open_disk_lru_index(root_dir: &std::path::Path, buffer: ByteBuffer) -> crate::index::LruIndex {
-    let Some(path) = lazy_index_path(root_dir, "lru.bin") else {
-        return crate::index::LruIndex::ephemeral();
-    };
-    crate::index::LruIndex::with_persist_at(path, buffer)
-}
-
-/// Build the `root_dir/_index/<name>` path; `None` if the parent dir can't be
-/// created (caller falls back to an ephemeral index).
-#[cfg(not(target_arch = "wasm32"))]
-fn lazy_index_path(root_dir: &std::path::Path, name: &str) -> Option<PathBuf> {
-    let path = root_dir.join("_index").join(name);
-    if let Some(parent) = path.parent()
-        && let Err(e) = std::fs::create_dir_all(parent)
-    {
-        tracing::debug!("create _index dir failed: {e}");
-        return None;
-    }
-    Some(path)
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -452,6 +319,7 @@ mod tests {
         AssetEvent, AssetResourceState, AssetWriter, AssetsError, EvictReason, ResourceAcquisition,
         ResourceKey, consts,
         decorator::Capabilities,
+        index::FlushPolicy,
         resource::{AcquisitionResult, ReadSide, WriteSide},
     };
 

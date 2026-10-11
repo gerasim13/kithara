@@ -1,8 +1,3 @@
-#[cfg(not(target_arch = "wasm32"))]
-use std::collections::HashMap;
-
-#[cfg(not(target_arch = "wasm32"))]
-use kithara::{events::EventBus, platform::CancelToken};
 use kithara::{
     events::TrackId,
     platform::sync::{Arc, Mutex},
@@ -10,9 +5,7 @@ use kithara::{
 use uuid::Uuid;
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::native::{ItemEventBridge, ItemTracker};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::types::FfiAbrMode;
+use self::native::{CancelToken, EventBus, ItemEventBridge, ItemTracker};
 use crate::{
     core::observer_set::ObserverSet,
     observer::{ItemLoadCallback, ItemObserver},
@@ -21,6 +14,27 @@ use crate::{
         FfiTrackStatus,
     },
 };
+
+#[cfg(not(target_arch = "wasm32"))]
+mod native {
+    use std::collections::HashMap;
+
+    pub(super) use kithara::{events::EventBus, platform::CancelToken};
+
+    use super::AudioPlayerItem;
+    pub(super) use crate::native::{ItemEventBridge, ItemTracker};
+    use crate::types::FfiAbrMode;
+
+    impl AudioPlayerItem {
+        pub(crate) const fn abr_mode(&self) -> Option<FfiAbrMode> {
+            self.config.abr_mode
+        }
+
+        pub(crate) fn headers(&self) -> Option<HashMap<String, String>> {
+            self.config.headers.clone()
+        }
+    }
+}
 
 /// Loading lifecycle of an item. A sum type so the contradictory
 /// boolean combinations the old packed struct allowed
@@ -366,11 +380,6 @@ impl AudioPlayerItem {
 
 /// Internal methods not exported across FFI.
 impl AudioPlayerItem {
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) const fn abr_mode(&self) -> Option<FfiAbrMode> {
-        self.config.abr_mode
-    }
-
     /// The one place a queue-level track status reaches item state and
     /// item observers, on every platform.
     pub(crate) fn apply_track_status(&self, status: &FfiTrackStatus) {
@@ -392,11 +401,6 @@ impl AudioPlayerItem {
     pub(crate) fn deliver(&self, event: FfiItemEvent) {
         self.state.lock().absorb(&event);
         self.observers.on_event(event);
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn headers(&self) -> Option<HashMap<String, String>> {
-        self.config.headers.clone()
     }
 
     /// The observer set as one trait object, for bridges that own their
@@ -461,6 +465,8 @@ fn derived_uuid_i64(url: &str, queue_id: TrackId) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     fn item_for(url: &str) -> Arc<AudioPlayerItem> {
