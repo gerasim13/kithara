@@ -56,6 +56,9 @@ pub(crate) const BLOCK_FRAMES: usize = 480;
 /// quality without providing a useful playback mode.
 pub const MIN_SPEED: f32 = 0.05;
 
+pub(crate) const NATIVE_PACKET_FRAMES: usize = 480;
+pub(crate) const MAX_NATIVE_STRETCH: f64 = 2.0;
+
 pub(crate) const DEFAULT_SOURCE_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize::new(8192) {
     Some(frames) => frames,
     None => unreachable!(),

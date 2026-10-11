@@ -2,12 +2,14 @@ use kithara_bufpool::{HasPool, SampleBuffer};
 use kithara_signal::SourceSpan;
 use kithara_stretch::{ElasticEngine, ElasticError, ElasticRequest};
 
-use super::core::WarpRenderer;
+use super::{super::trajectory::Fraction, core::WarpRenderer, mapping::span_speed};
 
 pub(in crate::render) struct Projection {
     pub(in crate::render) engines: [Box<dyn ElasticEngine>; 2],
     pub(in crate::render) buffers: [SampleBuffer; 2],
     pub(in crate::render) stages: usize,
+    pub(in crate::render) feed: Option<u64>,
+    pub(in crate::render) offset: usize,
 }
 
 fn pitch_factors(speed: f64, stages: usize) -> [f64; 3] {
@@ -89,6 +91,12 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         pending
             .ensure_len(count)
             .map_err(|_| ElasticError::PoolCapacity)?;
+        let mut cursor = self.trajectory.clone();
+        cursor.advance_by(
+            span.start(),
+            self.spec.sample_rate,
+            from.max(0).unsigned_abs(),
+        )?;
         let resident = self.residency.as_ref().ok_or(ElasticError::PoolCapacity)?;
         for frame in 0..frames {
             let offset = from
@@ -97,11 +105,26 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             let position = if offset < 0 {
                 resident.history_position(offset.unsigned_abs())
             } else {
-                Some(self.mapped_position(
+                Some(self.map_nominal_position(
                     span.start(),
                     self.spec.sample_rate,
-                    offset.unsigned_abs(),
+                    cursor.at_offset(span.start(), self.spec.sample_rate, 0)?,
                 )?)
+            };
+            let next = if offset >= 0 {
+                let nominal = cursor.span(span.start(), self.spec.sample_rate, 1)?;
+                cursor.advance(nominal)?;
+                Some(
+                    self.map_nominal_position(
+                        span.start(),
+                        self.spec.sample_rate,
+                        nominal
+                            .source_ratio_at(1)
+                            .ok_or(ElasticError::SampleCountOverflow)?,
+                    )?,
+                )
+            } else {
+                None
             };
             let Some((numerator, denominator)) = position else {
                 let pending = self
@@ -121,11 +144,18 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 pending[frame * channels..(frame + 1) * channels].fill(0.0);
                 continue;
             }
-            let speed = self.mapped_frame_speed(
-                span.start(),
-                self.spec.sample_rate,
-                offset.max(0).unsigned_abs(),
-            )?;
+            let speed = if let Some(next) = next {
+                let fraction = |(numerator, denominator)| Fraction {
+                    numerator,
+                    denominator,
+                };
+                fraction(next)
+                    .sub(fraction((numerator, denominator)))
+                    .and_then(Fraction::as_f64)
+                    .ok_or(ElasticError::SampleCountOverflow)?
+            } else {
+                span_speed(span, 0)?
+            };
             let pending = self
                 .pending_source
                 .as_mut()
@@ -148,13 +178,16 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         &mut self,
         span: SourceSpan,
     ) -> Result<(), ElasticError> {
-        let channels = usize::from(self.spec.channels);
-        let latency = self
+        let capabilities = self
             .engine
             .as_ref()
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
-            .capabilities()
-            .latency();
+            .capabilities();
+        if let Some(speed) = self.native_projection_speed(capabilities, self.current_keylock)? {
+            return self.render_native_projection(span, speed);
+        }
+        let channels = usize::from(self.spec.channels);
+        let latency = capabilities.latency();
         let stages = self.projection_stages()?;
         let lookahead = latency
             .first()
@@ -177,15 +210,14 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .ensure_len(count)
             .map_err(|_| ElasticError::PoolCapacity)?;
         scratch.truncate(count);
+        self.project_source(
+            span,
+            i64::try_from(lookahead).map_err(|_| ElasticError::SampleCountOverflow)?,
+            frames,
+        )?;
         for frame in 0..frames {
-            let offset = lookahead
-                .checked_add(frame)
-                .and_then(|offset| i64::try_from(offset).ok())
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            self.project_source(span, offset, 1)?;
-            let speed = self.mapped_frame_speed(
-                span.start(),
-                self.spec.sample_rate,
+            let speed = span_speed(
+                span,
                 u64::try_from(frame).map_err(|_| ElasticError::SampleCountOverflow)?,
             )?;
             let factors = pitch_factors(speed, stages);
@@ -194,6 +226,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 .pending_source
                 .as_deref()
                 .ok_or(ElasticError::PoolCapacity)?;
+            let input = &input[frame * channels..(frame + 1) * channels];
             let scratch = self.scratch.as_mut().ok_or(ElasticError::PoolCapacity)?;
             let output = &mut scratch[frame * channels..(frame + 1) * channels];
             let engine = self
@@ -275,6 +308,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
         let projection = self.projection.as_mut().ok_or(ElasticError::PoolCapacity)?;
         projection.stages = stages;
+        projection.feed = None;
         let [first, second] = &mut projection.buffers;
         let next = history
             .checked_add(lead)

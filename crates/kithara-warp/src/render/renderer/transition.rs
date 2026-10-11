@@ -2,7 +2,7 @@ use std::mem;
 
 use kithara_bufpool::HasPool;
 use kithara_signal::SourceSpan;
-use kithara_stretch::ElasticError;
+use kithara_stretch::{ElasticCapabilities, ElasticError};
 use num_traits::ToPrimitive;
 
 use super::{super::trajectory::Trajectory, core::WarpRenderer, target::PreparedTarget};
@@ -18,24 +18,6 @@ pub(in crate::render) struct RetiringTarget {
 }
 
 impl RetiringTarget {
-    pub(in crate::render) fn lookahead(&self, stages: usize) -> Result<usize, ElasticError> {
-        if !self.keylock {
-            return Ok(0);
-        }
-        let latency = self
-            .target
-            .engine
-            .as_ref()
-            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
-            .capabilities()
-            .latency();
-        latency
-            .first()
-            .checked_add(latency.second())
-            .and_then(|frames| frames.checked_mul(stages))
-            .ok_or(ElasticError::SampleCountOverflow)
-    }
-
     pub(in crate::render) fn complete(&self) -> bool {
         self.rendered == self.frames
     }
@@ -47,21 +29,55 @@ impl RetiringTarget {
 
 impl<S: HasPool<f32>> WarpRenderer<S> {
     pub(in crate::render) fn projection_lookahead(&self) -> Result<usize, ElasticError> {
-        let stages = self.projection_stages()?;
-        let latency = self
+        let capabilities = self
             .engine
             .as_ref()
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
-            .capabilities()
-            .latency();
-        let frames = latency
-            .first()
-            .checked_add(latency.second())
-            .and_then(|frames| frames.checked_mul(stages))
-            .ok_or(ElasticError::SampleCountOverflow)?;
+            .capabilities();
+        let frames = self.target_lookahead(capabilities, self.current_keylock)?;
         self.retiring_target.as_ref().map_or(Ok(frames), |target| {
-            target.lookahead(stages).map(|old| old.max(frames))
+            let capabilities = target
+                .target
+                .engine
+                .as_ref()
+                .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
+                .capabilities();
+            self.target_lookahead(capabilities, target.keylock && target.trajectory.is_none())
+                .map(|old| old.max(frames))
         })
+    }
+
+    fn target_lookahead(
+        &self,
+        capabilities: ElasticCapabilities,
+        keylock: bool,
+    ) -> Result<usize, ElasticError> {
+        if !keylock {
+            return Ok(0);
+        }
+        let latency = capabilities.latency();
+        if let Some(speed) = self.native_projection_speed(capabilities, keylock)? {
+            (latency
+                .first()
+                .to_f64()
+                .ok_or(ElasticError::SampleCountOverflow)?
+                / speed
+                + self
+                    .native_projection_packet(speed, capabilities)?
+                    .to_f64()
+                    .ok_or(ElasticError::SampleCountOverflow)?)
+            .ceil()
+            .to_usize()
+            .and_then(|history| history.checked_add(latency.second()))
+            .ok_or(ElasticError::SampleCountOverflow)
+        } else {
+            let stages = self.projection_stages()?;
+            latency
+                .first()
+                .checked_add(latency.second())
+                .and_then(|frames| frames.checked_mul(stages))
+                .ok_or(ElasticError::SampleCountOverflow)
+        }
     }
 
     pub(in crate::render) fn retire_mapped_target(&mut self) -> Result<(), ElasticError> {

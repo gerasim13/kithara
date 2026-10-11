@@ -51,6 +51,15 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         offset: u64,
     ) -> Result<(u128, NonZeroU128), ElasticError> {
         let nominal = self.trajectory.at_offset(start, rate, offset)?;
+        self.map_nominal_position(start, rate, nominal)
+    }
+
+    pub(in crate::render) fn map_nominal_position(
+        &self,
+        start: u64,
+        rate: NonZeroU32,
+        nominal: (u128, NonZeroU128),
+    ) -> Result<(u128, NonZeroU128), ElasticError> {
         let Some(plan) = self.plan.as_ref() else {
             return Ok(nominal);
         };

@@ -399,6 +399,7 @@ fn changing_non_dyadic_regions_keeps_phase_on_the_replacement_lattice(#[case] sp
 }
 
 #[kithara::test]
+#[kithara::hang_watchdog]
 #[cfg_attr(feature = "stretch-glide", case::varispeed(StretchKind::Glide))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
@@ -406,6 +407,7 @@ fn changing_non_dyadic_regions_keeps_phase_on_the_replacement_lattice(#[case] sp
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn a_failed_large_mapping_cannot_leak_scratch_into_a_smaller_quantum(#[case] backend: StretchKind) {
+    hang_tick!();
     let mut renderer = renderer(
         &WarpConfig::builder()
             .backend(backend)
@@ -415,6 +417,7 @@ fn a_failed_large_mapping_cannot_leak_scratch_into_a_smaller_quantum(#[case] bac
     );
     let mut source = 0;
     mapped_signal(&mut renderer, &mut source, 128, |_| 0.25);
+    hang_reset!();
     renderer.prepare(spec());
     let meta = AudioChunkInfo {
         spec: spec(),
@@ -444,7 +447,10 @@ fn a_failed_large_mapping_cannot_leak_scratch_into_a_smaller_quantum(#[case] bac
         renderer.scratch.as_ref().expect("scratch").is_empty(),
         "failure clears partial PCM"
     );
+    hang_reset!();
+    renderer.reset();
     let output = mapped_signal(&mut renderer, &mut source, 8, |_| 0.25);
+    hang_reset!();
     assert_eq!(output.frames(), 8);
     assert_eq!(output.samples.len(), 16);
     assert_eq!(

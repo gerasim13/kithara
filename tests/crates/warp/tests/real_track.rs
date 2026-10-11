@@ -100,6 +100,7 @@ struct Track {
 }
 
 impl Track {
+    #[kithara_test_utils::kithara::hang_watchdog]
     fn load(library: Library, start: Start, trajectories: &[Trajectory]) -> Self {
         let Library { name, extension } = library;
         let analysed = analysed_grid(name);
@@ -151,6 +152,7 @@ impl Track {
             .expect("a trajectory");
         let mut pcm = Vec::new();
         while pcm.len() < (first_frame + needed) * CH {
+            hang_tick!();
             match decoder
                 .next_chunk()
                 .unwrap_or_else(|error| panic!("decode `{name}`: {error:?}"))
@@ -159,6 +161,7 @@ impl Track {
                 DecoderChunkOutcome::Pending(reason) => panic!("`{name}` pending: {reason:?}"),
                 DecoderChunkOutcome::Eof => panic!("`{name}` ends before frame {needed}"),
             }
+            hang_reset!();
         }
         pcm.truncate((first_frame + needed) * CH);
         pcm.drain(..first_frame * CH);
@@ -241,10 +244,16 @@ fn source_end(name: &str, beats: &[(f64, f64)], last_beat: f64) -> usize {
     let margin = consts::SOURCE_MARGIN_BEATS
         .to_f64()
         .expect("margin fits f64");
-    source_frame(name, beats, last_beat.ceil() + margin)
-        .ceil()
+    let required = source_frame(name, beats, last_beat.ceil() + margin);
+    beats
+        .iter()
+        .find(|&&(_, frame)| frame >= required)
+        .unwrap_or_else(|| panic!("`{name}` has a complete beat past frame {required}"))
+        .1
+        .floor()
         .to_usize()
         .expect("frame fits usize")
+        + 1
 }
 
 /// The Host beat `trajectory` reaches at its end.

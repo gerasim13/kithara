@@ -268,13 +268,19 @@ pub(super) fn vinyl(kind: StretchKind, speed: f32) -> WarpRenderer {
     feature = "stretch-bungee",
     feature = "stretch-glide"
 ))]
+#[kithara::hang_watchdog]
 fn render_with_tail(fx: &mut WarpRenderer, input: &[f32]) -> (Vec<f32>, usize) {
     let pools = fx.pools.clone();
     let mut out: Vec<f32> = Vec::new();
     let mut tail_frames = 0;
+    let mut source = 0;
     let block = 4096 * usize::from(consts::CH);
     for data in input.chunks(block) {
-        if let Some(c) = render_serviced(fx, chunk(&pools, data)) {
+        hang_tick!();
+        let mut input = chunk(&pools, data);
+        input.meta.frame_offset = source;
+        source += u64::try_from(input.frames()).expect("source frames fit u64");
+        if let Some(c) = render_serviced(fx, input) {
             assert_eq!(
                 c.spec().sample_rate.get(),
                 consts::SR,
@@ -283,8 +289,10 @@ fn render_with_tail(fx: &mut WarpRenderer, input: &[f32]) -> (Vec<f32>, usize) {
             assert_eq!(c.spec().channels, consts::CH);
             out.extend_from_slice(&c.samples);
         }
+        hang_reset!();
     }
     while let Some(c) = flush_serviced(fx) {
+        hang_tick!();
         // A non-empty flush chunk carries real audio, so its spec must stay
         // the source spec - never the `AudioChunkInfo::default()` sentinel (0
         // channels) that a `None` `last_input_meta` would otherwise yield.
@@ -296,6 +304,7 @@ fn render_with_tail(fx: &mut WarpRenderer, input: &[f32]) -> (Vec<f32>, usize) {
         );
         tail_frames += c.frames();
         out.extend_from_slice(&c.samples);
+        hang_reset!();
     }
     (out, tail_frames)
 }
@@ -648,6 +657,7 @@ fn vinyl_speed_scales_duration_and_pitch(#[case] backend: StretchKind, warp_sine
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+#[kithara::hang_watchdog]
 fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let mut fx = renderer(
         &WarpConfig::builder()
@@ -664,13 +674,21 @@ fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind, warp
     fx.set_speed(SpeedCurve::Constant(0.5), 1)
         .expect("valid speed");
     let mut stretched: Vec<f32> = Vec::new();
+    let mut source = 4096;
     for _ in 0..24 {
-        if let Some(c) = render_serviced(&mut fx, chunk(&pools, &block)) {
+        hang_tick!();
+        let mut input = chunk(&pools, &block);
+        input.meta.frame_offset = source;
+        source += u64::try_from(input.frames()).expect("source frames fit u64");
+        if let Some(c) = render_serviced(&mut fx, input) {
             stretched.extend_from_slice(&c.samples);
         }
+        hang_reset!();
     }
     while let Some(c) = flush_serviced(&mut fx) {
+        hang_tick!();
         stretched.extend_from_slice(&c.samples);
+        hang_reset!();
     }
     assert!(
         stretched.len() > block.len() * 24,
@@ -687,6 +705,7 @@ fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind, warp
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+#[kithara::hang_watchdog]
 fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let mut fx = renderer(
         &WarpConfig::builder()
@@ -699,10 +718,16 @@ fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind, warp_si
     let block = warp_sine[..(4096) * 2].to_vec();
 
     let mut vinyl_out: Vec<f32> = Vec::new();
+    let mut source = 0;
     for _ in 0..24 {
-        if let Some(c) = render_serviced(&mut fx, chunk(&pools, &block)) {
+        hang_tick!();
+        let mut input = chunk(&pools, &block);
+        input.meta.frame_offset = source;
+        source += u64::try_from(input.frames()).expect("source frames fit u64");
+        if let Some(c) = render_serviced(&mut fx, input) {
             vinyl_out.extend_from_slice(&c.samples);
         }
+        hang_reset!();
     }
     let vinyl_mono: Vec<f32> = vinyl_out
         .iter()
@@ -718,17 +743,26 @@ fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind, warp_si
     let mut stretched: Vec<f32> = Vec::new();
     fx.prepare(spec());
     while fx.transition_pending() {
+        hang_tick!();
         if let Some(output) = flush_serviced(&mut fx) {
             stretched.extend_from_slice(&output.samples);
+            hang_reset!();
         }
     }
     for _ in 0..24 {
-        if let Some(c) = render_serviced(&mut fx, chunk(&pools, &block)) {
+        hang_tick!();
+        let mut input = chunk(&pools, &block);
+        input.meta.frame_offset = source;
+        source += u64::try_from(input.frames()).expect("source frames fit u64");
+        if let Some(c) = render_serviced(&mut fx, input) {
             stretched.extend_from_slice(&c.samples);
         }
+        hang_reset!();
     }
     while let Some(c) = flush_serviced(&mut fx) {
+        hang_tick!();
         stretched.extend_from_slice(&c.samples);
+        hang_reset!();
     }
     let mono: Vec<f32> = stretched
         .iter()
