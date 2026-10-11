@@ -48,9 +48,18 @@ where
         &mut self,
         out: &mut Outbox<'_, S>,
     ) -> Result<(), QueueError> {
+        if let Some(pass) = out.pass() {
+            self.enter_chained_target(pass.now)?;
+        }
         let Some(target) = self.target else {
             return Ok(());
         };
+        let consumed =
+            target.auto
+                || target.reason == AdvanceReason::InitialLoad
+                    && self.tracks.records().iter().any(|record| {
+                        record.id == target.to && record.status == TrackStatus::Loaded
+                    });
         if target.repeat.is_some() {
             self.cancel_repeat(out)?;
             self.target = None;
@@ -59,8 +68,18 @@ where
         if let Some(index) = self.incoming_index(target.to) {
             self.release_track(index, out)?;
         }
-        self.tracks.set_status(target.to, TrackStatus::Cancelled);
+        self.tracks.set_status(
+            target.to,
+            if consumed {
+                TrackStatus::Consumed
+            } else {
+                TrackStatus::Cancelled
+            },
+        );
         self.target = None;
+        if target.auto && self.navigation.current() == Some(target.to) {
+            self.navigation.prev(&self.track_ids());
+        }
         self.reap_released();
         Ok(())
     }
@@ -75,7 +94,7 @@ where
         for index in self.active.indices(|active| active.role == Role::Preloaded) {
             let id = self.active.get(index).ok_or(PlayError::NoActiveSlot)?.item;
             self.release_track(index, out)?;
-            self.tracks.set_status(id, TrackStatus::Cancelled);
+            self.tracks.set_status(id, TrackStatus::Consumed);
         }
         self.reap_released();
         Ok(())
@@ -119,6 +138,21 @@ where
         Ok(())
     }
 
+    pub(in crate::queue) fn enter_chained_target(
+        &mut self,
+        now: SessionFrame,
+    ) -> Result<(), PlayError> {
+        if let Some(target) = self.target.filter(|target| target.chained)
+            && let Some(index) = self.incoming_index(target.to)
+            && let Some(active) = self.active.get(index)
+            && let PlayingStatus::Playing { since } = active.track.snapshot().as_ref().status
+            && now >= since
+        {
+            self.enter_target(index, since)?;
+        }
+        Ok(())
+    }
+
     pub(in crate::queue) fn tick_deadlines(
         &mut self,
         now: SessionFrame,
@@ -131,6 +165,7 @@ where
         self.release_tails(out)?;
         self.reap_released();
         self.loaded_tracks(out)?;
+        self.enter_chained_target(now)?;
         if self.config.action_at_item_end != ActionAtItemEnd::Advance {
             return self.cancel_auto(out);
         }
@@ -144,12 +179,15 @@ where
                 }
                 return Ok(());
             }
-            if target.auto && self.auto_bound(target.settings)? != Some(target.bound) {
+            if target.auto
+                && target.reason == AdvanceReason::NaturalEof
+                && self.auto_bound(target.settings)? != target.bound
+            {
                 self.withdraw_auto(out)?;
             }
             return Ok(());
         }
-        let ids = self.track_ids();
+        let ids = self.selectable_ids();
         let wrap = self.navigation.repeat_mode() == RepeatMode::All;
         let Some(id) = self.navigation.next(&ids, true, wrap) else {
             return Ok(());
@@ -159,7 +197,19 @@ where
                 self.repeat_one(end, out)?;
                 return Ok(());
             }
-            self.load_track(id, Role::Preloaded, output, out)?;
+            if let Err(error) = self.load_track(id, Role::Preloaded, output, out) {
+                if matches!(error, QueueError::Play(PlayError::Full("deck"))) {
+                    for parked in self
+                        .active
+                        .parked_iter_mut()
+                        .filter(|parked| parked.item == id)
+                    {
+                        parked.track.apply(TrackCommand::Release, out)?;
+                    }
+                    self.tracks.set_status(id, TrackStatus::Consumed);
+                }
+                return Err(error);
+            }
         }
         let duration = if self.config.settings.gapless() {
             FrameCount::new(0)
@@ -209,13 +259,13 @@ where
         self.target = Some(Target {
             playing: true,
             to,
-            bound: Bound::AtOrBefore(end),
+            bound: Some(Bound::AtOrBefore(end)),
             settings: Transition::None.settings(self.config.settings.crossfade()),
             transition: Transition::None,
             reason: AdvanceReason::NaturalEof,
             auto: true,
             stale: None,
-            retry: None,
+            continued: None,
             repeat: Some(seq),
             chained: false,
         });
@@ -274,6 +324,7 @@ where
     }
 
     pub(in crate::queue) fn current_end(&self) -> Option<SessionFrame> {
+        self.current?;
         let track = self.current_track()?;
         let snapshot = track.snapshot();
         let snapshot = snapshot.as_ref();

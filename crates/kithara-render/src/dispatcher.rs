@@ -566,6 +566,7 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(tokio)]
+    #[kithara::hang_watchdog(ctx = String)]
     async fn an_external_dispatcher_wake_completes_a_waiting_preload() {
         use crate::{PlayWorker, PlayWorkerConfig, test_pools::pools};
 
@@ -597,21 +598,33 @@ mod tests {
                 },
             )
             .expect("load batch");
-        first_block.await.expect("source blocks before producing");
+        hang_tick!(format!(
+            "dispatcher load {seq:?} waits for its source to block"
+        ));
+        kithara_platform::time::timeout(__hang_detector.remaining(), first_block)
+            .await
+            .expect("source reaches its first block")
+            .expect("source blocks before producing");
+        hang_reset!();
         assert!(sender.receipts().next().is_none(), "Load waits for preload");
         input
             .send(())
             .expect("make upstream input available without a source waker");
         worker.wake();
+        let budget = Duration::from_secs(2).min(__hang_detector.remaining());
         let receipt = kithara_platform::time::timeout(
-            Duration::from_secs(2),
+            budget,
             poll_fn(|cx| {
+                hang_tick!(format!(
+                    "dispatcher load {seq:?} waits for preload after wake"
+                ));
                 sender.hold(cx.waker().clone());
                 sender.receipts().next().map_or(Poll::Pending, Poll::Ready)
             }),
         )
         .await
         .expect("dispatcher gate wake must complete preload");
+        hang_reset!();
         sender.release();
         assert_eq!(receipt.seq(), seq);
         assert!(matches!(
@@ -752,6 +765,7 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test]
+    #[kithara::hang_watchdog(ctx = String)]
     fn a_play_worker_without_a_runtime_refuses_an_open() {
         use crate::{PlayWorker, PlayWorkerConfig, test_pools::pools};
 
@@ -766,7 +780,9 @@ mod tests {
         let deadline = kithara_platform::time::WallInstant::now() + Duration::from_secs(5);
 
         loop {
+            hang_tick!(format!("dispatcher load {seq:?} waits for NoRuntime"));
             if let Some(receipt) = sender.receipts().next() {
+                hang_reset!();
                 assert_eq!(receipt.seq(), seq);
                 assert!(matches!(
                     receipt.outcome(),
@@ -778,7 +794,9 @@ mod tests {
                 kithara_platform::time::WallInstant::now() < deadline,
                 "the load must settle"
             );
-            kithara_platform::thread::sleep(Duration::from_millis(1));
+            hang_park!(|remaining| {
+                kithara_platform::thread::sleep(Duration::from_millis(1).min(remaining));
+            });
         }
     }
 

@@ -54,23 +54,28 @@ where
         output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, QueueError> {
-        let ids = self.track_ids();
+        let ids = self.selectable_ids();
         let wrap = self.navigation.repeat_mode() == RepeatMode::All;
-        self.navigation
-            .next(&ids, auto, wrap)
-            .map_or(Ok(None), |id| {
-                self.request_transition(
-                    TransitionRequest {
-                        id,
-                        transition,
-                        reason,
-                        auto,
-                        playing,
-                    },
-                    output,
-                    out,
-                )
-            })
+        let Some(id) =
+            self.navigation
+                .next(&ids, auto && reason != AdvanceReason::TrackFailed, wrap)
+        else {
+            if auto {
+                self.announce(QueueEvent::QueueEnded);
+            }
+            return Ok(None);
+        };
+        self.request_transition(
+            TransitionRequest {
+                id,
+                transition,
+                reason,
+                auto,
+                playing,
+            },
+            output,
+            out,
+        )
     }
 
     pub(in crate::queue) fn request_transition(
@@ -91,6 +96,9 @@ where
             .validate()
             .map_err(PlayError::from)?;
         if !auto && self.current == Some(id) {
+            if self.target.is_some_and(|target| !target.auto) {
+                self.cancel_target(out)?;
+            }
             return self
                 .transport(TrackCommand::Play { at: When::Next }, out)
                 .map_err(Into::into);
@@ -110,10 +118,10 @@ where
             }
             return self.transition_loaded(out).map_err(Into::into);
         }
-        let bound = if auto {
-            self.auto_bound(settings)?.ok_or(PlayError::Untimed)?
+        let bound = if auto && reason == AdvanceReason::NaturalEof {
+            self.auto_bound(settings)?
         } else {
-            Bound::AtOrAfter(self.earliest()?)
+            Some(Bound::AtOrAfter(self.earliest()?))
         };
         self.cancel_target(out)?;
         self.target = Some(Target {
@@ -125,7 +133,7 @@ where
             reason,
             auto,
             stale: None,
-            retry: None,
+            continued: None,
             repeat: None,
             chained: false,
         });
@@ -133,13 +141,18 @@ where
             self.navigation.select(id, &self.track_ids());
         }
         match self.load_track(id, Role::Incoming { batch: None }, output, out) {
-            Ok(load) => match self.transition_loaded(out) {
-                Ok(sent) => Ok(sent.or(load)),
-                Err(error) => {
-                    self.cancel_target(out)?;
-                    Err(error.into())
+            Ok(load) => {
+                if auto {
+                    self.navigation.select(id, &self.track_ids());
                 }
-            },
+                match self.transition_loaded(out) {
+                    Ok(sent) => Ok(sent.or(load)),
+                    Err(error) => {
+                        self.cancel_target(out)?;
+                        Err(error.into())
+                    }
+                }
+            }
             Err(error) => {
                 self.target = None;
                 self.tracks.fail(id, &error);
@@ -188,7 +201,7 @@ where
                 return Ok(None);
             }
             if let Some(target) = &mut self.target {
-                target.retry = Some(load.seq());
+                target.continued = Some(load.seq());
             }
         }
         if !target.playing {
@@ -203,14 +216,14 @@ where
             }
             return Ok(sent);
         }
-        let bound = if target.auto {
+        let bound = if target.auto && target.reason == AdvanceReason::NaturalEof {
             let Some(bound) = self.auto_bound(target.settings)? else {
                 return Ok(None);
             };
-            self.target.as_mut().ok_or(PlayError::NotReady)?.bound = bound;
+            self.target.as_mut().ok_or(PlayError::NotReady)?.bound = Some(bound);
             bound
         } else {
-            target.bound
+            target.bound.ok_or(PlayError::Untimed)?
         };
         let Some(frame) = self.transition_entry(index, bound)? else {
             return Ok(None);
@@ -219,7 +232,7 @@ where
         if sent.is_some()
             && let Some(target) = &mut self.target
         {
-            target.retry = None;
+            target.continued = None;
         }
         Ok(sent)
     }

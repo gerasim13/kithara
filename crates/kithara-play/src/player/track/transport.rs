@@ -55,7 +55,7 @@ impl<S> PlayerImpl<S> {
         Ok(None)
     }
 
-    pub(super) fn retry_detach(&mut self, out: &mut Outbox<'_, S>) {
+    pub(super) fn deferred_detach(&mut self, out: &mut Outbox<'_, S>) {
         if let Some(slot) = self.slot
             && let Err(error) = self.send_playback(When::Next, vec![DeckPart::Detach { slot }], out)
         {
@@ -89,7 +89,20 @@ impl<S> PlayerImpl<S> {
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
         self.check_when(at, out)?;
-        if let Some(resume) = self.resume {
+        if matches!(self.status, TrackStatus::Ended { .. }) {
+            self.segment(Position::ZERO, None, out)?;
+            self.resume = None;
+            self.play = Some(at);
+            return Ok(None);
+        }
+        if let Some(resume) = self.resume.or_else(|| {
+            self.mark.filter(|_| {
+                matches!(
+                    self.status,
+                    TrackStatus::Loaded | TrackStatus::Paused { .. }
+                )
+            })
+        }) {
             let pending = self
                 .lane_commands
                 .iter()

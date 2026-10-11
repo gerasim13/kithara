@@ -188,6 +188,8 @@ async fn render_paced(harness: &OfflinePlayer, frames: usize) -> Vec<f32> {
     block
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+#[kithara_test_utils::kithara::flash(io)]
 async fn render_until_current(
     harness: &OfflinePlayer,
     id: kithara::events::TrackId,
@@ -195,12 +197,14 @@ async fn render_until_current(
     deadline: WallInstant,
 ) {
     while harness.player().current().map(|entry| entry.id) != Some(id) {
+        hang_tick!("render_until_current waits for playback progress".to_owned());
         assert!(
             WallInstant::now() < deadline,
             "desktop queue did not commit current track {id:?} before the render deadline"
         );
         render_paced(harness, block_frames).await;
     }
+    hang_reset!();
 }
 
 async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPrepared {

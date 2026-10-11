@@ -241,13 +241,13 @@ where
     /// resource, the metadata the caller left unset fills from the decoder's
     /// tags, and the track is `Loaded`. `false` when the load was cancelled
     /// meanwhile: the cancel is the last word on it, and the track is left
-    /// `Cancelled` for the queue to let go. An already `Loaded` record also
+    /// `Cancelled` for the queue to let go. An already `Loaded` or `Consumed` record also
     /// returns `false` without announcing another status change.
     pub(crate) fn loaded(&mut self, id: TrackId, metadata: &TrackMetadata) -> bool {
         let Some(record) = self.record_mut(id) else {
             return false;
         };
-        if record.status == TrackStatus::Loaded {
+        if matches!(record.status, TrackStatus::Loaded | TrackStatus::Consumed) {
             return false;
         }
         if record.load_cancelled() {

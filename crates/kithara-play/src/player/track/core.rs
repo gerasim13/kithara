@@ -38,7 +38,7 @@ pub struct PlayerImpl<S> {
     pub(super) ready: Option<SegmentId>,
     pub(super) issued_segment: SegmentId,
     pub(super) adopting: Vec<Adoption>,
-    pub(super) adopt_retry: Option<Seq>,
+    pub(super) newest_epoch_pending: Option<Seq>,
     pub(super) lane_commands: Vec<LaneOperation>,
     pub(super) playback_commands: Vec<PlaybackOperation>,
     pub(super) speed_answers: VecDeque<SpeedAnswer>,
@@ -77,7 +77,7 @@ impl<S> PlayerImpl<S> {
             ready: None,
             issued_segment: SegmentId::FIRST,
             adopting: Vec::new(),
-            adopt_retry: None,
+            newest_epoch_pending: None,
             lane_commands: Vec::new(),
             playback_commands: Vec::new(),
             speed_answers: VecDeque::new(),
@@ -298,7 +298,7 @@ impl<S> PlayerImpl<S> {
         if matches!(at, When::Next)
             && matches!(
                 self.status,
-                TrackStatus::Loaded | TrackStatus::Paused { .. }
+                TrackStatus::Loaded | TrackStatus::Paused { .. } | TrackStatus::Ended { .. }
             )
             && self.playback_commands.is_empty()
         {

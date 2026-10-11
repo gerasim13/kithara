@@ -75,27 +75,40 @@ async fn build_fixture_url(kind: LocalSource, helper: &TestServerHelper) -> Url 
 /// empty buffer means (a live-playback window waits for the next event; a
 /// PAUSE window — where progress is silent by design — reads the frozen
 /// `Queue::position_seconds()` explicitly).
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 fn drain_latest_position(rx: &mut EventReceiver<TestEvent>) -> Option<f64> {
     let mut latest: Option<f64> = None;
     loop {
+        hang_tick!("local playback progress drain".to_owned());
         match rx.try_recv().map(|env| env.event) {
             Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
                 latest = Some(Duration::from_millis(position_ms).as_secs_f64());
+                hang_reset!();
             }
-            Ok(_) | Err(TryRecvError::Lagged(_)) => {}
+            Ok(_) | Err(TryRecvError::Lagged(_)) => {
+                hang_reset!();
+            }
             Err(TryRecvError::Empty | TryRecvError::Closed) => break,
         }
     }
     latest
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn receive_progress(
     rx: &mut EventReceiver<TestEvent>,
     mut lagged: impl FnMut() -> Option<f64>,
 ) -> Result<f64, String> {
     loop {
-        match rx.recv().await.map(|env| env.event) {
+        hang_tick!("local track awaits sink PlaybackProgress".to_owned());
+        let received = timeout(__hang_detector.remaining(), rx.recv()).await;
+        let received = received.unwrap_or_else(|_| {
+            hang_tick!("local track awaits sink PlaybackProgress".to_owned());
+            panic!("local track progress did not arrive")
+        });
+        match received.map(|env| env.event) {
             Ok(TestEvent::Audio(AudioEvent::PlaybackProgress { position_ms, .. })) => {
+                hang_reset!();
                 return Ok(Duration::from_millis(position_ms).as_secs_f64());
             }
             Ok(_) => {}
@@ -129,6 +142,7 @@ async fn next_progress_position(
 /// clock), then assert non-decreasing. Replaces a wall-clock sample loop
 /// whose REAL `sleep` would not park the engine. The fast-path seed keeps
 /// the first sample aligned with the current head.
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn sample_positions_via_progress(
     rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<TestPools>,
@@ -139,7 +153,12 @@ async fn sample_positions_via_progress(
     out.push(queue.position_seconds().unwrap_or(0.0));
     timeout(deadline, async {
         while out.len() < count {
+            hang_tick!(format!(
+                "local playback sampled {} of {count} positions",
+                out.len()
+            ));
             out.push(receive_progress(rx, || Some(queue.position_seconds().unwrap_or(0.0))).await?);
+            hang_reset!();
         }
         Ok::<(), String>(())
     })
@@ -356,6 +375,8 @@ async fn local_track_plays_end_to_end(
     queue.close().await;
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
+#[kithara_test_utils::kithara::flash(io)]
 async fn wait_for_queue_event<F>(
     rx: &mut EventReceiver<TestEvent>,
     mut pred: F,
@@ -364,11 +385,13 @@ async fn wait_for_queue_event<F>(
 where
     F: FnMut(&QueueEvent) -> bool,
 {
-    timeout(deadline, async {
+    timeout(deadline.min(__hang_detector.remaining()), async {
         loop {
+            hang_tick!("local playlist awaits its requested QueueEvent".to_owned());
             match rx.recv().await.map(|env| env.event) {
                 Ok(TestEvent::Queue(ev)) => {
                     if pred(&ev) {
+                        hang_reset!();
                         return Some(ev);
                     }
                 }
@@ -379,8 +402,10 @@ where
         }
     })
     .await
-    .ok()
-    .flatten()
+    .unwrap_or_else(|_| {
+        hang_tick!("local playlist awaits its requested QueueEvent".to_owned());
+        None
+    })
 }
 
 fn playlist_snapshot(queue: &QueueControl<TestPools>, ids: &[TrackId]) -> String {

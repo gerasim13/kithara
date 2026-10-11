@@ -20,6 +20,13 @@ impl<S> Player<S> for PlayerImpl<S> {
     type Snapshot = TrackSnapshot;
 
     fn entry(&self, bound: Bound) -> Option<SessionFrame> {
+        if matches!(
+            self.status,
+            TrackStatus::Loaded | TrackStatus::Paused { .. }
+        ) && self.ready != Some(self.segment)
+        {
+            return None;
+        }
         match bound {
             Bound::AtOrAfter(frame) | Bound::AtOrBefore(frame) => Some(frame),
         }
@@ -137,7 +144,7 @@ impl<S> Player<S> for PlayerImpl<S> {
                         adoption.cancelled = true;
                     }
                 }
-                self.adopt_retry = None;
+                self.newest_epoch_pending = None;
                 self.repeat = false;
                 Ok(None)
             }
@@ -182,7 +189,7 @@ impl<S> Player<S> for PlayerImpl<S> {
                         self.ready = None;
                         self.playback_commands.clear();
                         self.adopting.clear();
-                        self.adopt_retry = None;
+                        self.newest_epoch_pending = None;
                         if let Err(error) = self.release_lane(out) {
                             warn!(%error, "lane release waits for dispatcher room");
                         }
@@ -233,7 +240,7 @@ impl<S> Player<S> for PlayerImpl<S> {
     fn tick(&mut self, _now: SessionFrame, out: &mut Outbox<'_, S>) {
         self.observe(out);
         self.settle_lane();
-        self.retry_adopt(out);
+        self.adopt_newest_epoch(out);
         if let Err(error) = self.promote(out) {
             warn!(%error, "a seated lane waits to leave the background class");
         }
@@ -242,7 +249,7 @@ impl<S> Player<S> for PlayerImpl<S> {
                 warn!(%error, "lane release waits for room");
             }
         } else if self.releasing && self.attaching.is_none() && self.playback_commands.is_empty() {
-            self.retry_detach(out);
+            self.deferred_detach(out);
         } else if self.attached()
             && self.ready == Some(self.segment)
             && let Some(at) = self.play

@@ -160,6 +160,13 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
         AudioSpec::new(2, mock::SAMPLE_RATE),
     )
     .expect("leading WAV");
+    let successor_dir = TestTempDir::new();
+    mock::write_pcm_wav(
+        &successor_dir.path().join("entry.wav"),
+        &vec![0.5; 8192],
+        AudioSpec::new(2, mock::SAMPLE_RATE),
+    )
+    .expect("successor WAV");
     real_outbox(
         &mut queue,
         &mut mixer,
@@ -167,13 +174,14 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
         SessionFrame::new(0),
         1,
         |queue, out| {
-            for id in [first, second] {
+            for (id, source_dir) in [(first, &dir), (second, &successor_dir)] {
                 Player::apply(
                     queue,
                     QueueCommand::Append {
                         id,
                         source: TrackSource::Uri(
-                            dir.path()
+                            source_dir
+                                .path()
                                 .join("entry.wav")
                                 .to_str()
                                 .expect("fixture path")
@@ -240,13 +248,7 @@ async fn cancel_preload_unloads_a_successor_only_while_it_preloads(
         },
     )
     .expect("gapless successor");
-    mock::write_pcm_wav(
-        &dir.path().join("entry.wav"),
-        &vec![0.5; 8192],
-        AudioSpec::new(2, mock::SAMPLE_RATE),
-    )
-    .expect("successor WAV");
-    let successor = loaded_fixture(&mut rig, &dir).await;
+    let successor = loaded_fixture(&mut rig, &successor_dir).await;
     let receipt = rig.open(Ok(successor)).expect("successor load");
     real_outbox(
         &mut queue,

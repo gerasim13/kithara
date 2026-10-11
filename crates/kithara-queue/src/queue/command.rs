@@ -131,6 +131,9 @@ where
                     None => 0,
                 };
                 self.insert_entry(id, source, Placement::At(index));
+                if after == self.current && self.current.is_some() {
+                    self.cancel_auto(out)?;
+                }
                 self.arm_initial_load(output, out);
                 Ok(None)
             }
@@ -180,16 +183,7 @@ where
                 })
             }
             QueueCommand::Play { at } => self.play_at(at, output, out),
-            QueueCommand::Pause { at } => {
-                if self.active_current_index().is_none() && self.target.is_some() {
-                    self.withdraw_transition(out)?;
-                    self.target.as_mut().ok_or(PlayError::NotReady)?.playing = false;
-                    return self.transition_loaded(out).map_err(Into::into);
-                }
-                self.cancel_auto(out)?;
-                self.transport(TrackCommand::Pause { at }, out)
-                    .map_err(Into::into)
-            }
+            QueueCommand::Pause { at } => self.pause_at(at, out),
             QueueCommand::Seek { to } => self.seek_to(to, out),
             QueueCommand::ConfigureTrack(change, at) => self.configure_tracks(change, at, out),
             QueueCommand::ConfigureQueue(change, at) => self.configure_queue(change, at, out),
@@ -263,6 +257,21 @@ where
         }
     }
 
+    fn pause_at(
+        &mut self,
+        at: When<SessionFrame>,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, QueueError> {
+        if self.active_current_index().is_none() && self.target.is_some() {
+            self.withdraw_transition(out)?;
+            self.target.as_mut().ok_or(PlayError::NotReady)?.playing = false;
+            return self.transition_loaded(out).map_err(Into::into);
+        }
+        self.cancel_auto(out)?;
+        self.transport(TrackCommand::Pause { at }, out)
+            .map_err(Into::into)
+    }
+
     fn play_at(
         &mut self,
         at: When<SessionFrame>,
@@ -270,8 +279,11 @@ where
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, QueueError> {
         if self.active_current_index().is_some() {
-            self.transport(TrackCommand::Play { at }, out)
-                .map_err(Into::into)
+            let sent = self.transport(TrackCommand::Play { at }, out)?;
+            if let Some(id) = self.current {
+                self.tracks.set_status(id, TrackStatus::Consumed);
+            }
+            Ok(sent)
         } else if self.target.is_some() {
             self.target.as_mut().ok_or(PlayError::NotReady)?.playing = true;
             self.transition_loaded(out).map_err(Into::into)

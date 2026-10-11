@@ -127,6 +127,7 @@ async fn stress_offline_crossfade_no_gaps(
     target_os = "android",
     case::no_extension_android(mp3_no_extension().await, DecoderBackend::Android)
 )]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn resource_mp3_no_hint_decodes_with_duration(
     #[case] mp3_source: (TestServerHelper, url::Url),
     #[case] backend: DecoderBackend,
@@ -163,11 +164,15 @@ async fn resource_mp3_no_hint_decodes_with_duration(
         let deadline = WallInstant::now() + consts::READ_TIMEOUT;
         let mut saw_eof = false;
         loop {
+            hang_tick!(
+                "resource_mp3_no_hint_decodes_with_duration waits for playback progress".to_owned()
+            );
             match resource.read(&mut buf) {
                 Ok(ReadOutcome::Frames { count, .. }) => {
                     let count = count.get();
                     if count > 0 {
                         total += count;
+                        hang_reset!();
                     }
                 }
                 Ok(ReadOutcome::Eof { .. }) => {
@@ -195,6 +200,7 @@ async fn resource_mp3_no_hint_decodes_with_duration(
         position >= Duration::from_secs(2),
         "path={path}: must decode at least 2s, got {position:?}"
     );
+    hang_reset!();
 }
 
 /// Local fixture (the generated ~187s MPEG clip, packaged AAC HLS ~64s) through
@@ -221,6 +227,7 @@ async fn resource_mp3_no_hint_decodes_with_duration(
     target_os = "android",
     case::hls_aac_android(local_hls().await, DecoderBackend::Android)
 )]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn local_resource_decodes_with_duration(
     #[case] local_source: (TestServerHelper, url::Url),
     #[case] backend: DecoderBackend,
@@ -256,11 +263,13 @@ async fn local_resource_decodes_with_duration(
     let mut samples = 0usize;
     let mut buf = [0.0f32; 4096];
     loop {
+        hang_tick!("local_resource_decodes_with_duration waits for playback progress".to_owned());
         match resource.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) => {
                 let count = count.get();
                 if count > 0 {
                     samples += count;
+                    hang_reset!();
                 }
             }
             Ok(ReadOutcome::Eof { .. }) => break,
@@ -284,4 +293,5 @@ async fn local_resource_decodes_with_duration(
         "{url}: must decode at least 2s, got {:?}",
         resource.position()
     );
+    hang_reset!();
 }

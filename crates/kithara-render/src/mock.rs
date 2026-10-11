@@ -43,6 +43,7 @@ pub struct MockDeck {
     inputs: MixerInputs,
     held: Vec<Option<(Box<PlayerResource>, SegmentId)>>,
     armed: Vec<Option<Seq>>,
+    metrics: crate::bridge::RtMetrics,
 }
 
 impl MockDeck {
@@ -56,6 +57,7 @@ impl MockDeck {
             inputs,
             held,
             armed,
+            metrics: crate::bridge::RtMetrics::default(),
         }
     }
 
@@ -121,7 +123,14 @@ impl MockDeck {
     /// # Errors
     /// Returns the event when the ring is full.
     pub fn report(&mut self, event: DeckEvent) -> Result<(), DeckEvent> {
-        report(&mut self.inputs, event)
+        report(&mut self.inputs, event).inspect_err(|_| {
+            self.metrics.record_event_overflow();
+        })
+    }
+
+    #[must_use]
+    pub fn metrics(&self) -> crate::bridge::RtMetricsSnapshot {
+        self.metrics.snapshot()
     }
 
     /// The source of the consumer `slot` holds.

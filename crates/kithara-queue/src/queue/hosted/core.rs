@@ -2,12 +2,14 @@ use std::{num::NonZeroU32, task::Waker};
 
 use kithara_bufpool::HasPool;
 use kithara_command::{Outcome, Receipt, Rejection, Seq};
-use kithara_events::TrackId;
-use kithara_platform::maybe_send::MaybeSend;
+use kithara_events::{SlotId, TrackId};
+use kithara_platform::{
+    maybe_send::MaybeSend, sync::Arc, tokio::sync::broadcast::error::TryRecvError,
+};
 use kithara_play::{
-    DeckEvent, DeckMixerConfig, DeckPass, HostedDeck, LoadRefusal, Outbox, OutputSnapshot,
-    PlayError, PlayWorker, Player, Settled, TrackCommand, TrackFactory, TrackReceipt,
-    TrackStatus as PlayingStatus,
+    DeckEvent, DeckMixerConfig, DeckPass, HostedDeck, ItemRole, LoadRefusal, Outbox,
+    OutputSnapshot, PlayError, PlayWorker, PlaybackFault, Player, PlayerEvent, Settled,
+    TrackCommand, TrackFactory, TrackReceipt, TrackRef, TrackStatus as PlayingStatus,
 };
 use kithara_signal::SessionFrame;
 use tracing::warn;
@@ -30,6 +32,9 @@ where
         output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
+        if let Some((now, _)) = self.clock {
+            self.enter_chained_target(now)?;
+        }
         let result = self.apply_command(command, output, out).map_err(play_error);
         self.pump_loads(output, out);
         self.publish();
@@ -92,11 +97,12 @@ where
                     let leaving = active.role == Role::Leaving;
                     let wanted = self.target.is_some_and(|target| target.to == id)
                         && matches!(active.role, Role::Incoming { .. });
-                    let retry = self.classify_load(id, leaving, wanted, receipt.outcome());
+                    let host_can_answer_later =
+                        self.classify_load(id, leaving, wanted, receipt.outcome());
                     if let Some(active) = self.active.get_mut(index) {
                         let settled = active.track.settle(TrackReceipt::Loaded(receipt), out);
-                        if retry {
-                            if let Err(error) = self.retry_load(index, output, out) {
+                        if host_can_answer_later {
+                            if let Err(error) = self.reopen_requested_load(index, output, out) {
                                 let error = play_error(error);
                                 outcomes.push((
                                     index,
@@ -167,8 +173,10 @@ where
                     }
                 }
                 Settled::Rejected { seq, reason } => {
-                    let retrying = self.target.is_some_and(|target| target.retry == Some(*seq));
-                    if !retrying
+                    let continued = self
+                        .target
+                        .is_some_and(|target| target.continued == Some(*seq));
+                    if !continued
                         && (rescheduling != Some(*seq) || !matches!(reason, Rejection::Stale))
                     {
                         result = settled;
@@ -224,6 +232,7 @@ where
         for parked in self.active.parked_iter_mut() {
             parked.track.tick(now, out);
         }
+        self.drain_player_events(output, out);
         if let Err(error) = self.tick_deadlines(now, output, out) {
             warn!(%error, "queue deadline could not advance");
         }
@@ -318,6 +327,11 @@ where
         }
         self.deck.mix = pass.mix;
         self.deck.suspended = pass.suspended;
+        if self.deck.mixer.metrics.event_overflows() != pass.deck.metrics.event_overflows()
+            && self.current.is_some()
+        {
+            self.announce(QueueEvent::CurrentTrackChanged { id: self.current });
+        }
         self.deck.mixer.clone_from(pass.deck);
         self.deck.mixer.sample_rate = rate;
         if !had_clock {
@@ -396,17 +410,17 @@ where
             return false;
         }
         let error = QueueError::Resource(refusal.to_string());
-        let retry = self
-            .tracks
-            .refused(id, &error, loader::asks_again(refusal), wanted);
-        if !retry {
+        let host_can_answer_later =
+            self.tracks
+                .refused(id, &error, loader::asks_again(refusal), wanted);
+        if !host_can_answer_later {
             self.announce(QueueEvent::TrackLoadFailed {
                 id,
                 reason: error.to_string(),
                 auto_skipped: false,
             });
         }
-        retry
+        host_can_answer_later
     }
 
     pub(super) fn item_event(
@@ -442,50 +456,129 @@ where
                 return;
             }
             let id = active.item;
-            if self
-                .track(id)
-                .is_some_and(|entry| matches!(entry.status, TrackStatus::Failed(_)))
+            if let Some(item) = self.item_role(slot) {
+                self.bus.publish(PlayerEvent::ItemDidFail { item, fault });
+            }
+            self.item_failed(id, fault, output, out);
+            return;
+        }
+        if let DeckEvent::Ended { slot, at } = event {
+            let Some(active) = self.active.iter().find(|active| active.slot == slot) else {
+                return;
+            };
+            if !matches!(active.track.snapshot().as_ref().status, PlayingStatus::Ended { at: ended_at } if ended_at == at)
             {
                 return;
             }
-            let reason = fault.to_string();
-            self.tracks
-                .set_status(id, TrackStatus::Failed(reason.clone()));
-            self.announce(QueueEvent::TrackLoadFailed {
-                id,
-                reason,
-                auto_skipped: self.config.action_at_item_end == ActionAtItemEnd::Advance,
+            if let Some(item) = self.item_role(slot) {
+                self.bus.publish(PlayerEvent::ItemDidPlayToEnd { item });
+            }
+            let current = self.active.iter().any(|active| {
+                active.slot == slot
+                    && active.role == Role::Current
+                    && self.current == Some(active.item)
             });
-            if self.target.is_none() && self.config.action_at_item_end == ActionAtItemEnd::Advance {
-                match self.next_target(
-                    super::super::Transition::None,
-                    crate::AdvanceReason::TrackFailed,
-                    true,
-                    true,
-                    output,
+            if current && self.config.action_at_item_end == ActionAtItemEnd::Pause {
+                if let Err(error) = self.transport(
+                    TrackCommand::Pause {
+                        at: kithara_command::When::Next,
+                    },
                     out,
                 ) {
-                    Ok(Some(_)) => {}
-                    Ok(None) => self.announce(QueueEvent::QueueEnded),
-                    Err(error) => warn!(%error, "queue could not advance after source failure"),
+                    warn!(%error, "queue could not pause its ended track");
                 }
+                return;
             }
-            return;
-        }
-        if let DeckEvent::Ended { slot, .. } = event {
-            let current = self
-                .active
-                .iter()
-                .any(|active| active.slot == slot && active.role == Role::Current);
             if current
                 && self.target.is_none()
                 && self.config.action_at_item_end == ActionAtItemEnd::Advance
             {
-                let ids = self.track_ids();
+                let ids = self.selectable_ids();
                 let wrap = self.navigation.repeat_mode() == crate::RepeatMode::All;
                 if self.navigation.next(&ids, true, wrap).is_none() {
                     self.announce(QueueEvent::QueueEnded);
                 }
+            }
+        }
+    }
+
+    fn item_role(&self, slot: kithara_play::Slot) -> Option<ItemRole> {
+        let active = self.active.iter().find(|active| active.slot == slot)?;
+        let record = self
+            .tracks
+            .records()
+            .iter()
+            .find(|record| record.id == active.item)?;
+        let track = TrackRef::new(
+            active.item,
+            SlotId::new(u64::from(slot.get())),
+            Arc::from(record.source.uri().unwrap_or_default()),
+        );
+        Some(match active.role {
+            Role::Current => ItemRole::Leading(track),
+            Role::Outgoing => ItemRole::Outgoing(track),
+            _ => ItemRole::Background(track),
+        })
+    }
+
+    #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+    fn drain_player_events(&mut self, output: Option<&OutputSnapshot>, out: &mut Outbox<'_, S>) {
+        loop {
+            hang_tick!("queue player event drain".to_owned());
+            match self.player_events.try_recv() {
+                Ok(envelope) => {
+                    hang_reset!();
+                    if let PlayerEvent::ItemDidFail {
+                        item: ItemRole::Leading(track),
+                        fault,
+                    } = envelope.event
+                    {
+                        self.item_failed(track.id, fault, output, out);
+                    }
+                }
+                Err(TryRecvError::Lagged(_)) => {
+                    hang_reset!();
+                    self.announce(QueueEvent::CurrentTrackChanged { id: self.current });
+                }
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            }
+        }
+    }
+
+    fn item_failed(
+        &mut self,
+        id: TrackId,
+        fault: PlaybackFault,
+        output: Option<&OutputSnapshot>,
+        out: &mut Outbox<'_, S>,
+    ) {
+        if self.current != Some(id)
+            || self
+                .track(id)
+                .is_none_or(|entry| matches!(entry.status, TrackStatus::Failed(_)))
+        {
+            return;
+        }
+        let reason = fault.to_string();
+        self.tracks
+            .set_status(id, TrackStatus::Failed(reason.clone()));
+        self.announce(QueueEvent::TrackLoadFailed {
+            id,
+            reason,
+            auto_skipped: self.config.action_at_item_end == ActionAtItemEnd::Advance,
+        });
+        if self.target.is_none() && self.config.action_at_item_end == ActionAtItemEnd::Advance {
+            match self.next_target(
+                super::super::Transition::None,
+                crate::AdvanceReason::TrackFailed,
+                true,
+                true,
+                output,
+                out,
+            ) {
+                Ok(Some(_)) => {}
+                Ok(None) => self.current = None,
+                Err(error) => warn!(%error, "queue could not advance after source failure"),
             }
         }
     }

@@ -1,7 +1,7 @@
 use kithara_assets::{AssetStore, StorageBackend};
 use kithara_bufpool::HasPool;
 use kithara_command::mailbox;
-use kithara_events::{EventBus, TrackId};
+use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::{CancelScope, CancelToken, tokio::runtime::Handle as RuntimeHandle};
 use kithara_play::{PlayError, PlayerEvent, PlayerFactory, Position, TrackFactory};
 use kithara_signal::{FrameCount, SessionFrame};
@@ -45,6 +45,7 @@ where
     pub(super) view: QueueView<S>,
     pub(super) bus: EventBus,
     pub(super) loader: Option<Loader<S>>,
+    pub(super) player_events: EventReceiver<PlayerEvent>,
     pub(super) shutdown: CancelToken,
     pub(super) events: Vec<QueueEvent>,
     pub(super) clock: Option<(SessionFrame, FrameCount)>,
@@ -97,6 +98,7 @@ where
             config.action_at_item_end,
             deck.clone(),
         );
+        let player_events = bus.subscribe();
         Self {
             active: Slots::new(config.mixer.slots().get()),
             config,
@@ -110,6 +112,7 @@ where
             view,
             bus,
             loader,
+            player_events,
             shutdown,
             events: Vec::new(),
             clock: None,
@@ -208,6 +211,21 @@ where
             .map(|record| record.id)
             .collect()
     }
+
+    pub(super) fn selectable_ids(&self) -> Vec<TrackId> {
+        self.tracks
+            .records()
+            .iter()
+            .filter(|record| {
+                self.navigation.current() == Some(record.id)
+                    || !matches!(
+                        record.status,
+                        crate::TrackStatus::Cancelled | crate::TrackStatus::Failed(_)
+                    )
+            })
+            .map(|record| record.id)
+            .collect()
+    }
 }
 
 impl<S, F> Drop for Queue<S, F>
@@ -223,7 +241,7 @@ where
 #[cfg(test)]
 pub(crate) mod tests {
     use std::{
-        sync::{Arc, mpsc},
+        sync::Arc,
         task::{Wake, Waker},
     };
 
@@ -232,6 +250,7 @@ pub(crate) mod tests {
     use kithara_config::Config;
     use kithara_events::{Envelope, EventReceiver, TrackId};
     use kithara_platform::{
+        sync::mpsc,
         thread,
         time::{Duration, WallInstant, timeout},
         tokio::sync::mpsc::{UnboundedSender, unbounded_channel},
@@ -311,6 +330,7 @@ pub(crate) mod tests {
         })
     }
 
+    #[kithara::hang_watchdog(ctx = String)]
     pub(in crate::queue) async fn wait_for_queue_event<F>(
         rx: &mut EventReceiver<QueueEvent>,
         mut matches: F,
@@ -321,12 +341,16 @@ pub(crate) mod tests {
     {
         let deadline = WallInstant::now() + Duration::from_millis(timeout_ms);
         loop {
+            hang_tick!("queue event predicate remains unsatisfied".to_owned());
             let remaining = deadline.saturating_duration_since(WallInstant::now());
             if remaining.is_zero() {
                 return false;
             }
-            match timeout(remaining, rx.recv()).await {
-                Ok(Ok(Envelope { event: ev, .. })) if matches(&ev) => return true,
+            match timeout(remaining.min(__hang_detector.remaining()), rx.recv()).await {
+                Ok(Ok(Envelope { event: ev, .. })) if matches(&ev) => {
+                    hang_reset!();
+                    return true;
+                }
                 Ok(Ok(_)) => continue,
                 Ok(Err(_)) | Err(_) => return false,
             }
@@ -376,28 +400,41 @@ pub(crate) mod tests {
     }
 
     #[kithara::test]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     fn a_control_command_runs_when_the_holder_drains_the_queue() {
         let (mut queue, mut rig) = make_queue();
         let control = queue.control();
         let (woke_tx, woke_rx) = mpsc::channel();
         HostedDeck::hold(&mut queue, Waker::from(Arc::new(Wakes(woke_tx))));
 
-        let append = thread::spawn(move || {
-            let appended = control.append("https://example.com/a.mp3");
-            (control, appended)
-        });
-        woke_rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("a post wakes the holder");
-        assert!(
-            queue.control().is_empty(),
-            "the command waits for the holder to drain"
-        );
+        let (control, appended) = {
+            // WHY: The append caller is a real thread that Flash does not count as busy.
+            let _real_io = kithara_platform::flash::real_io();
+            let append = thread::spawn(move || {
+                let appended = control.append("https://example.com/a.mp3");
+                (control, appended)
+            });
+            woke_rx
+                .recv_timeout(kithara_platform::time::Instant::now() + __hang_detector.remaining())
+                .expect("a post wakes the holder");
 
-        with_outbox(&mut queue, &mut rig, |queue, pass, out| {
-            HostedDeck::drain(queue, pass, out);
-        });
-        let (control, appended) = append.join().expect("append thread must not panic");
+            assert!(
+                queue.control().is_empty(),
+                "the command waits for the holder to drain"
+            );
+
+            with_outbox(&mut queue, &mut rig, |queue, pass, out| {
+                HostedDeck::drain(queue, pass, out);
+            });
+            while !append.is_finished() {
+                hang_tick!("append caller awaits its mailbox answer".to_owned());
+                thread::yield_now();
+            }
+            let (control, appended) = append.join().expect("append thread must not panic");
+            hang_reset!();
+            (control, appended)
+        };
+        hang_reset!();
         let id = appended.expect("an open queue appends");
         assert_eq!(
             queue.control().tracks().first().map(|track| track.id),
@@ -424,6 +461,7 @@ pub(crate) mod tests {
     /// load did meanwhile, the track keeps the status the owner left it with
     /// until the executor holding the queue drains it.
     #[kithara::test(tokio)]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     async fn a_load_reaches_its_track_only_when_the_holder_drains_the_queue() {
         let (mut queue, mut rig) = make_queue();
         let (woke_tx, mut woke_rx) = unbounded_channel();
@@ -457,6 +495,7 @@ pub(crate) mod tests {
         };
 
         loop {
+            hang_tick!("dispatcher load awaits a queue owner wake".to_owned());
             let left = status(&queue);
             let receipt = rig
                 .open(Err(kithara_play::LoadRefusal::Source(
@@ -465,9 +504,10 @@ pub(crate) mod tests {
                     },
                 )))
                 .expect("the dispatcher answers the load");
-            timeout(Duration::from_secs(5), woke_rx.recv())
+            timeout(__hang_detector.remaining(), woke_rx.recv())
                 .await
                 .expect("the load reports to the holder");
+            hang_reset!();
             assert_eq!(
                 status(&queue),
                 left,

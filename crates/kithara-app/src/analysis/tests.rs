@@ -623,6 +623,7 @@ async fn a_completed_pass_releases_its_publication_after_the_last_subscriber_lea
     run.close().await;
 }
 
+#[kithara::hang_watchdog(ctx = String)]
 async fn resumable_progress(url: &str) -> AnalysisProgress {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
@@ -631,9 +632,14 @@ async fn resumable_progress(url: &str) -> AnalysisProgress {
     let target = target_of(&owner, &source);
     let _rx = owner.subscribe(queue, track_id, source, axis());
     loop {
-        time::timeout(Duration::from_secs(2), owner.drive())
-            .await
-            .expect("the pass progresses");
+        hang_tick!(format!("analysis checkpoint for {track_id:?}"));
+        time::timeout(
+            Duration::from_secs(2).min(__hang_detector.remaining()),
+            owner.drive(),
+        )
+        .await
+        .expect("the pass progresses");
+        hang_reset!();
         let held = owner.cache.get(&target, axis());
         if let Some(progress) = held.filter(AnalysisProgress::is_resumable) {
             cancel.cancel();
@@ -828,20 +834,24 @@ async fn a_background_warm_keeps_the_holder_of_a_held_entry(tone_mp3: String) {
     host_b.close().await;
 }
 
-#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn settle(owner: &mut Owner) {
     while owner.active.is_some() {
-        let progress = time::timeout(Duration::from_secs(2), owner.drive());
+        hang_tick!("analysis pass awaits executor progress".to_owned());
+        let progress = time::timeout(
+            Duration::from_secs(2).min(__hang_detector.remaining()),
+            owner.drive(),
+        );
         ::kithara::platform::tokio::pin!(progress);
         loop {
-            hang_tick!();
+            hang_tick!("analysis pass awaits executor progress".to_owned());
             ::kithara::platform::tokio::select! {
                 result = &mut progress => {
                     result.expect("the pass progresses");
                     hang_reset!();
                     break;
                 }
-                () = time::sleep(Duration::from_millis(100)) => {}
+                () = time::sleep(Duration::from_millis(100).min(__hang_detector.remaining())) => {}
             }
         }
     }

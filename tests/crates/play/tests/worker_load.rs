@@ -138,13 +138,20 @@ fn load(worker: &PlayWorker<TestPools>, dir: &TestTempDir, name: &str) -> Batch<
 }
 
 /// The next receipt from the dispatcher's configured worker owner.
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn answered(sender: &mut Sender<Loads>) -> Receipt<Loads> {
+    // WHY: The dispatcher may be opening a fixture on an uncounted real thread.
+    let _real_io = kithara::platform::flash::real_io();
+    let budget = __hang_detector.remaining();
     let receipt = poll_fn(|cx| {
+        hang_tick!("dispatcher waits for a load or priority answer".to_owned());
         sender.hold(cx.waker().clone());
         sender.receipts().next().map_or(Poll::Pending, Poll::Ready)
-    })
-    .await;
+    });
+    let receipt = kithara::platform::time::timeout(budget, receipt).await;
     sender.release();
+    let receipt = receipt.expect("dispatcher answers within its watchdog budget");
+    hang_reset!();
     receipt
 }
 

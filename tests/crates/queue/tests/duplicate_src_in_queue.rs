@@ -164,16 +164,8 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
     .await;
     let queue = harness.player().clone();
     let source = asset_source(&asset);
-    let first_source = source.clone();
-    let first = harness
-        .run(&queue, move |q| q.append(first_source))
-        .await
-        .expect("first duplicate");
-    let playing_source = source.clone();
-    let playing = harness
-        .run(&queue, move |q| q.append(playing_source))
-        .await
-        .expect("second duplicate");
+    let first = TrackId::allocate();
+    let playing = TrackId::allocate();
     let source_cancel = cancel_token();
     let pools = harness.worker().pools().clone();
     let path = asset.path().expect("native WAV fixture path").to_owned();
@@ -204,6 +196,16 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
             },
         ),
     );
+    let first_source = source.clone();
+    let first = harness
+        .run(&queue, move |q| q.append_with_id(first, first_source))
+        .await
+        .expect("first duplicate");
+    let playing_source = source.clone();
+    let playing = harness
+        .run(&queue, move |q| q.append_with_id(playing, playing_source))
+        .await
+        .expect("second duplicate");
     let mut loaded = queue.subscribe::<TestEvent>();
     harness
         .run(&queue, move |player| {

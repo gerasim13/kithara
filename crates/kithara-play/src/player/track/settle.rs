@@ -138,12 +138,15 @@ impl<S> PlayerImpl<S> {
                     Rejection::Stale | Rejection::Refused(DeckRefusal::Outdated { .. })
                 )
             ) {
-                self.adopt_retry = Some(adoption.caller);
-                self.retry_adopt(out);
+                self.newest_epoch_pending = Some(adoption.caller);
+                self.adopt_newest_epoch(out);
                 return Settled::Pending;
             }
             if matches!(outcome, Outcome::Applied { .. }) && adoption.segment == self.segment {
                 self.repeat = false;
+                if matches!(self.status, TrackStatus::Ended { .. }) {
+                    self.status = TrackStatus::Loaded;
+                }
             }
         }
         let at = match outcome {
@@ -158,7 +161,7 @@ impl<S> PlayerImpl<S> {
                     self.play = None;
                     self.playback_commands.clear();
                     self.adopting.clear();
-                    self.adopt_retry = None;
+                    self.newest_epoch_pending = None;
                     if let Err(error) = self.release_lane(out) {
                         warn!(%error, "refused attachment waits for lane release room");
                     }
@@ -207,7 +210,7 @@ impl<S> PlayerImpl<S> {
                     self.ready = None;
                     self.playback_commands.clear();
                     self.adopting.clear();
-                    self.adopt_retry = None;
+                    self.newest_epoch_pending = None;
                     if let Err(error) = self.release_lane(out) {
                         warn!(%error, "lane release waits for dispatcher room");
                     }
@@ -218,8 +221,8 @@ impl<S> PlayerImpl<S> {
         Settled::Applied { seq: answered, at }
     }
 
-    pub(super) fn retry_adopt(&mut self, out: &mut Outbox<'_, S>) {
-        let Some(caller) = self.adopt_retry else {
+    pub(super) fn adopt_newest_epoch(&mut self, out: &mut Outbox<'_, S>) {
+        let Some(caller) = self.newest_epoch_pending else {
             return;
         };
         if out.deck_available() == 0 {
@@ -243,7 +246,7 @@ impl<S> PlayerImpl<S> {
                     parked: None,
                     cancelled: false,
                 });
-                self.adopt_retry = None;
+                self.newest_epoch_pending = None;
             }
             Ok(None) => {}
             Err((error, _parts)) => warn!(%error, "the latest segment's adoption waits for room"),

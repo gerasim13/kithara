@@ -105,6 +105,7 @@ pub fn output(shape: Option<StreamShape>) -> SessionOutputView {
 /// # Panics
 /// Panics if the prepared fixture fails to play, advance, produce PCM, or keep
 /// render-side events off the source event bus.
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 pub async fn assert_prepared_render_off_bus<S>(
     prep: &crate::ResourcePrep<S>,
     output: &crate::OutputSnapshot,
@@ -152,14 +153,24 @@ where
         Box::new(kithara_audio::AudioObserverSlot::default().relay()),
     );
     let (_control, inbox) = load.lane_channel()?;
-    let (opened, _lane, _) = load
-        .open(
+    let (opened, _lane, _) = {
+        // WHY: Source reads run on real threads, so their watchdog must not leap in virtual time.
+        let _real_io = kithara_platform::flash::real_io();
+        hang_tick!("prepared fixture awaits its source".to_owned());
+        let opened = load.open(
             kithara_platform::time::Duration::ZERO,
             TrackSettings::default().lane_start(),
             inbox,
-        )
-        .await
-        .map_err(|error| PlayError::Internal(format!("{error:?}")))?;
+        );
+        kithara_platform::time::timeout(__hang_detector.remaining(), opened)
+            .await
+            .map_err(|error| {
+                hang_tick!("prepared fixture awaits its source".to_owned());
+                PlayError::Internal(error.to_string())
+            })?
+            .map_err(|error| PlayError::Internal(format!("{error:?}")))?
+    };
+    hang_reset!();
     let mut mixer = MixerRig::new(DeckMixerConfig::default(), shape, pools)?;
     let slot = Slot::new(0);
     mixer.send(
@@ -177,7 +188,10 @@ where
             fade: Fade::Declick,
         },
     )?;
-    while events.try_recv().is_ok() {}
+    while events.try_recv().is_ok() {
+        hang_tick!("draining prepared source events".to_owned());
+    }
+    hang_reset!();
     let mut position = 0.0;
     for block in 0..2 {
         let mut pcm = [[0.0; 128]; 2];
@@ -512,6 +526,7 @@ impl<S: 'static> DeckRig<S> {
     ///
     /// # Errors
     /// Returns the source, lane, or dispatcher admission failure.
+    #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
     pub async fn load_fixture(
         &mut self,
         item: ResourceLoad<S>,
@@ -526,7 +541,7 @@ impl<S: 'static> DeckRig<S> {
                 driver: Box::pin(kithara_render::dispatch(inbox)),
             }
         });
-        dispatcher
+        let seq = dispatcher
             .sender
             .send(
                 When::Next,
@@ -542,15 +557,27 @@ impl<S: 'static> DeckRig<S> {
                 },
             )
             .map_err(|error| PlayError::Internal(error.to_string()))?;
-        let receipt = futures::future::poll_fn(|context| {
-            let _ = dispatcher.driver.as_mut().poll(context);
-            dispatcher
-                .sender
-                .receipts()
-                .next()
-                .map_or(Poll::Pending, Poll::Ready)
-        })
-        .await;
+        let receipt = {
+            // WHY: The dispatcher opens disk fixtures on real threads outside Flash's task count.
+            let _real_io = kithara_platform::flash::real_io();
+            let budget = __hang_detector.remaining();
+            let receipt = futures::future::poll_fn(|context| {
+                hang_tick!(format!("fixture dispatcher load {seq:?} awaits its source"));
+                let _ = dispatcher.driver.as_mut().poll(context);
+                dispatcher
+                    .sender
+                    .receipts()
+                    .next()
+                    .map_or(Poll::Pending, Poll::Ready)
+            });
+            kithara_platform::time::timeout(budget, receipt)
+                .await
+                .map_err(|error| {
+                    hang_tick!(format!("fixture dispatcher load {seq:?} awaits its source"));
+                    PlayError::Internal(error.to_string())
+                })?
+        };
+        hang_reset!();
         let (outcome, _) = receipt.into();
         match outcome {
             Outcome::Applied {

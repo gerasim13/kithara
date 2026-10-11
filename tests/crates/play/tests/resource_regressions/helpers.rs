@@ -152,6 +152,7 @@ pub(super) async fn open_resource(
 // the consumer hang watchdog before the HLS producer necessarily gets scheduled.
 // The loop already drives preload and handles Pending explicitly.
 #[kithara::flash(true)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 pub(super) async fn warm_hls_worker(
     url: &url::Url,
     store: AssetStore<TestPools>,
@@ -181,9 +182,11 @@ pub(super) async fn warm_hls_worker(
 
     let mut buf = [0.0f32; 4096];
     loop {
+        hang_tick!(format!("HLS warmup awaits PCM from {url}"));
         audio.preload().expect("preload must succeed");
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => {
+                hang_reset!();
                 if seek.is_none() {
                     return audio.position().as_secs_f64();
                 }
@@ -203,6 +206,7 @@ pub(super) async fn warm_hls_worker(
         .unwrap_or_else(|err| panic!("HLS warmup seek must succeed for {}: {err}", url));
 
     loop {
+        hang_tick!(format!("HLS warmup seek awaits PCM from {url}"));
         audio.preload().expect("preload must succeed");
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => {
@@ -300,6 +304,7 @@ pub(super) async fn open_packaged_hls_audio(
     audio
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 pub(super) async fn read_audio_some(
     audio: &mut kithara_integration_tests::mock::LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     stage: &str,
@@ -308,9 +313,13 @@ pub(super) async fn read_audio_some(
     let mut buf = [0.0f32; 4096];
 
     loop {
+        hang_tick!(format!("packaged PCM at {stage}"));
         audio.preload().expect("preload must succeed");
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => return count.get(),
+            Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => {
+                hang_reset!();
+                return count.get();
+            }
             Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Pending { .. }) => {}
             Ok(ReadOutcome::Eof { .. }) => {
                 panic!("unexpected EOF while waiting for packaged audio at stage={stage}")
@@ -325,17 +334,29 @@ pub(super) async fn read_audio_some(
     }
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 pub(super) async fn read_some(resource: &mut Resource, stage: &str) -> usize {
     let deadline = WallInstant::now() + consts::READ_TIMEOUT;
     let mut buf = [0.0f32; 4096];
 
     loop {
-        timeout(consts::READ_TIMEOUT, resource.preload())
-            .await
-            .unwrap_or_else(|_| panic!("timed out waiting for preload at stage={stage}"))
-            .unwrap_or_else(|err| panic!("preload failed at stage={stage}: {err}"));
+        hang_tick!(format!("resource PCM at {stage}"));
+        {
+            // WHY: The decoder's fixture read is real work, not a virtual-clock participant.
+            let _real_io = kithara::platform::flash::real_io();
+            timeout(__hang_detector.remaining(), resource.preload())
+                .await
+                .unwrap_or_else(|_| {
+                    hang_tick!(format!("preload at {stage}"));
+                    panic!("timed out waiting for preload at stage={stage}")
+                })
+                .unwrap_or_else(|err| panic!("preload failed at stage={stage}: {err}"));
+        }
         match resource.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => return count.get(),
+            Ok(ReadOutcome::Frames { count, .. }) if count.get() > 0 => {
+                hang_reset!();
+                return count.get();
+            }
             Ok(ReadOutcome::Frames { .. }) | Ok(ReadOutcome::Pending { .. }) => {}
             Ok(ReadOutcome::Eof { .. }) => {
                 // The duration decides where a seek lands: the seek engine

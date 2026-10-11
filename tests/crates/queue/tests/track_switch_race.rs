@@ -48,6 +48,7 @@ use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
 #[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn a_press_before_f_on_one_slot_leaves_the_sounding_track_untouched() {
     use kithara::{
         play::{CrossfadeSettings, DeckMixerConfig, ResourcePrep},
@@ -109,6 +110,7 @@ async fn a_press_before_f_on_one_slot_leaves_the_sounding_track_untouched() {
     let deadline = time::Instant::now() + Duration::from_secs(10);
     let mut reference = 0.0;
     loop {
+        hang_tick!("a_press_before_f_on_one_slot_leaves_the_sounding_track_untouched waits for playback progress".to_owned());
         assert!(
             time::Instant::now() < deadline,
             "replacement must arm before F"
@@ -147,7 +149,10 @@ async fn a_press_before_f_on_one_slot_leaves_the_sounding_track_untouched() {
             .position_seconds()
             .is_some_and(|position| position < 0.9)
     );
-    while events.try_recv().is_ok() {}
+    while events.try_recv().is_ok() {
+        hang_tick!("draining events before selecting the replacement".to_owned());
+        hang_reset!();
+    }
     harness
         .run(move |queue| queue.select(selected, Transition::Crossfade))
         .await
@@ -155,12 +160,15 @@ async fn a_press_before_f_on_one_slot_leaves_the_sounding_track_untouched() {
     let deadline = time::Instant::now() + Duration::from_secs(10);
     let mut changed = false;
     while !changed {
+        hang_tick!("a_press_before_f_on_one_slot_leaves_the_sounding_track_untouched waits for playback progress".to_owned());
         assert!(
             time::Instant::now() < deadline,
             "selected track becomes current"
         );
         let pcm = harness.render(128).await;
         while let Ok(event) = events.try_recv() {
+            hang_tick!("a_press_before_f_on_one_slot_leaves_the_sounding_track_untouched waits for playback progress".to_owned());
+            hang_reset!();
             match event.event {
                 QueueEvent::CurrentTrackChanged { id: Some(id) } => {
                     assert_ne!(id, cancelled);
@@ -198,6 +206,7 @@ async fn a_press_before_f_on_one_slot_leaves_the_sounding_track_untouched() {
         "selected track is audible"
     );
     harness.close().await;
+    hang_reset!();
 }
 
 use crate::bufpool_ext::{TestPools, pools};

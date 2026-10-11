@@ -126,6 +126,7 @@ fn events(receiver: &mut EventReceiver<QueueEvent>) -> Vec<QueueEvent> {
 }
 
 #[kithara::test(tokio)]
+#[kithara::hang_watchdog(ctx = String)]
 async fn prefetch_lane_caps_concurrent_loads() {
     let (mut queue, mut rig, dir) =
         queue_with_load_settings(NonZeroUsize::new(2).expect("cap"), false);
@@ -143,7 +144,21 @@ async fn prefetch_lane_caps_concurrent_loads() {
         max_seen = max_seen.max(unanswered.len());
     }
     while let Some(seq) = unanswered.pop() {
-        let loaded = loaded_fixture(&mut rig, &dir).await;
+        let loaded = {
+            // WHY: Arm the outer budget only after pacing the real fixture open.
+            let _real_io = kithara_platform::flash::real_io();
+            hang_tick!(format!("answering held background load {seq:?}"));
+            kithara_platform::time::timeout(
+                __hang_detector.remaining(),
+                loaded_fixture(&mut rig, &dir),
+            )
+            .await
+            .unwrap_or_else(|error| {
+                hang_tick!(format!("answering held background load {seq:?}"));
+                panic!("held background load did not progress: {error}");
+            })
+        };
+        hang_reset!();
         answer(&mut queue, &mut rig, seq, loaded);
         unanswered.extend(
             hold_loads(&mut queue, &mut rig)
@@ -403,6 +418,22 @@ async fn a_select_supersedes_the_initial_load() {
     assert_eq!(
         queue.track(ids[0]).expect("initial record").status,
         TrackStatus::Cancelled
+    );
+    assert_eq!(queue.target.expect("new target").to, ids[1]);
+}
+
+#[kithara::test(tokio)]
+async fn selecting_another_track_consumes_the_opened_initial_resource() {
+    let (mut queue, mut rig, dir) = empty_queue();
+    let ids = append(&mut queue, &mut rig, &dir, 2);
+    let seq = load_seq(&queue, ids[0]);
+    hold_loads(&mut queue, &mut rig);
+    let loaded = loaded_fixture(&mut rig, &dir).await;
+    answer(&mut queue, &mut rig, seq, loaded);
+    select(&mut queue, &mut rig, ids[1]);
+    assert_eq!(
+        queue.track(ids[0]).expect("initial record").status,
+        TrackStatus::Consumed
     );
     assert_eq!(queue.target.expect("new target").to, ids[1]);
 }

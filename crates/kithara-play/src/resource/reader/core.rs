@@ -416,6 +416,7 @@ mod tests {
     };
 
     #[kithara::test(tokio)]
+    #[kithara::hang_watchdog(ctx = String)]
     async fn a_direct_resource_decodes_to_the_end_without_the_play_dispatcher() {
         let dir = TestTempDir::new();
         let path = dir.path().join("direct.wav");
@@ -432,15 +433,29 @@ mod tests {
             )
             .worker(worker)
             .build();
-        let resource = Resource::open(config, kithara_worker::Wake::default())
+        let resource = {
+            // WHY: The fixture's disk open must consume real time before the watchdog expires.
+            let _real_io = kithara_platform::flash::real_io();
+            hang_tick!("direct resource awaits its source open".to_owned());
+            kithara_platform::time::timeout(
+                __hang_detector.remaining(),
+                Resource::open(config, kithara_worker::Wake::default()),
+            )
             .await
-            .expect("direct reader");
+            .expect("direct reader opens within the watchdog budget")
+            .expect("direct reader")
+        };
+        hang_reset!();
         let mut reader: Box<dyn AudioReader> = resource.into();
         assert_eq!(reader.spec().sample_rate, crate::mock::SAMPLE_RATE);
         let mut frames = 0;
         for _ in 0..8192 {
+            hang_tick!(format!("direct reader waits for EOF after {frames} frames"));
             match reader.next_chunk().expect("decoded chunk") {
-                ChunkOutcome::Chunk(chunk) => frames += chunk.frames(),
+                ChunkOutcome::Chunk(chunk) => {
+                    frames += chunk.frames();
+                    hang_reset!();
+                }
                 ChunkOutcome::Pending { .. } => kithara_platform::tokio::task::yield_now().await,
                 ChunkOutcome::Eof { .. } => {
                     assert_eq!(frames, 4096);
@@ -497,6 +512,7 @@ mod tests {
     #[kithara::test(tokio)]
     #[case::queue(true)]
     #[case::track(false)]
+    #[kithara::hang_watchdog(ctx = String)]
     async fn cancellation_precedes_in_flight_future_drop(#[case] cancel_queue: bool) {
         use futures::{channel::oneshot, future};
 
@@ -562,7 +578,14 @@ mod tests {
                 track_cancel.cancel();
             }
         };
-        let (opened, ()) = future::join(opening, canceller).await;
+        hang_tick!("waiting for the cancelled open to release its future".to_owned());
+        let (opened, ()) = kithara_platform::time::timeout(
+            __hang_detector.remaining(),
+            future::join(opening, canceller),
+        )
+        .await
+        .expect("the cancelled open releases its future within the watchdog budget");
+        hang_reset!();
 
         assert!(matches!(opened, Err(LoadRefusal::Cancelled)));
         assert_eq!(state.load(Ordering::SeqCst), 1);
@@ -738,6 +761,7 @@ mod tests {
         panic!("the lane did not stop making progress within {FILL_TICKS} ticks");
     }
 
+    #[kithara::hang_watchdog(ctx = String)]
     async fn warped_player_resource(
         speed: f32,
         src: &str,
@@ -765,10 +789,20 @@ mod tests {
             .speed(speed)
             .build()
             .lane_start();
-        let (opened, lane, _) = load
-            .open(Duration::ZERO, start, inbox)
+        let (opened, lane, _) = {
+            // WHY: The decoder reads the fixture on a real thread outside Flash's task count.
+            let _real_io = kithara_platform::flash::real_io();
+            hang_tick!(format!("warped fixture {src} awaits its source"));
+            let (opened, lane, _latency) = kithara_platform::time::timeout(
+                __hang_detector.remaining(),
+                load.open(Duration::ZERO, start, inbox),
+            )
             .await
+            .expect("fixture source makes progress")
             .expect("URI opens");
+            (opened, lane, _latency)
+        };
+        hang_reset!();
         (opened, lane, sender, dir)
     }
 
@@ -1164,6 +1198,7 @@ mod tests {
     /// `Cancelled`, and gives its worker slot back: the next load opens
     /// instead of finding the worker full.
     #[kithara::test(native, tokio)]
+    #[kithara::hang_watchdog(ctx = String)]
     async fn an_open_in_flight_ends_cancelled_and_frees_its_slot() {
         use axum::Router;
         use futures::future;
@@ -1224,12 +1259,14 @@ mod tests {
             track.cancel();
         };
 
+        hang_tick!("stalled source awaits its request and cancellation".to_owned());
         let (refused, ()) = time::timeout(
-            Duration::from_secs(2),
+            Duration::from_secs(2).min(__hang_detector.remaining()),
             future::join(stalled, cancel_once_reached),
         )
         .await
         .expect("a cancelled open ends");
+        hang_reset!();
         assert!(
             matches!(refused, Err(LoadRefusal::Cancelled)),
             "a cancelled open answered otherwise: {refused:?}"

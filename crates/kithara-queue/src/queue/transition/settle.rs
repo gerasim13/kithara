@@ -46,11 +46,22 @@ where
                 )
             })
             .map(|active| active.slot);
-        let chain =
-            target.auto && self.config.settings.gapless() && predecessor.is_some() && !replacement;
+        let chain = target.auto
+            && (self.config.settings.gapless() || target.settings.duration == 0.0)
+            && predecessor.is_some()
+            && !replacement;
         let at = When::At(frame);
         let sent = if chain {
-            Some(out.chain(predecessor.ok_or(PlayError::NoActiveSlot)?, slot)?)
+            self.active
+                .get_mut(incoming)
+                .ok_or(PlayError::NoActiveSlot)?
+                .track
+                .apply(
+                    TrackCommand::PlayAfter {
+                        track: predecessor.ok_or(PlayError::NoActiveSlot)?,
+                    },
+                    out,
+                )?
         } else {
             let result = out.together_owned(at, |out| {
                 let active = self
@@ -92,11 +103,25 @@ where
             match result {
                 Ok(((), Some(seq))) => {
                     track.finish_group(Ok(seq));
+                    if let Some(index) = outgoing {
+                        self.active
+                            .get_mut(index)
+                            .ok_or(PlayError::NoActiveSlot)?
+                            .track
+                            .finish_group(Ok(seq));
+                    }
                     Some(seq)
                 }
                 Ok(((), None)) => None,
                 Err((error, mut parts)) => {
                     track.finish_group(Err(&mut parts));
+                    if let Some(index) = outgoing {
+                        self.active
+                            .get_mut(index)
+                            .ok_or(PlayError::NoActiveSlot)?
+                            .track
+                            .finish_group(Err(&mut parts));
+                    }
                     return Err(error);
                 }
             }
@@ -132,6 +157,9 @@ where
         {
             return Ok(());
         }
+        if target.chained {
+            return Ok(());
+        }
         self.enter_target(index, at)
     }
 
@@ -162,6 +190,7 @@ where
             .role = Role::Current;
         self.active.activate_replacement(index);
         self.current = Some(target.to);
+        self.tracks.set_status(target.to, TrackStatus::Consumed);
         if target.auto || target.reason == AdvanceReason::InitialLoad {
             self.navigation.select(target.to, &self.track_ids());
         }
@@ -208,7 +237,7 @@ where
                 } => {
                     if let Some(target) = &mut self.target {
                         target.repeat = None;
-                        target.retry = Some(seq);
+                        target.continued = Some(seq);
                     }
                 }
                 _ => self.cancel_target(out).map_err(play_error)?,
@@ -216,42 +245,7 @@ where
             return Ok(());
         }
         if active.load.is_some_and(|load| load.seq() == seq) {
-            let id = active.item;
-            let wanted = self
-                .target
-                .is_some_and(|target| self.incoming_index(target.to) == Some(index));
-            if applied && self.finish_load(index)? {
-                self.transition_loaded(out)?;
-            } else if !applied {
-                self.active
-                    .get_mut(index)
-                    .ok_or(PlayError::NoActiveSlot)?
-                    .load = None;
-                if let Settled::Rejected { reason, .. } = settled
-                    && self.tracks.records().iter().any(|record| {
-                        record.id == id
-                            && matches!(
-                                record.status,
-                                TrackStatus::Loading | TrackStatus::Slow | TrackStatus::Loaded
-                            )
-                    })
-                {
-                    let error = QueueError::Play(super::super::hosted::refusal(reason));
-                    self.tracks.fail(id, &error);
-                    self.announce(QueueEvent::TrackLoadFailed {
-                        id,
-                        reason: error.to_string(),
-                        auto_skipped: false,
-                    });
-                }
-                self.release_track(index, out)?;
-                if wanted {
-                    self.target = None;
-                }
-            } else if wanted {
-                self.cancel_target(out).map_err(play_error)?;
-            }
-            return Ok(());
+            return self.load_settled(index, settled, out);
         }
         if self.target.is_some_and(|target| target.stale == Some(seq))
             && matches!(active.role, Role::Incoming { .. })
@@ -288,7 +282,7 @@ where
                         .ok_or(PlayError::NoActiveSlot)?
                         .role = Role::Incoming { batch: None };
                     if let Some(target) = &mut self.target {
-                        target.retry = Some(seq);
+                        target.continued = Some(seq);
                     }
                 }
                 Settled::Applied { at, .. } => self.transition_applied(seq, *at)?,
@@ -325,8 +319,8 @@ where
                     }
                     let earliest = self.earliest()?;
                     if let Some(target) = &mut self.target {
-                        target.retry = Some(seq);
-                        target.bound = Bound::AtOrAfter(earliest);
+                        target.continued = Some(seq);
+                        target.bound = Some(Bound::AtOrAfter(earliest));
                     }
                     Ok(())
                 } else {
@@ -335,5 +329,60 @@ where
             }
             _ => Ok(()),
         }
+    }
+
+    fn load_settled(
+        &mut self,
+        index: usize,
+        settled: &Settled,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<(), PlayError> {
+        let active = self.active.get(index).ok_or(PlayError::NoActiveSlot)?;
+        let id = active.item;
+        let preloaded = active.role == Role::Preloaded;
+        let wanted = self
+            .target
+            .is_some_and(|target| self.incoming_index(target.to) == Some(index));
+        let applied = matches!(settled, Settled::Applied { .. });
+        if applied && self.finish_load(index)? {
+            self.transition_loaded(out)?;
+        } else if !applied {
+            self.active
+                .get_mut(index)
+                .ok_or(PlayError::NoActiveSlot)?
+                .load = None;
+            if let Settled::Rejected { reason, .. } = settled
+                && self.tracks.records().iter().any(|record| {
+                    record.id == id
+                        && matches!(
+                            record.status,
+                            TrackStatus::Loading | TrackStatus::Slow | TrackStatus::Loaded
+                        )
+                })
+            {
+                if self
+                    .target
+                    .is_some_and(|target| target.to == id && target.auto)
+                    || preloaded
+                {
+                    self.tracks.set_status(id, TrackStatus::Consumed);
+                } else {
+                    let error = QueueError::Play(super::super::hosted::refusal(reason));
+                    self.tracks.fail(id, &error);
+                    self.announce(QueueEvent::TrackLoadFailed {
+                        id,
+                        reason: error.to_string(),
+                        auto_skipped: false,
+                    });
+                }
+            }
+            self.release_track(index, out)?;
+            if wanted {
+                self.target = None;
+            }
+        } else if wanted {
+            self.cancel_target(out).map_err(play_error)?;
+        }
+        Ok(())
     }
 }

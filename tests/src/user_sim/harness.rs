@@ -161,7 +161,7 @@ impl SimHarness {
     /// offline renderer, then tick the queue so the playhead it publishes
     /// reflects what the sink consumed. Returns the frames the renderer
     /// advanced by — the queue's cached position only moves inside `tick`.
-    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     async fn render_step(&self) -> u64 {
         let batch = u64::from(self.rig.queue.host().max_block_frames().get())
             .saturating_mul(RENDER_BATCH_BLOCKS);
@@ -172,24 +172,27 @@ impl SimHarness {
         };
         tokio::pin!(step);
         loop {
-            hang_tick!();
+            hang_tick!(format!(
+                "user simulation renders track {:?}",
+                self.current_track_id()
+            ));
             tokio::select! {
                 rendered = &mut step => {
                     hang_reset!();
                     return rendered;
                 }
-                () = sleep(Duration::from_millis(100)) => {}
+                () = sleep(Duration::from_millis(100).min(__hang_detector.remaining())) => {}
             }
         }
     }
 
     /// Render turns until `done` sees the state it waits for, at most `turns`
     /// of them. Returns whether it landed.
-    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     async fn render_until(&self, turns: u32, mut done: impl FnMut(&Self) -> bool) -> bool {
         let mut observed = (self.current_track_id(), self.position(), self.is_playing());
         for _ in 0..turns {
-            hang_tick!();
+            hang_tick!(format!("user simulation awaits state after {observed:?}"));
             if done(self) {
                 hang_reset!();
                 return true;
@@ -692,8 +695,12 @@ impl SimHarness {
 /// `Err` is a closed bus (terminal). `recv()` itself parks on the
 /// virtual clock — awaiting it is what lets the engine advance time
 /// (run the tick driver + decode worker) until real state changes.
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn recv_event(rx: &mut EventReceiver<TestEvent>) -> Result<Option<TestEvent>, String> {
-    match rx.recv().await {
+    hang_tick!("user simulation awaits a player event".to_owned());
+    let answer = timeout(__hang_detector.remaining(), rx.recv()).await;
+    hang_tick!("user simulation awaits a player event".to_owned());
+    match answer.map_err(|_| "player event wait stopped progressing".to_owned())? {
         Ok(env) => Ok(Some(env.event)),
         Err(RecvError::Lagged(_)) => Ok(None),
         Err(RecvError::Closed) => Err("event bus closed".to_string()),
@@ -722,6 +729,7 @@ fn progress_secs(ev: &TestEvent) -> Option<f64> {
 /// virtual clock, so the engine is free to advance time, run the tick
 /// driver, and let the decode worker produce the next block — exactly
 /// the events the wait then resolves on.
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn await_progress<S>(
     rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<S>,
@@ -739,19 +747,26 @@ where
     {
         return Ok(p);
     }
+    let mut previous = queue.position_seconds();
+    let budget = deadline.min(__hang_detector.remaining());
     let wait = async {
         loop {
+            hang_tick!(format!("awaiting playback progress: {previous:?}"));
             let Some(ev) = recv_event(rx).await? else {
                 continue;
             };
-            if let Some(p) = progress_secs(&ev)
-                && done(p)
-            {
-                return Ok(p);
+            if let Some(position) = progress_secs(&ev) {
+                if previous != Some(position) {
+                    previous = Some(position);
+                    hang_reset!();
+                }
+                if done(position) {
+                    return Ok(position);
+                }
             }
         }
     };
-    match timeout(deadline, wait).await {
+    match timeout(budget, wait).await {
         Ok(res) => res,
         Err(_) => Err(format!(
             "no PlaybackProgress satisfied predicate within {deadline:?} \
@@ -761,6 +776,7 @@ where
     }
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 pub async fn wait_for_loaded<S>(
     queue: &QueueControl<S>,
     id: TrackId,
@@ -780,11 +796,18 @@ where
         }
     }
     let mut rx = queue.subscribe();
+    let mut previous = queue.track(id).map(|entry| entry.status);
+    let budget = deadline.min(__hang_detector.remaining());
     let wait = async {
         loop {
+            hang_tick!(format!("track {id:?} awaits loading: {previous:?}"));
             // Re-check on every event: status may have flipped between
             // the pre-subscribe snapshot and the first delivered event.
             if let Some(entry) = queue.track(id) {
+                if previous.as_ref() != Some(&entry.status) {
+                    previous = Some(entry.status.clone());
+                    hang_reset!();
+                }
                 match &entry.status {
                     TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
                     TrackStatus::Failed(err) => return Err(format!("Failed: {err}")),
@@ -811,7 +834,7 @@ where
             }
         }
     };
-    match timeout(deadline, wait).await {
+    match timeout(budget, wait).await {
         Ok(res) => res,
         Err(_) => Err(format!(
             "timeout {deadline:?} (last={:?})",
