@@ -302,7 +302,6 @@ mod tests {
         core::event_set::ItemBusEvent,
         item::AudioPlayerItem,
         observer::ItemObserver,
-        pools,
         pools::{FfiQueue, FfiWorker},
         types::{
             FfiAdvanceReason, FfiCrossfadeSettings, FfiItemConfig, FfiItemEvent, FfiItemStatus,
@@ -827,133 +826,22 @@ mod tests {
         }
     }
 
-    /// What an event wait actually observed, so a failure names the
-    /// outcome instead of reporting a bare boolean.
-    enum WaitOutcome {
-        /// The awaited event arrived.
-        Observed { lagged: u64, seen: usize },
-        /// The bus closed before the awaited event arrived.
-        Closed { lagged: u64, seen: usize },
-        /// The budget expired before the awaited event arrived.
-        TimedOut {
-            budget_ms: u64,
-            lagged: u64,
-            seen: usize,
-        },
-    }
-
-    impl WaitOutcome {
-        fn observed(&self) -> bool {
-            matches!(self, Self::Observed { .. })
-        }
-    }
-
-    impl std::fmt::Display for WaitOutcome {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Self::Observed { lagged, seen } => {
-                    write!(f, "observed after {seen} event(s), {lagged} dropped")
-                }
-                Self::Closed { lagged, seen } => {
-                    write!(f, "bus closed after {seen} event(s), {lagged} dropped")
-                }
-                Self::TimedOut {
-                    budget_ms,
-                    lagged,
-                    seen,
-                } => write!(
-                    f,
-                    "no event within {budget_ms}ms, after {seen} event(s), {lagged} dropped"
-                ),
-            }
-        }
-    }
-
-    /// Waits for an event the bus may deliver behind a dropped burst.
-    ///
-    /// `Lagged` reports that the bus dropped the oldest envelopes and kept
-    /// delivering, so the wait continues exactly as the bridge's own event
-    /// task does; only `Closed` and the budget end it.
-    #[kithara_test_utils::kithara::hang_watchdog]
-    async fn wait_for_event(
-        events: &mut EventReceiver<QueueBusEvent>,
-        timeout_ms: u64,
-        is_awaited: impl Fn(&QueueBusEvent) -> bool,
-    ) -> WaitOutcome {
-        let mut lagged = 0_u64;
-        let mut seen = 0_usize;
-        let ended = {
-            let lagged = &mut lagged;
-            let seen = &mut seen;
-            let wait = async move {
-                loop {
-                    match events.recv().await {
-                        Ok(Envelope { event, .. }) => {
-                            *seen += 1;
-                            if is_awaited(&event) {
-                                return true;
-                            }
-                        }
-                        Err(broadcast::error::RecvError::Lagged(dropped)) => *lagged += dropped,
-                        Err(broadcast::error::RecvError::Closed) => return false,
-                    }
-                }
-            };
-            kithara::platform::time::timeout(Duration::from_millis(timeout_ms), wait).await
-        };
-        match ended {
-            Ok(true) => WaitOutcome::Observed { lagged, seen },
-            Ok(false) => WaitOutcome::Closed { lagged, seen },
-            Err(_) => WaitOutcome::TimedOut {
-                lagged,
-                seen,
-                budget_ms: timeout_ms,
-            },
-        }
-    }
-
-    async fn wait_for_status(
-        events: &mut EventReceiver<QueueBusEvent>,
-        id: TrackId,
-        status: TrackStatus,
-        timeout_ms: u64,
-    ) -> WaitOutcome {
-        wait_for_event(events, timeout_ms, |event| {
-            matches!(
-                event,
-                QueueBusEvent::Queue(QueueEvent::TrackStatusChanged { id: seen, status: seen_status })
-                    if *seen == id && *seen_status == status
-            )
-        })
-        .await
-    }
-
-    async fn wait_for_eof_advance(
-        events: &mut EventReceiver<QueueBusEvent>,
-        id: TrackId,
-        timeout_ms: u64,
-    ) -> WaitOutcome {
-        wait_for_event(events, timeout_ms, |event| {
-            matches!(
-                event,
-                QueueBusEvent::Queue(QueueEvent::CurrentTrackAdvance {
-                    reason: AdvanceReason::NaturalEof,
-                    id: Some(seen),
-                }) if *seen == id
-            )
-        })
-        .await
-    }
+    use crate::mock::{WaitOutcome, wait_for_eof_advance, wait_for_status};
 
     /// The process Host's deck clock drives `Queue::tick`, including
     /// repeat-one replay, with no FFI thread ticking the queue.
     #[kithara::test(tokio, flash(false))]
     async fn the_process_host_replays_a_consumed_repeat_one_track_after_eof() {
-        let worker = FfiWorker::new(
-            PlayWorkerConfig::builder(pools::build().expect("valid FFI pool policy")).build(),
-        );
+        crate::mock::offline();
+        let store = crate::asset::FfiAssetStore::for_test();
+        let worker = FfiWorker::new(PlayWorkerConfig::builder(store.pools().clone()).build());
         let prep = ResourcePrep::builder().worker(worker).build();
-        let queue = FfiQueue::new(QueueConfig::builder().prep(prep).build());
+        let queue = FfiQueue::new(
+            QueueConfig::builder()
+                .prep(prep)
+                .store(store.handle().clone())
+                .build(),
+        );
         // The FFI surface calls the session from the caller's thread, never
         // from a runtime worker.
         let owner = spawn_blocking(move || crate::native::session::insert(queue))
@@ -969,7 +857,9 @@ mod tests {
         let id = spawn_blocking(move || {
             setup.set_repeat(kithara::queue::RepeatMode::One);
             setup.set_rate(1.0).expect("a finite rate is accepted");
-            setup.append(track.to_string_lossy().into_owned())
+            let id = setup.append(track.to_string_lossy().into_owned())?;
+            setup.select(id, Transition::None)?;
+            Ok::<_, kithara::queue::QueueError>(id)
         })
         .await
         .expect("setup task completes")
@@ -986,7 +876,15 @@ mod tests {
             .expect("select task completes")
             .expect("loaded track starts through the real queue lifecycle");
 
+        let cancel = kithara::platform::CancelScope::new(None);
+        let render_cancel = cancel.token();
+        let rendering = spawn_blocking(move || crate::mock::render_until_cancelled(&render_cancel));
         let replay = wait_for_eof_advance(&mut events, id, 2000).await;
+        cancel.cancel();
+        rendering
+            .await
+            .expect("the render driver joins")
+            .expect("the process Host renders until the replay event");
         let status = queue.track(id).map(|entry| entry.status);
         let owner = spawn_blocking(move || {
             crate::native::session::remove(&owner)

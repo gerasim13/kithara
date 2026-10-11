@@ -13,6 +13,8 @@ pub(crate) use build::build;
 pub(crate) use command::{AppCmd, Command, DeckCmd, Envelope, MixCmd};
 pub(crate) use error::EngineError;
 pub(crate) use owner::Engine;
+#[cfg(all(test, feature = "mock", feature = "gui", not(feature = "broadcast")))]
+pub(crate) use owner::mock::render as render_fixture;
 pub(crate) use run::run;
 pub(crate) use serve::serve;
 #[cfg(test)]

@@ -128,6 +128,20 @@ pub(super) fn mixer_without_declick() -> (TestMixer, TestEnds) {
 }
 
 #[kithara::test]
+fn a_constructed_deck_publishes_its_shape_before_any_rendered_block() {
+    let (_mixer, mut ends) = mixer();
+    let snapshot = ends.deck.snapshot.read();
+    assert_eq!(snapshot.sample_rate, RATE);
+    assert_eq!(snapshot.blocks, 0);
+    assert!(
+        snapshot
+            .slots
+            .iter()
+            .all(|slot| slot.state == SlotState::Empty)
+    );
+}
+
+#[kithara::test]
 fn an_empty_deck_counts_every_block_it_renders() {
     let (mut mixer, mut ends) = mixer();
     for start in [0, 128, 256] {

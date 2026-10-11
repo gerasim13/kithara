@@ -73,6 +73,20 @@ fn root_view_publishes_the_decks_the_session_holds() {
 }
 
 #[kithara::test]
+fn registration_publishes_membership_before_the_next_owner_pass() {
+    let mut state = test_state(start_route_loss_stream);
+    let grid_id = BeatGridId::allocate().expect("fixture player grid id");
+
+    state
+        .owner
+        .apply(registration(grid_id))
+        .expect("register deck");
+
+    assert!(state.root_view.holds(grid_id));
+    assert!(!state.root_view.is_empty());
+}
+
+#[kithara::test]
 fn exhausted_player_identity_refuses_the_deck_whole() {
     let mut state = test_state(start_route_loss_stream);
     let grid_id = BeatGridId::allocate().expect("fixture player grid id");

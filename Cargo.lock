@@ -5423,6 +5423,7 @@ dependencies = [
  "kithara-config",
  "kithara-derive",
  "kithara-events",
+ "kithara-ffi",
  "kithara-file",
  "kithara-hls",
  "kithara-platform",

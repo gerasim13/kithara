@@ -9,6 +9,7 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_play::PlayError;
+use kithara_test_utils::kithara;
 use kithara_worker::{Dispatcher, Task, TaskConfig, TickResult};
 use thiserror::Error;
 
@@ -217,12 +218,14 @@ impl<S, O: HostOwner<S>> Task for OfflineSessionTask<S, O>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
+    #[kithara::hang_watchdog]
     fn tick(&mut self) -> TickResult {
         self.owner.begin_pass();
         let mut progress = false;
         let mut requests: Vec<OfflineRequest> = Vec::new();
         let mut stopped = false;
         loop {
+            hang_tick!();
             match self.cmd_rx.try_recv() {
                 Ok(OfflineMsg::Posted) => {
                     self.posts.drain(&mut self.owner, &mut self.mailbox);
@@ -249,10 +252,12 @@ where
                 #[cfg(target_arch = "wasm32")]
                 Err(_) => break,
             }
+            hang_reset!();
         }
         self.posts.drain(&mut self.owner, &mut self.mailbox);
         let mut published = false;
         for request in requests {
+            hang_tick!();
             match request {
                 OfflineRequest::Position(answer) => {
                     let _ = answer.send(self.position);
@@ -276,6 +281,7 @@ where
                     drop(answer.send(result));
                 }
             }
+            hang_reset!();
         }
         if !published {
             self.posts.pass(&mut self.owner, false);

@@ -369,6 +369,7 @@ mod tests {
 
     #[kithara::test]
     fn repeat_mode_round_trips_and_notifies_observer() {
+        crate::mock::offline();
         let player = AudioPlayer::new(FfiPlayerConfig::for_test()).expect("create player");
         let (sender, receiver) = channel();
         player.set_observer(Arc::new(ChannelObserver { sender }));

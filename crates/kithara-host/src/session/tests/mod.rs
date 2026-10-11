@@ -1,6 +1,6 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod deck_probe;
-#[cfg(all(feature = "backend-cpal", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "offline", not(target_arch = "wasm32")))]
 mod engine_cpal;
 pub(crate) mod graph;
 mod graph_retirement;

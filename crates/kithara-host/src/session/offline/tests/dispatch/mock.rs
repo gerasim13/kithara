@@ -21,7 +21,7 @@ pub(super) fn route_loss<R>(f: impl FnOnce(&RouteLossProbe) -> R) -> R {
     ROUTE_LOSS.with(f)
 }
 
-pub(super) type Command = HostCommand<TestPools, Queue<TestPools>>;
+pub(crate) type Command = HostCommand<TestPools, Queue<TestPools>>;
 
 pub(super) struct Inbox(
     pub(super) kithara_platform::sync::Mutex<kithara_platform::sync::mpsc::Sender<DeckMsg>>,
@@ -32,8 +32,8 @@ impl DeckInbox for Inbox {
     }
 }
 
-pub(super) struct TestState {
-    pub(super) owner: HostCore<TestPools, Queue<TestPools>>,
+pub(crate) struct TestState {
+    pub(crate) owner: HostCore<TestPools, Queue<TestPools>>,
     pub(super) messages: kithara_platform::sync::mpsc::Receiver<DeckMsg>,
 }
 impl TestState {
@@ -51,7 +51,7 @@ impl std::ops::DerefMut for TestState {
     }
 }
 
-pub(super) fn test_state(
+pub(crate) fn test_state(
     start: impl FnMut(&mut FirewheelContext, u32) -> Result<SessionStream, String> + Send + 'static,
 ) -> TestState {
     let state = crate::session::tests::graph::state_for(
@@ -66,15 +66,20 @@ pub(super) fn test_state(
     }
 }
 
-pub(super) fn ask(state: &mut TestState, command: Command) -> Result<(), PlayError> {
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+pub(crate) fn ask(state: &mut TestState, command: Command) -> Result<(), PlayError> {
+    hang_tick!();
     state.owner.begin_pass();
     for message in state.messages.try_iter() {
+        hang_tick!();
         message.run(&mut state.owner);
+        hang_reset!();
     }
     state.owner.apply(command)?;
     state.owner.pass();
     state.owner.begin_pass();
     state.owner.pass();
+    hang_reset!();
     Ok(())
 }
 
@@ -161,7 +166,7 @@ pub(super) fn start_route_loss_stream(
     .map_err(|error| error.to_string())
 }
 
-pub(super) fn registration(grid_id: BeatGridId) -> Command {
+pub(crate) fn registration(grid_id: BeatGridId) -> Command {
     configured_registration(grid_id, None, None)
 }
 
