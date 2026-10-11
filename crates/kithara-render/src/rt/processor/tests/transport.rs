@@ -1,5 +1,66 @@
 use super::*;
 
+#[kithara::test]
+fn eof_during_a_crossfade_answers_the_transition_batch_once() {
+    const EOF: usize = BLOCK + 88;
+    let (mut mixer, mut ends) = mixer();
+    send(
+        &mut ends,
+        When::Next,
+        vec![
+            DeckPart::Attach {
+                slot: A,
+                pcm: pcm_samples("outgoing", 1.0, &vec![LEVEL; EOF * 2], true),
+                segment: SegmentId::FIRST,
+            },
+            DeckPart::Attach {
+                slot: B,
+                pcm: pcm_samples("incoming", 1.0, &vec![LEVEL; BLOCK * 8], false),
+                segment: SegmentId::FIRST,
+            },
+            DeckPart::Start {
+                slot: A,
+                fade: Fade::Declick,
+            },
+        ],
+    );
+    render(&mut mixer, 0);
+    drop(receipts(&mut ends));
+    let settings =
+        CrossfadeSettings::new(1.0, CrossfadeCurve::Linear, 1.0, 0.5).expect("valid crossfade");
+    let transition = send(
+        &mut ends,
+        at(BLOCK),
+        vec![
+            DeckPart::Start {
+                slot: B,
+                fade: Fade::Crossfade(settings),
+            },
+            DeckPart::Fade {
+                slot: A,
+                settings,
+                dir: FadeDir::Out,
+            },
+        ],
+    );
+    render(&mut mixer, BLOCK);
+    let replies = receipts(&mut ends);
+    assert_stopped_once(&replies, transition, BLOCK, A, EOF);
+    assert_eq!(
+        mixer.track(A).map(PlayerTrack::state),
+        Some(SlotState::Ended)
+    );
+    assert_eq!(
+        ends.events.drain().collect::<Vec<_>>(),
+        [DeckEvent::Ended {
+            slot: A,
+            at: frame_at(EOF)
+        }],
+    );
+    render(&mut mixer, BLOCK * 2);
+    assert!(receipts(&mut ends).is_empty(), "one verdict per transition");
+}
+
 /// A slot started on a frame inside a block is silent before that frame and sounds after it.
 #[kithara::test(tokio)]
 async fn a_started_slot_sounds_from_its_frame(constant_half: &'static [u8]) {
