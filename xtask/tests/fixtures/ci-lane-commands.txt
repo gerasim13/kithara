@@ -337,35 +337,35 @@
 # apple-safari / branch
   <require os> macos
   <require tools> cargo just
-  just test wasm safari
+  just test wasm safari all include
 # apple-safari / platforms
   <require os> macos
   <require tools> cargo just
-  just test wasm safari
+  just test wasm safari all include
 # apple-safari / merge-request
   <require os> macos
   <require tools> cargo just
-  just test wasm safari
+  just test wasm safari all include
 # apple-safari / quarantine
   <require os> macos
   <require tools> cargo just
-  just test wasm safari
+  just test wasm safari all include
 # apple-safari / main
   <require os> macos
   <require tools> cargo just
-  just test wasm safari
+  just test wasm safari all include
 # apple-safari / nightly
   <require os> macos
   <require tools> cargo just
-  just test wasm safari
+  just test wasm safari all include
 # apple-safari / weekly
   <require os> macos
   <require tools> cargo just
-  just test wasm safari
+  just test wasm safari all include
 # apple-safari / release
   <require os> macos
   <require tools> cargo just
-  just test wasm safari
+  just test wasm safari all include
 # apple-swift-test / branch
   <require os> macos
   <require tools> cargo just sccache swift /usr/bin/xcodebuild xcodegen xcrun
@@ -2502,67 +2502,67 @@
 # web-chromium / branch
   <require os> linux
   <require tools> chromium chromedriver just
-  just test wasm chrome webcodecs
+  just test wasm chrome webcodecs include
 # web-chromium / platforms
   <require os> linux
   <require tools> chromium chromedriver just
-  just test wasm chrome webcodecs
+  just test wasm chrome webcodecs include
 # web-chromium / merge-request
   <require os> linux
   <require tools> chromium chromedriver just
-  just test wasm chrome webcodecs
+  just test wasm chrome webcodecs include
 # web-chromium / quarantine
   <require os> linux
   <require tools> chromium chromedriver just
-  just test wasm chrome webcodecs
+  just test wasm chrome webcodecs include
 # web-chromium / main
   <require os> linux
   <require tools> chromium chromedriver just
-  just test wasm chrome webcodecs
+  just test wasm chrome webcodecs include
 # web-chromium / nightly
   <require os> linux
   <require tools> chromium chromedriver just
-  just test wasm chrome webcodecs
+  just test wasm chrome webcodecs include
 # web-chromium / weekly
   <require os> linux
   <require tools> chromium chromedriver just
-  just test wasm chrome webcodecs
+  just test wasm chrome webcodecs include
 # web-chromium / release
   <require os> linux
   <require tools> chromium chromedriver just
-  just test wasm chrome webcodecs
+  just test wasm chrome webcodecs include
 # web-firefox / branch
   <require os> linux
   <require tools> firefox geckodriver just
-  just test wasm firefox
+  just test wasm firefox all include
 # web-firefox / platforms
   <require os> linux
   <require tools> firefox geckodriver just
-  just test wasm firefox
+  just test wasm firefox all include
 # web-firefox / merge-request
   <require os> linux
   <require tools> firefox geckodriver just
-  just test wasm firefox
+  just test wasm firefox all include
 # web-firefox / quarantine
   <require os> linux
   <require tools> firefox geckodriver just
-  just test wasm firefox
+  just test wasm firefox all include
 # web-firefox / main
   <require os> linux
   <require tools> firefox geckodriver just
-  just test wasm firefox
+  just test wasm firefox all include
 # web-firefox / nightly
   <require os> linux
   <require tools> firefox geckodriver just
-  just test wasm firefox
+  just test wasm firefox all include
 # web-firefox / weekly
   <require os> linux
   <require tools> firefox geckodriver just
-  just test wasm firefox
+  just test wasm firefox all include
 # web-firefox / release
   <require os> linux
   <require tools> firefox geckodriver just
-  just test wasm firefox
+  just test wasm firefox all include
 # web-size / branch
   <require os> linux
   <require tools> cargo just
