@@ -48,7 +48,7 @@ use kithara_test_utils::{TestTempDir, temp_dir};
 use url::Url;
 
 #[kithara::test(tokio, timeout(Duration::from_secs(30)))]
-#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn a_press_before_f_on_one_slot_leaves_the_sounding_track_untouched() {
     use kithara::{
         play::{CrossfadeSettings, DeckMixerConfig, ResourcePrep},
@@ -90,53 +90,97 @@ async fn a_press_before_f_on_one_slot_leaves_the_sounding_track_untouched() {
         assets::constant_wav_four_1_5s(),
     ];
     let mut ids = Vec::new();
-    for source in sources {
-        let source = kithara_integration_tests::offline::asset_source(&source);
-        ids.push(
+    for source in sources.iter().take(1) {
+        hang_tick!(String::from("append one-slot incumbent"));
+        let source = kithara_integration_tests::offline::asset_source(source);
+        ids.push({
+            let _real_io = kithara::platform::flash::real_io();
             harness
                 .run(move |queue| queue.append(source))
                 .await
-                .expect("append"),
-        );
+                .expect("append")
+        });
+        hang_reset!();
     }
     let first = ids[0];
-    let cancelled = ids[1];
-    let selected = ids[2];
     harness
         .run(move |queue| queue.select(first, Transition::None))
         .await
         .expect("select first");
     harness.run(QueueControl::play).await;
+    {
+        let _real_io = kithara::platform::flash::real_io();
+        let mut position = harness.control().position_seconds();
+        while position.is_none_or(|position| position <= 0.1) {
+            hang_tick!(format!(
+                "one-slot incumbent enters before its successors: {position:?}"
+            ));
+            harness.render(128).await;
+            let next = harness.control().position_seconds();
+            if next != position {
+                position = next;
+                hang_reset!();
+            }
+            sleep(Duration::from_millis(1)).await;
+        }
+    }
+    for source in sources.into_iter().skip(1) {
+        hang_tick!(String::from("append one-slot successor"));
+        let source = kithara_integration_tests::offline::asset_source(&source);
+        ids.push({
+            let _real_io = kithara::platform::flash::real_io();
+            harness
+                .run(move |queue| queue.append(source))
+                .await
+                .expect("append")
+        });
+        hang_reset!();
+    }
+    let cancelled = ids[1];
+    let selected = ids[2];
     let deadline = time::Instant::now() + Duration::from_secs(10);
     let mut reference = 0.0;
-    loop {
-        hang_tick!("a_press_before_f_on_one_slot_leaves_the_sounding_track_untouched waits for playback progress".to_owned());
-        assert!(
-            time::Instant::now() < deadline,
-            "replacement must arm before F"
-        );
-        let pcm = harness.render(128).await;
-        let control = harness.control();
-        if control.current().is_some_and(|track| track.id == first)
-            && control
-                .position_seconds()
-                .is_some_and(|position| position > 0.1)
-        {
-            reference = mean_abs(&pcm);
-        }
-        if control
-            .track(cancelled)
-            .is_some_and(|track| track.status == TrackStatus::Loaded)
-        {
+    {
+        let _real_io = kithara::platform::flash::real_io();
+        let mut observed = harness.control().position_seconds();
+        hang_reset!();
+        loop {
+            hang_tick!(format!(
+                "one-slot successor loads before F: position={observed:?}, status={:?}",
+                harness.control().track(cancelled).map(|track| track.status)
+            ));
             assert!(
-                control
-                    .position_seconds()
-                    .is_some_and(|position| position < 0.9)
+                time::Instant::now() < deadline,
+                "replacement must arm before F"
             );
-            assert!(reference > 0.1, "first track is audible");
-            break;
+            let pcm = harness.render(128).await;
+            let control = harness.control();
+            let position = control.position_seconds();
+            if position != observed {
+                observed = position;
+                hang_reset!();
+            }
+            if control.current().is_some_and(|track| track.id == first)
+                && control
+                    .position_seconds()
+                    .is_some_and(|position| position > 0.1)
+            {
+                reference = mean_abs(&pcm);
+            }
+            if control
+                .track(cancelled)
+                .is_some_and(|track| track.status == TrackStatus::Loaded)
+            {
+                assert!(
+                    control
+                        .position_seconds()
+                        .is_some_and(|position| position < 0.9)
+                );
+                assert!(reference > 0.1, "first track is audible");
+                break;
+            }
+            sleep(Duration::from_millis(1)).await;
         }
-        sleep(Duration::from_millis(1)).await;
     }
     let _ = harness.render(128).await;
     assert_eq!(
@@ -159,34 +203,42 @@ async fn a_press_before_f_on_one_slot_leaves_the_sounding_track_untouched() {
         .expect("press is accepted");
     let deadline = time::Instant::now() + Duration::from_secs(10);
     let mut changed = false;
-    while !changed {
-        hang_tick!("a_press_before_f_on_one_slot_leaves_the_sounding_track_untouched waits for playback progress".to_owned());
-        assert!(
-            time::Instant::now() < deadline,
-            "selected track becomes current"
-        );
-        let pcm = harness.render(128).await;
-        while let Ok(event) = events.try_recv() {
-            hang_tick!("a_press_before_f_on_one_slot_leaves_the_sounding_track_untouched waits for playback progress".to_owned());
-            hang_reset!();
-            match event.event {
-                QueueEvent::CurrentTrackChanged { id: Some(id) } => {
-                    assert_ne!(id, cancelled);
-                    changed |= id == selected;
-                }
-                QueueEvent::CrossfadeStarted { .. } => {
-                    assert!(changed, "only the selected track starts a crossfade");
-                }
-                _ => {}
-            }
-        }
-        if !changed {
+    {
+        let _real_io = kithara::platform::flash::real_io();
+        hang_reset!();
+        while !changed {
+            hang_tick!(format!(
+                "one-slot selection waits for its entry receipt: current={:?}, target={:?}",
+                harness.control().current().map(|track| track.id),
+                harness.control().track(selected).map(|track| track.status)
+            ));
             assert!(
-                (mean_abs(&pcm) - reference).abs() < 0.02,
-                "the cancelled replacement never dips the incumbent"
+                time::Instant::now() < deadline,
+                "selected track becomes current"
             );
+            let pcm = harness.render(128).await;
+            while let Ok(event) = events.try_recv() {
+                hang_tick!("a_press_before_f_on_one_slot_leaves_the_sounding_track_untouched waits for playback progress".to_owned());
+                hang_reset!();
+                match event.event {
+                    QueueEvent::CurrentTrackChanged { id: Some(id) } => {
+                        assert_ne!(id, cancelled);
+                        changed |= id == selected;
+                    }
+                    QueueEvent::CrossfadeStarted { .. } => {
+                        assert!(changed, "only the selected track starts a crossfade");
+                    }
+                    _ => {}
+                }
+            }
+            if !changed {
+                assert!(
+                    (mean_abs(&pcm) - reference).abs() < 0.02,
+                    "the cancelled replacement never dips the incumbent"
+                );
+            }
+            sleep(Duration::from_millis(1)).await;
         }
-        sleep(Duration::from_millis(1)).await;
     }
     assert_eq!(
         harness.control().current().map(|track| track.id),
@@ -316,9 +368,8 @@ async fn build_queue(
 /// `deadline` as a hard safety cap. Returns the matched event, or `None` on
 /// timeout / bus closure. Lagged is non-fatal (the per-test bus has ample
 /// capacity); we re-loop to keep draining, mirroring the sibling-test idiom.
-/// The helper is flash-active so deadlines are virtual in flash runs; otherwise
-/// every absence window would consume real wall time.
-#[kithara::flash(true)]
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn next_queue_event<F>(
     rx: &mut EventReceiver<TestEvent>,
     deadline: Duration,
@@ -329,17 +380,29 @@ where
 {
     let start = time::Instant::now();
     loop {
+        hang_tick!("waiting for the next matching queue event".to_owned());
         let remaining = deadline.saturating_sub(start.elapsed());
         if remaining.is_zero() {
             return None;
         }
-        match time::timeout(remaining, rx.recv())
+        match time::timeout(remaining.min(__hang_detector.remaining()), rx.recv())
             .await
             .map(|r| r.map(|env| env.event))
         {
-            Ok(Ok(TestEvent::Queue(ev))) if pred(&ev) => return Some(ev),
-            Ok(Ok(_)) | Ok(Err(RecvError::Lagged(_))) => continue,
-            Ok(Err(RecvError::Closed)) | Err(_) => return None,
+            Ok(Ok(TestEvent::Queue(ev))) if pred(&ev) => {
+                hang_reset!();
+                return Some(ev);
+            }
+            Ok(Ok(_)) | Ok(Err(RecvError::Lagged(_))) => {
+                hang_reset!();
+            }
+            Ok(Err(RecvError::Closed)) => return None,
+            Err(_) => {
+                if start.elapsed() < deadline {
+                    hang_tick!("queue event producer made no progress".to_owned());
+                }
+                return None;
+            }
         }
     }
 }
@@ -409,10 +472,17 @@ where
 /// GET has reached the server, under a hard deadline. This is the empirical
 /// proof that the loader is parked on the gate (not merely slow), and
 /// synchronizes on an observable rather than on wall-clock timing.
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn wait_for_init_requested(gate: &InitGateHandle, deadline: Duration) -> Result<(), String> {
     let start = time::Instant::now();
     loop {
+        hang_tick!(format!(
+            "waiting for gated init GET; requested={}",
+            gate.requested()
+        ));
         if gate.requested() >= 1 {
+            hang_reset!();
             return Ok(());
         }
         if start.elapsed() >= deadline {
@@ -683,12 +753,15 @@ async fn play_keeps_pending_select_of_loading_track(
 
 /// Drain any backlog already buffered on `rx` so the completion-race watch
 /// observes only events that follow the selects under test.
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 fn drain_event_backlog(rx: &mut EventReceiver<TestEvent>) {
     use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
     loop {
+        hang_tick!("draining the queue event backlog".to_owned());
         match rx.try_recv().map(|env| env.event) {
-            Ok(_) => {}
-            Err(TryRecvError::Lagged(_)) => continue,
+            Ok(_) | Err(TryRecvError::Lagged(_)) => {
+                hang_reset!();
+            }
             Err(_) => break,
         }
     }
@@ -723,6 +796,7 @@ fn drain_event_backlog(rx: &mut EventReceiver<TestEvent>) {
 // gate exists to probe. It therefore has no state-wait equivalent and is left
 // as a timer on purpose.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn concurrent_completion_race_does_not_barge_in(
     #[future(awt)] race_tracks: (TestServerHelper, CreatedHls, CreatedHls),
 ) {
@@ -733,6 +807,7 @@ async fn concurrent_completion_race_does_not_barge_in(
     let mut barge_ins: Vec<String> = Vec::new();
 
     for iter in 0..consts::STRESS_ITERATIONS {
+        hang_tick!(format!("completion-race iteration {iter}"));
         let temp = temp_dir();
         let (queue, downloader, store) = build_queue(&temp).await;
         // The queue pauses where `fast` ends, so `slow` can only become
@@ -783,6 +858,9 @@ async fn concurrent_completion_race_does_not_barge_in(
         let mut saw_fast = history.last().copied().flatten() == Some(fast_id);
         loop {
             let remaining = consts::RACE_OBSERVE.saturating_sub(watch.elapsed());
+            hang_tick!(format!(
+                "completion-race iteration {iter}; history={history:?}"
+            ));
             if remaining.is_zero() {
                 break;
             }
@@ -810,6 +888,7 @@ async fn concurrent_completion_race_does_not_barge_in(
             }
         }
         queue.close().await;
+        hang_reset!();
     }
 
     assert!(

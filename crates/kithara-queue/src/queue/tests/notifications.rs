@@ -11,8 +11,12 @@ use crate::{
 };
 
 #[kithara::test(tokio)]
+#[kithara::hang_watchdog]
 async fn notification_changed_carries_src() {
     let (mut queue, mut rig, dir) = empty_queue();
+    let path = dir.path().join("next.mp3");
+    std::fs::copy(dir.path().join("entry.wav"), &path).expect("named offline fixture");
+    let expected_source = path.to_str().expect("fixture path").to_owned();
     let control = queue.control();
     let mut events = control.subscribe();
     let item = TrackId::allocate();
@@ -21,7 +25,7 @@ async fn notification_changed_carries_src() {
             queue,
             QueueCommand::Append {
                 id: item,
-                source: TrackSource::Uri("next.mp3".to_owned()),
+                source: TrackSource::Uri(expected_source.clone()),
             },
             out,
         )
@@ -38,9 +42,15 @@ async fn notification_changed_carries_src() {
     });
     answer_load(&mut queue, &mut rig, &dir).await;
     finish(&mut queue, &mut rig);
-    let notification = std::iter::from_fn(|| events.try_recv().ok().map(|event| event.event))
-        .find(|event| matches!(event, QueueEvent::CurrentTrackChanged { .. }))
-        .expect("current source changed");
+    let notification = std::iter::from_fn(|| {
+        hang_tick!();
+        events.try_recv().ok().map(|event| {
+            hang_reset!();
+            event.event
+        })
+    })
+    .find(|event| matches!(event, QueueEvent::CurrentTrackChanged { .. }))
+    .expect("current source changed");
     let QueueEvent::CurrentTrackChanged { id: Some(id) } = notification else {
         panic!("expected a current identity");
     };
@@ -48,20 +58,23 @@ async fn notification_changed_carries_src() {
     let Some(TrackSource::Uri(source)) = control.track_source(id) else {
         panic!("changed identity must retain a URI source");
     };
-    assert_eq!(source, "next.mp3");
+    assert_eq!(source, expected_source);
 }
 
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn notification_clone() {
     let (mut queue, mut rig, dir) = empty_queue();
+    let path = dir.path().join("ended.mp3");
+    std::fs::copy(dir.path().join("entry.wav"), &path).expect("named offline fixture");
+    let expected_source = path.to_str().expect("fixture path").to_owned();
     let item = TrackId::allocate();
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(
             queue,
             QueueCommand::Append {
                 id: item,
-                source: TrackSource::Uri("ended.mp3".to_owned()),
+                source: TrackSource::Uri(expected_source.clone()),
             },
             out,
         )
@@ -143,12 +156,12 @@ async fn notification_clone() {
     else {
         panic!("stopped identity must retain a URI source");
     };
-    assert_eq!(source, "ended.mp3");
+    assert_eq!(source, expected_source);
     let Some(TrackSource::Uri(source)) = queue
         .control()
         .track_source(cloned.current.expect("cloned stopped identity"))
     else {
         panic!("cloned stopped identity must retain a URI source");
     };
-    assert_eq!(source, "ended.mp3");
+    assert_eq!(source, expected_source);
 }

@@ -1,13 +1,13 @@
 use std::{num::NonZeroU32, task::Waker};
 
 use kithara_bufpool::HasPool;
-use kithara_command::{Outcome, Receipt, Rejection, Seq};
+use kithara_command::{Batch, Outcome, Receipt, Rejection, Seq};
 use kithara_events::{SlotId, TrackId};
 use kithara_platform::{
     maybe_send::MaybeSend, sync::Arc, tokio::sync::broadcast::error::TryRecvError,
 };
 use kithara_play::{
-    DeckEvent, DeckMixerConfig, DeckPass, HostedDeck, ItemRole, LoadRefusal, Outbox,
+    DeckEvent, DeckMixerConfig, DeckPass, DeckProtocol, HostedDeck, ItemRole, LoadRefusal, Outbox,
     OutputSnapshot, PlayError, PlayWorker, PlaybackFault, Player, PlayerEvent, Settled,
     TrackCommand, TrackFactory, TrackReceipt, TrackRef, TrackStatus as PlayingStatus,
 };
@@ -54,24 +54,7 @@ where
                 outcome,
                 batch,
             } => {
-                for index in self
-                    .active
-                    .indices(|active| batch.basis.iter().any(|&(slot, _)| slot == active.slot))
-                {
-                    if let Some(active) = self.active.get_mut(index) {
-                        outcomes.push((
-                            index,
-                            active.track.settle(
-                                TrackReceipt::Deck {
-                                    seq,
-                                    outcome,
-                                    batch: &mut *batch,
-                                },
-                                out,
-                            ),
-                        ));
-                    }
-                }
+                outcomes = self.settle_deck(seq, outcome, batch, out);
             }
             TrackReceipt::Event(event) => {
                 let named: TrackReceipt<'_, S> = TrackReceipt::Event(event);
@@ -138,6 +121,58 @@ where
         self.reap_released();
         self.publish();
         result
+    }
+
+    fn settle_deck(
+        &mut self,
+        seq: Seq,
+        outcome: &Outcome<DeckProtocol>,
+        batch: &mut Batch<DeckProtocol>,
+        out: &mut Outbox<'_, S>,
+    ) -> Vec<(usize, Settled)> {
+        let mut outcomes: Vec<(usize, Settled)> = Vec::new();
+        for index in self
+            .active
+            .indices(|active| batch.basis.iter().any(|&(slot, _)| slot == active.slot))
+        {
+            if let Some(active) = self.active.get_mut(index) {
+                let settled = active.track.settle(
+                    TrackReceipt::Deck {
+                        seq,
+                        outcome,
+                        batch: &mut *batch,
+                    },
+                    out,
+                );
+                if let Some(super::super::types::SeekPosition::Pending {
+                    item,
+                    seq: caller,
+                    segment,
+                    ..
+                }) = &mut self.held_position
+                    && *item == active.item
+                {
+                    match settled {
+                        Settled::Rejected { seq: answered, .. } if answered == *caller => {
+                            self.held_position = None;
+                        }
+                        Settled::Applied { seq: answered, .. } if answered == *caller => {
+                            *segment = batch.commands.iter().find_map(|part| match part {
+                                kithara_play::DeckPart::Adopt { slot, segment }
+                                    if *slot == active.slot =>
+                                {
+                                    Some(*segment)
+                                }
+                                _ => None,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                outcomes.push((index, settled));
+            }
+        }
+        outcomes
     }
 
     fn settle_transitions(
@@ -271,18 +306,22 @@ where
         }
     }
 
+    #[kithara_test_utils::kithara::hang_watchdog]
     fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
         self.accept_host_pass(pass, out);
         for post in self.mailbox.drain() {
+            hang_tick!();
             if let Err(error) = self.validate_command(&post.command) {
                 self.publish();
                 post.answer.answer(Err(error));
+                hang_reset!();
                 continue;
             }
             match self.apply_with_output(post.command, Some(pass.output), out) {
                 Ok(_) => post.answer.answer(Ok(())),
                 Err(error) => post.answer.answer(Err(error.into())),
             }
+            hang_reset!();
         }
     }
 
@@ -496,6 +535,8 @@ where
                 let ids = self.selectable_ids();
                 let wrap = self.navigation.repeat_mode() == crate::RepeatMode::All;
                 if self.navigation.next(&ids, true, wrap).is_none() {
+                    self.current = None;
+                    self.held_position = None;
                     self.announce(QueueEvent::QueueEnded);
                 }
             }

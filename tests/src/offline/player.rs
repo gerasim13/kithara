@@ -346,17 +346,18 @@ where
     }
 
     /// Render until selection is committed by the queue, not merely prepared by its loader.
-    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
+    #[kithara_test_utils::kithara::flash(io)]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     pub async fn render_until_current(
         &self,
         id: TrackId,
         block_frames: usize,
         deadline: WallInstant,
     ) {
+        let mut observed = self.player().playback_view();
         while self.player().current().map(|entry| entry.id) != Some(id) {
             hang_tick!(format!(
-                "render_until_current: awaiting {id:?}, current {:?}",
-                self.player().current().map(|entry| entry.id)
+                "render_until_current awaits {id:?}; playback={observed:?}"
             ));
             assert!(
                 WallInstant::now() < deadline,
@@ -364,6 +365,11 @@ where
             );
             self.render(block_frames).await;
             let _ = self.tick_and_drain().await;
+            let progress = self.player().playback_view();
+            if progress != observed {
+                observed = progress;
+                hang_reset!();
+            }
         }
         hang_reset!();
     }
@@ -382,6 +388,7 @@ where
     /// Render `frames` of interleaved stereo audio through the product Host.
     /// A resident player then publishes what the block produced, as the app
     /// update loop would.
+    #[kithara_test_utils::kithara::flash(io)]
     pub async fn render(&self, frames: usize) -> Vec<f32> {
         let output = self.host.render(frames).await;
         self.tick_player().await;

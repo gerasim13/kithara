@@ -342,7 +342,7 @@ impl<T, S> LaneAudio<T, S> {
             hang_reset!();
         }
         for receipt in self.sender.receipts() {
-            hang_tick!();
+            hang_tick!(format!("settling test lane segment {:?}", self.segment));
             hang_reset!();
             if let Outcome::Applied { data, .. } = receipt.outcome() {
                 if data.ready == Some(self.segment) {

@@ -661,6 +661,8 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
 // flash(false): real zvuk prod CDN/keyserver e2e; wall-clock latency IS the assertion.
 #[kithara::test(tokio)]
 #[cfg(any(target_os = "macos", target_os = "ios"))]
+#[kithara_test_utils::kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn prod_tracks_sequential_startup_latency() {
     kithara_integration_tests::apple_warmup::warm_if_apple(DecoderBackend::Apple);
 
@@ -711,6 +713,7 @@ async fn prod_tracks_sequential_startup_latency() {
         Vec::with_capacity(TRACKS.len());
 
     for url in TRACKS {
+        hang_tick!(format!("production startup append {url}"));
         let mut rx = ctx.queue.subscribe();
         let source = build_track_source(url, ctx, DecoderBackend::Apple, AbrMode::Auto(None));
         let t0 = kithara::platform::time::Instant::now();
@@ -719,6 +722,7 @@ async fn prod_tracks_sequential_startup_latency() {
             .run(move |q| q.append(source))
             .await
             .expect("append Apple production track");
+        hang_reset!();
 
         let outcome: Result<(Duration, Duration), String> = async {
             wait_for_status(
@@ -730,15 +734,18 @@ async fn prod_tracks_sequential_startup_latency() {
             )
             .await
             .map_err(|e| format!("load: {e}"))?;
+            hang_reset!();
             let load_latency = t0.elapsed();
 
             ctx.queue
                 .run(move |q| q.select(track_id, Transition::None))
                 .await
                 .map_err(|e| format!("select: {e:?}"))?;
+            hang_reset!();
             wait_for_position_at_least(&ctx.queue, 0.1, Duration::from_secs(20))
                 .await
                 .map_err(|e| format!("first-audio: {e}"))?;
+            hang_reset!();
             let first_audio_latency = t0.elapsed();
 
             Ok((load_latency, first_audio_latency))
@@ -746,6 +753,7 @@ async fn prod_tracks_sequential_startup_latency() {
         .await;
 
         let _ = ctx.queue.run(move |q| q.remove(track_id)).await;
+        hang_reset!();
         report.push((url, outcome));
     }
 

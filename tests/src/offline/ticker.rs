@@ -3,7 +3,7 @@ use kithara::{
     platform::{
         sync::mpsc::{self, RecvTimeoutError},
         thread::{JoinHandle, spawn_named},
-        time::{Duration, Instant},
+        time::{Duration, Instant, timeout},
         tokio::{runtime::Handle, task::spawn_blocking},
     },
     queue::QueueControl,
@@ -35,7 +35,7 @@ impl QueueTicker {
         }
     }
 
-    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     fn tick_until_stopped<S>(queue: QueueControl<S>, stop: mpsc::Receiver<()>, interval: Duration)
     where
         S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
@@ -66,15 +66,15 @@ impl QueueTicker {
     }
 
     /// Stops ticking and joins the thread; `Err` is the message of a tick panic.
-    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
+    #[kithara_test_utils::kithara::flash(io)]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     pub async fn join(&mut self) -> Result<(), String> {
         drop(self.stop.take());
         let Some(thread) = self.thread.take() else {
             return Ok(());
         };
         hang_tick!("queue ticker: joining stopped thread".to_owned());
-        let _real_io = kithara::platform::flash::real_io();
-        let joined = kithara::platform::time::timeout(
+        let joined = timeout(
             __hang_detector.remaining(),
             spawn_blocking(move || thread.join()),
         )

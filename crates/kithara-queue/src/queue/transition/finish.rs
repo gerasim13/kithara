@@ -56,6 +56,9 @@ where
         };
         let consumed =
             target.auto
+                && self
+                    .incoming_index(target.to)
+                    .is_some_and(|index| !self.active.is_replacement(index))
                 || target.reason == AdvanceReason::InitialLoad
                     && self.tracks.records().iter().any(|record| {
                         record.id == target.to && record.status == TrackStatus::Loaded
@@ -66,7 +69,15 @@ where
             return Ok(());
         }
         if let Some(index) = self.incoming_index(target.to) {
-            self.release_track(index, out)?;
+            if target.chained {
+                self.active
+                    .get_mut(index)
+                    .ok_or(PlayError::NoActiveSlot)?
+                    .track
+                    .apply(TrackCommand::Pause { at: When::Next }, out)?;
+            } else {
+                self.release_track(index, out)?;
+            }
         }
         self.tracks.set_status(
             target.to,
@@ -325,7 +336,7 @@ where
 
     pub(in crate::queue) fn current_end(&self) -> Option<SessionFrame> {
         self.current?;
-        let track = self.current_track()?;
+        let track = &self.active.get(self.active_current_index()?)?.track;
         let snapshot = track.snapshot();
         let snapshot = snapshot.as_ref();
         if let PlayingStatus::Ended { at } | PlayingStatus::Failed { at, .. } = snapshot.status {

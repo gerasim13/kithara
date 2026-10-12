@@ -3,7 +3,7 @@ use kithara_command::{Seq, When};
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_play::{
-    Bound, Outbox, OutputSnapshot, PlayError, Player, TrackCommand, TrackFactory,
+    Bound, Outbox, OutputSnapshot, PlayError, Player, Settled, TrackCommand, TrackFactory,
     TrackStatus as PlayingStatus,
 };
 use kithara_signal::SessionFrame;
@@ -116,7 +116,15 @@ where
             if reason != AdvanceReason::InitialLoad {
                 self.navigation.select(id, &self.track_ids());
             }
-            return self.transition_loaded(out).map_err(Into::into);
+            let load = self
+                .incoming_index(id)
+                .and_then(|index| self.active.get(index))
+                .and_then(|active| active.load)
+                .map(LoadState::seq);
+            return self
+                .transition_loaded(out)
+                .map(|sent| sent.or(load))
+                .map_err(Into::into);
         }
         let bound = if auto && reason == AdvanceReason::NaturalEof {
             self.auto_bound(settings)?
@@ -124,6 +132,16 @@ where
             Some(Bound::AtOrAfter(self.earliest()?))
         };
         self.cancel_target(out)?;
+        if !auto {
+            for index in self.active.indices(|active| {
+                active.item != id && active.role == Role::Preloaded && active.load.is_none()
+            }) {
+                let item = self.active.get(index).ok_or(PlayError::NoActiveSlot)?.item;
+                self.release_track(index, out)?;
+                self.tracks.set_status(item, TrackStatus::Consumed);
+            }
+            self.reap_released();
+        }
         self.target = Some(Target {
             playing,
             to: id,
@@ -156,11 +174,6 @@ where
             Err(error) => {
                 self.target = None;
                 self.tracks.fail(id, &error);
-                self.announce(QueueEvent::TrackLoadFailed {
-                    id,
-                    reason: error.to_string(),
-                    auto_skipped: false,
-                });
                 Err(error)
             }
         }
@@ -274,6 +287,63 @@ where
             .records()
             .iter()
             .any(|record| record.id == active.item && record.status != TrackStatus::Cancelled))
+    }
+
+    pub(super) fn load_settled(
+        &mut self,
+        index: usize,
+        settled: &Settled,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<(), PlayError> {
+        let active = self.active.get(index).ok_or(PlayError::NoActiveSlot)?;
+        let id = active.item;
+        let preloaded = active.role == Role::Preloaded;
+        let leaving = active.role == Role::Leaving;
+        let wanted = self
+            .target
+            .is_some_and(|target| self.incoming_index(target.to) == Some(index));
+        let applied = matches!(settled, Settled::Applied { .. });
+        if applied && self.finish_load(index)? {
+            self.transition_loaded(out)?;
+        } else if !applied {
+            self.active
+                .get_mut(index)
+                .ok_or(PlayError::NoActiveSlot)?
+                .load = None;
+            if let Settled::Rejected { reason, .. } = settled
+                && !leaving
+                && self.tracks.records().iter().any(|record| {
+                    record.id == id
+                        && matches!(
+                            record.status,
+                            TrackStatus::Loading | TrackStatus::Slow | TrackStatus::Loaded
+                        )
+                })
+            {
+                if self
+                    .target
+                    .is_some_and(|target| target.to == id && target.auto)
+                    || preloaded
+                {
+                    self.tracks.set_status(id, TrackStatus::Consumed);
+                } else {
+                    let error = QueueError::Play(super::super::hosted::refusal(reason));
+                    self.tracks.fail(id, &error);
+                    self.announce(QueueEvent::TrackLoadFailed {
+                        id,
+                        reason: error.to_string(),
+                        auto_skipped: false,
+                    });
+                }
+            }
+            self.release_track(index, out)?;
+            if wanted {
+                self.target = None;
+            }
+        } else if wanted {
+            self.cancel_target(out).map_err(play_error)?;
+        }
+        Ok(())
     }
 
     /// Step 3: a deadline entry may not precede what this pass can deliver.

@@ -74,8 +74,15 @@ where
 
     /// Seeks the sounding track in media seconds.
     /// # Errors
-    /// Returns an invalid position, the track's refusal or a closed mailbox.
+    /// Returns an invalid finite position, the track's refusal or a closed mailbox.
     pub fn seek(&self, seconds: f64) -> Result<(), QueueError> {
+        let seconds = if seconds.is_finite() {
+            seconds
+        } else if seconds == f64::INFINITY {
+            self.duration_seconds().unwrap_or_default()
+        } else {
+            0.0
+        };
         let value = seconds.to_f32().ok_or_else(|| {
             PlayError::Internal("position diagnostic cannot be represented as f32".into())
         })?;

@@ -88,12 +88,10 @@ impl ThresholdRig {
             target_bound: None,
             monitoring: false,
         };
-        for id in [THRESHOLD_ITEM, THRESHOLD_NEXT] {
-            rig.apply(QueueCommand::Append {
-                id,
-                source: rig.source.clone(),
-            });
-        }
+        rig.apply(QueueCommand::Append {
+            id: THRESHOLD_ITEM,
+            source: rig.source.clone(),
+        });
         rig.apply(QueueCommand::Select {
             id: THRESHOLD_ITEM,
             transition: Transition::None,
@@ -110,6 +108,7 @@ impl ThresholdRig {
             (request, due.defer())
         };
         let mut loaded = {
+            let _real_io = kithara_platform::flash::real_io();
             let mut opening = std::pin::pin!(rig.loads.load_request_fixture(*request));
             loop {
                 hang_tick!();
@@ -151,6 +150,11 @@ impl ThresholdRig {
         );
         assert_eq!(rig.ends, 0);
         rig.order.clear();
+        rig.queue.insert_entry(
+            THRESHOLD_NEXT,
+            rig.source.clone(),
+            crate::queue::types::Placement::Append,
+        );
         rig.apply(QueueCommand::Play { at: When::Next });
         rig.monitoring = true;
         rig.queue.config.action_at_item_end = ActionAtItemEnd::Advance;
@@ -202,15 +206,30 @@ impl ThresholdRig {
             .expect("threshold command");
     }
 
-    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    #[kithara::flash(io)]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     async fn seek(&mut self, position: f64) {
         self.apply(QueueCommand::Pause { at: When::Next });
-        self.read(1).await;
+        loop {
+            hang_tick!(format!(
+                "threshold seek awaits its pause receipt: {:?}",
+                self.queue.current_track().map(Player::snapshot)
+            ));
+            self.read(THRESHOLD_BLOCK).await;
+            if self.mixer.ends.snapshot.read().slots[0].state == SlotState::Stopped {
+                hang_reset!();
+                break;
+            }
+            kithara_platform::time::sleep(Duration::from_millis(1)).await;
+        }
         self.apply(QueueCommand::Seek {
             to: kithara_play::Position::try_from_secs_f64(position).expect("seek position"),
         });
         loop {
-            hang_tick!();
+            hang_tick!(format!(
+                "threshold seek to {position}: {:?}",
+                self.queue.current_track().map(Player::snapshot)
+            ));
             self.read(1).await;
             let snapshot = self
                 .queue
@@ -227,12 +246,34 @@ impl ThresholdRig {
             kithara_platform::time::sleep(Duration::from_millis(1)).await;
         }
         self.apply(QueueCommand::Play { at: When::Next });
+        loop {
+            hang_tick!(format!(
+                "threshold seek awaits its play receipt: {:?}",
+                self.queue.current_track().map(Player::snapshot)
+            ));
+            self.read(1).await;
+            if matches!(
+                self.queue
+                    .current_track()
+                    .expect("current track")
+                    .snapshot()
+                    .status,
+                kithara_play::TrackStatus::Playing { .. }
+            ) {
+                hang_reset!();
+                break;
+            }
+            kithara_platform::time::sleep(Duration::from_millis(1)).await;
+        }
     }
 
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     async fn read(&mut self, frames: usize) -> [Vec<f32>; 2] {
         hang_tick!();
-        self.loads.poll_fixture().await;
+        {
+            let _real_io = kithara_platform::flash::real_io();
+            self.loads.poll_fixture().await;
+        }
         let mut pcm = [vec![0.0; frames], vec![0.0; frames]];
         let [left, right] = &mut pcm;
         self.mixer
@@ -284,11 +325,34 @@ impl ThresholdRig {
 
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     fn observe(&mut self) {
-        use kithara_render::DispatcherCommand;
+        use kithara_render::{Dispatched, DispatcherCommand};
 
         self.loads.opens.drain();
         while let Some(due) = self.loads.opens.next_due((), 1) {
             hang_tick!();
+            if matches!(
+                due.commands().first(),
+                Some(DispatcherCommand::SetPriority(_, _))
+            ) {
+                due.apply(Dispatched::Prioritized);
+                hang_reset!();
+                continue;
+            }
+            if matches!(due.commands().first(), Some(DispatcherCommand::Release(_))) {
+                due.apply(Dispatched::Released);
+                hang_reset!();
+                continue;
+            }
+            due.defer();
+            hang_reset!();
+        }
+        if self.successor_seq.is_none()
+            && self
+                .queue
+                .active
+                .iter()
+                .any(|active| active.item == THRESHOLD_NEXT)
+        {
             let active = self
                 .queue
                 .active
@@ -296,6 +360,11 @@ impl ThresholdRig {
                 .find(|active| active.item == THRESHOLD_NEXT)
                 .expect("preload request belongs to the next queue item");
             let seq = active.load.expect("successor remains unadmitted").seq();
+            let due = self
+                .loads
+                .opens
+                .resume(seq, (), ())
+                .expect("preload owns its original dispatcher request");
             assert_eq!(due.seq(), seq);
             assert_eq!(due.commands().len(), 1, "one load per request");
             assert!(matches!(
@@ -378,13 +447,16 @@ async fn handover_emits_once_when_position_crosses_fade_threshold() {
 }
 
 #[kithara::test(tokio)]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn prefetch_fires_before_handover() {
     for (duration, lead, seek) in [(10.0, 2.0, Some(8.5)), (0.5, 5.0, None)] {
+        hang_tick!();
         let mut rig = ThresholdRig::playing(duration, 0.0, lead, None).await;
         if let Some(position) = seek {
             rig.seek(position).await;
         }
         rig.read(THRESHOLD_BLOCK).await;
+        hang_reset!();
         assert_eq!(
             rig.prefetches, 1,
             "preload must fire inside the prefetch lead window"

@@ -191,6 +191,7 @@ where
 /// queue, which turns the track [`TrackStatus::Slow`](crate::TrackStatus::Slow),
 /// unless `watch` ends first. A `Lagged` bus dropped the oldest envelopes and
 /// keeps delivering, so the watch survives the gap; only `Closed` ends it.
+#[kithara_test_utils::kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn slow_transfer<S>(
     id: TrackId,
@@ -201,32 +202,44 @@ async fn slow_transfer<S>(
     S: HasPool<u8> + Send + Sync + 'static,
 {
     let slow = async {
+        let mut reported = false;
         loop {
             hang_tick!(format!("load {id:?} awaits downloader progress"));
-            let answer =
+            let answer = {
+                let _real_io = kithara_platform::flash::real_io();
                 kithara_platform::time::timeout(__hang_detector.remaining(), events.recv())
                     .await
                     .unwrap_or_else(|_| {
                         hang_tick!(format!("load {id:?} awaits downloader progress"));
                         panic!("load {id:?} downloader watch stopped progressing")
-                    });
+                    })
+            };
             hang_reset!();
             match answer {
                 Ok(Envelope {
                     event: DownloaderEvent::LoadSlow { .. },
                     ..
-                }) => return true,
+                }) => {
+                    if !reported {
+                        report(
+                            &postbox,
+                            LoadReport::Slow {
+                                id,
+                                watch: watch.clone(),
+                            },
+                        );
+                        reported = true;
+                    }
+                }
                 Ok(_) | Err(RecvError::Lagged(_)) => {}
-                Err(RecvError::Closed) => return false,
+                Err(RecvError::Closed) => return,
             }
         }
     };
     tokio::select! {
         biased;
         () = watch.cancelled() => {}
-        slow = slow => if slow {
-            report(&postbox, LoadReport::Slow { id, watch: watch.clone() });
-        },
+        () = slow => {},
     }
 }
 
@@ -257,21 +270,21 @@ fn can_answer_later(error: &(dyn StdError + 'static)) -> bool {
 /// [`io::Error`] hides its payload from [`StdError::source`] — it reports the
 /// payload's *own* source instead — so a plain chain walk steps straight over a
 /// wrapped `NetError`. This looks inside one explicitly.
+#[kithara_test_utils::kithara::hang_watchdog]
 fn net_cause<'e>(error: &'e (dyn StdError + 'static)) -> Option<&'e NetError> {
     let mut current = Some(error);
     while let Some(err) = current {
+        hang_tick!();
         if let Some(net) = err.downcast_ref::<NetError>() {
+            hang_reset!();
             return Some(net);
         }
-        if let Some(net) = err
+        current = err
             .downcast_ref::<Error>()
             .and_then(Error::get_ref)
-            .and_then(|payload| net_cause(payload))
-        {
-            return Some(net);
-        }
-        current = err.source();
+            .map_or_else(|| err.source(), |payload| Some(payload));
     }
+    hang_reset!();
     None
 }
 #[cfg(test)]
@@ -438,9 +451,9 @@ mod tests {
         assert_eq!(tracks.records()[0].status, TrackStatus::Cancelled);
     }
 
-    #[kithara::test(native)]
+    #[kithara::test(tokio)]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-    fn a_slow_watch_survives_a_bus_that_dropped_a_burst() {
+    async fn a_slow_watch_survives_a_bus_that_dropped_a_burst() {
         hang_tick!();
         let capacity = 4;
         let bus = EventBus::new(capacity);
@@ -504,6 +517,7 @@ mod tests {
         );
     }
 
+    #[kithara::flash(io)]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     async fn open(item: ResourceLoad<TestPools>) -> Result<(), LoadRefusal> {
         let (_sender, inbox) = channel::<LaneProtocol>(ChannelConfig::builder().build());
@@ -525,6 +539,7 @@ mod tests {
         }
     }
 
+    #[kithara::flash(io)]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     async fn cover_report(
         mailbox: &mut Mailbox<QueueCommand<TestPools>, QueueError>,

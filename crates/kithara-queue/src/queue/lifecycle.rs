@@ -11,7 +11,7 @@ use super::{
     Queue, Transition,
     slots::{Active, LoadState, Parked, Role},
     transition::TransitionRequest,
-    types::{Placement, extract_track_name},
+    types::{Placement, SeekPosition, extract_track_name},
 };
 use crate::{
     AdvanceReason, NavigationState, QueueError, QueueEvent, TrackSource, TrackStatus, consts,
@@ -95,6 +95,7 @@ where
         } else {
             None
         };
+        let shifted = self.current_index().is_some_and(|current| current > index);
         if self.target.is_some_and(|target| target.to == id) {
             self.cancel_target(out)?;
         }
@@ -114,6 +115,9 @@ where
         drop(self.tracks.records_mut().remove(index));
         self.navigation.reconcile(&self.track_ids());
         self.announce(QueueEvent::TrackRemoved { id });
+        if shifted {
+            self.announce(QueueEvent::CurrentTrackChanged { id: self.current });
+        }
         if let Some(replacement) = replacement {
             return self.request_transition(
                 TransitionRequest {
@@ -190,7 +194,7 @@ where
         };
         let (track, load) = if let Some(mut parked) = taken {
             let result = (|| {
-                if let Some(to) = self.held_position {
+                if let Some(to) = self.held_position.and_then(SeekPosition::held) {
                     parked.track.apply(TrackCommand::Seek { to }, out)?;
                     self.held_position = None;
                 }
@@ -214,11 +218,15 @@ where
             let (track, seq) = self.open_track(
                 id,
                 Some(slot),
-                self.held_position.unwrap_or(Position::ZERO),
+                self.held_position
+                    .and_then(SeekPosition::held)
+                    .unwrap_or(Position::ZERO),
                 output,
                 out,
             )?;
-            self.held_position = None;
+            if matches!(self.held_position, Some(SeekPosition::Held(_))) {
+                self.held_position = None;
+            }
             (track, seq.map(LoadState::Opening))
         };
         let seq = load.map(LoadState::seq);
@@ -308,7 +316,7 @@ where
             }
         };
         let (track, load) = if let Some(mut parked) = taken {
-            if let Some(to) = self.held_position {
+            if let Some(to) = self.held_position.and_then(SeekPosition::held) {
                 if let Err(error) = parked.track.apply(TrackCommand::Seek { to }, out) {
                     if let Err(error) = parked.track.apply(TrackCommand::Release, out) {
                         warn!(%error, "a refused background seek waits to release");
@@ -323,11 +331,15 @@ where
             let (track, seq) = self.open_track(
                 id,
                 None,
-                self.held_position.unwrap_or(Position::ZERO),
+                self.held_position
+                    .and_then(SeekPosition::held)
+                    .unwrap_or(Position::ZERO),
                 output,
                 out,
             )?;
-            self.held_position = None;
+            if matches!(self.held_position, Some(SeekPosition::Held(_))) {
+                self.held_position = None;
+            }
             (track, seq.map(LoadState::Opening))
         };
         let seq = load.map(LoadState::seq);
@@ -444,6 +456,7 @@ where
         }
     }
 
+    #[kithara_test_utils::kithara::hang_watchdog]
     pub(super) fn pump_loads(&mut self, output: Option<&OutputSnapshot>, out: &mut Outbox<'_, S>) {
         if self.shutdown.is_cancelled() || output.is_none() {
             return;
@@ -451,6 +464,7 @@ where
         while self.active.parked_len() < self.config.max_concurrent_loads.get()
             && out.dispatcher_available() > consts::SELECT_DISPATCH_RESERVE
         {
+            hang_tick!();
             let Some(id) = self
                 .tracks
                 .records()
@@ -476,6 +490,7 @@ where
                     });
                 }
             }
+            hang_reset!();
         }
     }
 
@@ -588,6 +603,7 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
+    #[kithara::hang_watchdog(timeout = kithara_platform::time::Duration::from_secs(1))]
     async fn append_returns_monotonic_ids_and_emits_track_added() {
         let (queue, _host) = hosted_queue().await;
         let mut rx = queue.subscribe();
@@ -604,7 +620,9 @@ mod tests {
         )
         .await
         {
+            hang_tick!();
             seen += 1;
+            hang_reset!();
             if seen == 2 {
                 break;
             }

@@ -184,6 +184,7 @@ async fn immediate_seek(
     run_case(gated_source, mode).await;
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn warm_up(
     harness: &Harness,
     queue: &QueueControl<TestPools>,
@@ -191,8 +192,10 @@ async fn warm_up(
     mode: GateMode,
 ) {
     for _ in 0..WARMUP_BLOCKS {
+        hang_tick!(format!("warm-up waits for offline block, mode={mode:?}"));
         let _ = harness.run(queue, QueueControl::tick).await;
         let _ = harness.render(BLOCK_FRAMES).await;
+        hang_reset!();
     }
     assert_eq!(
         gate.head_requested(),
@@ -202,6 +205,7 @@ async fn warm_up(
     );
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode) {
     let (hls, gate) = gated_source;
     // A registered gate parks the body by default. Apply the requested mode.
@@ -291,9 +295,12 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
     let mut trigger = Trigger::NoTerminal;
     let mut outcome = Outcome::HeldOnTrack;
     for _ in 0..OBSERVE_BLOCKS {
+        hang_tick!(format!("withheld seek awaits offline block, mode={mode:?}"));
         let _ = harness.run(&queue, QueueControl::tick).await;
         let _ = harness.render(BLOCK_FRAMES).await;
+        hang_reset!();
         while let Ok(ev) = rx.try_recv().map(|env| env.event) {
+            hang_tick!("withheld seek drains terminal events".to_owned());
             if let TestEvent::Player(pe) = ev {
                 match pe {
                     PlayerEvent::ItemDidFail { ref item, .. } if item.track().src == target_src => {
@@ -316,6 +323,7 @@ async fn run_case(gated_source: (CreatedHls, SegmentGateHandle), mode: GateMode)
                     | PlayerEvent::PrerollCompleted { .. } => {}
                 }
             }
+            hang_reset!();
         }
         let idx = queue.current_index();
         if idx != Some(0) {

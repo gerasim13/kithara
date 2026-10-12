@@ -1,9 +1,30 @@
 use kithara_bufpool::HasPool;
 use kithara_command::Seq;
 use kithara_events::TrackId;
-use kithara_play::{Bound, CrossfadeSettings, ResourceSrc};
+use kithara_play::{Bound, CrossfadeSettings, Position, ResourceSrc};
+use kithara_signal::SegmentId;
 
 use crate::{event::AdvanceReason, track::TrackSource};
+
+#[derive(Clone, Copy)]
+pub(super) enum SeekPosition {
+    Held(Position),
+    Pending {
+        item: TrackId,
+        seq: Seq,
+        to: Position,
+        segment: Option<SegmentId>,
+    },
+}
+
+impl SeekPosition {
+    pub(super) fn held(self) -> Option<Position> {
+        match self {
+            Self::Held(to) => Some(to),
+            Self::Pending { .. } => None,
+        }
+    }
+}
 
 /// One coherent view of the current track's published playback state.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -112,7 +133,7 @@ mod tests {
 
     #[kithara::test]
     fn cached_position_known_nan_canonicalises_to_unknown() {
-        assert!(kithara_play::Position::try_from_secs_f64(f64::NAN).is_err());
+        assert!(Position::try_from_secs_f64(f64::NAN).is_err());
     }
 
     #[kithara::test]

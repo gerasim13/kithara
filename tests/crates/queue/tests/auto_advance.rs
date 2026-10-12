@@ -71,21 +71,28 @@ fn first_onset_frame(pcm: &[f32], threshold: f32) -> Option<usize> {
 
 /// Render until either EOF count or block budget is reached. Returns the
 /// concatenated stereo-interleaved PCM.
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn render_loop(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayer,
     block_budget: usize,
 ) -> Vec<f32> {
     let mut pcm = Vec::new();
-    for _ in 0..block_budget {
+    for block_index in 0..block_budget {
+        hang_tick!(format!(
+            "rendering queue block {block_index}/{block_budget}"
+        ));
         let _ = harness.run(queue, QueueControl::tick).await;
         let block = harness.render(BLOCK_FRAMES).await;
         pcm.extend(block);
+        hang_reset!();
     }
     pcm
 }
 
 #[kithara::test(tokio)]
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn crossfade_started_requires_a_live_predecessor() {
     const CROSSFADE_SECS: f32 = 0.2;
 
@@ -109,6 +116,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
         .expect("select initial track");
 
     while let Ok(envelope) = receiver.try_recv() {
+        hang_tick!();
         assert!(
             !matches!(
                 envelope.event,
@@ -116,14 +124,17 @@ async fn crossfade_started_requires_a_live_predecessor() {
             ),
             "a cold select cannot crossfade from an idle player"
         );
+        hang_reset!();
     }
 
     let mut saw_playing = false;
     for _ in 0..MAX_BLOCKS {
+        hang_tick!();
         let _ = harness.run(&queue, QueueControl::tick).await;
         let _ = harness.render(BLOCK_FRAMES).await;
         let is_playing = queue.is_playing();
         saw_playing |= is_playing;
+        hang_reset!();
         if saw_playing && !is_playing {
             break;
         }
@@ -147,6 +158,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
         .expect("select successor after EOF");
 
     while let Ok(envelope) = receiver.try_recv() {
+        hang_tick!();
         assert!(
             !matches!(
                 envelope.event,
@@ -154,6 +166,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
             ),
             "a completed predecessor cannot start a crossfade"
         );
+        hang_reset!();
     }
     drop(queue);
     harness.close().await;
@@ -233,9 +246,11 @@ async fn selecting_a_loaded_track_starts_playback_from_a_stopped_transport() {
 }
 
 #[kithara::test(tokio)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn repeat_all_natural_advance_wraps_last_track_to_first() {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
@@ -262,9 +277,14 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first() {
         })
     ));
     for _ in 0..MAX_BLOCKS {
+        hang_tick!(format!(
+            "repeat-all waits for track {first:?}; current={:?}",
+            queue.current_index()
+        ));
         let _ = harness.run(&queue, QueueControl::tick).await;
         let _ = harness.render(BLOCK_FRAMES).await;
         if queue.current().is_some_and(|entry| entry.id == first) {
+            hang_reset!();
             break;
         }
     }
@@ -284,6 +304,7 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
 
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
@@ -352,6 +373,7 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
 async fn a_queue_the_host_holds_moves_on_with_no_caller_ticking_it() {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
@@ -373,6 +395,10 @@ async fn a_queue_the_host_holds_moves_on_with_no_caller_ticking_it() {
     let mut announced = false;
     let mut pcm = Vec::new();
     for _ in 0..MAX_BLOCKS {
+        hang_tick!(format!(
+            "automatic advance waits for track {id_b:?}; current={:?}",
+            queue.current_index()
+        ));
         pcm.extend(harness.render(BLOCK_FRAMES).await);
         while let Ok(envelope) = events.try_recv() {
             hang_tick!("draining automatic-advance events".to_owned());
@@ -652,14 +678,19 @@ async fn gapless_queue_with_an_armed_successor()
 /// Renders blocks until the one in which the deck stitches in the loud
 /// successor behind the quiet track it plays. The Host ticks the queue only
 /// ahead of a block, so no tick has read the stitch yet.
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn render_through_the_stitch(harness: &OfflinePlayer, block_budget: usize) {
     /// Between `constant_wav_quiet_1_5s` (≈0.1) and `constant_wav_loud_1_5s`
     /// (≈0.8).
     const LOUD_LEVEL: f32 = 0.45;
 
-    for _ in 0..block_budget {
+    for block_index in 0..block_budget {
+        hang_tick!(format!(
+            "waiting for the loud successor; block {block_index}/{block_budget}"
+        ));
         let block = harness.render(BLOCK_FRAMES).await;
         if block.iter().any(|sample| sample.abs() > LOUD_LEVEL) {
+            hang_reset!();
             return;
         }
     }
@@ -670,6 +701,7 @@ async fn render_through_the_stitch(harness: &OfflinePlayer, block_budget: usize)
 /// once: the deck stops at that end even when no tick comes before it,
 /// instead of stitching in the gapless successor armed behind it.
 #[kithara::test(tokio)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn pausing_at_the_end_takes_back_the_armed_successor_at_once() {
     /// `constant_wav_*_1_5s`: 1.5 s at 44.1 kHz.
     const TRACK_FRAMES: usize = 66_150;
@@ -688,7 +720,9 @@ async fn pausing_at_the_end_takes_back_the_armed_successor_at_once() {
 
     let mut pcm = Vec::new();
     for _ in 0..TRACK_FRAMES / BLOCK_FRAMES + ARMING_BLOCKS {
+        hang_tick!("rendering the paused-at-end predecessor".to_owned());
         pcm.extend(harness.render(BLOCK_FRAMES).await);
+        hang_reset!();
     }
     let loudest = pcm
         .iter()
@@ -737,6 +771,7 @@ async fn a_pause_after_the_deck_stitches_in_the_successor_leaves_the_queue_on_it
 /// the stitch, leaves the queue nothing to follow it to: the end of the track
 /// before it advances to the next track the queue holds.
 #[kithara::test(tokio)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn removing_a_successor_the_deck_already_stitched_in_advances_past_it() {
     /// `constant_wav_*_1_5s`: 1.5 s at 44.1 kHz.
     const TRACK_FRAMES: usize = 66_150;
@@ -756,6 +791,19 @@ async fn removing_a_successor_the_deck_already_stitched_in_advances_past_it() {
         .expect("remove track B");
     let _ = harness.run(&queue, QueueControl::tick).await;
 
+    {
+        let _real_io = kithara::platform::flash::real_io();
+        while queue.current().map(|entry| entry.id) != Some(id_c) {
+            hang_tick!(format!(
+                "removed stitched successor; awaiting {id_c:?}, current={:?}, target={:?}",
+                queue.current().map(|entry| entry.id),
+                queue.track(id_c).map(|entry| entry.status)
+            ));
+            let _ = harness.render(BLOCK_FRAMES).await;
+        }
+        hang_reset!();
+    }
+
     assert_eq!(
         queue.current().map(|entry| entry.id),
         Some(id_c),
@@ -769,6 +817,7 @@ async fn removing_a_successor_the_deck_already_stitched_in_advances_past_it() {
 /// between the insert and the end: the insert itself takes the successor it
 /// displaced off the deck.
 #[kithara::test(tokio)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn a_track_inserted_after_the_playing_one_follows_it_without_a_tick_before_the_end() {
     /// `constant_wav_*_1_5s`: 1.5 s at 44.1 kHz.
     const TRACK_FRAMES: usize = 66_150;
@@ -789,7 +838,9 @@ async fn a_track_inserted_after_the_playing_one_follows_it_without_a_tick_before
         .await
         .expect("track C loads");
     for _ in 0..TRACK_FRAMES / BLOCK_FRAMES {
+        hang_tick!("rendering the predecessor before inserted C enters".to_owned());
         let _ = harness.render(BLOCK_FRAMES).await;
+        hang_reset!();
     }
     let _ = harness.run(&queue, QueueControl::tick).await;
 
@@ -1044,6 +1095,7 @@ async fn a_crossfade_at_double_speed_starts_its_duration_before_the_outgoing_end
 /// the first track reaches the bus during a cf>0 cycle — purely event-level,
 /// but pinned to the real `Queue::tick` path.
 #[kithara::test(tokio)]
+#[kithara_test_utils::kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
     use kithara::{platform::tokio::sync::broadcast::error::TryRecvError, play::PlayerEvent};
@@ -1052,6 +1104,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
 
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(CROSSFADE_SECS)
             .build(),
         SAMPLE_RATE,
@@ -1072,11 +1125,18 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
         .expect("select track A");
 
     let mut item_end_seen = false;
+    let mut observed = (queue.current_index(), queue.position_seconds());
+    hang_reset!();
 
     for _ in 0..MAX_BLOCKS {
-        hang_tick!("queue waits for ItemDidPlayToEnd".to_owned());
+        hang_tick!(format!("queue waits for ItemDidPlayToEnd: {observed:?}"));
         let _ = harness.run(&queue, QueueControl::tick).await;
         let _ = harness.render(BLOCK_FRAMES).await;
+        let progress = (queue.current_index(), queue.position_seconds());
+        if progress != observed {
+            observed = progress;
+            hang_reset!();
+        }
 
         loop {
             hang_tick!("queue end event drain".to_owned());
@@ -1108,6 +1168,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
 /// successor reloads when the outgoing track has `lead` session seconds
 /// left, which is twice the lead in media seconds.
 #[kithara::test(tokio)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn a_consumed_successor_reloads_its_lead_in_session_time_before_the_end() {
     const TRACK_SECS: f64 = 1.5;
     const SPEED: f32 = 2.0;
@@ -1168,9 +1229,14 @@ async fn a_consumed_successor_reloads_its_lead_in_session_time_before_the_end() 
         .expect("track A reloads");
     let mut reload = None;
     for block in 0..MAX_BLOCKS {
+        hang_tick!(format!(
+            "waiting for consumed successor {id_b:?} to reload; block={block}, current={:?}",
+            queue.current_index()
+        ));
         let _ = harness.run(&queue, QueueControl::tick).await;
         let status = queue.track(id_b).map(|entry| entry.status);
         if status != Some(TrackStatus::Consumed) {
+            hang_reset!();
             reload = Some((block, status, queue.current_index(), queue.playback_view()));
             break;
         }
@@ -1276,11 +1342,14 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
 /// When the last track finishes, the live playback snapshot must become inactive
 /// so the UI sees a stopped state even though transport intent remains unchanged.
 #[kithara::test(tokio)]
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn queue_stops_live_playback_when_last_track_ends() {
     use kithara::{platform::tokio::sync::broadcast::error::TryRecvError, queue::QueueEvent};
 
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
@@ -1300,20 +1369,25 @@ async fn queue_stops_live_playback_when_last_track_ends() {
 
     let mut saw_queue_ended = false;
     for _ in 0..MAX_BLOCKS {
+        hang_tick!("terminal EOF awaits its queue event".to_owned());
         let _ = harness.run(&queue, QueueControl::tick).await;
         let _ = harness.render(BLOCK_FRAMES).await;
+        hang_reset!();
         loop {
+            hang_tick!("terminal EOF drains queue events".to_owned());
             match rx.try_recv().map(|env| env.event) {
                 Ok(TestEvent::Queue(QueueEvent::QueueEnded)) => saw_queue_ended = true,
-                Ok(_) => {}
+                Ok(_) | Err(TryRecvError::Lagged(_)) => {}
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
-                Err(TryRecvError::Lagged(_)) => continue,
             }
+            hang_reset!();
         }
         if saw_queue_ended {
             for _ in 0..4 {
+                hang_tick!("terminal EOF drains its final receipts".to_owned());
                 let _ = harness.run(&queue, QueueControl::tick).await;
                 let _ = harness.render(BLOCK_FRAMES).await;
+                hang_reset!();
             }
             break;
         }
@@ -1455,6 +1529,7 @@ async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
 
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,

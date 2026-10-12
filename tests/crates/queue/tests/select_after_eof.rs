@@ -26,9 +26,18 @@ const BLOCK_FRAMES: usize = 512;
 const BLOCK_BUDGET: usize = 256;
 
 /// The advance a natural end asks for, named for the entry it lands on.
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn wait_for_eof_advance(events: &mut EventReceiver<QueueEvent>, id: TrackId) {
-    let answered = time::timeout(Duration::from_secs(20), async {
-        while let Ok(envelope) = events.recv().await {
+    let answered = time::timeout(__hang_detector.remaining(), async {
+        loop {
+            hang_tick!(format!(
+                "repeat-one waits for natural EOF advance onto {id:?}"
+            ));
+            let Ok(Ok(envelope)) = time::timeout(__hang_detector.remaining(), events.recv()).await
+            else {
+                return false;
+            };
             if matches!(
                 envelope.event,
                 QueueEvent::CurrentTrackAdvance {
@@ -36,10 +45,10 @@ async fn wait_for_eof_advance(events: &mut EventReceiver<QueueEvent>, id: TrackI
                     reason: AdvanceReason::NaturalEof,
                 } if seen == id
             ) {
+                hang_reset!();
                 return true;
             }
         }
-        false
     })
     .await
     .unwrap_or(false);
@@ -55,19 +64,24 @@ async fn wait_for_eof_advance(events: &mut EventReceiver<QueueEvent>, id: TrackI
 /// the loader's latency instead of the switch. The statement travels from the
 /// player through `tick`, so the wait has to render; subscribe before the
 /// select, because the event is edge-triggered and never repeats.
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn wait_for_current_track(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayer,
     events: &mut EventReceiver<QueueEvent>,
     id: TrackId,
 ) {
-    let landed = time::timeout(Duration::from_secs(20), async {
+    let landed = time::timeout(__hang_detector.remaining(), async {
         loop {
+            hang_tick!(format!("queue waits for current track {id:?}"));
             while let Ok(envelope) = events.try_recv() {
+                hang_tick!(format!("queue drains current track events for {id:?}"));
                 if matches!(
                     envelope.event,
                     QueueEvent::CurrentTrackChanged { id: Some(seen) } if seen == id
                 ) {
+                    hang_reset!();
                     return true;
                 }
             }
@@ -92,6 +106,8 @@ fn first_onset_frame(pcm: &[f32], threshold: f32) -> Option<usize> {
         .position(|frame| frame.iter().any(|s| s.abs() > threshold))
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn render_loop(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayer,
@@ -99,8 +115,10 @@ async fn render_loop(
 ) -> Vec<f32> {
     let mut pcm = Vec::with_capacity(block_budget * BLOCK_FRAMES * usize::from(CHANNELS));
     for _ in 0..block_budget {
+        hang_tick!(format!("queue renders block after {} samples", pcm.len()));
         let _ = harness.run(queue, QueueControl::tick).await;
         pcm.extend(harness.render(BLOCK_FRAMES).await);
+        hang_reset!();
     }
     pcm
 }

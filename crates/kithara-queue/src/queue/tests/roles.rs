@@ -12,7 +12,7 @@ use kithara_test_utils::{TestTempDir, kithara};
 use super::super::slots::Role;
 use crate::{
     ActionAtItemEnd, Queue, QueueCommand, TrackSource, Transition,
-    mock::{TestPools, loaded_fixture, pending_selection, with_outbox},
+    mock::{TestPools, pending_selection, with_outbox},
 };
 
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
@@ -31,9 +31,9 @@ fn dispatcher(
             };
             match due.commands_mut().as_slice() {
                 [DispatcherCommand::Load(_)] => {
-                    due.apply(Dispatched::Loaded(
-                        loaded.take().expect("requested fixture"),
-                    ));
+                    due.defer();
+                    hang_reset!();
+                    continue;
                 }
                 [DispatcherCommand::Release(_)] => due.apply(Dispatched::Released),
                 [DispatcherCommand::SetPriority(lane, class)] => {
@@ -48,6 +48,24 @@ fn dispatcher(
             .receipts()
             .next()
             .expect("dispatcher receipt");
+        with_outbox(queue, rig, |queue, out| {
+            Player::settle(queue, TrackReceipt::Loaded(receipt), out)
+        });
+        hang_reset!();
+    }
+    if let Some(fixture) = loaded.take() {
+        let wanted = queue
+            .active
+            .iter()
+            .filter_map(|active| active.load)
+            .last()
+            .expect("the actual owner must request the fixture")
+            .seq();
+        rig.opens
+            .resume(wanted, (), ())
+            .expect("requested fixture")
+            .apply(Dispatched::Loaded(fixture));
+        let receipt = rig.dispatcher.receipts().next().expect("fixture receipt");
         with_outbox(queue, rig, |queue, out| {
             Player::settle(queue, TrackReceipt::Loaded(receipt), out)
         });
@@ -116,11 +134,18 @@ fn deck(
 async fn open(
     queue: &mut Queue<TestPools>,
     rig: &mut mock::DeckRig<TestPools>,
-    dir: &TestTempDir,
+    _dir: &TestTempDir,
     priorities: &mut Vec<(LaneId, ServiceClass)>,
 ) -> LaneId {
     hang_tick!();
-    let mut loaded = loaded_fixture(rig, dir).await;
+    let seq = queue
+        .active
+        .iter()
+        .filter_map(|active| active.load)
+        .last()
+        .expect("fixture load")
+        .seq();
+    let mut loaded = crate::mock::loaded_request(rig, seq).await;
     hang_reset!();
     loaded.opened.duration = Some(Duration::from_secs(10));
     let lane = loaded.lane;
