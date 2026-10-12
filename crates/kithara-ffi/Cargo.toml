@@ -168,6 +168,7 @@ kithara = { workspace = true, default-features = false, features = [
     "audio",
     "hls",
     "host",
+    "worker",
     "resample-rubato",
     "stretch-glide",
     "symphonia",

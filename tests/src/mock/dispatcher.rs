@@ -49,7 +49,10 @@ where
     B: Default + ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    pub fn new(worker: &PlayWorker<S>) -> Result<Self, LoadRefusal> {
+    pub fn new(worker: &PlayWorker<S>) -> Result<Self, LoadRefusal>
+    where
+        T::Config: Send + 'static,
+    {
         let (sender, inbox) = channel(ChannelConfig::builder().build());
         let dispatcher = worker.start_dispatcher(inbox)?;
         Ok(Self {

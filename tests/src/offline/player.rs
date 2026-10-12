@@ -1,8 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-#[cfg(not(target_arch = "wasm32"))]
-use kithara::audio::AudioReader;
 use kithara::{
+    audio::AudioReader,
     decode::GaplessMode,
     effects::eq::EqBandConfig,
     events::{EventReceiver, TrackId},
@@ -437,12 +436,19 @@ where
         drop(pcm_decks);
     }
 
+    #[cfg_attr(target_arch = "wasm32", kithara_test_utils::kithara::hang_watchdog)]
     fn drain_events(&self) -> Vec<TestEvent> {
         let mut events = Vec::new();
         let mut rx = self.events.lock();
         loop {
+            #[cfg(target_arch = "wasm32")]
+            hang_tick!();
             match rx.try_recv() {
-                Ok(envelope) => events.push(envelope.event),
+                Ok(envelope) => {
+                    events.push(envelope.event);
+                    #[cfg(target_arch = "wasm32")]
+                    hang_reset!();
+                }
                 Err(TryRecvError::Lagged(_)) => continue,
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             }

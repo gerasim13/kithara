@@ -186,6 +186,28 @@ where
         self.with_deck(id, &mut |deck, out, _pass| {
             result = deck.close(out);
         })?;
+        if let Err(error @ PlayError::SessionGone { .. }) = result {
+            let (_, mut record) = self.decks.0.remove(index);
+            if let Some(channel) = &mut self.session.channel
+                && let Err(error) = channel.close(record.scope)
+            {
+                tracing::warn!(%error, ?id, "gone session scope could not close");
+            }
+            if let Err(error) = graph::remove_deck(&mut self.session, id) {
+                tracing::warn!(%error, ?id, "gone session deck node could not retire");
+            }
+            self.retired_dispatches.append(&mut record.dispatches);
+            record.deck.release();
+            drop(record);
+            self.session.settled.push(HostSettled::Closed { deck: id });
+            if self.decks.0.is_empty()
+                && let Err(error) = graph::idle(&mut self.session)
+            {
+                tracing::warn!(%error, "gone session could not idle");
+            }
+            self.publish_root();
+            return Err(error);
+        }
         result?;
         let record = &mut self.decks.0[index].1;
         self.session
@@ -816,6 +838,7 @@ fn map_deck_rejection(
 }
 
 impl<S, D: ?Sized + HostedDeck<S>> Drop for HostCore<S, D> {
+    #[cfg_attr(target_arch = "wasm32", kithara_test_utils::kithara::hang_watchdog)]
     fn drop(&mut self) {
         for (_, record) in &mut self.decks.0 {
             if let Some(channel) = &mut self.session.channel {
@@ -859,6 +882,7 @@ impl<S, D: ?Sized + HostedDeck<S>> Drop for HostCore<S, D> {
                     drop(kithara_platform::tokio::task::spawn(async move {
                         let mut retired = false;
                         loop {
+                            hang_tick!();
                             if let Err(error) = context.update() {
                                 tracing::warn!(?error, "browser shutdown graph update failed");
                             }
@@ -874,23 +898,32 @@ impl<S, D: ?Sized + HostedDeck<S>> Drop for HostCore<S, D> {
                                     drop(entry.remove());
                                 }
                                 retired = true;
+                                hang_reset!();
                             }
                             if let Some(channel) = &mut channel {
                                 while let Some(receipt) = channel.receipt() {
+                                    hang_tick!();
                                     if let ScopedReceipt::Closed(scope) = receipt
                                         && let Some(index) =
                                             decks.iter().position(|(held, _)| *held == scope)
                                     {
                                         let (_, mut deck) = decks.remove(index);
                                         deck.release();
+                                        hang_reset!();
                                     }
                                 }
                             }
                             if retired && decks.is_empty() {
                                 break;
                             }
-                            kithara_platform::time::sleep(crate::consts::SESSION_PUMP_INTERVAL)
-                                .await;
+                            let mut budget = kithara_platform::time::Duration::ZERO;
+                            hang_park!(|remaining| budget = remaining);
+                            let _real_io = kithara_platform::flash::real_io();
+                            let _ = kithara_platform::time::timeout(
+                                budget,
+                                kithara_platform::time::sleep(crate::consts::SESSION_PUMP_INTERVAL),
+                            )
+                            .await;
                         }
                         root_view.publish_decks(Box::default());
                         drop(dispatcher_task);

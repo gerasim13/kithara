@@ -22,14 +22,22 @@ all:
 # Both suites run the wasm Host tests and FFI wire contract. SUITE `all` also
 # runs the integration browser suite; `webcodecs` adds kithara-decode's target.
 
-# Run the Rust tests that need a browser (SUITE: all | webcodecs).
+# Run browser tests; REAL_AUDIO_ROUTE selects device-backed binaries for CI only.
 [positional-arguments]
-wasm BROWSER="chrome" SUITE="all":
+wasm BROWSER="chrome" SUITE="all" REAL_AUDIO_ROUTE="exclude":
     #!/usr/bin/env bash
     set -euo pipefail
     browser="{{ BROWSER }}"
     suite="{{ SUITE }}"
+    real_audio_route="{{ REAL_AUDIO_ROUTE }}"
     toolchain="${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
+    case "$real_audio_route" in
+      exclude|include) ;;
+      *)
+        echo "unknown real audio route selection: $real_audio_route (use exclude|include)"
+        exit 2
+        ;;
+    esac
     case "$suite" in
       all|webcodecs) ;;
       *)
@@ -71,13 +79,15 @@ wasm BROWSER="chrome" SUITE="all":
       -Z build-std-features=optimize_for_size \
       -p kithara-host --lib --no-default-features \
       --features symphonia,webcodecs,resample-rubato,stretch-identity,client-reqwest,tls-rustls
-    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-      cargo "+$toolchain" test --profile test-release \
-      --target wasm32-unknown-unknown \
-      -Z build-std=std,panic_abort,core,alloc \
-      -Z build-std-features=optimize_for_size \
-      -p kithara-ffi --test web-observer --no-default-features \
-      --features wasm
+    if [[ "$real_audio_route" == "include" ]]; then
+      WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+        cargo "+$toolchain" test --profile test-release \
+        --target wasm32-unknown-unknown \
+        -Z build-std=std,panic_abort,core,alloc \
+        -Z build-std-features=optimize_for_size \
+        -p kithara-ffi --test web-observer --no-default-features \
+        --features wasm
+    fi
     WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
       cargo "+$toolchain" test --profile test-release \
       --target wasm32-unknown-unknown \
@@ -109,12 +119,14 @@ wasm BROWSER="chrome" SUITE="all":
       -Z build-std-features=optimize_for_size \
       -p kithara-analysis --lib --no-default-features \
       --features analysis-waveform,beat-dsp,client-reqwest,tls-rustls,symphonia,webcodecs
-    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-      cargo "+$toolchain" test --profile test-release \
-      --target wasm32-unknown-unknown \
-      -Z build-std=std,panic_abort,core,alloc \
-      -Z build-std-features=optimize_for_size \
-      -p kithara-ffi-web-analysis-tests --features browser --test web-analysis
+    if [[ "$real_audio_route" == "include" ]]; then
+      WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+        cargo "+$toolchain" test --profile test-release \
+        --target wasm32-unknown-unknown \
+        -Z build-std=std,panic_abort,core,alloc \
+        -Z build-std-features=optimize_for_size \
+        -p kithara-ffi-web-analysis-tests --features browser --test web-analysis
+    fi
     if [[ "$suite" == "all" ]]; then
       # `optimize_for_size` matches crates/kithara-ffi/.cargo/config.toml
       # so both lanes rebuild one identical std. The release-grade test profile
@@ -129,13 +141,15 @@ wasm BROWSER="chrome" SUITE="all":
         --features kithara-integration-tests/wasm --test ffi_web --test suite_heavy
       # `wasm-bindgen-test` picks its thread per binary, and the live-graph
       # oracle needs the page's main thread.
-      WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
-        cargo "+$toolchain" test --profile test-release \
-        --target wasm32-unknown-unknown \
-        -Z build-std=std,panic_abort,core,alloc \
-        -Z build-std-features=optimize_for_size \
-        -p kithara-integration-tests --no-default-features \
-        --features kithara-integration-tests/wasm --test suite_live_web_audio
+      if [[ "$real_audio_route" == "include" ]]; then
+        WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+          cargo "+$toolchain" test --profile test-release \
+          --target wasm32-unknown-unknown \
+          -Z build-std=std,panic_abort,core,alloc \
+          -Z build-std-features=optimize_for_size \
+          -p kithara-integration-tests --no-default-features \
+          --features kithara-integration-tests/wasm --test suite_live_web_audio
+      fi
     fi
     # `webcodecs_browser` belongs to kithara-decode, not to any integration
     # suite, so it is its own cargo invocation. WebCodecs is a Chromium API;
