@@ -337,15 +337,19 @@ mod probed {
             .await;
     }
 
+    #[kithara::hang_watchdog]
     async fn receive_chunks<P>(trace: &Scope, handle: &PlaybackScheduler, pop: &mut P, count: usize)
     where
         P: FnMut() -> Option<()>,
     {
         let mut received = 0;
         loop {
+            hang_tick!();
             let seen = trace.events().len();
             while received < count && pop().is_some() {
+                hang_tick!();
                 received += 1;
+                hang_reset!();
             }
             if received == count {
                 return;
@@ -458,6 +462,7 @@ mod probed {
     }
 
     #[kithara::test(tokio, flash(false))]
+    #[kithara::hang_watchdog]
     async fn worker_unregister_removes_track() {
         let trace = scope();
         let pools = pools();
@@ -472,7 +477,10 @@ mod probed {
             pass_field(pass, "active") == 0
         })
         .await;
-        while pop().is_some() {}
+        while pop().is_some() {
+            hang_tick!();
+            hang_reset!();
+        }
         let seen = trace.events().len();
         pass_after(&trace, &handle, seen, |_| true).await;
         drop(trace);
@@ -480,6 +488,7 @@ mod probed {
     }
 
     #[kithara::test(tokio, flash(false))]
+    #[kithara::hang_watchdog]
     async fn unregister_one_task_keeps_sibling_running_and_releases_capacity() {
         let trace = scope();
         let pools = pools();
@@ -502,7 +511,10 @@ mod probed {
             .register(node_c)
             .expect("unregister must release capacity");
 
-        while pop_b().is_some() {}
+        while pop_b().is_some() {
+            hang_tick!();
+            hang_reset!();
+        }
         receive_chunks(&trace, &handle, &mut pop_b, 1).await;
 
         drop(id_b);
@@ -528,6 +540,7 @@ mod probed {
     #[kithara::test(tokio, flash(false))]
     #[case::instant_step(Duration::ZERO)]
     #[case::sync_blocking_step(Duration::from_millis(10))]
+    #[kithara::hang_watchdog]
     async fn shared_worker_endless_producer_does_not_starve_other_tracks(#[case] step: Duration) {
         const SOURCE_CHUNKS: usize = 1000;
 
@@ -551,11 +564,17 @@ mod probed {
 
         let mut delivered = 0;
         loop {
+            hang_tick!();
             let seen = trace.events().len();
             while pop_a().is_some() {
+                hang_tick!();
                 delivered += 1;
+                hang_reset!();
             }
-            while pop_b().is_some() {}
+            while pop_b().is_some() {
+                hang_tick!();
+                hang_reset!();
+            }
             if delivered == SOURCE_CHUNKS {
                 break;
             }

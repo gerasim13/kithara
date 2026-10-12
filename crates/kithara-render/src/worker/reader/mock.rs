@@ -24,15 +24,34 @@ use crate::worker::scheduler::StreamWake;
 
 pub struct PacketRing {
     pub receiver: Option<PcmReceiver>,
-    producer: PcmProducer,
+    pub(in crate::worker) producer: PcmProducer,
 }
 
 impl PacketRing {
     #[must_use]
     pub fn new(spec: AudioSpec, duration: Duration, capacity: usize) -> Self {
+        Self::with_wake(
+            spec,
+            duration,
+            capacity,
+            capacity,
+            false,
+            StreamWake::new(Wake::default()),
+        )
+    }
+
+    pub(in crate::worker) fn with_wake(
+        spec: AudioSpec,
+        duration: Duration,
+        capacity: usize,
+        reverse_capacity: usize,
+        blocking: bool,
+        wake: StreamWake,
+    ) -> Self {
         let (forward_tx, forward_rx) = HeapRb::new(capacity).split();
-        let (reverse_tx, reverse_rx) = HeapRb::new(capacity).split();
+        let (reverse_tx, reverse_rx) = HeapRb::new(reverse_capacity).split();
         let (playing_tx, playing_rx) = triple_buffer(&false);
+        let ready = blocking.then(|| Arc::new(ThreadGate::default()));
         Self {
             receiver: Some(PcmReceiver {
                 render_publisher: None,
@@ -40,8 +59,8 @@ impl PacketRing {
                 forward: forward_rx,
                 reverse: reverse_tx,
                 playing: playing_tx,
-                ready: None,
-                wake: StreamWake::new(Wake::default()),
+                ready: ready.clone(),
+                wake,
                 duration: Some(duration),
                 position: Duration::ZERO,
                 frontier: Duration::ZERO,
@@ -52,7 +71,9 @@ impl PacketRing {
                 forward: forward_tx,
                 reverse: reverse_rx,
                 playing: playing_rx,
-                ready: FinalWake(None),
+                ready: FinalWake(ready),
+                events: kithara_events::EventBus::default(),
+                output_pending: false,
             },
         }
     }
@@ -153,6 +174,8 @@ pub(in crate::worker) fn packet_fixture(
             reverse,
             playing: activity,
             ready: FinalWake(ready),
+            events: kithara_events::EventBus::default(),
+            output_pending: false,
         },
     )
 }

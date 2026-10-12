@@ -1,32 +1,18 @@
-#![cfg(not(target_arch = "wasm32"))]
+use std::num::NonZeroU32;
 
-use std::{
-    future::{Future, poll_fn},
-    num::{NonZeroU32, NonZeroUsize},
-    pin::pin,
-    task::Poll,
-};
-
-use kithara_assets::{AssetStore, StorageBackend};
-use kithara_audio::{Audio, AudioConfig, NoResamplerBackend};
-use kithara_file::{File, FileConfig, FileSrc};
-use kithara_platform::{
-    sync::Arc,
-    time::{Duration, timeout},
-};
+use kithara_events::{EventReceiver, EventSet};
+use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId, SourceSpan};
-use kithara_stream::mock::NoopWorkerWake;
-use kithara_test_fixtures::assets;
-use kithara_test_utils::kithara;
 use ringbuf::traits::{Consumer, Producer};
 
-use super::{PcmPacket, PcmReceiver, reader::PcmProducer, scheduler::StreamWake};
-use crate::test_pools::{TestPools, pools, sample_buffer};
+use super::{
+    PcmPacket, PcmReceiver, packet_mock::PacketRing, reader::PcmProducer, scheduler::StreamWake,
+};
+use crate::test_pools::{pools, sample_buffer};
 
 pub(crate) struct PcmFixture {
     pub(crate) receiver: Option<PcmReceiver>,
     pub(in crate::worker) producer: Option<PcmProducer>,
-    pub(crate) audio: Option<Audio<kithara_stream::Stream<File<TestPools>>>>,
 }
 
 impl PcmFixture {
@@ -39,51 +25,20 @@ impl PcmFixture {
         .await
     }
 
-    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     pub(crate) async fn with_wake(capacity: usize, blocking: bool, wake: StreamWake) -> Self {
-        let pools = pools();
-        let path = assets::audio_wav_frames_44100()
-            .path()
-            .expect("native WAV fixture");
-        let file = FileConfig::for_src(FileSrc::Local(path.to_owned()))
-            .store(
-                AssetStore::builder(pools.clone())
-                    .backend(StorageBackend::Memory)
-                    .build(),
-            )
-            .pools(pools.clone())
-            .build();
-        let config = AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(file).build();
-        let mut preparation = pin!(Audio::prepare(config, Arc::new(NoopWorkerWake), pools));
-        let audio = loop {
-            hang_tick!();
-            let result = timeout(
-                Duration::from_millis(10),
-                poll_fn(|context| {
-                    let mut result = Poll::Pending;
-                    hang_park!(|_remaining: Duration| {
-                        result = preparation.as_mut().poll(context);
-                    });
-                    result
-                }),
-            )
-            .await;
-            if let Ok(result) = result {
-                hang_reset!();
-                break result.expect("prepare test source");
-            }
-        };
-        let (receiver, producer) = PcmReceiver::new(
-            NonZeroUsize::new(capacity).expect("nonzero ring capacity"),
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let (receiver, producer) = PacketRing::with_wake(
+            spec,
+            Duration::from_secs(1),
+            capacity,
+            capacity + 2,
             blocking,
             wake,
-            &audio,
-            Duration::ZERO,
-        );
+        )
+        .into_ends();
         Self {
             receiver: Some(receiver),
             producer: Some(producer),
-            audio: Some(audio),
         }
     }
 
@@ -92,6 +47,14 @@ impl PcmFixture {
         producer.forward.try_push(packet)?;
         producer.signal();
         Ok(())
+    }
+
+    pub(crate) fn flush(&mut self) {
+        self.producer.as_mut().expect("producer").flush();
+    }
+
+    pub(crate) fn events<E: EventSet>(&self) -> EventReceiver<E> {
+        self.producer.as_ref().expect("producer").events.subscribe()
     }
 
     pub(crate) fn returned(&mut self) -> Option<PcmPacket> {

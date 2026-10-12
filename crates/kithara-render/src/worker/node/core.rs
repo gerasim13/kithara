@@ -38,12 +38,15 @@ where
     pub(in crate::worker) fn new(
         source: WarpSource<T, S>,
         port: PcmProducer,
-        activity: Option<ActivityWriter>,
+        mut activity: Option<ActivityWriter>,
         initial: AudioChunkInfo,
         engine_load: Option<Arc<EngineLoad>>,
         pools: PoolRegion<S>,
         cancel: Option<CancelToken>,
     ) -> Self {
+        if let Some(activity) = &mut activity {
+            activity.set_playing(true);
+        }
         Self {
             source,
             port,
@@ -64,7 +67,12 @@ where
     }
 
     pub(super) fn synchronize(&mut self) -> Result<(), TrackFailureKind> {
-        self.source.service_commands()?;
+        if self.source.service_commands()?
+            && !matches!(self.terminal, Some(Err(_)))
+            && let Some(activity) = &mut self.activity
+        {
+            activity.set_playing(true);
+        }
         let segment = self.source.cursor().segment;
         if self
             .terminal
@@ -93,6 +101,9 @@ where
     }
 
     fn fail(&mut self, failure: TrackFailureKind) {
+        if let Some(activity) = &mut self.activity {
+            activity.set_playing(false);
+        }
         if matches!(self.terminal, Some(Err(_)))
             || self
                 .pending
@@ -157,6 +168,9 @@ where
     }
 
     fn eof(&mut self) {
+        if let Some(activity) = &mut self.activity {
+            activity.set_playing(false);
+        }
         let cursor = self.source.cursor();
         let source_span = (self.last_output.segment == cursor.segment)
             .then_some(self.last_output.source_span)
@@ -230,11 +244,10 @@ where
             self.retire(packet);
             hang_reset!();
         }
-        if let Some(activity) = &mut self.activity {
-            activity.set_playing(*self.port.playing.read());
-        }
+        self.port.playing.read();
         let _ = self.source.prepare_deferred();
         self.source.finish_deferred();
+        self.port.flush();
     }
 
     #[kithara::measure(label = "play.decoder.tick")]
@@ -308,7 +321,7 @@ impl<T, S> Drop for DecoderNode<T, S> {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod tests {
     use kithara_signal::SegmentId;
     use kithara_test_utils::kithara;
@@ -335,7 +348,7 @@ mod tests {
         ))));
     }
 
-    #[kithara::test(native, tokio)]
+    #[kithara::test(tokio)]
     async fn connect_push_pop() {
         let mut fixture = NodeFixture::new(2).await;
         assert_eq!(pop(&mut fixture), None);
@@ -357,7 +370,7 @@ mod tests {
         assert_eq!(pop(&mut fixture), None);
     }
 
-    #[kithara::test(native, tokio)]
+    #[kithara::test(tokio)]
     async fn try_push_drains_overflow_first() {
         let mut fixture = NodeFixture::new(1).await;
         stage(&mut fixture, 1.0);
@@ -373,7 +386,7 @@ mod tests {
         assert_eq!(pop(&mut fixture), Some(3.0));
     }
 
-    #[kithara::test(native, tokio)]
+    #[kithara::test(tokio)]
     async fn flush_returns_false_when_ring_full() {
         let mut fixture = NodeFixture::new(1).await;
         stage(&mut fixture, 1.0);
@@ -387,7 +400,7 @@ mod tests {
         assert_eq!(pop(&mut fixture), None);
     }
 
-    #[kithara::test(native, tokio)]
+    #[kithara::test(tokio)]
     async fn direct_push_never_occupies_overflow() {
         let mut fixture = NodeFixture::new(1).await;
         assert!(fixture.node.pending.is_none());
