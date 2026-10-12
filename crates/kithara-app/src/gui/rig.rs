@@ -14,7 +14,7 @@ use kithara::{
     },
     ui::render::{ControlAction, Published, ReadValue, Reads, Walk},
 };
-use kithara_test_utils::clock::real_clock_verdict;
+use kithara_test_utils::{clock::real_clock_verdict, kithara as test_attrs};
 
 use super::{app::Kithara, message::Message, reads::ReadRoot, test_fixture, update::update};
 use crate::{
@@ -35,6 +35,7 @@ pub(crate) struct Rig {
     pub(crate) queues: Vec<AppQueueControl>,
     pub(crate) deck_tokens: Vec<CancelToken>,
     pub(crate) shutdown: CancelToken,
+    pub(crate) rendered_frames: u64,
     #[cfg(not(feature = "broadcast"))]
     states: Vec<Arc<kithara::platform::sync::Mutex<crate::state::UiState>>>,
     _runtime: kithara::platform::tokio::runtime::Runtime,
@@ -60,6 +61,7 @@ impl Rig {
         self.snapshots.load().applied_seq
     }
 
+    #[test_attrs::hang_watchdog(timeout = Duration::from_secs(2))]
     fn build(
         config: &AppConfig,
         mut host: AppHost,
@@ -72,6 +74,22 @@ impl Rig {
                 Deck::build(DeckId(index), config, &mut host).expect("host accepts the test deck")
             })
             .collect();
+        if config.eq_bands > 3 {
+            for deck in &decks {
+                hang_tick!();
+                deck.queue
+                    .control()
+                    .set_eq_layout(
+                        crate::deck::EqMode::ThreeBand
+                            .layout(&[kithara::effects::GainDb::default(); 3]),
+                    )
+                    .expect("the fixture starts in three-band mode");
+                hang_reset!();
+            }
+            crate::mock::render_host(&mut host, 0..128, &config.shutdown)
+                .expect("the initial EQ layout renders");
+            hang_reset!();
+        }
         let queues = decks
             .iter()
             .map(|deck| deck.queue.control().clone())
@@ -107,6 +125,7 @@ impl Rig {
             #[cfg(not(feature = "broadcast"))]
             states: Vec::new(),
             shutdown: config.shutdown.clone(),
+            rendered_frames: if config.eq_bands > 3 { 128 } else { 0 },
         }
     }
 
@@ -151,20 +170,26 @@ impl Rig {
         Self::with_host(&config, host, Broadcaster::new(broadcast))
     }
 
+    #[test_attrs::hang_watchdog(timeout = Duration::from_secs(2))]
     pub(crate) fn pump(&mut self) -> Vec<u64> {
         let mut applied = Vec::new();
         while let Ok(envelope) = self.commands.try_recv() {
+            hang_tick!();
             applied.push(envelope.seq);
             self.engine.apply(envelope);
+            hang_reset!();
         }
+        crate::engine::render_fixture(self, 128);
+        self.engine.tick();
         self.engine.publish();
         applied
     }
 
     #[cfg(not(feature = "broadcast"))]
-    pub(crate) fn realtime() -> Self {
+    pub(crate) fn offline_listening() -> Self {
         let config = test_fixture::config();
-        let host = AppHost::new(HostConfig::builder().build()).expect("test host");
+        let host = AppHost::new(HostConfig::offline(config.worker.pools().clone()).build())
+            .expect("test host");
         Self::with_host(
             &config,
             host,
@@ -222,6 +247,8 @@ impl Rig {
     /// run out with no real time spent. The verdict says which happened, in the
     /// wording the hang detector uses, so both read as one cluster in a stress
     /// report.
+    #[test_attrs::flash(io)]
+    #[test_attrs::hang_watchdog(timeout = Duration::from_secs(2))]
     pub(crate) fn until(
         &mut self,
         what: &str,
@@ -231,17 +258,37 @@ impl Rig {
     ) {
         let deadline = Instant::now() + within;
         let started_real = WallInstant::now();
+        let progress = |rig: &Self| {
+            (
+                rig.applied_seq(),
+                rig.queues
+                    .iter()
+                    .map(|queue| (queue.current_index(), queue.position_seconds()))
+                    .collect::<Vec<_>>(),
+            )
+        };
         loop {
+            hang_tick!();
+            let before = progress(self);
+            crate::engine::render_fixture(self, 1024);
+            self.engine.tick();
+            self.engine.publish();
             step(self);
             if done(self) {
+                hang_reset!();
                 return;
+            }
+            if before != progress(self) {
+                hang_reset!();
             }
             assert!(
                 Instant::now() < deadline,
                 "{what}: not within {within:?} | {}",
                 real_clock_verdict(started_real, within)
             );
-            thread::paced_backoff(Duration::from_millis(5));
+            hang_park!(|remaining: Duration| {
+                thread::paced_backoff(remaining.min(Duration::from_millis(5)));
+            });
         }
     }
 }

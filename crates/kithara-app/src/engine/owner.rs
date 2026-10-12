@@ -390,6 +390,21 @@ impl Drop for Engine {
     }
 }
 
+#[cfg(all(test, feature = "mock"))]
+pub(crate) mod mock {
+    use crate::gui::rig::Rig;
+
+    pub(crate) fn render(rig: &mut Rig, frames: u64) {
+        let start = rig.rendered_frames;
+        let end = start.checked_add(frames).expect("fixture frame range");
+        let host = crate::deck::mock::host(&mut rig.engine.session);
+        let report = crate::mock::render_host(host, start..end, &rig.shutdown)
+            .expect("the offline app output renders");
+        assert_eq!(report.frames, frames);
+        rig.rendered_frames = end;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::convert::Infallible;
@@ -479,7 +494,7 @@ mod tests {
     #[cfg(not(feature = "broadcast"))]
     #[kithara::test(native, tokio, flash(false))]
     async fn a_seek_lands_on_the_duration_the_queue_knows_before_the_next_tick(tone_mp3: String) {
-        let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::realtime()))
+        let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::offline()))
             .await
             .expect("rig fixture is infallible");
         rig.call(move |rig| {

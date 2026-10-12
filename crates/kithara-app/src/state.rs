@@ -785,6 +785,7 @@ mod tests {
     /// already observes on the engine's axis changes nothing it asked for, so
     /// the deck keeps the channel it was answered on rather than asking again.
     #[kithara::test(native, tokio)]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(2))]
     async fn a_repeated_follow_for_the_same_track_keeps_the_publication_channel() {
         let (host, queue) = queue_off().await;
         let (track_id, _) = track(&host, 1, "file:///tmp/track-1.mp3").await;
@@ -798,8 +799,17 @@ mod tests {
         tx.send_replace(Some(progress(1)));
         wait_for_revision(&state, 1).await;
 
-        host.call(|(_, queue)| queue.set_eq_gain(0, -6.0).expect("set the deck EQ"))
+        let render_cancel = cancel.child();
+        {
+            let _real_io = ::kithara::platform::flash::real_io();
+            host.call(move |(host, queue)| {
+                queue.set_eq_gain(0, -6.0).expect("set the deck EQ");
+                crate::mock::render_host(host, 0..128, &render_cancel)
+                    .expect("the deck EQ reaches the offline render");
+            })
             .await;
+        }
+        hang_reset!();
         state.lock().abr_mode = Some(AbrMode::manual(1));
         queue
             .bus()
@@ -810,7 +820,9 @@ mod tests {
         queue.bus().publish(PlayerEvent::RateChanged { rate: 1.0 });
         let playing = async {
             for _ in 0..2_000 {
+                hang_tick!();
                 if state.lock().playing {
+                    hang_reset!();
                     return true;
                 }
                 time::sleep(Duration::from_millis(1)).await;
