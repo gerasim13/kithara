@@ -171,10 +171,6 @@ where
             });
             return Ok(());
         }
-        let target = self.target.ok_or(PlayError::NotReady)?;
-        if target.chained {
-            return Ok(());
-        }
         self.enter_target(index, at)
     }
 

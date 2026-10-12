@@ -776,6 +776,26 @@ async fn a_re_armed_successor_the_audio_thread_stitched_in_is_promoted() {
 }
 
 #[kithara::test(tokio)]
+#[kithara::hang_watchdog]
+async fn a_chained_successor_that_ends_in_its_stitch_block_is_reported() {
+    let mut rig = HandoverRig::playing().await;
+    let second = rig.arm(1).await;
+    rig.chain();
+    let applied = rig.stitch();
+    rig.event(DeckEvent::Ended {
+        slot: rig.slot(0),
+        at: SessionFrame::new(128),
+    });
+    rig.event(DeckEvent::Ended {
+        slot: second,
+        at: SessionFrame::new(128),
+    });
+    rig.settle(applied);
+    assert_eq!(rig.queue.control().current_index(), Some(1));
+    assert_eq!(rig.armed(), None);
+}
+
+#[kithara::test(tokio)]
 async fn a_withdrawn_successor_that_ends_in_its_stitch_block_is_reported() {
     let mut rig = HandoverRig::playing().await;
     let second = rig.arm(1).await;
