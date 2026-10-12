@@ -209,6 +209,7 @@ async fn a_deck_applies_fades_for_tracks_it_does_not_hold_without_allocating(
         &mut ring,
         scope,
         DeckPart::Attach {
+            item_id: kithara_events::TrackId::allocate(),
             slot: held,
             pcm: opened.pcm,
             segment: SegmentId::FIRST,

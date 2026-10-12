@@ -887,6 +887,7 @@ fn projected_activation_refuses_uncommitted_manual_source_before_consumption() {
     feature = "stretch-bungee",
     case::bungee_ramp(kithara_stretch::StretchKind::Bungee, true)
 )]
+#[kithara::hang_watchdog]
 fn a_finite_projected_recording_shorter_than_backend_latency_renders_its_covered_span(
     #[case] backend: kithara_stretch::StretchKind,
     #[case] ramp: bool,
@@ -951,6 +952,7 @@ fn a_finite_projected_recording_shorter_than_backend_latency_renders_its_covered
         let mut source = 0;
         let mut pcm = Vec::new();
         while source < 128 {
+            hang_tick!();
             renderer.prepare(spec());
             let meta = AudioChunkInfo {
                 frame_offset: source as u64,
@@ -981,9 +983,16 @@ fn a_finite_projected_recording_shorter_than_backend_latency_renders_its_covered
                 pcm.extend_from_slice(&output.samples);
             }
             source += frames;
+            if frames > 0 {
+                hang_reset!();
+            }
         }
         while let Some(output) = flush_serviced(&mut renderer) {
+            hang_tick!();
             pcm.extend_from_slice(&output.samples);
+            if output.frames() > 0 {
+                hang_reset!();
+            }
         }
         assert_eq!(
             pcm.len() / 2,
@@ -1058,6 +1067,7 @@ fn repeated_terminal_padding_keeps_the_decoded_eof_and_resident_extent() {
     feature = "stretch-bungee",
     case::bungee(kithara_stretch::StretchKind::Bungee)
 )]
+#[kithara::hang_watchdog]
 fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
     #[case] backend: kithara_stretch::StretchKind,
 ) {
@@ -1100,6 +1110,7 @@ fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
     renderer.prepare(spec());
     let mut tail_frames = 0;
     while let Some(output) = flush_serviced(&mut renderer) {
+        hang_tick!();
         assert_eq!(output.meta.render_revision, revision);
         assert_eq!(
             output.meta.frame_offset, previous,
@@ -1111,6 +1122,9 @@ fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
             .0;
         assert!(previous <= admitted, "drain never invents decoded source");
         tail_frames += output.frames();
+        if output.frames() > 0 {
+            hang_reset!();
+        }
     }
     assert!(
         tail_frames > 0,
@@ -1270,6 +1284,7 @@ fn render_commits_the_context_captured_for_the_operation(warp_pair: Vec<f32>) {
     feature = "stretch-bungee",
     case::bungee(kithara_stretch::StretchKind::Bungee)
 )]
+#[kithara::hang_watchdog]
 fn a_one_frame_decoder_chunk_keeps_the_slowed_projection_presenting(
     #[case] backend: kithara_stretch::StretchKind,
 ) {
@@ -1317,6 +1332,7 @@ fn a_one_frame_decoder_chunk_keeps_the_slowed_projection_presenting(
         pending.extend_from_slice(&input.samples);
         decoded += u64::try_from(*chunk_frames).expect("decoder chunk");
         loop {
+            hang_tick!();
             if pending.is_empty() {
                 break;
             }
@@ -1344,6 +1360,9 @@ fn a_one_frame_decoder_chunk_keeps_the_slowed_projection_presenting(
             audible = Some(output.meta.frame_offset);
             pending.drain(..count);
             position += u64::try_from(frames).expect("span fits u64");
+            if frames > 0 {
+                hang_reset!();
+            }
         }
     }
     assert_eq!(

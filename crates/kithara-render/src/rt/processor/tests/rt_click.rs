@@ -96,6 +96,7 @@ fn load(control: &mut ClickControl, src: &str, input: &'static [u8]) -> Slot {
     push(
         control,
         DeckPart::Attach {
+            item_id: kithara_events::TrackId::allocate(),
             slot,
             pcm,
             segment: SegmentId::FIRST,

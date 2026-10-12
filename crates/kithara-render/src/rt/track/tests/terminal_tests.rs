@@ -86,7 +86,7 @@ fn committed_pcm_is_drained_before_an_unmarked_producer_closure(#[case] blocking
     let mut left = [0.0];
     let mut right = [0.0];
     assert_eq!(
-        reader.read(&mut [&mut left, &mut right], 0..1, &mut 8),
+        reader.read(None, &mut [&mut left, &mut right], 0..1, &mut 8),
         ReadOutcome::Full { frames: 1 }
     );
     assert_eq!(left, [0.25]);
@@ -291,7 +291,7 @@ fn typed_failures_survive_the_real_warp_node_and_reader(#[case] seek_before_read
         let mut left = [0.0; 8];
         let mut right = [0.0; 8];
         assert_eq!(
-            reader.read(&mut [&mut left, &mut right], 0..8, &mut 8),
+            reader.read(None, &mut [&mut left, &mut right], 0..8, &mut 8),
             ReadOutcome::Failed(expected),
             "{failure:?}"
         );
@@ -362,7 +362,7 @@ fn checked_stream_terminal_reads(reader: &mut PlayerResource) -> [bool; 3] {
     std::array::from_fn(|_| {
         let mut left = [0.0; 8];
         let mut right = [0.0; 8];
-        let result = reader.read(&mut [&mut left, &mut right], 0..8, &mut 8);
+        let result = reader.read(None, &mut [&mut left, &mut right], 0..8, &mut 8);
         let ReadOutcome::Failed(source) = result else {
             return false;
         };
@@ -403,6 +403,7 @@ async fn a_real_source_failure_keeps_its_cause_in_the_single_stop_notification()
     cancel.cancel();
     assert_eq!(node.tick(), TickResult::Progress);
     let mut track = PlayerTrack::builder()
+        .item_id(kithara_events::TrackId::allocate())
         .sample_rate(spec().sample_rate)
         .build(Box::new(resource(receiver)));
     track.start(Fade::Declick);
@@ -535,7 +536,7 @@ fn read_returns_failed_not_eof_on_decoder_error() {
     let mut reader = resource(receiver);
     let mut left = vec![0.0_f32; 4096];
     let mut right = vec![0.0_f32; 4096];
-    let result = reader.read(&mut [&mut left, &mut right], 0..4096, &mut 8);
+    let result = reader.read(None, &mut [&mut left, &mut right], 0..4096, &mut 8);
     match result {
         ReadOutcome::Failed(source) => assert_eq!(
             TrackFailureKind::from(source),

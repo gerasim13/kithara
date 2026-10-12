@@ -52,7 +52,7 @@ impl RingFixture {
         let mut right = [-1.0; 2];
         let outcome = self
             .resource
-            .read(&mut [&mut left, &mut right], 0..2, &mut 16);
+            .read(None, &mut [&mut left, &mut right], 0..2, &mut 16);
         assert_eq!(right, left);
         (outcome, left)
     }

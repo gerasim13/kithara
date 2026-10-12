@@ -11,8 +11,9 @@ use kithara::{
 };
 use kithara_integration_tests::{
     disk_asset_store,
-    offline::{OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
+    offline::{LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
     test_defaults::consts,
+    waits::wait_for_loader_done_event,
 };
 use kithara_test_fixtures::integration_fixtures::{constant_half, drain_tone};
 use kithara_test_utils::{TestTempDir, temp_dir};
@@ -56,14 +57,18 @@ fn file_resource(
     config
 }
 
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn render_target(harness: &OfflinePlayer) -> Vec<f32> {
+    let _real_io = kithara::platform::flash::real_io();
     let mut rendered: Vec<f32> = Vec::new();
     let mut total_frames: usize = 0;
     while rendered.len() < TARGET_SAMPLES && total_frames < MAX_RENDERED_FRAMES {
+        hang_tick!();
         let block = harness.render(BLOCK_FRAMES).await;
         rendered.extend_from_slice(&block);
         total_frames = total_frames.saturating_add(BLOCK_FRAMES);
         let _ = harness.tick_and_drain().await;
+        hang_reset!();
     }
     rendered
 }
@@ -76,7 +81,8 @@ async fn offline_harness_smoke(constant_half: &'static [u8]) {
     )
     .await;
     let deck_source = harness.pcm_deck((make_resource(constant_half, 0.1)).into());
-    harness
+    let mut events = harness.player().subscribe();
+    let deck_id = harness
         .with_queue(move |player| {
             let deck_id = TrackId::allocate();
             player
@@ -86,8 +92,12 @@ async fn offline_harness_smoke(constant_half: &'static [u8]) {
                 .select(deck_id, kithara::queue::Transition::None)
                 .expect("select the item");
             player.play();
+            deck_id
         })
         .await;
+    wait_for_loader_done_event(&mut events, harness.player(), deck_id, LOCAL_LOAD_DEADLINE)
+        .await
+        .expect("PCM deck is loaded before measuring its audio");
 
     let rendered = render_target(&harness).await;
 
@@ -98,14 +108,21 @@ async fn offline_harness_smoke(constant_half: &'static [u8]) {
 
 /// Audible frames rendered until the item plays to its end. A zero-filled
 /// underrun frame is silent, so decode latency does not count.
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn audible_frames_until_end(harness: &OfflinePlayer) -> usize {
+    let _real_io = kithara::platform::flash::real_io();
     let mut audible = 0usize;
     for _ in 0..DRAIN_BLOCK_BUDGET {
+        hang_tick!();
         let block = harness.render(BLOCK_FRAMES).await;
-        audible += block
+        let progress = block
             .chunks_exact(OUTPUT_CHANNELS)
             .filter(|frame| frame.iter().any(|sample| *sample != 0.0))
             .count();
+        audible += progress;
+        if progress > 0 {
+            hang_reset!();
+        }
         let ended = harness
             .tick_and_drain()
             .await

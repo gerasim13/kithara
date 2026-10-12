@@ -7,6 +7,7 @@ use std::num::NonZeroU32;
 use kithara::{
     audio::{AudioConfig, NoResamplerBackend},
     effects::AudioEffect,
+    events::TrackId,
     host::{HostConfig, HostSettings},
     platform::{
         flash::real_io,
@@ -319,12 +320,13 @@ async fn passthrough_player(
         },
     );
     let mut events = player.player().subscribe();
+    let id = TrackId::allocate();
+    factory.insert(id, load);
     let id = player
         .run(player.player(), move |queue| {
             let id = queue
-                .append(source)
+                .append_with_id(id, source)
                 .expect("append explicit source fixture");
-            factory.insert(id, load);
             queue
                 .select(id, Transition::None)
                 .expect("select explicit source fixture");

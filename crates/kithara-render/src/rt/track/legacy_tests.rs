@@ -89,6 +89,7 @@ fn make_track_with(input: &'static [u8], seconds: f64, _slot: Slot) -> Fixture {
     .expect("resource");
     Fixture {
         track: PlayerTrack::builder()
+            .item_id(kithara_events::TrackId::allocate())
             .sample_rate(spec().sample_rate)
             .build(Box::new(resource)),
         packets,
@@ -421,6 +422,7 @@ fn decoded_frontier_reads_live_resource_not_stale_render_cache() {
     )
     .expect("resource");
     let track = PlayerTrack::builder()
+        .item_id(kithara_events::TrackId::allocate())
         .sample_rate(spec().sample_rate)
         .build(Box::new(resource));
 
@@ -523,6 +525,7 @@ async fn a_buffered_eof_corrects_an_overestimated_duration(constant_half: &'stat
     )
     .expect("resource");
     let mut track = PlayerTrack::builder()
+        .item_id(kithara_events::TrackId::allocate())
         .sample_rate(spec().sample_rate)
         .build(Box::new(resource));
     let (tx, mut rx) = HeapRb::<DeckEvent>::new(16).split();

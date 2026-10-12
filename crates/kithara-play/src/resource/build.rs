@@ -3,7 +3,7 @@ use kithara_bufpool::HasPool;
 use kithara_decode::DecodeError;
 use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::HlsConfig;
-use kithara_render::TrackConfig;
+use kithara_render::{TrackConfig, TrackConfigPatch};
 use kithara_stream::StreamType;
 use url::Url;
 
@@ -117,13 +117,16 @@ where
     where
         T: StreamType,
     {
-        TrackConfig::for_audio(audio)
-            .maybe_preload_chunks(self.preload_chunks)
-            .maybe_audio_buffer_chunks(self.audio_buffer_chunks)
+        let mut config = TrackConfig::for_audio(audio)
             .block_on_underrun(self.block_on_underrun)
             .maybe_engine_load(self.engine_load.clone())
             .warp(self.warp.clone())
-            .build()
+            .build();
+        let mut patch = TrackConfigPatch::default();
+        patch.preload_chunks = self.preload_chunks;
+        patch.audio_buffer_chunks = self.audio_buffer_chunks;
+        config.apply(patch);
+        config
     }
 }
 

@@ -23,7 +23,7 @@ use kithara::{
 use kithara_render::bridge::{DeckSnapshot, RtMetricsSnapshot};
 
 use super::{
-    OfflineHostHarness,
+    OfflineHostHarness, append_source_loaded,
     host::{ObservedDeck, offline_pools},
 };
 use crate::{
@@ -310,11 +310,8 @@ where
     ///
     /// Panics if the product player rejects the resource.
     pub async fn load_and_fadein(&self, source: impl Into<TrackSource<TestPools>>) {
-        let source = source.into();
+        let id = append_source_loaded(self, self.player(), source).await;
         self.with_queue(move |control| {
-            let id = control
-                .append(source)
-                .unwrap_or_else(|error| panic!("append offline queue item: {error}"));
             control
                 .select(id, Transition::Crossfade)
                 .unwrap_or_else(|error| panic!("select offline queue item: {error}"));

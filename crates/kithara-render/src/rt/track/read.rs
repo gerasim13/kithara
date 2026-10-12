@@ -71,10 +71,11 @@ impl PlayerTrack {
     }
 
     #[kithara::probe(
-        track_id = u64::from(sink.slot.get()),
+        track_id = self.item_id.as_u64(),
         output_base = context.map(|context| i64::from(context.output().output_frames().start)),
         range_start = range.start,
-        range_end = range.end
+        range_end = range.end,
+        served_media_frames = self.resource.position().map_or(0, kithara_signal::SourceSpan::end)
     )]
     pub(crate) fn render(
         &mut self,
@@ -114,7 +115,9 @@ impl PlayerTrack {
             range.len()
         };
         let requested = range.start..range.start.saturating_add(limit);
-        let outcome = self.resource.read(scratch, requested.clone(), budget);
+        let outcome = self
+            .resource
+            .read(context, scratch, requested.clone(), budget);
         let frames = match outcome {
             ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
             ReadOutcome::Eof => return TrackReadOutcome::Eof,
@@ -183,7 +186,7 @@ impl PlayerTrack {
         }
         let gain = self.gain();
         let mut buffers = [&mut left[..length], &mut right[..length]];
-        let written = match self.resource.read(&mut buffers, 0..length, budget) {
+        let written = match self.resource.read(None, &mut buffers, 0..length, budget) {
             ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
             ReadOutcome::Eof | ReadOutcome::Failed(_) => 0,
         };

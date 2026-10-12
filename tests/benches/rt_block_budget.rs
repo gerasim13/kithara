@@ -104,6 +104,7 @@ struct BenchMixer {
     frame: i64,
 }
 
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn processor(count: usize) -> BenchMixer {
     let config = DeckMixerConfig::default();
     let (mut control, inbox) = scoped_channel(
@@ -131,6 +132,7 @@ async fn processor(count: usize) -> BenchMixer {
     let mut senders = Vec::new();
     let mut commands = Vec::new();
     for index in 0..count {
+        hang_tick!();
         let source = PcmDeck::new(Box::new(TestPcmReader::with_pcm(
             spec(),
             consts::TRACK_SECONDS,
@@ -157,12 +159,23 @@ async fn processor(count: usize) -> BenchMixer {
             keylock: false,
             backend: StretchKind::default(),
         };
-        let (pcm, lane, _) = worker
-            .load(config, Duration::ZERO, start, inbox)
+        let (pcm, lane, _) = {
+            let _real_io = kithara::platform::flash::real_io();
+            kithara::platform::time::timeout(
+                __hang_detector.remaining(),
+                worker.load(config, Duration::ZERO, start, inbox),
+            )
             .await
-            .expect("bench PCM lane");
+            .unwrap_or_else(|_| {
+                hang_tick!();
+                panic!("bench PCM lane load exceeded its watchdog budget")
+            })
+            .expect("bench PCM lane")
+        };
+        hang_reset!();
         let slot = Slot::new(u16::try_from(index).expect("bench slot"));
         commands.push(DeckPart::Attach {
+            item_id: kithara_events::TrackId::allocate(),
             slot,
             pcm: Box::new(
                 PlayerResource::new(

@@ -75,7 +75,7 @@ async fn read_returns_constant_samples_full(constant_half: &'static [u8]) {
     let mut left = vec![0.0f32; 128];
     let mut right = vec![0.0f32; 128];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-    let result = pr.read(&mut output, 0..128, &mut 8);
+    let result = pr.read(None, &mut output, 0..128, &mut 8);
     assert!(matches!(result, BlockReadOutcome::Full { frames: 128 }));
     for &s in &left[..128] {
         assert!((s - 0.5).abs() < f32::EPSILON);
@@ -105,7 +105,7 @@ fn full_read_refills_before_the_next_callback_drains_scratch() {
     let mut right = vec![0.0f32; CALLBACK_FRAMES];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
 
-    let result = player.read(&mut output, 0..CALLBACK_FRAMES, &mut 32);
+    let result = player.read(None, &mut output, 0..CALLBACK_FRAMES, &mut 32);
 
     assert_eq!(
         result,
@@ -119,7 +119,7 @@ fn full_read_refills_before_the_next_callback_drains_scratch() {
         "a successful callback must refill while one callback is still buffered",
     );
     assert_eq!(
-        player.read(&mut output, 0..CALLBACK_FRAMES, &mut 32),
+        player.read(None, &mut output, 0..CALLBACK_FRAMES, &mut 32),
         BlockReadOutcome::Full {
             frames: CALLBACK_FRAMES
         }
@@ -177,7 +177,7 @@ async fn reset_for_seek_drops_buffered_samples() {
     let mut right = vec![0.0f32; 128];
     {
         let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-        let _ = pr.read(&mut output, 0..128, &mut 8);
+        let _ = pr.read(None, &mut output, 0..128, &mut 8);
     }
     assert!(left[0] < 1024.0, "pre-seek sample should be near frame 0");
     let buffered_before = left[127];
@@ -198,7 +198,7 @@ async fn reset_for_seek_drops_buffered_samples() {
     let mut left2 = vec![0.0f32; 128];
     let mut right2 = vec![0.0f32; 128];
     let mut output2: Vec<&mut [f32]> = vec![&mut left2, &mut right2];
-    let _ = pr.read(&mut output2, 0..128, &mut 8);
+    let _ = pr.read(None, &mut output2, 0..128, &mut 8);
     assert!(
         left2[0] > buffered_before,
         "the reset must discard the scratch and pull fresh frames, got {}",
@@ -217,7 +217,7 @@ async fn read_zeroes_output_when_no_data_available() {
     let mut right = vec![0.999f32; 128];
     {
         let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-        let result = pr.read(&mut output, 0..128, &mut 8);
+        let result = pr.read(None, &mut output, 0..128, &mut 8);
         assert!(
             matches!(result, BlockReadOutcome::Full { frames: 0 }),
             "zero-read without EOF must not error"
@@ -240,7 +240,7 @@ async fn full_read_prefetches_buffered_eof(constant_half: &'static [u8]) {
     let mut left = vec![0.0f32; 512];
     let mut right = vec![0.0f32; 512];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-    let result = pr.read(&mut output, 0..512, &mut 8);
+    let result = pr.read(None, &mut output, 0..512, &mut 8);
 
     assert!(matches!(result, BlockReadOutcome::Full { frames: 512 }));
     let remaining = match pr.packet.as_ref() {
@@ -257,7 +257,7 @@ async fn read_returns_partial_when_eof_inside_buffer(constant_half: &'static [u8
     let mut left = vec![0.0f32; 4096];
     let mut right = vec![0.0f32; 4096];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-    let result = pr.read(&mut output, 0..4096, &mut 8);
+    let result = pr.read(None, &mut output, 0..4096, &mut 8);
 
     let frames = match result {
         BlockReadOutcome::Partial { frames, .. } => frames,
@@ -267,10 +267,10 @@ async fn read_returns_partial_when_eof_inside_buffer(constant_half: &'static [u8
     assert!(frames < 4096);
 
     let mut output2: Vec<&mut [f32]> = vec![&mut left, &mut right];
-    let result2 = pr.read(&mut output2, 0..4096, &mut 8);
+    let result2 = pr.read(None, &mut output2, 0..4096, &mut 8);
     assert!(matches!(result2, BlockReadOutcome::Eof));
 
     let mut output3: Vec<&mut [f32]> = vec![&mut left, &mut right];
-    let result3 = pr.read(&mut output3, 0..4096, &mut 8);
+    let result3 = pr.read(None, &mut output3, 0..4096, &mut 8);
     assert!(matches!(result3, BlockReadOutcome::Eof));
 }

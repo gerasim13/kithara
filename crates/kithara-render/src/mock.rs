@@ -168,7 +168,12 @@ fn hold(
             .map(|(pcm, _)| DeckPart::Returned(Returned::Pcm { slot, pcm }))
     };
     match part {
-        DeckPart::Attach { slot, pcm, segment } | DeckPart::Replace { slot, pcm, segment } => {
+        DeckPart::Attach {
+            slot, pcm, segment, ..
+        }
+        | DeckPart::Replace {
+            slot, pcm, segment, ..
+        } => {
             let left = entry(held, slot);
             if let Some(entry) = held.get_mut(usize::from(slot.get())) {
                 *entry = Some((pcm, segment));
@@ -338,6 +343,7 @@ mod tests {
             (
                 0,
                 vec![DeckPart::Attach {
+                    item_id: kithara_events::TrackId::allocate(),
                     slot,
                     pcm: pcm("first"),
                     segment: SegmentId::FIRST,
@@ -356,6 +362,7 @@ mod tests {
             (
                 2,
                 vec![DeckPart::Replace {
+                    item_id: kithara_events::TrackId::allocate(),
                     slot,
                     pcm: pcm("second"),
                     segment,

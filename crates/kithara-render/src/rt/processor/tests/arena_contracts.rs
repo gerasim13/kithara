@@ -21,6 +21,7 @@ fn engine_allocate_and_release_slot() {
         &mut ends,
         When::Next,
         vec![DeckPart::Attach {
+            item_id: kithara_events::TrackId::allocate(),
             slot: slot_id,
             pcm: pcm_samples("allocated", 1.0, &[0.0; 2], false),
             segment: SegmentId::FIRST,
@@ -65,6 +66,7 @@ fn engine_arena_full_error() {
         &mut ends,
         When::Next,
         vec![DeckPart::Attach {
+            item_id: kithara_events::TrackId::allocate(),
             slot: A,
             pcm: pcm_samples("first", 1.0, &[0.0; 2], false),
             segment: SegmentId::FIRST,
@@ -83,6 +85,7 @@ fn engine_arena_full_error() {
         &mut ends,
         When::Next,
         vec![DeckPart::Attach {
+            item_id: kithara_events::TrackId::allocate(),
             slot: A,
             pcm: pcm_samples("refused", 1.0, &[0.0; 2], false),
             segment: SegmentId::FIRST.next(),
@@ -110,6 +113,7 @@ fn engine_arena_full_error() {
         &mut ends,
         When::Next,
         vec![DeckPart::Replace {
+            item_id: kithara_events::TrackId::allocate(),
             slot: A,
             pcm: pcm_samples("second", 1.0, &[0.0; 2], false),
             segment,

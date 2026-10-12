@@ -35,6 +35,7 @@ impl PacketRing {
         let (playing_tx, playing_rx) = triple_buffer(&false);
         Self {
             receiver: Some(PcmReceiver {
+                render_publisher: None,
                 spec,
                 forward: forward_rx,
                 reverse: reverse_tx,
@@ -134,6 +135,7 @@ pub(in crate::worker) fn packet_fixture(
         worker.dispatcher(DispatcherConfig::builder().name("terminal-fixture").build());
     (
         PcmReceiver {
+            render_publisher: None,
             playing,
             spec,
             forward: received,

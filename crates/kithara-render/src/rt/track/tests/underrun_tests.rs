@@ -35,6 +35,7 @@ fn a_blocking_read_waits_for_the_lane_instead_of_underrunning() {
     .expect("resource");
     let rate = NonZeroU32::new(48_000).expect("rate");
     let mut track = PlayerTrack::builder()
+        .item_id(kithara_events::TrackId::allocate())
         .sample_rate(rate)
         .build(Box::new(resource));
     track.start(Fade::Declick);
@@ -94,6 +95,7 @@ async fn underrun_edges_emit_once_per_starvation_window() {
     .expect("resource");
     let rate = NonZeroU32::new(48_000).expect("rate");
     let mut track = PlayerTrack::builder()
+        .item_id(kithara_events::TrackId::allocate())
         .sample_rate(rate)
         .build(Box::new(resource));
     track.start(Fade::Declick);

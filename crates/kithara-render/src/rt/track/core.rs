@@ -2,6 +2,7 @@ use std::num::NonZeroU32;
 
 use bon::bon;
 use kithara_dsp::param::SmootherConfig;
+use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use kithara_signal::{SegmentId, SessionFrame};
 
@@ -14,6 +15,7 @@ use crate::{
 
 /// A slot's packet consumer and data-driven envelope.
 pub struct PlayerTrack {
+    pub(super) item_id: TrackId,
     pub(super) resource: Box<PlayerResource>,
     pub(super) fade: TrackFade,
     pub(super) gate: TrackGate,
@@ -31,12 +33,14 @@ impl PlayerTrack {
     #[must_use]
     pub fn new(
         #[builder(finish_fn)] mut resource: Box<PlayerResource>,
+        item_id: TrackId,
         sample_rate: NonZeroU32,
         #[builder(default = DEFAULT_DECLICK)] declick: SmootherConfig,
         #[builder(default = SegmentId::FIRST)] segment: SegmentId,
     ) -> Self {
         resource.select_segment(segment);
         Self {
+            item_id,
             resource,
             fade: TrackFade::default(),
             gate: TrackGate::new(false, declick, sample_rate),

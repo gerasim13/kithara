@@ -104,6 +104,7 @@ mod tests {
         .map_or_else(|error| panic!("test player resource: {error}"), Box::new);
 
         PlayerTrack::builder()
+            .item_id(kithara_events::TrackId::allocate())
             .sample_rate(sample_rate)
             .build(resource)
     }

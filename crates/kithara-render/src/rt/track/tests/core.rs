@@ -44,6 +44,7 @@ fn an_adopted_segment_never_uses_a_held_obsolete_packet(#[case] check_mark: bool
     let mut previous_left = [0.0; 1];
     let mut previous_right = [0.0; 1];
     resource.read(
+        None,
         &mut [&mut previous_left, &mut previous_right],
         0..1,
         &mut budget,
@@ -72,7 +73,7 @@ fn an_adopted_segment_never_uses_a_held_obsolete_packet(#[case] check_mark: bool
     let mut left = [0.0; 4];
     let mut right = [0.0; 4];
     let adopted_at = SessionFrame::new(700);
-    resource.read(&mut [&mut left, &mut right], 0..4, &mut budget);
+    resource.read(None, &mut [&mut left, &mut right], 0..4, &mut budget);
     if check_mark {
         assert_eq!(
             resource.mark(adopted_at),
@@ -89,7 +90,7 @@ fn an_adopted_segment_never_uses_a_held_obsolete_packet(#[case] check_mark: bool
     while ring.returned().is_some() {}
     budget = 2;
     resource.refresh_mark(&mut budget);
-    resource.read(&mut [&mut left, &mut right], 0..4, &mut budget);
+    resource.read(None, &mut [&mut left, &mut right], 0..4, &mut budget);
     assert_eq!(left, [2.0; 4]);
     assert_eq!(
         resource.mark(SessionFrame::new(704)),

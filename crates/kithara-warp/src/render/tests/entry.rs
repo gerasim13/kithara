@@ -10,6 +10,7 @@ use crate::{SpeedCurve, Warp, WarpConfig, consts, test_pools::pools};
 
 const CUE_BEAT: f64 = 4.0;
 
+#[kithara::hang_watchdog]
 fn entered_renderer(
     host_rate: NonZeroU32,
     backend: StretchKind,
@@ -42,6 +43,7 @@ fn entered_renderer(
         let input = source_span(&renderer, entry, history);
         let mut position = entry;
         while position < cue {
+            hang_tick!();
             let offset = usize::try_from(position - entry).expect("history offset");
             renderer.prepare(spec());
             let mut meta = input.meta;
@@ -56,13 +58,15 @@ fn entered_renderer(
                 .continue_value()
                 .expect("admit exact history");
             position += u64::try_from(frames).expect("history quantum frames");
+            if frames > 0 {
+                hang_reset!();
+            }
         }
         assert_eq!(
             renderer.rendered_source_end(),
             Some((cue, spec().sample_rate))
         );
     }
-    // Ruling: WarpConfig::entering(WarpPlan) → cue segment with an effective speed and render revision — spec §3.1, §4.3, §5.
     let speed = (100.0 / 120.0 * f64::from(consts::SR) / f64::from(host_rate.get()))
         .to_f32()
         .expect("entry speed");
@@ -107,6 +111,7 @@ fn source_span(renderer: &WarpRenderer, start: u64, frames: usize) -> AudioChunk
     feature = "stretch-glide",
     case::glide_host_rate_differs(48_000, StretchKind::Glide, false)
 )]
+#[kithara::hang_watchdog]
 fn an_entered_plan_presents_its_activation_source_after_exact_history(
     #[case] host_rate: u32,
     #[case] backend: StretchKind,
@@ -121,6 +126,7 @@ fn an_entered_plan_presents_its_activation_source_after_exact_history(
     );
     let mut position = cue;
     let output = loop {
+        hang_tick!();
         assert!(
             position < cue + 16 * 1024,
             "entered PCM must appear within the engine's warm-up"
@@ -134,6 +140,9 @@ fn an_entered_plan_presents_its_activation_source_after_exact_history(
         let mut input = source_span(&renderer, position, frames);
         input.meta.frames = u32::try_from(frames).expect("span fits u32");
         position += u64::try_from(frames).expect("span fits u64");
+        if frames > 0 {
+            hang_reset!();
+        }
         if let Some(output) = renderer
             .render_quantum(input)
             .continue_value()
@@ -143,7 +152,6 @@ fn an_entered_plan_presents_its_activation_source_after_exact_history(
         }
     };
     assert_eq!(output.meta.frame_offset, cue);
-    // Ruling: mapping_revision → producer render_revision — spec §3.1, PCM carries its segment's revision.
     assert_eq!(
         output.meta.render_revision, 1,
         "entered PCM carries the effective trajectory"
@@ -177,7 +185,6 @@ fn an_entered_plan_refuses_a_landing_after_its_activation_source(
         .prepare_quantum(expected.meta, expected.frames(), usize::MAX)
         .expect("entry quantum")
         .get();
-    // Ruling: entered-plan late landing error → Break returns the unconsumed discontinuous source, with no PCM — spec §3.1, §5.
     let late = source_span(&renderer, cue + 1, frames);
     let refused = renderer.render_quantum(late);
     let refused = refused

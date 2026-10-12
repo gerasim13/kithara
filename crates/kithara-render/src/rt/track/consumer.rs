@@ -49,7 +49,7 @@ mod tests {
             let mut right = [0.0; 4];
             let mut budget = 8;
             assert_eq!(
-                resource.read(&mut [&mut left, &mut right], 0..4, &mut budget),
+                resource.read(None, &mut [&mut left, &mut right], 0..4, &mut budget),
                 crate::rt::track::ReadOutcome::Full { frames: 4 }
             );
             assert_eq!(
@@ -61,7 +61,7 @@ mod tests {
             );
             assert_eq!(left, [0.5; 4]);
             assert_eq!(
-                resource.read(&mut [&mut left, &mut right], 0..4, &mut budget),
+                resource.read(None, &mut [&mut left, &mut right], 0..4, &mut budget),
                 crate::rt::track::ReadOutcome::Full { frames: 4 }
             );
             let mark = resource.mark(SessionFrame::new(8)).expect("second mark");
