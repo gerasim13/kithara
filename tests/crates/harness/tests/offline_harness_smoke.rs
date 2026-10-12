@@ -5,13 +5,16 @@ use std::path::Path;
 use kithara::{
     self,
     events::TrackId,
-    platform::time::{self, Duration},
+    platform::{
+        flash::real_io,
+        time::{self, Duration},
+    },
     play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc},
     warp::{StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     disk_asset_store,
-    offline::{LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
+    offline::{OfflinePlayer, OfflinePlayerOptions, resource_from_reader},
     test_defaults::consts,
     waits::wait_for_loader_done_event,
 };
@@ -57,18 +60,22 @@ fn file_resource(
     config
 }
 
-#[kithara_test_utils::kithara::hang_watchdog]
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn render_target(harness: &OfflinePlayer) -> Vec<f32> {
-    let _real_io = kithara::platform::flash::real_io();
     let mut rendered: Vec<f32> = Vec::new();
     let mut total_frames: usize = 0;
     while rendered.len() < TARGET_SAMPLES && total_frames < MAX_RENDERED_FRAMES {
-        hang_tick!();
+        hang_tick!(format!(
+            "rendered {total_frames} frames toward the PCM window"
+        ));
         let block = harness.render(BLOCK_FRAMES).await;
         rendered.extend_from_slice(&block);
         total_frames = total_frames.saturating_add(BLOCK_FRAMES);
         let _ = harness.tick_and_drain().await;
-        hang_reset!();
+        if !block.is_empty() {
+            hang_reset!();
+        }
     }
     rendered
 }
@@ -80,6 +87,10 @@ async fn offline_harness_smoke(constant_half: &'static [u8]) {
         consts::SAMPLE_RATE,
     )
     .await;
+    {
+        let _real_io = real_io();
+        harness.render(BLOCK_FRAMES).await;
+    }
     let deck_source = harness.pcm_deck((make_resource(constant_half, 0.1)).into());
     let mut events = harness.player().subscribe();
     let deck_id = harness
@@ -95,9 +106,14 @@ async fn offline_harness_smoke(constant_half: &'static [u8]) {
             deck_id
         })
         .await;
-    wait_for_loader_done_event(&mut events, harness.player(), deck_id, LOCAL_LOAD_DEADLINE)
-        .await
-        .expect("PCM deck is loaded before measuring its audio");
+    wait_for_loader_done_event(
+        &mut events,
+        harness.player(),
+        deck_id,
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("PCM deck loads before the render window");
 
     let rendered = render_target(&harness).await;
 
@@ -108,12 +124,14 @@ async fn offline_harness_smoke(constant_half: &'static [u8]) {
 
 /// Audible frames rendered until the item plays to its end. A zero-filled
 /// underrun frame is silent, so decode latency does not count.
-#[kithara_test_utils::kithara::hang_watchdog]
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn audible_frames_until_end(harness: &OfflinePlayer) -> usize {
-    let _real_io = kithara::platform::flash::real_io();
     let mut audible = 0usize;
     for _ in 0..DRAIN_BLOCK_BUDGET {
-        hang_tick!();
+        hang_tick!(format!(
+            "waiting for the end after {audible} audible frames"
+        ));
         let block = harness.render(BLOCK_FRAMES).await;
         let progress = block
             .chunks_exact(OUTPUT_CHANNELS)
@@ -131,7 +149,7 @@ async fn audible_frames_until_end(harness: &OfflinePlayer) -> usize {
         if ended {
             return audible;
         }
-        time::sleep(Duration::from_millis(1)).await;
+        time::sleep(Duration::from_millis(1).min(__hang_detector.remaining())).await;
     }
     panic!("the source never played to its end within {DRAIN_BLOCK_BUDGET} blocks");
 }
@@ -149,6 +167,10 @@ async fn offline_harness_glide_varispeed(drain_tone: &'static [u8], temp_dir: Te
         consts::SAMPLE_RATE,
     )
     .await;
+    {
+        let _real_io = real_io();
+        harness.render(BLOCK_FRAMES).await;
+    }
     let path = temp_dir.write("glide.wav", drain_tone);
     let resource = file_resource(&path, &temp_dir.path().join("store"));
     harness
