@@ -535,7 +535,6 @@ where
                 let ids = self.selectable_ids();
                 let wrap = self.navigation.repeat_mode() == crate::RepeatMode::All;
                 if self.navigation.next(&ids, true, wrap).is_none() {
-                    self.current = None;
                     self.held_position = None;
                     self.announce(QueueEvent::QueueEnded);
                 }
