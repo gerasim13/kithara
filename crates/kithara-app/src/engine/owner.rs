@@ -394,7 +394,7 @@ impl Drop for Engine {
     }
 }
 
-#[cfg(all(test, feature = "mock", feature = "gui", not(feature = "broadcast")))]
+#[cfg(all(test, feature = "mock", feature = "gui"))]
 pub(crate) mod mock {
     use crate::gui::rig::Rig;
 
@@ -501,7 +501,7 @@ mod tests {
     #[cfg(not(feature = "broadcast"))]
     #[kithara::test(native, tokio, flash(false))]
     async fn a_seek_lands_on_the_duration_the_queue_knows_before_the_next_tick(tone_mp3: String) {
-        let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::playback()))
+        let rig = OffThread::spawn("engine", || Ok::<_, Infallible>(Rig::offline()))
             .await
             .expect("rig fixture is infallible");
         rig.call(move |rig| {

@@ -2156,9 +2156,11 @@ mod answered {
     }
 
     #[kithara::test(native, flash(false))]
+    #[kithara::hang_watchdog]
     fn every_write_the_studio_declares_is_answered() {
         let mut declared = BTreeMap::new();
         for layout in LAYOUTS {
+            hang_tick!();
             let ui = compile_ui(layout).unwrap();
             let writes = host_writes(&ui);
             let unreached: Vec<&str> = tree_writes(&ui)
@@ -2170,6 +2172,7 @@ mod answered {
                 "{layout:?}: no gesture reaches {unreached:?}"
             );
             declared.extend(writes);
+            hang_reset!();
         }
         for key in [
             "deck.tempo.reset@deck=a",
@@ -2183,7 +2186,12 @@ mod answered {
 
         let unanswered: Vec<String> = declared
             .into_iter()
-            .filter(|(key, value)| !answers(key, value.clone()))
+            .filter(|(key, value)| {
+                hang_tick!();
+                let answered = answers(key, value.clone());
+                hang_reset!();
+                !answered
+            })
             .map(|(key, _)| key)
             .collect();
         assert!(

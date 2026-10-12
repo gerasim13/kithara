@@ -288,7 +288,7 @@ impl Drop for DeckSet {
     }
 }
 
-#[cfg(all(test, feature = "mock", feature = "gui", not(feature = "broadcast")))]
+#[cfg(all(test, feature = "mock", feature = "gui"))]
 pub(crate) mod mock {
     use super::{AppHost, DeckSet};
 

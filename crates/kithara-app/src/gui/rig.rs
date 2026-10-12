@@ -90,6 +90,7 @@ impl Rig {
             }
             crate::mock::render_host(&mut host, 0..128, &config.shutdown)
                 .expect("the initial EQ layout renders");
+            hang_reset!();
         }
         let queues = decks
             .iter()
@@ -171,12 +172,17 @@ impl Rig {
         Self::with_host(&config, host, Broadcaster::new(broadcast))
     }
 
+    #[test_attrs::hang_watchdog(timeout = Duration::from_secs(2))]
     pub(crate) fn pump(&mut self) -> Vec<u64> {
         let mut applied = Vec::new();
         while let Ok(envelope) = self.commands.try_recv() {
+            hang_tick!();
             applied.push(envelope.seq);
             self.engine.apply(envelope);
+            hang_reset!();
         }
+        crate::engine::render_fixture(self, 128);
+        self.engine.tick();
         self.engine.publish();
         applied
     }
@@ -240,6 +246,7 @@ impl Rig {
     ///
     /// The wall-clock budget bounds fixture I/O as well as engine work. A
     /// playing deck's position or an applied command resets its idle budget.
+    #[test_attrs::flash(io)]
     #[test_attrs::hang_watchdog(timeout = Duration::from_secs(2))]
     pub(crate) fn until(
         &mut self,
@@ -268,6 +275,9 @@ impl Rig {
         loop {
             hang_tick!();
             let before = progress(self);
+            crate::engine::render_fixture(self, 1024);
+            self.engine.tick();
+            self.engine.publish();
             step(self);
             if done(self) {
                 hang_reset!();
@@ -283,7 +293,9 @@ impl Rig {
                 "{what}: not within {within:?} | {}",
                 real_clock_verdict(started_real, within)
             );
-            hang_park!(|_| thread::paced_backoff(Duration::from_millis(5)));
+            hang_park!(|remaining: Duration| {
+                thread::paced_backoff(remaining.min(Duration::from_millis(5)));
+            });
         }
     }
 }
