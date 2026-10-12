@@ -397,7 +397,8 @@ impl ProductHarness {
             if ready == ids.len() {
                 let _ = self.render(case, self.block_frames).await;
             } else {
-                time::sleep(Duration::from_millis(1)).await;
+                let _real_io = kithara::platform::flash::real_io();
+                time::sleep(Duration::from_millis(1).min(__hang_detector.remaining())).await;
             }
         }
     }
