@@ -153,12 +153,17 @@ fn update_failed(err: &UpdateError) -> SessionError {
 /// An inactive context without a reserved stopped generation lost its stream.
 /// Firewheel returns the processor when it stops instead of reporting an update error.
 pub(super) fn stream_died<T, S>(state: &SessionState<T, S>) -> bool {
-    state.reserved_session_grid.is_none()
-        && !state.stream_needs_restart
+    state.reserved_session_grid.is_none_or(|reserved| {
+        state
+            .transport_observation
+            .as_ref()
+            .is_some_and(|observation| observation.output_buffer().session_grid() == reserved)
+    }) && !state.stream_needs_restart
         && state.ctx.as_ref().is_some_and(|ctx| !ctx.is_active())
 }
 
 fn restart_dead_stream<T, S>(state: &mut SessionState<T, S>) -> Result<(), SessionError> {
+    state.reserved_session_grid = None;
     state.stream_needs_restart = true;
     state.publish_root();
     warn!("session stream stopped unexpectedly; restarting audio stream");

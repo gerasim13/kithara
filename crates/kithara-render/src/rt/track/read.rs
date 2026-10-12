@@ -64,6 +64,9 @@ impl PlayerTrack {
             ReadOutcome::Full { .. } | ReadOutcome::Partial { .. } => return false,
         };
         self.gap = 0;
+        if self.stop_at.is_some() {
+            self.stop_resume = self.resource.mark(sink.at(offset));
+        }
         self.state = SlotState::Ended;
         self.shut();
         sink.report(event);

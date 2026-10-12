@@ -14,6 +14,58 @@ use crate::{
 
 static HOST: OnceLock<Mutex<Option<FfiHost>>> = OnceLock::new();
 
+#[cfg(all(test, feature = "mock"))]
+pub(crate) mod mock {
+    use kithara::{
+        output::{
+            OfflineRenderError, OfflineRenderRequest, OfflineRenderer, RenderSink, RenderSinkError,
+        },
+        platform::CancelToken,
+        signal::AudioSpec,
+    };
+
+    use super::{FfiHost, HostConfig, HostSettingsControl, host};
+
+    struct Discard;
+
+    impl RenderSink for Discard {
+        fn write(&mut self, _: &[f32]) -> Result<(), RenderSinkError> {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn offline() {
+        let mut slot = host()
+            .try_lock()
+            .expect("the process Host fixture is uncontended");
+        assert!(
+            slot.is_none(),
+            "the fixture starts before a process Host exists"
+        );
+        *slot = Some(
+            FfiHost::new(HostConfig::offline(crate::pools::build().expect("FFI pools")).build())
+                .expect("offline FFI Host"),
+        );
+    }
+
+    pub(crate) fn render(
+        frames: std::ops::Range<u64>,
+        cancel: &CancelToken,
+    ) -> Result<(), OfflineRenderError> {
+        let mut slot = host()
+            .try_lock()
+            .expect("the process Host fixture is uncontended");
+        let host = slot.as_mut().expect("offline process Host is installed");
+        let request = OfflineRenderRequest::builder()
+            .spec(AudioSpec::new(2, host.sample_rate()))
+            .frames(frames)
+            .build();
+        let result = host.render(&request, cancel, &mut Discard);
+        drop(slot);
+        result.map(|_| ())
+    }
+}
+
 fn host() -> &'static Mutex<Option<FfiHost>> {
     HOST.get_or_init(|| Mutex::new(None))
 }

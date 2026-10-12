@@ -94,7 +94,7 @@ impl<E: SessionInbox> DeckMixer<E> {
             pools.get_with_len::<f32>(capacity)?,
         ];
         let mix = config.mix();
-        Ok(Self {
+        let mut mixer = Self {
             scope,
             snapshot,
             scratch,
@@ -121,7 +121,9 @@ impl<E: SessionInbox> DeckMixer<E> {
                 sample_rate: shape.sample_rate,
                 declick: config.declick(),
             },
-        })
+        };
+        mixer.publish(SessionFrame::new(0));
+        Ok(mixer)
     }
 
     #[must_use]

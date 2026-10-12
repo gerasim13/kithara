@@ -17,6 +17,8 @@ mod engine;
 pub mod logging;
 pub mod memory;
 pub mod mix;
+#[cfg(all(test, feature = "mock"))]
+pub mod mock;
 pub mod plugins;
 pub mod pools;
 pub mod recording;

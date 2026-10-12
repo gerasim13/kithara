@@ -221,6 +221,7 @@ mod tests {
 
     #[kithara::test]
     fn update_peak_bitrate_remembers_both_limits() {
+        crate::mock::offline();
         let inner = NativeInner::new(FfiPlayerConfig::for_test()).expect("create player");
         inner.update_peak_bitrate(2_000_000.0, 500_000.0);
         let snapshot = *inner.peak_bitrate.lock();

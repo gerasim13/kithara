@@ -8,7 +8,7 @@ use kithara_config::ConfigOwner;
 use kithara_platform::maybe_send::MaybeSend;
 pub use kithara_play::DeckControl;
 use kithara_play::{DeckPass, HostedDeck, Outbox, PlayError, ResourceLoad, TrackReceipt};
-use kithara_render::{DispatcherProtocol, bridge::DeckPart};
+use kithara_render::{DispatcherProtocol, PlayWorker, bridge::DeckPart};
 use kithara_signal::{FrameCount, SessionFrame};
 use kithara_worker::TaskHandle;
 
@@ -150,7 +150,7 @@ pub struct HostCore<S, D: ?Sized + HostedDeck<S> = dyn HostedDeck<S>> {
     decks: Decks<S, D>,
     dispatcher: Sender<DispatcherProtocol<ResourceLoad<S>>>,
     dispatcher_inbox: Option<kithara_command::Inbox<DispatcherProtocol<ResourceLoad<S>>>>,
-    dispatcher_task: Option<TaskHandle>,
+    dispatcher_task: Option<(TaskHandle, PlayWorker<S>)>,
     retired_dispatches: Vec<Seq>,
     retired_lanes: Vec<kithara_render::LaneId>,
     inbox: kithara_platform::sync::Arc<dyn DeckInbox>,
@@ -299,11 +299,12 @@ where
         }
         let pools = worker.pools().clone();
         if let Some(inbox) = self.dispatcher_inbox.take() {
-            self.dispatcher_task = Some(
+            self.dispatcher_task = Some((
                 worker
                     .start_dispatcher(inbox)
                     .map_err(|error| PlayError::Internal(error.to_string()))?,
-            );
+                worker.clone(),
+            ));
         }
         let scope = self
             .session
@@ -337,6 +338,7 @@ where
             .hold(DeckWake::waker(&self.inbox, DeckMsg::Receipts));
         self.decks.0.push((id, record));
         self.with_deck(id, &mut |deck, out, pass| deck.drain(pass, out))?;
+        self.publish_root();
         Ok(())
     }
 

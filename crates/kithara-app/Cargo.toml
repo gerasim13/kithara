@@ -53,6 +53,7 @@ analysis-waveform = ["kithara/analysis-waveform"]
 # modules without pulling in iced. Used by integration tests
 # (`tests/crates/queue/tests/real_playlist.rs`).
 lib-only = []
+mock = ["kithara/offline"]
 # Hand the no-block gate the facade the app is built on, so a lane that runs
 # this package under the gate detects a blocking call made from the app as
 # well as from the crates beneath it.
@@ -160,7 +161,7 @@ kithara-app-document = { workspace = true }
 
 [dev-dependencies]
 kithara = { workspace = true, default-features = false, features = ["usdt", "download", "offline", "ui-capture"] }
-kithara-app = { path = ".", default-features = false, features = ["usdt"] }
+kithara-app = { path = ".", default-features = false, features = ["mock", "usdt"] }
 kithara-encode = { workspace = true, default-features = false }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["usdt", "mock", "hang", "temp-dir"] }

@@ -799,8 +799,13 @@ mod tests {
         tx.send_replace(Some(progress(1)));
         wait_for_revision(&state, 1).await;
 
-        host.call(|(_, queue)| queue.set_eq_gain(0, -6.0).expect("set the deck EQ"))
-            .await;
+        let render_cancel = cancel.clone();
+        host.call(move |(host, queue)| {
+            queue.set_eq_gain(0, -6.0).expect("set the deck EQ");
+            crate::mock::render_host(host, 0..128, &render_cancel)
+                .expect("apply the deck EQ to its output");
+        })
+        .await;
         state.lock().abr_mode = Some(AbrMode::manual(1));
         queue
             .bus()

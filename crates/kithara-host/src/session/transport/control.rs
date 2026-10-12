@@ -32,12 +32,11 @@ pub(crate) fn prepare_route_restart<T, S>(
             "session host published a non-session grid axis".to_owned(),
         ));
     };
-    let target = if let Some(target) = state.reserved_session_grid {
+    let mut target = if let Some(target) = state.reserved_session_grid {
         let target_stamp = target
             .stamp()
             .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
-        if was_running
-            || !matches!(current.state(), BeatGridState::Unavailable(_))
+        if !matches!(current.state(), BeatGridState::Unavailable(_))
             || current.stamp() != target_stamp
             || axis.epoch() != target.epoch()
         {
@@ -60,23 +59,20 @@ pub(crate) fn prepare_route_restart<T, S>(
                 "session transport generation trails the published host grid".to_owned(),
             ));
         }
-        let mut target = observed;
-        if was_running || observed.epoch() == axis.epoch() {
-            target
-                .advance_restart()
-                .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
-        }
-        let stamp = target
-            .stamp()
-            .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
-        let sample_rate = state.settings.config().sample_rate();
-        state
-            .root
-            .publish_unavailable(stamp, sample_rate, target.epoch());
-        state.publish_root();
-        state.reserved_session_grid = Some(target);
-        target
+        observed
     };
+    if was_running || (state.reserved_session_grid.is_none() && target.epoch() == axis.epoch()) {
+        target
+            .advance_restart()
+            .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
+    }
+    let stamp = target
+        .stamp()
+        .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
+    state
+        .root
+        .publish_unavailable(stamp, state.settings.config().sample_rate(), target.epoch());
+    state.reserved_session_grid = Some(target);
 
     if was_running {
         state
@@ -155,13 +151,21 @@ fn finish_route_restart<T, S>(
 /// Nothing is committed while no graph runs or a route restart holds the
 /// session grid.
 pub(crate) fn observe_commits<T, S>(state: &mut SessionState<T, S>) {
-    if state.reserved_session_grid.is_some() {
+    if state.stream.is_none() {
         return;
     }
     let Some(observation) = state.transport_observation.as_mut() else {
         return;
     };
     let observation = *observation.read();
+    if observation.snapshot().is_none()
+        || state
+            .reserved_session_grid
+            .is_some_and(|reserved| reserved.epoch() != observation.session_grid().epoch())
+    {
+        return;
+    }
+    state.reserved_session_grid = None;
     publish_committed(state, &observation);
 }
 

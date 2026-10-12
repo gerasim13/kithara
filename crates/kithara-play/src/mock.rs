@@ -275,8 +275,8 @@ where
     )?;
     while events.try_recv().is_ok() {
         hang_tick!();
+        hang_reset!();
     }
-    hang_reset!();
     let mut position = 0.0;
     for block in 0..2 {
         hang_tick!();
@@ -636,6 +636,8 @@ impl<S: 'static> DeckRig<S> {
     ///
     /// # Errors
     /// Returns the source, lane, or dispatcher admission failure.
+    #[kithara::flash(true)]
+    #[kithara::flash(io)]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     pub async fn load_fixture(
         &mut self,
@@ -684,25 +686,23 @@ impl<S: 'static> DeckRig<S> {
                 },
             )
             .map_err(|error| PlayError::Internal(error.to_string()))?;
-        let mut awaiting = std::pin::pin!(poll_fn(|context| {
+        let mut deadline = None;
+        let receipt = poll_fn(|context| {
+            hang_tick!();
             let _ = dispatcher.driver.as_mut().poll(context);
-            dispatcher
-                .sender
-                .receipts()
-                .next()
-                .map_or(Poll::Pending, Poll::Ready)
-        }));
-        let receipt = {
-            // WHY: The dispatcher opens disk fixtures on real threads outside Flash's task count.
-            let _real_io = kithara_platform::flash::real_io();
-            loop {
-                hang_tick!();
-                if let Ok(receipt) = timeout(Duration::from_millis(10), awaiting.as_mut()).await {
-                    break receipt;
-                }
+            if let Some(receipt) = dispatcher.sender.receipts().next() {
+                hang_reset!();
+                Poll::Ready(receipt)
+            } else {
+                hang_park!(|remaining| {
+                    let deadline = deadline
+                        .get_or_insert_with(|| Box::pin(kithara_platform::time::sleep(remaining)));
+                    let _ = deadline.as_mut().poll(context);
+                });
+                Poll::Pending
             }
-        };
-        hang_reset!();
+        })
+        .await;
         let (outcome, _) = receipt.into();
         match outcome {
             Outcome::Applied {

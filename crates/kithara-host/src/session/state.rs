@@ -407,7 +407,6 @@ fn create_firewheel_context<T, S>(state: &mut SessionState<T, S>) -> Result<(), 
     let mut ctx = FirewheelContext::new(config);
     let session_grid = state
         .reserved_session_grid
-        .take()
         .ok_or_else(|| SessionError::Graph("session grid generation is missing".to_owned()))?;
     let (channel, transport_observation) = match install(
         &mut ctx,
@@ -538,7 +537,12 @@ mod tests {
     fn exhausted_player_identity_preserves_the_canonical_root() {
         hang_tick!();
         let mut state = test_state(crate::session::offline::mock::start);
-        state.channel_config = ScopedConfig::builder().scopes(NonZeroU16::MIN).build();
+        let channel = state.channel_config.values();
+        state.channel_config = ScopedConfig::builder()
+            .root(channel.root)
+            .scope(channel.scope)
+            .scopes(NonZeroU16::MIN)
+            .build();
         let first = BeatGridId::allocate().expect("first fixture deck id");
         assert!(matches!(ask(&mut state, registration(first)), Ok(())));
         hang_reset!();
@@ -562,7 +566,10 @@ mod tests {
     #[kithara::test]
     fn owner_side_topology_commands_resolve_the_base_when_executed() {
         let mut state = test_state(crate::session::offline::mock::start);
+        let channel = state.channel_config.values();
         state.channel_config = ScopedConfig::builder()
+            .root(channel.root)
+            .scope(channel.scope)
             .scopes(NonZeroU16::new(2).expect("two decks"))
             .build();
         let first = BeatGridId::allocate().expect("first fixture deck id");

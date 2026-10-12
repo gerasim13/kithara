@@ -59,6 +59,7 @@ pub(super) fn config() -> AppConfig {
         .shutdown(shutdown)
         .worker(worker)
         .store(store)
+        .eq_bands(4)
         .build()
 }
 

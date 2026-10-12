@@ -305,6 +305,7 @@ mod tests {
     use crate::{
         core::event_set::ItemBusEvent,
         item::AudioPlayerItem,
+        mock::{WaitOutcome, wait_for_eof_advance, wait_for_status},
         observer::ItemObserver,
         pools,
         pools::{FfiHost, FfiQueue, FfiWorker},
@@ -838,6 +839,7 @@ mod tests {
         }
     }
     #[hang_watchdog(timeout = Duration::from_secs(1))]
+    #[kithara::flash(io)]
     fn wait_for_host_event(
         host: &mut FfiHost,
         events: &mut EventReceiver<QueueBusEvent>,
@@ -881,6 +883,7 @@ mod tests {
     }
 
     #[hang_watchdog(timeout = Duration::from_secs(1))]
+    #[kithara::flash(io)]
     async fn completed<T>(task: tokio::task::JoinHandle<T>) -> T {
         while !task.is_finished() {
             hang_tick!();
@@ -892,6 +895,7 @@ mod tests {
     }
 
     #[hang_watchdog(timeout = Duration::from_secs(1))]
+    #[kithara::flash(io)]
     fn joined(thread: JoinHandle<()>) -> std::thread::Result<()> {
         while !thread.is_finished() {
             hang_park!(|remaining: Duration| sleep(remaining.min(Duration::from_millis(10))));
@@ -977,5 +981,111 @@ mod tests {
             "polling thread must survive the reload it starts"
         );
         hang_reset!();
+    }
+
+    /// The process Host's deck clock drives `Queue::tick`, including
+    /// repeat-one replay, with no FFI thread ticking the queue.
+    #[kithara::test(tokio)]
+    #[hang_watchdog(timeout = Duration::from_secs(1))]
+    async fn the_process_host_replays_a_consumed_repeat_one_track_after_eof() {
+        crate::mock::offline();
+        let store = crate::asset::FfiAssetStore::for_test();
+        let worker = FfiWorker::new(PlayWorkerConfig::builder(store.pools().clone()).build());
+        let prep = ResourcePrep::builder().worker(worker).build();
+        let queue = FfiQueue::new(
+            QueueConfig::builder()
+                .prep(prep)
+                .store(store.handle().clone())
+                .build(),
+        );
+        // The FFI surface calls the session from the caller's thread, never
+        // from a runtime worker.
+        let owner = completed(spawn_blocking(move || {
+            crate::native::session::insert(queue)
+        }))
+        .await
+        .expect("INVARIANT: the FFI test Host accepts its allocated Queue");
+        let queue = owner.control().clone();
+        let mut events = queue.subscribe();
+        let track = assets::sine_wav_a440_100_frames()
+            .path()
+            .expect("the short decoder WAV lives on disk");
+        let setup = queue.clone();
+        let id = completed(spawn_blocking(move || {
+            setup.set_repeat(kithara::queue::RepeatMode::One);
+            setup.set_rate(1.0).expect("a finite rate is accepted");
+            let id = setup.append(track.to_string_lossy().into_owned())?;
+            setup.select(id, Transition::None)?;
+            Ok::<_, kithara::queue::QueueError>(id)
+        }))
+        .await
+        .expect("open queue accepts a local track");
+        let loaded = wait_for_status(&mut events, id, TrackStatus::Loaded, 2000).await;
+        assert!(
+            loaded.observed(),
+            "real local track must load before playback; wait: {loaded}"
+        );
+
+        let selecting = queue.clone();
+        completed(spawn_blocking(move || {
+            selecting.select(id, Transition::None)
+        }))
+        .await
+        .expect("loaded track starts through the real queue lifecycle");
+
+        let cancel = CancelScope::new(None);
+        let render_cancel = cancel.token();
+        let rendering = spawn_blocking(move || crate::mock::render_until_cancelled(&render_cancel));
+        let replay = wait_for_eof_advance(&mut events, id, 2000).await;
+        cancel.cancel();
+        completed(rendering)
+            .await
+            .expect("the process Host renders until the replay event");
+        let status = queue.track(id).map(|entry| entry.status);
+        let owner = completed(spawn_blocking(move || {
+            crate::native::session::remove(&owner)
+                .expect("INVARIANT: the FFI test Queue detaches from its Host");
+            owner
+        }))
+        .await;
+        drop(owner);
+
+        assert!(
+            replay.observed(),
+            "tick after EOF must replay the consumed repeat-one track; wait: {replay}, status: {status:?}"
+        );
+    }
+
+    /// A burst that outruns the bus drops the oldest envelopes and keeps
+    /// delivering, so a wait must survive the gap instead of reading it as
+    /// the awaited event never arriving.
+    #[kithara::test(tokio)]
+    async fn a_wait_survives_a_lagged_bus_and_still_observes_the_next_event() {
+        const CAPACITY: usize = 4;
+
+        let bus = EventBus::new(CAPACITY);
+        let mut events = bus.subscribe::<QueueBusEvent>();
+        let id = TrackId::from(23_u64);
+
+        for _ in 0..=CAPACITY {
+            bus.publish(QueueEvent::TrackStatusChanged {
+                id,
+                status: TrackStatus::Loading,
+            });
+        }
+        bus.publish(QueueEvent::CurrentTrackAdvance {
+            reason: AdvanceReason::NaturalEof,
+            id: Some(id),
+        });
+
+        let outcome = wait_for_eof_advance(&mut events, id, 2000).await;
+        assert!(
+            outcome.observed(),
+            "a dropped burst must not end the wait; wait: {outcome}"
+        );
+        assert!(
+            matches!(&outcome, WaitOutcome::Observed { lagged, .. } if *lagged > 0),
+            "the burst must outrun the bus, else the wait never met a gap; wait: {outcome}"
+        );
     }
 }
