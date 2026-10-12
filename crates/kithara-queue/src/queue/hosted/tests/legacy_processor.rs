@@ -209,6 +209,17 @@ impl ThresholdRig {
     #[kithara::flash(io)]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     async fn seek(&mut self, position: f64) {
+        self.read(1).await;
+        let segment = self
+            .queue
+            .current_track()
+            .expect("current track")
+            .snapshot()
+            .mark
+            .expect("playing threshold track has a lane mark")
+            .lane
+            .segment;
+        let to = kithara_play::Position::try_from_secs_f64(position).expect("seek position");
         self.apply(QueueCommand::Pause { at: When::Next });
         loop {
             hang_tick!(format!(
@@ -222,9 +233,7 @@ impl ThresholdRig {
             }
             kithara_platform::time::sleep(Duration::from_millis(1)).await;
         }
-        self.apply(QueueCommand::Seek {
-            to: kithara_play::Position::try_from_secs_f64(position).expect("seek position"),
-        });
+        self.apply(QueueCommand::Seek { to });
         loop {
             hang_tick!(format!(
                 "threshold seek to {position}: {:?}",
@@ -252,14 +261,17 @@ impl ThresholdRig {
                 self.queue.current_track().map(Player::snapshot)
             ));
             self.read(1).await;
-            if matches!(
-                self.queue
-                    .current_track()
-                    .expect("current track")
-                    .snapshot()
-                    .status,
-                kithara_play::TrackStatus::Playing { .. }
-            ) {
+            let snapshot = self
+                .queue
+                .current_track()
+                .expect("current track")
+                .snapshot();
+            if matches!(snapshot.status, kithara_play::TrackStatus::Playing { .. })
+                && snapshot
+                    .mark
+                    .is_some_and(|mark| mark.lane.segment != segment)
+                && snapshot.position >= to
+            {
                 hang_reset!();
                 break;
             }
@@ -351,15 +363,24 @@ impl ThresholdRig {
                 .queue
                 .active
                 .iter()
-                .any(|active| active.item == THRESHOLD_NEXT)
+                .map(|active| active.item)
+                .chain(self.queue.active.parked_iter().map(|parked| parked.item))
+                .any(|item| item == THRESHOLD_NEXT)
         {
-            let active = self
+            let (_, load) = self
                 .queue
                 .active
                 .iter()
-                .find(|active| active.item == THRESHOLD_NEXT)
+                .map(|active| (active.item, active.load))
+                .chain(
+                    self.queue
+                        .active
+                        .parked_iter()
+                        .map(|parked| (parked.item, parked.load)),
+                )
+                .find(|(item, _)| *item == THRESHOLD_NEXT)
                 .expect("preload request belongs to the next queue item");
-            let seq = active.load.expect("successor remains unadmitted").seq();
+            let seq = load.expect("successor remains unadmitted").seq();
             let due = self
                 .loads
                 .opens
@@ -376,8 +397,6 @@ impl ThresholdRig {
                 "no second successor load in this playback cycle"
             );
             self.successor_seq = Some(seq);
-            self.prefetches += 1;
-            self.order.push("prefetch");
             due.defer();
             hang_reset!();
         }
@@ -391,6 +410,10 @@ impl ThresholdRig {
                 Some(active.load.expect("successor remains unadmitted").seq()),
                 self.successor_seq
             );
+            if self.prefetches == 0 {
+                self.prefetches += 1;
+                self.order.push("prefetch");
+            }
         }
         if let Some(target) = self
             .queue
