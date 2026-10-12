@@ -203,6 +203,13 @@ impl ProductHarness {
         host.with(|host| host.metronome().set_enabled(true))
             .await
             .unwrap_or_else(|error| panic!("{}: metronome: {error}", case.id));
+        hang_tick!(format!(
+            "{}: publishing the offline clock and stream shape",
+            case.id
+        ));
+        let _ = host.render(block_frames).await;
+        hang_reset!();
+        let output_frames = host.position();
         let master = host
             .attach_tap(
                 Tap::Master,
@@ -249,7 +256,7 @@ impl ProductHarness {
             block_frames,
             host,
             master,
-            output_frames: 0,
+            output_frames,
             paced,
             provider,
             worker,
