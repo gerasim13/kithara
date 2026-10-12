@@ -63,8 +63,9 @@ async fn an_offline_deck_publishes_owner_commands_without_a_render_pull() {
     .await
     .expect("offline host starts");
     let queue = host.call(|(_, deck)| deck.control().clone()).await;
-    let track = queue
-        .append("file:///unopened.wav")
+    let track = host
+        .call(|(_, deck)| deck.control().append("file:///unopened.wav"))
+        .await
         .expect("append accepted");
     let started = WallInstant::now();
     loop {
