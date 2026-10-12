@@ -294,6 +294,8 @@ pub(super) fn assert_initial_decoder(
     assert_eq!(event.variant, Some(expected_variant), "{label} variant");
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn prepare_player(
     master_url: &url::Url,
     initial_variant: usize,
@@ -366,12 +368,17 @@ async fn prepare_player(
     let mut active_blocks = 0usize;
     let mut decoder_events = drain_decoder_events(&mut events, 0);
     loop {
+        hang_tick!();
+        let before = player.position();
         let rendered = source_frame(player.position(), label);
         let remaining = capture_frame.saturating_sub(rendered);
         let request = usize::try_from(remaining)
             .unwrap_or(BLOCK_FRAMES)
             .min(BLOCK_FRAMES);
         let block = render_paced(&mut player, request.max(1)).await;
+        if player.position() > before {
+            hang_reset!();
+        }
         decoder_events.extend(drain_decoder_events(&mut events, 0));
         if block
             .iter()
@@ -433,6 +440,8 @@ pub(super) async fn render_paced(player: &mut OfflinePlayer, frames: usize) -> V
     block
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog]
 pub(super) async fn render_switch(
     master_url: &url::Url,
     transition: Transition,
@@ -449,10 +458,15 @@ pub(super) async fn render_switch(
     let mut applied_frame = None;
     let mut decoder_events = Vec::new();
     while samples.len() / usize::from(CHANNELS) < observation_frames {
+        hang_tick!();
+        let before = prepared.player.position();
         let rendered_frames = samples.len() / usize::from(CHANNELS);
         let remaining_frames = observation_frames.saturating_sub(rendered_frames);
         let render_frames = remaining_frames.min(BLOCK_FRAMES);
         samples.extend_from_slice(&render_paced(&mut prepared.player, render_frames).await);
+        if prepared.player.position() > before {
+            hang_reset!();
+        }
         let rendered_frames = samples.len() / usize::from(CHANNELS);
         decoder_events.extend(drain_decoder_events(&mut prepared.events, rendered_frames));
         if applied_frame.is_none() && prepared.abr.current_variant_index() == Some(transition.to) {
@@ -542,6 +556,8 @@ pub(super) async fn render_switch(
     result
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog]
 pub(super) async fn render_no_switch_control(
     master_url: &url::Url,
     initial_variant: usize,
@@ -557,10 +573,15 @@ pub(super) async fn render_no_switch_control(
     let mut samples = Vec::with_capacity(observation_frames * usize::from(CHANNELS));
     let mut decoder_events = Vec::new();
     while samples.len() / usize::from(CHANNELS) < observation_frames {
+        hang_tick!();
+        let before = prepared.player.position();
         let rendered_frames = samples.len() / usize::from(CHANNELS);
         let remaining_frames = observation_frames.saturating_sub(rendered_frames);
         let render_frames = remaining_frames.min(BLOCK_FRAMES);
         samples.extend_from_slice(&render_paced(&mut prepared.player, render_frames).await);
+        if prepared.player.position() > before {
+            hang_reset!();
+        }
         decoder_events.extend(drain_decoder_events(
             &mut prepared.events,
             samples.len() / usize::from(CHANNELS),

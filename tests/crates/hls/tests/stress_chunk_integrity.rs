@@ -17,12 +17,14 @@ use kithara::{
     },
     play::{PlayWorker, PlayWorkerConfig},
     signal::{AudioChunk, AudioChunkInfo},
-    stream::{AudioCodec, ContainerFormat, MediaInfo},
+    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
+    mock::LaneAudio,
+    reads::blocking_audio,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_fixtures::hls_fixtures::{
@@ -87,6 +89,8 @@ fn intra_chunk_breaks(chunk: &AudioChunk) -> usize {
     breaks
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn next_chunk_with_timeout<R: AudioRead>(
     audio: &mut R,
     timeout: Duration,
@@ -94,9 +98,16 @@ async fn next_chunk_with_timeout<R: AudioRead>(
 ) -> Option<AudioChunk> {
     let deadline = Instant::now() + timeout;
     loop {
+        hang_tick!();
         match AudioRead::next_chunk(audio) {
-            Ok(ChunkOutcome::Chunk(chunk)) => return Some(*chunk),
-            Ok(ChunkOutcome::Eof { .. }) => return None,
+            Ok(ChunkOutcome::Chunk(chunk)) => {
+                hang_reset!();
+                return Some(*chunk);
+            }
+            Ok(ChunkOutcome::Eof { .. }) => {
+                hang_reset!();
+                return None;
+            }
             Ok(ChunkOutcome::Pending { .. }) => {}
             Err(e) => panic!("next_chunk decode error at stage='{stage}': {e}"),
         }
@@ -201,10 +212,23 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .build();
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 
+    let _ = blocking_audio(audio, move |audio| {
+        kithara::platform::tokio::runtime::Handle::current()
+            .block_on(check_chunk_integrity(audio, segment_duration));
+    })
+    .await;
+}
+
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+async fn check_chunk_integrity(
+    audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
+    segment_duration: f64,
+) {
     let spec = audio.spec();
     info!(
         sample_rate = spec.sample_rate,
@@ -222,6 +246,7 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
     let mut warmup_unknown = 0u64;
 
     loop {
+        hang_tick!();
         if warmup_start.elapsed() > warmup_timeout {
             panic!(
                 "ABR switch not detected within {}s (ascending={}, unknown={})",
@@ -232,7 +257,7 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
         }
 
         let Some(chunk) = next_chunk_with_timeout(
-            &mut audio,
+            audio,
             Duration::from_millis(consts::WARMUP_NEXT_CHUNK_TIMEOUT_MS),
             "phase1_warmup",
         )
@@ -244,6 +269,7 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
             );
         };
 
+        hang_reset!();
         let dir = detect_chunk_direction(&chunk);
         match dir {
             Direction::Ascending => {
@@ -284,9 +310,10 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
     let mut continuity_breaks = 0u64;
 
     for chunk_idx in 0..consts::POST_SWITCH_CHUNKS {
+        hang_tick!();
         let stage = format!("phase2_post_switch_chunk_{chunk_idx}");
         let Some(chunk) = next_chunk_with_timeout(
-            &mut audio,
+            audio,
             Duration::from_millis(consts::NEXT_CHUNK_TIMEOUT_MS),
             &stage,
         )
@@ -294,6 +321,7 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
         else {
             panic!("next_chunk returned None at post-switch chunk {chunk_idx}",);
         };
+        hang_reset!();
 
         let frames = chunk.frames();
         let meta = &chunk.meta;
@@ -373,6 +401,7 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
     let mut direction_errors = 0u64;
 
     for i in 0..consts::SEEK_ITERATIONS {
+        hang_tick!();
         let pos_secs = rng.range_f64(0.001, max_seek_secs);
         let position = Duration::from_secs_f64(pos_secs);
 
@@ -385,9 +414,10 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
         let mut prev_last_sample: Option<f32> = None;
 
         for c in 0..consts::CHUNKS_PER_SEEK {
+            hang_tick!();
             let stage = format!("phase3_seek_{i}_chunk_{c}");
             let Some(chunk) = next_chunk_with_timeout(
-                &mut audio,
+                audio,
                 Duration::from_millis(consts::NEXT_CHUNK_TIMEOUT_MS),
                 &stage,
             )
@@ -395,6 +425,7 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
             else {
                 break;
             };
+            hang_reset!();
 
             let channels = chunk.meta.spec.channels as usize;
             let frames = chunk.frames();
@@ -556,9 +587,11 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
 
     let mut remaining_chunks = 0u64;
     let mut remaining_samples = 0u64;
+    hang_reset!();
     loop {
+        hang_tick!();
         let Some(chunk) = next_chunk_with_timeout(
-            &mut audio,
+            audio,
             Duration::from_millis(consts::NEXT_CHUNK_TIMEOUT_MS),
             "phase4_tail_drain",
         )
@@ -567,6 +600,7 @@ async fn stress_chunk_integrity(#[future(awt)] audio_server: CreatedHls, #[case]
             break;
         };
         remaining_chunks += 1;
+        hang_reset!();
         remaining_samples += chunk.samples.len() as u64;
         for &sample in chunk.samples.iter() {
             assert!(

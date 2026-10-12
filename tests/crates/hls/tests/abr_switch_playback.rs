@@ -33,6 +33,7 @@ use kithara_integration_tests::{
         CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe,
         render_offline_window, render_until_audible,
     },
+    reads::blocking_audio,
     served_mp3,
 };
 use kithara_test_utils::{TestTempDir, pace, temp_dir};
@@ -95,6 +96,7 @@ async fn open_packaged_hls_audio(
     bus: Option<EventBus>,
     block_on_underrun: bool,
 ) -> LaneAudio<Stream<Hls<TestPools>>, TestPools> {
+    let bus = bus.unwrap_or_default();
     let cancel = CancelToken::never();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
@@ -113,12 +115,12 @@ async fn open_packaged_hls_audio(
         .download_batch_size(1)
         .cancel(cancel)
         .downloader(downloader)
-        .maybe_events(bus.clone())
+        .events(bus.clone())
         .build();
 
     let config = kithara::play::TrackConfig::for_audio(
         AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
-            .maybe_events(bus)
+            .events(bus)
             .build(),
     )
     .block_on_underrun(block_on_underrun)
@@ -131,6 +133,36 @@ async fn open_packaged_hls_audio(
     audio
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+fn warm_packaged_variant(
+    audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
+    variant: usize,
+) -> u64 {
+    let _ = audio.preload();
+    let mut buffer = [0.0; 4096];
+    let mut total = 0u64;
+    loop {
+        hang_tick!();
+        match audio.read(&mut buffer) {
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                total += count.get() as u64;
+                hang_reset!();
+            }
+            Ok(ReadOutcome::Pending { .. }) => {
+                hang_park!(|remaining: Duration| pace(remaining.min(Duration::from_micros(500))));
+            }
+            Ok(ReadOutcome::Eof { .. }) => {
+                hang_reset!();
+                return total;
+            }
+            Err(error) => panic!("packaged ABR warm decode error (v{variant}): {error}"),
+        }
+    }
+}
+
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn read_audio_some(
     audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     stage: &str,
@@ -139,9 +171,13 @@ async fn read_audio_some(
     let mut buf = [0.0f32; 4096];
 
     loop {
+        hang_tick!();
         let _ = audio.preload();
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => return count.get(),
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                hang_reset!();
+                return count.get();
+            }
             Ok(ReadOutcome::Pending { .. }) => {}
             Ok(ReadOutcome::Eof { .. }) => {
                 panic!("unexpected EOF while waiting for packaged ABR audio at stage={stage}");
@@ -254,6 +290,7 @@ async fn abr_switch_on_production_ladder_does_not_hang(
     hang_timeout_secs(3),
     tracing("kithara_abr=debug,kithara_audio=debug,kithara_hls=debug,kithara_stream=debug")
 )]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn packaged_abr_switch_keeps_player_continuity(
     temp_dir: TestTempDir,
     #[future(awt)] create_packaged_abr_fixture: (TestServerHelper, Url),
@@ -296,6 +333,7 @@ async fn packaged_abr_switch_keeps_player_continuity(
     let deadline = Instant::now() + Duration::from_secs(8);
 
     while Instant::now() < deadline {
+        hang_tick!();
         let _ = progress_audio.preload();
         let read: usize = match progress_audio.read(&mut buf) {
             Ok(ReadOutcome::Frames {
@@ -320,6 +358,7 @@ async fn packaged_abr_switch_keeps_player_continuity(
         };
         progress_probe.drain(&mut progress_rx);
         loop {
+            hang_tick!();
             match hls_rx.try_recv().map(|env| env.event) {
                 Ok(TestEvent::Abr(AbrEvent::VariantApplied { .. })) => {
                     switch_count += 1;
@@ -337,6 +376,7 @@ async fn packaged_abr_switch_keeps_player_continuity(
             progress_probe.observe_idle();
             continue;
         }
+        hang_reset!();
 
         total_samples += read as u64;
         if switch_seen {
@@ -382,6 +422,7 @@ async fn packaged_abr_switch_keeps_player_continuity(
     // `hang_timeout_secs`. Forcing each variant with a manual mode guarantees
     // full coverage regardless of which path the offline render's `auto(0)` ABR
     // then takes.
+    drop(progress_audio);
     for variant in [0usize, 1usize] {
         let warm_config = kithara::play::TrackConfig::for_audio(
             AudioConfig::<Hls<TestPools>>::for_stream(
@@ -399,22 +440,9 @@ async fn packaged_abr_switch_keeps_player_continuity(
         let mut warm_audio = kithara_integration_tests::mock::load_audio(&worker, warm_config)
             .await
             .unwrap_or_else(|e| panic!("packaged ABR warm audio (v{variant}) must open: {e}"));
-        let warmed = spawn_blocking(move || {
-            let _ = warm_audio.preload();
-            let mut buf = vec![0f32; 4096];
-            let mut total = 0u64;
-            loop {
-                match warm_audio.read(&mut buf) {
-                    Ok(ReadOutcome::Frames { count, .. }) => total += count.get() as u64,
-                    Ok(ReadOutcome::Pending { .. }) => {}
-                    Ok(ReadOutcome::Eof { .. }) => break,
-                    Err(e) => panic!("packaged ABR warm decode error (v{variant}): {e}"),
-                }
-            }
-            total
-        })
-        .await
-        .expect("packaged ABR warm read join");
+        let warmed = spawn_blocking(move || warm_packaged_variant(&mut warm_audio, variant))
+            .await
+            .expect("packaged ABR warm read join");
         assert!(
             warmed > 0,
             "packaged ABR warm pass (v{variant}) must decode the variant into the shared store"
@@ -981,8 +1009,13 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
     let pools = pools();
     let cancel = CancelToken::never();
     let net = HttpClient::new(NetOptions::default(), pools.clone(), cancel.child());
+    let ladder = mixed_codec_ladder().variant_bandwidths(
+        [66_005, 134_107, 269_930, 988_758]
+            .map(|bandwidth| bandwidth * 4)
+            .to_vec(),
+    );
     let plain = server
-        .create_hls(mixed_codec_ladder())
+        .create_hls(ladder.clone())
         .await
         .expect("create the ladder");
     let master = net
@@ -1005,10 +1038,10 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         .await
         .expect("fetch a top-variant segment")
         .len() as u64;
-    // Each slow segment then measures half the top bandwidth.
-    let slow_segment_delay_ms = slow_segment_bytes * 8 * 2 * 1000 / top_bandwidth;
+    // Scaled advertised rates preserve the ABR pressure ratio within the chunk watchdog budget.
+    let slow_segment_delay_ms = slow_segment_bytes * 8 * 3 * 1000 / (top_bandwidth * 2);
     let created = server
-        .create_hls(mixed_codec_ladder().delay_rules(vec![DelayRule {
+        .create_hls(ladder.delay_rules(vec![DelayRule {
             variant: Some(TOP_VARIANT),
             segment_gte: Some(SLOW_FROM_SEGMENT),
             delay_ms: slow_segment_delay_ms,
@@ -1033,7 +1066,7 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         .build(),
     );
     let bus = EventBus::new(EVENT_BUS_CAPACITY);
-    let mut events = bus.subscribe();
+    let events = bus.subscribe();
     let hls_config = HlsConfig::for_url(created.master_url())
         .download_batch_size(PREFETCH_SEGMENTS)
         .store(
@@ -1050,108 +1083,155 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         .events(bus)
         .build();
 
-    let mut audio = kithara_integration_tests::mock::load_audio(
+    let audio = kithara_integration_tests::mock::load_audio(
         &worker,
         AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build(),
     )
     .await
     .expect("audio creation");
-    let _ = audio.preload();
 
-    async fn next_chunk(
+    #[kithara::flash(true)]
+    #[kithara::flash(io)]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(3), ctx = String)]
+    fn verify_frozen_seek(
         audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
-    ) -> Option<AudioChunk> {
-        loop {
-            let _ = audio.preload();
-            match AudioRead::next_chunk(audio) {
-                Ok(ChunkOutcome::Chunk(chunk)) => return Some(*chunk),
-                Ok(ChunkOutcome::Eof { .. }) => return None,
-                Ok(ChunkOutcome::Pending { .. }) => {}
-                Err(e) => panic!("decode error in next_chunk: {e}"),
-            }
-            // Yield so the worker runs and (under flash) the virtual clock
-            // advances; wait on the *fact* of a chunk / EOF, never a
-            // wall-clock window. A genuine stall trips `KITHARA_HANG_TIMEOUT_SECS`.
-            time::sleep(Duration::from_millis(2)).await;
-        }
-    }
-
-    while next_chunk(&mut audio)
-        .await
-        .expect("ABR must reach the top variant before the track ends")
-        .meta
-        .variant_index
-        != Some(TOP_VARIANT)
-    {}
-
-    let _ = lowest_pending_estimate(&mut events);
-    audio.seek(SEEK_TARGET).expect("seek must not fail");
-    let pressure_deadline = Instant::now() + Duration::from_millis(slow_segment_delay_ms * 4);
-    let mut lowest_while_pending: Option<u64> = None;
-    while seek_segment.requested() == 0
-        || lowest_while_pending.is_none_or(|bps| bps >= top_bandwidth)
-    {
-        assert!(
-            Instant::now() <= pressure_deadline,
-            "the estimate did not fall below the top bandwidth {top_bandwidth} while the seek \
-             was pending: lowest {lowest_while_pending:?}, seek target requested {} times",
-            seek_segment.requested()
-        );
+        mut events: EventReceiver<TestEvent>,
+        seek_segment: kithara_integration_tests::SegmentGateHandle,
+        top_bandwidth: u64,
+        slow_segment_delay_ms: u64,
+    ) {
         let _ = audio.preload();
-        if let Some(bps) = lowest_pending_estimate(&mut events) {
-            lowest_while_pending = Some(lowest_while_pending.map_or(bps, |low| low.min(bps)));
-        }
-        time::sleep(Duration::from_millis(2)).await;
-    }
-    seek_segment.release();
 
-    let landing = next_chunk(&mut audio)
-        .await
-        .expect("playback must resume after the seek");
-    assert_eq!(
-        landing.meta.segment_index,
-        Some(u32::try_from(SEEK_SEGMENT).expect("the seek segment fits u32")),
-        "the seek must land on its target segment"
-    );
-    assert_eq!(
-        landing.meta.variant_index,
-        Some(TOP_VARIANT),
-        "the seek must land on the variant that played before it, although the \
-         estimate fell below it while the seek was pending"
-    );
-    let mut decisions = Vec::new();
-    loop {
-        let chunk = next_chunk(&mut audio)
-            .await
-            .expect("ABR must move off the top variant before the track ends");
-        let variant = chunk.meta.variant_index.expect("HLS chunk has a variant");
-        drain_abr_decisions(&mut events, &mut decisions);
-        if variant != TOP_VARIANT {
-            assert!(variant < TOP_VARIANT, "ABR must switch down");
-            break;
+        #[kithara::flash(io)]
+        #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
+        fn next_chunk(
+            audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
+            stage: &str,
+        ) -> Option<AudioChunk> {
+            loop {
+                hang_tick!(stage.to_owned());
+                let _ = audio.preload();
+                match AudioRead::next_chunk(audio) {
+                    Ok(ChunkOutcome::Chunk(chunk)) => {
+                        hang_reset!();
+                        return Some(*chunk);
+                    }
+                    Ok(ChunkOutcome::Eof { .. }) => {
+                        hang_reset!();
+                        return None;
+                    }
+                    Ok(ChunkOutcome::Pending { .. }) => {}
+                    Err(e) => panic!("decode error in next_chunk: {e}"),
+                }
+                paced_backoff(Duration::from_millis(2));
+            }
         }
-    }
-    let unlocked = decisions
-        .iter()
-        .rposition(|event| matches!(event, AbrEvent::Unlocked))
-        .expect("the seek lock must end once the landing output is committed");
-    let decided = decisions[unlocked + 1..]
-        .iter()
-        .find(|event| {
+
+        while next_chunk(audio, "reach top variant")
+            .expect("ABR must reach the top variant before the track ends")
+            .meta
+            .variant_index
+            != Some(TOP_VARIANT)
+        {
+            hang_tick!();
+            hang_reset!();
+        }
+
+        let _ = lowest_pending_estimate(&mut events);
+        audio.seek(SEEK_TARGET).expect("seek must not fail");
+        let pressure_deadline = Instant::now() + Duration::from_millis(slow_segment_delay_ms * 4);
+        let mut lowest_while_pending: Option<u64> = None;
+        {
+            let _real_io = kithara::platform::flash::real_io();
+            let mut requested = seek_segment.requested();
+            while seek_segment.requested() == 0
+                || lowest_while_pending.is_none_or(|bps| bps >= top_bandwidth)
+            {
+                hang_tick!(format!(
+                    "seek requests={}, lowest={lowest_while_pending:?}, top={top_bandwidth}, slow_delay_ms={slow_segment_delay_ms}",
+                    seek_segment.requested()
+                ));
+                assert!(
+                    Instant::now() <= pressure_deadline,
+                    "the estimate did not fall below the top bandwidth {top_bandwidth} while the seek \
+                 was pending: lowest {lowest_while_pending:?}, seek target requested {} times",
+                    seek_segment.requested()
+                );
+                let current_requested = seek_segment.requested();
+                if current_requested > requested {
+                    hang_reset!();
+                    requested = current_requested;
+                }
+                if let Some(bps) = lowest_pending_estimate(&mut events) {
+                    hang_reset!();
+                    lowest_while_pending =
+                        Some(lowest_while_pending.map_or(bps, |low| low.min(bps)));
+                }
+                paced_backoff(Duration::from_millis(2));
+            }
+        }
+        seek_segment.release();
+        hang_reset!();
+
+        let landing =
+            next_chunk(audio, "seek landing").expect("playback must resume after the seek");
+        assert_eq!(
+            landing.meta.segment_index,
+            Some(u32::try_from(SEEK_SEGMENT).expect("the seek segment fits u32")),
+            "the seek must land on its target segment"
+        );
+        assert_eq!(
+            landing.meta.variant_index,
+            Some(TOP_VARIANT),
+            "the seek must land on the variant that played before it, although the \
+         estimate fell below it while the seek was pending"
+        );
+        let mut decisions = Vec::new();
+        loop {
+            hang_tick!();
+            let chunk = next_chunk(audio, "leave top variant")
+                .expect("ABR must move off the top variant before the track ends");
+            hang_reset!();
+            let variant = chunk.meta.variant_index.expect("HLS chunk has a variant");
+            drain_abr_decisions(&mut events, &mut decisions);
+            if variant != TOP_VARIANT {
+                assert!(variant < TOP_VARIANT, "ABR must switch down");
+                break;
+            }
+        }
+        let unlocked = decisions
+            .iter()
+            .rposition(|event| matches!(event, AbrEvent::Unlocked))
+            .expect("the seek lock must end once the landing output is committed");
+        let decided = decisions[unlocked + 1..]
+            .iter()
+            .find(|event| {
+                matches!(
+                    event,
+                    AbrEvent::VariantApplied { .. } | AbrEvent::DecisionSkipped { .. }
+                )
+            })
+            .expect("ABR must decide once the seek lock ended");
+        assert!(
             matches!(
-                event,
-                AbrEvent::VariantApplied { .. } | AbrEvent::DecisionSkipped { .. }
-            )
-        })
-        .expect("ABR must decide once the seek lock ended");
-    assert!(
-        matches!(
-            decided,
-            AbrEvent::VariantApplied { from, to, .. }
-                if from.get() == TOP_VARIANT && to.get() < TOP_VARIANT
-        ),
-        "the first ABR decision after the seek lock ended must leave the top variant, got {decided:?}"
-    );
+                decided,
+                AbrEvent::VariantApplied { from, to, .. }
+                    if from.get() == TOP_VARIANT && to.get() < TOP_VARIANT
+            ),
+            "the first ABR decision after the seek lock ended must leave the top variant, got {decided:?}"
+        );
+    }
+
+    let _ = blocking_audio(audio, move |audio| {
+        verify_frozen_seek(
+            audio,
+            events,
+            seek_segment,
+            top_bandwidth,
+            slow_segment_delay_ms,
+        );
+    })
+    .await;
 }
 
 #[derive(Debug)]

@@ -30,14 +30,23 @@ pub(crate) async fn prepared_audio() -> Audio<Stream<File<TestPools>>> {
         .expect("prepare decoded source")
 }
 
+#[kithara_test_utils::kithara::hang_watchdog]
+#[kithara_test_utils::kithara::flash(io)]
 pub(crate) fn produced_audio(audio: &mut Audio<Stream<File<TestPools>>>) -> AudioChunk {
     use crate::{AudioSource, Fetch, TrackStep};
 
     for _ in 0..64 {
+        hang_tick!();
         let _ = audio.prepare_deferred();
         match audio.step_track() {
-            TrackStep::Produced(Fetch::Data { data, .. }) => return data,
-            TrackStep::StateChanged | TrackStep::Blocked(_) => {}
+            TrackStep::Produced(Fetch::Data { data, .. }) => {
+                hang_reset!();
+                return data;
+            }
+            TrackStep::StateChanged => {
+                hang_reset!();
+            }
+            TrackStep::Blocked(_) => {}
             _ => panic!("expected decoded output"),
         }
         audio.finish_deferred();

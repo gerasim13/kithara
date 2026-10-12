@@ -116,7 +116,16 @@ where
     /// `cursor` lands in a different `(variant, segment_index)` than
     /// the previously observed one.
     fn maybe_publish_segment_start(&mut self, cursor: u64) {
-        let Some((seg_idx, seg_start, _size)) = self.route.find_at_offset(cursor) else {
+        let at_eof = self.route.map(
+            |coord| coord.active().eof_at(cursor),
+            |session| session.variant().eof_at(cursor),
+        );
+        let lookup_cursor = if at_eof {
+            cursor.saturating_sub(1)
+        } else {
+            cursor
+        };
+        let Some((seg_idx, seg_start, _size)) = self.route.find_at_offset(lookup_cursor) else {
             return;
         };
         let variant = self.route.variant_index();
@@ -359,6 +368,26 @@ mod tests {
             publisher,
             Arc::from(vec![variant]),
         ))
+    }
+
+    #[kithara::test]
+    fn a_tail_chunk_announces_its_segment_when_the_reader_cursor_is_at_eof() {
+        let bus = EventBus::new(8);
+        let mut events = bus.subscribe();
+        let coord = coord(&bus);
+        coord.set_position(250);
+        let mut sink = HlsReaderEventSink::new(Arc::new(DeferredBus::new(bus, 8)), coord.clone());
+        coord.set_position(300);
+        sink.on_chunk(ReaderChunkSignal::Chunk);
+        sink.flush();
+        assert!(matches!(
+            events.try_recv().map(|envelope| envelope.event),
+            Ok(HlsEvent::SegmentReadStart {
+                variant: 0,
+                segment_index: 1,
+                byte_offset: 100,
+            })
+        ));
     }
 
     #[kithara::test]
