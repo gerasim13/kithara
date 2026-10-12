@@ -256,13 +256,37 @@ impl<S> PlayerImpl<S> {
         let lane = self.lane.as_mut().ok_or(PlayError::NotReady)?;
         let seq = Outbox::<S>::lane(lane, when, commands.clone())?;
         self.lane_commands
-            .extend(commands.into_iter().map(|command| LaneOperation {
-                seq,
-                when,
-                segment: self.segment,
-                session,
-                command,
-                applied: None,
+            .extend(commands.into_iter().map(|command| {
+                #[cfg(feature = "usdt")]
+                {
+                    let target_speed = match &command {
+                        LaneCommand::SetSpeed(
+                            SpeedCurve::Constant(speed) | SpeedCurve::Ramp { to: speed, .. },
+                        ) => Some(*speed),
+                        LaneCommand::SetSpeed(SpeedCurve::Steps(steps)) => {
+                            steps.last().map(|(_, speed)| *speed)
+                        }
+                        _ => None,
+                    };
+                    if let Some(speed) = target_speed
+                        && let Some(mark) = self.mark
+                    {
+                        kithara_test_macros::probe_event!(
+                            rate_requested,
+                            request_revision = seq.get(),
+                            target_rate_bits = speed.to_bits(),
+                            session_frame = i64::from(mark.session)
+                        );
+                    }
+                }
+                LaneOperation {
+                    seq,
+                    when,
+                    segment: self.segment,
+                    session,
+                    command,
+                    applied: None,
+                }
             }));
         Ok(seq)
     }
