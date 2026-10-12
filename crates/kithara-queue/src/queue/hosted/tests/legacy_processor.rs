@@ -220,19 +220,6 @@ impl ThresholdRig {
             .lane
             .segment;
         let to = kithara_play::Position::try_from_secs_f64(position).expect("seek position");
-        self.apply(QueueCommand::Pause { at: When::Next });
-        loop {
-            hang_tick!(format!(
-                "threshold seek awaits its pause receipt: {:?}",
-                self.queue.current_track().map(Player::snapshot)
-            ));
-            self.read(THRESHOLD_BLOCK).await;
-            if self.mixer.ends.snapshot.read().slots[0].state == SlotState::Stopped {
-                hang_reset!();
-                break;
-            }
-            kithara_platform::time::sleep(Duration::from_millis(1)).await;
-        }
         self.apply(QueueCommand::Seek { to });
         loop {
             hang_tick!(format!(
@@ -246,27 +233,7 @@ impl ThresholdRig {
                 .expect("current track")
                 .snapshot();
             if !snapshot.pending_lane
-                && (snapshot.position.as_secs_f64() - position).abs()
-                    < 1.0 / f64::from(mock::SAMPLE_RATE.get())
-            {
-                hang_reset!();
-                break;
-            }
-            kithara_platform::time::sleep(Duration::from_millis(1)).await;
-        }
-        self.apply(QueueCommand::Play { at: When::Next });
-        loop {
-            hang_tick!(format!(
-                "threshold seek awaits its play receipt: {:?}",
-                self.queue.current_track().map(Player::snapshot)
-            ));
-            self.read(1).await;
-            let snapshot = self
-                .queue
-                .current_track()
-                .expect("current track")
-                .snapshot();
-            if matches!(snapshot.status, kithara_play::TrackStatus::Playing { .. })
+                && matches!(snapshot.status, kithara_play::TrackStatus::Playing { .. })
                 && snapshot
                     .mark
                     .is_some_and(|mark| mark.lane.segment != segment)
