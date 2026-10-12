@@ -161,11 +161,20 @@ where
     }
 
     fn settle(&mut self, receipt: TrackReceipt<'_, S>, out: &mut Outbox<'_, S>) -> Settled {
-        if let TrackReceipt::Deck { seq, batch, .. } = &receipt {
+        if let TrackReceipt::Deck {
+            seq,
+            outcome: Outcome::Applied { .. },
+            batch,
+        } = &receipt
+        {
             let snapshot = self.inner.snapshot();
-            for part in &batch.commands {
-                if matches!(part, DeckPart::Start { slot, .. } if Some(*slot) == snapshot.slot) {
-                    self.observation.lock().starts.push((snapshot.item, *seq));
+            if batch.commands.iter().any(
+                |part| matches!(part, DeckPart::Start { slot, .. } if Some(*slot) == snapshot.slot),
+            ) {
+                let mut observation = self.observation.lock();
+                let start = (snapshot.item, *seq);
+                if !observation.starts.contains(&start) {
+                    observation.starts.push(start);
                 }
             }
         }
