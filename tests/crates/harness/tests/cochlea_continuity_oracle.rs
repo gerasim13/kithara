@@ -3,9 +3,9 @@
 use std::num::NonZeroU32;
 
 use cochlea_features::{Audio as CochleaAudio, SegmentOpts, segment_timeline};
-use kithara::{audio::mock::TestPcmReader, events::TrackId, signal::AudioSpec};
+use kithara::{audio::mock::TestPcmReader, signal::AudioSpec};
 use kithara_integration_tests::offline::{
-    OfflinePlayer, OfflinePlayerOptions, resource_from_reader,
+    OfflinePlayer, OfflinePlayerOptions, append_source_loaded, resource_from_reader,
 };
 use kithara_test_fixtures::integration_fixtures::constant_half;
 use num_traits::AsPrimitive;
@@ -19,6 +19,7 @@ const PAUSE_FRAMES: usize = SAMPLE_RATE as usize * 3 / 50;
 const SEGMENT_WINDOW_MS: f64 = 20.0;
 const SAMPLE_SILENCE_THRESHOLD: f32 = 1.0e-4;
 
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn render_no_switch_control(constant_half: &'static [u8]) -> Vec<f32> {
     let spec = AudioSpec::new(
         CHANNELS,
@@ -33,12 +34,9 @@ async fn render_no_switch_control(constant_half: &'static [u8]) -> Vec<f32> {
     .await;
     let deck_source = harness
         .pcm_deck((resource_from_reader(TestPcmReader::with_pcm(spec, 3.0, constant_half))).into());
+    let deck_id = append_source_loaded(&harness, harness.player(), deck_source).await;
     harness
         .with_queue(move |player| {
-            let deck_id = TrackId::allocate();
-            player
-                .append_with_id(deck_id, deck_source)
-                .expect("append PCM deck");
             player
                 .select(deck_id, kithara::queue::Transition::None)
                 .expect("select no-switch control item");
@@ -46,10 +44,14 @@ async fn render_no_switch_control(constant_half: &'static [u8]) -> Vec<f32> {
         })
         .await;
 
+    hang_reset!();
+    let _real_io = kithara::platform::flash::real_io();
     let mut rendered = Vec::with_capacity(CAPTURE_FRAMES * usize::from(CHANNELS));
     while rendered.len() / usize::from(CHANNELS) < CAPTURE_FRAMES {
+        hang_tick!();
         rendered.extend(harness.render(BLOCK_FRAMES).await);
         let _ = harness.tick_and_drain().await;
+        hang_reset!();
     }
     rendered.truncate(CAPTURE_FRAMES * usize::from(CHANNELS));
     harness.close().await;

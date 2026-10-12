@@ -171,6 +171,7 @@ impl<S> PlayerImpl<S> {
         let at = When::Next;
         let mut parts = vec![DeckPart::Attach {
             slot,
+            item_id: self.item,
             pcm,
             segment: self.segment,
         }];
@@ -297,6 +298,7 @@ impl<S> PlayerImpl<S> {
             at,
             vec![DeckPart::Replace {
                 slot,
+                item_id: self.item,
                 pcm,
                 segment: self.segment,
             }],

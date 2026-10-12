@@ -103,12 +103,14 @@ pub(in crate::rt) fn attach(
         control,
         if replace {
             DeckPart::Replace {
+                item_id: kithara_events::TrackId::allocate(),
                 slot,
                 pcm,
                 segment: SegmentId::FIRST,
             }
         } else {
             DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
                 slot,
                 pcm,
                 segment: SegmentId::FIRST,

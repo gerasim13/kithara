@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 
 use kithara_audio::{AudioConfig, ResamplerBackend};
-use kithara_config::Config;
+use kithara_config::{Config, Patch};
 use kithara_dsp::param::SmootherConfig;
 use kithara_effects::AudioEffect;
 use kithara_platform::sync::Arc;
@@ -11,7 +11,7 @@ use kithara_warp::WarpConfig;
 use super::EngineLoad;
 
 /// Play-owned configuration for one resident Warp/audio producer lane.
-#[derive(Config, fieldwork::Fieldwork)]
+#[derive(Config, Patch, fieldwork::Fieldwork)]
 #[config(construction, builder(start_fn = for_audio))]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
@@ -23,7 +23,8 @@ where
     /// Source-only decoder configuration.
     #[config(
         skip = "transferred to the play-owned audio producer",
-        builder(start_fn)
+        builder(start_fn),
+        patch(skip)
     )]
     #[field(get)]
     pub(crate) audio: AudioConfig<T, B>,
@@ -32,7 +33,7 @@ where
     #[field(get, copy)]
     pub(crate) preload_chunks: NonZeroUsize,
     /// Lane-owned Jump ramp, using the deck's frame rounding.
-    #[config(value, builder(default = crate::consts::DEFAULT_DECLICK))]
+    #[config(value, builder(default = crate::consts::DEFAULT_DECLICK), patch(skip))]
     #[field(get, copy)]
     pub(crate) declick: SmootherConfig,
     /// Chunk capacity of each forward and reverse PCM ring.
@@ -42,20 +43,25 @@ where
     /// Make offline reads of playing slots wait for PCM or lane closure instead of underrunning.
     #[config(
         skip = "blocking reads are an explicit off-real-time choice",
-        builder(default)
+        builder(default),
+        patch(skip)
     )]
     #[field(get, copy)]
     pub(crate) block_on_underrun: bool,
     /// Optional live cost meter for this play-owned producer lane.
     #[field(get)]
-    #[config(skip = "transferred to the producer cost meter")]
+    #[config(skip = "transferred to the producer cost meter", patch(skip))]
     pub(crate) engine_load: Option<Arc<EngineLoad>>,
     /// Playback effects after the resident Warp stage.
-    #[config(skip = "transferred to the effect chain", builder(default))]
+    #[config(
+        skip = "transferred to the effect chain",
+        builder(default),
+        patch(skip)
+    )]
     #[field(get)]
     pub(crate) effects: Vec<Box<dyn AudioEffect>>,
     /// Resident Warp resources and live temporal controls.
-    #[config(skip = "transferred to the warp lane", builder(default = WarpConfig::builder().build()))]
+    #[config(skip = "transferred to the warp lane", builder(default = WarpConfig::builder().build()), patch(skip))]
     #[field(get)]
     pub(crate) warp: WarpConfig,
 }

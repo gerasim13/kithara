@@ -11,7 +11,7 @@ use kithara_platform::sync::{
     atomic::{AtomicU64, Ordering},
 };
 use kithara_signal::AudioChunkInfo;
-use kithara_test_utils::bufpool::TestPools;
+use kithara_test_utils::{bufpool::TestPools, kithara};
 #[cfg(any(
     feature = "stretch-signalsmith",
     feature = "stretch-bungee",
@@ -606,6 +606,7 @@ pub(in crate::source) fn lane_over<'a>(
 }
 
 /// Steps the lane from output frame `from` until it emitted `until`.
+#[kithara::hang_watchdog]
 pub(in crate::source) fn emit(
     source: &mut WarpSource<RawSource, TestPools>,
     from: u64,
@@ -614,6 +615,7 @@ pub(in crate::source) fn emit(
     let mut emitted = Vec::new();
     let mut cursor = from;
     for _ in 0..4096 {
+        hang_tick!();
         if cursor >= until {
             return emitted;
         }
@@ -626,6 +628,9 @@ pub(in crate::source) fn emit(
                     samples: data.samples.to_vec(),
                 });
                 cursor += u64::from(data.meta.frames);
+                if data.meta.frames > 0 {
+                    hang_reset!();
+                }
             }
             TrackStep::StateChanged | TrackStep::Blocked(_) => {}
             TrackStep::Eof => panic!("the lane ended at frame {cursor} before {until}"),

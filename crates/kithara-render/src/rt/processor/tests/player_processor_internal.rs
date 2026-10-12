@@ -143,6 +143,7 @@ async fn processor_multiple_seek_epochs_only_last_applies() {
         &mut control,
         DeckPart::Attach {
             slot: item_id,
+            item_id: kithara_events::TrackId::allocate(),
             pcm,
             segment: SegmentId::FIRST,
         },

@@ -71,10 +71,11 @@ impl PlayerTrack {
     }
 
     #[kithara::probe(
-        track_id = u64::from(sink.slot.get()),
+        track_id = self.item_id.as_u64(),
         output_base = context.map(|context| i64::from(context.output().output_frames().start)),
         range_start = range.start,
-        range_end = range.end
+        range_end = range.end,
+        served_media_frames = self.resource.position().map_or(0, kithara_signal::SourceSpan::end)
     )]
     pub(crate) fn render(
         &mut self,

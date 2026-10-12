@@ -403,6 +403,7 @@ async fn a_real_source_failure_keeps_its_cause_in_the_single_stop_notification()
     cancel.cancel();
     assert_eq!(node.tick(), TickResult::Progress);
     let mut track = PlayerTrack::builder()
+        .item_id(kithara_events::TrackId::allocate())
         .sample_rate(spec().sample_rate)
         .build(Box::new(resource(receiver)));
     track.start(Fade::Declick);

@@ -163,7 +163,7 @@ impl PcmReceiver {
     /// Publish transport activity through the ring's deferred wake path.
     pub fn set_playing(&mut self, playing: bool) {
         self.playing.write(playing);
-        self.notify();
+        self.wake.defer();
     }
 
     /// Record the exact consumed source position supplied by the PCM owner.

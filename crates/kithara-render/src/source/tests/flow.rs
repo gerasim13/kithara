@@ -72,6 +72,7 @@ fn upstream_terminal_failure_keeps_its_classification(
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee, true))]
 #[cfg_attr(feature = "stretch-glide", case::glide(StretchKind::Glide, true))]
+#[kithara::hang_watchdog]
 fn upstream_terminal_failure_keeps_its_classification_after_buffered_pcm(
     #[case] backend: StretchKind,
     #[case] staged: bool,
@@ -80,11 +81,17 @@ fn upstream_terminal_failure_keeps_its_classification_after_buffered_pcm(
     let pools = pools();
     let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test sample rate"));
     let failure = TrackFailureKind::RecreateFailed { offset: 91 };
+    let frames = match backend {
+        #[cfg(feature = "stretch-bungee")]
+        StretchKind::Bungee => 8192,
+        _ => 4096,
+    };
+    let quarter = quarter.repeat(2);
     let raw = FailedSource {
         failure,
         chunks: VecDeque::from([
-            chunk_with_frames(&pools, spec, 0, 4096, &quarter),
-            chunk_with_frames(&pools, spec, 4096, 17, &quarter),
+            chunk_with_frames(&pools, spec, 0, frames, &quarter),
+            chunk_with_frames(&pools, spec, u64::from(frames), 17, &quarter),
         ]),
     };
     let config = kithara_warp::WarpConfig::builder()
@@ -113,6 +120,7 @@ fn upstream_terminal_failure_keeps_its_classification_after_buffered_pcm(
     let mut produced_nonzero_pcm = false;
     let mut terminal_seen = false;
     for _ in 0..128 {
+        hang_tick!();
         flush_deferred(&mut source);
         assert_eq!(source.warp.requires_staging(), staged);
         let step = source.step_track();
@@ -121,6 +129,7 @@ fn upstream_terminal_failure_keeps_its_classification_after_buffered_pcm(
         });
         match step {
             TrackStep::Produced(Fetch::Data { data, .. }) => {
+                hang_reset!();
                 assert_eq!(data.meta.segment, SegmentId::FIRST);
                 assert!(data.frames() > 0);
                 assert_eq!(data.samples.len(), data.frames() * 2);
@@ -147,6 +156,7 @@ fn upstream_terminal_failure_keeps_its_classification_after_buffered_pcm(
     assert!(terminal_seen, "the upstream failure must remain terminal");
     assert_eq!(staged_prefix_seen, staged);
     for _ in 0..3 {
+        hang_tick!();
         flush_deferred(&mut source);
         assert!(matches!(source.step_track(), TrackStep::Failed(actual) if actual == failure));
         assert!(held_source_frames(&source.effects) > 0);

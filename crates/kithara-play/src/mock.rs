@@ -235,7 +235,7 @@ where
         }
     };
     hang_reset!();
-    lane.warm_up();
+    preload_lane(&mut lane).await?;
     let required_span = f64::from(frames.get() * 2) / f64::from(rate.get());
     let mut buffered = opened.pcm.cached_span();
     while buffered < required_span {
@@ -260,6 +260,7 @@ where
     mixer.send(
         When::Next,
         DeckPart::Attach {
+            item_id: kithara_events::TrackId::allocate(),
             slot,
             pcm: opened.pcm,
             segment: SegmentId::FIRST,
@@ -294,6 +295,35 @@ where
         hang_reset!();
     }
     Ok(())
+}
+
+/// Drives a directly opened lane through the dispatcher's preload admission.
+///
+/// # Errors
+/// Returns the refusal that prevents the lane from becoming ready.
+#[kithara::hang_watchdog]
+pub async fn preload_lane<Lane>(lane: &mut Lane) -> Result<(), PlayError>
+where
+    Lane: kithara_render::LaneTask,
+{
+    let _real_io = kithara_platform::flash::real_io();
+    lane.warm_up();
+    loop {
+        hang_tick!();
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        let _ = lane.poll_commands(&mut context);
+        lane.recycle();
+        if lane.tick() == kithara_worker::TickResult::Progress {
+            hang_reset!();
+        }
+        if lane
+            .preload_status()
+            .map_err(|error| PlayError::Internal(format!("{error:?}")))?
+        {
+            return Ok(());
+        }
+        yield_now().await;
+    }
 }
 
 /// A real offline mixer driven by exact host blocks and scoped deck commands.
