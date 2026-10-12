@@ -21,25 +21,32 @@ impl Wake for SessionWake {
     }
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String, timeout = kithara_test_utils::hang::default_timeout().min(kithara_platform::time::Duration::from_secs(4)))]
 pub(crate) fn receive_message<M>(
     cmd_rx: &mpsc::Receiver<M>,
     active: bool,
     deadline: Instant,
 ) -> Result<Option<M>, mpsc::RecvTimeoutError> {
-    if active {
-        match cmd_rx.recv_timeout(deadline) {
-            Ok(message) => Ok(Some(message)),
-            Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
-            Err(error) => Err(error),
+    loop {
+        hang_tick!(format!("native session message: active={active}"));
+        let budget = Instant::now() + __hang_detector.remaining();
+        match cmd_rx.recv_timeout(if active { deadline.min(budget) } else { budget }) {
+            Ok(message) => {
+                hang_reset!();
+                return Ok(Some(message));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                hang_tick!(format!("native session message: active={active}"));
+                if active {
+                    return Ok(None);
+                }
+            }
+            Err(error) => return Err(error),
         }
-    } else {
-        cmd_rx
-            .recv()
-            .map(Some)
-            .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
     }
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String, timeout = kithara_test_utils::hang::default_timeout().min(kithara_platform::time::Duration::from_secs(4)))]
 pub(super) fn engine_thread<S, O: HostOwner<S>>(
     cmd_rx: &mpsc::Receiver<EngineMsg>,
     mut mailbox: HostMailbox<O::Command>,
@@ -49,10 +56,12 @@ pub(super) fn engine_thread<S, O: HostOwner<S>>(
     let mut shutdown_completion = None;
     let mut deadline = Instant::now() + consts::SESSION_PUMP_INTERVAL;
     while let Ok(message) = receive_message(cmd_rx, true, deadline) {
+        hang_tick!("native engine pass has not completed".to_owned());
         owner.begin_pass();
         let mut next = message;
         let mut shutdown = false;
         loop {
+            hang_tick!("native engine is draining queued messages".to_owned());
             match next {
                 Some(EngineMsg::Posted) => posts.drain(&mut owner, &mut mailbox),
                 Some(EngineMsg::Deck(message)) => message.run(&mut owner),
@@ -70,9 +79,11 @@ pub(super) fn engine_thread<S, O: HostOwner<S>>(
         }
         posts.drain(&mut owner, &mut mailbox);
         posts.pass(&mut owner, true);
+        hang_tick!("native engine pass has not completed".to_owned());
         if shutdown {
             break;
         }
+        hang_reset!();
         deadline = Instant::now() + consts::SESSION_PUMP_INTERVAL;
     }
     drop(owner);

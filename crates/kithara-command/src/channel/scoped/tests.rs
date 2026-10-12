@@ -2,16 +2,190 @@ use std::convert::Infallible;
 #[cfg(panic = "unwind")]
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 #[cfg(panic = "unwind")]
-use ringbuf::traits::{Consumer, Producer};
+use ringbuf::traits::Consumer;
+use ringbuf::traits::Producer;
 
 #[cfg(panic = "unwind")]
 use super::{Item, ScopeId, ScopeReply};
 use super::{ScopedConfig, scoped_channel};
-use crate::{Batch, Protocol, When};
 #[cfg(panic = "unwind")]
-use crate::{Outcome, Rejection, Seq, channel::sender::Sent};
+use crate::channel::sender::Sent;
+use crate::{Batch, Outcome, Protocol, Rejection, Seq, When};
+
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
+fn await_plain_answers(sender: &mut crate::Sender<Test>, expected: &[Seq]) {
+    let mut answered = Vec::new();
+    while answered.len() < expected.len() {
+        hang_tick!(format!(
+            "inbox teardown answered {} of {} admitted batches",
+            answered.len(),
+            expected.len()
+        ));
+        for receipt in sender.receipts() {
+            assert_eq!(receipt.outcome(), &Outcome::Rejected(Rejection::Unanswered));
+            assert!(
+                !answered.contains(&receipt.seq()),
+                "one answer per admission"
+            );
+            answered.push(receipt.seq());
+            hang_reset!();
+        }
+        if answered.len() < expected.len() {
+            hang_park!(
+                |remaining: Duration| kithara_platform::thread::park_timeout(
+                    remaining.min(Duration::from_millis(1))
+                ),
+                format!(
+                    "inbox teardown answered {} of {} admitted batches",
+                    answered.len(),
+                    expected.len()
+                )
+            );
+        }
+    }
+    assert_eq!(answered, expected);
+    assert_eq!(sender.receipts().count(), 0, "no duplicate answer");
+}
+
+#[kithara::test]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
+fn sends_racing_inbox_drop_are_answered_exactly_once() {
+    let _real_io = kithara_platform::flash::real_io();
+    let (sender, inbox) = crate::channel::<Test>(crate::ChannelConfig::builder().build());
+    let (started, receiving) = std::sync::mpsc::channel();
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
+    fn hammer_sends(
+        mut sender: crate::Sender<Test>,
+        started: std::sync::mpsc::Sender<()>,
+    ) -> (crate::Sender<Test>, Vec<Seq>) {
+        let mut admitted = Vec::new();
+        loop {
+            hang_tick!(format!(
+                "sender awaits inbox closure after {} admissions",
+                admitted.len()
+            ));
+            match sender.send(
+                When::Next,
+                Batch {
+                    basis: Vec::new(),
+                    commands: vec![0],
+                },
+            ) {
+                Ok(seq) => {
+                    admitted.push(seq);
+                    hang_reset!();
+                    if admitted.len() == 1 {
+                        started.send(()).expect("closer is waiting");
+                    }
+                }
+                Err(crate::SendError::Closed(_)) => break,
+                Err(crate::SendError::Full(_)) => {
+                    hang_park!(
+                        |remaining: Duration| kithara_platform::thread::park_timeout(
+                            remaining.min(Duration::from_millis(1))
+                        ),
+                        "sender awaits inbox closure".to_owned()
+                    );
+                }
+                Err(crate::SendError::Target(_)) => panic!("empty basis is admitted"),
+            }
+        }
+        (sender, admitted)
+    }
+    let worker = std::thread::spawn(move || hammer_sends(sender, started));
+    hang_park!(
+        |remaining| receiving
+            .recv_timeout(remaining)
+            .expect("sender reaches its first admission"),
+        "sender has not reached its first admission".to_owned()
+    );
+    hang_reset!();
+    drop(inbox);
+    while !worker.is_finished() {
+        hang_park!(
+            |remaining: Duration| kithara_platform::thread::park_timeout(
+                remaining.min(Duration::from_millis(1))
+            ),
+            "sender has not left the closed channel".to_owned()
+        );
+    }
+    let (mut sender, admitted) = worker.join().expect("sender must not panic");
+    assert!(!admitted.is_empty());
+    await_plain_answers(&mut sender, &admitted);
+}
+
+#[cfg(panic = "unwind")]
+#[kithara::test]
+fn lost_answer_negative_control_trips_the_watchdog() {
+    let _real_io = kithara_platform::flash::real_io();
+    let (mut sender, inbox) = crate::channel::<Test>(crate::ChannelConfig::builder().build());
+    let seq = sender
+        .send(
+            When::Next,
+            Batch {
+                basis: Vec::new(),
+                commands: vec![1],
+            },
+        )
+        .expect("admitted");
+    drop(inbox);
+    assert_eq!(sender.receipts().count(), 1);
+    let failure = catch_unwind(AssertUnwindSafe(|| {
+        await_plain_answers(&mut sender, &[seq]);
+    }));
+    let panic = failure.expect_err("lost answer must fail instead of timing out the test runner");
+    let reason = panic.downcast_ref::<String>().expect("watchdog reason");
+    assert!(
+        reason.contains("inbox teardown answered 0 of 1 admitted batches"),
+        "{reason}"
+    );
+}
+
+#[kithara::test]
+fn a_publication_admitted_before_drop_recovers_both_levels() {
+    use crate::Port;
+    let (mut sender, inbox) = scoped_channel::<Test, Test>(ScopedConfig::builder().build());
+    let id = sender.open(0).expect("slot");
+    let root = sender
+        .send(
+            When::Next,
+            Batch {
+                basis: Vec::new(),
+                commands: vec![1],
+            },
+        )
+        .expect("root");
+    let scope = sender
+        .scope(id)
+        .expect("scope")
+        .send(
+            When::Next,
+            Batch {
+                basis: Vec::new(),
+                commands: vec![2],
+            },
+        )
+        .expect("scope admission");
+    assert!(sender.gate.enter());
+    drop(inbox);
+    assert_eq!(sender.commands.push_iter(sender.staged.drain(..)), 2);
+    let super::ScopedReceipt::Root(receipt) = sender.receipt().expect("root answer") else {
+        panic!("root first")
+    };
+    assert_eq!(receipt.seq(), root);
+    assert_eq!(receipt.outcome(), &Outcome::Rejected(Rejection::Unanswered));
+    let super::ScopedReceipt::Scope(answered_id, receipt) = sender.receipt().expect("scope answer")
+    else {
+        panic!("scope next")
+    };
+    assert_eq!(answered_id, id);
+    assert_eq!(receipt.seq(), scope);
+    assert_eq!(receipt.outcome(), &Outcome::Rejected(Rejection::Unanswered));
+    assert!(sender.receipt().is_none());
+}
 
 #[derive(Debug, PartialEq, Eq)]
 enum Test {}

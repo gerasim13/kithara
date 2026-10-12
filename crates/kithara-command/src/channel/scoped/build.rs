@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     Protocol, Receipt, Seq,
-    channel::{book::Book, docket::Docket, gate::Gate},
+    channel::{book::Book, docket::Docket, gate::Gate, sender::Doorbell},
 };
 
 /// Builds a root and its scope slots with independent credits and one publication ring.
@@ -58,7 +58,7 @@ pub fn scoped_channel<R: Protocol, M: Protocol>(
             })
             .collect(),
         gate,
-        answered,
+        answered: Doorbell(answered),
     };
     (sender, inbox)
 }

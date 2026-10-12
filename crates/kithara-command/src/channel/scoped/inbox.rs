@@ -5,7 +5,7 @@ use ringbuf::{HeapCons, HeapProd, traits::Consumer};
 use super::{Item, ScopeDocket, ScopeId, ScopeReply};
 use crate::{
     LevelInbox, Outcome, Protocol, Receipt, Rejection,
-    channel::{docket::Docket, gate::Gate, sink::Sink},
+    channel::{docket::Docket, gate::Gate, sender::Doorbell, sink::Sink},
 };
 
 /// The shared command-ring consumer and the preallocated executor dockets.
@@ -16,7 +16,7 @@ pub struct ScopedInbox<R: Protocol, M: Protocol> {
     pub(super) root: Docket<R>,
     pub(super) scopes: Vec<ScopeDocket<M>>,
     pub(super) gate: Arc<Gate>,
-    pub(super) answered: Arc<AtomicWaker>,
+    pub(super) answered: Doorbell,
 }
 
 impl<R: Protocol, M: Protocol> ScopedInbox<R, M> {

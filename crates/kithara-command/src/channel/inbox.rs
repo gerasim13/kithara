@@ -14,7 +14,7 @@ use super::{
     docket::Docket,
     gate::Gate,
     level::{Deferred, Due, LevelInbox},
-    sender::Sent,
+    sender::{Doorbell, Sent},
     sink::Sink,
 };
 use crate::{ChannelConfig, Protocol, Receipt, Seq};
@@ -24,7 +24,7 @@ pub struct Inbox<P: Protocol> {
     pending: HeapCons<Sent<P>>,
     answers: HeapProd<Receipt<P>>,
     wake: Arc<AtomicWaker>,
-    answered: Arc<AtomicWaker>,
+    answered: Doorbell,
     gate: Arc<Gate>,
     docket: Docket<P>,
 }
@@ -50,7 +50,7 @@ impl<P: Protocol> Inbox<P> {
             pending,
             answers,
             wake,
-            answered,
+            answered: Doorbell(answered),
             gate,
             docket: Docket::new(config),
         }

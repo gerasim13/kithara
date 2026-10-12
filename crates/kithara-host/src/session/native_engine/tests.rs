@@ -168,26 +168,49 @@ fn deck_session() -> (Arc<SessionClient<Command>>, JoinHandle<()>, RootView) {
         ready.send(view).expect("owner thread publishes its view");
         engine_thread(&cmd_rx, mailbox, RigOwner(HostCore::new(state, inbox)));
     });
-    let view = started.recv().expect("owner thread starts");
+    let view = receive(&started, "owner startup").expect("owner thread starts");
     (client, worker, view)
 }
 
 #[cfg(feature = "offline")]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String, timeout = kithara_test_utils::hang::default_timeout().min(Duration::from_secs(4)))]
 fn shut_down(client: &SessionClient<Command>, worker: JoinHandle<()>) {
     client.shutdown();
+    while !worker.is_finished() {
+        hang_park!(
+            |remaining: Duration| {
+                kithara_platform::thread::sleep(remaining.min(Duration::from_millis(1)));
+            },
+            "native session thread has not exited".to_owned()
+        );
+    }
+    hang_reset!();
     assert!(worker.join().is_ok());
 }
 
 #[cfg(feature = "offline")]
 fn ask(client: &SessionClient<Command>, command: Command) -> Result<(), &'static str> {
-    dispatch(client, command).map_err(|_| "native command refused")
+    let command_name = match &command {
+        Command::Host(command) => match command {
+            HostCommand::Register { .. } => "Register",
+            HostCommand::Configure(..) => "Configure",
+            HostCommand::Close(_) => "Close",
+            HostCommand::Release(_) => "Release",
+            HostCommand::AttachOutputs { .. } => "AttachOutputs",
+            HostCommand::DetachOutputs { .. } => "DetachOutputs",
+            HostCommand::Restart => "Restart",
+            HostCommand::_Marker(_) => "_Marker",
+        },
+        Command::Render { .. } => "Render",
+    };
+    dispatch(client, command, command_name).map_err(|_| "native command refused")
 }
 
 #[cfg(feature = "offline")]
 fn render(client: &SessionClient<Command>, position: u64) -> Vec<f32> {
     let (reply, receiver) = mpsc::channel();
     ask(client, Command::Render { position, reply }).expect("native owner renders");
-    receiver.recv().expect("rendered block")
+    receive(&receiver, "rendered block").expect("rendered block")
 }
 
 /// Commands posted before the deck was held woke no one, so the session
@@ -211,6 +234,7 @@ fn the_session_thread_drains_a_deck_as_it_takes_it() {
 
 #[kithara::test]
 #[cfg(feature = "offline")]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String, timeout = kithara_test_utils::hang::default_timeout().min(Duration::from_secs(4)))]
 fn the_session_thread_ticks_a_held_deck_until_it_is_released() {
     let (client, worker, _view) = deck_session();
     let (id, deck, seen) = probe();
@@ -219,9 +243,11 @@ fn the_session_thread_ticks_a_held_deck_until_it_is_released() {
         .expect("the session takes the deck");
     let mut ticked = 0;
     while ticked < 2 {
+        hang_tick!(format!("held deck ticks={ticked}/2"));
         if let Seen::Ticked(thread) = next(&seen) {
             assert_eq!(thread.as_deref(), Some(consts::DECK_SESSION));
             ticked += 1;
+            hang_reset!();
         }
     }
     // The session hands the deck back by value: nothing it does later
@@ -281,6 +307,7 @@ fn shutdown_lets_go_of_every_deck_before_it_answers() {
 
 #[kithara::test]
 #[cfg(feature = "offline")]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String, timeout = kithara_test_utils::hang::default_timeout().min(Duration::from_secs(4)))]
 fn a_woken_deck_drains_on_the_session_thread() {
     let (client, worker, _view) = deck_session();
     let (id, deck, seen) = probe();
@@ -297,6 +324,7 @@ fn a_woken_deck_drains_on_the_session_thread() {
     waker.wake_by_ref();
 
     loop {
+        hang_tick!("woken deck has not drained".to_owned());
         match next(&seen) {
             Seen::Drained(thread) => {
                 assert_eq!(thread.as_deref(), Some(consts::DECK_SESSION));
@@ -326,6 +354,7 @@ fn output_block_override_preserves_the_backend_default_or_sets_128() {
 
 #[kithara::test]
 #[cfg(feature = "offline")]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String, timeout = kithara_test_utils::hang::default_timeout().min(Duration::from_secs(4)))]
 fn idle_native_worker_publishes_rendered_transport_without_a_deck_tick() {
     let runtime = kithara_platform::tokio::runtime::Builder::new_current_thread()
         .enable_time()
@@ -341,12 +370,17 @@ fn idle_native_worker_publishes_rendered_transport_without_a_deck_tick() {
             Duration::from_secs(2),
             "native Host delivers graph change",
             || {
+                hang_tick!(format!(
+                    "native transport grid={:?}; clock={clock_samples}",
+                    root_view.grid().state()
+                ));
                 let _ = render(&client, clock_samples);
                 clock_samples += 512;
                 root_view.grid().state() == BeatGridState::Live
             },
         ))
         .expect("the transport's own tempo reaches the read-only Host view without a command");
+    hang_reset!();
 
     assert!(matches!(
         ask(
@@ -366,6 +400,9 @@ fn idle_native_worker_publishes_rendered_transport_without_a_deck_tick() {
             || {
                 let mut sounded = false;
                 for _ in 0..100 {
+                    hang_tick!(format!(
+                        "metronome enabled; blocks={on_blocks}; clock={clock_samples}"
+                    ));
                     let pcm = render(&client, clock_samples);
                     clock_samples += 512;
                     on_blocks += 1;
@@ -375,6 +412,7 @@ fn idle_native_worker_publishes_rendered_transport_without_a_deck_tick() {
             },
         ))
         .unwrap_or_else(|error| panic!("metronome on reaches PCM: {error}; blocks={on_blocks}"));
+    hang_reset!();
 
     assert!(matches!(
         ask(
@@ -393,6 +431,7 @@ fn idle_native_worker_publishes_rendered_transport_without_a_deck_tick() {
             || {
                 let mut silent = true;
                 for _ in 0..100 {
+                    hang_tick!(format!("metronome disabled; clock={clock_samples}"));
                     let pcm = render(&client, clock_samples);
                     clock_samples += 512;
                     silent &= pcm.iter().all(|sample| sample.abs() < 1e-6);
@@ -401,5 +440,18 @@ fn idle_native_worker_publishes_rendered_transport_without_a_deck_tick() {
             },
         ))
         .expect("the muted capture spans more than one beat");
+    hang_reset!();
     shut_down(&client, worker);
+}
+
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String, timeout = kithara_test_utils::hang::default_timeout().min(Duration::from_secs(4)))]
+fn receive<T>(receiver: &mpsc::Receiver<T>, reason: &str) -> Result<T, mpsc::RecvTimeoutError> {
+    loop {
+        let result = receiver.recv_timeout(Instant::now() + __hang_detector.remaining());
+        if !matches!(result, Err(mpsc::RecvTimeoutError::Timeout)) {
+            hang_reset!();
+            return result;
+        }
+        hang_tick!(reason.to_owned());
+    }
 }

@@ -905,20 +905,29 @@ pub(crate) mod tests {
         .expect("offline session attachment");
     }
 
-    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     fn answered(
-        ticket: kithara_command::Ticket<QueueError>,
+        mut ticket: kithara_command::Ticket<QueueError>,
     ) -> Result<(), kithara_command::Refused<QueueError>> {
         let _real_io = kithara_platform::flash::real_io();
-        let answer = std::thread::spawn(move || ticket.wait());
-        while !answer.is_finished() {
-            hang_park!(|remaining: Duration| {
-                thread::sleep(remaining.min(Duration::from_millis(1)));
-            });
+        loop {
+            let mut answer = None;
+            hang_park!(
+                |remaining: Duration| {
+                    let now = kithara_platform::time::Instant::now();
+                    answer = Some(ticket.wait_until(now + remaining));
+                },
+                "queue fixture owner has not answered its ticket".to_owned()
+            );
+            match answer {
+                Some(Ok(answer)) => {
+                    hang_reset!();
+                    return answer;
+                }
+                Some(Err(pending)) => ticket = pending,
+                None => unreachable!("the watchdog executes its wait closure"),
+            }
         }
-        let result = answer.join().expect("ticket answer worker must not panic");
-        hang_reset!();
-        result
     }
 
     #[kithara::test]

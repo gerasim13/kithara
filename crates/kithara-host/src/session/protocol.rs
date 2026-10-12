@@ -31,17 +31,31 @@ pub(crate) trait HostDispatcher<C>: MaybeSend + MaybeSync {
     fn shutdown(&self);
 }
 
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String, timeout = kithara_test_utils::hang::default_timeout().min(kithara_platform::time::Duration::from_secs(4)))]
 pub(crate) fn ask<C, D: HostDispatcher<C> + ?Sized>(
     dispatcher: &D,
     command: C,
+    command_name: &str,
 ) -> Result<(), HostDispatchError> {
-    dispatcher
-        .dispatch(command)?
-        .wait()
-        .map_err(|refused| match refused {
-            Refused::Owner(error) => HostDispatchError::Refused(error),
-            Refused::Unanswered => HostDispatchError::Unanswered,
-        })
+    let mut ticket = dispatcher.dispatch(command)?;
+    loop {
+        hang_tick!(format!(
+            "host command {command_name}, post {} has no owner answer",
+            ticket.seq().get()
+        ));
+        match ticket
+            .wait_until(kithara_platform::time::Instant::now() + __hang_detector.remaining())
+        {
+            Ok(answer) => {
+                hang_reset!();
+                return answer.map_err(|refused| match refused {
+                    Refused::Owner(error) => HostDispatchError::Refused(error),
+                    Refused::Unanswered => HostDispatchError::Unanswered,
+                });
+            }
+            Err(pending) => ticket = pending,
+        }
+    }
 }
 
 pub(crate) fn not_taken(_: PostError) -> HostDispatchError {
@@ -94,7 +108,7 @@ mod tests {
 
     #[kithara::test]
     fn a_post_the_session_drops_reads_unanswered() {
-        let asked = ask(&session(|| None), HostCommand::Restart);
+        let asked = ask(&session(|| None), HostCommand::Restart, "Restart");
 
         assert!(matches!(asked, Err(HostDispatchError::Unanswered)));
     }
@@ -104,11 +118,51 @@ mod tests {
         let asked = ask(
             &session(|| Some(Err(PlayError::Late))),
             HostCommand::Restart,
+            "Restart",
         );
 
         assert!(matches!(
             asked,
             Err(HostDispatchError::Refused(PlayError::Late))
         ));
+    }
+
+    #[cfg(panic = "unwind")]
+    #[kithara::test(hang_timeout_secs(1))]
+    fn an_unanswered_ask_fails_with_its_command_within_the_watchdog_budget() {
+        struct StalledSession {
+            postbox: HostPostbox<BaseCommand>,
+            _mailbox: Mutex<HostMailbox<BaseCommand>>,
+        }
+
+        impl HostDispatcher<BaseCommand> for StalledSession {
+            fn dispatch(
+                &self,
+                command: BaseCommand,
+            ) -> Result<Ticket<PlayError>, HostDispatchError> {
+                self.postbox.post(command).map_err(not_taken)
+            }
+
+            fn shutdown(&self) {}
+        }
+
+        let (postbox, mailbox) = mailbox();
+        let dispatcher = StalledSession {
+            postbox,
+            _mailbox: Mutex::new(mailbox),
+        };
+        let started = kithara_platform::time::WallInstant::now();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = ask(&dispatcher, HostCommand::Restart, "Restart");
+        }))
+        .expect_err("an unanswered ask must trip the watchdog");
+        assert!(started.elapsed() < kithara_platform::time::Duration::from_secs(2));
+        let reason = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .expect("watchdog panic text");
+        assert!(reason.contains("host command Restart"), "{reason}");
+        assert!(reason.contains("has no owner answer"), "{reason}");
     }
 }

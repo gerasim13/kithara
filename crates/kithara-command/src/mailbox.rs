@@ -1,6 +1,9 @@
 use std::{mem, task::Waker};
 
-use kithara_platform::sync::{Arc, Mutex, mpsc};
+use kithara_platform::{
+    sync::{Arc, Mutex, mpsc},
+    time::Instant,
+};
 
 use crate::protocol::Seq;
 
@@ -114,18 +117,21 @@ impl<R> Ticket<R> {
         self.seq
     }
 
-    /// Waits for the owner to answer the post. Never call it on the thread
+    /// Waits until `deadline` for the owner to answer the post. Never call it on the thread
     /// whose executor holds the owner: the answer would never come.
     ///
     /// # Errors
     ///
-    /// Returns the owner's refusal, or [`Refused::Unanswered`] when the post
-    /// went unanswered.
-    pub fn wait(self) -> Result<(), Refused<R>> {
-        self.answered.recv().map_or_else(
-            |_| Err(Refused::Unanswered),
-            |answer| answer.map_err(Refused::Owner),
-        )
+    /// Returns the ticket intact when the deadline expires. An answer contains
+    /// the owner's refusal, or [`Refused::Unanswered`] when the post went unanswered.
+    pub fn wait_until(self, deadline: Instant) -> Result<Result<(), Refused<R>>, Self> {
+        match self.answered.recv_timeout(deadline) {
+            Ok(answer) => Ok(answer.map_err(Refused::Owner)),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Ok(Err(Refused::Unanswered)),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(self),
+            #[cfg(target_arch = "wasm32")]
+            Err(_) => Ok(Err(Refused::Unanswered)),
+        }
     }
 }
 
@@ -249,8 +255,34 @@ mod tests {
             tickets.windows(2).all(|pair| pair[0].seq() < pair[1].seq()),
             "numbers grow in post order across postboxes"
         );
-        let answers = tickets.map(super::Ticket::wait);
+        let answers = tickets.map(|ticket| {
+            ticket
+                .wait_until(kithara_platform::time::Instant::now())
+                .ok()
+                .expect("answer is ready")
+        });
         assert_eq!(answers, [1, 2, 3, 4].map(|n| Err(Refused::Owner(n))));
+    }
+
+    #[kithara::test]
+    fn an_unanswered_live_post_keeps_its_ticket_after_the_deadline() {
+        let (postbox, mut mailbox) = mailbox::<(), ()>();
+        let ticket = postbox.post(()).expect("an open mailbox takes the post");
+        let seq = ticket.seq();
+        let ticket = ticket
+            .wait_until(kithara_platform::time::Instant::now())
+            .expect_err("the deadline returns the ticket");
+        assert_eq!(ticket.seq(), seq);
+        for post in mailbox.drain() {
+            post.answer.answer(Ok(()));
+        }
+        assert_eq!(
+            ticket
+                .wait_until(kithara_platform::time::Instant::now())
+                .ok()
+                .expect("answer is ready"),
+            Ok(())
+        );
     }
 
     #[kithara::test]
@@ -262,7 +294,13 @@ mod tests {
             post.answer.answer(Ok(()));
         }
 
-        assert_eq!(ticket.wait(), Ok(()));
+        assert_eq!(
+            ticket
+                .wait_until(kithara_platform::time::Instant::now())
+                .ok()
+                .expect("answer is ready"),
+            Ok(())
+        );
     }
 
     #[kithara::test]
@@ -272,7 +310,13 @@ mod tests {
 
         drop(mailbox.drain().collect::<Vec<_>>());
 
-        assert_eq!(ticket.wait(), Err(Refused::Unanswered));
+        assert_eq!(
+            ticket
+                .wait_until(kithara_platform::time::Instant::now())
+                .ok()
+                .expect("answer is ready"),
+            Err(Refused::Unanswered)
+        );
     }
 
     #[kithara::test]
@@ -296,7 +340,13 @@ mod tests {
 
         drop(mailbox);
 
-        assert_eq!(ticket.wait(), Err(Refused::Unanswered));
+        assert_eq!(
+            ticket
+                .wait_until(kithara_platform::time::Instant::now())
+                .ok()
+                .expect("answer is ready"),
+            Err(Refused::Unanswered)
+        );
         assert_eq!(postbox.post(2).err(), Some(PostError));
     }
 

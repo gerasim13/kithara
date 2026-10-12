@@ -37,7 +37,7 @@ impl<C> OfflineSessionClient<C> {
         let (answer, receipt) = mpsc::channel();
         self.send(OfflineMsg::Request(OfflineRequest::Position(answer)))
             .map_err(|_| OfflineSessionError::SessionGone)?;
-        receipt.recv().map_err(|_| OfflineSessionError::SessionGone)
+        receive(&receipt, "position").map_err(|_| OfflineSessionError::SessionGone)
     }
     pub(crate) fn render(
         &self,
@@ -51,9 +51,7 @@ impl<C> OfflineSessionClient<C> {
             answer,
         }))
         .map_err(|_| OfflineSessionError::SessionGone)?;
-        receipt
-            .recv()
-            .map_err(|_| OfflineSessionError::SessionGone)?
+        receive(&receipt, "render").map_err(|_| OfflineSessionError::SessionGone)?
     }
     fn send(&self, message: OfflineMsg) -> Result<(), PlayError> {
         self.cmd_tx
@@ -78,7 +76,7 @@ impl<C: MaybeSend + 'static> HostDispatcher<C> for OfflineSessionClient<C> {
         let (completion, completed) = mpsc::channel();
         if self.send(OfflineMsg::Shutdown(completion)).is_ok() {
             #[cfg(not(target_arch = "wasm32"))]
-            let _ = completed.recv();
+            let _ = receive(&completed, "shutdown");
             #[cfg(target_arch = "wasm32")]
             drop(completed);
         }
@@ -122,5 +120,19 @@ impl std::task::Wake for OfflineDeckWake {
         {
             self.control.wake();
         }
+    }
+}
+
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String, timeout = kithara_test_utils::hang::default_timeout().min(kithara_platform::time::Duration::from_secs(4)))]
+fn receive<R>(receipt: &mpsc::Receiver<R>, operation: &str) -> Result<R, mpsc::RecvTimeoutError> {
+    loop {
+        hang_tick!(format!("offline session has not answered {operation}"));
+        let result = receipt
+            .recv_timeout(kithara_platform::time::Instant::now() + __hang_detector.remaining());
+        if !matches!(result, Err(mpsc::RecvTimeoutError::Timeout)) {
+            hang_reset!();
+            return result;
+        }
+        hang_tick!(format!("offline session has not answered {operation}"));
     }
 }

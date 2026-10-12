@@ -1,17 +1,18 @@
-use std::{iter, task::Waker};
+use std::{iter, ops::Deref, task::Waker};
 
 use futures::task::AtomicWaker;
 use kithara_platform::sync::Arc;
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
     traits::{Consumer, Observer, Producer, Split},
+    wrap::Wrap,
 };
 
 use super::{Inbox, book::Book, gate::Gate};
 use crate::{
     config::ChannelConfig,
     protocol::{Batch, Protocol, Seq, When},
-    receipt::Receipt,
+    receipt::{Outcome, Receipt, Rejection},
 };
 
 /// Why a batch was not sent; the batch comes back whole.
@@ -36,6 +37,14 @@ pub(super) struct Sent<P: Protocol> {
 }
 
 impl<P: Protocol> Sent<P> {
+    pub(super) fn unanswered(self) -> Receipt<P> {
+        Receipt {
+            batch: self.batch,
+            seq: self.seq,
+            outcome: Outcome::Rejected(Rejection::Unanswered),
+        }
+    }
+
     /// Execution order: earlier moments first, then send order.
     pub(super) fn key(&self) -> (When<P::Clock>, Seq) {
         (self.when, self.seq)
@@ -59,7 +68,15 @@ pub struct Sender<P: Protocol> {
 }
 
 /// The executor's waker, rung by each send and once more as the sender drops.
-struct Doorbell(Arc<AtomicWaker>);
+pub(super) struct Doorbell(pub(super) Arc<AtomicWaker>);
+
+impl Deref for Doorbell {
+    type Target = Arc<AtomicWaker>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 impl Drop for Doorbell {
     fn drop(&mut self) {
@@ -92,7 +109,14 @@ impl<P: Protocol> Sender<P> {
             self.answered.register(holder);
         }
         iter::from_fn(move || {
-            let receipt = self.receipts.try_pop()?;
+            let receipt = self.receipts.try_pop().or_else(|| {
+                if self.receipts.write_is_held() {
+                    return None;
+                }
+                HeapCons::new(self.commands.rb_ref().clone())
+                    .try_pop()
+                    .map(Sent::unanswered)
+            })?;
             self.book.settle(&receipt);
             Some(receipt)
         })
@@ -123,7 +147,6 @@ impl<P: Protocol> Sender<P> {
             return Err(SendError::Closed(batch));
         }
         let pushed = self.push(when, batch);
-        self.gate.leave();
         let seq = pushed?;
         self.doorbell.0.wake();
         Ok(seq)

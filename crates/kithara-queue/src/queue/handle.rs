@@ -1,9 +1,11 @@
 use kithara_bufpool::HasPool;
 use kithara_command::{Refused, When};
 use kithara_events::TrackId;
+use kithara_platform::time::{Duration, Instant};
 use kithara_play::{
     CrossfadeSettings, EqBandConfig, InterruptionKind, PlayError, Position, TrackSettingsChange,
 };
+use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::{QueueCommand, QueueControl, Transition};
@@ -253,11 +255,29 @@ where
         self.postbox.is_closed()
     }
 
+    #[kithara::hang_watchdog(ctx = String, timeout = kithara_test_utils::hang::default_timeout().min(Duration::from_secs(4)))]
     fn call(&self, command: QueueCommand<S>) -> Result<(), QueueError> {
-        let ticket = self.postbox.post(command).map_err(|_| PlayError::Closed)?;
-        ticket.wait().map_err(|refused| match refused {
-            Refused::Owner(error) => error,
-            Refused::Unanswered => PlayError::Closed.into(),
-        })
+        let mut ticket = self.postbox.post(command).map_err(|_| PlayError::Closed)?;
+        loop {
+            let mut answer = None;
+            hang_park!(
+                |remaining: Duration| {
+                    let now = Instant::now();
+                    answer = Some(ticket.wait_until(now + remaining));
+                },
+                "queue command owner has not answered its ticket".to_owned()
+            );
+            match answer {
+                Some(Ok(answer)) => {
+                    hang_reset!();
+                    return answer.map_err(|refused| match refused {
+                        Refused::Owner(error) => error,
+                        Refused::Unanswered => PlayError::Closed.into(),
+                    });
+                }
+                Some(Err(pending)) => ticket = pending,
+                None => unreachable!("the watchdog executes its wait closure"),
+            }
+        }
     }
 }

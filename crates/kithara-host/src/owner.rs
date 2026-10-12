@@ -842,7 +842,7 @@ fn map_deck_rejection(
 }
 
 impl<S: 'static, D: ?Sized + HostedDeck<S>> Drop for HostCore<S, D> {
-    #[cfg_attr(target_arch = "wasm32", kithara_test_utils::kithara::hang_watchdog)]
+    #[kithara_test_utils::kithara::hang_watchdog(name = "host owner processor shutdown", timeout = kithara_test_utils::hang::default_timeout().min(kithara_platform::time::Duration::from_secs(4)))]
     fn drop(&mut self) {
         for (_, record) in &mut self.decks.0 {
             if let Some(channel) = &mut self.session.channel {
@@ -864,11 +864,16 @@ impl<S: 'static, D: ?Sized + HostedDeck<S>> Drop for HostCore<S, D> {
         self.session.stream = None;
         if let Some(ctx) = &mut self.session.ctx {
             #[cfg(not(target_arch = "wasm32"))]
-            if let Err(error) =
-                ctx.deactivate_blocking(kithara_platform::time::Duration::from_secs(3))
             {
-                tracing::error!(?error, "host processor did not return during shutdown");
-                return;
+                let deactivated = ctx.deactivate_blocking(
+                    kithara_platform::time::Duration::from_secs(3).min(__hang_detector.remaining()),
+                );
+                hang_tick!();
+                if let Err(error) = deactivated {
+                    tracing::error!(?error, "host processor did not return during shutdown");
+                    return;
+                }
+                hang_reset!();
             }
             #[cfg(target_arch = "wasm32")]
             {

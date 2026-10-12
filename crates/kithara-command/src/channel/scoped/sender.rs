@@ -5,6 +5,7 @@ use kithara_platform::sync::Arc;
 use ringbuf::{
     HeapCons, HeapProd,
     traits::{Consumer, Observer, Producer},
+    wrap::Wrap,
 };
 
 use super::{Closed, Item, OpenError, ScopeId, ScopeReply, ScopedReceipt, Slot, StaleScope, State};
@@ -111,7 +112,6 @@ impl<R: Protocol, M: Protocol> ScopedSender<R, M> {
         }
         let staged = self.staged.len();
         let published = self.commands.push_iter(self.staged.drain(..));
-        self.gate.leave();
         debug_assert_eq!(published, staged, "admitted pass fits in the command ring");
         Ok(())
     }
@@ -121,6 +121,7 @@ impl<R: Protocol, M: Protocol> ScopedSender<R, M> {
         if let Some(holder) = &self.holder {
             self.answered.register(holder);
         }
+        self.recover_orphans();
         let receipt = self.root_receipts.try_pop()?;
         self.root.settle(&receipt);
         Some(receipt)
@@ -169,6 +170,28 @@ impl<R: Protocol, M: Protocol> ScopedSender<R, M> {
     pub fn release(&mut self) {
         self.holder = None;
         self.answered.register(Waker::noop());
+    }
+
+    fn recover_orphans(&mut self) {
+        if self.root_receipts.write_is_held() || self.scope_receipts.write_is_held() {
+            return;
+        }
+        let mut pending = HeapCons::new(self.commands.rb_ref().clone());
+        let mut root_answers = HeapProd::new(self.root_receipts.rb_ref().clone());
+        let mut scope_answers = HeapProd::new(self.scope_receipts.rb_ref().clone());
+        for item in pending.pop_iter() {
+            let pushed = match item {
+                Item::Root(sent) => root_answers.try_push(sent.unanswered()).is_ok(),
+                Item::Scope { id, sent } => scope_answers
+                    .try_push(ScopeReply::Receipt {
+                        id,
+                        receipt: sent.unanswered(),
+                    })
+                    .is_ok(),
+                Item::Close(id) => scope_answers.try_push(ScopeReply::Closed(id)).is_ok(),
+            };
+            debug_assert!(pushed, "credits bound orphaned receipts");
+        }
     }
 }
 

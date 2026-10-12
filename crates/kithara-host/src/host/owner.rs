@@ -122,7 +122,17 @@ impl<S, O: HostOwner<S>> Host<S, O> {
     }
 
     fn ask(&self, command: HostCommand<S, O::Deck>) -> Result<(), PlayError> {
-        ask(&*self.dispatcher, command.into()).map_err(Into::into)
+        let command_name = match &command {
+            HostCommand::Register { .. } => "Register",
+            HostCommand::Configure(..) => "Configure",
+            HostCommand::Close(_) => "Close",
+            HostCommand::Release(_) => "Release",
+            HostCommand::AttachOutputs { .. } => "AttachOutputs",
+            HostCommand::DetachOutputs { .. } => "DetachOutputs",
+            HostCommand::Restart => "Restart",
+            HostCommand::_Marker(_) => "_Marker",
+        };
+        ask(&*self.dispatcher, command.into(), command_name).map_err(Into::into)
     }
 
     /// Attaches one output group to a session tap.
