@@ -492,6 +492,8 @@ impl WaitPark {
         self.armed.store(true, Ordering::Release);
     }
 
+    #[kithara_test_utils::kithara::flash(io)]
+    #[kithara_test_utils::kithara::hang_watchdog]
     pub(in crate::pipeline::source) fn enter_if_armed(&self) {
         if !self.armed.load(Ordering::Acquire) {
             return;
@@ -500,8 +502,13 @@ impl WaitPark {
         state.entered = true;
         self.entered.notify_one();
         while !state.released {
-            state = self.condvar.wait(state);
+            hang_tick!();
+            state = self.condvar.wait_timeout(
+                state,
+                kithara_platform::time::Instant::now() + __hang_detector.remaining(),
+            );
         }
+        hang_reset!();
         drop(state);
     }
 
@@ -514,10 +521,15 @@ impl WaitPark {
 
     /// Wait until the holder is inside `wait_range` — i.e. the control
     /// mutex is held by a parked blocking read.
+    #[kithara_test_utils::kithara::flash(io)]
+    #[kithara_test_utils::kithara::hang_watchdog]
     pub(in crate::pipeline::source) async fn wait_entered(&self) {
         while !self.state.lock().entered {
-            self.entered.notified().await;
+            hang_tick!();
+            let notified = self.entered.notified();
+            let _ = kithara_platform::time::timeout(__hang_detector.remaining(), notified).await;
         }
+        hang_reset!();
     }
 }
 

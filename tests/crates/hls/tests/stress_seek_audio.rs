@@ -481,6 +481,8 @@ impl SeekCheck {
 
 /// Seek to `SEEK_ITERATIONS` random positions and check the chunk each one
 /// reads back. Returns the churn snapshot taken after `WARMUP_K` seeks.
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 fn random_seek_reads(
     audio: &mut HlsAudio,
     buf: &mut [f32],
@@ -499,6 +501,7 @@ fn random_seek_reads(
 
     let mut warmup_churn = None;
     for (i, &pos_secs) in seek_positions.iter().enumerate() {
+        hang_tick!();
         audio
             .seek(Duration::from_secs_f64(pos_secs))
             .unwrap_or_else(|e| panic!("seek #{i} to {pos_secs:.4}s failed: {e}"));
@@ -514,6 +517,7 @@ fn random_seek_reads(
             Err(e) => panic!("read error after seek #{i}: {e}"),
         };
         check.record(i, pos_secs, &buf[..n]);
+        hang_reset!();
 
         if i + 1 == WARMUP_K {
             warmup_churn = Some(snapshot_hls_churn(&usdt_trace::events()));
@@ -534,6 +538,8 @@ fn random_seek_reads(
 
 /// A seek near the end reads valid samples through to EOF without ever
 /// reporting `Pending`.
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 fn drain_tail_to_eof(audio: &mut HlsAudio, buf: &mut [f32], final_seek_secs: f64) {
     info!(final_seek_secs, "Final seek near end");
 
@@ -543,12 +549,14 @@ fn drain_tail_to_eof(audio: &mut HlsAudio, buf: &mut [f32], final_seek_secs: f64
 
     let mut remaining_samples = 0u64;
     loop {
+        hang_tick!();
         match audio.read(buf) {
             Ok(ReadOutcome::Pending { .. }) => {
                 panic!("final tail read returned Pending with block_on_underrun");
             }
             Ok(ReadOutcome::Frames { count, .. }) => {
                 remaining_samples += count.get() as u64;
+                hang_reset!();
                 assert!(
                     first_invalid_sample(&buf[..count.get()]).is_none(),
                     "invalid sample in final tail read",
@@ -563,15 +571,20 @@ fn drain_tail_to_eof(audio: &mut HlsAudio, buf: &mut [f32], final_seek_secs: f64
 }
 
 /// After EOF, a seek back into the track reads samples again.
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 fn resume_after_eof(audio: &mut HlsAudio, buf: &mut [f32], total_secs: f64) {
     let resume_positions = [0.5_f64, total_secs * 0.25, total_secs * 0.75];
     for (i, pos_secs) in resume_positions.iter().copied().enumerate() {
+        hang_tick!();
         audio
             .seek(Duration::from_secs_f64(pos_secs))
             .unwrap_or_else(|e| panic!("seek-after-eof #{i} to {pos_secs:.4}s failed: {e}"));
 
         match audio.read(buf) {
-            Ok(ReadOutcome::Frames { .. }) => {}
+            Ok(ReadOutcome::Frames { .. }) => {
+                hang_reset!();
+            }
             Ok(other) => {
                 panic!("seek-after-eof #{i} at {pos_secs:.4}s produced no samples: {other:?}");
             }

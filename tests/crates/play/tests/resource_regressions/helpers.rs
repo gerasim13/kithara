@@ -287,6 +287,7 @@ pub(super) async fn open_packaged_hls_audio(
     backend: DecoderBackend,
 ) -> kithara_integration_tests::mock::LaneAudio<Stream<Hls<TestPools>>, TestPools> {
     let hls = HlsConfig::for_url(url.clone())
+        .events(kithara::events::EventBus::default())
         .store(store)
         .pools(worker.pools().clone())
         .build();

@@ -39,14 +39,20 @@ fn media_secs() -> f64 {
     segments * consts::SEGMENT_SECS
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(3))]
 async fn next_chunk_or_timeout(
     audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>,
     label: &str,
 ) {
     let deadline = time::Instant::now() + Duration::from_secs(3);
     loop {
+        hang_tick!();
         match AudioRead::next_chunk(audio) {
-            Ok(ChunkOutcome::Chunk(_)) | Ok(ChunkOutcome::Eof { .. }) => return,
+            Ok(ChunkOutcome::Chunk(_)) | Ok(ChunkOutcome::Eof { .. }) => {
+                hang_reset!();
+                return;
+            }
             Ok(ChunkOutcome::Pending { .. }) => {}
             Err(e) => panic!("next_chunk decode error at `{label}`: {e}"),
         }
@@ -58,11 +64,15 @@ async fn next_chunk_or_timeout(
     }
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(3))]
 async fn preload_or_timeout(audio: &mut LaneAudio<Stream<Hls<TestPools>>, TestPools>, label: &str) {
     time::timeout(Duration::from_secs(3), async {
         while !audio.current_segment_ready() {
+            hang_tick!();
             time::sleep(Duration::from_micros(200)).await;
         }
+        hang_reset!();
     })
     .await
     .unwrap_or_else(|_| panic!("preload timeout at `{label}`"));

@@ -257,6 +257,7 @@ impl DecoderGeneration {
     pub(crate) fn seek(
         &mut self,
         position: kithara_platform::time::Duration,
+        gapless_mode: GaplessMode,
     ) -> DecodeResult<DecoderSeekOutcome> {
         if let Some(gate) = &self.construction_gate {
             gate.arm();
@@ -266,7 +267,19 @@ impl DecoderGeneration {
             gate.disarm();
         }
         match result {
-            Ok(result) => result,
+            Ok(result) => {
+                if matches!(
+                    result,
+                    Ok(DecoderSeekOutcome::Landed {
+                        landed_frame: 0,
+                        ..
+                    })
+                ) {
+                    let codec = self.media_info.as_ref().and_then(|info| info.codec);
+                    self.gapless = GaplessStage::build(self.gapless_profile, gapless_mode, codec);
+                }
+                result
+            }
             Err(payload) => {
                 warn!(panic = %panic_message(payload), "decoder panicked during seek");
                 Err(DecodeError::InvalidData {
@@ -445,7 +458,7 @@ mod tests {
         fn seek(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
             Ok(DecoderSeekOutcome::Landed {
                 landed_at: position,
-                landed_frame: 0,
+                landed_frame: self.spec.frame_at(position).expect("valid seek frame"),
                 landed_byte: None,
                 preroll: PrerollHint::NotNeeded,
             })
@@ -597,6 +610,43 @@ mod tests {
         let generation = priming_generation(spec(2, 44_100), GaplessMode::MediaOnly);
 
         assert_eq!(generation.timeline_origin(GaplessMode::MediaOnly), 1_024);
+    }
+
+    #[kithara::test]
+    fn seek_to_start_preserves_codec_priming_trim() {
+        let pools = pools();
+        let spec = spec(2, 44_100);
+        let mut generation = priming_generation(spec, GaplessMode::CodecPriming);
+        generation.notify_seek();
+        let _ = generation
+            .seek(Duration::ZERO, GaplessMode::CodecPriming)
+            .expect("seek to start");
+        generation.push(chunk(&pools, &vec![0.25; 4_096], spec, 0, 2_048, 2_048));
+        let output = generation.next().expect("output after priming trim");
+        assert_eq!(output.meta.frame_offset, 1_024);
+        assert_eq!(output.frames(), 1_024);
+    }
+
+    #[kithara::test]
+    fn seek_into_content_does_not_reapply_codec_priming_trim() {
+        let pools = pools();
+        let spec = spec(2, 44_100);
+        let mut generation = priming_generation(spec, GaplessMode::CodecPriming);
+        generation.notify_seek();
+        let _ = generation
+            .seek(Duration::from_secs(1), GaplessMode::CodecPriming)
+            .expect("seek into content");
+        generation.push(chunk(
+            &pools,
+            &vec![0.25; 4_096],
+            spec,
+            44_100,
+            2_048,
+            2_048,
+        ));
+        let output = generation.next().expect("output without priming trim");
+        assert_eq!(output.meta.frame_offset, 44_100);
+        assert_eq!(output.frames(), 2_048);
     }
 
     #[kithara::test]
@@ -847,7 +897,7 @@ mod tests {
         let second = Duration::from_secs(2);
         generation.notify_seek();
         assert!(matches!(
-            generation.seek(first),
+            generation.seek(first, GaplessMode::MediaOnly),
             Ok(DecoderSeekOutcome::Landed { landed_at, .. }) if landed_at == first
         ));
         assert!(!generation.has_output());
@@ -859,7 +909,7 @@ mod tests {
         assert!(generation.has_output());
         generation.notify_seek();
         assert!(matches!(
-            generation.seek(second),
+            generation.seek(second, GaplessMode::MediaOnly),
             Ok(DecoderSeekOutcome::Landed { landed_at, .. }) if landed_at == second
         ));
         assert!(!generation.has_output());

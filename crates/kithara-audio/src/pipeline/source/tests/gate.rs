@@ -62,6 +62,8 @@ async fn repeated_parked_polls_coalesce_into_one_probe() {
 }
 
 #[kithara::test(tokio)]
+#[kithara::flash(io)]
+#[kithara::hang_watchdog]
 async fn a_readiness_poll_answers_while_a_construction_read_holds_the_mutex() {
     let wake = Arc::new(DeferredWake::default());
     let source = TestSource::new(Arc::new(TestControl::new(media_info(0))))
@@ -98,6 +100,11 @@ async fn a_readiness_poll_answers_while_a_construction_read_holds_the_mutex() {
     assert!(wake.flush());
     *phase.lock() = SourcePhase::Eof;
     park.release();
+    hang_reset!();
+    while !holder.is_finished() {
+        hang_tick!();
+        kithara_platform::tokio::task::yield_now().await;
+    }
     holder
         .join()
         .expect("reader thread")

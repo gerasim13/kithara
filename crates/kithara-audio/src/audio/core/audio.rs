@@ -8,6 +8,7 @@ use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stream::{Activity, ActivityWriter, PlayheadWrite};
+use kithara_test_utils::kithara;
 
 use super::{
     super::{
@@ -31,6 +32,7 @@ pub struct Audio<S> {
     last_progress_emit: Option<u64>,
     metadata: TrackMetadata,
     abr: Option<kithara_abr::AbrHandle>,
+    seek_lock: Option<kithara_abr::AbrHandle>,
     activity: Activity,
     activity_writer: Option<ActivityWriter>,
     cancel: CancelToken,
@@ -55,6 +57,7 @@ impl<S> Audio<S> {
             last_progress_emit: None,
             metadata: context.metadata,
             abr: context.abr,
+            seek_lock: None,
             activity: context.activity,
             activity_writer: context.activity_writer,
             cancel: context.cancel,
@@ -180,11 +183,15 @@ impl<S> Audio<S> {
             TrackStep::Produced(Fetch::Data { data, .. }) => {
                 Ok(ChunkOutcome::Chunk(Box::new(data)))
             }
-            TrackStep::Produced(Fetch::NaturalEof) | TrackStep::Eof => Ok(ChunkOutcome::Eof {
-                position: self.position(),
-            }),
+            TrackStep::Produced(Fetch::NaturalEof) | TrackStep::Eof => {
+                self.release_seek_lock();
+                Ok(ChunkOutcome::Eof {
+                    position: self.position(),
+                })
+            }
             TrackStep::Produced(Fetch::Failure { failure }) | TrackStep::Failed(failure) => {
                 self.failure = Some(failure);
+                self.release_seek_lock();
                 Err(AudioReadError::Stream {
                     what: "read decoded source",
                     source: FailureSource::Producer { failure },
@@ -218,6 +225,11 @@ impl<S> Audio<S> {
                 source_end(&chunk.meta, u64::from(chunk.meta.frames))?,
                 chunk.meta,
             );
+            if chunk.meta.frames > 0 {
+                self.release_seek_lock();
+            }
+            self.publish_progress();
+            self.emit.flush();
         }
         Ok(outcome)
     }
@@ -238,6 +250,7 @@ impl<S> Audio<S> {
     ) -> Result<ReadOutcome, AudioReadError> {
         self.read_into(ReadBuffer::Planar(output))
     }
+    #[kithara::hang_watchdog]
     fn read_into(&mut self, mut output: ReadBuffer<'_, '_>) -> Result<ReadOutcome, AudioReadError> {
         let capacity = output.capacity()?;
         let mut written = 0usize;
@@ -245,6 +258,7 @@ impl<S> Audio<S> {
         let mut output_frames = 0u64;
         let mut eof = false;
         while written < capacity {
+            hang_tick!();
             if self.current_chunk.is_none() {
                 match self.pull_chunk() {
                     Err(_) if written > 0 => break,
@@ -301,6 +315,9 @@ impl<S> Audio<S> {
                 chunk.meta,
             );
             written += copied.count;
+            if copied.count > 0 {
+                hang_reset!();
+            }
             output_frames = output_frames.saturating_add(copied.output_frames);
             source_span = match (source_span, copied.source_span) {
                 (Some(previous), Some(next)) => previous.followed_by(next),
@@ -314,6 +331,9 @@ impl<S> Audio<S> {
             }
         }
         if let Some(count) = NonZeroUsize::new(written) {
+            self.release_seek_lock();
+            self.publish_progress();
+            self.emit.flush();
             return Ok(ReadOutcome::Frames {
                 count,
                 position: self.position(),
@@ -330,6 +350,32 @@ impl<S> Audio<S> {
                 position: self.position(),
             })
         }
+    }
+
+    fn release_seek_lock(&mut self) {
+        if let Some(abr) = self.seek_lock.take() {
+            abr.unlock();
+        }
+    }
+
+    fn publish_progress(&mut self) {
+        let position_ms = u64::try_from(self.position().as_millis()).unwrap_or(u64::MAX);
+        if self.last_progress_emit.is_some_and(|last| {
+            position_ms.abs_diff(last) < crate::consts::PROGRESS_EMIT_MIN_DELTA_MS
+        }) {
+            return;
+        }
+        self.last_progress_emit = Some(position_ms);
+        let total_ms = self
+            .duration()
+            .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX));
+        let decoded_ms =
+            u64::try_from(self.playhead.decoded_frontier().as_millis()).unwrap_or(u64::MAX);
+        self.emit.enqueue(crate::AudioEvent::PlaybackProgress {
+            position_ms,
+            total_ms,
+            buffered_ms: Some(total_ms.map_or(decoded_ms, |total| decoded_ms.min(total))),
+        });
     }
 }
 
@@ -353,6 +399,7 @@ pub(super) fn source_end(meta: &AudioChunkInfo, consumed: u64) -> Result<SourceE
 impl<S> Drop for Audio<S> {
     fn drop(&mut self) {
         self.cancel.cancel();
+        self.release_seek_lock();
     }
 }
 impl<S> AudioRead for Audio<S> {
@@ -393,16 +440,29 @@ impl<S> AudioControl for Audio<S> {
     delegate::delegate! {
         to self {
             fn preload(&mut self) -> Result<(), AudioReadError>;
-            fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError>;
             fn set_host_sample_rate(&mut self, rate: NonZeroU32);
         }
+    }
+
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
+        if self.seek_lock.is_none()
+            && let Some(abr) = &self.abr
+        {
+            abr.lock();
+            self.seek_lock = Some(abr.clone());
+        }
+        let result = self.seek(position);
+        if !matches!(result, Ok(SeekOutcome::Landed { .. })) {
+            self.release_seek_lock();
+        }
+        result
     }
 }
 impl<S: 'static> AudioSource for Audio<S> {
     type Chunk = AudioChunk;
 
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
-        let outcome = self.seek(position)?;
+        let outcome = AudioControl::seek(self, position)?;
         self.seek_pending = matches!(outcome, SeekOutcome::Landed { .. });
         Ok(outcome)
     }
@@ -412,6 +472,7 @@ impl<S: 'static> AudioSource for Audio<S> {
         if meta.frames == 0 {
             return;
         }
+        self.release_seek_lock();
         self.playhead.advance(&chunk_position(&meta));
         if self.seek_pending {
             self.seek_pending = false;
@@ -428,23 +489,7 @@ impl<S: 'static> AudioSource for Audio<S> {
                 position: meta.timestamp,
             });
         }
-        let position_ms = u64::try_from(self.position().as_millis()).unwrap_or(u64::MAX);
-        if self.last_progress_emit.is_some_and(|last| {
-            position_ms.abs_diff(last) < crate::consts::PROGRESS_EMIT_MIN_DELTA_MS
-        }) {
-            return;
-        }
-        self.last_progress_emit = Some(position_ms);
-        let total_ms = self
-            .duration()
-            .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX));
-        let decoded_ms =
-            u64::try_from(self.playhead.decoded_frontier().as_millis()).unwrap_or(u64::MAX);
-        self.emit.enqueue(crate::AudioEvent::PlaybackProgress {
-            position_ms,
-            total_ms,
-            buffered_ms: Some(total_ms.map_or(decoded_ms, |total| decoded_ms.min(total))),
-        });
+        self.publish_progress();
     }
 
     delegate::delegate! {
@@ -473,6 +518,7 @@ impl<S: 'static> AudioSource for Audio<S> {
                         kind: crate::map_decode_error_kind(&error),
                     };
                     self.failure = Some(failure);
+                    self.release_seek_lock();
                     return TrackStep::Failed(failure);
                 }
             };
@@ -484,6 +530,7 @@ impl<S: 'static> AudioSource for Audio<S> {
                             kind: crate::map_decode_error_kind(&error),
                         };
                         self.failure = Some(failure);
+                        self.release_seek_lock();
                         return TrackStep::Failed(failure);
                     }
                 };
@@ -491,7 +538,16 @@ impl<S: 'static> AudioSource for Audio<S> {
                 return TrackStep::Produced(Fetch::rendered(chunk, end));
             }
         }
-        self.source.step_track()
+        let step = self.source.step_track();
+        if matches!(
+            step,
+            TrackStep::Produced(Fetch::NaturalEof | Fetch::Failure { .. })
+                | TrackStep::Eof
+                | TrackStep::Failed(_)
+        ) {
+            self.release_seek_lock();
+        }
+        step
     }
 }
 
@@ -503,6 +559,7 @@ mod tests {
     use crate::mock::{prepared_audio, produced_audio};
 
     #[kithara::test(native, tokio)]
+    #[kithara::hang_watchdog]
     async fn lane_seek_events_publish_once_in_commit_order_without_open_seek_completion() {
         use crate::{AudioEvent, AudioSource, SeekLifecycleStage, SeekOutcome};
 
@@ -515,6 +572,8 @@ mod tests {
         audio.commit_source_end(end, chunk.meta);
         audio.finish_deferred();
         while let Ok(envelope) = events.try_recv() {
+            hang_tick!();
+            hang_reset!();
             assert!(!matches!(envelope.event, AudioEvent::SeekComplete { .. }));
             assert!(!matches!(
                 envelope.event,
@@ -534,6 +593,8 @@ mod tests {
             audio.finish_deferred();
             let mut stages = Vec::new();
             while let Ok(envelope) = events.try_recv() {
+                hang_tick!();
+                hang_reset!();
                 match envelope.event {
                     AudioEvent::SeekLifecycle { stage, .. } => stages.push(stage),
                     AudioEvent::SeekComplete { .. } => panic!("seek completed before admission"),
@@ -574,6 +635,8 @@ mod tests {
             audio.commit_source_end(end, chunk.meta);
             audio.finish_deferred();
             while let Ok(envelope) = events.try_recv() {
+                hang_tick!();
+                hang_reset!();
                 assert!(!matches!(envelope.event, AudioEvent::SeekComplete { .. }));
                 assert!(!matches!(
                     envelope.event,

@@ -144,7 +144,13 @@ async fn seamless_queue_advance_gapless_when_crossfade_is_zero(
     harness.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(30)),
+    hang_timeout_secs(1),
+    tracing("kithara_play=info")
+)]
 async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(
     #[future(awt)] crossfade_sources: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
@@ -297,17 +303,32 @@ async fn render_until_second_item_end(
     let mut events = Vec::new();
 
     let mut post_roll = None;
+    let mut previous_position = queue.position_seconds();
+    let mut previous_states = Vec::new();
 
     // WHY: The decode worker producing these blocks is uncounted real work.
     let _real_io = kithara::platform::flash::real_io();
     loop {
-        hang_tick!("render_until_second_item_end waits for playback progress".to_owned());
+        hang_tick!(format!(
+            "position={previous_position:?}, frames={rendered_frames}, events={events:?}"
+        ));
         let _ = harness.run(queue, QueueControl::tick).await;
         let block = harness.render(BLOCK_FRAMES as usize).await;
+        let snapshot = harness.deck_snapshot();
+        let states: Vec<_> = snapshot.slots.iter().map(|slot| slot.state).collect();
+        if states != previous_states {
+            tracing::info!(target: "kithara_play", rendered_frames, slots = ?snapshot.slots, "queue handover slot states changed");
+            previous_states = states;
+        }
+        let position = queue.position_seconds();
+        if position != previous_position {
+            previous_position = position;
+            hang_reset!();
+        }
         rendered.extend_from_slice(&block);
         rendered_frames = rendered_frames.saturating_add(BLOCK_FRAMES as usize);
         loop {
-            hang_tick!("render_until_second_item_end waits for playback progress".to_owned());
+            hang_tick!();
             match rx.try_recv().map(|envelope| envelope.event) {
                 Ok(TestEvent::Player(event)) => {
                     hang_reset!();

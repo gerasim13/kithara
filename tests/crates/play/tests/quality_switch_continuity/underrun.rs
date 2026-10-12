@@ -49,6 +49,8 @@ fn cold_target_fixture(target: usize) -> HlsFixtureBuilder {
     }])
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn prepare_tiny_ring_player(
     master_url: &url::Url,
     initial_variant: usize,
@@ -79,6 +81,7 @@ async fn prepare_tiny_ring_player(
                     .build(),
             )
             .events(bus)
+            .preload_chunks(std::num::NonZeroUsize::MIN)
             .audio_buffer_chunks(
                 std::num::NonZeroUsize::new(OUTPUT_RING_CHUNKS).expect("output ring depth"),
             )
@@ -110,7 +113,12 @@ async fn prepare_tiny_ring_player(
     let mut active_blocks = 0usize;
     let mut decoder_events = drain_decoder_events(&mut events, 0);
     loop {
+        hang_tick!();
+        let before = player.position();
         let block = render_paced(&mut player, BLOCK_FRAMES).await;
+        if player.position() > before {
+            hang_reset!();
+        }
         decoder_events.extend(drain_decoder_events(&mut events, 0));
         if block
             .iter()
@@ -146,8 +154,11 @@ async fn prepare_tiny_ring_player(
     }
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn render_to_capture_frame(player: &mut OfflinePlayer, label: &str) {
     loop {
+        hang_tick!();
         let current = usize::try_from(source_frame(player.position(), label))
             .unwrap_or_else(|_| panic!("{label} capture frame must be non-negative"));
         assert!(
@@ -158,16 +169,27 @@ async fn render_to_capture_frame(player: &mut OfflinePlayer, label: &str) {
         if remaining == 0 {
             return;
         }
+        let before = player.position();
         render_paced(player, remaining.min(BLOCK_FRAMES)).await;
+        if player.position() > before {
+            hang_reset!();
+        }
     }
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog]
 async fn capture_tiny_ring(prepared: &mut PreparedPlayer) -> (Vec<f32>, Vec<DecoderObservation>) {
     let mut samples = Vec::with_capacity(OBSERVATION_FRAMES * usize::from(CHANNELS));
     let mut decoder_events = Vec::new();
     while samples.len() / usize::from(CHANNELS) < OBSERVATION_FRAMES {
+        hang_tick!();
+        let before = prepared.player.position();
         let frames = (OBSERVATION_FRAMES - samples.len() / usize::from(CHANNELS)).min(BLOCK_FRAMES);
         samples.extend_from_slice(&render_paced(&mut prepared.player, frames).await);
+        if prepared.player.position() > before {
+            hang_reset!();
+        }
         decoder_events.extend(drain_decoder_events(
             &mut prepared.events,
             samples.len() / usize::from(CHANNELS),
