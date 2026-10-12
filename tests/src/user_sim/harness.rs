@@ -104,6 +104,7 @@ impl SimHarness {
     /// Build a fresh `Queue + Player` against `cache_path` and append
     /// every track in `specs`. Does **not** call `select` — that's left
     /// to the scenario via `enter_track`.
+    #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
     pub async fn new(cache_path: &Path, specs: &[TrackSpec]) -> Self {
         let rig = DiskQueue::builder(cache_path)
             .pacing(RenderPacing::Unpaced)
@@ -114,6 +115,7 @@ impl SimHarness {
 
         let mut track_ids = Vec::with_capacity(specs.len());
         for spec in specs {
+            hang_tick!(format!("appending simulated track {}", spec.url));
             let cfg = ResourceConfig::for_src(
                 ResourceSrc::parse(spec.url.as_str()).expect("valid track URL"),
             )
@@ -127,13 +129,16 @@ impl SimHarness {
             .initial_abr_mode(spec.abr_mode)
             .build();
             let control = queue.clone();
-            let id = rig
-                .queue
-                .host()
-                .run(move || control.append(TrackSource::Config(Box::new(cfg))))
-                .await
-                .expect("queue is open while the harness is being built");
+            let id = {
+                let _real_io = ::kithara::platform::flash::real_io();
+                rig.queue
+                    .host()
+                    .run(move || control.append(TrackSource::Config(Box::new(cfg))))
+                    .await
+                    .expect("queue is open while the harness is being built")
+            };
             track_ids.push(id);
+            hang_reset!();
         }
 
         Self {
@@ -161,6 +166,7 @@ impl SimHarness {
     /// offline renderer, then tick the queue so the playhead it publishes
     /// reflects what the sink consumed. Returns the frames the renderer
     /// advanced by — the queue's cached position only moves inside `tick`.
+    #[kithara::flash(io)]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     async fn render_step(&self) -> u64 {
         let batch = u64::from(self.rig.queue.host().max_block_frames().get())
@@ -188,6 +194,7 @@ impl SimHarness {
 
     /// Render turns until `done` sees the state it waits for, at most `turns`
     /// of them. Returns whether it landed.
+    #[kithara::flash(io)]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     async fn render_until(&self, turns: u32, mut done: impl FnMut(&Self) -> bool) -> bool {
         let mut observed = (self.current_track_id(), self.position(), self.is_playing());
@@ -435,6 +442,8 @@ impl SimHarness {
         self.last_known_codec = self.current_codec();
     }
 
+    #[kithara::flash(io)]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     async fn do_set_quality(&mut self, idx: usize) {
         let Some(handle) = self.current_abr_handle() else {
             return;
@@ -466,6 +475,9 @@ impl SimHarness {
         let mut seek_rebase_allowed = false;
 
         while turns < ACTION_TURNS {
+            hang_tick!(format!(
+                "quality {bounded}: position={last_pos}, turns={turns}"
+            ));
             if pre_track.is_some() && self.current_track_id() != pre_track {
                 if self.current_track_id().is_none()
                     && pre_dur > 0.0
@@ -488,6 +500,7 @@ impl SimHarness {
             }
 
             loop {
+                hang_tick!(format!("quality {bounded}: draining seek receipts"));
                 match rx.try_recv() {
                     Ok(envelope) => match &envelope.event {
                         TestEvent::Audio(AudioEvent::SeekLifecycle {
@@ -514,6 +527,7 @@ impl SimHarness {
                 baseline_pos = cur;
             }
             if cur + 1.0 < last_pos || cur > last_pos + 0.05 {
+                hang_reset!();
                 last_pos = cur;
                 stagnant_turns = 0;
             }
@@ -587,6 +601,8 @@ impl SimHarness {
     /// the wall-clock oracles on the work axis: a playhead that stops
     /// advancing across [`STAGNATION_TURNS`] turns, a playhead that ends short
     /// of the request, and a track that flips before its end.
+    #[kithara::flash(io)]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     async fn do_render_for(&mut self, at_least: Duration) {
         let target = at_least.as_secs_f64();
         let budget = self
@@ -607,6 +623,9 @@ impl SimHarness {
         let mut stagnant_turns: u32 = 0;
 
         while rendered < budget {
+            hang_tick!(format!(
+                "render for {target}: position={last_pos}, rendered={rendered}"
+            ));
             if let Some(id) = pre_track
                 && let Some(entry) = self.queue.track(id)
                 && let TrackStatus::Failed(err) = &entry.status
@@ -621,11 +640,13 @@ impl SimHarness {
             // from 0 once it starts producing), so rebase the baseline rather
             // than compare against the previous track's high-water mark.
             if cur + 1.0 < pre_pos {
+                hang_reset!();
                 pre_pos = cur;
                 last_pos = cur;
                 stagnant_turns = 0;
             }
             if cur > last_pos + 0.05 {
+                hang_reset!();
                 last_pos = cur;
                 stagnant_turns = 0;
             }
@@ -695,11 +716,12 @@ impl SimHarness {
 /// `Err` is a closed bus (terminal). `recv()` itself parks on the
 /// virtual clock — awaiting it is what lets the engine advance time
 /// (run the tick driver + decode worker) until real state changes.
-#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn recv_event(rx: &mut EventReceiver<TestEvent>) -> Result<Option<TestEvent>, String> {
     hang_tick!("user simulation awaits a player event".to_owned());
     let answer = timeout(__hang_detector.remaining(), rx.recv()).await;
     hang_tick!("user simulation awaits a player event".to_owned());
+    hang_reset!();
     match answer.map_err(|_| "player event wait stopped progressing".to_owned())? {
         Ok(env) => Ok(Some(env.event)),
         Err(RecvError::Lagged(_)) => Ok(None),
@@ -729,7 +751,8 @@ fn progress_secs(ev: &TestEvent) -> Option<f64> {
 /// virtual clock, so the engine is free to advance time, run the tick
 /// driver, and let the decode worker produce the next block — exactly
 /// the events the wait then resolves on.
-#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn await_progress<S>(
     rx: &mut EventReceiver<TestEvent>,
     queue: &QueueControl<S>,
@@ -747,8 +770,8 @@ where
     {
         return Ok(p);
     }
-    let mut previous = queue.position_seconds();
     let budget = deadline.min(__hang_detector.remaining());
+    let mut previous = queue.position_seconds();
     let wait = async {
         loop {
             hang_tick!(format!("awaiting playback progress: {previous:?}"));
@@ -776,7 +799,8 @@ where
     }
 }
 
-#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 pub async fn wait_for_loaded<S>(
     queue: &QueueControl<S>,
     id: TrackId,
@@ -795,9 +819,9 @@ where
             | TrackStatus::Cancelled => {}
         }
     }
+    let budget = deadline.min(__hang_detector.remaining());
     let mut rx = queue.subscribe();
     let mut previous = queue.track(id).map(|entry| entry.status);
-    let budget = deadline.min(__hang_detector.remaining());
     let wait = async {
         loop {
             hang_tick!(format!("track {id:?} awaits loading: {previous:?}"));

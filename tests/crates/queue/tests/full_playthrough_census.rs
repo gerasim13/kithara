@@ -292,6 +292,7 @@ impl Census {
     }
 }
 
+#[kithara::hang_watchdog(ctx = String)]
 async fn build_queue(
     sources: Vec<ResourceSrc>,
     origins: [Origin; 3],
@@ -325,12 +326,14 @@ async fn build_queue(
     let mut tracks = Vec::with_capacity(sources.len());
     let mut rejected = 0;
     for (source, origin) in sources.into_iter().zip(origins) {
+        hang_tick!(format!("loading census track from {origin:?}"));
         let mut events = queue.subscribe();
         let id = harness
             .run(&queue, move |control| control.append(source.to_string()))
             .await
             .expect("append census track through the production loader");
         let loaded = wait_for_loader_done_event(&mut events, &queue, id, LOCAL_LOAD_DEADLINE).await;
+        hang_reset!();
         let rejection = match origin {
             Origin::RemoteSignal(asset) => {
                 kithara_integration_tests::fixtures::android_fixture_rejection(asset)
@@ -416,7 +419,8 @@ struct QueueLog {
 }
 
 #[kithara::flash(true)]
-#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+#[kithara::flash(io)]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn play_to_the_end(census: &Census) -> (Vec<f32>, QueueLog) {
     let block_duration = render_block_duration();
     let mut receiver = census.queue.subscribe();
@@ -425,7 +429,18 @@ async fn play_to_the_end(census: &Census) -> (Vec<f32>, QueueLog) {
     let mut observed = (None, None, 0, 0, false);
 
     for _ in 0..BLOCK_BUDGET {
-        hang_tick!();
+        hang_tick!(format!(
+            "queue census awaiting owner tick: index={:?}, position={:?}, advances={}, \
+             crossfades={}, ended={}, playing={}, status={:?}, rendered={} frames",
+            observed.0,
+            observed.1,
+            observed.2,
+            observed.3,
+            observed.4,
+            census.queue.is_playing(),
+            census.queue.status(),
+            rendered.len() / 2,
+        ));
         let _ = census.harness.run(&census.queue, QueueControl::tick).await;
         rendered.extend(census.harness.render(BLOCK_FRAMES).await);
 
@@ -438,6 +453,7 @@ async fn play_to_the_end(census: &Census) -> (Vec<f32>, QueueLog) {
         }
 
         while let Ok(envelope) = receiver.try_recv() {
+            hang_tick!(format!("queue census drains events at {observed:?}"));
             match envelope.event {
                 TestEvent::Queue(QueueEvent::CurrentTrackAdvance { id, reason }) => {
                     log.advances.push((id, reason));
@@ -904,6 +920,7 @@ struct PreparedTracks {
     sources: Vec<ResourceSrc>,
 }
 
+#[kithara::hang_watchdog(ctx = String)]
 async fn prepare_tracks(origins: [Origin; 3]) -> PreparedTracks {
     let server = if origins.iter().copied().any(Origin::needs_server) {
         Some(TestServerHelper::new().await)
@@ -917,7 +934,12 @@ async fn prepare_tracks(origins: [Origin; 3]) -> PreparedTracks {
     ];
     let mut sources = Vec::with_capacity(origins.len());
     for (origin, pattern) in origins.iter().zip(patterns) {
-        sources.push(track_src(*origin, server.as_ref(), pattern).await);
+        hang_tick!(format!("preparing census source from {origin:?}"));
+        {
+            let _real_io = ::kithara::platform::flash::real_io();
+            sources.push(track_src(*origin, server.as_ref(), pattern).await);
+        }
+        hang_reset!();
     }
     PreparedTracks {
         server,

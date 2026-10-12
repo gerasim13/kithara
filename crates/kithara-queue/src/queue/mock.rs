@@ -88,6 +88,7 @@ pub fn pending_selection() -> (
 ///
 /// # Panics
 /// Panics if fixture preparation or opening fails, or opening makes no progress.
+#[kithara::flash(io)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 pub async fn loaded_fixture(
     rig: &mut DeckRig<TestPools>,
@@ -127,12 +128,53 @@ pub async fn loaded_fixture(
 pub async fn answer_load(
     queue: &mut Queue<TestPools>,
     rig: &mut DeckRig<TestPools>,
-    dir: &TestTempDir,
+    _dir: &TestTempDir,
 ) {
     hang_tick!();
-    let loaded = loaded_fixture(rig, dir).await;
+    let seq = queue
+        .target
+        .and_then(|target| queue.incoming_index(target.to))
+        .and_then(|index| queue.active.get(index))
+        .and_then(|active| active.load)
+        .expect("selected load")
+        .seq();
+    let mut loaded = loaded_request(rig, seq).await;
+    loaded.opened.metadata.title = Some("Loaded fixture".to_owned());
     hang_reset!();
     answer_loaded(queue, rig, loaded);
+}
+
+/// Opens the owner's requested source while retaining its lane inbox.
+///
+/// # Panics
+/// Panics if the requested load is missing, refused, or stalls.
+#[kithara::flash(io)]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+pub async fn loaded_request(
+    rig: &mut DeckRig<TestPools>,
+    seq: Seq,
+) -> kithara_render::Loaded<kithara_play::OpenedTrack> {
+    use kithara_render::DispatcherCommand;
+
+    rig.opens.drain();
+    while let Some(due) = rig.opens.next_due((), 1) {
+        hang_tick!();
+        due.defer();
+        hang_reset!();
+    }
+    let mut due = rig.opens.resume(seq, (), ()).expect("owner load request");
+    let DispatcherCommand::Load(request) = due.commands_mut().pop().expect("load command") else {
+        panic!("owner requested a load");
+    };
+    assert!(due.commands().is_empty(), "one load per batch");
+    due.defer();
+    hang_tick!();
+    let loaded = rig
+        .load_request_fixture(*request)
+        .await
+        .expect("opened owner source");
+    hang_reset!();
+    loaded
 }
 
 /// Settles pending dispatcher commands through the first fixture load.
@@ -147,16 +189,25 @@ pub fn answer_loaded(
 ) {
     use kithara_render::{Dispatched, DispatcherCommand};
 
-    let mut loaded = Some(loaded);
     rig.opens.drain();
+    let wanted = queue
+        .target
+        .and_then(|target| queue.incoming_index(target.to))
+        .and_then(|index| queue.active.get(index))
+        .and_then(|active| active.load)
+        .expect("the selected fixture is loading")
+        .seq();
     loop {
         hang_tick!();
-        let mut due = rig.opens.next_due((), 1).expect("dispatcher command");
-        let opens = matches!(due.commands_mut().as_slice(), [DispatcherCommand::Load(_)]);
+        let Some(mut due) = rig.opens.next_due((), 1) else {
+            break;
+        };
+        if matches!(due.commands_mut().as_slice(), [DispatcherCommand::Load(_)]) {
+            due.defer();
+            hang_reset!();
+            continue;
+        }
         match due.commands_mut().as_slice() {
-            [DispatcherCommand::Load(_)] => {
-                due.apply(Dispatched::Loaded(loaded.take().expect("load fixture")));
-            }
             [DispatcherCommand::Release(_)] => due.apply(Dispatched::Released),
             [DispatcherCommand::SetPriority(_, _)] => due.apply(Dispatched::Prioritized),
             _ => panic!("one dispatcher command per batch"),
@@ -170,10 +221,20 @@ pub fn answer_loaded(
             Player::settle(queue, TrackReceipt::Loaded(receipt), out)
         });
         hang_reset!();
-        if opens {
-            break;
-        }
     }
+    rig.opens
+        .resume(wanted, (), ())
+        .expect("selected dispatcher command")
+        .apply(Dispatched::Loaded(loaded));
+    let receipt = rig
+        .dispatcher
+        .receipts()
+        .next()
+        .expect("selected load receipt");
+    with_outbox(queue, rig, |queue, out| {
+        Player::settle(queue, TrackReceipt::Loaded(receipt), out)
+    });
+    hang_reset!();
 }
 
 /// Applies and settles the pending deck entry, returning its sequence.

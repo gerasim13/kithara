@@ -15,7 +15,11 @@ use kithara::{
     events::{SlotId, TrackId},
     file::{File, FileConfig, FileSrc},
     host::{HostConfig, HostSettings},
-    platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError},
+    platform::{
+        sync::Arc,
+        time::{Duration, WallInstant},
+        tokio::sync::broadcast::error::TryRecvError,
+    },
     play::{ItemRole, PlaybackFault, PlayerEvent, TrackConfig, TrackRef},
     queue::{QueueControl, QueueEvent, TrackStatus, Transition},
     warp::WarpConfig,
@@ -45,6 +49,8 @@ fn is_leading(role: &ItemRole) -> bool {
     matches!(role, ItemRole::Leading(_))
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn render_loop(
     queue: &QueueControl<TestPools>,
     harness: &OfflinePlayer<
@@ -54,6 +60,7 @@ async fn render_loop(
 ) -> Vec<f32> {
     let mut output = Vec::with_capacity(block_budget * BLOCK_FRAMES * 2);
     for block in 0..block_budget {
+        hang_tick!(format!("duplicate-source queue renders block {block}"));
         harness
             .run(queue, QueueControl::tick)
             .await
@@ -65,6 +72,7 @@ async fn render_loop(
             "master PCM must be finite in block {block}"
         );
         output.extend(samples);
+        hang_reset!();
     }
     output
 }
@@ -141,6 +149,7 @@ async fn a_failure_only_flags_the_entry_that_played(#[case] played_entry: bool) 
 }
 
 #[kithara::test(tokio, flash(false))]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
     let asset = assets::constant_wav_loud_30s();
     let factory = InjectedFactory::default();
@@ -213,15 +222,17 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
         })
         .await
         .expect("select the source-owned second copy");
-    wait_for_loader_done_event(
-        &mut loaded,
-        &queue,
-        playing,
-        kithara::platform::time::Duration::from_secs(5),
-    )
-    .await
-    .expect("the real lane has produced PCM");
+    wait_for_loader_done_event(&mut loaded, &queue, playing, Duration::from_secs(5))
+        .await
+        .expect("the real lane has produced PCM");
     harness.run(&queue, QueueControl::play).await;
+    harness
+        .render_until_current(
+            playing,
+            BLOCK_FRAMES,
+            WallInstant::now() + Duration::from_secs(1),
+        )
+        .await;
     let samples = render_loop(&queue, &harness, WARMUP_BLOCKS).await;
     for (block, samples) in samples.chunks_exact(BLOCK_FRAMES * 2).enumerate() {
         let level = rms(samples);
@@ -265,9 +276,14 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
         "the failed final entry ends the queue"
     );
     let mut observed = Vec::new();
+    hang_reset!();
     loop {
+        hang_tick!("draining source cancellation events".to_owned());
         match events.try_recv() {
-            Ok(envelope) => observed.push(envelope.event),
+            Ok(envelope) => {
+                observed.push(envelope.event);
+                hang_reset!();
+            }
             Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             Err(TryRecvError::Lagged(skipped)) => panic!("lost {skipped} terminal events"),
         }

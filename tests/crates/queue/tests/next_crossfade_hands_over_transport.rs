@@ -26,18 +26,21 @@ const BLOCKS_PER_SECOND: usize = (SAMPLE_RATE as usize).div_ceil(BLOCK_FRAMES);
 
 /// Renders `blocks` output blocks, giving the queue an owner pass before each
 /// one the way the app's engine tick does, and returns the last block.
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn render(
     harness: &OfflinePlayer,
     queue: &QueueControl<TestPools>,
     blocks: usize,
 ) -> Vec<f32> {
     let mut last = Vec::new();
-    for _ in 0..blocks {
+    for block_index in 0..blocks {
+        hang_tick!(format!("rendering transport block {block_index}/{blocks}"));
         harness
             .run(queue, QueueControl::tick)
             .await
             .expect("the queue takes its owner pass");
         last = harness.render(BLOCK_FRAMES).await;
+        hang_reset!();
     }
     last
 }
@@ -203,6 +206,7 @@ async fn a_next_press_hands_the_transport_to_the_track_it_crossfades_in(
 /// the render waits for the stretched lane rather than outrunning it, so no
 /// window of the output is silence and the playhead moves at the tempo.
 #[kithara::test(tokio)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn a_track_at_a_set_tempo_keeps_sounding_through_an_offline_render() {
     const RATE: f32 = 1.06;
     const WINDOWS: usize = 12;
@@ -244,7 +248,9 @@ async fn a_track_at_a_set_tempo_keeps_sounding_through_an_offline_render() {
         .position_seconds()
         .expect("the playing track has a position");
     for window in 0..WINDOWS {
+        hang_tick!(format!("tempo render window {window}"));
         let pcm = render(&harness, &queue, window_blocks).await;
+        hang_reset!();
         assert!(
             rms(&pcm) > 0.05,
             "window {window} sounds: rms {}",

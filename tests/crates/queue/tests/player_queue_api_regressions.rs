@@ -53,7 +53,7 @@ async fn auto_advance_starts_next_track_without_explicit_play(
             .build(),
         ))
     });
-    let [first_id, _second_id] = harness
+    let [first_id, second_id] = harness
         .with_queue(move |queue| {
             sources.map(|source| queue.append(source).expect("append signal fixture"))
         })
@@ -71,6 +71,7 @@ async fn auto_advance_starts_next_track_without_explicit_play(
     let mut observed = (None, None, 0);
 
     while WallInstant::now() <= deadline {
+        let _real_io = ::kithara::platform::flash::real_io();
         hang_tick!(format!(
             "automatic successor after {first_id:?}: {observed:?}"
         ));
@@ -104,7 +105,7 @@ async fn auto_advance_starts_next_track_without_explicit_play(
 
         if harness.player().current_index() == Some(1) && second_current_item_changed.is_none() {
             second_current_item_changed = events.iter().find_map(|timed| {
-                matches!(&timed.event, PlayerEvent::CurrentItemChanged { .. })
+                matches!(&timed.event, PlayerEvent::CurrentItemChanged { item: Some(item) } if *item == second_id)
                     .then_some(timed.frame_end)
             });
         }

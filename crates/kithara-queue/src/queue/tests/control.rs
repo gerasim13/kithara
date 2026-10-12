@@ -11,7 +11,7 @@ use num_traits::ToPrimitive;
 
 use crate::{
     Queue, QueueConfig, QueueControl, QueueError,
-    mock::{TestPools, answer_loaded, finish, loaded_fixture, pending_selection, pools},
+    mock::{TestPools, answer_loaded, finish, pending_selection, pools},
 };
 
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
@@ -21,6 +21,7 @@ fn drive_call(
     call: impl FnOnce(QueueControl<TestPools>) -> Result<(), QueueError> + Send + 'static,
     mut drain: impl FnMut(&mut Queue<TestPools>),
 ) -> Result<(), QueueError> {
+    let _real_io = kithara_platform::flash::real_io();
     let caller = std::thread::spawn(move || call(control));
     while !caller.is_finished() {
         hang_tick!();
@@ -169,8 +170,14 @@ async fn seek_frame_index_clamps_unrepresentable_targets(
     #[case] duration: Option<Duration>,
     #[case] expected_frame: u64,
 ) {
-    let (mut queue, _, _, mut rig, dir) = pending_selection();
-    let mut loaded = loaded_fixture(&mut rig, &dir).await;
+    let (mut queue, _, _, mut rig, _dir) = pending_selection();
+    let seq = queue
+        .active
+        .iter()
+        .find_map(|active| active.load)
+        .expect("selected load")
+        .seq();
+    let mut loaded = crate::mock::loaded_request(&mut rig, seq).await;
     loaded.opened.duration = duration;
     answer_loaded(&mut queue, &mut rig, loaded);
     finish(&mut queue, &mut rig);

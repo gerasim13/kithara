@@ -109,6 +109,8 @@ async fn delayed_drm_track() -> (TestServerHelper, Url) {
     drm_source(Some(150)).await
 }
 
+#[kithara_test_utils::kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, temp: TestTempDir) {
     let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
@@ -188,18 +190,22 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
         .expect("duration known after Loaded");
     let mut rng = Xorshift64::new(42);
     for i in 0..3 {
+        hang_tick!(format!("packaged DRM seek iteration {i}"));
         let target = duration * rng.range_f64(0.05, 0.95);
         // Through the host owner, as the app seeks and as every other
         // control call here does. Called directly, the seek waits for the
         // queue's owner inside the test's own poll.
         queue.run(move |q| q.seek(target)).await.expect("seek");
+        hang_reset!();
         wait_for_position_near(&queue, target, 1.0, Duration::from_secs(5))
             .await
             .unwrap_or_else(|e| panic!("seek #{i} to {target:.1}s fail: {e}"));
+        hang_reset!();
         let before = queue.position_seconds().unwrap_or(0.0);
         wait_for_position_at_least(&queue, before + 0.5, Duration::from_secs(5))
             .await
             .unwrap_or_else(|e| panic!("seek #{i} hang: {e}"));
+        hang_reset!();
         let after = queue.position_seconds().unwrap_or(0.0);
         assert!(
             after - before >= 0.5,

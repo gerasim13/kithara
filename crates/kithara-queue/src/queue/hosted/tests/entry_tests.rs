@@ -9,7 +9,7 @@ pub(super) use kithara_play::{
     Player, ResourceConfig, ResourcePrep, ResourceSrc, TrackReceipt, TrackStatus as PlayingStatus,
     mock,
 };
-use kithara_play::{DeckMixSettingsChange, DeckProtocol, PlayerEvent};
+use kithara_play::{DeckMixSettingsChange, DeckProtocol, PlayerEvent, Position};
 pub(super) use kithara_render::{
     LaneFrame,
     bridge::{Returned, SlotMark},
@@ -199,6 +199,7 @@ fn rejected_slot_volume_leaves_live_values_unchanged() {
     );
 }
 
+#[kithara::flash(io)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn arm_current_fixture(
     rig: &mut mock::DeckRig<TestPools>,
@@ -298,6 +299,75 @@ async fn finish_disarms_and_ignores_stale_ticket() {
 }
 
 #[kithara::test(tokio)]
+async fn only_the_accepted_seek_receipt_relinquishes_the_requested_position() {
+    let (mut queue, _, _, mut rig, _dir) = crate::mock::selected().await;
+    let before = queue.control().position_seconds();
+    let first = with_outbox(&mut queue, &mut rig, |queue, out| {
+        Player::apply(
+            queue,
+            QueueCommand::Seek {
+                to: Position::try_from_secs_f64(1.0).expect("first seek"),
+            },
+            out,
+        )
+    })
+    .expect("accept first seek")
+    .expect("first seek receipt");
+    let second = with_outbox(&mut queue, &mut rig, |queue, out| {
+        Player::apply(
+            queue,
+            QueueCommand::Seek {
+                to: Position::try_from_secs_f64(2.0).expect("second seek"),
+            },
+            out,
+        )
+    })
+    .expect("accept second seek")
+    .expect("second seek receipt");
+    assert_eq!(queue.control().position_seconds(), Some(2.0));
+    let slot = queue
+        .current_track()
+        .expect("selected track")
+        .snapshot()
+        .slot
+        .expect("selected slot");
+    let outcome = Outcome::Applied {
+        at: SessionFrame::new(256),
+        data: (),
+    };
+    let mut batch = kithara_command::Batch::<DeckProtocol> {
+        basis: vec![(slot, None)],
+        commands: Vec::new(),
+    };
+    with_outbox(&mut queue, &mut rig, |queue, out| {
+        Player::settle(
+            queue,
+            TrackReceipt::Deck {
+                seq: first,
+                outcome: &outcome,
+                batch: &mut batch,
+            },
+            out,
+        )
+    });
+    queue.publish();
+    assert_eq!(queue.control().position_seconds(), Some(2.0));
+    with_outbox(&mut queue, &mut rig, |queue, out| {
+        Player::settle(
+            queue,
+            TrackReceipt::Deck {
+                seq: second,
+                outcome: &outcome,
+                batch: &mut batch,
+            },
+            out,
+        )
+    });
+    queue.publish();
+    assert_eq!(queue.control().position_seconds(), before);
+}
+
+#[kithara::test(tokio)]
 async fn atomic_track_id_cas_arm_then_disarm() {
     let (mut queue, mut rig, dir) = empty_queue();
     queue.config.action_at_item_end = ActionAtItemEnd::None;
@@ -334,6 +404,29 @@ async fn atomic_track_id_cas_arm_then_disarm() {
     answer_loaded(&mut queue, &mut rig, loaded);
     crate::mock::finish(&mut queue, &mut rig);
     assert_eq!(queue.current, Some(TrackId(2)));
+    let slot = queue
+        .current_track()
+        .expect("sounding predecessor")
+        .snapshot()
+        .slot
+        .expect("seated predecessor");
+    queue.deck.mixer.slots[usize::from(slot.get())].mark = Some(SlotMark {
+        session: SessionFrame::new(256),
+        lane: LaneFrame {
+            segment: kithara_signal::SegmentId::FIRST,
+            frame: 0,
+        },
+        position: Duration::ZERO,
+    });
+    with_outbox(&mut queue, &mut rig, |queue, out| {
+        let current = queue.active_current_index().expect("sounding predecessor");
+        queue
+            .active
+            .get_mut(current)
+            .expect("current entry")
+            .track
+            .tick(SessionFrame::new(256), out);
+    });
     assert!(
         queue.current_end().is_some(),
         "deadline guard must see a sounding predecessor"

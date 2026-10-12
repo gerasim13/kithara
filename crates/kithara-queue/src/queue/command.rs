@@ -9,7 +9,12 @@ use kithara_play::{
 };
 use kithara_signal::{FaderValue, SessionFrame};
 
-use super::{Queue, Transition, slots::Role, transition::TransitionRequest, types::Placement};
+use super::{
+    Queue, Transition,
+    slots::Role,
+    transition::TransitionRequest,
+    types::{Placement, SeekPosition},
+};
 use crate::{
     ActionAtItemEnd, AdvanceReason, PlaybackOrder, QueueError, QueueEvent, QueueRepeatMode,
     QueueSettingsChange, RepeatMode, TrackSource, TrackStatus, loading::LoadReport,
@@ -309,16 +314,14 @@ where
                 .and_then(|target| self.incoming_index(target.to))
         });
         let Some(index) = index else {
-            self.held_position = Some(to);
+            self.held_position = Some(SeekPosition::Held(to));
             return Ok(None);
         };
-        let sent = self
-            .active
-            .get_mut(index)
-            .ok_or(PlayError::NoActiveSlot)?
-            .track
-            .apply(TrackCommand::Seek { to }, out)?;
+        let active = self.active.get_mut(index).ok_or(PlayError::NoActiveSlot)?;
+        let item = active.item;
+        let sent = active.track.apply(TrackCommand::Seek { to }, out)?;
         self.withdraw_auto(out)?;
+        self.held_position = sent.map(|seq| SeekPosition::Pending { item, seq, to });
         Ok(sent)
     }
 

@@ -3,13 +3,15 @@ use kithara_bufpool::HasPool;
 use kithara_command::mailbox;
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::{CancelScope, CancelToken, tokio::runtime::Handle as RuntimeHandle};
-use kithara_play::{PlayError, PlayerEvent, PlayerFactory, Position, TrackFactory};
+use kithara_play::{
+    PlayError, Player, PlayerEvent, PlayerFactory, TrackFactory, TrackStatus as PlayingStatus,
+};
 use kithara_signal::{FrameCount, SessionFrame};
 
 use super::{
     command::{QueueMailbox, QueuePostbox},
     slots::{Role, Slots},
-    types::Target,
+    types::{SeekPosition, Target},
     view::{DeckObservation, QueueView},
 };
 use crate::{QueueConfig, QueueEvent, loader::Loader, navigation::NavigationState, track::Tracks};
@@ -37,7 +39,7 @@ where
     pub(super) tracks: Tracks<S>,
     pub(super) navigation: NavigationState,
     pub(super) current: Option<TrackId>,
-    pub(super) held_position: Option<Position>,
+    pub(super) held_position: Option<SeekPosition>,
     pub(super) target: Option<Target>,
     pub(super) active: Slots<F::Track>,
     pub(super) postbox: QueuePostbox<S>,
@@ -155,7 +157,15 @@ where
     pub fn current_track(&self) -> Option<&F::Track> {
         self.active
             .iter()
-            .find(|active| active.role == Role::Current)
+            .find(|active| {
+                active.role == Role::Current
+                    && !matches!(
+                        active.track.snapshot().as_ref().status,
+                        PlayingStatus::Ended { .. }
+                            | PlayingStatus::Failed { .. }
+                            | PlayingStatus::Released
+                    )
+            })
             .map(|active| &active.track)
     }
 
@@ -200,6 +210,10 @@ where
                 .publish(PlayerEvent::MuteChanged { muted: mix.muted() });
         }
         for event in self.events.drain(..) {
+            if let QueueEvent::CurrentTrackChanged { id } = &event {
+                self.bus
+                    .publish(PlayerEvent::CurrentItemChanged { item: *id });
+            }
             self.bus.publish(event);
         }
     }
@@ -257,13 +271,16 @@ pub(crate) mod tests {
     };
     use kithara_play::{
         DeckMixerConfig, DeckPass, HostedDeck, Outbox, PlayError, PlayWorker, PlayWorkerConfig,
-        Player, ResourcePrep,
+        Player, Position, ResourcePrep,
         mock::{self, DeckRig},
     };
     use kithara_signal::{FrameCount, SessionFrame};
     use kithara_test_utils::kithara;
 
-    use super::{super::QueueCommand, *};
+    use super::{
+        super::{QueueCommand, types::Placement},
+        *,
+    };
     use crate::{
         QueueError, QueueSettingsChange,
         event::{QueueEvent, QueueRepeatMode, TrackStatus},
@@ -330,7 +347,8 @@ pub(crate) mod tests {
         })
     }
 
-    #[kithara::hang_watchdog(ctx = String)]
+    #[kithara::flash(io)]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     pub(in crate::queue) async fn wait_for_queue_event<F>(
         rx: &mut EventReceiver<QueueEvent>,
         mut matches: F,
@@ -589,6 +607,40 @@ pub(crate) mod tests {
     /// the queue made its changes: a handle that hears a track change reads
     /// that change.
     #[kithara::test]
+    fn a_current_item_event_is_published_with_its_committed_queue_view() {
+        let (mut queue, _) = make_queue();
+        let control = queue.control();
+        let id = TrackId::allocate();
+        queue.insert_entry(id, "https://example.com/a.mp3".into(), Placement::Append);
+        let mut events = control.subscribe::<PlayerEvent>();
+        queue.current = Some(id);
+        queue.announce(QueueEvent::CurrentTrackChanged { id: Some(id) });
+        assert!(events.try_recv().is_err());
+        assert!(control.current().is_none());
+
+        queue.publish();
+        assert!(matches!(
+            events.try_recv().expect("committed current item").event,
+            PlayerEvent::CurrentItemChanged { item: Some(actual) } if actual == id
+        ));
+        assert_eq!(control.current().expect("published current").id, id);
+        queue.publish();
+        assert!(
+            events.try_recv().is_err(),
+            "unchanged current is not re-announced"
+        );
+
+        queue.current = None;
+        queue.announce(QueueEvent::CurrentTrackChanged { id: None });
+        queue.publish();
+        assert!(matches!(
+            events.try_recv().expect("committed inactive queue").event,
+            PlayerEvent::CurrentItemChanged { item: None }
+        ));
+        assert!(control.current().is_none());
+    }
+
+    #[kithara::test]
     fn a_queue_event_is_heard_with_the_view_that_shows_it() {
         let (mut queue, mut rig) = make_queue();
         let control = queue.control();
@@ -831,6 +883,7 @@ pub(crate) mod tests {
     fn answered(
         ticket: kithara_command::Ticket<QueueError>,
     ) -> Result<(), kithara_command::Refused<QueueError>> {
+        let _real_io = kithara_platform::flash::real_io();
         let answer = std::thread::spawn(move || ticket.wait());
         while !answer.is_finished() {
             hang_park!(|remaining: Duration| {

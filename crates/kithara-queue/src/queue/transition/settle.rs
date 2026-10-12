@@ -7,7 +7,7 @@ use kithara_play::{
 use kithara_signal::SessionFrame;
 
 use super::super::{Queue, command::play_error, slots::Role};
-use crate::{AdvanceReason, QueueError, QueueEvent, TrackStatus};
+use crate::{AdvanceReason, QueueEvent, TrackStatus};
 
 impl<S, F> Queue<S, F>
 where
@@ -144,19 +144,34 @@ where
         seq: Seq,
         at: SessionFrame,
     ) -> Result<(), PlayError> {
-        let Some(target) = self.target else {
-            return Ok(());
-        };
-        let Some(index) = self.incoming_index(target.to) else {
-            return Ok(());
-        };
-        if !self
+        let Some(index) = self
             .active
-            .get(index)
-            .is_some_and(|active| active.role == (Role::Incoming { batch: Some(seq) }))
-        {
+            .position(|active| active.role == (Role::Incoming { batch: Some(seq) }))
+        else {
+            return Ok(());
+        };
+        let id = self.active.get(index).ok_or(PlayError::NoActiveSlot)?.item;
+        if self.target.is_none_or(|target| target.to != id) {
+            if let Some(current) = self.active_current_index() {
+                self.active
+                    .get_mut(current)
+                    .ok_or(PlayError::NoActiveSlot)?
+                    .role = Role::Outgoing;
+            }
+            self.active
+                .get_mut(index)
+                .ok_or(PlayError::NoActiveSlot)?
+                .role = Role::Current;
+            self.current = Some(id);
+            self.tracks.set_status(id, TrackStatus::Consumed);
+            self.announce(QueueEvent::CurrentTrackChanged { id: self.current });
+            self.announce(QueueEvent::CurrentTrackAdvance {
+                id: self.current,
+                reason: AdvanceReason::NaturalEof,
+            });
             return Ok(());
         }
+        let target = self.target.ok_or(PlayError::NotReady)?;
         if target.chained {
             return Ok(());
         }
@@ -169,7 +184,12 @@ where
         at: SessionFrame,
     ) -> Result<(), PlayError> {
         let target = self.target.ok_or(PlayError::NotReady)?;
-        if let Some(current) = self.active_current_index() {
+        let outgoing = self.active_current_index();
+        let incoming_slot = self.active.get(index).ok_or(PlayError::NoActiveSlot)?.slot;
+        let crossfading = outgoing
+            .and_then(|current| self.active.get(current))
+            .is_some_and(|active| active.slot != incoming_slot);
+        if let Some(current) = outgoing {
             let slot = self
                 .active
                 .get(current)
@@ -190,7 +210,11 @@ where
             .role = Role::Current;
         self.active.activate_replacement(index);
         self.current = Some(target.to);
-        self.tracks.set_status(target.to, TrackStatus::Consumed);
+        if crossfading && target.playing && target.settings.duration > 0.0 && !target.chained {
+            self.announce(QueueEvent::CrossfadeStarted {
+                settings: target.settings,
+            });
+        }
         if target.auto || target.reason == AdvanceReason::InitialLoad {
             self.navigation.select(target.to, &self.track_ids());
         }
@@ -200,11 +224,7 @@ where
             id: self.current,
             reason: target.reason,
         });
-        if target.playing && target.settings.duration > 0.0 && !target.chained {
-            self.announce(QueueEvent::CrossfadeStarted {
-                settings: target.settings,
-            });
-        }
+        self.tracks.set_status(target.to, TrackStatus::Consumed);
         Ok(())
     }
 
@@ -313,6 +333,10 @@ where
                     .get(index)
                     .is_some_and(|active| active.role == (Role::Incoming { batch: Some(seq) })) =>
             {
+                let item = self.active.get(index).ok_or(PlayError::NoActiveSlot)?.item;
+                if self.target.is_none_or(|target| target.to != item) {
+                    return self.release_track(index, out).map(|_| ());
+                }
                 if matches!(reason, Rejection::Late | Rejection::Stale) {
                     if let Some(active) = self.active.get_mut(index) {
                         active.role = Role::Incoming { batch: None };
@@ -329,60 +353,5 @@ where
             }
             _ => Ok(()),
         }
-    }
-
-    fn load_settled(
-        &mut self,
-        index: usize,
-        settled: &Settled,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<(), PlayError> {
-        let active = self.active.get(index).ok_or(PlayError::NoActiveSlot)?;
-        let id = active.item;
-        let preloaded = active.role == Role::Preloaded;
-        let wanted = self
-            .target
-            .is_some_and(|target| self.incoming_index(target.to) == Some(index));
-        let applied = matches!(settled, Settled::Applied { .. });
-        if applied && self.finish_load(index)? {
-            self.transition_loaded(out)?;
-        } else if !applied {
-            self.active
-                .get_mut(index)
-                .ok_or(PlayError::NoActiveSlot)?
-                .load = None;
-            if let Settled::Rejected { reason, .. } = settled
-                && self.tracks.records().iter().any(|record| {
-                    record.id == id
-                        && matches!(
-                            record.status,
-                            TrackStatus::Loading | TrackStatus::Slow | TrackStatus::Loaded
-                        )
-                })
-            {
-                if self
-                    .target
-                    .is_some_and(|target| target.to == id && target.auto)
-                    || preloaded
-                {
-                    self.tracks.set_status(id, TrackStatus::Consumed);
-                } else {
-                    let error = QueueError::Play(super::super::hosted::refusal(reason));
-                    self.tracks.fail(id, &error);
-                    self.announce(QueueEvent::TrackLoadFailed {
-                        id,
-                        reason: error.to_string(),
-                        auto_skipped: false,
-                    });
-                }
-            }
-            self.release_track(index, out)?;
-            if wanted {
-                self.target = None;
-            }
-        } else if wanted {
-            self.cancel_target(out).map_err(play_error)?;
-        }
-        Ok(())
     }
 }

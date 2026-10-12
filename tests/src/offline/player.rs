@@ -10,7 +10,7 @@ use kithara::{
     platform::{
         maybe_send::MaybeSend,
         sync::{Arc, Mutex},
-        time::WallInstant,
+        time::{Duration, WallInstant},
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{
@@ -350,21 +350,30 @@ where
     }
 
     /// Render until selection is committed by the queue, not merely prepared by its loader.
-    #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+    #[kithara_test_utils::kithara::flash(io)]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     pub async fn render_until_current(
         &self,
         id: TrackId,
         block_frames: usize,
         deadline: WallInstant,
     ) {
+        let mut observed = self.player().playback_view();
         while self.player().current().map(|entry| entry.id) != Some(id) {
-            hang_tick!("render_until_current waits for playback progress".to_owned());
+            hang_tick!(format!(
+                "render_until_current awaits {id:?}; playback={observed:?}"
+            ));
             assert!(
                 WallInstant::now() < deadline,
                 "queue did not commit current track {id:?} before the render deadline"
             );
             self.render(block_frames).await;
             let _ = self.tick_and_drain().await;
+            let progress = self.player().playback_view();
+            if progress != observed {
+                observed = progress;
+                hang_reset!();
+            }
         }
         hang_reset!();
     }
@@ -440,13 +449,20 @@ where
         drop(pcm_decks);
     }
 
+    #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
     fn drain_events(&self) -> Vec<TestEvent> {
         let mut events = Vec::new();
         let mut rx = self.events.lock();
         loop {
+            hang_tick!("offline player drains committed events".to_owned());
             match rx.try_recv() {
-                Ok(envelope) => events.push(envelope.event),
-                Err(TryRecvError::Lagged(_)) => continue,
+                Ok(envelope) => {
+                    events.push(envelope.event);
+                    hang_reset!();
+                }
+                Err(TryRecvError::Lagged(_)) => {
+                    hang_reset!();
+                }
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             }
         }

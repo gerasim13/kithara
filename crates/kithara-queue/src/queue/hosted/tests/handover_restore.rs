@@ -18,6 +18,15 @@ impl HandoverRig {
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     async fn playing() -> Self {
         hang_tick!();
+        let rig = Self::playing_with_sources(["item-1.wav", "item-2.wav", "item-3.wav"]).await;
+        hang_reset!();
+        rig
+    }
+
+    #[kithara::flash(io)]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    async fn playing_with_sources(names: [&str; 3]) -> Self {
+        hang_tick!();
         let (queue, deck, dir) = empty_queue();
         let mut rig = Self {
             queue,
@@ -31,11 +40,16 @@ impl HandoverRig {
             ],
             last_lane: None,
         };
-        for (index, id) in rig.ids.into_iter().enumerate() {
+        for name in names {
             hang_tick!();
-            let path = rig.dir.path().join(format!("item-{}.wav", index + 1));
+            let path = rig.dir.path().join(name);
             mock::write_pcm_wav(&path, &[0.5; 2_048], AudioSpec::new(2, mock::SAMPLE_RATE))
                 .expect("offline item fixture");
+            hang_reset!();
+        }
+        for (id, name) in rig.ids.into_iter().zip(names).take(1) {
+            hang_tick!();
+            let path = rig.dir.path().join(name);
             rig.apply(QueueCommand::Append {
                 id,
                 source: TrackSource::Uri(path.to_str().expect("fixture path").to_owned()),
@@ -45,10 +59,37 @@ impl HandoverRig {
         }
         rig.select(0, Transition::None).expect("select first");
         hang_tick!();
-        rig.load(64.295).await;
+        rig.load(0, 64.295).await;
         hang_reset!();
         crate::mock::finish(&mut rig.queue, &mut rig.deck);
         assert_eq!(rig.queue.current, Some(rig.ids[0]));
+        let slot = rig.slot(0);
+        rig.queue.deck.mixer.slots[usize::from(slot.get())].mark = Some(SlotMark {
+            session: SessionFrame::new(128),
+            lane: LaneFrame::default(),
+            position: Duration::ZERO,
+        });
+        with_outbox(&mut rig.queue, &mut rig.deck, |queue, out| {
+            let current = queue.active_current_index().expect("current fixture");
+            queue
+                .active
+                .get_mut(current)
+                .expect("current fixture")
+                .track
+                .tick(SessionFrame::new(128), out);
+        });
+        rig.queue.insert_entry(
+            rig.ids[1],
+            TrackSource::Uri(
+                rig.dir
+                    .path()
+                    .join(names[1])
+                    .to_str()
+                    .expect("fixture path")
+                    .to_owned(),
+            ),
+            crate::queue::types::Placement::Append,
+        );
         rig
     }
 
@@ -59,14 +100,29 @@ impl HandoverRig {
     }
 
     fn select(&mut self, index: usize, transition: Transition) -> Result<Option<Seq>, PlayError> {
+        if self.queue.track(self.ids[index]).is_none() {
+            self.queue.insert_entry(
+                self.ids[index],
+                TrackSource::Uri(
+                    self.dir
+                        .path()
+                        .join("item-3.wav")
+                        .to_str()
+                        .expect("fixture path")
+                        .to_owned(),
+                ),
+                crate::queue::types::Placement::Append,
+            );
+        }
         self.apply(QueueCommand::Select {
             id: self.ids[index],
             transition,
         })
     }
 
+    #[kithara::flash(io)]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-    async fn load(&mut self, duration: f64) {
+    async fn load(&mut self, index: usize, duration: f64) {
         use kithara_render::{Dispatched, DispatcherCommand};
 
         self.deck.opens.drain();
@@ -81,6 +137,19 @@ impl HandoverRig {
             assert!(due.commands_mut().is_empty());
             let opened = match command {
                 DispatcherCommand::Load(request) => {
+                    let wanted = self
+                        .queue
+                        .active
+                        .iter()
+                        .find(|active| active.item == self.ids[index])
+                        .and_then(|active| active.load)
+                        .expect("fixture load")
+                        .seq();
+                    if due.seq() != wanted {
+                        due.commands_mut().push(DispatcherCommand::Load(request));
+                        due.defer();
+                        continue;
+                    }
                     let mut loaded = self
                         .loader
                         .load_request_fixture(*request)
@@ -127,7 +196,7 @@ impl HandoverRig {
         .expect("preload item");
         hang_reset!();
         hang_tick!();
-        self.load(162.0).await;
+        self.load(index, 162.0).await;
         hang_reset!();
         self.slot(index)
     }
@@ -195,6 +264,14 @@ impl HandoverRig {
         let snapshot = &mut self.queue.deck.mixer.slots[usize::from(slot.get())];
         snapshot.position = 62.3;
         snapshot.duration = 64.295;
+        snapshot.mark = Some(SlotMark {
+            session: SessionFrame::new(256),
+            lane: LaneFrame {
+                segment: kithara_signal::SegmentId::FIRST,
+                frame: 2_747_430,
+            },
+            position: Duration::from_secs_f64(62.3),
+        });
         with_outbox(&mut self.queue, &mut self.deck, |queue, out| {
             for track in queue.tracks_mut() {
                 track.tick(SessionFrame::new(256), out);
@@ -259,6 +336,10 @@ impl HandoverRig {
             due.apply(());
             hang_reset!();
         }
+        while self.deck.ring.receipt().is_some() {
+            hang_tick!();
+            hang_reset!();
+        }
         parts
     }
 
@@ -309,6 +390,44 @@ async fn arm_next_loads_item_and_returns_src() {
         rig.queue.track(rig.ids[1]).expect("record").status,
         TrackStatus::Loaded
     );
+}
+
+#[kithara::test(tokio)]
+async fn a_rejected_retained_chain_does_not_rewrite_the_new_selection() {
+    let mut rig = HandoverRig::playing().await;
+    rig.arm(1).await;
+    rig.chain();
+    let seq = rig
+        .queue
+        .active
+        .iter()
+        .find_map(|active| match active.role {
+            Role::Incoming { batch } if active.item == rig.ids[1] => batch,
+            _ => None,
+        })
+        .expect("accepted chained entry");
+    rig.select(2, Transition::None).expect("new selection");
+    let target = rig.queue.target.expect("new selection remains pending");
+    let index = rig
+        .queue
+        .incoming_index(rig.ids[1])
+        .expect("retained chain");
+    with_outbox(&mut rig.queue, &mut rig.deck, |queue, out| {
+        queue.transition_settled(
+            index,
+            &kithara_play::Settled::Rejected {
+                seq,
+                reason: Rejection::Stale,
+            },
+            out,
+        )
+    })
+    .expect("retained rejection settles independently");
+    let remaining = rig.queue.target.expect("new selection survives");
+    assert_eq!(remaining.to, target.to);
+    assert_eq!(remaining.bound, target.bound);
+    assert_eq!(remaining.continued, target.continued);
+    assert_eq!(remaining.stale, target.stale);
 }
 
 #[kithara::test(tokio)]
@@ -363,7 +482,7 @@ async fn arm_next_replaces_previously_armed_slot() {
     let before = rig.source(1).to_owned();
     rig.select(2, Transition::None)
         .expect("replace preload through selection");
-    rig.load(162.0).await;
+    rig.load(2, 162.0).await;
     assert_ne!(before, rig.source(2));
     assert_eq!(rig.armed(), Some(rig.ids[2]));
 }
@@ -540,7 +659,7 @@ async fn select_item_clears_pending_next_and_unloads_preloaded_track() {
         .expect("select another item");
     let parts = rig.pending_parts();
     assert_eq!(detached(&parts), [armed_slot]);
-    rig.load(162.0).await;
+    rig.load(2, 162.0).await;
     crate::mock::finish(&mut rig.queue, &mut rig.deck);
     assert_eq!(rig.armed(), None);
     assert_eq!(rig.queue.control().current_index(), Some(2));
@@ -565,7 +684,7 @@ async fn selecting_another_item_cancels_the_successor_preload_instead_of_unloadi
             .any(|part| matches!(part, DeckPart::Stop { slot, .. } if *slot == second_slot))
     );
     rig.settle(stitched);
-    rig.load(162.0).await;
+    rig.load(2, 162.0).await;
     crate::mock::finish(&mut rig.queue, &mut rig.deck);
     assert_eq!(
         rig.queue.control().current_index(),
@@ -642,7 +761,7 @@ async fn a_re_armed_successor_the_audio_thread_stitched_in_is_promoted() {
     rig.arm(1).await;
     rig.chain();
     rig.select(2, Transition::None).expect("re-arm accepted");
-    rig.load(162.0).await;
+    rig.load(2, 162.0).await;
     let applied = rig
         .deck
         .block(SessionFrame::new(128), 0.0)
@@ -690,14 +809,11 @@ async fn a_successor_whose_cancel_the_ring_refused_is_reported_when_stitched_in_
             .any(|part| matches!(part, DeckPart::Stop { .. })),
         "the ring refused cancellation"
     );
+    let applied = rig.stitch();
     rig.select(2, Transition::None).expect("select third");
-    rig.load(162.0).await;
+    rig.load(2, 162.0).await;
     crate::mock::finish(&mut rig.queue, &mut rig.deck);
     let third = rig.slot(2);
-    let applied = rig
-        .deck
-        .end(third, SessionFrame::new(256))
-        .expect("third ends before the retained successor starts");
     rig.event(DeckEvent::Ended {
         slot: third,
         at: SessionFrame::new(256),
@@ -712,7 +828,7 @@ async fn a_re_armed_successor_that_fails_in_its_stitch_block_is_reported() {
     rig.arm(1).await;
     rig.chain();
     rig.select(2, Transition::None).expect("re-arm third");
-    rig.load(162.0).await;
+    rig.load(2, 162.0).await;
     let applied = rig
         .deck
         .block(SessionFrame::new(128), 0.0)
@@ -740,7 +856,7 @@ async fn an_unloaded_successor_whose_cancel_the_ring_refused_leaves_the_question
     assert!(with_outbox(&mut rig.queue, &mut rig.deck, Queue::withdraw_transition).is_err());
     rig.pending_parts();
     rig.select(2, Transition::None).expect("re-arm third");
-    rig.load(162.0).await;
+    rig.load(2, 162.0).await;
     let applied = rig
         .deck
         .block(SessionFrame::new(128), 0.0)
@@ -851,7 +967,7 @@ async fn end_of_a_slot_the_phase_does_not_hold_is_a_background_track() {
 
 #[kithara::test(tokio)]
 async fn the_outgoing_half_of_a_crossfade_is_not_the_leading_track() {
-    let mut rig = HandoverRig::playing().await;
+    let mut rig = HandoverRig::playing_with_sources(["item-1.wav"; 3]).await;
     let same = rig.source(0).to_owned();
     rig.queue.tracks.records_mut()[1].source = TrackSource::Uri(same.clone());
     rig.arm(1).await;
@@ -884,7 +1000,7 @@ async fn the_outgoing_half_of_a_crossfade_is_not_the_leading_track() {
 
 #[kithara::test(tokio)]
 async fn the_promoted_half_of_a_crossfade_is_the_leading_track() {
-    let mut rig = HandoverRig::playing().await;
+    let mut rig = HandoverRig::playing_with_sources(["item-1.wav"; 3]).await;
     let same = rig.source(0).to_owned();
     rig.queue.tracks.records_mut()[1].source = TrackSource::Uri(same.clone());
     rig.arm(1).await;

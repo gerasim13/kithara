@@ -83,6 +83,7 @@ fn settle_dispatcher(queue: &mut Queue<TestPools>, rig: &mut mock::DeckRig<TestP
     }
 }
 
+#[kithara::hang_watchdog]
 fn hold_loads(
     queue: &mut Queue<TestPools>,
     rig: &mut mock::DeckRig<TestPools>,
@@ -91,6 +92,7 @@ fn hold_loads(
     let mut priorities = Vec::new();
     rig.opens.drain();
     while let Some(due) = rig.opens.next_due((), 1) {
+        hang_tick!();
         match due.commands() {
             [DispatcherCommand::Load(request)] => {
                 let class = request.class;
@@ -103,6 +105,7 @@ fn hold_loads(
             }
             _ => panic!("one dispatcher operation per batch"),
         }
+        hang_reset!();
     }
     settle_dispatcher(queue, rig);
     (loads, priorities)
@@ -121,8 +124,16 @@ fn answer(
     settle_dispatcher(queue, rig);
 }
 
+#[kithara::hang_watchdog]
 fn events(receiver: &mut EventReceiver<QueueEvent>) -> Vec<QueueEvent> {
-    std::iter::from_fn(|| receiver.try_recv().ok().map(|envelope| envelope.event)).collect()
+    std::iter::from_fn(|| {
+        hang_tick!();
+        receiver.try_recv().ok().map(|envelope| {
+            hang_reset!();
+            envelope.event
+        })
+    })
+    .collect()
 }
 
 #[kithara::test(tokio)]
@@ -244,6 +255,7 @@ async fn an_appended_track_loads_without_a_select() {
 }
 
 #[kithara::test(tokio)]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn background_loads_stay_within_max_concurrent_loads() {
     let (mut queue, mut rig, dir) =
         queue_with_load_settings(NonZeroUsize::new(2).expect("cap"), false);
@@ -264,14 +276,18 @@ async fn background_loads_stay_within_max_concurrent_loads() {
         2
     );
     for id in &ids[3..] {
+        hang_tick!();
         assert_eq!(
             queue.track(*id).expect("record").status,
             TrackStatus::Pending
         );
+        hang_reset!();
     }
     for id in &ids[1..3] {
+        hang_tick!();
         let seq = load_seq(&queue, *id);
         let loaded = loaded_fixture(&mut rig, &dir).await;
+        hang_reset!();
         answer(&mut queue, &mut rig, seq, loaded);
         assert!(
             hold_loads(&mut queue, &mut rig).0.is_empty(),
@@ -528,15 +544,18 @@ async fn a_selected_background_track_announces_loaded_once() {
 }
 
 #[kithara::test(tokio)]
+#[kithara::hang_watchdog]
 async fn a_failed_replacement_release_keeps_the_taken_background_track() {
     let (mut queue, mut rig, dir) = empty_queue();
     queue.active = Slots::new(1);
     let ids = append(&mut queue, &mut rig, &dir, 3);
     hold_loads(&mut queue, &mut rig);
     for id in &ids[1..] {
+        hang_tick!();
         let seq = load_seq(&queue, *id);
         let loaded = loaded_fixture(&mut rig, &dir).await;
         answer(&mut queue, &mut rig, seq, loaded);
+        hang_reset!();
     }
     with_outbox(&mut queue, &mut rig, |queue, out| {
         let output = *out.pass().expect("pass").output;
@@ -544,6 +563,7 @@ async fn a_failed_replacement_release_keeps_the_taken_background_track() {
     })
     .expect("stage the first parked replacement");
     while rig.dispatcher.available() > 0 {
+        hang_tick!();
         rig.dispatcher
             .send(
                 When::Next,
@@ -553,6 +573,7 @@ async fn a_failed_replacement_release_keeps_the_taken_background_track() {
                 },
             )
             .expect("consume dispatcher credit");
+        hang_reset!();
     }
     let seq = load_seq(&queue, ids[2]);
     let result = with_outbox(&mut queue, &mut rig, |queue, out| {

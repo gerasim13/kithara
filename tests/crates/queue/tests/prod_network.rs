@@ -618,6 +618,8 @@ fn assert_audio_live(samples: &[f32], label: &str) {
 /// `position_seconds()` can advance even when the actual audio is
 /// silence (the timeline commits the seek-landed position before any
 /// chunk is decoded). Reading PCM is the ground truth.
+#[kithara_test_utils::kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
     /// How far the published position may sit from a target the seek landed
     /// on; a seek judged past the end leaves the pre-seek position instead.
@@ -632,6 +634,7 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
 
     let mut track_ids = Vec::with_capacity(urls.len());
     for url in urls {
+        hang_tick!(format!("{label}: append production DRM source"));
         track_ids.push(
             queue
                 .run({
@@ -641,6 +644,7 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
                 .await
                 .expect("append multi-track production DRM track"),
         );
+        hang_reset!();
     }
 
     use kithara_integration_tests::user_sim::harness::wait_for_loaded;
@@ -650,18 +654,23 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
 
     let rotations: u32 = if track_ids.len() >= 7 { 2 } else { 4 };
     for rotation in 0..rotations {
+        hang_tick!(format!("{label}: rotation {rotation}"));
         for (idx, &track_id) in track_ids.iter().enumerate() {
             let ctx = format!("{label} [rot={rotation} idx={idx}]");
+            hang_tick!(format!("{ctx}: select {track_id:?}"));
 
             queue
                 .run(move |q| q.select(track_id, Transition::None))
                 .await
                 .unwrap_or_else(|e| panic!("{ctx} select Err: {e}"));
+            hang_reset!();
 
             wait_for_handover(&queue, track_id, &ctx).await;
+            hang_reset!();
 
             let phase1 = format!("{ctx} phase1 (post-select)");
             let pcm_phase1 = render_audio_frames(&queue, ten_seconds_frames, &phase1).await;
+            hang_reset!();
             assert_audio_live(&pcm_phase1, &phase1);
 
             let duration = queue
@@ -672,6 +681,7 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
                 .run(move |q| q.seek(target))
                 .await
                 .unwrap_or_else(|e| panic!("{ctx} seek Err: {e}"));
+            hang_reset!();
             let landed = queue.position_seconds();
             assert!(
                 landed.is_some_and(|landed| (landed - target).abs() < LANDING_SLACK_S),
@@ -682,6 +692,7 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
 
             let phase2 = format!("{ctx} phase2 (post-near-end-seek)");
             let pcm_phase2 = render_audio_frames(&queue, ten_seconds_frames, &phase2).await;
+            hang_reset!();
             assert_audio_live(&pcm_phase2, &phase2);
         }
     }

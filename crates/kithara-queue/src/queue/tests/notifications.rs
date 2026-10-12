@@ -11,6 +11,7 @@ use crate::{
 };
 
 #[kithara::test(tokio)]
+#[kithara::hang_watchdog]
 async fn notification_changed_carries_src() {
     let (mut queue, mut rig, dir) = empty_queue();
     let control = queue.control();
@@ -21,7 +22,13 @@ async fn notification_changed_carries_src() {
             queue,
             QueueCommand::Append {
                 id: item,
-                source: TrackSource::Uri("next.mp3".to_owned()),
+                source: TrackSource::Uri(
+                    dir.path()
+                        .join("entry.wav")
+                        .to_str()
+                        .expect("fixture path")
+                        .to_owned(),
+                ),
             },
             out,
         )
@@ -36,11 +43,18 @@ async fn notification_changed_carries_src() {
         )
         .expect("select source");
     });
+    queue.tracks.records_mut()[0].source = TrackSource::Uri("next.mp3".to_owned());
     answer_load(&mut queue, &mut rig, &dir).await;
     finish(&mut queue, &mut rig);
-    let notification = std::iter::from_fn(|| events.try_recv().ok().map(|event| event.event))
-        .find(|event| matches!(event, QueueEvent::CurrentTrackChanged { .. }))
-        .expect("current source changed");
+    let notification = std::iter::from_fn(|| {
+        hang_tick!();
+        events.try_recv().ok().map(|event| {
+            hang_reset!();
+            event.event
+        })
+    })
+    .find(|event| matches!(event, QueueEvent::CurrentTrackChanged { .. }))
+    .expect("current source changed");
     let QueueEvent::CurrentTrackChanged { id: Some(id) } = notification else {
         panic!("expected a current identity");
     };
@@ -61,7 +75,13 @@ async fn notification_clone() {
             queue,
             QueueCommand::Append {
                 id: item,
-                source: TrackSource::Uri("ended.mp3".to_owned()),
+                source: TrackSource::Uri(
+                    dir.path()
+                        .join("entry.wav")
+                        .to_str()
+                        .expect("fixture path")
+                        .to_owned(),
+                ),
             },
             out,
         )
@@ -76,6 +96,7 @@ async fn notification_clone() {
         )
         .expect("select stopped source");
     });
+    queue.tracks.records_mut()[0].source = TrackSource::Uri("ended.mp3".to_owned());
     hang_tick!();
     answer_load(&mut queue, &mut rig, &dir).await;
     hang_reset!();

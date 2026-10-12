@@ -9,7 +9,7 @@ use kithara_play::{
     TrackStatus as PlayingStatus,
 };
 
-use super::{PlaybackView, Queue, QueueControl};
+use super::{PlaybackView, Queue, QueueControl, types::SeekPosition};
 use crate::{
     ActionAtItemEnd, NavigationState, PlaybackOrder, QueueSettings, RepeatMode, TrackEntry,
     TrackSource, TrackStatus,
@@ -112,7 +112,7 @@ where
     F: TrackFactory<S>,
 {
     pub(super) fn queue_snapshot(&self) -> QueueSnapshot<S> {
-        let track = self
+        let mut track = self
             .active_current_index()
             .or_else(|| {
                 self.target.and_then(|target| {
@@ -125,6 +125,12 @@ where
             .and_then(|index| self.active.get(index))
             .map(|active| &active.track)
             .map(|track| track.snapshot().as_ref().clone());
+        if let Some(SeekPosition::Pending { item, to, .. }) = self.held_position
+            && let Some(track) = &mut track
+            && track.item == item
+        {
+            track.position = to;
+        }
         let slot = track
             .as_ref()
             .and_then(|track| track.slot)
@@ -155,7 +161,7 @@ where
             initial: self.config.track,
             slot,
             sample_rate: self.deck.mixer.sample_rate,
-            held_position: self.held_position,
+            held_position: self.held_position.and_then(SeekPosition::held),
             deck: self.deck.clone(),
             engine_load: self
                 .config
