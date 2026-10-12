@@ -5,7 +5,12 @@
 
 use std::num::NonZeroU32;
 
-use kithara::{audio::mock::TestPcmReader, events::TrackId, queue::Transition, signal::AudioSpec};
+use kithara::{
+    audio::mock::TestPcmReader,
+    events::TrackId,
+    queue::{ActionAtItemEnd, Transition},
+    signal::AudioSpec,
+};
 use kithara_integration_tests::offline::{OfflinePlayer, OfflinePlayerOptions};
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -40,6 +45,7 @@ async fn a_bare_deck_keeps_its_item_past_the_end() {
     let mut events = harness.player().subscribe();
     harness
         .with_queue(move |player| {
+            player.set_action_at_item_end(ActionAtItemEnd::None);
             player
                 .append_with_id(item, source)
                 .expect("append the item");

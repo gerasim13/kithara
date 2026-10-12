@@ -325,6 +325,38 @@ impl HandoverRig {
     }
 
     #[kithara::hang_watchdog]
+    fn assert_no_pending_load(&mut self) {
+        use kithara_render::{Dispatched, DispatcherCommand};
+
+        self.deck.opens.drain();
+        loop {
+            let Some(mut due) = self.deck.opens.next_due((), 1) else {
+                break;
+            };
+            hang_tick!();
+            let seq = due.seq();
+            let command = due.commands_mut().pop().expect("dispatcher command");
+            assert!(due.commands_mut().is_empty());
+            match command {
+                DispatcherCommand::Load(_) => panic!("promotion reuses the opened lane"),
+                DispatcherCommand::SetPriority(_, _) => due.apply(Dispatched::Prioritized),
+                DispatcherCommand::Release(_) => due.apply(Dispatched::Released),
+            }
+            let receipt = self
+                .deck
+                .dispatcher
+                .receipts()
+                .next()
+                .expect("dispatcher maintenance receipt");
+            assert_eq!(receipt.seq(), seq);
+            with_outbox(&mut self.queue, &mut self.deck, |queue, out| {
+                Player::settle(queue, TrackReceipt::Loaded(receipt), out)
+            });
+            hang_reset!();
+        }
+    }
+
+    #[kithara::hang_watchdog]
     fn pending_parts(&mut self) -> Vec<DeckPart> {
         self.deck.ring.publish().expect("publish pending commands");
         self.deck.inbox.drain();
@@ -624,11 +656,17 @@ async fn select_item_on_armed_index_promotes_armed_slot() {
     assert_eq!(rig.armed(), None);
     assert_eq!(rig.slot(1), armed);
     assert_eq!(rig.source(1), source);
-    rig.deck.opens.drain();
-    assert!(
-        rig.deck.opens.next_due((), 1).is_none(),
-        "promotion reuses the opened lane"
-    );
+    rig.assert_no_pending_load();
+}
+
+#[kithara::test(tokio)]
+#[should_panic(expected = "promotion reuses the opened lane")]
+async fn the_promotion_reuse_check_rejects_an_additional_load() {
+    let mut rig = HandoverRig::playing().await;
+    rig.arm(1).await;
+    rig.select(2, Transition::None)
+        .expect("another selection loads");
+    rig.assert_no_pending_load();
 }
 
 #[kithara::test(tokio)]

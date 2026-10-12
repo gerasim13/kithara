@@ -14,7 +14,7 @@ use kithara_test_fixtures::integration_fixtures::{constant_half, constant_quarte
 use kithara_test_utils::kithara;
 use kithara_warp::RenderContext;
 
-use super::{TestEnds, TestMixer, mixer_with_shape, send as send_batch};
+use super::{TestEnds, TestMixer, frame_at, mixer_with_shape, send as send_batch};
 use crate::{
     CrossfadeSettings,
     bridge::{DeckMixSettingsChange, DeckPart, DeckProtocol, Fade, FadeDir, Returned, Slot},
@@ -105,8 +105,8 @@ fn load(control: &mut ClickControl, src: &str, input: &'static [u8]) -> Slot {
     slot
 }
 
-fn push(control: &mut ClickControl, part: DeckPart) {
-    send_batch(&mut control.ends, When::Next, vec![part]);
+fn push(control: &mut ClickControl, part: DeckPart) -> Seq {
+    send_batch(&mut control.ends, When::Next, vec![part])
 }
 
 fn send_at(control: &mut ClickControl, at: SessionFrame, part: DeckPart) -> Seq {
@@ -174,10 +174,15 @@ fn block(processor: &mut TestMixer) -> (Vec<f32>, bool) {
     block_from(processor, SessionFrame::default())
 }
 
-fn pump(processor: &mut TestMixer, blocks: usize) -> Vec<f32> {
+fn pump(processor: &mut TestMixer, blocks: usize, start: Option<SessionFrame>) -> Vec<f32> {
     let mut rendered = Vec::with_capacity(blocks * BLOCK_FRAMES);
-    for _ in 0..blocks {
-        let (out_l, _) = block(processor);
+    for index in 0..blocks {
+        let (out_l, _) = if let Some(start) = start {
+            let offset = i64::try_from(index * BLOCK_FRAMES).expect("fixture clock range");
+            block_from(processor, SessionFrame::new(i64::from(start) + offset))
+        } else {
+            block(processor)
+        };
         rendered.extend_from_slice(&out_l);
     }
     rendered
@@ -213,21 +218,29 @@ fn pausing_fades_the_output_out(constant_half: &'static [u8]) {
     block(&mut processor);
     start(&mut processor, item_id);
 
-    let playing = pump(&mut processor, WARMUP_BLOCKS);
+    let playing = pump(&mut processor, WARMUP_BLOCKS, Some(frame_at(BLOCK_FRAMES)));
     assert!(
         (last(&playing) - TEST_PCM_DEFAULT_VALUE).abs() < EXACT,
         "the track plays at full level before the pause ({})",
         last(&playing)
     );
 
-    push(
+    let stop = push(
         &mut control,
         DeckPart::Stop {
             slot: item_id,
             fade: Fade::Declick,
         },
     );
-    let paused = pump(&mut processor, SETTLE_BLOCKS);
+    let pause_at = frame_at((WARMUP_BLOCKS + 1) * BLOCK_FRAMES);
+    let paused = pump(&mut processor, SETTLE_BLOCKS, Some(pause_at));
+    let answer = answer(&mut control, stop);
+    assert!(
+        matches!(answer.outcome(), Outcome::Applied { at, .. } if *at == pause_at)
+            && answer.batch().commands.iter().any(|part| matches!(part,
+                DeckPart::Returned(Returned::Stopped { slot, resume: Some(_) }) if *slot == item_id)),
+        "Stop completes before a later transport command can interrupt it"
+    );
 
     let step = max_step(&across(&playing, &paused));
     assert!(
@@ -240,7 +253,8 @@ fn pausing_fades_the_output_out(constant_half: &'static [u8]) {
             .all(|sample| *sample == 0.0),
         "a paused player still reaches silence"
     );
-    let (_, still_reading) = block(&mut processor);
+    let end = frame_at((WARMUP_BLOCKS + 1 + SETTLE_BLOCKS) * BLOCK_FRAMES);
+    let (_, still_reading) = block_from(&mut processor, end);
     assert!(
         !still_reading,
         "once the fade has run out the pause stops reading the tracks"
@@ -260,16 +274,24 @@ fn resuming_fades_the_output_in(constant_half: &'static [u8]) {
     );
     block(&mut processor);
     start(&mut processor, item_id);
-    pump(&mut processor, WARMUP_BLOCKS);
+    pump(&mut processor, WARMUP_BLOCKS, Some(frame_at(BLOCK_FRAMES)));
 
-    push(
+    let stop = push(
         &mut control,
         DeckPart::Stop {
             slot: item_id,
             fade: Fade::Declick,
         },
     );
-    let paused = pump(&mut processor, SETTLE_BLOCKS);
+    let pause_at = frame_at((WARMUP_BLOCKS + 1) * BLOCK_FRAMES);
+    let paused = pump(&mut processor, SETTLE_BLOCKS, Some(pause_at));
+    let answer = answer(&mut control, stop);
+    assert!(
+        matches!(answer.outcome(), Outcome::Applied { at, .. } if *at == pause_at)
+            && answer.batch().commands.iter().any(|part| matches!(part,
+                DeckPart::Returned(Returned::Stopped { slot, resume: Some(_) }) if *slot == item_id)),
+        "Stop completes before Start resumes the slot"
+    );
     assert!(last(&paused) == 0.0, "the pause settled at silence");
 
     push(
@@ -279,7 +301,8 @@ fn resuming_fades_the_output_in(constant_half: &'static [u8]) {
             fade: Fade::Declick,
         },
     );
-    let resumed = pump(&mut processor, SETTLE_BLOCKS);
+    let resume_at = frame_at((WARMUP_BLOCKS + 1 + SETTLE_BLOCKS) * BLOCK_FRAMES);
+    let resumed = pump(&mut processor, SETTLE_BLOCKS, Some(resume_at));
 
     let step = max_step(&across(&paused, &resumed));
     assert!(
@@ -299,7 +322,9 @@ fn a_start_inside_a_block_sounds_from_its_frame(constant_half: &'static [u8]) {
     let item_id = load(&mut control, "a.mp3", constant_half);
     block(&mut processor);
     assert!(
-        pump(&mut processor, 2).iter().all(|sample| *sample == 0.0),
+        pump(&mut processor, 2, None)
+            .iter()
+            .all(|sample| *sample == 0.0),
         "a stopped deck stays silent"
     );
 
@@ -367,7 +392,7 @@ fn stopping_one_track_inside_a_block_holds_it_from_its_frame(
             fade: Fade::Declick,
         },
     );
-    let both = pump(&mut processor, WARMUP_BLOCKS);
+    let both = pump(&mut processor, WARMUP_BLOCKS, Some(SessionFrame::new(0)));
     let mixed = TEST_PCM_DEFAULT_VALUE + SECOND_LEVEL;
     assert!(
         (last(&both) - mixed).abs() < EXACT,
@@ -376,7 +401,7 @@ fn stopping_one_track_inside_a_block_holds_it_from_its_frame(
     );
     let before = position(&processor, first);
 
-    let origin = i64::try_from(BLOCK_FRAMES).expect("a block fits the clock");
+    let origin = i64::try_from(WARMUP_BLOCKS * BLOCK_FRAMES).expect("warmup fits the clock");
     let offset = BLOCK_FRAMES / 2;
     let at = SessionFrame::new(origin + i64::try_from(offset).expect("an offset fits the clock"));
     let seq = send_at(
@@ -399,7 +424,8 @@ fn stopping_one_track_inside_a_block_holds_it_from_its_frame(
         stopping[offset] < mixed,
         "the stopped track's share falls from the frame the stop applies on"
     );
-    let stopped = pump(&mut processor, SETTLE_BLOCKS);
+    let stopped_at = frame_at((WARMUP_BLOCKS + 1) * BLOCK_FRAMES);
+    let stopped = pump(&mut processor, SETTLE_BLOCKS, Some(stopped_at));
     let answer = answer(&mut control, seq);
     let declick = DeckMixerConfig::default()
         .declick_frames(spec().sample_rate)
@@ -409,7 +435,7 @@ fn stopping_one_track_inside_a_block_holds_it_from_its_frame(
         matches!(answer.outcome(), Outcome::Applied { at: applied, data: () } if *applied == at)
             && answer.batch().commands.iter().any(|part| matches!(part,
                 DeckPart::Returned(Returned::Stopped { slot, resume })
-                if *slot == first && (resume.position.as_secs_f64() - expected).abs() < SAME_POSITION)),
+                if *slot == first && resume.is_some_and(|resume| (resume.position.as_secs_f64() - expected).abs() < SAME_POSITION))),
         "the stop is applied at its frame and reports where the fade stopped reading \
          ({expected}): {:?}",
         answer.outcome()
@@ -431,7 +457,8 @@ fn stopping_one_track_inside_a_block_holds_it_from_its_frame(
         last(&stopped)
     );
     let held = position(&processor, first);
-    pump(&mut processor, SETTLE_BLOCKS);
+    let holding_at = frame_at((WARMUP_BLOCKS + 1 + SETTLE_BLOCKS) * BLOCK_FRAMES);
+    pump(&mut processor, SETTLE_BLOCKS, Some(holding_at));
     assert!(
         (position(&processor, first) - held).abs() < SAME_POSITION,
         "a stopped track is not read once its ramp has run out"
@@ -444,7 +471,8 @@ fn stopping_one_track_inside_a_block_holds_it_from_its_frame(
             fade: Fade::Declick,
         },
     );
-    let resumed = pump(&mut processor, SETTLE_BLOCKS);
+    let resume_at = frame_at((WARMUP_BLOCKS + 1 + 2 * SETTLE_BLOCKS) * BLOCK_FRAMES);
+    let resumed = pump(&mut processor, SETTLE_BLOCKS, Some(resume_at));
     let step = max_step(&across(&stopped, &resumed));
     assert!(
         step <= MAX_STEP,
@@ -488,7 +516,7 @@ fn a_volume_change_inside_a_block_moves_the_gain_from_its_frame(constant_half: &
     );
     block(&mut processor);
     start(&mut processor, item_id);
-    let unity = pump(&mut processor, WARMUP_BLOCKS);
+    let unity = pump(&mut processor, WARMUP_BLOCKS, None);
     assert!(
         (last(&unity) - TEST_PCM_DEFAULT_VALUE).abs() < EXACT,
         "the deck plays at unity before its volume changes ({})",
@@ -517,7 +545,7 @@ fn a_volume_change_inside_a_block_moves_the_gain_from_its_frame(constant_half: &
         "the change is applied at its frame"
     );
 
-    let settled = pump(&mut processor, SETTLE_BLOCKS);
+    let settled = pump(&mut processor, SETTLE_BLOCKS, None);
     let step = max_step(&across(&unity, &[changed, settled.clone()].concat()));
     assert!(
         step <= MAX_STEP,
@@ -543,9 +571,9 @@ fn a_level_change_inside_a_block_scales_the_volume_from_its_frame(constant_half:
     );
     block(&mut processor);
     start(&mut processor, item_id);
-    pump(&mut processor, WARMUP_BLOCKS);
+    pump(&mut processor, WARMUP_BLOCKS, None);
     push(&mut control, half_volume());
-    let half = pump(&mut processor, SETTLE_BLOCKS);
+    let half = pump(&mut processor, SETTLE_BLOCKS, None);
     let quarter = TEST_PCM_DEFAULT_VALUE * HALF_FADER_GAIN;
     assert!(
         (last(&half) - quarter).abs() < EXACT,
@@ -575,7 +603,7 @@ fn a_level_change_inside_a_block_scales_the_volume_from_its_frame(constant_half:
         "the level is applied at its frame"
     );
 
-    let settled = pump(&mut processor, SETTLE_BLOCKS);
+    let settled = pump(&mut processor, SETTLE_BLOCKS, None);
     let step = max_step(&across(&half, &[changed, settled.clone()].concat()));
     assert!(
         step <= MAX_STEP,
@@ -601,10 +629,10 @@ fn a_muted_deck_is_silent_at_any_volume_and_unmutes_to_it(constant_half: &'stati
     );
     block(&mut processor);
     start(&mut processor, item_id);
-    let unity = pump(&mut processor, WARMUP_BLOCKS);
+    let unity = pump(&mut processor, WARMUP_BLOCKS, None);
 
     push(&mut control, mix(DeckMixSettingsChange::Muted(true)));
-    let muted = pump(&mut processor, SETTLE_BLOCKS);
+    let muted = pump(&mut processor, SETTLE_BLOCKS, None);
     let step = max_step(&across(&unity, &muted));
     assert!(
         step <= MAX_STEP,
@@ -614,14 +642,14 @@ fn a_muted_deck_is_silent_at_any_volume_and_unmutes_to_it(constant_half: &'stati
 
     push(&mut control, half_volume());
     assert!(
-        pump(&mut processor, SETTLE_BLOCKS)
+        pump(&mut processor, SETTLE_BLOCKS, None)
             .iter()
             .all(|sample| *sample == 0.0),
         "a volume change leaves a muted deck silent"
     );
 
     push(&mut control, mix(DeckMixSettingsChange::Muted(false)));
-    let unmuted = pump(&mut processor, SETTLE_BLOCKS);
+    let unmuted = pump(&mut processor, SETTLE_BLOCKS, None);
     assert!(
         (last(&unmuted) - TEST_PCM_DEFAULT_VALUE * HALF_FADER_GAIN).abs() < EXACT,
         "unmuting brings the deck back at the volume it was given while muted ({})",
@@ -647,7 +675,7 @@ fn fading_in(constant_half: &'static [u8]) -> (TestMixer, ClickControl, Vec<f32>
         },
     );
 
-    let fading = pump(&mut processor, WARMUP_BLOCKS);
+    let fading = pump(&mut processor, WARMUP_BLOCKS, None);
     let level = last(&fading);
     assert!(
         level > 0.0 && level < TEST_PCM_DEFAULT_VALUE * 0.9,
@@ -669,7 +697,7 @@ fn reversing_a_fade_in_continues_from_the_gain_it_reached(constant_half: &'stati
             dir: FadeDir::Out,
         },
     );
-    let reversed = pump(&mut processor, SETTLE_BLOCKS * 3);
+    let reversed = pump(&mut processor, SETTLE_BLOCKS * 3, None);
 
     let step = max_step(&across(&fading, &reversed));
     assert!(
@@ -686,7 +714,7 @@ fn reversing_a_fade_in_continues_from_the_gain_it_reached(constant_half: &'stati
 #[kithara::test]
 fn reversing_a_fade_out_continues_from_the_gain_it_reached(constant_half: &'static [u8]) {
     let (mut processor, mut control, _, item_id) = fading_in(constant_half);
-    pump(&mut processor, SETTLE_BLOCKS * 20);
+    pump(&mut processor, SETTLE_BLOCKS * 20, None);
 
     push(
         &mut control,
@@ -696,7 +724,7 @@ fn reversing_a_fade_out_continues_from_the_gain_it_reached(constant_half: &'stat
             dir: FadeDir::Out,
         },
     );
-    let fading_out = pump(&mut processor, WARMUP_BLOCKS);
+    let fading_out = pump(&mut processor, WARMUP_BLOCKS, None);
     let level = last(&fading_out);
     assert!(
         level > TEST_PCM_DEFAULT_VALUE * 0.1 && level < TEST_PCM_DEFAULT_VALUE,
@@ -711,7 +739,7 @@ fn reversing_a_fade_out_continues_from_the_gain_it_reached(constant_half: &'stat
             fade: Fade::Crossfade(crossfade(FADE_SECONDS)),
         },
     );
-    let reversed = pump(&mut processor, SETTLE_BLOCKS * 3);
+    let reversed = pump(&mut processor, SETTLE_BLOCKS * 3, None);
 
     let step = max_step(&across(&fading_out, &reversed));
     assert!(
@@ -750,7 +778,7 @@ fn seeking_a_fading_track_does_not_snap_the_mix(constant_half: &'static [u8]) {
             segment,
         },
     );
-    let sought = pump(&mut processor, WARMUP_BLOCKS);
+    let sought = pump(&mut processor, WARMUP_BLOCKS, None);
 
     let step = max_step(&across(&fading, &sought));
     assert!(
@@ -765,7 +793,7 @@ fn each_fade_runs_under_its_own_settings(
     constant_quarter: &'static [u8],
 ) {
     let (mut processor, mut control, _, first) = fading_in(constant_half);
-    let settled = pump(&mut processor, SETTLE_BLOCKS * 20);
+    let settled = pump(&mut processor, SETTLE_BLOCKS * 20, None);
     assert!(
         (last(&settled) - TEST_PCM_DEFAULT_VALUE).abs() < EXACT,
         "the first fade has settled under its own duration ({})",
@@ -788,7 +816,7 @@ fn each_fade_runs_under_its_own_settings(
             fade: Fade::Crossfade(crossfade(FADE_SECONDS / 10.0)),
         },
     );
-    let handed_over = pump(&mut processor, SETTLE_BLOCKS * 3);
+    let handed_over = pump(&mut processor, SETTLE_BLOCKS * 3, None);
     assert!(
         (last(&handed_over) - SECOND_LEVEL).abs() < EXACT,
         "the next fade runs under its own duration: a tenth of the first settles within three \
@@ -814,7 +842,7 @@ fn a_track_started_without_a_crossfade_is_instant(
     block(&mut processor);
     start(&mut processor, first_id);
 
-    let playing = pump(&mut processor, WARMUP_BLOCKS);
+    let playing = pump(&mut processor, WARMUP_BLOCKS, None);
     assert!(
         (last(&playing) - TEST_PCM_DEFAULT_VALUE).abs() < EXACT,
         "the first track plays at full level ({})",
@@ -824,7 +852,7 @@ fn a_track_started_without_a_crossfade_is_instant(
     let second_id = load(&mut control, "b.mp3", constant_quarter);
     block(&mut processor);
     start(&mut processor, second_id);
-    let handover = pump(&mut processor, 1);
+    let handover = pump(&mut processor, 1, None);
 
     assert!(
         (handover[0] - (TEST_PCM_DEFAULT_VALUE + SECOND_LEVEL)).abs() < EXACT,

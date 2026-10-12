@@ -8,6 +8,8 @@ mod state;
 mod terminal_tests;
 mod underrun_tests;
 
+pub(super) use core::stop_seq;
+
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{SegmentId, SessionFrame};
 

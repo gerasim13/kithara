@@ -160,7 +160,6 @@ impl Deck {
                 due.commands_mut().push(returned);
             }
             due.apply(());
-            self.finish_stops(level);
             self.resolve_armed(level, start, at);
         }
     }

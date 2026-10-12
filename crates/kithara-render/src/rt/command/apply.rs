@@ -1,4 +1,4 @@
-use kithara_command::{Due, LevelInbox, Seq, Target};
+use kithara_command::{Due, Seq, Target};
 use kithara_config::LiveConfig;
 use kithara_events::TrackId;
 use kithara_signal::{SegmentId, SessionFrame};
@@ -10,7 +10,7 @@ use super::{
     },
     state::*,
 };
-use crate::bridge::{DeckEqChange, DeckPart, DeckProtocol, Fade, FadeDir, Returned, Slot};
+use crate::bridge::{DeckEqChange, DeckPart, DeckProtocol, Fade, Returned, Slot};
 
 impl Deck {
     pub(in crate::rt) fn apply(
@@ -20,17 +20,6 @@ impl Deck {
         seq: Seq,
         context_valid: bool,
     ) -> Option<DeckPart> {
-        let part = match part {
-            DeckPart::Fade {
-                slot,
-                settings,
-                dir: FadeDir::Out,
-            } => DeckPart::Stop {
-                slot,
-                fade: Fade::Crossfade(settings),
-            },
-            part => part,
-        };
         if let Some(slot) = shifted_slot(&part) {
             self.ended[slot.index()] = false;
         }
@@ -67,12 +56,10 @@ impl Deck {
             }
             DeckPart::Stop { slot, fade } => {
                 let track = self.tracks.at_mut(slot)?;
-                track.stop(fade, at);
-                if let Some(resume) = track.stop_resume() {
-                    track.clear_stop();
+                track.stop(seq, fade, at);
+                if let Some((_, resume)) = track.take_stop() {
                     Some(DeckPart::Returned(Returned::Stopped { slot, resume }))
                 } else {
-                    self.stops[slot.index()] = Some(seq);
                     Some(DeckPart::Stop { slot, fade })
                 }
             }
@@ -180,67 +167,20 @@ impl Deck {
         slot: Slot,
         remaining: usize,
     ) {
-        let Some(seq) = self.stops[slot.index()].take() else {
+        let Some(track) = self.tracks.at_mut(slot) else {
             return;
         };
-        let resume = self
-            .tracks
-            .at_mut(slot)
-            .and_then(|track| track.interrupt_stop(due.at()));
-        let Some(resume) = resume else { return };
+        track.interrupt_stop(due.at());
+        let Some((seq, resume)) = track.take_stop() else {
+            return;
+        };
         if seq == due.seq() {
-            replace_stop(&mut due.commands_mut()[remaining..], slot, resume);
-        } else {
-            self.interrupted[slot.index()] = Some((seq, resume));
-        }
-    }
-
-    pub(in crate::rt) fn finish_stops(&mut self, level: &mut LevelInbox<'_, DeckProtocol>) {
-        for (index, interrupted) in self.interrupted.iter_mut().enumerate() {
-            let Some((seq, resume)) = interrupted.take() else {
-                continue;
-            };
-            let slot = Slot::new(u16::try_from(index).unwrap_or(u16::MAX));
-            if let Some(commands) = level.committed_mut(seq) {
-                replace_stop(commands, slot, resume);
-                if stops_complete(commands) {
-                    level.complete(seq, ());
-                }
-            }
-        }
-        for index in 0..self.stops.len() {
-            let Some(seq) = self.stops[index] else {
-                continue;
-            };
-            let Some(commands) = level.committed_mut(seq) else {
-                self.clear_stops(seq);
-                continue;
-            };
-            let slot = Slot::new(u16::try_from(index).unwrap_or(u16::MAX));
-            let Some(resume) = self.tracks.at(slot).and_then(PlayerTrack::stop_resume) else {
-                continue;
-            };
-            replace_stop(commands, slot, resume);
-            self.stops[index] = None;
-            if let Some(track) = self.tracks.at_mut(slot) {
-                track.clear_stop();
-            }
-            if stops_complete(commands) {
-                level.complete(seq, ());
-            }
-        }
-    }
-
-    pub(in crate::rt) fn clear_stops(&mut self, seq: Seq) {
-        for (index, pending) in self.stops.iter_mut().enumerate() {
-            if *pending != Some(seq) {
-                continue;
-            }
-            *pending = None;
-            let slot = Slot::new(u16::try_from(index).unwrap_or(u16::MAX));
-            if let Some(track) = self.tracks.at_mut(slot) {
-                track.clear_stop();
-            }
+            answer_stop(&mut due.commands_mut()[remaining..], slot, resume);
+        } else if due
+            .committed_mut(seq)
+            .is_some_and(|commands| answer_stop(commands, slot, resume))
+        {
+            due.complete(seq, ());
         }
     }
 }

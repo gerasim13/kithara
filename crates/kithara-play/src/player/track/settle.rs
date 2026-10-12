@@ -197,8 +197,8 @@ impl<S> PlayerImpl<S> {
                 DeckPart::Returned(Returned::Stopped { slot, resume })
                     if Some(*slot) == self.slot =>
                 {
-                    self.position = resume.position;
-                    self.resume = Some(*resume);
+                    self.position = resume.map_or(self.position, |mark| mark.position);
+                    self.resume = *resume;
                     self.status = TrackStatus::Paused { at: self.position };
                 }
                 DeckPart::Returned(Returned::Pcm { slot, .. })

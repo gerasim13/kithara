@@ -119,7 +119,7 @@ async fn notification_clone() {
         let (outcome, mut batch) = receipt.into();
         stopped |= batch.commands.iter().any(|part| {
             matches!(part, DeckPart::Returned(Returned::Stopped { slot: stopped_slot, resume })
-                if *stopped_slot == slot && resume.position == Duration::ZERO)
+                if *stopped_slot == slot && resume.is_some_and(|resume| resume.position == Duration::ZERO))
         });
         with_outbox(&mut queue, &mut rig, |queue, out| {
             Player::settle(

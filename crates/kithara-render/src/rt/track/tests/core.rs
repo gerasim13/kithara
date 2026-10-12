@@ -6,6 +6,22 @@ pub(super) use kithara_test_utils::kithara;
 use super::*;
 pub(super) use crate::worker::packet_tests::chunk;
 
+pub(in super::super) fn stop_seq() -> kithara_command::Seq {
+    use kithara_command::{Batch, ChannelConfig, When, channel};
+
+    let (mut sender, _inbox) =
+        channel::<crate::bridge::DeckProtocol>(ChannelConfig::builder().build());
+    sender
+        .send(
+            When::Next,
+            Batch {
+                basis: Vec::new(),
+                commands: Vec::new(),
+            },
+        )
+        .expect("fixture Stop sequence")
+}
+
 #[kithara::test]
 #[case::samples(false)]
 #[case::mark(true)]

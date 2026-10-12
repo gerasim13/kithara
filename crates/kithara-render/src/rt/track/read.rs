@@ -64,8 +64,9 @@ impl PlayerTrack {
             ReadOutcome::Full { .. } | ReadOutcome::Partial { .. } => return false,
         };
         self.gap = 0;
-        if self.stop_at.is_some() {
-            self.stop_resume = self.resource.mark(sink.at(offset));
+        if self.stopping() {
+            self.finish_stop(sink.at(offset));
+            self.fade.stop();
         }
         self.state = SlotState::Ended;
         self.shut();
@@ -139,22 +140,13 @@ impl PlayerTrack {
             }
             let written = range.start..range.start.saturating_add(frames);
             self.gate.apply(scratch, written.clone());
-            self.fade.mix_range(scratch, bus, written, frames);
-            if self.fade.settled() && self.fade.gain() == 0.0 {
-                let at = sink.at(range.start.saturating_add(frames));
-                self.settle_stop();
-                self.gap = 0;
-                sink.report(DeckEvent::Faded {
-                    slot: sink.slot,
-                    at,
-                });
-            }
+            self.fade.mix_range(scratch, bus, written);
         }
         if frames < limit && self.state == SlotState::Playing {
-            if self.gap == 0 && self.stop_at.is_none() {
+            if self.gap == 0 && !self.stopping() {
                 sink.metrics.record_underrun();
             }
-            if self.stop_at.is_none() {
+            if !self.stopping() {
                 self.gap = self
                     .gap
                     .saturating_add(u32::try_from(limit - frames).unwrap_or(u32::MAX));

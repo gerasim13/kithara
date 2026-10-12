@@ -284,7 +284,7 @@ pub(super) fn assert_stopped_once(
         .collect::<Vec<_>>();
     assert_eq!(
         marks,
-        [crate::bridge::SlotMark {
+        [Some(crate::bridge::SlotMark {
             session: frame_at(interrupt_at),
             lane: crate::LaneFrame {
                 segment: SegmentId::FIRST,
@@ -293,7 +293,7 @@ pub(super) fn assert_stopped_once(
             position: AudioSpec::new(2, shape().sample_rate)
                 .duration_for(interrupt_at as u64)
                 .expect("position"),
-        }]
+        })]
     );
 }
 

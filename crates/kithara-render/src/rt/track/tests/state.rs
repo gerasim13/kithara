@@ -4,6 +4,7 @@ use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioSpec, SegmentId, SessionFrame};
 use kithara_test_utils::kithara;
 
+use super::stop_seq;
 use crate::{
     CrossfadeSettings,
     bridge::{Fade, SlotMark, SlotState},
@@ -48,11 +49,12 @@ fn track_state_is_playing() {
     track.start(fade);
     assert_eq!(track.state(), SlotState::Playing);
     assert!(ring.playing(), "fading in is audible");
-    track.stop(fade, SessionFrame::new(0));
+    track.stop(stop_seq(), fade, SessionFrame::new(0));
     assert_eq!(track.state(), SlotState::Playing);
     assert!(ring.playing(), "fading out is audible");
 
     track.stop(
+        stop_seq(),
         Fade::Crossfade(CrossfadeSettings {
             duration: 0.0,
             ..Default::default()
@@ -91,17 +93,21 @@ fn seek_targets_reject_unrepresentable_durations() {
         &[1.0; 2],
     ))));
     track.recycle_obsolete(&mut 1);
-    track.stop(Fade::Declick, SessionFrame::new(0));
+    let seq = stop_seq();
+    track.stop(seq, Fade::Declick, SessionFrame::new(0));
     assert_eq!(
-        track.stop_resume(),
-        Some(SlotMark {
-            session: SessionFrame::new(0),
-            lane: crate::LaneFrame {
-                segment: SegmentId::FIRST,
-                frame: 0
-            },
-            position: Duration::ZERO,
-        })
+        track.take_stop(),
+        Some((
+            seq,
+            Some(SlotMark {
+                session: SessionFrame::new(0),
+                lane: crate::LaneFrame {
+                    segment: SegmentId::FIRST,
+                    frame: 0
+                },
+                position: Duration::ZERO,
+            })
+        ))
     );
 }
 

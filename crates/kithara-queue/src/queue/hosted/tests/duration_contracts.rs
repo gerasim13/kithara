@@ -112,20 +112,42 @@ impl DurationRig {
             transition: Transition::Crossfade,
         });
         self.apply(QueueCommand::Play { at: When::Next });
+        let wanted = self
+            .queue
+            .active
+            .iter()
+            .find(|active| active.item == id)
+            .and_then(|active| active.load)
+            .expect("the selected fixture is loading")
+            .seq();
         self.loads.opens.drain();
-        let (request, seq) = {
+        let (request, seq) = loop {
+            hang_tick!();
             let mut due = self
                 .loads
                 .opens
                 .next_due((), 1)
                 .expect("pending queue load");
-            let DispatcherCommand::Load(request) =
-                due.commands_mut().pop().expect("queue load request")
-            else {
-                panic!("queue dispatcher batch must load");
-            };
+            let seq = due.seq();
+            let command = due.commands_mut().pop().expect("queue dispatcher command");
             assert!(due.commands_mut().is_empty());
-            (request, due.defer())
+            match command {
+                DispatcherCommand::Load(request) => {
+                    assert_eq!(seq, wanted, "the fixture opens its selected load");
+                    break (request, due.defer());
+                }
+                DispatcherCommand::SetPriority(_, _) => due.apply(Dispatched::Prioritized),
+                DispatcherCommand::Release(_) => due.apply(Dispatched::Released),
+            }
+            let receipt = self
+                .loads
+                .dispatcher
+                .receipts()
+                .next()
+                .expect("dispatcher maintenance receipt");
+            assert_eq!(receipt.seq(), seq);
+            self.in_pass(|queue, out| Player::settle(queue, TrackReceipt::Loaded(receipt), out));
+            hang_reset!();
         };
         let loaded = {
             let mut opening = std::pin::pin!(self.loads.load_request_fixture(*request));

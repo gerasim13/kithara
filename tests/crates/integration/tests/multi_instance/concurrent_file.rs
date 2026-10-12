@@ -69,6 +69,8 @@ async fn run_concurrent_file(n: usize, source: (TestServerHelper, Url)) {
         let audio = create_file_audio(url.clone(), temp.path()).await;
         temps.push(temp);
         handles.push(spawn_blocking(move || {
+            #[cfg(not(target_arch = "wasm32"))]
+            let audio = kithara_integration_tests::mock::with_blocking_reads(audio);
             let mut audio = audio;
             let total = read_for_concurrency_check(&mut audio, ReadLimit::wasm_default());
             info!(instance = i, total_samples = total, "instance finished");

@@ -750,11 +750,11 @@ async fn a_pause_over_a_scheduled_entry_settles_current_paused(#[case] reverse: 
             };
             *part = DeckPart::Returned(Returned::Stopped {
                 slot,
-                resume: SlotMark {
+                resume: Some(SlotMark {
                     session: SessionFrame::new(0),
                     lane: LaneFrame::default(),
                     position: Duration::ZERO,
-                },
+                }),
             });
         }
         stop.apply(());

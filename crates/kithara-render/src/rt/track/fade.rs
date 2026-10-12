@@ -22,7 +22,7 @@ pub(super) struct TrackFade {
     frames: u64,
     /// Gain the current fade started from.
     from: f32,
-    /// Gain applied to the last mixed frame.
+    /// Gain at the last session frame.
     gain: f32,
 }
 
@@ -63,11 +63,10 @@ impl TrackFade {
     }
 
     pub(super) fn mix_range(
-        &mut self,
+        &self,
         scratch_bufs: &mut [&mut [f32]],
         mix_bufs: &mut [&mut [f32]],
         range: Range<usize>,
-        _frames: usize,
     ) {
         const MIN_STEREO_CHANNELS: usize = 2;
         if scratch_bufs.len() < MIN_STEREO_CHANNELS || mix_bufs.len() < MIN_STEREO_CHANNELS {
@@ -78,29 +77,16 @@ impl TrackFade {
         let output_r = &mut output_r_slice[0][range.clone()];
         let input_l = &scratch_bufs[0][range.clone()];
         let input_r = &scratch_bufs[1][range];
-        for ((out_l, out_r), (in_l, in_r)) in output_l
+        for (index, ((out_l, out_r), (in_l, in_r))) in output_l
             .iter_mut()
             .zip(output_r.iter_mut())
             .zip(input_l.iter().zip(input_r))
+            .enumerate()
         {
-            let progress = if self.frames <= 1 {
-                1.0
-            } else if matches!(self.direction, Direction::DeclickOut) {
-                let frame = cast::<u64, f32>(self.frame.saturating_add(1)).unwrap_or(f32::MAX);
-                let frames = cast::<u64, f32>(self.frames).unwrap_or(f32::MAX);
-                (frame / frames).min(1.0)
-            } else {
-                let frame = cast::<u64, f32>(self.frame).unwrap_or(f32::MAX);
-                let frames = cast::<u64, f32>(self.frames - 1).unwrap_or(f32::MAX);
-                (frame / frames).min(1.0)
-            };
-            let (out, into) = self.settings.gains(progress);
-            let gain = match self.direction {
-                Direction::In => (1.0 - self.from).mul_add(into, self.from),
-                Direction::Out => self.from * out,
-                Direction::DeclickOut => self.from * (1.0 - progress),
-            };
-            self.gain = gain;
+            let frame = self
+                .frame
+                .saturating_add(u64::try_from(index).unwrap_or(u64::MAX));
+            let gain = self.gain_at(frame);
             if gain == 1.0 {
                 *out_l += in_l;
                 *out_r += in_r;
@@ -108,9 +94,37 @@ impl TrackFade {
                 *out_l = in_l.mul_add(gain, *out_l);
                 *out_r = in_r.mul_add(gain, *out_r);
             }
-            self.frame = self.frame.saturating_add(1);
         }
+    }
+
+    pub(super) fn advance(&mut self, frames: usize) {
+        if frames == 0 {
+            return;
+        }
+        let frames = u64::try_from(frames).unwrap_or(u64::MAX);
+        self.gain = self.gain_at(self.frame.saturating_add(frames - 1));
+        self.frame = self.frame.saturating_add(frames);
         self.settled = self.frame >= self.frames;
+    }
+
+    fn gain_at(&self, frame: u64) -> f32 {
+        let progress = if self.frames <= 1 {
+            1.0
+        } else if matches!(self.direction, Direction::DeclickOut) {
+            let frame = cast::<u64, f32>(frame.saturating_add(1)).unwrap_or(f32::MAX);
+            let frames = cast::<u64, f32>(self.frames).unwrap_or(f32::MAX);
+            (frame / frames).min(1.0)
+        } else {
+            let frame = cast::<u64, f32>(frame).unwrap_or(f32::MAX);
+            let frames = cast::<u64, f32>(self.frames - 1).unwrap_or(f32::MAX);
+            (frame / frames).min(1.0)
+        };
+        let (out, into) = self.settings.gains(progress);
+        match self.direction {
+            Direction::In => (1.0 - self.from).mul_add(into, self.from),
+            Direction::Out => self.from * out,
+            Direction::DeclickOut => self.from * (1.0 - progress),
+        }
     }
 
     pub(super) fn play(&mut self, _sample_rate: NonZeroU32) {
@@ -122,7 +136,7 @@ impl TrackFade {
         self.gain = 1.0;
     }
 
-    /// Starts a fade from the gain the last mixed frame had, so a fade that
+    /// Starts a fade from the current session gain, so a fade that
     /// reverses another one continues from where it was instead of stepping.
     fn start(
         &mut self,
@@ -135,13 +149,13 @@ impl TrackFade {
         self.from = self.gain;
         self.frame = 0;
         self.frames = Self::frames(settings.duration, sample_rate);
-        self.settled = self.frames == 0;
+        self.settled = self.frames == 0 && matches!(direction, Direction::In);
     }
 
     delegate::delegate! {
         to self {
             #[expr(self.gain)]
-            /// Gain the envelope applied to the last mixed frame.
+            /// Gain at the last session frame.
             pub(super) const fn gain(&self) -> f32;
         }
     }
@@ -156,7 +170,7 @@ impl TrackFade {
         self.frames.saturating_sub(self.frame)
     }
 
-    pub(super) fn stop(&mut self, _sample_rate: NonZeroU32) {
+    pub(super) fn stop(&mut self) {
         self.direction = Direction::Out;
         self.frame = 1;
         self.frames = 0;

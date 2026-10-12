@@ -219,7 +219,10 @@ impl<S> Player<S> for PlayerImpl<S> {
                     DeckEvent::Ended { slot, at } if Some(slot) == self.slot && !self.repeat => {
                         self.status = TrackStatus::Ended { at }
                     }
-                    DeckEvent::Faded { slot, at } if Some(slot) == self.slot => {
+                    DeckEvent::Faded { slot, at }
+                        if Some(slot) == self.slot
+                            && !matches!(self.status, TrackStatus::Ended { .. }) =>
+                    {
                         self.status = TrackStatus::Faded { at }
                     }
                     DeckEvent::Underrun { slot, .. }

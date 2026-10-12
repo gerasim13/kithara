@@ -1,15 +1,22 @@
 use std::{
     collections::VecDeque,
     fmt::{self, Write as _},
+    hash::{BuildHasher as _, BuildHasherDefault, DefaultHasher, Hash as _, Hasher as _},
     sync::{Mutex, MutexGuard, PoisonError},
 };
 
 use tracing::{
     Event, Level, Metadata, Subscriber,
     field::{Field, Visit},
+    span::{Attributes, Id, Record},
 };
 use tracing_subscriber::{
+    field::RecordFields,
     filter::filter_fn,
+    fmt::{
+        FormattedFields,
+        format::{DefaultFields, FormatFields, Writer},
+    },
     layer::{Context, Layer},
     registry::LookupSpan,
 };
@@ -46,8 +53,8 @@ static PROBES: Mutex<VecDeque<Entry>> = Mutex::new(VecDeque::new());
 
 /// One recorded line and how many times it repeated inside the window.
 struct Entry {
-    /// `line` without [`FOLD_COUNTERS`] — what a repeat is matched on.
-    key: String,
+    /// Hash of the counter-filtered thread, span, and event fields.
+    key: u64,
     line: String,
     repeats: u32,
 }
@@ -109,10 +116,10 @@ enum Lane {
 
 /// Only kithara traffic: probe events (TRACE, `<crate>_probe` targets, one
 /// per call of a probed production fn) and DEBUG-and-coarser events. The
-/// recorder must keep callsites alive that the fmt filter disabled, without
-/// pulling in dependency chatter or non-probe TRACE firehoses.
+/// recorder keeps their span context even when the fmt filter disables it,
+/// without dependency chatter or non-probe TRACE firehoses.
 fn classify(meta: &Metadata<'_>) -> Option<Lane> {
-    if !meta.is_event() || !meta.target().starts_with("kithara") {
+    if !meta.target().starts_with("kithara") {
         return None;
     }
     if meta.target().ends_with("_probe") {
@@ -121,8 +128,47 @@ fn classify(meta: &Metadata<'_>) -> Option<Lane> {
     (*meta.level() <= Level::DEBUG).then_some(Lane::Event)
 }
 
-impl<S: Subscriber> Layer<S> for RingLayer {
-    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+impl<'writer> FormatFields<'writer> for RingLayer {
+    fn format_fields<R: RecordFields>(&self, writer: Writer<'writer>, fields: R) -> fmt::Result {
+        DefaultFields::new().format_fields(writer, fields)
+    }
+}
+
+struct SpanFields {
+    fields: FormattedFields<RingLayer>,
+    key: DefaultHasher,
+}
+
+impl<S> Layer<S> for RingLayer
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+        let Some(span) = ctx.span(id) else {
+            return;
+        };
+        let mut fields = FormattedFields::<Self>::new(String::new());
+        if self.format_fields(fields.as_writer(), attrs).is_ok() {
+            let mut key = DefaultHasher::new();
+            fields.fields.hash(&mut key);
+            fields.fields = clamp(fields.fields);
+            span.extensions_mut().insert(SpanFields { fields, key });
+        }
+    }
+
+    fn on_record(&self, id: &Id, values: &Record<'_>, ctx: Context<'_, S>) {
+        let Some(span) = ctx.span(id) else {
+            return;
+        };
+        let mut extensions = span.extensions_mut();
+        if let Some(span) = extensions.get_mut::<SpanFields>() {
+            let _ = self.add_fields(&mut span.fields, values);
+            span.fields.fields.hash(&mut span.key);
+            span.fields.fields = clamp(std::mem::take(&mut span.fields.fields));
+        }
+    }
+
+    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
         let meta = event.metadata();
         let Some(lane) = classify(meta) else {
             return;
@@ -130,13 +176,30 @@ impl<S: Subscriber> Layer<S> for RingLayer {
         // No timestamp: the ring is chronological by construction, and a wall
         // stamp would mix real and flash-virtual clocks depending on where the
         // event fired.
+        let thread = std::thread::current();
         let prefix = format!(
-            "{level} {target}:",
+            "{level} {target}: thread={id:?} thread_name={name:?}",
             level = meta.level(),
             target = meta.target(),
+            id = thread.id(),
+            name = thread.name(),
         );
         let mut line = prefix.clone();
         let mut key = prefix;
+        if let Some(scope) = ctx.event_scope(event) {
+            for span in scope.from_root() {
+                let extensions = span.extensions();
+                if let Some(fields) = extensions.get::<SpanFields>() {
+                    let _ = write!(
+                        line,
+                        " {name}{{{fields}}}",
+                        name = span.name(),
+                        fields = fields.fields,
+                    );
+                    let _ = write!(key, " {}#{:x}", span.name(), fields.key.finish());
+                }
+            }
+        }
         event.record(&mut LineVisitor {
             line: &mut line,
             key: &mut key,
@@ -158,8 +221,8 @@ fn record(ring: &Mutex<VecDeque<Entry>>, line: String, key: String) {
     /// test's dump keeps the rare transitions that led to the failure.
     const DEDUP_WINDOW: usize = 16;
 
+    let key = BuildHasherDefault::<DefaultHasher>::default().hash_one(key);
     let line = clamp(line);
-    let key = clamp(key);
     let mut ring = lock(ring);
     let window = ring.len().saturating_sub(DEDUP_WINDOW);
     if let Some(entry) = ring.iter_mut().skip(window).find(|entry| entry.key == key) {
@@ -186,7 +249,7 @@ fn clamp(mut text: String) -> String {
     }
     text.truncate(end);
     text.push('…');
-    text
+    text.into_boxed_str().into_string()
 }
 
 struct LineVisitor<'a> {
@@ -210,7 +273,10 @@ impl Visit for LineVisitor<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, MutexGuard, PoisonError};
+    use std::{
+        sync::{Mutex, MutexGuard, PoisonError},
+        thread,
+    };
 
     use tracing::debug;
     use tracing_subscriber::layer::SubscriberExt;
@@ -230,7 +296,9 @@ mod tests {
         let guard = FLIGHT_TEST_LOCK
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let subscriber = tracing_subscriber::registry().with(layer());
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer().with_test_writer())
+            .with(layer());
         tracing::subscriber::with_default(subscriber, body);
         guard
     }
@@ -256,6 +324,12 @@ mod tests {
     #[kithara::test]
     fn a_probe_repeat_folds_across_a_changed_sequence() {
         let _guard = with_recorder(|| {
+            let _span = tracing::debug_span!(
+                target: "kithara_flight_test",
+                "worker_lane",
+                lane = 7u64,
+            )
+            .entered();
             for seq in 0..4u64 {
                 tracing::trace!(
                     target: "kithara_flight_test_probe",
@@ -272,6 +346,224 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(folded.len(), 1, "{folded:?}");
+        assert!(folded[0].contains("worker_lane{lane=7}"), "{folded:?}");
+        assert!(folded[0].ends_with("(x4)"), "{folded:?}");
+    }
+
+    #[kithara::test]
+    fn identical_probes_in_different_lanes_do_not_fold() {
+        let _guard = with_recorder(|| {
+            for lane in [11u64, 12] {
+                let _span = tracing::debug_span!(
+                    target: "kithara_flight_test",
+                    "worker_lane",
+                    lane,
+                )
+                .entered();
+                tracing::trace!(
+                    target: "kithara_flight_test_probe",
+                    probe = "lane_split_marker",
+                    seq = 1u64,
+                );
+            }
+        });
+
+        let entries = probes_tail()
+            .into_iter()
+            .filter(|line| line.contains("lane_split_marker"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        for lane in [11, 12] {
+            assert!(
+                entries
+                    .iter()
+                    .any(|line| line.contains(&format!("worker_lane{{lane={lane}}}"))),
+                "{entries:?}"
+            );
+        }
+    }
+
+    #[kithara::test(native)]
+    fn identical_probes_from_different_workers_do_not_fold() {
+        let mut ids = Vec::new();
+        let _guard = with_recorder(|| {
+            let dispatch = tracing::dispatcher::get_default(Clone::clone);
+            for _ in 0..2 {
+                let dispatch = dispatch.clone();
+                let worker = thread::Builder::new()
+                    .name("flight-worker".to_owned())
+                    .spawn(move || {
+                        tracing::dispatcher::with_default(&dispatch, || {
+                            tracing::trace!(
+                                target: "kithara_flight_test_probe",
+                                probe = "worker_split_marker",
+                                seq = 1u64,
+                            );
+                            thread::current().id()
+                        })
+                    })
+                    .expect("recorder worker starts");
+                ids.push(worker.join().expect("recorder worker joins"));
+            }
+        });
+
+        let entries = probes_tail()
+            .into_iter()
+            .filter(|line| line.contains("worker_split_marker"))
+            .collect::<Vec<_>>();
+
+        assert_ne!(ids[0], ids[1]);
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        for id in ids {
+            assert!(
+                entries
+                    .iter()
+                    .any(|line| line.contains(&format!("thread={id:?}"))),
+                "{entries:?}"
+            );
+        }
+        assert!(
+            entries
+                .iter()
+                .all(|line| line.contains("thread_name=Some(\"flight-worker\")")),
+            "{entries:?}"
+        );
+    }
+
+    #[kithara::test]
+    fn recorded_span_fields_follow_updates() {
+        let _guard = with_recorder(|| {
+            let span = tracing::debug_span!(
+                target: "kithara_flight_test",
+                "worker_lane",
+                lane = 19u64,
+                ready = tracing::field::Empty,
+            );
+            let _entered = span.enter();
+            tracing::trace!(
+                target: "kithara_flight_test_probe",
+                probe = "updated_span_marker",
+                seq = 1u64,
+            );
+            span.record("ready", true);
+            tracing::trace!(
+                target: "kithara_flight_test_probe",
+                probe = "updated_span_marker",
+                seq = 2u64,
+            );
+        });
+
+        let entries = probes_tail()
+            .into_iter()
+            .filter(|line| line.contains("updated_span_marker"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        assert!(entries[0].contains("worker_lane{lane=19}"), "{entries:?}");
+        assert!(
+            entries[1].contains("worker_lane{lane=19 ready=true}"),
+            "{entries:?}"
+        );
+    }
+
+    #[kithara::test]
+    fn a_truncated_parent_span_keeps_lane_repeat_keys_distinct() {
+        let context = "\u{1f980}".repeat(MAX_EVENT_BYTES);
+        let _guard = with_recorder(|| {
+            let _parent = tracing::debug_span!(
+                target: "kithara_flight_test",
+                "long_span_key_marker",
+                context = context.as_str(),
+            )
+            .entered();
+            for lane in [23u64, 24] {
+                let _span = tracing::debug_span!(
+                    target: "kithara_flight_test",
+                    "worker_lane",
+                    lane,
+                )
+                .entered();
+                tracing::trace!(
+                    target: "kithara_flight_test_probe",
+                    probe = "bounded_context_key",
+                    seq = 1u64,
+                );
+            }
+        });
+
+        let entries = probes_tail()
+            .into_iter()
+            .filter(|line| line.contains("long_span_key_marker"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        assert!(entries.iter().all(|line| {
+            line.len() <= MAX_EVENT_BYTES + '…'.len_utf8() && line.ends_with('…')
+        }));
+        assert_eq!(entries[0], entries[1]);
+    }
+
+    #[kithara::test]
+    fn a_long_span_keeps_lane_fields_after_truncation_distinct() {
+        let context = "\u{1f980}".repeat(MAX_EVENT_BYTES);
+        let _guard = with_recorder(|| {
+            for lane in [23u64, 24] {
+                let _span = tracing::debug_span!(
+                    target: "kithara_flight_test",
+                    "long_lane_key_marker",
+                    context = context.as_str(),
+                    lane,
+                )
+                .entered();
+                tracing::trace!(
+                    target: "kithara_flight_test_probe",
+                    probe = "bounded_lane_key",
+                    seq = 1u64,
+                );
+            }
+        });
+
+        let entries = probes_tail()
+            .into_iter()
+            .filter(|line| line.contains("long_lane_key_marker"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        assert!(entries.iter().all(|line| {
+            line.len() <= MAX_EVENT_BYTES + '\u{2026}'.len_utf8() && line.ends_with('\u{2026}')
+        }));
+        assert_eq!(entries[0], entries[1]);
+    }
+
+    #[kithara::test]
+    fn a_long_span_keeps_recorded_lane_updates_distinct() {
+        let context = "\u{1f980}".repeat(MAX_EVENT_BYTES);
+        let _guard = with_recorder(|| {
+            let span = tracing::debug_span!(
+                target: "kithara_flight_test",
+                "long_lane_update_marker",
+                context = context.as_str(),
+                lane = tracing::field::Empty,
+            );
+            let _entered = span.enter();
+            for lane in [23u64, 24] {
+                span.record("lane", lane);
+                tracing::trace!(
+                    target: "kithara_flight_test_probe",
+                    probe = "bounded_lane_update",
+                    seq = 1u64,
+                );
+            }
+        });
+
+        let entries = probes_tail()
+            .into_iter()
+            .filter(|line| line.contains("long_lane_update_marker"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        assert_eq!(entries[0], entries[1]);
     }
 
     /// The fold count is the tempo of the probe, so it must total the firings

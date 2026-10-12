@@ -189,7 +189,7 @@ fn hold(
                 let seconds = position.as_secs_f64();
                 DeckPart::Returned(Returned::Stopped {
                     slot,
-                    resume: SlotMark {
+                    resume: Some(SlotMark {
                         session: at,
                         lane: LaneFrame {
                             segment: *segment,
@@ -199,7 +199,7 @@ fn hold(
                                 .unwrap_or(u64::MAX),
                         },
                         position,
-                    },
+                    }),
                 })
             }),
         DeckPart::Adopt { slot, segment } => {
@@ -403,11 +403,11 @@ mod tests {
                 1 => {
                     assert!(
                         matches!(batch.commands.as_slice(), [DeckPart::Adopt { .. }, DeckPart::Returned(Returned::Stopped { slot: stopped, resume })]
-                        if *stopped == slot && *resume == SlotMark {
+                        if *stopped == slot && *resume == Some(SlotMark {
                             session: at,
                             lane: LaneFrame { segment, frame: lane_frame },
                             position,
-                        })
+                        }))
                     );
                     assert_eq!(deck.held(slot), Some("first"));
                 }

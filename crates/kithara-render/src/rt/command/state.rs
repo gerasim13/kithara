@@ -23,13 +23,20 @@ pub(in crate::rt) fn shifted_slot(part: &DeckPart) -> Option<Slot> {
         | DeckPart::Start { slot, .. }
         | DeckPart::Stop { slot, .. }
         | DeckPart::Adopt { slot, .. }
-        | DeckPart::Fade { slot, .. }
         | DeckPart::Replace { slot, .. } => Some(*slot),
-        DeckPart::Chain { .. } | DeckPart::Mix(_) | DeckPart::Eq(_) | DeckPart::Returned(_) => None,
+        DeckPart::Fade { .. }
+        | DeckPart::Chain { .. }
+        | DeckPart::Mix(_)
+        | DeckPart::Eq(_)
+        | DeckPart::Returned(_) => None,
     }
 }
 
-pub(in crate::rt) fn replace_stop(commands: &mut [DeckPart], slot: Slot, resume: SlotMark) {
+pub(in crate::rt) fn answer_stop(
+    commands: &mut [DeckPart],
+    slot: Slot,
+    resume: Option<SlotMark>,
+) -> bool {
     if let Some(part) = commands
         .iter_mut()
         .rev()
@@ -37,9 +44,6 @@ pub(in crate::rt) fn replace_stop(commands: &mut [DeckPart], slot: Slot, resume:
     {
         *part = DeckPart::Returned(Returned::Stopped { slot, resume });
     }
-}
-
-pub(in crate::rt) fn stops_complete(commands: &[DeckPart]) -> bool {
     !commands
         .iter()
         .any(|part| matches!(part, DeckPart::Stop { .. }))

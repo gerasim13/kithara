@@ -31,6 +31,15 @@ pub struct Due<'inbox, P: Protocol> {
 }
 
 impl<P: Protocol> Due<'_, P> {
+    delegate::delegate! {
+        to self.inbox {
+            /// Edits an earlier committed batch while this due batch owns the level.
+            pub fn committed_mut(&mut self, seq: Seq) -> Option<&mut [P::Command]>;
+            /// Answers an earlier committed batch at its original moment.
+            pub fn complete(&mut self, seq: Seq, data: P::Applied) -> bool;
+        }
+    }
+
     /// Records the batch and eagerly answers outdated batches now, retaining this batch
     /// and its credit until the executor completes it or the level returns its leftovers.
     pub fn commit(mut self) -> Seq {

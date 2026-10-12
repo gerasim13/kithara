@@ -571,19 +571,45 @@ impl<S> DeckRig<S> {
         self.pass(|mixer, level| mixer.end(level, slot, at))
     }
 
-    /// Answers the oldest open the dispatcher holds with `opened` and returns
-    /// its receipt; `None` when no open is waiting.
+    /// Answers the oldest load after acknowledging preceding priority changes.
+    ///
+    /// # Panics
+    /// Panics if a batch is not a load or priority change, or its receipt is missing.
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     pub fn open(
         &mut self,
         opened: Result<Loaded<OpenedTrack>, LoadRefusal>,
     ) -> Option<Receipt<DispatcherProtocol<ResourceLoad<S>>>> {
         self.opens.drain();
-        let due = self.opens.next_due((), 1)?;
-        match opened {
-            Ok(opened) => due.apply(Dispatched::Loaded(opened)),
-            Err(refusal) => due.refuse(refusal),
+        loop {
+            hang_tick!();
+            let due = self.opens.next_due((), 1)?;
+            let seq = due.seq();
+            let loading = match due.commands() {
+                [DispatcherCommand::Load(_)] => true,
+                [DispatcherCommand::SetPriority(_, _)] => false,
+                _ => panic!("expected one fixture load or priority change"),
+            };
+            if !loading {
+                due.apply(Dispatched::Prioritized);
+                let receipt = self.dispatcher.receipts().next().expect("priority answer");
+                assert_eq!(receipt.seq(), seq, "the dispatcher answers its own command");
+                hang_reset!();
+                continue;
+            }
+            match opened {
+                Ok(opened) => due.apply(Dispatched::Loaded(opened)),
+                Err(refusal) => due.refuse(refusal),
+            }
+            let receipt = self
+                .dispatcher
+                .receipts()
+                .next()
+                .expect("dispatcher answer");
+            assert_eq!(receipt.seq(), seq, "the dispatcher answers its own command");
+            hang_reset!();
+            return Some(receipt);
         }
-        self.dispatcher.receipts().next()
     }
 
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]

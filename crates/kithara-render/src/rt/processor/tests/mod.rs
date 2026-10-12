@@ -6,7 +6,9 @@ mod player_processor_internal;
 mod rt_click;
 mod rt_metrics;
 mod snapshot_contracts;
+mod stop;
 mod transport;
+mod zero_fade;
 
 use std::num::{NonZeroU32, NonZeroUsize};
 

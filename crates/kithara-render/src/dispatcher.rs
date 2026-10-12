@@ -13,6 +13,7 @@ use kithara_platform::{time::Duration, tokio::runtime::Handle};
 use kithara_signal::FrameCount;
 use kithara_warp::{SpeedCurve, StretchKind};
 use kithara_worker::{Priority, Task, TickResult};
+use tracing::Instrument as _;
 
 use crate::{LaneProtocol, LoadRefusal, ServiceClass, worker::scheduler::StreamWake};
 
@@ -220,14 +221,22 @@ where
                     if request.class != ServiceClass::Idle {
                         self.playing_opens += 1;
                     }
+                    let span = tracing::debug_span!(
+                        "dispatcher_load",
+                        ?seq,
+                        ?lane,
+                        class = ?request.class,
+                    );
                     self.opening.push(
                         async move {
                             let result = request
                                 .item
                                 .open(request.position, request.start, request.inbox)
                                 .await;
+                            tracing::debug!(opened = result.is_ok(), "source open finished");
                             (seq, lane, request.class, result)
                         }
+                        .instrument(span)
                         .boxed_local(),
                     );
                 }
@@ -259,6 +268,11 @@ where
                 }
             }
         }
+        self.poll_lanes(cx, progress);
+        Poll::Pending
+    }
+
+    fn poll_lanes(&mut self, cx: &mut Context<'_>, mut progress: bool) {
         self.lanes.sort_unstable_by(|left, right| {
             right
                 .task
@@ -269,10 +283,28 @@ where
         let mut waiting = false;
         let mut upstream = !self.opening.is_empty();
         self.lanes.retain_mut(|resident| {
+            let span = tracing::debug_span!(
+                "dispatcher_lane",
+                lane = ?resident.id,
+                class = ?resident.class,
+                seq = ?resident.admission.as_ref().map(|(seq, _, _)| *seq),
+            );
+            let _entered = span.enter();
+            tracing::trace!(
+                target: "kithara_render_probe",
+                probe = "dispatcher_resident_poll",
+                "polling resident lane",
+            );
             let lane = &mut resident.task;
             let _ = lane.poll_commands(cx);
             lane.recycle();
             let result = lane.tick();
+            tracing::trace!(
+                target: "kithara_render_probe",
+                probe = "dispatcher_resident_tick",
+                ?result,
+                "resident lane tick",
+            );
             progress |= result == TickResult::Progress;
             waiting |= result == TickResult::Waiting;
             upstream |= result == TickResult::UpstreamPending;
@@ -310,7 +342,6 @@ where
         if progress {
             cx.waker().wake_by_ref();
         }
-        Poll::Pending
     }
 
     fn priority(&self) -> Option<Priority> {

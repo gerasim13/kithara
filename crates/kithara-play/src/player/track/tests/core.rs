@@ -762,9 +762,11 @@ fn pause_from_idle_is_noop() {
 }
 
 #[kithara::test]
-fn processor_set_paused_updates_playback() {
+#[case::mapped(true)]
+#[case::without_mark(false)]
+fn processor_set_paused_updates_playback(#[case] mapped: bool) {
     let mut rig = rig();
-    let (mut track, _inbox) = prepared_track();
+    let (mut track, _inbox) = loaded(&mut rig, A, "pause observation");
     command_at_zero(
         &mut track,
         &mut rig,
@@ -772,8 +774,8 @@ fn processor_set_paused_updates_playback() {
             at: When::At(frame(0)),
         },
     );
-    let receipt = answer_next(&mut rig, Ok(()));
-    answer_track(&mut track, &mut rig, receipt);
+    let mut started = rig.block(frame(0), 0.0);
+    settle(&mut track, &mut rig, &mut started);
     assert_eq!(
         track.snapshot().status,
         TrackStatus::Playing { since: frame(0) }
@@ -782,6 +784,7 @@ fn processor_set_paused_updates_playback() {
         track.snapshot().status,
         TrackStatus::Playing { .. }
     ));
+
     command_at_zero(
         &mut track,
         &mut rig,
@@ -789,6 +792,76 @@ fn processor_set_paused_updates_playback() {
             at: When::At(frame(0)),
         },
     );
+    let mut previous = rig.block(frame(0), 1.0);
+    settle(&mut track, &mut rig, &mut previous);
+    let previous_mark = SlotMark {
+        session: frame(0),
+        lane: LaneFrame {
+            segment: track.segment,
+            frame: u64::from(mock::SAMPLE_RATE.get()),
+        },
+        position: Position::from_secs(1),
+    };
+    assert_eq!(track.resume, Some(previous_mark));
+    assert_eq!(track.snapshot().position, previous_mark.position);
+
+    let observed = Position::from_secs(3);
+    let output = mock::output(None).get();
+    let deck = crate::DeckSnapshot {
+        slots: vec![SlotSnapshot {
+            position: observed.as_secs_f64(),
+            mark: Some(SlotMark {
+                session: frame(0),
+                lane: LaneFrame {
+                    segment: track.segment,
+                    frame: 3 * u64::from(mock::SAMPLE_RATE.get()),
+                },
+                position: observed,
+            }),
+            ..SlotSnapshot::default()
+        }],
+        ..crate::DeckSnapshot::default()
+    };
+    let pass = crate::DeckPass {
+        mix: DeckMixSettings::default(),
+        suspended: false,
+        now: frame(0),
+        delivery: FrameCount::new(0),
+        output: &output,
+        deck: &deck,
+    };
+    {
+        let mut scope = rig.deck.ring.scope(rig.deck.scope).expect("live scope");
+        let mut out = Outbox::new(&mut scope, &mut rig.deck.dispatcher).in_pass(pass);
+        track
+            .apply(
+                TrackCommand::Pause {
+                    at: When::At(frame(0)),
+                },
+                &mut out,
+            )
+            .expect("scheduled pause")
+            .expect("one Stop sequence");
+    }
+    assert_eq!(
+        track.snapshot().position,
+        observed,
+        "Pause observes the owning deck snapshot"
+    );
+    assert_eq!(
+        track.resume,
+        Some(previous_mark),
+        "a new Stop has not answered yet"
+    );
+
+    let stopped_mark = SlotMark {
+        session: frame(0),
+        lane: LaneFrame {
+            segment: track.segment,
+            frame: 5 * u64::from(mock::SAMPLE_RATE.get()),
+        },
+        position: Position::from_secs(5),
+    };
     rig.deck.ring.publish().expect("publish Stop");
     rig.deck.inbox.drain();
     {
@@ -796,14 +869,7 @@ fn processor_set_paused_updates_playback() {
         let mut due = scope.next_due(frame(0), 1).expect("admitted Stop");
         *due.commands_mut() = vec![DeckPart::Returned(Returned::Stopped {
             slot: A,
-            resume: SlotMark {
-                session: frame(0),
-                lane: LaneFrame {
-                    segment: SegmentId::FIRST,
-                    frame: 0,
-                },
-                position: Position::ZERO,
-            },
+            resume: mapped.then_some(stopped_mark),
         })];
         due.apply(());
     }
@@ -813,14 +879,21 @@ fn processor_set_paused_updates_playback() {
         panic!("scoped Stop")
     };
     answer_track(&mut track, &mut rig, receipt);
+    let position = if mapped {
+        stopped_mark.position
+    } else {
+        observed
+    };
     assert_eq!(
         track.snapshot().status,
-        TrackStatus::Paused { at: Position::ZERO }
+        TrackStatus::Paused { at: position }
     );
+    assert_eq!(track.snapshot().position, position);
     assert!(!matches!(
         track.snapshot().status,
         TrackStatus::Playing { .. }
     ));
+    assert_eq!(track.resume, mapped.then_some(stopped_mark));
 }
 
 #[kithara::test]
@@ -1570,6 +1643,32 @@ fn a_load_opens_its_source_once_and_attaches_on_the_next_block() {
 }
 
 #[kithara::test]
+fn an_unrelated_load_receipt_does_not_make_a_reserved_track_ready() {
+    let mut rig = rig();
+    let mut other = unseated_track();
+    let foreign = load(&mut other, &mut rig, Position::ZERO);
+    let mut pending = unseated_track();
+    let wanted = load(&mut pending, &mut rig, Position::ZERO);
+    assert_ne!(foreign, wanted);
+
+    let opened = opened_fixture(&mut rig, "foreign");
+    let receipt = rig.open(Ok(opened)).expect("foreign load");
+    assert_eq!(receipt.seq(), foreign);
+    let settled = rig
+        .with_outbox(|out| pending.settle(TrackReceipt::Loaded(receipt), out))
+        .expect("deck scope");
+    assert!(matches!(settled, Settled::Pending));
+    assert_eq!(pending.snapshot().status, TrackStatus::Loading);
+
+    let opened = opened_fixture(&mut rig, "wanted");
+    let receipt = rig.open(Ok(opened)).expect("matching load");
+    assert_eq!(receipt.seq(), wanted);
+    rig.with_outbox(|out| pending.settle(TrackReceipt::Loaded(receipt), out))
+        .expect("deck scope");
+    assert_eq!(pending.snapshot().status, TrackStatus::Loaded);
+}
+
+#[kithara::test]
 #[case(0.0)]
 #[case(-1.0)]
 fn a_cued_subfloor_speed_reaches_the_lane_at_the_floor(#[case] speed: f32) {
@@ -1910,10 +2009,15 @@ fn an_evicting_track_takes_the_slot_over_on_its_frame() {
     settle(&mut old, &mut rig, &mut receipts);
 
     let mut new = unseated_track();
-    load(&mut new, &mut rig, Position::ZERO);
+    let wanted = load(&mut new, &mut rig, Position::ZERO);
 
     let opened = opened_fixture(&mut rig, "new");
     let receipt = rig.open(Ok(opened)).expect("one open");
+    assert_eq!(
+        receipt.seq(),
+        wanted,
+        "the replacement answers its own load"
+    );
     rig.with_outbox(|out| new.settle(TrackReceipt::Loaded(receipt), out))
         .expect("live deck scope");
     assert_eq!(rig.deck.mixer.held(A), Some("old"));
@@ -2102,10 +2206,15 @@ fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
         return;
     }
     let mut new = unseated_track();
-    load(&mut new, &mut rig, Position::ZERO);
+    let wanted = load(&mut new, &mut rig, Position::ZERO);
 
     let opened = opened_fixture(&mut rig, "new");
     let receipt = rig.open(Ok(opened)).expect("replacement load");
+    assert_eq!(
+        receipt.seq(),
+        wanted,
+        "the replacement answers its own load"
+    );
     rig.with_outbox(|out| new.settle(TrackReceipt::Loaded(receipt), out))
         .expect("deck scope");
     let output = mock::output(None).get();

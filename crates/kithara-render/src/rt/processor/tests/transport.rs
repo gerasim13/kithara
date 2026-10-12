@@ -4,9 +4,10 @@ use super::*;
 fn eof_during_a_crossfade_answers_the_transition_batch_once() {
     const EOF: usize = BLOCK + 88;
     let (mut mixer, mut ends) = mixer();
-    send(
+    let attached = send_on(
         &mut ends,
         When::Next,
+        &[(A, None), (B, None)],
         vec![
             DeckPart::Attach {
                 item_id: kithara_events::TrackId::allocate(),
@@ -30,9 +31,10 @@ fn eof_during_a_crossfade_answers_the_transition_batch_once() {
     drop(receipts(&mut ends));
     let settings =
         CrossfadeSettings::new(1.0, CrossfadeCurve::Linear, 1.0, 0.5).expect("valid crossfade");
-    let transition = send(
+    let transition = send_on(
         &mut ends,
         at(BLOCK),
+        &[(A, Some(attached)), (B, Some(attached))],
         vec![
             DeckPart::Start {
                 slot: B,
@@ -45,9 +47,48 @@ fn eof_during_a_crossfade_answers_the_transition_batch_once() {
             },
         ],
     );
-    render(&mut mixer, BLOCK);
+    render_frames(&mut mixer, BLOCK, 1);
     let replies = receipts(&mut ends);
-    assert_stopped_once(&replies, transition, BLOCK, A, EOF);
+    assert_eq!(
+        replies.len(),
+        1,
+        "one verdict before the outgoing track ends"
+    );
+    let (_, outcome, parts) = replies
+        .iter()
+        .find(|(seq, ..)| *seq == transition)
+        .expect("the crossfade applies before its outgoing track ends");
+    assert_applied_at(outcome, BLOCK);
+    assert!(
+        matches!(
+            parts.as_slice(),
+            [
+                DeckPart::Start {
+                    slot: incoming,
+                    fade: Fade::Crossfade(applied_in),
+                },
+                DeckPart::Fade {
+                    slot: outgoing,
+                    settings: applied_out,
+                    dir: FadeDir::Out,
+                },
+            ] if *incoming == B && *outgoing == A
+                && *applied_in == settings && *applied_out == settings
+        ),
+        "the transition returns both slot commands without an implicit Stop: {parts:?}"
+    );
+    for slot in [A, B] {
+        assert_eq!(
+            mixer.track(slot).map(PlayerTrack::state),
+            Some(SlotState::Playing)
+        );
+    }
+    assert!(ends.events.drain().next().is_none());
+    render_frames(&mut mixer, BLOCK + 1, BLOCK - 1);
+    assert!(
+        receipts(&mut ends).is_empty(),
+        "EOF cannot answer the fade twice"
+    );
     assert_eq!(
         mixer.track(A).map(PlayerTrack::state),
         Some(SlotState::Ended)
@@ -61,6 +102,60 @@ fn eof_during_a_crossfade_answers_the_transition_batch_once() {
     );
     render(&mut mixer, BLOCK * 2);
     assert!(receipts(&mut ends).is_empty(), "one verdict per transition");
+}
+
+#[kithara::test]
+fn eof_during_an_explicit_stop_returns_its_resume_mark_once() {
+    const EOF: usize = BLOCK + 88;
+    let (mut mixer, mut ends) = mixer();
+    send(
+        &mut ends,
+        When::Next,
+        vec![
+            DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
+                slot: A,
+                pcm: pcm_samples("stopping", 1.0, &vec![LEVEL; EOF * 2], true),
+                segment: SegmentId::FIRST,
+            },
+            DeckPart::Start {
+                slot: A,
+                fade: Fade::Declick,
+            },
+        ],
+    );
+    render(&mut mixer, 0);
+    drop(receipts(&mut ends));
+    let settings =
+        CrossfadeSettings::new(1.0, CrossfadeCurve::Linear, 1.0, 0.5).expect("valid stop fade");
+    let stop = send(
+        &mut ends,
+        at(BLOCK),
+        vec![DeckPart::Stop {
+            slot: A,
+            fade: Fade::Crossfade(settings),
+        }],
+    );
+
+    render(&mut mixer, BLOCK);
+
+    assert_stopped_once(&receipts(&mut ends), stop, BLOCK, A, EOF);
+    assert_eq!(
+        mixer.track(A).map(PlayerTrack::state),
+        Some(SlotState::Ended)
+    );
+    assert_eq!(
+        ends.events.drain().collect::<Vec<_>>(),
+        [DeckEvent::Ended {
+            slot: A,
+            at: frame_at(EOF)
+        }],
+    );
+    render(&mut mixer, BLOCK * 2);
+    assert!(
+        receipts(&mut ends).is_empty(),
+        "one verdict per explicit stop"
+    );
 }
 
 /// A slot started on a frame inside a block is silent before that frame and sounds after it.

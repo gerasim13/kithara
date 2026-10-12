@@ -59,11 +59,14 @@ async fn spawn_file_instance(
         .hint(("mp3").to_string())
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create File audio");
 
     spawn_blocking(move || {
+        #[cfg(not(target_arch = "wasm32"))]
+        let audio = kithara_integration_tests::mock::with_blocking_reads(audio);
+        let mut audio = audio;
         let total = read_for_concurrency_check(&mut audio, ReadLimit::wasm_default());
         info!(instance = id, kind = "file", total_samples = total, "done");
         InstanceResult {
@@ -118,11 +121,14 @@ async fn spawn_hls_instance(
         .build();
 
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("create HLS audio");
 
     let handle = spawn_blocking(move || {
+        #[cfg(not(target_arch = "wasm32"))]
+        let audio = kithara_integration_tests::mock::with_blocking_reads(audio);
+        let mut audio = audio;
         let total = read_for_concurrency_check(&mut audio, ReadLimit::wasm_default());
         info!(instance = id, kind = "hls", total_samples = total, "done");
         InstanceResult {

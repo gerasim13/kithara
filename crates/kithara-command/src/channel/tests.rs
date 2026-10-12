@@ -1118,6 +1118,60 @@ fn unfinished_commits_remain_owned_until_inbox_drop() {
 }
 
 #[kithara::test]
+fn a_due_batch_can_complete_an_older_commit_without_answering_itself() {
+    let (mut sender, mut inbox) = pair(2, 1);
+    let committed = send(
+        &mut sender,
+        When::At(Frame(80)),
+        batch(1, &[(Slot(0), None)]),
+    );
+    let current = send(
+        &mut sender,
+        When::At(Frame(100)),
+        batch(2, &[(Slot(0), Some(committed))]),
+    );
+    inbox.drain();
+    inbox.next_due(Frame(64), BLOCK).expect("commit").commit();
+    let mut due = inbox.next_due(Frame(64), BLOCK).expect("current due");
+    let absent = current.next();
+    for seq in [current, absent] {
+        assert!(due.committed_mut(seq).is_none());
+        assert!(
+            !due.complete(seq, ()),
+            "only committed batches can complete"
+        );
+    }
+    due.committed_mut(committed).expect("older commit")[0] = 99;
+    assert!(due.complete(committed, ()));
+    assert!(
+        !due.complete(committed, ()),
+        "a committed credit is returned once"
+    );
+    assert!(due.committed_mut(committed).is_none());
+    assert_eq!(due.commands(), &[2]);
+    assert_eq!(due.basis(), &[(Slot(0), Some(committed))]);
+    due.apply(());
+    let replies = sender
+        .receipts()
+        .map(|receipt| {
+            let seq = receipt.seq();
+            let (outcome, batch): Parts = receipt.into();
+            (seq, outcome, batch)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(replies.len(), 2);
+    assert_eq!(replies[0].0, committed);
+    assert_eq!(replies[0].1, applied(80));
+    assert_eq!(replies[0].2.commands, [99]);
+    assert_eq!(replies[0].2.basis, [(Slot(0), None)]);
+    assert_eq!(replies[1].0, current);
+    assert_eq!(replies[1].1, applied(100));
+    assert_eq!(replies[1].2.commands, [2]);
+    assert_eq!(replies[1].2.basis, [(Slot(0), Some(committed))]);
+    assert_eq!(sender.available(), 2);
+}
+
+#[kithara::test]
 fn delayed_applied_receipt_does_not_roll_back_sender_basis() {
     let (mut sender, mut inbox) = pair(2, 1);
     let committed = send(&mut sender, When::Next, batch(1, &[(Slot(0), None)]));

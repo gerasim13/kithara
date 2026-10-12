@@ -12,7 +12,7 @@ use ringbuf::{
     traits::{Consumer, Split},
 };
 
-use super::*;
+use super::{tests::stop_seq, *};
 use crate::{
     CrossfadeSettings,
     bridge::{DeckEvent, Fade, FadeDir, RtMetrics, Slot, SlotState},
@@ -134,6 +134,7 @@ fn render_track(
             sink,
         );
     }
+    track.advance(range, sink);
     outcome
 }
 fn collect_notifications(rx: &mut impl Consumer<Item = DeckEvent>) -> Vec<DeckEvent> {
@@ -180,6 +181,7 @@ async fn track_state_transitions(
         TrackStateScenario::StopAfterPlay => {
             start(&mut track);
             track.stop(
+                stop_seq(),
                 Fade::Crossfade(CrossfadeSettings {
                     duration: 0.0,
                     ..Default::default()

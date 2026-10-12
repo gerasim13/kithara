@@ -178,8 +178,9 @@ where
             .await
             .unwrap_or_else(|error| panic!("insert product offline queue: {error}"));
         if let Some(layout) = options.eq_layout {
-            queue
-                .set_eq_layout(layout)
+            let control = queue.control().clone();
+            host.run(move || control.set_eq_layout(layout))
+                .await
                 .unwrap_or_else(|error| panic!("configure product offline queue EQ: {error}"));
         }
         Self {

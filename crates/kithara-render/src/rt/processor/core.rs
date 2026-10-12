@@ -5,7 +5,7 @@ use firewheel::{
     node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
 };
 use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
-use kithara_command::{LevelInbox, ScopeId, Seq, Target};
+use kithara_command::{LevelInbox, ScopeId, Target};
 use kithara_dsp::param::SmootherConfig;
 use kithara_signal::{FrameCount, SegmentId, SessionFrame};
 use kithara_test_utils::kithara;
@@ -15,7 +15,7 @@ use triple_buffer::Input;
 
 use super::{
     super::{
-        command::Armed,
+        command::{Armed, answer_stop},
         context::read_render_context,
         tail::SlotTail,
         track::{PlayerTrack, RtSink},
@@ -49,8 +49,6 @@ pub(in crate::rt) struct Deck {
     pub(in crate::rt) ended: Vec<bool>,
     pub(in crate::rt) tails: Vec<SlotTail>,
     pub(in crate::rt) held: Vec<Option<SegmentId>>,
-    pub(in crate::rt) stops: Vec<Option<Seq>>,
-    pub(in crate::rt) interrupted: Vec<Option<(Seq, crate::bridge::SlotMark)>>,
     pub(in crate::rt) recycle: Vec<usize>,
     pub(in crate::rt) declick_frames: usize,
     pub(in crate::rt) evict_frames: usize,
@@ -109,8 +107,6 @@ impl<E: SessionInbox> DeckMixer<E> {
                 ended: vec![false; slots.get()],
                 tails,
                 held: vec![None; slots.get()],
-                stops: vec![None; slots.get()],
-                interrupted: vec![None; slots.get()],
                 recycle: vec![0; slots.get()],
                 declick_frames,
                 evict_frames,
@@ -192,16 +188,13 @@ impl<E: SessionInbox> DeckMixer<E> {
                     break;
                 };
                 self.deck.take_due(due, context.is_some());
-                self.deck.finish_stops(level);
                 self.deck.resolve_armed(level, start, at);
             }
             self.deck.maintain();
-            self.deck.finish_stops(level);
             if context.is_some() {
                 self.deck.observe_ends(cursor, start);
             }
             self.deck.fire_ended(level, start, at, context.is_some());
-            self.deck.finish_stops(level);
             let command_frames = level
                 .frames_until_due(at)
                 .and_then(|count| usize::try_from(count).ok())
@@ -210,8 +203,7 @@ impl<E: SessionInbox> DeckMixer<E> {
                 .deck
                 .tracks
                 .iter_mut()
-                .filter(|(_, track)| track.state() == SlotState::Playing)
-                .filter_map(|(_, track)| track.frames_until_boundary())
+                .filter_map(|(_, track)| track.frames_until_boundary(at))
                 .fold((frames - cursor).min(command_frames), usize::min)
                 .max(1);
             let end = cursor.saturating_add(span).min(frames);
@@ -228,11 +220,10 @@ impl<E: SessionInbox> DeckMixer<E> {
                 cursor..end,
                 start,
             );
-            self.deck.finish_stops(level);
+            self.deck.advance(cursor..end, start, level);
             cursor = end;
         }
         self.deck.maintain();
-        self.deck.finish_stops(level);
         sounded
     }
 
@@ -271,6 +262,27 @@ fn slot_snapshot(track: &PlayerTrack, at: SessionFrame) -> SlotSnapshot {
 }
 
 impl Deck {
+    fn advance(
+        &mut self,
+        range: Range<usize>,
+        start: SessionFrame,
+        level: &mut LevelInbox<'_, DeckProtocol>,
+    ) {
+        for (slot, track) in self.tracks.iter_mut() {
+            let mut sink = RtSink::new(&mut self.events, &self.metrics, slot, start);
+            track.advance(range.clone(), &mut sink);
+            let Some((seq, resume)) = track.take_stop() else {
+                continue;
+            };
+            if level
+                .committed_mut(seq)
+                .is_some_and(|commands| answer_stop(commands, slot, resume))
+            {
+                level.complete(seq, ());
+            }
+        }
+    }
+
     fn maintain(&mut self) {
         for (slot, track) in self.tracks.iter_mut() {
             track.recycle_obsolete(&mut self.recycle[slot.index()]);
@@ -326,7 +338,7 @@ impl Deck {
                 continue;
             }
             let mut sink = RtSink::new(&mut self.events, &self.metrics, slot, start);
-            let _ = track.render(
+            let outcome = track.render(
                 context,
                 &mut read,
                 &mut bus,
@@ -334,6 +346,10 @@ impl Deck {
                 &mut self.recycle[slot.index()],
                 &mut sink,
             );
+            if let Some(offset) = outcome.ended_at(&range) {
+                self.ended[slot.index()] =
+                    track.poll_end(offset, &mut self.recycle[slot.index()], &mut sink);
+            }
             sounded = true;
         }
         let [left, right] = &mut bus;

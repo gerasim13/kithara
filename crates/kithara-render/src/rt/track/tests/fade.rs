@@ -25,16 +25,16 @@ fn a_declick_stop_keeps_its_consumed_fraction_when_the_rate_changes() {
         &mut [&mut left, &mut right],
         &mut [&mut output_left, &mut output_right],
         0..2,
-        6,
     );
+    fade.advance(2);
     fade.update_sample_rate(NonZeroU32::new(2_000).expect("rate"));
     assert_eq!(fade.remaining(), 4);
     fade.mix_range(
         &mut [&mut left, &mut right],
         &mut [&mut output_left, &mut output_right],
         2..6,
-        6,
     );
+    fade.advance(4);
     assert_eq!(output_left, [0.75, 0.5, 0.375, 0.25, 0.125, 0.0]);
     assert_eq!(output_right, output_left);
     assert!(fade.settled());
@@ -60,8 +60,8 @@ fn a_declick_stop_changes_its_first_frame_and_reaches_silence_on_its_last() {
         &mut [&mut left, &mut right],
         &mut [&mut output_left, &mut output_right],
         0..4,
-        4,
     );
+    fade.advance(4);
     assert_eq!(output_left, [0.75, 0.5, 0.25, 0.0]);
     assert_eq!(output_right, output_left);
     assert_eq!(fade.remaining(), 0);
@@ -83,8 +83,8 @@ fn rendered_linear_fade_reaches_both_exact_endpoints() {
         &mut [&mut input_l, &mut input_r],
         &mut [&mut output_l, &mut output_r],
         0..4,
-        4,
     );
+    fade.advance(4);
     assert_eq!(output_l[0], 0.0);
     assert_eq!(output_l[3], 1.0);
     assert_eq!(output_l, output_r);
@@ -106,8 +106,8 @@ fn a_fade_sounds_its_crossfade_gains_frame_by_frame() {
             &mut [&mut input_l, &mut input_r],
             &mut [&mut output_l, &mut output_r],
             0..LAW_FRAMES,
-            LAW_FRAMES,
         );
+        fade.advance(LAW_FRAMES);
         output_l
     }
 

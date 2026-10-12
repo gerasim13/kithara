@@ -2,4 +2,4 @@ mod apply;
 mod arrivals;
 mod state;
 
-pub(in crate::rt) use state::Armed;
+pub(in crate::rt) use state::{Armed, answer_stop};

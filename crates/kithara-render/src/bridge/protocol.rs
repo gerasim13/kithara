@@ -121,7 +121,7 @@ pub enum Returned {
     Eq(Box<EqLayout>),
     Stopped {
         slot: Slot,
-        resume: SlotMark,
+        resume: Option<SlotMark>,
     },
 }
 
