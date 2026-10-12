@@ -163,10 +163,6 @@ async fn record_sync_listening_wavs(
     #[case] case: SyncCase,
     #[case] target_bpm: Option<f64>,
 ) {
-    assert!(
-        std::env::var_os("KITHARA_AUDIO_ARTIFACT_DIR").is_some(),
-        "KITHARA_AUDIO_ARTIFACT_DIR must be set for the listening recorder"
-    );
     let mut deck_reports = Vec::with_capacity(case.decks());
     let mut failures = Vec::new();
     for deck in 0..case.decks() {

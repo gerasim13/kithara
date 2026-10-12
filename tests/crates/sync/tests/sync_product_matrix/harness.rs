@@ -23,10 +23,9 @@ pub(crate) struct ProductHarness {
     trajectory: TempoTrajectory,
     /// The second each deck's start opens it at, before its stagger.
     cues: Vec<f64>,
-    /// Every rendered block as `graph_out` plays it, metronome included,
-    /// when artifacts are on.
+    /// Every rendered block as `graph_out` plays it, metronome included.
     #[cfg(not(target_os = "android"))]
-    tap: Option<kithara_integration_tests::audio_artifact::AudioArtifactTap>,
+    tap: kithara_integration_tests::audio_artifact::AudioArtifactTap,
     #[cfg(not(target_os = "android"))]
     metronome_delta_peak: f32,
 }
@@ -93,9 +92,8 @@ impl Audible {
     }
 }
 
-/// Listening artifacts: an opt-in desktop recording of each harness run with
-/// the Host metronome. They encode through the app's recording stack, which no
-/// device build carries.
+/// Listening artifacts of each desktop harness run with the Host metronome.
+/// They encode through the app's recording stack, which no device build carries.
 #[cfg(not(target_os = "android"))]
 mod artifact {
     use kithara_integration_tests::audio_artifact::{AudioArtifactTap, artifact_label};
@@ -108,18 +106,22 @@ mod artifact {
         case: SyncCase,
         provider: Provider,
         audible: Audible,
-    ) -> Option<AudioArtifactTap> {
-        let mut tap = AudioArtifactTap::from_env(
+    ) -> AudioArtifactTap {
+        let default_root = std::env::current_exe()
+            .unwrap_or_else(|error| panic!("{}: locate the test executable: {error}", case.id))
+            .with_file_name("audio-artifacts");
+        let mut tap = AudioArtifactTap::from_env_or(
+            &default_root,
             &format!("{}-{}-{}", artifact_label(), case.id, audible.label()),
             case.sample_rate,
             CHANNELS,
         )
-        .unwrap_or_else(|error| panic!("{}: open the listening artifact: {error}", case.id))?;
+        .unwrap_or_else(|error| panic!("{}: open the listening artifact: {error}", case.id));
         tap.evidence(
             "provider",
             serde_json::Value::String(format!("{provider:?}")),
         );
-        Some(tap)
+        tap
     }
 }
 
@@ -447,9 +449,7 @@ impl ProductHarness {
         self.tick_all(case).await;
         self.output_frames = end;
         #[cfg(not(target_os = "android"))]
-        if let Some(tap) = self.tap.as_mut() {
-            tap.push(&samples);
-        }
+        self.tap.push(&samples);
         let delay = if self.paced {
             let frames: f64 = frames.as_();
             Duration::from_secs_f64(frames / f64::from(case.sample_rate))
@@ -466,13 +466,13 @@ impl ProductHarness {
             "the master tap sees every rendered frame"
         );
         #[cfg(not(target_os = "android"))]
-        if let Some(tap) = self.tap.as_mut() {
+        {
             self.metronome_delta_peak = samples
                 .iter()
                 .zip(&master)
                 .map(|(output, master)| (output - master).abs())
                 .fold(self.metronome_delta_peak, f32::max);
-            tap.evidence(
+            self.tap.evidence(
                 "metronome_output_delta_peak",
                 serde_json::json!(self.metronome_delta_peak),
             );
@@ -480,12 +480,10 @@ impl ProductHarness {
         master
     }
 
-    /// Stamps a control marker on the artifact, when artifacts are on.
+    /// Stamps a control marker on the listening artifact.
     #[cfg(not(target_os = "android"))]
     pub(crate) fn mark(&mut self, label: &str) {
-        if let Some(tap) = self.tap.as_mut() {
-            tap.mark(label);
-        }
+        self.tap.mark(label);
     }
 
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
