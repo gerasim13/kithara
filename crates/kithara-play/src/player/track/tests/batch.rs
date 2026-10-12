@@ -2,6 +2,50 @@ use std::num::NonZeroUsize;
 
 use super::*;
 
+#[cfg(feature = "usdt")]
+#[kithara::test]
+#[case::constant(SpeedCurve::Constant(1.5))]
+#[case::ramp(SpeedCurve::Ramp {
+    to: 1.5,
+    frames: std::num::NonZeroU64::new(441).expect("nonempty ramp"),
+})]
+#[case::steps(SpeedCurve::Steps(Arc::from([(0, 1.25), (441, 1.5)])))]
+fn a_queued_speed_publishes_its_target_and_sequence_once(#[case] curve: SpeedCurve) {
+    let trace = kithara_test_utils::test::usdt::scope();
+    let mut track = track(A);
+    let (sender, _inbox) = channel(
+        ChannelConfig::builder()
+            .capacity(NonZeroUsize::new(1).expect("one batch"))
+            .build(),
+    );
+    track.lane = Some(sender);
+    track.mark = Some(SlotMark {
+        session: frame(128),
+        lane: LaneFrame {
+            segment: SegmentId::FIRST,
+            frame: 64,
+        },
+        position: Duration::ZERO,
+    });
+    let seq = track
+        .send_lane(LaneCommand::SetSpeed(curve.clone()), When::Next)
+        .expect("accepted speed");
+    let requests = trace.events_of("rate_requested");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].field("request_revision"), Some(seq.get()));
+    assert_eq!(
+        requests[0].field("target_rate_bits"),
+        Some(u64::from(1.5_f32.to_bits())),
+    );
+    assert_eq!(requests[0].field("session_frame"), Some(128));
+    assert!(matches!(
+        track.send_lane(LaneCommand::SetSpeed(curve), When::Next),
+        Err(PlayError::Full(_)),
+    ));
+    assert_eq!(trace.events_of("rate_requested").len(), 1);
+    drop(trace);
+}
+
 #[kithara::test]
 fn a_ready_paused_segment_keeps_its_cue_over_an_old_slot_snapshot() {
     let mut rig = rig();
