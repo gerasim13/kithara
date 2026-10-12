@@ -14,10 +14,73 @@ fn pop_blocking(reader: &mut PcmReceiver) -> Option<PcmPacket> {
     reader.pop()
 }
 
+fn discharge_off_rt(wake: &kithara_worker::Wake) {
+    wake.wake();
+    assert!(kithara_worker::mock::flush_deferred(wake));
+}
+
+fn pop_off_rt(fixture: &mut PcmFixture, wake: &kithara_worker::Wake) -> Option<PcmPacket> {
+    let packet = fixture.receiver.as_mut().expect("receiver").pop();
+    discharge_off_rt(wake);
+    packet
+}
+
+#[kithara::test(tokio)]
+#[case::nonblocking(false, false)]
+#[case::offline(true, false)]
+#[case::eof_nonblocking(false, true)]
+#[case::eof_offline(true, true)]
+async fn callback_consumption_defers_every_wake_even_when_offline_blocking_is_enabled(
+    #[case] blocking: bool,
+    #[case] end_of_track: bool,
+) {
+    let wake = kithara_worker::Wake::default();
+    let mut fixture = PcmFixture::with_wake(
+        4,
+        blocking,
+        crate::worker::scheduler::StreamWake::new(wake.clone()),
+    )
+    .await;
+    assert!(
+        fixture
+            .receiver
+            .as_ref()
+            .expect("receiver")
+            .peek()
+            .is_none()
+    );
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (0, true));
+    assert!(kithara_worker::mock::flush_deferred(&wake));
+    let mut output = chunk(SegmentId::FIRST, if end_of_track { &[] } else { &[1.0] });
+    output.meta.end_of_track = end_of_track;
+    fixture
+        .push(PcmPacket::Chunk(Box::new(output)))
+        .expect("forward packet fits");
+    let packet = fixture
+        .receiver
+        .as_mut()
+        .expect("receiver")
+        .pop()
+        .expect("forward packet");
+    assert!(matches!(&packet, PcmPacket::Chunk(chunk) if chunk.meta.end_of_track == end_of_track));
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (0, true));
+    assert!(kithara_worker::mock::flush_deferred(&wake));
+    fixture
+        .receiver
+        .as_mut()
+        .expect("receiver")
+        .recycle(packet)
+        .expect("reverse packet fits");
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (0, true));
+    assert!(kithara_worker::mock::flush_deferred(&wake));
+    assert!(fixture.receiver.as_mut().expect("receiver").pop().is_none());
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (0, true));
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[kithara::flash(io)]
 #[kithara::hang_watchdog]
-fn receive_notice(receiver: &std::sync::mpsc::Receiver<()>) {
+pub(super) fn receive_notice(receiver: &std::sync::mpsc::Receiver<()>) {
     hang_tick!();
     let mut notice = None;
     hang_park!(|remaining| {
@@ -181,7 +244,7 @@ async fn block_on_underrun_forces_immediate_off_rt_wakes() {
     .await;
     assert!(fixture.receiver.as_ref().expect("receiver").ready.is_some());
     assert_eq!(kithara_worker::mock::wake_state(&wake), (0, false));
-    assert!(fixture.receiver.as_mut().expect("receiver").pop().is_none());
+    assert!(pop_off_rt(&mut fixture, &wake).is_none());
     assert_eq!(kithara_worker::mock::wake_state(&wake), (1, false));
     fixture
         .receiver
@@ -189,6 +252,7 @@ async fn block_on_underrun_forces_immediate_off_rt_wakes() {
         .expect("receiver")
         .recycle(PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[1.0]))))
         .expect("return fits");
+    discharge_off_rt(&wake);
     assert_eq!(kithara_worker::mock::wake_state(&wake), (2, false));
 }
 
@@ -211,7 +275,7 @@ async fn an_adopted_mode_still_yields_to_blocking_reads() {
             .0
             .is_some()
     );
-    assert!(fixture.receiver.as_mut().expect("receiver").pop().is_none());
+    assert!(pop_off_rt(&mut fixture, &wake).is_none());
     assert_eq!(kithara_worker::mock::wake_state(&wake), (1, false));
     let deferred = kithara_worker::Wake::default();
     let mut nonblocking = PcmFixture::with_wake(
@@ -291,14 +355,7 @@ async fn explicit_off_rt_mode_is_immediate_without_blocking_reads() {
     )
     .await;
     assert!(fixture.receiver.as_ref().expect("receiver").ready.is_none());
-    assert!(
-        fixture
-            .receiver
-            .as_mut()
-            .expect("receiver")
-            .pop_off_rt()
-            .is_none()
-    );
+    assert!(pop_off_rt(&mut fixture, &wake).is_none());
     assert_eq!(kithara_worker::mock::wake_state(&wake), (1, false));
 }
 

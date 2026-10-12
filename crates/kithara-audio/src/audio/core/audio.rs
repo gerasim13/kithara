@@ -226,7 +226,7 @@ impl<S> Audio<S> {
                 chunk.meta,
             );
             if chunk.meta.frames > 0 {
-                self.release_seek_lock();
+                self.commit_read(chunk.meta);
             }
             self.publish_progress();
             self.emit.flush();
@@ -314,8 +314,10 @@ impl<S> Audio<S> {
                 source_end(&chunk.meta, self.cursor.consumed_frames())?,
                 chunk.meta,
             );
+            let meta = chunk.meta;
             written += copied.count;
             if copied.count > 0 {
+                self.commit_read(meta);
                 hang_reset!();
             }
             output_frames = output_frames.saturating_add(copied.output_frames);
@@ -355,6 +357,24 @@ impl<S> Audio<S> {
     fn release_seek_lock(&mut self) {
         if let Some(abr) = self.seek_lock.take() {
             abr.unlock();
+        }
+    }
+
+    fn commit_read(&mut self, meta: AudioChunkInfo) {
+        self.release_seek_lock();
+        if std::mem::take(&mut self.seek_pending) {
+            self.emit.enqueue(crate::AudioEvent::SeekLifecycle {
+                stage: crate::SeekLifecycleStage::OutputCommitted,
+                location: crate::SegmentLocation::new(
+                    meta.variant_index,
+                    meta.segment_index,
+                    None,
+                    None,
+                ),
+            });
+            self.emit.enqueue(crate::AudioEvent::SeekComplete {
+                position: meta.timestamp,
+            });
         }
     }
 
@@ -452,6 +472,7 @@ impl<S> AudioControl for Audio<S> {
             self.seek_lock = Some(abr.clone());
         }
         let result = self.seek(position);
+        self.seek_pending = matches!(result, Ok(SeekOutcome::Landed { .. }));
         if !matches!(result, Ok(SeekOutcome::Landed { .. })) {
             self.release_seek_lock();
         }
@@ -462,9 +483,7 @@ impl<S: 'static> AudioSource for Audio<S> {
     type Chunk = AudioChunk;
 
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError> {
-        let outcome = AudioControl::seek(self, position)?;
-        self.seek_pending = matches!(outcome, SeekOutcome::Landed { .. });
-        Ok(outcome)
+        AudioControl::seek(self, position)
     }
 
     fn commit_source_end(&mut self, end: SourceEnd, meta: AudioChunkInfo) {
@@ -472,23 +491,8 @@ impl<S: 'static> AudioSource for Audio<S> {
         if meta.frames == 0 {
             return;
         }
-        self.release_seek_lock();
         self.playhead.advance(&chunk_position(&meta));
-        if self.seek_pending {
-            self.seek_pending = false;
-            self.emit.enqueue(crate::AudioEvent::SeekLifecycle {
-                stage: crate::SeekLifecycleStage::OutputCommitted,
-                location: crate::SegmentLocation::new(
-                    meta.variant_index,
-                    meta.segment_index,
-                    None,
-                    None,
-                ),
-            });
-            self.emit.enqueue(crate::AudioEvent::SeekComplete {
-                position: meta.timestamp,
-            });
-        }
+        self.commit_read(meta);
         self.publish_progress();
     }
 

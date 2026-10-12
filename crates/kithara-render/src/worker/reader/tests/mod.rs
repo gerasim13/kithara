@@ -1,4 +1,6 @@
 mod core;
+#[cfg(not(target_arch = "wasm32"))]
+mod progress_tests;
 mod terminal_tests;
 mod transport_tests;
 

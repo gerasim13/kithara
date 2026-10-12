@@ -217,19 +217,8 @@ impl PcmReceiver {
 
     /// Try to take one packet without waiting, regardless of blocking policy.
     pub fn pop(&mut self) -> Option<PcmPacket> {
-        if self.ready.is_some() {
-            return self.pop_off_rt();
-        }
         let packet = self.take_packet();
         self.notify();
-        packet
-    }
-
-    /// Take one packet without waiting and immediately schedule its producer.
-    /// Use this on an off-real-time consumer, not an audio callback.
-    pub fn pop_off_rt(&mut self) -> Option<PcmPacket> {
-        let packet = self.take_packet();
-        self.wake.wake();
         packet
     }
 
@@ -267,11 +256,7 @@ impl PcmReceiver {
     }
 
     fn notify(&self) {
-        if self.ready.is_some() {
-            self.wake.wake();
-        } else {
-            self.wake.defer();
-        }
+        self.wake.defer();
     }
 }
 

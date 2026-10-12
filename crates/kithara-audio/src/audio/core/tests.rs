@@ -140,6 +140,78 @@ fn direct_pulls_publish_consumed_progress(#[case] read_kind: u8, cursor_half: Ve
     assert!(events.try_recv().is_err(), "one event per committed pull");
 }
 
+#[kithara::hang_watchdog]
+fn seek_completions(
+    events: &mut kithara_events::EventReceiver<crate::AudioEvent>,
+) -> Vec<Duration> {
+    let mut completions = Vec::new();
+    loop {
+        hang_tick!();
+        match events.try_recv() {
+            Ok(envelope) => {
+                hang_reset!();
+                if let crate::AudioEvent::SeekComplete { position } = envelope.event {
+                    completions.push(position);
+                }
+            }
+            Err(kithara_events::TryRecvError::Empty) => return completions,
+            Err(error) => panic!("event receiver failed: {error:?}"),
+        }
+    }
+}
+
+#[kithara::test]
+fn off_rt_read_publishes_the_seek_completion_it_births(cursor_half: Vec<f32>) {
+    let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
+    let mut audio = fixture(spec, Vec::new());
+    let mut events = audio.event_bus().subscribe::<crate::AudioEvent>();
+    audio.preload().expect("mark the direct reader preloaded");
+    let target = Duration::from_millis(250);
+    crate::AudioControl::seek(&mut audio, target).expect("seek the direct reader");
+    let mut chunk = timed_chunk(
+        &pools(),
+        &cursor_half,
+        spec,
+        4,
+        target,
+        target + spec.duration_for(4).expect("four frames"),
+    );
+    chunk.meta.frame_offset = 12_000;
+    audio.cursor.begin_chunk(&chunk);
+    audio.current_chunk = Some(chunk);
+
+    let mut output = [0.0; 8];
+    let outcome = audio.read(&mut output).expect("staged read");
+    assert!(matches!(outcome, ReadOutcome::Frames { .. }));
+    assert!(matches!(outcome, ReadOutcome::Frames { count, .. } if count.get() == 8));
+    assert_eq!(
+        seek_completions(&mut events),
+        vec![target],
+        "an off-RT read publishes the completion it births before returning"
+    );
+    let next = target + spec.duration_for(4).expect("four frames");
+    let mut chunk = timed_chunk(
+        &pools(),
+        &cursor_half,
+        spec,
+        4,
+        next,
+        next + spec.duration_for(4).expect("four frames"),
+    );
+    chunk.meta.frame_offset = 12_004;
+    audio.cursor.begin_chunk(&chunk);
+    audio.current_chunk = Some(chunk);
+    assert!(matches!(
+        audio.read(&mut output).expect("next consumed read"),
+        ReadOutcome::Frames { count, .. } if count.get() == 8
+    ));
+    assert_eq!(
+        seek_completions(&mut events),
+        Vec::<Duration>::new(),
+        "later consumed PCM does not complete the same seek twice"
+    );
+}
+
 struct SeekAbr {
     state: Arc<AbrState>,
     cancel: kithara_platform::CancelToken,
