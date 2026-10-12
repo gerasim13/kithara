@@ -17,6 +17,110 @@ use kithara_test_fixtures::{assets, fixtures::tone_mp3, headerless_bitrate_chang
 
 use crate::common::test_defaults::consts;
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog]
+async fn read_prefix(mut audio: impl AudioRead + Send + 'static) -> (usize, Duration, bool) {
+    spawn_blocking(move || {
+        let mut total = 0usize;
+        let mut buf = [0.0f32; 4096];
+        let mut saw_eof = false;
+
+        loop {
+            hang_tick!();
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => hang_park!(|remaining| {
+                    thread::paced_backoff(Duration::from_millis(5).min(remaining));
+                }),
+                Ok(ReadOutcome::Frames { count, .. }) => {
+                    total += count.get();
+                    hang_reset!();
+                }
+                Ok(ReadOutcome::Eof { .. }) => {
+                    saw_eof = true;
+                    hang_reset!();
+                    break;
+                }
+                Err(e) => panic!("decode error: {e}"),
+            }
+            if audio.position() >= Duration::from_secs(2) {
+                break;
+            }
+        }
+
+        (total, audio.position(), saw_eof)
+    })
+    .await
+    .expect("the decode thread must not panic")
+}
+
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog]
+async fn read_to_end(
+    mut audio: impl AudioRead + Send + 'static,
+    max_pending_waits: usize,
+) -> (Duration, bool, usize) {
+    spawn_blocking(move || {
+        let mut buf = [0.0f32; 4096];
+        let mut saw_eof = false;
+        let mut waits = 0usize;
+        loop {
+            hang_tick!();
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => {
+                    waits += 1;
+                    if waits >= max_pending_waits {
+                        break;
+                    }
+                    hang_park!(|remaining| {
+                        thread::paced_backoff(Duration::from_millis(5).min(remaining));
+                    });
+                }
+                Ok(ReadOutcome::Frames { .. }) => {
+                    hang_reset!();
+                }
+                Ok(ReadOutcome::Eof { .. }) => {
+                    saw_eof = true;
+                    hang_reset!();
+                    break;
+                }
+                Err(e) => panic!("decode error: {e}"),
+            }
+        }
+        (audio.position(), saw_eof, waits)
+    })
+    .await
+    .expect("the decode thread must not panic")
+}
+
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog]
+async fn seek_and_read(
+    mut audio: impl AudioRead + AudioControl + Send + 'static,
+    position: Duration,
+    max_pending_waits: usize,
+) -> ReadOutcome {
+    spawn_blocking(move || {
+        audio.seek(position).expect("seek inside the track");
+        let mut buf = [0.0f32; 4096];
+        for _ in 0..max_pending_waits {
+            hang_tick!();
+            match audio.read(&mut buf) {
+                Ok(ReadOutcome::Pending { .. }) => hang_park!(|remaining| {
+                    thread::paced_backoff(Duration::from_millis(5).min(remaining));
+                }),
+                Ok(outcome) => {
+                    hang_reset!();
+                    return outcome;
+                }
+                Err(e) => panic!("decode error after the seek: {e}"),
+            }
+        }
+        panic!("the source stopped delivering the range the seek requested")
+    })
+    .await
+    .expect("the decode thread must not panic")
+}
+
 #[kithara::test(tokio)]
 #[cfg_attr(
     not(target_os = "android"),
@@ -94,7 +198,7 @@ async fn audio_file_mp3_decodes_with_duration(
         )
         .maybe_hint(hint.map(str::to_owned))
         .build();
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .unwrap_or_else(|e| panic!("probe failed for url={url} hint={hint:?}: {e}"));
 
@@ -110,32 +214,7 @@ async fn audio_file_mp3_decodes_with_duration(
         consts::TEST_MP3_DURATION_SECS
     );
 
-    let (samples_read, position, eof) = spawn_blocking(move || {
-        let mut total = 0usize;
-        let mut buf = [0.0f32; 4096];
-        let mut saw_eof = false;
-
-        for _ in 0..600 {
-            match audio.read(&mut buf) {
-                Ok(ReadOutcome::Pending { .. }) => break,
-                Ok(ReadOutcome::Frames { count, .. }) => {
-                    total += count.get();
-                }
-                Ok(ReadOutcome::Eof { .. }) => {
-                    saw_eof = true;
-                    break;
-                }
-                Err(e) => panic!("decode error: {e}"),
-            }
-            if audio.position() >= Duration::from_secs(2) {
-                break;
-            }
-        }
-
-        (total, audio.position(), saw_eof)
-    })
-    .await
-    .unwrap();
+    let (samples_read, position, eof) = read_prefix(audio).await;
 
     assert!(samples_read > 0, "no decoded samples");
     assert!(
@@ -207,35 +286,11 @@ async fn streamed_mp3_plays_to_the_length_it_was_built_to(
                 .build(),
         )
         .build();
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("open the streamed track");
 
-    let (position, eof, waits) = spawn_blocking(move || {
-        let mut buf = [0.0f32; 4096];
-        let mut saw_eof = false;
-        let mut waits = 0usize;
-        loop {
-            match audio.read(&mut buf) {
-                Ok(ReadOutcome::Pending { .. }) => {
-                    waits += 1;
-                    if waits >= MAX_PENDING_WAITS {
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(5));
-                }
-                Ok(ReadOutcome::Frames { .. }) => {}
-                Ok(ReadOutcome::Eof { .. }) => {
-                    saw_eof = true;
-                    break;
-                }
-                Err(e) => panic!("decode error: {e}"),
-            }
-        }
-        (audio.position(), saw_eof, waits)
-    })
-    .await
-    .expect("the decode thread must not panic");
+    let (position, eof, waits) = read_to_end(audio, MAX_PENDING_WAITS).await;
 
     assert!(
         waits < MAX_PENDING_WAITS,
@@ -311,7 +366,7 @@ async fn headerless_mp3_whose_bitrate_changes_plays_past_its_opening_estimate(
                 .build(),
         )
         .build();
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .expect("open the headerless track");
 
@@ -321,20 +376,7 @@ async fn headerless_mp3_whose_bitrate_changes_plays_past_its_opening_estimate(
         "{backend:?}: a published length must not end before audio the file holds, got {duration:?}"
     );
 
-    let outcome = spawn_blocking(move || {
-        audio.seek(SEEK).expect("seek inside the track");
-        let mut buf = [0.0f32; 4096];
-        for _ in 0..MAX_PENDING_WAITS {
-            match audio.read(&mut buf) {
-                Ok(ReadOutcome::Pending { .. }) => thread::sleep(Duration::from_millis(5)),
-                Ok(outcome) => return outcome,
-                Err(e) => panic!("decode error after the seek: {e}"),
-            }
-        }
-        panic!("the source stopped delivering the range the seek requested")
-    })
-    .await
-    .expect("the decode thread must not panic");
+    let outcome = seek_and_read(audio, SEEK, MAX_PENDING_WAITS).await;
 
     let ReadOutcome::Frames { position, .. } = outcome else {
         panic!("{backend:?}: a seek to {SEEK:?} must play on, got {outcome:?}");
@@ -418,36 +460,11 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe(tone_mp3: &
         .pools(pools)
         .build();
     let config = AudioConfig::<File<TestPools>>::for_stream(file_config).build();
-    let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
+    let audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await
         .unwrap();
 
-    let (samples_read, position, eof) = spawn_blocking(move || {
-        let mut total = 0usize;
-        let mut buf = [0.0f32; 4096];
-        let mut saw_eof = false;
-
-        for _ in 0..600 {
-            match audio.read(&mut buf) {
-                Ok(ReadOutcome::Pending { .. }) => break,
-                Ok(ReadOutcome::Frames { count, .. }) => {
-                    total += count.get();
-                }
-                Ok(ReadOutcome::Eof { .. }) => {
-                    saw_eof = true;
-                    break;
-                }
-                Err(e) => panic!("decode error: {e}"),
-            }
-            if audio.position() >= Duration::from_secs(2) {
-                break;
-            }
-        }
-
-        (total, audio.position(), saw_eof)
-    })
-    .await
-    .unwrap();
+    let (samples_read, position, eof) = read_prefix(audio).await;
 
     assert!(samples_read > 0, "no decoded samples");
     assert!(
