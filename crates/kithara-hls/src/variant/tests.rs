@@ -393,6 +393,36 @@ fn segment_aware_seek_alias_routes_tail_by_segment_index() {
 }
 
 #[kithara::test]
+fn segment_aware_byte_seek_retires_stale_time_alias() {
+    let ctx = test_ctx(3);
+    let variant = VariantParts {
+        init: None,
+        segments: (0..4)
+            .map(|idx| make_placeholder_seg(idx, 100, &ctx.scope))
+            .collect(),
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    let anchor = variant
+        .prepare_seek_time_anchor(Duration::from_secs(4))
+        .expect("time seek")
+        .expect("segment anchor");
+    let session = active_session(&variant, &ctx, anchor.byte_offset);
+    variant.apply_resolved_size(SizeDemand::Segment(1), 200);
+    let refreshed = variant.descriptor(2).expect("refreshed target segment");
+    assert_ne!(refreshed.byte_range.start, anchor.byte_offset);
+
+    session.seek_to_byte(refreshed.byte_range.start);
+
+    assert_eq!(
+        session.find_at_offset(refreshed.byte_range.start),
+        Some((2, refreshed.byte_range.start, 100)),
+    );
+    assert!(!seek_projection_is_live(&variant));
+}
+
+#[kithara::test]
 fn position_starts_at_zero() {
     let ctx = test_ctx(3);
     let v = make_var(0, 200, &[400], &ctx);
