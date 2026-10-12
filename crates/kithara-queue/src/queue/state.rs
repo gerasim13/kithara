@@ -195,6 +195,32 @@ where
 
     /// Publishes before announcing, so an event's reader sees its state.
     pub(super) fn publish(&mut self) {
+        if let Some(SeekPosition::Pending { item, segment, .. }) = self.held_position {
+            let active = self
+                .active_current_index()
+                .or_else(|| {
+                    self.target.and_then(|target| {
+                        self.active.position(|active| {
+                            active.item == target.to && matches!(active.role, Role::Incoming { .. })
+                        })
+                    })
+                })
+                .and_then(|index| self.active.get(index));
+            if active.is_none_or(|active| active.item != item)
+                || active.is_some_and(|active| {
+                    segment.is_some_and(|segment| {
+                        active
+                            .track
+                            .snapshot()
+                            .as_ref()
+                            .mark
+                            .is_some_and(|mark| mark.lane.segment == segment)
+                    })
+                })
+            {
+                self.held_position = None;
+            }
+        }
         self.events.extend(self.tracks.drain_events());
         let snapshot = self.queue_snapshot();
         let previous = self.view.read().deck.mix;

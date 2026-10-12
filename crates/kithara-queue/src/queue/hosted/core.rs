@@ -144,13 +144,30 @@ where
                     },
                     out,
                 );
-                let answered = match settled {
-                    Settled::Applied { seq, .. } | Settled::Rejected { seq, .. } => Some(seq),
-                    Settled::Pending => None,
-                };
-                if matches!(self.held_position, Some(super::super::types::SeekPosition::Pending { item, seq, .. }) if item == active.item && answered == Some(seq))
+                if let Some(super::super::types::SeekPosition::Pending {
+                    item,
+                    seq: caller,
+                    segment,
+                    ..
+                }) = &mut self.held_position
+                    && *item == active.item
                 {
-                    self.held_position = None;
+                    match settled {
+                        Settled::Rejected { seq: answered, .. } if answered == *caller => {
+                            self.held_position = None;
+                        }
+                        Settled::Applied { seq: answered, .. } if answered == *caller => {
+                            *segment = batch.commands.iter().find_map(|part| match part {
+                                kithara_play::DeckPart::Adopt { slot, segment }
+                                    if *slot == active.slot =>
+                                {
+                                    Some(*segment)
+                                }
+                                _ => None,
+                            });
+                        }
+                        _ => {}
+                    }
                 }
                 outcomes.push((index, settled));
             }

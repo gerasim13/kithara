@@ -304,27 +304,6 @@ where
         }
     }
 
-    fn seek_to(
-        &mut self,
-        to: Position,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Option<Seq>, QueueError> {
-        let index = self.active_current_index().or_else(|| {
-            self.target
-                .and_then(|target| self.incoming_index(target.to))
-        });
-        let Some(index) = index else {
-            self.held_position = Some(SeekPosition::Held(to));
-            return Ok(None);
-        };
-        let active = self.active.get_mut(index).ok_or(PlayError::NoActiveSlot)?;
-        let item = active.item;
-        let sent = active.track.apply(TrackCommand::Seek { to }, out)?;
-        self.withdraw_auto(out)?;
-        self.held_position = sent.map(|seq| SeekPosition::Pending { item, seq, to });
-        Ok(sent)
-    }
-
     fn configure_queue(
         &mut self,
         change: QueueSettingsChange,
@@ -469,6 +448,38 @@ where
         }
         let prep = self.config.prep.as_ref().ok_or(PlayError::NotReady)?;
         out.eq_layout(prep.worker.pools(), bands, self.config.mixer.sample_rate())
+    }
+}
+
+impl<S, F> Queue<S, F>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    F: TrackFactory<S>,
+{
+    fn seek_to(
+        &mut self,
+        to: Position,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<Option<Seq>, QueueError> {
+        let index = self.active_current_index().or_else(|| {
+            self.target
+                .and_then(|target| self.incoming_index(target.to))
+        });
+        let Some(index) = index else {
+            self.held_position = Some(SeekPosition::Held(to));
+            return Ok(None);
+        };
+        let active = self.active.get_mut(index).ok_or(PlayError::NoActiveSlot)?;
+        let item = active.item;
+        let sent = active.track.apply(TrackCommand::Seek { to }, out)?;
+        self.withdraw_auto(out)?;
+        self.held_position = sent.map(|seq| SeekPosition::Pending {
+            item,
+            seq,
+            to,
+            segment: None,
+        });
+        Ok(sent)
     }
 }
 
