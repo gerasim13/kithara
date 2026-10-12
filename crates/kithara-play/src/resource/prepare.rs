@@ -7,7 +7,8 @@ use kithara_decode::GaplessMode;
 use kithara_derive::Patch;
 use kithara_events::EventBus;
 use kithara_platform::{CancelScope, CancelToken, sync::Arc};
-use kithara_warp::WarpConfig;
+use kithara_render::rt::BufferGeometryError;
+use kithara_warp::{WarpConfig, WarpConfigPatch};
 
 use crate::{EngineLoad, OutputSnapshot, PlayError, PlayWorker, resource::ResourceConfig};
 
@@ -71,8 +72,20 @@ where
             let track = cancel.clone();
             Arc::new(parent.on_cancel(move || track.cancel()))
         });
+        let mut warp = self.warp.clone();
+        if warp.render_quantum_frames().is_none()
+            && self.response_budget_frames.is_some()
+            && let Some(shape) = output.stream_shape
+        {
+            let quantum = NonZeroUsize::try_from(shape.max_block_frames)
+                .map_err(|_| BufferGeometryError::Overflow)?;
+            let mut patch = WarpConfigPatch::default();
+            patch.render_quantum_frames = Some(quantum);
+            warp.apply(patch)
+                .map_err(|error| PlayError::Internal(error.to_string()))?;
+        }
         let (preload_chunks, audio_buffer_chunks) =
-            match (self.warp.render_quantum_frames(), output.stream_shape) {
+            match (warp.render_quantum_frames(), output.stream_shape) {
                 (Some(quantum), Some(shape)) => {
                     let (preload, ring) =
                         shape.playback_buffers(quantum, self.response_budget_frames)?;
@@ -113,7 +126,7 @@ where
             audio_buffer_chunks,
             host_sample_rate: NonZeroU32::new(output.sample_rate.output()),
             decoder,
-            warp: self.warp.clone(),
+            warp,
             engine_load: Some(Arc::clone(&self.engine_load)),
             ..config
         })
@@ -382,6 +395,35 @@ mod tests {
             prepared.audio_buffer_chunks.map(NonZeroUsize::get),
             Some(expected_ring)
         );
+    }
+
+    #[kithara::test]
+    fn response_budget_bounds_the_default_render_quantum() {
+        let (mut prep, output) = prep_with_geometry(32, 128, 441);
+        prep.warp = WarpConfig::builder().build();
+        let prepared = prep
+            .prepare(resource_config("https://example.com/song.mp3"), &output)
+            .expect("the session block fits the response budget");
+
+        assert_eq!(
+            prepared.warp.render_quantum_frames().map(NonZeroUsize::get),
+            Some(128)
+        );
+        assert_eq!(prepared.preload_chunks.map(NonZeroUsize::get), Some(1));
+        assert_eq!(prepared.audio_buffer_chunks.map(NonZeroUsize::get), Some(2));
+        assert_eq!(prep.warp.render_quantum_frames(), None);
+
+        prep.response_budget_frames = NonZeroUsize::new(382);
+        assert!(matches!(
+            prep.prepare(resource_config("https://example.com/song.mp3"), &output),
+            Err(PlayError::Session(SessionError::BufferGeometry(
+                BufferGeometryError::BudgetExceeded {
+                    required_frames: 383,
+                    budget_frames: 382,
+                    ..
+                }
+            )))
+        ));
     }
 
     #[kithara::test]
