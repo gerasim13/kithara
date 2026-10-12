@@ -1,4 +1,3 @@
-#![cfg(not(target_arch = "wasm32"))]
 use kithara_platform::sync::WaitGate;
 use kithara_signal::SegmentId;
 use kithara_test_utils::kithara;
@@ -15,7 +14,22 @@ fn pop_blocking(reader: &mut PcmReceiver) -> Option<PcmPacket> {
     reader.pop()
 }
 
-#[kithara::test(native, tokio)]
+#[cfg(not(target_arch = "wasm32"))]
+#[kithara::flash(io)]
+#[kithara::hang_watchdog]
+fn receive_notice(receiver: &std::sync::mpsc::Receiver<()>) {
+    hang_tick!();
+    let mut notice = None;
+    hang_park!(|remaining| {
+        notice = Some(receiver.recv_timeout(remaining));
+    });
+    notice
+        .expect("bounded observer wait")
+        .expect("scheduler notice");
+    hang_reset!();
+}
+
+#[kithara::test(tokio)]
 #[case::nonblocking(false)]
 #[case::offline(true)]
 async fn playback_publication_is_deferred_even_for_an_offline_receiver(#[case] blocking: bool) {
@@ -59,7 +73,7 @@ fn blocking_recv_without_preload_panics_when_no_chunk_arrives() {
 }
 
 #[kithara::test(native, tokio)]
-async fn a_nonblocking_poll_of_an_empty_ring_states_its_demand() {
+async fn an_empty_poll_schedules_exactly_one_producer_pass() {
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -89,7 +103,7 @@ async fn a_nonblocking_poll_of_an_empty_ring_states_its_demand() {
         fn on_event(&mut self, event: Event) {
             if matches!(event, Event::Backpressured(_)) {
                 self.parked.send(()).expect("report producer backpressure");
-                self.resume.recv().expect("resume producer scheduler");
+                receive_notice(&self.resume);
             }
         }
     }
@@ -119,23 +133,16 @@ async fn a_nonblocking_poll_of_an_empty_ring_states_its_demand() {
         crate::worker::scheduler::StreamWake::new(dispatcher.wake_handle()),
     )
     .await;
-    let timeout = Duration::from_secs(2);
-    observed
-        .recv_timeout(timeout)
-        .expect("first backpressured pass");
+    receive_notice(&observed);
     dispatcher.wake_handle().wake();
     resume.send(()).expect("consume the registration wake");
-    observed
-        .recv_timeout(timeout)
-        .expect("registration wake consumed");
+    receive_notice(&observed);
     let before = ticks.load(Ordering::Relaxed);
     let receiver = fixture.receiver.as_mut().expect("receiver");
     assert!(receiver.pop().is_none());
     assert!(receiver.ready.is_none());
     resume.send(()).expect("park after empty poll");
-    observed
-        .recv_timeout(timeout)
-        .expect("empty poll must wake the producer");
+    receive_notice(&observed);
     assert_eq!(
         ticks.load(Ordering::Relaxed),
         before + 1,
@@ -145,7 +152,25 @@ async fn a_nonblocking_poll_of_an_empty_ring_states_its_demand() {
     resume.send(()).expect("release observer for shutdown");
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(tokio)]
+async fn a_nonblocking_poll_of_an_empty_ring_states_its_demand() {
+    let wake = kithara_worker::Wake::default();
+    let mut fixture = PcmFixture::with_wake(
+        4,
+        false,
+        crate::worker::scheduler::StreamWake::new(wake.clone()),
+    )
+    .await;
+    assert!(fixture.receiver.as_mut().expect("receiver").pop().is_none());
+    assert!(fixture.receiver.as_ref().expect("receiver").ready.is_none());
+    assert_eq!(
+        kithara_worker::mock::wake_state(&wake),
+        (0, true),
+        "an empty poll states producer demand"
+    );
+}
+
+#[kithara::test(tokio)]
 async fn block_on_underrun_forces_immediate_off_rt_wakes() {
     let wake = kithara_worker::Wake::default();
     let mut fixture = PcmFixture::with_wake(
@@ -167,7 +192,7 @@ async fn block_on_underrun_forces_immediate_off_rt_wakes() {
     assert_eq!(kithara_worker::mock::wake_state(&wake), (2, false));
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(tokio)]
 async fn an_adopted_mode_still_yields_to_blocking_reads() {
     let wake = kithara_worker::Wake::default();
     let mut fixture = PcmFixture::with_wake(
@@ -212,7 +237,7 @@ async fn an_adopted_mode_still_yields_to_blocking_reads() {
     assert_eq!(kithara_worker::mock::wake_state(&deferred), (0, true));
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(tokio)]
 async fn every_in_flight_packet_fits_the_reverse_ring_without_recycling() {
     let capacity = 4;
     let mut fixture = PcmFixture::new(capacity, true).await;
@@ -256,14 +281,28 @@ async fn every_in_flight_packet_fits_the_reverse_ring_without_recycling() {
     assert!(fixture.returned().is_none());
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(tokio)]
 async fn explicit_off_rt_mode_is_immediate_without_blocking_reads() {
-    let mut fixture = PcmFixture::new(4, false).await;
+    let wake = kithara_worker::Wake::default();
+    let mut fixture = PcmFixture::with_wake(
+        4,
+        false,
+        crate::worker::scheduler::StreamWake::new(wake.clone()),
+    )
+    .await;
     assert!(fixture.receiver.as_ref().expect("receiver").ready.is_none());
-    assert!(pop_blocking(fixture.receiver.as_mut().expect("receiver")).is_none());
+    assert!(
+        fixture
+            .receiver
+            .as_mut()
+            .expect("receiver")
+            .pop_off_rt()
+            .is_none()
+    );
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (1, false));
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(tokio)]
 async fn blocking_recv_returns_closed_after_cancel() {
     let mut fixture = PcmFixture::new(4, true).await;
     fixture.close();
@@ -288,7 +327,7 @@ async fn a_preloaded_read_still_parks_when_underruns_block() {
     assert!(fixture.producer.is_some());
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(tokio)]
 async fn consumer_phase_failed_on_channel_close() {
     let mut fixture = PcmFixture::new(4, true).await;
     fixture.close();
@@ -303,19 +342,19 @@ async fn consumer_phase_failed_on_channel_close() {
     );
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(tokio)]
 async fn preloaded_recv_is_nonblocking() {
     let mut fixture = PcmFixture::new(4, false).await;
     assert!(fixture.receiver.as_mut().expect("receiver").pop().is_none());
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(tokio)]
 async fn audio_config_defaults_to_realtime_deferred_consumer_wakes() {
     let fixture = PcmFixture::new(4, false).await;
     assert!(fixture.receiver.as_ref().expect("receiver").ready.is_none());
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(tokio)]
 async fn wake_signal() {
     let mut fixture = PcmFixture::new(2, true).await;
     let ready = fixture
@@ -333,7 +372,7 @@ async fn wake_signal() {
         .expect("ring push");
     assert_ne!(ready.current(), since);
 }
-#[kithara::test(native, tokio)]
+#[kithara::test(tokio)]
 async fn wake_skipped_when_parking_in_overflow() {
     let mut fixture = PcmFixture::new(1, true).await;
     let ready = fixture
@@ -359,7 +398,7 @@ async fn wake_skipped_when_parking_in_overflow() {
     fixture.push(packet).expect("admit retained packet");
     assert_eq!(ready.current(), since + 2);
 }
-#[kithara::test(native, tokio)]
+#[kithara::test(tokio)]
 async fn wake_fires_every_ring_push() {
     let mut fixture = PcmFixture::new(2, true).await;
     let ready = fixture
@@ -391,77 +430,92 @@ async fn wake_fires_every_ring_push() {
     assert_eq!(ready.current(), since + 3);
 }
 
-#[kithara::test(native, tokio)]
+#[kithara::test(tokio)]
 async fn output_wake_is_deferred_until_the_scheduler_shell_flushes() {
-    let mut fixture = PcmFixture::new(2, true).await;
-    let ready = fixture
-        .receiver
-        .as_ref()
-        .expect("receiver")
-        .ready
-        .as_ref()
-        .expect("readiness")
-        .clone();
-    let since = ready.current();
-    assert_eq!(ready.current(), since);
-    fixture
-        .push(PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[0.1]))))
-        .expect("owner-thread admission");
-    let delivered = ready.current();
-    assert_ne!(delivered, since);
-    assert_eq!(ready.current(), delivered);
+    let wake = kithara_worker::Wake::default();
+    let mut fixture = PcmFixture::with_wake(
+        2,
+        false,
+        crate::worker::scheduler::StreamWake::new(wake.clone()),
+    )
+    .await;
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (0, false));
+    assert!(fixture.receiver.as_mut().expect("receiver").pop().is_none());
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (0, true));
+    assert!(kithara_worker::mock::flush_deferred(&wake));
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (0, false));
+    assert!(!kithara_worker::mock::flush_deferred(&wake));
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (0, false));
 }
-#[kithara::test(native, tokio)]
+#[kithara::test(tokio)]
 async fn reader_output_wake_is_deferred_and_coalesced() {
-    let mut fixture = PcmFixture::new(2, true).await;
-    let ready = fixture
-        .receiver
-        .as_ref()
-        .expect("receiver")
-        .ready
-        .as_ref()
-        .expect("readiness")
-        .clone();
-    let since = ready.current();
-    assert_eq!(ready.current(), since);
-    fixture
-        .push(PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[0.1]))))
-        .expect("first owner admission");
-    fixture
-        .push(PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[0.2]))))
-        .expect("second owner admission");
-    assert_eq!(ready.current(), since + 2);
-    assert_eq!(ready.current(), since + 2);
+    let wake = kithara_worker::Wake::default();
+    let mut fixture = PcmFixture::with_wake(
+        2,
+        false,
+        crate::worker::scheduler::StreamWake::new(wake.clone()),
+    )
+    .await;
+    assert!(fixture.receiver.as_mut().expect("receiver").pop().is_none());
+    assert!(fixture.receiver.as_mut().expect("receiver").pop().is_none());
+    assert_eq!(
+        kithara_worker::mock::wake_state(&wake),
+        (0, true),
+        "reader requests do not signal the gate immediately"
+    );
+    assert!(kithara_worker::mock::flush_deferred(&wake));
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (0, false));
+    assert!(
+        !kithara_worker::mock::flush_deferred(&wake),
+        "a second flush delivers no extra pass"
+    );
 }
-#[kithara::test(native, tokio)]
-async fn output_available_event_is_coalesced_per_producer_pass() {
-    let mut fixture = PcmFixture::new(2, true).await;
-    let ready = fixture
-        .receiver
-        .as_ref()
-        .expect("receiver")
-        .ready
-        .as_ref()
-        .expect("readiness")
-        .clone();
-    let since = ready.current();
+#[kithara::test(tokio)]
+#[case::offline(true)]
+#[case::realtime_nonblocking(false)]
+async fn output_available_event_is_coalesced_per_producer_pass(#[case] blocking: bool) {
+    let _real_io = (!blocking).then(kithara_platform::flash::real_io);
+    let mut fixture = PcmFixture::new(2, blocking).await;
+    let mut events = fixture.events::<kithara_audio::AudioEvent>();
     fixture
         .push(PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[0.1]))))
         .expect("first push");
-    assert_eq!(ready.current(), since + 1);
+    assert!(events.try_recv().is_err());
+    fixture.flush();
+    assert!(matches!(
+        events.try_recv().map(|envelope| envelope.event),
+        Ok(kithara_audio::AudioEvent::OutputAvailable)
+    ));
     fixture
         .push(PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[0.2]))))
         .expect("second push");
-    assert_eq!(ready.current(), since + 2);
-    assert_eq!(ready.current(), since + 2);
-    assert!(fixture.receiver.as_mut().expect("receiver").pop().is_some());
-    assert!(fixture.receiver.as_mut().expect("receiver").pop().is_some());
+    assert!(events.try_recv().is_err());
+    fixture.flush();
+    assert!(matches!(
+        events.try_recv().map(|envelope| envelope.event),
+        Ok(kithara_audio::AudioEvent::OutputAvailable)
+    ));
+    fixture.flush();
+    assert!(events.try_recv().is_err());
+    let first = fixture.receiver.as_mut().expect("receiver").pop();
+    let second = fixture.receiver.as_mut().expect("receiver").pop();
+    assert!(first.is_some());
+    assert!(second.is_some());
+    let underruns = usize::from(first.is_none()) + usize::from(second.is_none());
+    assert_eq!(
+        underruns, 0,
+        "available PCM never underruns a nonblocking consumer"
+    );
     fixture
         .push(PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[0.3]))))
         .expect("third push");
     fixture
         .push(PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[0.4]))))
         .expect("fourth push");
-    assert_eq!(ready.current(), since + 4);
-    assert_eq!(ready.current(), since + 4);
+    fixture.flush();
+    assert!(matches!(
+        events.try_recv().map(|envelope| envelope.event),
+        Ok(kithara_audio::AudioEvent::OutputAvailable)
+    ));
+    assert!(events.try_recv().is_err(), "one event per producer pass");
 }

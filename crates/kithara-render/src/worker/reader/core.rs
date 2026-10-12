@@ -1,8 +1,9 @@
 use std::{fmt, num::NonZeroUsize};
 
 use kithara_abr::AbrHandle;
-use kithara_audio::Audio;
+use kithara_audio::{Audio, AudioEvent, AudioSession};
 use kithara_decode::TrackMetadata;
+use kithara_events::EventBus;
 use kithara_platform::{
     sync::{Arc, ThreadGate, WaitGate},
     time::Duration,
@@ -23,6 +24,8 @@ pub(in crate::worker) struct PcmProducer {
     pub(in crate::worker) reverse: HeapCons<PcmPacket>,
     pub(in crate::worker) playing: Output<bool>,
     pub(super) ready: FinalWake,
+    pub(in crate::worker) events: EventBus,
+    pub(in crate::worker) output_pending: bool,
 }
 
 pub(super) struct FinalWake(pub(super) Option<Arc<ThreadGate>>);
@@ -36,9 +39,16 @@ impl Drop for FinalWake {
 }
 
 impl PcmProducer {
-    pub(in crate::worker) fn signal(&self) {
+    pub(in crate::worker) fn signal(&mut self) {
+        self.output_pending = true;
         if let Some(ready) = &self.ready.0 {
             ready.signal();
+        }
+    }
+
+    pub(in crate::worker) fn flush(&mut self) {
+        if std::mem::take(&mut self.output_pending) {
+            self.events.publish(AudioEvent::OutputAvailable);
         }
     }
 }
@@ -93,6 +103,8 @@ impl PcmReceiver {
                 reverse: reverse_rx,
                 playing: playing_rx,
                 ready: FinalWake(ready),
+                events: AudioSession::event_bus(audio).clone(),
+                output_pending: false,
             },
         )
     }
@@ -189,12 +201,14 @@ impl PcmReceiver {
             return;
         };
         loop {
+            hang_tick!();
             let since = ready.current();
             if self.forward.try_peek().is_some() || !self.forward.write_is_held() {
                 hang_reset!();
                 return;
             }
             self.wake.wake();
+            let _real_io = kithara_platform::flash::real_io();
             hang_park!(|remaining| {
                 ready.wait_timeout(since, remaining);
             });
@@ -203,6 +217,23 @@ impl PcmReceiver {
 
     /// Try to take one packet without waiting, regardless of blocking policy.
     pub fn pop(&mut self) -> Option<PcmPacket> {
+        if self.ready.is_some() {
+            return self.pop_off_rt();
+        }
+        let packet = self.take_packet();
+        self.notify();
+        packet
+    }
+
+    /// Take one packet without waiting and immediately schedule its producer.
+    /// Use this on an off-real-time consumer, not an audio callback.
+    pub fn pop_off_rt(&mut self) -> Option<PcmPacket> {
+        let packet = self.take_packet();
+        self.wake.wake();
+        packet
+    }
+
+    fn take_packet(&mut self) -> Option<PcmPacket> {
         let packet = self.forward.try_pop();
         if let Some(PcmPacket::Chunk(chunk)) = &packet {
             self.spec = chunk.spec();
@@ -217,7 +248,6 @@ impl PcmReceiver {
                 }
             }
         }
-        self.notify();
         packet
     }
 

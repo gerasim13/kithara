@@ -1,38 +1,42 @@
-#![cfg(not(target_arch = "wasm32"))]
 use std::num::NonZeroUsize;
 
-use kithara_audio::Audio;
-use kithara_command::{ChannelConfig, channel};
+use kithara_audio::TrackStep;
+use kithara_command::{ChannelConfig, Sender, channel};
 use kithara_effects::EffectDrain;
-use kithara_file::File;
-use kithara_signal::AudioChunkInfo;
-use kithara_stream::Activity;
+use kithara_signal::{AudioChunk, AudioChunkInfo};
+use kithara_stream::{Activity, ActivityWriter};
 use kithara_warp::{Warp, WarpConfig};
 
 use super::{DecoderNode, pending::PendingPacket};
 use crate::{
     WarpSource,
-    mock::pcm_fixture::PcmFixture,
+    mock::{ScriptedSource, pcm_fixture::PcmFixture},
     test_pools::{TestPools, pools},
     worker::PcmReceiver,
 };
 pub(in crate::worker::node) struct NodeFixture {
-    pub(in crate::worker::node) node:
-        DecoderNode<Audio<kithara_stream::Stream<File<TestPools>>>, TestPools>,
+    pub(in crate::worker::node) node: DecoderNode<ScriptedSource, TestPools>,
     pub(in crate::worker::node) receiver: PcmReceiver,
     pub(in crate::worker::node) activity: Activity,
+    pub(in crate::worker::node) lane: Sender<crate::LaneProtocol>,
 }
 impl NodeFixture {
     pub(in crate::worker::node) async fn new(capacity: usize) -> Self {
-        let mut fixture = PcmFixture::new(capacity, true).await;
-        let mut audio = fixture.audio.take().expect("source owner");
-        let activity = audio.activity();
-        let writer = audio.take_activity_writer();
-        let spec = audio.spec();
-        let (_, inbox) = channel(ChannelConfig::builder().build());
+        Self::with_steps(capacity, []).await
+    }
+
+    pub(in crate::worker::node) async fn with_steps(
+        capacity: usize,
+        steps: impl IntoIterator<Item = TrackStep<AudioChunk>>,
+    ) -> Self {
+        let mut fixture = PcmFixture::new(capacity, false).await;
+        let writer = ActivityWriter::new();
+        let activity = writer.reader();
+        let spec = fixture.receiver.as_ref().expect("receiver").spec();
+        let (lane, inbox) = channel(ChannelConfig::builder().build());
         let pools = pools();
         let source = WarpSource::new(
-            audio,
+            ScriptedSource::new(steps),
             Warp::new((), &WarpConfig::builder().build()).renderer(spec, pools.clone()),
             Vec::new(),
             EffectDrain::new(0, &pools).expect("empty effect drain"),
@@ -48,7 +52,7 @@ impl NodeFixture {
             node: DecoderNode::new(
                 source,
                 fixture.producer.take().expect("producer owner"),
-                writer,
+                Some(writer),
                 AudioChunkInfo {
                     spec,
                     ..AudioChunkInfo::default()
@@ -59,6 +63,7 @@ impl NodeFixture {
             ),
             receiver: fixture.receiver.take().expect("receiver owner"),
             activity,
+            lane,
         }
     }
     pub(in crate::worker::node) fn stage(&mut self, packet: crate::worker::PcmPacket) {
