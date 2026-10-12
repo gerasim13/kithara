@@ -16,11 +16,7 @@ ignored = ["serde"]
 
 [features]
 default = ["symphonia", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
-mock = [
-    "dep:kithara-render",
-    "kithara-play/mock",
-    "kithara-test-utils/temp-dir",
-]
+mock = ["dep:kithara-render", "kithara-play/mock", "kithara-test-utils/temp-dir"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = ["kithara-play/client-reqwest", "kithara-download/client-reqwest", "kithara-abr/client-reqwest"]
 client-wreq = ["kithara-play/client-wreq", "kithara-download/client-wreq", "kithara-abr/client-wreq"]

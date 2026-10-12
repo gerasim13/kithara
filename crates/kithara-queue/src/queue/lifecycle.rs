@@ -517,11 +517,16 @@ where
 mod tests {
     use kithara_assets::{AssetStore, StorageBackend};
     use kithara_host::{Host, HostConfig, HostOwned};
-    use kithara_platform::tokio::task::spawn_blocking;
+    use kithara_platform::{
+        time::{self, Duration},
+        tokio::task::spawn_blocking,
+    };
     use kithara_play::{
         DeckEvent, HostedDeck, PlayWorker, PlayWorkerConfig, ResourcePrep, Slot, TrackReceipt,
     };
     use kithara_test_utils::kithara;
+    #[cfg(not(target_arch = "wasm32"))]
+    use kithara_test_utils::off_thread::OffThread;
 
     use super::*;
     use crate::{
@@ -534,38 +539,96 @@ mod tests {
         test_pools::{TestPools, pools},
     };
 
-    async fn hosted_queue() -> (HostOwned<Queue<TestPools>>, Host<TestPools>) {
-        spawn_blocking(|| {
-            let prep = ResourcePrep::builder()
-                .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-                .build();
-            let config = QueueConfig::builder()
-                .prep(prep)
-                .store(
-                    AssetStore::builder(pools())
-                        .backend(StorageBackend::Memory)
-                        .build(),
-                )
-                .build();
-            let mut host =
-                Host::new(HostConfig::offline(pools()).build()).expect("fixture offline Host");
-            let queue = host
-                .insert(Queue::new(config))
-                .expect("insert fixture queue");
-            (queue, host)
-        })
-        .await
-        .expect("create queue on the blocking test worker")
+    #[cfg(not(target_arch = "wasm32"))]
+    type QueueHost = OffThread<Host<TestPools>>;
+    #[cfg(target_arch = "wasm32")]
+    type QueueHost = Host<TestPools>;
+
+    fn insert_queue(host: &mut Host<TestPools>) -> HostOwned<Queue<TestPools>> {
+        let prep = ResourcePrep::builder()
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+            .build();
+        let config = QueueConfig::builder()
+            .prep(prep)
+            .store(
+                AssetStore::builder(pools())
+                    .backend(StorageBackend::Memory)
+                    .build(),
+            )
+            .build();
+        host.insert(Queue::new(config))
+            .expect("insert fixture queue")
     }
 
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    #[kithara::flash(io)]
+    async fn hosted_queue() -> (HostOwned<Queue<TestPools>>, QueueHost) {
+        hang_tick!();
+        let fixture = time::timeout(__hang_detector.remaining(), async {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let host = OffThread::spawn("queue-lifecycle-host", || {
+                    Host::new(HostConfig::offline(pools()).build())
+                })
+                .await
+                .expect("fixture offline Host");
+                let queue = host.call(insert_queue).await;
+                (queue, host)
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                spawn_blocking(|| {
+                    let mut host = Host::new(HostConfig::offline(pools()).build())
+                        .expect("fixture offline Host");
+                    let queue = insert_queue(&mut host);
+                    (queue, host)
+                })
+                .await
+                .expect("create queue on the blocking test worker")
+            }
+        })
+        .await;
+        hang_tick!();
+        let fixture = fixture.expect("queue fixture initializes within its liveness budget");
+        hang_reset!();
+        fixture
+    }
+
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    #[kithara::flash(io)]
+    async fn close_host(host: QueueHost) {
+        hang_tick!();
+        let closed = time::timeout(__hang_detector.remaining(), async move {
+            #[cfg(not(target_arch = "wasm32"))]
+            host.close().await;
+            #[cfg(target_arch = "wasm32")]
+            drop(host);
+        })
+        .await;
+        hang_tick!();
+        closed.expect("queue Host teardown completes within its liveness budget");
+        hang_reset!();
+    }
+
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    #[kithara::flash(io)]
     async fn command<R: Send + 'static>(
         queue: &QueueControl<TestPools>,
         run: impl FnOnce(QueueControl<TestPools>) -> R + Send + 'static,
     ) -> R {
         let control = queue.clone();
-        spawn_blocking(move || run(control))
-            .await
-            .expect("queue command worker must not panic")
+        hang_tick!();
+        let answer = time::timeout(
+            __hang_detector.remaining(),
+            spawn_blocking(move || run(control)),
+        )
+        .await;
+        hang_tick!();
+        let answer = answer
+            .expect("queue command completes within its liveness budget")
+            .expect("queue command worker must not panic");
+        hang_reset!();
+        answer
     }
 
     async fn append(queue: &QueueControl<TestPools>, source: &str) -> TrackId {
@@ -580,16 +643,18 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn len_is_empty_reflect_append() {
-        let (queue, _host) = hosted_queue().await;
+        let (queue, host) = hosted_queue().await;
         assert!(queue.is_empty());
         let _ = append(&queue, "https://example.com/a.mp3").await;
         let _ = append(&queue, "https://example.com/b.mp3").await;
         assert_eq!(queue.len(), 2);
+        close_host(host).await;
     }
 
     #[kithara::test(tokio)]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     async fn append_returns_monotonic_ids_and_emits_track_added() {
-        let (queue, _host) = hosted_queue().await;
+        let (queue, host) = hosted_queue().await;
         let mut rx = queue.subscribe();
         let a = append(&queue, "https://example.com/a.mp3").await;
         let b = append(&queue, "https://example.com/b.mp3").await;
@@ -604,17 +669,20 @@ mod tests {
         )
         .await
         {
+            hang_tick!();
             seen += 1;
+            hang_reset!();
             if seen == 2 {
                 break;
             }
         }
         assert_eq!(seen, 2);
+        close_host(host).await;
     }
 
     #[kithara::test(tokio)]
     async fn remove_drops_from_queue_and_emits() {
-        let (queue, _host) = hosted_queue().await;
+        let (queue, host) = hosted_queue().await;
         let a = append(&queue, "https://example.com/a.mp3").await;
         let _b = append(&queue, "https://example.com/b.mp3").await;
         let mut rx = queue.subscribe();
@@ -630,11 +698,12 @@ mod tests {
         )
         .await;
         assert!(saw_removed);
+        close_host(host).await;
     }
 
     #[kithara::test(tokio)]
     async fn clear_empties_queue() {
-        let (queue, _host) = hosted_queue().await;
+        let (queue, host) = hosted_queue().await;
         let _a = append(&queue, "https://example.com/a.mp3").await;
         let _b = append(&queue, "https://example.com/b.mp3").await;
         assert_eq!(queue.len(), 2);
@@ -642,6 +711,7 @@ mod tests {
             .await
             .expect("the idle deck takes the clear");
         assert_eq!(queue.len(), 0);
+        close_host(host).await;
     }
 
     #[kithara::test(tokio)]
@@ -690,7 +760,7 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn set_tracks_replaces_queue() {
-        let (queue, _host) = hosted_queue().await;
+        let (queue, host) = hosted_queue().await;
         let _a = append(&queue, "https://example.com/a.mp3").await;
         command(&queue, |control| {
             control.set_tracks(
@@ -705,11 +775,12 @@ mod tests {
         .await
         .expect("the idle deck takes the clear");
         assert_eq!(queue.len(), 3);
+        close_host(host).await;
     }
 
     #[kithara::test(tokio)]
     async fn insert_after_id_places_next() {
-        let (queue, _host) = hosted_queue().await;
+        let (queue, host) = hosted_queue().await;
         let a = append(&queue, "https://example.com/a.mp3").await;
         let b = append(&queue, "https://example.com/b.mp3").await;
         let mid = command(&queue, move |control| {
@@ -720,11 +791,12 @@ mod tests {
         let snapshot = queue.tracks();
         let ids: Vec<TrackId> = snapshot.iter().map(|e| e.id).collect();
         assert_eq!(ids, vec![a, mid, b]);
+        close_host(host).await;
     }
 
     #[kithara::test(tokio)]
     async fn track_source_is_keyed_by_id_across_removal() {
-        let (queue, _host) = hosted_queue().await;
+        let (queue, host) = hosted_queue().await;
         let a = append(&queue, "https://example.com/a.mp3").await;
         let b = append(&queue, "https://example.com/b.mp3").await;
 
@@ -752,6 +824,7 @@ mod tests {
             Some("https://example.com/b.mp3".to_string()),
             "surviving track still resolves to its own source by id"
         );
+        close_host(host).await;
     }
 
     #[kithara::test(tokio)]
