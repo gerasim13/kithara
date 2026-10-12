@@ -1,13 +1,17 @@
-use std::{
-    convert::Infallible,
-    panic::{AssertUnwindSafe, catch_unwind},
-};
+use std::convert::Infallible;
+#[cfg(panic = "unwind")]
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use kithara_test_utils::kithara;
+#[cfg(panic = "unwind")]
 use ringbuf::traits::{Consumer, Producer};
 
-use super::{Item, ScopeId, ScopeReply, ScopedConfig, scoped_channel};
-use crate::{Batch, Outcome, Protocol, Rejection, Seq, When, channel::sender::Sent};
+#[cfg(panic = "unwind")]
+use super::{Item, ScopeId, ScopeReply};
+use super::{ScopedConfig, scoped_channel};
+use crate::{Batch, Protocol, When};
+#[cfg(panic = "unwind")]
+use crate::{Outcome, Rejection, Seq, channel::sender::Sent};
 
 #[derive(Debug, PartialEq, Eq)]
 enum Test {}
@@ -24,6 +28,7 @@ impl Protocol for Test {
     }
 }
 
+#[cfg(panic = "unwind")]
 #[kithara::test]
 fn a_foreign_generation_is_answered_whole_and_never_routed() {
     let (mut sender, mut inbox) = scoped_channel::<Test, Test>(ScopedConfig::builder().build());
