@@ -458,6 +458,11 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             return;
         };
         kithara::probe_event!(
+            rate_smoothed,
+            frames = output_frames,
+            multiplier_bits = self.rate.speed().to_bits()
+        );
+        kithara::probe_event!(
             rate_applied,
             request_revision,
             applied_rate_bits = applied_rate.to_bits(),
