@@ -498,7 +498,12 @@ fn segment_aware_byte_seek_retires_stale_time_alias() {
         .expect("segment anchor");
     let session = active_session(&variant, &ctx, anchor.byte_offset);
     variant.apply_resolved_size(SizeDemand::Segment(1), 200);
-    let refreshed = variant.descriptor(2).expect("refreshed target segment");
+    let mut refreshed = variant.descriptor(2).expect("refreshed target segment");
+    let natural_offset = variant
+        .segment_byte_offset(2)
+        .expect("refreshed natural segment offset");
+    refreshed.byte_range =
+        natural_offset..natural_offset + (refreshed.byte_range.end - refreshed.byte_range.start);
     assert_ne!(refreshed.byte_range.start, anchor.byte_offset);
 
     session.seek_to_byte(refreshed.byte_range.start);
