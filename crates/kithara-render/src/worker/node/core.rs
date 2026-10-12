@@ -223,9 +223,12 @@ where
         }
     }
 
+    #[kithara::hang_watchdog]
     fn recycle(&mut self) {
         while let Some(packet) = self.port.reverse.try_pop() {
+            hang_tick!();
             self.retire(packet);
+            hang_reset!();
         }
         if let Some(activity) = &mut self.activity {
             activity.set_playing(*self.port.playing.read());

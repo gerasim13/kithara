@@ -354,6 +354,48 @@ fn report(queue: &mut TestQueue, event: DeckEvent) {
 }
 
 #[kithara::test]
+#[case(Role::Current)]
+#[case(Role::Outgoing)]
+fn natural_end_names_the_track_that_accepted_the_receipt(#[case] role: Role) {
+    let (mut queue, first, second) = selected_second();
+    let active = queue
+        .active
+        .iter()
+        .find(|active| active.role == role)
+        .expect("active role");
+    let slot = active.slot;
+    let id = active.item;
+    let at = SessionFrame::new(1024);
+    let mut events = queue.subscribe::<kithara_play::PlayerEvent>();
+    report(&mut queue, DeckEvent::Ended { slot, at });
+    assert!(
+        events.try_recv().is_err(),
+        "an unaccepted end must not be published"
+    );
+    queue
+        .active
+        .get_mut(if role == Role::Current { 1 } else { 0 })
+        .expect("active track")
+        .track
+        .0
+        .status = PlayerTrackStatus::Ended { at };
+    report(&mut queue, DeckEvent::Ended { slot, at });
+    let kithara_play::PlayerEvent::ItemDidPlayToEnd { item } =
+        events.try_recv().expect("accepted natural end").event
+    else {
+        panic!("natural end must publish ItemDidPlayToEnd");
+    };
+    assert_eq!(item.id(), id);
+    assert_eq!(id, if role == Role::Current { second } else { first });
+    assert_eq!(item.track().slot.value(), u64::from(slot.get()));
+    assert!(matches!(
+        (role, item),
+        (Role::Current, kithara_play::ItemRole::Leading(_))
+            | (Role::Outgoing, kithara_play::ItemRole::Outgoing(_))
+    ));
+}
+
+#[kithara::test]
 fn an_underrun_on_the_current_track_reports_a_stall_and_its_recovery() {
     let (mut queue, _, _) = selected_second();
     let slot = queue

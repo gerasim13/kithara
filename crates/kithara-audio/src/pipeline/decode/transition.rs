@@ -4,6 +4,7 @@ use kithara_decode::DecoderChunkOutcome;
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioSpec, FrameCount};
 use kithara_stream::{PendingReason, VariantTransition};
+use kithara_test_utils::kithara;
 use tracing::{debug, trace};
 
 use super::generation::DecoderGeneration;
@@ -740,6 +741,7 @@ fn timeline_spec(sample_rate: u32) -> Option<AudioSpec> {
     NonZeroU32::new(sample_rate).map(|sample_rate| AudioSpec::new(1, sample_rate))
 }
 
+#[kithara::hang_watchdog]
 pub(super) fn trim_staged_head(
     generation: &mut DecoderGeneration,
     overlap: OverlapSpan,
@@ -749,11 +751,16 @@ pub(super) fn trim_staged_head(
         return Ok(generation.has_output());
     }
     while remaining != 0 {
+        hang_tick!();
+        let previous = remaining;
         let Some(chunk) = generation.pop_staged() else {
             return Ok(false);
         };
         if let Some(chunk) = apply_frames(chunk, &mut remaining)? {
             generation.push_staged_front(chunk);
+        }
+        if remaining < previous {
+            hang_reset!();
         }
     }
     Ok(generation.has_output())

@@ -80,7 +80,7 @@ pub struct PcmDeck {
 
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 impl PcmDeck {
-    #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     pub fn new(mut reader: Box<dyn kithara::audio::AudioReader>) -> Self {
         use std::io::{Seek, SeekFrom, Write};
 
@@ -115,6 +115,7 @@ impl PcmDeck {
             hang_tick!(format!("writing PCM fixture after {bytes} bytes"));
             match reader.read(&mut samples).expect("read PCM deck samples") {
                 ReadOutcome::Frames { count, .. } => {
+                    hang_reset!();
                     for sample in &samples[..count.get()] {
                         file.write_all(&sample.to_le_bytes())
                             .expect("write PCM sample");
@@ -196,7 +197,7 @@ where
     B: Default + ResamplerBackend,
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(3), ctx = String)]
     pub async fn load<C>(&mut self, config: C) -> Result<LaneAudio<Stream<T>, S>, LoadRefusal>
     where
         C: Into<TrackConfig<T, B>>,
@@ -245,20 +246,24 @@ where
         let receipt = {
             // WHY: The worker's disk open runs outside Flash's counted async tasks.
             let _real_io = kithara::platform::flash::real_io();
+            let budget = __hang_detector.remaining();
             let answered = poll_fn(|context| {
+                hang_tick!(format!("dispatcher load {seq:?} has no answer"));
                 let mut owner = self.owner.lock();
                 let loads = &mut owner.sender;
                 loads.hold(context.waker().clone());
-                let found = loads.receipts().find(|receipt| receipt.seq() == seq);
+                let found = loads.receipts().find(|receipt| {
+                    hang_tick!(format!("dispatcher load {seq:?} awaits its receipt"));
+                    receipt.seq() == seq
+                });
                 drop(owner);
                 found.map_or(Poll::Pending, Poll::Ready)
             });
-            kithara::platform::time::timeout(__hang_detector.remaining(), answered)
-                .await
-                .unwrap_or_else(|_| {
-                    hang_tick!(format!("dispatcher load {seq:?} has no answer"));
-                    panic!("dispatcher load {seq:?} has no answer");
-                })
+            let answered = kithara::platform::time::timeout(budget, answered).await;
+            answered.unwrap_or_else(|_| {
+                hang_tick!(format!("dispatcher load {seq:?} has no answer"));
+                panic!("dispatcher load {seq:?} has no answer");
+            })
         };
         hang_reset!();
         self.owner.lock().sender.release();
@@ -318,8 +323,13 @@ pub async fn wait_for_preload<T, S>(audio: &mut LaneAudio<T, S>, label: &str) {
     audio.wait_ready(label).await;
 }
 
+pub fn with_blocking_reads<T, S>(mut audio: LaneAudio<T, S>) -> LaneAudio<T, S> {
+    audio.block_on_underrun = true;
+    audio
+}
+
 impl<T, S> LaneAudio<T, S> {
-    #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     fn service(&mut self) {
         while self.pcm.peek().is_some_and(|packet| match packet {
             PcmPacket::Chunk(chunk) => chunk.meta.segment != self.segment,
@@ -331,6 +341,7 @@ impl<T, S> LaneAudio<T, S> {
             hang_reset!();
         }
         for receipt in self.sender.receipts() {
+            hang_tick!();
             hang_reset!();
             if let Outcome::Applied { data, .. } = receipt.outcome() {
                 if data.ready == Some(self.segment) {
@@ -342,7 +353,7 @@ impl<T, S> LaneAudio<T, S> {
         }
     }
 
-    #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     async fn wait_ready(&mut self, label: &str) {
         // WHY: PCM preparation is produced by a real worker thread.
         let _real_io = kithara::platform::flash::real_io();
@@ -403,10 +414,13 @@ impl<T, S> LaneAudio<T, S> {
         Ok(())
     }
 
-    #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     fn pull(&mut self) -> Result<ChunkOutcome, AudioReadError> {
-        if !self.current_segment_ready() {
-            futures::executor::block_on(self.wait_ready("read"));
+        if !self.block_on_underrun && !self.current_segment_ready() {
+            return Ok(ChunkOutcome::Pending {
+                reason: PendingReason::Buffering,
+                position: self.pcm.position(),
+            });
         }
         self.service();
         if let Some(failure) = self.failure {
@@ -425,6 +439,9 @@ impl<T, S> LaneAudio<T, S> {
             let Some(packet) = self.pcm.pop() else {
                 if self.block_on_underrun && !self.pcm.is_closed() {
                     kithara_render::mock::wait_for_packet(&self.pcm);
+                    if self.pcm.peek().is_some() || self.pcm.is_closed() {
+                        hang_reset!();
+                    }
                     continue;
                 }
                 return Ok(ChunkOutcome::Pending {
@@ -432,6 +449,7 @@ impl<T, S> LaneAudio<T, S> {
                     position: self.pcm.position(),
                 });
             };
+            hang_reset!();
             match packet {
                 PcmPacket::Chunk(chunk) if chunk.meta.segment == self.segment => {
                     if chunk.meta.end_of_track {

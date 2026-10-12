@@ -28,7 +28,7 @@ pub trait AudioSource: Send + 'static {
     fn set_host_sample_rate(&mut self, rate: NonZeroU32);
     /// Current host-rate value owned by the open source.
     fn host_sample_rate(&self) -> Option<NonZeroU32>;
-    /// Current decoder-format discontinuity.
+    /// Current decoder-format or frame-coordinate discontinuity.
     fn discontinuity(&self) -> Option<SourceDiscontinuity> {
         None
     }
@@ -57,7 +57,7 @@ pub struct SourceDiscontinuity {
 }
 
 impl SourceDiscontinuity {
-    /// Construct a decoder-format reset stamp.
+    /// Construct a decoder-format or frame-coordinate reset stamp.
     #[must_use]
     pub const fn new(revision: u64, spec: AudioSpec) -> Self {
         Self { spec, revision }

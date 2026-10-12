@@ -19,7 +19,7 @@ tls-native = ["kithara/tls-native"]
 flash = ["kithara/flash", "kithara-integration-tests/flash"]
 load = ["kithara-integration-tests/load"]
 no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
-apple-fused-src = ["kithara/apple-fused-src"]
+apple-fused-src = ["kithara/apple-fused-src", "kithara-integration-tests/apple-fused-src"]
 
 [dependencies]
 kithara = { workspace = true, features = ["usdt", "mock", "offline", "resample-rubato", "signal", "tokio-net", "tokio-rt-multi-thread"] }

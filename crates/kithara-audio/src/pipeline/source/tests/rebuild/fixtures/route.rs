@@ -296,7 +296,7 @@ pub(in crate::pipeline::source) fn next_test_chunk(
     chunk
 }
 
-#[kithara_test_utils::kithara::hang_watchdog]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 pub(in crate::pipeline::source) fn next_decoded_chunk(
     source: &mut StreamAudioSource<TestStream>,
     route_recreated: &mut bool,

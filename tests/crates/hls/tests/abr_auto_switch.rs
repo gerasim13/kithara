@@ -5,7 +5,7 @@ use kithara::{
     events::{EventBus, EventReceiver},
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, TrackConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -116,6 +116,9 @@ async fn abr_auto_switch_during_playback(
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
+        .build();
+    let config = TrackConfig::for_audio(config)
+        .block_on_underrun(true)
         .build();
     let mut audio = kithara_integration_tests::mock::load_audio(&worker, config)
         .await

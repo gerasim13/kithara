@@ -9,6 +9,7 @@ pub(super) use kithara_test_utils::kithara;
 pub(super) use kithara_worker::{Task, TickResult};
 
 use super::*;
+use crate::dispatcher::LaneTask;
 pub(super) use crate::{
     LaneCommand, LaneProtocol,
     mock::prepared_node,
@@ -46,6 +47,23 @@ pub(in crate::worker) fn segment(lane: &mut Sender<LaneProtocol>) -> SegmentId {
     )
     .expect("segment batch");
     id
+}
+
+#[kithara::test(tokio)]
+async fn transient_upstream_wait_does_not_complete_preload() {
+    let (mut node, _receiver, _lane) = prepared_node(
+        ScriptedSource::new([
+            TrackStep::StateChanged,
+            TrackStep::Blocked(WaitingReason::Waiting),
+        ]),
+        4,
+        3,
+    )
+    .await;
+    assert_eq!(node.tick(), TickResult::Progress);
+    assert!(matches!(node.preload_status(), Ok(false)));
+    assert_eq!(node.tick(), TickResult::Waiting);
+    assert!(matches!(node.preload_status(), Ok(false)));
 }
 
 #[kithara::test(tokio)]

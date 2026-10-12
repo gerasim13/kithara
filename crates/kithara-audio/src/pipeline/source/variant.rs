@@ -149,6 +149,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         match control.promote_variant(transition) {
             VariantPromotion::Promoted => {
                 let outgoing = self.decode.commit_prepared_promotion(prepared);
+                self.waiting_for_source = false;
                 {
                     let emit = &self.emit;
                     enqueue_generation_installed(

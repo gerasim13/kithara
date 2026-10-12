@@ -243,7 +243,7 @@ where
         if let Some(span) = original.source_span {
             let end = offset.checked_add(u64::from(frames))?;
             let span = span.for_output_range(offset..end)?;
-            meta.frame_offset = span.start();
+            meta.frame_offset = original.frame_offset.checked_add(offset)?;
             meta.timestamp = span.position_at(0)?;
             meta.end_timestamp = span.position_at(span.output_frames())?;
             meta.frames = frames;
@@ -592,6 +592,9 @@ where
                 .discontinuity
                 .as_ref()
                 .map(SourceDiscontinuity::revision);
+        if revision_changed && (self.pending_input.is_some() || self.staged_frames() > 0) {
+            return false;
+        }
         if let Some(discontinuity) = next.as_ref() {
             self.spec = *discontinuity.spec();
         }
@@ -624,8 +627,13 @@ where
         }
         let spec = self.source.prepare_deferred();
         self.sync_discontinuity();
-        self.prepare_renderers(spec.unwrap_or(self.spec));
-        spec
+        let prepared_spec = if self.pending_input.is_some() || self.staged_frames() > 0 {
+            self.spec
+        } else {
+            spec.unwrap_or(self.spec)
+        };
+        self.prepare_renderers(prepared_spec);
+        spec.map(|_| prepared_spec)
     }
 
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
@@ -636,6 +644,17 @@ where
             Ok(true) => return TrackStep::StateChanged,
             Ok(false) => {}
             Err(error) => return self.fail(error),
+        }
+        if self.pending_input.is_none()
+            && self.staged_frames() > 0
+            && self.source.discontinuity() != self.discontinuity
+        {
+            let frames = self.staged_frames();
+            let Some(frames) = self.warp.prepare_terminal_quantum(frames) else {
+                return self.fail(TrackFailureKind::Render);
+            };
+            self.prepared_frames = Some(frames.get());
+            return self.render_staged(frames.get());
         }
         if self.sync_discontinuity() {
             return TrackStep::StateChanged;
@@ -723,5 +742,90 @@ where
             fn finish_deferred(&mut self);
             fn warm_up(&mut self);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroUsize;
+
+    use kithara_audio::mock::AudioSourceMock;
+    use kithara_command::{ChannelConfig, channel};
+    use kithara_signal::SourceSpan;
+    use kithara_test_utils::{
+        bufpool::{TestPools, pools},
+        kithara,
+    };
+    use unimock::{MockFn, Unimock};
+
+    use super::*;
+
+    #[kithara::test]
+    fn decoder_discontinuity_drains_the_staged_outgoing_quantum() {
+        let pools = pools();
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("sample rate"));
+        let next = SourceDiscontinuity::new(1, spec);
+        let decoded = Unimock::new(
+            AudioSourceMock::discontinuity
+                .each_call(unimock::matching!())
+                .returns(Some(next)),
+        );
+        let (_sender, inbox) = channel(ChannelConfig::builder().build());
+        let config = kithara_warp::WarpConfig::builder().build();
+        let mut source = WarpSource::new(
+            decoded,
+            kithara_warp::Warp::new((), &config).renderer(spec, pools.clone()),
+            Vec::new(),
+            EffectDrain::new(0, &pools).expect("effect drain"),
+            spec,
+            pools.clone(),
+            LaneSetup {
+                inbox,
+                preload_chunks: NonZeroUsize::MIN,
+                declick: crate::consts::DEFAULT_DECLICK,
+            },
+        );
+        source.discontinuity = Some(SourceDiscontinuity::new(0, spec));
+        let meta = AudioChunkInfo {
+            spec,
+            frames: 1_024,
+            ..AudioChunkInfo::default()
+        };
+        source.prepare_renderers(spec);
+        source.prepared_frames = Some(source.prepare_quantum(meta, 1_024).expect("quantum").get());
+        let mut samples = pools.get::<f32>();
+        samples.ensure_len(1_024).expect("staged samples");
+        samples.fill(0.25);
+        source.render_input = Some(samples);
+        source.staged_meta = WarpSource::<Unimock, TestPools>::span_meta(meta, 0, 512);
+
+        assert!(!source.sync_discontinuity());
+        let TrackStep::Produced(Fetch::Data { data, .. }) = source.step_track() else {
+            panic!("the outgoing quantum must be emitted before resetting the decoder geometry");
+        };
+        assert_eq!(data.frames(), 512);
+        assert!(data.samples.iter().all(|sample| *sample == 0.25));
+        assert_eq!(source.discontinuity.expect("outgoing stamp").revision(), 0);
+        assert!(source.sync_discontinuity());
+        assert_eq!(source.discontinuity, Some(next));
+    }
+
+    #[kithara::test]
+    fn sliced_resumed_meta_keeps_the_decoded_frame_coordinate() {
+        let decoded_rate = NonZeroU32::new(48_000).expect("decoded sample rate");
+        let source_rate = NonZeroU32::new(44_100).expect("source sample rate");
+        let original = AudioChunkInfo {
+            spec: AudioSpec::new(2, decoded_rate),
+            frame_offset: 48_000,
+            frames: 48_000,
+            source_span: SourceSpan::new(44_100, 88_200, source_rate, 48_000),
+            ..AudioChunkInfo::default()
+        };
+        let sliced = WarpSource::<Unimock, TestPools>::span_meta(original, 480, 480)
+            .expect("the decoded range lies inside the source span");
+        assert_eq!(sliced.frame_offset, 48_480);
+        assert_eq!(sliced.timestamp, Duration::from_millis(1010));
+        assert_eq!(sliced.end_timestamp, Duration::from_millis(1020));
+        assert_eq!(sliced.source_span.expect("source mapping").start(), 44_541);
     }
 }

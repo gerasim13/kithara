@@ -491,6 +491,7 @@ mod tests {
             None,
             true,
             DispatchTokens {
+                metadata: fixture.cancel.clone(),
                 fetch: fixture.cancel.clone(),
                 lookahead: fixture.cancel.clone(),
             },
@@ -518,6 +519,7 @@ mod tests {
             None,
             true,
             DispatchTokens {
+                metadata: fixture.cancel.clone(),
                 fetch: fixture.cancel.clone(),
                 lookahead: fixture.cancel.clone(),
             },

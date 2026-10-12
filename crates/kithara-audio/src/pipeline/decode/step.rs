@@ -34,6 +34,7 @@ pub(crate) fn tick<T: StreamType>(core: &mut ActiveDecode, ctx: DecodeCtx<'_, T>
     }
     let mut decoded = false;
     loop {
+        hang_tick!();
         if let Some(error) = core.take_stage_error() {
             return decode_failed(core, error, &ctx);
         }
@@ -68,12 +69,10 @@ pub(crate) fn tick<T: StreamType>(core: &mut ActiveDecode, ctx: DecodeCtx<'_, T>
             return DecodeAction::Progress;
         }
         decoded = true;
+        kithara::probe_event!(decode_step);
         match core.next_chunk(ctx.stream.position()) {
             Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
                 return variant_change(core, &ctx);
-            }
-            Ok(DecoderChunkOutcome::Pending(PendingReason::Retry)) => {
-                return DecodeAction::Progress;
             }
             Ok(DecoderChunkOutcome::Pending(_)) => {
                 let reason = match ctx.stream.phase() {

@@ -511,7 +511,7 @@ async fn same_spec_priming_retains_the_full_join_after_the_emitted_frontier(rout
 }
 
 #[kithara::test(tokio)]
-#[kithara::hang_watchdog]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn exact_primed_generation_promotes_once_at_outgoing_frontier(route_pcm: RoutePcm) {
     let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
     let plan = incoming_plan();
@@ -1098,7 +1098,7 @@ async fn stale_prepared_promotion_returns_incoming_for_shell_retirement(route_pc
 }
 
 #[kithara::test(tokio)]
-#[kithara::hang_watchdog]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks(
     route_pcm: RoutePcm,
 ) {
@@ -1305,6 +1305,7 @@ async fn incoming_media_facts_choose_reader_profile(route_pcm: RoutePcm) {
 }
 
 #[kithara::test(tokio)]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn exact_promotion_emits_variant_switch_decoder_event(route_pcm: RoutePcm) {
     let mut fixture = route_signal_source(&route_pcm, consts::SAMPLE_RATE).await;
     let bus = EventBus::new(16);
@@ -1337,6 +1338,7 @@ async fn exact_promotion_emits_variant_switch_decoder_event(route_pcm: RoutePcm)
 
     let mut changed = false;
     while let Ok(envelope) = events.try_recv() {
+        hang_tick!();
         changed |= matches!(
             envelope.event,
             DecoderEvent::DecoderChanged {
@@ -1345,6 +1347,7 @@ async fn exact_promotion_emits_variant_switch_decoder_event(route_pcm: RoutePcm)
                 ..
             }
         );
+        hang_reset!();
     }
     assert!(changed);
 }

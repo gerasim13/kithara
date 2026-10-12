@@ -493,23 +493,24 @@ impl WaitPark {
     }
 
     #[kithara_test_utils::kithara::flash(io)]
-    #[kithara_test_utils::kithara::hang_watchdog]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     pub(in crate::pipeline::source) fn enter_if_armed(&self) {
         if !self.armed.load(Ordering::Acquire) {
             return;
         }
-        let mut state = self.state.lock();
-        state.entered = true;
+        let mut parked = Some(self.state.lock());
+        parked.as_mut().expect("owned wait guard").entered = true;
         self.entered.notify_one();
-        while !state.released {
-            hang_tick!();
-            state = self.condvar.wait_timeout(
-                state,
-                kithara_platform::time::Instant::now() + __hang_detector.remaining(),
-            );
+        while !parked.as_ref().expect("owned wait guard").released {
+            hang_park!(|remaining| {
+                parked = Some(self.condvar.wait_timeout(
+                    parked.take().expect("owned wait guard"),
+                    kithara_platform::time::Instant::now() + remaining,
+                ));
+            });
         }
         hang_reset!();
-        drop(state);
+        drop(parked);
     }
 
     pub(in crate::pipeline::source) fn release(&self) {
@@ -522,7 +523,7 @@ impl WaitPark {
     /// Wait until the holder is inside `wait_range` — i.e. the control
     /// mutex is held by a parked blocking read.
     #[kithara_test_utils::kithara::flash(io)]
-    #[kithara_test_utils::kithara::hang_watchdog]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     pub(in crate::pipeline::source) async fn wait_entered(&self) {
         while !self.state.lock().entered {
             hang_tick!();

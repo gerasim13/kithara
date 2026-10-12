@@ -20,6 +20,12 @@ impl ActiveDecode {
                 .align_timeline_gap(self.active.timeline_gap());
         }
         let incoming_profile = prepared.generation.blender_profile();
+        if self.active.blender_profile().spec() != incoming_profile.spec()
+            || self.active.timeline_origin(self.gapless_mode())
+                != incoming_origin(&self.active, &prepared.generation, self.gapless_mode())
+        {
+            self.discontinuity_revision = self.discontinuity_revision.wrapping_add(1);
+        }
         match prepared.join {
             PromotionJoin::HardCut => self.blender.replace_active(incoming_profile),
             PromotionJoin::Blend { .. } => self.blender.commit_join(),

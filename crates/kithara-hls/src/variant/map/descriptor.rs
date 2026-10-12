@@ -32,15 +32,16 @@ where
         let seg_idx_u32 = u32::try_from(idx).ok()?;
         let byte_offset = match self.seek.alias.load() {
             Some(alias)
-                if !needs_exact_byte_sizes(self.profile.codec, self.profile.container)
-                    && seg_idx_u32 >= alias.segment =>
+                if seg_idx_u32 == alias.segment
+                    || (seg_idx_u32 > alias.segment
+                        && !needs_exact_byte_sizes(self.profile.codec, self.profile.container)) =>
             {
-                self.segments
-                    .get(alias.segment as usize..idx)?
-                    .iter()
-                    .try_fold(alias.anchor, |offset, segment| {
-                        offset.checked_add(segment.len())
-                    })?
+                let prefix = self
+                    .segments
+                    .get(usize::try_from(alias.segment).ok()?..idx)?;
+                prefix.iter().try_fold(alias.anchor, |offset, segment| {
+                    offset.checked_add(segment.len())
+                })?
             }
             _ => self.layout.natural_offset(idx)?,
         };

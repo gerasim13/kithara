@@ -3,9 +3,12 @@ mod core;
 mod dispatcher;
 
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]
+pub mod gapless;
+
+#[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 mod ramped;
 
-pub use core::{LaneAudio, load_audio, load_source_audio, wait_for_preload};
+pub use core::{LaneAudio, load_audio, load_source_audio, wait_for_preload, with_blocking_reads};
 #[cfg(all(feature = "all", not(target_arch = "wasm32")))]
 pub use core::{PcmDeck, open_resource};
 

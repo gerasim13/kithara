@@ -44,7 +44,7 @@ where
     /// Two conditions, and both are needed. Everything the rebuild would
     /// enqueue is already `Loaded`, so it would only reseed entries `dispatch`
     /// skips — that is [`Self::fetch_plan_satisfied`]. *And* the queue holds no
-    /// fetch for a segment behind `from_seg`. Those are entries a previous
+    /// fetch for an unloaded segment behind `from_seg`. Those are entries a previous
     /// request plan left there; they are not part of the plan a rebuild would produce,
     /// and `fetch_plan_satisfied` never sees them because it only inspects
     /// `[from_seg, num_segments)`. Its "dispatch skips them" argument does not
@@ -60,7 +60,9 @@ where
             .queue
             .lock()
             .iter()
-            .any(|fetch| matches!(fetch, PlannedFetch::Segment(idx) if *idx < from_seg))
+            .any(|fetch| {
+                matches!(fetch, PlannedFetch::Segment(idx) if *idx < from_seg && !self.segment_loaded(*idx))
+            })
     }
 
     #[kithara::probe(

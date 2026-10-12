@@ -456,7 +456,7 @@ async fn seek_after_terminal_failure_returns_the_first_cause() {
 }
 
 #[kithara::test(tokio)]
-#[kithara::hang_watchdog]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks(
     route_pcm: RoutePcm,
 ) {

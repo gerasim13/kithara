@@ -507,7 +507,10 @@ fn random_seek_reads(
             .unwrap_or_else(|e| panic!("seek #{i} to {pos_secs:.4}s failed: {e}"));
 
         let n = match audio.read(buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => count.get(),
+            Ok(ReadOutcome::Frames { count, .. }) => {
+                hang_reset!();
+                count.get()
+            }
             Ok(ReadOutcome::Pending { .. }) => {
                 panic!("read returned 0 after seek #{i} to {pos_secs:.4}s");
             }

@@ -12,7 +12,6 @@ use kithara::{
     platform::{
         time,
         time::{Duration, WallInstant},
-        tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
     play::{ResourceConfig, ResourceSrc},
@@ -127,6 +126,7 @@ struct PostSeekObservation {
     any(target_os = "macos", target_os = "ios"),
     case::apple(DecoderBackend::Apple)
 )]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(3))]
 async fn hls_seek_near_end_skips_prefix(
     #[future(awt)] prepared_hls: (TestServerHelper, Url),
     #[case] backend: DecoderBackend,
@@ -183,11 +183,15 @@ async fn hls_seek_near_end_skips_prefix(
     // Drain any events still buffered after steady playback so the pre-seek
     // enqueued baseline is complete before the seek fires.
     loop {
+        hang_tick!();
         match rx.try_recv().map(|env| env.event) {
             Ok(TestEvent::Downloader(DownloaderEvent::RequestEnqueued { request_id, .. })) => {
                 pre_seek_enqueued.insert(request_id);
+                hang_reset!();
             }
-            Ok(_) => {}
+            Ok(_) => {
+                hang_reset!();
+            }
             Err(TryRecvError::Lagged(_)) => continue,
             Err(_) => break,
         }
@@ -209,17 +213,7 @@ async fn hls_seek_near_end_skips_prefix(
         .await
         .expect("seek");
 
-    let (observation, _reset_evt) = tokio::join!(
-        observe_post_seek(&mut rx, seek_at, &pre_seek_enqueued),
-        time::timeout(
-            consts::POST_SEEK_OBSERVATION,
-            probe_recorder.wait_for(|events| {
-                events[pre_seek..]
-                    .iter()
-                    .any(|e| e.target == "kithara_hls_probe" && e.probe == "rebuild")
-            }),
-        ),
-    );
+    let observation = observe_post_seek(&mut rx, seek_at, &pre_seek_enqueued).await;
 
     tick_handle.stop().await;
 

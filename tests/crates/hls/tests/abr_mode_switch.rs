@@ -692,6 +692,8 @@ struct BlockingReadStep {
     saw_eof: bool,
 }
 
+#[kithara::flash(io)]
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn read_one_chunk_blocking<S>(
     mut audio: LaneAudio<Stream<S>, TestPools>,
     label: &str,
@@ -702,12 +704,20 @@ where
 {
     let read_label = label.to_owned();
     let join_label = read_label.clone();
-    spawn_blocking(move || {
+    hang_tick!();
+    let read = spawn_blocking(move || {
         let step = read_one_chunk(&mut audio, &read_label);
         (audio, step)
-    })
-    .await
-    .unwrap_or_else(|err| panic!("{join_label}: spawn_blocking failed: {err}"))
+    });
+    let result = kithara::platform::time::timeout(__hang_detector.remaining(), read)
+        .await
+        .unwrap_or_else(|_| {
+            hang_tick!();
+            panic!("{join_label}: blocking read did not join");
+        })
+        .unwrap_or_else(|err| panic!("{join_label}: spawn_blocking failed: {err}"));
+    hang_reset!();
+    result
 }
 
 #[kithara::flash(io)]
@@ -727,6 +737,7 @@ fn read_one_chunk<S: StreamType>(
                 hang_reset!();
                 let n = count.get();
                 for &sample in &buf[..n] {
+                    hang_tick!();
                     assert!(sample.is_finite(), "{read_label}: non-finite sample");
                 }
                 return BlockingReadStep {
