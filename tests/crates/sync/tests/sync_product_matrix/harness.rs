@@ -40,9 +40,11 @@ fn linked_queue(
 ) -> kithara_integration_tests::offline::linked::LinkedQueue<TestPools> {
     Queue::new(
         QueueConfig::with_factory(LinkedFactory::new(
-            ObservedFactory::new(observation.clone()),
-            LinkConfig::default(),
-            trajectory.clone(),
+            LinkedConfig::builder()
+                .inner(ObservedFactory::new(observation.clone()))
+                .settings(LinkConfig::default())
+                .trajectory(trajectory.clone())
+                .build(),
         ))
         .should_autoplay(false)
         .prep(
@@ -196,7 +198,12 @@ impl ProductHarness {
         );
         let host_axis = trajectory.clone();
         let host = OfflineHostHarness::layered(session, None, move |core| {
-            LinkedHost::new(core, host_axis)
+            LinkedHost::new(
+                LinkedHostConfig::builder()
+                    .inner(core)
+                    .trajectory(host_axis)
+                    .build(),
+            )
         })
         .await
         .unwrap_or_else(|error| panic!("{}: create offline Host: {error}", case.id));

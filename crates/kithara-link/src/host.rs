@@ -7,7 +7,7 @@ use kithara_host::{
 use kithara_play::{DeckPass, Outbox, PlayError, SessionTransportSnapshot};
 use kithara_signal::{FrameCount, SessionEpoch, SessionFrame};
 
-use crate::{GridAnswer, LinkedDeck, TempoTrajectory};
+use crate::{GridAnswer, LinkedDeck, LinkedHostConfig, TempoTrajectory};
 
 /// A tempo batch whose projected step is retained until the Host answers it.
 #[derive(Clone, Copy, Debug)]
@@ -60,7 +60,8 @@ pub struct LinkedHost<S, H> {
 impl<S, H> LinkedHost<S, H> {
     /// Starts with the Host's configured tempo anchor and no tempo batches in flight.
     #[must_use]
-    pub fn new(inner: H, trajectory: TempoTrajectory) -> Self {
+    pub fn new(config: LinkedHostConfig<H>) -> Self {
+        let LinkedHostConfig { inner, trajectory } = config;
         Self {
             inner,
             trajectory,

@@ -62,7 +62,10 @@ pub struct PlayerImpl<S> {
 
 impl<S> PlayerImpl<S> {
     /// Builds an idle track for its assigned item and mixer slot.
-    pub(crate) fn new(config: PlayerConfig) -> Result<Self, PlayError> {
+    ///
+    /// # Errors
+    /// Returns a refusal for invalid track settings.
+    pub fn new(config: PlayerConfig) -> Result<Self, PlayError> {
         Ok(Self {
             item: config.item,
             slot: config.slot,

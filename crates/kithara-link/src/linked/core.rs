@@ -15,7 +15,9 @@ use kithara_sync::checked_correction;
 use tracing::warn;
 
 use super::{LinkConfig, LinkedPlayer, LinkedSnapshot, SyncMode, SyncStatus, Waiting};
-use crate::{GridAnswer, TempoTrajectory, covers, entry, jump_target, phase_error, speed};
+use crate::{
+    GridAnswer, LinkedConfig, TempoTrajectory, covers, entry, jump_target, phase_error, speed,
+};
 
 /// One track decorated with analysis, Host tempo and owner-thread synchronization.
 pub struct Linked<P> {
@@ -62,7 +64,12 @@ impl<P> Linked<P> {
 
     /// Decorates a track with synchronization initially off.
     #[must_use]
-    pub fn new(inner: P, config: LinkConfig, host: TempoTrajectory) -> Self {
+    pub fn new(config: LinkedConfig<P>) -> Self {
+        let LinkedConfig {
+            inner,
+            settings: config,
+            trajectory: host,
+        } = config;
         Self {
             inner,
             config,

@@ -5,9 +5,8 @@ use kithara_audio::AudioObserverSlot;
 use kithara_command::{Batch, Outcome, Receipt, Rejection, When};
 use kithara_host::HostOwner;
 use kithara_play::{
-    PlayWorker, PlayWorkerConfig, Player, PlayerConfig, PlayerFactory, PlayerImpl, ResourceConfig,
-    ResourceLoad, ResourceSrc, TrackCommand, TrackFactory, TrackReceipt, TrackSettings,
-    TrackStatus,
+    PlayWorker, PlayWorkerConfig, Player, PlayerConfig, PlayerImpl, ResourceConfig, ResourceLoad,
+    ResourceSrc, TrackCommand, TrackReceipt, TrackSettings, TrackStatus,
     mock::{self, DeckRig},
 };
 use kithara_render::{
@@ -25,7 +24,7 @@ use super::{
     fixtures::{answer, grid, load, loaded, position, sounding, trajectory},
     host_fixture::{host, register},
 };
-use crate::{LinkConfig, Linked, SyncStatus};
+use crate::{LinkConfig, Linked, LinkedConfig, SyncStatus};
 
 fn settle(
     deck: &mut Linked<PlayerImpl<TestPools>>,
@@ -73,14 +72,19 @@ async fn a_lane_dropped_before_its_turn_is_reported_only_by_its_cancellation() {
             Box::pin(async move { worker.load(config, position, start, inbox).await })
         },
     );
-    let track: PlayerImpl<TestPools> = PlayerFactory
-        .track(PlayerConfig {
-            item: kithara_events::TrackId::allocate(),
-            slot: Some(Slot::new(0)),
-            settings: TrackSettings::default(),
-        })
-        .expect("track");
-    let mut deck = Linked::new(track, LinkConfig::default(), trajectory(120.0, 4));
+    let track: PlayerImpl<TestPools> = PlayerImpl::new(PlayerConfig {
+        item: kithara_events::TrackId::allocate(),
+        slot: Some(Slot::new(0)),
+        settings: TrackSettings::default(),
+    })
+    .expect("track");
+    let mut deck = Linked::new(
+        LinkedConfig::builder()
+            .inner(track)
+            .settings(LinkConfig::default())
+            .trajectory(trajectory(120.0, 4))
+            .build(),
+    );
     let mut rig = DeckRig::new(DeckMixerConfig::default()).expect("deck scope");
     rig.with_outbox(|out| {
         deck.apply(

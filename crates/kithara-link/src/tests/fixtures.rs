@@ -27,7 +27,9 @@ use kithara_test_utils::bufpool::{TestPools, pools};
 use kithara_warp::{SessionBeat, SpeedCurve};
 use num_traits::AsPrimitive;
 
-use crate::{GridAnswer, LinkConfig, Linked, LinkedPlayer, TempoStep, TempoTrajectory};
+use crate::{
+    GridAnswer, LinkConfig, Linked, LinkedConfig, LinkedPlayer, TempoStep, TempoTrajectory,
+};
 
 pub(super) type Deck = Linked<ScriptedTrack>;
 
@@ -572,12 +574,14 @@ pub(super) fn deck(host: TempoTrajectory) -> (Deck, Control) {
     })));
     (
         Linked::new(
-            ScriptedTrack {
-                control: control.clone(),
-                sequence: Sequence::new(),
-            },
-            LinkConfig::default(),
-            host,
+            LinkedConfig::builder()
+                .inner(ScriptedTrack {
+                    control: control.clone(),
+                    sequence: Sequence::new(),
+                })
+                .settings(LinkConfig::default())
+                .trajectory(host)
+                .build(),
         ),
         control,
     )

@@ -18,7 +18,10 @@ use kithara_test_utils::bufpool::TestPools;
 use kithara_warp::{BeatGridRevision, BeatGridStamp, SessionAnchor, SessionBeat};
 
 use super::fixtures::{Control, Deck, Rig, Sequence, rate, trajectory};
-use crate::{GridAnswer, LinkedDeck, LinkedHost, LinkedPlayer, LinkedSnapshot, TempoTrajectory};
+use crate::{
+    GridAnswer, LinkedDeck, LinkedHost, LinkedHostConfig, LinkedPlayer, LinkedSnapshot,
+    TempoTrajectory,
+};
 
 pub(super) struct Observation {
     pub snapshot: LinkedSnapshot<TrackSnapshot>,
@@ -360,12 +363,14 @@ pub(super) fn host() -> (Host, HostControl) {
     })));
     (
         LinkedHost::new(
-            ScriptedHost {
-                control: control.clone(),
-                decks: Vec::new(),
-                sequence: Sequence::new(),
-            },
-            trajectory(120.0, 4),
+            LinkedHostConfig::builder()
+                .inner(ScriptedHost {
+                    control: control.clone(),
+                    decks: Vec::new(),
+                    sequence: Sequence::new(),
+                })
+                .trajectory(trajectory(120.0, 4))
+                .build(),
         ),
         control,
     )

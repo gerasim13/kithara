@@ -20,8 +20,8 @@ pub(super) use kithara::{
         Tap, api::Tempo,
     },
     link::{
-        GridAnswer, LinkConfig, LinkedFactory, LinkedHost, LinkedHostCommand, TempoStep,
-        TempoTrajectory,
+        GridAnswer, LinkConfig, LinkedConfig, LinkedFactory, LinkedHost, LinkedHostCommand,
+        LinkedHostConfig, TempoStep, TempoTrajectory,
     },
     platform::{
         sync::{Arc, Mutex},

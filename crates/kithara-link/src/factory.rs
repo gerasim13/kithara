@@ -1,6 +1,6 @@
 use kithara_play::{PlayError, PlayerConfig, TrackFactory};
 
-use crate::{LinkConfig, Linked, SyncMode, TempoTrajectory};
+use crate::{LinkConfig, Linked, LinkedConfig, SyncMode, TempoTrajectory};
 
 /// Builds every queue track with the deck's mode and latest Host trajectory.
 pub struct LinkedFactory<F> {
@@ -13,7 +13,12 @@ pub struct LinkedFactory<F> {
 impl<F> LinkedFactory<F> {
     /// Decorates a track factory with synchronization initially off.
     #[must_use]
-    pub fn new(inner: F, config: LinkConfig, host: TempoTrajectory) -> Self {
+    pub fn new(config: LinkedConfig<F>) -> Self {
+        let LinkedConfig {
+            inner,
+            settings: config,
+            trajectory: host,
+        } = config;
         Self {
             inner,
             config,
@@ -43,7 +48,13 @@ impl<S, F: TrackFactory<S>> TrackFactory<S> for LinkedFactory<F> {
     type Track = Linked<F::Track>;
 
     fn track(&self, config: PlayerConfig) -> Result<Self::Track, PlayError> {
-        let mut track = Linked::new(self.inner.track(config)?, self.config, self.host.clone());
+        let mut track = Linked::new(
+            LinkedConfig::builder()
+                .inner(self.inner.track(config)?)
+                .settings(self.config)
+                .trajectory(self.host.clone())
+                .build(),
+        );
         track.mode = if self.synced {
             SyncMode::On
         } else {

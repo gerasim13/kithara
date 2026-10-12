@@ -1,6 +1,7 @@
 //! Track and Host synchronization on one owner-thread tempo trajectory.
 #![forbid(unsafe_code)]
 
+mod config;
 mod deck;
 mod error;
 mod factory;
@@ -12,6 +13,7 @@ mod queue;
 #[cfg(test)]
 mod tests;
 
+pub use config::{LinkedConfig, LinkedHostConfig};
 pub use deck::LinkedDeck;
 pub use error::LinkError;
 pub use factory::LinkedFactory;
