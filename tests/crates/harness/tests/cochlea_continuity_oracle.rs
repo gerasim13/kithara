@@ -17,7 +17,12 @@ use kithara_test_fixtures::integration_fixtures::constant_half;
 use num_traits::AsPrimitive;
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
-async fn render_tempo_control(sample_rate: u32, played_bpm: f64, decorated: bool) -> Vec<f32> {
+async fn render_tempo_control(
+    sample_rate: u32,
+    played_bpm: f64,
+    decorated: bool,
+    live_rate: bool,
+) -> Vec<f32> {
     let period = f64::from(sample_rate) * 0.5;
     let sample_rate_frames: usize = sample_rate.as_();
     let frames = sample_rate_frames * 24;
@@ -29,7 +34,7 @@ async fn render_tempo_control(sample_rate: u32, played_bpm: f64, decorated: bool
             let ordinal: usize = beat.floor().as_();
             let level = if ordinal.is_multiple_of(4) { 0.9 } else { 0.7 };
             if decorated && ordinal.is_multiple_of(3) && (0.3..0.306).contains(&phase) {
-                0.3
+                0.65
             } else if phase < 0.12 {
                 (level * (1.0 - phase / 0.12)).as_()
             } else {
@@ -55,24 +60,33 @@ async fn render_tempo_control(sample_rate: u32, played_bpm: f64, decorated: bool
         harness.pcm_deck(resource_from_reader(TestPcmReader::with_samples(spec, source)).into());
     let id = harness
         .with_queue(move |player| {
-            player
-                .set_default_rate((played_bpm / 120.0).as_())
-                .expect("control playback rate");
+            if !live_rate {
+                player
+                    .set_default_rate((played_bpm / 120.0).as_())
+                    .expect("control playback rate");
+            }
             let id = player.append(deck).expect("append tempo control");
             player
                 .select(id, kithara::queue::Transition::None)
                 .expect("select tempo control");
+            if live_rate {
+                player
+                    .set_default_rate((played_bpm / 120.0).as_())
+                    .expect("live playback rate");
+            }
             player.play();
             id
         })
         .await;
-    harness
-        .render_until_current(
-            id,
-            BLOCK_FRAMES,
-            WallInstant::now() + Duration::from_secs(5),
-        )
-        .await;
+    if !live_rate {
+        harness
+            .render_until_current(
+                id,
+                BLOCK_FRAMES,
+                WallInstant::now() + Duration::from_secs(5),
+            )
+            .await;
+    }
     hang_reset!();
     let capture_frames = sample_rate_frames * 6;
     let mut captured = Vec::with_capacity(capture_frames * usize::from(CHANNELS));
@@ -101,12 +115,16 @@ async fn render_tempo_control(sample_rate: u32, played_bpm: f64, decorated: bool
 #[case::half_44k(44_100, 63.5, false)]
 #[case::double_48k(48_000, 254.0, false)]
 #[case::double_44k(44_100, 254.0, false)]
+#[case::outside_fast_48k(48_000, 127.51, false)]
+#[case::outside_fast_44k(44_100, 127.51, false)]
+#[case::outside_slow_48k(48_000, 126.49, false)]
+#[case::outside_slow_44k(44_100, 126.49, false)]
 async fn tempo_oracle_distinguishes_the_rendered_rate(
     #[case] sample_rate: u32,
     #[case] played_bpm: f64,
     #[case] accepted: bool,
 ) {
-    let capture = render_tempo_control(sample_rate, played_bpm, false).await;
+    let capture = render_tempo_control(sample_rate, played_bpm, false, false).await;
     let (markers, _) = marked_rhythm_markers(&capture, CHANNELS, sample_rate);
     assert!(
         markers.len() >= 3,
@@ -134,6 +152,10 @@ async fn tempo_oracle_distinguishes_the_rendered_rate(
 #[case::fast_44k(44_100, 128.0, false)]
 #[case::slow_48k(48_000, 126.0, false)]
 #[case::slow_44k(44_100, 126.0, false)]
+#[case::outside_fast_48k(48_000, 127.51, false)]
+#[case::outside_fast_44k(44_100, 127.51, false)]
+#[case::outside_slow_48k(48_000, 126.49, false)]
+#[case::outside_slow_44k(44_100, 126.49, false)]
 #[case::half_48k(48_000, 63.5, false)]
 #[case::half_44k(44_100, 63.5, false)]
 #[case::double_48k(48_000, 254.0, false)]
@@ -143,7 +165,7 @@ async fn tempo_oracle_distinguishes_a_decorated_capture(
     #[case] played_bpm: f64,
     #[case] accepted: bool,
 ) {
-    let capture = render_tempo_control(sample_rate, played_bpm, true).await;
+    let capture = render_tempo_control(sample_rate, played_bpm, true, false).await;
     let failures = synchronization_failures(
         "decorated tempo control",
         &[&capture],
@@ -162,6 +184,36 @@ async fn tempo_oracle_distinguishes_a_decorated_capture(
             "wrong-rate decorated control must fail its tempo measurement: {failures:?}"
         );
     }
+}
+
+#[kithara::test(tokio, multi_thread)]
+#[case::cd_rate(44_100)]
+#[case::render_rate(48_000)]
+async fn tempo_oracle_preserves_the_live_rate_boundary(#[case] sample_rate: u32) {
+    let capture = render_tempo_control(sample_rate, 127.0, false, true).await;
+    let failures = synchronization_failures("live rate", &[&capture], CHANNELS, sample_rate, 127.0);
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
+#[kithara::test(tokio, multi_thread)]
+#[case::cd_rate(44_100)]
+#[case::render_rate(48_000)]
+async fn decorated_render_rejects_a_one_frame_phase_error(#[case] sample_rate: u32) {
+    let capture = render_tempo_control(sample_rate, 127.0, true, false).await;
+    let shifted = [vec![0.0; usize::from(CHANNELS)], capture.clone()].concat();
+    let failures = synchronization_failures(
+        "one frame",
+        &[&capture, &shifted],
+        CHANNELS,
+        sample_rate,
+        127.0,
+    );
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("beat phase spread is 1 frame")),
+        "{failures:?}"
+    );
 }
 
 const SAMPLE_RATE: u32 = 48_000;
