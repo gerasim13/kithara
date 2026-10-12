@@ -53,6 +53,7 @@ pub(super) fn config() -> AppConfig {
         .backend(StorageBackend::Memory)
         .build();
     AppConfig::builder()
+        .eq_bands(4)
         .drm(AppDrm::new(DomainKeyPolicy::new(Vec::new())))
         .net(net)
         .downloader(downloader)

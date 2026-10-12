@@ -59,6 +59,7 @@ lib-only = []
 no-block = ["kithara/no-block"]
 # Enable app and facade USDT probes together.
 usdt = ["kithara/usdt"]
+mock = ["kithara/offline"]
 # Production Apple decode shape: embedded AudioConverter SRC inside the Apple
 # codec. Opt-in so the default desktop build keeps the Rubato adapter path.
 apple-fused-src = ["kithara/apple-fused-src"]
@@ -160,7 +161,7 @@ kithara-app-document = { workspace = true }
 
 [dev-dependencies]
 kithara = { workspace = true, default-features = false, features = ["usdt", "download", "offline", "ui-capture"] }
-kithara-app = { path = ".", default-features = false, features = ["usdt"] }
+kithara-app = { path = ".", default-features = false, features = ["mock", "usdt"] }
 kithara-encode = { workspace = true, default-features = false }
 kithara-test-fixtures = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true, features = ["usdt", "mock", "hang", "temp-dir"] }
