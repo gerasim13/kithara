@@ -43,7 +43,7 @@ kithara = { workspace = true, features = ["download", "apple", "client-wreq"] }
 [target.'cfg(not(target_os = "android"))'.dependencies]
 kithara = { workspace = true, features = ["full", "symphonia", "fdk-aac"] }
 kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
-kithara-arch-trace = { workspace = true }
+kithara-devtools-trace-format = { workspace = true }
 
 [lints]
 workspace = true

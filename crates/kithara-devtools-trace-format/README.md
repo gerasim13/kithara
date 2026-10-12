@@ -6,19 +6,19 @@
 
 <div align="center">
 
-[![crates.io](https://img.shields.io/crates/v/kithara-arch-trace.svg)](https://crates.io/crates/kithara-arch-trace)
-[![docs.rs](https://docs.rs/kithara-arch-trace/badge.svg)](https://docs.rs/kithara-arch-trace)
+[![crates.io](https://img.shields.io/crates/v/kithara-devtools-trace-format.svg)](https://crates.io/crates/kithara-devtools-trace-format)
+[![docs.rs](https://docs.rs/kithara-devtools-trace-format/badge.svg)](https://docs.rs/kithara-devtools-trace-format)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/zvuk/kithara/blob/main/LICENSE-MIT)
 
 </div>
 
-# kithara-arch-trace
+# kithara-devtools-trace-format
 
 Versioned architecture trace records and a JSONL writer. Runtime scenarios depend
 on this format crate without building the devtools command infrastructure.
 
 ```rust
-use kithara_arch_trace::{TraceRecord, TraceWriter};
+use kithara_devtools_trace_format::{TraceRecord, TraceWriter};
 
 let mut writer = TraceWriter::create(std::path::Path::new("trace.jsonl"))?;
 let record: TraceRecord = serde_json::from_str(

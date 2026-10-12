@@ -11,7 +11,7 @@ use kithara::{
     play::{ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
 };
-use kithara_arch_trace::{TRACE_SCHEMA_VERSION, TraceRecordKind};
+use kithara_devtools_trace_format::{TRACE_SCHEMA_VERSION, TraceRecordKind};
 use kithara_integration_tests::{
     TestServerHelper, architecture_trace, disk_asset_store,
     hls_fixture::create_test_downloader,

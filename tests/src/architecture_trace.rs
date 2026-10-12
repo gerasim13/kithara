@@ -1,7 +1,9 @@
 use std::path::Path;
 
 use anyhow::Result;
-use kithara_arch_trace::{TRACE_SCHEMA_VERSION, TraceRecord, TraceRecordKind, TraceWriter};
+use kithara_devtools_trace_format::{
+    TRACE_SCHEMA_VERSION, TraceRecord, TraceRecordKind, TraceWriter,
+};
 use serde_json::{Value, json};
 
 use crate::usdt_trace::Scope;

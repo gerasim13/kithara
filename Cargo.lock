@@ -4897,18 +4897,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kithara-arch-trace"
-version = "0.0.1-alpha5"
-dependencies = [
- "anyhow",
- "fieldwork",
- "kithara-test-utils",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "kithara-assets"
 version = "0.0.1-alpha5"
 dependencies = [
@@ -5244,8 +5232,8 @@ dependencies = [
  "fs4",
  "glob",
  "hex",
- "kithara-arch-trace",
  "kithara-config",
+ "kithara-devtools-trace-format",
  "proc-macro2",
  "quote",
  "rayon",
@@ -5261,6 +5249,18 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+]
+
+[[package]]
+name = "kithara-devtools-trace-format"
+version = "0.0.1-alpha5"
+dependencies = [
+ "anyhow",
+ "fieldwork",
+ "kithara-test-utils",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -5778,7 +5778,7 @@ dependencies = [
  "kithara",
  "kithara-app",
  "kithara-app-library",
- "kithara-arch-trace",
+ "kithara-devtools-trace-format",
  "kithara-dsp",
  "kithara-encode",
  "kithara-events",
@@ -6043,7 +6043,7 @@ dependencies = [
  "delegate",
  "kithara",
  "kithara-app",
- "kithara-arch-trace",
+ "kithara-devtools-trace-format",
  "kithara-integration-tests",
  "kithara-test-dylib",
  "kithara-test-fixtures",

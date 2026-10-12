@@ -86,7 +86,7 @@ crate's docs; `just tooling xtask --help` lists the current surface.
 - `lint` (default) — the syn-based `arch` / `style` / `idioms` lint family.
 - `viz` (default) - architecture visualization.
 
-Architecture runtime scenarios use `kithara-arch-trace` for versioned records and
+Architecture runtime scenarios use `kithara-devtools-trace-format` for versioned records and
 JSONL writing. Importing, correlation, source matching, and graph rendering remain
 in devtools.
 

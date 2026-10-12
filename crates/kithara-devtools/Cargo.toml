@@ -15,8 +15,8 @@ lint = []
 viz = []
 
 [dependencies]
-kithara-arch-trace = { workspace = true }
 kithara-config = { workspace = true }
+kithara-devtools-trace-format = { workspace = true }
 
 anyhow = { workspace = true }
 cargo_metadata = { workspace = true }

@@ -1,5 +1,5 @@
 [package]
-name = "kithara-arch-trace"
+name = "kithara-devtools-trace-format"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

@@ -10,7 +10,6 @@ members = [
     "crates/kithara-app-library",
     "crates/kithara-app-zvuk",
     "crates/kithara-apple",
-    "crates/kithara-arch-trace",
     "crates/kithara-assets",
     "crates/kithara-audio",
     "crates/kithara-beat",
@@ -22,6 +21,7 @@ members = [
     "crates/kithara-decode",
     "crates/kithara-derive",
     "crates/kithara-devtools",
+    "crates/kithara-devtools-trace-format",
     "crates/kithara-download",
     "crates/kithara-drm",
     "crates/kithara-dsp",
@@ -290,7 +290,6 @@ kithara-app-document = { path = "crates/kithara-app-document" }
 kithara-app-library = { path = "crates/kithara-app-library" }
 kithara-app-zvuk = { path = "crates/kithara-app-zvuk", default-features = false }
 kithara-apple = { path = "crates/kithara-apple", version = "0.0.1-alpha5" }
-kithara-arch-trace = { path = "crates/kithara-arch-trace", version = "0.0.1-alpha5" }
 kithara-assets = { path = "crates/kithara-assets", version = "0.0.1-alpha5", default-features = false }
 kithara-audio = { path = "crates/kithara-audio", version = "0.0.1-alpha5", default-features = false }
 kithara-beat = { path = "crates/kithara-beat", version = "0.0.1-alpha5" }
@@ -303,6 +302,7 @@ kithara-core-test-fixtures = { path = "tests/crates/core" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.0.1-alpha5", default-features = false }
 kithara-derive = { path = "crates/kithara-derive", version = "0.0.1-alpha5", default-features = false }
 kithara-devtools = { path = "crates/kithara-devtools", version = "0.0.1-alpha5" }
+kithara-devtools-trace-format = { path = "crates/kithara-devtools-trace-format", version = "0.0.1-alpha5" }
 kithara-download = { path = "crates/kithara-download", version = "0.0.1-alpha5", default-features = false }
 kithara-drm = { path = "crates/kithara-drm", version = "0.0.1-alpha5" }
 kithara-dsp = { path = "crates/kithara-dsp", version = "0.0.1-alpha5" }

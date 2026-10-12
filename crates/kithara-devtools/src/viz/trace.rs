@@ -6,7 +6,9 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use kithara_arch_trace::{TRACE_SCHEMA_VERSION, TraceRecord, TraceRecordKind, TraceSource};
+use kithara_devtools_trace_format::{
+    TRACE_SCHEMA_VERSION, TraceRecord, TraceRecordKind, TraceSource,
+};
 use serde::Serialize;
 
 use crate::viz::graph::{
@@ -433,7 +435,7 @@ impl SourceIndex {
 
 #[cfg(test)]
 mod tests {
-    use kithara_arch_trace::TraceWriter;
+    use kithara_devtools_trace_format::TraceWriter;
     use serde_json::json;
     use tempfile::tempdir;
 

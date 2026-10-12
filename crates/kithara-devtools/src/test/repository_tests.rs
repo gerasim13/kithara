@@ -66,7 +66,7 @@ fn engine_trace_consumers_do_not_build_devtools_commands() {
         !packages.contains("kithara-devtools"),
         "engine trace consumers must not compile the command crate"
     );
-    assert!(packages.contains("kithara-arch-trace"));
+    assert!(packages.contains("kithara-devtools-trace-format"));
 }
 
 /// A member's directory relative to the workspace root, with a trailing
