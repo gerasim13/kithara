@@ -113,6 +113,25 @@ async fn provider_tempo_controls_measure_without_sync(
                 prepared.0
             );
             let measured = synchronization_failures(&label, &[&pcm], CHANNELS, 48_000, target);
+            let (markers, downbeats) =
+                kithara_integration_tests::cochlea::marked_rhythm_markers(&pcm, CHANNELS, 48_000);
+            eprintln!(
+                "ORACLE_PCM source={source} start={} markers={markers:?} downbeats={downbeats:?}",
+                prepared.0.start_seconds(deck, start)
+            );
+            let artifact = format!(
+                "{}-{deck}-{target}",
+                kithara_integration_tests::audio_artifact::artifact_label()
+            )
+            .replace('.', "-");
+            if let Some(mut tap) =
+                kithara_integration_tests::audio_artifact::AudioArtifactTap::from_env(
+                    &artifact, 48_000, CHANNELS,
+                )
+                .expect("control artifact")
+            {
+                tap.push(&pcm);
+            }
             eprintln!("ORACLE_CONTROL {label}: {measured:?}");
             failures.extend(measured);
             hang_reset!();
