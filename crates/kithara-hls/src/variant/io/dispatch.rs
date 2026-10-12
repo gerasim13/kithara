@@ -124,7 +124,9 @@ where
                             break;
                         }
                         if let Some(cap) = prefetch_byte_cap
-                            && let Some(seg_off) = self.segment_byte_offset(seg_idx)
+                            && let Some(seg_off) = self
+                                .descriptor(seg_idx as usize)
+                                .map(|descriptor| descriptor.byte_range.start)
                             && seg_off > cap
                         {
                             resume_at = ctx
@@ -255,7 +257,9 @@ where
 
     fn segment_window_entry_byte(&self, ctx: &PlanCtx<S>, seg_idx: u32) -> Option<u64> {
         let window = look_ahead_segments(ctx)?;
-        self.segment_byte_offset(seg_idx.saturating_sub(window.saturating_sub(1)))
+        let entry = seg_idx.saturating_sub(window.saturating_sub(1));
+        self.descriptor(entry as usize)
+            .map(|descriptor| descriptor.byte_range.start)
     }
 
     /// Settle a claim whose resource could not be acquired, per

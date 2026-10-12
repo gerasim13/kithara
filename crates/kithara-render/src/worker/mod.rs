@@ -27,7 +27,7 @@ pub use load::{EngineLoad, EngineLoadSnapshot};
 pub use node::DecoderNode;
 pub use reader::{PcmPacket, PcmReceiver};
 pub use scheduler::StreamWake;
-pub use track::TrackConfig;
+pub use track::{TrackConfig, TrackConfigPatch};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;

@@ -183,6 +183,7 @@ fn a_seek_on_the_audio_thread_only_syncs_never_blocks() {
     push(
         &mut control,
         DeckPart::Attach {
+            item_id: kithara_events::TrackId::allocate(),
             slot,
             pcm,
             segment: SegmentId::FIRST,

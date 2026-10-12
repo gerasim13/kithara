@@ -3,6 +3,7 @@ use std::fmt;
 use kithara_audio::TrackFailureKind;
 use kithara_command::{Protocol, Target};
 use kithara_effects::{GainDb, eq::EqLayout};
+use kithara_events::TrackId;
 use kithara_signal::{SegmentId, SessionFrame};
 
 use super::{DeckMixSettingsChange, SlotMark};
@@ -72,6 +73,7 @@ pub enum FadeDir {
 pub enum DeckPart {
     Attach {
         slot: Slot,
+        item_id: TrackId,
         pcm: Box<PlayerResource>,
         segment: SegmentId,
     },
@@ -97,6 +99,7 @@ pub enum DeckPart {
     },
     Replace {
         slot: Slot,
+        item_id: TrackId,
         pcm: Box<PlayerResource>,
         segment: SegmentId,
     },
@@ -153,13 +156,25 @@ pub enum DeckEvent {
 impl fmt::Debug for DeckPart {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Attach { slot, pcm, segment } | Self::Replace { slot, pcm, segment } => formatter
+            Self::Attach {
+                slot,
+                item_id,
+                pcm,
+                segment,
+            }
+            | Self::Replace {
+                slot,
+                item_id,
+                pcm,
+                segment,
+            } => formatter
                 .debug_struct(if matches!(self, Self::Attach { .. }) {
                     "Attach"
                 } else {
                     "Replace"
                 })
                 .field("slot", slot)
+                .field("item_id", item_id)
                 .field("src", pcm.src())
                 .field("segment", segment)
                 .finish(),

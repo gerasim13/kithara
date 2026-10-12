@@ -107,15 +107,20 @@ fn finite_projection_clips_a_quantum_before_resolving_past_the_recording() {
     feature = "stretch-glide"
 ))]
 #[kithara::test]
+#[kithara::hang_watchdog]
 fn terminal_projection_recomputes_both_endpoints_and_keeps_the_selected_rate() {
+    hang_tick!();
     let (mut renderer, meta) = renderer();
+    hang_reset!();
     renderer
         .set_speed(SpeedCurve::Constant(1.5), 1)
         .expect("mapped speed");
     renderer.prepare(meta.spec);
+    hang_tick!();
     let requested = renderer
         .prepare_quantum(meta, 4096, usize::MAX)
         .expect("initial quantum resolves");
+    hang_reset!();
     let prepared = renderer.prepared_quantum.expect("prepared quantum");
     let rate = prepared.rate;
     assert_eq!(requested.get(), 192);

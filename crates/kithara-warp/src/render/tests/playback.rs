@@ -539,6 +539,7 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+#[kithara::hang_watchdog]
 fn output_meta_preserves_decoder_timeline(#[case] backend: StretchKind, warp_sine: Vec<f32>) {
     let channels = usize::from(consts::CH);
     let mut fx = keylocked(backend, 0.5);
@@ -559,7 +560,12 @@ fn output_meta_preserves_decoder_timeline(#[case] backend: StretchKind, warp_sin
         }
     }
     while let Some(o) = flush_serviced(&mut fx) {
+        hang_tick!();
+        let frames = o.frames();
         emitted.push(o);
+        if frames > 0 {
+            hang_reset!();
+        }
     }
     assert!(!emitted.is_empty(), "stretch produced no output");
     for o in &emitted {

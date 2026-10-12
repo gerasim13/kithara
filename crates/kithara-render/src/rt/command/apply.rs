@@ -1,5 +1,6 @@
 use kithara_command::{Due, LevelInbox, Seq, Target};
 use kithara_config::LiveConfig;
+use kithara_events::TrackId;
 use kithara_signal::{SegmentId, SessionFrame};
 
 use super::{
@@ -34,8 +35,13 @@ impl Deck {
             self.ended[slot.index()] = false;
         }
         match part {
-            DeckPart::Attach { slot, pcm, segment } => {
-                let track = self.track(pcm, segment);
+            DeckPart::Attach {
+                slot,
+                item_id,
+                pcm,
+                segment,
+            } => {
+                let track = self.track(pcm, segment, item_id);
                 self.tracks
                     .put(slot, track)
                     .err()
@@ -99,8 +105,13 @@ impl Deck {
                     dir,
                 })
             }
-            DeckPart::Replace { slot, pcm, segment } => {
-                let mut track = self.track(pcm, segment);
+            DeckPart::Replace {
+                slot,
+                item_id,
+                pcm,
+                segment,
+            } => {
+                let mut track = self.track(pcm, segment, item_id);
                 track.start(Fade::Declick);
                 track.snap_gate();
                 match self.tracks.replace(slot, track) {
@@ -149,8 +160,14 @@ impl Deck {
         }
     }
 
-    pub(in crate::rt) fn track(&self, pcm: Box<PlayerResource>, segment: SegmentId) -> PlayerTrack {
+    pub(in crate::rt) fn track(
+        &self,
+        pcm: Box<PlayerResource>,
+        segment: SegmentId,
+        item_id: TrackId,
+    ) -> PlayerTrack {
         PlayerTrack::builder()
+            .item_id(item_id)
             .sample_rate(self.sample_rate)
             .declick(self.declick)
             .segment(segment)

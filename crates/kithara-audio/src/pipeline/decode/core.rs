@@ -301,7 +301,7 @@ impl ActiveDecode {
         self.active.notify_seek();
         self.reset();
         let before = stream.position();
-        let outcome = self.active.seek(position);
+        let outcome = self.active.seek(position, self.gapless_mode);
         if let Ok(ref outcome) = outcome {
             commit_outcome(&self.active, stream, playhead, outcome);
             if matches!(outcome, DecoderSeekOutcome::Landed { .. }) {

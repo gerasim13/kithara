@@ -28,6 +28,7 @@ fn track_state_is_playing() {
         .expect("resource"),
     );
     let mut track = PlayerTrack::builder()
+        .item_id(kithara_events::TrackId::allocate())
         .sample_rate(spec.sample_rate)
         .build(resource);
     assert_ne!(track.state(), SlotState::Playing);
@@ -78,6 +79,7 @@ fn seek_targets_reject_unrepresentable_durations() {
         .expect("resource"),
     );
     let mut track = PlayerTrack::builder()
+        .item_id(kithara_events::TrackId::allocate())
         .sample_rate(spec.sample_rate)
         .build(resource);
     assert_eq!(track.mark(SessionFrame::new(0)), None);
@@ -119,6 +121,7 @@ fn slot_state_controls_receiver_activity(#[case] state: SlotState, #[case] expec
         .expect("resource"),
     );
     let mut track = PlayerTrack::builder()
+        .item_id(kithara_events::TrackId::allocate())
         .sample_rate(spec.sample_rate)
         .build(resource);
     if state == SlotState::Playing {

@@ -246,7 +246,7 @@ where
                 end_timestamp: position,
                 ..AudioChunkInfo::default()
             };
-            let (receiver, port) = PcmReceiver::new(
+            let (mut receiver, port) = PcmReceiver::new(
                 audio_buffer_chunks,
                 block_on_underrun,
                 wake,
@@ -254,10 +254,11 @@ where
                 position,
             );
             let activity = audio.take_activity_writer();
-            let warp = Warp::new(
+            let mut warp = Warp::new(
                 (),
                 &warp.starting_at(warp.speed(), start.keylock, start.backend),
             );
+            receiver.render_publisher = warp.take_publisher();
             let mut renderer = warp.renderer(spec, self.pools().clone());
             renderer
                 .set_speed(start.speed, 0)

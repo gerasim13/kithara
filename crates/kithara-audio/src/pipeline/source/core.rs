@@ -387,7 +387,10 @@ impl<T: StreamType> StreamAudioSource<T> {
             );
             if let Some(target) = landing {
                 generation.notify_seek();
-                match generation.seek(kithara_decode::DecodeResult::from(target)?)? {
+                match generation.seek(
+                    kithara_decode::DecodeResult::from(target)?,
+                    self.decode.gapless_mode(),
+                )? {
                     DecoderSeekOutcome::Landed { .. } => generation.trim_to(target),
                     DecoderSeekOutcome::PastEof { .. } => generation.finish(),
                 }

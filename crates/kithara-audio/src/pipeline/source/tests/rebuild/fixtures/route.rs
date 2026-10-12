@@ -296,16 +296,21 @@ pub(in crate::pipeline::source) fn next_test_chunk(
     chunk
 }
 
+#[kithara_test_utils::kithara::hang_watchdog]
 pub(in crate::pipeline::source) fn next_decoded_chunk(
     source: &mut StreamAudioSource<TestStream>,
     route_recreated: &mut bool,
 ) -> AudioChunk {
     loop {
+        hang_tick!();
         run_pending_rebuild_inline(source);
         *route_recreated |=
             source.decode.output_spec().sample_rate.get() == consts::ROUTE_SAMPLE_RATE;
         match source.step_track() {
-            TrackStep::Produced(fetch) => return produced_data(fetch),
+            TrackStep::Produced(fetch) => {
+                hang_reset!();
+                return produced_data(fetch);
+            }
             TrackStep::StateChanged => {
                 *route_recreated |=
                     source.decode.output_spec().sample_rate.get() != consts::SAMPLE_RATE;

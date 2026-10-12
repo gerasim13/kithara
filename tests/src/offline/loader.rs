@@ -1,6 +1,7 @@
 use kithara::{
     events::{EventReceiver, TrackId},
-    platform::time::Duration,
+    platform::{maybe_send::MaybeSend, time::Duration},
+    play::TrackFactory,
     queue::{QueueControl, TrackSource},
 };
 use kithara_test_fixtures::asset::Asset;
@@ -40,11 +41,16 @@ pub async fn append_loaded(
 ///
 /// Panics when the append fails or the track does not load within
 /// [`LOCAL_LOAD_DEADLINE`].
-pub async fn append_source_loaded(
-    harness: &OfflinePlayer,
+#[kithara_test_utils::kithara::flash(io)]
+pub async fn append_source_loaded<F>(
+    harness: &OfflinePlayer<F>,
     queue: &QueueControl<TestPools>,
     source: impl Into<TrackSource<TestPools>>,
-) -> TrackId {
+) -> TrackId
+where
+    F: TrackFactory<TestPools> + MaybeSend + 'static,
+    F::Track: MaybeSend,
+{
     let source = source.into();
     let mut events: EventReceiver<TestEvent> = queue.subscribe();
     let id = harness

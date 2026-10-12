@@ -222,6 +222,7 @@ pub(super) fn start_dc(mixer: &mut TestMixer, ends: &mut TestEnds, slots: &[Slot
     let mut parts = Vec::new();
     for slot in slots {
         parts.push(DeckPart::Attach {
+            item_id: kithara_events::TrackId::allocate(),
             slot: *slot,
             pcm: pcm_samples("dc", 1.0, &vec![1.0; 8192], false),
             segment: SegmentId::FIRST,
@@ -304,6 +305,7 @@ fn an_interrupted_stop_still_answers_its_batch(#[case] replace: bool) {
         at(interrupted_at),
         vec![if replace {
             DeckPart::Replace {
+                item_id: kithara_events::TrackId::allocate(),
                 slot: A,
                 pcm: pcm_samples("replacement", 1.0, &vec![1.0; 8192], false),
                 segment: SegmentId::FIRST,
@@ -474,6 +476,7 @@ fn adopt_never_mixes_a_blocked_older_packet_or_publishes_its_mark(#[case] check_
         at(0),
         vec![
             DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
                 slot: A,
                 pcm: resource,
                 segment: old,
@@ -546,6 +549,7 @@ fn removing_a_slot_while_its_tail_sounds_preserves_gain_continuity(#[case] repla
         &mut ends,
         at(BLOCK),
         vec![DeckPart::Replace {
+            item_id: kithara_events::TrackId::allocate(),
             slot: A,
             pcm: pcm_samples("second dc", 1.0, &vec![1.0; 8192], false),
             segment: SegmentId::FIRST,
@@ -557,6 +561,7 @@ fn removing_a_slot_while_its_tail_sounds_preserves_gain_continuity(#[case] repla
         at(BLOCK + CUT),
         vec![if replace {
             DeckPart::Replace {
+                item_id: kithara_events::TrackId::allocate(),
                 slot: A,
                 pcm: pcm_samples("silence", 1.0, &vec![0.0; 8192], false),
                 segment: SegmentId::FIRST,

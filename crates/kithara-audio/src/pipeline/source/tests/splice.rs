@@ -591,8 +591,8 @@ fn segment_end(state: &SpliceState, segment: u32) -> Duration {
 }
 
 /// splice-continuity contract: RED = audible click on variant switch
-/// (see .docs/plans/2026-07-03-resampler-native-src-design.md, S-Click)
 #[kithara::test(tokio)]
+#[kithara::hang_watchdog]
 async fn hls_aac_lc_abr_variant_switch_splice_continuity_metric(
     slq_layout: VariantLayout,
     smq_layout: VariantLayout,
@@ -607,6 +607,7 @@ async fn hls_aac_lc_abr_variant_switch_splice_continuity_metric(
     let mut last_end = Duration::ZERO;
 
     while left.len() < capture_frames {
+        hang_tick!();
         run_pending_rebuild_inline(&mut source);
         match source.step_track() {
             TrackStep::Produced(fetch) => {
@@ -614,6 +615,9 @@ async fn hls_aac_lc_abr_variant_switch_splice_continuity_metric(
                 last_segment = chunk.meta.segment_index;
                 last_end = chunk.meta.end_timestamp;
                 append_left_channel(&mut left, &chunk);
+                if chunk.frames() != 0 {
+                    hang_reset!();
+                }
                 source
                     .playhead
                     .advance(&crate::audio::chunk_position(&chunk.meta));
@@ -667,6 +671,7 @@ async fn hls_aac_lc_abr_variant_switch_splice_continuity_metric(
 }
 
 #[kithara::test(tokio)]
+#[kithara::hang_watchdog]
 async fn hls_aac_lc_same_variant_recreate_continuity_metric(slq_layout: VariantLayout) {
     let SpliceFixture { mut source, state } = splice_source(vec![slq_layout]).await;
     let recreate_after = segment_end(&state, consts::SPLICE_SEGMENT - 1);
@@ -678,6 +683,7 @@ async fn hls_aac_lc_same_variant_recreate_continuity_metric(slq_layout: VariantL
     let mut last_end = Duration::ZERO;
 
     while left.len() < capture_frames {
+        hang_tick!();
         run_pending_rebuild_inline(&mut source);
         match source.step_track() {
             TrackStep::Produced(fetch) => {
@@ -685,6 +691,9 @@ async fn hls_aac_lc_same_variant_recreate_continuity_metric(slq_layout: VariantL
                 last_segment = chunk.meta.segment_index;
                 last_end = chunk.meta.end_timestamp;
                 append_left_channel(&mut left, &chunk);
+                if chunk.frames() != 0 {
+                    hang_reset!();
+                }
                 source
                     .playhead
                     .advance(&crate::audio::chunk_position(&chunk.meta));

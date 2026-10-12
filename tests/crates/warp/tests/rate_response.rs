@@ -57,8 +57,21 @@ async fn capture_frames(
         hang_tick!();
         let remaining = frames - samples.len() / usize::from(CHANNELS);
         let block_frames = remaining.min(callback_frames);
-        samples.extend(harness.render(block_frames).await);
-        let _ = harness.tick_and_drain().await;
+        let block = {
+            let _real_io = kithara::platform::flash::real_io();
+            let mut budget = Duration::ZERO;
+            hang_park!(|remaining| budget = remaining);
+            let rendered = time::timeout(budget, async {
+                let block = harness.render(block_frames).await;
+                let _ = harness.tick_and_drain().await;
+                block
+            })
+            .await;
+            hang_tick!();
+            rendered.expect("offline response callback makes progress within its watchdog")
+        };
+        samples.extend(block);
+        hang_reset!();
         time::sleep(frame_period(block_frames)).await;
         hang_reset!();
     }
@@ -282,7 +295,10 @@ async fn playing_queue(
         .expect("append sine fixture");
     let mut budget = Duration::ZERO;
     hang_park!(|remaining: Duration| budget = remaining.min(Duration::from_secs(5)));
-    let loaded = wait_for_loader_done_event(&mut events, &queue, id, budget).await;
+    let loaded = {
+        let _real_io = kithara::platform::flash::real_io();
+        wait_for_loader_done_event(&mut events, &queue, id, budget).await
+    };
     hang_tick!();
     loaded.expect("load sine fixture through resident queue");
     hang_reset!();
@@ -795,8 +811,8 @@ async fn live_rate_change_reaches_presented_pcm_within_response_budget(
     run_strict_case(&temp_dir, backend, backends, case, response_source).await;
 }
 
-/// A plain rate step is ramped by the existing Warp manual-rate smoother: no block moves the multiplier
-/// further than the smoother's worst-case step for that block, the renderer
+/// The fixture submits a rate step as an explicit output-frame ramp: no block moves the multiplier
+/// further than the ramp's worst-case step for that block, the renderer
 /// applies intermediate ratios, and the ramp settles at the target.
 #[kithara::test(
     tokio,

@@ -31,6 +31,7 @@ fn snapshot_frontier_never_trails_position() {
         &mut ends,
         When::Next,
         vec![DeckPart::Attach {
+            item_id: kithara_events::TrackId::allocate(),
             slot: A,
             pcm: Box::new(pcm),
             segment: SegmentId::FIRST,
@@ -68,6 +69,7 @@ fn processor_fade_in_restarts_track_from_zero() {
         &mut ends,
         When::Next,
         vec![DeckPart::Attach {
+            item_id: kithara_events::TrackId::allocate(),
             slot: A,
             pcm,
             segment,
