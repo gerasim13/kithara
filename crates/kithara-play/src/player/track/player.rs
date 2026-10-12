@@ -232,6 +232,7 @@ impl<S> Player<S> for PlayerImpl<S> {
                     }
                     _ => {}
                 }
+                self.promote(out);
                 Settled::Pending
             }
         }
@@ -241,9 +242,7 @@ impl<S> Player<S> for PlayerImpl<S> {
         self.observe(out);
         self.settle_lane();
         self.adopt_newest_epoch(out);
-        if let Err(error) = self.promote(out) {
-            warn!(%error, "a seated lane waits to leave the background class");
-        }
+        self.promote(out);
         if self.status == TrackStatus::Released {
             if let Err(error) = self.release_lane(out) {
                 warn!(%error, "lane release waits for room");

@@ -218,6 +218,7 @@ impl<S> PlayerImpl<S> {
                 _ => {}
             }
         }
+        self.promote(out);
         Settled::Applied { seq: answered, at }
     }
 

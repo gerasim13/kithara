@@ -311,7 +311,6 @@ async fn track_state_maps_to_service_class(#[case] phase: &str, #[case] expected
             first_lane
         }
         "fading_in" | "fading_out" => {
-            priorities.clear();
             select_successor(&mut queue, &mut rig, second);
             let second_lane = open(&mut queue, &mut rig, &dir, &mut priorities).await;
             let fades = deck(&mut queue, &mut rig, &mut priorities);
@@ -361,6 +360,7 @@ async fn track_state_maps_to_service_class(#[case] phase: &str, #[case] expected
         }
         "finished" => {
             priorities.clear();
+            assert_eq!(queue.snapshot().current, Some(first));
             let slot = queue
                 .current_track()
                 .expect("finishing track")
@@ -377,14 +377,17 @@ async fn track_state_maps_to_service_class(#[case] phase: &str, #[case] expected
                     out,
                 )
             });
+            let finished = queue
+                .active
+                .iter()
+                .find(|active| active.item == first)
+                .expect("finished track");
+            assert_eq!(finished.slot, slot);
             assert!(matches!(
-                queue
-                    .current_track()
-                    .expect("finished track")
-                    .snapshot()
-                    .status,
+                finished.track.snapshot().status,
                 PlayingStatus::Ended { .. }
             ));
+            assert_eq!(queue.snapshot().current, Some(first));
             dispatcher(&mut queue, &mut rig, None, &mut priorities);
             first_lane
         }

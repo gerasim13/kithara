@@ -104,9 +104,7 @@ impl<S> PlayerImpl<S> {
                         reason: Rejection::Refused(error),
                     };
                 }
-                if let Err(error) = self.promote(out) {
-                    warn!(%error, "a seated lane waits to leave the background class");
-                }
+                self.promote(out);
                 Settled::Pending
             }
             Outcome::Rejected(refused) => {
@@ -269,9 +267,7 @@ impl<S> PlayerImpl<S> {
                 self.reserved_ready();
                 return Err(error);
             }
-            if let Err(error) = self.promote(out) {
-                warn!(%error, "a seated lane waits to leave the background class");
-            }
+            self.promote(out);
             return Ok(None);
         }
         if self.attaching.is_some() || self.ready != Some(self.segment) {
@@ -312,9 +308,7 @@ impl<S> PlayerImpl<S> {
                     replacement: true,
                     play: self.play.take(),
                 });
-                if let Err(error) = self.promote(out) {
-                    warn!(%error, "a seated lane waits to leave the background class");
-                }
+                self.promote(out);
                 Ok(seq)
             }
             Err((error, parts)) => {
@@ -342,14 +336,20 @@ impl<S> PlayerImpl<S> {
         }
     }
 
-    pub(super) fn promote(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError> {
-        if self.slot.is_some()
-            && self.class == ServiceClass::Idle
+    pub(super) fn promote(&mut self, out: &mut Outbox<'_, S>) {
+        let class = match self.status {
+            TrackStatus::Playing { .. } => ServiceClass::Audible,
+            TrackStatus::Ended { .. } | TrackStatus::Faded { .. } => ServiceClass::Idle,
+            _ if self.slot.is_some() && self.class == ServiceClass::Idle => ServiceClass::Warm,
+            _ => return,
+        };
+        if self.class != class
             && let Some(lane) = self.lane_id
         {
-            out.prioritize(lane, ServiceClass::Warm)?;
-            self.class = ServiceClass::Warm;
+            match out.prioritize(lane, class) {
+                Ok(_) => self.class = class,
+                Err(error) => warn!(%error, "a track waits to publish its service class"),
+            }
         }
-        Ok(())
     }
 }
