@@ -451,9 +451,9 @@ mod tests {
         assert_eq!(tracks.records()[0].status, TrackStatus::Cancelled);
     }
 
-    #[kithara::test(native)]
+    #[kithara::test(tokio)]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
-    fn a_slow_watch_survives_a_bus_that_dropped_a_burst() {
+    async fn a_slow_watch_survives_a_bus_that_dropped_a_burst() {
         hang_tick!();
         let capacity = 4;
         let bus = EventBus::new(capacity);
