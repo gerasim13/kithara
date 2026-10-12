@@ -30,7 +30,7 @@ pub(super) use kithara::{
     play::{
         ArtifactSource, PlayWorker, PlayWorkerConfig, ResourceConfig, ResourcePrep, ResourceSrc,
     },
-    queue::{Queue, QueueConfig, TrackSource, TrackStatus, Transition},
+    queue::{Queue, QueueConfig, TrackSource, TrackStatus},
     signal::SessionFrame,
     warp::SessionBeat,
 };

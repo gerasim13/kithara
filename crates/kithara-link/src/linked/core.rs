@@ -2,11 +2,9 @@ use std::task::Waker;
 
 use kithara_beat::BeatGridModel;
 use kithara_command::{Rejection, Seq, When};
-use kithara_config::Config;
 use kithara_play::{
     Bound, DeckControl, DeckPass, HostedDeck, Outbox, PlayError, PlayWorker, Player, Position,
-    Settled, Track, TrackCommand, TrackReceipt, TrackSettings, TrackSettingsChange, TrackSnapshot,
-    TrackStatus,
+    Settled, Track, TrackCommand, TrackReceipt, TrackSettings, TrackSettingsChange, TrackStatus,
 };
 use kithara_render::{
     bridge::{DeckEvent, DeckPart},
@@ -16,122 +14,8 @@ use kithara_signal::{FrameCount, SessionFrame};
 use kithara_sync::checked_correction;
 use tracing::warn;
 
-use crate::{
-    GridAnswer, LinkError, TempoTrajectory, covers, entry, jump_target, phase_error, speed,
-};
-
-/// A player that can align itself and receive the Host's planned tempo trajectory.
-pub trait LinkedPlayer<S>: Player<S> {
-    /// Enables alignment, including an explicit phase jump while sounding;
-    /// disabling alignment sends nothing and preserves in-flight speeds.
-    ///
-    /// # Errors
-    /// Returns the refusal of the speed or jump batch, if one is sent.
-    fn sync(&mut self, on: bool, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError>;
-
-    /// Replaces the Host trajectory, changing sounding lanes on `at`, silent
-    /// lanes on Next, and withdrawing and replanning any waiting start.
-    fn retime(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>);
-
-    /// Accepts analysis for the current load only: resumes grid waits, applies
-    /// silent refinements immediately, and corrects sounding phase without a jump.
-    fn grid(&mut self, answer: GridAnswer, out: &mut Outbox<'_, S>);
-
-    /// Whether the Host should send this player tempo changes.
-    fn synced(&self) -> bool;
-
-    /// The lane's required lead while sounding in SYNC; silent players return None.
-    fn lead(&self, delivery: FrameCount) -> Option<FrameCount>;
-
-    /// Available room in all lane queues that a retime would send to.
-    fn lane_room(&self) -> usize;
-
-    /// Scope batches needed to reopen silent tracks during a retime.
-    fn scope_parts(&self) -> usize;
-
-    /// Whether any speed batch for this retime has applied; None awaits a verdict.
-    fn retime_applied(&mut self, at: SessionFrame) -> Option<bool>;
-
-    /// Replaces the trajectory and closes phase using only bounded speed steps.
-    fn realign(&mut self, trajectory: &TempoTrajectory, at: SessionFrame, out: &mut Outbox<'_, S>);
-}
-
-/// Maximum adjacent speed step used for inaudible phase correction.
-#[derive(Clone, Copy, Debug, PartialEq, Config)]
-#[config(default, check(error = LinkError), fields(value, get(copy)))]
-pub struct LinkConfig {
-    #[config(check = check_epsilon, builder(default = 0.001))]
-    epsilon: f32,
-}
-
-fn check_epsilon(epsilon: f32) -> Result<f32, LinkError> {
-    if epsilon.is_finite() && epsilon > 0.0 {
-        Ok(epsilon)
-    } else {
-        Err(LinkError::Epsilon { epsilon })
-    }
-}
-
-/// Whether Host synchronization owns speed and phase for this track.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SyncMode {
-    Off,
-    On,
-    /// Analysis refused; playback continues without synchronization.
-    Unsyncable,
-}
-
-/// Synchronization progress beside the underlying track snapshot.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SyncStatus {
-    Off,
-    On,
-    WaitingForGrid { required: Position },
-    Unsyncable,
-    Correcting { remaining: FrameCount },
-}
-
-/// An owner command waiting for a grid that covers its media position.
-#[derive(Clone, Copy, Debug)]
-pub enum Waiting {
-    Load {
-        required: Position,
-    },
-    Play {
-        required: Position,
-        at: When<SessionFrame>,
-    },
-    Sync {
-        required: Position,
-    },
-    Seek {
-        required: Position,
-    },
-}
-
-impl Waiting {
-    fn required(self) -> Position {
-        match self {
-            Self::Load { required }
-            | Self::Play { required, .. }
-            | Self::Sync { required }
-            | Self::Seek { required } => required,
-        }
-    }
-}
-
-/// Track state and its synchronization admission or correction state.
-#[derive(Clone, Debug)]
-pub struct LinkedSnapshot<T> {
-    pub track: T,
-    pub sync: SyncStatus,
-}
-
-impl<T: AsRef<TrackSnapshot>> AsRef<TrackSnapshot> for LinkedSnapshot<T> {
-    fn as_ref(&self) -> &TrackSnapshot {
-        self.track.as_ref()
-    }
-}
+use super::{LinkConfig, LinkedPlayer, LinkedSnapshot, SyncMode, SyncStatus, Waiting};
+use crate::{GridAnswer, TempoTrajectory, covers, entry, jump_target, phase_error, speed};
 
 /// One track decorated with analysis, Host tempo and owner-thread synchronization.
 pub struct Linked<P> {
@@ -415,6 +299,12 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
             return self.inner.entry(bound);
         }
         let track = self.inner.snapshot();
+        if matches!(
+            track.as_ref().status,
+            TrackStatus::Idle | TrackStatus::Loading | TrackStatus::Released
+        ) {
+            return None;
+        }
         self.grid
             .as_ref()
             .and_then(|grid| entry(&self.host, grid, track.as_ref().position, bound))
@@ -510,7 +400,15 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
                     self.inner.snapshot().as_ref().status,
                     TrackStatus::Playing { .. }
                 ) {
-                    return self.inner.apply(TrackCommand::Seek { to }, out);
+                    let sent = self.inner.apply(TrackCommand::Seek { to }, out)?;
+                    if let Some(start) = self.start {
+                        self.start_caller.get_or_insert(start);
+                    }
+                    self.withdraw_start(to);
+                    if self.cue.is_some() {
+                        self.cue = Some(to);
+                    }
+                    return Ok(sent);
                 }
                 let Some(grid) = self.grid.as_ref().filter(|grid| covers(grid, to)) else {
                     self.waiting = Some(Waiting::Seek { required: to });
@@ -772,6 +670,51 @@ where
     }
 }
 
+impl<P> Linked<P> {
+    fn align<S>(&mut self, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError>
+    where
+        P: Track<S>,
+    {
+        let track = self.inner.snapshot();
+        let required = track.as_ref().position;
+        let Some(grid) = self.grid.as_ref().filter(|grid| covers(grid, required)) else {
+            self.waiting = Some(Waiting::Sync { required });
+            return Ok(None);
+        };
+        if matches!(track.as_ref().status, TrackStatus::Playing { .. }) {
+            let at = self.jump_frame(out)?;
+            let (position, _speed) = self.planned::<S>(at)?;
+            if !covers(grid, position) {
+                self.waiting = Some(Waiting::Sync { required: position });
+                return Ok(None);
+            }
+            if self.lane_room() == 0 {
+                return Err(PlayError::Full("lane"));
+            }
+            if out.deck_available() == 0 {
+                return Err(PlayError::Full("deck"));
+            }
+            let to = jump_target(position, phase_error(&self.host, grid, position, at));
+            let sent = self.inner.apply(
+                TrackCommand::Align {
+                    to,
+                    speed: speed(&self.host, grid, at),
+                    at,
+                },
+                out,
+            )?;
+            if let Some(seq) = sent {
+                self.speeds.push((seq, SpeedOperation::Alignment));
+            }
+            self.correction = None;
+            self.waiting = None;
+            return Ok(sent);
+        }
+        let at = self.earliest(out)?;
+        self.inner.cue(required, speed(&self.host, grid, at), out)
+    }
+}
+
 impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
     fn sync(&mut self, on: bool, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError> {
         let previous = self.mode;
@@ -942,50 +885,5 @@ impl<S, P: Track<S>> LinkedPlayer<S> for Linked<P> {
             self.alignment = Some(false);
             warn!(?at, %error, "tempo phase correction awaits a lane");
         }
-    }
-}
-
-impl<P> Linked<P> {
-    fn align<S>(&mut self, out: &mut Outbox<'_, S>) -> Result<Option<Seq>, PlayError>
-    where
-        P: Track<S>,
-    {
-        let track = self.inner.snapshot();
-        let required = track.as_ref().position;
-        let Some(grid) = self.grid.as_ref().filter(|grid| covers(grid, required)) else {
-            self.waiting = Some(Waiting::Sync { required });
-            return Ok(None);
-        };
-        if matches!(track.as_ref().status, TrackStatus::Playing { .. }) {
-            let at = self.jump_frame(out)?;
-            let (position, _speed) = self.planned::<S>(at)?;
-            if !covers(grid, position) {
-                self.waiting = Some(Waiting::Sync { required: position });
-                return Ok(None);
-            }
-            if self.lane_room() == 0 {
-                return Err(PlayError::Full("lane"));
-            }
-            if out.deck_available() == 0 {
-                return Err(PlayError::Full("deck"));
-            }
-            let to = jump_target(position, phase_error(&self.host, grid, position, at));
-            let sent = self.inner.apply(
-                TrackCommand::Align {
-                    to,
-                    speed: speed(&self.host, grid, at),
-                    at,
-                },
-                out,
-            )?;
-            if let Some(seq) = sent {
-                self.speeds.push((seq, SpeedOperation::Alignment));
-            }
-            self.correction = None;
-            self.waiting = None;
-            return Ok(sent);
-        }
-        let at = self.earliest(out)?;
-        self.inner.cue(required, speed(&self.host, grid, at), out)
     }
 }

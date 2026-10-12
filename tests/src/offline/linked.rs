@@ -46,6 +46,11 @@ pub enum LinkProbeCommand<S: HasPool<u8> + Send + Sync + 'static> {
     },
 }
 
+struct LinkProbes<S: HasPool<u8> + Send + Sync + 'static> {
+    commands: Vec<LinkProbeCommand<S>>,
+    wake: Option<Waker>,
+}
+
 #[derive(Default)]
 pub struct LinkObservation {
     pub tracks: Vec<LinkedSnapshot<TrackSnapshot>>,
@@ -145,7 +150,6 @@ where
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
         let loading = matches!(command, TrackCommand::Load { .. });
-        let starting = matches!(command, TrackCommand::Play { .. });
         let seq = self.inner.apply(command, out)?;
         if loading && let Some(seq) = seq {
             self.observation
@@ -153,16 +157,27 @@ where
                 .loads
                 .push((self.inner.snapshot().item, seq));
         }
-        if starting && let Some(seq) = seq {
-            self.observation
-                .lock()
-                .starts
-                .push((self.inner.snapshot().item, seq));
-        }
         Ok(seq)
     }
 
     fn settle(&mut self, receipt: TrackReceipt<'_, S>, out: &mut Outbox<'_, S>) -> Settled {
+        if let TrackReceipt::Deck {
+            seq,
+            outcome: Outcome::Applied { .. },
+            batch,
+        } = &receipt
+        {
+            let snapshot = self.inner.snapshot();
+            if batch.commands.iter().any(
+                |part| matches!(part, DeckPart::Start { slot, .. } if Some(*slot) == snapshot.slot),
+            ) {
+                let mut observation = self.observation.lock();
+                let start = (snapshot.item, *seq);
+                if !observation.starts.contains(&start) {
+                    observation.starts.push(start);
+                }
+            }
+        }
         let settled = self.inner.settle(receipt, out);
         self.record(&settled);
         settled
@@ -216,7 +231,7 @@ where
     id: DeckId,
     control: QueueControl<S>,
     observation: Arc<Mutex<LinkObservation>>,
-    commands: Arc<Mutex<Vec<LinkProbeCommand<S>>>>,
+    commands: Arc<Mutex<LinkProbes<S>>>,
 }
 
 impl<S> LinkedQueueHandle<S>
@@ -224,7 +239,14 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     pub fn probe(&self, command: LinkProbeCommand<S>) {
-        self.commands.lock().push(command);
+        let wake = {
+            let mut probes = self.commands.lock();
+            probes.commands.push(command);
+            probes.wake.clone()
+        };
+        if let Some(wake) = wake {
+            wake.wake();
+        }
     }
 
     delegate::delegate! {
@@ -266,7 +288,7 @@ where
 {
     inner: LinkedQueue<S>,
     observation: Arc<Mutex<LinkObservation>>,
-    commands: Arc<Mutex<Vec<LinkProbeCommand<S>>>>,
+    commands: Arc<Mutex<LinkProbes<S>>>,
 }
 
 impl<S> ObservedQueue<S>
@@ -288,14 +310,18 @@ where
             fn resource_prep(&self) -> Option<&ResourcePrep<S>>;
             fn mixer_config(&self) -> DeckMixerConfig;
             fn close(&mut self, out: &mut Outbox<'_, S>) -> Result<(), PlayError>;
-            fn hold(&mut self, waker: Waker);
             fn release(&mut self);
         }
     }
 
+    fn hold(&mut self, waker: Waker) {
+        self.commands.lock().wake = Some(waker.clone());
+        self.inner.hold(waker);
+    }
+
     fn drain(&mut self, pass: DeckPass<'_>, out: &mut Outbox<'_, S>) {
         self.inner.drain(pass, out);
-        let commands = std::mem::take(&mut *self.commands.lock());
+        let commands = std::mem::take(&mut self.commands.lock().commands);
         for command in commands {
             match command {
                 LinkProbeCommand::Track { item, command } => {
@@ -463,7 +489,10 @@ where
         self.with(move |host| {
             let id = host.deck_id()?;
             let control = queue.control();
-            let commands = Arc::new(Mutex::new(Vec::new()));
+            let commands = Arc::new(Mutex::new(LinkProbes {
+                commands: Vec::new(),
+                wake: None,
+            }));
             host.send(
                 HostCommand::Register {
                     id,

@@ -9,7 +9,7 @@ use kithara::{
     platform::{
         maybe_send::MaybeSend,
         sync::{Arc, Mutex},
-        time::WallInstant,
+        time::{Duration, WallInstant},
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{
@@ -346,7 +346,7 @@ where
     }
 
     /// Render until selection is committed by the queue, not merely prepared by its loader.
-    #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     pub async fn render_until_current(
         &self,
         id: TrackId,
@@ -354,7 +354,10 @@ where
         deadline: WallInstant,
     ) {
         while self.player().current().map(|entry| entry.id) != Some(id) {
-            hang_tick!("render_until_current waits for playback progress".to_owned());
+            hang_tick!(format!(
+                "render_until_current: awaiting {id:?}, current {:?}",
+                self.player().current().map(|entry| entry.id)
+            ));
             assert!(
                 WallInstant::now() < deadline,
                 "queue did not commit current track {id:?} before the render deadline"
@@ -436,20 +439,23 @@ where
         drop(pcm_decks);
     }
 
-    #[cfg_attr(target_arch = "wasm32", kithara_test_utils::kithara::hang_watchdog)]
+    #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     fn drain_events(&self) -> Vec<TestEvent> {
         let mut events = Vec::new();
         let mut rx = self.events.lock();
         loop {
-            #[cfg(target_arch = "wasm32")]
-            hang_tick!();
+            hang_tick!(format!(
+                "offline player: draining {} observed events",
+                events.len()
+            ));
             match rx.try_recv() {
                 Ok(envelope) => {
                     events.push(envelope.event);
-                    #[cfg(target_arch = "wasm32")]
                     hang_reset!();
                 }
-                Err(TryRecvError::Lagged(_)) => continue,
+                Err(TryRecvError::Lagged(_)) => {
+                    hang_reset!();
+                }
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             }
         }
