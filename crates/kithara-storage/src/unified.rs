@@ -52,71 +52,10 @@ impl From<MemResource> for StorageResource {
 /// [`AtomicChunked`]. The split-handle typestate lives below this layer; this
 /// unified enum is the multi-owner facade used by the asset cache.
 impl StorageResource {
-    /// Release the writer without failing the resource, for a caller that owns
-    /// the refill. See [`AtomicChunked::abandon`].
-    pub fn abandon(&self) {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Mmap(r) => r.abandon(),
-            Self::Mem(r) => r.abandon(),
-        }
-    }
-
-    /// Commit the resource.
-    ///
-    /// # Errors
-    /// Returns error if the backend cannot finalize.
-    pub fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Mmap(r) => r.commit(final_len),
-            Self::Mem(r) => r.commit(final_len),
-        }
-    }
-
-    /// Whether the given range is fully covered by available data.
-    #[must_use]
-    pub fn contains_range(&self, range: Range<u64>) -> bool {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Mmap(r) => r.contains_range(range),
-            Self::Mem(r) => r.contains_range(range),
-        }
-    }
-
-    /// Mark the resource failed.
-    pub fn fail(&self, reason: String) {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Mmap(r) => r.fail(reason),
-            Self::Mem(r) => r.fail(reason),
-        }
-    }
-
     /// Returns `true` if the resource has been committed with zero length.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == Some(0)
-    }
-
-    /// Committed length, if known.
-    #[must_use]
-    pub fn len(&self) -> Option<u64> {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Mmap(r) => r.len(),
-            Self::Mem(r) => r.len(),
-        }
-    }
-
-    /// First gap in available data starting at `from`, up to `limit`.
-    #[must_use]
-    pub fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>> {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Mmap(r) => r.next_gap(from, limit),
-            Self::Mem(r) => r.next_gap(from, limit),
-        }
     }
 
     /// Backing file path, if any.
@@ -129,96 +68,6 @@ impl StorageResource {
         }
     }
 
-    /// Reactivate a committed resource for continued writing.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled or the backend cannot reopen.
-    pub fn reactivate(&self) -> StorageResult<()> {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Mmap(r) => r.reactivate(),
-            Self::Mem(r) => r.reactivate(),
-        }
-    }
-
-    /// Read data at the given offset into `buf`; returns bytes read.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the read fails.
-    pub fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Mmap(r) => r.read_at(offset, buf),
-            Self::Mem(r) => r.read_at(offset, buf),
-        }
-    }
-
-    /// Read the writer's own in-flight bytes from the active working storage,
-    /// bypassing the committed snapshot (decrypt-on-commit read-back).
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the read fails.
-    pub fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Mmap(r) => r.read_inflight_at(offset, buf),
-            Self::Mem(r) => r.read_inflight_at(offset, buf),
-        }
-    }
-
-    /// Read the entire resource into a caller buffer; returns bytes read.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the read fails.
-    pub fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Mmap(r) => r.read_into(buf),
-            Self::Mem(r) => r.read_into(buf),
-        }
-    }
-
-    /// Current runtime status.
-    #[must_use]
-    pub fn status(&self) -> ResourceStatus {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Mmap(r) => r.status(),
-            Self::Mem(r) => r.status(),
-        }
-    }
-
-    /// Wait until the given byte range is available.
-    ///
-    /// # Errors
-    /// Returns error if the range is invalid, the resource is cancelled, or the
-    /// resource has failed.
-    pub fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Mmap(r) => r.wait_range(range),
-            Self::Mem(r) => r.wait_range(range),
-        }
-    }
-
-    /// Wait until the given byte range is available, interrupting only this
-    /// wait when `cancel` fires.
-    ///
-    /// # Errors
-    /// Returns error if the range is invalid, either cancellation token fires,
-    /// or the resource has failed.
-    pub fn wait_range_with_cancel(
-        &self,
-        range: Range<u64>,
-        cancel: &CancelToken,
-    ) -> StorageResult<WaitOutcome> {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Mmap(r) => r.wait_range_with_cancel(range, cancel),
-            Self::Mem(r) => r.wait_range_with_cancel(range, cancel),
-        }
-    }
-
     /// Write entire contents and commit atomically.
     ///
     /// # Errors
@@ -228,15 +77,77 @@ impl StorageResource {
         self.commit(Some(data.len() as u64))
     }
 
-    /// Write data at the given offset.
-    ///
-    /// # Errors
-    /// Returns error if the resource is cancelled, failed, or the write fails.
-    pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        match self {
+    delegate::delegate! {
+        to match self {
             #[cfg(not(target_arch = "wasm32"))]
-            Self::Mmap(r) => r.write_at(offset, data),
-            Self::Mem(r) => r.write_at(offset, data),
+            Self::Mmap(resource) => resource,
+            Self::Mem(resource) => resource,
+        } {
+            /// Release the writer without failing the resource, for a caller that owns
+            /// the refill. See [`AtomicChunked::abandon`].
+            pub fn abandon(&self);
+            /// Commit the resource.
+            ///
+            /// # Errors
+            /// Returns error if the backend cannot finalize.
+            pub fn commit(&self, final_len: Option<u64>) -> StorageResult<()>;
+            /// Whether the given range is fully covered by available data.
+            #[must_use]
+            pub fn contains_range(&self, range: Range<u64>) -> bool;
+            /// Mark the resource failed.
+            pub fn fail(&self, reason: String);
+            /// Committed length, if known.
+            #[must_use]
+            pub fn len(&self) -> Option<u64>;
+            /// First gap in available data starting at `from`, up to `limit`.
+            #[must_use]
+            pub fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
+            /// Reactivate a committed resource for continued writing.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled or the backend cannot reopen.
+            pub fn reactivate(&self) -> StorageResult<()>;
+            /// Read data at the given offset into `buf`; returns bytes read.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled, failed, or the read fails.
+            pub fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+            /// Read the writer's own in-flight bytes from the active working storage,
+            /// bypassing the committed snapshot (decrypt-on-commit read-back).
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled, failed, or the read fails.
+            pub fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+            /// Read the entire resource into a caller buffer; returns bytes read.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled, failed, or the read fails.
+            pub fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize>;
+            /// Current runtime status.
+            #[must_use]
+            pub fn status(&self) -> ResourceStatus;
+            /// Wait until the given byte range is available.
+            ///
+            /// # Errors
+            /// Returns error if the range is invalid, the resource is cancelled, or the
+            /// resource has failed.
+            pub fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
+            /// Wait until the given byte range is available, interrupting only this
+            /// wait when `cancel` fires.
+            ///
+            /// # Errors
+            /// Returns error if the range is invalid, either cancellation token fires,
+            /// or the resource has failed.
+            pub fn wait_range_with_cancel(
+                &self,
+                range: Range<u64>,
+                cancel: &CancelToken,
+            ) -> StorageResult<WaitOutcome>;
+            /// Write data at the given offset.
+            ///
+            /// # Errors
+            /// Returns error if the resource is cancelled, failed, or the write fails.
+            pub fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
         }
     }
 }

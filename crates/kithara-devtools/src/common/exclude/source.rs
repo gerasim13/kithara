@@ -39,7 +39,8 @@ pub(crate) fn item_is_test_only(item: &Item) -> bool {
         || matches!(item, Item::Fn(function) if attrs_have_test_marker(&function.attrs))
 }
 
-fn attr_without_test(meta: &Meta) -> Option<bool> {
+/// Whether this attribute retains existence with `test = false`; unknown features stay unknown.
+pub(crate) fn attr_without_test(meta: &Meta) -> Option<bool> {
     match meta {
         Meta::List(list) if list.path.is_ident("cfg") => {
             cfg_without_test(&syn::parse2::<Meta>(list.tokens.clone()).ok()?)
@@ -271,7 +272,8 @@ fn fully_excluded_lines(source: &str, ranges: &mut [Range<usize>]) -> BTreeSet<u
     out
 }
 
-fn collect_cfg_test_ranges(items: &[Item], out: &mut Vec<Range<usize>>) {
+/// Append test-only byte ranges from parsed items, retaining their original token spans.
+pub(crate) fn collect_cfg_test_ranges(items: &[Item], out: &mut Vec<Range<usize>>) {
     let mut visitor = TestRanges { out };
     for item in items {
         visitor.visit_item(item);
