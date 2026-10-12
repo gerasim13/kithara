@@ -96,6 +96,27 @@ mod tests {
     use crate::test_pools::pools;
 
     #[kithara::test]
+    fn downsampling_keeps_the_mapped_source_coordinate() {
+        let pools = pools();
+        let mut resident =
+            SourceResidency::prepare(&pools, None, 32, 64, 0, 1).expect("retained source history");
+        let samples: Vec<_> = (0..64_u16).map(|frame| f32::from(frame) / 64.0).collect();
+        resident
+            .append(
+                AudioChunkInfo {
+                    spec: AudioSpec::new(1, NonZeroU32::new(44_100).expect("sample rate")),
+                    frames: 64,
+                    ..AudioChunkInfo::default()
+                },
+                &samples,
+            )
+            .expect("exact mapped source span");
+        let actual = source_sample(&resident, (16, NonZeroU128::MIN), 4.0, None, 1, 0)
+            .expect("all filter taps are in the resident source window");
+        assert_eq!(actual, 0.25);
+    }
+
+    #[kithara::test]
     fn quadratic_sampling_keeps_the_fraction_when_the_window_position_rounds_up() {
         let pools = pools();
         let mut resident =

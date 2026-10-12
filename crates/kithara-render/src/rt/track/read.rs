@@ -114,7 +114,9 @@ impl PlayerTrack {
             range.len()
         };
         let requested = range.start..range.start.saturating_add(limit);
-        let outcome = self.resource.read(scratch, requested.clone(), budget);
+        let outcome = self
+            .resource
+            .read(context, scratch, requested.clone(), budget);
         let frames = match outcome {
             ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
             ReadOutcome::Eof => return TrackReadOutcome::Eof,
@@ -183,7 +185,7 @@ impl PlayerTrack {
         }
         let gain = self.gain();
         let mut buffers = [&mut left[..length], &mut right[..length]];
-        let written = match self.resource.read(&mut buffers, 0..length, budget) {
+        let written = match self.resource.read(None, &mut buffers, 0..length, budget) {
             ReadOutcome::Full { frames } | ReadOutcome::Partial { frames } => frames,
             ReadOutcome::Eof | ReadOutcome::Failed(_) => 0,
         };

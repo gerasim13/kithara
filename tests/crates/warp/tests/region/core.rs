@@ -75,6 +75,7 @@ pub(super) fn render(
     let mut out = Vec::new();
     let mut offset = 0_u64;
     for data in source.chunks(4096 * CH) {
+        hang_tick!();
         let frames = data.len() / CH;
         let output = fx
             .render(chunk(&pools, spec(), data, offset))
@@ -85,14 +86,20 @@ pub(super) fn render(
             out.extend_from_slice(&o.samples);
         }
         offset += u64_of(frames);
+        hang_reset!();
     }
     loop {
+        hang_tick!();
         fx.prepare(spec());
         let output = fx.drain(usize::MAX).expect("drain renderer");
         let Some(o) = output else {
             break;
         };
+        let frames = o.frames();
         out.extend_from_slice(&o.samples);
+        if frames > 0 {
+            hang_reset!();
+        }
     }
     out
 }
@@ -655,7 +662,9 @@ pub(crate) fn render_configured_grid_with_updates(
                 present(&mut out, output);
             }
             consumed += planned;
-            hang_reset!();
+            if planned > 0 {
+                hang_reset!();
+            }
         }
         carried = consumed.saturating_sub(frames);
         offset += u64_of(frames);
@@ -667,8 +676,11 @@ pub(crate) fn render_configured_grid_with_updates(
         let Some(o) = output else {
             break;
         };
+        let frames = o.frames();
         present(&mut out, o);
-        hang_reset!();
+        if frames > 0 {
+            hang_reset!();
+        }
     }
     Presented {
         samples: out,

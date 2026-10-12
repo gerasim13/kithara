@@ -54,14 +54,17 @@ async fn scratch_holds_200ms_of_frames(#[case] sample_rate: u32, #[case] expecte
     let split = expected / 2;
     let mut budget = 4;
     let ReadOutcome::Full { frames: first } =
-        resource.read(&mut [&mut left, &mut right], 0..split, &mut budget)
+        resource.read(None, &mut [&mut left, &mut right], 0..split, &mut budget)
     else {
         panic!("the first read must consume the packet prefix")
     };
     assert_eq!(first, split);
-    let ReadOutcome::Full { frames: second } =
-        resource.read(&mut [&mut left, &mut right], split..expected, &mut budget)
-    else {
+    let ReadOutcome::Full { frames: second } = resource.read(
+        None,
+        &mut [&mut left, &mut right],
+        split..expected,
+        &mut budget,
+    ) else {
         panic!("the second read must consume the held packet remainder")
     };
     assert_eq!(FrameCount::new(first + second), FrameCount::new(expected));
@@ -84,7 +87,7 @@ async fn epoch_validator_keeps_matching_chunks() {
     let mut left = [0.0; 3];
     let mut right = [0.0; 3];
     let mut budget = 4;
-    let result = resource.read(&mut [&mut left, &mut right], 0..3, &mut budget);
+    let result = resource.read(None, &mut [&mut left, &mut right], 0..3, &mut budget);
     assert!(matches!(result, ReadOutcome::Full { frames: 3 }));
     assert_eq!(left, [1.0, 2.0, 3.0]);
     assert_eq!(right, left);
@@ -111,7 +114,7 @@ async fn epoch_validator_rejects_stale_chunks_after_seek() {
     let mut left = [-1.0; 1];
     let mut right = [-1.0; 1];
     let mut budget = 4;
-    resource.read(&mut [&mut left, &mut right], 0..1, &mut budget);
+    resource.read(None, &mut [&mut left, &mut right], 0..1, &mut budget);
     assert!(!left.contains(&1.0));
     assert!(!left.contains(&3.0));
     assert!(left.contains(&2.0));
