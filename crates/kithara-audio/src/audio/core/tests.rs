@@ -11,7 +11,7 @@ use kithara_test_utils::kithara;
 
 use super::{audio::*, context::AudioContext};
 use crate::{
-    AudioSession, AudioSource, Fetch, ReadOutcome, SeekOutcome, SourceSpan, TrackStep,
+    AudioRead, AudioSession, AudioSource, Fetch, ReadOutcome, SeekOutcome, SourceSpan, TrackStep,
     WaitingReason,
     test_pools::{Pools, pools, sample_buffer},
 };
@@ -542,4 +542,40 @@ fn partial_reads_keep_resumed_source_frames_and_rational_mapping(cursor_half: Ve
     assert_eq!(remaining.meta.source_span, span.for_output_range(2..5));
     assert_eq!(Some(remaining.meta.timestamp), span.position_at(2));
     assert_eq!(Some(remaining.meta.end_timestamp), span.position_at(5));
+}
+
+#[kithara::test]
+fn audio_cache_read_view_follows_the_source_coverage_and_duration() {
+    let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("sample rate"));
+    let metadata = context();
+    let playhead = Arc::clone(&metadata.playhead);
+    let audio: Audio<()> = Audio::new(
+        Box::new(StagedSource {
+            chunks: VecDeque::new(),
+            spec,
+            failure: None,
+        }),
+        metadata,
+        spec,
+    );
+    let view = audio.playhead_read();
+
+    playhead.set_cached(1, 4);
+    assert_eq!(AudioRead::cached_span(&audio), Duration::ZERO);
+    assert_eq!(view.cached(), Duration::ZERO);
+
+    playhead.set_duration(Some(Duration::from_secs(187)));
+    assert_eq!(
+        AudioRead::cached_span(&audio),
+        Duration::from_millis(46_750)
+    );
+    assert_eq!(view.cached(), Duration::from_millis(46_750));
+
+    playhead.set_cached(4, 4);
+    assert_eq!(AudioRead::cached_span(&audio), Duration::from_secs(187));
+    assert_eq!(view.cached(), Duration::from_secs(187));
+
+    playhead.set_cached(3, 0);
+    assert_eq!(AudioRead::cached_span(&audio), Duration::from_secs(187));
+    assert_eq!(view.cached(), Duration::from_secs(187));
 }

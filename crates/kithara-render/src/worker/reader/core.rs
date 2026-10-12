@@ -9,7 +9,7 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_signal::AudioSpec;
-use kithara_stream::WorkerWake;
+use kithara_stream::{PlayheadRead, WorkerWake};
 use kithara_test_utils::kithara;
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
@@ -63,6 +63,7 @@ pub struct PcmReceiver {
     pub(super) wake: StreamWake,
     pub(super) spec: AudioSpec,
     pub(super) duration: Option<Duration>,
+    pub(super) playhead: Arc<dyn PlayheadRead>,
     pub(super) position: Duration,
     pub(super) frontier: Duration,
     pub(super) metadata: TrackMetadata,
@@ -93,6 +94,7 @@ impl PcmReceiver {
                 wake,
                 spec: audio.spec(),
                 duration: audio.duration(),
+                playhead: audio.playhead_read(),
                 position,
                 frontier: position,
                 metadata: audio.metadata().clone(),
@@ -158,7 +160,7 @@ impl PcmReceiver {
 
     #[must_use]
     pub fn cached_span(&self) -> Duration {
-        self.decoded_frontier().saturating_sub(self.position)
+        self.playhead.cached()
     }
 
     #[must_use]

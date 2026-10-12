@@ -7,7 +7,7 @@ use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::{DeferredBus, EventBus};
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
-use kithara_stream::{Activity, ActivityWriter, PlayheadWrite};
+use kithara_stream::{Activity, ActivityWriter, PlayheadRead, PlayheadWrite};
 use kithara_test_utils::kithara;
 
 use super::{
@@ -82,6 +82,22 @@ impl<S> Audio<S> {
     pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
         self.abr.clone()
     }
+
+    delegate::delegate! {
+        to self.playhead {
+            /// Current committed source position.
+            #[must_use]
+            pub fn position(&self) -> Duration;
+            /// Total content duration, when known.
+            #[must_use]
+            pub fn duration(&self) -> Option<Duration>;
+            /// Read-only source playback and cache metadata.
+            #[must_use]
+            #[call(clone)]
+            pub fn playhead_read(&self) -> Arc<dyn PlayheadRead>;
+        }
+    }
+
     /// Currently selected adaptive variant.
     #[must_use]
     pub fn current_variant(&self) -> Option<kithara_abr::VariantInfo> {
@@ -101,17 +117,6 @@ impl<S> Audio<S> {
     #[must_use]
     pub fn spec(&self) -> AudioSpec {
         self.cursor.spec()
-    }
-
-    delegate::delegate! {
-        to self.playhead {
-            /// Current committed source position.
-            #[must_use]
-            pub fn position(&self) -> Duration;
-            /// Total content duration, when known.
-            #[must_use]
-            pub fn duration(&self) -> Option<Duration>;
-        }
     }
 
     /// Prepare one initial chunk without moving work to another thread.
@@ -423,6 +428,10 @@ impl<S> Drop for Audio<S> {
     }
 }
 impl<S> AudioRead for Audio<S> {
+    fn cached_span(&self) -> Duration {
+        self.playhead.cached()
+    }
+
     fn decoded_frontier(&self) -> Duration {
         self.current_chunk
             .as_ref()

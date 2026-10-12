@@ -4,7 +4,7 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId, SourceSpan};
-use kithara_stream::WorkerWake;
+use kithara_stream::{PlayheadState, PlayheadWrite, WorkerWake};
 use kithara_test_utils::{
     bufpool::{pools, sample_buffer},
     kithara,
@@ -52,6 +52,8 @@ impl PacketRing {
         let (reverse_tx, reverse_rx) = HeapRb::new(reverse_capacity).split();
         let (playing_tx, playing_rx) = triple_buffer(&false);
         let ready = blocking.then(|| Arc::new(ThreadGate::default()));
+        let playhead = Arc::new(PlayheadState::new());
+        playhead.set_duration(Some(duration));
         Self {
             receiver: Some(PcmReceiver {
                 render_publisher: None,
@@ -62,6 +64,7 @@ impl PacketRing {
                 ready: ready.clone(),
                 wake,
                 duration: Some(duration),
+                playhead,
                 position: Duration::ZERO,
                 frontier: Duration::ZERO,
                 metadata: TrackMetadata::default(),
@@ -164,6 +167,7 @@ pub(in crate::worker) fn packet_fixture(
             ready: ready.clone(),
             wake: StreamWake::new(dispatcher.wake_handle()),
             duration: None,
+            playhead: Arc::new(PlayheadState::new()),
             position: Duration::ZERO,
             frontier: Duration::ZERO,
             metadata: TrackMetadata::default(),

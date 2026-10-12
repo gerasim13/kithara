@@ -237,7 +237,7 @@ where
     hang_reset!();
     preload_lane(&mut lane).await?;
     let required_span = f64::from(frames.get() * 2) / f64::from(rate.get());
-    let mut buffered = opened.pcm.cached_span();
+    let mut buffered = (opened.pcm.decoded_frontier() - request.position.as_secs_f64()).max(0.0);
     while buffered < required_span {
         hang_tick!();
         {
@@ -249,7 +249,7 @@ where
         lane.preload_status()
             .map_err(|error| PlayError::Internal(format!("{error:?}")))?;
         kithara_platform::time::sleep(Duration::from_millis(1)).await;
-        let available = opened.pcm.cached_span();
+        let available = (opened.pcm.decoded_frontier() - request.position.as_secs_f64()).max(0.0);
         if available > buffered {
             hang_reset!();
         }

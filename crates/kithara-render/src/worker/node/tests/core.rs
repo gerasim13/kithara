@@ -97,7 +97,12 @@ async fn worker_telemetry_throttles_immediate_repeats() {
     assert_eq!(node.tick(), TickResult::Progress);
     let first = meter.snapshot();
     for _ in 0..2 {
-        assert_eq!(receiver.cached_span(), Duration::from_millis(250));
+        assert_eq!(
+            receiver
+                .decoded_frontier()
+                .saturating_sub(receiver.position()),
+            Duration::from_millis(250)
+        );
         assert_eq!(receiver.decoded_frontier(), Duration::from_millis(350));
         assert!(meter.snapshot().is_active());
         assert_eq!(meter.snapshot().load(), first.load());
@@ -214,7 +219,12 @@ async fn worker_observation_reads_do_not_republish_packets() {
     receiver.set_position(Duration::from_millis(100));
     assert_eq!(node.tick(), TickResult::Progress);
     for _ in 0..2 {
-        assert_eq!(receiver.cached_span(), Duration::from_millis(250));
+        assert_eq!(
+            receiver
+                .decoded_frontier()
+                .saturating_sub(receiver.position()),
+            Duration::from_millis(250)
+        );
         assert_eq!(receiver.decoded_frontier(), Duration::from_millis(350));
         assert!(meter.snapshot().is_active());
     }
