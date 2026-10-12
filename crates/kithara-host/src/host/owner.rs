@@ -41,7 +41,7 @@ impl<D: DeckControl> Deref for HostOwned<D> {
 }
 
 /// A handle whose session drives one canonical owner, optionally decorated.
-pub struct Host<S, O: HostOwner<S> = HostCore<S>> {
+pub struct Host<S: 'static, O: HostOwner<S> = HostCore<S>> {
     pub(in crate::host) dispatcher: Arc<dyn HostDispatcher<O::Command>>,
     pub(in crate::host) id: BeatGridId,
     pub(in crate::host) root_view: RootView,

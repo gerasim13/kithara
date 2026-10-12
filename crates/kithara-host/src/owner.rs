@@ -8,7 +8,7 @@ use kithara_config::ConfigOwner;
 use kithara_platform::maybe_send::MaybeSend;
 pub use kithara_play::DeckControl;
 use kithara_play::{DeckPass, HostedDeck, Outbox, PlayError, ResourceLoad, TrackReceipt};
-use kithara_render::{DispatcherProtocol, bridge::DeckPart};
+use kithara_render::{DispatcherProtocol, PlayWorker, bridge::DeckPart};
 use kithara_signal::{FrameCount, SessionFrame};
 use kithara_worker::TaskHandle;
 
@@ -145,12 +145,12 @@ pub enum HostSettled {
 }
 
 /// The base owner of a session, its deck records and its single load dispatcher.
-pub struct HostCore<S, D: ?Sized + HostedDeck<S> = dyn HostedDeck<S>> {
+pub struct HostCore<S: 'static, D: ?Sized + HostedDeck<S> = dyn HostedDeck<S>> {
     pub(crate) session: SessionState<SessionStream, S>,
     decks: Decks<S, D>,
     dispatcher: Sender<DispatcherProtocol<ResourceLoad<S>>>,
     dispatcher_inbox: Option<kithara_command::Inbox<DispatcherProtocol<ResourceLoad<S>>>>,
-    dispatcher_task: Option<(TaskHandle, Box<dyn MaybeSend>)>,
+    dispatcher_task: Option<(TaskHandle, PlayWorker<S>)>,
     retired_dispatches: Vec<Seq>,
     retired_lanes: Vec<kithara_render::LaneId>,
     inbox: kithara_platform::sync::Arc<dyn DeckInbox>,
@@ -325,7 +325,7 @@ where
                 worker
                     .start_dispatcher(inbox)
                     .map_err(|error| PlayError::Internal(error.to_string()))?,
-                Box::new(worker.clone()),
+                worker.clone(),
             ));
         }
         let scope = self
@@ -841,7 +841,7 @@ fn map_deck_rejection(
     }
 }
 
-impl<S, D: ?Sized + HostedDeck<S>> Drop for HostCore<S, D> {
+impl<S: 'static, D: ?Sized + HostedDeck<S>> Drop for HostCore<S, D> {
     #[cfg_attr(target_arch = "wasm32", kithara_test_utils::kithara::hang_watchdog)]
     fn drop(&mut self) {
         for (_, record) in &mut self.decks.0 {
