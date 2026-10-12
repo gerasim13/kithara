@@ -86,10 +86,17 @@ async fn a_nonblocking_poll_of_an_empty_ring_states_its_demand() {
     }
 
     impl Observer for DemandObserver {
+        #[kithara::hang_watchdog]
         fn on_event(&mut self, event: Event) {
             if matches!(event, Event::Backpressured(_)) {
                 self.parked.send(()).expect("report producer backpressure");
-                self.resume.recv().expect("resume producer scheduler");
+                let _real_io = kithara_platform::flash::real_io();
+                hang_park!(|remaining| {
+                    self.resume
+                        .recv_timeout(remaining)
+                        .expect("resume producer scheduler");
+                });
+                hang_reset!();
             }
         }
     }
@@ -164,7 +171,46 @@ async fn block_on_underrun_forces_immediate_off_rt_wakes() {
         .expect("receiver")
         .recycle(PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[1.0]))))
         .expect("return fits");
-    assert_eq!(kithara_worker::mock::wake_state(&wake), (2, false));
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (1, true));
+    wake.wake();
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (2, true));
+}
+
+#[kithara::test(native, tokio)]
+#[case::nonblocking(false)]
+#[case::offline(true)]
+async fn recycling_pcm_never_wakes_the_producer_inside_the_render_pass(#[case] blocking: bool) {
+    #[kithara::rtsan_forbid_blocking]
+    fn recycle_in_pass(
+        receiver: &mut PcmReceiver,
+        wake: &kithara_worker::Wake,
+        packets: [PcmPacket; 2],
+    ) {
+        for packet in packets {
+            receiver.recycle(packet).expect("return fits");
+            assert_eq!(kithara_worker::mock::wake_state(wake), (0, true));
+        }
+    }
+
+    let wake = kithara_worker::Wake::default();
+    let mut fixture = PcmFixture::with_wake(
+        4,
+        blocking,
+        crate::worker::scheduler::StreamWake::new(wake.clone()),
+    )
+    .await;
+    let receiver = fixture.receiver.as_mut().expect("receiver");
+    assert_eq!(receiver.ready.is_some(), blocking);
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (0, false));
+    let packets = [
+        PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[1.0]))),
+        PcmPacket::Chunk(Box::new(chunk(SegmentId::FIRST, &[2.0]))),
+    ];
+    recycle_in_pass(receiver, &wake, packets);
+    assert_eq!(receiver.reverse.occupied_len(), 2);
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (0, true));
+    wake.wake();
+    assert_eq!(kithara_worker::mock::wake_state(&wake), (1, true));
 }
 
 #[kithara::test(native, tokio)]

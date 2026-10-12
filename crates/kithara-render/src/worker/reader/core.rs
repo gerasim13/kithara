@@ -232,7 +232,7 @@ impl PcmReceiver {
     /// Returns the original packet when the reverse ring is full.
     pub fn recycle(&mut self, packet: PcmPacket) -> Result<(), PcmPacket> {
         let result = self.reverse.try_push(packet);
-        self.notify();
+        self.wake.defer();
         result
     }
 
