@@ -250,6 +250,7 @@ async fn selecting_a_loaded_track_starts_playback_from_a_stopped_transport() {
 async fn repeat_all_natural_advance_wraps_last_track_to_first() {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
@@ -303,6 +304,7 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
 
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
@@ -371,6 +373,7 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
 async fn a_queue_the_host_holds_moves_on_with_no_caller_ticking_it() {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
@@ -392,6 +395,10 @@ async fn a_queue_the_host_holds_moves_on_with_no_caller_ticking_it() {
     let mut announced = false;
     let mut pcm = Vec::new();
     for _ in 0..MAX_BLOCKS {
+        hang_tick!(format!(
+            "automatic advance waits for track {id_b:?}; current={:?}",
+            queue.current_index()
+        ));
         pcm.extend(harness.render(BLOCK_FRAMES).await);
         while let Ok(envelope) = events.try_recv() {
             hang_tick!("draining automatic-advance events".to_owned());
@@ -1097,6 +1104,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
 
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(CROSSFADE_SECS)
             .build(),
         SAMPLE_RATE,
@@ -1341,6 +1349,7 @@ async fn queue_stops_live_playback_when_last_track_ends() {
 
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
@@ -1520,6 +1529,7 @@ async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
 
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
