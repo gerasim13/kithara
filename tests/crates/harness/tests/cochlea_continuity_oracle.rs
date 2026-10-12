@@ -6,7 +6,7 @@ use cochlea_features::{Audio as CochleaAudio, SegmentOpts, segment_timeline};
 use kithara::{
     audio::mock::TestPcmReader,
     events::TrackId,
-    platform::time::Duration,
+    platform::time::{Duration, WallInstant},
     signal::AudioSpec,
     warp::{StretchKind, WarpConfig},
 };
@@ -30,7 +30,7 @@ async fn render_tempo_control(sample_rate: u32, played_bpm: f64, decorated: bool
             let ordinal: usize = beat.floor().as_();
             let level = if ordinal.is_multiple_of(4) { 0.9 } else { 0.7 };
             if decorated && ordinal.is_multiple_of(3) && (0.3..0.306).contains(&phase) {
-                0.65
+                0.3
             } else if phase < 0.12 {
                 (level * (1.0 - phase / 0.12)).as_()
             } else {
@@ -54,18 +54,27 @@ async fn render_tempo_control(sample_rate: u32, played_bpm: f64, decorated: bool
     let _ = harness.render(BLOCK_FRAMES).await;
     let deck =
         harness.pcm_deck(resource_from_reader(TestPcmReader::with_samples(spec, source)).into());
-    harness
+    let id = harness
         .with_queue(move |player| {
+            player
+                .set_default_rate((played_bpm / 120.0).as_())
+                .expect("control playback rate");
             let id = player.append(deck).expect("append tempo control");
             player
                 .select(id, kithara::queue::Transition::None)
                 .expect("select tempo control");
-            player
-                .set_default_rate((played_bpm / 120.0).as_())
-                .expect("control playback rate");
             player.play();
+            id
         })
         .await;
+    harness
+        .render_until_current(
+            id,
+            BLOCK_FRAMES,
+            WallInstant::now() + Duration::from_secs(5),
+        )
+        .await;
+    hang_reset!();
     let capture_frames = sample_rate_frames * 6;
     let mut captured = Vec::with_capacity(capture_frames * usize::from(CHANNELS));
     while captured.len() < capture_frames * usize::from(CHANNELS) {
