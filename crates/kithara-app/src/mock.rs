@@ -1,3 +1,5 @@
+#![cfg(feature = "mock")]
+
 use std::ops::Range;
 
 use kithara::{
@@ -9,8 +11,9 @@ use kithara::{
     platform::CancelToken,
     signal::AudioSpec,
 };
+use kithara_test_utils::kithara as test_attrs;
 
-#[cfg(all(test, feature = "gui", not(feature = "broadcast")))]
+#[cfg(all(test, feature = "gui"))]
 pub(crate) use crate::engine::render_fixture as render_rig;
 use crate::pools::AppHost;
 
@@ -26,6 +29,7 @@ impl RenderSink for Discard {
 ///
 /// # Errors
 /// Returns the host's offline rendering failure.
+#[test_attrs::flash(io)]
 pub fn render_host(
     host: &mut AppHost,
     frames: Range<u64>,
