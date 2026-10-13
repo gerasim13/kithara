@@ -5372,6 +5372,7 @@ name = "kithara-encode"
 version = "0.0.1-alpha5"
 dependencies = [
  "bon",
+ "delegate",
  "derive_more",
  "fdk-aac-sys",
  "ffmpeg-next",
