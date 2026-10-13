@@ -824,9 +824,7 @@ where
     /// Values are re-read per control; surrounding objects determine poses through
     /// one document walk. Blocks stand first so hidden content remains unread.
     pub fn refresh(&mut self, ctx: Ctx<'_, '_>) {
-        if self.stand_blocks(ctx) {
-            self.stand_engines();
-        }
+        self.stand_blocks(ctx);
         let shown = self.show_values(ctx);
         self.reread_plans(ctx);
         let placed = self.place_objects(ctx);
@@ -907,20 +905,24 @@ where
         moved
     }
 
-    fn stand_blocks(&mut self, ctx: Ctx<'_, '_>) -> bool {
+    fn stand_blocks(&mut self, ctx: Ctx<'_, '_>) {
         let mut changed: Vec<WidgetId> = Vec::new();
         for block in self.blocks.iter().rev() {
             if block.within.shown() && block.item.state.latch(ctx.flag(Some(&block.item.hidden))) {
                 changed.push(block.item.flow);
             }
         }
-        let stood = !changed.is_empty();
+        if changed.is_empty() {
+            return;
+        }
+        // Editing a flow immediately runs composition, which reads its controls.
+        // Publish visibility to their engines before exposing the new layout.
+        self.stand_engines();
         for flow in changed {
             self.root.edit_widget(flow, |mut flow| {
                 flow.ctx.request_layout();
             });
         }
-        stood
     }
 
     fn stand_engines(&mut self) {
