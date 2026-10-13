@@ -18,7 +18,7 @@ pub use ir::{DrawCmd, Geom, Rgba, TRANSPARENT};
 pub use list::{DrawList, DrawListBuilder};
 pub use path::{FillRule, Outline, Path, PoolPath, Verb};
 pub use place::{ink, union};
-pub use pool::{DrawBuffers, PoolStats, PoolText};
+pub use pool::{DrawBuffers, DrawCommandKey, DrawPathKey, DrawTextKey, PoolStats, PoolText};
 pub use style::{LineCap, LineJoin, MAX_STOPS, Paint, Pen, Stop, Stops, StopsError};
 pub use svg::{SvgError, outline};
 

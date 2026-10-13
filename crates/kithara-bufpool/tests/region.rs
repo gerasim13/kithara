@@ -537,6 +537,75 @@ fn generic_keys_report_reuse_and_rejected_returns() {
 }
 
 #[kithara::test]
+fn a_pool_handle_shares_region_admission_and_returned_storage() {
+    let region = generic_keys::pools(16, 0);
+    let numbers = region.pool::<generic_keys::Numbers>();
+    let clone = numbers.clone();
+    let mut held = numbers
+        .get_with_len(2)
+        .unwrap_or_else(|error| panic!("held numbers: {error}"));
+    held.copy_from_slice(&[7, 9]);
+    let pointer = held.as_ptr();
+    let misses = numbers.stats().alloc_misses;
+    let mut text = region.pool::<generic_keys::Text>().get();
+
+    assert!(matches!(
+        text.try_push_str("x"),
+        Err(PoolError::OverallBudgetExceeded { .. })
+    ));
+    assert_eq!(&*held, &[7, 9]);
+    assert!(text.is_empty());
+    assert_eq!(region.stats().allocated_bytes, 16);
+
+    drop(held);
+    let reused = clone
+        .get_with_len(2)
+        .unwrap_or_else(|error| panic!("returned numbers: {error}"));
+    assert_eq!(reused.as_ptr(), pointer);
+    assert_eq!(&*reused, &[0, 0]);
+    assert_eq!(clone.stats().alloc_misses, misses);
+    assert_eq!(clone.stats(), region.pool_stats::<generic_keys::Numbers>());
+}
+
+#[kithara::test]
+fn a_pool_handle_and_guard_keep_their_budget_after_region_drop() {
+    let region = generic_keys::pools(16, 0);
+    let numbers = region.pool::<generic_keys::Numbers>();
+    drop(region);
+    let mut held = numbers
+        .get_with_len(2)
+        .unwrap_or_else(|error| panic!("numbers after region drop: {error}"));
+    held.copy_from_slice(&[1, 2]);
+    drop(numbers);
+
+    assert!(matches!(
+        held.ensure_len(3),
+        Err(PoolError::OverallBudgetExceeded { .. })
+    ));
+    assert_eq!(&*held, &[1, 2]);
+}
+
+#[kithara::test]
+fn a_pool_handle_preserves_its_slot_ceiling() {
+    let region = TestPools::region(
+        OverallBudget(100),
+        PoolConfig::builder()
+            .max_buffers(32)
+            .max_share(Percent::checked(50).expect("valid percentage"))
+            .build(),
+        config(8),
+    )
+    .unwrap_or_else(|error| panic!("region: {error}"));
+    let bytes = region.pool::<u8>();
+
+    assert!(matches!(
+        bytes.get_with_len(51),
+        Err(PoolError::PoolBudgetExceeded { .. })
+    ));
+    assert_eq!(region.stats().allocated_bytes, 0);
+}
+
+#[kithara::test]
 fn idle_capacity_on_other_shards_does_not_refuse_a_live_request() {
     const MIB: usize = 1024 * 1024;
     let pools = pools(4 * MIB);

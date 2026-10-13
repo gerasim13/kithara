@@ -35,7 +35,7 @@ pub trait PoolKey: sealed::Sealed {
     type Buffer;
     /// Opaque core used by schema-generated plumbing.
     #[doc(hidden)]
-    type Core;
+    type Core: Clone;
     /// Element stored in this pool's buffers.
     type Item;
 
@@ -117,6 +117,7 @@ impl<T, const SHARDS: usize> sealed::Sealed for VecKey<T, SHARDS> {}
 
 /// Opaque core for a registered vector key.
 #[doc(hidden)]
+#[derive_where::derive_where(Clone)]
 pub struct VecCore<T, const SHARDS: usize>(Arc<Core<SHARDS, Vec<T>, true>>);
 
 impl<T, const SHARDS: usize> PoolKey for VecKey<T, SHARDS>
@@ -169,6 +170,7 @@ impl<const SHARDS: usize> sealed::Sealed for StringKey<SHARDS> {}
 
 /// Opaque core for a registered string key.
 #[doc(hidden)]
+#[derive(Clone)]
 pub struct StringCore<const SHARDS: usize>(Arc<Core<SHARDS, String, true>>);
 
 impl<const SHARDS: usize> PoolKey for StringKey<SHARDS> {
@@ -198,10 +200,12 @@ impl<const SHARDS: usize> PoolKey for StringKey<SHARDS> {
 
 /// Opaque core for the built-in byte key.
 #[doc(hidden)]
+#[derive(Clone)]
 pub struct ByteCore(Arc<Core<32, Vec<u8>, false>>);
 
 /// Opaque core for the built-in decoded-sample key.
 #[doc(hidden)]
+#[derive(Clone)]
 pub struct SampleCore(Arc<Core<8, Vec<f32>, false>>);
 
 impl sealed::Sealed for u8 {}

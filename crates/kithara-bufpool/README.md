@@ -69,6 +69,8 @@ fn build() -> Result<(), PoolError> {
 
 <tr><td><code>PoolRegion&lt;S&gt;</code></td><td>Cloneable facade over one closed schema and shared hard budget</td></tr>
 
+<tr><td><code>Pool&lt;K&gt;</code></td><td>Cloneable typed slot handle sharing the originating region's hard budgets</td></tr>
+
 <tr><td><code>pool_schema!</code></td><td>Declares the registered keys and their typestate builder</td></tr>
 
 <tr><td><code>PoolConfig</code></td><td>Retention, initial allocation, trim, and per-pool share policy</td></tr>
@@ -97,5 +99,10 @@ The app and FFI composition roots own concrete schemas. Lower layers are
 generic over only the `HasPool<u8>` and `HasPool<f32>` capabilities they use.
 Acquisition and return stay lock-free; every capacity increase is checked
 against both the region and selected-pool limits.
+
+`region.pool::<K>()` gives a consumer one registered slot without carrying the
+whole application's schema. Its guards return to the same pool, and its clones
+compete with direct region acquisitions under the same caps. A handle keeps its
+slot alive when the original region facade is dropped.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-bufpool) for detailed contracts, invariants, and internals.

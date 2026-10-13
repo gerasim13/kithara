@@ -19,6 +19,6 @@ pub use config::{PoolConfig, PoolConfigPatch};
 pub use error::PoolError;
 pub use key::{PoolAlias, PoolKey, PoolKeyWithLen, StringKey, VecKey};
 pub use kithara_ring::{RingCons, RingHalves, RingProd};
-pub use pool::PoolStats;
+pub use pool::{Pool, PoolStats};
 pub use region::{PoolRegion, RegionStats};
 pub use schema::HasPool;

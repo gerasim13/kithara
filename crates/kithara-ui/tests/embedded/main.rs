@@ -4,18 +4,19 @@
 
 use std::sync::LazyLock;
 
+use kithara_bufpool::{OverallBudget, PoolConfig, PoolError, pool_schema};
 use kithara_test_utils::kithara;
 use kithara_ui::{
     app::{App, Config, Handled, RenderRootSignal, Ui},
     builtin,
-    draw::Pt,
+    draw::{DrawBuffers, DrawCommandKey, DrawPathKey, DrawPoolLimits, DrawTextKey, Pt},
     ids::SourceUri,
     interact::{Input, PointerPhase, Scroll, mouse},
     mock::TestRegistry,
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     render::{ReadValue, Reads, Skin, TableCell, TableRow, UiEvent, WriteValue},
     shaping::FontPolicy,
-    source::MemResolver,
+    source::{MemResolver, UiConfig},
 };
 
 #[derive(Default)]
@@ -127,6 +128,63 @@ fn mounted<'a>(registry: &'a TestRegistry, resolver: &'a MemResolver) -> Ui<'a, 
         .unwrap_or_else(|error| panic!("fixture must lay out: {error}"));
     ui.complete_frame();
     ui
+}
+
+pool_schema! {
+    AppDrawPools {
+        commands: DrawCommandKey,
+        paths: DrawPathKey,
+        text: DrawTextKey,
+        bytes: u8,
+    }
+}
+
+#[kithara::test]
+fn embedded_configuration_preserves_the_application_draw_region() {
+    const BUDGET: usize = 4 * 1024 * 1024;
+    let limits = DrawPoolLimits::default();
+    let config = |capacity| {
+        PoolConfig::builder()
+            .max_buffers(limits.max_buffers)
+            .max_retained_capacity(capacity)
+            .build()
+    };
+    let region = AppDrawPools::builder(OverallBudget(BUDGET))
+        .commands(config(limits.command_capacity))
+        .paths(config(limits.path_capacity))
+        .text(config(limits.text_capacity))
+        .bytes(PoolConfig::builder().max_buffers(32).build())
+        .build()
+        .unwrap_or_else(|error| panic!("application region: {error}"));
+    let settings = UiConfig::builder()
+        .draw_buffers(DrawBuffers::from_region(limits, &region))
+        .build();
+    let (registry, resolver) = documents();
+    let mut ui = Ui::new(
+        Editor::default(),
+        Config::builder()
+            .endpoints(&registry)
+            .resolver(&resolver)
+            .settings(&settings)
+            .text(builtin::text_doc())
+            .build(),
+        (240, 160),
+        1.0,
+    )
+    .unwrap_or_else(|error| panic!("injected UI must mount: {error}"));
+    ui.frame(std::time::Duration::from_millis(16));
+    ui.render()
+        .unwrap_or_else(|error| panic!("injected UI must render: {error}"));
+    let held = settings.draw_buffers.text("held");
+
+    assert_eq!(ui.draw_pool_stats(), settings.draw_buffers.stats());
+    assert_eq!(settings.draw_buffers.limits().max_bytes, BUDGET);
+    assert!(matches!(
+        region.get_with_len::<u8>(BUDGET),
+        Err(PoolError::OverallBudgetExceeded { .. })
+    ));
+    assert_eq!(held.as_str(), "held");
+    assert!(region.stats().allocated_bytes <= BUDGET);
 }
 
 #[kithara::test]

@@ -108,6 +108,7 @@ hotpath = { workspace = true, optional = true }
 iced = { workspace = true, optional = true, features = ["tiny-skia"] }
 
 [dev-dependencies]
+kithara-bufpool = { workspace = true }
 kithara-platform = { path = "../kithara-platform" }
 kithara-test-utils = { path = "../kithara-test-utils", features = [
     "usdt",

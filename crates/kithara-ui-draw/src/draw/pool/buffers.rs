@@ -1,5 +1,6 @@
 use kithara_bufpool::{
-    OverallBudget, PoolAlias, PoolConfig, PoolError, PoolRegion, StringKey, VecKey, pool_schema,
+    HasPool, OverallBudget, Pool, PoolAlias, PoolConfig, PoolError, PoolRegion, StringKey, VecKey,
+    pool_schema,
 };
 
 use super::{
@@ -12,19 +13,18 @@ mod consts {
     pub(super) const SHARDS: usize = 1;
 }
 
-enum CommandTag {}
-enum PathTag {}
-enum TextTag {}
-
-type CommandKey = PoolAlias<CommandTag, VecKey<DrawCmd, { consts::SHARDS }>>;
-type PathKey = PoolAlias<PathTag, VecKey<Verb, { consts::SHARDS }>>;
-type TextKey = PoolAlias<TextTag, StringKey<{ consts::SHARDS }>>;
+/// Registered slot for draw-list commands in an application's region.
+pub type DrawCommandKey = PoolAlias<DrawCmd, VecKey<DrawCmd, { consts::SHARDS }>>;
+/// Registered slot for vector-path verbs in an application's region.
+pub type DrawPathKey = PoolAlias<Verb, VecKey<Verb, { consts::SHARDS }>>;
+/// Registered slot for UTF-8 draw text in an application's region.
+pub type DrawTextKey = PoolAlias<PoolText, StringKey<{ consts::SHARDS }>>;
 
 pool_schema! {
     pub(crate) DrawSchema {
-        commands: CommandKey,
-        paths: PathKey,
-        text: TextKey,
+        commands: DrawCommandKey,
+        paths: DrawPathKey,
+        text: DrawTextKey,
     }
 }
 
@@ -44,8 +44,10 @@ pub struct PoolStats {
 /// Shared reusable storage for retained commands, paths, and text.
 #[derive(Clone, Debug)]
 pub struct DrawBuffers {
+    commands: Pool<DrawCommandKey>,
     limits: DrawPoolLimits,
-    region: PoolRegion<DrawSchema>,
+    paths: Pool<DrawPathKey>,
+    text: Pool<DrawTextKey>,
 }
 
 impl DrawBuffers {
@@ -67,7 +69,7 @@ impl DrawBuffers {
     }
 
     pub(in crate::draw) fn commands(&self) -> Buffer<DrawCmd> {
-        Buffer::pooled(self.region.get::<CommandKey>())
+        Buffer::pooled(self.commands.get())
     }
 
     #[must_use]
@@ -87,22 +89,18 @@ impl DrawBuffers {
     where
         Verbs: IntoIterator<Item = Verb>,
     {
-        let mut path = PoolPath::pooled(rule, self.region.get::<PathKey>());
+        let mut path = PoolPath::pooled(rule, self.paths.get());
         path.extend(verbs);
         path
     }
 
     pub(in crate::draw) fn pooled_path(&self, path: PoolPath) -> PoolPath {
-        path.into_pooled(|| self.region.get::<PathKey>())
+        path.into_pooled(|| self.paths.get())
     }
 
     #[must_use]
     pub fn stats(&self) -> PoolStats {
-        let stats = [
-            self.region.pool_stats::<CommandKey>(),
-            self.region.pool_stats::<PathKey>(),
-            self.region.pool_stats::<TextKey>(),
-        ];
+        let stats = [self.commands.stats(), self.paths.stats(), self.text.stats()];
         PoolStats {
             alloc_misses: stats.iter().map(|stats| stats.alloc_misses).sum(),
             home_hits: stats.iter().map(|stats| stats.home_hits).sum(),
@@ -114,7 +112,27 @@ impl DrawBuffers {
     /// Copies UTF-8 content into a buffer that returns here when unused.
     #[must_use]
     pub fn text(&self, content: &str) -> PoolText {
-        PoolText::pooled(content, self.region.get::<TextKey>())
+        PoolText::pooled(content, self.text.get())
+    }
+
+    /// Use the draw slots already registered in the application's region.
+    ///
+    /// The application's schema configures the three slots' retention policies
+    /// from `limits`. This constructor allocates no region or payload; commands,
+    /// paths and text share the supplied region's hard cap with its other slots.
+    /// The reported byte limit always reflects that originating region's cap.
+    #[must_use]
+    pub fn from_region<S>(mut limits: DrawPoolLimits, region: &PoolRegion<S>) -> Self
+    where
+        S: HasPool<DrawCommandKey> + HasPool<DrawPathKey> + HasPool<DrawTextKey>,
+    {
+        limits.max_bytes = region.stats().max_bytes;
+        Self {
+            commands: region.pool::<DrawCommandKey>(),
+            limits,
+            paths: region.pool::<DrawPathKey>(),
+            text: region.pool::<DrawTextKey>(),
+        }
     }
 
     /// Builds the registered draw-buffer family under one shared hard budget.
@@ -136,7 +154,7 @@ impl DrawBuffers {
             .paths(config(limits.path_capacity))
             .text(config(limits.text_capacity))
             .build()?;
-        Ok(Self { limits, region })
+        Ok(Self::from_region(limits, &region))
     }
 }
 
@@ -158,6 +176,61 @@ mod tests {
 
     use super::*;
     use crate::draw::{Pt, Rect, Rgba};
+
+    pool_schema! {
+        AppDrawPools {
+            commands: DrawCommandKey,
+            paths: DrawPathKey,
+            text: DrawTextKey,
+            bytes: u8,
+        }
+    }
+
+    #[kithara::test]
+    fn injected_draw_slots_share_admission_and_reuse_with_the_application() {
+        const BUDGET: usize = 1024;
+        let limits = DrawPoolLimits::builder()
+            .max_buffers(1)
+            .command_capacity(8)
+            .path_capacity(8)
+            .text_capacity(32)
+            .build();
+        let config = |capacity| {
+            PoolConfig::builder()
+                .max_buffers(limits.max_buffers)
+                .max_retained_capacity(capacity)
+                .build()
+        };
+        let region = AppDrawPools::builder(OverallBudget(BUDGET))
+            .commands(config(limits.command_capacity))
+            .paths(config(limits.path_capacity))
+            .text(config(limits.text_capacity))
+            .bytes(PoolConfig::builder().max_buffers(32).build())
+            .build()
+            .unwrap_or_else(|error| panic!("application region: {error}"));
+        let buffers = DrawBuffers::from_region(limits, &region);
+        let held = buffers.text("held");
+        let misses = region.pool_stats::<DrawTextKey>().alloc_misses;
+
+        assert_eq!(buffers.limits().max_bytes, BUDGET);
+        assert!(matches!(
+            region.get_with_len::<u8>(BUDGET),
+            Err(PoolError::OverallBudgetExceeded { .. })
+        ));
+        assert_eq!(held.as_str(), "held");
+        drop(held);
+        drop(buffers.clone().text("back"));
+        assert_eq!(region.pool_stats::<DrawTextKey>().alloc_misses, misses);
+        assert!(region.pool_stats::<DrawTextKey>().home_hits >= 1);
+
+        let bytes = region
+            .get_with_len::<u8>(BUDGET)
+            .unwrap_or_else(|error| panic!("idle draw capacity must be reclaimable: {error}"));
+        assert_eq!(region.stats().allocated_bytes, BUDGET);
+        drop(bytes);
+        drop(buffers.path(FillRule::NonZero, [Verb::Close]));
+        assert!(region.stats().allocated_bytes <= BUDGET);
+    }
 
     #[kithara::test]
     fn released_draw_values_are_reused_and_observable() {
@@ -196,9 +269,9 @@ mod tests {
         }
         let cold = buffers.stats().alloc_misses;
         let cold_by_kind = [
-            buffers.region.pool_stats::<CommandKey>().alloc_misses,
-            buffers.region.pool_stats::<PathKey>().alloc_misses,
-            buffers.region.pool_stats::<TextKey>().alloc_misses,
+            buffers.commands.stats().alloc_misses,
+            buffers.paths.stats().alloc_misses,
+            buffers.text.stats().alloc_misses,
         ];
         {
             let path = buffers.path(FillRule::NonZero, [Verb::Close]);
@@ -223,9 +296,9 @@ mod tests {
         );
         assert_eq!(
             [
-                buffers.region.pool_stats::<CommandKey>().alloc_misses,
-                buffers.region.pool_stats::<PathKey>().alloc_misses,
-                buffers.region.pool_stats::<TextKey>().alloc_misses,
+                buffers.commands.stats().alloc_misses,
+                buffers.paths.stats().alloc_misses,
+                buffers.text.stats().alloc_misses,
             ],
             cold_by_kind
         );

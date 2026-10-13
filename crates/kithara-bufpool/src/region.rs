@@ -4,7 +4,8 @@ use kithara_platform::sync::{Arc, Weak};
 use kithara_ring::RingHalves;
 
 use crate::{
-    HasPool, OverallBudget, Percent, PoolConfig, PoolError, PoolKey, PoolKeyWithLen, PoolStats,
+    HasPool, OverallBudget, Percent, Pool, PoolConfig, PoolError, PoolKey, PoolKeyWithLen,
+    PoolStats,
     budget::{IdleReclaimer, RegionBudget},
     key::PoolAccess,
     pool::{Core, storage::Storage},
@@ -57,6 +58,19 @@ impl<S> PoolRegion<S> {
                 budget: context.budget,
             }),
         })
+    }
+
+    /// Share the registered slot without exposing this region's full schema.
+    ///
+    /// The handle and region acquire from the same physical pool and compete
+    /// under the same hard budgets. Creating a handle allocates no new region.
+    #[must_use]
+    pub fn pool<K>(&self) -> Pool<K>
+    where
+        K: PoolKey,
+        S: HasPool<K>,
+    {
+        Pool::new(self.slot::<K>().core.clone())
     }
 
     /// Acquire an empty buffer from the pool registered for `K`.

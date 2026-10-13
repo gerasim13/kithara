@@ -71,4 +71,12 @@ assert_eq!(list.commands().len(), 1);
 feature turns `iced` on; a build that parses documents without drawing them
 carries only the geometry and the pool limits.
 
+An embedding application can register `DrawCommandKey`, `DrawPathKey` and
+`DrawTextKey` alongside its other keys in one `PoolRegion`. Configure their
+retention policies from `DrawPoolLimits`, then use
+`DrawBuffers::from_region(limits, &region)` with
+`UiConfig::builder().draw_buffers(...)`.
+The draw slots share the application's actual hard cap; no separate draw region
+is created. Standalone consumers can continue using `DrawBuffers::try_new`.
+
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-ui-draw) for detailed contracts, invariants, and internals.
