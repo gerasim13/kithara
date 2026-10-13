@@ -81,7 +81,7 @@ impl From<solve::Size<solve::Length>> for Natural {
 
 /// One child of a stage: the block hiding it, whether it floats above the
 /// stage, and its box.
-type StageChild = (Option<Rc<BlockState>>, bool, Natural);
+type StageChild<T = Natural> = (Option<Rc<BlockState>>, bool, T);
 
 pub(crate) struct StageSize {
     size: Option<SizeSpec>,
@@ -494,10 +494,7 @@ impl<Action> MasonryNode<Action> {
         area
     }
 
-    pub(crate) fn stage(
-        size: Option<SizeSpec>,
-        children: Vec<(Option<Rc<BlockState>>, bool, Self)>,
-    ) -> Self {
+    pub(crate) fn stage(size: Option<SizeSpec>, children: Vec<StageChild<Self>>) -> Self {
         let (sized, nodes) = children
             .into_iter()
             .map(|(block, floats, node)| ((block, floats, node.natural.clone()), node))
@@ -614,7 +611,6 @@ impl<Action> MasonryNode<Action> {
         self.window = Some(tracker);
     }
 
-    #[cfg(feature = "capture")]
     pub(crate) fn widget_id(&self) -> WidgetId {
         self.widget.id()
     }

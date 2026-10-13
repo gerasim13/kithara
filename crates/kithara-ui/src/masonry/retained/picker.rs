@@ -182,21 +182,28 @@ impl HostedEngine {
 
     /// The face every control this engine drives shows, in target order.
     fn faces(&self, engine: &Engine, point: Option<Pt>) -> Vec<Face> {
-        self.all()
-            .map(|target| match &target.plan {
-                HostedControlPlan::Table(plan) => {
-                    Face::Table(plan.view(engine, point, target_bounds(target)))
+        self.targets
+            .iter()
+            .map(|target| {
+                if !target.within.shown() {
+                    return Face::Unread;
                 }
-                HostedControlPlan::Search(plan) => {
-                    Face::Search(engine.text_input_snapshot(&plan.path))
+                let target = &target.item;
+                match &target.plan {
+                    HostedControlPlan::Table(plan) => {
+                        Face::Table(plan.view(engine, point, target_bounds(target)))
+                    }
+                    HostedControlPlan::Search(plan) => {
+                        Face::Search(engine.text_input_snapshot(&plan.path))
+                    }
+                    HostedControlPlan::Tree(plan) => {
+                        Face::Tree(plan.view(engine, point, target_bounds(target)))
+                    }
+                    HostedControlPlan::Picker { path, .. } => {
+                        Face::Picker(engine.picker_snapshot(path))
+                    }
+                    _ => Face::Unread,
                 }
-                HostedControlPlan::Tree(plan) => {
-                    Face::Tree(plan.view(engine, point, target_bounds(target)))
-                }
-                HostedControlPlan::Picker { path, .. } => {
-                    Face::Picker(engine.picker_snapshot(path))
-                }
-                _ => Face::Unread,
             })
             .collect()
     }
@@ -321,10 +328,10 @@ impl HostedEngine {
             (self.map_event)(event)
         });
         Routed {
+            outcome,
+            drag,
             repaint,
             focused,
-            drag,
-            outcome,
         }
     }
 

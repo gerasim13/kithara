@@ -463,7 +463,10 @@ lucide-icons = { version = "1.52", default-features = false }
 masonry = "0.4"
 memory-stats = "1.2"
 mmap-io = { version = "1.0", default-features = false }
-naga = { version = "27", features = ["wgsl-in"] }
+naga = { version = "27", features = ["wgsl-in", "termcolor"] }
+# Vello 0.6 uses the older parser; both parser versions share codespan's
+# termcolor feature and therefore need the matching diagnostic writer.
+naga-vello = { package = "naga", version = "26", default-features = false, features = ["termcolor"] }
 ndk-context = "0.1.1"
 nix = { version = "0.31", features = ["resource", "signal"] }
 num-traits = { version = "0.2", default-features = false }

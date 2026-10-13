@@ -11,6 +11,7 @@ categories = ["gui", "graphics"]
 autotests = false
 
 [dependencies]
+kithara-platform = { workspace = true }
 kithara-ui-draw = { workspace = true, features = ["list"] }
 
 fieldwork = { workspace = true }
