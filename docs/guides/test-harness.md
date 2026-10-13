@@ -16,6 +16,19 @@ validation scope.
 - If a probe is reported, name the package, filter, lane, and why it is enough
   for that local question.
 
+### Exact scoped selection
+
+Use `just test run --narrow='<filterset>' --expected-tests expected.tsv` when a
+batch must execute specific tests. The UTF-8 TSV contains one ASCII binary ID,
+a tab, and the full test name per line. Empty, duplicate, or malformed records
+reject before build. The harness lists the same resolved lane and caller
+selection, requires exact identity-set equality, and reports missing and
+unexpected tests before executing any test. This supports one Nextest lane
+with the default non-ignored selection; `--touched`, rerun selection, and
+nondefault ignored selection cannot be combined with the guard. Compilation
+still follows the configured Cargo selection, and Run reuses its normal build
+artifacts. An unguarded run keeps its existing behavior.
+
 ### Axes
 
 - `flash` is the default axis and defaults ON.
