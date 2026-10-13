@@ -32,7 +32,9 @@ pub(crate) struct ReaderBootstrap {
 /// don't stall an HLS source. Seek is re-enabled unconditionally once
 /// the reader is built so subsequent decode/seek operations work.
 ///
-/// MP4 and Ogg require seek during construction: Ogg reads the terminal
+/// MPEG audio, MP4 and Ogg require seek during construction: MPEG estimates
+/// duration from the source length and bitrate when no Xing/VBRI header exists.
+/// Ogg reads the terminal
 /// granule position to establish the track duration. MP4's `moov` atom lives at the tail of
 /// the file, so the reader must seek to it during construction. This is
 /// safe because standard-MP4 consumers pass a fully materialised source.
@@ -45,7 +47,10 @@ pub(crate) fn new_direct<R>(
 where
     R: Read + Seek + Send + Sync + 'static,
 {
-    let seek_enabled = matches!(container, ContainerFormat::Mp4 | ContainerFormat::Ogg);
+    let seek_enabled = matches!(
+        container,
+        ContainerFormat::MpegAudio | ContainerFormat::Mp4 | ContainerFormat::Ogg
+    );
     let mut source: crate::traits::BoxedSource = Box::new(source);
     let audio_start = crate::factory::skip_id3_tags(&mut source)?;
     source.seek(SeekFrom::Start(0))?;
