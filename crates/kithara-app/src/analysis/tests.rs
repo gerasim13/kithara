@@ -36,7 +36,7 @@ use crate::{
 
 fn owner_in(cancel: &CancelToken, store: AppStore) -> Owner {
     let config = app_config(cancel, store);
-    let persistence = persistence(cancel, test_pools());
+    let persistence = persistence(cancel, test_pools(), config.analysis_chunk_seconds);
     let (service, _handle) = AnalysisService::new(&config, persistence, cancel.child());
     service.owner
 }
@@ -94,8 +94,11 @@ fn take_over_run(
 async fn a_settled_hit_with_a_gap_is_served_without_a_pass(tone_mp3: String) {
     let cancel = CancelToken::root();
     let config = app_config(&cancel, memory_store());
-    let (mut service, handle) =
-        AnalysisService::new(&config, persistence(&cancel, test_pools()), cancel.child());
+    let (mut service, handle) = AnalysisService::new(
+        &config,
+        persistence(&cancel, test_pools(), config.analysis_chunk_seconds),
+        cancel.child(),
+    );
     let owner = &mut service.owner;
     let (host, queue) = queue_off().await;
     let (track_id, source) = track(&host, 1, &tone_mp3).await;
@@ -631,9 +634,7 @@ async fn resumable_progress(url: &str) -> AnalysisProgress {
     let target = target_of(&owner, &source);
     let _rx = owner.subscribe(queue, track_id, source, axis());
     loop {
-        time::timeout(Duration::from_secs(2), owner.drive())
-            .await
-            .expect("the pass progresses");
+        drive_once(&mut owner).await;
         let held = owner.cache.get(&target, axis());
         if let Some(progress) = held.filter(AnalysisProgress::is_resumable) {
             cancel.cancel();
@@ -677,10 +678,15 @@ async fn a_rejected_checkpoint_opens_a_fresh_pass(long_wav: String) {
     let url = long_wav;
     let checkpoint = resumable_progress(&url).await;
     let cancel = CancelToken::root();
-    let mut config = app_config(&cancel, memory_store());
+    let store = memory_store();
+    let pools = test_pools();
+    let mut config = app_config(&cancel, store.clone());
     config.analysis_chunk_seconds = NonZeroU32::new(7).expect("fixture chunk is non-zero");
-    let (service, _handle) =
-        AnalysisService::new(&config, persistence(&cancel, test_pools()), cancel.child());
+    let (service, _handle) = AnalysisService::new(
+        &config,
+        persistence(&cancel, pools.clone(), config.analysis_chunk_seconds),
+        cancel.child(),
+    );
     let mut owner = service.owner;
     let (host, queue) = queue_off().await;
     let (track_id, source) = track(&host, 1, &url).await;
@@ -697,7 +703,7 @@ async fn a_rejected_checkpoint_opens_a_fresh_pass(long_wav: String) {
         "the fixture checkpoint is rejected on another chunk size"
     );
     owner.runner.clear();
-    owner.cache.put(target, checkpoint.clone());
+    owner.cache.put(target.clone(), checkpoint.clone());
 
     let rx = owner.subscribe(queue, track_id, source, axis());
 
@@ -718,6 +724,26 @@ async fn a_rejected_checkpoint_opens_a_fresh_pass(long_wav: String) {
         "which finishes the track"
     );
     assert!(held.analysis().map(TrackAnalysis::revision) > Some(checkpoint.analysis().revision()));
+    let reader = store
+        .open_resource(target.key(), None)
+        .expect("the final analysis is committed");
+    let mut bytes = pools.get::<u8>();
+    reader
+        .read_into(&mut bytes)
+        .expect("the committed analysis reads");
+    let restored = AnalysisFile::parse(&bytes, owner.runner.fingerprint())
+        .expect("the committed analysis validates");
+    let chunk_duration = Duration::from_secs(u64::from(config.analysis_chunk_seconds.get()));
+    assert!(
+        restored.spec().matches_chunk_duration(chunk_duration),
+        "the saved analysis uses the active chunk size"
+    );
+    let saved_analysis = restored.latest().analysis();
+    assert!(saved_analysis.is_complete());
+    assert_eq!(
+        saved_analysis.revision(),
+        held.analysis().expect("a pass published").revision()
+    );
     cancel.cancel();
     host.close().await;
 }
@@ -830,9 +856,34 @@ async fn a_background_warm_keeps_the_holder_of_a_held_entry(tone_mp3: String) {
 
 async fn settle(owner: &mut Owner) {
     while owner.active.is_some() {
-        time::timeout(Duration::from_secs(2), owner.drive())
-            .await
-            .expect("the pass progresses");
+        drive_once(owner).await;
+    }
+}
+
+async fn drive_once(owner: &mut Owner) {
+    if let Err(error) = time::timeout(Duration::from_secs(2), owner.drive()).await {
+        match owner.active.as_ref() {
+            Some(Activity::Running(run)) => {
+                let changed = run.rx.has_changed();
+                let progress = run.rx.borrow().clone();
+                let analysis = progress.as_ref().map(AnalysisProgress::analysis);
+                panic!(
+                    "the pass progresses: {error:?}; phase=running; track={:?}; changed={:?}; \
+                     revision={:?}; extent={:?}; frontier={:?}; settled={:?}",
+                    owner.entries[run.entry].track_id(),
+                    changed,
+                    analysis.map(TrackAnalysis::revision),
+                    analysis.and_then(TrackAnalysis::extent),
+                    analysis.map(|analysis| analysis.coverage().frontier()),
+                    analysis.map(TrackAnalysis::is_settled),
+                );
+            }
+            Some(Activity::Committing(task)) => panic!(
+                "the pass progresses: {error:?}; phase=committing; task_finished={}",
+                task.is_finished(),
+            ),
+            None => panic!("the pass progresses: {error:?}; phase=idle"),
+        }
     }
 }
 
@@ -904,12 +955,26 @@ async fn an_invalid_layout_yields_no_analysis(tone_mp3: String) {
     host.close().await;
 }
 
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(
+    native,
+    tokio,
+    flash(false),
+    tracing(
+        "kithara_app::analysis=debug,kithara_app::waveform=debug,kithara_analysis=trace,kithara_audio=trace,kithara_decode=debug,kithara_file=trace"
+    )
+)]
 async fn a_track_shorter_than_its_header_claims_is_done(tone_mp3: String) {
     the_source_gave_everything_it_can(&tone_mp3).await;
 }
 
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(
+    native,
+    tokio,
+    flash(false),
+    tracing(
+        "kithara_app::analysis=debug,kithara_app::waveform=debug,kithara_analysis=trace,kithara_audio=trace,kithara_decode=debug,kithara_file=trace"
+    )
+)]
 async fn a_resampled_track_is_covered_from_its_first_frame(rhythm_a_mp3: String) {
     the_source_gave_everything_it_can(&rhythm_a_mp3).await;
 }
@@ -998,7 +1063,14 @@ async fn a_track_opened_with_every_artifact_is_not_analysed(tone_mp3: String) {
     host.close().await;
 }
 
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(
+    native,
+    tokio,
+    flash(false),
+    tracing(
+        "kithara_app::analysis=debug,kithara_app::waveform=debug,kithara_analysis=trace,kithara_audio=trace,kithara_decode=debug,kithara_file=trace"
+    )
+)]
 async fn a_served_waveform_leaves_only_the_beats_to_analyse(tone_mp3: String) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
@@ -1208,7 +1280,14 @@ async fn a_cached_pass_never_replaces_the_grid_the_caller_supplied(tone_mp3: Str
 /// The mirror of the served-waveform case: one publication carries a grid the
 /// caller handed over and a waveform this build analysed, and neither origin
 /// is visible to the consumer that reads them.
-#[kithara::test(native, tokio, flash(false))]
+#[kithara::test(
+    native,
+    tokio,
+    flash(false),
+    tracing(
+        "kithara_app::analysis=debug,kithara_app::waveform=debug,kithara_analysis=trace,kithara_audio=trace,kithara_decode=debug,kithara_file=trace"
+    )
+)]
 async fn a_supplied_grid_is_published_beside_a_locally_analysed_waveform(tone_mp3: String) {
     let cancel = CancelToken::root();
     let mut owner = owner(&cancel);
