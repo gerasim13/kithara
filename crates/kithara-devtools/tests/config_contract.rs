@@ -174,7 +174,7 @@ fn stress_config_owns_generic_modes_environment_and_artifacts() {
         r#"
 [stress]
 default_modes = ["baseline"]
-lanes = ["workspace"]
+default_tier = "night"
 nextest_config = "config/runner.toml"
 nextest_profile = "repeated"
 default_filter = "all()"
@@ -186,6 +186,9 @@ build_dir = "target-stress"
 raw_output = "target/evidence"
 report_output = "target/report.md"
 workflow_job_timeout_minutes = 60
+
+[stress.tiers.night]
+lanes = ["workspace"]
 
 [stress.artifacts]
 attempts = "attempts.json"
@@ -240,7 +243,7 @@ fn a_stress_mode_that_runs_a_command_cannot_ask_for_a_toggle() {
     let template = r#"
 [stress]
 default_modes = ["probe"]
-lanes = ["workspace"]
+default_tier = "night"
 nextest_config = "config/runner.toml"
 nextest_profile = "repeated"
 default_filter = "all()"
@@ -252,6 +255,9 @@ build_dir = "target-stress"
 raw_output = "target/evidence"
 report_output = "target/report.md"
 workflow_job_timeout_minutes = 60
+
+[stress.tiers.night]
+lanes = ["workspace"]
 
 [stress.artifacts]
 attempts = "attempts.json"
@@ -304,7 +310,7 @@ fn stress_envelope_policy_requires_an_envelope_artifact() {
         r#"
 [stress]
 default_modes = ["baseline"]
-lanes = ["workspace"]
+default_tier = "night"
 nextest_config = "config/runner.toml"
 nextest_profile = "repeated"
 default_filter = "all()"
@@ -316,6 +322,9 @@ build_dir = "target-stress"
 raw_output = "target/evidence"
 report_output = "target/report.md"
 workflow_job_timeout_minutes = 60
+
+[stress.tiers.night]
+lanes = ["workspace"]
 
 [stress.artifacts]
 attempts = "attempts.json"
@@ -361,7 +370,7 @@ fn a_stress_config_must_name_the_directory_it_builds_into() {
         r#"
 [stress]
 default_modes = ["baseline"]
-lanes = ["workspace"]
+default_tier = "night"
 nextest_config = "config/runner.toml"
 nextest_profile = "repeated"
 default_filter = "all()"
@@ -372,6 +381,9 @@ max_test_threads = 1
 raw_output = "target/evidence"
 report_output = "target/report.md"
 workflow_job_timeout_minutes = 60
+
+[stress.tiers.night]
+lanes = ["workspace"]
 
 [stress.artifacts]
 attempts = "attempts.json"
@@ -527,13 +539,14 @@ prefix_args = ["nextest", "run", "-E", "all()"]
     );
 }
 
-/// A campaign config repeating `lanes`, over the test lanes `test_lanes`.
+/// A campaign config whose one tier, `night`, repeats `lanes`, over the test
+/// lanes `test_lanes`.
 fn campaign(lanes: &str, test_lanes: &str) -> String {
     format!(
         r#"
 [stress]
 default_modes = ["baseline"]
-lanes = {lanes}
+default_tier = "night"
 nextest_config = "config/runner.toml"
 nextest_profile = "repeated"
 default_filter = "all()"
@@ -545,6 +558,9 @@ build_dir = "target-stress"
 raw_output = "target/evidence"
 report_output = "target/report.md"
 workflow_job_timeout_minutes = 60
+
+[stress.tiers.night]
+lanes = {lanes}
 
 [stress.artifacts]
 attempts = "attempts.json"
@@ -610,13 +626,13 @@ fn a_stress_campaign_names_each_lane_it_can_repeat_once() {
         ),
     );
     let config = ProjectConfig::load(temp.path()).expect("a campaign over two lanes");
-    assert_eq!(config.stress.lanes, ["workspace", "tools"]);
+    assert_eq!(config.stress.tiers["night"].lanes, ["workspace", "tools"]);
 
     for (lanes, refusal) in [
-        ("[]", "stress.lanes must name at least one lane"),
+        ("[]", "stress tier `night` must name at least one lane"),
         (
             r#"["workspace", "workspace"]"#,
-            "stress.lanes names `workspace` twice",
+            "stress tier `night` names `workspace` twice",
         ),
         (
             r#"["absent"]"#,
@@ -630,6 +646,28 @@ fn a_stress_campaign_names_each_lane_it_can_repeat_once() {
         );
         assert!(error.contains(refusal), "{lanes}: {error}");
     }
+}
+
+/// A run that names no tier repeats the default one, so the default has to
+/// be a tier the project configures.
+#[test]
+fn the_default_stress_tier_is_a_configured_tier() {
+    let temp = tempdir().expect("tempdir");
+    write_config(
+        temp.path(),
+        &campaign(r#"["workspace"]"#, "")
+            .replace(r#"default_tier = "night""#, r#"default_tier = "dawn""#),
+    );
+
+    let error = format!(
+        "{:#}",
+        ProjectConfig::load(temp.path()).expect_err("an unconfigured default tier")
+    );
+
+    assert!(
+        error.contains("stress.default_tier names `dawn`, which is not configured"),
+        "{error}"
+    );
 }
 
 /// A lane the campaign leaves out says why, so a deliberate gap reads

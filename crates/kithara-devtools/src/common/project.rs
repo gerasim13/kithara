@@ -767,9 +767,12 @@ pub struct StressConfig {
     /// lane runs belong to the revision the lane was asked about.
     pub build_dir: String,
     pub default_filter: String,
-    /// The test lanes every lane mode repeats, in order. The repository owns
-    /// the campaign's domain and any distinct feature or backend selections.
-    pub lanes: Vec<String>,
+    /// The tier a run repeats when it names neither a tier nor lanes.
+    pub default_tier: String,
+    /// The campaigns a run can repeat, each a list of test lanes. A tier is a
+    /// cadence's question: what a night can afford to repeat is a smaller
+    /// selection than what a month can.
+    pub tiers: BTreeMap<String, StressTierConfig>,
     /// Domain lanes intentionally left out of repetition, each with its
     /// reason. Lanes outside the campaign's domain need no exemption.
     pub not_stressed: BTreeMap<String, String>,
@@ -822,6 +825,20 @@ pub struct StressArtifactConfig {
 pub struct StressEnvironmentConfig {
     #[config(value)]
     pub remove: Vec<String>,
+}
+
+/// One campaign a run can repeat.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, kithara_config::Config)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+#[config(builder(none), fields(value))]
+pub struct StressTierConfig {
+    /// The test lanes every lane mode repeats, in order. The repository owns
+    /// the campaign's domain and any distinct feature or backend selections.
+    pub lanes: Vec<String>,
+    /// The tier answers for every lane the project does not exempt: a lane it
+    /// does not name is one a lane it names runs whole, with its features.
+    pub covers_every_lane: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, kithara_config::Config)]
@@ -946,6 +963,25 @@ impl StressConfig {
             .with_context(|| format!("stress mode `{name}` is not configured"))
     }
 
+    /// Resolve one configured stress tier.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `name` is not configured.
+    pub fn tier(&self, name: &str) -> Result<&StressTierConfig> {
+        self.tiers
+            .get(name)
+            .with_context(|| format!("stress tier `{name}` is not configured"))
+    }
+
+    /// Every lane some tier repeats, each once.
+    pub(crate) fn stressed_lanes(&self) -> BTreeSet<&str> {
+        self.tiers
+            .values()
+            .flat_map(|tier| tier.lanes.iter().map(String::as_str))
+            .collect()
+    }
+
     /// A lane names the directory its evidence lands in, so listing one twice would let the second
     /// run overwrite the first and report half of what it did.
     pub(crate) fn validate(&self) -> Result<()> {
@@ -990,19 +1026,30 @@ impl StressConfig {
             require_value("stress mode name", name)?;
             Self::validate_mode(name, mode)?;
         }
-        if self.lanes.is_empty() {
-            bail!("stress.lanes must name at least one lane");
+        require_value("stress.default_tier", &self.default_tier)?;
+        if !self.tiers.contains_key(&self.default_tier) {
+            bail!(
+                "stress.default_tier names `{}`, which is not configured",
+                self.default_tier
+            );
         }
-        let mut lanes = BTreeSet::new();
-        for lane in &self.lanes {
-            require_value("stress.lanes entry", lane)?;
-            if !lanes.insert(lane) {
-                bail!("stress.lanes names `{lane}` twice");
+        for (name, tier) in &self.tiers {
+            require_value("stress tier name", name)?;
+            if tier.lanes.is_empty() {
+                bail!("stress tier `{name}` must name at least one lane");
+            }
+            let mut lanes = BTreeSet::new();
+            for lane in &tier.lanes {
+                require_value(&format!("stress tier `{name}` entry"), lane)?;
+                if !lanes.insert(lane) {
+                    bail!("stress tier `{name}` names `{lane}` twice");
+                }
             }
         }
+        let lanes = self.stressed_lanes();
         for (lane, reason) in &self.not_stressed {
             require_value(&format!("stress.not_stressed reason for `{lane}`"), reason)?;
-            if lanes.contains(lane) {
+            if lanes.contains(lane.as_str()) {
                 bail!("stress lane `{lane}` is both stressed and exempt");
             }
         }
@@ -1284,7 +1331,7 @@ impl ProjectConfig {
         }
         if self.stress.is_configured() {
             self.stress.validate()?;
-            for name in &self.stress.lanes {
+            for name in self.stress.stressed_lanes() {
                 let Some(lane) = self.test.lanes.get(name) else {
                     bail!("stress lane `{name}` is not configured under test.lanes");
                 };

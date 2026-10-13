@@ -60,19 +60,27 @@ pub(super) fn resolve_modes(requested: &[String], config: &StressConfig) -> Resu
     Ok(modes)
 }
 
-/// The test lanes this invocation's lane modes run on: what was asked for, or
-/// every lane the project stresses.
-pub(super) fn resolve_lanes(requested: &[String], config: &StressConfig) -> Result<Vec<String>> {
+/// The test lanes this invocation's lane modes run on: the lanes asked for,
+/// or else the named tier's, or else the default tier's.
+pub(super) fn resolve_lanes(
+    tier: Option<&str>,
+    requested: &[String],
+    config: &StressConfig,
+) -> Result<Vec<String>> {
     let lanes = if requested.is_empty() {
-        config.lanes.clone()
+        config
+            .tier(tier.unwrap_or(&config.default_tier))?
+            .lanes
+            .clone()
     } else {
         requested.to_vec()
     };
+    let stressed = config.stressed_lanes();
     let mut seen = BTreeSet::new();
     for lane in &lanes {
         ensure!(
-            config.lanes.contains(lane),
-            "stress lane `{lane}` is not in stress.lanes"
+            stressed.contains(lane.as_str()),
+            "stress lane `{lane}` is in no stress tier"
         );
         validate_directory_name("lane", lane)?;
         ensure!(seen.insert(lane), "stress lane `{lane}` is named twice");

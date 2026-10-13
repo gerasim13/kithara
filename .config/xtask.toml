@@ -237,16 +237,7 @@ default_modes = [
   "rtsan-file",
   "rtsan-hls",
 ]
-# Repeat engine contracts, including distinct backend and analysis feature
-# builds. App, UI, tooling and test-infrastructure self-tests use ordinary CI.
-# Positive package selections keep new workspace members out until reviewed.
-lanes = [
-  "engine",
-  "engine-broadcast",
-  "net-host",
-  "analysis",
-  "integration-regressions",
-]
+default_tier = "nightly"
 nextest_config = ".config/nextest.toml"
 nextest_profile = "stress"
 default_filter = "all()"
@@ -262,6 +253,49 @@ build_dir = "target-stress"
 raw_output = "target/stress"
 report_output = "target/stress-report.md"
 workflow_job_timeout_minutes = 1380
+
+# A night repeats the player's core, one domain lane at a time, so a flake
+# names the domain it belongs to. Positive package selections keep new
+# workspace members out until reviewed.
+[stress.tiers.nightly]
+lanes = [
+  "core",
+  "audio",
+  "sync",
+  "warp",
+  "file",
+  "hls",
+  "host",
+  "play",
+  "queue",
+]
+
+# A week repeats every engine contract, including distinct backend and
+# analysis feature builds.
+[stress.tiers.weekly]
+lanes = [
+  "engine",
+  "engine-broadcast",
+  "net-host",
+  "analysis",
+  "integration-regressions",
+]
+
+# A month repeats everything a repeat can count: each lane not exempt below,
+# either itself or through a lane that runs all of its tests with its features.
+[stress.tiers.monthly]
+covers_every_lane = true
+lanes = [
+  "workspace",
+  "analysis",
+  "tooling",
+  "harness",
+  "fixtures",
+  "broadcast",
+  "net-host",
+  "engine-broadcast",
+  "integration-regressions",
+]
 
 [stress.not_stressed]
 loom = "a loom model explores every interleaving in one run; a repeat replays the same search"

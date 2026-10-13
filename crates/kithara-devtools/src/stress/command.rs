@@ -95,7 +95,7 @@ mod sharding_tests {
         let project = ProjectConfig::load(&root).expect("load nightly selection");
         let config = &project.stress;
         let modes = resolve_modes(&[], config).expect("default modes");
-        let lanes = resolve_lanes(&[], config).expect("default lanes");
+        let lanes = resolve_lanes(None, &[], config).expect("default lanes");
         let canonical = units(&project, config, &modes, &lanes).expect("canonical units");
         let expected = canonical
             .iter()
@@ -165,7 +165,7 @@ mod sharding_tests {
         ];
         let config = &project.stress;
         let modes = resolve_modes(&requested, config).expect("interleaved requested modes");
-        let lanes = resolve_lanes(&[], config).expect("lanes");
+        let lanes = resolve_lanes(None, &[], config).expect("lanes");
         let expected_modes = [
             BTreeSet::from([defaults[0].as_str(), defaults[3].as_str()]),
             BTreeSet::new(),
@@ -237,6 +237,12 @@ mod sharding_tests {
     fn project(names: &[&str]) -> ProjectConfig {
         ProjectConfig {
             stress: StressConfig {
+                // Command modes repeat no lane, so the default tier names none.
+                default_tier: "nightly".to_owned(),
+                tiers: BTreeMap::from([(
+                    "nightly".to_owned(),
+                    crate::common::project::StressTierConfig::default(),
+                )]),
                 default_count: 1,
                 default_filter: "all()".to_owned(),
                 default_modes: names.iter().map(|name| (*name).to_owned()).collect(),
@@ -312,6 +318,7 @@ mod sharding_tests {
             expected_subject_sha: None,
             filter: None,
             lanes: Vec::new(),
+            tier: None,
             modes: Vec::new(),
             output: Some(root.join("raw")),
             shard_count: Some(2),
@@ -503,6 +510,7 @@ mod sharding_tests {
             expected_subject_sha: "b".repeat(40),
             filter: None,
             lanes: Vec::new(),
+            tier: None,
             modes: Vec::new(),
             output: Some(root.join("report.md")),
             raw,
@@ -662,6 +670,12 @@ mod subject {
             stress: StressConfig {
                 modes: BTreeMap::from([("command".to_owned(), mode)]),
                 default_modes: vec!["command".to_owned()],
+                // Command modes repeat no lane, so the default tier names none.
+                default_tier: "nightly".to_owned(),
+                tiers: BTreeMap::from([(
+                    "nightly".to_owned(),
+                    crate::common::project::StressTierConfig::default(),
+                )]),
                 default_filter: "all()".to_owned(),
                 build_dir: "target-stress".to_owned(),
                 nextest_config: "nextest.toml".to_owned(),
@@ -694,6 +708,7 @@ mod subject {
             subject_root: subject,
             modes: Vec::new(),
             lanes: Vec::new(),
+            tier: None,
         };
         (Ctx::new(controller, project), args)
     }
@@ -769,6 +784,7 @@ mod subject {
             expected_subject_sha: "b".repeat(40),
             modes: Vec::new(),
             lanes: Vec::new(),
+            tier: None,
         };
 
         let error = run_report(&args, &ctx).expect_err("command reports cannot claim a filterset");
@@ -807,6 +823,7 @@ mod subject {
             expected_subject_sha: "b".repeat(40),
             modes: Vec::new(),
             lanes: Vec::new(),
+            tier: None,
         };
 
         let error = run_report(&report, &ctx).expect_err("configured command report filterset");
@@ -957,11 +974,14 @@ pub struct RunArgs {
     #[arg(long = "mode")]
     modes: Vec<String>,
     /// Stressed test lane the lane modes run on; repeat the flag for several,
-    /// empty for every lane the project stresses. A filter aimed at one lane's
-    /// tests selects nothing in the others, and a lane that selects nothing
-    /// fails.
-    #[arg(long = "lane")]
+    /// empty for the tier's lanes. A filter aimed at one lane's tests selects
+    /// nothing in the others, and a lane that selects nothing fails.
+    #[arg(long = "lane", conflicts_with = "tier")]
     lanes: Vec<String>,
+    /// Configured stress tier whose lanes the lane modes run on; empty for
+    /// the project's default tier.
+    #[arg(long)]
+    tier: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -987,10 +1007,13 @@ pub struct ReportArgs {
     /// Mode to verify; repeat to verify several, empty for the project's list.
     #[arg(long = "mode")]
     modes: Vec<String>,
-    /// Stressed test lane to verify; repeat to verify several, empty for every
-    /// lane the project stresses.
-    #[arg(long = "lane")]
+    /// Stressed test lane to verify; repeat to verify several, empty for the
+    /// tier's lanes.
+    #[arg(long = "lane", conflicts_with = "tier")]
     lanes: Vec<String>,
+    /// Configured stress tier to verify; empty for the project's default tier.
+    #[arg(long)]
+    tier: Option<String>,
 }
 
 /// Runs the selected stress command.
@@ -1072,7 +1095,7 @@ fn execute_run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let config = &ctx.config.stress;
     ensure!(config.is_configured(), "stress run is not configured");
     let modes = resolve_modes(&args.modes, config)?;
-    let lanes = resolve_lanes(&args.lanes, config)?;
+    let lanes = resolve_lanes(args.tier.as_deref(), &args.lanes, config)?;
     let units = units(&ctx.config, config, &modes, &lanes)?;
     validate_filter(args.filter.as_deref(), &config.default_filter, &units)?;
     let shard = Shard::new(args.shard_index, args.shard_count)?;
@@ -1487,7 +1510,7 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
     let config = &ctx.config.stress;
     ensure!(config.is_configured(), "stress run is not configured");
     let modes = resolve_modes(&args.modes, config)?;
-    let lanes = resolve_lanes(&args.lanes, config)?;
+    let lanes = resolve_lanes(args.tier.as_deref(), &args.lanes, config)?;
     let units = units(&ctx.config, config, &modes, &lanes)?;
     validate_filter(args.filter.as_deref(), &config.default_filter, &units)?;
     let filter = args
@@ -2363,9 +2386,9 @@ mod tests {
     use super::*;
     use crate::{
         common::project::{
-            ProjectConfig, StressEnvironmentConfig, TestCargoOptions, TestCommandConfig,
-            TestFlashConfig, TestLaneConfig, TestLoadConfig, TestNetBackendConfig,
-            TestNoBlockConfig,
+            ProjectConfig, StressEnvironmentConfig, StressTierConfig, TestCargoOptions,
+            TestCommandConfig, TestFlashConfig, TestLaneConfig, TestLoadConfig,
+            TestNetBackendConfig, TestNoBlockConfig,
         },
         stress::selection::{unit_runner, validate_directory_name},
     };
@@ -2388,7 +2411,14 @@ mod tests {
 
     fn command_lane_config() -> (StressConfig, StressModeConfig) {
         let config = StressConfig {
-            lanes: vec!["workspace".to_owned()],
+            default_tier: "nightly".to_owned(),
+            tiers: BTreeMap::from([(
+                "nightly".to_owned(),
+                StressTierConfig {
+                    lanes: vec!["workspace".to_owned()],
+                    ..StressTierConfig::default()
+                },
+            )]),
             modes: BTreeMap::from([("rtsan".to_owned(), per_repeat_mode())]),
             ..StressConfig::default()
         };
@@ -2588,29 +2618,92 @@ mod tests {
         );
     }
 
-    /// A filter aimed at one lane's tests selects nothing in the others, so a
-    /// run can be narrowed to lanes — but only to lanes the project stresses.
+    /// A run repeats one tier's lanes: the tier it names, or the project's
+    /// default. A filter aimed at one lane's tests selects nothing in the
+    /// others, so a run can instead be narrowed to lanes — but only to lanes
+    /// some tier stresses.
     #[test]
-    fn a_run_narrows_only_to_lanes_the_project_stresses() {
+    fn a_run_repeats_a_tier_or_lanes_some_tier_stresses() {
+        let tier = |lanes: &[&str]| StressTierConfig {
+            lanes: lanes.iter().map(|lane| (*lane).to_owned()).collect(),
+            ..StressTierConfig::default()
+        };
         let config = StressConfig {
-            lanes: vec!["product".to_owned(), "tools".to_owned()],
+            default_tier: "nightly".to_owned(),
+            tiers: BTreeMap::from([
+                ("nightly".to_owned(), tier(&["product"])),
+                ("weekly".to_owned(), tier(&["tools", "product"])),
+            ]),
             ..StressConfig::default()
         };
 
         assert_eq!(
-            resolve_lanes(&["tools".to_owned()], &config).expect("a stressed lane"),
-            ["tools"]
+            resolve_lanes(None, &[], &config).expect("the default tier"),
+            ["product"]
         );
         assert_eq!(
-            resolve_lanes(&[], &config).expect("the project's lanes"),
-            ["product", "tools"]
+            resolve_lanes(Some("weekly"), &[], &config).expect("a named tier"),
+            ["tools", "product"]
         );
-        let error = resolve_lanes(&["detector".to_owned()], &config)
-            .expect_err("a lane the project does not stress");
+        assert_eq!(
+            resolve_lanes(None, &["tools".to_owned()], &config).expect("a stressed lane"),
+            ["tools"]
+        );
+        let error = resolve_lanes(Some("monthly"), &[], &config)
+            .expect_err("a tier the project does not configure");
         assert!(
-            error.to_string().contains("not in stress.lanes"),
+            error
+                .to_string()
+                .contains("stress tier `monthly` is not configured"),
             "{error:#}"
         );
+        let error = resolve_lanes(None, &["detector".to_owned()], &config)
+            .expect_err("a lane the project does not stress");
+        assert!(
+            error
+                .to_string()
+                .contains("stress lane `detector` is in no stress tier"),
+            "{error:#}"
+        );
+    }
+
+    /// A tier and a lane list each say what to repeat; a run told both would
+    /// have to drop one of them.
+    #[test]
+    fn a_run_names_a_tier_or_lanes_not_both() {
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(subcommand)]
+            command: StressCommand,
+        }
+        for command in ["run", "report"] {
+            let mut args = vec!["stress", command, "--tier", "weekly", "--lane", "engine"];
+            if command == "report" {
+                args.extend([
+                    "--raw",
+                    "raw",
+                    "--execute-result",
+                    "success",
+                    "--expected-controller-sha",
+                    "a",
+                    "--expected-subject-sha",
+                    "b",
+                ]);
+            }
+            assert!(
+                <Cli as clap::Parser>::try_parse_from(&args).is_err(),
+                "{command} accepted a tier and lanes together"
+            );
+            let alone = args
+                .iter()
+                .copied()
+                .filter(|arg| !["--lane", "engine"].contains(arg))
+                .collect::<Vec<_>>();
+            assert!(
+                <Cli as clap::Parser>::try_parse_from(&alone).is_ok(),
+                "{command} refused a tier on its own"
+            );
+        }
     }
 
     /// The report has to expect the command the mode was told to run. Expecting
@@ -2623,7 +2716,8 @@ mod tests {
         let (config, _) = command_lane_config();
         let modes = ["rtsan".to_owned()];
 
-        let units = units(&ProjectConfig::default(), &config, &modes, &config.lanes)
+        let lanes = resolve_lanes(None, &[], &config).expect("the default tier");
+        let units = units(&ProjectConfig::default(), &config, &modes, &lanes)
             .expect("a command mode needs no configured test runner");
 
         assert_eq!(
@@ -3385,17 +3479,18 @@ mod engine_selection_tests {
                 "rtsan-hls",
             ]
         );
-        assert_eq!(
-            project.stress.lanes,
-            [
-                "engine",
-                "engine-broadcast",
-                "net-host",
-                "analysis",
-                "integration-regressions",
-            ]
-        );
-        for name in &project.stress.lanes {
+        // A tier that answers for every lane repeats the workspace on purpose;
+        // every other tier names engine packages, so a new workspace member
+        // stays out of it until reviewed.
+        let named = project
+            .stress
+            .tiers
+            .values()
+            .filter(|tier| !tier.covers_every_lane)
+            .flat_map(|tier| &tier.lanes)
+            .collect::<BTreeSet<_>>();
+        assert!(!named.is_empty());
+        for name in named {
             let lane = &project.test.lanes[name];
             assert!(
                 !lane.cargo.workspace,
@@ -3416,6 +3511,11 @@ mod engine_selection_tests {
                 "{name} selects only existing packages"
             );
             for package in SUPPORT_PACKAGES {
+                // Core's deterministic PCM generators are tested in core's
+                // own lane, the one support package a domain tier repeats.
+                if name == "core" && *package == "kithara-core-test-fixtures" {
+                    continue;
+                }
                 assert!(
                     !selected.contains(package),
                     "{name} selects support package {package}"

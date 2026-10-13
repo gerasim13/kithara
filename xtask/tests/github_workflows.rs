@@ -19,20 +19,21 @@ const STRESS_EXECUTE_COMMAND: &str = r#"args=(
   --expected-controller-sha "$CONTROLLER_SHA"
   --expected-subject-sha "$SUBJECT_SHA"
   --shard-index "$SHARD_INDEX"
-  --shard-count 3
+  --shard-count "$SHARD_COUNT"
 )
 [[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
 [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
+[[ -z "$TIER" ]] || args+=(--tier "$TIER")
 # `--mode` and `--lane` repeat per entry; each input is a space-separated
 # list, so one flag carrying the whole string would name a mode or a lane
 # that does not exist and fail the run at argument parsing.
 for mode in $MODE; do args+=(--mode "$mode"); done
 for lane in $LANE; do args+=(--lane "$lane"); done
 just ci stress "${args[@]}""#;
-const STRESS_REPORT_COMMAND: &str = r#"args=(
-  --raw "$GITHUB_WORKSPACE/raw/shard-0"
-  --raw "$GITHUB_WORKSPACE/raw/shard-1"
-  --raw "$GITHUB_WORKSPACE/raw/shard-2"
+const STRESS_REPORT_COMMAND: &str = r#"args=()
+# One root per shard, each downloaded into a directory of its own.
+for raw in "$GITHUB_WORKSPACE"/raw/stress-raw-*; do args+=(--raw "$raw"); done
+args+=(
   --output "$GITHUB_WORKSPACE/target/stress-report.md"
   --expected-controller-sha "$CONTROLLER_SHA"
   --expected-subject-sha "$SUBJECT_SHA"
@@ -40,6 +41,7 @@ const STRESS_REPORT_COMMAND: &str = r#"args=(
 )
 [[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
 [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
+[[ -z "$TIER" ]] || args+=(--tier "$TIER")
 for mode in $MODE; do args+=(--mode "$mode"); done
 for lane in $LANE; do args+=(--lane "$lane"); done
 just ci stress-report "${args[@]}""#;
@@ -968,9 +970,9 @@ fn stress_workflow_inputs_own_no_defaults() {
                 .keys()
                 .map(|name| name.as_str().expect("input name is a string"))
                 .collect::<BTreeSet<_>>(),
-            BTreeSet::from(["count", "filter", "lane", "mode", "revision"])
+            BTreeSet::from(["count", "filter", "lane", "mode", "revision", "tier"])
         );
-        for name in ["count", "filter", "lane", "mode", "revision"] {
+        for name in ["count", "filter", "lane", "mode", "revision", "tier"] {
             let input = mapping_field(inputs, name)
                 .as_mapping()
                 .unwrap_or_else(|| panic!("{trigger} input `{name}` is a mapping"));
@@ -997,7 +999,7 @@ fn stress_authorization_admits_only_the_owner_on_a_fork() {
     let authorization_env = mapping_field(authorization, "env")
         .as_mapping()
         .expect("stress authorization environment is a mapping");
-    assert_eq!(authorization_env.len(), 9);
+    assert_eq!(authorization_env.len(), 10);
     for (name, expected) in [
         ("ACTOR", "${{ github.actor }}"),
         ("COUNT", "${{ inputs.count || vars.KITHARA_STRESS_COUNT }}"),
@@ -1007,6 +1009,7 @@ fn stress_authorization_admits_only_the_owner_on_a_fork() {
         ("OWNER", "${{ github.repository_owner }}"),
         ("REVISION", "${{ inputs.revision || github.sha }}"),
         ("RUNNER_LABELS", "${{ vars.KITHARA_STRESS_RUNNER_LABELS }}"),
+        ("SHARDS", "${{ vars.KITHARA_STRESS_SHARDS }}"),
         ("TRIGGERING_ACTOR", "${{ github.triggering_actor }}"),
     ] {
         assert_eq!(
@@ -1028,12 +1031,30 @@ fn stress_authorization_admits_only_the_owner_on_a_fork() {
         "10#$COUNT <= 10#$MAX_COUNT",
         "\"self-hosted\", \"linux\", \"x64\", \"kithara-stress\"",
         "<<< \"$RUNNER_LABELS\"",
+        "[[ \"$SHARDS\" =~ ^[1-9][0-9]*$ ]]",
+        "SHARDS=\"${SHARDS:-1}\"",
+        "jq -nc --argjson n \"$SHARDS\" '[range($n)]'",
+        ">> \"$GITHUB_OUTPUT\"",
     ] {
         assert!(
             authorization_script.contains(contract),
             "stress authorization omits {contract:?}"
         );
     }
+    // One shard per runner that serves the run: the matrix and its
+    // parallelism are what authorization says, never a count of its own.
+    assert_eq!(mapping_field(authorization, "id").as_str(), Some("shards"));
+    let outputs = mapping_field(authorize, "outputs")
+        .as_mapping()
+        .expect("authorization publishes the shard plan");
+    assert_eq!(
+        mapping_field(outputs, "shards").as_str(),
+        Some("${{ steps.shards.outputs.shards }}")
+    );
+    assert_eq!(
+        mapping_field(outputs, "shard-count").as_str(),
+        Some("${{ steps.shards.outputs.shard-count }}")
+    );
 }
 
 #[test]
@@ -1087,13 +1108,16 @@ fn stress_execute_runs_the_portable_command_on_the_subject() {
         Some(false),
         "one failed shard must not cancel the other repetitions"
     );
-    assert_eq!(mapping_field(strategy, "max-parallel").as_u64(), Some(3));
+    assert_eq!(
+        mapping_field(strategy, "max-parallel").as_str(),
+        Some("${{ fromJSON(needs.authorize.outputs.shard-count) }}")
+    );
     let matrix = mapping_field(strategy, "matrix")
         .as_mapping()
         .expect("stress matrix is a mapping");
     assert_eq!(
-        mapping_field(matrix, "shard"),
-        &Value::Sequence((0_u64..3).map(Value::from).collect())
+        mapping_field(matrix, "shard").as_str(),
+        Some("${{ fromJSON(needs.authorize.outputs.shards) }}")
     );
     assert_eq!(
         job_step_names(execute),
@@ -1131,7 +1155,7 @@ fn stress_execute_runs_the_portable_command_on_the_subject() {
     let stress_env = mapping_field(run, "env")
         .as_mapping()
         .expect("run environment is a mapping");
-    assert_eq!(stress_env.len(), 7);
+    assert_eq!(stress_env.len(), 9);
     for (name, expected) in [
         ("CONTROLLER_SHA", "${{ job.workflow_sha }}"),
         ("COUNT", "${{ inputs.count || vars.KITHARA_STRESS_COUNT }}"),
@@ -1139,7 +1163,9 @@ fn stress_execute_runs_the_portable_command_on_the_subject() {
         ("LANE", "${{ inputs.lane }}"),
         ("MODE", "${{ inputs.mode }}"),
         ("SUBJECT_SHA", "${{ inputs.revision || github.sha }}"),
+        ("SHARD_COUNT", "${{ needs.authorize.outputs.shard-count }}"),
         ("SHARD_INDEX", "${{ matrix.shard }}"),
+        ("TIER", "${{ inputs.tier }}"),
     ] {
         assert_eq!(mapping_field(stress_env, name).as_str(), Some(expected));
     }
@@ -1193,9 +1219,7 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
         BTreeSet::from([
             "Add the stress summary".to_owned(),
             "Checkout controller".to_owned(),
-            "Download shard 0 evidence".to_owned(),
-            "Download shard 1 evidence".to_owned(),
-            "Download shard 2 evidence".to_owned(),
+            "Download every shard's evidence".to_owned(),
             "Install just".to_owned(),
             "Install the audio headers the renderer links".to_owned(),
             "Upload the stress evidence".to_owned(),
@@ -1209,28 +1233,21 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
         "${{ job.workflow_repository }}",
         "${{ job.workflow_sha }}",
     );
-    let mut artifact_names = BTreeSet::new();
-    let mut artifact_roots = BTreeSet::new();
-    for shard in 0..3 {
-        let download = named_step(report, &format!("Download shard {shard} evidence"));
-        assert_always(download);
-        assert_action_repository(download, "actions/download-artifact");
-        let inputs = mapping_field(download, "with")
-            .as_mapping()
-            .expect("artifact download inputs are a mapping");
-        let name = format!(
-            "stress-raw-${{{{ github.run_id }}}}-${{{{ github.run_attempt }}}}-shard-{shard}"
-        );
-        let path = format!("raw/shard-{shard}");
-        assert_eq!(mapping_field(inputs, "name").as_str(), Some(name.as_str()));
-        assert_eq!(mapping_field(inputs, "path").as_str(), Some(path.as_str()));
-        assert!(artifact_names.insert(name));
-        assert!(artifact_roots.insert(path));
-        assert!(
-            inputs.get("merge-multiple").is_none(),
-            "artifact roots must remain separate so duplicate units cannot overwrite evidence"
-        );
-    }
+    let download = named_step(report, "Download every shard's evidence");
+    assert_always(download);
+    assert_action_repository(download, "actions/download-artifact");
+    let inputs = mapping_field(download, "with")
+        .as_mapping()
+        .expect("artifact download inputs are a mapping");
+    assert_eq!(
+        mapping_field(inputs, "pattern").as_str(),
+        Some("stress-raw-${{ github.run_id }}-${{ github.run_attempt }}-shard-*")
+    );
+    assert_eq!(mapping_field(inputs, "path").as_str(), Some("raw"));
+    assert!(
+        inputs.get("merge-multiple").is_none(),
+        "artifact roots must remain separate so duplicate units cannot overwrite evidence"
+    );
 
     let report_install = named_step(report, "Install just");
     assert_always(report_install);
@@ -1249,7 +1266,7 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
     let verifier_env = mapping_field(verifier, "env")
         .as_mapping()
         .expect("verifier environment is a mapping");
-    assert_eq!(verifier_env.len(), 7);
+    assert_eq!(verifier_env.len(), 8);
     for (name, expected) in [
         ("CONTROLLER_SHA", "${{ job.workflow_sha }}"),
         ("COUNT", "${{ inputs.count || vars.KITHARA_STRESS_COUNT }}"),
@@ -1258,6 +1275,7 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
         ("LANE", "${{ inputs.lane }}"),
         ("MODE", "${{ inputs.mode }}"),
         ("SUBJECT_SHA", "${{ inputs.revision || github.sha }}"),
+        ("TIER", "${{ inputs.tier }}"),
     ] {
         assert_eq!(mapping_field(verifier_env, name).as_str(), Some(expected));
     }
@@ -1294,8 +1312,11 @@ fn stress_report_verifies_and_publishes_the_raw_evidence() {
     );
 }
 
+/// Every cadence repeats its own stress tier: the night the player's core,
+/// the week the engine, the month everything. The run is admitted by the
+/// repository switch and the runner pool, not by which cadence fired.
 #[test]
-fn scheduled_stress_respects_the_repository_switch_and_runner_pool() {
+fn scheduled_stress_repeats_the_tier_of_its_cadence() {
     let workflow = github_workflow("dispatch.yml");
     let stress = workflow_job(workflow_jobs(&workflow), "stress");
     assert_eq!(
@@ -1305,22 +1326,39 @@ fn scheduled_stress_respects_the_repository_switch_and_runner_pool() {
     let condition = mapping_field(stress, "if")
         .as_str()
         .expect("scheduled stress condition is a string");
-    let [_, weekly] = dispatch_crons(&workflow)[..] else {
-        panic!("one cron per cadence");
-    };
-    let cadence = dispatch_cadence(weekly);
-    let nightly_only = format!(
-        "({}) == 'nightly'",
-        cadence.trim_start_matches("${{ ").trim_end_matches(" }}")
-    );
     for contract in [
         "vars.KITHARA_STRESS_ENABLED == 'true'",
         "vars.KITHARA_STRESS_RUNNER_LABELS != ''",
-        nightly_only.as_str(),
     ] {
         assert!(
             condition.contains(contract),
             "scheduled stress omits `{contract}`"
+        );
+    }
+    let cadence = dispatch_cadence(&workflow);
+    assert!(
+        !condition.contains(cadence_expression(&cadence)),
+        "scheduled stress runs at every cadence: {condition}"
+    );
+    let with = mapping_field(stress, "with")
+        .as_mapping()
+        .expect("scheduled stress names its tier");
+    assert_eq!(mapping_field(with, "tier").as_str(), Some(cadence.as_str()));
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask has a workspace root");
+    let config: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
+    )
+    .expect("xtask config is valid TOML");
+    let tiers = config["stress"]["tiers"]
+        .as_table()
+        .expect("stress tiers are configured");
+    for kind in dispatch_kinds(&workflow) {
+        assert!(
+            tiers.contains_key(kind),
+            "cadence `{kind}` has no stress tier"
         );
     }
 }
@@ -1346,11 +1384,45 @@ fn dispatch_crons(workflow: &Value) -> Vec<&str> {
 }
 
 /// How every dispatched job resolves its cadence: the input when started by
-/// hand, otherwise which of the two crons fired.
-fn dispatch_cadence(weekly_cron: &str) -> String {
+/// hand, otherwise which of the crons fired.
+fn dispatch_cadence(workflow: &Value) -> String {
+    let [_, weekly, monthly] = dispatch_crons(workflow)[..] else {
+        panic!("one cron per cadence");
+    };
     format!(
-        "${{{{ inputs.kind || (github.event.schedule == '{weekly_cron}' && 'weekly' || 'nightly') }}}}"
+        "${{{{ inputs.kind || (github.event.schedule == '{weekly}' && 'weekly' || \
+         github.event.schedule == '{monthly}' && 'monthly' || 'nightly') }}}}"
     )
+}
+
+/// The cadence as a job condition reads it, without the `${{ }}` wrapper.
+fn cadence_expression(cadence: &str) -> &str {
+    cadence.trim_start_matches("${{ ").trim_end_matches(" }}")
+}
+
+/// The cadences the dispatcher can be started with by hand.
+fn dispatch_kinds(workflow: &Value) -> Vec<&str> {
+    let triggers = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "on")
+        .as_mapping()
+        .expect("on is a mapping");
+    let inputs = mapping_field(
+        mapping_field(triggers, "workflow_dispatch")
+            .as_mapping()
+            .expect("workflow_dispatch is a mapping"),
+        "inputs",
+    )
+    .as_mapping()
+    .expect("dispatch inputs are a mapping");
+    let kind = mapping_field(inputs, "kind")
+        .as_mapping()
+        .expect("kind is a mapping");
+    assert_eq!(mapping_field(kind, "type").as_str(), Some("choice"));
+    mapping_field(kind, "options")
+        .as_sequence()
+        .expect("kind options are a sequence")
+        .iter()
+        .map(|option| option.as_str().expect("an option is a string"))
+        .collect()
 }
 
 /// Eleven crons fired the same workflow so that one job ran and ten skipped,
@@ -1366,12 +1438,24 @@ fn the_dispatcher_has_one_cron_per_cadence() {
         .expect("on is a mapping");
 
     let crons = dispatch_crons(&workflow);
-    let [nightly, weekly] = crons.as_slice() else {
-        panic!("one cron per cadence, a night and a week: {crons:?}");
+    let [nightly, weekly, monthly] = crons.as_slice() else {
+        panic!("one cron per cadence, a night, a week and a month: {crons:?}");
     };
+    let fields = |cron: &str| {
+        cron.split_whitespace()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let (weekly_fields, monthly_fields) = (fields(weekly), fields(monthly));
     assert!(
-        nightly.ends_with(" * * *") && !weekly.ends_with(" * * *"),
-        "the first cron fires every day, the second on one day of the week: {crons:?}"
+        nightly.ends_with(" * * *")
+            && weekly_fields[2] == "*"
+            && weekly_fields[4] != "*"
+            && monthly_fields[2] != "*"
+            && monthly_fields[3] == "*"
+            && monthly_fields[4] == "*",
+        "the crons fire every day, on one day of the week, and on one day of the month: \
+         {crons:?}"
     );
     // GitHub starts a schedule late when load peaks, and it peaks at the top
     // of every hour: a night declared for 01:00 started between 06:02 and
@@ -1394,26 +1478,14 @@ fn the_dispatcher_has_one_cron_per_cadence() {
     )
     .as_mapping()
     .expect("dispatch inputs are a mapping");
-    let kind = mapping_field(inputs, "kind")
-        .as_mapping()
-        .expect("kind is a mapping");
-    assert_eq!(mapping_field(kind, "type").as_str(), Some("choice"));
-    assert_eq!(
-        mapping_field(kind, "options")
-            .as_sequence()
-            .expect("kind options are a sequence")
-            .iter()
-            .map(|option| option.as_str().expect("an option is a string"))
-            .collect::<Vec<_>>(),
-        ["nightly", "weekly"]
-    );
+    assert_eq!(dispatch_kinds(&workflow), ["nightly", "weekly", "monthly"]);
     assert!(inputs.contains_key("only"), "one lane runs on its own");
 
     // Every role reaches the fleet through the one fan-out, and none of them
     // reads the weekly cron differently from the others: a cadence resolved
     // two ways is a night that half-runs.
     let jobs = workflow_jobs(&workflow);
-    let cadence = dispatch_cadence(weekly);
+    let cadence = dispatch_cadence(&workflow);
     let cadence = cadence.as_str();
     for role in ["gate", "platforms", "deep", "quality"] {
         let job = workflow_job(jobs, role);
@@ -1439,14 +1511,30 @@ fn the_dispatcher_has_one_cron_per_cadence() {
     // fired: the Saturday run then drove the fan-out weekly and these four
     // nightly, and a week's run also spent the fleet's hours on the repeated
     // run that is declared nightly-only.
-    let cadence_expression = cadence.trim_start_matches("${{ ").trim_end_matches(" }}");
-    for name in ["network", "windows", "ui", "stress"] {
+    let cadence_expression = cadence_expression(cadence);
+    for name in ["network", "windows", "ui"] {
         let condition = mapping_field(workflow_job(jobs, name), "if")
             .as_str()
             .expect("a nightly-only workflow states the cadence it runs in");
         assert!(
             condition.contains(&format!("({cadence_expression}) == 'nightly'")),
             "job `{name}` resolves its cadence without reading the cron: {condition}"
+        );
+    }
+
+    // A month is the stress tier's cadence alone: the fan-out has no monthly
+    // selection, and the night and the week already run every other job.
+    for name in workflow_job_names(jobs) {
+        if name == "stress" {
+            continue;
+        }
+        let condition = mapping_field(workflow_job(jobs, &name), "if")
+            .as_str()
+            .expect("every dispatched job states when it runs");
+        assert!(
+            condition.contains(&format!("({cadence_expression}) == 'nightly'"))
+                || condition.contains(&format!("({cadence_expression}) != 'monthly'")),
+            "job `{name}` runs in a month: {condition}"
         );
     }
 
@@ -1477,13 +1565,10 @@ fn a_newer_dispatch_of_one_selection_supersedes_the_older() {
     let group = mapping_field(concurrency, "group")
         .as_str()
         .expect("the dispatch group is a string");
-    let [_, weekly] = dispatch_crons(&workflow)[..] else {
-        panic!("one cron per cadence");
-    };
-    let cadence = dispatch_cadence(weekly);
+    let cadence = dispatch_cadence(&workflow);
     for part in [
         "github.ref",
-        cadence.trim_start_matches("${{ ").trim_end_matches(" }}"),
+        cadence_expression(&cadence),
         "inputs.only",
         "inputs.narrow",
         "inputs.mutants",
