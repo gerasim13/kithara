@@ -3,6 +3,8 @@ use std::{
     task::{Context, Poll},
 };
 
+#[cfg(feature = "thread-cpu-time")]
+pub use cpu_time::ThreadTime;
 use pin_project_lite::pin_project;
 
 pub use crate::{

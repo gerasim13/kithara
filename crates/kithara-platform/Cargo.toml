@@ -22,7 +22,8 @@ flash = []
 loom = ["dep:loom"]
 # Async blocking detection (poll context + budgets). OFF by default and
 # referenced by no shipping crate; the inert twin keeps prod byte-identical.
-no-block = ["dep:cpu-time"]
+no-block = ["thread-cpu-time"]
+thread-cpu-time = ["dep:cpu-time"]
 signal = ["tokio/signal"]
 # Native socket surface for test/server plumbing. Keep this out of the default
 # production platform dependency so non-network consumers do not pull tokio net

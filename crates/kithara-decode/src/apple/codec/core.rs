@@ -5,7 +5,7 @@ use kithara_apple::audio_toolbox::{
     AudioStreamPacketDescription, AudioToolboxError, SingleAudioBufferList, pod_from_prefix,
 };
 use kithara_bufpool::SampleBuffer;
-use kithara_platform::time::{Duration, WallInstant};
+use kithara_platform::time::{Duration, ThreadTime, WallInstant};
 use kithara_signal::AudioSpec;
 use kithara_stream::AudioCodec;
 
@@ -168,13 +168,24 @@ impl AppleCodec {
             build_pcm_output_format(track.sample_rate, track.channels, target_output_rate);
 
         tracing::debug!(operation = "AudioConverterNew", phase = "begin");
+        let converter_cpu_started =
+            tracing::enabled!(tracing::Level::DEBUG).then(ThreadTime::try_now);
         let converter_started = WallInstant::now();
         let created = AudioConverter::new(&input_format, &output_format);
         let converter_elapsed_us = converter_started.elapsed().as_micros();
+        let (converter_cpu_elapsed_us, converter_cpu_error) = match converter_cpu_started
+            .map(|started| started.and_then(|start| start.try_elapsed()))
+        {
+            Some(Ok(elapsed)) => (Some(elapsed.as_micros()), None),
+            Some(Err(error)) => (None, Some(error)),
+            None => (None, None),
+        };
         tracing::debug!(
             operation = "AudioConverterNew",
             phase = "end",
             elapsed_us = converter_elapsed_us,
+            cpu_elapsed_us = converter_cpu_elapsed_us,
+            cpu_clock_error = ?converter_cpu_error,
             succeeded = created.is_ok(),
         );
         let mut converter = created.map_err(|err| DecodeError::BackendStatus {
