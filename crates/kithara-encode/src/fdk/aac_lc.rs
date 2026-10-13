@@ -29,9 +29,13 @@ pub(crate) struct FdkStream {
     channels: usize,
     frame_samples: usize,
     pending_len: usize,
+    encoder_delay_frames: u32,
 }
 
 impl AacStream for FdkStream {
+    fn encoder_delay_frames(&self) -> Option<u32> {
+        Some(self.encoder_delay_frames)
+    }
     fn finish(mut self: Box<Self>) -> EncodeResult<Vec<EncodedAccessUnit>> {
         let mut units: Vec<EncodedAccessUnit> = Vec::new();
         if self.pending_len > 0 {
@@ -103,7 +107,8 @@ impl FdkStream {
             sbr: false,
         })?;
 
-        let frame_samples = usize::try_from(encoder.info()?.frameLength).unwrap_or(0);
+        let native_info = encoder.info()?;
+        let frame_samples = usize::try_from(native_info.frameLength).unwrap_or(0);
         if frame_samples != StreamEncoder::FRAME_SAMPLES {
             return Err(EncodeError::backend_message(format!(
                 "fdk-aac opened a {frame_samples} sample AAC-LC frame, not {}",
@@ -122,6 +127,7 @@ impl FdkStream {
             pending_len: 0,
             output: [0; consts::ACCESS_UNIT_CAPACITY],
             emitted: 0,
+            encoder_delay_frames: native_info.nDelay,
         })
     }
 

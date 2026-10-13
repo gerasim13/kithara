@@ -40,6 +40,9 @@ pub(crate) struct StreamParams {
 }
 
 pub(crate) trait AacStream: Send {
+    fn encoder_delay_frames(&self) -> Option<u32> {
+        None
+    }
     fn finish(self: Box<Self>) -> EncodeResult<Vec<EncodedAccessUnit>>;
 
     fn push(&mut self, samples: &[f32]) -> EncodeResult<Vec<EncodedAccessUnit>>;
@@ -55,6 +58,16 @@ pub struct StreamEncoder {
 impl StreamEncoder {
     /// Samples per channel in one AAC-LC access unit.
     pub const FRAME_SAMPLES: usize = 1024;
+
+    /// Leading decoded PCM frames before the first input frame, when known.
+    ///
+    /// Frames are per channel at the encoder's input sample rate, independently
+    /// of its access-unit timescale. `None` means the backend does not expose
+    /// a native delay; callers must not treat an unknown delay as zero.
+    #[must_use]
+    pub fn encoder_delay_frames(&self) -> Option<u32> {
+        self.inner.encoder_delay_frames()
+    }
 
     /// Open a backend with explicit audio and timestamp parameters.
     ///
