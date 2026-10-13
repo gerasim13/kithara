@@ -1,9 +1,10 @@
+use kithara_beat::BeatGridModel;
 use kithara_command::{Seq, When};
 use kithara_config::Config;
 use kithara_play::{Outbox, PlayError, Player, Position, TrackSnapshot};
 use kithara_signal::{FrameCount, SessionFrame};
 
-use crate::{GridAnswer, LinkError, TempoTrajectory};
+use crate::{GridAnswer, LinkError, LinkedConfig, TempoTrajectory};
 
 /// A player that can align itself and receive the Host's planned tempo trajectory.
 pub trait LinkedPlayer<S>: Player<S> {
@@ -34,7 +35,8 @@ pub trait LinkedPlayer<S>: Player<S> {
     /// Scope batches needed to reopen silent tracks during a retime.
     fn scope_parts(&self) -> usize;
 
-    /// Whether any speed batch for this retime has applied; None awaits a verdict.
+    /// Whether the current native representation of this retime has applied.
+    /// None awaits its current receipt.
     fn retime_applied(&mut self, at: SessionFrame) -> Option<bool>;
 
     /// Replaces the trajectory and closes phase using only bounded speed steps.
@@ -115,5 +117,64 @@ pub struct LinkedSnapshot<T> {
 impl<T: AsRef<TrackSnapshot>> AsRef<TrackSnapshot> for LinkedSnapshot<T> {
     fn as_ref(&self) -> &TrackSnapshot {
         self.track.as_ref()
+    }
+}
+
+/// One track decorated with analysis, Host tempo and owner-thread synchronization.
+pub struct Linked<P> {
+    pub(super) inner: P,
+    pub(super) config: LinkConfig,
+    pub(super) grid: Option<BeatGridModel>,
+    pub(super) host: TempoTrajectory,
+    pub(crate) mode: SyncMode,
+    pub(super) load: Option<Seq>,
+    pub(super) waiting: Option<Waiting>,
+    pub(super) correction: Option<RunningCorrection>,
+    pub(super) alignment: Option<bool>,
+    pub(super) speeds: Vec<(Seq, SpeedOperation)>,
+    pub(super) start: Option<Seq>,
+    pub(super) start_caller: Option<Seq>,
+    pub(super) withdrawn: Vec<Seq>,
+    pub(super) retimes: Vec<(SessionFrame, Seq)>,
+    pub(super) cue: Option<Position>,
+}
+
+pub(super) struct RunningCorrection {
+    pub(super) at: SessionFrame,
+    pub(super) frames: FrameCount,
+}
+
+pub(super) enum SpeedOperation {
+    Correction { commanded: bool },
+    Alignment,
+    Relocation { to: Position },
+}
+
+impl<P> Linked<P> {
+    /// Decorates a track with synchronization initially off.
+    #[must_use]
+    pub fn new(config: LinkedConfig<P>) -> Self {
+        let LinkedConfig {
+            inner,
+            settings: config,
+            trajectory: host,
+        } = config;
+        Self {
+            inner,
+            config,
+            grid: None,
+            host,
+            mode: SyncMode::Off,
+            load: None,
+            waiting: None,
+            correction: None,
+            alignment: None,
+            speeds: Vec::new(),
+            start: None,
+            start_caller: None,
+            withdrawn: Vec::new(),
+            retimes: Vec::new(),
+            cue: None,
+        }
     }
 }

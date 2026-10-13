@@ -5,22 +5,11 @@ use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioSpec, SourceSpan};
 use tracing::debug;
 
-use crate::{
-    consts,
-    pipeline::seek::{ResumeState, ResumeTarget},
-};
+use crate::pipeline::seek::{ResumeState, ResumeTarget};
 
-pub(crate) fn frames(spec: AudioSpec, duration: Duration) -> usize {
-    let frames = duration
-        .as_nanos()
-        .saturating_mul(u128::from(spec.sample_rate.get()))
-        .saturating_div(consts::NANOS_PER_SEC);
-    assert!(
-        frames <= usize::MAX as u128,
-        "post-seek frame count {frames} exceeds usize::MAX for {duration:?} at {} Hz",
-        spec.sample_rate
-    );
-    frames as usize
+fn frames(spec: AudioSpec, duration: Duration) -> DecodeResult<usize> {
+    let frames = spec.frame_at(duration).map_err(|_| mapping_error())?;
+    usize::try_from(frames).map_err(|_| mapping_error())
 }
 
 pub(crate) fn apply(
@@ -39,7 +28,9 @@ pub(crate) fn apply(
         return Ok(None);
     }
     let drop_frames = match resume.target {
-        ResumeTarget::Position(target) => frames(spec, target.saturating_sub(chunk.meta.timestamp)),
+        ResumeTarget::Position(target) => {
+            frames(spec, target.saturating_sub(chunk.meta.timestamp))?
+        }
         ResumeTarget::Source(end) => {
             let target = output_frame(end, spec)?;
             usize::try_from(target.saturating_sub(chunk.meta.frame_offset))
@@ -171,4 +162,112 @@ fn trim_start(chunk: &mut AudioChunk, drop_frames: usize) -> DecodeResult<()> {
         .frames
         .saturating_sub(u32::try_from(drop_frames).unwrap_or(u32::MAX));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::test_pools::{pools, sample_buffer};
+
+    #[kithara::test]
+    fn a_seek_to_a_nanosecond_rounded_frame_retains_that_pcm_frame() {
+        let pools = pools();
+        let rate = NonZeroU32::new(44_100).expect("fixture rate");
+        let span = SourceSpan::new(0, 4, rate, 4).expect("fixture source span");
+        let pcm = [0.25, -0.25, 0.5, -0.5, 0.75, -0.75, 1.0, -1.0];
+        let chunk = AudioChunk::new(
+            kithara_signal::AudioChunkInfo {
+                spec: AudioSpec::new(2, rate),
+                frames: 4,
+                end_timestamp: Duration::from_nanos(90_702),
+                source_span: Some(span),
+                ..kithara_signal::AudioChunkInfo::default()
+            },
+            sample_buffer(&pools, &pcm),
+        );
+        let mut resume = ResumeState {
+            target: ResumeTarget::Position(Duration::from_nanos(22_675)),
+            trim_head: true,
+        };
+
+        let retained = apply(chunk, Some(&mut resume))
+            .expect("seek retains a source interval")
+            .expect("three PCM frames remain");
+
+        assert_eq!(retained.samples.as_ref(), &pcm[2..]);
+        assert_eq!(retained.meta.frame_offset, 1);
+        assert_eq!(retained.meta.timestamp, Duration::from_nanos(22_675));
+        assert_eq!(retained.meta.frames, 3);
+        assert_eq!(retained.meta.source_span, span.for_output_range(1..4));
+        assert!(!resume.trim_head);
+    }
+
+    #[kithara::test]
+    #[case::native_before(false, 38_249_999, 0)]
+    #[case::native_tie(false, 38_250_000, 1)]
+    #[case::native_after(false, 38_250_001, 1)]
+    #[case::mapped_before(true, 38_249_999, 0)]
+    #[case::mapped_tie(true, 38_250_000, 1)]
+    #[case::mapped_after(true, 38_250_001, 1)]
+    fn a_seek_rounds_relative_to_its_native_pcm_basis(
+        #[case] mapped: bool,
+        #[case] target_ns: u64,
+        #[case] drop_frames: usize,
+    ) {
+        let pools = pools();
+        let rate = NonZeroU32::new(1_000).expect("fixture rate");
+        let span = SourceSpan::try_from((
+            151,
+            4,
+            NonZeroU128::new(4).expect("fixture denominator"),
+            rate,
+            4,
+        ))
+        .expect("fractional native PCM basis");
+        let pcm = [0.25, -0.25, 0.5, -0.5, 0.75, -0.75, 1.0, -1.0];
+        let chunk = AudioChunk::new(
+            kithara_signal::AudioChunkInfo {
+                spec: AudioSpec::new(2, rate),
+                frame_offset: 37,
+                timestamp: Duration::from_nanos(37_750_000),
+                end_timestamp: Duration::from_nanos(41_750_000),
+                frames: 4,
+                source_span: mapped.then_some(span),
+                ..kithara_signal::AudioChunkInfo::default()
+            },
+            sample_buffer(&pools, &pcm),
+        );
+        let mut resume = ResumeState {
+            target: ResumeTarget::Position(Duration::from_nanos(target_ns)),
+            trim_head: true,
+        };
+
+        let retained = apply(chunk, Some(&mut resume))
+            .expect("native-basis seek")
+            .expect("the native PCM suffix remains");
+        let drop_frames_u64 = u64::try_from(drop_frames).expect("fixture frame count");
+
+        assert_eq!(retained.samples.as_ref(), &pcm[drop_frames * 2..]);
+        assert_eq!(retained.meta.frame_offset, 37 + drop_frames_u64);
+        assert_eq!(
+            retained.meta.timestamp,
+            Duration::from_nanos(37_750_000 + drop_frames_u64 * 1_000_000)
+        );
+        assert_eq!(
+            retained.meta.end_timestamp,
+            Duration::from_nanos(41_750_000)
+        );
+        assert_eq!(retained.frames(), 4 - drop_frames);
+        assert_eq!(
+            retained.meta.source_span,
+            mapped.then(|| span
+                .for_output_range(drop_frames_u64..4)
+                .expect("PCM suffix"))
+        );
+        assert!(!resume.trim_head);
+    }
 }

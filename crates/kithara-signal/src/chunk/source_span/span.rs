@@ -6,27 +6,32 @@ use std::{
 use kithara_platform::time::Duration;
 use num_traits::ToPrimitive;
 
+use super::{
+    affine::Affine,
+    approach::Approach,
+    mapping::{Mapping, Rational},
+    ratio::Ratio,
+};
+use crate::ExponentialApproach;
+
 /// Decoded-source interval represented by a physical output interval.
 ///
-/// Slices retain the exact rational source position and slope. Integer source
-/// endpoints are rounded down only when queried, never used as a new basis.
-/// Coefficients retain 128-bit precision when a curve and correction share a basis.
+/// Rational mappings retain exact coefficients. Exponential mappings retain
+/// their original analytic basis and round advance to the nearest Q32 lattice.
+/// Slices never replace either basis with rounded source endpoints.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct SourceSpan {
     #[field(get, copy)]
     sample_rate: NonZeroU32,
-    denominator: NonZeroU128,
     #[field(get, copy, with)]
     mapping_revision: Option<NonZeroU64>,
-    numerator: u128,
+    mapping: Mapping,
     #[field(get, copy)]
     output_frames: u64,
     #[field(get, copy, with)]
     render_revision: u64,
-    step: u128,
-    step_change: i128,
 }
 
 fn fractional_nanos(numerator: u128, denominator: u128) -> u32 {
@@ -76,6 +81,60 @@ impl SourceSpan {
         Some(Duration::new(seconds, nanos))
     }
 
+    /// Maps an original exponential source basis over a nonempty output span.
+    ///
+    /// Rates are source frames per output frame; elapsed and the time constant
+    /// are output frames. The rational origin is at curve elapsed zero.
+    /// Unrepresentable coordinates or an overflowing range return `None`.
+    #[must_use]
+    pub fn approaching(
+        origin_numerator: u128,
+        origin_denominator: NonZeroU128,
+        curve: ExponentialApproach,
+        elapsed: u64,
+        sample_rate: NonZeroU32,
+        output_frames: u64,
+    ) -> Option<Self> {
+        if output_frames == 0 {
+            return None;
+        }
+        let mapping = Mapping::Approach(Approach {
+            curve,
+            elapsed,
+            origin: Ratio::new(origin_numerator, origin_denominator)?,
+            affine: Affine::identity()?,
+        });
+        mapping.validate(output_frames)?;
+        Some(Self {
+            mapping,
+            output_frames,
+            sample_rate,
+            render_revision: 0,
+            mapping_revision: None,
+        })
+    }
+
+    /// Applies `position + scale * (source - pivot)` without changing the basis.
+    ///
+    /// All three coordinates are exact ratios. A positive scale is required;
+    /// negative or unrepresentable source results return `None`.
+    #[must_use]
+    pub fn scaled_from(
+        self,
+        pivot: (u128, NonZeroU128),
+        position: (u128, NonZeroU128),
+        scale: (u128, NonZeroU128),
+    ) -> Option<Self> {
+        let affine = Affine::new(
+            Ratio::new(pivot.0, pivot.1)?,
+            Ratio::new(position.0, position.1)?,
+            Ratio::new(scale.0, scale.1)?,
+        )?;
+        let mapping = self.mapping.transformed(affine)?;
+        mapping.validate(self.output_frames)?;
+        Some(Self { mapping, ..self })
+    }
+
     /// Creates a mapping for a nonempty physical output interval.
     #[must_use]
     pub fn new(start: u64, end: u64, sample_rate: NonZeroU32, output_frames: u64) -> Option<Self> {
@@ -96,46 +155,14 @@ impl SourceSpan {
         .ok()
     }
 
-    fn step_at(self, frame: u64) -> Option<u128> {
-        let change = self
-            .step_change
-            .unsigned_abs()
-            .checked_mul(u128::from(frame))?;
-        if self.step_change < 0 {
-            self.step.checked_sub(change)
-        } else {
-            self.step.checked_add(change)
-        }
-    }
-
-    fn numerator_at(self, frame: u64) -> Option<u128> {
-        let linear = self.step.checked_mul(u128::from(frame))?;
-        let pairs = u128::from(frame).checked_mul(u128::from(frame.saturating_sub(1)))? / 2;
-        let change = pairs.checked_mul(self.step_change.unsigned_abs())?;
-        let advance = if self.step_change < 0 {
-            linear.checked_sub(change)?
-        } else {
-            linear.checked_add(change)?
-        };
-        self.numerator.checked_add(advance)
-    }
-
-    /// Exact reduced decoded-source coordinate at an output boundary.
+    /// Reduced source coordinate, exact for rational maps and Q32 for approaches.
     #[must_use]
     pub fn source_ratio_at(self, output_frame: u64) -> Option<(u128, NonZeroU128)> {
         if output_frame > self.output_frames {
             return None;
         }
-        let numerator = self.numerator_at(output_frame)?;
-        let mut divisor = self.denominator.get();
-        let mut remainder = numerator;
-        while remainder != 0 {
-            (divisor, remainder) = (remainder, divisor % remainder);
-        }
-        Some((
-            numerator / divisor,
-            NonZeroU128::new(self.denominator.get() / divisor)?,
-        ))
+        let position = self.mapping.ratio_at(output_frame)?;
+        Some((position.numerator, position.denominator))
     }
 
     /// Exclusive decoded-source frame, rounded down on the source lattice.
@@ -145,8 +172,9 @@ impl SourceSpan {
     #[must_use]
     pub fn end(self) -> u64 {
         let Some(end) = self
-            .numerator_at(self.output_frames)
-            .and_then(|numerator| u64::try_from(numerator / self.denominator.get()).ok())
+            .mapping
+            .ratio_at(self.output_frames)
+            .and_then(Ratio::source_frame)
         else {
             unreachable!("validated source mapping endpoint");
         };
@@ -156,23 +184,17 @@ impl SourceSpan {
     /// Joins adjacent output intervals only when their exact mappings agree.
     #[must_use]
     pub fn followed_by(self, next: Self) -> Option<Self> {
-        let boundary = self.numerator_at(self.output_frames)?;
-        if self.step_at(self.output_frames)? != next.step
-            || self.step_change != next.step_change
-            || self.denominator != next.denominator
-            || boundary != next.numerator
-            || self.sample_rate != next.sample_rate
+        if self.sample_rate != next.sample_rate
             || self.render_revision != next.render_revision
             || self.mapping_revision != next.mapping_revision
         {
             return None;
         }
+        let mapping = self.mapping.followed_by(next.mapping, self.output_frames)?;
         let output_frames = self.output_frames.checked_add(next.output_frames)?;
-        u64::try_from(self.numerator_at(output_frames)? / self.denominator.get()).ok()?;
-        if output_frames > 0 {
-            self.step_at(output_frames - 1)?;
-        }
+        mapping.validate(output_frames)?;
         Some(Self {
+            mapping,
             output_frames,
             ..self
         })
@@ -184,14 +206,12 @@ impl SourceSpan {
         if range.start > range.end || range.end > self.output_frames {
             return None;
         }
+        let output_frames = range.end - range.start;
+        let mapping = self.mapping.sliced(range.start, output_frames)?;
+        mapping.validate(output_frames)?;
         Some(Self {
-            numerator: self.numerator_at(range.start)?,
-            step: if range.start == range.end {
-                0
-            } else {
-                self.step_at(range.start)?
-            },
-            output_frames: range.end - range.start,
+            mapping,
+            output_frames,
             ..self
         })
     }
@@ -206,7 +226,7 @@ impl SourceSpan {
     /// invariant this panics on.
     #[must_use]
     pub fn start(self) -> u64 {
-        let Ok(start) = u64::try_from(self.numerator / self.denominator.get()) else {
+        let Some(start) = self.mapping.ratio_at(0).and_then(Ratio::source_frame) else {
             unreachable!("validated source mapping origin");
         };
         start
@@ -242,19 +262,20 @@ impl TryFrom<(u128, u128, i128, NonZeroU128, NonZeroU32, u64)> for SourceSpan {
         if output_frames == 0 {
             return Err(());
         }
-        let span = Self {
+        let mapping = Mapping::Rational(Rational {
             numerator: start_numerator,
             step: step_numerator,
             step_change,
             denominator,
+        });
+        mapping.validate(output_frames).ok_or(())?;
+        let span = Self {
+            mapping,
             output_frames,
             sample_rate,
             render_revision: 0,
             mapping_revision: None,
         };
-        span.step_at(output_frames - 1).ok_or(())?;
-        let end = span.numerator_at(output_frames).ok_or(())?;
-        u64::try_from(end / denominator.get()).map_err(|_| ())?;
         Ok(span)
     }
 }

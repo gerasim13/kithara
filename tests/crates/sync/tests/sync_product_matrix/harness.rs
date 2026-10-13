@@ -1,3 +1,11 @@
+use kithara::{
+    audio::{
+        AudioDecoderConfig, DecoderBackend as EventDecoderBackend, DecoderChangeCause, DecoderEvent,
+    },
+    decode::DecoderBackend,
+    events::EventBus,
+};
+
 use super::{cases::*, imports::*, providers::*};
 
 #[derive(Clone, Copy, Debug)]
@@ -21,11 +29,16 @@ pub(crate) struct ProductHarness {
     provider: Provider,
     worker: PlayWorker<TestPools>,
     trajectory: TempoTrajectory,
+    operation_grid: Option<kithara::warp::BeatGridSnapshot>,
     /// The second each deck's start opens it at, before its stagger.
     cues: Vec<f64>,
+    decoder_backends: Vec<EventDecoderBackend>,
+    decoder_rates: Vec<Option<(u32, u32)>>,
     /// Every rendered block as `graph_out` plays it, metronome included.
     #[cfg(not(target_os = "android"))]
     tap: kithara_integration_tests::audio_artifact::AudioArtifactTap,
+    #[cfg(not(target_os = "android"))]
+    master_tap: kithara_integration_tests::audio_artifact::AudioArtifactTap,
     #[cfg(not(target_os = "android"))]
     metronome_delta_peak: f32,
 }
@@ -106,13 +119,19 @@ mod artifact {
         case: SyncCase,
         provider: Provider,
         audible: Audible,
+        stream: &str,
     ) -> AudioArtifactTap {
         let default_root = std::env::current_exe()
             .unwrap_or_else(|error| panic!("{}: locate the test executable: {error}", case.id))
             .with_file_name("audio-artifacts");
         let mut tap = AudioArtifactTap::from_env_or(
             &default_root,
-            &format!("{}-{}-{}", artifact_label(), case.id, audible.label()),
+            &format!(
+                "{}-{}-{}-{stream}",
+                artifact_label(),
+                case.id,
+                audible.label()
+            ),
             case.sample_rate,
             CHANNELS,
         )
@@ -133,7 +152,7 @@ impl ProductHarness {
         start: Start,
         audible: Audible,
     ) -> Self {
-        Self::build(case, prepared, start, audible, BLOCK_FRAMES, false).await
+        Self::build(case, prepared, start, audible, BLOCK_FRAMES, false, None).await
     }
 
     pub(crate) async fn new_for_block(
@@ -143,7 +162,37 @@ impl ProductHarness {
         audible: Audible,
         block_frames: usize,
     ) -> Self {
-        Self::build(case, prepared, start, audible, block_frames, true).await
+        Self::build(case, prepared, start, audible, block_frames, true, None).await
+    }
+
+    pub(crate) async fn new_with_decoder(
+        case: SyncCase,
+        prepared: &PreparedSources,
+        start: Start,
+        audible: Audible,
+        decoder: DecoderBackend,
+    ) -> Self {
+        Self::build(
+            case,
+            prepared,
+            start,
+            audible,
+            BLOCK_FRAMES,
+            false,
+            Some(decoder),
+        )
+        .await
+    }
+
+    pub(crate) fn assert_decoder_backend(&self, expected: EventDecoderBackend) {
+        assert_eq!(self.decoder_backends.len(), self.decks.len());
+        assert!(
+            self.decoder_backends
+                .iter()
+                .all(|backend| *backend == expected),
+            "requested decoder must own every source: {:?}",
+            self.decoder_backends
+        );
     }
 
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
@@ -154,6 +203,7 @@ impl ProductHarness {
         audible: Audible,
         block_frames: usize,
         paced: bool,
+        decoder: Option<DecoderBackend>,
     ) -> Self {
         let provider = prepared.0;
         let sources: Vec<_> = prepared
@@ -228,6 +278,7 @@ impl ProductHarness {
             .unwrap_or_else(|error| panic!("{}: master tap: {error}", case.id));
         let mut decks = Vec::with_capacity(sources.len());
         let mut ids = Vec::with_capacity(sources.len());
+        let mut decoder_receivers = Vec::new();
         for (index, source) in sources.into_iter().enumerate() {
             hang_tick!(format!("{}: creating deck {index}", case.id));
             // Ruling: PlayerImpl-backed Host deck → Queue<LinkedFactory<ObservedFactory>> on LinkedHost — spec §4.4–§4.6, §11.2.
@@ -244,8 +295,17 @@ impl ProductHarness {
             .store(memory_asset_store())
             .initial_abr_mode(AbrMode::manual(0))
             .discriminator(format!("{}-{provider:?}-{index}", case.id))
-            .maybe_beat_grid(case.gridded.then(|| provider.beat_grid(index)))
-            .build();
+            .maybe_beat_grid(case.gridded.then(|| provider.beat_grid(index)));
+            let events = EventBus::default();
+            decoder_receivers.push(events.subscribe::<DecoderEvent>());
+            let config = config.events(events);
+            let config = if let Some(backend) = decoder {
+                config
+                    .decoder(AudioDecoderConfig::builder().backend(backend).build())
+                    .build()
+            } else {
+                config.build()
+            };
             let control = deck.control().clone();
             let muted = !audible.hears(index);
             let id = host
@@ -270,11 +330,16 @@ impl ProductHarness {
             provider,
             worker,
             trajectory,
+            operation_grid: None,
+            decoder_backends: Vec::new(),
+            decoder_rates: Vec::new(),
             cues: (0..case.decks)
                 .map(|deck| provider.start_seconds(deck, start))
                 .collect(),
             #[cfg(not(target_os = "android"))]
-            tap: artifact::open_tap(case, provider, audible),
+            tap: artifact::open_tap(case, provider, audible, "output"),
+            #[cfg(not(target_os = "android"))]
+            master_tap: artifact::open_tap(case, provider, audible, "master"),
             #[cfg(not(target_os = "android"))]
             metronome_delta_peak: 0.0,
             _trace: trace,
@@ -282,6 +347,38 @@ impl ProductHarness {
         let _ = harness.render(case, block_frames).await;
         hang_reset!();
         harness.wait_loaded(case, &ids).await;
+        for (deck, mut receiver) in decoder_receivers.into_iter().enumerate() {
+            let event = receiver
+                .try_recv()
+                .expect("the loaded source publishes its initial decoder")
+                .event;
+            if decoder.is_some() {
+                eprintln!("DECODER_RECEIPT deck={deck} requested={decoder:?} event={event:?}");
+            }
+            let DecoderEvent::DecoderChanged {
+                backend,
+                cause: DecoderChangeCause::Initial,
+                ..
+            } = event
+            else {
+                panic!(
+                    "the first source decoder event must identify the initial generation: {event:?}"
+                );
+            };
+            harness.decoder_backends.push(backend);
+            let rates =
+                std::iter::from_fn(|| receiver.try_recv().ok()).find_map(|event| {
+                    match event.event {
+                        DecoderEvent::ResamplerConfigured {
+                            input_rate,
+                            output_rate,
+                            ..
+                        } => Some((input_rate, output_rate)),
+                        _ => None,
+                    }
+                });
+            harness.decoder_rates.push(rates);
+        }
         harness.deliver_grids(case).await;
         harness.set_tempo(case, case.start_bpm(), true).await;
         harness.warm_up_transport(case).await;
@@ -467,6 +564,7 @@ impl ProductHarness {
         );
         #[cfg(not(target_os = "android"))]
         {
+            self.master_tap.push(&master);
             self.metronome_delta_peak = samples
                 .iter()
                 .zip(&master)
@@ -484,6 +582,7 @@ impl ProductHarness {
     #[cfg(not(target_os = "android"))]
     pub(crate) fn mark(&mut self, label: &str) {
         self.tap.mark(label);
+        self.master_tap.mark(label);
     }
 
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
@@ -547,6 +646,12 @@ impl ProductHarness {
             hang_tick!(format!("{}: seeking deck {index}", case.id));
             let stagger: f64 = index.as_();
             let seconds = stagger.mul_add(stagger_seconds, self.cues[index]);
+            #[cfg(not(target_os = "android"))]
+            {
+                self.tap.mark(&format!("seek deck {index} to {seconds:.9}"));
+                self.master_tap
+                    .mark(&format!("seek deck {index} to {seconds:.9}"));
+            }
             let control = deck.control().clone();
             self.host
                 .run(move || control.seek(seconds))
@@ -558,6 +663,8 @@ impl ProductHarness {
     }
 
     pub(crate) async fn set_tempo(&mut self, case: SyncCase, bpm: f64, required: bool) {
+        #[cfg(not(target_os = "android"))]
+        self.mark(&format!("tempo {bpm:.9}"));
         let tempo = Tempo::new(bpm).expect("fixture tempo");
         match self.host.with(move |host| host.set_tempo(tempo)).await {
             Ok(()) => {}
@@ -615,6 +722,185 @@ impl ProductHarness {
         }
     }
 
+    pub(crate) async fn grid_binding_failures(&mut self, case: SyncCase) -> Vec<String> {
+        use kithara::play::TrackStatus as OwnerTrackStatus;
+        let host_grid = self.host.session_grid().await;
+        let mut failures = Vec::new();
+        let mut evidence = Vec::new();
+        for (index, deck) in self.decks.iter().enumerate() {
+            let item = deck.current().expect("selected binding track").id;
+            let snapshot = deck.track_snapshot(item).expect("published binding track");
+            assert!(matches!(
+                snapshot.track.status,
+                OwnerTrackStatus::Playing { .. }
+            ));
+            assert_eq!(
+                snapshot.sync,
+                kithara::link::SyncStatus::On,
+                "binding is claimed after the correction has applied"
+            );
+            let (slot, evaluation_rate) = deck
+                .observe(|observation| {
+                    let slot = observation
+                        .consumed
+                        .iter()
+                        .find_map(|(owner, slot)| (*owner == item).then_some(*slot))?;
+                    Some((slot, observation.consumed_rate?))
+                })
+                .expect("real DeckPass consumed slot and grid evaluation axis");
+            assert_eq!(
+                snapshot.track.mark, slot.mark,
+                "the Player snapshot reads that consumed PCM mark"
+            );
+            assert_eq!(
+                evaluation_rate.get(),
+                case.sample_rate,
+                "the consumed DeckPass declares the grid evaluation axis"
+            );
+            let ArtifactSource::Value(model) = self.provider.beat_grid(index) else {
+                panic!("materialized supplied source grid");
+            };
+            let binding = super::binding::check(
+                &model,
+                evaluation_rate,
+                &host_grid,
+                slot,
+                snapshot.track.speed,
+                4,
+            );
+            match binding {
+                Ok(binding) => {
+                    failures.extend(
+                        binding
+                            .failures()
+                            .into_iter()
+                            .map(|failure| format!("deck {index}: {failure}")),
+                    );
+                    evidence.push(binding.evidence());
+                }
+                Err(error) => failures.push(format!("deck {index}: {error}")),
+            }
+        }
+        #[cfg(not(target_os = "android"))]
+        self.master_tap
+            .evidence("grid_bindings", serde_json::json!(evidence));
+        failures
+    }
+
+    pub(crate) async fn grid_anchor_failures(&mut self, case: SyncCase) -> Vec<String> {
+        use kithara::play::Settled;
+        use kithara_integration_tests::offline::linked::LinkReceiptOrigin;
+
+        let host_grid = self.host.session_grid().await;
+        let Some(selection_grid) = self.operation_grid.as_ref() else {
+            return vec!["no published Host grid was captured before the operations".to_owned()];
+        };
+        let mut failures = Vec::new();
+        let mut evidence = Vec::new();
+        let stagger_seconds = 3.0 / 8.0 * 60.0 / case.start_bpm();
+        for (index, deck) in self.decks.iter().enumerate() {
+            let item = deck.current().expect("selected anchor track").id;
+            let ArtifactSource::Value(model) = self.provider.beat_grid(index) else {
+                panic!("declared anchor source grid");
+            };
+            let stagger: f64 = index.as_();
+            let requested = Duration::from_secs_f64(self.cues[index] + stagger * stagger_seconds);
+            let result = deck.observe(|observation| {
+                let evaluation_rate = observation.consumed_rate
+                    .ok_or_else(|| "no consumed grid evaluation axis".to_owned())?;
+                let consumed = observation.consumed.iter()
+                    .find_map(|(owner, slot)| (*owner == item).then_some(*slot))
+                    .ok_or_else(|| "no actual consumed anchor slot".to_owned())?;
+                let placements = observation.placements.iter()
+                    .filter(|placement| placement.item == item).collect::<Vec<_>>();
+                if placements.len() != 2 {
+                    return Err(format!(
+                        "one sounding Sync and one Seek require two admitted relocations, found {}",
+                        placements.len()
+                    ));
+                }
+                let mut bindings = Vec::new();
+                for (ordinal, placement) in placements.iter().enumerate() {
+                    let required = if ordinal + 1 == placements.len() {
+                        requested
+                    } else {
+                        placement.planned.as_ref()
+                            .map_err(|error| format!("pre-emission source projection failed: {error}"))?.0
+                    };
+                    let lead = placement.delivery.get()
+                        .checked_add(placement.before.ring_depth.get())
+                        .and_then(|lead| lead.checked_add(placement.before.engine_latency.get()))
+                        .and_then(|lead| lead.checked_add(placement.before.declick.get()))
+                        .ok_or_else(|| "placement lead does not fit the Host frame axis".to_owned())?;
+                    let expected_at = placement.now + kithara::signal::FrameCount::new(lead);
+                    let anchor = super::binding::select_nearest(
+                        &model, evaluation_rate, selection_grid, required, expected_at,
+                    )?;
+                    let errors = anchor.command_failures(
+                        &model, evaluation_rate, selection_grid, placement.to, placement.at,
+                    )?;
+                    if !errors.is_empty() {
+                        return Err(format!("placement {:?}: {}", placement.seq, errors.join("; ")));
+                    }
+                    let admitted_at = anchor.frame - placement.before.declick;
+                    let applied = observation.placement_receipts.iter()
+                        .filter(|(owner, origin, settled)| {
+                            *owner == item && *origin == LinkReceiptOrigin::Lane
+                                && matches!(settled, Settled::Applied { seq, at }
+                                    if *seq == placement.seq && *at == admitted_at)
+                        }).count();
+                    if placement.aligned && applied != 1 {
+                        return Err(format!("relocation {:?} has {applied} owned Lane Applied receipts at {:?}", placement.seq, admitted_at));
+                    }
+                    if !placement.aligned {
+                        let applied = observation.placement_applied.iter()
+                            .find_map(|(owner, seq, applied)| (*owner == item && *seq == placement.seq).then_some(*applied));
+                        if applied != Some(true) {
+                            return Err(format!("Jump {:?} has no owned Applied outcome: {:?}", placement.seq, applied));
+                        }
+                    }
+                    let segment = placement.consumed.mark
+                        .ok_or_else(|| "admitted relocation has no prior consumed segment".to_owned())?.lane.segment;
+                    if ordinal + 1 == placements.len() {
+                        let errors = anchor.consumption_failures(
+                            &model, evaluation_rate, &host_grid, consumed, segment,
+                        )?;
+                        if !errors.is_empty() {
+                            return Err(errors.join("; "));
+                        }
+                    }
+                    bindings.push(serde_json::json!({
+                        "item": u64::from(item), "seq": placement.seq.get(),
+                        "requested_media_ns": required.as_nanos().to_string(),
+                        "selected_media_ns": anchor.media.as_nanos().to_string(),
+                        "source_beat": anchor.source_beat, "host_beat": anchor.host_beat,
+                        "target_frame": i64::from(anchor.frame),
+                        "scheduled_lane_frame": i64::from(admitted_at), "segment": segment.get(),
+                        "lane_applied_frame": placement.aligned.then_some(i64::from(admitted_at)),
+                        "aligned": placement.aligned,
+                        "owned_applied": observation.placement_applied.iter().find_map(|(owner, seq, applied)|
+                            (*owner == item && *seq == placement.seq).then_some(*applied)),
+                        "evaluation_rate": evaluation_rate.get(),
+                        "selection_grid": format!("{:?}", selection_grid.stamp()),
+                        "consumption_grid": format!("{:?}", host_grid.stamp()),
+                        "decoder_rates": self.decoder_rates[index],
+                        "consumed_mark": format!("{:?}", consumed.mark),
+                        "media_origin_ns": consumed.media_origin.map(|origin| origin.as_nanos().to_string()),
+                    }));
+                }
+                Ok(bindings)
+            });
+            match result {
+                Ok(binding) => evidence.push(binding),
+                Err(error) => failures.push(format!("deck {index}: {error}")),
+            }
+        }
+        #[cfg(not(target_os = "android"))]
+        self.master_tap
+            .evidence("grid_anchors", serde_json::json!(evidence));
+        failures
+    }
+
     pub(crate) async fn request_sync(&mut self, case: SyncCase) {
         self.request_sync_intent(case, SyncRequest::On).await;
     }
@@ -644,6 +930,7 @@ impl ProductHarness {
 
     #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
     pub(crate) async fn run_operations(&mut self, case: SyncCase) {
+        self.operation_grid = Some(self.host.session_grid().await);
         for operation in case.order.operations() {
             hang_tick!(format!("run_operations: {operation:?}"));
             match operation {
@@ -727,6 +1014,8 @@ impl ProductHarness {
         paced: bool,
     ) -> Vec<f32> {
         let capture_kind = if paced { "paced" } else { "product" };
+        #[cfg(not(target_os = "android"))]
+        self.mark("capture start");
         let mut pcm = Vec::with_capacity(capture_frames * usize::from(CHANNELS));
         while pcm.len() < capture_frames * usize::from(CHANNELS) {
             let remaining_frames =
@@ -750,6 +1039,36 @@ impl ProductHarness {
                 let period = Duration::from_secs_f64(frames / f64::from(case.sample_rate));
                 time::sleep(period.saturating_sub(started.elapsed())).await;
             }
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            self.mark("capture end");
+            let (beats, downbeats) = kithara_integration_tests::cochlea::marked_rhythm_markers(
+                &pcm,
+                CHANNELS,
+                case.sample_rate,
+            );
+            self.master_tap.evidence(
+                "capture_markers",
+                serde_json::json!({"beats": beats, "downbeats": downbeats}),
+            );
+            let observations: Vec<_> = self
+                .decks
+                .iter()
+                .map(|deck| {
+                    deck.observe(|observation| {
+                        serde_json::json!({
+                            "deck": u64::from(deck.id()),
+                            "timeline": observation.timeline,
+                            "tracks": format!("{:?}", observation.tracks),
+                            "settled": format!("{:?}", observation.settled),
+                            "sync_requests": format!("{:?}", observation.sync_requests),
+                        })
+                    })
+                })
+                .collect();
+            self.master_tap
+                .evidence("observations", serde_json::json!(observations));
         }
         pcm
     }

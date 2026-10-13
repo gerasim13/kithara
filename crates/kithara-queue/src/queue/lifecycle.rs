@@ -11,7 +11,7 @@ use super::{
     Queue, Transition,
     slots::{Active, LoadState, Parked, Role},
     transition::TransitionRequest,
-    types::{Placement, SeekPosition, extract_track_name},
+    types::{Continuation, Placement, SeekPosition, extract_track_name},
 };
 use crate::{
     AdvanceReason, NavigationState, QueueError, QueueEvent, TrackSource, TrackStatus, consts,
@@ -85,7 +85,11 @@ where
             .iter()
             .position(|record| record.id == id)
             .ok_or(QueueError::UnknownTrackId(id))?;
-        let replacement = if self.current == Some(id) {
+        let current = self.current == Some(id);
+        let pending = self
+            .pending_handover
+            .filter(|pending| pending.item == id && !pending.replacement);
+        let replacement = if current || pending.is_some() {
             self.tracks
                 .records()
                 .get(index + 1)
@@ -103,10 +107,21 @@ where
             self.cancel_target(out)?;
         }
         let mut sent = None;
+        let mut removal_seq = None;
         for active_index in self.active.indices(|active| {
             active.item == id && !(active.role == Role::Current && replacement.is_some())
         }) {
-            sent = self.release_track(active_index, out)?.or(sent);
+            let pending_owner = pending.is_some_and(|pending| {
+                self.active
+                    .get(active_index)
+                    .is_some_and(|active| active.slot == pending.slot)
+                    && self.active.is_replacement(active_index) == pending.replacement
+            });
+            let released = self.release_track(active_index, out)?;
+            sent = released.or(sent);
+            if pending_owner {
+                removal_seq = released;
+            }
         }
         for parked in self
             .active
@@ -121,8 +136,8 @@ where
         if shifted {
             self.announce(QueueEvent::CurrentTrackChanged { id: self.current });
         }
-        if let Some(replacement) = replacement {
-            return self.request_transition(
+        if let Some(replacement) = replacement.filter(|_| current || removal_seq.is_some()) {
+            let entry = self.request_transition(
                 TransitionRequest {
                     id: replacement,
                     transition: Transition::None,
@@ -132,7 +147,19 @@ where
                 },
                 output,
                 out,
-            );
+            )?;
+            if let Some(pending) = pending
+                && let Some(seq) = removal_seq
+                && let Some(target) = &mut self.target
+            {
+                target.continued = Some(Continuation::Removal {
+                    seq,
+                    handover: pending.seq,
+                    slot: pending.slot,
+                    applied: false,
+                });
+            }
+            return Ok(sent.or(entry));
         }
         self.reap_released();
         Ok(sent)

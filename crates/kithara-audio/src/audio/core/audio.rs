@@ -14,6 +14,7 @@ use super::{
     super::{
         chunk_position,
         cursor::{ChunkCursor, ReadBuffer, source_spans_coalesce},
+        normalize_geometry,
     },
     context::AudioContext,
 };
@@ -84,6 +85,11 @@ impl<S> Audio<S> {
     }
 
     delegate::delegate! {
+        to self.source {
+            /// Original raw coordinate of track-media zero.
+            #[must_use]
+            pub fn media_origin(&self) -> Option<Duration>;
+        }
         to self.playhead {
             /// Current committed source position.
             #[must_use]
@@ -282,31 +288,15 @@ impl<S> Audio<S> {
                     },
                 }
             }
-            let Some(chunk) = self.current_chunk.as_ref() else {
+            let Some(chunk) = self.current_chunk.as_mut() else {
                 break;
             };
-            let span = chunk.meta.source_span.map_or_else(
-                || {
-                    SourceSpan::new(
-                        chunk.meta.frame_offset,
-                        chunk
-                            .meta
-                            .frame_offset
-                            .saturating_add(u64::from(chunk.meta.frames)),
-                        chunk.spec().sample_rate,
-                        u64::from(chunk.meta.frames),
-                    )
-                    .map(|span| {
-                        span.with_render_revision(chunk.meta.render_revision)
-                            .with_mapping_revision(chunk.meta.mapping_revision)
-                    })
-                },
-                Some,
-            );
+            let span = Some(normalize_geometry(&mut chunk.meta)?);
             if written > 0
                 && (source_meta.is_some_and(|previous| {
                     previous.source_revision != chunk.meta.source_revision
                         || previous.visible_origin != chunk.meta.visible_origin
+                        || previous.media_origin != chunk.meta.media_origin
                 }) || !source_spans_coalesce(
                     source_span,
                     output_frames,
@@ -460,6 +450,7 @@ impl<S> AudioSession for Audio<S> {
     delegate::delegate! {
         to self {
             fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
+            fn media_origin(&self) -> Option<Duration>;
             fn duration(&self) -> Option<Duration>;
             fn is_preloaded(&self) -> bool;
             fn metadata(&self) -> &TrackMetadata;

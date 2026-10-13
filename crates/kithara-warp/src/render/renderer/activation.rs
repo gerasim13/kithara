@@ -4,7 +4,10 @@ use kithara_stretch::ElasticError;
 use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
 
-use super::core::{PreparedQuantum, WarpRenderer};
+use super::{
+    core::{PreparedQuantum, WarpRenderer},
+    mapping::source_demand,
+};
 
 impl<S> WarpRenderer<S>
 where
@@ -133,13 +136,30 @@ where
         Ok(())
     }
 
-    /// Select the next source span that fits the configured output quantum.
-    /// A quantum at the renderer's own speed renders at most `output_limit`
-    /// output frames.
+    /// Select source demand up to the next output quantum's mapped endpoint.
+    /// Filter and engine lookahead remain in the separately prepared source window.
     ///
     /// # Errors
     /// Returns pending activation or the geometry/engine admission error.
     pub fn prepare_quantum(
+        &mut self,
+        meta: AudioChunkInfo,
+        remaining: usize,
+        output_limit: usize,
+    ) -> Result<FrameCount, crate::WarpRenderError> {
+        self.prepare_source_window(meta, remaining, output_limit)?;
+        let prepared = self
+            .prepared_quantum
+            .ok_or(crate::WarpRenderError::OutstandingQuantum)?;
+        Ok(FrameCount::new(prepared.active_frames))
+    }
+
+    /// Prepare the decoded-source window, including filter and engine lookahead.
+    /// Supply this physical extent to `render_quantum`; only its mapped span is emitted.
+    ///
+    /// # Errors
+    /// Returns the quantum's preparation or mapping error.
+    pub fn prepare_source_window(
         &mut self,
         meta: AudioChunkInfo,
         remaining: usize,
@@ -212,13 +232,15 @@ where
             .ok_or(ElasticError::SampleCountOverflow)?;
         let frames = usize::try_from(end.saturating_sub(meta.frame_offset))
             .map_err(|_| ElasticError::SampleCountOverflow)?;
+        let active_frames = source_demand(span, meta.frame_offset)?;
+        let frames = frames.max(active_frames);
         Ok(PreparedQuantum {
             source_span: Some(span),
             activation: None,
             rate: self.rate,
             speed: 1.0,
             source_start: meta.frame_offset,
-            active_frames: frames,
+            active_frames,
             frames,
             landing_frames: Some(outputs),
         })
@@ -276,13 +298,15 @@ where
             .ok_or(ElasticError::SampleCountOverflow)?;
         let frames = usize::try_from(end.saturating_sub(meta.frame_offset))
             .map_err(|_| ElasticError::SampleCountOverflow)?;
+        let active_frames = source_demand(span, meta.frame_offset)?;
+        let frames = frames.max(active_frames);
         Ok(PreparedQuantum {
             source_span: Some(span),
             activation: None,
             rate: self.rate,
             speed: self.trajectory.speed()?,
             source_start: meta.frame_offset,
-            active_frames: frames,
+            active_frames,
             frames,
             landing_frames: Some(outputs),
         })
@@ -318,12 +342,14 @@ where
             prepared.landing_frames = None;
         }
         prepared.frames = frames;
-        if prepared.active_frames > shrink {
-            prepared.active_frames -= shrink;
-        } else {
-            prepared.active_frames = frames;
-            prepared.activation = None;
-        }
+        prepared.active_frames = match prepared.source_span {
+            Some(span) => source_demand(span, prepared.source_start).ok()?.min(frames),
+            None if prepared.active_frames > shrink => prepared.active_frames - shrink,
+            None => {
+                prepared.activation = None;
+                frames
+            }
+        };
         self.prepared_quantum = Some(prepared);
         Some(FrameCount::new(frames))
     }

@@ -4,7 +4,7 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
-use kithara_decode::{DecodeError, DecoderSeekOutcome};
+use kithara_decode::{DecodeError, DecoderSeekOutcome, PcmOrigin};
 use kithara_events::DeferredBus;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::AudioChunk;
@@ -108,10 +108,14 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
     fn commit_source_end(&mut self, end: crate::SourceEnd, meta: kithara_signal::AudioChunkInfo) {
         if meta.source_revision == self.decode.discontinuity().revision()
             && meta.visible_origin == self.decode.active().visible_origin()
+            && meta.media_origin == self.decode.active().media_origin()
         {
             self.resume.commit_source_end(end);
         }
         self.release_seek_abr();
+    }
+    fn media_origin(&self) -> Option<Duration> {
+        self.decode.active().media_origin()
     }
     fn discontinuity(&self) -> Option<crate::SourceDiscontinuity> {
         Some(self.decode.discontinuity())
@@ -285,7 +289,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
                             visible_origin = ?origin,
                             raw_end = ?end,
                             visible_duration = ?duration,
-                            decoder_origin = ?self.decode.active().decoder().initial_pcm_position(),
+                            decoder_origin = ?self.decode.active().decoder().initial_pcm_origin().map(PcmOrigin::position),
                             gapless_profile = ?self.decode.active().gapless_profile(),
                             "refined visible duration at natural EOF"
                         );
@@ -506,7 +510,11 @@ impl<T: StreamType> StreamAudioSource<T> {
             landing.map(ResumeTarget::Source),
         )?;
         if landing.is_some() {
-            generation.retain_visible_origin(self.decode.active().visible_origin());
+            generation.retain_media_origin(self.decode.active().media_origin());
+            generation.retain_visible_origin(
+                self.decode.active().visible_origin(),
+                self.decode.active().comparison_base(),
+            );
         } else {
             generation.seal_visible_origin(gapless_mode);
         }

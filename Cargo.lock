@@ -6196,6 +6196,7 @@ dependencies = [
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
+ "ordered-float 5.5.0",
  "rangemap",
  "serde",
 ]
@@ -6318,6 +6319,7 @@ dependencies = [
  "kithara-app",
  "kithara-command",
  "kithara-integration-tests",
+ "kithara-render",
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",

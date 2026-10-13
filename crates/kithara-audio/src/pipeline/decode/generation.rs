@@ -7,7 +7,7 @@ use std::{
 
 use kithara_decode::{
     BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome,
-    GaplessMode, GaplessProfile,
+    GaplessMode, GaplessProfile, PcmOrigin,
 };
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioSpec};
@@ -78,7 +78,9 @@ pub(crate) struct DecoderGeneration {
     /// transition cannot reinterpret the new active generation on a smaller
     /// origin.
     timeline_gap_floor: u64,
+    media_origin: Option<Duration>,
     visible_origin: Option<Duration>,
+    comparison_base: Option<Duration>,
     observing_visible_origin: bool,
     media_info: Option<MediaInfo>,
     pending_head_skip: Option<ResumeState>,
@@ -101,7 +103,11 @@ impl DecoderGeneration {
         let codec = media_info.as_ref().and_then(|info| info.codec);
         let gapless_profile = decoder.gapless_profile(codec);
         let gapless = GaplessStage::build(gapless_profile, gapless_mode, codec);
-        let visible_origin = decoder.initial_pcm_position().and_then(|position| {
+        let media_origin = decoder.media_origin();
+        let initial_origin = decoder.initial_pcm_origin();
+        let initial_position = initial_origin.map(PcmOrigin::position);
+        let comparison_base = initial_origin.map(PcmOrigin::comparison_base);
+        let visible_origin = initial_position.and_then(|position| {
             crate::pipeline::gapless::visible_origin(position, gapless_profile, gapless_mode)
         });
         Self {
@@ -117,7 +123,9 @@ impl DecoderGeneration {
             exhaustion_observed: false,
             holdback: None,
             timeline_gap_floor: 0,
+            media_origin,
             visible_origin,
+            comparison_base,
             observing_visible_origin: true,
             staged: VecDeque::new(),
             #[cfg(test)]
@@ -135,6 +143,15 @@ impl DecoderGeneration {
         self.timeline_gap_floor = self.timeline_gap_floor.max(gap);
     }
 
+    pub(super) fn observe_comparison_base(&mut self) {
+        if self.observing_visible_origin && self.comparison_base.is_none() {
+            self.comparison_base = self
+                .decoder
+                .initial_pcm_origin()
+                .map(PcmOrigin::comparison_base);
+        }
+    }
+
     pub(crate) fn observe_visible_origin(&mut self, chunk: &AudioChunk) {
         if self.observing_visible_origin && chunk.meta.frames > 0 {
             if self.visible_origin.is_none() {
@@ -149,23 +166,52 @@ impl DecoderGeneration {
 
     pub(crate) fn seal_visible_origin(&mut self, mode: GaplessMode) {
         if self.observing_visible_origin {
-            self.visible_origin = self.decoder.initial_pcm_position().and_then(|position| {
+            let initial_origin = self.decoder.initial_pcm_origin();
+            let initial_position = initial_origin.map(PcmOrigin::position);
+            if self.comparison_base.is_none() {
+                self.comparison_base = initial_origin.map(PcmOrigin::comparison_base);
+            }
+            self.visible_origin = initial_position.and_then(|position| {
                 crate::pipeline::gapless::visible_origin(position, self.gapless_profile, mode)
             });
             self.observing_visible_origin = false;
         }
     }
 
-    pub(crate) fn retain_visible_origin(&mut self, origin: Option<Duration>) {
+    pub(crate) fn retain_visible_origin(
+        &mut self,
+        origin: Option<Duration>,
+        comparison_base: Option<Duration>,
+    ) {
         self.visible_origin = origin;
+        self.comparison_base = comparison_base;
         self.observing_visible_origin = false;
     }
 
+    pub(crate) fn retain_media_origin(&mut self, origin: Option<Duration>) {
+        self.media_origin = origin;
+    }
+
     pub(crate) fn comparison_origin(&self, mode: GaplessMode) -> Option<u64> {
-        self.visible_origin.map_or_else(
-            || Some(self.timeline_origin(mode)),
-            |origin| self.blender_profile().spec().frame_at(origin).ok(),
-        )
+        self.timeline_origin(mode)
+            .checked_add(self.comparison_base_frames()?)
+    }
+
+    pub(crate) fn comparison_origin_with_gap(&self, mode: GaplessMode, gap: u64) -> Option<u64> {
+        self.timeline_origin_with_gap(mode, gap)
+            .checked_add(self.comparison_base_frames()?)
+    }
+
+    fn comparison_base_frames(&self) -> Option<u64> {
+        let spec = self.blender_profile().spec();
+        if self
+            .visible_origin
+            .is_some_and(|origin| spec.frame_at(origin).is_err())
+        {
+            return None;
+        }
+        self.comparison_base
+            .map_or(Some(0), |position| spec.frame_at(position).ok())
     }
 
     pub(crate) fn has_same_source_basis(&self, other: &Self) -> bool {
@@ -182,67 +228,6 @@ impl DecoderGeneration {
             && retained_source(self) == retained_source(other)
     }
 
-    pub(crate) fn copy_staged_frames(
-        &self,
-        spec: AudioSpec,
-        start: u64,
-        frames: u64,
-        output: &mut [f32],
-    ) -> bool {
-        let channels = usize::from(spec.channels);
-        let Ok(frame_count) = usize::try_from(frames) else {
-            return false;
-        };
-        let Some(sample_count) = frame_count.checked_mul(channels) else {
-            return false;
-        };
-        if channels == 0 || output.len() != sample_count || !self.staged_covers(spec, start, frames)
-        {
-            return false;
-        }
-        let Some(end) = start.checked_add(frames) else {
-            return false;
-        };
-        let mut written = 0usize;
-        for chunk in &self.staged {
-            let Some((chunk_start, chunk_end)) = chunk_range(chunk, spec) else {
-                return false;
-            };
-            let copy_start = chunk_start.max(start);
-            let copy_end = chunk_end.min(end);
-            if copy_start >= copy_end {
-                continue;
-            }
-            let Some(source_start) = usize::try_from(copy_start - chunk_start)
-                .ok()
-                .and_then(|frame| frame.checked_mul(channels))
-            else {
-                return false;
-            };
-            let Some(copy_samples) = usize::try_from(copy_end - copy_start)
-                .ok()
-                .and_then(|frame| frame.checked_mul(channels))
-            else {
-                return false;
-            };
-            let Some(source_end) = source_start.checked_add(copy_samples) else {
-                return false;
-            };
-            let Some(output_end) = written.checked_add(copy_samples) else {
-                return false;
-            };
-            let (Some(source), Some(destination)) = (
-                chunk.samples.get(source_start..source_end),
-                output.get_mut(written..output_end),
-            ) else {
-                return false;
-            };
-            destination.copy_from_slice(source);
-            written = output_end;
-        }
-        written == output.len()
-    }
-
     pub(crate) fn finish(&mut self) {
         if self.finished {
             return;
@@ -253,21 +238,6 @@ impl DecoderGeneration {
         self.gapless
             .set_tail_compensation(self.decoder.gapless_profile(codec), codec);
         self.gapless.flush();
-    }
-
-    #[kithara::hang_watchdog]
-    pub(crate) fn finish_staging(&mut self) {
-        self.finish();
-        while let Some(chunk) = self.gapless.next() {
-            hang_tick!();
-            self.observe_visible_origin(&chunk);
-            self.staged.push_back(chunk);
-            hang_reset!();
-        }
-    }
-
-    pub(crate) fn has_output(&self) -> bool {
-        !self.staged.is_empty() || self.gapless.has_output()
     }
 
     pub(crate) const fn mark_source_exhausted(&mut self) {
@@ -333,7 +303,8 @@ impl DecoderGeneration {
                 let at_original_head = match &result {
                     Ok(DecoderSeekOutcome::Landed { landed_frame, .. }) => {
                         let at_known_head =
-                            self.decoder.initial_pcm_position().is_some_and(|origin| {
+                            self.decoder.initial_pcm_origin().is_some_and(|origin| {
+                                let origin = origin.position();
                                 let spec = self.decoder.spec();
                                 let (Ok(origin_frame), Ok(requested_frame)) =
                                     (spec.frame_at(origin), spec.frame_at(position))
@@ -368,11 +339,6 @@ impl DecoderGeneration {
         });
     }
 
-    pub(crate) fn pop_staged(&mut self) -> Option<AudioChunk> {
-        self.holdback = None;
-        self.staged.pop_front()
-    }
-
     pub(crate) fn prepare_deferred(&mut self, prepare_input: bool) {
         self.gapless.prepare_deferred();
         if prepare_input {
@@ -382,50 +348,8 @@ impl DecoderGeneration {
 
     pub(crate) fn push(&mut self, chunk: AudioChunk) {
         self.holdback = None;
+        self.observe_comparison_base();
         self.gapless.push(chunk);
-    }
-
-    pub(crate) fn push_staged_front(&mut self, chunk: AudioChunk) {
-        self.holdback = None;
-        self.staged.push_front(chunk);
-    }
-
-    #[kithara::hang_watchdog]
-    pub(crate) fn stage(&mut self, chunk: AudioChunk) {
-        self.holdback = None;
-        self.gapless.push(chunk);
-        while let Some(chunk) = self.gapless.next() {
-            hang_tick!();
-            self.observe_visible_origin(&chunk);
-            self.staged.push_back(chunk);
-            hang_reset!();
-        }
-    }
-
-    pub(crate) fn staged_covers(&self, spec: AudioSpec, start: u64, frames: u64) -> bool {
-        let Some(end) = start.checked_add(frames) else {
-            return false;
-        };
-        let Some((first, staged_end, staged_spec)) = self.staged_span() else {
-            return false;
-        };
-        staged_spec == spec && first <= start && end <= staged_end
-    }
-
-    pub(crate) fn staged_span(&self) -> Option<(u64, u64, AudioSpec)> {
-        #[cfg(test)]
-        self.record_staged_scan();
-        let first = self.staged.front()?;
-        let spec = first.spec();
-        let (start, mut end) = chunk_range(first, spec)?;
-        for chunk in self.staged.iter().skip(1) {
-            let (next, next_end) = chunk_range(chunk, spec)?;
-            if next != end {
-                return None;
-            }
-            end = next_end;
-        }
-        Some((start, end, spec))
     }
 
     pub(crate) fn timeline_gap(&self) -> u64 {
@@ -452,8 +376,12 @@ impl DecoderGeneration {
 
     delegate::delegate! {
         to self {
+            #[expr(self.media_origin)]
+            pub(crate) const fn media_origin(&self) -> Option<Duration>;
             #[expr(self.visible_origin)]
             pub(crate) const fn visible_origin(&self) -> Option<Duration>;
+            #[expr(self.comparison_base)]
+            pub(crate) const fn comparison_base(&self) -> Option<Duration>;
         }
         to self.decoder {
             pub(crate) fn blender_profile(&self) -> BlenderProfile;
@@ -494,14 +422,18 @@ pub(super) fn stage_failure(chunk: AudioChunk, detail: &'static str) -> StageFai
         error: DecodeError::InvalidData { detail },
     }
 }
+
 #[cfg(test)]
 mod tests {
     use std::{cell::Cell, num::NonZeroU32};
 
-    use kithara_decode::{DecoderSeekOutcome, GaplessInfo, GaplessTailCompensation};
+    use kithara_decode::{
+        DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessInfo,
+        GaplessMode, GaplessProfile, GaplessTailCompensation, PcmOrigin,
+    };
     use kithara_platform::time::Duration;
-    use kithara_signal::AudioChunkInfo;
-    use kithara_stream::PrerollHint;
+    use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+    use kithara_stream::{MediaInfo, PrerollHint};
     use kithara_test_fixtures::unit_fixtures::decode_quarter;
     use kithara_test_utils::kithara;
 
@@ -1030,8 +962,9 @@ mod tests {
     }
 
     impl Decoder for HeadSeekDecoder {
-        fn initial_pcm_position(&self) -> Option<Duration> {
+        fn initial_pcm_origin(&self) -> Option<PcmOrigin> {
             self.origin
+                .map(|position| PcmOrigin::new(position, position))
         }
 
         fn duration(&self) -> Option<Duration> {

@@ -1,6 +1,6 @@
 use kithara_command::{Rejection, When};
 use kithara_play::{HostedDeck, PlayError, Player, Settled, TrackCommand, TrackStatus};
-use kithara_signal::{FrameCount, SessionFrame};
+use kithara_signal::{ExponentialApproach, FrameCount, SessionFrame};
 use kithara_test_utils::kithara;
 use kithara_warp::SpeedCurve;
 
@@ -34,17 +34,29 @@ fn aligned_seek_uses_the_committed_host_tempo_at_its_landing() {
             )
         })
         .expect("seek")
-        .expect("jump");
-    // Ruling: spec 4.5 keeps the 96000 anchor at beat 4; F has phase 31/18, so nearest to beat 10 is 175/18, or 233333 1/3 frames.
+        .expect("alignment");
+    // The 5ms tempo approach contributes -1/1200 beat before this landing.
     assert_eq!(
         control.commands(),
-        [(
-            seq,
-            Command::Jump(
-                kithara_play::Position::from_nanos(4_861_111_111),
-                SessionFrame::new(400_000)
+        [
+            (
+                seq,
+                Command::Speed(
+                    SpeedCurve::Approach(
+                        ExponentialApproach::new(13.0 / 12.0, 13.0 / 12.0, 0.0)
+                            .expect("exact settled rate")
+                    ),
+                    When::At(SessionFrame::new(400_000))
+                )
+            ),
+            (
+                seq,
+                Command::Jump(
+                    kithara_play::Position::from_nanos(4_860_694_444),
+                    SessionFrame::new(400_000)
+                )
             )
-        )]
+        ]
     );
 }
 
@@ -622,12 +634,25 @@ fn an_armed_preparation_refuses_a_relocation() {
         .expect("relocation after retime")
         .expect("jump sequence");
     let commands = control.commands();
-    assert_eq!(commands.len(), 2);
+    assert_eq!(commands.len(), 3);
     assert!(
         matches!(commands[0].1, Command::Speed(_, When::At(frame)) if frame == SessionFrame::new(96_000))
     );
     assert_eq!(
         commands[1],
+        (
+            relocation,
+            Command::Speed(
+                SpeedCurve::Approach(
+                    ExponentialApproach::new(1.0, 13.0 / 12.0, 240.0)
+                        .expect("Host approach on the lane frame")
+                ),
+                When::At(SessionFrame::new(96_000))
+            )
+        )
+    );
+    assert_eq!(
+        commands[2],
         (
             relocation,
             Command::Jump(position(0), SessionFrame::new(96_000))

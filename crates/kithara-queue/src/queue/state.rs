@@ -767,6 +767,8 @@ pub(crate) mod tests {
         queue.pending_handover = Some(PendingHandover {
             seq,
             item: id,
+            slot: queue.active.get(index).expect("incoming slot").slot,
+            replacement: queue.active.is_replacement(index),
             reason: crate::AdvanceReason::UserSelect,
         });
         let other = TrackId(id.0 + 1);

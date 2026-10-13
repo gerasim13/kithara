@@ -440,7 +440,7 @@ fn a_failed_large_mapping_cannot_leak_scratch_into_a_smaller_quantum(#[case] bac
         ..Default::default()
     };
     let count = renderer
-        .prepare_quantum(meta, 4096, 128)
+        .prepare_source_window(meta, 4096, 128)
         .expect("fault request")
         .get();
     let prepared = renderer.prepared_quantum.as_mut().expect("cached quantum");
@@ -591,7 +591,7 @@ pub(super) fn mapped_signal(
         ..AudioChunkInfo::default()
     };
     let frames = renderer
-        .prepare_quantum(meta, 65_536, budget)
+        .prepare_source_window(meta, 65_536, budget)
         .expect("bounded quantum")
         .get();
     let pools = renderer.pools.clone();
@@ -732,10 +732,10 @@ fn a_tighter_budget_replans_a_cached_quantum_before_rendering() {
         ..AudioChunkInfo::default()
     };
     renderer
-        .prepare_quantum(meta, 65_536, 64)
+        .prepare_source_window(meta, 65_536, 64)
         .expect("initial quantum");
     let frames = renderer
-        .prepare_quantum(meta, 65_536, 3)
+        .prepare_source_window(meta, 65_536, 3)
         .expect("new budget")
         .get();
     let pools = renderer.pools.clone();
@@ -1251,7 +1251,9 @@ fn terminal_quantum_and_drain_do_not_map_padding_as_source(#[case] backend: Stre
         spec: spec(),
         ..AudioChunkInfo::default()
     };
-    renderer.prepare_quantum(meta, 65_536, 31).expect("quantum");
+    renderer
+        .prepare_source_window(meta, 65_536, 31)
+        .expect("quantum");
     renderer
         .prepare_terminal_quantum(3)
         .expect("terminal input");

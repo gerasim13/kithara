@@ -1,3 +1,4 @@
+mod binding;
 mod cases;
 mod harness;
 mod imports;

@@ -40,7 +40,7 @@ fn native_keylock_preserves_the_physical_source_frequency(#[case] quantum: usize
         };
         renderer.prepare_engine_latency(spec).expect("service");
         let frames = renderer
-            .prepare_quantum(
+            .prepare_source_window(
                 AudioChunkInfo {
                     spec,
                     frame_offset: source,

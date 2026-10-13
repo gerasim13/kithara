@@ -123,6 +123,10 @@ impl Demuxer for AndroidMediaExtractorDemuxer {
         })
     }
 
+    fn media_origin(&self) -> Option<Duration> {
+        Some(Duration::ZERO)
+    }
+
     fn track_info(&self) -> &TrackInfo {
         &self.track_info
     }

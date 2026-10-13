@@ -1,5 +1,6 @@
 use std::num::NonZeroU32;
 
+use kithara_signal::ExponentialApproach;
 use kithara_warp::{MIN_SPEED, SpeedCurve};
 use num_traits::ToPrimitive;
 /// One speed and its residence time in output seconds.
@@ -38,6 +39,62 @@ impl CorrectionPlan {
         let steps = self.frame_steps(sample_rate).collect::<Option<Vec<_>>>()?;
         let frames = steps.last().map_or(0, |(frame, _speed)| *frame);
         Some((SpeedCurve::Steps(steps.into()), frames))
+    }
+
+    /// Applies the finite correction offsets to a continuing Host rate law.
+    #[must_use]
+    pub fn checked_curve_following(
+        &self,
+        sample_rate: NonZeroU32,
+        base: &SpeedCurve,
+        reference: f32,
+    ) -> Option<(SpeedCurve, u64)> {
+        let steps = self.frame_steps(sample_rate).collect::<Option<Vec<_>>>()?;
+        let frames = steps.last()?.0;
+        if steps.iter().all(|(_, speed)| *speed == reference) {
+            return Some((base.clone(), frames));
+        }
+        let mut boundaries: Vec<_> = steps.iter().map(|(frame, _)| *frame).collect();
+        if let SpeedCurve::ApproachSteps(laws) = base {
+            boundaries.extend(laws.iter().map(|(frame, _)| *frame));
+        }
+        boundaries.sort_unstable();
+        boundaries.dedup();
+        let curves = boundaries
+            .into_iter()
+            .map(|frame| {
+                let (start, law) = match base {
+                    SpeedCurve::Approach(law) => (0, *law),
+                    SpeedCurve::ApproachSteps(laws) => *laws.get(
+                        laws.partition_point(|(at, _)| *at <= frame)
+                            .checked_sub(1)?,
+                    )?,
+                    _ => return None,
+                };
+                let speed = steps
+                    .get(
+                        steps
+                            .partition_point(|(at, _)| *at <= frame)
+                            .checked_sub(1)?,
+                    )?
+                    .1;
+                let offset = f64::from(speed) - f64::from(reference);
+                let initial = law.rate_at(frame.checked_sub(start)?.to_f64()?)? + offset;
+                let target = law.target() + offset;
+                if initial < f64::from(MIN_SPEED)
+                    || target < f64::from(MIN_SPEED)
+                    || initial > 4.0
+                    || target > 4.0
+                {
+                    return None;
+                }
+                Some((
+                    frame,
+                    ExponentialApproach::new(initial, target, law.time_constant())?,
+                ))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some((SpeedCurve::ApproachSteps(curves.into()), frames))
     }
 
     fn frame_steps(

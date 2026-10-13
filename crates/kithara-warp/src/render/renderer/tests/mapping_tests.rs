@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 
 use kithara_platform::sync::Arc;
-use kithara_signal::{AudioChunkInfo, FrameCount};
+use kithara_signal::{AudioChunkInfo, ExponentialApproach, FrameCount};
 use kithara_test_utils::kithara;
 
 use super::*;
@@ -57,6 +57,15 @@ fn a_short_decoder_suffix_requests_the_next_mapped_source_frame() {
         .prepare_quantum(meta, 1, 1)
         .expect("one mapped output frame spans decoder chunks");
     assert_eq!(requested.get(), 2);
+    let prepared = renderer.prepared_quantum.expect("prepared request");
+    assert_eq!(prepared.active_frames, 2);
+    assert_eq!(prepared.frames, 17);
+    assert_eq!(
+        renderer
+            .prepare_source_window(meta, 1, 1)
+            .expect("physical lookahead reuses the selected quantum"),
+        FrameCount::new(17)
+    );
     assert_eq!(
         renderer
             .prepared_quantum
@@ -124,6 +133,8 @@ fn terminal_projection_recomputes_both_endpoints_and_keeps_the_selected_rate() {
     let prepared = renderer.prepared_quantum.expect("prepared quantum");
     let rate = prepared.rate;
     assert_eq!(requested.get(), 192);
+    assert_eq!(prepared.active_frames, 192);
+    assert_eq!(prepared.frames, 208);
     assert_eq!(
         renderer.prepare_terminal_quantum(96),
         Some(FrameCount::new(96))
@@ -149,4 +160,117 @@ fn terminal_projection_recomputes_both_endpoints_and_keeps_the_selected_rate() {
             .map(|(numerator, denominator)| (numerator, denominator.get())),
         Some((96, 1))
     );
+}
+
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+#[kithara::test]
+#[case::single(false)]
+#[case::finite_segments(true)]
+fn an_approach_region_preserves_one_analytic_basis_between_quanta(#[case] composite: bool) {
+    let (mut renderer, meta) = renderer();
+    renderer.plan = Some(Arc::new(
+        RegionPlan::new(vec![GridSegment::new(0, 10_000, 1.25)]).expect("uniform region"),
+    ));
+    let curve = ExponentialApproach::new(1.0, 0.9, 220.5).expect("approach");
+    let command = if composite {
+        SpeedCurve::ApproachSteps(vec![(0, curve)].into())
+    } else {
+        SpeedCurve::Approach(curve)
+    };
+    renderer.set_speed(command, 1).expect("accepted approach");
+    renderer.prepare(meta.spec);
+    let whole = renderer
+        .mapping_span(0, meta.spec.sample_rate, 256)
+        .expect("whole mapping");
+    let first = renderer
+        .mapping_span(0, meta.spec.sample_rate, 128)
+        .expect("first quantum");
+    renderer
+        .trajectory
+        .advance(first)
+        .expect("first quantum consumed");
+    let second = renderer
+        .mapping_span(0, meta.spec.sample_rate, 128)
+        .expect("second quantum");
+    assert_eq!(
+        renderer
+            .mapped_position(0, meta.spec.sample_rate, 0)
+            .expect("current mapped position"),
+        first.source_ratio_at(128).expect("consumed mapped point")
+    );
+    assert_eq!(first.followed_by(second), Some(whole));
+    for frame in 0..=128 {
+        assert_eq!(first.source_ratio_at(frame), whole.source_ratio_at(frame));
+        assert_eq!(
+            second.source_ratio_at(frame),
+            whole.source_ratio_at(128 + frame)
+        );
+    }
+}
+
+#[cfg(any(
+    feature = "stretch-signalsmith",
+    feature = "stretch-bungee",
+    feature = "stretch-glide"
+))]
+#[kithara::test]
+fn an_approach_crosses_a_region_boundary_with_its_actual_source_origin() {
+    use crate::render::trajectory::Fraction;
+
+    let (mut renderer, meta) = renderer();
+    renderer.plan = Some(Arc::new(
+        RegionPlan::new(vec![
+            GridSegment::new(0, 100, 1.25),
+            GridSegment::new(100, 10_000, 0.75),
+        ])
+        .expect("two source regions"),
+    ));
+    renderer
+        .set_speed(
+            SpeedCurve::Approach(ExponentialApproach::new(1.0, 0.9, 220.5).expect("approach")),
+            1,
+        )
+        .expect("accepted approach");
+    renderer.prepare(meta.spec);
+    let nominal = renderer
+        .trajectory
+        .span(0, meta.spec.sample_rate, 512)
+        .expect("nominal law");
+    let boundary = Fraction::new(125, 1).expect("nominal boundary");
+    let mut cursor = 0;
+    while cursor < 512 {
+        let span = renderer
+            .mapping_span(0, meta.spec.sample_rate, 64.min(512 - cursor))
+            .expect("mapped region quantum");
+        for offset in 0..=span.output_frames() {
+            let frame = u64::try_from(cursor).expect("cursor") + offset;
+            let (numerator, denominator) = nominal.source_ratio_at(frame).expect("nominal point");
+            let source = Fraction {
+                numerator,
+                denominator,
+            };
+            let expected = if numerator <= 125 * denominator.get() {
+                source.mul(Fraction::new(4, 5).expect("first inverse ratio"))
+            } else {
+                source
+                    .sub(boundary)
+                    .and_then(|advance| advance.mul(Fraction::new(4, 3)?))
+                    .and_then(|advance| advance.add(Fraction::new(100, 1)?))
+            }
+            .expect("independent region projection");
+            assert_eq!(
+                span.source_ratio_at(offset),
+                Some((expected.numerator, expected.denominator))
+            );
+        }
+        cursor += usize::try_from(span.output_frames()).expect("quantum length");
+        renderer
+            .trajectory
+            .advance(span)
+            .expect("mapped quantum consumed");
+    }
 }

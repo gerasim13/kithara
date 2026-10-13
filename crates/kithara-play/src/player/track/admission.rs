@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use kithara_command::{Seq, When};
-use kithara_render::{LaneFrame, bridge::DeckPart};
+use kithara_render::{LaneCommand, LaneFrame, bridge::DeckPart};
 use kithara_signal::SessionFrame;
 use kithara_warp::SpeedCurve;
 use tracing::warn;
@@ -16,7 +16,7 @@ use super::{
     geometry::*,
     state::*,
 };
-use crate::PlayError;
+use crate::{Bound, PlayError, Player};
 
 impl<S> Track<S> for PlayerImpl<S> {
     fn admit(
@@ -32,6 +32,63 @@ impl<S> Track<S> for PlayerImpl<S> {
 
     fn projected(&self) -> TrackSettings {
         self.settings.projected()
+    }
+
+    fn prepared_speed(&self) -> Option<&SpeedCurve> {
+        let consumed = self
+            .resume
+            .or(self.mark)
+            .is_some_and(|mark| mark.lane.segment == self.segment && mark.lane.frame > 0);
+        let mut prepared = None;
+        for operation in self.lane_commands.iter().rev() {
+            if operation.applied == Some(false) {
+                continue;
+            }
+            match &operation.command {
+                LaneCommand::Segment { id, speed, .. } if *id == self.segment => {
+                    prepared = Some(speed);
+                    break;
+                }
+                LaneCommand::SetSpeed(speed) if operation.segment == self.segment => {
+                    prepared = match operation.when {
+                        When::At(frame) if frame.segment == self.segment && frame.frame == 0 => {
+                            Some(speed)
+                        }
+                        _ => None,
+                    };
+                    break;
+                }
+                _ => {}
+            }
+        }
+        prepared.filter(|curve| {
+            !consumed
+                || match curve {
+                    SpeedCurve::Constant(_) => true,
+                    SpeedCurve::Approach(curve) => {
+                        curve.time_constant() == 0.0 || curve.initial() == curve.target()
+                    }
+                    _ => false,
+                }
+        })
+    }
+
+    fn prepare_entry(
+        &mut self,
+        at: SessionFrame,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<bool, PlayError> {
+        self.observe(out);
+        self.settle_lane();
+        if matches!(self.status, TrackStatus::Ended { .. })
+            && self
+                .adopting
+                .iter()
+                .any(|adoption| adoption.segment == self.segment)
+        {
+            return Ok(false);
+        }
+        Ok(self.entry(Bound::AtOrAfter(at)).is_some())
     }
 
     fn finish_group(&mut self, result: Result<Seq, &mut Vec<DeckPart>>) {
@@ -81,6 +138,7 @@ impl<S> Track<S> for PlayerImpl<S> {
         at: SessionFrame,
         sample_rate: NonZeroU32,
     ) -> Result<(Position, f32), PlayError> {
+        let media_origin = self.media_origin.ok_or(PlayError::Untimed)?;
         let mark = self.mark.ok_or(PlayError::Untimed)?;
         if mark.lane.segment != self.segment || !matches!(self.status, TrackStatus::Playing { .. })
         {
@@ -128,8 +186,9 @@ impl<S> Track<S> for PlayerImpl<S> {
             cursor.saturating_sub(start),
             target.saturating_sub(start),
         )? / f64::from(sample_rate.get());
-        let position = Position::try_from_secs_f64(position)
-            .map_err(|error| PlayError::Internal(error.to_string()))?;
+        let position =
+            Position::try_from_secs_f64((position - media_origin.as_secs_f64()).max(0.0))
+                .map_err(|error| PlayError::Internal(error.to_string()))?;
         Ok((
             position,
             curve_speed(curve, origin, target.saturating_sub(start))?,
@@ -250,11 +309,12 @@ impl<S> Track<S> for PlayerImpl<S> {
     fn cue(
         &mut self,
         position: Position,
-        speed: f32,
+        speed: SpeedCurve,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
         self.observe(out);
         self.settle_lane();
+        let position = self.raw_position(position)?;
         self.segment_with(position, None, speed, out)?;
         Ok(self.lane_commands.last().map(|operation| operation.seq))
     }

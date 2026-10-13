@@ -3,6 +3,8 @@ pub(crate) mod event;
 pub(crate) mod format;
 pub(crate) mod generation;
 mod generation_holdback;
+#[cfg(test)]
+mod generation_origin_tests;
 pub(crate) mod output;
 pub(crate) mod resume;
 pub(crate) mod step;

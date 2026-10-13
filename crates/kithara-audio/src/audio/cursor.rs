@@ -263,7 +263,7 @@ mod tests {
         let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
         let duration = Duration::from_nanos(36_360_000_000);
-        let chunk = timed_chunk(
+        let mut chunk = timed_chunk(
             &pools,
             &cursor_half,
             spec,
@@ -271,6 +271,7 @@ mod tests {
             duration.saturating_sub(Duration::from_millis(2)),
             duration.saturating_add(Duration::from_millis(2)),
         );
+        chunk.meta.visible_origin = Some(Duration::ZERO);
         let playhead = PlayheadState::new();
         playhead.set_duration(Some(duration));
         let mut cursor = ChunkCursor::new(spec);

@@ -64,7 +64,7 @@ fn quantum(renderer: &mut WarpRenderer<TestPools>, source: &mut u64) -> AudioChu
         .prepare_engine_latency(renderer.spec)
         .expect("renderer service");
     let frames = renderer
-        .prepare_quantum(
+        .prepare_source_window(
             AudioChunkInfo {
                 spec: renderer.spec,
                 frame_offset: *source,
@@ -187,7 +187,7 @@ fn a_new_source_origin_rebases_the_prepared_unity_mapping() {
         frame_offset: source,
         ..Default::default()
     };
-    match renderer.prepare_quantum(meta, 65_536, 128) {
+    match renderer.prepare_source_window(meta, 65_536, 128) {
         Ok(_) => {}
         Err(crate::WarpRenderError::NeedsService) => {
             renderer
@@ -241,7 +241,7 @@ fn lost_source_history_terminates_until_an_explicit_reset(#[case] start: u64) {
         ..Default::default()
     };
     let frames = renderer
-        .prepare_quantum(meta, 65_536, 128)
+        .prepare_source_window(meta, 65_536, 128)
         .expect("quantum")
         .get();
     renderer
@@ -258,7 +258,7 @@ fn lost_source_history_terminates_until_an_explicit_reset(#[case] start: u64) {
         .continue_value()
         .expect("prepared input");
     assert!(
-        renderer.prepare_quantum(meta, 65_536, 128).is_err(),
+        renderer.prepare_source_window(meta, 65_536, 128).is_err(),
         "lost history is terminal"
     );
     assert!(

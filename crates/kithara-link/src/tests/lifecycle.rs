@@ -533,10 +533,18 @@ fn an_armed_member_keeps_its_arm_across_a_grid_replacement() {
     let replacement = control.commands();
     assert_eq!(replacement.len(), 1);
     assert_ne!(replacement[0].0, armed);
-    assert!(matches!(
-        replacement[0].1,
-        Command::Speed(SpeedCurve::Steps(_), _)
-    ));
+    let Command::Speed(SpeedCurve::ApproachSteps(steps), When::At(_)) = &replacement[0].1 else {
+        panic!("grid refinement must preserve the analytic rate with finite correction segments");
+    };
+    assert!(steps.len() > 1);
+    assert_eq!(steps[0].0, 0);
+    assert!(steps.windows(2).all(|pair| pair[0].0 < pair[1].0));
+    assert!(
+        steps.iter().all(|(_, curve)| {
+            curve.initial() == curve.target() && curve.time_constant() == 0.0
+        })
+    );
+    assert_eq!(steps.last().expect("final law").1.target(), 130.0 / 120.0);
     assert_track_unchanged(deck.snapshot().as_ref(), applied.as_ref());
     assert!(matches!(
         deck.snapshot().sync,

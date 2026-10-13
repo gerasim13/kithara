@@ -15,6 +15,27 @@ struct HandoverRig {
 }
 
 impl HandoverRig {
+    fn on_pass<Value>(
+        &mut self,
+        now: SessionFrame,
+        run: impl FnOnce(&mut Queue<TestPools>, &mut Outbox<'_, TestPools>) -> Value,
+    ) -> Value {
+        let output = mock::output(None).get();
+        let deck = self.queue.deck.mixer.clone();
+        let pass = DeckPass {
+            mix: self.queue.deck.mix,
+            suspended: false,
+            now,
+            delivery: FrameCount::new(128),
+            output: &output,
+            deck: &deck,
+        };
+        let mut scope = self.deck.ring.scope(self.deck.scope).expect("deck scope");
+        let mut out = Outbox::new(&mut scope, &mut self.deck.dispatcher).in_pass(pass);
+        self.queue.clock = out.pass().map(|pass| (pass.now, pass.delivery));
+        run(&mut self.queue, &mut out)
+    }
+
     fn unrelated_mix(&mut self) -> Seq {
         self.deck
             .ring
@@ -187,8 +208,8 @@ impl HandoverRig {
                         .queue
                         .active
                         .iter()
-                        .find(|active| active.item == self.ids[index])
-                        .and_then(|active| active.load)
+                        .filter(|active| active.item == self.ids[index])
+                        .find_map(|active| active.load)
                         .expect("fixture load")
                         .seq();
                     if due.seq() != wanted {
@@ -230,6 +251,15 @@ impl HandoverRig {
             }
         }
         crate::mock::settle(&mut self.queue, &mut self.deck, SessionFrame::new(0));
+        let slot = self.slot(index);
+        let snapshot = &mut self.queue.deck.mixer.slots[usize::from(slot.get())];
+        snapshot.visible_origin = Some(Duration::ZERO);
+        snapshot.media_origin = Some(Duration::ZERO);
+        snapshot.mark = Some(SlotMark {
+            session: SessionFrame::new(0),
+            lane: LaneFrame::default(),
+            position: Duration::ZERO,
+        });
     }
 
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
@@ -463,6 +493,921 @@ fn detached(parts: &[DeckPart]) -> Vec<Slot> {
 }
 
 #[kithara::test(tokio)]
+#[case::chain_first(false)]
+#[case::stop_first(true)]
+async fn a_pause_over_a_held_native_chain_stops_the_stitched_successor(#[case] stop_first: bool) {
+    use kithara_render::bridge::Returned;
+
+    let mut rig = HandoverRig::playing().await;
+    let outgoing = rig.slot(0);
+    let incoming = rig.arm(1).await;
+    let source = rig.source(1).to_owned();
+    let mut observed = rig.queue.control().subscribe::<QueueEvent>();
+    rig.chain();
+    let expected = rig
+        .queue
+        .pending_handover
+        .expect("native Chain pending")
+        .seq;
+    let mut held = rig.stitch();
+    assert_eq!(held.len(), 1, "the native end answers only the Chain");
+    let receipt = held.pop().expect("held native Chain receipt");
+    assert_eq!(receipt.seq(), expected);
+    let (outcome, mut batch) = receipt.into();
+    assert!(matches!(outcome, Outcome::Applied { at, .. } if at == SessionFrame::new(128)));
+    assert!(matches!(batch.commands.as_slice(),
+        [DeckPart::Chain { from, to }] if *from == outgoing && *to == incoming));
+    assert_eq!(rig.queue.current, Some(rig.ids[0]));
+
+    let paused = rig
+        .apply(QueueCommand::Pause { at: When::Next })
+        .expect("pause after the native stitch")
+        .expect("native Pause sequence");
+    let mut stops = rig
+        .deck
+        .block(SessionFrame::new(256), 0.5)
+        .expect("native Stops after the Chain");
+    assert!(
+        stops.iter().any(|receipt| receipt.seq() == paused
+            && matches!(receipt.outcome(), Outcome::Applied { .. }))
+    );
+    let stopped = stops
+        .iter()
+        .flat_map(|receipt| receipt.batch().commands.iter())
+        .filter(|part| {
+            matches!(part,
+            DeckPart::Returned(Returned::Stopped { slot, resume: Some(mark) })
+                if *slot == incoming && mark.session == SessionFrame::new(256))
+        })
+        .count();
+    assert_eq!(
+        stopped, 1,
+        "the actual stitched successor receives one native Stop"
+    );
+    assert!(
+        stops
+            .iter()
+            .flat_map(|receipt| receipt.batch().commands.iter())
+            .all(|part| !matches!(part,
+            DeckPart::Returned(Returned::Pcm { slot, .. }) if *slot == incoming))
+    );
+    assert_eq!(rig.deck.mixer.held(incoming), Some(source.as_str()));
+
+    if stop_first {
+        rig.settle(std::mem::take(&mut stops));
+    }
+    assert!(matches!(rig.settle_batch(expected, &outcome, &mut batch),
+        kithara_play::Settled::Applied { seq, at }
+            if seq == expected && at == SessionFrame::new(128)));
+    if !stop_first {
+        rig.settle(stops);
+    }
+    assert_eq!(rig.queue.current, Some(rig.ids[1]));
+    assert!(matches!(
+        rig.queue.current_track().expect("stitched successor owner").snapshot().as_ref().status,
+        PlayingStatus::Paused { at } if at == Duration::from_millis(500)
+    ));
+    assert_eq!(rig.deck.mixer.held(incoming), Some(source.as_str()));
+    assert!(matches!(
+        rig.settle_batch(expected, &outcome, &mut batch),
+        kithara_play::Settled::Pending
+    ));
+    let changes = events(&mut observed)
+        .into_iter()
+        .filter(|event| {
+            matches!(event,
+        QueueEvent::CurrentTrackChanged { id: Some(id) } if *id == rig.ids[1])
+        })
+        .count();
+    assert_eq!(
+        changes, 1,
+        "the original Chain publishes its successor once"
+    );
+}
+
+#[kithara::test(tokio)]
+#[case::chain_first(false)]
+#[case::remove_first(true)]
+#[kithara::hang_watchdog]
+async fn removing_a_successor_over_a_held_native_chain_enters_the_next_item(
+    #[case] remove_first: bool,
+) {
+    use kithara_render::{Dispatched, DispatcherCommand, bridge::Returned};
+
+    let mut rig = HandoverRig::playing().await;
+    let outgoing = rig.slot(0);
+    let outgoing_source = rig.source(0).to_owned();
+    let incoming = rig.arm(1).await;
+    let incoming_source = rig.source(1).to_owned();
+    let source = rig.dir.path().join("item-3.wav");
+    rig.apply(QueueCommand::Append {
+        id: rig.ids[2],
+        source: TrackSource::Uri(source.to_str().expect("fixture source").to_owned()),
+    })
+    .expect("append the held successor after B");
+    let following = rig.arm(2).await;
+    let following_source = rig.source(2).to_owned();
+    let following_lane = rig.last_lane.expect("opened following lane");
+    let mut observed = rig.queue.control().subscribe::<QueueEvent>();
+    rig.chain();
+    let expected = rig
+        .queue
+        .pending_handover
+        .expect("native Chain pending")
+        .seq;
+    let mut held = rig.stitch();
+    assert_eq!(held.len(), 1, "the native end answers only the Chain");
+    let receipt = held.pop().expect("held native Chain receipt");
+    assert_eq!(receipt.seq(), expected);
+    let (outcome, mut batch) = receipt.into();
+    assert!(matches!(outcome, Outcome::Applied { at, .. } if at == SessionFrame::new(128)));
+    assert!(matches!(batch.commands.as_slice(),
+        [DeckPart::Chain { from, to }] if *from == outgoing && *to == incoming));
+    assert_eq!(rig.queue.current, Some(rig.ids[0]));
+
+    let removed_item = rig.ids[1];
+    let removed = rig
+        .on_pass(SessionFrame::new(128), |queue, out| {
+            Player::apply(queue, QueueCommand::Remove(removed_item), out)
+        })
+        .expect("remove the physically stitched successor")
+        .expect("native removal sequence");
+    assert!(rig.queue.track(rig.ids[1]).is_none());
+    let mut removals = rig
+        .deck
+        .block(SessionFrame::new(256), 0.5)
+        .expect("native removal of B");
+    assert!(
+        removals.iter().any(|receipt| receipt.seq() == removed
+            && matches!(receipt.outcome(), Outcome::Applied { .. }))
+    );
+    let returned = removals
+        .iter()
+        .flat_map(|receipt| receipt.batch().commands.iter())
+        .filter_map(|part| match part {
+            DeckPart::Returned(Returned::Pcm { slot, pcm }) => Some((*slot, &**pcm.src())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        returned,
+        vec![(incoming, incoming_source.as_str())],
+        "removing B returns only B's original consumer"
+    );
+    assert_eq!(
+        rig.deck.mixer.held(outgoing),
+        Some(outgoing_source.as_str())
+    );
+    assert_eq!(
+        rig.deck.mixer.held(following),
+        Some(following_source.as_str())
+    );
+
+    if remove_first {
+        for receipt in std::mem::take(&mut removals) {
+            let seq = receipt.seq();
+            let (outcome, mut batch) = receipt.into();
+            rig.on_pass(SessionFrame::new(256), |queue, out| {
+                Player::settle(
+                    queue,
+                    TrackReceipt::Deck {
+                        seq,
+                        outcome: &outcome,
+                        batch: &mut batch,
+                    },
+                    out,
+                )
+            });
+        }
+    }
+    assert!(
+        matches!(rig.on_pass(SessionFrame::new(256), |queue, out| Player::settle(queue,
+        TrackReceipt::Deck { seq: expected, outcome: &outcome, batch: &mut batch }, out)),
+        kithara_play::Settled::Applied { seq, at }
+            if seq == expected && at == SessionFrame::new(128))
+    );
+    if !remove_first {
+        for receipt in removals {
+            let seq = receipt.seq();
+            let (outcome, mut batch) = receipt.into();
+            rig.on_pass(SessionFrame::new(256), |queue, out| {
+                Player::settle(
+                    queue,
+                    TrackReceipt::Deck {
+                        seq,
+                        outcome: &outcome,
+                        batch: &mut batch,
+                    },
+                    out,
+                )
+            });
+        }
+    }
+    let entry = rig
+        .deck
+        .block(SessionFrame::new(384), 0.5)
+        .expect("native entry past the removed B");
+    assert!(
+        entry.iter().any(
+            |receipt| matches!(receipt.outcome(), Outcome::Applied { .. })
+                && receipt
+                    .batch()
+                    .commands
+                    .iter()
+                    .any(|part| matches!(part, DeckPart::Start { slot, .. } if *slot == following))
+        ),
+        "C must enter on its own real native receipt"
+    );
+    rig.settle(entry);
+    assert_eq!(rig.queue.current, Some(rig.ids[2]));
+    assert!(rig.queue.track(rig.ids[1]).is_none());
+    assert_eq!(rig.slot(2), following);
+    assert_eq!(
+        rig.deck.mixer.held(following),
+        Some(following_source.as_str())
+    );
+
+    rig.deck.opens.drain();
+    loop {
+        let Some(due) = rig.deck.opens.next_due((), 1) else {
+            break;
+        };
+        hang_tick!();
+        let seq = due.seq();
+        let data = match due.commands() {
+            [DispatcherCommand::SetPriority(_, _)] => Dispatched::Prioritized,
+            [DispatcherCommand::Release(lane)] => {
+                assert_ne!(*lane, following_lane, "removing B cannot release C's lane");
+                Dispatched::Released
+            }
+            _ => panic!("removal must reuse the held C instead of opening another source"),
+        };
+        due.apply(data);
+        let receipt = rig
+            .deck
+            .dispatcher
+            .receipts()
+            .next()
+            .expect("maintenance answer");
+        assert_eq!(receipt.seq(), seq);
+        with_outbox(&mut rig.queue, &mut rig.deck, |queue, out| {
+            Player::settle(queue, TrackReceipt::Loaded(receipt), out)
+        });
+        hang_reset!();
+    }
+    assert!(matches!(
+        rig.settle_batch(expected, &outcome, &mut batch),
+        kithara_play::Settled::Pending
+    ));
+    assert_eq!(rig.queue.current, Some(rig.ids[2]));
+    let changes = events(&mut observed)
+        .into_iter()
+        .filter(|event| {
+            matches!(event,
+        QueueEvent::CurrentTrackChanged { id: Some(id) } if *id == rig.ids[2])
+        })
+        .count();
+    assert_eq!(
+        changes, 1,
+        "the native C entry publishes the surviving successor once"
+    );
+}
+
+#[kithara::test(tokio)]
+#[case::stale_chain_first(false, false, false)]
+#[case::stale_remove_first(false, true, false)]
+#[case::refused_chain_first(true, false, false)]
+#[case::refused_remove_first(true, true, false)]
+#[case::selected_chain_first(false, false, true)]
+#[case::selected_remove_first(false, true, true)]
+#[kithara::hang_watchdog]
+async fn removing_an_unstarted_chain_target_keeps_the_confirmed_current(
+    #[case] refused: bool,
+    #[case] remove_first: bool,
+    #[case] select_following: bool,
+) {
+    use kithara_render::bridge::{DeckRefusal, Returned};
+
+    let mut rig = HandoverRig::playing().await;
+    let outgoing = rig.slot(0);
+    let outgoing_source = rig.source(0).to_owned();
+    let incoming = rig.arm(1).await;
+    let incoming_source = rig.source(1).to_owned();
+    let following_item = rig.ids[2];
+    let source = rig.dir.path().join("item-3.wav");
+    rig.apply(QueueCommand::Append {
+        id: following_item,
+        source: TrackSource::Uri(source.to_str().expect("fixture source").to_owned()),
+    })
+    .expect("append following C");
+    let following = rig.arm(2).await;
+    let following_source = rig.source(2).to_owned();
+    let mut observed = rig.queue.control().subscribe::<QueueEvent>();
+    rig.chain();
+    let pending = rig.queue.pending_handover.expect("parked native Chain");
+    assert_eq!(pending.item, rig.ids[1]);
+    let held_refusal = if refused {
+        rig.deck.ring.publish().expect("publish parked Chain");
+        rig.deck.inbox.drain();
+        let mut scope = rig.deck.inbox.scope(rig.deck.scope).expect("deck scope");
+        let due = scope
+            .resume(pending.seq, SessionFrame::new(128), SessionFrame::new(128))
+            .expect("the original parked Chain is still unstarted");
+        assert_eq!(due.seq(), pending.seq);
+        assert!(
+            matches!(due.commands(), [DeckPart::Chain { from, to }] if *from == outgoing && *to == incoming)
+        );
+        due.refuse(DeckRefusal::Deferral);
+        let ScopedReceipt::Scope(_, receipt) =
+            rig.deck.ring.receipt().expect("owned Chain refusal")
+        else {
+            panic!("Chain receipt belongs to its deck scope");
+        };
+        assert!(matches!(
+            receipt.outcome(),
+            Outcome::Rejected(Rejection::Refused(DeckRefusal::Deferral))
+        ));
+        Some(receipt)
+    } else {
+        None
+    };
+    let removed_item = rig.ids[1];
+    let removed = rig
+        .on_pass(SessionFrame::new(128), |queue, out| {
+            Player::apply(queue, QueueCommand::Remove(removed_item), out)
+        })
+        .expect("remove pending B")
+        .expect("native removal sequence");
+    if select_following {
+        rig.on_pass(SessionFrame::new(128), |queue, out| {
+            Player::apply(
+                queue,
+                QueueCommand::Select {
+                    id: following_item,
+                    transition: Transition::None,
+                },
+                out,
+            )
+        })
+        .expect("explicit C replaces the conditional removal intent");
+        let target = rig
+            .queue
+            .target
+            .expect("C selection retains its custody gate");
+        assert_eq!(target.reason, AdvanceReason::UserSelect);
+        assert!(
+            matches!(target.continued, Some(crate::queue::types::Continuation::Removal {
+            seq, handover, applied: false, ..
+        }) if seq == removed && handover == pending.seq)
+        );
+    }
+    let mut removals = rig
+        .deck
+        .block(SessionFrame::new(256), 0.5)
+        .expect("native B removal");
+    let chain = held_refusal.unwrap_or_else(|| {
+        let index = removals
+            .iter()
+            .position(|receipt| receipt.seq() == pending.seq)
+            .expect("basis shift answers the unstarted Chain");
+        let receipt = removals.remove(index);
+        assert!(matches!(
+            receipt.outcome(),
+            Outcome::Rejected(Rejection::Stale)
+        ));
+        receipt
+    });
+    assert!(
+        removals.iter().any(|receipt| receipt.seq() == removed
+            && matches!(receipt.outcome(), Outcome::Applied { .. }))
+    );
+    let returned = removals
+        .iter()
+        .flat_map(|receipt| receipt.batch().commands.iter())
+        .filter_map(|part| match part {
+            DeckPart::Returned(Returned::Pcm { slot, pcm }) => Some((*slot, &**pcm.src())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(returned, vec![(incoming, incoming_source.as_str())]);
+    assert!(
+        removals
+            .iter()
+            .flat_map(|receipt| &receipt.batch().commands)
+            .all(|part| !matches!(part,
+        DeckPart::Start { slot, .. } | DeckPart::Chain { to: slot, .. } if *slot == following))
+    );
+    if remove_first {
+        for receipt in std::mem::take(&mut removals) {
+            let seq = receipt.seq();
+            let (outcome, mut batch) = receipt.into();
+            rig.on_pass(SessionFrame::new(256), |queue, out| {
+                Player::settle(
+                    queue,
+                    TrackReceipt::Deck {
+                        seq,
+                        outcome: &outcome,
+                        batch: &mut batch,
+                    },
+                    out,
+                )
+            });
+        }
+    }
+    let seq = chain.seq();
+    let (outcome, mut batch) = chain.into();
+    assert_eq!(seq, pending.seq);
+    let result = rig.on_pass(SessionFrame::new(256), |queue, out| {
+        Player::settle(
+            queue,
+            TrackReceipt::Deck {
+                seq,
+                outcome: &outcome,
+                batch: &mut batch,
+            },
+            out,
+        )
+    });
+    assert!(
+        matches!(result, kithara_play::Settled::Rejected { seq: answered, reason: Rejection::Stale } if !refused && answered == pending.seq)
+            || matches!(result, kithara_play::Settled::Rejected { seq: answered, reason: Rejection::Refused(PlayError::Deck(DeckRefusal::Deferral)) } if refused && answered == pending.seq)
+    );
+    if !remove_first {
+        for receipt in removals {
+            let seq = receipt.seq();
+            let (outcome, mut batch) = receipt.into();
+            rig.on_pass(SessionFrame::new(256), |queue, out| {
+                Player::settle(
+                    queue,
+                    TrackReceipt::Deck {
+                        seq,
+                        outcome: &outcome,
+                        batch: &mut batch,
+                    },
+                    out,
+                )
+            });
+        }
+    }
+    assert_eq!(rig.queue.current, Some(rig.ids[0]));
+    if select_following {
+        assert!(
+            rig.queue
+                .pending_handover
+                .is_some_and(|entry| entry.item == following_item)
+        );
+        assert_eq!(
+            rig.queue
+                .target
+                .expect("explicit C survives the stale B verdict")
+                .reason,
+            AdvanceReason::UserSelect
+        );
+        let entries = rig
+            .deck
+            .block(SessionFrame::new(384), 0.5)
+            .expect("explicit C owner deadline");
+        assert_eq!(entries.len(), 1, "one C entry without a repeated B release");
+        assert!(entries.iter().any(|receipt| matches!(receipt.outcome(), Outcome::Applied { at, .. } if *at == SessionFrame::new(384))
+            && receipt.batch().commands.iter().any(|part| matches!(part, DeckPart::Start { slot, .. } if *slot == following))));
+        rig.settle(entries);
+        assert_eq!(rig.queue.current, Some(following_item));
+        assert_eq!(
+            rig.deck.mixer.held(following),
+            Some(following_source.as_str())
+        );
+        assert!(rig.queue.track(removed_item).is_none());
+        assert_eq!(events(&mut observed).iter().filter(|event| matches!(event,
+            QueueEvent::CurrentTrackAdvance { id: Some(id), reason: AdvanceReason::UserSelect } if *id == following_item)).count(), 1);
+        return;
+    }
+    assert!(rig.queue.target.is_none());
+    assert!(rig.queue.pending_handover.is_none());
+    assert!(rig.queue.track(removed_item).is_none());
+    let preloaded = rig
+        .queue
+        .active
+        .position(|active| active.item == following_item && active.role == Role::Preloaded)
+        .expect("C remains preloaded after an unstarted B is removed");
+    assert_eq!(
+        rig.queue.active.get(preloaded).expect("C owner").slot,
+        following
+    );
+    assert_eq!(
+        rig.deck.mixer.held(outgoing),
+        Some(outgoing_source.as_str())
+    );
+    assert_eq!(
+        rig.deck.mixer.held(following),
+        Some(following_source.as_str())
+    );
+    let next = rig
+        .deck
+        .block(SessionFrame::new(384), 0.5)
+        .expect("next owner deadline");
+    assert!(
+        next.iter()
+            .flat_map(|receipt| &receipt.batch().commands)
+            .all(|part| !matches!(part,
+        DeckPart::Start { slot, .. } | DeckPart::Chain { to: slot, .. } if *slot == following))
+    );
+    rig.settle(next);
+    assert_eq!(rig.queue.current, Some(rig.ids[0]));
+    assert!(events(&mut observed).iter().all(|event| !matches!(event,
+        QueueEvent::CurrentTrackChanged { id: Some(id) } if *id == removed_item || *id == following_item)));
+}
+
+#[kithara::test(tokio)]
+#[case::stale(false)]
+#[case::refused(true)]
+#[kithara::hang_watchdog]
+async fn removing_an_unstarted_staged_replacement_does_not_select_its_neighbor(
+    #[case] refused: bool,
+) {
+    use kithara_render::{
+        Dispatched, DispatcherCommand,
+        bridge::{DeckRefusal, Returned},
+    };
+
+    let config = DeckMixerConfig::builder()
+        .slots(std::num::NonZeroUsize::new(2).expect("two mixer slots"))
+        .build();
+    let mut rig =
+        HandoverRig::playing_with_config(["item-1.wav", "item-2.wav", "item-3.wav"], config).await;
+    let old_slot = rig.slot(0);
+    let old_source = rig.source(0).to_owned();
+    rig.arm(1).await;
+    let entry = rig.entry(1, Transition::Crossfade);
+    rig.settle(entry);
+    let current_slot = rig.slot(1);
+    let current_source = rig.source(1).to_owned();
+    assert_eq!(rig.queue.current, Some(rig.ids[1]));
+    rig.queue.deck.mixer.slots[usize::from(old_slot.get())].state = SlotState::Playing;
+    let following_item = rig.ids[2];
+    let source = rig.dir.path().join("item-3.wav");
+    rig.apply(QueueCommand::Insert {
+        id: following_item,
+        source: TrackSource::Uri(source.to_str().expect("fixture source").to_owned()),
+        after: Some(rig.ids[0]),
+    })
+    .expect("C follows the outgoing A in queue order");
+    rig.select(0, Transition::Crossfade)
+        .expect("new A replacement intent");
+    rig.load(0, 64.295).await;
+    let pending = rig
+        .queue
+        .pending_handover
+        .expect("staged A native replacement");
+    assert!(pending.replacement);
+    assert_eq!(pending.slot, old_slot);
+    let held_refusal = if refused {
+        rig.deck.ring.publish().expect("publish A replacement");
+        rig.deck.inbox.drain();
+        let mut scope = rig.deck.inbox.scope(rig.deck.scope).expect("deck scope");
+        let due = scope
+            .next_due(SessionFrame::new(128), 1)
+            .expect("actual replacement due");
+        assert_eq!(due.seq(), pending.seq);
+        assert!(
+            due.commands()
+                .iter()
+                .any(|part| matches!(part, DeckPart::Replace { slot, .. } if *slot == old_slot))
+        );
+        due.refuse(DeckRefusal::Deferral);
+        let ScopedReceipt::Scope(_, receipt) =
+            rig.deck.ring.receipt().expect("owned replacement refusal")
+        else {
+            panic!("replacement receipt belongs to its deck scope");
+        };
+        Some(receipt)
+    } else {
+        None
+    };
+    let removed_item = rig.ids[0];
+    rig.on_pass(SessionFrame::new(128), |queue, out| {
+        Player::apply(queue, QueueCommand::Remove(removed_item), out)
+    })
+    .expect("remove outgoing and staged A");
+    assert!(
+        rig.queue.target.is_none(),
+        "an unstarted staged replacement cannot conditionally select C"
+    );
+    let mut replies = rig
+        .deck
+        .block(SessionFrame::new(256), 0.0)
+        .expect("old A detaches");
+    let replacement = held_refusal.map_or_else(
+        || {
+            let index = replies
+                .iter()
+                .position(|receipt| receipt.seq() == pending.seq)
+                .expect("superseded replacement answers");
+            let receipt = replies.remove(index);
+            assert!(matches!(
+                receipt.outcome(),
+                Outcome::Rejected(Rejection::Stale)
+            ));
+            receipt
+        },
+        |receipt| {
+            assert!(matches!(
+                receipt.outcome(),
+                Outcome::Rejected(Rejection::Refused(DeckRefusal::Deferral))
+            ));
+            receipt
+        },
+    );
+    assert_eq!(replies.iter().flat_map(|receipt| &receipt.batch().commands).filter(|part| matches!(part,
+        DeckPart::Returned(Returned::Pcm { slot, pcm }) if *slot == old_slot && &**pcm.src() == old_source.as_str())).count(), 1);
+    replies.push(replacement);
+    rig.settle(replies);
+    assert_eq!(rig.queue.current, Some(rig.ids[1]));
+    assert!(rig.queue.target.is_none());
+    assert!(rig.queue.pending_handover.is_none());
+    assert!(rig.queue.track(removed_item).is_none());
+    assert_eq!(rig.deck.mixer.held(old_slot), None);
+    assert_eq!(
+        rig.deck.mixer.held(current_slot),
+        Some(current_source.as_str())
+    );
+    rig.deck.opens.drain();
+    while let Some(due) = rig.deck.opens.next_due((), 1) {
+        hang_tick!();
+        let data = match due.commands() {
+            [DispatcherCommand::SetPriority(_, _)] => Dispatched::Prioritized,
+            [DispatcherCommand::Release(_)] => Dispatched::Released,
+            _ => panic!("removing the unstarted replacement must not open C"),
+        };
+        due.apply(data);
+        hang_reset!();
+    }
+}
+
+#[kithara::test(tokio)]
+#[case::refused_conditional(false, false)]
+#[case::stale_conditional(true, false)]
+#[case::refused_explicit(false, true)]
+#[kithara::hang_watchdog]
+async fn a_rejected_removal_detach_finishes_its_custody_gate(
+    #[case] stale: bool,
+    #[case] explicit: bool,
+) {
+    use kithara_render::bridge::DeckRefusal;
+
+    let mut rig = HandoverRig::playing().await;
+    let incoming = rig.arm(1).await;
+    let incoming_source = rig.source(1).to_owned();
+    let following_item = rig.ids[2];
+    let source = rig.dir.path().join("item-3.wav");
+    rig.apply(QueueCommand::Append {
+        id: following_item,
+        source: TrackSource::Uri(source.to_str().expect("fixture source").to_owned()),
+    })
+    .expect("append C");
+    let following = rig.arm(2).await;
+    let following_source = rig.source(2).to_owned();
+    rig.chain();
+    let pending = rig.queue.pending_handover.expect("original Chain");
+    let held = rig.stitch();
+    let chain = held
+        .into_iter()
+        .find(|receipt| receipt.seq() == pending.seq)
+        .expect("held Applied Chain");
+    assert!(
+        matches!(chain.outcome(), Outcome::Applied { at, .. } if *at == SessionFrame::new(128))
+    );
+    let removed_item = rig.ids[1];
+    let removed = rig
+        .on_pass(SessionFrame::new(128), |queue, out| {
+            Player::apply(queue, QueueCommand::Remove(removed_item), out)
+        })
+        .expect("remove held successor")
+        .expect("owned Detach sequence");
+    if explicit {
+        rig.on_pass(SessionFrame::new(128), |queue, out| {
+            Player::apply(
+                queue,
+                QueueCommand::Select {
+                    id: following_item,
+                    transition: Transition::None,
+                },
+                out,
+            )
+        })
+        .expect("explicit C");
+    }
+    let seq = chain.seq();
+    let (outcome, mut batch) = chain.into();
+    rig.on_pass(SessionFrame::new(128), |queue, out| {
+        Player::settle(
+            queue,
+            TrackReceipt::Deck {
+                seq,
+                outcome: &outcome,
+                batch: &mut batch,
+            },
+            out,
+        )
+    });
+    assert_eq!(rig.queue.current, Some(removed_item));
+    assert!(rig.queue.pending_handover.is_none());
+    assert!(
+        matches!(rig.queue.target.expect("C awaits B custody").continued,
+        Some(crate::queue::types::Continuation::Removal { seq, applied: false, .. }) if seq == removed)
+    );
+    rig.deck.ring.publish().expect("publish B removal");
+    rig.deck.inbox.drain();
+    let stop_seq = {
+        let mut scope = rig.deck.inbox.scope(rig.deck.scope).expect("deck scope");
+        let stop = scope
+            .next_due(SessionFrame::new(256), 1)
+            .expect("prior cancellation Stop");
+        assert_ne!(stop.seq(), removed);
+        assert!(
+            stop.commands()
+                .iter()
+                .any(|part| matches!(part, DeckPart::Stop { slot, .. } if *slot == incoming))
+        );
+        let seq = stop.seq();
+        stop.apply(());
+        seq
+    };
+    let ScopedReceipt::Scope(_, stop_answer) = rig
+        .deck
+        .ring
+        .receipt()
+        .expect("prior Stop terminal receipt")
+    else {
+        panic!("Stop receipt belongs to its deck scope");
+    };
+    assert_eq!(stop_answer.seq(), stop_seq);
+    assert!(
+        matches!(stop_answer.outcome(), Outcome::Applied { at, .. } if *at == SessionFrame::new(256))
+    );
+    let rejected = if stale {
+        let basis = {
+            let mut scope = rig.deck.inbox.scope(rig.deck.scope).expect("deck scope");
+            let due = scope
+                .next_due(SessionFrame::new(256), 1)
+                .expect("owned B Detach before execution");
+            assert_eq!(due.seq(), removed);
+            assert!(matches!(due.commands(), [DeckPart::Detach { slot }] if *slot == incoming));
+            assert_eq!(due.basis(), &[(incoming, Some(stop_seq))]);
+            let basis = due.basis().to_vec();
+            due.defer();
+            basis
+        };
+        assert_eq!(
+            rig.deck.mixer.held(incoming),
+            Some(incoming_source.as_str())
+        );
+        let superseded = rig
+            .deck
+            .ring
+            .scope(rig.deck.scope)
+            .expect("deck scope")
+            .send(
+                When::Next,
+                Batch {
+                    basis,
+                    commands: Vec::new(),
+                },
+            )
+            .expect("supersede the parked Detach from its actual Stop basis");
+        let replies = rig
+            .deck
+            .block(SessionFrame::new(256), 0.5)
+            .expect("native basis rejection");
+        assert!(replies.iter().any(|receipt| receipt.seq() == superseded
+            && matches!(receipt.outcome(), Outcome::Applied { at, .. } if *at == SessionFrame::new(256))
+            && receipt.batch().commands.is_empty()));
+        let applied_epoch = replies
+            .iter()
+            .position(|receipt| receipt.seq() == superseded)
+            .expect("superseding epoch receipt");
+        let stale_detach = replies
+            .iter()
+            .position(|receipt| receipt.seq() == removed)
+            .expect("parked Detach receipt");
+        assert!(applied_epoch < stale_detach);
+        let receipt = replies
+            .into_iter()
+            .find(|receipt| receipt.seq() == removed)
+            .expect("original Detach Stale");
+        assert!(matches!(
+            receipt.outcome(),
+            Outcome::Rejected(Rejection::Stale)
+        ));
+        receipt
+    } else {
+        let mut scope = rig.deck.inbox.scope(rig.deck.scope).expect("deck scope");
+        let due = scope
+            .next_due(SessionFrame::new(256), 1)
+            .expect("owned B Detach due");
+        assert_eq!(due.seq(), removed);
+        assert!(
+            due.commands()
+                .iter()
+                .any(|part| matches!(part, DeckPart::Detach { slot } if *slot == incoming))
+        );
+        due.refuse(DeckRefusal::Deferral);
+        let ScopedReceipt::Scope(_, receipt) =
+            rig.deck.ring.receipt().expect("owned Detach refusal")
+        else {
+            panic!("Detach receipt belongs to its deck scope");
+        };
+        assert!(matches!(
+            receipt.outcome(),
+            Outcome::Rejected(Rejection::Refused(DeckRefusal::Deferral))
+        ));
+        receipt
+    };
+    let seq = rejected.seq();
+    let (outcome, mut batch) = rejected.into();
+    let original_basis = batch.basis.clone();
+    let dependency = batch
+        .basis
+        .iter_mut()
+        .find(|(slot, _)| *slot == incoming)
+        .expect("owned Detach basis");
+    assert!(
+        dependency.1.is_some(),
+        "the held Chain has a native B basis"
+    );
+    dependency.1 = None;
+    let foreign = rig.on_pass(SessionFrame::new(256), |queue, out| {
+        Player::settle(
+            queue,
+            TrackReceipt::Deck {
+                seq,
+                outcome: &outcome,
+                batch: &mut batch,
+            },
+            out,
+        )
+    });
+    assert!(matches!(foreign, kithara_play::Settled::Pending));
+    assert!(
+        matches!(rig.queue.target.expect("foreign basis cannot cancel C").continued,
+        Some(crate::queue::types::Continuation::Removal { seq: retained, applied: false, .. }) if retained == removed)
+    );
+    assert_eq!(rig.queue.current, Some(removed_item));
+    batch.basis = original_basis;
+    let result = rig.on_pass(SessionFrame::new(256), |queue, out| {
+        Player::settle(
+            queue,
+            TrackReceipt::Deck {
+                seq,
+                outcome: &outcome,
+                batch: &mut batch,
+            },
+            out,
+        )
+    });
+    assert!(
+        matches!(result, kithara_play::Settled::Rejected { seq: answered, reason: Rejection::Stale } if stale && answered == removed)
+            || matches!(result, kithara_play::Settled::Rejected { seq: answered, reason: Rejection::Refused(PlayError::Deck(DeckRefusal::Deferral)) } if !stale && answered == removed)
+    );
+    assert!(
+        rig.queue.target.is_none(),
+        "terminal removal refusal cannot leave a pending custody gate"
+    );
+    assert!(rig.queue.pending_handover.is_none());
+    assert_eq!(rig.queue.current, Some(removed_item));
+    assert_eq!(
+        rig.deck.mixer.held(incoming),
+        Some(incoming_source.as_str())
+    );
+    if !explicit {
+        let preload = rig
+            .queue
+            .active
+            .position(|active| active.item == following_item && active.role == Role::Preloaded)
+            .expect("conditional C remains available after refused custody");
+        assert_eq!(
+            rig.queue.active.get(preload).expect("C owner").slot,
+            following
+        );
+        assert_eq!(
+            rig.deck.mixer.held(following),
+            Some(following_source.as_str())
+        );
+    }
+    let next = rig
+        .deck
+        .block(SessionFrame::new(384), 0.5)
+        .expect("next block after terminal removal");
+    assert!(
+        next.iter()
+            .flat_map(|receipt| &receipt.batch().commands)
+            .all(|part| !matches!(part,
+        DeckPart::Start { slot, .. } | DeckPart::Chain { to: slot, .. } if *slot == following))
+    );
+    rig.settle(next);
+    assert_eq!(rig.queue.current, Some(removed_item));
+}
+
+#[kithara::test(tokio)]
 #[case::crossfade(false)]
 #[case::chain(true)]
 async fn a_native_handover_answers_after_its_player_changes_segment(#[case] chained: bool) {
@@ -597,6 +1542,172 @@ async fn an_unrelated_native_receipt_cannot_publish_a_pending_handover() {
 }
 
 #[kithara::test(tokio)]
+async fn a_repeat_receipt_names_the_new_slot_of_the_same_item() {
+    let mut rig = HandoverRig::playing().await;
+    rig.apply(QueueCommand::SetRepeat(crate::RepeatMode::One))
+        .expect("repeat one");
+    rig.queue.config.action_at_item_end = ActionAtItemEnd::None;
+    let old_slot = rig.slot(0);
+    rig.event(DeckEvent::Ended {
+        slot: old_slot,
+        at: SessionFrame::new(128),
+    });
+    with_outbox(&mut rig.queue, &mut rig.deck, |queue, out| {
+        queue.next_target(
+            Transition::None,
+            AdvanceReason::NaturalEof,
+            true,
+            true,
+            Some(&mock::output(None).get()),
+            out,
+        )
+    })
+    .expect("repeat entry");
+    rig.load(0, 64.295).await;
+    let incoming = rig
+        .queue
+        .incoming_index(rig.ids[0])
+        .expect("new repeat owner");
+    let new_slot = rig
+        .queue
+        .active
+        .get(incoming)
+        .expect("new repeat slot")
+        .slot;
+    assert_ne!(new_slot, old_slot);
+    assert_eq!(
+        rig.queue
+            .active
+            .iter()
+            .filter(|active| active.item == rig.ids[0])
+            .count(),
+        2
+    );
+    let pending = rig.queue.pending_handover.expect("native repeat Start");
+    assert_eq!(pending.slot, new_slot);
+    let mut receiver = rig.queue.control().subscribe::<QueueEvent>();
+    let receipts = rig
+        .deck
+        .block(SessionFrame::new(128), 0.0)
+        .expect("native repeat entry");
+    let receipt = receipts
+        .into_iter()
+        .find(|receipt| receipt.seq() == pending.seq)
+        .expect("repeat native receipt");
+    assert!(matches!(receipt.outcome(), Outcome::Applied { .. }));
+    let seq = receipt.seq();
+    let (outcome, mut batch) = receipt.into();
+    assert!(
+        batch
+            .commands
+            .iter()
+            .any(|part| matches!(part, DeckPart::Start { slot, .. } if *slot == new_slot))
+    );
+    assert!(batch.basis.iter().all(|&(slot, _)| slot != old_slot));
+    let original = batch.basis.clone();
+    batch.basis = vec![(old_slot, None)];
+    rig.settle_batch(seq, &outcome, &mut batch);
+    assert_eq!(rig.queue.current, Some(rig.ids[0]));
+    let current = rig
+        .queue
+        .active_current_index()
+        .expect("old ended repeat owner");
+    let old = rig.queue.active.get(current).expect("old repeat slot");
+    assert_eq!(old.item, rig.ids[0]);
+    assert_eq!(old.slot, old_slot);
+    assert_eq!(old.role, Role::Current);
+    assert!(
+        matches!(old.track.snapshot().status, PlayingStatus::Ended { at } if at == SessionFrame::new(128))
+    );
+    assert_eq!(
+        rig.queue.pending_handover.map(|pending| pending.seq),
+        Some(seq)
+    );
+    assert!(
+        events(&mut receiver)
+            .iter()
+            .all(|event| !matches!(event, QueueEvent::CurrentTrackAdvance { .. }))
+    );
+    batch.basis = original;
+    assert!(
+        matches!(rig.settle_batch(seq, &outcome, &mut batch), kithara_play::Settled::Applied { seq: answered, .. } if answered == seq)
+    );
+    assert_eq!(
+        rig.queue
+            .current_track()
+            .expect("new repeat owner")
+            .snapshot()
+            .slot,
+        Some(new_slot)
+    );
+    assert_eq!(
+        rig.queue.track(rig.ids[0]).map(|entry| entry.status),
+        Some(TrackStatus::Consumed)
+    );
+    assert_eq!(events(&mut receiver).iter().filter(|event| matches!(event,
+        QueueEvent::CurrentTrackAdvance { id: Some(id), reason: AdvanceReason::NaturalEof } if *id == rig.ids[0]
+    )).count(), 1);
+}
+
+#[kithara::test(tokio)]
+async fn returning_to_an_outgoing_item_commits_its_new_native_slot() {
+    let mut rig = HandoverRig::playing().await;
+    let old_slot = rig.slot(0);
+    let source = rig.source(0).to_owned();
+    rig.arm(1).await;
+    let entry = rig.entry(1, Transition::Crossfade);
+    rig.settle(entry);
+    assert_eq!(rig.queue.current, Some(rig.ids[1]));
+    assert_eq!(rig.deck.mixer.held(old_slot), Some(source.as_str()));
+    rig.select(0, Transition::Crossfade).expect("return to A");
+    rig.load(0, 64.295).await;
+    let incoming = rig.queue.incoming_index(rig.ids[0]).expect("new A owner");
+    let new_slot = rig.queue.active.get(incoming).expect("new A slot").slot;
+    assert_ne!(new_slot, old_slot);
+    let pending = rig.queue.pending_handover.expect("new A native entry");
+    assert_eq!(pending.slot, new_slot);
+    assert_eq!(rig.deck.mixer.held(old_slot), Some(source.as_str()));
+    let mut receiver = rig.queue.control().subscribe::<QueueEvent>();
+    let receipts = rig
+        .deck
+        .block(SessionFrame::new(128), 0.0)
+        .expect("native return to A");
+    let entry = receipts
+        .iter()
+        .find(|receipt| receipt.seq() == pending.seq)
+        .expect("new A verdict");
+    assert!(matches!(entry.outcome(), Outcome::Applied { .. }));
+    assert!(
+        entry
+            .batch()
+            .basis
+            .iter()
+            .all(|&(slot, _)| slot != old_slot)
+    );
+    assert!(
+        entry
+            .batch()
+            .commands
+            .iter()
+            .any(|part| matches!(part, DeckPart::Start { slot, .. } if *slot == new_slot))
+    );
+    rig.settle(receipts);
+    assert_eq!(rig.queue.current, Some(rig.ids[0]));
+    assert_eq!(
+        rig.queue
+            .current_track()
+            .expect("returned A")
+            .snapshot()
+            .slot,
+        Some(new_slot)
+    );
+    assert_eq!(rig.deck.mixer.held(new_slot), Some(source.as_str()));
+    assert_eq!(events(&mut receiver).iter().filter(|event| matches!(event,
+        QueueEvent::CurrentTrackAdvance { id: Some(id), reason: AdvanceReason::UserSelect } if *id == rig.ids[0]
+    )).count(), 1);
+}
+
+#[kithara::test(tokio)]
 #[case::sequence(false)]
 #[case::basis(true)]
 async fn a_foreign_native_receipt_cannot_answer_the_queues_entry(#[case] foreign_basis: bool) {
@@ -628,6 +1739,230 @@ async fn a_foreign_native_receipt_cannot_answer_the_queues_entry(#[case] foreign
         kithara_play::Settled::Applied { seq: answered, at }
         if answered == seq && at == SessionFrame::new(128)));
     assert_eq!(rig.queue.current, Some(rig.ids[1]));
+}
+
+#[kithara::test(tokio)]
+#[kithara::hang_watchdog]
+async fn returning_to_an_outgoing_item_replaces_its_old_owner_in_the_same_slot() {
+    let config = DeckMixerConfig::builder()
+        .slots(std::num::NonZeroUsize::new(2).expect("two mixer slots"))
+        .build();
+    let mut rig =
+        HandoverRig::playing_with_config(["item-1.wav", "item-2.wav", "item-3.wav"], config).await;
+    let old_slot = rig.slot(0);
+    let old_lane = rig.last_lane.expect("original A lane");
+    let source = rig.source(0).to_owned();
+    rig.arm(1).await;
+    let entry = rig.entry(1, Transition::Crossfade);
+    rig.settle(entry);
+    assert_eq!(rig.queue.current, Some(rig.ids[1]));
+    assert_eq!(rig.deck.mixer.held(old_slot), Some(source.as_str()));
+    rig.queue.deck.mixer.slots[usize::from(old_slot.get())].state = SlotState::Playing;
+    rig.select(0, Transition::Crossfade)
+        .expect("return to A on a full deck");
+    rig.load(0, 64.295).await;
+    let replacement = rig.queue.incoming_index(rig.ids[0]).expect("new staged A");
+    assert!(rig.queue.active.is_replacement(replacement));
+    assert_eq!(
+        rig.queue.active.get(replacement).expect("staged A").slot,
+        old_slot
+    );
+    assert_eq!(
+        rig.queue
+            .active
+            .iter()
+            .filter(|active| active.item == rig.ids[0] && active.slot == old_slot)
+            .count(),
+        2
+    );
+    assert_ne!(rig.last_lane, Some(old_lane));
+    let pending = rig
+        .queue
+        .pending_handover
+        .expect("replacement native entry");
+    assert_eq!(pending.item, rig.ids[0]);
+    assert_eq!(pending.slot, old_slot);
+    let mut receiver = rig.queue.control().subscribe::<QueueEvent>();
+    let receipts = rig
+        .deck
+        .block(SessionFrame::new(128), 0.0)
+        .expect("native same-item same-slot replacement");
+    let entry = receipts
+        .iter()
+        .find(|receipt| receipt.seq() == pending.seq)
+        .expect("replacement verdict");
+    assert!(matches!(entry.outcome(), Outcome::Applied { .. }));
+    assert!(
+        entry
+            .batch()
+            .commands
+            .iter()
+            .any(|part| matches!(part, DeckPart::Start { slot, .. } if *slot == old_slot))
+    );
+    assert_eq!(
+        entry
+            .batch()
+            .commands
+            .iter()
+            .filter(|part| matches!(part,
+                DeckPart::Returned(Returned::Pcm { slot, pcm })
+                    if *slot == old_slot && &**pcm.src() == source.as_str()
+            ))
+            .count(),
+        1
+    );
+    rig.settle(receipts);
+    assert_eq!(rig.queue.current, Some(rig.ids[0]));
+    assert!(rig.queue.active.replacement_index().is_none());
+    assert_eq!(
+        rig.queue
+            .current_track()
+            .expect("replacement A owns playback")
+            .snapshot()
+            .slot,
+        Some(old_slot)
+    );
+    assert_eq!(
+        rig.queue
+            .active
+            .iter()
+            .filter(|active| active.item == rig.ids[0] && active.slot == old_slot)
+            .count(),
+        1
+    );
+    assert_eq!(rig.deck.mixer.held(old_slot), Some(source.as_str()));
+    assert_eq!(events(&mut receiver).iter().filter(|event| matches!(event,
+        QueueEvent::CurrentTrackAdvance { id: Some(id), reason: AdvanceReason::UserSelect } if *id == rig.ids[0]
+    )).count(), 1);
+    rig.deck.opens.drain();
+    let mut releases = 0;
+    while let Some(due) = rig.deck.opens.next_due((), 1) {
+        hang_tick!();
+        match due.commands() {
+            [kithara_render::DispatcherCommand::Release(lane)] if *lane == old_lane => {
+                releases += 1;
+                due.apply(kithara_render::Dispatched::Released);
+            }
+            [kithara_render::DispatcherCommand::SetPriority(_, _)] => {
+                due.apply(kithara_render::Dispatched::Prioritized);
+            }
+            _ => panic!("replacement releases the old A lane and retains the new A"),
+        }
+        hang_reset!();
+    }
+    assert_eq!(releases, 1);
+}
+
+#[kithara::test(tokio)]
+#[kithara::hang_watchdog]
+async fn a_held_applied_replacement_commits_its_active_owner_before_a_superseding_target() {
+    let config = DeckMixerConfig::builder()
+        .slots(std::num::NonZeroUsize::new(2).expect("two mixer slots"))
+        .build();
+    let mut rig =
+        HandoverRig::playing_with_config(["item-1.wav", "item-2.wav", "item-3.wav"], config).await;
+    let old_slot = rig.slot(0);
+    let source = rig.source(0).to_owned();
+    rig.arm(1).await;
+    let entry = rig.entry(1, Transition::Crossfade);
+    rig.settle(entry);
+    assert_eq!(rig.queue.current, Some(rig.ids[1]));
+    assert_eq!(rig.deck.mixer.held(old_slot), Some(source.as_str()));
+    let outgoing = rig
+        .queue
+        .active
+        .iter()
+        .find(|active| active.item == rig.ids[0])
+        .expect("outgoing A native owner");
+    assert!(matches!(
+        outgoing.track.snapshot().as_ref().status,
+        PlayingStatus::Playing { .. }
+    ));
+    rig.queue.deck.mixer.slots[usize::from(old_slot.get())].state = SlotState::Playing;
+    rig.select(0, Transition::Crossfade)
+        .expect("return to A on a full mixer");
+    rig.load(0, 64.295).await;
+    let replacement = rig.queue.incoming_index(rig.ids[0]).expect("staged new A");
+    assert!(rig.queue.active.is_replacement(replacement));
+    assert_eq!(
+        rig.queue.active.get(replacement).expect("new A").slot,
+        old_slot
+    );
+    let pending = rig.queue.pending_handover.expect("new A native entry");
+    assert!(pending.replacement);
+    let applied = rig
+        .deck
+        .block(SessionFrame::new(128), 0.0)
+        .expect("held native A replacement");
+    let native = applied
+        .iter()
+        .find(|receipt| receipt.seq() == pending.seq)
+        .expect("new A replacement verdict");
+    assert!(matches!(native.outcome(), Outcome::Applied { .. }));
+    assert_eq!(
+        native
+            .batch()
+            .commands
+            .iter()
+            .filter(|part| matches!(part,
+                DeckPart::Returned(Returned::Pcm { slot, pcm })
+                    if *slot == old_slot && &**pcm.src() == source.as_str()
+            ))
+            .count(),
+        1,
+    );
+    let mut receiver = rig.queue.control().subscribe::<QueueEvent>();
+    rig.select(2, Transition::None)
+        .expect("superseding C before A's verdict is delivered");
+    assert_eq!(rig.queue.current, Some(rig.ids[1]));
+    assert_eq!(rig.queue.target.map(|target| target.to), Some(rig.ids[2]));
+    assert_eq!(
+        rig.queue.pending_handover.map(|pending| pending.seq),
+        Some(pending.seq)
+    );
+    rig.settle(applied);
+    assert_eq!(rig.queue.current, Some(rig.ids[0]));
+    assert_eq!(rig.queue.target.map(|target| target.to), Some(rig.ids[2]));
+    assert!(rig.queue.pending_handover.is_none());
+    let current = rig
+        .queue
+        .active_current_index()
+        .expect("native A current owner");
+    assert!(
+        !rig.queue.active.is_replacement(current),
+        "an applied replacement becomes the active native owner even after its target is superseded",
+    );
+    assert_eq!(
+        rig.queue.active.get(current).expect("active A").slot,
+        old_slot
+    );
+    assert_eq!(
+        rig.queue
+            .active
+            .iter()
+            .filter(|active| active.item == rig.ids[0])
+            .count(),
+        1,
+    );
+    let waiting = rig
+        .queue
+        .active
+        .replacement_index()
+        .expect("only C remains staged");
+    assert_eq!(
+        rig.queue.active.get(waiting).expect("staged C").item,
+        rig.ids[2]
+    );
+    assert_eq!(
+        events(&mut receiver)
+            .iter()
+            .filter(|event| matches!(event,
+                QueueEvent::CurrentTrackAdvance { id: Some(id), reason: AdvanceReason::UserSelect }
+                    if *id == rig.ids[0]
+            ))
+            .count(),
+        1
+    );
 }
 
 #[kithara::test(tokio)]
@@ -1451,9 +2786,62 @@ async fn eof_playback_stopped_notification_maps_to_item_end_event() {
         slot: rig.slot(0),
         at: SessionFrame::new(128),
     });
+    assert!(rig.queue.control().current().is_none());
     let observed = events(&mut receiver);
     assert_eq!(observed.len(), 1);
     assert!(matches!(observed[0], QueueEvent::QueueEnded));
+    with_outbox(&mut rig.queue, &mut rig.deck, |queue, out| {
+        Player::tick(queue, SessionFrame::new(128), out);
+    });
+    assert!(rig.queue.control().current().is_none());
+    assert!(events(&mut receiver).is_empty());
+}
+
+#[kithara::test(tokio)]
+async fn an_ended_current_keeps_its_successor_uncommitted_until_the_native_receipt() {
+    let mut rig = HandoverRig::playing().await;
+    rig.arm(1).await;
+    rig.chain();
+    let pending = rig.queue.pending_handover.expect("pending native Chain");
+    let mut receiver = rig.queue.control().subscribe::<QueueEvent>();
+    rig.event(DeckEvent::Ended {
+        slot: rig.slot(0),
+        at: SessionFrame::new(128),
+    });
+    assert_eq!(
+        rig.queue.control().current().map(|entry| entry.id),
+        Some(rig.ids[0])
+    );
+    assert_eq!(
+        rig.queue.pending_handover.map(|pending| pending.seq),
+        Some(pending.seq)
+    );
+    assert_eq!(
+        rig.queue.track(rig.ids[1]).map(|entry| entry.status),
+        Some(TrackStatus::Loaded)
+    );
+    assert!(events(&mut receiver).iter().all(|event| !matches!(
+        event,
+        QueueEvent::QueueEnded
+            | QueueEvent::CurrentTrackChanged { .. }
+            | QueueEvent::CurrentTrackAdvance { .. }
+    )));
+    let receipts = rig.stitch();
+    assert!(receipts.iter().any(|receipt| receipt.seq() == pending.seq
+        && matches!(receipt.outcome(), Outcome::Applied { .. })));
+    rig.settle(receipts);
+    assert_eq!(
+        rig.queue.control().current().map(|entry| entry.id),
+        Some(rig.ids[1])
+    );
+    let observed = events(&mut receiver);
+    assert_eq!(observed.iter().filter(|event| matches!(
+        event,
+        QueueEvent::CurrentTrackAdvance { id: Some(id), reason: AdvanceReason::NaturalEof } if *id == rig.ids[1]
+    )).count(), 1);
+    rig.apply(QueueCommand::Previous(Transition::None))
+        .expect("native handover committed A to history");
+    assert_eq!(rig.queue.target.map(|target| target.to), Some(rig.ids[0]));
 }
 
 #[kithara::test(tokio)]
@@ -1947,6 +3335,123 @@ async fn a_current_reselect_restores_its_resource_after_a_held_applied_previous(
     rig.apply(QueueCommand::Previous(Transition::None))
         .expect("history after restored A");
     assert_eq!(rig.queue.target.map(|target| target.to), Some(rig.ids[1]));
+}
+
+#[kithara::test(tokio)]
+async fn reselecting_current_keeps_an_automatic_chain_owned_by_its_receipt() {
+    let mut rig = HandoverRig::playing().await;
+    rig.arm(1).await;
+    rig.chain();
+    let slot = rig.slot(0);
+    let source = rig.source(0).to_owned();
+    let pending = rig.queue.pending_handover.expect("pending automatic Chain");
+    assert!(rig.queue.target.is_some_and(|target| target.auto
+        && target.chained
+        && target.to == rig.ids[1]
+        && target.reason == AdvanceReason::NaturalEof));
+    assert_eq!(pending.item, rig.ids[1]);
+    assert_eq!(pending.slot, rig.slot(1));
+    let mut receiver = rig.queue.control().subscribe::<QueueEvent>();
+    rig.select(0, Transition::None)
+        .expect("same confirmed current");
+    assert_eq!(rig.queue.current, Some(rig.ids[0]));
+    assert_eq!(rig.slot(0), slot);
+    assert_eq!(rig.deck.mixer.held(slot), Some(source.as_str()));
+    assert_eq!(
+        rig.queue.pending_handover.map(|pending| pending.seq),
+        Some(pending.seq)
+    );
+    assert!(
+        rig.queue
+            .target
+            .is_some_and(|target| target.auto && target.chained && target.to == rig.ids[1])
+    );
+    assert_eq!(
+        rig.queue.track(rig.ids[1]).map(|entry| entry.status),
+        Some(TrackStatus::Loaded)
+    );
+    assert!(events(&mut receiver).iter().all(|event| !matches!(
+        event,
+        QueueEvent::CurrentTrackChanged { .. } | QueueEvent::CurrentTrackAdvance { .. }
+    )));
+    rig.assert_no_pending_load();
+    let receipts = rig.stitch();
+    assert!(receipts.iter().any(|receipt| receipt.seq() == pending.seq
+        && matches!(receipt.outcome(), Outcome::Applied { .. })));
+    rig.settle(receipts);
+    assert_eq!(rig.queue.current, Some(rig.ids[1]));
+    rig.apply(QueueCommand::Previous(Transition::None))
+        .expect("successor commits the old current to history");
+    assert_eq!(rig.queue.target.map(|target| target.to), Some(rig.ids[0]));
+}
+
+#[kithara::test(tokio)]
+async fn reselecting_current_preserves_a_held_applied_automatic_chain_and_its_history() {
+    let mut rig = HandoverRig::playing().await;
+    let old_slot = rig.slot(0);
+    let source = rig.source(0).to_owned();
+    rig.arm(1).await;
+    rig.chain();
+    let pending = rig.queue.pending_handover.expect("pending automatic Chain");
+    let stitched = rig.stitch();
+    let native = stitched
+        .iter()
+        .find(|receipt| receipt.seq() == pending.seq)
+        .expect("held native Chain");
+    assert!(matches!(native.outcome(), Outcome::Applied { .. }));
+    assert!(native.batch().commands.iter().any(|part| matches!(part,
+        DeckPart::Chain { from, to } if *from == old_slot && *to == pending.slot
+    )));
+    let mut receiver = rig.queue.control().subscribe::<QueueEvent>();
+    rig.select(0, Transition::None)
+        .expect("same Queue-confirmed current while B's verdict is held");
+    assert_eq!(rig.queue.current, Some(rig.ids[0]));
+    assert_eq!(
+        rig.queue.pending_handover.map(|pending| pending.seq),
+        Some(pending.seq)
+    );
+    assert!(
+        rig.queue
+            .target
+            .is_some_and(|target| target.auto && target.chained && target.to == rig.ids[1])
+    );
+    assert_eq!(
+        rig.queue.track(rig.ids[1]).map(|entry| entry.status),
+        Some(TrackStatus::Loaded)
+    );
+    assert_eq!(rig.deck.mixer.held(old_slot), Some(source.as_str()));
+    rig.assert_no_pending_load();
+    assert!(events(&mut receiver).iter().all(|event| !matches!(
+        event,
+        QueueEvent::CurrentTrackChanged { .. } | QueueEvent::CurrentTrackAdvance { .. }
+    )));
+    rig.settle(stitched);
+    assert_eq!(rig.queue.current, Some(rig.ids[1]));
+    crate::mock::finish(&mut rig.queue, &mut rig.deck);
+    let observed = events(&mut receiver);
+    assert_eq!(observed.iter().filter(|event| matches!(event,
+        QueueEvent::CurrentTrackAdvance { id: Some(id), reason: AdvanceReason::NaturalEof } if *id == rig.ids[1]
+    )).count(), 1);
+    assert_eq!(observed.iter().filter(|event| matches!(event, QueueEvent::CurrentTrackChanged { id: Some(id) } if *id == rig.ids[1])).count(), 1);
+    rig.apply(QueueCommand::Previous(Transition::None))
+        .expect("history points to A");
+    assert_eq!(rig.queue.target.map(|target| target.to), Some(rig.ids[0]));
+    rig.load(0, 64.295).await;
+    let applied = rig
+        .deck
+        .block(SessionFrame::new(128), 0.0)
+        .expect("actual native Previous");
+    let previous = rig
+        .queue
+        .pending_handover
+        .expect("native Previous receipt owner");
+    assert!(applied.iter().any(|receipt| receipt.seq() == previous.seq
+        && matches!(receipt.outcome(), Outcome::Applied { .. })));
+    rig.settle(applied);
+    assert_eq!(rig.queue.current, Some(rig.ids[0]));
+    assert_eq!(events(&mut receiver).iter().filter(|event| matches!(event,
+        QueueEvent::CurrentTrackAdvance { id: Some(id), reason: AdvanceReason::UserPrev } if *id == rig.ids[0]
+    )).count(), 1);
 }
 
 #[kithara::test(tokio)]

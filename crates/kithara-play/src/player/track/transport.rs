@@ -66,17 +66,15 @@ impl<S> PlayerImpl<S> {
     pub(super) fn align(
         &mut self,
         to: Position,
-        speed: f32,
+        mut speed: SpeedCurve,
         at: SessionFrame,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
-        let change = TrackSettings::check(TrackSettingsChange::Speed(speed))?;
+        let to = self.raw_position(to)?;
+        let change = TrackSettings::check(TrackSettingsChange::Speed(check_curve(&mut speed)?))?;
         let when = self.jump_when(at, out)?;
         let seq = self.send_lane_batch(
-            vec![
-                LaneCommand::SetSpeed(SpeedCurve::Constant(speed)),
-                LaneCommand::Jump { to },
-            ],
+            vec![LaneCommand::SetSpeed(speed), LaneCommand::Jump { to }],
             when,
         )?;
         self.settings.track(seq, when, change);
@@ -107,11 +105,26 @@ impl<S> PlayerImpl<S> {
                 .lane_commands
                 .iter()
                 .filter(|operation| operation.applied != Some(false))
-                .any(|operation| match operation.when {
-                    When::At(frame) => {
-                        frame.segment == resume.lane.segment && frame.frame > resume.lane.frame
+                .any(|operation| {
+                    let pending = match operation.when {
+                        When::At(frame) => {
+                            frame.segment == resume.lane.segment && frame.frame > resume.lane.frame
+                        }
+                        When::Next | When::Deferred => operation.segment == resume.lane.segment,
+                    };
+                    if pending {
+                        tracing::debug!(
+                            item = u64::from(self.item),
+                            seq = operation.seq.get(),
+                            current_segment = self.segment.get(),
+                            applied = ?operation.applied,
+                            requested_when = ?operation.when,
+                            paused_resume = ?resume,
+                            command = ?operation.command,
+                            "paused Play requires a new segment"
+                        );
                     }
-                    When::Next | When::Deferred => operation.segment == resume.lane.segment,
+                    pending
                 });
             if pending {
                 self.segment(resume.position, None, out)?;
@@ -176,6 +189,7 @@ impl<S> PlayerImpl<S> {
                 segment: self.segment,
                 basis,
                 action,
+                obsolete: false,
                 transparent: None,
             });
         }
@@ -202,6 +216,28 @@ impl<S> PlayerImpl<S> {
             }
         }
         None
+    }
+
+    pub(super) fn obsolete_playback_ancestors(&mut self, slot: Slot, mut basis: Option<Seq>) {
+        for operation in self.playback_commands.iter_mut().rev() {
+            if operation.seq.is_some()
+                && (operation.seq == basis
+                    || (operation.transparent.is_some() && operation.transparent == basis))
+            {
+                operation.obsolete = true;
+                basis = operation
+                    .basis
+                    .iter()
+                    .find(|(named, _)| *named == slot)
+                    .and_then(|(_, basis)| *basis);
+            }
+        }
+        if let Some(attach) = self.attaching.as_mut()
+            && attach.seq.is_some()
+            && attach.seq == basis
+        {
+            attach.obsolete = true;
+        }
     }
 
     pub(super) fn configuring(
@@ -286,6 +322,19 @@ impl<S> PlayerImpl<S> {
             if let Outcome::Applied { at, data } = receipt.outcome() {
                 let mut speed_session = None;
                 for operation in operations {
+                    tracing::debug!(
+                        item = u64::from(self.item),
+                        seq = receipt.seq().get(),
+                        actual_apply_segment = at.segment.get(),
+                        actual_apply_frame = at.frame,
+                        current_segment = self.segment.get(),
+                        requested_when = ?operation.when,
+                        paused_resume = ?self.resume,
+                        mark = ?self.mark,
+                        ready_segment = ?data.ready,
+                        command = ?operation.command,
+                        "lane command settled"
+                    );
                     let session = match operation.when {
                         When::At(requested) if requested == *at => operation.session,
                         _ => self.mark.and_then(|mark| session_at(mark, *at)),
@@ -299,10 +348,11 @@ impl<S> PlayerImpl<S> {
                         && data.ready == Some(id)
                         && id == self.segment
                         && !matches!(self.status, TrackStatus::Playing { .. })
+                        && let Some(origin) = self.media_origin
                     {
-                        self.position = from;
+                        self.position = from.saturating_sub(origin);
                         if matches!(self.status, TrackStatus::Paused { .. }) {
-                            self.status = TrackStatus::Paused { at: from };
+                            self.status = TrackStatus::Paused { at: self.position };
                         }
                     }
                 }

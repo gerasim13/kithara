@@ -36,12 +36,9 @@ impl ResumeCursor {
         let meta = self
             .decoded
             .filter(|meta| meta.source_revision == source_revision)?;
-        match meta.source_span {
-            Some(span) => span.position_at(u64::from(meta.frames)),
-            None => meta
-                .timestamp
-                .checked_add(meta.spec.duration_for(u64::from(meta.frames)).ok()?),
-        }
+        meta.source_span.map_or(Some(meta.end_timestamp), |span| {
+            span.position_at(u64::from(meta.frames))
+        })
     }
     pub(crate) fn source_end(&self) -> Option<crate::SourceEnd> {
         self.rendered_source_head.or_else(|| {

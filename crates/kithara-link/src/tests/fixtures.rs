@@ -184,11 +184,19 @@ impl Sequence {
 pub(super) struct ScriptedTrack {
     control: Control,
     sequence: Sequence,
+    lane_commands: Vec<(Seq, SpeedCurve, When<SessionFrame>)>,
 }
 
 impl ScriptedTrack {
     fn send(&mut self, commands: Vec<Command>) -> Result<Option<Seq>, PlayError> {
-        self.control.edit(|script| {
+        let curves: Vec<_> = commands
+            .iter()
+            .filter_map(|command| match command {
+                Command::Speed(curve, at) => Some((curve.clone(), *at)),
+                _ => None,
+            })
+            .collect();
+        let sent = self.control.edit(|script| {
             if let Some(error) = script.reject.take() {
                 return Err(error);
             }
@@ -198,7 +206,12 @@ impl ScriptedTrack {
                 .extend(commands.iter().cloned().map(|command| (seq, command)));
             script.pending.push((seq, commands, true));
             Ok(Some(seq))
-        })
+        })?;
+        if let Some(seq) = sent {
+            self.lane_commands
+                .extend(curves.into_iter().map(|(curve, at)| (seq, curve, at)));
+        }
+        Ok(sent)
     }
 }
 
@@ -207,6 +220,15 @@ impl Player<TestPools> for ScriptedTrack {
     type Snapshot = TrackSnapshot;
 
     fn entry(&self, bound: Bound) -> Option<SessionFrame> {
+        let track = self.snapshot();
+        if track.pending_lane
+            && matches!(
+                track.status,
+                TrackStatus::Loaded | TrackStatus::Paused { .. }
+            )
+        {
+            return None;
+        }
         let (Bound::AtOrAfter(frame) | Bound::AtOrBefore(frame)) = bound;
         Some(frame)
     }
@@ -219,7 +241,7 @@ impl Player<TestPools> for ScriptedTrack {
         let command = match command {
             TrackCommand::Align { to, speed, at } => {
                 return self.send(vec![
-                    Command::Speed(SpeedCurve::Constant(speed), When::At(at)),
+                    Command::Speed(speed, When::At(at)),
                     Command::Jump(to, at),
                 ]);
             }
@@ -266,7 +288,7 @@ impl Player<TestPools> for ScriptedTrack {
         let TrackReceipt::Deck { seq, outcome, .. } = receipt else {
             return Settled::Pending;
         };
-        self.control.edit(|script| {
+        let settled = self.control.edit(|script| {
             let Some(index) = script
                 .pending
                 .iter()
@@ -292,7 +314,10 @@ impl Player<TestPools> for ScriptedTrack {
                             | Command::Seek(position)
                             | Command::Jump(position, _) => {
                                 script.snapshot.position = position;
-                                if matches!(script.snapshot.status, TrackStatus::Loading) {
+                                if matches!(
+                                    script.snapshot.status,
+                                    TrackStatus::Loading | TrackStatus::Ended { .. }
+                                ) {
                                     script.snapshot.status = TrackStatus::Loaded;
                                 }
                             }
@@ -310,6 +335,13 @@ impl Player<TestPools> for ScriptedTrack {
                                     SpeedCurve::Steps(steps) => {
                                         steps.last().expect("nonempty speed curve").1
                                     }
+                                    SpeedCurve::Approach(curve) => curve.target().as_(),
+                                    SpeedCurve::ApproachSteps(steps) => steps
+                                        .last()
+                                        .expect("nonempty approach steps")
+                                        .1
+                                        .target()
+                                        .as_(),
                                     _ => panic!("unexpected speed curve"),
                                 }
                             }
@@ -338,7 +370,11 @@ impl Player<TestPools> for ScriptedTrack {
                 script.speeds.push_back(settled.clone());
             }
             settled
-        })
+        });
+        if matches!(settled, Settled::Rejected { .. }) {
+            self.lane_commands.retain(|(named, _, _)| *named != seq);
+        }
+        settled
     }
 
     fn tick(&mut self, _now: SessionFrame, _out: &mut Outbox<'_, TestPools>) {}
@@ -372,11 +408,34 @@ impl Track<TestPools> for ScriptedTrack {
                     Command::Speed(SpeedCurve::Steps(steps), _) => {
                         Some(steps.last().expect("nonempty speed curve").1)
                     }
+                    Command::Speed(SpeedCurve::Approach(curve), _) => Some(curve.target().as_()),
+                    Command::Speed(SpeedCurve::ApproachSteps(steps), _) => Some(
+                        steps
+                            .last()
+                            .expect("nonempty approach steps")
+                            .1
+                            .target()
+                            .as_(),
+                    ),
                     _ => None,
                 })
                 .unwrap_or(script.snapshot.speed);
             TrackSettings::builder().speed(speed).build()
         })
+    }
+
+    fn prepared_speed(&self) -> Option<&SpeedCurve> {
+        self.lane_commands
+            .last()
+            .and_then(|(_, curve, at)| (*at == When::Next).then_some(curve))
+    }
+
+    fn prepare_entry(
+        &mut self,
+        at: SessionFrame,
+        _out: &mut Outbox<'_, TestPools>,
+    ) -> Result<bool, PlayError> {
+        Ok(self.entry(Bound::AtOrAfter(at)).is_some())
     }
 
     fn planned(
@@ -418,18 +477,23 @@ impl Track<TestPools> for ScriptedTrack {
     fn cue(
         &mut self,
         position: Position,
-        speed: f32,
+        speed: SpeedCurve,
         _out: &mut Outbox<'_, TestPools>,
     ) -> Result<Option<Seq>, PlayError> {
         let sent = self.send(vec![
-            Command::Speed(SpeedCurve::Constant(speed), When::Next),
+            Command::Speed(speed, When::Next),
             Command::Seek(position),
         ])?;
+        self.lane_commands.retain(|(seq, _, _)| Some(*seq) == sent);
         self.control.edit(|script| {
-            for (_, commands, current) in &mut script.pending {
+            for (seq, commands, current) in &mut script.pending {
                 if commands
                     .iter()
                     .any(|command| matches!(command, Command::Play(_)))
+                    || (Some(*seq) != sent
+                        && commands
+                            .iter()
+                            .any(|command| matches!(command, Command::Seek(_))))
                 {
                     *current = false;
                 }
@@ -578,6 +642,7 @@ pub(super) fn deck(host: TempoTrajectory) -> (Deck, Control) {
                 .inner(ScriptedTrack {
                     control: control.clone(),
                     sequence: Sequence::new(),
+                    lane_commands: Vec::new(),
                 })
                 .settings(LinkConfig::default())
                 .trajectory(host)

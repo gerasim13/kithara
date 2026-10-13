@@ -609,7 +609,7 @@ where
     ///
     /// Returns the original input when it requires splitting into prepared
     /// quanta. The caller retains the unconsumed suffix between operations.
-    /// Curves require the output-indexed `prepare_quantum` / `render_quantum` path.
+    /// Curves require the output-indexed `prepare_source_window` / `render_quantum` path.
     pub fn render(&mut self, mut chunk: AudioChunk) -> ControlFlow<AudioChunk, Option<AudioChunk>> {
         if self.terminal_error.is_some() {
             return ControlFlow::Break(chunk);
@@ -777,7 +777,7 @@ where
         self.process_active(chunk, speed, prepared)
     }
 
-    /// Render the source span selected by [`Self::prepare_quantum`].
+    /// Render the physical source window selected by [`Self::prepare_source_window`].
     ///
     /// Returns the unchanged input if no matching quantum was prepared.
     pub fn render_quantum(

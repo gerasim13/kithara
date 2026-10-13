@@ -18,8 +18,15 @@ use super::super::{
     Queue, QueueCommand,
     command::play_error,
     slots::{LoadState, Role},
+    types::Continuation,
 };
 use crate::{ActionAtItemEnd, ItemEvent, QueueError, QueueEvent, TrackStatus, loader};
+
+struct DeckSettlement {
+    outcomes: Vec<(usize, Settled)>,
+    handover: Option<(Option<usize>, Settled)>,
+    removal_result: Option<Settled>,
+}
 
 impl<S, F> Queue<S, F>
 where
@@ -46,14 +53,17 @@ where
     ) -> Settled {
         let mut outcomes: Vec<(usize, Settled)> = Vec::new();
         let mut handover = None;
+        let mut removal_result = None;
         match receipt {
             TrackReceipt::Deck {
                 seq,
                 outcome,
                 batch,
             } => {
-                handover = self.settle_handover(seq, outcome, batch);
-                outcomes = self.settle_deck(seq, outcome, batch, out);
+                let settled = self.settle_deck_receipt(seq, outcome, batch, out);
+                outcomes = settled.outcomes;
+                handover = settled.handover;
+                removal_result = settled.removal_result;
             }
             TrackReceipt::Event(event) => {
                 let named: TrackReceipt<'_, S> = TrackReceipt::Event(event);
@@ -125,6 +135,8 @@ where
                     }
                 }
             }
+        } else if let Some(rejected) = removal_result {
+            rejected
         } else {
             track_result
         };
@@ -137,6 +149,63 @@ where
         self.reap_released();
         self.publish();
         result
+    }
+
+    fn settle_deck_receipt(
+        &mut self,
+        seq: Seq,
+        outcome: &Outcome<DeckProtocol>,
+        batch: &mut Batch<DeckProtocol>,
+        out: &mut Outbox<'_, S>,
+    ) -> DeckSettlement {
+        let mut removal_result = None;
+        let removal = self.target.and_then(|target| match target.continued {
+            Some(Continuation::Removal {
+                seq: removal, slot, ..
+            }) if removal == seq && batch.basis.iter().any(|&(named, _)| named == slot) => {
+                Some(slot)
+            }
+            _ => None,
+        });
+        let returned = removal.is_some_and(|slot| batch.commands.iter().any(|part| matches!(part,
+            kithara_play::DeckPart::Returned(kithara_play::Returned::Pcm { slot: named, .. }) if *named == slot)));
+        let handover = self.settle_handover(seq, outcome, batch);
+        let outcomes = self.settle_deck(seq, outcome, batch, out);
+        if returned
+            && outcomes.iter().any(|(_, settled)| matches!(settled, Settled::Applied { seq: owned, .. } if *owned == seq))
+            && let Some(target) = &mut self.target
+            && let Some(Continuation::Removal { seq: removal, slot, applied, .. }) = &mut target.continued
+            && *removal == seq
+            && batch.basis.iter().any(|&(named, _)| named == *slot)
+        {
+            *applied = true;
+        }
+        if removal.is_some()
+            && outcomes.iter().any(|(_, settled)| matches!(settled, Settled::Rejected { seq: owned, .. } if *owned == seq))
+            && let Outcome::Rejected(reason) = outcome
+        {
+            if self.target.is_some_and(|target| target.reason == crate::AdvanceReason::RemovedCurrent) {
+                if let Err(error) = self.abandon_removal_entry() {
+                    warn!(%error, "rejected removal could not retain its neighbor");
+                }
+            } else if let Err(error) = self.cancel_target(out) {
+                warn!(%error, "rejected removal could not cancel its dependent entry");
+            }
+            removal_result = Some(Settled::Rejected {
+                seq,
+                reason: match reason {
+                    Rejection::Late => Rejection::Late,
+                    Rejection::Stale => Rejection::Stale,
+                    Rejection::Unanswered => Rejection::Unanswered,
+                    Rejection::Refused(refusal) => Rejection::Refused(PlayError::Deck(*refusal)),
+                },
+            });
+        }
+        DeckSettlement {
+            outcomes,
+            handover,
+            removal_result,
+        }
     }
 
     fn settle_deck(
@@ -545,6 +614,9 @@ where
                 )
             {
                 warn!(%error, "queue could not pause its ended track");
+            }
+            if current && let Err(error) = self.tick_deadlines(at, output, out) {
+                warn!(%error, "queue could not settle its ended track");
             }
         }
     }

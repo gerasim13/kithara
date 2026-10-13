@@ -9,4 +9,7 @@ pub enum TrajectoryError {
     /// Each frame names at most one tempo change.
     #[error("a tempo step already occupies {frame:?}")]
     Occupied { frame: SessionFrame },
+    /// An accepted target cannot produce representable beat and frame geometry.
+    #[error("tempo geometry is not representable: {0}")]
+    Geometry(#[from] kithara_warp::CoordinateError),
 }

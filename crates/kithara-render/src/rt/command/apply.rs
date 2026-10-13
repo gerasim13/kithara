@@ -20,9 +20,6 @@ impl Deck {
         seq: Seq,
         context_valid: bool,
     ) -> Option<DeckPart> {
-        if let Some(slot) = shifted_slot(&part) {
-            self.ended[slot.index()] = false;
-        }
         match part {
             DeckPart::Attach {
                 slot,
@@ -120,7 +117,6 @@ impl Deck {
                 }
             }
             DeckPart::Chain { from, to } => {
-                self.ended[to.index()] = false;
                 if let Some(track) = self.tracks.at_mut(to) {
                     track.start(Fade::Crossfade(crate::CrossfadeSettings {
                         duration: 0.0,

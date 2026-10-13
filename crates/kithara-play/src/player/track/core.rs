@@ -5,7 +5,7 @@ use kithara_command::{Live, Sender, Seq, Target, When};
 use kithara_config::LiveConfig;
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::time::Duration;
 use kithara_render::{
     LaneCommand, LaneFrame, LaneId, LaneProtocol, ServiceClass,
     bridge::{DeckPart, Fade, Slot, SlotMark},
@@ -16,7 +16,7 @@ use kithara_warp::SpeedCurve;
 use super::{
     super::{
         outbox::Outbox,
-        settings::{PlayerConfig, TrackSettings, TrackSettingsChange, check_speed},
+        settings::{PlayerConfig, TrackSettings, TrackSettingsChange},
     },
     geometry::*,
     state::*,
@@ -55,6 +55,7 @@ pub struct PlayerImpl<S> {
     pub(super) position: Position,
     pub(super) duration: Option<Duration>,
     pub(super) visible_origin: Option<Duration>,
+    pub(super) media_origin: Option<Duration>,
     pub(super) abr: Option<AbrHandle>,
     pub(super) metadata: TrackMetadata,
     pub(super) release: Option<Seq>,
@@ -98,6 +99,7 @@ impl<S> PlayerImpl<S> {
             position: Position::ZERO,
             duration: None,
             visible_origin: None,
+            media_origin: None,
             abr: None,
             metadata: TrackMetadata::default(),
             release: None,
@@ -124,6 +126,12 @@ impl<S> PlayerImpl<S> {
                 )
     }
 
+    pub(super) fn raw_position(&self, position: Position) -> Result<Position, PlayError> {
+        self.media_origin
+            .and_then(|origin| origin.checked_add(position))
+            .ok_or(PlayError::Untimed)
+    }
+
     pub(super) fn observe(&mut self, out: &Outbox<'_, S>) {
         if self.loading.is_some() {
             return;
@@ -136,18 +144,20 @@ impl<S> PlayerImpl<S> {
             if slot
                 .mark
                 .is_some_and(|mark| mark.lane.segment == self.segment)
-                && slot.position.is_finite()
-                && slot.position >= 0.0
-            {
-                self.position = Position::from_secs_f64(slot.position);
-            }
-            if slot
-                .mark
-                .is_some_and(|mark| mark.lane.segment == self.segment)
                 && self.attach_at.is_some()
                 && !matches!(self.status, TrackStatus::Released)
             {
                 self.visible_origin = slot.visible_origin;
+                self.media_origin = slot.media_origin;
+            }
+            if slot
+                .mark
+                .is_some_and(|mark| mark.lane.segment == self.segment)
+                && slot.position.is_finite()
+                && slot.position >= 0.0
+                && let Some(origin) = self.media_origin
+            {
+                self.position = Position::from_secs_f64(slot.position).saturating_sub(origin);
             }
             if slot.duration.is_finite() && slot.duration > 0.0 {
                 self.duration = Some(Duration::from_secs_f64(slot.duration));
@@ -164,21 +174,24 @@ impl<S> PlayerImpl<S> {
             if operation.applied == Some(false) {
                 continue;
             }
-            let frame = match operation.when {
-                When::At(frame) if frame.segment == mark.lane.segment => frame.frame,
-                When::Next | When::Deferred
-                    if operation.segment == mark.lane.segment
-                        && matches!(
-                            operation.command,
-                            LaneCommand::SetSpeed(_) | LaneCommand::Jump { .. }
-                        ) =>
-                {
-                    return Err(PlayError::NotReady);
-                }
-                When::At(_) | When::Next | When::Deferred => continue,
+            let frame = match &operation.command {
+                LaneCommand::Segment { id, .. } if *id == mark.lane.segment => 0,
+                _ => match operation.when {
+                    When::At(frame) if frame.segment == mark.lane.segment => frame.frame,
+                    When::Next | When::Deferred
+                        if operation.segment == mark.lane.segment
+                            && matches!(
+                                operation.command,
+                                LaneCommand::SetSpeed(_) | LaneCommand::Jump { .. }
+                            ) =>
+                    {
+                        return Err(PlayError::NotReady);
+                    }
+                    When::At(_) | When::Next | When::Deferred => continue,
+                },
             };
             match &operation.command {
-                LaneCommand::SetSpeed(curve) => {
+                LaneCommand::SetSpeed(curve) | LaneCommand::Segment { speed: curve, .. } => {
                     commands.push((frame, operation.seq, PlannedChange::Speed(curve)));
                 }
                 LaneCommand::Jump { to } => {
@@ -270,6 +283,16 @@ impl<S> PlayerImpl<S> {
         let seq = Outbox::<S>::lane(lane, when, commands.clone())?;
         self.lane_commands
             .extend(commands.into_iter().map(|command| {
+                tracing::debug!(
+                    item = u64::from(self.item),
+                    seq = seq.get(),
+                    current_segment = self.segment.get(),
+                    requested_when = ?when,
+                    paused_resume = ?self.resume,
+                    mark = ?self.mark,
+                    command = ?command,
+                    "lane command submitted"
+                );
                 #[cfg(feature = "usdt")]
                 {
                     let target_speed = match &command {
@@ -361,31 +384,7 @@ impl<S> PlayerImpl<S> {
         if let SpeedCurve::Constant(speed) = speed {
             return self.configure(TrackSettingsChange::Speed(speed), at, out);
         }
-        let final_speed = match &mut speed {
-            SpeedCurve::Ramp { to, .. } => {
-                *to = check_speed(*to)?;
-                *to
-            }
-            SpeedCurve::Steps(steps) => {
-                let Some(&(_, last)) = steps.last() else {
-                    return Err(PlayError::Internal(
-                        "an empty speed curve has no target".into(),
-                    ));
-                };
-                let mut previous = None;
-                for (frame, value) in Arc::make_mut(steps) {
-                    *value = check_speed(*value)?;
-                    if previous.is_some_and(|prior| *frame <= prior) {
-                        return Err(PlayError::Internal(
-                            "speed steps must increase on the output axis".into(),
-                        ));
-                    }
-                    previous = Some(*frame);
-                }
-                check_speed(last)?
-            }
-            _ => return Err(PlayError::Internal("unsupported speed curve".into())),
-        };
+        let final_speed = check_curve(&mut speed)?;
         let change = TrackSettings::check(TrackSettingsChange::Speed(final_speed))?;
         let when = self.lane_when(at, out)?;
         let seq = self.send_lane(LaneCommand::SetSpeed(speed), when)?;

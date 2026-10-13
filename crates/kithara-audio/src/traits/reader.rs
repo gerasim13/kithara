@@ -81,6 +81,11 @@ pub trait AudioSession {
         None
     }
 
+    /// Original raw coordinate of track-media zero.
+    fn media_origin(&self) -> Option<Duration> {
+        None
+    }
+
     /// Get total duration (if known).
     fn duration(&self) -> Option<Duration>;
 

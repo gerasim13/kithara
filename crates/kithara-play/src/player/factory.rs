@@ -3,6 +3,7 @@ use std::num::NonZeroU32;
 use kithara_command::{Seq, When};
 use kithara_render::bridge::DeckPart;
 use kithara_signal::SessionFrame;
+use kithara_warp::SpeedCurve;
 
 use super::{
     Player, PlayerConfig, PlayerImpl, Position, Settled, TrackCommand, TrackSettings,
@@ -26,6 +27,20 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
 
     /// The settings a track built after this one starts with: the applied ones and the changes still in flight.
     fn projected(&self) -> TrackSettings;
+
+    /// The accepted speed law at the current segment's origin, if still intact.
+    fn prepared_speed(&self) -> Option<&SpeedCurve>;
+
+    /// Prepares the actual entry before its owner's timed batch is assembled.
+    /// Returns false until the current segment's readiness receipt arrives.
+    ///
+    /// # Errors
+    /// Returns a cue or admission refusal without starting the track.
+    fn prepare_entry(
+        &mut self,
+        at: SessionFrame,
+        out: &mut super::Outbox<'_, S>,
+    ) -> Result<bool, PlayError>;
 
     /// Projects media position and instantaneous speed on the output frame.
     ///
@@ -59,7 +74,7 @@ pub trait Track<S>: Player<S, Command = TrackCommand<S>, Snapshot: AsRef<TrackSn
     fn cue(
         &mut self,
         position: Position,
-        speed: f32,
+        speed: SpeedCurve,
         out: &mut super::Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError>;
 }

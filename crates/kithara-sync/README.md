@@ -15,7 +15,7 @@
 # kithara-sync
 
 Pure synchronization mathematics: sided entry placement, grid coverage, phase
-error, bounded speed correction, and continuous piecewise-constant tempo
+error, bounded speed correction, and continuous Host tempo
 trajectories. It owns no player, renderer, group topology, or receipt custody.
 
 ## Usage

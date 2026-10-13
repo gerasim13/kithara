@@ -75,9 +75,11 @@ fn a_tempo_commit_before_the_activation_moves_it_onto_the_live_beat() {
     assert_eq!(starts.len(), 1);
     assert_eq!(
         starts[0].1,
-        Command::Play(When::At(SessionFrame::new(45_600)))
+        Command::Play(When::At(SessionFrame::new(45_648)))
     );
-    assert_eq!(f64::from(host.beat_at(SessionFrame::new(45_600))), 2.0);
+    assert_eq!(f64::from(host.beat_at(SessionFrame::new(45_648))), 2.0);
+    assert!(f64::from(host.beat_at(SessionFrame::new(45_647))) < 2.0);
+    assert!(f64::from(host.beat_at(SessionFrame::new(45_649))) > 2.0);
     assert_eq!(deck.snapshot().as_ref().position, position(48_000));
 }
 
@@ -105,7 +107,7 @@ fn every_pending_member_moves_in_one_transaction_onto_its_own_map() {
         assert_eq!(deck.snapshot().as_ref().position, source);
         assert_eq!(
             deck.entry(Bound::AtOrAfter(SessionFrame::new(36_000))),
-            Some(SessionFrame::new(45_600))
+            Some(SessionFrame::new(45_648))
         );
     }
     assert_ne!(
@@ -139,7 +141,13 @@ fn an_activation_pushed_past_its_window_is_withdrawn() {
     assert_eq!(commands.len(), 2);
     assert_eq!(
         deck.entry(Bound::AtOrAfter(SessionFrame::new(36_000))),
-        Some(SessionFrame::new(52_000))
+        None,
+        "the replacement needs its own readiness receipt"
+    );
+    rig.apply(&mut deck, commands[0].0, 36_000);
+    assert_eq!(
+        deck.entry(Bound::AtOrAfter(SessionFrame::new(36_000))),
+        Some(SessionFrame::new(51_920))
     );
     assert_eq!(
         deck.entry(Bound::AtOrBefore(SessionFrame::new(48_000))),
@@ -190,14 +198,14 @@ fn a_local_tempo_commit_moves_the_pending_member() {
     assert_ne!(commands[0].0, old);
     assert_eq!(commands[1].1, Command::Seek(position(48_000)));
     assert_eq!(
-        f64::from(probe.trajectory().beat_at(SessionFrame::new(45_600))),
+        f64::from(probe.trajectory().beat_at(SessionFrame::new(45_648))),
         2.0
     );
     assert_eq!(
         probe
             .trajectory()
             .frame_at(kithara_warp::SessionBeat::new(2.0).expect("entry beat")),
-        SessionFrame::new(45_600)
+        SessionFrame::new(45_648)
     );
 }
 
@@ -213,10 +221,10 @@ fn a_root_tempo_reaches_the_pending_member_two_levels_down() {
     assert_ne!(commands[0].0, old);
     assert_eq!(commands[1].1, Command::Seek(position(48_000)));
     assert_eq!(
-        f64::from(probe.trajectory().beat_at(SessionFrame::new(45_600))),
+        f64::from(probe.trajectory().beat_at(SessionFrame::new(45_648))),
         2.0
     );
-    assert!(SessionFrame::new(45_600) < SessionFrame::new(48_000));
+    assert!(SessionFrame::new(45_648) < SessionFrame::new(48_000));
     host.with_deck(id, &mut |deck, out, pass| deck.tick(pass, out))
         .expect("registered descendant");
     probe.read(|observation| {

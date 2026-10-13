@@ -16,7 +16,6 @@ use super::{
 };
 use crate::{
     api::{SessionTransportSnapshot, Tempo, TransportRevision},
-    consts,
     host::{HostSettings, HostSettingsChange},
     session::queue::{HostPart, HostProtocol},
 };
@@ -477,11 +476,7 @@ impl TransportState {
                         staged
                             .anchor
                             .ok_or(TransportProcessError::InvalidBeatRange)?
-                            .retarget(
-                                due.at(),
-                                tempo.beats_per_second(),
-                                consts::TEMPO_SMOOTH_SECONDS,
-                            )
+                            .retarget_tempo(due.at(), tempo.beats_per_second())
                             .map_err(|_| TransportProcessError::InvalidBeatRange)?,
                     );
                     staged.retargeted = true;

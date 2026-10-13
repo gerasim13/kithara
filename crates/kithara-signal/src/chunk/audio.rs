@@ -13,10 +13,12 @@ use crate::{AudioSpec, SegmentId, SourceSpan};
 pub struct AudioChunkInfo {
     /// Decoded-audio format.
     pub spec: AudioSpec,
-    /// Media-timeline position after this chunk's frames have played out.
+    /// Raw decoded-source position after this chunk's frames have played out.
     pub end_timestamp: Duration,
-    /// Media-timeline position of the first frame in this chunk.
+    /// Raw decoded-source position of the first frame in this chunk.
     pub timestamp: Duration,
+    /// Raw decoded-source coordinate of track-media zero, independent of trimming.
+    pub media_origin: Option<Duration>,
     /// Original visible position in this chunk's raw source clock, when known.
     pub visible_origin: Option<Duration>,
     /// Audio-owned raw source-coordinate discontinuity represented by this chunk.
@@ -70,6 +72,7 @@ impl Default for AudioChunkInfo {
             spec: AudioSpec::new(0, PLACEHOLDER_RATE),
             end_timestamp: Duration::ZERO,
             timestamp: Duration::ZERO,
+            media_origin: None,
             visible_origin: None,
             source_revision: 0,
             source_span: None,

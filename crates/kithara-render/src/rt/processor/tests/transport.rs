@@ -399,6 +399,206 @@ async fn a_chain_starts_its_slot_on_the_frame_after_the_end(constant_half: &'sta
     );
 }
 
+#[kithara::test]
+fn a_deferred_adopt_restarts_an_ended_slot_after_repeated_eof_observation() {
+    let (mut mixer, mut ends) = mixer_without_declick();
+    let spec = AudioSpec::new(2, shape().sample_rate);
+    let old = SegmentId::FIRST;
+    let current = old.next();
+    let mut packets = PacketRing::new(spec, Duration::from_secs(1), 4);
+    packets.push(PcmPacket::Chunk(Box::new(chunk(
+        spec,
+        old,
+        0,
+        0,
+        &[LEVEL; 8],
+    ))));
+    let mut end = chunk(spec, old, 4, 4, &[]);
+    end.meta.end_of_track = true;
+    packets.push(PcmPacket::Chunk(Box::new(end)));
+    let resource = Box::new(
+        PlayerResource::new(
+            PcmConsumer::new(packets.receiver.take().expect("receiver")),
+            Arc::from("repeat"),
+            &pools(),
+        )
+        .expect("resource"),
+    );
+    let attached = send_on(
+        &mut ends,
+        When::Next,
+        &[(A, None)],
+        vec![
+            DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
+                slot: A,
+                pcm: resource,
+                segment: old,
+            },
+            DeckPart::Start {
+                slot: A,
+                fade: Fade::Declick,
+            },
+        ],
+    );
+    assert_eq!(
+        render_frames(&mut mixer, 0, 8),
+        [LEVEL, LEVEL, LEVEL, LEVEL, 0.0, 0.0, 0.0, 0.0]
+    );
+    assert_applied_at(outcome_of(&receipts(&mut ends), attached), 0);
+    assert_eq!(
+        mixer.track(A).map(PlayerTrack::state),
+        Some(SlotState::Ended)
+    );
+    assert_eq!(
+        ends.events.drain().collect::<Vec<_>>(),
+        [DeckEvent::Ended {
+            slot: A,
+            at: frame_at(4)
+        }]
+    );
+    assert_eq!(render_frames(&mut mixer, 8, 4), [0.0; 4]);
+    assert_eq!(
+        mixer.track(A).map(PlayerTrack::state),
+        Some(SlotState::Ended)
+    );
+    assert!(receipts(&mut ends).is_empty());
+    assert!(ends.events.drain().next().is_none());
+
+    packets.push(PcmPacket::Chunk(Box::new(chunk(
+        spec,
+        current,
+        100,
+        1_000,
+        &[0.25; 16],
+    ))));
+    let adopt = send_on(
+        &mut ends,
+        When::Deferred,
+        &[(A, Some(attached))],
+        vec![DeckPart::Adopt {
+            slot: A,
+            segment: current,
+        }],
+    );
+    assert_eq!(render_frames(&mut mixer, 12, 4), [0.25; 4]);
+    let replies = receipts(&mut ends);
+    assert_eq!(replies.len(), 1);
+    let (_, outcome, parts) = replies
+        .iter()
+        .find(|(seq, ..)| *seq == adopt)
+        .expect("deferred Adopt");
+    assert_applied_at(outcome, 12);
+    assert!(
+        matches!(parts.as_slice(), [DeckPart::Adopt { slot, segment }] if *slot == A && *segment == current)
+    );
+    assert_eq!(
+        mixer.track(A).map(PlayerTrack::state),
+        Some(SlotState::Playing)
+    );
+    assert_eq!(
+        mixer.track(A).expect("restarted slot").mark(frame_at(16)),
+        Some(crate::bridge::SlotMark {
+            session: frame_at(16),
+            lane: crate::LaneFrame {
+                segment: current,
+                frame: 104
+            },
+            position: spec.duration_for(1_004).expect("new source position"),
+        })
+    );
+    assert!(ends.events.drain().next().is_none());
+    assert_eq!(render_frames(&mut mixer, 16, 4), [0.25; 4]);
+    assert!(receipts(&mut ends).is_empty());
+    assert!(
+        ends.events
+            .drain()
+            .all(|event| !matches!(event, DeckEvent::Ended { .. }))
+    );
+}
+
+#[kithara::test]
+fn a_late_chain_enters_after_repeated_eof_observation() {
+    let (mut mixer, mut ends) = mixer_without_declick();
+    let attached = send_on(
+        &mut ends,
+        When::Next,
+        &[(A, None), (B, None)],
+        vec![
+            DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
+                slot: A,
+                pcm: pcm_samples("ending", 1.0, &[LEVEL; 8], true),
+                segment: SegmentId::FIRST,
+            },
+            DeckPart::Attach {
+                item_id: kithara_events::TrackId::allocate(),
+                slot: B,
+                pcm: pcm_samples("successor", 1.0, &[0.25; 32], false),
+                segment: SegmentId::FIRST,
+            },
+            DeckPart::Start {
+                slot: A,
+                fade: Fade::Declick,
+            },
+        ],
+    );
+    assert_eq!(
+        render_frames(&mut mixer, 0, 8),
+        [LEVEL, LEVEL, LEVEL, LEVEL, 0.0, 0.0, 0.0, 0.0]
+    );
+    assert_applied_at(outcome_of(&receipts(&mut ends), attached), 0);
+    assert_eq!(
+        mixer.track(A).map(PlayerTrack::state),
+        Some(SlotState::Ended)
+    );
+    assert_eq!(
+        mixer.track(B).map(PlayerTrack::state),
+        Some(SlotState::Stopped)
+    );
+    assert_eq!(
+        ends.events.drain().collect::<Vec<_>>(),
+        [DeckEvent::Ended {
+            slot: A,
+            at: frame_at(4)
+        }]
+    );
+    assert_eq!(render_frames(&mut mixer, 8, 4), [0.0; 4]);
+    assert!(receipts(&mut ends).is_empty());
+    assert!(ends.events.drain().next().is_none());
+    let chain = send_on(
+        &mut ends,
+        When::Deferred,
+        &[(A, Some(attached)), (B, Some(attached))],
+        vec![DeckPart::Chain { from: A, to: B }],
+    );
+    assert_eq!(render_frames(&mut mixer, 12, 4), [0.25; 4]);
+    let replies = receipts(&mut ends);
+    assert_eq!(replies.len(), 1);
+    let (_, outcome, parts) = replies
+        .iter()
+        .find(|(seq, ..)| *seq == chain)
+        .expect("late Chain");
+    assert_applied_at(outcome, 12);
+    assert!(matches!(parts.as_slice(), [DeckPart::Chain { from, to }] if *from == A && *to == B));
+    assert_eq!(
+        mixer.track(A).map(PlayerTrack::state),
+        Some(SlotState::Ended)
+    );
+    assert_eq!(
+        mixer.track(B).map(PlayerTrack::state),
+        Some(SlotState::Playing)
+    );
+    assert!(ends.events.drain().next().is_none());
+    assert_eq!(render_frames(&mut mixer, 16, 4), [0.25; 4]);
+    assert!(receipts(&mut ends).is_empty());
+    assert!(
+        ends.events
+            .drain()
+            .all(|event| !matches!(event, DeckEvent::Ended { .. }))
+    );
+}
+
 /// A chain whose slot another batch shifted while it waited comes back stale.
 #[kithara::test(tokio)]
 async fn a_chain_whose_slot_shifted_comes_back_stale(constant_half: &'static [u8]) {

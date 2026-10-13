@@ -15,6 +15,7 @@ use tracing::debug;
 
 use crate::{
     AudioLaneEvent, AudioObserver,
+    audio::normalize_geometry,
     pipeline::{
         blend::GaplessBlender,
         decode::{
@@ -204,12 +205,14 @@ impl ActiveDecode {
         let Some(mut chunk) = next else {
             return Ok(None);
         };
+        normalize_geometry(&mut chunk.meta)?;
         crate::pipeline::seek::skip::rebase_source(
             &mut chunk,
             self.active.pending_head_skip_mut().as_deref(),
         )?;
         self.active.observe_visible_origin(&chunk);
         chunk.meta.visible_origin = self.active.visible_origin();
+        chunk.meta.media_origin = self.active.media_origin();
         chunk.meta.source_revision = self.discontinuity_revision;
         cursor.record(&chunk);
         if let Some(observer) = &mut self.observer {

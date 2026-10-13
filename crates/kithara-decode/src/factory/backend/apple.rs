@@ -605,7 +605,7 @@ mod apple_output_clock_tests {
     use kithara_test_utils::kithara;
 
     use crate::{
-        Decoder, DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory,
+        Decoder, DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory, PcmOrigin,
         test_pools::{TestPools, pools},
     };
 
@@ -692,7 +692,10 @@ mod apple_output_clock_tests {
         let frames = assert_clock(&chunks, Duration::ZERO);
         assert_eq!(chunks[0].timestamp, Duration::ZERO);
         assert_eq!(chunks[0].frame_offset, 0);
-        assert_eq!(decoder.initial_pcm_position(), Some(Duration::ZERO));
+        assert_eq!(
+            decoder.initial_pcm_origin().map(PcmOrigin::position),
+            Some(Duration::ZERO)
+        );
         assert_eq!(
             frames - gapless.leading_frames - gapless.trailing_frames,
             264_600
@@ -709,7 +712,10 @@ mod apple_output_clock_tests {
         let (suffix, _) = drain(decoder.as_mut());
         let suffix_frames = assert_clock(&suffix, target);
         assert_eq!(suffix[0].frame_offset, 66_150);
-        assert_eq!(decoder.initial_pcm_position(), Some(Duration::ZERO));
+        assert_eq!(
+            decoder.initial_pcm_origin().map(PcmOrigin::position),
+            Some(Duration::ZERO)
+        );
         assert!(
             suffix_frames.abs_diff(original_frames - 66_150) <= 1,
             "a sought suffix must keep all remaining decoded PCM"
@@ -725,7 +731,10 @@ mod apple_output_clock_tests {
         let (replay, replay_pcm) = drain(decoder.as_mut());
         assert_eq!(assert_clock(&replay, Duration::ZERO), original_frames);
         assert_eq!(replay[0].frame_offset, 0);
-        assert_eq!(decoder.initial_pcm_position(), Some(Duration::ZERO));
+        assert_eq!(
+            decoder.initial_pcm_origin().map(PcmOrigin::position),
+            Some(Duration::ZERO)
+        );
         assert_eq!(replay_pcm, original_pcm);
     }
 }

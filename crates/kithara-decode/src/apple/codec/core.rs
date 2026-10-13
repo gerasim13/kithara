@@ -114,16 +114,21 @@ impl AppleCodec {
             return Ok(0);
         }
 
-        let decoded_pts = self
-            .output_origin
-            .map(|origin| {
-                origin
-                    .checked_add(self.spec.duration_for(self.output_frames_seen)?)
-                    .ok_or(DecodeError::InvalidData {
+        let decoded_pts =
+            self.output_origin
+                .map(|origin| {
+                    let start = self.spec.frame_at(origin)?;
+                    let end = start.checked_add(self.output_frames_seen).ok_or(
+                        DecodeError::InvalidData {
+                            detail: "Apple PCM output frame offset overflows",
+                        },
+                    )?;
+                    let elapsed = self.spec.duration_for(end)? - self.spec.duration_for(start)?;
+                    origin.checked_add(elapsed).ok_or(DecodeError::InvalidData {
                         detail: "Apple PCM output timestamp overflows",
                     })
-            })
-            .transpose()?;
+                })
+                .transpose()?;
         let channels = usize::from(self.spec.channels);
         let needed_samples = output_sample_capacity(target_frames, channels)?;
         out.ensure_len(needed_samples)?;
@@ -359,6 +364,17 @@ impl FrameCodec for AppleCodec {
 
     fn decoded_pts(&self) -> Option<Duration> {
         self.decoded_pts
+    }
+
+    fn media_time_rebase(&self) -> Option<Duration> {
+        checked_audio_spec(
+            self.spec.channels,
+            self.source_sample_rate,
+            "apple.codec.source",
+        )
+        .ok()?
+        .duration_for(apple_decoder_algo_delay(self.codec))
+        .ok()
     }
 
     fn decoder_algo_delay(&self, codec: AudioCodec) -> u64 {

@@ -11,7 +11,7 @@ use tracing::warn;
 use super::{
     super::{
         outbox::{Outbox, Settled, rejection},
-        settings::{TrackSettingsChange, check_speed},
+        settings::TrackSettingsChange,
     },
     core::PlayerImpl,
     state::*,
@@ -25,18 +25,23 @@ impl<S> PlayerImpl<S> {
         rate: Option<NonZeroU32>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
-        self.segment_with(from, rate, self.settings.projected().speed(), out)
+        self.segment_with(
+            from,
+            rate,
+            SpeedCurve::Constant(self.settings.projected().speed()),
+            out,
+        )
     }
 
     pub(super) fn segment_with(
         &mut self,
         from: Position,
         rate: Option<NonZeroU32>,
-        speed: f32,
+        mut speed: SpeedCurve,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
-        let speed = check_speed(speed)?;
-        let change = TrackSettingsChange::Speed(speed);
+        let final_speed = super::geometry::check_curve(&mut speed)?;
+        let change = TrackSettingsChange::Speed(final_speed);
         let attached = self.attached();
         if attached && out.is_grouped() {
             return Err(PlayError::Internal(
@@ -55,7 +60,7 @@ impl<S> PlayerImpl<S> {
             LaneCommand::Segment {
                 id: segment,
                 from,
-                speed: SpeedCurve::Constant(speed),
+                speed,
             },
             |rate| LaneCommand::SetHostRate { id: segment, rate },
         );
@@ -65,7 +70,7 @@ impl<S> PlayerImpl<S> {
             self.settings.track(seq, When::Next, change);
         }
         self.segment = segment;
-        self.segment_speed = speed;
+        self.segment_speed = final_speed;
         self.ready = None;
         self.mark = None;
         self.resume = None;
@@ -101,6 +106,7 @@ impl<S> PlayerImpl<S> {
         seq: Seq,
         outcome: &Outcome<DeckProtocol>,
         batch: &mut Batch<DeckProtocol>,
+        transport_current: bool,
         out: &mut Outbox<'_, S>,
     ) -> Settled {
         let attaching = self.attaching.filter(|attach| attach.seq == Some(seq));
@@ -184,34 +190,27 @@ impl<S> PlayerImpl<S> {
             self.attaching = None;
             self.loading = None;
             self.attach_at = Some(at);
-            self.status = TrackStatus::Loaded;
+            if transport_current {
+                self.status = TrackStatus::Loaded;
+            }
         }
         for part in &batch.commands {
             match part {
                 DeckPart::Start { slot, .. } | DeckPart::Chain { to: slot, .. }
-                    if Some(*slot) == self.slot =>
+                    if Some(*slot) == self.slot && transport_current =>
                 {
                     self.status = TrackStatus::Playing { since: at };
                     self.resume = None;
                 }
                 DeckPart::Returned(Returned::Stopped { slot, resume })
-                    if Some(*slot) == self.slot =>
+                    if Some(*slot) == self.slot && transport_current =>
                 {
                     self.stopped(*resume);
                 }
                 DeckPart::Returned(Returned::Pcm { slot, .. })
                     if Some(*slot) == self.slot && attaching.is_none() =>
                 {
-                    self.status = TrackStatus::Released;
-                    self.mark = None;
-                    self.play = None;
-                    self.ready = None;
-                    self.playback_commands.clear();
-                    self.adopting.clear();
-                    self.newest_epoch_pending = None;
-                    if let Err(error) = self.release_lane(out) {
-                        warn!(%error, "lane release waits for dispatcher room");
-                    }
+                    self.released(out);
                 }
                 _ => {}
             }
@@ -222,8 +221,25 @@ impl<S> PlayerImpl<S> {
 
     fn stopped(&mut self, resume: Option<SlotMark>) {
         self.resume = resume.filter(|mark| mark.lane.segment == self.segment);
-        self.position = self.resume.map_or(self.position, |mark| mark.position);
+        if let Some(mark) = self.resume
+            && let Some(origin) = self.media_origin
+        {
+            self.position = mark.position.saturating_sub(origin);
+        }
         self.status = TrackStatus::Paused { at: self.position };
+    }
+
+    fn released(&mut self, out: &mut Outbox<'_, S>) {
+        self.status = TrackStatus::Released;
+        self.mark = None;
+        self.play = None;
+        self.ready = None;
+        self.playback_commands.clear();
+        self.adopting.clear();
+        self.newest_epoch_pending = None;
+        if let Err(error) = self.release_lane(out) {
+            warn!(%error, "lane release waits for dispatcher room");
+        }
     }
 
     pub(super) fn adopt_newest_epoch(&mut self, out: &mut Outbox<'_, S>) {

@@ -100,7 +100,7 @@ fn source_span_is_planned_from_the_output_quantum(
     renderer.prepare(spec());
 
     let frames = renderer
-        .prepare_quantum(
+        .prepare_source_window(
             AudioChunkInfo {
                 spec: spec(),
                 ..Default::default()
@@ -169,7 +169,7 @@ fn live_activation_primes_from_passthrough_history(
         ..AudioChunkInfo::default()
     };
     let input_frames = renderer
-        .prepare_quantum(meta, 128, usize::MAX)
+        .prepare_source_window(meta, 128, usize::MAX)
         .expect("activation quantum is plannable")
         .get();
     assert!(
@@ -211,7 +211,7 @@ fn a_speed_set_after_planning_replans_the_next_quantum(warp_sine: Vec<f32>) {
     let input = chunk(&pools, &warp_sine[..128 * 2]);
 
     renderer
-        .prepare_quantum(input.meta, input.frames(), usize::MAX)
+        .prepare_source_window(input.meta, input.frames(), usize::MAX)
         .expect("test source span is plannable");
     renderer
         .set_speed(SpeedCurve::Constant(1.0), 2)
@@ -222,7 +222,7 @@ fn a_speed_set_after_planning_replans_the_next_quantum(warp_sine: Vec<f32>) {
         .expect("the quantum planned before the speed is dropped");
 
     let frames = renderer
-        .prepare_quantum(input.meta, input.frames(), usize::MAX)
+        .prepare_source_window(input.meta, input.frames(), usize::MAX)
         .expect("test source span is plannable");
     assert_eq!(frames.get(), input.frames());
     let output = renderer

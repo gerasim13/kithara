@@ -335,6 +335,7 @@ mod ogg_raw_clock_tests {
     use super::SymphoniaDemuxer;
     use crate::{
         CodecPriming, DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory,
+        PcmOrigin,
         demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
         test_pools::{TestPools, pools},
     };
@@ -513,7 +514,7 @@ mod ogg_raw_clock_tests {
             }
         }
         assert_eq!(
-            decoder.initial_pcm_position(),
+            decoder.initial_pcm_origin().map(PcmOrigin::position),
             Some(duration(first_frame, rate))
         );
         assert_eq!(frames, emitted_frames);
@@ -728,6 +729,10 @@ impl Demuxer for SymphoniaDemuxer {
             landed_byte,
             preroll,
         })
+    }
+
+    fn media_origin(&self) -> Option<Duration> {
+        self.ts_to_duration(Timestamp::ZERO).ok()
     }
 
     fn track_info(&self) -> &TrackInfo {

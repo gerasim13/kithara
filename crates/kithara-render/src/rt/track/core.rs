@@ -78,6 +78,8 @@ impl PlayerTrack {
             #[must_use]
             pub fn visible_origin(&self) -> Option<Duration>;
             #[must_use]
+            pub fn media_origin(&self) -> Option<Duration>;
+            #[must_use]
             pub fn decoded_frontier(&self) -> f64;
             #[must_use]
             pub fn cached_span(&self) -> f64;

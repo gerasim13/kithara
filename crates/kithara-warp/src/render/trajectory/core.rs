@@ -1,18 +1,13 @@
 use std::num::{NonZeroU32, NonZeroU128};
 
-use kithara_signal::SourceSpan;
+use kithara_signal::ExponentialApproach;
 use kithara_stretch::ElasticError;
 use num_traits::ToPrimitive;
 
+use super::{Fraction, Phase, Trajectory};
 use crate::{SpeedCurve, consts};
 
-#[derive(Clone, Copy)]
-pub(super) struct Fraction {
-    pub(super) numerator: u128,
-    pub(super) denominator: NonZeroU128,
-}
-
-fn divisor(mut first: u128, mut second: u128) -> u128 {
+pub(super) fn divisor(mut first: u128, mut second: u128) -> u128 {
     while second != 0 {
         (first, second) = (second, first % second);
     }
@@ -20,7 +15,7 @@ fn divisor(mut first: u128, mut second: u128) -> u128 {
 }
 
 impl Fraction {
-    pub(super) fn on_lattice(self) -> Option<Self> {
+    pub(in crate::render) fn on_lattice(self) -> Option<Self> {
         let scale = 1u128 << 32;
         let denominator = self.denominator.get();
         let frames = u64::try_from(self.numerator / denominator).ok()?;
@@ -42,7 +37,7 @@ impl Fraction {
         Self::new(u128::from(frames) * scale + fraction, scale)
     }
 
-    pub(super) fn new(numerator: u128, denominator: u128) -> Option<Self> {
+    pub(in crate::render) fn new(numerator: u128, denominator: u128) -> Option<Self> {
         let common = divisor(numerator, denominator);
         Some(Self {
             numerator: numerator.checked_div(common)?,
@@ -50,7 +45,7 @@ impl Fraction {
         })
     }
 
-    fn speed(value: f32) -> Result<Self, ElasticError> {
+    pub(super) fn speed(value: f32) -> Result<Self, ElasticError> {
         if !value.is_finite() || !(consts::MIN_SPEED..=4.0).contains(&value) {
             return Err(ElasticError::InvalidRate(f64::from(value)));
         }
@@ -69,14 +64,34 @@ impl Fraction {
             .ok_or(ElasticError::SampleCountOverflow)
     }
 
-    pub(super) fn common(self, other: Self) -> Option<u128> {
+    fn precise_speed(value: f64) -> Result<Self, ElasticError> {
+        if !value.is_finite() || !(f64::from(consts::MIN_SPEED)..=4.0).contains(&value) {
+            return Err(ElasticError::InvalidRate(value));
+        }
+        let bits = value.to_bits();
+        let exponent = i32::try_from((bits >> 52) & 2047)
+            .map_err(|_| ElasticError::SampleCountOverflow)?
+            - 1075;
+        let mantissa = u128::from((bits & 0x000f_ffff_ffff_ffff) | 0x0010_0000_0000_0000);
+        let (numerator, denominator) = if exponent >= 0 {
+            (mantissa.checked_shl(exponent.unsigned_abs()), Some(1))
+        } else {
+            (Some(mantissa), 1u128.checked_shl(exponent.unsigned_abs()))
+        };
+        numerator
+            .zip(denominator)
+            .and_then(|(numerator, denominator)| Self::new(numerator, denominator))
+            .ok_or(ElasticError::SampleCountOverflow)
+    }
+
+    pub(in crate::render) fn common(self, other: Self) -> Option<u128> {
         let first = self.denominator.get();
         first
             .checked_div(divisor(first, other.denominator.get()))?
             .checked_mul(other.denominator.get())
     }
 
-    pub(super) fn at(self, denominator: u128) -> Option<u128> {
+    pub(in crate::render) fn at(self, denominator: u128) -> Option<u128> {
         self.numerator
             .checked_mul(denominator.checked_div(self.denominator.get())?)
     }
@@ -95,7 +110,7 @@ impl Fraction {
         .ok_or(ElasticError::SampleCountOverflow)
     }
 
-    pub(super) fn correction(value: f64) -> Option<Self> {
+    pub(in crate::render) fn correction(value: f64) -> Option<Self> {
         if !value.is_finite() || value <= 0.0 {
             return None;
         }
@@ -114,17 +129,17 @@ impl Fraction {
         Self::new(numerator, denominator)
     }
 
-    pub(super) fn add(self, other: Self) -> Option<Self> {
+    pub(in crate::render) fn add(self, other: Self) -> Option<Self> {
         let common = self.common(other)?;
         Self::new(self.at(common)?.checked_add(other.at(common)?)?, common)
     }
 
-    pub(super) fn sub(self, other: Self) -> Option<Self> {
+    pub(in crate::render) fn sub(self, other: Self) -> Option<Self> {
         let common = self.common(other)?;
         Self::new(self.at(common)?.checked_sub(other.at(common)?)?, common)
     }
 
-    pub(super) fn mul(self, other: Self) -> Option<Self> {
+    pub(in crate::render) fn mul(self, other: Self) -> Option<Self> {
         let first = divisor(self.numerator, other.denominator.get());
         let second = divisor(other.numerator, self.denominator.get());
         Self::new(
@@ -133,64 +148,20 @@ impl Fraction {
         )
     }
 
-    pub(super) fn div(self, other: Self) -> Option<Self> {
+    pub(in crate::render) fn div(self, other: Self) -> Option<Self> {
         self.mul(Self {
             numerator: other.denominator.get(),
             denominator: NonZeroU128::new(other.numerator)?,
         })
     }
 
-    pub(super) fn as_f64(self) -> Option<f64> {
+    pub(in crate::render) fn as_f64(self) -> Option<f64> {
         Some(self.numerator.to_f64()? / self.denominator.get().to_f64()?)
     }
 }
 
-#[derive(Clone)]
-pub(super) struct Trajectory {
-    curve: SpeedCurve,
-    origin_speed: Fraction,
-    elapsed: u64,
-    position: Option<Phase>,
-}
-
-/// Replacement origins use whole source frames and Q32 fractions, rounded to
-/// nearest with exact half units toward the next frame. A running curve keeps
-/// its exact integral until the next replacement.
-#[derive(Clone, Copy)]
-enum Phase {
-    Origin { frames: u64, fraction: u32 },
-    Rendered(SourceSpan),
-}
-
-impl Phase {
-    fn ratio(self) -> Option<Fraction> {
-        match self {
-            Self::Origin { frames, fraction } => Fraction::new(
-                (u128::from(frames) << 32) + u128::from(fraction),
-                1u128 << 32,
-            ),
-            Self::Rendered(span) => {
-                let (numerator, denominator) = span.source_ratio_at(span.output_frames())?;
-                Some(Fraction {
-                    numerator,
-                    denominator,
-                })
-            }
-        }
-    }
-
-    fn on_lattice(self) -> Option<Self> {
-        let position = self.ratio()?.on_lattice()?;
-        let numerator = position.at(1u128 << 32)?;
-        Some(Self::Origin {
-            frames: u64::try_from(numerator >> 32).ok()?,
-            fraction: u32::try_from(numerator & u128::from(u32::MAX)).ok()?,
-        })
-    }
-}
-
 impl Trajectory {
-    pub(super) fn new(speed: f32) -> Self {
+    pub(in crate::render) fn new(speed: f32) -> Self {
         Self {
             curve: SpeedCurve::Constant(speed),
             origin_speed: Fraction {
@@ -199,60 +170,69 @@ impl Trajectory {
             },
             elapsed: 0,
             position: None,
+            curve_origin: None,
         }
     }
 
-    pub(super) fn reset(&mut self) {
-        self.position = None;
-    }
-
-    pub(super) fn snap_position(&mut self) -> Result<(), ElasticError> {
-        if let Some(position) = self.position {
-            self.position = Some(
-                position
-                    .on_lattice()
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-            );
-        }
-        Ok(())
-    }
-
-    pub(super) fn snap_to_frame(&mut self) -> Result<(), ElasticError> {
-        if let Some(position) = self.position {
-            let position = position.ratio().ok_or(ElasticError::SampleCountOverflow)?;
-            let denominator = position.denominator.get();
-            let remainder = position.numerator % denominator;
-            let frames =
-                position.numerator / denominator + u128::from(remainder >= denominator - remainder);
-            self.position = Some(Phase::Origin {
-                frames: u64::try_from(frames).map_err(|_| ElasticError::SampleCountOverflow)?,
-                fraction: 0,
-            });
-        }
-        Ok(())
-    }
-
-    pub(super) fn requires_quanta(&self) -> bool {
+    pub(in crate::render) fn requires_quanta(&self) -> bool {
         !matches!(&self.curve, SpeedCurve::Constant(_))
     }
 
-    pub(super) fn unity_interval(&self) -> bool {
+    pub(super) fn approach_at(&self, frame: u64) -> Option<(ExponentialApproach, u64)> {
+        match &self.curve {
+            SpeedCurve::Approach(curve) => Some((*curve, 0)),
+            SpeedCurve::ApproachSteps(steps) => steps
+                .get(
+                    steps
+                        .partition_point(|(at, _)| *at <= frame)
+                        .checked_sub(1)?,
+                )
+                .map(|(at, curve)| (*curve, *at)),
+            _ => None,
+        }
+    }
+
+    pub(in crate::render) fn passthrough_speed(&self, speed: f32) -> bool {
+        match self.approach_at(self.elapsed) {
+            Some((curve, _)) => curve.initial() == 1.0 && curve.target() == 1.0,
+            None => (speed - 1.0).abs() <= f32::EPSILON,
+        }
+    }
+
+    pub(in crate::render) fn unity_interval(&self) -> bool {
         !matches!(&self.curve, SpeedCurve::Ramp { frames, .. } if self.elapsed < frames.get())
+            && self.passthrough_speed(1.0)
             && self.speed().is_ok_and(|speed| speed == 1.0)
     }
 
-    pub(super) fn constant_unity(&self) -> bool {
+    pub(in crate::render) fn constant_unity(&self) -> bool {
         self.unity_interval()
-            && !matches!(
-                &self.curve,
-                SpeedCurve::Steps(steps)
-                    if steps.last().is_some_and(|(frame, _)| *frame > self.elapsed)
-            )
+            && !match &self.curve {
+                SpeedCurve::Steps(steps) => {
+                    steps.last().is_some_and(|(frame, _)| *frame > self.elapsed)
+                }
+                SpeedCurve::ApproachSteps(steps) => {
+                    steps.last().is_some_and(|(frame, _)| *frame > self.elapsed)
+                }
+                _ => false,
+            }
     }
 
-    fn speed_at(&self) -> Result<Fraction, ElasticError> {
+    pub(super) fn speed_at(&self) -> Result<Fraction, ElasticError> {
         match &self.curve {
             SpeedCurve::Constant(speed) => Fraction::speed(*speed),
+            SpeedCurve::Approach(_) | SpeedCurve::ApproachSteps(_) => {
+                let (curve, start) =
+                    self.approach_at(self.elapsed)
+                        .ok_or(ElasticError::EnginePreparation(
+                            "analytic speed has no current segment",
+                        ))?;
+                (self.elapsed - start)
+                    .to_f64()
+                    .and_then(|elapsed| curve.rate_at(elapsed))
+                    .ok_or(ElasticError::SampleCountOverflow)
+                    .and_then(Fraction::precise_speed)
+            }
             SpeedCurve::Steps(steps) => steps
                 [..steps.partition_point(|(frame, _)| *frame <= self.elapsed)]
                 .last()
@@ -285,10 +265,27 @@ impl Trajectory {
         }
     }
 
-    pub(super) fn replace(&mut self, curve: SpeedCurve) -> Result<f32, ElasticError> {
+    pub(in crate::render) fn replace(&mut self, curve: SpeedCurve) -> Result<f32, ElasticError> {
         match &curve {
             SpeedCurve::Constant(speed) | SpeedCurve::Ramp { to: speed, .. } => {
                 Fraction::speed(*speed)?;
+            }
+            SpeedCurve::Approach(curve) => {
+                Fraction::precise_speed(curve.initial())?;
+                Fraction::precise_speed(curve.target())?;
+            }
+            SpeedCurve::ApproachSteps(steps) => {
+                if steps.first().is_none_or(|(frame, _)| *frame != 0)
+                    || steps.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+                {
+                    return Err(ElasticError::EnginePreparation(
+                        "analytic segments must start at zero and be strictly ordered",
+                    ));
+                }
+                for (_, curve) in steps.iter() {
+                    Fraction::precise_speed(curve.initial())?;
+                    Fraction::precise_speed(curve.target())?;
+                }
             }
             SpeedCurve::Steps(steps) => {
                 if steps.is_empty() || steps.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
@@ -301,7 +298,10 @@ impl Trajectory {
                 }
             }
         }
-        let origin_speed = Fraction::speed(self.speed_at()?.value()?)?;
+        let origin_speed = match &self.curve {
+            SpeedCurve::Approach(_) | SpeedCurve::ApproachSteps(_) => self.speed_at()?,
+            _ => Fraction::speed(self.speed_at()?.value()?)?,
+        };
         let position = match self.position {
             Some(position) => Some(
                 position
@@ -314,8 +314,12 @@ impl Trajectory {
         let previous_origin = self.origin_speed;
         let previous_elapsed = self.elapsed;
         let previous_position = self.position;
+        let previous_curve_origin = self.curve_origin;
         self.origin_speed = origin_speed;
         self.position = position;
+        self.curve_origin = position
+            .and_then(Phase::ratio)
+            .map(|position| (position, 0));
         self.elapsed = 0;
         let result = self.speed_at().and_then(Fraction::value).and_then(|speed| {
             let frames = match &self.curve {
@@ -334,13 +338,17 @@ impl Trajectory {
             self.origin_speed = previous_origin;
             self.elapsed = previous_elapsed;
             self.position = previous_position;
+            self.curve_origin = previous_curve_origin;
         }
         result
     }
 
-    pub(super) fn output_limit(&self, budget: usize) -> usize {
+    pub(in crate::render) fn output_limit(&self, budget: usize) -> usize {
         let next = match &self.curve {
             SpeedCurve::Steps(steps) => steps
+                .get(steps.partition_point(|(frame, _)| *frame <= self.elapsed))
+                .map(|(frame, _)| *frame),
+            SpeedCurve::ApproachSteps(steps) => steps
                 .get(steps.partition_point(|(frame, _)| *frame <= self.elapsed))
                 .map(|(frame, _)| *frame),
             SpeedCurve::Ramp { frames, .. } if self.elapsed < frames.get() => Some(frames.get()),
@@ -351,32 +359,42 @@ impl Trajectory {
         })
     }
 
-    pub(super) fn speed(&self) -> Result<f32, ElasticError> {
+    pub(in crate::render) fn speed(&self) -> Result<f32, ElasticError> {
         self.speed_at()?.value()
     }
 
-    pub(super) fn unity_span(
-        &self,
-        start: u64,
-        sample_rate: NonZeroU32,
-        frames: usize,
-    ) -> Result<SourceSpan, ElasticError> {
-        let position = self.source_position(start)?;
-        SourceSpan::try_from((
-            position.numerator,
-            position.denominator.get(),
-            position.denominator,
-            sample_rate,
-            u64::try_from(frames).map_err(|_| ElasticError::SampleCountOverflow)?,
-        ))
-        .ok()
-        .ok_or(ElasticError::SampleCountOverflow)
-    }
-
-    pub(super) fn speed_bounds(&self) -> Result<(f32, f32), ElasticError> {
+    pub(in crate::render) fn speed_bounds(&self) -> Result<(f32, f32), ElasticError> {
         let origin = self.origin_speed.value()?;
         Ok(match &self.curve {
             SpeedCurve::Constant(speed) => (*speed, *speed),
+            SpeedCurve::Approach(curve) => {
+                let initial = curve
+                    .initial()
+                    .to_f32()
+                    .ok_or(ElasticError::SampleCountOverflow)?;
+                let target = curve
+                    .target()
+                    .to_f32()
+                    .ok_or(ElasticError::SampleCountOverflow)?;
+                (initial.min(target), initial.max(target))
+            }
+            SpeedCurve::ApproachSteps(steps) => {
+                let mut minimum = origin;
+                let mut maximum = origin;
+                for (_, curve) in steps.iter() {
+                    let initial = curve
+                        .initial()
+                        .to_f32()
+                        .ok_or(ElasticError::SampleCountOverflow)?;
+                    let target = curve
+                        .target()
+                        .to_f32()
+                        .ok_or(ElasticError::SampleCountOverflow)?;
+                    minimum = minimum.min(initial).min(target);
+                    maximum = maximum.max(initial).max(target);
+                }
+                (minimum, maximum)
+            }
             SpeedCurve::Ramp { to, .. } => (origin.min(*to), origin.max(*to)),
             SpeedCurve::Steps(steps) => steps
                 .iter()
@@ -386,7 +404,10 @@ impl Trajectory {
         })
     }
 
-    pub(super) fn projection_stages(&self, correction: f64) -> Result<usize, ElasticError> {
+    pub(in crate::render) fn projection_stages(
+        &self,
+        correction: f64,
+    ) -> Result<usize, ElasticError> {
         let (minimum, maximum) = self.speed_bounds()?;
         let mut pitch = correction / f64::from(minimum);
         let mut stages = 1;
@@ -405,138 +426,5 @@ impl Trajectory {
             return Err(ElasticError::InvalidRate(f64::from(minimum) / correction));
         }
         Ok(stages)
-    }
-
-    pub(super) fn at_offset(
-        &self,
-        start: u64,
-        rate: NonZeroU32,
-        offset: u64,
-    ) -> Result<(u128, NonZeroU128), ElasticError> {
-        let mut cursor = self.clone();
-        if offset > 0 {
-            cursor.advance_by(start, rate, offset)?;
-        }
-        let position = cursor.source_position(start)?;
-        Ok((position.numerator, position.denominator))
-    }
-
-    #[kithara_test_macros::hang_watchdog]
-    pub(super) fn advance_by(
-        &mut self,
-        start: u64,
-        rate: NonZeroU32,
-        offset: u64,
-    ) -> Result<(), ElasticError> {
-        let mut remaining = offset;
-        while remaining > 0 {
-            hang_tick!();
-            let frames = self.output_limit(
-                usize::try_from(remaining).map_err(|_| ElasticError::SampleCountOverflow)?,
-            );
-            let span = self.span(start, rate, frames)?;
-            self.advance(span)?;
-            remaining -= span.output_frames();
-            hang_reset!();
-        }
-        Ok(())
-    }
-
-    pub(super) fn span(
-        &self,
-        start: u64,
-        sample_rate: NonZeroU32,
-        frames: usize,
-    ) -> Result<SourceSpan, ElasticError> {
-        let position = self.source_position(start)?;
-        let speed = self.speed_at()?;
-        let common = position
-            .common(speed)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let mut denominator = common;
-        let mut step = speed.at(common).ok_or(ElasticError::SampleCountOverflow)?;
-        let mut change = 0i128;
-        if let SpeedCurve::Ramp {
-            to,
-            frames: duration,
-        } = &self.curve
-            && self.elapsed < duration.get()
-        {
-            let target = Fraction::speed(*to)?;
-            let basis = self
-                .origin_speed
-                .common(target)
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            let delta = i128::try_from(target.at(basis).ok_or(ElasticError::SampleCountOverflow)?)
-                .ok()
-                .and_then(|target| {
-                    i128::try_from(self.origin_speed.at(basis)?)
-                        .ok()
-                        .and_then(|origin| target.checked_sub(origin))
-                })
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            let ramp_denominator = basis
-                .checked_mul(u128::from(duration.get()))
-                .and_then(|value| value.checked_mul(2))
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            denominator = common
-                .checked_div(divisor(common, ramp_denominator))
-                .and_then(|value| value.checked_mul(ramp_denominator))
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            let scaled_delta = delta
-                .checked_mul(
-                    i128::try_from(denominator / ramp_denominator)
-                        .map_err(|_| ElasticError::SampleCountOverflow)?,
-                )
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            step = u128::try_from(
-                i128::try_from(
-                    speed
-                        .at(denominator)
-                        .ok_or(ElasticError::SampleCountOverflow)?,
-                )
-                .map_err(|_| ElasticError::SampleCountOverflow)?
-                .checked_add(scaled_delta)
-                .ok_or(ElasticError::SampleCountOverflow)?,
-            )
-            .map_err(|_| ElasticError::SampleCountOverflow)?;
-            change = scaled_delta
-                .checked_mul(2)
-                .ok_or(ElasticError::SampleCountOverflow)?;
-        }
-        SourceSpan::try_from((
-            position
-                .at(denominator)
-                .ok_or(ElasticError::SampleCountOverflow)?,
-            step,
-            change,
-            NonZeroU128::new(denominator).ok_or(ElasticError::SampleCountOverflow)?,
-            sample_rate,
-            u64::try_from(frames).map_err(|_| ElasticError::SampleCountOverflow)?,
-        ))
-        .ok()
-        .ok_or(ElasticError::SampleCountOverflow)
-    }
-
-    pub(super) fn advance(&mut self, span: SourceSpan) -> Result<(), ElasticError> {
-        let elapsed = self
-            .elapsed
-            .checked_add(span.output_frames())
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        self.position = Some(Phase::Rendered(span));
-        self.elapsed = elapsed;
-        Ok(())
-    }
-
-    fn source_position(&self, start: u64) -> Result<Fraction, ElasticError> {
-        self.position.map_or_else(
-            || {
-                Ok(Fraction {
-                    numerator: u128::from(start),
-                    denominator: NonZeroU128::MIN,
-                })
-            },
-            |position| position.ratio().ok_or(ElasticError::SampleCountOverflow),
-        )
     }
 }

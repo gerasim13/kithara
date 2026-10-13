@@ -5,12 +5,11 @@ use kithara_warp::{SessionAnchor, SessionBeat};
 
 use crate::{Tempo, TrajectoryError};
 
-/// Host tempo over session time, with continuous beats at every tempo step.
+/// Host tempo over session time, retaining the executed approach at every target.
 #[derive(Clone, Debug)]
 pub struct TempoTrajectory {
-    steps: Vec<TempoStep>,
+    steps: Vec<SessionAnchor>,
     beats_per_bar: NonZeroU16,
-    sample_rate: NonZeroU32,
 }
 
 /// One tempo change and the beat reached when it takes effect.
@@ -23,12 +22,24 @@ pub struct TempoStep {
 
 impl TempoTrajectory {
     /// Starts the trajectory at an anchor, extrapolating its tempo backwards.
+    ///
+    /// # Panics
+    /// Panics if the initial anchor cannot represent the supplied tempo.
     #[must_use]
     pub fn new(start: TempoStep, beats_per_bar: NonZeroU16, sample_rate: NonZeroU32) -> Self {
         Self {
-            steps: vec![start],
+            steps: vec![
+                SessionAnchor::new(
+                    start.frame,
+                    start.beat,
+                    start.tempo.beats_per_second(),
+                    sample_rate,
+                )
+                .unwrap_or_else(|error| {
+                    panic!("initial session anchor is not representable: {error}")
+                }),
+            ],
             beats_per_bar,
-            sample_rate,
         }
     }
 
@@ -37,26 +48,32 @@ impl TempoTrajectory {
     /// # Errors
     /// Returns a refusal for an occupied frame or a frame at or before the anchor.
     pub fn push(&mut self, frame: SessionFrame, tempo: Tempo) -> Result<(), TrajectoryError> {
-        if frame <= self.steps[0].frame {
+        if frame <= self.steps[0].frame() {
             return Err(TrajectoryError::BeforeAnchor { frame });
         }
-        let index = self.steps.partition_point(|step| step.frame < frame);
+        let index = self.steps.partition_point(|step| step.frame() < frame);
         if self
             .steps
             .get(index)
-            .is_some_and(|step| step.frame == frame)
+            .is_some_and(|step| step.frame() == frame)
         {
             return Err(TrajectoryError::Occupied { frame });
         }
-        let beat = self.beat_at(frame);
-        self.steps.insert(index, TempoStep { frame, beat, tempo });
-        self.reanchor(index + 1);
+        let anchor = self.steps[index - 1].retarget_tempo(frame, tempo.beats_per_second())?;
+        let mut successors = self.steps[index..].to_vec();
+        let mut prior = anchor;
+        for next in &mut successors {
+            *next = prior.retarget_tempo(next.frame(), next.target_beats_per_second())?;
+            prior = *next;
+        }
+        self.steps.insert(index, anchor);
+        self.steps[index + 1..].copy_from_slice(&successors);
         Ok(())
     }
 
     /// Removes a refused step, retaining the initial anchor and continuous beats.
     pub fn withdraw(&mut self, frame: SessionFrame) {
-        if let Some(index) = self.steps.iter().position(|step| step.frame == frame)
+        if let Some(index) = self.steps.iter().position(|step| step.frame() == frame)
             && index != 0
         {
             self.steps.remove(index);
@@ -70,11 +87,7 @@ impl TempoTrajectory {
     /// Panics if the requested frame's beat is not representable on the session axis.
     #[must_use]
     pub fn beat_at(&self, frame: SessionFrame) -> SessionBeat {
-        let index = self
-            .steps
-            .partition_point(|step| step.frame <= frame)
-            .saturating_sub(1);
-        match self.anchor(self.steps[index]).beat_at(frame) {
+        match self.anchor_at(frame).beat_at(frame) {
             Ok(beat) => beat,
             Err(error) => panic!("session beat is not representable: {error}"),
         }
@@ -93,19 +106,37 @@ impl TempoTrajectory {
     pub(crate) fn try_frame_at(&self, beat: SessionBeat) -> Option<SessionFrame> {
         let index = self
             .steps
-            .partition_point(|step| step.beat <= beat)
+            .partition_point(|step| step.beat() <= beat)
             .saturating_sub(1);
-        self.anchor(self.steps[index]).frame_at(beat).ok()
+        self.steps[index].frame_at(beat).ok()
     }
 
-    /// The piecewise-constant tempo active on a frame.
+    /// The reached tempo active on a frame.
+    ///
+    /// # Panics
+    /// Panics if the reached tempo is not representable as a `Tempo`.
     #[must_use]
     pub fn tempo_at(&self, frame: SessionFrame) -> Tempo {
+        Tempo::new(self.anchor_at(frame).tempo_at(frame) * 60.0)
+            .unwrap_or_else(|error| panic!("reached session tempo is not representable: {error}"))
+    }
+
+    /// The accepted transport law governing this frame and following frames.
+    #[must_use]
+    pub fn anchor_at(&self, frame: SessionFrame) -> SessionAnchor {
         let index = self
             .steps
-            .partition_point(|step| step.frame <= frame)
+            .partition_point(|step| step.frame() <= frame)
             .saturating_sub(1);
-        self.steps[index].tempo
+        self.steps[index]
+    }
+
+    /// Accepted target frames whose laws depend on an earlier change.
+    pub fn changes_after(&self, frame: SessionFrame) -> impl Iterator<Item = SessionFrame> + '_ {
+        self.steps
+            .iter()
+            .map(SessionAnchor::frame)
+            .filter(move |at| *at > frame)
     }
 
     /// Bar lines on or after `from`, while their frames are representable.
@@ -119,14 +150,9 @@ impl TempoTrajectory {
     }
 
     /// Reanchors the trajectory on observed session geometry and tempo.
-    pub fn reaxis_observed(&mut self, anchor: SessionAnchor, tempo: Tempo) {
-        self.sample_rate = anchor.sample_rate();
+    pub fn reaxis_observed(&mut self, anchor: SessionAnchor) {
         self.steps.clear();
-        self.steps.push(TempoStep {
-            frame: anchor.frame(),
-            beat: anchor.beat(),
-            tempo,
-        });
+        self.steps.push(anchor);
     }
 
     pub(crate) fn beats_per_bar(&self) -> f64 {
@@ -136,36 +162,33 @@ impl TempoTrajectory {
     /// The output sample rate used for beat and frame conversion.
     #[must_use]
     pub fn sample_rate(&self) -> NonZeroU32 {
-        self.sample_rate
+        self.steps[0].sample_rate()
     }
 
     /// Changes the anchor tempo and keeps later tempo steps continuous.
+    ///
+    /// # Panics
+    /// Panics if the new anchor or its successors are not representable.
     pub fn initial_tempo(&mut self, tempo: Tempo) {
-        self.steps[0].tempo = tempo;
+        let first = self.steps[0];
+        self.steps[0] = SessionAnchor::new(
+            first.frame(),
+            first.beat(),
+            tempo.beats_per_second(),
+            first.sample_rate(),
+        )
+        .unwrap_or_else(|error| panic!("initial session tempo is not representable: {error}"));
         self.reanchor(1);
-    }
-
-    fn anchor(&self, step: TempoStep) -> SessionAnchor {
-        match SessionAnchor::new(
-            step.frame,
-            step.beat,
-            step.tempo.beats_per_second(),
-            self.sample_rate,
-        ) {
-            Ok(anchor) => anchor,
-            Err(error) => unreachable!("validated tempo and sample rate define an anchor: {error}"),
-        }
     }
 
     fn reanchor(&mut self, from: usize) {
         for index in from..self.steps.len() {
-            self.steps[index].beat = match self
-                .anchor(self.steps[index - 1])
-                .beat_at(self.steps[index].frame)
-            {
-                Ok(beat) => beat,
-                Err(error) => panic!("session beat is not representable: {error}"),
-            };
+            let next = self.steps[index];
+            self.steps[index] = self.steps[index - 1]
+                .retarget_tempo(next.frame(), next.target_beats_per_second())
+                .unwrap_or_else(|error| {
+                    panic!("successor session anchor is not representable: {error}")
+                });
         }
     }
 
@@ -214,12 +237,12 @@ mod tests {
             let frame = SessionFrame::new(frame);
             assert_eq!(host.frame_at(host.beat_at(frame)), frame);
         }
-        assert_eq!(f64::from(host.beat_at(SessionFrame::new(192_000))), 6.0);
+        assert_eq!(f64::from(host.beat_at(SessionFrame::new(192_000))), 6.005);
         assert_eq!(
             host.downbeats(SessionFrame::new(1))
                 .take(2)
                 .collect::<Vec<_>>(),
-            vec![SessionFrame::new(96_000), SessionFrame::new(224_000)]
+            vec![SessionFrame::new(96_000), SessionFrame::new(224_080)]
         );
         assert_eq!(
             host.beats(SessionFrame::new(1)).next(),
@@ -253,8 +276,9 @@ mod tests {
 
         assert_eq!(host.beat_at(now), before);
         assert_eq!(f64::from(host.beat_at(now)), 2.0);
-        assert_eq!(f64::from(host.beat_at(SessionFrame::new(96_000))), 3.5);
-        assert_eq!(host.tempo_at(now).beats_per_minute(), 90.0);
+        assert_eq!(f64::from(host.beat_at(SessionFrame::new(96_000))), 3.5025);
+        assert_eq!(host.tempo_at(now).beats_per_minute(), 120.0);
+        assert_eq!(host.anchor_at(now).target_beats_per_second(), 1.5);
     }
 
     #[kithara::test]
@@ -268,6 +292,9 @@ mod tests {
             NonZeroU16::new(4).expect("nonzero meter"),
             NonZeroU32::new(48_000).expect("nonzero rate"),
         );
+        let mut reached = 124.0;
+        let mut previous_target = 124.0;
+        let mut rates = Vec::new();
         for step in 0..16_i64 {
             let target = if step % 2 == 0 { 124.0 } else { 116.0 };
             let at = SessionFrame::new(step * 128);
@@ -276,6 +303,8 @@ mod tests {
             if step == 0 {
                 host.initial_tempo(tempo);
             } else {
+                reached =
+                    previous_target + (reached - previous_target) * (-128.0_f64 / 240.0).exp();
                 host.push(at, tempo).expect("each block has its own frame");
             }
             let played = host.tempo_at(at).beats_per_minute();
@@ -284,15 +313,20 @@ mod tests {
                 (115.999..=124.001).contains(&played),
                 "step {step}: tempo {played} left the knob range"
             );
-            assert_eq!(played, target);
+            assert!((played - reached).abs() < 1e-12);
+            assert_eq!(host.anchor_at(at).target_beats_per_second(), target / 60.0);
             assert_eq!(host.beat_at(at), before);
+            rates.push(reached);
+            previous_target = target;
         }
         for step in 0..16_i64 {
-            let target = if step % 2 == 0 { 124.0 } else { 116.0 };
-            assert_eq!(
-                host.tempo_at(SessionFrame::new(step * 128))
-                    .beats_per_minute(),
-                target
+            assert!(
+                (host
+                    .tempo_at(SessionFrame::new(step * 128))
+                    .beats_per_minute()
+                    - rates[usize::try_from(step).expect("nonnegative step")])
+                .abs()
+                    < 1e-12
             );
         }
     }
@@ -343,7 +377,8 @@ mod tests {
             host.push(frame, Tempo::DEFAULT),
             Err(TrajectoryError::Occupied { frame })
         );
-        assert_eq!(host.tempo_at(frame).beats_per_minute(), 60.0);
+        assert_eq!(host.tempo_at(frame).beats_per_minute(), 120.0);
+        assert_eq!(host.anchor_at(frame).target_beats_per_second(), 1.0);
         assert_eq!(f64::from(host.beat_at(frame)), 4.0);
     }
 }

@@ -126,6 +126,16 @@ pub(super) fn spec() -> AudioSpec {
     }
 }
 
+pub(super) fn info(frame_offset: u64) -> AudioChunkInfo {
+    AudioChunkInfo {
+        spec: spec(),
+        frame_offset,
+        media_origin: Some(Duration::ZERO),
+        visible_origin: Some(Duration::ZERO),
+        ..Default::default()
+    }
+}
+
 pub(super) fn sine(pcm: &[f32], frames: usize) -> &[f32] {
     sine_from(pcm, 0, frames)
 }
@@ -139,10 +149,8 @@ pub(super) fn chunk(pools: &Pools, samples: &[f32], frame_offset: u64) -> AudioC
     let frames = samples.len() / usize::from(consts::CH);
     AudioChunk::new(
         AudioChunkInfo {
-            spec: spec(),
             frames: u32::try_from(frames).unwrap_or(0),
-            frame_offset,
-            ..Default::default()
+            ..info(frame_offset)
         },
         sample_buffer(pools, samples),
     )

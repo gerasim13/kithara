@@ -139,7 +139,7 @@ fn projected_source_endpoints_do_not_drift_across_sample_rate_partitions() {
                 ..Default::default()
             };
             let frames = renderer
-                .prepare_quantum(meta, 4096, usize::MAX)
+                .prepare_source_window(meta, 4096, usize::MAX)
                 .expect("prepared")
                 .get();
             let mut input = chunk(
@@ -308,7 +308,7 @@ fn adoption_frontier_reports_only_committed_pcm() {
 
     assert!(renderer.committed.is_none());
     renderer
-        .prepare_quantum(input.meta, input.frames(), usize::MAX)
+        .prepare_source_window(input.meta, input.frames(), usize::MAX)
         .expect("initial quantum is prepared");
     renderer
         .render_quantum(input)
@@ -351,7 +351,7 @@ fn an_unapplied_activation_splits_every_crossing_source_quantum(#[case] input_fr
     };
 
     let frames = renderer
-        .prepare_quantum(meta, input_frames, usize::MAX)
+        .prepare_source_window(meta, input_frames, usize::MAX)
         .expect("crossing source quantum is split");
 
     assert_eq!(frames.get(), 16);
@@ -373,7 +373,7 @@ fn an_unapplied_activation_splits_every_crossing_source_quantum(#[case] input_fr
 
     renderer.prepare(spec());
     renderer
-        .prepare_quantum(
+        .prepare_source_window(
             AudioChunkInfo {
                 frame_offset: 16,
                 ..meta
@@ -406,7 +406,7 @@ fn servicing_a_new_plan_preserves_an_already_prepared_quantum() {
     let input = chunk(&pools, &samples);
 
     renderer
-        .prepare_quantum(input.meta, input.frames(), usize::MAX)
+        .prepare_source_window(input.meta, input.frames(), usize::MAX)
         .expect("current plan accepts the source quantum");
     renderer
         .set_speed(SpeedCurve::Constant(1.0), 1)
@@ -414,7 +414,7 @@ fn servicing_a_new_plan_preserves_an_already_prepared_quantum() {
     assert!(renderer.prepared_quantum.is_none());
     renderer.prepare(spec());
     renderer
-        .prepare_quantum(input.meta, input.frames(), usize::MAX)
+        .prepare_source_window(input.meta, input.frames(), usize::MAX)
         .expect("replacement replans the unconsumed source quantum");
 
     let output = renderer
@@ -460,7 +460,7 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
     let first = chunk(&pools, &[0.0; 32]);
     assert_eq!(
         renderer
-            .prepare_quantum(first.meta, first.frames(), usize::MAX)
+            .prepare_source_window(first.meta, first.frames(), usize::MAX)
             .expect("prefix is prepared")
             .get(),
         16
@@ -491,7 +491,7 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
     let mut second = chunk(&pools, &[0.0; 64]);
     second.meta.frame_offset = 16;
     renderer
-        .prepare_quantum(second.meta, second.frames(), usize::MAX)
+        .prepare_source_window(second.meta, second.frames(), usize::MAX)
         .expect("activation source is revisited");
     let second = renderer
         .render_quantum(second)
@@ -523,7 +523,7 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
     bridge.meta.frame_offset = 48;
     assert_eq!(
         renderer
-            .prepare_quantum(bridge.meta, bridge.frames(), usize::MAX)
+            .prepare_source_window(bridge.meta, bridge.frames(), usize::MAX)
             .expect("continuous source bridge")
             .get(),
         32
@@ -540,7 +540,7 @@ fn a_split_quantum_revisits_the_exact_activation_without_resetting_source() {
     let mut before_future_activation = chunk(&pools, &[0.0; 32]);
     before_future_activation.meta.frame_offset = 80;
     renderer
-        .prepare_quantum(
+        .prepare_source_window(
             before_future_activation.meta,
             before_future_activation.frames(),
             usize::MAX,
@@ -588,7 +588,7 @@ fn prepared_projection_refuses_another_source_origin_without_consuming_pcm() {
         ..Default::default()
     };
     let count = renderer
-        .prepare_quantum(meta, 4096, usize::MAX)
+        .prepare_source_window(meta, 4096, usize::MAX)
         .expect("projected span");
     let input = chunk(
         &renderer.pools,
@@ -669,7 +669,7 @@ fn entering_a_unity_grid_preserves_the_next_source_samples(
         ..AudioChunkInfo::default()
     };
     let frames = renderer
-        .prepare_quantum(meta, 128, usize::MAX)
+        .prepare_source_window(meta, 128, usize::MAX)
         .expect("next source span is plannable")
         .get();
     meta.frames = u32::try_from(frames).expect("source span fits u32");
@@ -733,7 +733,7 @@ fn distant_reanchor_keeps_each_source_quantum_bounded(
         ..AudioChunkInfo::default()
     };
     let frames = renderer
-        .prepare_quantum(meta, warp_sine.len() / 2 - initial_frames, usize::MAX)
+        .prepare_source_window(meta, warp_sine.len() / 2 - initial_frames, usize::MAX)
         .expect("distant transition is plannable")
         .get();
     assert!(
@@ -775,7 +775,7 @@ fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
             ..AudioChunkInfo::default()
         };
         let frames = renderer
-            .prepare_quantum(meta, 4096, usize::MAX)
+            .prepare_source_window(meta, 4096, usize::MAX)
             .expect("projected quantum")
             .get();
         let mut input = chunk(
@@ -810,7 +810,7 @@ fn projected_keylock_switch_resumes_at_the_same_source_frontier() {
         ..AudioChunkInfo::default()
     };
     let frames = renderer
-        .prepare_quantum(meta, 4096, usize::MAX)
+        .prepare_source_window(meta, 4096, usize::MAX)
         .expect("new backend resumes without seeking or reanchoring")
         .get();
     let mut input = chunk(
@@ -960,7 +960,7 @@ fn a_finite_projected_recording_shorter_than_backend_latency_renders_its_covered
                 ..AudioChunkInfo::default()
             };
             let requested = renderer
-                .prepare_quantum(meta, 128 - source, usize::MAX)
+                .prepare_source_window(meta, 128 - source, usize::MAX)
                 .expect("covered short recording is renderable without invented geometry")
                 .get();
             let frames = requested.min(128 - source);
@@ -1090,7 +1090,7 @@ fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
             ..AudioChunkInfo::default()
         };
         let frames = renderer
-            .prepare_quantum(meta, 4096, usize::MAX)
+            .prepare_source_window(meta, 4096, usize::MAX)
             .expect("mapped request")
             .get();
         let mut input = chunk(&renderer.pools, &vec![0.25; frames * 2]);
@@ -1141,7 +1141,7 @@ fn removing_a_projection_drains_only_its_admitted_interval_before_manual_pcm(
     let mut input = chunk(&renderer.pools, &[0.5; 128]);
     input.meta.frame_offset = admitted;
     let frames = renderer
-        .prepare_quantum(input.meta, input.frames(), usize::MAX)
+        .prepare_source_window(input.meta, input.frames(), usize::MAX)
         .expect("manual request");
     assert_eq!(frames.get(), input.frames());
     let output = renderer
@@ -1210,7 +1210,7 @@ fn partial_manual_history_after_seek_keeps_the_reset_prime_contract(
             ..AudioChunkInfo::default()
         };
         let frames = renderer
-            .prepare_quantum(meta, 128, usize::MAX)
+            .prepare_source_window(meta, 128, usize::MAX)
             .expect("activation")
             .get();
         assert!(frames > 128, "partial history still primes native latency");
@@ -1343,7 +1343,7 @@ fn a_one_frame_decoder_chunk_keeps_the_slowed_projection_presenting(
                 ..Default::default()
             };
             let frames = renderer
-                .prepare_quantum(meta, pending.len() / 2, 128)
+                .prepare_source_window(meta, pending.len() / 2, 128)
                 .expect("the projected source continues")
                 .get();
             let count = frames * 2;

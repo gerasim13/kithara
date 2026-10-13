@@ -1,7 +1,7 @@
 use kithara_beat::BeatGridModel;
 use kithara_platform::time::Duration;
-use kithara_signal::SessionFrame;
-use kithara_warp::{MIN_SPEED, SessionBeat};
+use kithara_signal::{ExponentialApproach, SessionFrame};
+use kithara_warp::{MIN_SPEED, SessionBeat, SpeedCurve};
 use num_traits::ToPrimitive;
 
 use super::plan::{CorrectionPlan, CorrectionStep};
@@ -82,6 +82,44 @@ pub fn speed(host: &TempoTrajectory, grid: &BeatGridModel, at: SessionFrame) -> 
     (host.tempo_at(at).beats_per_minute() / grid.as_raw().bpm)
         .to_f32()
         .unwrap_or_else(|| unreachable!("f64 values can be converted to f32"))
+}
+
+/// The Host's reached and target rates on the track's physical output axis.
+#[must_use]
+pub fn speed_curve(
+    host: &TempoTrajectory,
+    grid: &BeatGridModel,
+    at: SessionFrame,
+) -> Option<SpeedCurve> {
+    let scale = 60.0 / grid.as_raw().bpm;
+    let law_at = |frame| {
+        let anchor = host.anchor_at(frame);
+        let initial = anchor.tempo_at(frame) * scale;
+        let target = anchor.target_beats_per_second() * scale;
+        ExponentialApproach::new(
+            initial,
+            target,
+            if initial == target || anchor.approach().time_constant() == 0.0 {
+                0.0
+            } else {
+                anchor.approach().time_constant() * f64::from(host.sample_rate().get())
+            },
+        )
+    };
+    let first = law_at(at)?;
+    let mut steps = vec![(0, first)];
+    for frame in host.changes_after(at) {
+        steps.push((frame.frames_since(at)?, law_at(frame)?));
+    }
+    if steps.len() > 1 {
+        return Some(SpeedCurve::ApproachSteps(steps.into()));
+    }
+    let rounded = first.target().to_f32()?;
+    if first.time_constant() == 0.0 && f64::from(rounded) == first.target() {
+        Some(SpeedCurve::Constant(rounded))
+    } else {
+        Some(SpeedCurve::Approach(first))
+    }
 }
 
 /// The nearest in-phase entry on the requested side of a frame.

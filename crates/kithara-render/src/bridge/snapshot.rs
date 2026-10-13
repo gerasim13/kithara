@@ -61,10 +61,12 @@ impl EqSnapshot {
 pub struct SlotSnapshot {
     pub state: SlotState,
     pub mark: Option<SlotMark>,
-    /// Media position in seconds.
+    /// Raw decoded-source position in seconds.
     pub position: f64,
-    /// Visible media duration in seconds; `0.0` when unknown.
+    /// Visible decoded-source length in seconds; `0.0` when unknown.
     pub duration: f64,
+    /// Raw coordinate of track-media zero for the same PCM as `mark`.
+    pub media_origin: Option<Duration>,
     /// Immutable original source position for interpreting this visible length.
     pub visible_origin: Option<Duration>,
     /// Decoded-ahead frontier in seconds, never behind `position`.

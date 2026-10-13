@@ -21,6 +21,48 @@ fn assert_track_unchanged(actual: &TrackSnapshot, expected: &TrackSnapshot) {
 }
 
 #[kithara::test]
+fn an_earlier_tempo_replaces_the_deck_law_of_an_accepted_future_target() {
+    use kithara_command::When;
+    use kithara_warp::SpeedCurve;
+
+    use super::fixtures::Command;
+
+    let (mut host, _) = host();
+    let (deck, control, _, _) = sounding();
+    register(&mut host, deck, &control);
+    let future = SessionFrame::new(96_000);
+    tempo(&mut host, 180.0, i64::from(future)).expect("future tempo");
+    let old = control
+        .commands()
+        .iter()
+        .find_map(|(seq, command)| {
+            matches!(command, Command::Speed(_, When::At(at)) if *at == future).then_some(*seq)
+        })
+        .expect("first future deck law");
+    tempo(&mut host, 90.0, 95_872).expect("earlier tempo");
+    let sent = control.commands();
+    let (latest, curve) = sent
+        .iter()
+        .rev()
+        .find_map(|(seq, command)| match command {
+            Command::Speed(curve, When::At(at)) if *at == future => Some((*seq, curve)),
+            _ => None,
+        })
+        .expect("replacement future deck law");
+    assert_ne!(latest, old);
+    let law = match curve {
+        SpeedCurve::Approach(law) => *law,
+        SpeedCurve::ApproachSteps(steps) => steps[0].1,
+        _ => panic!("the future target preserves an exponential law"),
+    };
+    let reached = 0.75 + 0.25 * (-128.0_f64 / 240.0).exp();
+    assert!((law.initial() - reached).abs() < 1e-12);
+    assert_eq!(law.target(), 1.5);
+    assert_eq!(law.time_constant(), 240.0);
+    assert!(law.initial() < 1.0);
+}
+
+#[kithara::test]
 fn a_host_is_a_session_root_and_refuses_every_parent_fact() {
     let (mut host, clock) = host();
     clock.axis(1, 0, 0.0, 120.0, 48_000);
@@ -120,12 +162,23 @@ fn enabling_sync_observes_tempo_changes_made_while_unlinked() {
             .trajectory()
             .tempo_at(SessionFrame::new(48_000))
             .beats_per_minute(),
-        132.0
+        120.0
     );
+    assert_eq!(
+        probe
+            .trajectory()
+            .anchor_at(SessionFrame::new(48_000))
+            .target_beats_per_second(),
+        132.0 / 60.0
+    );
+    let reached = (2.0 - (2.2 - 2.0) * (-128.0_f64 / 240.0).exp_m1()) * 0.5;
     assert!(control.commands().iter().any(|(_, command)| matches!(
         command,
-        super::fixtures::Command::Speed(kithara_warp::SpeedCurve::Constant(value), _)
-            if *value == 1.1
+        super::fixtures::Command::Speed(kithara_warp::SpeedCurve::Approach(curve), kithara_command::When::At(at))
+            if *at == SessionFrame::new(48_128)
+                && curve.initial() == reached
+                && curve.target() == 132.0 / 120.0
+                && curve.time_constant() == 240.0
     )));
 }
 
@@ -150,7 +203,7 @@ fn a_sync_intent_addressed_to_a_track_grid_is_rejected() {
     assert!(control.commands().is_empty());
 }
 
-// Ruling: spec 4.6 makes Host the sole tempo owner; its step preserves beat 2 at frame 48000, with no ramp surplus.
+// The Host approach preserves its commit beat and carries the transient area.
 #[kithara::test]
 fn local_tempo_transaction_preserves_the_beat_at_its_commit_frame() {
     let (mut host, _) = host();
@@ -161,21 +214,33 @@ fn local_tempo_transaction_preserves_the_beat_at_its_commit_frame() {
         f64::from(probe.trajectory().beat_at(SessionFrame::new(48_000))),
         2.0
     );
-    assert!((f64::from(probe.trajectory().beat_at(SessionFrame::new(96_000))) - 3.5).abs() < 1e-9);
+    assert!(
+        (f64::from(probe.trajectory().beat_at(SessionFrame::new(96_000)))
+            - (3.5 + (2.0 - 1.5) * 0.005))
+            .abs()
+            < 1e-9
+    );
 }
 
-// Ruling: spec 4.6 replaces local exponential approaches with Host steps, preserving the playing beat.
+// Every linked observer follows the Host's same 5ms approach.
 #[kithara::test]
 fn a_local_tempo_is_approached_from_the_tempo_already_playing() {
     let (mut host, _) = host();
     let (deck, control, _, _) = sounding();
     let (_, probe) = register(&mut host, deck, &control);
     let before = f64::from(probe.trajectory().beat_at(SessionFrame::new(48_000)));
-    tempo(&mut host, 180.0, 48_000).expect("Host step");
+    tempo(&mut host, 180.0, 48_000).expect("Host target");
     let axis = probe.trajectory();
     assert!((f64::from(axis.beat_at(SessionFrame::new(48_000))) - before).abs() < 1e-9);
     assert!((axis.tempo_at(SessionFrame::new(47_999)).beats_per_minute() - 120.0).abs() < 1e-9);
-    assert!((axis.tempo_at(SessionFrame::new(48_000)).beats_per_minute() - 180.0).abs() < 1e-9);
+    assert!((axis.tempo_at(SessionFrame::new(48_000)).beats_per_minute() - 120.0).abs() < 1e-9);
+    assert_eq!(
+        axis.anchor_at(SessionFrame::new(48_000))
+            .target_beats_per_second(),
+        3.0
+    );
+    let reached = 180.0 - 60.0 * (-1.0_f64).exp();
+    assert!((axis.tempo_at(SessionFrame::new(48_240)).beats_per_minute() - reached).abs() < 1e-9);
     assert!((axis.tempo_at(SessionFrame::new(96_000)).beats_per_minute() - 180.0).abs() < 1e-9);
 }
 
@@ -233,7 +298,14 @@ fn parent_tempo_reaches_only_a_host_synced_group() {
                     .trajectory()
                     .tempo_at(SessionFrame::new(0))
                     .beats_per_minute(),
-                180.0
+                120.0
+            );
+            assert_eq!(
+                probe
+                    .trajectory()
+                    .anchor_at(SessionFrame::new(0))
+                    .target_beats_per_second(),
+                3.0
             );
             assert_eq!(control.commands().len(), 1);
         } else {
@@ -273,11 +345,18 @@ fn a_session_publication_reaches_host_synced_descendants_on_every_level() {
                     .trajectory()
                     .tempo_at(SessionFrame::new(0))
                     .beats_per_minute(),
-                180.0
+                120.0
+            );
+            assert_eq!(
+                probe
+                    .trajectory()
+                    .anchor_at(SessionFrame::new(0))
+                    .target_beats_per_second(),
+                3.0
             );
             assert_eq!(
                 f64::from(probe.trajectory().beat_at(SessionFrame::new(48_000))),
-                3.0
+                3.0 + (2.0 - 3.0) * 0.005
             );
             probe.read(|observation| assert_eq!(observation.trajectories.len(), 1));
         } else {

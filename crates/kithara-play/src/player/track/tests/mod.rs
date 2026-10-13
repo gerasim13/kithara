@@ -4,6 +4,7 @@ mod fade_events;
 mod legacy_lifecycle;
 mod legacy_metrics;
 mod legacy_rate;
+mod media_time;
 
 use std::num::NonZeroU32;
 

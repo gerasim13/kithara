@@ -1,4 +1,4 @@
-use kithara_platform::sync::Arc;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
 
 use crate::{
@@ -123,4 +123,37 @@ pub(crate) fn checked_audio_spec(
     let sample_rate = std::num::NonZeroU32::new(sample_rate)
         .ok_or(DecodeError::InvalidSampleRate { resource })?;
     Ok(AudioSpec::new(channels, sample_rate))
+}
+
+/// Immutable original PCM geometry before a nonzero seek.
+///
+/// Position follows the decoder's physical output clock. The comparison basis
+/// removes only the head gap reflected in that first position; wrappers retain
+/// its exact time independently of codec modelling and later PTS gaps.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct PcmOrigin {
+    position: Duration,
+    comparison_base: Duration,
+}
+
+impl PcmOrigin {
+    /// Captures physical position and its original content-comparison basis.
+    #[must_use]
+    pub const fn new(position: Duration, comparison_base: Duration) -> Self {
+        Self {
+            position,
+            comparison_base,
+        }
+    }
+
+    #[must_use]
+    pub const fn position(self) -> Duration {
+        self.position
+    }
+
+    #[must_use]
+    pub const fn comparison_base(self) -> Duration {
+        self.comparison_base
+    }
 }

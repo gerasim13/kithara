@@ -10,6 +10,6 @@ pub use kithara_signal::Bound;
 pub use kithara_warp::{Tempo, TempoError};
 pub use math::{
     CorrectionPlan, CorrectionStep, PhaseError, checked_correction, correction, covers, entry,
-    jump_target, phase_error, speed,
+    jump_target, phase_error, speed, speed_curve,
 };
 pub use trajectory::{TempoStep, TempoTrajectory};

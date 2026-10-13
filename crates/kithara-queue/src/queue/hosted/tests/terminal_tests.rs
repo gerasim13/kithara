@@ -114,6 +114,18 @@ impl Track<TestPools> for SnapshotTrack {
         TrackSettings::default()
     }
 
+    fn prepared_speed(&self) -> Option<&kithara_warp::SpeedCurve> {
+        None
+    }
+
+    fn prepare_entry(
+        &mut self,
+        at: SessionFrame,
+        _out: &mut Outbox<'_, TestPools>,
+    ) -> Result<bool, PlayError> {
+        Ok(!self.0.pending_lane && self.entry(Bound::AtOrAfter(at)).is_some())
+    }
+
     fn planned(
         &self,
         _at: SessionFrame,
@@ -149,7 +161,7 @@ impl Track<TestPools> for SnapshotTrack {
     fn cue(
         &mut self,
         _position: Duration,
-        _speed: f32,
+        _speed: kithara_warp::SpeedCurve,
         _out: &mut Outbox<'_, TestPools>,
     ) -> Result<Option<Seq>, PlayError> {
         panic!("terminal-event fixture does not send cue commands")
@@ -171,6 +183,57 @@ fn fixture_seq() -> Seq {
 }
 
 type TestQueue = Queue<TestPools, SnapshotFactory>;
+
+#[kithara::test]
+#[case::fade(false)]
+#[case::chain(true)]
+fn entry_preparation_preserves_the_queue_target_before_any_transition_part(#[case] auto: bool) {
+    let (mut queue, incoming, current) = selected_second();
+    let receiver = queue.active.get_mut(0).expect("incoming");
+    receiver.role = Role::Incoming;
+    receiver.track.0.status = PlayerTrackStatus::Loaded;
+    receiver.track.0.pending_lane = true;
+    queue.target = Some(super::super::super::types::Target {
+        to: incoming,
+        bound: Some(Bound::AtOrBefore(SessionFrame::new(512))),
+        settings: CrossfadeSettings {
+            duration: 0.0,
+            ..CrossfadeSettings::default()
+        },
+        transition: Transition::None,
+        reason: crate::AdvanceReason::NaturalEof,
+        playing: true,
+        auto,
+        stale: None,
+        continued: None,
+        repeat: None,
+        chained: false,
+    });
+    let (mut deck, mut inbox) = channel(ChannelConfig::builder().build());
+    let (mut dispatcher, _dispatcher_inbox) = channel(ChannelConfig::builder().build());
+    assert_eq!(
+        queue
+            .send_transition(
+                0,
+                SessionFrame::new(512),
+                &mut Outbox::new(&mut deck, &mut dispatcher)
+            )
+            .expect("preparation wait"),
+        None
+    );
+    assert_eq!(queue.current, Some(current));
+    assert_eq!(queue.target.expect("target remains").to, incoming);
+    assert_eq!(
+        queue.target.expect("target bound remains").bound,
+        Some(Bound::AtOrBefore(SessionFrame::new(512)))
+    );
+    assert!(queue.pending_handover.is_none());
+    inbox.drain();
+    assert!(
+        inbox.next_due(SessionFrame::new(512), 1).is_none(),
+        "neither half of the transition is sent before entry readiness"
+    );
+}
 
 #[kithara::test]
 fn a_track_settings_change_with_one_full_lane_reaches_no_track() {
@@ -249,6 +312,8 @@ fn a_speed_change_on_the_current_track_withdraws_a_sent_automatic_transition(#[c
     queue.pending_handover = Some(super::super::super::types::PendingHandover {
         seq: batch,
         item: incoming,
+        slot: receiver.slot,
+        replacement: false,
         reason: crate::AdvanceReason::NaturalEof,
     });
     queue.active.get_mut(1).expect("current").track.0.lane_room = 4;

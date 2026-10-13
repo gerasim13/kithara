@@ -80,6 +80,7 @@ impl<S> PlayerImpl<S> {
                 }
                 self.duration = loaded.opened.duration;
                 self.visible_origin = loaded.opened.pcm.visible_origin();
+                self.media_origin = loaded.opened.pcm.media_origin();
                 self.abr = loaded.opened.abr.clone();
                 self.metadata = loaded.opened.metadata.clone();
                 if let Some(loading) = self.loading.as_mut() {
@@ -189,6 +190,7 @@ impl<S> PlayerImpl<S> {
                     at,
                     replacement: false,
                     play: if start { self.play.take() } else { None },
+                    obsolete: false,
                 });
                 Ok(())
             }
@@ -308,6 +310,7 @@ impl<S> PlayerImpl<S> {
                     at,
                     replacement: true,
                     play: self.play.take(),
+                    obsolete: false,
                 });
                 self.promote(out);
                 Ok(seq)

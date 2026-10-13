@@ -510,6 +510,8 @@ async fn atomic_track_id_cas_arm_then_disarm() {
         .snapshot()
         .slot
         .expect("seated predecessor");
+    queue.deck.mixer.slots[usize::from(slot.get())].visible_origin = Some(Duration::ZERO);
+    queue.deck.mixer.slots[usize::from(slot.get())].media_origin = Some(Duration::ZERO);
     queue.deck.mixer.slots[usize::from(slot.get())].mark = Some(SlotMark {
         session: SessionFrame::new(256),
         lane: LaneFrame {
@@ -548,6 +550,8 @@ async fn atomic_track_id_cas_arm_then_disarm() {
     queue.pending_handover = Some(super::super::super::types::PendingHandover {
         seq,
         item: TrackId(3),
+        slot: queue.active.get(incoming).expect("incoming slot").slot,
+        replacement: queue.active.is_replacement(incoming),
         reason: crate::AdvanceReason::UserSelect,
     });
     let ids = queue.track_ids();

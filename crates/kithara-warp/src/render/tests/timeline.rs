@@ -223,7 +223,7 @@ fn assert_identity_quantum(
     let pointer = input.samples.as_ptr();
     assert_eq!(
         renderer
-            .prepare_quantum(input.meta, 128, 128)
+            .prepare_source_window(input.meta, 128, 128)
             .expect("identity quantum")
             .get(),
         128,
@@ -309,7 +309,7 @@ fn manual_ramp_to_the_rate_limit_keeps_quantized_requests_bounded() {
             ..Default::default()
         };
         let frames = fx
-            .prepare_quantum(meta, 128, usize::MAX)
+            .prepare_source_window(meta, 128, usize::MAX)
             .expect("a continuous ramp keeps accepting source quanta")
             .get();
         let mut input = chunk(&pools, &vec![0.25; frames * usize::from(consts::CH)]);
@@ -1086,7 +1086,7 @@ fn a_prepared_smoothed_quantum_keeps_the_identity_of_its_request() {
         frames: 128,
         ..Default::default()
     };
-    fx.prepare_quantum(meta, 128, usize::MAX)
+    fx.prepare_source_window(meta, 128, usize::MAX)
         .expect("manual span is plannable");
     let prepared = fx.prepared_quantum.expect("quantum was prepared");
 

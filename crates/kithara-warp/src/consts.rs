@@ -9,9 +9,7 @@ pub(crate) const FRAMES_PER_BEAT: i64 = 24_000;
 #[cfg(test)]
 pub(crate) const RATE: u32 = 48_000;
 
-#[cfg(test)]
 pub(crate) const SMOOTH_SECONDS: f64 = 0.005;
-
 pub(crate) const MODEL_SECONDS_PER_MINUTE: f64 = 60.0;
 
 #[cfg(test)]

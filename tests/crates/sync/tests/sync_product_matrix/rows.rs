@@ -1,3 +1,5 @@
+use kithara::{audio::DecoderBackend as EventDecoderBackend, decode::DecoderBackend};
+
 use super::{cases::*, harness::*, imports::*, providers::*};
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
@@ -145,6 +147,16 @@ async fn provider_tempo_controls_measure_without_sync(
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn run(case: SyncCase, prepared: PreparedSources, start: Start) {
+    run_with_decoder(case, prepared, start, None).await;
+}
+
+#[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
+async fn run_with_decoder(
+    case: SyncCase,
+    prepared: PreparedSources,
+    start: Start,
+    decoder: Option<(DecoderBackend, EventDecoderBackend)>,
+) {
     let provider = prepared.0;
     let expected_frames: usize = (f64::from(case.sample_rate) * 60.0 / case.ride.final_bpm() * 6.0)
         .round()
@@ -157,8 +169,20 @@ async fn run(case: SyncCase, prepared: PreparedSources, start: Start) {
             "{} {provider:?}: capturing deck {audible_deck}",
             case.id
         ));
-        let mut harness =
-            ProductHarness::new(case, &prepared, start, Audible::Deck(audible_deck)).await;
+        let mut harness = if let Some((backend, expected)) = decoder {
+            let harness = ProductHarness::new_with_decoder(
+                case,
+                &prepared,
+                start,
+                Audible::Deck(audible_deck),
+                backend,
+            )
+            .await;
+            harness.assert_decoder_backend(expected);
+            harness
+        } else {
+            ProductHarness::new(case, &prepared, start, Audible::Deck(audible_deck)).await
+        };
         harness.run_operations(case).await;
         harness.ride_tempo(case).await;
         let pcm = harness.capture(case).await;
@@ -168,6 +192,16 @@ async fn run(case: SyncCase, prepared: PreparedSources, start: Start) {
             "{} {provider:?}: deck {audible_deck} capture must contain six complete beats",
             case.id,
         );
+        if matches!(
+            provider,
+            Provider::Synthetic
+                | Provider::Mp3Same
+                | Provider::Mp3Distinct
+                | Provider::HlsMp3(_)
+                | Provider::HlsSame(_)
+        ) {
+            request_failures.extend(harness.grid_binding_failures(case).await);
+        }
         tracks.push(pcm);
         request_failures.append(&mut harness.failures);
         drop(harness);
@@ -428,4 +462,26 @@ pub(crate) async fn tunnel_sources() -> PreparedSources {
 #[kithara::fixture]
 pub(crate) async fn newtechno_sources() -> PreparedSources {
     prepared_sources(Provider::Library(NEWTECHNO)).await
+}
+
+#[cfg(not(target_os = "android"))]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    timeout(Duration::from_secs(60)),
+    tracing("info")
+)]
+#[case::paused_sync_then_play(PAUSED_SYNC)]
+#[case::play_sync_seek(PLAY_SYNC_SEEK)]
+async fn mixed_mp3_and_hls_keep_the_pcm_contract_on_symphonia(#[case] case: SyncCase) {
+    let prepared = source_hls_mp3_plain().await;
+    run_with_decoder(
+        case,
+        prepared,
+        CUE,
+        Some((DecoderBackend::Symphonia, EventDecoderBackend::Symphonia)),
+    )
+    .await;
 }

@@ -30,7 +30,7 @@ fn identity_region_plan_refusal_retains_the_original_pcm() {
         .collect::<Vec<_>>();
 
     assert!(matches!(
-        renderer.prepare_quantum(meta, input.frames(), usize::MAX),
+        renderer.prepare_source_window(meta, input.frames(), usize::MAX),
         Err(WarpRenderError::UnsupportedRegionPlan)
     ));
     let retained = renderer

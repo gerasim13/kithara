@@ -95,10 +95,10 @@ impl std::ops::DerefMut for Rig {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(super) struct Answer {
-    seq: Seq,
-    outcome: Outcome<DeckProtocol>,
+    pub(super) seq: Seq,
+    pub(super) outcome: Outcome<DeckProtocol>,
     #[field(get, vis = "")]
-    batch: Batch<DeckProtocol>,
+    pub(super) batch: Batch<DeckProtocol>,
 }
 
 impl From<Receipt<DeckProtocol>> for Answer {
@@ -162,6 +162,7 @@ pub(super) fn track(slot: Slot) -> Track {
     })
     .expect("unity speed is a valid track speed");
     track.visible_origin = Some(Duration::ZERO);
+    track.media_origin = Some(Duration::ZERO);
     track
 }
 
@@ -832,6 +833,7 @@ fn processor_set_paused_updates_playback(#[case] mapped: bool) {
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot {
         slots: vec![SlotSnapshot {
+            media_origin: Some(Duration::ZERO),
             position: observed.as_secs_f64(),
             mark: Some(SlotMark {
                 session: frame(0),
@@ -1345,6 +1347,7 @@ fn withdrawing_the_newest_epoch_unpublishes_the_seek() {
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot {
         slots: vec![SlotSnapshot {
+            media_origin: Some(Duration::ZERO),
             position: 8.0,
             mark: Some(SlotMark {
                 session: frame(0),
@@ -1442,8 +1445,10 @@ fn an_epoch_adopted_before_it_is_published_reports_the_audio_thread() {
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot {
         slots: vec![SlotSnapshot {
+            media_origin: Some(Duration::ZERO),
             position: 1.5,
             duration: 162.0,
+            visible_origin: Some(Duration::ZERO),
             mark: Some(SlotMark {
                 session: frame(0),
                 lane: LaneFrame {
@@ -1627,6 +1632,8 @@ pub(super) fn loaded(rig: &mut Rig, slot: Slot, src: &str) -> (Track, Inbox<Lane
     let mut receipts = rig.block(frame(0), 0.0);
     settle(&mut track, rig, &mut receipts);
     assert_eq!(track.snapshot().status, TrackStatus::Loaded);
+    track.visible_origin = Some(Duration::ZERO);
+    track.media_origin = Some(Duration::ZERO);
     (track, inbox)
 }
 
@@ -1701,7 +1708,7 @@ fn a_cued_subfloor_speed_reaches_the_lane_at_the_floor(#[case] speed: f32) {
     let (sender, mut inbox) = lane();
     let mut track = track(A);
     track.lane = Some(sender);
-    rig.with_outbox(|out| track.cue(Position::ZERO, speed, out))
+    rig.with_outbox(|out| track.cue(Position::ZERO, SpeedCurve::Constant(speed), out))
         .expect("live deck scope")
         .expect("finite cue speed is admitted");
 
@@ -2065,6 +2072,7 @@ fn a_native_stop_answers_without_overwriting_a_new_segments_position(
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot {
         slots: vec![SlotSnapshot {
+            media_origin: Some(Duration::ZERO),
             position: position.as_secs_f64(),
             mark: Some(SlotMark {
                 session: frame(0),
@@ -2175,6 +2183,7 @@ fn an_evicting_track_takes_the_slot_over_on_its_frame() {
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot {
         slots: vec![SlotSnapshot {
+            media_origin: Some(Duration::ZERO),
             state: SlotState::Playing,
             ..Default::default()
         }],
@@ -2371,6 +2380,7 @@ fn superseding_a_scheduled_batch_leaves_the_slot_sounding_as_it_was(
     let output = mock::output(None).get();
     let deck = crate::DeckSnapshot {
         slots: vec![SlotSnapshot {
+            media_origin: Some(Duration::ZERO),
             state: SlotState::Playing,
             ..Default::default()
         }],
@@ -3454,6 +3464,316 @@ fn a_fade_in_after_a_stop_and_transparent_envelope_still_starts(#[case] held: bo
         TrackStatus::Playing { since: frame(256) }
     );
     assert_eq!(rig.deck.mixer.held(A), Some("stop-envelope-start"));
+}
+
+#[kithara::test]
+#[case::same_frame(0)]
+#[case::later_frame(256)]
+fn a_delayed_start_answer_cannot_overwrite_its_applied_stop(#[case] stop_at: i64) {
+    let mut rig = rig();
+    let (mut track, _lane) = loaded(&mut rig, A, "held-start-stop");
+    let started = command_at_zero(
+        &mut track,
+        &mut rig,
+        TrackCommand::Play {
+            at: When::At(frame(0)),
+        },
+    )
+    .expect("native held Start");
+    let mut held = rig.block(frame(0), 0.0);
+    assert!(held.iter().any(|answer| answer.seq == started
+        && matches!(answer.outcome, Outcome::Applied { at, .. } if at == frame(0))));
+    let stopped = command_at_zero(
+        &mut track,
+        &mut rig,
+        TrackCommand::Pause {
+            at: When::At(frame(stop_at)),
+        },
+    )
+    .expect("native dependent Stop");
+    let mut stops = rig.block(frame(stop_at), 0.5);
+    let stop = stops
+        .iter()
+        .find(|answer| answer.seq == stopped)
+        .expect("native Stop answer");
+    assert!(matches!(stop.outcome, Outcome::Applied { at, .. } if at == frame(stop_at)));
+    assert!(stop.batch.basis.contains(&(A, Some(started))));
+    assert!(stop.batch.commands.iter().any(|part| matches!(part,
+        DeckPart::Returned(Returned::Stopped { slot, resume: Some(mark) })
+            if *slot == A && mark.session == frame(stop_at))));
+    settle(&mut track, &mut rig, &mut stops);
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Paused {
+            at: Duration::from_millis(500)
+        }
+    );
+    assert!(
+        settle(&mut track, &mut rig, &mut held)
+            .iter()
+            .any(|answer| matches!(
+                answer, Settled::Applied { seq, at } if *seq == started && *at == frame(0)
+            ))
+    );
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Paused {
+            at: Duration::from_millis(500)
+        }
+    );
+    assert_eq!(rig.deck.mixer.held(A), Some("held-start-stop"));
+    assert!(
+        settle(&mut track, &mut rig, &mut held)
+            .iter()
+            .all(|answer| matches!(answer, Settled::Pending))
+    );
+}
+
+#[kithara::test]
+#[case::stop_before_start(false)]
+#[case::start_before_stop(true)]
+fn an_applied_resume_keeps_its_status_when_both_older_transport_answers_are_delivered(
+    #[case] start_first: bool,
+) {
+    let mut rig = rig();
+    let (mut track, _lane) = loaded(&mut rig, A, "held-start-stop-resume");
+    let started = command_at_zero(
+        &mut track,
+        &mut rig,
+        TrackCommand::Play {
+            at: When::At(frame(0)),
+        },
+    )
+    .expect("first native Start");
+    let mut first = rig.block(frame(0), 0.0);
+    assert!(first.iter().any(|answer| answer.seq == started
+        && matches!(answer.outcome, Outcome::Applied { at, .. } if at == frame(0))));
+    let stopped = command_at_zero(
+        &mut track,
+        &mut rig,
+        TrackCommand::Pause {
+            at: When::At(frame(128)),
+        },
+    )
+    .expect("native Stop");
+    let mut stops = rig.block(frame(128), 0.5);
+    let resumed = command_at_zero(
+        &mut track,
+        &mut rig,
+        TrackCommand::Play {
+            at: When::At(frame(256)),
+        },
+    )
+    .expect("native resumed Start");
+    let mut resumes = rig.block(frame(256), 0.5);
+    let resume = resumes
+        .iter()
+        .find(|answer| answer.seq == resumed)
+        .expect("actual resume");
+    assert!(matches!(resume.outcome, Outcome::Applied { at, .. } if at == frame(256)));
+    assert!(resume.batch.basis.contains(&(A, Some(stopped))));
+    let stop = stops
+        .iter()
+        .find(|answer| answer.seq == stopped)
+        .expect("actual Stop");
+    assert!(matches!(stop.outcome, Outcome::Applied { at, .. } if at == frame(128)));
+    assert!(stop.batch.basis.contains(&(A, Some(started))));
+    assert!(stop.batch.commands.iter().any(|part| matches!(part,
+        DeckPart::Returned(Returned::Stopped { slot, resume: Some(mark) })
+            if *slot == A && mark.session == frame(128))));
+    settle(&mut track, &mut rig, &mut resumes);
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Playing { since: frame(256) }
+    );
+    if start_first {
+        assert!(
+            settle(&mut track, &mut rig, &mut first)
+                .iter()
+                .any(|answer| matches!(
+                    answer, Settled::Applied { seq, .. } if *seq == started
+                ))
+        );
+        assert_eq!(
+            track.snapshot().status,
+            TrackStatus::Playing { since: frame(256) }
+        );
+    }
+    assert!(
+        settle(&mut track, &mut rig, &mut stops)
+            .iter()
+            .any(|answer| matches!(
+                answer, Settled::Applied { seq, .. } if *seq == stopped
+            ))
+    );
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Playing { since: frame(256) }
+    );
+    if !start_first {
+        assert!(
+            settle(&mut track, &mut rig, &mut first)
+                .iter()
+                .any(|answer| matches!(
+                    answer, Settled::Applied { seq, .. } if *seq == started
+                ))
+        );
+    }
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Playing { since: frame(256) }
+    );
+    assert_eq!(rig.deck.mixer.held(A), Some("held-start-stop-resume"));
+}
+
+#[kithara::test]
+fn a_delayed_attach_answer_keeps_its_applied_dependent_start() {
+    let mut rig = rig();
+    let mut track = track(A);
+    let loaded = load(&mut track, &mut rig, Position::ZERO);
+    let opened = opened_fixture(&mut rig, "held-attach-start");
+    let receipt = rig.open(Ok(opened)).expect("native load");
+    rig.with_outbox(|out| track.settle(TrackReceipt::Loaded(receipt), out))
+        .expect("live deck scope");
+    let attached = track
+        .attaching
+        .expect("pending native attachment")
+        .seq
+        .expect("attachment admission");
+    let mut held = rig.block(frame(0), 0.0);
+    let attachment = held
+        .iter()
+        .find(|answer| answer.seq == attached)
+        .expect("actual attachment");
+    assert!(matches!(attachment.outcome, Outcome::Applied { at, .. } if at == frame(0)));
+    assert_eq!(rig.deck.mixer.held(A), Some("held-attach-start"));
+    assert!(
+        !attachment
+            .batch
+            .commands
+            .iter()
+            .any(|part| matches!(part, DeckPart::Start { .. } | DeckPart::Chain { .. }))
+    );
+    assert!(matches!(
+        in_pass(&mut rig, frame(0), |out| track.apply(
+            TrackCommand::Play {
+                at: When::At(frame(128)),
+            },
+            out,
+        )),
+        Err(PlayError::Untimed)
+    ));
+    let started = command_at_zero(&mut track, &mut rig, TrackCommand::Play { at: When::Next })
+        .expect("native dependent Start");
+    let mut starts = rig.block(frame(128), 0.0);
+    let start = starts
+        .iter()
+        .find(|answer| answer.seq == started)
+        .expect("actual Start");
+    assert!(matches!(start.outcome, Outcome::Applied { at, .. } if at == frame(128)));
+    assert!(start.batch.basis.contains(&(A, Some(attached))));
+    settle(&mut track, &mut rig, &mut starts);
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Playing { since: frame(128) }
+    );
+    assert!(
+        settle(&mut track, &mut rig, &mut held)
+            .iter()
+            .any(|answer| matches!(
+                answer, Settled::Applied { seq, at } if *seq == loaded && *at == frame(0)
+            ))
+    );
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Playing { since: frame(128) }
+    );
+    assert!(track.attaching.is_none());
+    assert!(track.loading.is_none());
+    assert_eq!(rig.deck.mixer.held(A), Some("held-attach-start"));
+}
+
+#[kithara::test]
+fn a_refused_stop_cannot_hide_the_earlier_applied_start_answer() {
+    let mut rig = rig();
+    let (mut track, _lane) = loaded(&mut rig, A, "held-start-refused-stop");
+    let started = command_at_zero(
+        &mut track,
+        &mut rig,
+        TrackCommand::Play {
+            at: When::At(frame(0)),
+        },
+    )
+    .expect("native held Start");
+    let mut held = rig.block(frame(0), 0.0);
+    let group = rig
+        .with_outbox(|out| {
+            out.together_owned(When::At(frame(0)), |out| {
+                track.apply(
+                    TrackCommand::Pause {
+                        at: When::At(frame(0)),
+                    },
+                    out,
+                )?;
+                out.deck(
+                    When::At(frame(0)),
+                    vec![DeckPart::Start {
+                        slot: B,
+                        fade: Fade::Declick,
+                    }],
+                )?;
+                Ok(())
+            })
+        })
+        .expect("live scope");
+    let stopped = match group {
+        Ok(((), Some(seq))) => {
+            track.finish_group(Ok(seq));
+            seq
+        }
+        Ok(((), None)) => panic!("the coupled native group is admitted"),
+        Err((error, mut parts)) => {
+            track.finish_group(Err(&mut parts));
+            panic!("native group admission: {error}");
+        }
+    };
+    let refused = answer_next(&mut rig, Err(DeckRefusal::Empty { slot: B }));
+    assert_eq!(refused.seq(), stopped);
+    assert!(
+        matches!(refused.outcome(), Outcome::Rejected(Rejection::Refused(DeckRefusal::Empty { slot })) if *slot == B)
+    );
+    assert!(refused.batch().basis.contains(&(A, Some(started))));
+    assert!(
+        refused
+            .batch()
+            .commands
+            .iter()
+            .any(|part| matches!(part, DeckPart::Stop { slot, .. } if *slot == A))
+    );
+    assert!(
+        refused
+            .batch()
+            .commands
+            .iter()
+            .any(|part| matches!(part, DeckPart::Start { slot, .. } if *slot == B))
+    );
+    assert!(
+        matches!(answer_track(&mut track, &mut rig, refused), Settled::Rejected {
+        seq, reason: Rejection::Refused(PlayError::Deck(DeckRefusal::Empty { slot }))
+    } if seq == stopped && slot == B)
+    );
+    assert!(
+        settle(&mut track, &mut rig, &mut held)
+            .iter()
+            .any(|answer| matches!(
+                answer, Settled::Applied { seq, .. } if *seq == started
+            ))
+    );
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Playing { since: frame(0) }
+    );
+    assert_eq!(rig.deck.mixer.held(A), Some("held-start-refused-stop"));
 }
 
 #[kithara::test(tokio)]

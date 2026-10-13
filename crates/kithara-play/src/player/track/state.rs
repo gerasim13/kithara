@@ -41,7 +41,7 @@ pub enum TrackCommand<S> {
     /// Sets speed and lands the jump on `at` as one lane batch.
     Align {
         to: Position,
-        speed: f32,
+        speed: SpeedCurve,
         at: SessionFrame,
     },
     Configure(TrackSettingsChange, When<SessionFrame>),
@@ -105,7 +105,9 @@ pub struct TrackSnapshot {
     pub slot: Option<Slot>,
     pub status: TrackStatus,
     pub speed: f32,
+    /// Last known media position; retains the commanded position until its source basis is known.
     pub position: Position,
+    /// End of the track on the same media clock as its grid and cues.
     pub duration: Option<Duration>,
     pub abr: Option<AbrHandle>,
     pub metadata: TrackMetadata,
@@ -167,6 +169,7 @@ pub(super) struct Attaching {
     pub(super) at: When<SessionFrame>,
     pub(super) replacement: bool,
     pub(super) play: Option<When<SessionFrame>>,
+    pub(super) obsolete: bool,
 }
 
 pub(super) struct LaneOperation {
@@ -195,6 +198,8 @@ pub(super) struct PlaybackOperation {
     pub(super) segment: SegmentId,
     pub(super) basis: Vec<(Slot, Option<Seq>)>,
     pub(super) action: Option<PlaybackAction>,
+    /// A later applied transport already determines this operation's status.
+    pub(super) obsolete: bool,
     /// The newest applied envelope descendant of this pending transport.
     pub(super) transparent: Option<Seq>,
 }

@@ -1,12 +1,399 @@
 use kithara_command::When;
-use kithara_play::{Bound, HostedDeck, Player, TrackCommand, TrackStatus};
-use kithara_signal::{FrameCount, SessionFrame};
+use kithara_host::api::Tempo;
+use kithara_play::{Bound, HostedDeck, Player, Track, TrackCommand, TrackStatus};
+use kithara_signal::{ExponentialApproach, FrameCount, SessionFrame};
 use kithara_test_utils::kithara;
 use kithara_warp::SpeedCurve;
 use num_traits::ToPrimitive;
 
 use super::fixtures::{Command, Rig, answer, deck, grid, load, position, trajectory};
 use crate::{LinkedPlayer, SyncStatus};
+
+#[kithara::test]
+#[case::future_start(23_990, When::At(SessionFrame::new(50_000)))]
+#[case::late_readiness(30_000, When::Next)]
+fn a_silent_curve_is_rebound_to_the_admitted_start(
+    #[case] ready_at: i64,
+    #[case] requested: When<SessionFrame>,
+) {
+    let mut host = trajectory(120.0, 4);
+    host.push(SessionFrame::new(23_990), Tempo::new(108.0).expect("tempo"))
+        .expect("tempo change");
+    let model = grid(24_000, 0, None, 480_000);
+    let (mut deck, control) = deck(host.clone());
+    let mut rig = Rig::new(23_990);
+    rig.delivery = FrameCount::new(0);
+    rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync");
+    let loading = load(&mut deck, &mut rig, 0);
+    rig.apply(&mut deck, loading, 23_990);
+    control.clear();
+    answer(&mut deck, &mut rig, loading, model.clone());
+    let initial = control.commands()[0].0;
+    let Command::Speed(SpeedCurve::Approach(curve), _) = control.commands()[0].1.clone() else {
+        panic!("the cue must begin inside the Host approach");
+    };
+    assert_ne!(curve.initial(), curve.target());
+    assert!(curve.time_constant() > 0.0);
+    rig.apply(&mut deck, initial, ready_at);
+    rig.now = SessionFrame::new(ready_at);
+    let bound = match requested {
+        When::At(at) => at,
+        When::Next => rig.now,
+        When::Deferred => unreachable!("test start has a frame"),
+    };
+    let admitted =
+        crate::entry(&host, &model, position(0), Bound::AtOrAfter(bound)).expect("entry");
+    let expected = kithara_sync::speed_curve(&host, &model, admitted).expect("entry curve");
+    control.clear();
+    assert_eq!(
+        rig.run(|out| deck.apply(TrackCommand::Play { at: requested }, out))
+            .expect("prepare start"),
+        None,
+    );
+    let commands = control.commands();
+    let replacement = commands[0].0;
+    assert_ne!(replacement, initial);
+    assert_eq!(
+        commands,
+        [
+            (replacement, Command::Speed(expected.clone(), When::Next)),
+            (replacement, Command::Seek(position(0))),
+        ]
+    );
+    assert_eq!(deck.entry(Bound::AtOrAfter(bound)), None);
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(
+        control.commands(),
+        commands,
+        "preparation cannot start before its receipt"
+    );
+    rig.apply(&mut deck, initial, ready_at);
+    assert_eq!(
+        deck.entry(Bound::AtOrAfter(bound)),
+        None,
+        "an old cue receipt does not ready the replacement"
+    );
+    rig.apply(&mut deck, replacement, ready_at);
+    control.clear();
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    let started = control.commands();
+    assert_eq!(started.len(), 1);
+    assert_eq!(started[0].1, Command::Play(When::At(admitted)));
+    assert_eq!(deck.prepared_speed(), Some(&expected));
+}
+
+#[kithara::test]
+fn owner_entry_preparation_waits_for_the_replacement_without_starting() {
+    let mut host = trajectory(120.0, 4);
+    host.push(SessionFrame::new(23_990), Tempo::new(108.0).expect("tempo"))
+        .expect("tempo change");
+    let model = grid(24_000, 0, None, 480_000);
+    let (mut deck, control) = deck(host.clone());
+    let mut rig = Rig::new(23_990);
+    rig.delivery = FrameCount::new(0);
+    rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync");
+    let loading = load(&mut deck, &mut rig, 0);
+    rig.apply(&mut deck, loading, 23_990);
+    control.clear();
+    answer(&mut deck, &mut rig, loading, model.clone());
+    let initial = control.commands()[0].0;
+    rig.apply(&mut deck, initial, 23_990);
+    control.clear();
+    let admitted = crate::entry(
+        &host,
+        &model,
+        position(0),
+        Bound::AtOrAfter(SessionFrame::new(50_000)),
+    )
+    .expect("future entry");
+    assert!(
+        !rig.run(|out| deck.prepare_entry(admitted, out))
+            .expect("entry preparation")
+    );
+    let prepared = control.commands();
+    assert_eq!(prepared.len(), 2);
+    let replacement = prepared[0].0;
+    assert_ne!(initial, replacement);
+    assert_eq!(
+        prepared[0].1,
+        Command::Speed(
+            kithara_sync::speed_curve(&host, &model, admitted).expect("entry law"),
+            When::Next
+        )
+    );
+    assert_eq!(prepared[1].1, Command::Seek(position(0)));
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(
+        control.commands(),
+        prepared,
+        "the Queue keeps custody of the eventual Start"
+    );
+    assert!(
+        !rig.run(|out| deck.prepare_entry(admitted, out))
+            .expect("still preparing")
+    );
+    rig.apply(&mut deck, replacement, 23_990);
+    control.clear();
+    assert!(
+        rig.run(|out| deck.prepare_entry(admitted, out))
+            .expect("entry ready")
+    );
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert!(
+        control.commands().is_empty(),
+        "readiness alone cannot launch the Queue target"
+    );
+}
+
+#[kithara::test]
+fn a_synchronized_replay_prepares_zero_with_the_actual_entry_law() {
+    let model = grid(24_000, 0, None, 480_000);
+    let (mut deck, control, mut rig, _) = super::fixtures::loaded(model.clone());
+    let cue = rig
+        .run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync")
+        .expect("cue");
+    rig.apply(&mut deck, cue, 0);
+    let endpoint = position(480_000);
+    control.edit(|script| {
+        script.snapshot.position = endpoint;
+        script.snapshot.status = TrackStatus::Ended {
+            at: SessionFrame::new(480_000),
+        };
+    });
+    rig.now = SessionFrame::new(480_000);
+    let at = deck
+        .entry(Bound::AtOrAfter(rig.now + rig.delivery))
+        .expect("admissible replay entry");
+    control.clear();
+    assert_eq!(
+        rig.run(|out| deck.apply(TrackCommand::Play { at: When::At(at) }, out))
+            .expect("replay"),
+        None
+    );
+    let commands = control.commands();
+    assert_eq!(commands.len(), 2);
+    let replacement = commands[0].0;
+    assert_eq!(
+        commands[0].1,
+        Command::Speed(
+            kithara_sync::speed_curve(&trajectory(120.0, 4), &model, at).expect("replay law"),
+            When::Next
+        )
+    );
+    assert_eq!(commands[1].1, Command::Seek(position(0)));
+    assert_eq!(deck.snapshot().as_ref().position, endpoint);
+    rig.apply(&mut deck, replacement, 480_000);
+    control.clear();
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert_eq!(deck.snapshot().as_ref().position, position(0));
+    let started = control.commands();
+    assert_eq!(started.len(), 1);
+    assert_eq!(started[0].1, Command::Play(When::At(at)));
+}
+
+#[kithara::test]
+fn a_silent_retime_keeps_the_callers_frame_and_latest_native_cue() {
+    let (mut deck, control, mut rig, _) = super::fixtures::loaded(grid(24_000, 0, None, 480_000));
+    let prepared = rig
+        .run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync")
+        .expect("cue");
+    rig.apply(&mut deck, prepared, 0);
+    let frame = SessionFrame::new(128);
+    let mut host = trajectory(120.0, 4);
+    host.push(frame, Tempo::new(108.0).expect("tempo"))
+        .expect("retime");
+    control.clear();
+    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, frame, out));
+    let first = control.commands()[0].0;
+    control.clear();
+    rig.run(|out| LinkedPlayer::retime(&mut deck, &host, frame, out));
+    let latest = control.commands()[0].0;
+    assert_ne!(first, latest);
+    assert_eq!(LinkedPlayer::retime_applied(&mut deck, frame), None);
+    rig.apply(&mut deck, first, 0);
+    assert_eq!(
+        LinkedPlayer::retime_applied(&mut deck, frame),
+        None,
+        "the replaced cue cannot credit the caller's retime"
+    );
+    rig.apply(&mut deck, latest, 0);
+    assert_eq!(LinkedPlayer::retime_applied(&mut deck, frame), Some(true));
+}
+
+#[kithara::test]
+#[case::preparation_before_callers(0, false)]
+#[case::preparation_between_callers(100_000, false)]
+#[case::cue_before_callers(0, true)]
+#[case::cue_between_callers(100_000, true)]
+fn an_entry_replacement_transfers_all_retime_callers_to_its_current_receipt(
+    #[case] at: i64,
+    #[case] explicit_cue: bool,
+) {
+    let model = grid(24_000, 0, None, 480_000);
+    let (mut deck, control, mut rig, _) = super::fixtures::loaded(model.clone());
+    let prepared = rig
+        .run(|out| LinkedPlayer::sync(&mut deck, true, out))
+        .expect("sync")
+        .expect("prepared segment");
+    rig.apply(&mut deck, prepared, 0);
+    let callers = [SessionFrame::new(128), SessionFrame::new(200_000)];
+    let mut host = trajectory(120.0, 4);
+    host.push(callers[0], Tempo::new(108.0).expect("tempo"))
+        .expect("first target");
+    host.push(callers[1], Tempo::new(150.0).expect("tempo"))
+        .expect("second target");
+    let mut previous = None;
+    for caller in callers {
+        control.clear();
+        rig.run(|out| LinkedPlayer::retime(&mut deck, &host, caller, out));
+        let seq = control.commands()[0].0;
+        rig.apply(&mut deck, seq, 0);
+        assert_eq!(LinkedPlayer::retime_applied(&mut deck, caller), Some(true));
+        previous = Some(seq);
+    }
+    let previous = previous.expect("last retime receipt");
+    control.clear();
+    let at = SessionFrame::new(at);
+    if explicit_cue {
+        let curve = kithara_sync::speed_curve(&host, &model, at).expect("entry law");
+        assert!(
+            rig.run(|out| deck.cue(position(0), curve, out))
+                .expect("explicit replacement")
+                .is_some()
+        );
+    } else {
+        assert!(
+            !rig.run(|out| deck.prepare_entry(at, out))
+                .expect("entry replacement")
+        );
+    }
+    let commands = control.commands();
+    assert_eq!(commands.len(), 2);
+    let current = commands[0].0;
+    assert_ne!(current, previous);
+    assert_eq!(commands[1].1, Command::Seek(position(0)));
+    for caller in callers {
+        assert_eq!(LinkedPlayer::retime_applied(&mut deck, caller), None);
+    }
+    rig.apply(&mut deck, previous, 0);
+    for caller in callers {
+        assert_eq!(
+            LinkedPlayer::retime_applied(&mut deck, caller),
+            None,
+            "a discarded segment cannot credit its replacement"
+        );
+    }
+    rig.apply(&mut deck, current, 0);
+    for caller in callers {
+        assert_eq!(LinkedPlayer::retime_applied(&mut deck, caller), Some(true));
+    }
+}
+
+#[kithara::test]
+#[case::host_retime(true)]
+#[case::sync_enable(false)]
+fn a_silent_rebind_after_eof_prepares_zero_before_native_ready_and_play(#[case] retime: bool) {
+    let model = grid(24_000, 0, None, 480_000);
+    let (mut deck, control, mut rig, _) = super::fixtures::loaded(model);
+    if retime {
+        let prepared = rig
+            .run(|out| LinkedPlayer::sync(&mut deck, true, out))
+            .expect("sync")
+            .expect("prepared segment");
+        rig.apply(&mut deck, prepared, 0);
+    }
+    control.edit(|script| {
+        script.snapshot.position = position(480_000);
+        script.snapshot.status = TrackStatus::Ended {
+            at: SessionFrame::new(480_000),
+        };
+    });
+    rig.now = SessionFrame::new(480_000);
+    let caller = rig.now + rig.delivery;
+    control.clear();
+    if retime {
+        let mut host = trajectory(120.0, 4);
+        host.push(caller, Tempo::new(108.0).expect("tempo"))
+            .expect("target");
+        rig.run(|out| LinkedPlayer::retime(&mut deck, &host, caller, out));
+    } else {
+        rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
+            .expect("sync after EOF")
+            .expect("replay segment");
+    }
+    let commands = control.commands();
+    assert_eq!(commands.len(), 2);
+    let prepared = commands[0].0;
+    assert_eq!(commands[1].1, Command::Seek(position(0)));
+    assert_eq!(deck.snapshot().as_ref().position, position(480_000));
+    rig.apply(&mut deck, prepared, i64::from(caller));
+    assert_eq!(deck.snapshot().as_ref().status, TrackStatus::Loaded);
+    assert_eq!(deck.snapshot().as_ref().position, position(0));
+    let at = deck
+        .entry(Bound::AtOrAfter(rig.now + rig.delivery))
+        .expect("admissible replay entry");
+    control.clear();
+    let started = rig
+        .run(|out| deck.apply(TrackCommand::Play { at: When::At(at) }, out))
+        .expect("replay")
+        .expect("start sequence");
+    assert_eq!(control.commands(), [(started, Command::Play(When::At(at)))]);
+    rig.apply(&mut deck, started, i64::from(at));
+    assert_eq!(
+        deck.snapshot().as_ref().status,
+        TrackStatus::Playing { since: at }
+    );
+    assert_eq!(deck.snapshot().as_ref().position, position(0));
+}
+
+#[kithara::test]
+fn a_late_partial_grid_resumes_ended_sync_from_zero() {
+    let (mut deck, control) = deck(trajectory(120.0, 4));
+    let mut rig = Rig::new(0);
+    let loading = load(&mut deck, &mut rig, 0);
+    rig.apply(&mut deck, loading, 0);
+    control.edit(|script| {
+        script.snapshot.position = position(480_000);
+        script.snapshot.status = TrackStatus::Ended {
+            at: SessionFrame::new(480_000),
+        };
+    });
+    rig.now = SessionFrame::new(480_000);
+    assert_eq!(
+        rig.run(|out| LinkedPlayer::sync(&mut deck, true, out))
+            .expect("sync waits for replay geometry"),
+        None
+    );
+    assert_eq!(
+        deck.snapshot().sync,
+        SyncStatus::WaitingForGrid {
+            required: position(0)
+        }
+    );
+    let model = grid(24_000, 0, None, 96_000);
+    assert!(crate::covers(&model, position(0)));
+    assert!(!crate::covers(&model, position(480_000)));
+    control.clear();
+    answer(&mut deck, &mut rig, loading, model);
+    let commands = control.commands();
+    assert_eq!(commands.len(), 2);
+    assert_eq!(commands[1].1, Command::Seek(position(0)));
+    assert_eq!(deck.snapshot().as_ref().position, position(480_000));
+    let ready = rig.now + rig.delivery;
+    rig.apply(&mut deck, commands[0].0, i64::from(ready));
+    assert_eq!(deck.snapshot().as_ref().status, TrackStatus::Loaded);
+    assert_eq!(deck.snapshot().as_ref().position, position(0));
+    control.clear();
+    rig.run_pass(|out, pass| HostedDeck::tick(&mut deck, pass, out));
+    assert!(
+        control.commands().is_empty(),
+        "late replay geometry alone does not start the track"
+    );
+}
 
 #[kithara::test]
 #[case::preparation_carries_the_next_source_beat_to_the_next_deck_beat(
@@ -457,7 +844,13 @@ fn a_boundary_rounded_onto_the_first_window_frame_is_admitted() {
     );
     assert_eq!(
         control.commands()[0].1,
-        Command::Speed(SpeedCurve::Constant(1.025), When::Next)
+        Command::Speed(
+            SpeedCurve::Approach(
+                ExponentialApproach::new(123.0 / 120.0, 123.0 / 120.0, 0.0)
+                    .expect("exact constant rate")
+            ),
+            When::Next
+        )
     );
 }
 

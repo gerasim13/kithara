@@ -15,6 +15,7 @@ mod kithara {
 }
 
 use crate::{
+    PcmOrigin,
     error::DecodeResult,
     types::{BlenderProfile, GaplessProfile, TrackMetadata},
 };
@@ -188,11 +189,19 @@ pub trait Decoder: Send + 'static {
         AudioCodec::encoder_priming_frames(codec)
     }
 
-    /// Original PCM timeline position observed before a nonzero seek.
+    /// Original physical PCM position and its content-comparison basis.
     ///
-    /// This position remains stable across seeks. `None` means the original
-    /// PCM position has not been observed; sought output must not supply it.
-    fn initial_pcm_position(&self) -> Option<Duration> {
+    /// Capture both at the original head, before read-ahead can change the live
+    /// gap. The basis removes only the gap already reflected in that head's
+    /// position, independent of later PTS jumps and codec gap modelling.
+    /// Wrappers retain the exact basis while projecting the physical position.
+    /// The record survives seeks; sought output cannot establish an unknown one.
+    fn initial_pcm_origin(&self) -> Option<PcmOrigin> {
+        None
+    }
+
+    /// Raw PCM coordinate of track-media zero, independent of gapless policy and seeks.
+    fn media_origin(&self) -> Option<Duration> {
         None
     }
 

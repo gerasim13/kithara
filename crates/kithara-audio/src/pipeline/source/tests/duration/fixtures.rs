@@ -39,6 +39,8 @@ pub(super) struct PhysicalDecoder {
     next_frame: u64,
     spec: AudioSpec,
     pools: Pools,
+    original: Option<kithara_decode::PcmOrigin>,
+    observing_original: bool,
 }
 
 impl PhysicalDecoder {
@@ -48,6 +50,11 @@ impl PhysicalDecoder {
             extent,
             spec: AudioSpec::new(2, rate),
             pools,
+            original: extent.reports_origin.then(|| {
+                let position = Duration::from_millis(extent.origin);
+                kithara_decode::PcmOrigin::new(position, position)
+            }),
+            observing_original: !extent.reports_origin,
         }
     }
     fn end_frame(&self) -> u64 {
@@ -56,10 +63,8 @@ impl PhysicalDecoder {
 }
 
 impl Decoder for PhysicalDecoder {
-    fn initial_pcm_position(&self) -> Option<Duration> {
-        self.extent
-            .reports_origin
-            .then(|| Duration::from_millis(self.extent.origin))
+    fn initial_pcm_origin(&self) -> Option<kithara_decode::PcmOrigin> {
+        self.original
     }
     fn duration(&self) -> Option<Duration> {
         self.extent.declared
@@ -80,6 +85,11 @@ impl Decoder for PhysicalDecoder {
             return Ok(DecoderChunkOutcome::Eof);
         }
         let start = self.next_frame;
+        if self.observing_original {
+            let position = self.spec.duration_for(start)?;
+            self.original = Some(kithara_decode::PcmOrigin::new(position, position));
+            self.observing_original = false;
+        }
         let frames = (self.end_frame() - start).min(256);
         self.next_frame += frames;
         let origin = self.extent.origin * u64::from(self.spec.sample_rate.get()) / 1_000;
@@ -104,6 +114,9 @@ impl Decoder for PhysicalDecoder {
         ))))
     }
     fn seek(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        if !position.is_zero() {
+            self.observing_original = false;
+        }
         let origin = self.extent.origin * u64::from(self.spec.sample_rate.get()) / 1_000;
         let frame = self.spec.frame_at(position)?.max(origin);
         self.next_frame = frame.min(self.end_frame());

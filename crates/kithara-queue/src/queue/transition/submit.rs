@@ -26,6 +26,15 @@ where
         if out.deck_available() == 0 {
             return Err(PlayError::Full("deck"));
         }
+        if !self
+            .active
+            .get_mut(incoming)
+            .ok_or(PlayError::NoActiveSlot)?
+            .track
+            .prepare_entry(frame, out)?
+        {
+            return Ok(None);
+        }
         let slot = self
             .active
             .get(incoming)
@@ -131,6 +140,8 @@ where
             self.pending_handover = Some(PendingHandover {
                 seq,
                 item: target.to,
+                slot,
+                replacement,
                 reason: target.reason,
             });
             if let Some(target) = &mut self.target {

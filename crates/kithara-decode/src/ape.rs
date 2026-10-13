@@ -104,6 +104,7 @@ where
         Ok(DecoderChunkOutcome::Chunk(Box::new(AudioChunk::new(
             AudioChunkInfo {
                 spec: self.spec,
+                media_origin: Some(Duration::ZERO),
                 timestamp: self.spec.duration_for(start)?,
                 end_timestamp: self.spec.duration_for(self.frame_offset)?,
                 frames: u32::try_from(frames)?,
@@ -122,8 +123,12 @@ where
     fn spec(&self) -> AudioSpec {
         self.spec
     }
-    fn initial_pcm_position(&self) -> Option<Duration> {
+    fn media_origin(&self) -> Option<Duration> {
         Some(Duration::ZERO)
+    }
+
+    fn initial_pcm_origin(&self) -> Option<crate::PcmOrigin> {
+        Some(crate::PcmOrigin::new(Duration::ZERO, Duration::ZERO))
     }
 
     fn duration(&self) -> Option<Duration> {

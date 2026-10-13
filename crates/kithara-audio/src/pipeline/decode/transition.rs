@@ -272,8 +272,7 @@ impl super::core::ActiveDecode {
         let outgoing_rate = self.active.blender_profile().spec().sample_rate.get();
         let active_profile = self.active.gapless_profile();
         let active_gap = self.active.timeline_gap();
-        let active = &self.active;
-        let blender = &self.blender;
+        let (active, blender) = (&self.active, &self.blender);
         let Some(IncomingDecode::Priming {
             frontier,
             generation,
@@ -297,6 +296,17 @@ impl super::core::ActiveDecode {
             self.fail_incoming();
             return IncomingPrime::Failed;
         };
+        debug!(
+            outgoing_origin,
+            incoming_origin,
+            active_gap,
+            incoming_gap = generation.timeline_gap(),
+            outgoing_visible = ?active.visible_origin(),
+            incoming_visible = ?generation.visible_origin(),
+            outgoing_base = ?active.comparison_base(),
+            incoming_base = ?generation.comparison_base(),
+            "variant comparison origins resolved"
+        );
         let readiness_at = |generation: &DecoderGeneration, frontier, origin| {
             promotion_readiness(
                 active,
@@ -337,17 +347,15 @@ impl super::core::ActiveDecode {
             generation.decoder_mut().prepare_next_chunk();
             outcome = match generation.next_chunk() {
                 Ok(DecoderChunkOutcome::Chunk(chunk)) => {
-                    let chunk = match apply_skip(*chunk, generation.pending_head_skip_mut()) {
-                        Ok(Some(chunk)) => chunk,
+                    match apply_skip(*chunk, generation.pending_head_skip_mut()) {
+                        Ok(Some(chunk)) if !chunk.samples.is_empty() => generation.stage(chunk),
+                        Ok(Some(_)) => {}
                         Ok(None) => continue,
                         Err(error) => {
                             tracing::warn!(?error, "incoming source mapping failed");
                             outcome = IncomingPrime::Failed;
                             break;
                         }
-                    };
-                    if !chunk.samples.is_empty() {
-                        generation.stage(chunk);
                     }
                     let Some((_, readiness)) = incoming_readiness(generation) else {
                         outcome = IncomingPrime::Failed;
@@ -795,21 +803,20 @@ fn incoming_origin_from(
     incoming: &DecoderGeneration,
     mode: kithara_decode::GaplessMode,
 ) -> Option<u64> {
-    if incoming.visible_origin().is_some() {
-        return incoming.comparison_origin(mode);
-    }
     let incoming_profile = incoming.gapless_profile();
     let gap = if shares_default_profile(active_profile, incoming_profile) {
         active_gap.max(incoming.timeline_gap())
     } else {
         incoming.timeline_gap()
     };
-    let origin = incoming.timeline_origin_with_gap(mode, gap);
+    let origin = incoming.comparison_origin_with_gap(mode, gap)?;
     debug!(
         origin,
         gap,
         gapless_known = incoming_profile.gapless().is_some(),
         default_priming = incoming_profile.default_priming_frames(),
+        visible_origin = ?incoming.visible_origin(),
+        comparison_base = ?incoming.comparison_base(),
         ?mode,
         "incoming timeline origin resolved"
     );

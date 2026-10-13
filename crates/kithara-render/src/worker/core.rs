@@ -235,7 +235,13 @@ where
             let position = if position.is_zero() {
                 position
             } else {
-                match audio.seek(position).map_err(|error| match error {
+                let raw_position = audio
+                    .media_origin()
+                    .and_then(|origin| origin.checked_add(position))
+                    .ok_or(LoadRefusal::Open(DecodeError::InvalidData {
+                        detail: "initial media target has no raw source translation",
+                    }))?;
+                match audio.seek(raw_position).map_err(|error| match error {
                     AudioReadError::Decode(error) => decode_refusal(error),
                     error => LoadRefusal::Source(TrackFailureKind::from(&error)),
                 })? {
@@ -246,6 +252,7 @@ where
             let spec = audio.spec();
             let initial = AudioChunkInfo {
                 spec,
+                media_origin: audio.media_origin(),
                 timestamp: position,
                 end_timestamp: position,
                 ..AudioChunkInfo::default()

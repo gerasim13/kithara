@@ -297,6 +297,7 @@ where
             && (expected_frame != pending_frame
                 || self.staged_meta.is_some_and(|meta| {
                     meta.visible_origin != pending.chunk.meta.visible_origin
+                        || meta.media_origin != pending.chunk.meta.media_origin
                         || meta.source_revision != pending.chunk.meta.source_revision
                 }))
         {
@@ -462,7 +463,7 @@ where
         remaining: usize,
     ) -> Result<FrameCount, WarpRenderError> {
         self.warp
-            .prepare_quantum(meta, remaining, self.lane.output_limit())
+            .prepare_source_window(meta, remaining, self.lane.output_limit())
     }
 
     fn prepare_renderers(&mut self, spec: AudioSpec) {

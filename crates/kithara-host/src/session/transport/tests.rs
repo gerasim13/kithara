@@ -504,6 +504,59 @@ fn a_tempo_change_inside_a_block_retargets_on_its_own_frame() {
 }
 
 #[kithara::test]
+fn successive_tempo_changes_preserve_the_reached_tempo_and_beat() {
+    let (mut processor, mut extra, mut output, mut queue) = active_harness();
+    process_node(&mut processor, &proc_info_at(block_frame(1)), &mut extra);
+    let first = SessionFrame::new(block_frame(2) + 100);
+    let second = SessionFrame::new(i64::from(first) + 48);
+    let observed = SessionFrame::new(i64::from(second) + 96);
+    send_tempo(&mut queue, 60.0, When::At(first));
+    send_tempo(&mut queue, 90.0, When::At(second));
+
+    process_node(&mut processor, &proc_info_at(block_frame(2)), &mut extra);
+    for frame in [first, second] {
+        assert!(matches!(
+            outcome(&mut queue),
+            Outcome::Applied { at, .. } if at == frame
+        ));
+    }
+    let applied = snapshot(&mut output);
+    let anchor = applied.anchor();
+    let rate = f64::from(sample_rate().get());
+    let elapsed = 48.0 / rate;
+    let after = 96.0 / rate;
+    let reached = 1.0 + (-elapsed / 0.005).exp();
+    let beat_at_second =
+        f64::from(i32::try_from(i64::from(first)).expect("invariant: fixture frame fits i32"))
+            * (2.0 / rate)
+            + elapsed
+            + 0.005 * -(-elapsed / 0.005).exp_m1();
+    let beat_at_observed =
+        beat_at_second + 1.5 * after + (reached - 1.5) * 0.005 * -(-after / 0.005).exp_m1();
+    assert_eq!(anchor.frame(), second);
+    assert_eq!(applied.tempo(), tempo(90.0));
+    assert_eq!(anchor.tempo_at(second), reached);
+    for (frame, expected) in [(second, beat_at_second), (observed, beat_at_observed)] {
+        let beat = SessionBeat::new(expected).expect("invariant: fixture beat is finite");
+        assert_eq!(
+            anchor
+                .frame_at(beat)
+                .expect("invariant: fixture beat is representable"),
+            frame
+        );
+        assert!(
+            (f64::from(
+                anchor
+                    .beat_at(frame)
+                    .expect("invariant: fixture frame is finite")
+            ) - expected)
+                .abs()
+                <= f64::EPSILON
+        );
+    }
+}
+
+#[kithara::test]
 fn a_tempo_change_at_a_rendered_frame_comes_back_late() {
     let (mut processor, mut extra, mut output, mut queue) = active_harness();
     process_node(&mut processor, &proc_info_at(block_frame(1)), &mut extra);

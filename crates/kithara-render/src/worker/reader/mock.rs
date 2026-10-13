@@ -192,6 +192,7 @@ pub fn chunk(
             segment,
             lane_frame,
             frame_offset: source_frame,
+            media_origin: Some(Duration::ZERO),
             timestamp: spec.duration_for(source_frame).expect("timestamp"),
             end_timestamp: spec
                 .duration_for(source_frame + frames)

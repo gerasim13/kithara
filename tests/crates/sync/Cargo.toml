@@ -39,6 +39,9 @@ kithara = { workspace = true, features = ["download", "apple", "client-wreq"] }
 kithara = { workspace = true, features = ["full", "symphonia", "fdk-aac"] }
 kithara-app = { workspace = true, features = ["analysis-waveform", "beat-nn-small", "lib-only"] }
 
+[dev-dependencies]
+kithara-render = { workspace = true }
+
 [lints]
 workspace = true
 

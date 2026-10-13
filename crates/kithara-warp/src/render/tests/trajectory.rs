@@ -1,5 +1,6 @@
 use std::num::{NonZeroU32, NonZeroU64, NonZeroU128};
 
+use kithara_signal::ExponentialApproach;
 use kithara_test_utils::kithara;
 
 use super::super::trajectory::{Fraction, Trajectory};
@@ -102,4 +103,238 @@ fn identity_snap_rounds_to_the_nearest_source_frame(#[case] speed: f32, #[case] 
         Some((u128::from(rounded), NonZeroU128::MIN)),
         "nearest whole frame; exact ties advance to the next frame"
     );
+}
+
+#[kithara::test]
+fn an_approach_keeps_one_mapping_basis_across_quantum_partitions() {
+    let rate = NonZeroU32::new(44_100).expect("sample rate");
+    let curve = ExponentialApproach::new(1.0, 0.9, 220.5).expect("approach");
+    let mut initial = Trajectory::new(1.0);
+    initial
+        .replace(SpeedCurve::Approach(curve))
+        .expect("accepted approach");
+    let whole = initial.span(1234, rate, 2048).expect("whole approach");
+    for quantum in [1, 32, 127, 512] {
+        let mut trajectory = initial.clone();
+        let mut joined: Option<kithara_signal::SourceSpan> = None;
+        let mut cursor = 0;
+        while cursor < 2048 {
+            let frames = quantum.min(2048 - cursor);
+            let span = trajectory.span(1234, rate, frames).expect("partition");
+            for offset in 0..=span.output_frames() {
+                assert_eq!(
+                    span.source_ratio_at(offset),
+                    whole.source_ratio_at(u64::try_from(cursor).expect("cursor") + offset)
+                );
+            }
+            joined = Some(joined.map_or(span, |previous| {
+                previous.followed_by(span).expect("one mapping basis joins")
+            }));
+            trajectory.advance(span).expect("partition consumed");
+            cursor += frames;
+        }
+        assert_eq!(joined, Some(whole));
+    }
+}
+
+#[kithara::test]
+fn a_rounded_unit_speed_does_not_finish_an_approach() {
+    let curve =
+        ExponentialApproach::new(1.0 - 2.0_f64.powi(-26), 1.0, 220.5).expect("approach to unity");
+    let mut trajectory = Trajectory::new(1.0);
+    trajectory
+        .replace(SpeedCurve::Approach(curve))
+        .expect("approach accepted");
+    assert_eq!(trajectory.speed().expect("observable speed"), 1.0);
+    assert!(!trajectory.unity_interval());
+    assert!(!trajectory.constant_unity());
+    assert!(!trajectory.passthrough_speed(1.0));
+}
+
+#[kithara::test]
+fn an_approach_replacement_keeps_its_reached_rate_and_q32_source_phase() {
+    let rate = NonZeroU32::new(44_100).expect("sample rate");
+    let first = ExponentialApproach::new(1.0, 0.9, 220.5).expect("initial approach");
+    let mut trajectory = Trajectory::new(1.0);
+    trajectory
+        .replace(SpeedCurve::Approach(first))
+        .expect("initial admission");
+    let span = trajectory
+        .span(10_000, rate, 97)
+        .expect("before replacement");
+    let (numerator, denominator) = span.source_ratio_at(97).expect("consumed position");
+    let carried = Fraction {
+        numerator,
+        denominator,
+    }
+    .on_lattice()
+    .expect("Q32 origin");
+    trajectory.advance(span).expect("consumed prefix");
+    let reached = first.rate_at(97.0).expect("reached speed");
+    let second = ExponentialApproach::new(reached, 1.1, 220.5).expect("new target");
+    trajectory
+        .replace(SpeedCurve::Approach(second))
+        .expect("replacement admission");
+    let span = trajectory.span(0, rate, 128).expect("replacement span");
+    assert_eq!(
+        span.source_ratio_at(0),
+        Some((carried.numerator, carried.denominator))
+    );
+    let whole = trajectory.span(0, rate, 256).expect("whole replacement");
+    trajectory.advance(span).expect("replacement prefix");
+    let next = trajectory.span(0, rate, 128).expect("replacement suffix");
+    assert_eq!(span.followed_by(next), Some(whole));
+}
+
+#[kithara::test]
+fn a_source_discontinuity_rebases_an_approach_at_its_reached_rate() {
+    let rate = NonZeroU32::new(44_100).expect("sample rate");
+    let first = ExponentialApproach::new(1.0, 0.9, 220.5).expect("approach");
+    let mut trajectory = Trajectory::new(1.0);
+    trajectory
+        .replace(SpeedCurve::Approach(first))
+        .expect("accepted approach");
+    let before = trajectory
+        .span(10_000, rate, 97)
+        .expect("before discontinuity");
+    trajectory.advance(before).expect("consumed prefix");
+    let reached = trajectory.speed().expect("reached speed");
+    trajectory.reset();
+    assert_eq!(trajectory.speed().expect("rebased speed"), reached);
+    let after = trajectory.span(50, rate, 128).expect("after backward seek");
+    assert_eq!(after.source_ratio_at(0), Some((50, NonZeroU128::MIN)));
+    let expected_curve = ExponentialApproach::new(
+        first.rate_at(97.0).expect("independent reached rate"),
+        first.target(),
+        first.time_constant(),
+    )
+    .expect("remaining approach");
+    let expected =
+        kithara_signal::SourceSpan::approaching(50, NonZeroU128::MIN, expected_curve, 0, rate, 256)
+            .expect("expected rebased mapping");
+    trajectory.advance(after).expect("rebased prefix");
+    let next = trajectory.span(50, rate, 128).expect("rebased suffix");
+    assert_eq!(after.followed_by(next), Some(expected));
+}
+
+#[kithara::test]
+fn analytic_correction_segments_preserve_positions_and_forecast_each_boundary() {
+    let rate = NonZeroU32::new(44_100).expect("sample rate");
+    let first = ExponentialApproach::new(1.0, 0.9, 220.5).expect("base approach");
+    let second = ExponentialApproach::new(
+        first.rate_at(97.0).expect("reached base rate") + 0.001,
+        0.901,
+        220.5,
+    )
+    .expect("bounded correction approach");
+    let third = ExponentialApproach::new(
+        second.rate_at(204.0).expect("reached correction rate") - 0.001,
+        0.9,
+        220.5,
+    )
+    .expect("correction ends");
+    let first_span =
+        kithara_signal::SourceSpan::approaching(500, NonZeroU128::MIN, first, 0, rate, 97)
+            .expect("first reference law");
+    let first_end = first_span.source_ratio_at(97).expect("first boundary");
+    let second_span =
+        kithara_signal::SourceSpan::approaching(first_end.0, first_end.1, second, 0, rate, 204)
+            .expect("second reference law");
+    let second_end = second_span.source_ratio_at(204).expect("second boundary");
+    let third_span =
+        kithara_signal::SourceSpan::approaching(second_end.0, second_end.1, third, 0, rate, 723)
+            .expect("third reference law");
+    let expected = |frame: u64| {
+        if frame <= 97 {
+            first_span.source_ratio_at(frame)
+        } else if frame <= 301 {
+            second_span.source_ratio_at(frame - 97)
+        } else {
+            third_span.source_ratio_at(frame - 301)
+        }
+    };
+    for quantum in [1, 32, 127, 512] {
+        let mut trajectory = Trajectory::new(1.0);
+        trajectory
+            .replace(SpeedCurve::ApproachSteps(
+                vec![(0, first), (97, second), (301, third)].into(),
+            ))
+            .expect("finite correction segments accepted");
+        assert_eq!(
+            trajectory
+                .at_offset(500, rate, 700)
+                .expect("forecast crosses real segment boundaries"),
+            expected(700).expect("forecast reference")
+        );
+        let mut cursor = 0;
+        while cursor < 1024 {
+            let span = trajectory
+                .span(500, rate, quantum.min(1024 - cursor))
+                .expect("segment quantum");
+            for offset in 0..=span.output_frames() {
+                assert_eq!(
+                    span.source_ratio_at(offset),
+                    expected(u64::try_from(cursor).expect("cursor") + offset)
+                );
+            }
+            cursor += usize::try_from(span.output_frames()).expect("quantum length");
+            trajectory.advance(span).expect("physical segment consumed");
+        }
+    }
+}
+
+#[kithara::test]
+fn a_source_discontinuity_preserves_future_analytic_correction_boundaries() {
+    let rate = NonZeroU32::new(44_100).expect("sample rate");
+    let first = ExponentialApproach::new(1.0, 0.9, 220.5).expect("first law");
+    let second = ExponentialApproach::new(1.1, 0.9, 220.5).expect("second law");
+    let mut trajectory = Trajectory::new(1.0);
+    trajectory
+        .replace(SpeedCurve::ApproachSteps(
+            vec![(0, first), (97, second)].into(),
+        ))
+        .expect("two analytic segments");
+    let prefix = trajectory.span(500, rate, 64).expect("prefix before seek");
+    trajectory.advance(prefix).expect("prefix consumed");
+    let reached = trajectory.speed().expect("reached speed");
+    trajectory.reset();
+    assert_eq!(
+        trajectory
+            .speed()
+            .expect("source rebase retains tempo clock"),
+        reached
+    );
+    let after = trajectory
+        .span(50, rate, 128)
+        .expect("new source waits for the original boundary");
+    assert_eq!(after.source_ratio_at(0), Some((50, NonZeroU128::MIN)));
+    assert_eq!(after.output_frames(), 33);
+    trajectory
+        .advance(after)
+        .expect("reached existing correction boundary");
+    assert_eq!(trajectory.speed().expect("next segment rate"), 1.1);
+    let next = trajectory
+        .span(50, rate, 128)
+        .expect("next law starts at actual consumed source");
+    assert_eq!(next.source_ratio_at(0), after.source_ratio_at(33));
+}
+
+#[kithara::test]
+fn invalid_analytic_segment_order_rejects_without_replacing_the_speed() {
+    let curve = ExponentialApproach::new(1.0, 0.9, 220.5).expect("valid law");
+    let mut trajectory = Trajectory::new(1.0);
+    for steps in [
+        vec![],
+        vec![(1, curve)],
+        vec![(0, curve), (0, curve)],
+        vec![(0, curve), (2, curve), (1, curve)],
+    ] {
+        assert!(
+            trajectory
+                .replace(SpeedCurve::ApproachSteps(steps.into()))
+                .is_err()
+        );
+        assert_eq!(trajectory.speed().expect("unchanged speed"), 1.0);
+        assert!(trajectory.constant_unity());
+    }
 }

@@ -2,8 +2,12 @@ use std::{io::Cursor, num::NonZeroU32};
 
 use ::kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ChunkOutcome, SeekOutcome},
-    decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
+    audio::{
+        Audio, AudioConfig, AudioDecoderConfig, AudioEvent, ChunkOutcome,
+        DecoderBackend as ObservedBackend, DecoderChangeCause, DecoderEvent, SeekOutcome,
+    },
+    decode::{DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory, PcmOrigin},
+    events::EventBus,
     file::{File, FileConfig},
     platform::{sync::Arc, time::Duration, tokio::task::yield_now},
     resampler::NoResamplerBackend,
@@ -48,7 +52,7 @@ async fn initial_visible_duration_matches_the_built_ruler_before_eof(#[case] ass
     .expect("initial encoded decoder");
     let raw_before = decoder.duration();
     let profile_before = decoder.gapless_profile(None);
-    let origin_before = decoder.initial_pcm_position();
+    let origin_before = decoder.initial_pcm_origin().map(PcmOrigin::position);
     let DecoderChunkOutcome::Chunk(first) = decoder.next_chunk().expect("original decoder PCM")
     else {
         panic!("in-memory encoded source must produce original PCM");
@@ -61,7 +65,7 @@ async fn initial_visible_duration_matches_the_built_ruler_before_eof(#[case] ass
     assert!(first.samples.iter().all(|sample| sample.is_finite()));
     let raw_after = decoder.duration();
     let profile_after = decoder.gapless_profile(None);
-    let origin_after = decoder.initial_pcm_position();
+    let origin_after = decoder.initial_pcm_origin().map(PcmOrigin::position);
     tracing::info!(asset = asset.name(), ?raw_before, ?raw_after, ?profile_before, ?profile_after,
         ?origin_before, ?origin_after, first_meta = ?first.meta,
         first_frames = first.frames(), first_samples = ?&first.samples[..first.samples.len().min(8)],
@@ -145,10 +149,19 @@ async fn initial_visible_duration_matches_the_built_ruler_before_eof(#[case] ass
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 #[kithara::hang_watchdog(ctx = String)]
-#[case::mp3(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_2CH)]
-#[case::aac(SignalAsset::PROFILE_M4A_AAC_44100_2CH)]
+#[case::mp3(
+    SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_2CH,
+    DecoderBackend::default()
+)]
+#[case::aac(SignalAsset::PROFILE_M4A_AAC_44100_2CH, DecoderBackend::default())]
+#[case::symphonia_mp3(
+    SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_2CH,
+    DecoderBackend::Symphonia
+)]
+#[case::symphonia_aac(SignalAsset::PROFILE_M4A_AAC_44100_2CH, DecoderBackend::Symphonia)]
 async fn preloaded_original_pcm_preserves_its_origin_through_the_first_raw_seek(
     #[case] asset: SignalAsset,
+    #[case] backend: DecoderBackend,
 ) {
     let server = TestServerHelper::new().await;
     let pools = pools();
@@ -160,12 +173,31 @@ async fn preloaded_original_pcm_preserves_its_origin_through_the_first_raw_seek(
         )
         .pools(pools.clone())
         .build();
+    let bus = EventBus::default();
+    let mut decoder_events = bus.subscribe::<DecoderEvent>();
     let config = AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(file)
         .hint(asset.ext().to_owned())
+        .events(bus)
+        .decoder(AudioDecoderConfig::builder().backend(backend).build())
         .build();
     let mut audio = Audio::prepare(config, Arc::new(NoopWorkerWake), pools)
         .await
         .expect("source owner");
+    let DecoderEvent::DecoderChanged {
+        backend: actual,
+        cause: DecoderChangeCause::Initial,
+        ..
+    } = decoder_events
+        .try_recv()
+        .expect("initial decoder receipt")
+        .event
+    else {
+        panic!("initial decoder must report its backend");
+    };
+    if matches!(backend, DecoderBackend::Symphonia) {
+        assert_eq!(actual, ObservedBackend::Symphonia);
+    }
+    let mut audio_events = audio.events::<AudioEvent>();
     let reference_file = FileConfig::for_src(server.signal(asset).into())
         .store(
             AssetStore::builder(kithara_integration_tests::bufpool_ext::pools())
@@ -177,6 +209,7 @@ async fn preloaded_original_pcm_preserves_its_origin_through_the_first_raw_seek(
     let reference_config =
         AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(reference_file)
             .hint(asset.ext().to_owned())
+            .decoder(AudioDecoderConfig::builder().backend(backend).build())
             .build();
     let mut reference = Audio::prepare(
         reference_config,
@@ -198,7 +231,10 @@ async fn preloaded_original_pcm_preserves_its_origin_through_the_first_raw_seek(
     loop {
         hang_tick!(format!("{} original preload", asset.name()));
         audio.preload().expect("preload the real source");
-        if audio.is_preloaded() {
+        if audio_events
+            .try_recv()
+            .is_ok_and(|event| matches!(event.event, AudioEvent::FormatDetected { .. }))
+        {
             hang_reset!();
             break;
         }
@@ -214,6 +250,13 @@ async fn preloaded_original_pcm_preserves_its_origin_through_the_first_raw_seek(
         hang_tick!(format!("{} sought PCM frames={served}", asset.name()));
         match audio.next_chunk().expect("real sought PCM") {
             ChunkOutcome::Chunk(chunk) => {
+                if served < 4096 {
+                    eprintln!(
+                        "SOUGHT_PCM asset={} served={served} origin={origin:?} target={target:?} prior={endpoint:?} meta={:?}",
+                        asset.name(),
+                        chunk.meta,
+                    );
+                }
                 assert_eq!(
                     chunk.samples.len(),
                     chunk.frames() * usize::from(chunk.spec().channels)
@@ -230,19 +273,15 @@ async fn preloaded_original_pcm_preserves_its_origin_through_the_first_raw_seek(
                         start + chunk.spec().duration_for(1).expect("one source frame") >= target
                     );
                 }
-                endpoint = Some(chunk.meta.source_span.map_or_else(
-                    || {
-                        chunk.meta.timestamp
-                            + chunk
-                                .spec()
-                                .duration_for(u64::from(chunk.meta.frames))
-                                .expect("actual extent")
-                    },
-                    |span| {
-                        span.position_at(u64::from(chunk.meta.frames))
-                            .expect("mapped endpoint")
-                    },
-                ));
+                endpoint = Some(
+                    chunk
+                        .meta
+                        .source_span
+                        .map_or(chunk.meta.end_timestamp, |span| {
+                            span.position_at(u64::from(chunk.meta.frames))
+                                .expect("mapped endpoint")
+                        }),
+                );
                 served += u64::from(chunk.meta.frames);
                 hang_reset!();
             }

@@ -205,6 +205,7 @@ pub(crate) fn covered(runs: &[(u64, u64)], extent: Option<u64>) -> TrackAnalysis
         coverage.insert(start..end);
     }
     TrackAnalysis::builder()
+        .media_origin(Duration::ZERO)
         .token("track".into())
         .revision(1)
         .source_sample_rate(NonZeroU32::new(44_100).expect("a positive rate"))
@@ -703,6 +704,7 @@ mod tests {
     fn progress(revision: u64) -> TrackArtifacts {
         let mut analysis = covered(&[(0, 1_000)], Some(1_000));
         analysis = TrackAnalysis::builder()
+            .media_origin(Duration::ZERO)
             .token(analysis.token().clone())
             .revision(revision)
             .source_sample_rate(analysis.source_sample_rate())
@@ -932,6 +934,7 @@ mod tests {
 
     fn analysed(beats: Vec<(u64, Option<f32>)>) -> TrackAnalysis {
         TrackAnalysis::builder()
+            .media_origin(Duration::ZERO)
             .token("track".into())
             .revision(1)
             .source_sample_rate(NonZeroU32::new(44_100).expect("a positive rate"))
@@ -993,6 +996,7 @@ mod tests {
         let mut coverage = RangeSet::new();
         coverage.insert(0..220_500);
         TrackAnalysis::builder()
+            .media_origin(Duration::ZERO)
             .token("deck-track".into())
             .revision(revision)
             .source_sample_rate(NonZeroU32::new(44_100).expect("a positive rate"))

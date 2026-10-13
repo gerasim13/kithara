@@ -102,6 +102,13 @@ fn a_rate_change_reprojects_the_model_it_already_holds() {
     );
     control.clear();
     rig.run(|out| LinkedPlayer::retime(&mut deck, &doubled, SessionFrame::new(0), out));
+    let replacement = control.commands()[0].0;
+    assert_eq!(
+        deck.entry(Bound::AtOrAfter(SessionFrame::new(1))),
+        None,
+        "a replacement requires its own readiness receipt"
+    );
+    rig.apply(&mut deck, replacement, 0);
     assert_eq!(
         first,
         Some(SessionFrame::new(24_000)),
@@ -134,6 +141,13 @@ fn a_source_that_answers_late_reaches_the_load_that_asked() {
     );
     control.clear();
     answer(&mut deck, &mut rig, loading, served_grid());
+    let replacement = control.commands()[0].0;
+    assert_eq!(
+        deck.entry(Bound::AtOrAfter(SessionFrame::new(1))),
+        None,
+        "an answered grid requires the prepared segment receipt"
+    );
+    rig.apply(&mut deck, replacement, 0);
     let answered = deck.snapshot();
     assert_eq!(
         deck.entry(Bound::AtOrAfter(SessionFrame::new(1))),

@@ -626,7 +626,7 @@ pub(crate) fn render_configured_grid_with_updates(
                 frames: u32::try_from(remaining).expect("fixture frames"),
                 ..Default::default()
             };
-            let planned = match fx.prepare_quantum(meta, remaining, usize::MAX) {
+            let planned = match fx.prepare_source_window(meta, remaining, usize::MAX) {
                 Ok(frames) => frames.get(),
                 Err(kithara::warp::WarpRenderError::NeedsService) => {
                     fx.prepare_engine_latency(spec).expect("service renderer");

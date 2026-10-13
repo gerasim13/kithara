@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use kithara_signal::SessionFrame;
+use kithara_signal::{ExponentialApproach, SessionFrame};
 use num_traits::cast::ToPrimitive;
 
 /// An invalid session coordinate or coordinate rate.
@@ -57,15 +57,9 @@ pub struct SessionAnchor {
     /// Returns the frame this anchor was established on.
     #[field(get, copy)]
     frame: SessionFrame,
-    /// Returns the tempo at the committed frame, in beats per second.
+    /// Returns the committed scalar tempo approach.
     #[field(get, copy)]
-    beats_per_second: f64,
-    /// Time constant of the tempo approach, in seconds.
-    #[field(get, copy)]
-    smooth_seconds: f64,
-    /// Tempo approached by this committed segment, in beats per second.
-    #[field(get, copy)]
-    target_beats_per_second: f64,
+    approach: ExponentialApproach,
 }
 
 impl SessionAnchor {
@@ -96,22 +90,36 @@ impl SessionAnchor {
             sample_rate,
             beat,
             frame,
-            beats_per_second,
-            target_beats_per_second: beats_per_second,
-            smooth_seconds: 0.0,
+            approach: ExponentialApproach::new(beats_per_second, beats_per_second, 0.0)
+                .ok_or(CoordinateError::NonInvertibleRate)?,
         })
     }
 
-    /// Beats advanced from this anchor over `elapsed` seconds of approach.
-    fn advanced_beats(self, elapsed: f64) -> f64 {
-        let approach = -self.smooth_seconds * (-elapsed / self.smooth_seconds).exp_m1();
-        self.target_beats_per_second * elapsed
-            + (self.beats_per_second - self.target_beats_per_second) * approach
+    delegate::delegate! {
+        to self.approach {
+            /// Tempo at the committed frame, in beats per second.
+            #[must_use]
+            #[call(initial)]
+            pub fn beats_per_second(self) -> f64;
+            /// Time constant of the tempo approach, in seconds.
+            #[must_use]
+            #[call(time_constant)]
+            pub fn smooth_seconds(self) -> f64;
+            /// Tempo approached by this committed segment, in beats per second.
+            #[must_use]
+            #[call(target)]
+            pub fn target_beats_per_second(self) -> f64;
+        }
     }
 
-    /// Whether a target tempo is still being approached from this anchor.
+    fn advanced_beats(self, elapsed: f64) -> Result<f64, CoordinateError> {
+        self.approach
+            .advance(elapsed)
+            .ok_or(CoordinateError::NonFinite)
+    }
+
     fn approaching(self) -> bool {
-        self.smooth_seconds > 0.0 && self.target_beats_per_second != self.beats_per_second
+        self.smooth_seconds() > 0.0 && self.target_beats_per_second() != self.beats_per_second()
     }
 
     /// The session beat playing at `frame`.
@@ -122,7 +130,7 @@ impl SessionAnchor {
     /// that the beat is not representable.
     pub fn beat_at(self, frame: SessionFrame) -> Result<SessionBeat, CoordinateError> {
         if let Some(elapsed) = self.elapsed_seconds(frame) {
-            return SessionBeat::new(f64::from(self.beat) + self.advanced_beats(elapsed));
+            return SessionBeat::new(f64::from(self.beat) + self.advanced_beats(elapsed)?);
         }
         let frames = i64::from(frame)
             .checked_sub(i64::from(self.frame))
@@ -134,7 +142,7 @@ impl SessionAnchor {
     /// Session beats one output frame advances at this tempo.
     #[must_use]
     pub fn beats_per_frame(self) -> f64 {
-        self.beats_per_second / f64::from(self.sample_rate.get())
+        self.beats_per_second() / f64::from(self.sample_rate.get())
     }
 
     /// Seconds from this anchor to a later `frame` while a target is still
@@ -178,18 +186,19 @@ impl SessionAnchor {
             return Err(CoordinateError::NonFinite);
         }
         let rate = f64::from(self.sample_rate.get());
-        let mut lower = beats / self.beats_per_second.max(self.target_beats_per_second);
-        let mut upper = (beats / self.beats_per_second.min(self.target_beats_per_second))
+        let mut lower = beats / self.beats_per_second().max(self.target_beats_per_second());
+        let mut upper = (beats / self.beats_per_second().min(self.target_beats_per_second()))
             .min(i64::MAX.to_f64().ok_or(CoordinateError::NonFinite)? / rate);
-        if lower > upper || self.advanced_beats(upper) < beats {
+        if lower > upper || self.advanced_beats(upper)? < beats {
             return Err(CoordinateError::NonFinite);
         }
         let mut elapsed = lower;
         for _ in 0..Self::INVERSION_STEPS {
-            let tempo = self.target_beats_per_second
-                + (self.beats_per_second - self.target_beats_per_second)
-                    * (-elapsed / self.smooth_seconds).exp();
-            let residual = self.advanced_beats(elapsed) - beats;
+            let tempo = self
+                .approach
+                .rate_at(elapsed)
+                .ok_or(CoordinateError::NonFinite)?;
+            let residual = self.advanced_beats(elapsed)? - beats;
             let step = residual / tempo;
             if step.abs() < Self::INVERSION_EPSILON {
                 break;
@@ -206,10 +215,11 @@ impl SessionAnchor {
                 lower + (upper - lower) * 0.5
             };
         }
-        let tempo = self.target_beats_per_second
-            + (self.beats_per_second - self.target_beats_per_second)
-                * (-elapsed / self.smooth_seconds).exp();
-        let error_frames = ((self.advanced_beats(elapsed) - beats) / tempo).abs() * rate;
+        let tempo = self
+            .approach
+            .rate_at(elapsed)
+            .ok_or(CoordinateError::NonFinite)?;
+        let error_frames = ((self.advanced_beats(elapsed)? - beats) / tempo).abs() * rate;
         if !error_frames.is_finite() || error_frames > 0.5 {
             return Err(CoordinateError::NonFinite);
         }
@@ -248,24 +258,40 @@ impl SessionAnchor {
         {
             return Err(CoordinateError::NonInvertibleRate);
         }
-        if smooth_seconds > 0.0 {
-            next.target_beats_per_second = beats_per_second;
-            next.smooth_seconds = smooth_seconds;
-        } else {
-            next = Self::new(frame, next.beat, beats_per_second, self.sample_rate)?;
-        }
+        next.approach = ExponentialApproach::new(
+            if smooth_seconds > 0.0 {
+                reached
+            } else {
+                beats_per_second
+            },
+            beats_per_second,
+            smooth_seconds,
+        )
+        .ok_or(CoordinateError::NonInvertibleRate)?;
         Ok(next)
+    }
+
+    /// Changes the session tempo with its canonical transport approach.
+    ///
+    /// # Errors
+    /// Returns the same coordinate errors as [`Self::retarget`].
+    pub fn retarget_tempo(
+        self,
+        frame: SessionFrame,
+        beats_per_second: f64,
+    ) -> Result<Self, CoordinateError> {
+        self.retarget(frame, beats_per_second, crate::consts::SMOOTH_SECONDS)
     }
 
     /// The tempo playing at `frame`, in beats per second.
     #[must_use]
     pub fn tempo_at(self, frame: SessionFrame) -> f64 {
         let Some(elapsed) = self.elapsed_seconds(frame) else {
-            return self.beats_per_second;
+            return self.beats_per_second();
         };
-        self.target_beats_per_second
-            + (self.beats_per_second - self.target_beats_per_second)
-                * (-elapsed / self.smooth_seconds).exp()
+        self.approach.rate_at(elapsed).unwrap_or_else(|| {
+            unreachable!("validated anchor and finite frame define a finite tempo")
+        })
     }
 }
 

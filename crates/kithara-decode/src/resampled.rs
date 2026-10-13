@@ -16,7 +16,7 @@ use smallvec::SmallVec;
 use crate::{
     BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
     DecoderResamplerConfig, DecoderSeekOutcome, DecoderTrackInfo, GaplessInfo,
-    GaplessTailCompensation, TrackMetadata,
+    GaplessTailCompensation, PcmOrigin, TrackMetadata,
 };
 
 pub(crate) fn wrap<B, S>(
@@ -56,7 +56,7 @@ where
     reanchor_output_on_next_chunk: bool,
     emitted_frames: u64,
     output_frame_offset: u64,
-    initial_pcm_position: Option<Duration>,
+    initial_pcm_origin: Option<PcmOrigin>,
     observing_initial_pcm: bool,
     source_frames_seen: u64,
     output_skip_frames: usize,
@@ -74,9 +74,13 @@ where
     ) -> DecodeResult<Self> {
         let source_spec = decoder.spec();
         let target_spec = AudioSpec::new(source_spec.channels, config.target_sample_rate);
-        let initial_pcm_position = decoder
-            .initial_pcm_position()
-            .map(|position| target_spec.duration_for(target_spec.frame_at(position)?))
+        let initial_pcm_origin = decoder
+            .initial_pcm_origin()
+            .map(|origin| {
+                let position =
+                    target_spec.duration_for(target_spec.frame_at(origin.position())?)?;
+                Ok::<_, DecodeError>(PcmOrigin::new(position, origin.comparison_base()))
+            })
             .transpose()?;
         let resampler = build_resampler(
             config.backend.clone(),
@@ -96,7 +100,7 @@ where
             last_input_meta: None,
             output: PlanarBuffer::new(pools, target_spec, empty)?,
             output_frame_offset: 0,
-            initial_pcm_position,
+            initial_pcm_origin,
             observing_initial_pcm: true,
             output_skip_frames: resampler.output_delay(),
             pending_meta: None,
@@ -120,8 +124,11 @@ where
             self.output_frame_offset = self.target_spec.frame_at(chunk.meta.timestamp)?;
             self.reanchor_output_on_next_chunk = false;
             if self.observing_initial_pcm {
-                self.initial_pcm_position =
-                    Some(self.target_spec.duration_for(self.output_frame_offset)?);
+                let position = self.target_spec.duration_for(self.output_frame_offset)?;
+                self.initial_pcm_origin = self
+                    .decoder
+                    .initial_pcm_origin()
+                    .map(|origin| PcmOrigin::new(position, origin.comparison_base()));
                 self.observing_initial_pcm = false;
             }
         }
@@ -400,8 +407,18 @@ where
         }
     }
 
-    fn initial_pcm_position(&self) -> Option<Duration> {
-        self.initial_pcm_position
+    delegate::delegate! {
+        to self.decoder {
+            fn duration(&self) -> Option<Duration>;
+            fn flush_reader_signals(&mut self);
+            fn metadata(&self) -> TrackMetadata;
+            fn update_byte_len(&self, len: u64);
+            fn media_origin(&self) -> Option<Duration>;
+        }
+    }
+
+    fn initial_pcm_origin(&self) -> Option<PcmOrigin> {
+        self.initial_pcm_origin
     }
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
@@ -459,15 +476,6 @@ where
                     self.config.target_sample_rate.get(),
                 )
             }),
-        }
-    }
-
-    delegate::delegate! {
-        to self.decoder {
-            fn duration(&self) -> Option<Duration>;
-            fn flush_reader_signals(&mut self);
-            fn metadata(&self) -> TrackMetadata;
-            fn update_byte_len(&self, len: u64);
         }
     }
 }
@@ -535,6 +543,7 @@ mod origin_tests {
     use kithara_resampler::rubato::RubatoBackend;
     use kithara_resampler::{ResamplerBuildError, ResamplerCapabilities, ResamplerError};
     use kithara_stream::PrerollHint;
+    use kithara_test_fixtures::mock_fixtures::zero_packet;
 
     use super::*;
     use crate::test_pools::{Pools, pools, sample_buffer};
@@ -613,14 +622,14 @@ mod origin_tests {
     struct OffsetDecoder {
         origin: u64,
         next_frame: u64,
-        reports_origin: bool,
+        original: Option<PcmOrigin>,
+        observing_original: bool,
         pools: Pools,
     }
 
     impl Decoder for OffsetDecoder {
-        fn initial_pcm_position(&self) -> Option<Duration> {
-            self.reports_origin
-                .then(|| Duration::from_millis(self.origin))
+        fn initial_pcm_origin(&self) -> Option<PcmOrigin> {
+            self.original
         }
         fn duration(&self) -> Option<Duration> {
             Some(Duration::from_secs(60))
@@ -634,6 +643,11 @@ mod origin_tests {
                 return Ok(DecoderChunkOutcome::Eof);
             }
             let start = self.next_frame;
+            if self.observing_original {
+                let position = self.spec().duration_for(start)?;
+                self.original = Some(PcmOrigin::new(position, position));
+                self.observing_original = false;
+            }
             let frames = (end - start).min(64);
             self.next_frame += frames;
             let samples: Vec<_> = (start..self.next_frame)
@@ -655,6 +669,9 @@ mod origin_tests {
             ))))
         }
         fn seek(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
+            if !position.is_zero() {
+                self.observing_original = false;
+            }
             let frame = self.spec().frame_at(position)?.max(self.origin);
             assert!((self.origin..self.origin + 1_000).contains(&frame));
             self.next_frame = frame;
@@ -698,6 +715,43 @@ mod origin_tests {
     }
 
     #[kithara::test]
+    fn first_resampled_pcm_keeps_the_head_basis_after_read_ahead_crosses_a_pts_gap(
+        zero_packet: &'static [u8],
+    ) {
+        let pools = pools();
+        let expected = [0.25, 0.25, -0.5, -0.5, 0.25, 0.25, -0.5, -0.5];
+        let source = crate::composed::origin_tests::head_gap_fixture(vec![0.25, -0.5], zero_packet);
+        let config = DecoderResamplerConfig::builder()
+            .target_sample_rate(NonZeroU32::new(2_000).expect("target rate"))
+            .backend(DoubleBackend)
+            .build();
+        let mut decoder = ResampledDecoder::new(source, config, &pools).expect("resampled decoder");
+        assert_eq!(decoder.initial_pcm_origin(), None);
+        let DecoderChunkOutcome::Chunk(output) = decoder.next_chunk().expect("resampled head")
+        else {
+            panic!("resampled head chunk");
+        };
+        let origin = decoder
+            .initial_pcm_origin()
+            .expect("paired original geometry");
+        assert_eq!(output.meta.timestamp, Duration::from_millis(59));
+        assert_eq!(output.meta.frame_offset, 118);
+        assert_eq!(output.meta.frames, 8);
+        assert_eq!(output.samples.as_ref(), expected.as_slice());
+        assert_eq!(decoder.timeline_gap_frames(), 62);
+        assert_eq!(origin.position(), Duration::from_millis(59));
+        assert_eq!(origin.comparison_base(), Duration::from_millis(42));
+        assert_eq!(
+            decoder
+                .spec()
+                .frame_at(origin.comparison_base())
+                .expect("basis")
+                + decoder.timeline_gap_frames(),
+            146
+        );
+    }
+
+    #[kithara::test]
     #[kithara::hang_watchdog]
     #[case::observed_nonzero(700, false, true)]
     #[case::known_nonzero_before_output(700, true, false)]
@@ -712,7 +766,11 @@ mod origin_tests {
         let source = OffsetDecoder {
             origin,
             next_frame: origin,
-            reports_origin,
+            original: reports_origin.then(|| {
+                let position = Duration::from_millis(origin);
+                PcmOrigin::new(position, position)
+            }),
+            observing_original: !reports_origin,
             pools: pools.clone(),
         };
         let config = DecoderResamplerConfig::builder()
@@ -722,7 +780,7 @@ mod origin_tests {
         let mut decoder =
             ResampledDecoder::new(Box::new(source), config, &pools).expect("production wrapper");
         assert_eq!(
-            decoder.initial_pcm_position(),
+            decoder.initial_pcm_origin().map(PcmOrigin::position),
             reports_origin.then(|| Duration::from_millis(origin))
         );
         if observe_original {
@@ -738,7 +796,10 @@ mod origin_tests {
             assert_eq!(&first.samples[..2], &[0.0; 2]);
         }
         let original = (reports_origin || observe_original).then(|| Duration::from_millis(origin));
-        assert_eq!(decoder.initial_pcm_position(), original);
+        assert_eq!(
+            decoder.initial_pcm_origin().map(PcmOrigin::position),
+            original
+        );
         let target = Duration::from_millis(origin + 800);
         let outcome = decoder.seek(target).expect("resampled physical seek");
         assert!(
@@ -765,11 +826,47 @@ mod origin_tests {
         }
         assert_eq!(frames, 400);
         assert_eq!(endpoint, Duration::from_millis(origin + 1_000));
-        assert_eq!(decoder.initial_pcm_position(), original);
+        assert_eq!(
+            decoder.initial_pcm_origin().map(PcmOrigin::position),
+            original
+        );
         if let Some(original) = original {
             assert_eq!(endpoint - original, Duration::from_secs(1));
         }
     }
+    #[cfg(feature = "resample-rubato")]
+    #[kithara::test]
+    fn original_resampled_basis_retains_exact_time_under_output_clock_rounding() {
+        let pools = pools();
+        let original = PcmOrigin::new(Duration::from_millis(701), Duration::from_millis(701));
+        let source = OffsetDecoder {
+            origin: 701,
+            next_frame: 701,
+            original: Some(original),
+            observing_original: false,
+            pools: pools.clone(),
+        };
+        let config = DecoderResamplerConfig::builder()
+            .target_sample_rate(NonZeroU32::new(1_500).expect("target rate"))
+            .backend(RubatoBackend::new())
+            .build();
+        let mut decoder =
+            ResampledDecoder::new(Box::new(source), config, &pools).expect("production wrapper");
+        let before = decoder
+            .initial_pcm_origin()
+            .expect("known original geometry");
+        assert_eq!(before.position(), Duration::from_nanos(701_333_333));
+        assert_eq!(before.comparison_base(), Duration::from_millis(701));
+        decoder
+            .seek(Duration::from_millis(900))
+            .expect("nonzero seek");
+        let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("sought PCM") else {
+            panic!("sought PCM chunk");
+        };
+        assert!(chunk.meta.timestamp >= Duration::from_millis(900));
+        assert_eq!(decoder.initial_pcm_origin(), Some(before));
+    }
+
     #[cfg(feature = "resample-rubato")]
     #[kithara::test]
     #[case::replay_original_head(0, 1_052)]
@@ -782,7 +879,11 @@ mod origin_tests {
         let source = OffsetDecoder {
             origin: 701,
             next_frame: 701,
-            reports_origin: true,
+            original: Some(PcmOrigin::new(
+                Duration::from_millis(701),
+                Duration::from_millis(701),
+            )),
+            observing_original: false,
             pools: pools.clone(),
         };
         let config = DecoderResamplerConfig::builder()
@@ -792,7 +893,10 @@ mod origin_tests {
         let mut decoder =
             ResampledDecoder::new(Box::new(source), config, &pools).expect("production wrapper");
         let spec = decoder.spec();
-        let original = decoder.initial_pcm_position().expect("known original head");
+        let original = decoder
+            .initial_pcm_origin()
+            .map(PcmOrigin::position)
+            .expect("known original head");
         assert_eq!(original, Duration::from_nanos(701_333_333));
         assert_eq!(spec.frame_at(original).expect("original frame"), 1_052);
         let DecoderSeekOutcome::Landed {
@@ -821,6 +925,9 @@ mod origin_tests {
             assert_eq!(landed_at, Duration::from_millis(900));
             assert!(landed_frame > spec.frame_at(original).expect("original frame"));
         }
-        assert_eq!(decoder.initial_pcm_position(), Some(original));
+        assert_eq!(
+            decoder.initial_pcm_origin().map(PcmOrigin::position),
+            Some(original)
+        );
     }
 }

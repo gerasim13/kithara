@@ -99,6 +99,7 @@ impl DecoderGeneration {
                 "transition holdback is already ready",
             )));
         }
+        self.observe_comparison_base();
         self.gapless.push(chunk);
         self.drain_holdback()
     }
@@ -172,5 +173,130 @@ impl DecoderGeneration {
                 .map(|chunk| stage_failure(chunk, detail));
         }
         None
+    }
+
+    pub(crate) fn copy_staged_frames(
+        &self,
+        spec: AudioSpec,
+        start: u64,
+        frames: u64,
+        output: &mut [f32],
+    ) -> bool {
+        let channels = usize::from(spec.channels);
+        let Ok(frame_count) = usize::try_from(frames) else {
+            return false;
+        };
+        let Some(sample_count) = frame_count.checked_mul(channels) else {
+            return false;
+        };
+        if channels == 0 || output.len() != sample_count || !self.staged_covers(spec, start, frames)
+        {
+            return false;
+        }
+        let Some(end) = start.checked_add(frames) else {
+            return false;
+        };
+        let mut written = 0usize;
+        for chunk in &self.staged {
+            let Some((chunk_start, chunk_end)) = chunk_range(chunk, spec) else {
+                return false;
+            };
+            let copy_start = chunk_start.max(start);
+            let copy_end = chunk_end.min(end);
+            if copy_start >= copy_end {
+                continue;
+            }
+            let Some(source_start) = usize::try_from(copy_start - chunk_start)
+                .ok()
+                .and_then(|frame| frame.checked_mul(channels))
+            else {
+                return false;
+            };
+            let Some(copy_samples) = usize::try_from(copy_end - copy_start)
+                .ok()
+                .and_then(|frame| frame.checked_mul(channels))
+            else {
+                return false;
+            };
+            let Some(source_end) = source_start.checked_add(copy_samples) else {
+                return false;
+            };
+            let Some(output_end) = written.checked_add(copy_samples) else {
+                return false;
+            };
+            let (Some(source), Some(destination)) = (
+                chunk.samples.get(source_start..source_end),
+                output.get_mut(written..output_end),
+            ) else {
+                return false;
+            };
+            destination.copy_from_slice(source);
+            written = output_end;
+        }
+        written == output.len()
+    }
+
+    #[kithara::hang_watchdog]
+    pub(crate) fn finish_staging(&mut self) {
+        self.finish();
+        while let Some(chunk) = self.gapless.next() {
+            hang_tick!();
+            self.observe_visible_origin(&chunk);
+            self.staged.push_back(chunk);
+            hang_reset!();
+        }
+    }
+
+    pub(crate) fn has_output(&self) -> bool {
+        !self.staged.is_empty() || self.gapless.has_output()
+    }
+
+    pub(crate) fn pop_staged(&mut self) -> Option<AudioChunk> {
+        self.holdback = None;
+        self.staged.pop_front()
+    }
+
+    pub(crate) fn push_staged_front(&mut self, chunk: AudioChunk) {
+        self.holdback = None;
+        self.staged.push_front(chunk);
+    }
+
+    #[kithara::hang_watchdog]
+    pub(crate) fn stage(&mut self, chunk: AudioChunk) {
+        self.holdback = None;
+        self.observe_comparison_base();
+        self.gapless.push(chunk);
+        while let Some(chunk) = self.gapless.next() {
+            hang_tick!();
+            self.observe_visible_origin(&chunk);
+            self.staged.push_back(chunk);
+            hang_reset!();
+        }
+    }
+
+    pub(crate) fn staged_covers(&self, spec: AudioSpec, start: u64, frames: u64) -> bool {
+        let Some(end) = start.checked_add(frames) else {
+            return false;
+        };
+        let Some((first, staged_end, staged_spec)) = self.staged_span() else {
+            return false;
+        };
+        staged_spec == spec && first <= start && end <= staged_end
+    }
+
+    pub(crate) fn staged_span(&self) -> Option<(u64, u64, AudioSpec)> {
+        #[cfg(test)]
+        self.record_staged_scan();
+        let first = self.staged.front()?;
+        let spec = first.spec();
+        let (start, mut end) = chunk_range(first, spec)?;
+        for chunk in self.staged.iter().skip(1) {
+            let (next, next_end) = chunk_range(chunk, spec)?;
+            if next != end {
+                return None;
+            }
+            end = next_end;
+        }
+        Some((start, end, spec))
     }
 }

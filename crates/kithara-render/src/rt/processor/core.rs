@@ -46,7 +46,6 @@ pub struct DeckMixer<E: SessionInbox> {
 pub(in crate::rt) struct Deck {
     pub(in crate::rt) tracks: TrackSlots,
     pub(in crate::rt) armed: Vec<Option<Armed>>,
-    pub(in crate::rt) ended: Vec<bool>,
     pub(in crate::rt) tails: Vec<SlotTail>,
     pub(in crate::rt) held: Vec<Option<SegmentId>>,
     pub(in crate::rt) recycle: Vec<usize>,
@@ -104,7 +103,6 @@ impl<E: SessionInbox> DeckMixer<E> {
             deck: Deck {
                 tracks: TrackSlots::new(slots),
                 armed: vec![None; slots.get()],
-                ended: vec![false; slots.get()],
                 tails,
                 held: vec![None; slots.get()],
                 recycle: vec![0; slots.get()],
@@ -256,6 +254,7 @@ fn slot_snapshot(track: &PlayerTrack, at: SessionFrame) -> SlotSnapshot {
         position,
         duration: track.duration(),
         visible_origin: track.visible_origin(),
+        media_origin: track.media_origin(),
         frontier: track.decoded_frontier().max(position),
         cached: track.cached_span(),
         gain: track.gain(),
@@ -293,8 +292,7 @@ impl Deck {
     fn observe_ends(&mut self, cursor: usize, start: SessionFrame) {
         for (slot, track) in self.tracks.iter_mut() {
             let mut sink = RtSink::new(&mut self.events, &self.metrics, slot, start);
-            self.ended[slot.index()] =
-                track.poll_end(cursor, &mut self.recycle[slot.index()], &mut sink);
+            track.poll_end(cursor, &mut self.recycle[slot.index()], &mut sink);
         }
     }
 
@@ -348,8 +346,7 @@ impl Deck {
                 &mut sink,
             );
             if let Some(offset) = outcome.ended_at(&range) {
-                self.ended[slot.index()] =
-                    track.poll_end(offset, &mut self.recycle[slot.index()], &mut sink);
+                track.poll_end(offset, &mut self.recycle[slot.index()], &mut sink);
             }
             sounded = true;
         }

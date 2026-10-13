@@ -184,7 +184,7 @@ async fn an_unrepresentable_known_origin_retires_the_incoming_without_model_retr
         None,
         GaplessMode::MediaOnly,
     );
-    incoming.retain_visible_origin(Some(Duration::MAX));
+    incoming.retain_visible_origin(Some(Duration::MAX), None);
     assert_eq!(incoming.comparison_origin(GaplessMode::MediaOnly), None);
     drop(
         source

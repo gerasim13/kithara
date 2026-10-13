@@ -62,6 +62,11 @@ pub(crate) trait Demuxer: Send {
     /// Surfaces parser-level seek failures verbatim.
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome>;
 
+    /// Raw packet coordinate of native media zero; absent when the translation is unknown.
+    fn media_origin(&self) -> Option<Duration> {
+        None
+    }
+
     /// Track-level metadata exposed by the container.
     fn track_info(&self) -> &TrackInfo;
 }

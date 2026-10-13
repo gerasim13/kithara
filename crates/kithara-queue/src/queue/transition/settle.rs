@@ -14,6 +14,18 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     F: TrackFactory<S>,
 {
+    pub(in crate::queue) fn abandon_removal_entry(&mut self) -> Result<(), PlayError> {
+        if let Some(target) = self.target.take()
+            && let Some(incoming) = self.incoming_index(target.to)
+        {
+            self.active
+                .get_mut(incoming)
+                .ok_or(PlayError::NoActiveSlot)?
+                .role = Role::Preloaded;
+        }
+        Ok(())
+    }
+
     /// Step 5: only the batch that starts the target changes the sounding item.
     pub(in crate::queue) fn transition_applied(
         &mut self,
@@ -23,10 +35,11 @@ where
     ) -> Result<(), PlayError> {
         let Some(pending) = self.pending_handover.filter(|pending| {
             pending.seq == seq
-                && self
-                    .active
-                    .get(index)
-                    .is_some_and(|active| active.item == pending.item)
+                && self.active.get(index).is_some_and(|active| {
+                    active.item == pending.item
+                        && active.slot == pending.slot
+                        && self.active.is_replacement(index) == pending.replacement
+                })
         }) else {
             return Ok(());
         };
@@ -43,6 +56,7 @@ where
                 .get_mut(index)
                 .ok_or(PlayError::NoActiveSlot)?
                 .role = Role::Current;
+            self.active.activate_replacement(index);
             self.navigation
                 .commit(self.current, id, pending.reason, &self.track_ids());
             self.current = Some(id);
@@ -67,13 +81,20 @@ where
         if self
             .active
             .iter()
-            .find(|active| active.item == pending.item)
-            .is_some_and(|active| !batch.basis.iter().any(|&(slot, _)| slot == active.slot))
+            .enumerate()
+            .find(|(index, active)| {
+                active.item == pending.item
+                    && active.slot == pending.slot
+                    && self.active.is_replacement(*index) == pending.replacement
+            })
+            .is_some_and(|(_, active)| !batch.basis.iter().any(|&(slot, _)| slot == active.slot))
         {
             return None;
         }
-        let index = self.active.position(|active| {
-            active.item == pending.item
+        let index = self.active.iter().enumerate().find_map(|(index, active)| {
+            (active.item == pending.item
+                && active.slot == pending.slot
+                && self.active.is_replacement(index) == pending.replacement
                 && batch.basis.iter().any(|&(slot, _)| slot == active.slot)
                 && batch.commands.iter().any(|part| match part {
                     DeckPart::Start { slot, .. }
@@ -84,7 +105,8 @@ where
                         ..
                     } => *slot == active.slot,
                     _ => false,
-                })
+                }))
+            .then_some(index)
         });
         let settled = match outcome {
             Outcome::Applied { at, .. } => Settled::Applied { seq, at: *at },
@@ -117,6 +139,15 @@ where
         {
             return Ok(());
         }
+        if matches!(settled, Settled::Rejected { .. })
+            && self.target.is_some_and(|target| {
+                target.reason == AdvanceReason::RemovedCurrent
+                    && matches!(target.continued,
+                    Some(Continuation::Removal { handover, .. }) if handover == seq)
+            })
+        {
+            self.abandon_removal_entry()?;
+        }
         let Some(index) = index else {
             self.pending_handover = None;
             return Ok(());
@@ -139,7 +170,12 @@ where
         self.pending_handover = None;
         let item = self.active.get(index).ok_or(PlayError::NoActiveSlot)?.item;
         if self.target.is_none_or(|target| target.to != item) {
-            if self.current != Some(item) {
+            if self.current != Some(item)
+                && self
+                    .active
+                    .get(index)
+                    .is_some_and(|active| active.role != Role::Leaving)
+            {
                 self.release_track(index, out)?;
             }
             return Ok(());

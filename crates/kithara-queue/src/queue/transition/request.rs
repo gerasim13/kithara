@@ -98,7 +98,18 @@ where
             .settings(self.config.settings.crossfade())
             .validate()
             .map_err(PlayError::from)?;
-        if !auto && self.current == Some(id) && self.pending_handover.is_none() {
+        if !auto
+            && self.current == Some(id)
+            && self.pending_handover.is_none_or(|pending| {
+                reason == AdvanceReason::UserSelect
+                    && self.target.is_some_and(|target| {
+                        target.auto
+                            && target.chained
+                            && target.reason == AdvanceReason::NaturalEof
+                            && target.to == pending.item
+                    })
+            })
+        {
             if self.target.is_some_and(|target| !target.auto) {
                 self.cancel_target(out)?;
             }
@@ -176,10 +187,14 @@ where
         &mut self,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
-        let Some(target) = self
-            .target
-            .filter(|target| target.stale.is_none() && target.repeat.is_none())
-        else {
+        let Some(target) = self.target.filter(|target| {
+            target.stale.is_none()
+                && target.repeat.is_none()
+                && !matches!(
+                    target.continued,
+                    Some(Continuation::Removal { applied: false, .. })
+                )
+        }) else {
             return Ok(None);
         };
         if self.pending_handover.is_some() {
@@ -259,6 +274,15 @@ where
             let Some(bound) = self.auto_bound(target.settings)? else {
                 return Ok(None);
             };
+            self.target.as_mut().ok_or(PlayError::NotReady)?.bound = Some(bound);
+            bound
+        } else if target.reason == AdvanceReason::RemovedCurrent
+            || matches!(
+                target.continued,
+                Some(Continuation::Removal { applied: true, .. })
+            )
+        {
+            let bound = Bound::AtOrAfter(self.earliest()?);
             self.target.as_mut().ok_or(PlayError::NotReady)?.bound = Some(bound);
             bound
         } else {

@@ -13,6 +13,17 @@ fn fraction(position: (u128, NonZeroU128)) -> Fraction {
     }
 }
 
+pub(super) fn source_demand(span: SourceSpan, start: u64) -> Result<usize, ElasticError> {
+    let (numerator, denominator) = span
+        .source_ratio_at(span.output_frames())
+        .ok_or(ElasticError::SampleCountOverflow)?;
+    u64::try_from(numerator.div_ceil(denominator.get()))
+        .ok()
+        .map(|end| end.saturating_sub(start))
+        .and_then(|frames| usize::try_from(frames).ok())
+        .ok_or(ElasticError::SampleCountOverflow)
+}
+
 pub(in crate::render) fn span_speed(span: SourceSpan, frame: u64) -> Result<f64, ElasticError> {
     let first = span.source_ratio_at(frame).map(fraction);
     let next = frame
@@ -51,21 +62,38 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         offset: u64,
     ) -> Result<(u128, NonZeroU128), ElasticError> {
         let nominal = self.trajectory.at_offset(start, rate, offset)?;
-        self.map_nominal_position(start, rate, nominal)
+        self.map_nominal_position(start, nominal)
     }
 
     pub(in crate::render) fn map_nominal_position(
         &self,
         start: u64,
-        rate: NonZeroU32,
         nominal: (u128, NonZeroU128),
     ) -> Result<(u128, NonZeroU128), ElasticError> {
-        let Some(plan) = self.plan.as_ref() else {
+        if self.plan.is_none() {
             return Ok(nominal);
-        };
-        let mut position = fraction(self.trajectory.at_offset(start, rate, 0)?);
+        }
+        let (pivot, position, correction, _end) = self.mapped_region(start, nominal)?;
+        let mapped = fraction(nominal)
+            .sub(pivot)
+            .and_then(|advance| advance.div(correction))
+            .and_then(|advance| position.add(advance))
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        Ok((mapped.numerator, mapped.denominator))
+    }
+
+    fn mapped_region(
+        &self,
+        start: u64,
+        nominal: (u128, NonZeroU128),
+    ) -> Result<(Fraction, Fraction, Fraction, u64), ElasticError> {
+        let plan = self.plan.as_ref().ok_or(ElasticError::EnginePreparation(
+            "region mapping requires its accepted plan",
+        ))?;
+        let mut position = fraction(self.trajectory.mapping_origin(start)?);
+        let mut pivot = position;
         let mut remaining = fraction(nominal)
-            .sub(position)
+            .sub(pivot)
             .ok_or(ElasticError::SampleCountOverflow)?;
         loop {
             let source = u64::try_from(position.numerator / position.denominator.get())
@@ -74,11 +102,7 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             let correction = Fraction::correction(region.correction())
                 .ok_or(ElasticError::SampleCountOverflow)?;
             if region.end() == u64::MAX {
-                let position = remaining
-                    .div(correction)
-                    .and_then(|advance| position.add(advance))
-                    .ok_or(ElasticError::SampleCountOverflow)?;
-                return Ok((position.numerator, position.denominator));
+                return Ok((pivot, position, correction, region.end()));
             }
             let end = Fraction {
                 numerator: u128::from(region.end()),
@@ -96,14 +120,13 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 .zip(available.at(common))
                 .is_some_and(|(remaining, available)| remaining <= available)
             {
-                let position = remaining
-                    .div(correction)
-                    .and_then(|advance| position.add(advance))
-                    .ok_or(ElasticError::SampleCountOverflow)?;
-                return Ok((position.numerator, position.denominator));
+                return Ok((pivot, position, correction, region.end()));
             }
             remaining = remaining
                 .sub(available)
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            pivot = pivot
+                .add(available)
                 .ok_or(ElasticError::SampleCountOverflow)?;
             position = end;
         }
@@ -140,31 +163,36 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             return self.trajectory.unity_span(start, rate, frames);
         }
         let nominal = self.trajectory.span(start, rate, frames)?;
-        let Some(plan) = self.plan.as_ref() else {
+        if self.plan.is_none() {
             return Ok(nominal);
-        };
-        let position = fraction(
-            nominal
-                .source_ratio_at(0)
-                .ok_or(ElasticError::SampleCountOverflow)?,
-        );
-        let region = plan.region_at(nominal.start());
-        let correction =
-            Fraction::correction(region.correction()).ok_or(ElasticError::SampleCountOverflow)?;
-        let advance = |frame| {
-            fraction(nominal.source_ratio_at(frame)?)
-                .sub(position)?
-                .div(correction)?
-                .add(position)
-        };
+        }
+        let nominal_start = nominal
+            .source_ratio_at(0)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let (pivot, position, correction, end) = self.mapped_region(start, nominal_start)?;
+        let mapped = nominal
+            .scaled_from(
+                (pivot.numerator, pivot.denominator),
+                (position.numerator, position.denominator),
+                (
+                    correction.denominator.get(),
+                    NonZeroU128::new(correction.numerator)
+                        .ok_or(ElasticError::SampleCountOverflow)?,
+                ),
+            )
+            .ok_or(ElasticError::SampleCountOverflow)?;
         let mut lower = 0;
-        let mut upper = nominal.output_frames();
+        let mut upper = mapped.output_frames();
         while lower < upper {
             let middle = lower + (upper - lower).div_ceil(2);
-            let endpoint = advance(middle).ok_or(ElasticError::SampleCountOverflow)?;
+            let endpoint = fraction(
+                mapped
+                    .source_ratio_at(middle)
+                    .ok_or(ElasticError::SampleCountOverflow)?,
+            );
             let whole = endpoint.numerator / endpoint.denominator.get();
-            if whole < u128::from(region.end())
-                || (whole == u128::from(region.end())
+            if whole < u128::from(end)
+                || (whole == u128::from(end)
                     && endpoint
                         .numerator
                         .is_multiple_of(endpoint.denominator.get()))
@@ -174,47 +202,26 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 upper = middle - 1;
             }
         }
-        let first = if lower == 0 {
-            fraction(self.mapped_position(start, rate, 1)?).sub(position)
-        } else {
-            advance(1).and_then(|next| next.sub(position))
+        if lower > 0 {
+            return mapped
+                .for_output_range(0..lower)
+                .ok_or(ElasticError::SampleCountOverflow);
         }
-        .ok_or(ElasticError::SampleCountOverflow)?;
-        let next = if lower > 1 {
-            advance(2).and_then(|next| advance(1).and_then(|first| next.sub(first)))
-        } else {
-            Some(first)
-        }
-        .ok_or(ElasticError::SampleCountOverflow)?;
-        let common = position
-            .common(first)
-            .and_then(|denominator| {
-                Fraction {
-                    numerator: 0,
-                    denominator: NonZeroU128::new(denominator)?,
-                }
-                .common(next)
-            })
+        let first = fraction(self.mapped_position(start, rate, 0)?);
+        let advance = fraction(self.mapped_position(start, rate, 1)?)
+            .sub(first)
             .ok_or(ElasticError::SampleCountOverflow)?;
-        let step = first.at(common).ok_or(ElasticError::SampleCountOverflow)?;
-        let change = next
-            .at(common)
-            .and_then(|next| i128::try_from(next).ok())
-            .and_then(|next| {
-                i128::try_from(step)
-                    .ok()
-                    .and_then(|step| next.checked_sub(step))
-            })
+        let common = first
+            .common(advance)
             .ok_or(ElasticError::SampleCountOverflow)?;
         SourceSpan::try_from((
-            position
+            first.at(common).ok_or(ElasticError::SampleCountOverflow)?,
+            advance
                 .at(common)
                 .ok_or(ElasticError::SampleCountOverflow)?,
-            step,
-            change,
             NonZeroU128::new(common).ok_or(ElasticError::SampleCountOverflow)?,
             rate,
-            lower.max(1),
+            1,
         ))
         .ok()
         .ok_or(ElasticError::SampleCountOverflow)

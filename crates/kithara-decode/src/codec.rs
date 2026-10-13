@@ -124,6 +124,11 @@ pub(crate) trait FrameCodec: Send + 'static {
     /// PCM output specification.
     fn spec(&self) -> AudioSpec;
 
+    /// Physical head duration removed while rebasing the emitted PCM clock.
+    fn media_time_rebase(&self) -> Option<Duration> {
+        Some(Duration::ZERO)
+    }
+
     /// Decoder-owned packet-time bias removed before the first PCM frame.
     fn timestamp_bias_frames(&self) -> u64 {
         0

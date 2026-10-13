@@ -124,6 +124,15 @@ impl PcmReceiver {
         }
     }
 
+    /// Raw coordinate of track-media zero from the next immutable PCM packet.
+    #[must_use]
+    pub fn media_origin(&self) -> Option<Duration> {
+        match self.forward.try_peek()? {
+            PcmPacket::Chunk(chunk) => chunk.meta.media_origin,
+            PcmPacket::Failed { .. } => None,
+        }
+    }
+
     /// Original visible source position published by the decoded-source owner.
     #[must_use]
     pub fn visible_origin(&self) -> Option<Duration> {

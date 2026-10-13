@@ -7,7 +7,7 @@ use kithara_test_utils::kithara;
 use kithara_warp::SpeedCurve;
 
 use super::{
-    fixtures::{Command, deck as new_deck, position, sounding, trajectory},
+    fixtures::{Command, deck as new_deck, grid, loaded, position, sounding, trajectory},
     host_fixture::{Host, Probe, finish, host, register, tempo},
 };
 use crate::{LinkedHostCommand, LinkedPlayer, SyncStatus};
@@ -52,8 +52,8 @@ fn registration_projects_the_canonical_member_grid() {
     clock.axis(1, 0, 0.0, 120.0, 48_000);
     host.begin_pass();
     let root = host.transport().expect("canonical Host transport");
-    let model = super::fixtures::grid(24_000, 0, Some((4, 0)), 960_000);
-    let (deck, control, _, load) = super::fixtures::loaded(model.clone());
+    let model = grid(24_000, 0, Some((4, 0)), 960_000);
+    let (deck, control, _, load) = loaded(model.clone());
     let (id, probe) = register(&mut host, deck, &control);
     let synced = host
         .apply(LinkedHostCommand::Sync { deck: id, on: true })
@@ -222,9 +222,14 @@ fn route_axis_reanchors_at_the_observed_stop_beat() {
 #[kithara::test]
 fn tempo_retargets_a_waiting_start_and_obsolete_receipts_do_not_start_it() {
     let (mut host, clock) = host();
-    let (deck, control, _, _) = sounding();
+    let (deck, control, _, _) = loaded(grid(24_000, 0, Some((4, 0)), 960_000));
     let (id, probe) = register(&mut host, deck, &control);
-    control.edit(|script| script.snapshot.status = kithara_play::TrackStatus::Loaded);
+    let prepared = host
+        .apply(LinkedHostCommand::Sync { deck: id, on: true })
+        .expect("sync")
+        .expect("prepared segment");
+    settle_deck(&mut host, id, prepared, 0);
+    control.clear();
     probe.send(TrackCommand::Play {
         at: When::At(SessionFrame::new(96_000)),
     });
@@ -270,7 +275,7 @@ fn tempo_retargets_a_waiting_start_and_obsolete_receipts_do_not_start_it() {
     assert_ne!(commands[0].0, old);
     assert_eq!(
         commands[0].1,
-        Command::Play(When::At(SessionFrame::new(112_000)))
+        Command::Play(When::At(SessionFrame::new(111_920)))
     );
     clock.answer(change, 90.0, Ok(SessionFrame::new(48_000)));
     assert!(
@@ -353,14 +358,21 @@ fn host_tempo_commit_keeps_the_beat_continuous() {
         )]
     );
     assert_eq!(beats(&probe, 48_000), 2.0);
-    assert_eq!(beats(&probe, 96_000), 3.5);
+    assert_eq!(beats(&probe, 96_000), 3.5 + (2.0 - 1.5) * 0.005);
     assert_eq!(bpm(&probe, 47_999), 120.0);
-    assert_eq!(bpm(&probe, 48_000), 90.0);
+    assert_eq!(bpm(&probe, 48_000), 120.0);
+    assert_eq!(
+        probe
+            .trajectory()
+            .anchor_at(SessionFrame::new(48_000))
+            .target_beats_per_second(),
+        1.5
+    );
     clock.answer(seq, 90.0, Ok(SessionFrame::new(48_000)));
     finish(&mut host);
     let (observer, observer_control) = new_deck(trajectory(120.0, 4));
     let (_, committed) = register(&mut host, observer, &observer_control);
-    assert_eq!(beats(&committed, 96_000), 3.5);
+    assert_eq!(beats(&committed, 96_000), 3.5 + (2.0 - 1.5) * 0.005);
 }
 
 #[kithara::test]
@@ -402,9 +414,16 @@ fn a_host_tempo_step_starts_at_the_continuous_playing_beat() {
     let (_, probe) = register(&mut host, deck, &control);
     tempo(&mut host, 180.0, 48_000).expect("retarget");
     assert_eq!(bpm(&probe, 47_999), 120.0);
-    assert_eq!(bpm(&probe, 48_000), 180.0);
+    assert_eq!(bpm(&probe, 48_000), 120.0);
+    assert_eq!(
+        probe
+            .trajectory()
+            .anchor_at(SessionFrame::new(48_000))
+            .target_beats_per_second(),
+        3.0
+    );
     assert_eq!(beats(&probe, 48_000), 2.0);
-    assert_eq!(beats(&probe, 96_000), 5.0);
+    assert_eq!(beats(&probe, 96_000), 5.0 + (2.0 - 3.0) * 0.005);
     assert!(
         matches!(control.commands()[0].1, Command::Speed(_, When::At(frame)) if frame == SessionFrame::new(48_000))
     );
@@ -430,11 +449,25 @@ fn every_block_host_tempo_lands_at_its_requested_frame() {
     let (deck, control) = new_deck(trajectory(120.0, 4));
     let (_, probe) = register(&mut host, deck, &control);
     let mut beat = 0.0;
+    let mut reached = 124.0 / 60.0;
     for step in 0..16_i64 {
-        let target = if step % 2 == 0 { 124.0 } else { 116.0 };
-        assert_eq!(bpm(&probe, step * 128), target);
+        let target = if step % 2 == 0 {
+            124.0 / 60.0
+        } else {
+            116.0 / 60.0
+        };
+        let at = SessionFrame::new(step * 128);
+        let anchor = probe.trajectory().anchor_at(at);
+        assert_eq!(anchor.tempo_at(at), reached);
+        assert_eq!(anchor.target_beats_per_second(), target);
         assert!((beats(&probe, step * 128) - beat).abs() < 1e-9);
-        beat += target * 128.0 / (60.0 * 48_000.0);
+        let elapsed = 128.0 / 48_000.0;
+        beat += target * elapsed + (reached - target) * (-0.005 * (-elapsed / 0.005_f64).exp_m1());
+        reached = if reached < target {
+            reached - (target - reached) * (-elapsed / 0.005_f64).exp_m1()
+        } else {
+            target + (reached - target) * (-elapsed / 0.005_f64).exp()
+        };
     }
     assert_eq!(clock.edit(|script| script.sent.len()), 16);
 }
@@ -450,7 +483,14 @@ fn host_retime_reaches_on_decks_but_not_off_decks() {
     let (_, off_probe) = register(&mut host, off, &off_control);
     off_probe.clear();
     tempo(&mut host, 180.0, 48_000).expect("host tempo");
-    assert_eq!(bpm(&on_probe, 48_000), 180.0);
+    assert_eq!(bpm(&on_probe, 48_000), 120.0);
+    assert_eq!(
+        on_probe
+            .trajectory()
+            .anchor_at(SessionFrame::new(48_000))
+            .target_beats_per_second(),
+        3.0
+    );
     assert_eq!(on_control.commands().len(), 1);
     assert!(off_control.commands().is_empty());
     off_probe.read(|observation| {
@@ -503,8 +543,15 @@ fn flat_host_fanout_delivers_one_trajectory_to_every_synced_deck() {
     }
     tempo(&mut host, 180.0, 48_000).expect("tempo");
     for (control, probe) in decks {
-        assert_eq!(bpm(&probe, 48_000), 180.0);
-        assert_eq!(beats(&probe, 96_000), 5.0);
+        assert_eq!(bpm(&probe, 48_000), 120.0);
+        assert_eq!(
+            probe
+                .trajectory()
+                .anchor_at(SessionFrame::new(48_000))
+                .target_beats_per_second(),
+            3.0
+        );
+        assert_eq!(beats(&probe, 96_000), 5.0 + (2.0 - 3.0) * 0.005);
         assert_eq!(control.commands().len(), 1);
         assert!(
             matches!(control.commands()[0].1, Command::Speed(_, When::At(frame)) if frame == SessionFrame::new(48_000))
@@ -587,7 +634,14 @@ fn rejected_at_tempo_withdraws_the_step_and_restores_decks(#[case] reason: Rejec
     let seq = tempo(&mut host, 180.0, 48_000)
         .expect("tempo")
         .expect("sequence");
-    assert_eq!(bpm(&probe, 48_000), 180.0);
+    assert_eq!(bpm(&probe, 48_000), 120.0);
+    assert_eq!(
+        probe
+            .trajectory()
+            .anchor_at(SessionFrame::new(48_000))
+            .target_beats_per_second(),
+        3.0
+    );
     clock.at(48_000);
     clock.answer(seq, 180.0, Err(reason));
     control.clear();
@@ -671,7 +725,14 @@ fn rejected_next_tempo_replans_with_lane_lead_and_keeps_the_caller() {
     assert_ne!(retry, caller);
     assert_eq!(sent[1].2, When::At(SessionFrame::new(768)));
     assert_eq!(bpm(&probe, 384), 120.0);
-    assert_eq!(bpm(&probe, 768), 180.0);
+    assert_eq!(bpm(&probe, 768), 120.0);
+    assert_eq!(
+        probe
+            .trajectory()
+            .anchor_at(SessionFrame::new(768))
+            .target_beats_per_second(),
+        3.0
+    );
     clock.answer(retry, 180.0, Ok(SessionFrame::new(768)));
     assert!(
         matches!(finish(&mut host).as_slice(), [HostSettled::Settings { seq, outcome: Ok(_), .. }] if *seq == caller)
@@ -710,7 +771,14 @@ fn a_newer_next_tempo_supersedes_a_rejected_older_one() {
     let (deck, control) = new_deck(trajectory(120.0, 4));
     let (_, probe) = register(&mut host, deck, &control);
     assert_eq!(bpm(&probe, 128), 120.0);
-    assert_eq!(bpm(&probe, 256), 90.0);
+    assert_eq!(bpm(&probe, 256), 120.0);
+    assert_eq!(
+        probe
+            .trajectory()
+            .anchor_at(SessionFrame::new(256))
+            .target_beats_per_second(),
+        1.5
+    );
     clock.answer(newer, 90.0, Ok(SessionFrame::new(256)));
     finish(&mut host);
 }

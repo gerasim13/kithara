@@ -22,6 +22,7 @@ pub struct PlayerResource {
     pub(super) lane: LaneFrame,
     #[field(get, vis = "pub(super)", copy)]
     position: Option<SourceSpan>,
+    media_origin: Option<Duration>,
     visible_origin: Option<Duration>,
     mapped: bool,
     awaiting_segment: bool,
@@ -60,6 +61,7 @@ impl PlayerResource {
                 frame: 0,
             },
             position: None,
+            media_origin: None,
             visible_origin: None,
             mapped: false,
             awaiting_segment: false,
@@ -89,6 +91,12 @@ impl PlayerResource {
             .receiver
             .duration()
             .map_or(0.0, |duration| duration.as_secs_f64())
+    }
+
+    /// Media zero from the same immutable PCM metadata as the current raw mark.
+    #[must_use]
+    pub const fn media_origin(&self) -> Option<Duration> {
+        self.media_origin
     }
 
     /// Source origin from the same immutable PCM metadata as the current raw mark.
@@ -243,6 +251,7 @@ impl PlayerResource {
                 if let Some(position) = chunk_position(chunk, 0) {
                     self.position = Some(position);
                     self.visible_origin = chunk.meta.visible_origin;
+                    self.media_origin = chunk.meta.media_origin;
                     self.mapped = true;
                 }
                 self.eof = true;
@@ -282,6 +291,7 @@ impl PlayerResource {
                 self.lane.frame = frame;
                 self.position = Some(position);
                 self.visible_origin = chunk.meta.visible_origin;
+                self.media_origin = chunk.meta.media_origin;
                 true
             } else {
                 false
@@ -401,6 +411,7 @@ impl PlayerResource {
                 self.lane.frame = frame;
                 self.position = Some(position);
                 self.visible_origin = chunk.meta.visible_origin;
+                self.media_origin = chunk.meta.media_origin;
                 true
             } else {
                 false

@@ -39,6 +39,7 @@ use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 use super::SourceSpan;
+use crate::ExponentialApproach;
 
 #[kithara::test]
 fn seconds_retain_the_exact_source_point_instead_of_truncated_nanos() {
@@ -213,4 +214,224 @@ fn source_span_requires_output_and_preserves_valid_source_boundaries() {
         full.for_output_range(1..u64::MAX).expect("suffix").start(),
         1
     );
+}
+
+#[kithara::test]
+fn exponential_source_spans_keep_nested_slices_and_adjacent_quantum_bases() {
+    let curve = ExponentialApproach::new(1.0, 0.9, 220.5).expect("law");
+    let rate = NonZeroU32::new(44_100).expect("rate");
+    let origin = NonZeroU128::new(3).expect("denominator");
+    let whole = SourceSpan::approaching(1, origin, curve, 0, rate, 4_096).expect("whole");
+    let nested = whole
+        .for_output_range(31..1_023)
+        .expect("outer")
+        .for_output_range(7..92)
+        .expect("nested");
+    assert_eq!(Some(nested), whole.for_output_range(38..123));
+    for frame in 0..=nested.output_frames() {
+        assert_eq!(
+            nested.source_ratio_at(frame),
+            whole.source_ratio_at(38 + frame)
+        );
+    }
+    let mut joined = SourceSpan::approaching(1, origin, curve, 0, rate, 64).expect("first quantum");
+    for elapsed in (64..4_096).step_by(64) {
+        let next =
+            SourceSpan::approaching(1, origin, curve, elapsed, rate, 64).expect("next quantum");
+        joined = joined.followed_by(next).expect("same original basis");
+    }
+    assert_eq!(joined, whole);
+    assert!(whole.source_ratio_at(4_097).is_none());
+}
+
+#[kithara::test]
+fn exponential_source_spans_keep_adjacent_frames_above_f64_integer_precision() {
+    let curve = ExponentialApproach::new(1.75, 1.25, 220.5).expect("law");
+    let rate = NonZeroU32::new(44_100).expect("rate");
+    let elapsed = (1u64 << 53) + 3;
+    let span = SourceSpan::approaching(
+        1,
+        NonZeroU128::new(3).expect("denominator"),
+        curve,
+        elapsed,
+        rate,
+        2,
+    )
+    .expect("large elapsed");
+    let first = (u128::from(elapsed) * 5 + 441) / 4;
+    assert_eq!(
+        span.source_ratio_at(0),
+        Some((first * 3 + 1, NonZeroU128::new(3).expect("third")))
+    );
+    assert_eq!(
+        span.source_ratio_at(1),
+        Some((first * 12 + 19, NonZeroU128::new(12).expect("twelfth")))
+    );
+    assert_eq!(
+        span.source_ratio_at(2),
+        Some((first * 6 + 17, NonZeroU128::new(6).expect("sixth")))
+    );
+    let next = span.for_output_range(1..2).expect("one frame");
+    assert_eq!(next.source_ratio_at(0), span.source_ratio_at(1));
+    assert_eq!(next.end() - next.start(), 1);
+}
+
+#[kithara::test]
+fn an_exponential_join_rejects_a_different_law_or_original_origin() {
+    let rate = NonZeroU32::new(44_100).expect("rate");
+    let curve = ExponentialApproach::new(1.0, 0.9, 220.5).expect("law");
+    let first = SourceSpan::approaching(0, NonZeroU128::MIN, curve, 0, rate, 16).expect("first");
+    let other_origin =
+        SourceSpan::approaching(1, NonZeroU128::MIN, curve, 16, rate, 16).expect("other origin");
+    assert!(first.followed_by(other_origin).is_none());
+    let other_curve = ExponentialApproach::new(1.0, 0.9, 221.5).expect("other law");
+    let next = SourceSpan::approaching(0, NonZeroU128::MIN, other_curve, 16, rate, 16)
+        .expect("different law");
+    assert!(first.followed_by(next).is_none());
+    let empty = first.for_output_range(7..7).expect("point");
+    assert_eq!(empty.followed_by(empty), Some(empty));
+}
+
+#[kithara::test]
+fn affine_exponential_maps_preserve_one_transform_across_quantum_partitions() {
+    let rate = NonZeroU32::new(44_100).expect("rate");
+    let curve = ExponentialApproach::new(1.0, 0.9, 220.5).expect("law");
+    let denominator = NonZeroU128::new(3).expect("denominator");
+    let pivot = (1, denominator);
+    let position = (1001, NonZeroU128::new(7).expect("position denominator"));
+    let scale = (2, denominator);
+    let whole = SourceSpan::approaching(1, denominator, curve, 0, rate, 128)
+        .expect("whole")
+        .scaled_from(pivot, position, scale)
+        .expect("affine map");
+    assert_eq!(whole.source_ratio_at(0), Some((143, NonZeroU128::MIN)));
+    let first = SourceSpan::approaching(1, denominator, curve, 0, rate, 64)
+        .expect("first")
+        .scaled_from(pivot, position, scale)
+        .expect("same affine map");
+    let second = SourceSpan::approaching(1, denominator, curve, 64, rate, 64)
+        .expect("second")
+        .scaled_from(pivot, position, scale)
+        .expect("same affine map");
+    assert_eq!(first.followed_by(second), Some(whole));
+    let slice = whole.for_output_range(7..91).expect("slice");
+    assert_eq!(slice.source_ratio_at(33), whole.source_ratio_at(40));
+    let translated = whole
+        .scaled_from(
+            position,
+            (7, NonZeroU128::MIN),
+            (1, NonZeroU128::new(2).expect("half")),
+        )
+        .expect("second transform");
+    assert_eq!(translated.source_ratio_at(0), Some((7, NonZeroU128::MIN)));
+    assert_eq!(
+        translated
+            .for_output_range(0..64)
+            .expect("first")
+            .followed_by(translated.for_output_range(64..128).expect("second")),
+        Some(translated)
+    );
+}
+
+#[kithara::test]
+fn affine_rational_maps_keep_exact_ramp_coefficients_and_negative_intercepts() {
+    let rate = NonZeroU32::new(44_100).expect("rate");
+    let third = NonZeroU128::new(3).expect("third");
+    let span = SourceSpan::from_ramp(100, 5, -1, third, rate, 4).expect("ramp");
+    let transformed = span
+        .scaled_from(
+            (100, third),
+            (2, NonZeroU128::new(5).expect("fifth")),
+            (2, NonZeroU128::new(7).expect("seventh")),
+        )
+        .expect("affine ramp");
+    let expected = SourceSpan::from_ramp(
+        42,
+        50,
+        -10,
+        NonZeroU128::new(105).expect("common basis"),
+        rate,
+        4,
+    )
+    .expect("exact transformed coefficients");
+    for frame in 0..=4 {
+        assert_eq!(
+            transformed.source_ratio_at(frame),
+            expected.source_ratio_at(frame)
+        );
+    }
+    assert_eq!(
+        transformed
+            .for_output_range(0..2)
+            .expect("first")
+            .followed_by(transformed.for_output_range(2..4).expect("second")),
+        Some(transformed)
+    );
+}
+
+#[kithara::test]
+fn exponential_source_spans_reject_unrepresentable_or_invalid_ranges() {
+    let rate = NonZeroU32::new(44_100).expect("rate");
+    let curve = ExponentialApproach::new(1.0, 0.9, 220.5).expect("law");
+    assert!(SourceSpan::approaching(0, NonZeroU128::MIN, curve, 0, rate, 0).is_none());
+    assert!(SourceSpan::approaching(0, NonZeroU128::MIN, curve, u64::MAX, rate, 1).is_none());
+    assert!(SourceSpan::approaching(u128::MAX, NonZeroU128::MIN, curve, 0, rate, 1).is_none());
+    let unrepresentable =
+        ExponentialApproach::new(f64::MIN_POSITIVE, f64::MIN_POSITIVE, 0.0).expect("finite law");
+    assert!(SourceSpan::approaching(0, NonZeroU128::MIN, unrepresentable, 0, rate, 1).is_none());
+    let span = SourceSpan::approaching(0, NonZeroU128::MIN, curve, 0, rate, 64).expect("span");
+    assert!(
+        span.scaled_from(
+            (0, NonZeroU128::MIN),
+            (0, NonZeroU128::MIN),
+            (0, NonZeroU128::MIN)
+        )
+        .is_none()
+    );
+    assert!(
+        span.scaled_from(
+            (1, NonZeroU128::MIN),
+            (0, NonZeroU128::MIN),
+            (1, NonZeroU128::MIN)
+        )
+        .is_none()
+    );
+    assert!(
+        span.scaled_from(
+            (0, NonZeroU128::MIN),
+            (u128::MAX, NonZeroU128::MIN),
+            (1, NonZeroU128::MIN)
+        )
+        .is_none()
+    );
+}
+
+#[kithara::test]
+fn exponential_source_coordinates_preserve_the_nonlinear_interior() {
+    let curve = ExponentialApproach::new(1.0, 2.0, 1.0).expect("unit-time law");
+    let span = SourceSpan::approaching(
+        1,
+        NonZeroU128::new(3).expect("third"),
+        curve,
+        0,
+        NonZeroU32::new(44_100).expect("rate"),
+        4,
+    )
+    .expect("span");
+    let expected = [
+        (1, 3),
+        (21919959691, 12884901888),
+        (44693454805, 12884901888),
+        (34680489113, 6442450944),
+        (47362637861, 6442450944),
+    ];
+    for (frame, (numerator, denominator)) in expected.into_iter().enumerate() {
+        assert_eq!(
+            span.source_ratio_at(u64::try_from(frame).expect("frame")),
+            Some((
+                numerator,
+                NonZeroU128::new(denominator).expect("denominator")
+            ))
+        );
+    }
 }

@@ -117,6 +117,12 @@ pub struct LaneSetup {
     pub declick: SmootherConfig,
 }
 
+struct Preparation {
+    seq: Seq,
+    at: LaneFrame,
+    latency: FrameCount,
+}
+
 pub(crate) struct Lane {
     inbox: Inbox<LaneProtocol>,
     cursor: LaneFrame,
@@ -124,7 +130,7 @@ pub(crate) struct Lane {
     preload_chunks: NonZeroUsize,
     declick: SmootherConfig,
     preload: Preload,
-    pending: Option<(Seq, FrameCount)>,
+    pending: Option<Preparation>,
     deferred: Option<Seq>,
     ended: bool,
     parked: Option<(LaneFrame, Duration)>,
@@ -174,11 +180,20 @@ impl Lane {
     }
 
     fn finish_pending(&mut self, ready: Option<SegmentId>) {
-        if let Some((seq, latency)) = self.pending.take()
-            && let Some(due) = self.inbox.resume(seq, self.cursor, self.cursor)
+        if let Some(pending) = self.pending.take()
+            && let Some(due) = self.inbox.resume(pending.seq, pending.at, pending.at)
         {
+            tracing::debug!(
+                seq = pending.seq.get(),
+                actual_apply_segment = pending.at.segment.get(),
+                actual_apply_frame = pending.at.frame,
+                prepared_segment = self.cursor.segment.get(),
+                prepared_frontier = self.cursor.frame,
+                ready_segment = ?ready,
+                "lane preparation finished"
+            );
             due.apply(LaneApplied {
-                engine_latency: latency,
+                engine_latency: pending.latency,
                 ready,
             });
         }
@@ -249,10 +264,20 @@ impl Lane {
                 changed = LaneChange::Controls;
             }
             let revision = due.seq().get();
+            let at = due.at();
             let mut segment = None;
             let mut restored_same = false;
             let mut cancelled_deferred = None;
             for command in due.commands() {
+                tracing::debug!(
+                    seq = revision,
+                    actual_apply_segment = at.segment.get(),
+                    actual_apply_frame = at.frame,
+                    current_segment = self.cursor.segment.get(),
+                    prepared_frontier = self.cursor.frame,
+                    command = ?command,
+                    "lane command executing"
+                );
                 match command {
                     LaneCommand::SetSpeed(curve) => warp
                         .set_speed(curve.clone(), revision)
@@ -327,7 +352,7 @@ impl Lane {
                 let seq = due.defer();
                 self.finish_pending(None);
                 self.preload = Preload::Filling(0);
-                self.pending = Some((seq, latency));
+                self.pending = Some(Preparation { seq, at, latency });
             } else {
                 due.apply(LaneApplied {
                     engine_latency: latency,
@@ -338,29 +363,46 @@ impl Lane {
                 drop(self.inbox.resume(seq, self.cursor, self.cursor));
             }
         }
-        if let Some(Jump::Down {
-            to, start, frames, ..
-        }) = self.jump
-        {
-            let frames = u64::try_from(frames).map_or(u64::MAX, |frames| frames);
-            if self.cursor.frame.saturating_sub(start) >= frames {
-                self.position = Some(landing_position(
-                    source
-                        .seek(to)
-                        .map_err(|error| TrackFailureKind::from(&error))?,
-                ));
-                warp.reset();
-                let next_spec = source.prepare_deferred().unwrap_or(spec);
-                warp.prepare_engine_latency(next_spec)
-                    .map_err(|_| TrackFailureKind::Render)?;
-                self.jump = Some(Jump::Up {
-                    start: self.cursor.frame,
-                    frames: usize::try_from(frames).map_or(usize::MAX, |frames| frames),
-                });
-                changed = LaneChange::Source;
-            }
+        if self.land_jump(source, warp, spec)? {
+            changed = LaneChange::Source;
         }
         Ok(changed)
+    }
+
+    fn land_jump<T, S>(
+        &mut self,
+        source: &mut T,
+        warp: &mut WarpRenderer<S>,
+        spec: AudioSpec,
+    ) -> Result<bool, TrackFailureKind>
+    where
+        T: AudioSource<Chunk = AudioChunk>,
+        S: HasPool<f32>,
+    {
+        let Some(Jump::Down {
+            to, start, frames, ..
+        }) = self.jump
+        else {
+            return Ok(false);
+        };
+        let frames = u64::try_from(frames).map_or(u64::MAX, |frames| frames);
+        if self.cursor.frame.saturating_sub(start) < frames {
+            return Ok(false);
+        }
+        self.position = Some(landing_position(
+            source
+                .seek(to)
+                .map_err(|error| TrackFailureKind::from(&error))?,
+        ));
+        warp.reset();
+        let next_spec = source.prepare_deferred().unwrap_or(spec);
+        warp.prepare_engine_latency(next_spec)
+            .map_err(|_| TrackFailureKind::Render)?;
+        self.jump = Some(Jump::Up {
+            start: self.cursor.frame,
+            frames: usize::try_from(frames).map_or(usize::MAX, |frames| frames),
+        });
+        Ok(true)
     }
 
     pub(crate) fn output_limit(&self) -> usize {

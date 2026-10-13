@@ -757,7 +757,8 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
     }
 
     pub(in crate::render) fn unity_passthrough(&self, speed: f32) -> bool {
-        !self.requires_staging() || (self.plan.is_none() && (speed - 1.0).abs() <= f32::EPSILON)
+        !self.requires_staging()
+            || (self.plan.is_none() && self.trajectory.passthrough_speed(speed))
     }
 
     pub(in crate::render) fn keylocked_unity(&self) -> bool {

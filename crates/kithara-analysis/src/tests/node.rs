@@ -28,7 +28,7 @@ use kithara_resampler::ResamplerBackend;
 #[cfg(feature = "analysis-beat")]
 use kithara_resampler::rubato::RubatoBackend;
 #[cfg(feature = "analysis-waveform")]
-use kithara_signal::{AudioSpec, FrameCoverage};
+use kithara_signal::{AudioChunkInfo, AudioSpec, FrameCoverage};
 use kithara_test_fixtures::analysis_fixtures::analysis_pcm;
 #[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
 use kithara_test_utils::kithara;
@@ -320,7 +320,7 @@ fn offered(analysis_pcm: &'static [f32], ranges: &[(u64, usize)]) -> Option<Trac
 
     for (at, frames) in ranges {
         assert_eq!(
-            producer.offer(sine(analysis_pcm, *frames), super::fixtures::spec(), *at),
+            producer.offer(sine(analysis_pcm, *frames), &super::fixtures::info(*at)),
             Ok(()),
             "the transport takes a range on its own axis"
         );
@@ -382,7 +382,7 @@ fn an_offer_reaches_only_the_pass_its_handle_names(analysis_pcm: &'static [f32])
     let (_idle_jobs, mut idle_node, idle_results, _idle_producer) = open("track-b");
 
     assert_eq!(
-        producer.offer(sine(analysis_pcm, 1024), super::fixtures::spec(), 0),
+        producer.offer(sine(analysis_pcm, 1024), &super::fixtures::info(0)),
         Ok(())
     );
     for _ in 0..64 {
@@ -430,11 +430,17 @@ fn an_offer_on_another_axis_leaves_the_coverage_alone(analysis_pcm: &'static [f3
     let mut node = NodeHarness::new(waveform_only(), receiver);
 
     assert_eq!(
-        producer.offer(sine(analysis_pcm, 1024), super::fixtures::spec(), 0),
+        producer.offer(sine(analysis_pcm, 1024), &super::fixtures::info(0)),
         Ok(())
     );
     assert_eq!(
-        producer.offer(sine(analysis_pcm, 1024), foreign, 4096),
+        producer.offer(
+            sine(analysis_pcm, 1024),
+            &AudioChunkInfo {
+                spec: foreign,
+                ..super::fixtures::info(4096)
+            }
+        ),
         Err(AudioObserveError::UnsupportedSampleRate {
             expected: rate,
             actual: foreign.sample_rate,
@@ -492,7 +498,7 @@ fn a_pass_fed_by_a_producer_publishes_as_it_goes(analysis_pcm: &'static [f32]) {
 
     for block in 0..BLOCKS {
         assert_eq!(
-            producer.offer(pcm, super::fixtures::spec(), block * BLOCK),
+            producer.offer(pcm, &super::fixtures::info(block * BLOCK)),
             Ok(()),
             "the worker keeps the transport drained"
         );
@@ -582,7 +588,7 @@ fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, R
 
     let mut at = 0;
     let refused = loop {
-        match producer.offer(pcm, super::fixtures::spec(), at) {
+        match producer.offer(pcm, &super::fixtures::info(at)) {
             Ok(()) => at = at.saturating_add(BLOCK),
             Err(AudioObserveError::Full) => break at..at + BLOCK,
             Err(other) => panic!("a range on the pass axis is taken or refused, got {other:?}"),
@@ -594,7 +600,7 @@ fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, R
             let _ = node.tick();
         }
         assert_eq!(
-            producer.offer(pcm, super::fixtures::spec(), refused.start + block * BLOCK),
+            producer.offer(pcm, &super::fixtures::info(refused.start + block * BLOCK)),
             Ok(()),
             "a drained transport takes the next range"
         );
@@ -604,7 +610,7 @@ fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, R
             let _ = node.tick();
         }
         assert_eq!(
-            producer.offer(pcm, super::fixtures::spec(), refused.start),
+            producer.offer(pcm, &super::fixtures::info(refused.start)),
             Ok(()),
             "the transport has room for the range it refused"
         );
@@ -693,7 +699,7 @@ fn a_seek_order_pass_keeps_publishing_and_covers_the_union(analysis_pcm: &'stati
     let mut published: Vec<TrackAnalysis> = Vec::new();
     for block in &order {
         assert_eq!(
-            producer.offer(pcm, super::fixtures::spec(), block * BLOCK),
+            producer.offer(pcm, &super::fixtures::info(block * BLOCK)),
             Ok(()),
             "the worker keeps the transport drained"
         );
@@ -947,8 +953,7 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress(analysis_pcm: &'static
     assert_eq!(
         producer.offer(
             sine(analysis_pcm, frames),
-            super::fixtures::spec(),
-            offered_at
+            &super::fixtures::info(offered_at)
         ),
         Ok(())
     );
@@ -1259,8 +1264,7 @@ fn producer_drain_limit_bounds_one_tick(analysis_pcm: &'static [f32]) {
         assert_eq!(
             producer.offer(
                 pcm,
-                super::fixtures::spec(),
-                block * u64::from(consts::FIXTURES_SR)
+                &super::fixtures::info(block * u64::from(consts::FIXTURES_SR))
             ),
             Ok(())
         );
@@ -1432,7 +1436,7 @@ fn a_pass_with_no_detector_publishes_the_rest(analysis_pcm: &'static [f32]) {
     let mut node = NodeHarness::new(waveform_only().with_beat(), receiver);
 
     assert_eq!(
-        producer.offer(&sine(analysis_pcm, 1024), super::fixtures::spec(), 0),
+        producer.offer(&sine(analysis_pcm, 1024), &super::fixtures::info(0)),
         Ok(())
     );
     for _ in 0..128 {
@@ -1453,4 +1457,12 @@ fn a_pass_with_no_detector_publishes_the_rest(analysis_pcm: &'static [f32]) {
         analysis.beat().is_none(),
         "there is no detector, so there is no beat artifact"
     );
+}
+
+#[cfg(feature = "analysis-waveform")]
+#[kithara::test]
+fn a_reader_visible_length_claims_a_raw_endpoint_only_after_its_basis_is_known(
+    analysis_pcm: &'static [f32],
+) {
+    super::schedule::assert_reader_visible_length_basis(analysis_pcm);
 }

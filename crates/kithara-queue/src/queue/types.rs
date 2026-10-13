@@ -1,7 +1,7 @@
 use kithara_bufpool::HasPool;
 use kithara_command::Seq;
 use kithara_events::TrackId;
-use kithara_play::{Bound, CrossfadeSettings, Position, ResourceSrc};
+use kithara_play::{Bound, CrossfadeSettings, Position, ResourceSrc, Slot};
 use kithara_signal::SegmentId;
 
 use crate::{event::AdvanceReason, track::TrackSource};
@@ -72,6 +72,8 @@ impl Transition {
 pub(super) struct PendingHandover {
     pub(super) seq: Seq,
     pub(super) item: TrackId,
+    pub(super) slot: Slot,
+    pub(super) replacement: bool,
     pub(super) reason: AdvanceReason,
 }
 
@@ -80,12 +82,20 @@ pub(super) enum Continuation {
     Load(Seq),
     Entry(Seq),
     Pause(Seq),
+    Removal {
+        seq: Seq,
+        handover: Seq,
+        slot: Slot,
+        applied: bool,
+    },
 }
 
 impl Continuation {
     pub(super) fn seq(self) -> Seq {
         match self {
-            Self::Load(seq) | Self::Entry(seq) | Self::Pause(seq) => seq,
+            Self::Load(seq) | Self::Entry(seq) | Self::Pause(seq) | Self::Removal { seq, .. } => {
+                seq
+            }
         }
     }
 }
@@ -110,7 +120,8 @@ pub(super) struct Target {
 
 impl Target {
     pub(super) fn set_playing(&mut self, playing: bool) {
-        if self.playing != playing {
+        if self.playing != playing && !matches!(self.continued, Some(Continuation::Removal { .. }))
+        {
             self.continued = None;
         }
         self.playing = playing;

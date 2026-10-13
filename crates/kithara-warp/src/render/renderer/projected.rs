@@ -107,7 +107,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
             } else {
                 Some(self.map_nominal_position(
                     span.start(),
-                    self.spec.sample_rate,
                     cursor.at_offset(span.start(), self.spec.sample_rate, 0)?,
                 )?)
             };
@@ -117,7 +116,6 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
                 Some(
                     self.map_nominal_position(
                         span.start(),
-                        self.spec.sample_rate,
                         nominal
                             .source_ratio_at(1)
                             .ok_or(ElasticError::SampleCountOverflow)?,

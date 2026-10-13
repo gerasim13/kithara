@@ -118,20 +118,19 @@ impl Deck {
         context_valid: bool,
     ) {
         loop {
-            let next =
-                self.armed
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, armed)| {
-                        let armed = (*armed)?;
-                        let from = Slot::new(u16::try_from(index).ok()?);
-                        (self.ended[index]
-                            || self.tracks.at(from).is_some_and(|track| {
-                                track.state() == crate::bridge::SlotState::Ended
-                            }))
+            let next = self
+                .armed
+                .iter()
+                .enumerate()
+                .filter_map(|(index, armed)| {
+                    let armed = (*armed)?;
+                    let from = Slot::new(u16::try_from(index).ok()?);
+                    self.tracks
+                        .at(from)
+                        .is_some_and(|track| track.state() == crate::bridge::SlotState::Ended)
                         .then_some((index, armed))
-                    })
-                    .min_by_key(|(_, armed)| armed.seq);
+                })
+                .min_by_key(|(_, armed)| armed.seq);
             let Some((index, armed)) = next else { break };
             self.armed[index] = None;
             let Some(mut due) = level.resume(armed.seq, start, at) else {

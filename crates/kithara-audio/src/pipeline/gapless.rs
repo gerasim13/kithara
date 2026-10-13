@@ -148,7 +148,17 @@ pub(crate) fn visible_origin(
         GaplessMode::SilenceTrim(_) => profile.gapless()?.leading_frames,
         _ => return None,
     };
-    raw.checked_add(profile.spec().duration_for(leading).ok()?)
+    if leading == 0 {
+        return Some(raw);
+    }
+    let spec = profile.spec();
+    let start = spec.frame_at(raw).ok()?;
+    let end = start.checked_add(leading)?;
+    let offset = spec
+        .duration_for(end)
+        .ok()?
+        .checked_sub(spec.duration_for(start).ok()?)?;
+    raw.checked_add(offset)
 }
 
 /// Returns the PCM duration downstream of exact metadata trim.
@@ -182,13 +192,50 @@ pub(crate) fn visible_duration(
 
 #[cfg(test)]
 mod tests {
-    use kithara_signal::AudioChunkInfo;
+    use std::num::NonZeroU32;
+
+    use kithara_signal::{AudioChunkInfo, AudioSpec};
     use kithara_test_utils::{
         bufpool::{pools, sample_buffer},
         kithara,
     };
 
     use super::*;
+
+    #[kithara::test]
+    #[case::native_44100(44_100, 46_439_909, 661, 61_428_571)]
+    #[case::fractional_pts(1_000, 42_250_000, 2, 44_250_000)]
+    fn sealed_visible_origin_keeps_the_original_frame_phase(
+        #[case] rate: u32,
+        #[case] raw_ns: u64,
+        #[case] leading: u64,
+        #[case] expected_ns: u64,
+    ) {
+        let spec = AudioSpec::new(2, NonZeroU32::new(rate).expect("source rate"));
+        let profile = GaplessProfile::new(spec, None, None, leading);
+        assert_eq!(
+            visible_origin(
+                Duration::from_nanos(raw_ns),
+                profile,
+                GaplessMode::CodecPriming
+            ),
+            Some(Duration::from_nanos(expected_ns)),
+        );
+    }
+
+    #[kithara::test]
+    fn disabled_visible_origin_preserves_unrepresentable_source_frames() {
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("source rate"));
+        let profile = GaplessProfile::new(spec, None, None, 661);
+        assert_eq!(
+            visible_origin(Duration::MAX, profile, GaplessMode::Disabled),
+            Some(Duration::MAX)
+        );
+        assert_eq!(
+            visible_origin(Duration::MAX, profile, GaplessMode::CodecPriming),
+            None
+        );
+    }
 
     #[kithara::rtsan_forbid_blocking]
     fn pop_last(stage: &mut GaplessStage) -> Option<AudioChunk> {

@@ -5,6 +5,7 @@ use kithara_analysis::{
     AnalysisToken, BeatAnalysisConfig, BeatArtifact, BeatSnapshot, BeatState, RangeSet,
     TrackAnalysis,
 };
+use kithara_platform::time::Duration;
 use kithara_resampler::rubato::RubatoBackend;
 use kithara_test_macros as kithara;
 
@@ -389,6 +390,7 @@ pub(in crate::defs) fn analysis_file(
     let mut coverage = RangeSet::new();
     coverage.insert(0..frames);
     let analysis = TrackAnalysis::builder()
+        .media_origin(Duration::ZERO)
         .token(AnalysisToken::from("rhythm-fixture"))
         .revision(1)
         .source_sample_rate(sample_rate)

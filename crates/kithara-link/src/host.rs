@@ -83,8 +83,7 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
         if self.epoch == Some(epoch) {
             return;
         }
-        self.trajectory
-            .reaxis_observed(transport.anchor(), transport.tempo());
+        self.trajectory.reaxis_observed(transport.anchor());
         self.epoch = Some(epoch);
         if let Some((now, delivery)) = self.inner.clock() {
             let at = now + self.lead(delivery);
@@ -109,9 +108,14 @@ impl<S: 'static, H: HostOwner<S, Deck = dyn LinkedDeck<S>>> LinkedHost<S, H> {
 
     fn retime(&mut self, frame: SessionFrame) {
         let trajectory = &self.trajectory;
+        let frames: Vec<_> = std::iter::once(frame)
+            .chain(trajectory.changes_after(frame))
+            .collect();
         self.inner.each_deck(&mut |_id, deck, out, _pass| {
             if deck.synced() {
-                deck.retime(trajectory, frame, out);
+                for &frame in &frames {
+                    deck.retime(trajectory, frame, out);
+                }
             }
         });
     }

@@ -3,14 +3,14 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use kithara_audio::{AudioReadError, AudioSource, SeekOutcome, TrackStep};
 use kithara_command::{Batch, ChannelConfig, Outcome, Sender, Seq, When, channel};
 use kithara_platform::time::Duration;
-use kithara_signal::{AudioChunk, AudioSpec, SegmentId};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId};
 use kithara_test_utils::kithara;
 use kithara_warp::{SpeedCurve, Warp, WarpConfig, WarpRenderer};
 
 use crate::{
-    LaneCommand, LaneProtocol,
+    LaneCommand, LaneFrame, LaneProtocol,
     lane::Lane,
-    test_pools::{TestPools, pools},
+    test_pools::{TestPools, pools, sample_buffer},
 };
 
 struct ReadySource {
@@ -96,6 +96,61 @@ impl LaneFixture {
         self.lane.admitted();
         self.lane.admitted();
     }
+}
+
+#[kithara::test]
+#[case::next(When::Next)]
+#[case::at(When::At(LaneFrame { segment: SegmentId::FIRST, frame: 16 }))]
+fn a_prepared_segment_receipt_keeps_its_actual_apply_point(#[case] when: When<LaneFrame>) {
+    let mut fixture = LaneFixture::new();
+    let mut chunk = AudioChunk::new(
+        AudioChunkInfo {
+            spec: fixture.spec,
+            frames: 16,
+            ..AudioChunkInfo::default()
+        },
+        sample_buffer(&pools(), &[0.25; 32]),
+    );
+    fixture.lane.stamp(&mut chunk);
+    let applied_at = fixture.lane.cursor();
+    let segment = SegmentId::FIRST.next();
+    let seq = fixture
+        .sender
+        .send(
+            when,
+            Batch {
+                basis: Vec::new(),
+                commands: vec![LaneCommand::Segment {
+                    id: segment,
+                    from: Duration::from_secs(1),
+                    speed: SpeedCurve::Constant(1.0),
+                }],
+            },
+        )
+        .expect("segment command fits the channel");
+    fixture
+        .lane
+        .execute_due(&mut fixture.source, &mut fixture.renderer, fixture.spec)
+        .expect("segment applies before its preload");
+    assert_eq!(fixture.lane.cursor(), LaneFrame { segment, frame: 0 });
+    assert!(!fixture.lane.is_preloaded());
+    assert!(fixture.sender.receipts().next().is_none());
+    fixture.lane.stamp(&mut chunk);
+    fixture.lane.admitted();
+    assert!(!fixture.lane.is_preloaded());
+    assert!(fixture.sender.receipts().next().is_none());
+    fixture.lane.stamp(&mut chunk);
+    fixture.lane.admitted();
+    assert!(fixture.lane.is_preloaded());
+    assert_eq!(fixture.lane.cursor(), LaneFrame { segment, frame: 32 });
+    let receipt = fixture.sender.receipts().next().expect("prepared receipt");
+    assert_eq!(receipt.seq(), seq);
+    assert!(matches!(receipt.outcome(), Outcome::Applied { at, data }
+        if *at == applied_at && data.ready == Some(segment)));
+    assert_eq!(&chunk.samples[..], &[0.25; 32]);
+    assert!(fixture.sender.receipts().next().is_none());
+    fixture.lane.admitted();
+    assert!(fixture.sender.receipts().next().is_none());
 }
 
 #[kithara::test]

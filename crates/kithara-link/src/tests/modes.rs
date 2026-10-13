@@ -1,6 +1,6 @@
 use kithara_command::{Batch, Outcome, Port, Rejection, When};
 use kithara_play::{Bound, PlayError, Player, TrackCommand, TrackSettingsChange, TrackStatus};
-use kithara_signal::SessionFrame;
+use kithara_signal::{ExponentialApproach, SessionFrame};
 use kithara_test_utils::kithara;
 use kithara_warp::SpeedCurve;
 
@@ -262,7 +262,12 @@ fn sync_on_inherits_host_speed_and_rejects_manual_speed() {
         .expect("speed");
     assert_eq!(
         control.commands()[0].1,
-        Command::Speed(SpeedCurve::Constant(4.0 / 3.0), When::Next)
+        Command::Speed(
+            SpeedCurve::Approach(
+                ExponentialApproach::new(4.0 / 3.0, 4.0 / 3.0, 0.0).expect("exact constant rate")
+            ),
+            When::Next
+        )
     );
     rig.apply(&mut deck, seq, 0);
     control.clear();

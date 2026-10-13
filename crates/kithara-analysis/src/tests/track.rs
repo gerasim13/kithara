@@ -125,6 +125,8 @@ impl AudioRead for Track {
                 spec: self.spec,
                 frames: u32::try_from(frames).unwrap_or(0),
                 frame_offset: at,
+                media_origin: Some(Duration::ZERO),
+                visible_origin: Some(Duration::ZERO),
                 ..Default::default()
             },
             sample_buffer(&self.pools, &self.pcm[from..from + len]),

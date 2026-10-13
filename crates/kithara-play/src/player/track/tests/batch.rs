@@ -2,6 +2,219 @@ use std::num::NonZeroUsize;
 
 use super::*;
 
+#[kithara::test]
+#[case::ready(true)]
+#[case::rejected(false)]
+fn a_segment_entry_keeps_its_native_curve_and_waits_for_native_readiness(#[case] applied: bool) {
+    let mut rig = rig();
+    let (mut track, mut inbox) = prepared_track();
+    let curve = SpeedCurve::Approach(
+        kithara_signal::ExponentialApproach::new(1.0, 0.9, 220.5).expect("finite curve"),
+    );
+    let position = Duration::from_secs(2);
+    in_pass(&mut rig, frame(0), |out| {
+        track.cue(position, curve.clone(), out)
+    })
+    .expect("cue");
+    let segment = track.segment;
+    assert_ne!(
+        track.lane_commands.last().expect("segment command").segment,
+        segment
+    );
+    assert_eq!(track.prepared_speed(), Some(&curve));
+    assert!(
+        !in_pass(&mut rig, frame(0), |out| track
+            .prepare_entry(frame(128), out))
+        .expect("preparation")
+    );
+    inbox.drain();
+    let due = inbox
+        .next_due(LaneFrame { segment, frame: 0 }, 1)
+        .expect("native segment");
+    assert!(
+        matches!(due.commands(), [LaneCommand::Segment { id, speed, from }] if *id == segment && *speed == curve && *from == position)
+    );
+    if applied {
+        due.apply(kithara_render::LaneApplied {
+            engine_latency: FrameCount::new(0),
+            ready: Some(segment),
+        });
+    } else {
+        drop(due);
+    }
+    assert_eq!(
+        in_pass(&mut rig, frame(0), |out| track
+            .prepare_entry(frame(128), out))
+        .expect("native receipt"),
+        applied
+    );
+    assert_eq!(track.prepared_speed(), applied.then_some(&curve));
+}
+
+#[kithara::test]
+fn a_later_speed_does_not_replace_the_prepared_origin_law() {
+    let mut rig = rig();
+    let (mut track, mut inbox) = prepared_track();
+    let curve = SpeedCurve::Approach(
+        kithara_signal::ExponentialApproach::new(1.0, 0.9, 220.5).expect("finite curve"),
+    );
+    in_pass(&mut rig, frame(0), |out| {
+        track.cue(Duration::ZERO, curve.clone(), out)
+    })
+    .expect("cue");
+    let segment = track.segment;
+    inbox.drain();
+    inbox
+        .next_due(LaneFrame { segment, frame: 0 }, 1)
+        .expect("native segment")
+        .apply(kithara_render::LaneApplied {
+            engine_latency: FrameCount::new(0),
+            ready: Some(segment),
+        });
+    track.settle_lane();
+    track.resume = Some(SlotMark {
+        session: frame(64),
+        lane: LaneFrame { segment, frame: 64 },
+        position: Duration::from_secs_f64(64.0 / f64::from(mock::SAMPLE_RATE.get())),
+    });
+    assert_eq!(
+        track.prepared_speed(),
+        None,
+        "a consumed transient is not a fresh entry law"
+    );
+    track.resume = None;
+    track
+        .send_lane(
+            LaneCommand::SetSpeed(SpeedCurve::Constant(1.5)),
+            When::At(LaneFrame { segment, frame: 64 }),
+        )
+        .expect("later speed");
+    assert_eq!(track.prepared_speed(), None);
+    inbox.drain();
+    drop(
+        inbox
+            .next_due(LaneFrame { segment, frame: 64 }, 1)
+            .expect("later speed"),
+    );
+    track.settle_lane();
+    assert_eq!(
+        track.prepared_speed(),
+        Some(&curve),
+        "a rejected speed does not change the origin law"
+    );
+    let replacement = SpeedCurve::Constant(1.25);
+    track
+        .send_lane(
+            LaneCommand::SetSpeed(replacement.clone()),
+            When::At(LaneFrame { segment, frame: 0 }),
+        )
+        .expect("origin speed");
+    assert_eq!(track.prepared_speed(), Some(&replacement));
+}
+
+#[kithara::test]
+fn a_replay_entry_waits_for_native_adoption_after_lane_readiness() {
+    let mut rig = rig();
+    let (mut track, mut inbox) = prepared_track();
+    track.status = TrackStatus::Ended { at: frame(480_000) };
+    let curve = SpeedCurve::Approach(
+        kithara_signal::ExponentialApproach::new(1.025, 1.025, 0.0).expect("exact replay curve"),
+    );
+    in_pass(&mut rig, frame(0), |out| {
+        track.cue(Duration::ZERO, curve.clone(), out)
+    })
+    .expect("replay cue");
+    let segment = track.segment;
+    inbox.drain();
+    inbox
+        .next_due(LaneFrame { segment, frame: 0 }, 1)
+        .expect("replay segment")
+        .apply(kithara_render::LaneApplied {
+            engine_latency: FrameCount::new(0),
+            ready: Some(segment),
+        });
+    assert!(
+        !in_pass(&mut rig, frame(0), |out| track
+            .prepare_entry(frame(128), out))
+        .expect("adoption pending")
+    );
+    assert_eq!(
+        track.lane_commands.len(),
+        1,
+        "lane readiness cannot reopen the replay again"
+    );
+    let receipt = answer_next(&mut rig, Ok(()));
+    answer_track(&mut track, &mut rig, receipt);
+    assert_eq!(track.status, TrackStatus::Loaded);
+    assert!(
+        in_pass(&mut rig, frame(0), |out| track
+            .prepare_entry(frame(128), out))
+        .expect("adopted replay")
+    );
+    assert_eq!(track.prepared_speed(), Some(&curve));
+    assert_eq!(track.lane_commands.len(), 1);
+}
+
+#[kithara::test]
+fn an_older_native_ready_receipt_cannot_admit_the_replacement_segment() {
+    let mut rig = rig();
+    let (mut track, mut inbox) = prepared_track();
+    in_pass(&mut rig, frame(0), |out| {
+        track.cue(Duration::ZERO, SpeedCurve::Constant(1.0), out)
+    })
+    .expect("first cue");
+    let old = track.segment;
+    let curve = SpeedCurve::Approach(
+        kithara_signal::ExponentialApproach::new(1.0, 0.9, 220.5).expect("replacement law"),
+    );
+    in_pass(&mut rig, frame(0), |out| {
+        track.cue(Duration::ZERO, curve.clone(), out)
+    })
+    .expect("replacement cue");
+    let current = track.segment;
+    assert_ne!(old, current);
+    inbox.drain();
+    inbox
+        .next_due(
+            LaneFrame {
+                segment: old,
+                frame: 0,
+            },
+            1,
+        )
+        .expect("older native segment")
+        .apply(kithara_render::LaneApplied {
+            engine_latency: FrameCount::new(0),
+            ready: Some(old),
+        });
+    assert!(
+        !in_pass(&mut rig, frame(0), |out| track
+            .prepare_entry(frame(128), out))
+        .expect("old receipt intake")
+    );
+    assert!(track.snapshot().pending_lane);
+    assert_eq!(track.prepared_speed(), Some(&curve));
+    inbox
+        .next_due(
+            LaneFrame {
+                segment: current,
+                frame: 0,
+            },
+            1,
+        )
+        .expect("current native segment")
+        .apply(kithara_render::LaneApplied {
+            engine_latency: FrameCount::new(0),
+            ready: Some(current),
+        });
+    assert!(
+        in_pass(&mut rig, frame(0), |out| track
+            .prepare_entry(frame(128), out))
+        .expect("current receipt intake")
+    );
+    assert!(!track.snapshot().pending_lane);
+}
+
 #[cfg(feature = "usdt")]
 #[kithara::test]
 #[case::constant(SpeedCurve::Constant(1.5))]
@@ -112,7 +325,7 @@ fn an_alignment_uses_one_credit_and_settles_every_part(#[case] applied: bool) {
         &mut rig,
         TrackCommand::Align {
             to,
-            speed: 1.5,
+            speed: SpeedCurve::Constant(1.5),
             at: landing,
         },
     )

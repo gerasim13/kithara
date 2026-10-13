@@ -18,13 +18,9 @@ use kithara_events::{EventBus, EventReceiver, EventSet};
 use kithara_platform::{CancelToken, maybe_send::BoxFuture, sync::Arc, time::Duration};
 use kithara_render::{
     LaneProtocol, LaneStart, LoadRefusal, Open, PcmReceiver,
-    rt::{
-        DeckMixerConfig,
-        track::{PcmConsumer, PlayerResource},
-    },
+    rt::track::{PcmConsumer, PlayerResource},
 };
 use kithara_signal::{AudioSpec, FrameCount};
-use num_traits::ToPrimitive;
 use tracing::warn;
 
 use super::super::{PlaybackResamplerBackend, ResourceConfig, ResourceLane, SourceType};
@@ -245,12 +241,7 @@ where
         let rate = config.host_sample_rate.ok_or_else(|| {
             PlayError::Internal("lane geometry requires the prepared host sample rate".into())
         })?;
-        let declick = (f64::from(rate.get())
-            * f64::from(DeckMixerConfig::default().declick().smooth_seconds))
-        .to_usize()
-        .ok_or_else(|| PlayError::Internal("lane Jump ramp frame count overflow".into()))?
-        .max(1);
-        Ok((ring_depth, FrameCount::new(declick)))
+        Ok((ring_depth, track.declick_frames(rate)))
     }
 
     async fn load(
@@ -408,6 +399,7 @@ mod tests {
     use kithara_test_fixtures::play_fixtures::half;
     use kithara_test_utils::{TestTempDir, kithara};
     use kithara_warp::{SpeedCurve, StretchKind, WarpConfig};
+    use num_traits::ToPrimitive;
 
     use super::*;
     use crate::{

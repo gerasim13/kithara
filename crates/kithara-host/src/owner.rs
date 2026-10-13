@@ -177,6 +177,88 @@ where
         }
     }
 
+    fn register_deck(&mut self, id: DeckId, deck: Box<D>) -> Result<(), PlayError> {
+        if self.decks.0.iter().any(|(held, _)| *held == id) {
+            return Err(SessionError::DeckAttached(id).into());
+        }
+        crate::session::state::ensure_ctx(&mut self.session)?;
+        let prep = deck.resource_prep();
+        if let Some(prep) = prep
+            && let Some(quantum) = prep.warp.render_quantum_frames()
+        {
+            let shape = self
+                .session
+                .root_view
+                .output
+                .get()
+                .stream_shape
+                .ok_or(SessionError::NoContext)?;
+            if let Err(error) = shape.playback_buffers(quantum, prep.response_budget_frames) {
+                if self.decks.0.is_empty() {
+                    graph::idle(&mut self.session)?;
+                    graph::drop_idle_context(&mut self.session)?;
+                }
+                return Err(error.into());
+            }
+        }
+        let bus = prep.map(|prep| prep.bus.clone());
+        let worker = deck.worker().ok_or_else(|| {
+            PlayError::Internal("a hosted deck requires its resource worker".into())
+        })?;
+        if let Some(delay) = &mut self.session.delivery_delay {
+            *delay = (*delay)
+                .max(crate::consts::SESSION_PUMP_INTERVAL.saturating_add(worker.wake_allowance()));
+        }
+        let pools = worker.pools().clone();
+        if let Some(inbox) = self.dispatcher_inbox.take() {
+            self.dispatcher_task = Some((
+                worker
+                    .start_dispatcher(inbox)
+                    .map_err(|error| PlayError::Internal(error.to_string()))?,
+                worker.clone(),
+            ));
+        }
+        let scope = self
+            .session
+            .channel
+            .as_mut()
+            .ok_or(PlayError::Closed)?
+            .open(deck.mixer_config().slots().get());
+        let scope = match scope {
+            Ok(scope) => scope,
+            Err(error) => {
+                if self.decks.0.is_empty() {
+                    graph::idle(&mut self.session)?;
+                    graph::drop_idle_context(&mut self.session)?;
+                }
+                return Err(PlayError::Internal(error.to_string()));
+            }
+        };
+        let (mut record, inputs) = Deck::new(deck, scope)?;
+        if let Err(error) = graph::install_deck(&mut self.session, id, inputs, pools, bus) {
+            if let Some(channel) = &mut self.session.channel {
+                let _ = channel.close(scope);
+            }
+            record.releasing = true;
+            self.decks.0.push((id, record));
+            return Err(error.into());
+        }
+        record
+            .deck
+            .hold(DeckWake::waker(&self.inbox, DeckMsg::Drain(id)));
+        self.dispatcher
+            .hold(DeckWake::waker(&self.inbox, DeckMsg::Receipts));
+        self.decks.0.push((id, record));
+        if self.session.iteration_clock.is_none() {
+            self.session.begin_iteration();
+        }
+        let delivery = self.session.delivery();
+        self.session.iteration_clock = self.session.iteration_clock.map(|(now, _)| (now, delivery));
+        self.with_deck(id, &mut |deck, out, pass| deck.drain(pass, out))?;
+        self.publish_root();
+        Ok(())
+    }
+
     fn close(&mut self, id: DeckId) -> Result<(), PlayError> {
         let index = self.decks.index(id)?;
         if self.decks.0[index].1.releasing {
@@ -288,80 +370,7 @@ where
     }
 
     fn register(&mut self, id: DeckId, deck: Box<D>) -> Result<(), PlayError> {
-        if self.decks.0.iter().any(|(held, _)| *held == id) {
-            return Err(SessionError::DeckAttached(id).into());
-        }
-        crate::session::state::ensure_ctx(&mut self.session)?;
-        let prep = deck.resource_prep();
-        if let Some(prep) = prep
-            && let Some(quantum) = prep.warp.render_quantum_frames()
-        {
-            let shape = self
-                .session
-                .root_view
-                .output
-                .get()
-                .stream_shape
-                .ok_or(SessionError::NoContext)?;
-            if let Err(error) = shape.playback_buffers(quantum, prep.response_budget_frames) {
-                if self.decks.0.is_empty() {
-                    graph::idle(&mut self.session)?;
-                    graph::drop_idle_context(&mut self.session)?;
-                }
-                return Err(error.into());
-            }
-        }
-        let bus = prep.map(|prep| prep.bus.clone());
-        let worker = deck.worker().ok_or_else(|| {
-            PlayError::Internal("a hosted deck requires its resource worker".into())
-        })?;
-        if let Some(delay) = &mut self.session.delivery_delay {
-            *delay = (*delay)
-                .max(crate::consts::SESSION_PUMP_INTERVAL.saturating_add(worker.wake_allowance()));
-        }
-        let pools = worker.pools().clone();
-        if let Some(inbox) = self.dispatcher_inbox.take() {
-            self.dispatcher_task = Some((
-                worker
-                    .start_dispatcher(inbox)
-                    .map_err(|error| PlayError::Internal(error.to_string()))?,
-                worker.clone(),
-            ));
-        }
-        let scope = self
-            .session
-            .channel
-            .as_mut()
-            .ok_or(PlayError::Closed)?
-            .open(deck.mixer_config().slots().get());
-        let scope = match scope {
-            Ok(scope) => scope,
-            Err(error) => {
-                if self.decks.0.is_empty() {
-                    graph::idle(&mut self.session)?;
-                    graph::drop_idle_context(&mut self.session)?;
-                }
-                return Err(PlayError::Internal(error.to_string()));
-            }
-        };
-        let (mut record, inputs) = Deck::new(deck, scope)?;
-        if let Err(error) = graph::install_deck(&mut self.session, id, inputs, pools, bus) {
-            if let Some(channel) = &mut self.session.channel {
-                let _ = channel.close(scope);
-            }
-            record.releasing = true;
-            self.decks.0.push((id, record));
-            return Err(error.into());
-        }
-        record
-            .deck
-            .hold(DeckWake::waker(&self.inbox, DeckMsg::Drain(id)));
-        self.dispatcher
-            .hold(DeckWake::waker(&self.inbox, DeckMsg::Receipts));
-        self.decks.0.push((id, record));
-        self.with_deck(id, &mut |deck, out, pass| deck.drain(pass, out))?;
-        self.publish_root();
-        Ok(())
+        self.register_deck(id, deck)
     }
 
     fn each_deck(

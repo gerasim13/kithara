@@ -106,6 +106,7 @@ pub(crate) fn snapshot(
     let mut coverage = RangeSet::new();
     coverage.insert(0..covered);
     TrackAnalysis::builder()
+        .media_origin(Duration::ZERO)
         .token(token)
         .revision(revision)
         .source_sample_rate(axis())
@@ -124,6 +125,7 @@ pub(crate) fn beats_only(fingerprint: AnalysisFingerprint) -> TrackAnalysis {
     let mut coverage = RangeSet::new();
     coverage.insert(0..1_000);
     TrackAnalysis::builder()
+        .media_origin(Duration::ZERO)
         .token("test-track".into())
         .revision(4)
         .source_sample_rate(axis())

@@ -1,6 +1,4 @@
 mod core;
 mod state;
 
-pub use core::Linked;
-
-pub use state::{LinkConfig, LinkedPlayer, LinkedSnapshot, SyncMode, SyncStatus, Waiting};
+pub use state::{LinkConfig, Linked, LinkedPlayer, LinkedSnapshot, SyncMode, SyncStatus, Waiting};

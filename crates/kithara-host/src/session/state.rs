@@ -504,18 +504,193 @@ mod tests {
     use std::num::NonZeroU16;
 
     use kithara_config::Config;
-    use kithara_test_utils::kithara;
+    use kithara_events::TrackId;
+    use kithara_platform::tokio::runtime::Builder;
+    use kithara_play::{HostedDeck, PlayWorker, PlayWorkerConfig, Player, ResourcePrep};
+    use kithara_queue::{Queue, QueueCommand, QueueConfig, TrackSource, Transition};
+    use kithara_signal::AudioSpec;
+    use kithara_test_utils::{TestTempDir, bufpool::pools, kithara};
 
     use super::*;
     use crate::{
         HostCommand, HostOwner,
-        mock::{TestState, ask, registration, test_state},
+        mock::{TestState, ask, registration, render_block, test_state},
     };
 
     fn canonical_decks(state: &mut TestState) -> Vec<BeatGridId> {
         let mut decks = Vec::new();
         state.owner.each_deck(&mut |id, _, _, _| decks.push(id));
         decks
+    }
+
+    #[kithara::test]
+    #[case::offline(false)]
+    #[case::threaded_delivery(true)]
+    fn first_registration_lends_the_real_clock_and_registered_worker_budget_in_the_same_pass(
+        #[case] threaded_delivery: bool,
+    ) {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("fixture load runtime");
+        let _entered = runtime.enter();
+        let mut state = test_state(crate::session::offline::mock::start);
+        state.delivery_delay = threaded_delivery.then_some(crate::consts::SESSION_PUMP_INTERVAL);
+        let before_delay = state.delivery_delay;
+        let id = BeatGridId::allocate().expect("fixture deck id");
+        let command = registration(id);
+        let worker_lead = match &command {
+            HostCommand::Register { deck, .. } => deck
+                .worker()
+                .expect("registered playback worker")
+                .wake_allowance(),
+            _ => panic!("registration fixture submits a held deck"),
+        };
+        assert!(worker_lead > Duration::ZERO);
+        let expected_delay = before_delay.map(|delay| {
+            delay.max(crate::consts::SESSION_PUMP_INTERVAL.saturating_add(worker_lead))
+        });
+        if threaded_delivery {
+            assert!(expected_delay > before_delay);
+        }
+        state.owner.begin_pass();
+        assert!(state.owner.clock().is_none());
+        assert!(state.ctx.is_none());
+        state.owner.apply(command).expect("first registration");
+        assert_eq!(state.delivery_delay, expected_delay);
+        let ctx = state.ctx.as_ref().expect("actual activated native context");
+        assert!(ctx.stream_info().is_some());
+        let native = SessionFrame::new(ctx.audio_clock().samples.0);
+        let clock = state
+            .owner
+            .clock()
+            .expect("started stream has a clock in this registration pass");
+        assert_eq!(clock, (native, state.delivery()));
+        let directory = TestTempDir::new();
+        let path = directory.path().join("same-pass.wav");
+        kithara_play::mock::write_pcm_wav(
+            &path,
+            &[0.5; 2_048],
+            AudioSpec::new(2, state.settings.config().sample_rate()),
+        )
+        .expect("clock witness WAV");
+        let item = TrackId::allocate();
+        state
+            .owner
+            .with_deck(id, &mut |deck, out, pass| {
+                let actual = out
+                    .pass()
+                    .expect("real same-pass clock and delivery are lent");
+                assert_eq!((actual.now, actual.delivery), clock);
+                assert_eq!((pass.now, pass.delivery), clock);
+                Player::apply(
+                    deck,
+                    QueueCommand::Append {
+                        id: item,
+                        source: TrackSource::Uri(path.to_string_lossy().into_owned()),
+                    },
+                    out,
+                )
+                .expect("append during registration pass");
+                Player::apply(
+                    deck,
+                    QueueCommand::Select {
+                        id: item,
+                        transition: Transition::None,
+                    },
+                    out,
+                )
+                .expect("selection uses the real clock without another pass");
+            })
+            .expect("held deck");
+    }
+
+    #[kithara::test]
+    fn a_later_registration_refreshes_delivery_without_resampling_the_live_pass_clock() {
+        let mut state = test_state(crate::session::offline::mock::start);
+        state.delivery_delay = Some(crate::consts::SESSION_PUMP_INTERVAL);
+        let first_id = BeatGridId::allocate().expect("first fixture deck id");
+        let first = registration(first_id);
+        let first_lead = match &first {
+            HostCommand::Register { deck, .. } => deck
+                .worker()
+                .expect("first playback worker")
+                .wake_allowance(),
+            _ => panic!("registration fixture submits a held deck"),
+        };
+        state.owner.begin_pass();
+        state.owner.apply(first).expect("first registration");
+        render_block(&mut state, 0);
+        state.owner.begin_pass();
+        let cached = state.owner.clock().expect("actual running stream clock");
+        assert!(cached.0 > SessionFrame::new(0));
+        assert_eq!(
+            cached.0,
+            SessionFrame::new(
+                state
+                    .ctx
+                    .as_ref()
+                    .expect("running context")
+                    .audio_clock()
+                    .samples
+                    .0,
+            )
+        );
+        let before_delay = state.delivery_delay.expect("threaded delivery budget");
+        let position = cached
+            .0
+            .frames_since(SessionFrame::new(0))
+            .expect("offline clock is nonnegative");
+        render_block(&mut state, position);
+        let advanced = SessionFrame::new(
+            state
+                .ctx
+                .as_ref()
+                .expect("running context")
+                .audio_clock()
+                .samples
+                .0,
+        );
+        assert!(
+            advanced > cached.0,
+            "the real native clock moved during this pass"
+        );
+        assert_eq!(state.owner.clock(), Some(cached));
+
+        let second_id = BeatGridId::allocate().expect("second fixture deck id");
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::builder(pools())
+                .idle_timeout(first_lead.saturating_add(crate::consts::SESSION_PUMP_INTERVAL))
+                .build(),
+        );
+        let second_lead = worker.wake_allowance();
+        assert!(second_lead > first_lead);
+        let expected_delay =
+            before_delay.max(crate::consts::SESSION_PUMP_INTERVAL.saturating_add(second_lead));
+        assert!(expected_delay > before_delay);
+        let prep = ResourcePrep::builder().worker(worker).build();
+        state
+            .owner
+            .apply(HostCommand::Register {
+                id: second_id,
+                deck: Box::new(Queue::new(QueueConfig::builder().prep(prep).build())),
+            })
+            .expect("second registration in the live pass");
+
+        assert_eq!(state.delivery_delay, Some(expected_delay));
+        let expected = (cached.0, state.delivery());
+        assert!(expected.1 > cached.1);
+        assert_eq!(state.owner.clock(), Some(expected));
+        for id in [first_id, second_id] {
+            state
+                .owner
+                .with_deck(id, &mut |_, out, pass| {
+                    let actual = out.pass().expect("live registration pass");
+                    assert_eq!((actual.now, actual.delivery), expected);
+                    assert_eq!((pass.now, pass.delivery), expected);
+                })
+                .expect("registered deck");
+        }
     }
 
     #[kithara::test]

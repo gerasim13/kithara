@@ -49,7 +49,7 @@ fn entered_renderer(
             let mut meta = input.meta;
             meta.frame_offset = position;
             let frames = renderer
-                .prepare_quantum(meta, history - offset, usize::MAX)
+                .prepare_source_window(meta, history - offset, usize::MAX)
                 .expect("history quantum")
                 .get();
             let source = source_span(&renderer, position, frames);
@@ -134,7 +134,7 @@ fn an_entered_plan_presents_its_activation_source_after_exact_history(
         renderer.prepare(spec());
         let at = source_span(&renderer, position, 1024);
         let frames = renderer
-            .prepare_quantum(at.meta, at.frames(), usize::MAX)
+            .prepare_source_window(at.meta, at.frames(), usize::MAX)
             .expect("the entered source continues")
             .get();
         let mut input = source_span(&renderer, position, frames);
@@ -182,7 +182,7 @@ fn an_entered_plan_refuses_a_landing_after_its_activation_source(
     renderer.prepare(spec());
     let expected = source_span(&renderer, cue, 256);
     let frames = renderer
-        .prepare_quantum(expected.meta, expected.frames(), usize::MAX)
+        .prepare_source_window(expected.meta, expected.frames(), usize::MAX)
         .expect("entry quantum")
         .get();
     let late = source_span(&renderer, cue + 1, frames);

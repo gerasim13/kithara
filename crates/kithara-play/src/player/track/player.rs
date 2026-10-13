@@ -48,10 +48,12 @@ impl<S> Player<S> for PlayerImpl<S> {
                     self.position = to;
                     return Ok(None);
                 }
+                let to = self.raw_position(to)?;
                 self.segment(to, None, out)
             }
             TrackCommand::SetHostRate { rate } => self.segment(self.position, Some(rate), out),
             TrackCommand::Jump { to, at } => {
+                let to = self.raw_position(to)?;
                 let when = self.jump_when(at, out)?;
                 self.send_lane(LaneCommand::Jump { to }, when).map(Some)
             }
@@ -100,7 +102,11 @@ impl<S> Player<S> for PlayerImpl<S> {
                 if out.deck_available() == 0 {
                     return Err(PlayError::Full("deck"));
                 }
-                let parked = (self.segment, self.position);
+                let parked_position = match self.resume.or(self.mark) {
+                    Some(mark) if mark.lane.segment == self.segment => mark.position,
+                    _ => self.raw_position(self.position)?,
+                };
+                let parked = (self.segment, parked_position);
                 let segment = self.issued_segment.next();
                 self.send_lane(
                     LaneCommand::Segment {
@@ -200,26 +206,33 @@ impl<S> Player<S> for PlayerImpl<S> {
                     }
                     return Settled::Pending;
                 }
+                let mut transport_current = self
+                    .attaching
+                    .filter(|attach| attach.seq == Some(seq))
+                    .is_none_or(|attach| !attach.obsolete);
                 if let Some(index) = playback {
                     let operation = self.playback_commands.remove(index);
+                    transport_current &= !operation.obsolete;
                     if matches!(outcome, Outcome::Applied { .. })
-                        && operation.action.is_none()
                         && let Some(slot) = self.slot
-                        && batch.commands.iter().any(|part| {
-                            matches!(part,
-                            DeckPart::Fade { slot: named, .. } if *named == slot)
-                        })
                         && let Some((_, basis)) =
                             operation.basis.iter().find(|(named, _)| *named == slot)
-                        && let Some((ancestor, _)) =
-                            self.pending_playback_action(slot, *basis, PlaybackQuery::Receipt)
-                        && let Some(ancestor) = self.playback_commands.get_mut(ancestor)
                     {
-                        ancestor.transparent = ancestor.transparent.max(Some(seq));
+                        if operation.action.is_some() {
+                            self.obsolete_playback_ancestors(slot, *basis);
+                        } else if batch.commands.iter().any(|part| {
+                            matches!(part,
+                            DeckPart::Fade { slot: named, .. } if *named == slot)
+                        }) && let Some((ancestor, _)) =
+                            self.pending_playback_action(slot, *basis, PlaybackQuery::Receipt)
+                            && let Some(ancestor) = self.playback_commands.get_mut(ancestor)
+                        {
+                            ancestor.transparent = ancestor.transparent.max(Some(seq));
+                        }
                     }
                 }
                 self.observe(out);
-                self.applied(seq, outcome, batch, out)
+                self.applied(seq, outcome, batch, transport_current, out)
             }
             TrackReceipt::Deck { .. } => Settled::Pending,
             TrackReceipt::Event(event) => {
@@ -290,7 +303,11 @@ impl<S> Player<S> for PlayerImpl<S> {
             status: self.status,
             speed: self.settings.config().speed(),
             position: self.position,
-            duration: self.duration,
+            duration: self.duration.and_then(|duration| {
+                self.visible_origin?
+                    .checked_add(duration)?
+                    .checked_sub(self.media_origin?)
+            }),
             abr: self.abr.clone(),
             metadata: self.metadata.clone(),
             mark: self.mark,
