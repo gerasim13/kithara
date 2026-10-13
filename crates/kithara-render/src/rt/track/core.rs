@@ -4,7 +4,7 @@ use bon::bon;
 use kithara_command::Seq;
 use kithara_dsp::param::SmootherConfig;
 use kithara_events::TrackId;
-use kithara_platform::sync::Arc;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{SegmentId, SessionFrame};
 
 use super::{PlayerResource, RtSink, fade::TrackFade, gate::TrackGate};
@@ -75,6 +75,8 @@ impl PlayerTrack {
         to self.resource {
             #[must_use]
             pub fn duration(&self) -> f64;
+            #[must_use]
+            pub fn visible_origin(&self) -> Option<Duration>;
             #[must_use]
             pub fn decoded_frontier(&self) -> f64;
             #[must_use]

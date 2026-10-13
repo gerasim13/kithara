@@ -1,4 +1,5 @@
 use kithara_effects::GainDb;
+use kithara_platform::time::Duration;
 
 use super::{RtMetricsSnapshot, SlotMark, SlotState};
 use crate::rt::DeckMixerConfig;
@@ -64,6 +65,8 @@ pub struct SlotSnapshot {
     pub position: f64,
     /// Visible media duration in seconds; `0.0` when unknown.
     pub duration: f64,
+    /// Immutable original source position for interpreting this visible length.
+    pub visible_origin: Option<Duration>,
     /// Decoded-ahead frontier in seconds, never behind `position`.
     pub frontier: f64,
     /// How much of the source is on disk, in seconds.

@@ -178,10 +178,25 @@ pub(super) struct LaneOperation {
     pub(super) applied: Option<bool>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum PlaybackAction {
+    Start,
+    Stop,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum PlaybackQuery {
+    Admission,
+    Receipt,
+}
+
 pub(super) struct PlaybackOperation {
     pub(super) seq: Option<Seq>,
     pub(super) segment: SegmentId,
     pub(super) basis: Vec<(Slot, Option<Seq>)>,
+    pub(super) action: Option<PlaybackAction>,
+    /// The newest applied envelope descendant of this pending transport.
+    pub(super) transparent: Option<Seq>,
 }
 
 pub(super) type SpeedAnswer = (

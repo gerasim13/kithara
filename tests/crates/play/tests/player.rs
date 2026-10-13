@@ -303,8 +303,8 @@ fn player_config_builder() {
     assert_eq!(player.eq_band_count(), 5);
 }
 
-#[kithara::test(tokio)]
-async fn synchronous_player_events_remain_in_order() {
+#[kithara::test]
+fn synchronous_player_events_remain_in_order() {
     let (mut host, player) = player();
     let mut cursor = 0;
     let mut rx = player.subscribe::<PlayerEvent>();
@@ -336,8 +336,8 @@ async fn synchronous_player_events_remain_in_order() {
     );
 }
 
-#[kithara::test(tokio)]
-async fn player_negative_crossfade_duration_clamped() {
+#[kithara::test]
+fn player_negative_crossfade_duration_clamped() {
     let (_host, player) = player();
     let error = player
         .set_crossfade_settings(CrossfadeSettings {

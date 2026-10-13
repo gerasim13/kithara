@@ -544,10 +544,18 @@ async fn atomic_track_id_cas_arm_then_disarm() {
     .expect("arm track three")
     .expect("open sequence");
     let incoming = queue.incoming_index(TrackId(3)).expect("armed track");
-    queue.active.get_mut(incoming).expect("incoming slot").role =
-        Role::Incoming { batch: Some(seq) };
+    queue.active.get_mut(incoming).expect("incoming slot").role = Role::Incoming;
+    queue.pending_handover = Some(super::super::super::types::PendingHandover {
+        seq,
+        item: TrackId(3),
+        reason: crate::AdvanceReason::UserSelect,
+    });
     let ids = queue.track_ids();
-    assert_eq!(queue.navigation.next(&ids, true, false), Some(TrackId(4)));
+    let cursor = queue.navigation_cursor();
+    assert_eq!(
+        queue.navigation.next(&ids, cursor, true, false),
+        Some(TrackId(4))
+    );
     let unrelated = with_outbox(&mut queue, &mut rig, |queue, out| {
         queue.load_track(
             TrackId(4),
@@ -578,12 +586,12 @@ async fn atomic_track_id_cas_arm_then_disarm() {
         "a second arm must not replace the armed track"
     );
     queue
-        .transition_applied(unrelated, SessionFrame::new(384))
+        .transition_applied(unrelated, incoming, SessionFrame::new(384))
         .expect("unrelated receipt");
     assert_eq!(queue.target.map(|target| target.to), Some(TrackId(3)));
     assert_eq!(queue.current, Some(TrackId(2)));
     queue
-        .transition_applied(seq, SessionFrame::new(384))
+        .transition_applied(seq, incoming, SessionFrame::new(384))
         .expect("matching receipt");
     assert_eq!(queue.current, Some(TrackId(3)));
     assert!(queue.target.is_none());
@@ -718,8 +726,13 @@ async fn play_with_a_pending_selection_enters_that_selection() {
             .get(queue.incoming_index(first).expect("incoming first"))
             .expect("slot")
             .role,
-        Role::Incoming { batch: Some(_) }
+        Role::Incoming
     ));
+    assert!(
+        queue
+            .pending_handover
+            .is_some_and(|pending| pending.item == first)
+    );
     answer_deck(&mut queue, &mut rig, SessionFrame::new(128));
     assert_eq!(queue.current, Some(first));
     assert_ne!(queue.current, Some(second));

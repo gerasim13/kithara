@@ -30,7 +30,7 @@ stretch-identity = ["kithara-stretch/stretch-identity", "render"]
 kithara-beat = { workspace = true }
 kithara-bufpool = { workspace = true, optional = true }
 kithara-config = { workspace = true }
-kithara-derive = { workspace = true, features = ["patch"] }
+kithara-derive = { workspace = true, features = ["patch", "ranged"] }
 kithara-dsp = { workspace = true, optional = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }

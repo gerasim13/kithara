@@ -25,6 +25,7 @@ pub(crate) fn commit_outcome<T: StreamType>(
         }
     };
     playhead.land(&kithara_stream::ChunkPosition {
+        visible_origin: None,
         frame_offset,
         end_position_ns: u64::try_from(end_position.as_nanos()).unwrap_or(u64::MAX),
         frames: 0,

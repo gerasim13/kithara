@@ -148,7 +148,19 @@ impl<T: StreamType> StreamAudioSource<T> {
         let transition = prepared.transition();
         match control.promote_variant(transition) {
             VariantPromotion::Promoted => {
+                let previous_revision = self.decode.discontinuity().revision();
+                let previous_resume = self.resume.source_end();
+                let incoming_resume = prepared.resume_head();
                 let outgoing = self.decode.commit_prepared_promotion(prepared);
+                let resume = if self.decode.discontinuity().revision() == previous_revision {
+                    previous_resume
+                } else {
+                    Some(incoming_resume)
+                };
+                self.resume.clear();
+                if let Some(resume) = resume {
+                    self.resume.rebase(resume);
+                }
                 self.waiting_for_source = false;
                 {
                     let emit = &self.emit;

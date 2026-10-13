@@ -27,6 +27,7 @@ use crate::{
             step::tick,
             transition::OutgoingFrontier,
         },
+        gapless::visible_duration,
         rebuild::{RecreateCause, RecreateState},
         seek::{ResumeTarget, emit::commit_outcome},
         stream::shared::SharedStream,
@@ -70,6 +71,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     seek_abr: Option<kithara_abr::AbrHandle>,
     pub(in crate::pipeline::source) failure_logged: bool,
     pub(in crate::pipeline::source) resume: ResumeCursor,
+    duration_reconciled: bool,
     pub(in crate::pipeline::source) shared_stream: SharedStream<T>,
     pub(in crate::pipeline::source) wake: Arc<dyn WorkerWake>,
 }
@@ -103,8 +105,12 @@ pub(in crate::pipeline::source) fn initial_promotion_frontier(
 
 impl<T: StreamType> AudioSource for StreamAudioSource<T> {
     type Chunk = AudioChunk;
-    fn commit_source_end(&mut self, end: crate::SourceEnd, _meta: kithara_signal::AudioChunkInfo) {
-        self.resume.commit_source_end(end);
+    fn commit_source_end(&mut self, end: crate::SourceEnd, meta: kithara_signal::AudioChunkInfo) {
+        if meta.source_revision == self.decode.discontinuity().revision()
+            && meta.visible_origin == self.decode.active().visible_origin()
+        {
+            self.resume.commit_source_end(end);
+        }
         self.release_seek_abr();
     }
     fn discontinuity(&self) -> Option<crate::SourceDiscontinuity> {
@@ -220,12 +226,22 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
             return TrackStep::Blocked(reason);
         }
         self.waiting_for_source = false;
+        if !self.duration_reconciled {
+            let active = self.decode.active();
+            if let Some(duration) = visible_duration(
+                active.decoder().duration(),
+                active.gapless_profile(),
+                self.decode.gapless_mode(),
+            ) && Some(duration) > self.playhead.duration()
+            {
+                self.playhead.set_duration(Some(duration));
+            }
+        }
         let action = tick(
             &mut self.decode,
             DecodeCtx {
                 cursor: &mut self.resume,
                 stream: &self.shared_stream,
-                playhead: self.playhead.as_ref(),
                 emit: Some(&self.emit),
             },
         );
@@ -254,6 +270,31 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
                 }
             }
             DecodeAction::Eof => {
+                if let Some(duration) = self
+                    .decode
+                    .active()
+                    .visible_origin()
+                    .zip(
+                        self.resume
+                            .decoded_end(self.decode.discontinuity().revision()),
+                    )
+                    .and_then(|(origin, end)| {
+                        let duration = end.checked_sub(origin)?;
+                        tracing::debug!(
+                            source_revision = self.decode.discontinuity().revision(),
+                            visible_origin = ?origin,
+                            raw_end = ?end,
+                            visible_duration = ?duration,
+                            decoder_origin = ?self.decode.active().decoder().initial_pcm_position(),
+                            gapless_profile = ?self.decode.active().gapless_profile(),
+                            "refined visible duration at natural EOF"
+                        );
+                        Some(duration)
+                    })
+                {
+                    self.playhead.set_duration(Some(duration));
+                    self.duration_reconciled = true;
+                }
                 self.release_seek_abr();
                 if !matches!(self.phase, OwnerPhase::Failed { .. }) {
                     self.phase = OwnerPhase::AtEof;
@@ -308,6 +349,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             seek_abr: None,
             failure_logged: false,
             resume: ResumeCursor::default(),
+            duration_reconciled: false,
         }
     }
 
@@ -422,6 +464,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 self.decode.gapless_mode(),
             );
             if let Some(target) = landing {
+                generation.seal_visible_origin(self.decode.gapless_mode());
                 generation.notify_seek();
                 match generation.seek(
                     kithara_decode::DecodeResult::from(target)?,
@@ -449,17 +492,24 @@ impl<T: StreamType> StreamAudioSource<T> {
         recreate: RecreateState,
         landing: Option<crate::SourceEnd>,
     ) -> Result<(), DecodeError> {
+        let gapless_mode = self.decode.gapless_mode();
+        self.decode.seal_visible_origin();
         self.abandon_incoming();
         self.shared_stream
             .probe_seek(SeekFrom::Start(recreate.offset))
             .map_err(|source| DecodeError::Io { source })?;
         let reader = self.shared_stream.open_rebuild_reader(recreate.offset);
-        let generation = self.build_generation(
+        let mut generation = self.build_generation(
             reader,
             recreate.media_info,
             recreate.offset,
             landing.map(ResumeTarget::Source),
         )?;
+        if landing.is_some() {
+            generation.retain_visible_origin(self.decode.active().visible_origin());
+        } else {
+            generation.seal_visible_origin(gapless_mode);
+        }
         let old_spec = self.decode.output_spec();
         self.decode
             .prepare_replacement_profile(generation.blender_profile());
@@ -513,6 +563,9 @@ impl<T: StreamType> StreamAudioSource<T> {
         &mut self,
         position: Duration,
     ) -> Result<SeekOutcome, crate::AudioReadError> {
+        if !position.is_zero() {
+            self.decode.seal_visible_origin();
+        }
         if self.seek_abr.is_none()
             && let Some(abr) = self.shared_stream.abr_handle()
         {
@@ -525,9 +578,11 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.resume.clear();
         self.waiting_for_source = false;
         if let Some(duration) = self
-            .playhead
-            .duration()
-            .filter(|duration| position >= *duration)
+            .decode
+            .active()
+            .visible_origin()
+            .and_then(|origin| origin.checked_add(self.playhead.duration()?))
+            .filter(|endpoint| position >= *endpoint)
         {
             let outcome = DecoderSeekOutcome::PastEof { duration };
             commit_outcome(

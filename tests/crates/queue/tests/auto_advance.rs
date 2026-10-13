@@ -675,9 +675,6 @@ async fn gapless_queue_with_an_armed_successor()
     (harness, queue, id_a, id_b)
 }
 
-/// Renders blocks until the one in which the deck stitches in the loud
-/// successor behind the quiet track it plays. The Host ticks the queue only
-/// ahead of a block, so no tick has read the stitch yet.
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn render_through_the_stitch(harness: &OfflinePlayer, block_budget: usize) {
     /// Between `constant_wav_quiet_1_5s` (≈0.1) and `constant_wav_loud_1_5s`
@@ -735,20 +732,17 @@ async fn pausing_at_the_end_takes_back_the_armed_successor_at_once() {
     harness.close().await;
 }
 
-/// The deck hands a gapless successor over on its own. A pause before the
-/// next tick gates the end report, so the queue must follow the deck's
-/// announcement of the successor, not wait for the end.
 #[kithara::test(tokio)]
 async fn a_pause_after_the_deck_stitches_in_the_successor_leaves_the_queue_on_it() {
     /// `constant_wav_*_1_5s`: 1.5 s at 44.1 kHz.
     const TRACK_FRAMES: usize = 66_150;
 
-    let (harness, queue, id_a, id_b) = gapless_queue_with_an_armed_successor().await;
+    let (harness, queue, _id_a, id_b) = gapless_queue_with_an_armed_successor().await;
     render_through_the_stitch(&harness, TRACK_FRAMES / BLOCK_FRAMES).await;
     assert_eq!(
         queue.current().map(|entry| entry.id),
-        Some(id_a),
-        "no tick has read the stitch before the pause"
+        Some(id_b),
+        "the offline Host publishes the native stitch before returning its PCM"
     );
     harness.run(&queue, QueueControl::pause).await;
     let _ = harness.run(&queue, QueueControl::tick).await;
@@ -767,23 +761,20 @@ async fn a_pause_after_the_deck_stitches_in_the_successor_leaves_the_queue_on_it
     harness.close().await;
 }
 
-/// Removing the successor the deck already stitched in, before a tick reads
-/// the stitch, leaves the queue nothing to follow it to: the end of the track
-/// before it advances to the next track the queue holds.
 #[kithara::test(tokio)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
 async fn removing_a_successor_the_deck_already_stitched_in_advances_past_it() {
     /// `constant_wav_*_1_5s`: 1.5 s at 44.1 kHz.
     const TRACK_FRAMES: usize = 66_150;
 
-    let (harness, queue, id_a, id_b) = gapless_queue_with_an_armed_successor().await;
+    let (harness, queue, _id_a, id_b) = gapless_queue_with_an_armed_successor().await;
     let c = assets::constant_wav_four_1_5s();
     let id_c = append_loaded(&harness, &queue, &c).await;
     render_through_the_stitch(&harness, TRACK_FRAMES / BLOCK_FRAMES).await;
     assert_eq!(
         queue.current().map(|entry| entry.id),
-        Some(id_a),
-        "no tick has read the stitch before the removal"
+        Some(id_b),
+        "the offline Host publishes the native stitch before returning its PCM"
     );
     harness
         .run(&queue, move |q| q.remove(id_b))

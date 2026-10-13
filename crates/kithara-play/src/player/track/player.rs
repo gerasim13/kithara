@@ -1,4 +1,4 @@
-use kithara_command::{Sender, Seq, Target, When};
+use kithara_command::{Outcome, Sender, Seq, Target, When};
 use kithara_config::ConfigOwner;
 use kithara_render::{
     LaneCommand,
@@ -68,8 +68,13 @@ impl<S> Player<S> for PlayerImpl<S> {
                 if !staged {
                     self.check_when(at, out)?;
                 }
+                let basis = out.deck_basis(slot, at);
+                let pending_stop = dir == FadeDir::In
+                    && self
+                        .pending_playback_action(slot, basis, PlaybackQuery::Admission)
+                        .is_some_and(|(_, action)| action == PlaybackAction::Stop);
                 let part = match (self.status, dir) {
-                    (TrackStatus::Playing { .. }, _) => DeckPart::Fade {
+                    (TrackStatus::Playing { .. }, _) if !pending_stop => DeckPart::Fade {
                         slot,
                         settings,
                         dir,
@@ -168,7 +173,6 @@ impl<S> Player<S> for PlayerImpl<S> {
                 let adopting = self.adopting.iter().any(|adopt| adopt.seq == seq);
                 let playback = self.playback_commands.iter().position(|operation| {
                     operation.seq == Some(seq)
-                        && operation.segment == self.segment
                         && operation
                             .basis
                             .iter()
@@ -197,7 +201,22 @@ impl<S> Player<S> for PlayerImpl<S> {
                     return Settled::Pending;
                 }
                 if let Some(index) = playback {
-                    self.playback_commands.remove(index);
+                    let operation = self.playback_commands.remove(index);
+                    if matches!(outcome, Outcome::Applied { .. })
+                        && operation.action.is_none()
+                        && let Some(slot) = self.slot
+                        && batch.commands.iter().any(|part| {
+                            matches!(part,
+                            DeckPart::Fade { slot: named, .. } if *named == slot)
+                        })
+                        && let Some((_, basis)) =
+                            operation.basis.iter().find(|(named, _)| *named == slot)
+                        && let Some((ancestor, _)) =
+                            self.pending_playback_action(slot, *basis, PlaybackQuery::Receipt)
+                        && let Some(ancestor) = self.playback_commands.get_mut(ancestor)
+                    {
+                        ancestor.transparent = ancestor.transparent.max(Some(seq));
+                    }
                 }
                 self.observe(out);
                 self.applied(seq, outcome, batch, out)

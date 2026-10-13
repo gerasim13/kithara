@@ -6,8 +6,8 @@ use kithara_render::{
     LoadRequest, ServiceClass,
     bridge::{DeckEvent, DeckPart, DeckProtocol, Slot},
 };
+pub use kithara_signal::Bound;
 use kithara_signal::SessionFrame;
-pub use kithara_sync::Bound;
 
 use crate::{
     DeckEqChange, DeckMixSettings, DeckMixSettingsChange, DeckPass, InterruptionKind, PlayError,

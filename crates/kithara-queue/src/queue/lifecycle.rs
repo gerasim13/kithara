@@ -41,7 +41,7 @@ where
                 index
             }
         };
-        self.navigation.insert(id);
+        self.navigation.insert(id, self.current);
         self.announce(QueueEvent::TrackAdded { id, index });
     }
 
@@ -54,7 +54,10 @@ where
             || output.is_none()
             || self.current.is_some()
             || self.target.is_some()
-            || self.navigation.current().is_some()
+            || self
+                .active
+                .iter()
+                .any(|active| active.role == Role::Current)
         {
             return;
         }
@@ -149,7 +152,7 @@ where
         let order = self.navigation.playback_order();
         self.navigation = NavigationState::new(self.navigation.history_limit());
         self.navigation.set_repeat(repeat);
-        self.navigation.set_playback_order(order, &[]);
+        self.navigation.set_playback_order(order, &[], None);
         for id in ids {
             self.announce(QueueEvent::TrackRemoved { id });
         }
@@ -164,11 +167,28 @@ where
         output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, QueueError> {
+        let reusable_current = self.pending_handover.is_some()
+            && self.current == Some(id)
+            && self
+                .target
+                .is_some_and(|target| !target.auto && target.to == id);
         if let Some(index) = self.active.position(|active| {
-            active.item == id && matches!(active.role, Role::Incoming { .. } | Role::Preloaded)
+            active.item == id
+                && (matches!(active.role, Role::Incoming | Role::Preloaded)
+                    || (reusable_current
+                        && active.role == Role::Current
+                        && matches!(
+                            active.track.snapshot().as_ref().status,
+                            PlayingStatus::Loaded
+                                | PlayingStatus::Paused { .. }
+                                | PlayingStatus::Playing { .. }
+                                | PlayingStatus::Faded { .. }
+                        )))
         }) {
             let active = self.active.get_mut(index).ok_or(QueueError::NotReady(id))?;
-            active.role = role;
+            if active.role != Role::Current {
+                active.role = role;
+            }
             return Ok(active.load.map(LoadState::seq));
         }
         if self
@@ -441,6 +461,9 @@ where
             .indices(|active| {
                 active.track.snapshot().as_ref().status == PlayingStatus::Released
                     && !matches!(active.load, Some(LoadState::Opening(_)))
+                    && self
+                        .pending_handover
+                        .is_none_or(|pending| pending.item != active.item)
             })
             .into_iter()
             .rev()
@@ -742,7 +765,7 @@ mod tests {
             },
         )
         .expect("open queue accepts a track");
-        queue.navigation.select(old, &[old]);
+        queue.current = Some(old);
         let ended = DeckEvent::Ended {
             slot: Slot::new(0),
             at: kithara_signal::SessionFrame::new(0),
@@ -760,7 +783,7 @@ mod tests {
             },
         )
         .expect("open queue accepts a replacement track");
-        queue.navigation.select(replacement, &[replacement]);
+        queue.current = Some(replacement);
         with_outbox(&mut queue, &mut rig, |queue, pass, out| {
             HostedDeck::settle(queue, TrackReceipt::Event(ended), pass, out);
             HostedDeck::tick(queue, pass, out);
@@ -904,13 +927,16 @@ mod tests {
                 .iter()
                 .any(|active| active.item == TrackId(1) && active.role == Role::Preloaded)
         );
-        assert!(queue.active.iter().any(
-            |active| active.item == TrackId(2) && active.role == Role::Incoming { batch: None }
-        ));
+        assert!(
+            queue
+                .active
+                .iter()
+                .any(|active| active.item == TrackId(2) && active.role == Role::Incoming)
+        );
     }
 
     #[kithara::test(tokio)]
-    async fn promote_replaces_waiting_and_cancels_it() {
+    async fn promote_waiting_reuses_its_open_and_preserves_its_claim() {
         let (mut queue, mut rig) = make_queue();
         queue.insert_entry(TrackId(1), "/kithara/missing.wav".into(), Placement::Append);
         let queued = with_outbox(&mut queue, &mut rig, |queue, pass, out| {
@@ -939,10 +965,13 @@ mod tests {
             },
         )
         .expect("select promotes the queued preload");
-        assert!(token.is_cancelled(), "parked attempt must abort");
         assert!(
-            parked.is_cancelled(),
-            "the replaced attempt loses its claim"
+            !token.is_cancelled(),
+            "promotion preserves the original load"
+        );
+        assert!(
+            !parked.is_cancelled(),
+            "the original attempt retains its claim"
         );
         let replacement = queue.tracks.records()[0]
             .load
@@ -953,7 +982,7 @@ mod tests {
             "the promoted attempt owns its claim"
         );
         assert!(!replacement.token().is_cancelled());
-        assert_ne!(promoted, Some(queued));
+        assert_eq!(promoted, Some(queued));
         assert!(queue.incoming_index(TrackId(1)).is_some());
         assert!(
             !queue
@@ -963,21 +992,14 @@ mod tests {
         );
         assert_eq!(
             rig.open(Err(kithara_play::LoadRefusal::Cancelled))
-                .expect("superseded open")
+                .expect("original open")
                 .seq(),
             queued
         );
-        assert_eq!(
-            Some(
-                rig.open(Err(kithara_play::LoadRefusal::Cancelled))
-                    .expect("promoted open")
-                    .seq()
-            ),
-            promoted
-        );
         assert!(
             rig.open(Err(kithara_play::LoadRefusal::Cancelled))
-                .is_none()
+                .is_none(),
+            "promotion must not open another source"
         );
     }
 

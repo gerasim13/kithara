@@ -1,12 +1,12 @@
 use kithara_bufpool::HasPool;
-use kithara_command::{Rejection, Seq, When};
+use kithara_command::{Batch, Outcome, Rejection, Seq};
 use kithara_play::{
-    Bound, FadeDir, Outbox, PlayError, Player, Settled, Track, TrackCommand, TrackFactory,
+    Bound, DeckPart, DeckProtocol, FadeDir, Outbox, PlayError, Player, Settled, TrackFactory,
     TrackStatus as PlayingStatus,
 };
 use kithara_signal::SessionFrame;
 
-use super::super::{Queue, command::play_error, slots::Role};
+use super::super::{Queue, command::play_error, slots::Role, types::Continuation};
 use crate::{AdvanceReason, QueueEvent, TrackStatus};
 
 impl<S, F> Queue<S, F>
@@ -14,142 +14,23 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     F: TrackFactory<S>,
 {
-    /// Step 4: both envelopes, or the gapless chain, share one deck batch.
-    pub(in crate::queue) fn send_transition(
-        &mut self,
-        incoming: usize,
-        frame: SessionFrame,
-        out: &mut Outbox<'_, S>,
-    ) -> Result<Option<Seq>, PlayError> {
-        let target = self.target.ok_or(PlayError::NotReady)?;
-        if out.deck_available() == 0 {
-            return Err(PlayError::Full("deck"));
-        }
-        let slot = self
-            .active
-            .get(incoming)
-            .ok_or(PlayError::NoActiveSlot)?
-            .slot;
-        let replacement = self.active.is_replacement(incoming);
-        let current = self.active_current_index();
-        let outgoing = current.filter(|index| {
-            self.active
-                .get(*index)
-                .is_some_and(|current| current.slot != slot)
-        });
-        let predecessor = current
-            .and_then(|index| self.active.get(index))
-            .filter(|active| {
-                matches!(
-                    active.track.snapshot().as_ref().status,
-                    PlayingStatus::Playing { .. }
-                )
-            })
-            .map(|active| active.slot);
-        let chain = target.auto
-            && (self.config.settings.gapless() || target.settings.duration == 0.0)
-            && predecessor.is_some()
-            && !replacement;
-        let at = When::At(frame);
-        let sent = if chain {
-            self.active
-                .get_mut(incoming)
-                .ok_or(PlayError::NoActiveSlot)?
-                .track
-                .apply(
-                    TrackCommand::PlayAfter {
-                        track: predecessor.ok_or(PlayError::NoActiveSlot)?,
-                    },
-                    out,
-                )?
-        } else {
-            let result = out.together_owned(at, |out| {
-                let active = self
-                    .active
-                    .get_mut(incoming)
-                    .ok_or(PlayError::NoActiveSlot)?;
-                if replacement {
-                    active.track.apply(TrackCommand::Seat { slot, at }, out)?;
-                }
-                active.track.apply(
-                    TrackCommand::Fade {
-                        at,
-                        settings: target.settings,
-                        dir: FadeDir::In,
-                    },
-                    out,
-                )?;
-                if let Some(index) = outgoing {
-                    self.active
-                        .get_mut(index)
-                        .ok_or(PlayError::NoActiveSlot)?
-                        .track
-                        .apply(
-                            TrackCommand::Fade {
-                                at,
-                                settings: target.settings,
-                                dir: FadeDir::Out,
-                            },
-                            out,
-                        )?;
-                }
-                Ok(())
-            });
-            let track = &mut self
-                .active
-                .get_mut(incoming)
-                .ok_or(PlayError::NoActiveSlot)?
-                .track;
-            match result {
-                Ok(((), Some(seq))) => {
-                    track.finish_group(Ok(seq));
-                    if let Some(index) = outgoing {
-                        self.active
-                            .get_mut(index)
-                            .ok_or(PlayError::NoActiveSlot)?
-                            .track
-                            .finish_group(Ok(seq));
-                    }
-                    Some(seq)
-                }
-                Ok(((), None)) => None,
-                Err((error, mut parts)) => {
-                    track.finish_group(Err(&mut parts));
-                    if let Some(index) = outgoing {
-                        self.active
-                            .get_mut(index)
-                            .ok_or(PlayError::NoActiveSlot)?
-                            .track
-                            .finish_group(Err(&mut parts));
-                    }
-                    return Err(error);
-                }
-            }
-        };
-        if let Some(batch) = sent {
-            self.active
-                .get_mut(incoming)
-                .ok_or(PlayError::NoActiveSlot)?
-                .role = Role::Incoming { batch: Some(batch) };
-            if let Some(target) = &mut self.target {
-                target.chained = chain;
-            }
-        }
-        Ok(sent)
-    }
-
     /// Step 5: only the batch that starts the target changes the sounding item.
     pub(in crate::queue) fn transition_applied(
         &mut self,
         seq: Seq,
+        index: usize,
         at: SessionFrame,
     ) -> Result<(), PlayError> {
-        let Some(index) = self
-            .active
-            .position(|active| active.role == (Role::Incoming { batch: Some(seq) }))
-        else {
+        let Some(pending) = self.pending_handover.filter(|pending| {
+            pending.seq == seq
+                && self
+                    .active
+                    .get(index)
+                    .is_some_and(|active| active.item == pending.item)
+        }) else {
             return Ok(());
         };
+        self.pending_handover = None;
         let id = self.active.get(index).ok_or(PlayError::NoActiveSlot)?.item;
         if self.target.is_none_or(|target| target.to != id) {
             if let Some(current) = self.active_current_index() {
@@ -162,22 +43,151 @@ where
                 .get_mut(index)
                 .ok_or(PlayError::NoActiveSlot)?
                 .role = Role::Current;
+            self.navigation
+                .commit(self.current, id, pending.reason, &self.track_ids());
             self.current = Some(id);
             self.tracks.set_status(id, TrackStatus::Consumed);
             self.announce(QueueEvent::CurrentTrackChanged { id: self.current });
             self.announce(QueueEvent::CurrentTrackAdvance {
                 id: self.current,
-                reason: AdvanceReason::NaturalEof,
+                reason: pending.reason,
             });
             return Ok(());
         }
-        self.enter_target(index, at)
+        self.enter_target(index, at, pending.reason)
+    }
+
+    pub(in crate::queue) fn settle_handover(
+        &self,
+        seq: Seq,
+        outcome: &Outcome<DeckProtocol>,
+        batch: &Batch<DeckProtocol>,
+    ) -> Option<(Option<usize>, Settled)> {
+        let pending = self.pending_handover.filter(|pending| pending.seq == seq)?;
+        if self
+            .active
+            .iter()
+            .find(|active| active.item == pending.item)
+            .is_some_and(|active| !batch.basis.iter().any(|&(slot, _)| slot == active.slot))
+        {
+            return None;
+        }
+        let index = self.active.position(|active| {
+            active.item == pending.item
+                && batch.basis.iter().any(|&(slot, _)| slot == active.slot)
+                && batch.commands.iter().any(|part| match part {
+                    DeckPart::Start { slot, .. }
+                    | DeckPart::Chain { to: slot, .. }
+                    | DeckPart::Fade {
+                        slot,
+                        dir: FadeDir::In,
+                        ..
+                    } => *slot == active.slot,
+                    _ => false,
+                })
+        });
+        let settled = match outcome {
+            Outcome::Applied { at, .. } => Settled::Applied { seq, at: *at },
+            Outcome::Rejected(reason) => Settled::Rejected {
+                seq,
+                reason: match reason {
+                    Rejection::Late => Rejection::Late,
+                    Rejection::Stale => Rejection::Stale,
+                    Rejection::Unanswered => Rejection::Unanswered,
+                    Rejection::Refused(reason) => Rejection::Refused(PlayError::Deck(*reason)),
+                },
+            },
+        };
+        Some((index, settled))
+    }
+
+    pub(in crate::queue) fn handover_settled(
+        &mut self,
+        index: Option<usize>,
+        settled: &Settled,
+        out: &mut Outbox<'_, S>,
+    ) -> Result<(), PlayError> {
+        let seq = match settled {
+            Settled::Applied { seq, .. } | Settled::Rejected { seq, .. } => *seq,
+            Settled::Pending => return Ok(()),
+        };
+        if self
+            .pending_handover
+            .is_none_or(|pending| pending.seq != seq)
+        {
+            return Ok(());
+        }
+        let Some(index) = index else {
+            self.pending_handover = None;
+            return Ok(());
+        };
+        if let Settled::Applied { at, .. } = settled {
+            self.transition_applied(seq, index, *at)?;
+            if let Some(target) = self.target.filter(|target| !target.auto)
+                && self.incoming_index(target.to).is_none()
+                && let Some(requested) = self
+                    .active
+                    .position(|active| active.item == target.to && active.role == Role::Outgoing)
+            {
+                self.active
+                    .get_mut(requested)
+                    .ok_or(PlayError::NoActiveSlot)?
+                    .role = Role::Incoming;
+            }
+            return Ok(());
+        }
+        self.pending_handover = None;
+        let item = self.active.get(index).ok_or(PlayError::NoActiveSlot)?.item;
+        if self.target.is_none_or(|target| target.to != item) {
+            if self.current != Some(item) {
+                self.release_track(index, out)?;
+            }
+            return Ok(());
+        }
+        let Settled::Rejected { reason, .. } = settled else {
+            return Ok(());
+        };
+        if matches!(reason, Rejection::Stale)
+            && self.target.is_some_and(|target| target.stale == Some(seq))
+        {
+            if self.target.is_some_and(|target| !target.playing) {
+                if matches!(
+                    self.active
+                        .get(index)
+                        .ok_or(PlayError::NoActiveSlot)?
+                        .track
+                        .snapshot()
+                        .as_ref()
+                        .status,
+                    PlayingStatus::Paused { .. }
+                ) {
+                    self.target.as_mut().ok_or(PlayError::NotReady)?.stale = None;
+                }
+                return Ok(());
+            }
+            let target = self.target.as_mut().ok_or(PlayError::NotReady)?;
+            target.stale = None;
+            target.settings = target.transition.settings(self.config.settings.crossfade());
+            target.continued = Some(Continuation::Entry(seq));
+            return Ok(());
+        }
+        if matches!(reason, Rejection::Late | Rejection::Stale) {
+            let earliest = self.earliest()?;
+            if let Some(target) = &mut self.target {
+                target.continued = Some(Continuation::Entry(seq));
+                target.bound = Some(Bound::AtOrAfter(earliest));
+            }
+            Ok(())
+        } else {
+            self.cancel_target(out).map_err(play_error)
+        }
     }
 
     pub(in crate::queue) fn enter_target(
         &mut self,
         index: usize,
         at: SessionFrame,
+        reason: AdvanceReason,
     ) -> Result<(), PlayError> {
         let target = self.target.ok_or(PlayError::NotReady)?;
         let outgoing = self.active_current_index();
@@ -205,20 +215,19 @@ where
             .ok_or(PlayError::NoActiveSlot)?
             .role = Role::Current;
         self.active.activate_replacement(index);
+        self.navigation
+            .commit(self.current, target.to, reason, &self.track_ids());
         self.current = Some(target.to);
         if crossfading && target.playing && target.settings.duration > 0.0 && !target.chained {
             self.announce(QueueEvent::CrossfadeStarted {
                 settings: target.settings,
             });
         }
-        if target.auto || target.reason == AdvanceReason::InitialLoad {
-            self.navigation.select(target.to, &self.track_ids());
-        }
         self.target = None;
         self.announce(QueueEvent::CurrentTrackChanged { id: self.current });
         self.announce(QueueEvent::CurrentTrackAdvance {
             id: self.current,
-            reason: target.reason,
+            reason,
         });
         self.tracks.set_status(target.to, TrackStatus::Consumed);
         Ok(())
@@ -253,7 +262,7 @@ where
                 } => {
                     if let Some(target) = &mut self.target {
                         target.repeat = None;
-                        target.continued = Some(seq);
+                        target.continued = Some(Continuation::Entry(seq));
                     }
                 }
                 _ => self.cancel_target(out).map_err(play_error)?,
@@ -263,91 +272,39 @@ where
         if active.load.is_some_and(|load| load.seq() == seq) {
             return self.load_settled(index, settled, out);
         }
-        if self.target.is_some_and(|target| target.stale == Some(seq))
-            && matches!(active.role, Role::Incoming { .. })
-        {
-            match settled {
-                Settled::Rejected {
-                    reason: Rejection::Stale,
-                    ..
-                } => {
-                    if self.target.is_some_and(|target| !target.playing) {
-                        self.active
-                            .get_mut(index)
-                            .ok_or(PlayError::NoActiveSlot)?
-                            .role = Role::Incoming { batch: None };
-                        if matches!(
-                            self.active
-                                .get(index)
-                                .ok_or(PlayError::NoActiveSlot)?
-                                .track
-                                .snapshot()
-                                .as_ref()
-                                .status,
-                            PlayingStatus::Paused { .. }
-                        ) {
-                            self.target.as_mut().ok_or(PlayError::NotReady)?.stale = None;
-                        }
-                        return Ok(());
-                    }
-                    let target = self.target.as_mut().ok_or(PlayError::NotReady)?;
-                    target.stale = None;
-                    target.settings = target.transition.settings(self.config.settings.crossfade());
-                    self.active
-                        .get_mut(index)
-                        .ok_or(PlayError::NoActiveSlot)?
-                        .role = Role::Incoming { batch: None };
-                    if let Some(target) = &mut self.target {
-                        target.continued = Some(seq);
-                    }
-                }
-                Settled::Applied { at, .. } => self.transition_applied(seq, *at)?,
-                _ => {
-                    self.cancel_target(out).map_err(play_error)?;
-                }
-            }
-            return Ok(());
-        }
-        if applied
-            && self
-                .target
-                .is_some_and(|target| !target.playing && target.stale.is_some())
-            && active.role == (Role::Incoming { batch: None })
-            && matches!(
-                active.track.snapshot().as_ref().status,
-                PlayingStatus::Paused { .. }
-            )
-        {
-            self.target.as_mut().ok_or(PlayError::NotReady)?.stale = None;
-            return self.enter_target(index, self.earliest()?);
-        }
-        match settled {
-            Settled::Applied { at, .. } => self.transition_applied(seq, *at),
-            Settled::Rejected { reason, .. }
-                if self
-                    .active
-                    .get(index)
-                    .is_some_and(|active| active.role == (Role::Incoming { batch: Some(seq) })) =>
-            {
-                let item = self.active.get(index).ok_or(PlayError::NoActiveSlot)?.item;
-                if self.target.is_none_or(|target| target.to != item) {
-                    return self.release_track(index, out).map(|_| ());
-                }
-                if matches!(reason, Rejection::Late | Rejection::Stale) {
-                    if let Some(active) = self.active.get_mut(index) {
-                        active.role = Role::Incoming { batch: None };
-                    }
-                    let earliest = self.earliest()?;
-                    if let Some(target) = &mut self.target {
-                        target.continued = Some(seq);
-                        target.bound = Some(Bound::AtOrAfter(earliest));
-                    }
+        let continued_pause = active.role == Role::Incoming
+            && self.target.is_some_and(|target| {
+                !target.playing
+                    && target.to == active.item
+                    && target.continued == Some(Continuation::Pause(seq))
+            });
+        let paused = matches!(
+            active.track.snapshot().as_ref().status,
+            PlayingStatus::Paused { .. }
+        );
+        if continued_pause {
+            self.target.as_mut().ok_or(PlayError::NotReady)?.continued = None;
+            if let Settled::Rejected { reason, .. } = settled {
+                return if matches!(reason, Rejection::Late | Rejection::Stale) {
                     Ok(())
                 } else {
                     self.cancel_target(out).map_err(play_error)
-                }
+                };
             }
-            _ => Ok(()),
         }
+        if applied
+            && self.target.is_some_and(|target| {
+                !target.playing
+                    && target.to == active.item
+                    && (target.stale.is_some() || continued_pause)
+            })
+            && active.role == Role::Incoming
+            && paused
+        {
+            self.target.as_mut().ok_or(PlayError::NotReady)?.stale = None;
+            let reason = self.target.ok_or(PlayError::NotReady)?.reason;
+            return self.enter_target(index, self.earliest()?, reason);
+        }
+        Ok(())
     }
 }

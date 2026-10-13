@@ -67,6 +67,29 @@ impl Transition {
     }
 }
 
+/// The submitted entry keeps its original item when a new target replaces it.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PendingHandover {
+    pub(super) seq: Seq,
+    pub(super) item: TrackId,
+    pub(super) reason: AdvanceReason,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Continuation {
+    Load(Seq),
+    Entry(Seq),
+    Pause(Seq),
+}
+
+impl Continuation {
+    pub(super) fn seq(self) -> Seq {
+        match self {
+            Self::Load(seq) | Self::Entry(seq) | Self::Pause(seq) => seq,
+        }
+    }
+}
+
 /// The transition the queue carries out, and why.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Target {
@@ -80,9 +103,18 @@ pub(super) struct Target {
     pub(super) auto: bool,
     /// The withdrawn transition whose stale receipt permits recomputation.
     pub(super) stale: Option<Seq>,
-    pub(super) continued: Option<Seq>,
+    pub(super) continued: Option<Continuation>,
     pub(super) repeat: Option<Seq>,
     pub(super) chained: bool,
+}
+
+impl Target {
+    pub(super) fn set_playing(&mut self, playing: bool) {
+        if self.playing != playing {
+            self.continued = None;
+        }
+        self.playing = playing;
+    }
 }
 
 /// Where a new track should land in the queue's internal `Vec`.

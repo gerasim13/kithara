@@ -71,9 +71,9 @@ pub enum SeekOutcome {
         target: Duration,
         landed_at: Duration,
     },
-    /// Seek target was past the reader's `duration()`. Reader is
-    /// parked at the end; the next `read()` / `next_chunk()` call
-    /// returns `Eof`.
+    /// Reader is parked at its exclusive absolute source endpoint.
+    /// `duration` is that endpoint; the visible media length is reported separately.
+    /// The next `read()` or `next_chunk()` returns `Eof`.
     PastEof {
         target: Duration,
         duration: Duration,

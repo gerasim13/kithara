@@ -76,6 +76,8 @@ pub(crate) struct AppleCodec {
     source_sample_rate: u32,
     source_frames_seen: u64,
     output_frames_seen: u64,
+    output_origin: Option<Duration>,
+    decoded_pts: Option<Duration>,
 }
 
 impl AppleCodec {
@@ -112,6 +114,16 @@ impl AppleCodec {
             return Ok(0);
         }
 
+        let decoded_pts = self
+            .output_origin
+            .map(|origin| {
+                origin
+                    .checked_add(self.spec.duration_for(self.output_frames_seen)?)
+                    .ok_or(DecodeError::InvalidData {
+                        detail: "Apple PCM output timestamp overflows",
+                    })
+            })
+            .transpose()?;
         let channels = usize::from(self.spec.channels);
         let needed_samples = output_sample_capacity(target_frames, channels)?;
         out.ensure_len(needed_samples)?;
@@ -138,6 +150,9 @@ impl AppleCodec {
         }
 
         let frames = output_packets;
+        if frames != 0 {
+            self.decoded_pts = decoded_pts;
+        }
         self.output_frames_seen = self.output_frames_seen.saturating_add(u64::from(frames));
         let samples_len = output_sample_capacity(frames, channels)?;
         out.truncate(samples_len);
@@ -213,6 +228,8 @@ impl AppleCodec {
             tail_compensation_enabled: output_sample_rate != track.sample_rate,
             source_frames_seen: 0,
             output_frames_seen: 0,
+            output_origin: None,
+            decoded_pts: None,
         })
     }
 
@@ -283,7 +300,7 @@ impl FrameCodec for AppleCodec {
     fn decode_frame(
         &mut self,
         frame_data: &[u8],
-        _pts: Duration,
+        pts: Duration,
         packet_desc: &[u8],
         out: &mut SampleBuffer,
     ) -> DecodeResult<u32> {
@@ -312,6 +329,10 @@ impl FrameCodec for AppleCodec {
             });
         }
 
+        if self.codec == AudioCodec::Mp3 && self.output_origin.is_none() {
+            self.output_origin = Some(pts);
+            self.decoded_pts = Some(pts);
+        }
         let input_frames = if self.input_bytes_per_packet > 0 {
             let packets = frame_data.len() / usize::try_from(self.input_bytes_per_packet)?;
             let frames =
@@ -336,6 +357,10 @@ impl FrameCodec for AppleCodec {
         Ok(frames)
     }
 
+    fn decoded_pts(&self) -> Option<Duration> {
+        self.decoded_pts
+    }
+
     fn decoder_algo_delay(&self, codec: AudioCodec) -> u64 {
         apple_decoder_algo_delay(codec)
     }
@@ -352,6 +377,8 @@ impl FrameCodec for AppleCodec {
         self.eof_drained = false;
         self.source_frames_seen = 0;
         self.output_frames_seen = 0;
+        self.output_origin = None;
+        self.decoded_pts = None;
         self.tail_compensation_enabled = false;
         self.track_info.gapless_tail = None;
         Ok(())

@@ -583,6 +583,8 @@ pub(super) fn mapped_signal(
     let meta = AudioChunkInfo {
         spec: spec(),
         frame_offset: *source,
+        visible_origin: Some(Duration::ZERO),
+        source_revision: 7,
         timestamp: duration(f64::from(
             u32::try_from(*source).expect("test source frame fits u32"),
         )),
@@ -690,6 +692,8 @@ fn every_engine_publishes_its_output_source_mapping(#[case] backend: StretchKind
     for budget in [3, 7, 11, 1, 29] {
         let output = mapped_render(&mut renderer, &mut source, budget);
         assert!(output.frames() <= budget);
+        assert_eq!(output.meta.visible_origin, Some(Duration::ZERO));
+        assert_eq!(output.meta.source_revision, 7);
         assert_positions(&output, output_frame, frame_f64);
         output_frame += output.frames();
     }
@@ -1144,6 +1148,8 @@ fn eof_drain_obeys_each_output_budget_and_keeps_mapping(#[case] backend: Stretch
     let mut source = 0;
     let output = mapped_render(&mut renderer, &mut source, 31);
     assert_eq!(output.frames(), 31);
+    assert_eq!(output.meta.visible_origin, Some(Duration::ZERO));
+    assert_eq!(output.meta.source_revision, 7);
     assert_positions(&output, 0, |frame| frame_f64(frame) * 0.5);
     renderer.prepare(spec());
     assert!(renderer.drain(0).expect("zero budget").is_none());
@@ -1154,6 +1160,8 @@ fn eof_drain_obeys_each_output_budget_and_keeps_mapping(#[case] backend: Stretch
             break;
         };
         assert!(output.frames() <= budget);
+        assert_eq!(output.meta.visible_origin, Some(Duration::ZERO));
+        assert_eq!(output.meta.source_revision, 7);
         assert_positions(&output, frame, |frame| frame_f64(frame) * 0.5);
         frame += output.frames();
     }

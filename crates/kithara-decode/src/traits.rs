@@ -188,6 +188,14 @@ pub trait Decoder: Send + 'static {
         AudioCodec::encoder_priming_frames(codec)
     }
 
+    /// Original PCM timeline position observed before a nonzero seek.
+    ///
+    /// This position remains stable across seeks. `None` means the original
+    /// PCM position has not been observed; sought output must not supply it.
+    fn initial_pcm_position(&self) -> Option<Duration> {
+        None
+    }
+
     /// Get total duration from track metadata.
     ///
     /// Returns `None` if duration cannot be determined.

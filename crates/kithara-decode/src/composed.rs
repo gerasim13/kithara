@@ -59,6 +59,8 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec, S> {
     head_strip: HeadStrip,
     byte_len_handle: Option<Arc<AtomicU64>>,
     duration: Option<Duration>,
+    initial_pcm_position: Option<Duration>,
+    observing_initial_pcm: bool,
     /// Reader-side event sink. Single-owner `Box<dyn ReaderEventSink>` —
     /// `None` skips emission entirely; `Some(_)` calls `on_chunk` /
     /// `on_seek` directly via `&mut` after the inner outcome resolves.
@@ -116,6 +118,8 @@ where
             codec,
             spec,
             duration,
+            initial_pcm_position: None,
+            observing_initial_pcm: true,
             pools: runtime.pools,
             output: None,
             prefill: Prefill::Needed,
@@ -143,6 +147,10 @@ where
         timestamp: Duration,
         source_bytes: u64,
     ) -> AudioChunk {
+        if self.observing_initial_pcm {
+            self.initial_pcm_position = Some(timestamp);
+            self.observing_initial_pcm = false;
+        }
         let live_spec = self.codec.spec();
         self.spec = live_spec;
 
@@ -214,6 +222,7 @@ where
             self.output = Some(Ok(buf));
             return Ok(DecoderChunkOutcome::Eof);
         }
+        let timestamp = self.codec.decoded_pts().unwrap_or(timestamp);
         let chunk = self.build_chunk(buf, frames, timestamp, 0);
         Ok(DecoderChunkOutcome::Chunk(Box::new(chunk)))
     }
@@ -414,6 +423,10 @@ where
         self.duration
     }
 
+    fn initial_pcm_position(&self) -> Option<Duration> {
+        self.initial_pcm_position
+    }
+
     fn flush_reader_signals(&mut self) {
         if let Some(hooks) = self.hooks.as_mut() {
             hooks.flush();
@@ -470,6 +483,9 @@ where
     }
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        if !pos.is_zero() {
+            self.observing_initial_pcm = false;
+        }
         let outcome = self.seek_inner(pos)?;
         self.prefill = Prefill::Needed;
         self.emit_seek_signal(&outcome);
@@ -942,14 +958,23 @@ mod test_stub_codec {
     }
 
     impl FrameCodec for LaggedQueueCodec {
+        fn needs_eof_drain(&self, _source_rate: u32) -> bool {
+            true
+        }
+
         fn decode_frame(
             &mut self,
-            _bytes: &[u8],
+            bytes: &[u8],
             pts: Duration,
             _packet_desc: &[u8],
             out: &mut SampleBuffer,
         ) -> DecodeResult<u32> {
-            let Some(decoded_pts) = self.pending_pts.replace(pts) else {
+            let pending = if bytes.is_empty() {
+                self.pending_pts.take()
+            } else {
+                self.pending_pts.replace(pts)
+            };
+            let Some(decoded_pts) = pending else {
                 out.clear();
                 return Ok(0);
             };
@@ -1283,6 +1308,58 @@ mod seek_trim_tests {
         reset_demuxer_seek!(idx = 0);
     }
 
+    #[kithara::test]
+    #[case::original_observed(true)]
+    #[case::seek_before_original(false)]
+    fn initial_pcm_position_never_adopts_a_sought_suffix(
+        trim_silence: Vec<f32>,
+        zero_packet: &'static [u8],
+        #[case] observe_original: bool,
+    ) {
+        let spec = test_spec(consts::SAMPLE_RATE);
+        let first = Duration::from_millis(700);
+        let suffix = Duration::from_secs(2);
+        let demuxer = BoundaryFrameDemuxer {
+            track: empty_track(),
+            frames: vec![
+                BoundaryFrame {
+                    pts: first,
+                    duration: packet_duration(),
+                },
+                BoundaryFrame {
+                    pts: suffix,
+                    duration: packet_duration(),
+                },
+            ],
+            held: zero_packet.to_vec(),
+            idx: 0,
+        };
+        let codec = CountingCodec::new(trim_silence, spec, consts::PACKET_FRAMES);
+        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+        assert_eq!(decoder.initial_pcm_position(), None);
+        if observe_original {
+            let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("original PCM")
+            else {
+                panic!("original PCM chunk");
+            };
+            assert_eq!(chunk.meta.timestamp, first);
+            assert_eq!(chunk.meta.frames, consts::PACKET_FRAMES);
+            assert_eq!(chunk.frames(), consts::PACKET_FRAMES as usize);
+            assert_eq!(decoder.initial_pcm_position(), Some(first));
+        }
+        decoder.seek(suffix).expect("nonzero seek");
+        let DecoderChunkOutcome::Chunk(chunk) = decoder.next_chunk().expect("sought PCM") else {
+            panic!("sought PCM chunk");
+        };
+        assert_eq!(chunk.meta.timestamp, suffix);
+        assert_eq!(chunk.meta.frames, consts::PACKET_FRAMES);
+        assert_eq!(chunk.frames(), consts::PACKET_FRAMES as usize);
+        assert_eq!(
+            decoder.initial_pcm_position(),
+            observe_original.then_some(first)
+        );
+    }
+
     fn empty_track() -> TrackInfo {
         track_with_rate(consts::SAMPLE_RATE)
     }
@@ -1482,6 +1559,59 @@ mod seek_trim_tests {
     }
 
     #[kithara::test]
+    #[case::replay_original_head(0, 10, 480)]
+    #[case::seek_inside_the_first_granule(15, 15, 240)]
+    fn a_seek_landing_at_zero_preserves_the_observed_pcm_head_and_sought_suffix(
+        trim_silence: Vec<f32>,
+        zero_packet: &'static [u8],
+        #[case] requested_millis: u64,
+        #[case] output_millis: u64,
+        #[case] frames: u32,
+    ) {
+        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
+        let codec = CountingCodec::new(trim_silence, spec, 480);
+        let demuxer = BoundaryFrameDemuxer {
+            track: track_with_rate(48_000),
+            held: zero_packet.to_vec(),
+            idx: 0,
+            frames: vec![BoundaryFrame {
+                pts: Duration::ZERO,
+                duration: Duration::from_millis(20),
+            }],
+        };
+        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+        let DecoderChunkOutcome::Chunk(original) = decoder.next_chunk().expect("original PCM")
+        else {
+            panic!("original PCM chunk");
+        };
+        assert_eq!(original.meta.timestamp, Duration::from_millis(10));
+        assert_eq!(original.meta.frames, 480);
+        assert_eq!(
+            decoder.initial_pcm_position(),
+            Some(Duration::from_millis(10))
+        );
+        let outcome = decoder
+            .seek(Duration::from_millis(requested_millis))
+            .expect("granule seek");
+        assert!(matches!(
+            outcome,
+            DecoderSeekOutcome::Landed { landed_at, landed_frame: 0, .. }
+            if landed_at.is_zero()
+        ));
+        let DecoderChunkOutcome::Chunk(sought) = decoder.next_chunk().expect("sought PCM") else {
+            panic!("sought PCM chunk");
+        };
+        assert_eq!(sought.meta.timestamp, Duration::from_millis(output_millis));
+        assert_eq!(sought.meta.frame_offset, output_millis * 48);
+        assert_eq!(sought.meta.frames, frames);
+        assert_eq!(sought.samples.len(), frames as usize * 2);
+        assert_eq!(
+            decoder.initial_pcm_position(),
+            Some(Duration::from_millis(10))
+        );
+    }
+
+    #[kithara::test]
     fn fully_trimmed_seek_packet_is_dropped_before_target_chunk(
         trim_silence: Vec<f32>,
         zero_packet: &'static [u8],
@@ -1527,6 +1657,53 @@ mod seek_trim_tests {
         );
         assert_eq!(chunk.meta.frame_offset, u64::from(PACKET_FRAMES));
         assert_eq!(chunk.meta.timestamp, target);
+    }
+
+    #[kithara::test]
+    fn delayed_codec_eof_keeps_the_last_pcm_presentation_time(
+        trim_silence: Vec<f32>,
+        zero_packet: &'static [u8],
+    ) {
+        const FRAME_FRAMES: u32 = 882;
+        let first = Duration::from_millis(700);
+        let last = Duration::from_secs(1);
+        let spec = test_spec(44_100);
+        let codec = LaggedQueueCodec::new(trim_silence, spec, FRAME_FRAMES);
+        let demuxer = BoundaryFrameDemuxer {
+            track: empty_track(),
+            frames: vec![
+                BoundaryFrame {
+                    pts: first,
+                    duration: Duration::from_millis(20),
+                },
+                BoundaryFrame {
+                    pts: last,
+                    duration: Duration::from_millis(20),
+                },
+            ],
+            held: zero_packet.to_vec(),
+            idx: 0,
+        };
+        let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+        let DecoderChunkOutcome::Chunk(head) = decoder.next_chunk().expect("delayed head") else {
+            panic!("delayed head must emit PCM");
+        };
+        assert_eq!(head.meta.timestamp, first);
+        assert_eq!(head.meta.frames, FRAME_FRAMES);
+        assert_eq!(decoder.initial_pcm_position(), Some(first));
+        let DecoderChunkOutcome::Chunk(tail) = decoder.next_chunk().expect("delayed EOF tail")
+        else {
+            panic!("EOF must release the held last packet");
+        };
+        assert_eq!(tail.meta.timestamp, last);
+        assert_eq!(tail.meta.frame_offset, 44_100);
+        assert_eq!(tail.meta.frames, FRAME_FRAMES);
+        assert_eq!(tail.samples.len(), FRAME_FRAMES as usize);
+        assert_eq!(decoder.initial_pcm_position(), Some(first));
+        assert!(matches!(
+            decoder.next_chunk().expect("drained EOF"),
+            DecoderChunkOutcome::Eof
+        ));
     }
 
     #[kithara::test]

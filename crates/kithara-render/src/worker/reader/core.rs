@@ -62,7 +62,6 @@ pub struct PcmReceiver {
     pub(super) ready: Option<Arc<ThreadGate>>,
     pub(super) wake: StreamWake,
     pub(super) spec: AudioSpec,
-    pub(super) duration: Option<Duration>,
     pub(super) playhead: Arc<dyn PlayheadRead>,
     pub(super) position: Duration,
     pub(super) frontier: Duration,
@@ -93,7 +92,6 @@ impl PcmReceiver {
                 ready: ready.clone(),
                 wake,
                 spec: audio.spec(),
-                duration: audio.duration(),
                 playhead: audio.playhead_read(),
                 position,
                 frontier: position,
@@ -116,14 +114,22 @@ impl PcmReceiver {
         self.spec
     }
 
+    delegate::delegate! {
+        to self.playhead {
+            #[must_use]
+            pub fn duration(&self) -> Option<Duration>;
+            #[must_use]
+            #[call(cached)]
+            pub fn cached_span(&self) -> Duration;
+        }
+    }
+
+    /// Original visible source position published by the decoded-source owner.
     #[must_use]
-    pub fn duration(&self) -> Option<Duration> {
-        match self.forward.last() {
-            Some(PcmPacket::Chunk(chunk)) if chunk.meta.end_of_track => chunk
-                .meta
-                .source_span
-                .and_then(|span| span.position_at(span.output_frames())),
-            _ => self.duration,
+    pub fn visible_origin(&self) -> Option<Duration> {
+        match self.forward.try_peek()? {
+            PcmPacket::Chunk(chunk) => chunk.meta.visible_origin,
+            PcmPacket::Failed { .. } => None,
         }
     }
 
@@ -156,11 +162,6 @@ impl PcmReceiver {
                 .unwrap_or(self.frontier),
             _ => self.frontier,
         }
-    }
-
-    #[must_use]
-    pub fn cached_span(&self) -> Duration {
-        self.playhead.cached()
     }
 
     #[must_use]
@@ -234,9 +235,6 @@ impl PcmReceiver {
                 .and_then(|span| span.position_at(span.output_frames()))
             {
                 self.frontier = position;
-                if chunk.meta.end_of_track {
-                    self.duration = Some(position);
-                }
             }
         }
         packet
@@ -267,7 +265,7 @@ impl fmt::Debug for PcmReceiver {
         formatter
             .debug_struct("PcmReceiver")
             .field("spec", &self.spec)
-            .field("duration", &self.duration)
+            .field("duration", &self.duration())
             .field("position", &self.position)
             .finish_non_exhaustive()
     }

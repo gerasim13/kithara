@@ -21,7 +21,9 @@ impl ActiveDecode {
         }
         let incoming_profile = prepared.generation.blender_profile();
         if self.active.blender_profile().spec() != incoming_profile.spec()
-            || self.active.timeline_origin(self.gapless_mode())
+            || !self.active.has_same_source_basis(&prepared.generation)
+            || self.active.visible_origin() != prepared.generation.visible_origin()
+            || self.active.comparison_origin(self.gapless_mode())
                 != incoming_origin(&self.active, &prepared.generation, self.gapless_mode())
         {
             self.discontinuity_revision = self.discontinuity_revision.wrapping_add(1);
@@ -43,8 +45,13 @@ impl ActiveDecode {
             return false;
         };
         let gapless_mode = self.gapless_mode();
-        let outgoing_origin = self.active.timeline_origin(gapless_mode);
-        let incoming_origin = incoming_origin(&self.active, generation, gapless_mode);
+        let Some((outgoing_origin, incoming_origin)) = self
+            .active
+            .comparison_origin(gapless_mode)
+            .zip(incoming_origin(&self.active, generation, gapless_mode))
+        else {
+            return false;
+        };
         matches!(
             promotion_readiness(
                 &self.active,
@@ -61,7 +68,7 @@ impl ActiveDecode {
     /// A finished incoming may trim to an empty tail: the end-of-track hard cut proves nothing
     /// exists past the cut, and an empty tail is exactly consistent with that proof.
     pub(crate) fn prepare_promotion(&mut self) -> Option<PreparedPromotion> {
-        let (transition, span) = {
+        let (transition, span, incoming_end) = {
             let IncomingDecode::Priming {
                 transition,
                 generation,
@@ -71,8 +78,8 @@ impl ActiveDecode {
                 return None;
             };
             let gapless_mode = self.gapless_mode();
-            let outgoing_origin = self.active.timeline_origin(gapless_mode);
-            let incoming_origin = incoming_origin(&self.active, generation, gapless_mode);
+            let outgoing_origin = self.active.comparison_origin(gapless_mode)?;
+            let incoming_origin = incoming_origin(&self.active, generation, gapless_mode)?;
             let PromotionReadiness::Ready(span) = promotion_readiness(
                 &self.active,
                 &self.blender,
@@ -83,7 +90,15 @@ impl ActiveDecode {
             ) else {
                 return None;
             };
-            (*transition, span)
+            let last = generation.staged.back()?.meta;
+            let incoming_end = last.source_span.map_or_else(
+                || crate::SourceEnd::new(last.frame_range().end, last.spec.sample_rate),
+                |span| {
+                    crate::SourceEnd::new(span.end(), span.sample_rate())
+                        .with_mapping_revision(span.mapping_revision())
+                },
+            );
+            (*transition, span, incoming_end)
         };
         let IncomingDecode::Priming { mut generation, .. } = self.incoming.take()? else {
             return None;
@@ -118,8 +133,18 @@ impl ActiveDecode {
                 "BUG: a minted incoming promotion lost its proven outgoing PCM"
             );
         }
+        let resume_head = generation.staged.front().map_or(incoming_end, |first| {
+            first.meta.source_span.map_or_else(
+                || crate::SourceEnd::new(first.meta.frame_offset, first.meta.spec.sample_rate),
+                |span| {
+                    crate::SourceEnd::new(span.start(), span.sample_rate())
+                        .with_mapping_revision(span.mapping_revision())
+                },
+            )
+        });
         Some(PreparedPromotion {
             generation,
+            resume_head,
             transition,
             join: span.join,
         })
@@ -165,8 +190,13 @@ impl ActiveDecode {
             return false;
         }
         let gapless_mode = self.gapless_mode();
-        let outgoing_origin = self.active.timeline_origin(gapless_mode);
-        let incoming_origin = incoming_origin(&self.active, generation, gapless_mode);
+        let Some((outgoing_origin, incoming_origin)) = self
+            .active
+            .comparison_origin(gapless_mode)
+            .zip(incoming_origin(&self.active, generation, gapless_mode))
+        else {
+            return false;
+        };
         !matches!(
             promotion_readiness(
                 &self.active,

@@ -243,9 +243,14 @@ fn a_speed_change_on_the_current_track_withdraws_a_sent_automatic_transition(#[c
     let (mut queue, incoming, _) = selected_second();
     let batch = fixture_seq();
     let receiver = queue.active.get_mut(0).expect("incoming");
-    receiver.role = Role::Incoming { batch: Some(batch) };
+    receiver.role = Role::Incoming;
     receiver.track.0.status = PlayerTrackStatus::Loaded;
     receiver.track.0.lane_room = 4;
+    queue.pending_handover = Some(super::super::super::types::PendingHandover {
+        seq: batch,
+        item: incoming,
+        reason: crate::AdvanceReason::NaturalEof,
+    });
     queue.active.get_mut(1).expect("current").track.0.lane_room = 4;
     queue.target = Some(super::super::super::types::Target {
         to: incoming,
@@ -694,8 +699,7 @@ fn should_arm_crossfade_cases(
         role: Role::Preloaded,
         load: Some(crate::queue::slots::LoadState::Opening(fixture_seq())),
     });
-    let track_ids = queue.track_ids();
-    queue.navigation.select(current, &track_ids);
+    queue.current = Some(current);
     if armed_for_current == Some(true) {
         queue.target = Some(crate::queue::types::Target {
             to: incoming,

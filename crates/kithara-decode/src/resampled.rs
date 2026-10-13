@@ -56,6 +56,8 @@ where
     reanchor_output_on_next_chunk: bool,
     emitted_frames: u64,
     output_frame_offset: u64,
+    initial_pcm_position: Option<Duration>,
+    observing_initial_pcm: bool,
     source_frames_seen: u64,
     output_skip_frames: usize,
 }
@@ -72,6 +74,10 @@ where
     ) -> DecodeResult<Self> {
         let source_spec = decoder.spec();
         let target_spec = AudioSpec::new(source_spec.channels, config.target_sample_rate);
+        let initial_pcm_position = decoder
+            .initial_pcm_position()
+            .map(|position| target_spec.duration_for(target_spec.frame_at(position)?))
+            .transpose()?;
         let resampler = build_resampler(
             config.backend.clone(),
             source_spec,
@@ -90,10 +96,12 @@ where
             last_input_meta: None,
             output: PlanarBuffer::new(pools, target_spec, empty)?,
             output_frame_offset: 0,
+            initial_pcm_position,
+            observing_initial_pcm: true,
             output_skip_frames: resampler.output_delay(),
             pending_meta: None,
             pools: pools.clone(),
-            reanchor_output_on_next_chunk: false,
+            reanchor_output_on_next_chunk: true,
             resampler,
             scratch: PlanarBuffer::new(pools, target_spec, empty)?,
             source_frames_seen: 0,
@@ -109,11 +117,13 @@ where
             self.rebuild_for_source_spec(spec)?;
         }
         if source_spec_changed || self.reanchor_output_on_next_chunk {
-            self.output_frame_offset = self
-                .target_spec
-                .frame_at(chunk.meta.timestamp)
-                .unwrap_or(u64::MAX);
+            self.output_frame_offset = self.target_spec.frame_at(chunk.meta.timestamp)?;
             self.reanchor_output_on_next_chunk = false;
+            if self.observing_initial_pcm {
+                self.initial_pcm_position =
+                    Some(self.target_spec.duration_for(self.output_frame_offset)?);
+                self.observing_initial_pcm = false;
+            }
         }
         if self.pending_meta.is_none() {
             self.pending_meta = Some(chunk.meta);
@@ -390,7 +400,14 @@ where
         }
     }
 
+    fn initial_pcm_position(&self) -> Option<Duration> {
+        self.initial_pcm_position
+    }
+
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
+        if !pos.is_zero() {
+            self.observing_initial_pcm = false;
+        }
         let outcome = self.decoder.seek(pos)?;
         self.reset_resampler_state();
         match outcome {
@@ -510,4 +527,300 @@ fn round_scaled_frames(count: u64, source_rate: u32, target_rate: u32) -> Decode
 
 fn round_scaled_frames_lossy(count: u64, source_rate: u32, target_rate: u32) -> u64 {
     round_scaled_frames(count, source_rate, target_rate).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod origin_tests {
+    #[cfg(feature = "resample-rubato")]
+    use kithara_resampler::rubato::RubatoBackend;
+    use kithara_resampler::{ResamplerBuildError, ResamplerCapabilities, ResamplerError};
+    use kithara_stream::PrerollHint;
+
+    use super::*;
+    use crate::test_pools::{Pools, pools, sample_buffer};
+
+    #[derive(Clone)]
+    struct DoubleBackend;
+
+    struct DoubleResampler {
+        mode: ResamplerMode,
+    }
+
+    impl ResamplerBackend for DoubleBackend {
+        type Resampler = DoubleResampler;
+
+        fn build<S>(
+            &self,
+            settings: &ResamplerSettings<S>,
+        ) -> Result<Self::Resampler, ResamplerBuildError>
+        where
+            S: HasPool<f32>,
+        {
+            assert_eq!(settings.channels, NonZeroUsize::MIN);
+            assert!(matches!(settings.mode, ResamplerMode::FixedRatio {
+                source_sample_rate, target_sample_rate,
+            } if source_sample_rate.get() == 1_000 && target_sample_rate.get() == 2_000));
+            Ok(DoubleResampler {
+                mode: settings.mode,
+            })
+        }
+        fn capabilities(&self) -> ResamplerCapabilities {
+            ResamplerCapabilities::FIXED_RATIO | ResamplerCapabilities::STANDALONE
+        }
+        fn name(&self) -> &'static str {
+            "double-fixture"
+        }
+    }
+
+    impl Resampler for DoubleResampler {
+        fn capabilities(&self) -> ResamplerCapabilities {
+            ResamplerCapabilities::FIXED_RATIO | ResamplerCapabilities::STANDALONE
+        }
+        fn channels(&self) -> NonZeroUsize {
+            NonZeroUsize::MIN
+        }
+        fn input_frames_max(&self) -> usize {
+            4
+        }
+        fn input_frames_next(&self) -> usize {
+            4
+        }
+        fn mode(&self) -> ResamplerMode {
+            self.mode
+        }
+        fn output_frames_for_input(&self, frames: usize) -> usize {
+            frames * 2
+        }
+        fn output_frames_max(&self) -> usize {
+            8
+        }
+        fn output_frames_next(&self) -> usize {
+            8
+        }
+        fn process_into_buffer(
+            &mut self,
+            input: &[&[f32]],
+            output: &mut [&mut [f32]],
+        ) -> Result<ResamplerProcess, ResamplerError> {
+            for (value, pair) in input[0].iter().zip(output[0].chunks_exact_mut(2)) {
+                pair.fill(*value);
+            }
+            Ok(ResamplerProcess::new(4, 8))
+        }
+        fn reset(&mut self) {}
+    }
+
+    struct OffsetDecoder {
+        origin: u64,
+        next_frame: u64,
+        reports_origin: bool,
+        pools: Pools,
+    }
+
+    impl Decoder for OffsetDecoder {
+        fn initial_pcm_position(&self) -> Option<Duration> {
+            self.reports_origin
+                .then(|| Duration::from_millis(self.origin))
+        }
+        fn duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(60))
+        }
+        fn spec(&self) -> AudioSpec {
+            AudioSpec::new(1, NonZeroU32::new(1_000).expect("source rate"))
+        }
+        fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+            let end = self.origin + 1_000;
+            if self.next_frame == end {
+                return Ok(DecoderChunkOutcome::Eof);
+            }
+            let start = self.next_frame;
+            let frames = (end - start).min(64);
+            self.next_frame += frames;
+            let samples: Vec<_> = (start..self.next_frame)
+                .map(|at| {
+                    f32::from(u16::try_from(at - self.origin).expect("fixture frame fits u16"))
+                        / 2_000.0
+                })
+                .collect();
+            Ok(DecoderChunkOutcome::Chunk(Box::new(AudioChunk::new(
+                AudioChunkInfo {
+                    spec: self.spec(),
+                    frames: u32::try_from(frames).expect("bounded physical PCM"),
+                    frame_offset: start,
+                    timestamp: self.spec().duration_for(start)?,
+                    end_timestamp: self.spec().duration_for(self.next_frame)?,
+                    ..AudioChunkInfo::default()
+                },
+                sample_buffer(&self.pools, &samples),
+            ))))
+        }
+        fn seek(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
+            let frame = self.spec().frame_at(position)?.max(self.origin);
+            assert!((self.origin..self.origin + 1_000).contains(&frame));
+            self.next_frame = frame;
+            Ok(DecoderSeekOutcome::Landed {
+                landed_at: self.spec().duration_for(frame)?,
+                landed_frame: frame,
+                landed_byte: None,
+                preroll: PrerollHint::NotNeeded,
+            })
+        }
+        fn update_byte_len(&self, _len: u64) {}
+    }
+
+    fn assert_physical_output(chunk: &AudioChunk, origin: u64) {
+        assert_eq!(chunk.frames(), chunk.meta.frames as usize);
+        assert_eq!(chunk.samples.len(), chunk.frames());
+        assert_eq!(chunk.spec().sample_rate.get(), 2_000);
+        assert_eq!(
+            chunk.meta.timestamp,
+            chunk
+                .spec()
+                .duration_for(chunk.meta.frame_offset)
+                .expect("output timestamp")
+        );
+        assert_eq!(
+            chunk.meta.end_timestamp,
+            chunk
+                .spec()
+                .duration_for(chunk.meta.frame_range().end)
+                .expect("output endpoint")
+        );
+        assert!(chunk.meta.source_span.is_none());
+        for (offset, value) in chunk.samples.iter().enumerate() {
+            let source_frame = (chunk.meta.frame_offset + offset as u64) / 2;
+            assert_eq!(
+                *value,
+                f32::from(u16::try_from(source_frame - origin).expect("fixture frame fits u16"))
+                    / 2_000.0
+            );
+        }
+    }
+
+    #[kithara::test]
+    #[kithara::hang_watchdog]
+    #[case::observed_nonzero(700, false, true)]
+    #[case::known_nonzero_before_output(700, true, false)]
+    #[case::known_zero_before_output(0, true, false)]
+    #[case::unknown_sought_suffix(700, false, false)]
+    fn original_resampled_clock_survives_a_nonzero_seek(
+        #[case] origin: u64,
+        #[case] reports_origin: bool,
+        #[case] observe_original: bool,
+    ) {
+        let pools = pools();
+        let source = OffsetDecoder {
+            origin,
+            next_frame: origin,
+            reports_origin,
+            pools: pools.clone(),
+        };
+        let config = DecoderResamplerConfig::builder()
+            .target_sample_rate(NonZeroU32::new(2_000).expect("target rate"))
+            .backend(DoubleBackend)
+            .build();
+        let mut decoder =
+            ResampledDecoder::new(Box::new(source), config, &pools).expect("production wrapper");
+        assert_eq!(
+            decoder.initial_pcm_position(),
+            reports_origin.then(|| Duration::from_millis(origin))
+        );
+        if observe_original {
+            let DecoderChunkOutcome::Chunk(first) =
+                decoder.next_chunk().expect("original resampled PCM")
+            else {
+                panic!("original PCM chunk");
+            };
+            assert_physical_output(&first, origin);
+            assert_eq!(first.frames(), 128);
+            assert_eq!(first.meta.frame_offset, origin * 2);
+            assert_eq!(first.meta.timestamp, Duration::from_millis(origin));
+            assert_eq!(&first.samples[..2], &[0.0; 2]);
+        }
+        let original = (reports_origin || observe_original).then(|| Duration::from_millis(origin));
+        assert_eq!(decoder.initial_pcm_position(), original);
+        let target = Duration::from_millis(origin + 800);
+        let outcome = decoder.seek(target).expect("resampled physical seek");
+        assert!(
+            matches!(outcome, DecoderSeekOutcome::Landed { landed_at, landed_frame, .. }
+            if landed_at == target && landed_frame == (origin + 800) * 2)
+        );
+        let mut frames = 0usize;
+        let mut endpoint = target;
+        loop {
+            hang_tick!();
+            match decoder.next_chunk().expect("resampled suffix") {
+                DecoderChunkOutcome::Chunk(chunk) => {
+                    assert_physical_output(&chunk, origin);
+                    assert_eq!(chunk.meta.timestamp, endpoint);
+                    frames += chunk.frames();
+                    endpoint = chunk.meta.end_timestamp;
+                    hang_reset!();
+                }
+                DecoderChunkOutcome::Eof => break,
+                DecoderChunkOutcome::Pending(reason) => {
+                    panic!("bounded fixture cannot pend: {reason:?}")
+                }
+            }
+        }
+        assert_eq!(frames, 400);
+        assert_eq!(endpoint, Duration::from_millis(origin + 1_000));
+        assert_eq!(decoder.initial_pcm_position(), original);
+        if let Some(original) = original {
+            assert_eq!(endpoint - original, Duration::from_secs(1));
+        }
+    }
+    #[cfg(feature = "resample-rubato")]
+    #[kithara::test]
+    #[case::replay_original_head(0, 1_052)]
+    #[case::sought_suffix(900, 1_350)]
+    fn resampled_head_and_seek_landings_share_the_actual_output_frame_clock(
+        #[case] requested_millis: u64,
+        #[case] expected_frame: u64,
+    ) {
+        let pools = pools();
+        let source = OffsetDecoder {
+            origin: 701,
+            next_frame: 701,
+            reports_origin: true,
+            pools: pools.clone(),
+        };
+        let config = DecoderResamplerConfig::builder()
+            .target_sample_rate(NonZeroU32::new(1_500).expect("target rate"))
+            .backend(RubatoBackend::new())
+            .build();
+        let mut decoder =
+            ResampledDecoder::new(Box::new(source), config, &pools).expect("production wrapper");
+        let spec = decoder.spec();
+        let original = decoder.initial_pcm_position().expect("known original head");
+        assert_eq!(original, Duration::from_nanos(701_333_333));
+        assert_eq!(spec.frame_at(original).expect("original frame"), 1_052);
+        let DecoderSeekOutcome::Landed {
+            landed_at,
+            landed_frame,
+            ..
+        } = decoder
+            .seek(Duration::from_millis(requested_millis))
+            .expect("actual source landing")
+        else {
+            panic!("seek landing");
+        };
+        assert_eq!(landed_frame, expected_frame);
+        assert_eq!(
+            spec.frame_at(landed_at).expect("landing frame"),
+            landed_frame
+        );
+        if requested_millis == 0 {
+            assert_eq!(landed_at, Duration::from_millis(701));
+            assert_ne!(landed_at, original);
+            assert_eq!(
+                landed_frame,
+                spec.frame_at(original).expect("original frame")
+            );
+        } else {
+            assert_eq!(landed_at, Duration::from_millis(900));
+            assert!(landed_frame > spec.frame_at(original).expect("original frame"));
+        }
+        assert_eq!(decoder.initial_pcm_position(), Some(original));
+    }
 }

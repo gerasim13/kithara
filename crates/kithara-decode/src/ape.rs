@@ -122,6 +122,10 @@ where
     fn spec(&self) -> AudioSpec {
         self.spec
     }
+    fn initial_pcm_position(&self) -> Option<Duration> {
+        Some(Duration::ZERO)
+    }
+
     fn duration(&self) -> Option<Duration> {
         Some(self.duration)
     }

@@ -11,7 +11,6 @@ use crate::{
             format::{FormatDecision, detect},
         },
         fetch::Fetch,
-        gapless::visible_duration,
         seek::skip::apply as apply_skip,
         track::WaitingReason,
     },
@@ -23,15 +22,6 @@ use crate::{
 #[kithara::measure(label = "audio.decode.step")]
 #[kithara::hang_watchdog]
 pub(crate) fn tick<T: StreamType>(core: &mut ActiveDecode, ctx: DecodeCtx<'_, T>) -> DecodeAction {
-    let active = core.active();
-    if let Some(duration) = visible_duration(
-        active.decoder().duration(),
-        active.gapless_profile(),
-        core.gapless_mode(),
-    ) && Some(duration) > ctx.playhead.duration()
-    {
-        ctx.playhead.set_duration(Some(duration));
-    }
     let mut decoded = false;
     loop {
         hang_tick!();

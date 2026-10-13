@@ -120,7 +120,7 @@ async fn the_deck_leading_on_past_a_failed_track_advances_for_the_failure() {
 #[kithara::test(tokio)]
 async fn lag_recovery_keeps_an_ended_queue_ended() {
     let (mut queue, last, _, mut rig, _dir) = crate::mock::selected().await;
-    queue.navigation.select(last, &queue.track_ids());
+    queue.current = Some(last);
     queue.current = None;
     queue.navigation = crate::NavigationState::new(queue.navigation.history_limit());
     queue.publish();

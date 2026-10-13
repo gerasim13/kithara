@@ -32,9 +32,6 @@ where
         output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
-        if let Some((now, _)) = self.clock {
-            self.enter_chained_target(now)?;
-        }
         let result = self.apply_command(command, output, out).map_err(play_error);
         self.pump_loads(output, out);
         self.publish();
@@ -48,12 +45,14 @@ where
         out: &mut Outbox<'_, S>,
     ) -> Settled {
         let mut outcomes: Vec<(usize, Settled)> = Vec::new();
+        let mut handover = None;
         match receipt {
             TrackReceipt::Deck {
                 seq,
                 outcome,
                 batch,
             } => {
+                handover = self.settle_handover(seq, outcome, batch);
                 outcomes = self.settle_deck(seq, outcome, batch, out);
             }
             TrackReceipt::Event(event) => {
@@ -79,7 +78,7 @@ where
                     let id = active.item;
                     let leaving = active.role == Role::Leaving;
                     let wanted = self.target.is_some_and(|target| target.to == id)
-                        && matches!(active.role, Role::Incoming { .. });
+                        && matches!(active.role, Role::Incoming);
                     let host_can_answer_later =
                         self.classify_load(id, leaving, wanted, receipt.outcome());
                     if let Some(active) = self.active.get_mut(index) {
@@ -111,7 +110,24 @@ where
                 self.pump_loads(output, out);
             }
         }
-        let result = self.settle_transitions(outcomes, out);
+        let track_result = self.settle_transitions(outcomes, out);
+        let result = if let Some((index, settled)) = handover {
+            match self.handover_settled(index, &settled, out) {
+                Ok(()) => settled,
+                Err(error) => {
+                    let seq = match settled {
+                        Settled::Applied { seq, .. } | Settled::Rejected { seq, .. } => seq,
+                        Settled::Pending => return Settled::Pending,
+                    };
+                    Settled::Rejected {
+                        seq,
+                        reason: Rejection::Refused(error),
+                    }
+                }
+            }
+        } else {
+            track_result
+        };
         if let Err(error) = self.release_tails(out) {
             warn!(%error, "outgoing queue track could not release");
         }
@@ -208,9 +224,11 @@ where
                     }
                 }
                 Settled::Rejected { seq, reason } => {
-                    let continued = self
-                        .target
-                        .is_some_and(|target| target.continued == Some(*seq));
+                    let continued = self.target.is_some_and(|target| {
+                        target
+                            .continued
+                            .is_some_and(|continued| continued.seq() == *seq)
+                    });
                     if !continued
                         && (rescheduling != Some(*seq) || !matches!(reason, Rejection::Stale))
                     {
@@ -517,28 +535,16 @@ where
                     && active.role == Role::Current
                     && self.current == Some(active.item)
             });
-            if current && self.config.action_at_item_end == ActionAtItemEnd::Pause {
-                if let Err(error) = self.transport(
+            if current
+                && self.config.action_at_item_end == ActionAtItemEnd::Pause
+                && let Err(error) = self.transport(
                     TrackCommand::Pause {
                         at: kithara_command::When::Next,
                     },
                     out,
-                ) {
-                    warn!(%error, "queue could not pause its ended track");
-                }
-                return;
-            }
-            if current
-                && self.target.is_none()
-                && self.config.action_at_item_end == ActionAtItemEnd::Advance
+                )
             {
-                let ids = self.selectable_ids();
-                let wrap = self.navigation.repeat_mode() == crate::RepeatMode::All;
-                if self.navigation.next(&ids, true, wrap).is_none() {
-                    self.current = None;
-                    self.held_position = None;
-                    self.announce(QueueEvent::QueueEnded);
-                }
+                warn!(%error, "queue could not pause its ended track");
             }
         }
     }

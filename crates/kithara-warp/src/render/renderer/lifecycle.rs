@@ -210,6 +210,8 @@ where
             }
             meta.frame_offset = start.frame_offset;
             meta.timestamp = start.timestamp;
+            meta.visible_origin = start.visible_origin;
+            meta.source_revision = start.source_revision;
         }
         let samples = self.scratch.take()?;
         self.defer_scratch(replacement);

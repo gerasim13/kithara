@@ -9,6 +9,7 @@ use kithara_decode::{
     BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome,
     GaplessMode, GaplessProfile,
 };
+use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::{ConstructionGate, MediaInfo};
 use kithara_test_utils::kithara;
@@ -77,6 +78,8 @@ pub(crate) struct DecoderGeneration {
     /// transition cannot reinterpret the new active generation on a smaller
     /// origin.
     timeline_gap_floor: u64,
+    visible_origin: Option<Duration>,
+    observing_visible_origin: bool,
     media_info: Option<MediaInfo>,
     pending_head_skip: Option<ResumeState>,
     pub(super) staged: VecDeque<AudioChunk>,
@@ -98,6 +101,9 @@ impl DecoderGeneration {
         let codec = media_info.as_ref().and_then(|info| info.codec);
         let gapless_profile = decoder.gapless_profile(codec);
         let gapless = GaplessStage::build(gapless_profile, gapless_mode, codec);
+        let visible_origin = decoder.initial_pcm_position().and_then(|position| {
+            crate::pipeline::gapless::visible_origin(position, gapless_profile, gapless_mode)
+        });
         Self {
             decoder,
             media_info,
@@ -111,6 +117,8 @@ impl DecoderGeneration {
             exhaustion_observed: false,
             holdback: None,
             timeline_gap_floor: 0,
+            visible_origin,
+            observing_visible_origin: true,
             staged: VecDeque::new(),
             #[cfg(test)]
             staged_scan_count: Cell::new(0),
@@ -125,6 +133,53 @@ impl DecoderGeneration {
 
     pub(crate) fn align_timeline_gap(&mut self, gap: u64) {
         self.timeline_gap_floor = self.timeline_gap_floor.max(gap);
+    }
+
+    pub(crate) fn observe_visible_origin(&mut self, chunk: &AudioChunk) {
+        if self.observing_visible_origin && chunk.meta.frames > 0 {
+            if self.visible_origin.is_none() {
+                self.visible_origin = chunk
+                    .meta
+                    .source_span
+                    .map_or(Some(chunk.meta.timestamp), |span| span.position_at(0));
+            }
+            self.observing_visible_origin = false;
+        }
+    }
+
+    pub(crate) fn seal_visible_origin(&mut self, mode: GaplessMode) {
+        if self.observing_visible_origin {
+            self.visible_origin = self.decoder.initial_pcm_position().and_then(|position| {
+                crate::pipeline::gapless::visible_origin(position, self.gapless_profile, mode)
+            });
+            self.observing_visible_origin = false;
+        }
+    }
+
+    pub(crate) fn retain_visible_origin(&mut self, origin: Option<Duration>) {
+        self.visible_origin = origin;
+        self.observing_visible_origin = false;
+    }
+
+    pub(crate) fn comparison_origin(&self, mode: GaplessMode) -> Option<u64> {
+        self.visible_origin.map_or_else(
+            || Some(self.timeline_origin(mode)),
+            |origin| self.blender_profile().spec().frame_at(origin).ok(),
+        )
+    }
+
+    pub(crate) fn has_same_source_basis(&self, other: &Self) -> bool {
+        let retained_source = |generation: &Self| {
+            generation
+                .pending_head_skip
+                .as_ref()
+                .and_then(|resume| match resume.target {
+                    ResumeTarget::Source(end) => Some((end.sample_rate(), end.mapping_revision())),
+                    ResumeTarget::Position(_) => None,
+                })
+        };
+        self.blender_profile().spec().sample_rate == other.blender_profile().spec().sample_rate
+            && retained_source(self) == retained_source(other)
     }
 
     pub(crate) fn copy_staged_frames(
@@ -205,6 +260,7 @@ impl DecoderGeneration {
         self.finish();
         while let Some(chunk) = self.gapless.next() {
             hang_tick!();
+            self.observe_visible_origin(&chunk);
             self.staged.push_back(chunk);
             hang_reset!();
         }
@@ -259,9 +315,12 @@ impl DecoderGeneration {
 
     pub(crate) fn seek(
         &mut self,
-        position: kithara_platform::time::Duration,
+        position: Duration,
         gapless_mode: GaplessMode,
     ) -> DecodeResult<DecoderSeekOutcome> {
+        if !position.is_zero() {
+            self.seal_visible_origin(gapless_mode);
+        }
         if let Some(gate) = &self.construction_gate {
             gate.arm();
         }
@@ -271,13 +330,23 @@ impl DecoderGeneration {
         }
         match result {
             Ok(result) => {
-                if matches!(
-                    result,
-                    Ok(DecoderSeekOutcome::Landed {
-                        landed_frame: 0,
-                        ..
-                    })
-                ) {
+                let at_original_head = match &result {
+                    Ok(DecoderSeekOutcome::Landed { landed_frame, .. }) => {
+                        let at_known_head =
+                            self.decoder.initial_pcm_position().is_some_and(|origin| {
+                                let spec = self.decoder.spec();
+                                let (Ok(origin_frame), Ok(requested_frame)) =
+                                    (spec.frame_at(origin), spec.frame_at(position))
+                                else {
+                                    return false;
+                                };
+                                requested_frame <= origin_frame && *landed_frame == origin_frame
+                            });
+                        (position.is_zero() && *landed_frame == 0) || at_known_head
+                    }
+                    _ => false,
+                };
+                if at_original_head {
                     let codec = self.media_info.as_ref().and_then(|info| info.codec);
                     self.gapless = GaplessStage::build(self.gapless_profile, gapless_mode, codec);
                 }
@@ -327,6 +396,7 @@ impl DecoderGeneration {
         self.gapless.push(chunk);
         while let Some(chunk) = self.gapless.next() {
             hang_tick!();
+            self.observe_visible_origin(&chunk);
             self.staged.push_back(chunk);
             hang_reset!();
         }
@@ -381,6 +451,10 @@ impl DecoderGeneration {
     }
 
     delegate::delegate! {
+        to self {
+            #[expr(self.visible_origin)]
+            pub(crate) const fn visible_origin(&self) -> Option<Duration>;
+        }
         to self.decoder {
             pub(crate) fn blender_profile(&self) -> BlenderProfile;
             #[call(as_ref)]
@@ -947,5 +1021,112 @@ mod tests {
         generation.notify_seek();
 
         assert!(!generation.is_finished());
+    }
+    struct HeadSeekDecoder {
+        spec: AudioSpec,
+        origin: Option<Duration>,
+        landed_at: Duration,
+        landed_frame: u64,
+    }
+
+    impl Decoder for HeadSeekDecoder {
+        fn initial_pcm_position(&self) -> Option<Duration> {
+            self.origin
+        }
+
+        fn duration(&self) -> Option<Duration> {
+            None
+        }
+
+        fn gapless_profile(&self, _codec: Option<kithara_stream::AudioCodec>) -> GaplessProfile {
+            GaplessProfile::new(self.spec, None, None, 1_024)
+        }
+
+        fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+            Ok(DecoderChunkOutcome::Eof)
+        }
+
+        fn seek(&mut self, _position: Duration) -> DecodeResult<DecoderSeekOutcome> {
+            Ok(DecoderSeekOutcome::Landed {
+                landed_at: self.landed_at,
+                landed_frame: self.landed_frame,
+                landed_byte: None,
+                preroll: PrerollHint::NotNeeded,
+            })
+        }
+
+        fn spec(&self) -> AudioSpec {
+            self.spec
+        }
+
+        fn update_byte_len(&self, _len: u64) {}
+    }
+
+    #[kithara::test]
+    #[case::unknown_raw_zero(None, 0, 0, 0, 0, 1_024)]
+    #[case::observed_shifted_pcm(Some(10_000_000), 0, 0, 0, 15, 1_024)]
+    #[case::known_nonzero(Some(700_000_000), 700_000_000, 1_050, 0, 1_050, 1_024)]
+    #[case::rounded_host_clock(Some(701_333_333), 701_000_000, 1_052, 0, 1_052, 1_024)]
+    #[case::unknown_sought_suffix(None, 0, 0, 100_000_000, 150, 0)]
+    #[case::known_sought_suffix(Some(10_000_000), 0, 0, 100_000_000, 150, 0)]
+    fn seeking_an_original_head_trims_priming_but_a_coarse_sought_suffix_does_not(
+        #[case] origin_nanos: Option<u64>,
+        #[case] landing_nanos: u64,
+        #[case] landing_frame: u64,
+        #[case] requested_nanos: u64,
+        #[case] output_start: u64,
+        #[case] trimmed: u64,
+    ) {
+        let spec = spec(2, 1_500);
+        let pools = pools();
+        let mut generation = DecoderGeneration::new(
+            Box::new(HeadSeekDecoder {
+                spec,
+                origin: origin_nanos.map(Duration::from_nanos),
+                landed_at: Duration::from_nanos(landing_nanos),
+                landed_frame: landing_frame,
+            }),
+            None,
+            0,
+            None,
+            None,
+            GaplessMode::CodecPriming,
+        );
+        generation.notify_seek();
+        generation
+            .seek(
+                Duration::from_nanos(requested_nanos),
+                GaplessMode::CodecPriming,
+            )
+            .expect("physical seek");
+        let mut input = chunk(&pools, &vec![0.25; 4_096], spec, output_start, 2_048, 2_048);
+        input.meta.timestamp = spec
+            .duration_for(output_start)
+            .expect("actual output start");
+        input.meta.end_timestamp = spec
+            .duration_for(output_start + 2_048)
+            .expect("actual output end");
+        generation.push(input);
+        let output = generation.next().expect("seek output");
+        assert_eq!(output.meta.frame_offset, output_start + trimmed);
+        assert_eq!(output.frames() as u64, 2_048 - trimmed);
+        assert_eq!(output.samples.len() as u64, 2 * (2_048 - trimmed));
+        if trimmed == 0 {
+            assert!(output.samples.iter().all(|value| *value == 0.25));
+        } else {
+            const FADE_FRAMES: usize = 4;
+            assert_eq!(&output.samples[..2], &[0.0; 2]);
+            let mut previous = 0.0;
+            for frame in output.samples[..FADE_FRAMES * 2].chunks_exact(2) {
+                assert_eq!(frame[0], frame[1]);
+                assert!(frame[0] >= previous && frame[0] < 0.25);
+                previous = frame[0];
+            }
+            assert!(
+                output.samples[FADE_FRAMES * 2..]
+                    .iter()
+                    .all(|value| *value == 0.25)
+            );
+        }
     }
 }

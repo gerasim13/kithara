@@ -118,7 +118,7 @@ where
                 self.target.and_then(|target| {
                     self.active.position(|active| {
                         active.item == target.to
-                            && matches!(active.role, super::slots::Role::Incoming { .. })
+                            && matches!(active.role, super::slots::Role::Incoming)
                     })
                 })
             })
@@ -142,15 +142,7 @@ where
             self.tracks.rows()
         };
         QueueSnapshot {
-            current: if self.current.is_none()
-                && self
-                    .target
-                    .is_some_and(|target| target.reason == crate::AdvanceReason::InitialLoad)
-            {
-                self.navigation.current()
-            } else {
-                self.current
-            },
+            current: self.current,
             track,
             settings: self.config.settings,
             rows,

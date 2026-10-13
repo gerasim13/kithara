@@ -2,7 +2,7 @@ use kithara_command::{Outcome, Seq, When};
 use kithara_config::{ConfigOwner, LiveConfig};
 use kithara_render::{
     LaneCommand,
-    bridge::{DeckPart, Fade},
+    bridge::{DeckPart, Fade, Slot},
 };
 use kithara_signal::SessionFrame;
 use kithara_warp::SpeedCurve;
@@ -140,6 +140,15 @@ impl<S> PlayerImpl<S> {
         parts: Vec<DeckPart>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, PlayError> {
+        let slot = self.seat()?;
+        let action = parts.iter().rev().find_map(|part| match part {
+            DeckPart::Start { slot: started, .. } if *started == slot => {
+                Some(PlaybackAction::Start)
+            }
+            DeckPart::Chain { to, .. } if *to == slot => Some(PlaybackAction::Start),
+            DeckPart::Stop { slot: stopped, .. } if *stopped == slot => Some(PlaybackAction::Stop),
+            _ => None,
+        });
         let basis = parts
             .iter()
             .flat_map(super::super::outbox::slots)
@@ -153,6 +162,9 @@ impl<S> PlayerImpl<S> {
         if let Some(pending) = self.playback_commands.iter_mut().find(|operation| {
             seq.is_none() && operation.seq.is_none() && operation.segment == self.segment
         }) {
+            if action.is_some() {
+                pending.action = action;
+            }
             for basis in basis {
                 if !pending.basis.contains(&basis) {
                     pending.basis.push(basis);
@@ -163,9 +175,33 @@ impl<S> PlayerImpl<S> {
                 seq,
                 segment: self.segment,
                 basis,
+                action,
+                transparent: None,
             });
         }
         Ok(seq)
+    }
+
+    pub(super) fn pending_playback_action(
+        &self,
+        slot: Slot,
+        basis: Option<Seq>,
+        query: PlaybackQuery,
+    ) -> Option<(usize, PlaybackAction)> {
+        let mut basis = basis;
+        for (index, operation) in self.playback_commands.iter().enumerate().rev() {
+            let staged = query == PlaybackQuery::Admission && operation.seq.is_none();
+            let admitted = operation.seq.is_some()
+                && (operation.seq == basis
+                    || (operation.transparent.is_some() && operation.transparent == basis));
+            if staged || admitted {
+                if let Some(action) = operation.action {
+                    return Some((index, action));
+                }
+                basis = operation.basis.iter().find(|(named, _)| *named == slot)?.1;
+            }
+        }
+        None
     }
 
     pub(super) fn configuring(

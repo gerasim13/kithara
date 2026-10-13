@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 
 use super::{
+    inventory::admit_expected,
     request::TestRequest,
     resolve::{ResolvedLane, resolve},
     selection::{requested, select_lane, validate_config},
@@ -21,7 +22,8 @@ pub struct TestArgs {
     /// Arguments for the configured test command. Recipe-level flags accepted anywhere:
     /// `--lane=<configured-name>`, `--touched`, `--flash=true|false|on|off`, `--no-flash`,
     /// `--loom=true|false|on|off`, `--no-loom`, `--no-block=true|false|on|off`,
-    /// `--load=true|false|on|off`, `--net-backend=<configured-name>`, and `--narrow=<filterset>`.
+    /// `--load=true|false|on|off`, `--net-backend=<configured-name>`, `--narrow=<filterset>`,
+    /// and `--expected-tests=<path>` (UTF-8 TSV: binary ID, tab, full test name per line).
     #[arg(value_name = "ARGS", allow_hyphen_values = true)]
     pub(crate) args: Vec<String>,
 }
@@ -123,7 +125,11 @@ fn run_lane(
     lane_name: &str,
     request: &TestRequest,
 ) -> Result<()> {
-    let mut command = lane_command(test, lane_name, request)?;
+    let lane = requested_lane(test, lane_name, request)?;
+    if let Some(path) = &request.expected_tests {
+        admit_expected(&lane, &request.passthrough, root, &root.join(path))?;
+    }
+    let mut command = lane.command(NextestAction::Run, &request.passthrough)?;
     execute(test, root, lane_name, &mut command)
 }
 
@@ -199,3 +205,7 @@ pub fn nextest_command_for_lane(
     let test = &project.test;
     resolve(test, &requested(test, lane_name, None)?)?.command(action, extra)
 }
+
+#[cfg(test)]
+#[path = "inventory_tests.rs"]
+mod inventory_tests;

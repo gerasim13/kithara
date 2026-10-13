@@ -104,7 +104,10 @@ impl ChunkCursor {
         if finished {
             playhead.advance(&chunk_position(&chunk.meta));
         } else {
-            playhead.advance_partial(interpolated_position(chunk.meta, consumed_total));
+            playhead.advance_partial(
+                interpolated_position(chunk.meta, consumed_total),
+                chunk.meta.visible_origin,
+            );
         }
         Ok(CopyOutcome {
             finished,

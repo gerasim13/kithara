@@ -132,6 +132,25 @@ fn resolve_codec_priming(profile: GaplessProfile) -> GaplessTrimmer {
     }
 }
 
+/// Original visible PCM position when the configured leading trim is exact.
+pub(crate) fn visible_origin(
+    raw: Duration,
+    profile: GaplessProfile,
+    mode: GaplessMode,
+) -> Option<Duration> {
+    let leading = match mode {
+        GaplessMode::Disabled => 0,
+        GaplessMode::MediaOnly => profile.gapless().map_or(0, |info| info.leading_frames),
+        GaplessMode::CodecPriming => profile.gapless().map_or_else(
+            || profile.default_priming_frames(),
+            |info| info.leading_frames,
+        ),
+        GaplessMode::SilenceTrim(_) => profile.gapless()?.leading_frames,
+        _ => return None,
+    };
+    raw.checked_add(profile.spec().duration_for(leading).ok()?)
+}
+
 /// Returns the PCM duration downstream of exact metadata trim.
 ///
 /// Heuristic trim keeps the raw duration until EOF reconciles the timeline.
@@ -145,10 +164,11 @@ pub(crate) fn visible_duration(
     if matches!(mode, GaplessMode::Disabled) {
         return Some(raw);
     }
-    let Some(info) = profile.gapless() else {
-        return Some(raw);
+    let trim_frames = match profile.gapless() {
+        Some(info) => info.leading_frames.saturating_add(info.trailing_frames),
+        None if matches!(mode, GaplessMode::CodecPriming) => profile.default_priming_frames(),
+        None => return Some(raw),
     };
-    let trim_frames = info.leading_frames.saturating_add(info.trailing_frames);
     if trim_frames == 0 {
         return Some(raw);
     }

@@ -57,11 +57,13 @@ fn changes(events: &mut EventReceiver<QueueEvent>) -> Vec<Option<TrackId>> {
 fn advance_stops_at_end() {
     let ids = [TrackId::allocate(), TrackId::allocate()];
     let mut navigation = NavigationState::new(2);
-    navigation.select(ids[0], &ids);
-    assert_eq!(navigation.next(&ids, false, false), Some(ids[1]));
-    navigation.select(ids[1], &ids);
-    assert_eq!(navigation.next(&ids, false, false), None);
-    assert_eq!(navigation.current(), Some(ids[1]));
+    let mut current = Some(ids[0]);
+    navigation.commit(None, ids[0], crate::AdvanceReason::UserSelect, &ids);
+    assert_eq!(navigation.next(&ids, current, false, false), Some(ids[1]));
+    navigation.commit(current, ids[1], crate::AdvanceReason::UserNext, &ids);
+    current = Some(ids[1]);
+    assert_eq!(navigation.next(&ids, current, false, false), None);
+    assert_eq!(current, Some(ids[1]));
 }
 
 #[kithara::test]
@@ -124,7 +126,11 @@ async fn announce_carries_the_item_identity(#[case] loaded: bool) {
             PlayingStatus::Loading
         ));
         queue
-            .enter_target(incoming, SessionFrame::new(0))
+            .enter_target(
+                incoming,
+                SessionFrame::new(0),
+                crate::AdvanceReason::UserSelect,
+            )
             .expect("announce queued identity");
         queue.publish();
     }
@@ -159,7 +165,7 @@ async fn clear_resets_cursor_and_announce() {
     assert_eq!(queue.control().current_index(), Some(1));
     apply(&mut queue, &mut rig, QueueCommand::RemoveAll).expect("clear");
     crate::mock::finish(&mut queue, &mut rig);
-    assert_eq!(queue.navigation.current(), None);
+    assert_eq!(queue.current, None);
     assert_eq!(queue.tracks.records().len(), 0);
     apply(
         &mut queue,

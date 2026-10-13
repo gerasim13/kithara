@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use kithara_command::{Batch, Outcome, Rejection, Seq, When};
 use kithara_render::{
     LaneCommand,
-    bridge::{DeckPart, DeckProtocol, DeckRefusal, Returned},
+    bridge::{DeckPart, DeckProtocol, DeckRefusal, Returned, SlotMark},
 };
 use kithara_warp::SpeedCurve;
 use tracing::warn;
@@ -65,10 +65,10 @@ impl<S> PlayerImpl<S> {
             self.settings.track(seq, When::Next, change);
         }
         self.segment = segment;
-        self.playback_commands.clear();
         self.segment_speed = speed;
         self.ready = None;
         self.mark = None;
+        self.resume = None;
         if self.slot.is_none() && self.loading.is_some() {
             self.status = TrackStatus::Loading;
         }
@@ -197,9 +197,7 @@ impl<S> PlayerImpl<S> {
                 DeckPart::Returned(Returned::Stopped { slot, resume })
                     if Some(*slot) == self.slot =>
                 {
-                    self.position = resume.map_or(self.position, |mark| mark.position);
-                    self.resume = *resume;
-                    self.status = TrackStatus::Paused { at: self.position };
+                    self.stopped(*resume);
                 }
                 DeckPart::Returned(Returned::Pcm { slot, .. })
                     if Some(*slot) == self.slot && attaching.is_none() =>
@@ -220,6 +218,12 @@ impl<S> PlayerImpl<S> {
         }
         self.promote(out);
         Settled::Applied { seq: answered, at }
+    }
+
+    fn stopped(&mut self, resume: Option<SlotMark>) {
+        self.resume = resume.filter(|mark| mark.lane.segment == self.segment);
+        self.position = self.resume.map_or(self.position, |mark| mark.position);
+        self.status = TrackStatus::Paused { at: self.position };
     }
 
     pub(super) fn adopt_newest_epoch(&mut self, out: &mut Outbox<'_, S>) {

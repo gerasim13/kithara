@@ -48,9 +48,6 @@ where
         &mut self,
         out: &mut Outbox<'_, S>,
     ) -> Result<(), QueueError> {
-        if let Some(pass) = out.pass() {
-            self.enter_chained_target(pass.now)?;
-        }
         let Some(target) = self.target else {
             return Ok(());
         };
@@ -68,7 +65,8 @@ where
             self.target = None;
             return Ok(());
         }
-        if let Some(index) = self.incoming_index(target.to) {
+        let incoming = self.incoming_index(target.to);
+        if let Some(index) = incoming {
             if target.chained {
                 self.active
                     .get_mut(index)
@@ -79,18 +77,17 @@ where
                 self.release_track(index, out)?;
             }
         }
-        self.tracks.set_status(
-            target.to,
-            if consumed {
-                TrackStatus::Consumed
-            } else {
-                TrackStatus::Cancelled
-            },
-        );
-        self.target = None;
-        if target.auto && self.navigation.current() == Some(target.to) {
-            self.navigation.prev(&self.track_ids());
+        if incoming.is_some() || self.current != Some(target.to) {
+            self.tracks.set_status(
+                target.to,
+                if consumed {
+                    TrackStatus::Consumed
+                } else {
+                    TrackStatus::Cancelled
+                },
+            );
         }
+        self.target = None;
         self.reap_released();
         Ok(())
     }
@@ -132,34 +129,32 @@ where
         let Some(index) = self.incoming_index(target.to) else {
             return Ok(());
         };
-        if let Some(batch) = self.active.get(index).and_then(|active| match active.role {
-            Role::Incoming { batch } => batch,
-            _ => None,
-        }) {
-            self.active
+        if let Some(pending) = self
+            .pending_handover
+            .filter(|pending| pending.item == target.to)
+        {
+            let pause_seq = self
+                .active
                 .get_mut(index)
                 .ok_or(PlayError::NoActiveSlot)?
                 .track
                 .apply(TrackCommand::Pause { at: When::Next }, out)?;
-            self.target.as_mut().ok_or(PlayError::NotReady)?.stale = Some(batch);
+            kithara_test_utils::kithara::probe_event!(
+                handover_withdrawal_submitted,
+                pending_seq = pending.seq.get(),
+                pause_seq = pause_seq.map(Seq::get),
+                chained = target.chained
+            );
+            tracing::debug!(
+                pending_seq = pending.seq.get(),
+                ?pause_seq,
+                chained = target.chained,
+                "queue handover withdrawal submitted"
+            );
+            self.target.as_mut().ok_or(PlayError::NotReady)?.stale = Some(pending.seq);
         } else {
             let settings = target.transition.settings(self.config.settings.crossfade());
             self.target.as_mut().ok_or(PlayError::NotReady)?.settings = settings;
-        }
-        Ok(())
-    }
-
-    pub(in crate::queue) fn enter_chained_target(
-        &mut self,
-        now: SessionFrame,
-    ) -> Result<(), PlayError> {
-        if let Some(target) = self.target.filter(|target| target.chained)
-            && let Some(index) = self.incoming_index(target.to)
-            && let Some(active) = self.active.get(index)
-            && let PlayingStatus::Playing { since } = active.track.snapshot().as_ref().status
-            && now >= since
-        {
-            self.enter_target(index, since)?;
         }
         Ok(())
     }
@@ -176,7 +171,6 @@ where
         self.release_tails(out)?;
         self.reap_released();
         self.loaded_tracks(out)?;
-        self.enter_chained_target(now)?;
         if self.config.action_at_item_end != ActionAtItemEnd::Advance {
             return self.cancel_auto(out);
         }
@@ -190,17 +184,62 @@ where
                 }
                 return Ok(());
             }
-            if target.auto
-                && target.reason == AdvanceReason::NaturalEof
-                && self.auto_bound(target.settings)? != target.bound
-            {
-                self.withdraw_auto(out)?;
+            if target.auto && target.reason == AdvanceReason::NaturalEof && !target.chained {
+                let new_bound = self.auto_bound(target.settings)?;
+                if new_bound != target.bound {
+                    let old_bound_frame = target.bound.map(|bound| match bound {
+                        Bound::AtOrBefore(frame) | Bound::AtOrAfter(frame) => i64::from(frame),
+                    });
+                    let new_bound_frame = new_bound.map(|bound| match bound {
+                        Bound::AtOrBefore(frame) | Bound::AtOrAfter(frame) => i64::from(frame),
+                    });
+                    let pending_seq = self
+                        .pending_handover
+                        .filter(|pending| pending.item == target.to)
+                        .map(|pending| pending.seq.get());
+                    let source_mark = self
+                        .active_current_index()
+                        .and_then(|index| self.active.get(index))
+                        .and_then(|active| active.track.snapshot().as_ref().mark);
+                    kithara_test_utils::kithara::probe_event!(
+                        automatic_handover_withdrawal,
+                        old_bound_frame,
+                        new_bound_frame,
+                        chained = target.chained,
+                        pending_seq,
+                        source_segment = source_mark.map(|mark| mark.lane.segment.get())
+                    );
+                    tracing::debug!(
+                        ?old_bound_frame,
+                        ?new_bound_frame,
+                        chained = target.chained,
+                        ?pending_seq,
+                        ?source_mark,
+                        ?now,
+                        "queue automatic handover deadline changed"
+                    );
+                    self.withdraw_auto(out)?;
+                }
             }
             return Ok(());
         }
         let ids = self.selectable_ids();
         let wrap = self.navigation.repeat_mode() == RepeatMode::All;
-        let Some(id) = self.navigation.next(&ids, true, wrap) else {
+        let Some(id) = self.navigation.next(&ids, self.current, true, wrap) else {
+            if self
+                .active_current_index()
+                .and_then(|index| self.active.get(index))
+                .is_some_and(|active| {
+                    matches!(
+                        active.track.snapshot().as_ref().status,
+                        PlayingStatus::Ended { .. }
+                    )
+                })
+            {
+                self.current = None;
+                self.held_position = None;
+                self.announce(crate::QueueEvent::QueueEnded);
+            }
             return Ok(());
         };
         if now >= end - self.frames(self.config.preload_lead)? {
@@ -248,7 +287,7 @@ where
 
     pub(in crate::queue) fn incoming_index(&self, id: TrackId) -> Option<usize> {
         self.active
-            .position(|active| active.item == id && matches!(active.role, Role::Incoming { .. }))
+            .position(|active| active.item == id && matches!(active.role, Role::Incoming))
     }
 
     pub(in crate::queue) fn single_slot_repeat(&self, id: TrackId) -> bool {

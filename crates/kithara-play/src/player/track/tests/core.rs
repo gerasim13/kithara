@@ -155,12 +155,14 @@ pub(super) fn track(slot: Slot) -> Track {
         .keylock(false)
         .backend(StretchKind::default())
         .build();
-    PlayerImpl::new(PlayerConfig {
+    let mut track = PlayerImpl::new(PlayerConfig {
         item: TrackId::allocate(),
         slot: Some(slot),
         settings,
     })
-    .expect("unity speed is a valid track speed")
+    .expect("unity speed is a valid track speed");
+    track.visible_origin = Some(Duration::ZERO);
+    track
 }
 
 fn unseated_track() -> Track {
@@ -674,6 +676,27 @@ fn installed_free_receipt_is_consumed_once(#[case] foreign: u8) {
         _ => {}
     }
     let before = track.snapshot();
+
+    if foreign == 3 {
+        assert!(matches!(rig.with_outbox(|out| track.settle(
+            TrackReceipt::Deck { seq, outcome: &outcome, batch: &mut batch }, out
+        )).expect("live scope"), Settled::Applied { seq: answered, .. } if answered == seq));
+        assert!(matches!(track.status(), TrackStatus::Playing { since } if since == frame(0)));
+        assert!(track.playback_commands.is_empty());
+        assert!(matches!(
+            rig.with_outbox(|out| track.settle(
+                TrackReceipt::Deck {
+                    seq,
+                    outcome: &outcome,
+                    batch: &mut batch
+                },
+                out
+            ))
+            .expect("live scope"),
+            Settled::Pending
+        ));
+        return;
+    }
 
     if foreign == 4 {
         let mut first = self::track(B);
@@ -1961,6 +1984,134 @@ fn a_release_frees_the_track_once_the_mixer_let_its_consumer_go() {
 }
 
 #[kithara::test]
+#[case::same_segment(false, false)]
+#[case::new_segment(true, false)]
+#[case::settled_then_new_segment(true, true)]
+fn a_native_stop_answers_without_overwriting_a_new_segments_position(
+    #[case] moved: bool,
+    #[case] settled_first: bool,
+) {
+    let mut rig = rig();
+    let (mut track, _lane) = loaded(&mut rig, A, "stop-segment");
+    command_at_zero(
+        &mut track,
+        &mut rig,
+        TrackCommand::Fade {
+            at: When::At(frame(0)),
+            settings: CrossfadeSettings::default(),
+            dir: FadeDir::In,
+        },
+    )
+    .expect("native start");
+    let mut started = rig.block(frame(0), 0.0);
+    settle(&mut track, &mut rig, &mut started);
+    let seq = command_at_zero(&mut track, &mut rig, TrackCommand::Pause { at: When::Next })
+        .expect("native stop");
+    let mut stopped = rig.block(frame(0), 3.0);
+    assert_eq!(stopped.len(), 1);
+    let mut receipt = stopped.pop().expect("native stop receipt");
+    assert_eq!(receipt.seq, seq);
+    assert!(matches!(receipt.outcome, Outcome::Applied { at, .. } if at == frame(0)));
+    assert!(receipt.batch.commands.iter().any(|part| matches!(part,
+        DeckPart::Returned(Returned::Stopped { slot, resume: Some(mark) })
+        if *slot == A && mark.lane.segment == SegmentId::FIRST && mark.position == Position::from_secs(3)
+    )));
+    if settled_first {
+        assert!(
+            matches!(rig.with_outbox(|out| track.settle(TrackReceipt::Deck {
+            seq, outcome: &receipt.outcome, batch: &mut receipt.batch,
+        }, out)).expect("live scope"), Settled::Applied { seq: answered, .. } if answered == seq)
+        );
+        assert_eq!(
+            track.resume.map(|mark| mark.position),
+            Some(Position::from_secs(3))
+        );
+    }
+    if moved {
+        command_at_zero(
+            &mut track,
+            &mut rig,
+            TrackCommand::Seek {
+                to: Position::from_secs(8),
+            },
+        )
+        .expect("new segment admitted");
+        assert_ne!(track.segment, SegmentId::FIRST);
+        assert!(
+            track.resume.is_none(),
+            "a new segment retires the previous Stop's coordinates"
+        );
+    }
+    if settled_first {
+        let before = track.snapshot();
+        assert!(matches!(
+            rig.with_outbox(|out| track.settle(
+                TrackReceipt::Deck {
+                    seq,
+                    outcome: &receipt.outcome,
+                    batch: &mut receipt.batch,
+                },
+                out
+            ))
+            .expect("live scope"),
+            Settled::Pending
+        ));
+        assert_eq!(track.snapshot().position, before.position);
+        assert_eq!(track.snapshot().status, before.status);
+        assert!(track.resume.is_none());
+        return;
+    }
+    let position = Position::from_secs(if moved { 8 } else { 3 });
+    let output = mock::output(None).get();
+    let deck = crate::DeckSnapshot {
+        slots: vec![SlotSnapshot {
+            position: position.as_secs_f64(),
+            mark: Some(SlotMark {
+                session: frame(0),
+                lane: LaneFrame {
+                    segment: track.segment,
+                    frame: 0,
+                },
+                position,
+            }),
+            ..SlotSnapshot::default()
+        }],
+        ..crate::DeckSnapshot::default()
+    };
+    let pass = crate::DeckPass {
+        mix: DeckMixSettings::default(),
+        suspended: false,
+        now: frame(0),
+        delivery: FrameCount::new(0),
+        output: &output,
+        deck: &deck,
+    };
+    let mut scope = rig.deck.ring.scope(rig.deck.scope).expect("live scope");
+    let mut out = Outbox::new(&mut scope, &mut rig.deck.dispatcher).in_pass(pass);
+    let mut batch = receipt.batch;
+    assert!(matches!(track.settle(TrackReceipt::Deck {
+        seq, outcome: &receipt.outcome, batch: &mut batch,
+    }, &mut out), Settled::Applied { seq: answered, at } if answered == seq && at == frame(0)));
+    assert_eq!(track.position, position);
+    assert_eq!(track.status(), TrackStatus::Paused { at: position });
+    assert_eq!(
+        track.resume.map(|mark| mark.position),
+        (!moved).then_some(position)
+    );
+    assert!(matches!(
+        track.settle(
+            TrackReceipt::Deck {
+                seq,
+                outcome: &receipt.outcome,
+                batch: &mut batch,
+            },
+            &mut out
+        ),
+        Settled::Pending
+    ));
+}
+
+#[kithara::test]
 fn detaching_a_member_withdraws_its_preparation() {
     let mut rig = rig();
     let (mut track, _inbox) = loaded(&mut rig, A, "track");
@@ -2857,4 +3008,811 @@ fn stale_or_paused_failure_does_not_change_the_scoped_player(#[case] paused: boo
     .expect("live deck scope");
     assert_eq!(player.snapshot().item, before.item);
     assert_eq!(player.snapshot().status, before.status);
+}
+
+#[kithara::test]
+#[case::known(Some(Duration::from_millis(717)))]
+#[case::unknown(None)]
+fn planned_end_uses_the_visible_length_in_the_raw_source_clock(#[case] origin: Option<Duration>) {
+    let mut track = track(A);
+    track.visible_origin = origin;
+    track.duration = Some(Duration::from_millis(952));
+    track.status = TrackStatus::Playing { since: frame(0) };
+    track.mark = Some(SlotMark {
+        session: frame(0),
+        lane: LaneFrame {
+            segment: SegmentId::FIRST,
+            frame: 0,
+        },
+        position: Duration::from_millis(1_500),
+    });
+    let expected = origin.map(|_| frame(7_453));
+    assert_eq!(
+        track
+            .planned_end(mock::SAMPLE_RATE)
+            .expect("raw end geometry"),
+        expected
+    );
+    assert_eq!(
+        track.mark.expect("raw mark").position,
+        Duration::from_millis(1_500)
+    );
+    assert_eq!(track.duration, Some(Duration::from_millis(952)));
+}
+
+#[kithara::test]
+fn planned_end_projects_a_raw_jump_through_the_same_original_origin() {
+    let mut track = track(A);
+    track.visible_origin = Some(Duration::from_millis(717));
+    track.duration = Some(Duration::from_millis(952));
+    track.status = TrackStatus::Playing { since: frame(0) };
+    track.mark = Some(SlotMark {
+        session: frame(0),
+        lane: LaneFrame {
+            segment: SegmentId::FIRST,
+            frame: 0,
+        },
+        position: Duration::from_millis(1_000),
+    });
+    let (sender, _inbox) = lane();
+    track.lane = Some(sender);
+    let seq = track
+        .send_lane(
+            LaneCommand::Jump {
+                to: Duration::from_millis(1_500),
+            },
+            When::At(LaneFrame {
+                segment: SegmentId::FIRST,
+                frame: 100,
+            }),
+        )
+        .expect("raw jump");
+    assert!(
+        track
+            .lane_commands
+            .iter()
+            .any(|operation| operation.seq == seq)
+    );
+    assert_eq!(
+        track.planned_end(mock::SAMPLE_RATE).expect("projected end"),
+        Some(frame(7_553))
+    );
+}
+
+#[kithara::test]
+#[case::playing(false)]
+#[case::before_a_future_stop(true)]
+fn a_playing_fade_in_preserves_its_native_transport(#[case] future_stop: bool) {
+    let mut rig = rig();
+    let (mut track, _lane) = loaded(&mut rig, A, "playing-fade");
+    command_at_zero(
+        &mut track,
+        &mut rig,
+        TrackCommand::Play {
+            at: When::At(frame(0)),
+        },
+    )
+    .expect("native initial Start");
+    let mut receipts = rig.block(frame(0), 0.0);
+    settle(&mut track, &mut rig, &mut receipts);
+    if future_stop {
+        rig.with_outbox(|out| {
+            track.apply(
+                TrackCommand::Pause {
+                    at: When::At(frame(256)),
+                },
+                out,
+            )
+        })
+        .expect("live scope")
+        .expect("future Stop admission")
+        .expect("actual future Stop");
+    }
+    let faded = rig
+        .with_outbox(|out| {
+            track.apply(
+                TrackCommand::Fade {
+                    at: When::At(frame(128)),
+                    settings: CrossfadeSettings::default(),
+                    dir: FadeDir::In,
+                },
+                out,
+            )
+        })
+        .expect("live scope")
+        .expect("fade admission")
+        .expect("actual fade");
+    let mut receipts = rig.block(frame(128), 0.0);
+    let receipt = receipts
+        .iter()
+        .find(|receipt| receipt.seq == faded)
+        .expect("native Fade answer");
+    assert!(matches!(receipt.outcome, Outcome::Applied { at, .. } if at == frame(128)));
+    assert!(
+        matches!(receipt.batch.commands.as_slice(), [DeckPart::Fade { slot, dir: FadeDir::In, .. }] if *slot == A)
+    );
+    settle(&mut track, &mut rig, &mut receipts);
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Playing { since: frame(0) }
+    );
+}
+
+#[kithara::test]
+fn a_fade_in_after_an_outstanding_native_stop_sends_a_real_start() {
+    let mut rig = rig();
+    let (mut track, _lane) = loaded(&mut rig, A, "stop-then-fade");
+    command_at_zero(
+        &mut track,
+        &mut rig,
+        TrackCommand::Play {
+            at: When::At(frame(0)),
+        },
+    )
+    .expect("initial Start");
+    let mut started = rig.block(frame(0), 0.0);
+    settle(&mut track, &mut rig, &mut started);
+    let stopped = command_at_zero(&mut track, &mut rig, TrackCommand::Pause { at: When::Next })
+        .expect("actual outstanding Stop");
+    let resumed = rig
+        .with_outbox(|out| {
+            track.apply(
+                TrackCommand::Fade {
+                    at: When::At(frame(128)),
+                    settings: CrossfadeSettings::default(),
+                    dir: FadeDir::In,
+                },
+                out,
+            )
+        })
+        .expect("live scope")
+        .expect("resume admission")
+        .expect("actual resumed Start");
+    let mut receipts = rig.block(frame(128), 3.0);
+    let stop = receipts
+        .iter()
+        .find(|receipt| receipt.seq == stopped)
+        .expect("native Stop answer");
+    assert!(matches!(stop.outcome, Outcome::Applied { .. }));
+    assert!(stop.batch.commands.iter().any(|part| matches!(part,
+        DeckPart::Returned(Returned::Stopped { slot, .. }) if *slot == A)));
+    let start = receipts
+        .iter()
+        .find(|receipt| receipt.seq == resumed)
+        .expect("native resume answer");
+    assert!(matches!(start.outcome, Outcome::Applied { at, .. } if at == frame(128)));
+    assert!(
+        matches!(start.batch.commands.as_slice(), [DeckPart::Start { slot, fade: Fade::Crossfade(_) }] if *slot == A)
+    );
+    settle(&mut track, &mut rig, &mut receipts);
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Playing { since: frame(128) }
+    );
+    assert_eq!(rig.deck.mixer.held(A), Some("stop-then-fade"));
+}
+
+#[kithara::test]
+fn a_hard_rejected_native_stop_leaves_the_next_playing_fade_ordinary() {
+    let mut rig = rig();
+    let (mut track, _lane) = loaded(&mut rig, A, "refused-stop-fade");
+    command_at_zero(
+        &mut track,
+        &mut rig,
+        TrackCommand::Play {
+            at: When::At(frame(0)),
+        },
+    )
+    .expect("initial Start");
+    let mut applied = rig.block(frame(0), 0.0);
+    settle(&mut track, &mut rig, &mut applied);
+    let stopped = command_at_zero(&mut track, &mut rig, TrackCommand::Pause { at: When::Next })
+        .expect("native Stop");
+    let rejected = answer_next(&mut rig, Err(DeckRefusal::Deferral));
+    assert_eq!(rejected.seq(), stopped);
+    assert!(matches!(
+        rejected.outcome(),
+        Outcome::Rejected(Rejection::Refused(DeckRefusal::Deferral))
+    ));
+    assert!(
+        matches!(answer_track(&mut track, &mut rig, rejected), Settled::Rejected { seq, .. } if seq == stopped)
+    );
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Playing { since: frame(0) }
+    );
+    let faded = rig
+        .with_outbox(|out| {
+            track.apply(
+                TrackCommand::Fade {
+                    at: When::At(frame(128)),
+                    settings: CrossfadeSettings::default(),
+                    dir: FadeDir::In,
+                },
+                out,
+            )
+        })
+        .expect("live scope")
+        .expect("fade admission")
+        .expect("native Fade");
+    let mut receipts = rig.block(frame(128), 0.0);
+    let fade = receipts
+        .iter()
+        .find(|receipt| receipt.seq == faded)
+        .expect("native Fade answer");
+    assert!(matches!(fade.outcome, Outcome::Applied { at, .. } if at == frame(128)));
+    assert!(
+        matches!(fade.batch.commands.as_slice(), [DeckPart::Fade { slot, dir: FadeDir::In, .. }] if *slot == A)
+    );
+    settle(&mut track, &mut rig, &mut receipts);
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Playing { since: frame(0) }
+    );
+}
+
+#[kithara::test]
+#[case::same_slot(true)]
+#[case::other_slot(false)]
+fn a_grouped_fade_in_uses_only_its_own_slots_actual_last_transport(#[case] own_stop: bool) {
+    let mut rig = rig();
+    let (mut a, _a_lane) = loaded(&mut rig, A, "group-a");
+    let (mut b, _b_lane) = loaded(&mut rig, B, "group-b");
+    command_at_zero(
+        &mut a,
+        &mut rig,
+        TrackCommand::Play {
+            at: When::At(frame(0)),
+        },
+    )
+    .expect("Start A");
+    command_at_zero(
+        &mut b,
+        &mut rig,
+        TrackCommand::Play {
+            at: When::At(frame(0)),
+        },
+    )
+    .expect("Start B");
+    let mut started = rig.block(frame(0), 0.0);
+    settle(&mut a, &mut rig, &mut started);
+    settle(&mut b, &mut rig, &mut started);
+    let group = rig
+        .with_outbox(|out| {
+            out.together_owned(When::At(frame(0)), |out| {
+                let stopped = if own_stop { &mut a } else { &mut b };
+                stopped.apply(
+                    TrackCommand::Pause {
+                        at: When::At(frame(0)),
+                    },
+                    out,
+                )?;
+                a.apply(
+                    TrackCommand::Fade {
+                        at: When::At(frame(0)),
+                        settings: CrossfadeSettings::default(),
+                        dir: FadeDir::In,
+                    },
+                    out,
+                )?;
+                Ok(())
+            })
+        })
+        .expect("live scope");
+    let seq = match group {
+        Ok(((), Some(seq))) => {
+            a.finish_group(Ok(seq));
+            b.finish_group(Ok(seq));
+            seq
+        }
+        Ok(((), None)) => panic!("the actual group must be admitted"),
+        Err((error, mut parts)) => {
+            a.finish_group(Err(&mut parts));
+            b.finish_group(Err(&mut parts));
+            panic!("native group admission: {error}");
+        }
+    };
+    let faded = rig
+        .with_outbox(|out| {
+            a.apply(
+                TrackCommand::Fade {
+                    at: When::At(frame(128)),
+                    settings: CrossfadeSettings::default(),
+                    dir: FadeDir::In,
+                },
+                out,
+            )
+        })
+        .expect("live scope")
+        .expect("later A fade admission")
+        .expect("native A fade");
+    let mut receipts = rig.block(frame(0), 0.0);
+    receipts.extend(rig.block(frame(128), 0.0));
+    let group = receipts
+        .iter()
+        .find(|receipt| receipt.seq == seq)
+        .expect("actual native group answer");
+    assert!(matches!(group.outcome, Outcome::Applied { at, .. } if at == frame(0)));
+    assert!(group.batch.commands.iter().any(|part| matches!(part,
+        DeckPart::Returned(Returned::Stopped { slot, .. }) if *slot == if own_stop { A } else { B })));
+    if own_stop {
+        assert!(group.batch.commands.iter().any(|part| matches!(part,
+            DeckPart::Start { slot, fade: Fade::Crossfade(_) } if *slot == A)));
+    } else {
+        assert!(group.batch.commands.iter().any(|part| matches!(part,
+            DeckPart::Fade { slot, dir: FadeDir::In, .. } if *slot == A)));
+        assert!(
+            group
+                .batch
+                .commands
+                .iter()
+                .all(|part| !matches!(part, DeckPart::Start { .. }))
+        );
+    }
+    let fade = receipts
+        .iter()
+        .find(|receipt| receipt.seq == faded)
+        .expect("later native A fade");
+    assert!(
+        matches!(fade.batch.commands.as_slice(), [DeckPart::Fade { slot, dir: FadeDir::In, .. }] if *slot == A)
+    );
+    settle(&mut a, &mut rig, &mut receipts);
+    settle(&mut b, &mut rig, &mut receipts);
+    assert!(matches!(a.snapshot().status, TrackStatus::Playing { .. }));
+    assert_eq!(rig.deck.mixer.held(A), Some("group-a"));
+    assert_eq!(rig.deck.mixer.held(B), Some("group-b"));
+}
+
+#[kithara::test]
+#[case::queued(false)]
+#[case::held_native_answers(true)]
+fn a_fade_in_after_a_stop_and_transparent_envelope_still_starts(#[case] held: bool) {
+    let mut rig = rig();
+    let (mut track, _lane) = loaded(&mut rig, A, "stop-envelope-start");
+    command_at_zero(
+        &mut track,
+        &mut rig,
+        TrackCommand::Play {
+            at: When::At(frame(0)),
+        },
+    )
+    .expect("initial Start");
+    let mut started = rig.block(frame(0), 0.0);
+    settle(&mut track, &mut rig, &mut started);
+    let stopped = command_at_zero(&mut track, &mut rig, TrackCommand::Pause { at: When::Next })
+        .expect("actual outstanding Stop");
+    let mut receipts = Vec::new();
+    if held {
+        receipts.extend(rig.block(frame(0), 3.0));
+    }
+    let envelope = rig
+        .with_outbox(|out| {
+            track.apply(
+                TrackCommand::Fade {
+                    at: When::At(frame(128)),
+                    settings: CrossfadeSettings::default(),
+                    dir: FadeDir::Out,
+                },
+                out,
+            )
+        })
+        .expect("live scope")
+        .expect("envelope admission")
+        .expect("native envelope");
+    if held {
+        receipts.extend(rig.block(frame(128), 3.0));
+    }
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Playing { since: frame(0) },
+        "the snapshot still awaits the actual earlier native answers"
+    );
+    let resumed = rig
+        .with_outbox(|out| {
+            track.apply(
+                TrackCommand::Fade {
+                    at: When::At(frame(256)),
+                    settings: CrossfadeSettings::default(),
+                    dir: FadeDir::In,
+                },
+                out,
+            )
+        })
+        .expect("live scope")
+        .expect("resume admission")
+        .expect("native resumed entry");
+    if !held {
+        receipts.extend(rig.block(frame(128), 3.0));
+    }
+    receipts.extend(rig.block(frame(256), 3.0));
+    let stop = receipts
+        .iter()
+        .find(|receipt| receipt.seq == stopped)
+        .expect("native Stop answer");
+    assert!(matches!(stop.outcome, Outcome::Applied { .. }));
+    assert!(stop.batch.commands.iter().any(|part| matches!(part,
+        DeckPart::Returned(Returned::Stopped { slot, .. }) if *slot == A)));
+    let fade = receipts
+        .iter()
+        .find(|receipt| receipt.seq == envelope)
+        .expect("native intermediate envelope");
+    assert!(matches!(fade.outcome, Outcome::Applied { at, .. } if at == frame(128)));
+    assert!(
+        matches!(fade.batch.commands.as_slice(), [DeckPart::Fade { slot, dir: FadeDir::Out, .. }] if *slot == A)
+    );
+    let start = receipts
+        .iter()
+        .find(|receipt| receipt.seq == resumed)
+        .expect("native resumed entry");
+    assert!(matches!(start.outcome, Outcome::Applied { at, .. } if at == frame(256)));
+    assert!(
+        matches!(start.batch.commands.as_slice(), [DeckPart::Start { slot, fade: Fade::Crossfade(_) }] if *slot == A)
+    );
+    settle(&mut track, &mut rig, &mut receipts);
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Playing { since: frame(256) }
+    );
+    assert_eq!(rig.deck.mixer.held(A), Some("stop-envelope-start"));
+}
+
+#[kithara::test(tokio)]
+#[case::applied_envelopes(false, false)]
+#[case::refused_envelope(true, false)]
+#[case::historical_receipt_in_a_group(true, true)]
+#[kithara::hang_watchdog(ctx = String)]
+async fn applied_envelopes_preserve_a_real_committed_stops_provenance(
+    #[case] refused: bool,
+    #[case] historical: bool,
+) {
+    use kithara_render::rt::StreamShape;
+
+    let dir = TestTempDir::new();
+    let (worker, item) = repeat_wav_load(&dir, 44_100);
+    let (mut dispatcher, inbox) = channel(ChannelConfig::builder().build());
+    let driver = worker.start_dispatcher(inbox).expect("real dispatcher");
+    let shape = StreamShape::new(
+        NonZeroU32::new(64).expect("block frames"),
+        mock::SAMPLE_RATE,
+    );
+    let mut mixer =
+        mock::MixerRig::new(DeckMixerConfig::default(), shape, &pools()).expect("real mixer");
+    let mut track = track(A);
+    with_mixer(&mut mixer, &mut dispatcher, frame(0), |out| {
+        track.apply(
+            TrackCommand::Load {
+                item,
+                position: Position::ZERO,
+            },
+            out,
+        )
+    })
+    .expect("real source Load");
+    let receipt = {
+        let _real_io = kithara_platform::flash::real_io();
+        let deadline = kithara_platform::time::WallInstant::now() + Duration::from_secs(5);
+        loop {
+            hang_tick!("waiting for the native Stop source".to_owned());
+            if let Some(receipt) = dispatcher.receipts().next() {
+                hang_reset!();
+                break receipt;
+            }
+            assert!(
+                kithara_platform::time::WallInstant::now() < deadline,
+                "real lane opens"
+            );
+            kithara_platform::tokio::task::yield_now().await;
+        }
+    };
+    with_mixer(&mut mixer, &mut dispatcher, frame(0), |out| {
+        track.settle(TrackReceipt::Loaded(receipt), out)
+    });
+    let mut pcm = [[0.0; 64]; 2];
+    let [left, right] = &mut pcm;
+    mixer
+        .block(frame(0), [left, right])
+        .expect("actual attachment");
+    settle_mixer(&mut track, &mut mixer, &mut dispatcher, frame(0));
+    with_mixer(&mut mixer, &mut dispatcher, frame(64), |out| {
+        track.apply(TrackCommand::Play { at: When::Next }, out)
+    })
+    .expect("native initial Start");
+    let [left, right] = &mut pcm;
+    mixer
+        .block(frame(64), [left, right])
+        .expect("actual initial playback");
+    settle_mixer(&mut track, &mut mixer, &mut dispatcher, frame(64));
+    assert_eq!(
+        mixer.ends.snapshot.read().slots[0].state,
+        SlotState::Playing
+    );
+    assert!(matches!(
+        track.snapshot().status,
+        TrackStatus::Playing { .. }
+    ));
+
+    let stop = with_mixer(&mut mixer, &mut dispatcher, frame(128), |out| {
+        track.apply(TrackCommand::Pause { at: When::Next }, out)
+    })
+    .expect("native Stop admission")
+    .expect("actual Stop sequence");
+    let [left, right] = &mut pcm;
+    mixer
+        .block_frames(frame(128), [&mut left[..1], &mut right[..1]])
+        .expect("actual Stop commits");
+    assert!(
+        mixer.ring.receipt().is_none(),
+        "the real Stop retains custody until its gate finishes"
+    );
+    assert_eq!(
+        mixer.ends.snapshot.read().slots[0].state,
+        SlotState::Playing
+    );
+
+    let mut held_envelope = None;
+    for at in [129, 130] {
+        let envelope = with_mixer(&mut mixer, &mut dispatcher, frame(at), |out| {
+            track.apply(
+                TrackCommand::Fade {
+                    at: When::Next,
+                    settings: CrossfadeSettings {
+                        duration: 1.0,
+                        ..CrossfadeSettings::default()
+                    },
+                    dir: FadeDir::Out,
+                },
+                out,
+            )
+        })
+        .expect("native envelope admission")
+        .expect("actual envelope sequence");
+        let [left, right] = &mut pcm;
+        mixer
+            .block_frames(frame(at), [&mut left[..1], &mut right[..1]])
+            .expect("actual envelope block");
+        let kithara_command::ScopedReceipt::Scope(scope, receipt) =
+            mixer.ring.receipt().expect("immediate native Fade answer")
+        else {
+            panic!("the envelope belongs to the real deck scope");
+        };
+        assert_eq!(scope, mixer.scope);
+        assert_eq!(
+            receipt.seq(),
+            envelope,
+            "the earlier Stop is still committed without a terminal answer"
+        );
+        let (outcome, mut batch) = receipt.into();
+        assert!(matches!(outcome, Outcome::Applied { at: applied, .. } if applied == frame(at)));
+        assert!(
+            matches!(batch.commands.as_slice(), [DeckPart::Fade { slot, dir: FadeDir::Out, .. }] if *slot == A)
+        );
+        if historical && at == 130 {
+            held_envelope = Some((envelope, outcome, batch));
+        } else {
+            assert!(
+                matches!(with_mixer(&mut mixer, &mut dispatcher, frame(at), |out| track.settle(TrackReceipt::Deck {
+                seq: envelope, outcome: &outcome, batch: &mut batch,
+            }, out)), Settled::Applied { seq, .. } if seq == envelope)
+            );
+            assert!(
+                matches!(
+                    with_mixer(&mut mixer, &mut dispatcher, frame(at), |out| track.settle(
+                        TrackReceipt::Deck {
+                            seq: envelope,
+                            outcome: &outcome,
+                            batch: &mut batch,
+                        },
+                        out
+                    )),
+                    Settled::Pending
+                ),
+                "the actual duplicate envelope does not move provenance twice"
+            );
+        }
+        assert!(
+            mixer.ring.receipt().is_none(),
+            "the Stop has not answered after this envelope"
+        );
+    }
+
+    if refused {
+        let group = with_mixer(&mut mixer, &mut dispatcher, frame(131), |out| {
+            out.together_owned(When::Next, |out| {
+                if historical {
+                    track.apply(TrackCommand::Pause { at: When::Next }, out)?;
+                    let (seq, outcome, batch) = held_envelope
+                        .as_mut()
+                        .expect("actual historical Fade receipt");
+                    assert!(matches!(track.settle(TrackReceipt::Deck {
+                        seq: *seq, outcome, batch,
+                    }, out), Settled::Applied { seq: answered, .. } if answered == *seq));
+                } else {
+                    track.apply(
+                        TrackCommand::Fade {
+                            at: When::Next,
+                            settings: CrossfadeSettings {
+                                duration: 1.0,
+                                ..CrossfadeSettings::default()
+                            },
+                            dir: FadeDir::Out,
+                        },
+                        out,
+                    )?;
+                }
+                out.deck(
+                    When::Next,
+                    vec![DeckPart::Stop {
+                        slot: B,
+                        fade: Fade::Declick,
+                    }],
+                )?;
+                Ok(())
+            })
+        });
+        let seq = match group {
+            Ok(((), Some(seq))) => {
+                track.finish_group(Ok(seq));
+                seq
+            }
+            Ok(((), None)) => panic!("the native coupled group is admitted"),
+            Err((error, mut parts)) => {
+                track.finish_group(Err(&mut parts));
+                panic!("native coupled group: {error}");
+            }
+        };
+        let [left, right] = &mut pcm;
+        mixer
+            .block_frames(frame(131), [&mut left[..1], &mut right[..1]])
+            .expect("actual refused group block");
+        let kithara_command::ScopedReceipt::Scope(_, receipt) =
+            mixer.ring.receipt().expect("native group refusal")
+        else {
+            panic!("the refused group belongs to the real deck scope");
+        };
+        assert_eq!(receipt.seq(), seq);
+        let (outcome, mut batch) = receipt.into();
+        assert!(
+            matches!(outcome, Outcome::Rejected(Rejection::Refused(DeckRefusal::Empty { slot })) if slot == B)
+        );
+        assert!(
+            matches!(with_mixer(&mut mixer, &mut dispatcher, frame(131), |out| track.settle(TrackReceipt::Deck {
+            seq, outcome: &outcome, batch: &mut batch,
+        }, out)), Settled::Rejected { seq: answered, .. } if answered == seq)
+        );
+        assert!(
+            mixer.ring.receipt().is_none(),
+            "the original Stop still awaits its terminal answer"
+        );
+    } else {
+        let [left, right] = &mut pcm;
+        mixer
+            .block_frames(frame(131), [&mut left[..1], &mut right[..1]])
+            .expect("actual pending Stop frame");
+        assert!(
+            mixer.ring.receipt().is_none(),
+            "the original Stop remains committed before resume"
+        );
+    }
+
+    let resumed = with_mixer(&mut mixer, &mut dispatcher, frame(132), |out| {
+        track.apply(
+            TrackCommand::Fade {
+                at: When::Next,
+                settings: CrossfadeSettings {
+                    duration: 0.0,
+                    ..CrossfadeSettings::default()
+                },
+                dir: FadeDir::In,
+            },
+            out,
+        )
+    })
+    .expect("native resume admission")
+    .expect("actual resumed entry");
+    let [left, right] = &mut pcm;
+    mixer
+        .block_frames(frame(132), [&mut left[..1], &mut right[..1]])
+        .expect("actual native resume");
+    let mut stopped = false;
+    let mut started = false;
+    while let Some(receipt) = mixer.ring.receipt() {
+        let kithara_command::ScopedReceipt::Scope(_, receipt) = receipt else {
+            panic!("playback belongs to the real deck scope");
+        };
+        let seq = receipt.seq();
+        let (outcome, mut batch) = receipt.into();
+        assert!(matches!(outcome, Outcome::Applied { .. }));
+        if seq == stop {
+            assert!(
+                !started,
+                "the interrupted Stop answers before the actual resumed Start"
+            );
+            assert!(batch.commands.iter().any(|part| matches!(part,
+                DeckPart::Returned(Returned::Stopped { slot, .. }) if *slot == A)));
+            stopped = true;
+        } else {
+            assert_eq!(seq, resumed);
+            assert!(
+                matches!(batch.commands.as_slice(), [DeckPart::Start { slot, fade: Fade::Crossfade(_) }] if *slot == A),
+                "a settled transparent Fade cannot hide the committed native Stop: {batch:?}"
+            );
+            started = true;
+        }
+        with_mixer(&mut mixer, &mut dispatcher, frame(132), |out| {
+            track.settle(
+                TrackReceipt::Deck {
+                    seq,
+                    outcome: &outcome,
+                    batch: &mut batch,
+                },
+                out,
+            )
+        });
+    }
+    assert!(stopped && started, "actual Stop and Start must both answer");
+    assert_eq!(
+        mixer.ends.snapshot.read().slots[0].state,
+        SlotState::Playing
+    );
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Playing { since: frame(132) }
+    );
+
+    let ordinary = with_mixer(&mut mixer, &mut dispatcher, frame(133), |out| {
+        track.apply(
+            TrackCommand::Fade {
+                at: When::Next,
+                settings: CrossfadeSettings::default(),
+                dir: FadeDir::In,
+            },
+            out,
+        )
+    })
+    .expect("ordinary Fade admission")
+    .expect("native ordinary Fade");
+    let [left, right] = &mut pcm;
+    mixer
+        .block_frames(frame(133), [&mut left[..1], &mut right[..1]])
+        .expect("ordinary native Fade");
+    let kithara_command::ScopedReceipt::Scope(_, receipt) =
+        mixer.ring.receipt().expect("ordinary Fade answer")
+    else {
+        panic!("ordinary Fade belongs to the real deck scope");
+    };
+    assert_eq!(receipt.seq(), ordinary);
+    let (outcome, mut batch) = receipt.into();
+    assert!(
+        matches!(batch.commands.as_slice(), [DeckPart::Fade { slot, dir: FadeDir::In, .. }] if *slot == A)
+    );
+    with_mixer(&mut mixer, &mut dispatcher, frame(133), |out| {
+        track.settle(
+            TrackReceipt::Deck {
+                seq: ordinary,
+                outcome: &outcome,
+                batch: &mut batch,
+            },
+            out,
+        )
+    });
+    assert_eq!(
+        track.snapshot().status,
+        TrackStatus::Playing { since: frame(132) }
+    );
+    with_mixer(&mut mixer, &mut dispatcher, frame(134), |out| {
+        track.apply(TrackCommand::Release, out)
+    })
+    .expect("real release admission");
+    let [left, right] = &mut pcm;
+    mixer
+        .block_frames(frame(134), [&mut left[..1], &mut right[..1]])
+        .expect("actual custody release");
+    settle_mixer(&mut track, &mut mixer, &mut dispatcher, frame(134));
+    assert_eq!(mixer.ends.snapshot.read().slots[0].state, SlotState::Empty);
+    assert_eq!(track.snapshot().status, TrackStatus::Released);
+    assert!(
+        track.playback_commands.is_empty(),
+        "terminal and release answers retire native provenance custody"
+    );
+    drop(driver);
 }

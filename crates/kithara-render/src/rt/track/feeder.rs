@@ -3,7 +3,7 @@ use std::ops::Range;
 use kithara_audio::FailureSource;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_decode::TrackMetadata;
-use kithara_platform::{maybe_send::WasmSend, sync::Arc};
+use kithara_platform::{maybe_send::WasmSend, sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioSpec, SegmentId, SessionFrame, SourceSpan};
 use kithara_test_macros as kithara;
 use kithara_warp::{PresentationFrontier, RenderContext, WarpMapRevision};
@@ -22,6 +22,7 @@ pub struct PlayerResource {
     pub(super) lane: LaneFrame,
     #[field(get, vis = "pub(super)", copy)]
     position: Option<SourceSpan>,
+    visible_origin: Option<Duration>,
     mapped: bool,
     awaiting_segment: bool,
     pub(super) eof: bool,
@@ -59,6 +60,7 @@ impl PlayerResource {
                 frame: 0,
             },
             position: None,
+            visible_origin: None,
             mapped: false,
             awaiting_segment: false,
             eof: false,
@@ -87,6 +89,12 @@ impl PlayerResource {
             .receiver
             .duration()
             .map_or(0.0, |duration| duration.as_secs_f64())
+    }
+
+    /// Source origin from the same immutable PCM metadata as the current raw mark.
+    #[must_use]
+    pub fn visible_origin(&self) -> Option<Duration> {
+        self.visible_origin
     }
 
     #[must_use]
@@ -234,6 +242,7 @@ impl PlayerResource {
                 self.lane.frame = chunk.meta.lane_frame;
                 if let Some(position) = chunk_position(chunk, 0) {
                     self.position = Some(position);
+                    self.visible_origin = chunk.meta.visible_origin;
                     self.mapped = true;
                 }
                 self.eof = true;
@@ -272,6 +281,7 @@ impl PlayerResource {
             {
                 self.lane.frame = frame;
                 self.position = Some(position);
+                self.visible_origin = chunk.meta.visible_origin;
                 true
             } else {
                 false
@@ -390,6 +400,7 @@ impl PlayerResource {
             {
                 self.lane.frame = frame;
                 self.position = Some(position);
+                self.visible_origin = chunk.meta.visible_origin;
                 true
             } else {
                 false

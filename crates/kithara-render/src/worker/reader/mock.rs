@@ -25,6 +25,8 @@ use crate::worker::scheduler::StreamWake;
 pub struct PacketRing {
     pub receiver: Option<PcmReceiver>,
     pub(in crate::worker) producer: PcmProducer,
+    pub(in crate::worker) playhead: Arc<PlayheadState>,
+    origin: Duration,
 }
 
 impl PacketRing {
@@ -48,12 +50,51 @@ impl PacketRing {
         blocking: bool,
         wake: StreamWake,
     ) -> Self {
+        Self::with_wake_and_origin(
+            spec,
+            duration,
+            capacity,
+            reverse_capacity,
+            blocking,
+            wake,
+            Duration::ZERO,
+        )
+    }
+
+    #[must_use]
+    pub fn with_origin(
+        spec: AudioSpec,
+        duration: Duration,
+        capacity: usize,
+        origin: Duration,
+    ) -> Self {
+        Self::with_wake_and_origin(
+            spec,
+            duration,
+            capacity,
+            capacity,
+            false,
+            StreamWake::new(Wake::default()),
+            origin,
+        )
+    }
+
+    fn with_wake_and_origin(
+        spec: AudioSpec,
+        duration: Duration,
+        capacity: usize,
+        reverse_capacity: usize,
+        blocking: bool,
+        wake: StreamWake,
+        origin: Duration,
+    ) -> Self {
         let (forward_tx, forward_rx) = HeapRb::new(capacity).split();
         let (reverse_tx, reverse_rx) = HeapRb::new(reverse_capacity).split();
         let (playing_tx, playing_rx) = triple_buffer(&false);
         let ready = blocking.then(|| Arc::new(ThreadGate::default()));
         let playhead = Arc::new(PlayheadState::new());
         playhead.set_duration(Some(duration));
+
         Self {
             receiver: Some(PcmReceiver {
                 render_publisher: None,
@@ -63,8 +104,7 @@ impl PacketRing {
                 playing: playing_tx,
                 ready: ready.clone(),
                 wake,
-                duration: Some(duration),
-                playhead,
+                playhead: playhead.clone(),
                 position: Duration::ZERO,
                 frontier: Duration::ZERO,
                 metadata: TrackMetadata::default(),
@@ -78,6 +118,8 @@ impl PacketRing {
                 events: kithara_events::EventBus::default(),
                 output_pending: false,
             },
+            playhead,
+            origin,
         }
     }
 
@@ -93,7 +135,32 @@ impl PacketRing {
     ///
     /// # Panics
     /// Panics if the forward ring is full.
-    pub fn push(&mut self, packet: PcmPacket) {
+    pub fn push(&mut self, mut packet: PcmPacket) {
+        if let PcmPacket::Chunk(chunk) = &mut packet
+            && chunk.meta.visible_origin.is_none()
+        {
+            chunk.meta.visible_origin = Some(self.origin);
+        }
+        if let PcmPacket::Chunk(chunk) = &packet
+            && chunk.meta.end_of_track
+        {
+            let end = chunk.meta.source_span.map_or_else(
+                || {
+                    chunk
+                        .meta
+                        .spec
+                        .duration_for(u64::from(chunk.meta.frames))
+                        .ok()
+                        .and_then(|duration| chunk.meta.timestamp.checked_add(duration))
+                },
+                |span| span.position_at(u64::from(chunk.meta.frames)),
+            );
+            if let Some(end) = end {
+                self.playhead.set_duration(Some(
+                    end.saturating_sub(chunk.meta.visible_origin.expect("fixture original origin")),
+                ));
+            }
+        }
         self.producer
             .forward
             .try_push(packet)
@@ -166,7 +233,6 @@ pub(in crate::worker) fn packet_fixture(
             reverse: returned,
             ready: ready.clone(),
             wake: StreamWake::new(dispatcher.wake_handle()),
-            duration: None,
             playhead: Arc::new(PlayheadState::new()),
             position: Duration::ZERO,
             frontier: Duration::ZERO,

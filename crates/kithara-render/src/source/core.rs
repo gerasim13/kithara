@@ -293,7 +293,13 @@ where
             meta.frame_offset
                 .checked_add(u64::try_from(staged_frames).ok()?)
         });
-        if staged > 0 && expected_frame != pending_frame {
+        if staged > 0
+            && (expected_frame != pending_frame
+                || self.staged_meta.is_some_and(|meta| {
+                    meta.visible_origin != pending.chunk.meta.visible_origin
+                        || meta.source_revision != pending.chunk.meta.source_revision
+                }))
+        {
             self.quantum_failed = true;
             return false;
         }

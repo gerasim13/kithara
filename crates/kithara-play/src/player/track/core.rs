@@ -54,6 +54,7 @@ pub struct PlayerImpl<S> {
     pub(super) declick: FrameCount,
     pub(super) position: Position,
     pub(super) duration: Option<Duration>,
+    pub(super) visible_origin: Option<Duration>,
     pub(super) abr: Option<AbrHandle>,
     pub(super) metadata: TrackMetadata,
     pub(super) release: Option<Seq>,
@@ -96,6 +97,7 @@ impl<S> PlayerImpl<S> {
             declick: FrameCount::new(0),
             position: Position::ZERO,
             duration: None,
+            visible_origin: None,
             abr: None,
             metadata: TrackMetadata::default(),
             release: None,
@@ -138,6 +140,14 @@ impl<S> PlayerImpl<S> {
                 && slot.position >= 0.0
             {
                 self.position = Position::from_secs_f64(slot.position);
+            }
+            if slot
+                .mark
+                .is_some_and(|mark| mark.lane.segment == self.segment)
+                && self.attach_at.is_some()
+                && !matches!(self.status, TrackStatus::Released)
+            {
+                self.visible_origin = slot.visible_origin;
             }
             if slot.duration.is_finite() && slot.duration > 0.0 {
                 self.duration = Some(Duration::from_secs_f64(slot.duration));

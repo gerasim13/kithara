@@ -11,7 +11,7 @@ use kithara_signal::{FrameCount, SessionFrame};
 use super::{
     command::{QueueMailbox, QueuePostbox},
     slots::{Role, Slots},
-    types::{SeekPosition, Target},
+    types::{PendingHandover, SeekPosition, Target},
     view::{DeckObservation, QueueView},
 };
 use crate::{QueueConfig, QueueEvent, loader::Loader, navigation::NavigationState, track::Tracks};
@@ -41,6 +41,7 @@ where
     pub(super) current: Option<TrackId>,
     pub(super) held_position: Option<SeekPosition>,
     pub(super) target: Option<Target>,
+    pub(super) pending_handover: Option<PendingHandover>,
     pub(super) active: Slots<F::Track>,
     pub(super) postbox: QueuePostbox<S>,
     pub(super) mailbox: QueueMailbox<S>,
@@ -89,7 +90,7 @@ where
             )
         });
         let mut navigation = NavigationState::new(config.max_history_size);
-        navigation.set_playback_order(config.playback_order, &[]);
+        navigation.set_playback_order(config.playback_order, &[], None);
         let tracks = Tracks::default();
         let deck = DeckObservation::new(config.mixer);
         let view = QueueView::new(
@@ -109,6 +110,7 @@ where
             current: None,
             held_position: None,
             target: None,
+            pending_handover: None,
             postbox,
             mailbox,
             view,
@@ -201,7 +203,7 @@ where
                 .or_else(|| {
                     self.target.and_then(|target| {
                         self.active.position(|active| {
-                            active.item == target.to && matches!(active.role, Role::Incoming { .. })
+                            active.item == target.to && matches!(active.role, Role::Incoming)
                         })
                     })
                 })
@@ -252,12 +254,16 @@ where
             .collect()
     }
 
+    pub(super) fn navigation_cursor(&self) -> Option<TrackId> {
+        self.target.map(|target| target.to).or(self.current)
+    }
+
     pub(super) fn selectable_ids(&self) -> Vec<TrackId> {
         self.tracks
             .records()
             .iter()
             .filter(|record| {
-                self.navigation.current() == Some(record.id)
+                self.current == Some(record.id)
                     || !matches!(
                         record.status,
                         crate::TrackStatus::Cancelled | crate::TrackStatus::Failed(_)
@@ -757,8 +763,12 @@ pub(crate) mod tests {
         .expect("select queues its load")
         .expect("load sequence");
         let index = queue.incoming_index(id).expect("incoming track");
-        queue.active.get_mut(index).expect("active incoming").role =
-            Role::Incoming { batch: Some(seq) };
+        queue.active.get_mut(index).expect("active incoming").role = Role::Incoming;
+        queue.pending_handover = Some(PendingHandover {
+            seq,
+            item: id,
+            reason: crate::AdvanceReason::UserSelect,
+        });
         let other = TrackId(id.0 + 1);
         apply(
             &mut queue,
@@ -789,12 +799,20 @@ pub(crate) mod tests {
         let (mut queue, _rig, seq, unrelated) = armed_queue(TrackId(7));
         assert_eq!(queue.target.map(|target| target.to), Some(TrackId(7)));
         queue
-            .transition_applied(unrelated, SessionFrame::new(128))
+            .transition_applied(
+                unrelated,
+                queue.incoming_index(TrackId(7)).expect("incoming"),
+                SessionFrame::new(128),
+            )
             .expect("stale receipt");
         assert_eq!(queue.target.map(|target| target.to), Some(TrackId(7)));
         assert_eq!(queue.current, None);
         queue
-            .transition_applied(seq, SessionFrame::new(128))
+            .transition_applied(
+                seq,
+                queue.incoming_index(TrackId(7)).expect("incoming"),
+                SessionFrame::new(128),
+            )
             .expect("matching receipt");
         assert_eq!(queue.current, Some(TrackId(7)));
         assert!(queue.target.is_none());
@@ -851,12 +869,20 @@ pub(crate) mod tests {
     async fn crossfade_arm_take_only_disarms_matching_track() {
         let (mut queue, _rig, seq, unrelated) = armed_queue(TrackId(9));
         queue
-            .transition_applied(unrelated, SessionFrame::new(128))
+            .transition_applied(
+                unrelated,
+                queue.incoming_index(TrackId(9)).expect("incoming"),
+                SessionFrame::new(128),
+            )
             .expect("unrelated receipt");
         assert_eq!(queue.target.map(|target| target.to), Some(TrackId(9)));
         assert_eq!(queue.current, None);
         queue
-            .transition_applied(seq, SessionFrame::new(128))
+            .transition_applied(
+                seq,
+                queue.incoming_index(TrackId(9)).expect("incoming"),
+                SessionFrame::new(128),
+            )
             .expect("matching receipt");
         assert_eq!(queue.current, Some(TrackId(9)));
         assert!(queue.target.is_none());

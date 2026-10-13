@@ -22,13 +22,15 @@
 use std::collections::BTreeMap;
 
 use ::kithara::{
+    audio::AudioDecoderConfig,
+    decode::DecoderBackend,
     events::TrackId,
     platform::{
         sync::Arc,
         time::{self, Duration},
     },
-    play::ResourceSrc,
-    queue::{AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, Transition},
+    play::{ResourceConfig, ResourceSrc},
+    queue::{AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, TrackSource, Transition},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -297,6 +299,7 @@ async fn build_queue(
     sources: Vec<ResourceSrc>,
     origins: [Origin; 3],
     seam: Seam,
+    backend: Option<DecoderBackend>,
 ) -> Option<Census> {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -306,6 +309,10 @@ async fn build_queue(
         SAMPLE_RATE,
     )
     .await;
+    let explicit_store = backend.map(|_| {
+        ::kithara::assets::AssetStore::builder(harness.resource_prep().worker.pools().clone())
+            .build()
+    });
     let config = QueueConfig::builder()
         .prep(harness.resource_prep().clone())
         .settings(
@@ -328,8 +335,23 @@ async fn build_queue(
     for (source, origin) in sources.into_iter().zip(origins) {
         hang_tick!(format!("loading census track from {origin:?}"));
         let mut events = queue.subscribe();
+        let source = match backend {
+            Some(backend) => {
+                let config = ResourceConfig::<TestPools>::for_src(source)
+                    .store(
+                        explicit_store
+                            .as_ref()
+                            .expect("explicit backend store")
+                            .clone(),
+                    )
+                    .decoder(AudioDecoderConfig::builder().backend(backend).build())
+                    .build();
+                TrackSource::Config(Box::new(config))
+            }
+            None => TrackSource::Uri(source.to_string()),
+        };
         let id = harness
-            .run(&queue, move |control| control.append(source.to_string()))
+            .run(&queue, move |control| control.append(source))
             .await
             .expect("append census track through the production loader");
         let loaded = wait_for_loader_done_event(&mut events, &queue, id, LOCAL_LOAD_DEADLINE).await;
@@ -535,15 +557,107 @@ fn active_windows(firings: &[Firing]) -> BTreeMap<u64, Active> {
             .entry(before.track)
             .and_modify(|window| {
                 window.last = after.block;
-                window.served = after.served;
+                window.served += after.served - before.served;
             })
             .or_insert(Active {
                 first: before.block,
                 last: after.block,
-                served: after.served,
+                served: after.served - before.served,
             });
     }
     windows
+}
+
+fn constant_clock_firings(raw_origin: u64, contributed: usize) -> Vec<Firing> {
+    let mut offsets: Vec<usize> = (0..=contributed).step_by(BLOCK_FRAMES).collect();
+    if offsets.last().copied() != Some(contributed) {
+        offsets.push(contributed);
+    }
+    offsets
+        .into_iter()
+        .map(|offset| Firing {
+            track: 7,
+            block: 1_024 + i64::try_from(offset).expect("fixture output frame fits"),
+            served: raw_origin + u64::try_from(offset).expect("fixture source frame fits"),
+        })
+        .collect()
+}
+
+#[kithara::test]
+fn census_counts_a_healthy_track_from_its_nonzero_raw_origin() {
+    let built = Origin::RemoteFlac.built_frames();
+    let slack = i64::try_from(BLOCK_FRAMES).expect("fixture block fits") * 4;
+    let contributed = usize::try_from(built).expect("fixture track length fits");
+    for origin in [2_304, 4_420] {
+        let windows = active_windows(&constant_clock_firings(origin, contributed));
+        let window = windows.get(&7).expect("healthy track contributes");
+        let served = i64::from_probe_arg(window.served);
+        assert_eq!(served, built);
+        assert_eq!(window.last - window.first, built);
+        assert!((served - built).abs() <= slack);
+    }
+}
+
+#[kithara::test]
+fn census_does_not_count_requested_ranges_without_clock_progress() {
+    let firings = [
+        Firing {
+            track: 7,
+            block: 1_024,
+            served: 4_420,
+        },
+        Firing {
+            track: 7,
+            block: 1_536,
+            served: 4_420,
+        },
+        Firing {
+            track: 7,
+            block: 2_048,
+            served: 4_932,
+        },
+        Firing {
+            track: 7,
+            block: 2_560,
+            served: 4_932,
+        },
+    ];
+    let windows = active_windows(&firings);
+    let window = windows.get(&7).expect("one range contributes");
+    assert_eq!(window.first, 1_536);
+    assert_eq!(window.last, 2_048);
+    assert_eq!(window.served, 512);
+    assert!(active_windows(&firings[..2]).is_empty());
+}
+
+#[kithara::test]
+fn census_rejects_a_shortened_contribution_hidden_by_its_raw_origin() {
+    let built = Origin::RemoteFlac.built_frames();
+    let slack = i64::try_from(BLOCK_FRAMES).expect("fixture block fits") * 4;
+    let contributed = usize::try_from(built - 4_420).expect("shortened fixture length fits");
+    let windows = active_windows(&constant_clock_firings(4_420, contributed));
+    let window = windows.get(&7).expect("shortened track contributes");
+    let served = i64::from_probe_arg(window.served);
+    assert!(
+        served < built - slack,
+        "shortened contribution must remain rejected"
+    );
+    assert!(window.last - window.first < built - slack);
+}
+
+#[kithara::test]
+fn census_rejects_excess_physical_contribution_with_a_nonzero_raw_origin() {
+    let built = Origin::RemoteFlac.built_frames();
+    let slack = i64::try_from(BLOCK_FRAMES).expect("fixture block fits") * 4;
+    let contributed = usize::try_from(built + 4_420).expect("extended fixture length fits");
+    let windows = active_windows(&constant_clock_firings(2_304, contributed));
+    let window = windows.get(&7).expect("extended track contributes");
+    let served = i64::from_probe_arg(window.served);
+    assert!(
+        served > built + slack,
+        "excess contribution must remain rejected"
+    );
+    assert!(window.last - window.first > built + slack);
 }
 
 fn left_channel(rendered: &[f32]) -> Vec<f32> {
@@ -591,15 +705,16 @@ fn played_samples(ordered: &[(u64, Active)]) -> usize {
 }
 
 /// Longest run of consecutive silent samples.
-fn longest_silence(channel: &[f32]) -> usize {
-    let mut longest = 0;
-    let mut run = 0;
-    for sample in channel {
+fn longest_silence(channel: &[f32]) -> std::ops::Range<usize> {
+    let mut longest = 0..0;
+    let mut run_start = 0;
+    for (index, sample) in channel.iter().enumerate() {
         if sample.abs() < SILENCE_THRESHOLD {
-            run += 1;
-            longest = longest.max(run);
+            if index + 1 - run_start > longest.len() {
+                longest = run_start..index + 1;
+            }
         } else {
-            run = 0;
+            run_start = index + 1;
         }
     }
     longest
@@ -612,6 +727,35 @@ struct Take {
     ordered: Vec<(u64, Active)>,
 }
 
+fn trace_census(log: &QueueLog, firings: &[Firing], ordered: &[(u64, Active)], slack: i64) {
+    tracing::info!(target: "kithara_tests::census", ?ordered, "queue census active windows");
+    tracing::info!(target: "kithara_tests::census", durations = ?log.durations, "queue census durations");
+    tracing::info!(target: "kithara_tests::census", advances = ?log.advances, "queue census advances");
+    for firing in ordered.windows(2).flat_map(|pair| {
+        let ((left_id, left), (right_id, right)) = (pair[0], pair[1]);
+        firings
+            .iter()
+            .filter(move |firing| firing.track == left_id && firing.block >= left.last - slack)
+            .take(8)
+            .chain(
+                firings
+                    .iter()
+                    .filter(move |firing| {
+                        firing.track == right_id && firing.block <= right.first + slack
+                    })
+                    .take(8),
+            )
+    }) {
+        tracing::info!(
+            target: "kithara_tests::census",
+            track = firing.track,
+            output = firing.block,
+            served = firing.served,
+            "queue census seam firing"
+        );
+    }
+}
+
 async fn census_provenance(
     prepared: PreparedTracks,
     seam: Seam,
@@ -621,8 +765,9 @@ async fn census_provenance(
         server: _server,
         origins,
         sources,
+        backend,
     } = prepared;
-    let census = build_queue(sources, origins, seam).await?;
+    let census = build_queue(sources, origins, seam, backend).await?;
     let trace = usdt_trace::scope();
     let (rendered, log) = play_to_the_end(&census).await;
     let records = trace.events_of("render");
@@ -634,10 +779,15 @@ async fn census_provenance(
         rendered.len() / usize::from(CHANNELS)
     );
 
-    let windows = active_windows(&firings(&records));
+    let firings = firings(&records);
+    let windows = active_windows(&firings);
     let expected: Vec<u64> = census.tracks.iter().map(|id| id.as_u64()).collect();
     let mut ordered: Vec<(u64, Active)> = windows.iter().map(|(id, w)| (*id, *w)).collect();
     ordered.sort_by_key(|(_, window)| window.first);
+
+    let block = i64::try_from(BLOCK_FRAMES).expect("block size fits the session axis");
+    let slack = block * 4;
+    trace_census(&log, &firings, &ordered, slack);
 
     assert_eq!(
         ordered.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
@@ -645,8 +795,6 @@ async fn census_provenance(
         "every queued track must produce audio, in queue order"
     );
 
-    let block = i64::try_from(BLOCK_FRAMES).expect("block size fits the session axis");
-    let slack = block * 4;
     let lengths: Vec<i64> = origins
         .iter()
         .enumerate()
@@ -768,7 +916,55 @@ fn census_acoustics(take: &Take) {
 
     let played = &rendered[..played_samples(ordered)];
 
-    let silence = longest_silence(&left_channel(played));
+    let channel = left_channel(played);
+    let worst = longest_silence(&channel);
+    let leading = channel
+        .iter()
+        .take_while(|sample| sample.abs() < SILENCE_THRESHOLD)
+        .count();
+    let trailing = channel
+        .iter()
+        .rev()
+        .take_while(|sample| sample.abs() < SILENCE_THRESHOLD)
+        .count();
+    let internal_end = channel.len().saturating_sub(trailing).max(leading);
+    let internal = longest_silence(&channel[leading..internal_end]);
+    tracing::info!(
+        target: "kithara_tests::census",
+        played_frames = channel.len(),
+        worst_start = worst.start,
+        worst_end = worst.end,
+        leading_frames = leading,
+        trailing_frames = trailing,
+        internal_start = leading + internal.start,
+        internal_end = leading + internal.end,
+        internal_frames = internal.len(),
+        ?ordered,
+        "queue census acoustic silence locations"
+    );
+    for pair in ordered.windows(2) {
+        let ((left_id, left), (right_id, right)) = (pair[0], pair[1]);
+        let start = usize::try_from(left.last.min(right.first).max(0))
+            .expect("positive seam frame")
+            .saturating_sub(BLOCK_FRAMES);
+        let end = usize::try_from(left.last.max(right.first).max(0))
+            .expect("positive seam frame")
+            .saturating_add(BLOCK_FRAMES)
+            .min(channel.len());
+        let run = longest_silence(&channel[start..end]);
+        tracing::info!(
+            target: "kithara_tests::census",
+            left_id,
+            right_id,
+            left_last = left.last,
+            right_first = right.first,
+            silence_start = start + run.start,
+            silence_end = start + run.end,
+            silence_frames = run.len(),
+            "queue census acoustic seam silence"
+        );
+    }
+    let silence = worst.len();
     assert!(
         silence <= BLOCK_FRAMES,
         "the playthrough may fall silent only for as long as the handover is \
@@ -918,6 +1114,7 @@ struct PreparedTracks {
     server: Option<TestServerHelper>,
     origins: [Origin; 3],
     sources: Vec<ResourceSrc>,
+    backend: Option<DecoderBackend>,
 }
 
 #[kithara::hang_watchdog(ctx = String)]
@@ -945,5 +1142,24 @@ async fn prepare_tracks(origins: [Origin; 3]) -> PreparedTracks {
         server,
         origins,
         sources,
+        backend: None,
     }
+}
+
+#[cfg(not(target_os = "android"))]
+#[kithara::test(
+    native,
+    tokio,
+    timeout(Duration::from_secs(180)),
+    hang_timeout_secs(20)
+)]
+#[case::profile_mp3_libmp3lame_44100_1ch_gapless(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_1CH)]
+#[case::profile_mp3_libmp3lame_11025_1ch_gapless(SignalAsset::PROFILE_MP3_LIBMP3LAME_11025_1CH)]
+async fn symphonia_mpeg_uses_the_same_full_playthrough_oracles(
+    #[case] asset: SignalAsset,
+    temp_dir: TestTempDir,
+) {
+    let mut prepared = prepare_tracks([Origin::RemoteSignal(asset); 3]).await;
+    prepared.backend = Some(DecoderBackend::Symphonia);
+    let _ = census_provenance(prepared, Seam::Gapless, &temp_dir).await;
 }

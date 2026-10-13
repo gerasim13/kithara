@@ -260,6 +260,7 @@ impl<S> Audio<S> {
         let capacity = output.capacity()?;
         let mut written = 0usize;
         let mut source_span: Option<SourceSpan> = None;
+        let mut source_meta: Option<AudioChunkInfo> = None;
         let mut output_frames = 0u64;
         let mut eof = false;
         while written < capacity {
@@ -303,12 +304,15 @@ impl<S> Audio<S> {
                 Some,
             );
             if written > 0
-                && !source_spans_coalesce(
+                && (source_meta.is_some_and(|previous| {
+                    previous.source_revision != chunk.meta.source_revision
+                        || previous.visible_origin != chunk.meta.visible_origin
+                }) || !source_spans_coalesce(
                     source_span,
                     output_frames,
                     span,
                     u64::from(chunk.meta.frames),
-                )
+                ))
             {
                 break;
             }
@@ -322,6 +326,7 @@ impl<S> Audio<S> {
             let meta = chunk.meta;
             written += copied.count;
             if copied.count > 0 {
+                source_meta = Some(meta);
                 self.commit_read(meta);
                 hang_reset!();
             }

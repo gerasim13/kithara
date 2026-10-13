@@ -65,6 +65,8 @@ pub(crate) struct PreparedPromotion {
     pub(super) generation: DecoderGeneration,
     pub(super) join: PromotionJoin,
     #[field(get, vis = "pub(crate)", copy)]
+    pub(super) resume_head: crate::SourceEnd,
+    #[field(get, vis = "pub(crate)", copy)]
     pub(super) transition: VariantTransition,
 }
 
@@ -253,7 +255,7 @@ impl super::core::ActiveDecode {
         let OutgoingFrontier::Exact { frame, rate } = outgoing_frontier else {
             return None;
         };
-        let origin = self.active.timeline_origin(self.gapless_mode());
+        let origin = self.active.comparison_origin(self.gapless_mode())?;
         let active_rate = self.active.blender_profile().spec().sample_rate.get();
         content_time(rate, frame, active_rate, origin)
     }
@@ -266,7 +268,7 @@ impl super::core::ActiveDecode {
 
     pub(crate) fn prime_incoming(&mut self, outgoing_frontier: OutgoingFrontier) -> IncomingPrime {
         let gapless_mode = self.gapless_mode();
-        let outgoing_origin = self.active.timeline_origin(gapless_mode);
+        let outgoing_origin = self.active.comparison_origin(gapless_mode);
         let outgoing_rate = self.active.blender_profile().spec().sample_rate.get();
         let active_profile = self.active.gapless_profile();
         let active_gap = self.active.timeline_gap();
@@ -286,16 +288,26 @@ impl super::core::ActiveDecode {
             *frontier = outgoing_frontier;
         }
         let mut latched_frontier = *frontier;
-        let incoming_origin =
-            incoming_origin_from(active_profile, active_gap, generation, gapless_mode);
-        let mut readiness = promotion_readiness(
-            active,
-            blender,
+        let Some((outgoing_origin, incoming_origin)) = outgoing_origin.zip(incoming_origin_from(
+            active_profile,
+            active_gap,
             generation,
-            latched_frontier,
-            outgoing_origin,
-            incoming_origin,
-        );
+            gapless_mode,
+        )) else {
+            self.fail_incoming();
+            return IncomingPrime::Failed;
+        };
+        let readiness_at = |generation: &DecoderGeneration, frontier, origin| {
+            promotion_readiness(
+                active,
+                blender,
+                generation,
+                frontier,
+                outgoing_origin,
+                origin,
+            )
+        };
+        let mut readiness = readiness_at(generation, latched_frontier, incoming_origin);
         if matches!(readiness, PromotionReadiness::AwaitingOutgoingFrontier)
             && observed_frontier_is_later(
                 latched_frontier,
@@ -306,14 +318,7 @@ impl super::core::ActiveDecode {
         {
             *frontier = outgoing_frontier;
             latched_frontier = outgoing_frontier;
-            readiness = promotion_readiness(
-                active,
-                blender,
-                generation,
-                latched_frontier,
-                outgoing_origin,
-                incoming_origin,
-            );
+            readiness = readiness_at(generation, latched_frontier, incoming_origin);
         }
         match readiness {
             PromotionReadiness::Ready(_) => return IncomingPrime::Ready,
@@ -323,6 +328,10 @@ impl super::core::ActiveDecode {
             }
             PromotionReadiness::NeedIncoming => {}
         }
+        let incoming_readiness = |generation: &DecoderGeneration| {
+            incoming_origin_from(active_profile, active_gap, generation, gapless_mode)
+                .map(|origin| (origin, readiness_at(generation, latched_frontier, origin)))
+        };
         let mut outcome = IncomingPrime::Pending;
         for _ in 0..consts::PRIME_STEPS_PER_PASS {
             generation.decoder_mut().prepare_next_chunk();
@@ -340,14 +349,11 @@ impl super::core::ActiveDecode {
                     if !chunk.samples.is_empty() {
                         generation.stage(chunk);
                     }
-                    match promotion_readiness(
-                        active,
-                        blender,
-                        generation,
-                        latched_frontier,
-                        outgoing_origin,
-                        incoming_origin,
-                    ) {
+                    let Some((_, readiness)) = incoming_readiness(generation) else {
+                        outcome = IncomingPrime::Failed;
+                        break;
+                    };
+                    match readiness {
                         PromotionReadiness::Ready(_) => IncomingPrime::Ready,
                         PromotionReadiness::AwaitingOutgoingFrontier
                         | PromotionReadiness::AwaitingOutgoingPcm => IncomingPrime::Pending,
@@ -367,14 +373,11 @@ impl super::core::ActiveDecode {
                 Ok(DecoderChunkOutcome::Pending(_)) => IncomingPrime::Pending,
                 Ok(DecoderChunkOutcome::Eof) => {
                     generation.finish_staging();
-                    match promotion_readiness(
-                        active,
-                        blender,
-                        generation,
-                        latched_frontier,
-                        outgoing_origin,
-                        incoming_origin,
-                    ) {
+                    let Some((incoming_origin, readiness)) = incoming_readiness(generation) else {
+                        outcome = IncomingPrime::Failed;
+                        break;
+                    };
+                    match readiness {
                         PromotionReadiness::Ready(_) => IncomingPrime::Ready,
                         PromotionReadiness::AwaitingOutgoingFrontier
                         | PromotionReadiness::AwaitingOutgoingPcm => IncomingPrime::Pending,
@@ -402,19 +405,24 @@ impl super::core::ActiveDecode {
             };
             break;
         }
-        if outcome == IncomingPrime::Failed
-            && let Some(IncomingDecode::Priming {
-                transition,
-                generation,
-                ..
-            }) = self.incoming.take()
+        if outcome == IncomingPrime::Failed {
+            self.fail_incoming();
+        }
+        outcome
+    }
+
+    fn fail_incoming(&mut self) {
+        if let Some(IncomingDecode::Priming {
+            transition,
+            generation,
+            ..
+        }) = self.incoming.take()
         {
             self.incoming = Some(IncomingDecode::Failed {
                 transition,
                 generation,
             });
         }
-        outcome
     }
 
     delegate::delegate! {
@@ -770,7 +778,7 @@ pub(super) fn incoming_origin(
     active: &DecoderGeneration,
     incoming: &DecoderGeneration,
     mode: kithara_decode::GaplessMode,
-) -> u64 {
+) -> Option<u64> {
     incoming_origin_from(
         active.gapless_profile(),
         active.timeline_gap(),
@@ -786,7 +794,10 @@ fn incoming_origin_from(
     active_gap: u64,
     incoming: &DecoderGeneration,
     mode: kithara_decode::GaplessMode,
-) -> u64 {
+) -> Option<u64> {
+    if incoming.visible_origin().is_some() {
+        return incoming.comparison_origin(mode);
+    }
     let incoming_profile = incoming.gapless_profile();
     let gap = if shares_default_profile(active_profile, incoming_profile) {
         active_gap.max(incoming.timeline_gap())
@@ -802,7 +813,7 @@ fn incoming_origin_from(
         ?mode,
         "incoming timeline origin resolved"
     );
-    origin
+    Some(origin)
 }
 
 pub(super) fn shares_default_profile(

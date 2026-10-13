@@ -17,6 +17,10 @@ pub struct AudioChunkInfo {
     pub end_timestamp: Duration,
     /// Media-timeline position of the first frame in this chunk.
     pub timestamp: Duration,
+    /// Original visible position in this chunk's raw source clock, when known.
+    pub visible_origin: Option<Duration>,
+    /// Audio-owned raw source-coordinate discontinuity represented by this chunk.
+    pub source_revision: u64,
     /// Exact decoded-source mapping of this physical output interval.
     pub source_span: Option<SourceSpan>,
     /// Opaque immutable source/output mapping revision, absent for unmapped PCM.
@@ -66,6 +70,8 @@ impl Default for AudioChunkInfo {
             spec: AudioSpec::new(0, PLACEHOLDER_RATE),
             end_timestamp: Duration::ZERO,
             timestamp: Duration::ZERO,
+            visible_origin: None,
+            source_revision: 0,
             source_span: None,
             segment_index: None,
             source_byte_offset: None,

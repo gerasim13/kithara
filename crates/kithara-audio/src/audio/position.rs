@@ -3,6 +3,7 @@ use kithara_stream::ChunkPosition;
 
 pub(crate) fn chunk_position(info: &AudioChunkInfo) -> ChunkPosition {
     ChunkPosition {
+        visible_origin: info.visible_origin,
         source_byte_offset: info.source_byte_offset,
         end_position_ns: u64::try_from(info.end_timestamp.as_nanos()).unwrap_or(u64::MAX),
         frame_offset: info.frame_offset,

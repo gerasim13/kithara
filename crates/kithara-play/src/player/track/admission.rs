@@ -140,7 +140,10 @@ impl<S> Track<S> for PlayerImpl<S> {
         if let TrackStatus::Ended { at } = self.status {
             return Ok(Some(at));
         }
-        let Some(duration) = self.duration else {
+        let Some(endpoint) = self
+            .duration
+            .and_then(|duration| self.visible_origin?.checked_add(duration))
+        else {
             return Ok(None);
         };
         if !matches!(self.status, TrackStatus::Playing { .. }) {
@@ -160,7 +163,7 @@ impl<S> Track<S> for PlayerImpl<S> {
         let mut position = mark.position.as_secs_f64();
         for (frame, _, change) in commands {
             if frame > cursor {
-                let remaining = (duration.as_secs_f64() - position).max(0.0) * rate;
+                let remaining = (endpoint.as_secs_f64() - position).max(0.0) * rate;
                 if let Some(offset) = curve_end(
                     curve,
                     origin,
@@ -197,7 +200,7 @@ impl<S> Track<S> for PlayerImpl<S> {
                 PlannedChange::Jump(_) => {}
             }
         }
-        let remaining = (duration.as_secs_f64() - position).max(0.0) * rate;
+        let remaining = (endpoint.as_secs_f64() - position).max(0.0) * rate;
         let offset = curve_end(curve, origin, cursor.saturating_sub(start), remaining, None)?
             .ok_or(PlayError::Untimed)?;
         let end = start.checked_add(offset).ok_or(PlayError::Untimed)?;

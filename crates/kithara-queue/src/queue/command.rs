@@ -200,7 +200,8 @@ where
             }
             QueueCommand::SetPlaybackOrder(order) => {
                 let ids = self.track_ids();
-                self.navigation.set_playback_order(order, &ids);
+                self.navigation
+                    .set_playback_order(order, &ids, self.current);
                 self.config.playback_order = order;
                 self.announce(QueueEvent::PlaybackOrderChanged { order });
                 self.cancel_auto(out)?;
@@ -269,8 +270,17 @@ where
     ) -> Result<Option<Seq>, QueueError> {
         if self.active_current_index().is_none() && self.target.is_some() {
             self.withdraw_transition(out)?;
-            self.target.as_mut().ok_or(PlayError::NotReady)?.playing = false;
+            self.target
+                .as_mut()
+                .ok_or(PlayError::NotReady)?
+                .set_playing(false);
             return self.transition_loaded(out).map_err(Into::into);
+        }
+        if self.pending_handover.is_some()
+            && let Some(target) = self.target.as_mut()
+            && self.current == Some(target.to)
+        {
+            target.set_playing(false);
         }
         self.cancel_auto(out)?;
         self.transport(TrackCommand::Pause { at }, out)
@@ -284,13 +294,22 @@ where
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, QueueError> {
         if self.active_current_index().is_some() {
+            if self.pending_handover.is_some()
+                && let Some(target) = self.target.as_mut()
+                && self.current == Some(target.to)
+            {
+                target.set_playing(true);
+            }
             let sent = self.transport(TrackCommand::Play { at }, out)?;
             if let Some(id) = self.current {
                 self.tracks.set_status(id, TrackStatus::Consumed);
             }
             Ok(sent)
         } else if self.target.is_some() {
-            self.target.as_mut().ok_or(PlayError::NotReady)?.playing = true;
+            self.target
+                .as_mut()
+                .ok_or(PlayError::NotReady)?
+                .set_playing(true);
             self.transition_loaded(out).map_err(Into::into)
         } else {
             self.next_target(
@@ -384,11 +403,12 @@ where
                     && target.stale.is_none()
                     && target.repeat.is_none()
                     && self
+                        .pending_handover
+                        .is_some_and(|pending| pending.item == target.to)
+                    && self
                         .incoming_index(target.to)
                         .and_then(|index| self.active.get(index))
-                        .is_some_and(|active| {
-                            matches!(active.role, Role::Incoming { batch: Some(_) })
-                        })
+                        .is_some_and(|active| matches!(active.role, Role::Incoming))
             });
         if withdraw && out.deck_available() == 0 {
             return Err(PlayError::Full("deck").into());

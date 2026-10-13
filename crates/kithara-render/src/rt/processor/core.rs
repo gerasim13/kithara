@@ -255,6 +255,7 @@ fn slot_snapshot(track: &PlayerTrack, at: SessionFrame) -> SlotSnapshot {
         mark: track.mark(at),
         position,
         duration: track.duration(),
+        visible_origin: track.visible_origin(),
         frontier: track.decoded_frontier().max(position),
         cached: track.cached_span(),
         gain: track.gain(),

@@ -32,16 +32,12 @@ async fn spurious_item_did_play_to_end_is_filtered() {
         })
         .expect("spurious terminal event");
     tick_fixture(&mut queue, &mut rig);
-    assert_eq!(
-        queue.navigation.current(),
-        None,
-        "navigation must not have advanced"
-    );
+    assert_eq!(queue.current, None, "navigation must not have advanced");
 }
 
 #[kithara::test(tokio)]
 async fn eof_after_queue_end_does_not_restart_from_first_track() {
-    let (mut queue, first, second, mut rig, dir) = crate::mock::selected().await;
+    let (mut queue, _first, second, mut rig, dir) = crate::mock::selected().await;
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(
             queue,
@@ -55,7 +51,7 @@ async fn eof_after_queue_end_does_not_restart_from_first_track() {
     .expect("select last");
     answer_load(&mut queue, &mut rig, &dir).await;
     crate::mock::finish(&mut queue, &mut rig);
-    queue.navigation.select(second, &[first, second]);
+    queue.current = Some(second);
     queue.current = None;
     queue.navigation = crate::NavigationState::new(queue.navigation.history_limit());
     let mut rx = queue.subscribe::<QueueEvent>();
@@ -72,11 +68,7 @@ async fn eof_after_queue_end_does_not_restart_from_first_track() {
         })
         .expect("stale end");
     tick_fixture(&mut queue, &mut rig);
-    assert_eq!(
-        queue.navigation.current(),
-        None,
-        "stale EOF must not restart the queue"
-    );
+    assert_eq!(queue.current, None, "stale EOF must not restart the queue");
     let saw_ended =
         wait_for_queue_event(&mut rx, |ev| matches!(ev, QueueEvent::QueueEnded), 200).await;
     assert!(!saw_ended, "stale EOF must not duplicate QueueEnded");
@@ -157,7 +149,7 @@ fn attempt_selected(queue: &Queue<TestPools>, id: TrackId) -> bool {
         .is_some_and(|target| target.to == id && target.playing)
         && queue.active.iter().any(|active| {
             active.item == id
-                && matches!(active.role, Role::Incoming { .. })
+                && matches!(active.role, Role::Incoming)
                 && matches!(
                     active.load,
                     Some(crate::queue::slots::LoadState::Opening(_))

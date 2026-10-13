@@ -172,8 +172,7 @@ fn registration_projects_the_canonical_member_grid() {
             Command::Jump(position(128), SessionFrame::new(96_128))
         )
     );
-    assert_ne!(alignment[0].0, enabled);
-    settle_deck(&mut host, id, alignment[0].0, 96_128);
+    assert_eq!(alignment[0].0, enabled);
     settle_deck(&mut host, id, enabled, 96_128);
     control.clear();
     assert!(matches!(

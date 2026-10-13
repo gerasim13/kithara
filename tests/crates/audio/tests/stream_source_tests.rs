@@ -172,7 +172,15 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(
         || audio.decoded_frontier().saturating_sub(committed) > Duration::from_millis(250),
     )
     .await
-    .expect("the fixture must admit PCM before the route change");
+    .unwrap_or_else(|error| {
+        panic!(
+            "the fixture must admit PCM before the route change: {error}; \
+             consumer={committed:?}, decoded_frontier={:?}, first_chunk={:?}..{:?}",
+            audio.decoded_frontier(),
+            first.meta.timestamp,
+            first.meta.end_timestamp,
+        )
+    });
     hang_reset!();
     let decoded_frontier = audio.decoded_frontier();
     assert!(

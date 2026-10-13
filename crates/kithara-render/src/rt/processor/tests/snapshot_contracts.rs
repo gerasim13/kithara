@@ -104,3 +104,49 @@ fn processor_fade_in_restarts_track_from_zero() {
     );
     assert!(seeks.try_iter().next().is_none(), "no hidden seek(0)");
 }
+#[kithara::test]
+fn snapshot_carries_the_owner_origin_without_rewriting_raw_pcm_position() {
+    let spec = AudioSpec::new(2, NonZeroU32::new(1_000).expect("millisecond source"));
+    let mut packets = PacketRing::with_origin(
+        spec,
+        Duration::from_millis(952),
+        4,
+        Duration::from_millis(717),
+    );
+    let data = chunk(spec, SegmentId::FIRST, 0, 1_500, &[0.5; 338]);
+    packets.push(PcmPacket::Chunk(Box::new(data)));
+    let pcm = PlayerResource::new(
+        PcmConsumer::new(packets.receiver.take().expect("receiver")),
+        Arc::from("offset"),
+        &pools(),
+    )
+    .expect("resource");
+    let (mut mixer, mut ends) = mixer();
+    send(
+        &mut ends,
+        When::Next,
+        vec![DeckPart::Attach {
+            item_id: kithara_events::TrackId::allocate(),
+            slot: A,
+            pcm: Box::new(pcm),
+            segment: SegmentId::FIRST,
+        }],
+    );
+    assert!(crate::mock::apply_initial_batch(
+        &mut mixer.mixer,
+        &mut mixer.inbox.0
+    ));
+    let track = mixer.mixer.deck.tracks.at_mut(A).expect("loaded slot");
+    track.recycle_obsolete(&mut 8);
+    assert_eq!(track.position(), 1.5);
+    mixer.mixer.publish(SessionFrame::new(0));
+    let snapshot = ends.deck.snapshot.read().slots[0];
+    assert_eq!(snapshot.position, 1.5);
+    assert_eq!(
+        snapshot.mark.expect("physical mark").position,
+        Duration::from_millis(1_500)
+    );
+    assert_eq!(snapshot.visible_origin, Some(Duration::from_millis(717)));
+    assert_eq!(snapshot.duration, 0.952);
+    assert_eq!(snapshot.frontier, 1.669);
+}

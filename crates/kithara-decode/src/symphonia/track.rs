@@ -21,7 +21,10 @@ use symphonia_core::{
             CODEC_ID_PCM_U32LE_PLANAR, CODEC_ID_VORBIS,
         },
     },
-    formats::Track,
+    formats::{
+        FormatId, Track,
+        well_known::{FORMAT_ID_MP3, FORMAT_ID_OGG},
+    },
     units::{Time, Timestamp},
 };
 
@@ -30,6 +33,7 @@ use crate::{DecodeError, DecodeResult, demuxer::TrackInfo};
 pub(super) fn build_track_info(
     track: &Track,
     codec_params: &AudioCodecParameters,
+    format: FormatId,
 ) -> DecodeResult<TrackInfo> {
     const DEFAULT_CHANNEL_COUNT: u16 = 2;
 
@@ -50,7 +54,7 @@ pub(super) fn build_track_info(
         .as_ref()
         .map(|d| d.to_vec())
         .unwrap_or_default();
-    let duration = calculate_track_duration(track, codec);
+    let duration = calculate_track_duration(track, codec, format);
 
     Ok(TrackInfo {
         codec,
@@ -65,24 +69,43 @@ pub(super) fn build_track_info(
     })
 }
 
-/// MPEG track metadata excludes LAME trim; downstream trimming requires its raw PCM extent.
-fn calculate_track_duration(track: &Track, codec: AudioCodec) -> Option<Duration> {
+pub(super) fn timestamp_origin(track: &Track, format: FormatId) -> Timestamp {
+    match format {
+        FORMAT_ID_MP3 => Timestamp::new(-i64::from(track.delay.unwrap_or(0))),
+        FORMAT_ID_OGG if track.start_ts.is_negative() => track.start_ts,
+        _ => Timestamp::ZERO,
+    }
+}
+
+/// Raw PCM extent includes declared endpoint padding and any negative container origin.
+fn calculate_track_duration(
+    track: &Track,
+    codec: AudioCodec,
+    format: FormatId,
+) -> Option<Duration> {
     let mut num_frames = track.num_frames?;
     if codec == AudioCodec::Mp3 {
         num_frames = num_frames
             .checked_add(u64::from(track.delay.unwrap_or(0)))?
             .checked_add(u64::from(track.padding.unwrap_or(0)))?;
+    } else if format == FORMAT_ID_OGG {
+        let native_end = Timestamp::new(i64::try_from(num_frames).ok()?);
+        num_frames = native_end
+            .duration_from(track.start_ts)?
+            .get()
+            .checked_add(u64::from(track.padding.unwrap_or(0)))?;
     }
     let time_base = track.time_base?;
-    let time = time_base.calc_time(Timestamp::new(
-        i64::try_from(num_frames).unwrap_or(i64::MAX),
-    ))?;
-    Some(time_to_duration(time))
+    let time = time_base.calc_duration(symphonia_core::units::Duration::new(num_frames))?;
+    time_to_duration(time)
 }
 
-pub(super) fn time_to_duration(time: Time) -> Duration {
+pub(super) fn time_to_duration(time: Time) -> Option<Duration> {
+    if time < Time::ZERO {
+        return None;
+    }
     let (seconds, nanos) = time.parts();
-    Duration::new(seconds.cast_unsigned(), nanos)
+    Some(Duration::new(u64::try_from(seconds).ok()?, nanos))
 }
 
 /// Map a symphonia codec id to our [`AudioCodec`] enum. Unknown ids fall

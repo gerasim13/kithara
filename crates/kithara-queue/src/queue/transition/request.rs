@@ -12,7 +12,7 @@ use super::super::{
     Queue, Transition,
     command::play_error,
     slots::{LoadState, Role},
-    types::Target,
+    types::{Continuation, Target},
 };
 use crate::{AdvanceReason, QueueError, QueueEvent, RepeatMode, TrackStatus};
 
@@ -56,10 +56,13 @@ where
     ) -> Result<Option<Seq>, QueueError> {
         let ids = self.selectable_ids();
         let wrap = self.navigation.repeat_mode() == RepeatMode::All;
-        let Some(id) =
-            self.navigation
-                .next(&ids, auto && reason != AdvanceReason::TrackFailed, wrap)
-        else {
+        let cursor = self.navigation_cursor();
+        let Some(id) = self.navigation.next(
+            &ids,
+            cursor,
+            auto && reason != AdvanceReason::TrackFailed,
+            wrap,
+        ) else {
             if auto {
                 self.announce(QueueEvent::QueueEnded);
             }
@@ -95,7 +98,7 @@ where
             .settings(self.config.settings.crossfade())
             .validate()
             .map_err(PlayError::from)?;
-        if !auto && self.current == Some(id) {
+        if !auto && self.current == Some(id) && self.pending_handover.is_none() {
             if self.target.is_some_and(|target| !target.auto) {
                 self.cancel_target(out)?;
             }
@@ -109,13 +112,10 @@ where
                 .is_some_and(|target| target.to == id && !target.auto)
         {
             let target = self.target.as_mut().ok_or(PlayError::NotReady)?;
-            target.playing = playing;
+            target.set_playing(playing);
             target.settings = settings;
             target.transition = transition;
             target.reason = reason;
-            if reason != AdvanceReason::InitialLoad {
-                self.navigation.select(id, &self.track_ids());
-            }
             let load = self
                 .incoming_index(id)
                 .and_then(|index| self.active.get(index))
@@ -155,22 +155,14 @@ where
             repeat: None,
             chained: false,
         });
-        if !auto && reason != AdvanceReason::InitialLoad {
-            self.navigation.select(id, &self.track_ids());
-        }
-        match self.load_track(id, Role::Incoming { batch: None }, output, out) {
-            Ok(load) => {
-                if auto {
-                    self.navigation.select(id, &self.track_ids());
+        match self.load_track(id, Role::Incoming, output, out) {
+            Ok(load) => match self.transition_loaded(out) {
+                Ok(sent) => Ok(sent.or(load)),
+                Err(error) => {
+                    self.cancel_target(out)?;
+                    Err(error.into())
                 }
-                match self.transition_loaded(out) {
-                    Ok(sent) => Ok(sent.or(load)),
-                    Err(error) => {
-                        self.cancel_target(out)?;
-                        Err(error.into())
-                    }
-                }
-            }
+            },
             Err(error) => {
                 self.target = None;
                 self.tracks.fail(id, &error);
@@ -190,13 +182,35 @@ where
         else {
             return Ok(None);
         };
+        if self.pending_handover.is_some() {
+            return Ok(None);
+        }
+        if !target.auto
+            && self.current == Some(target.to)
+            && self.incoming_index(target.to).is_none()
+            && let Some(index) = self.active_current_index()
+        {
+            let command = if target.playing {
+                TrackCommand::Play { at: When::Next }
+            } else {
+                TrackCommand::Pause { at: When::Next }
+            };
+            let sent = self
+                .active
+                .get_mut(index)
+                .ok_or(PlayError::NoActiveSlot)?
+                .track
+                .apply(command, out)?;
+            self.target = None;
+            return Ok(sent);
+        }
         let Some(index) = self.incoming_index(target.to) else {
             return Ok(None);
         };
         let Some(active) = self.active.get(index) else {
             return Ok(None);
         };
-        if !matches!(active.role, Role::Incoming { batch: None })
+        if !matches!(active.role, Role::Incoming)
             || (matches!(active.load, Some(LoadState::Opening(_)))
                 && !self.active.is_replacement(index))
         {
@@ -204,7 +218,10 @@ where
         }
         if !matches!(
             active.track.snapshot().as_ref().status,
-            PlayingStatus::Loaded | PlayingStatus::Paused { .. }
+            PlayingStatus::Loaded
+                | PlayingStatus::Paused { .. }
+                | PlayingStatus::Playing { .. }
+                | PlayingStatus::Faded { .. }
         ) {
             return Ok(None);
         }
@@ -214,18 +231,27 @@ where
                 return Ok(None);
             }
             if let Some(target) = &mut self.target {
-                target.continued = Some(load.seq());
+                target.continued = Some(Continuation::Load(load.seq()));
             }
         }
         if !target.playing {
+            if self
+                .target
+                .is_some_and(|target| matches!(target.continued, Some(Continuation::Pause(_))))
+            {
+                return Ok(None);
+            }
             let sent = self
                 .active
                 .get_mut(index)
                 .ok_or(PlayError::NoActiveSlot)?
                 .track
                 .apply(TrackCommand::Pause { at: When::Next }, out)?;
-            if sent.is_none() {
-                self.enter_target(index, self.earliest()?)?;
+            if let Some(seq) = sent {
+                self.target.as_mut().ok_or(PlayError::NotReady)?.continued =
+                    Some(Continuation::Pause(seq));
+            } else {
+                self.enter_target(index, self.earliest()?, target.reason)?;
             }
             return Ok(sent);
         }

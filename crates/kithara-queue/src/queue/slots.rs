@@ -17,9 +17,8 @@ pub(super) struct Parked<T> {
 pub(super) enum Role {
     /// Sounds as the queue's current item.
     Current,
-    /// The transition target; `batch` is the deck batch that brings it in,
-    /// once sent.
-    Incoming { batch: Option<Seq> },
+    /// The transition target.
+    Incoming,
     /// Loaded ahead of the current track's end; not yet a target.
     Preloaded,
     /// Plays its tail out after a transition replaced it.

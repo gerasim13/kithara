@@ -79,6 +79,7 @@ impl<S> PlayerImpl<S> {
                     self.ready = Some(SegmentId::FIRST);
                 }
                 self.duration = loaded.opened.duration;
+                self.visible_origin = loaded.opened.pcm.visible_origin();
                 self.abr = loaded.opened.abr.clone();
                 self.metadata = loaded.opened.metadata.clone();
                 if let Some(loading) = self.loading.as_mut() {

@@ -8,6 +8,7 @@ mod coordinate;
 #[cfg(feature = "render")]
 mod render;
 mod segment;
+mod tempo;
 mod temporal;
 #[cfg(all(test, feature = "render"))]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
@@ -34,6 +35,7 @@ pub use segment::{
     MapSegment, Meter, MeterError, MeterFacts, SegmentEndpoint, SegmentError, SegmentFacts,
     SegmentSet,
 };
+pub use tempo::{Tempo, TempoError};
 pub use temporal::{
     ActiveRegion, GridSegment, PresentationFrontier, RegionPlan, RegionPlanError, RenderContext,
     RenderPublisher, RenderReader, RenderSnapshot, SpeedCurve, StretchKind, WarpCapabilities,

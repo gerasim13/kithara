@@ -65,6 +65,8 @@ pub(crate) trait FrameCodec: Send + 'static {
     ) -> DecodeResult<u32>;
 
     /// Codec-owned presentation time of the most recent non-empty PCM output.
+    /// A buffering codec may expose its input anchor before producing PCM; callers
+    /// use that value as a chunk position only when output is non-empty.
     /// `None` uses synchronous packet timing and infers leading strip from its duration.
     fn decoded_pts(&self) -> Option<Duration> {
         None

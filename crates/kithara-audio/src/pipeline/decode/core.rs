@@ -108,7 +108,6 @@ pub(crate) struct ActiveDecode {
 pub(crate) struct DecodeCtx<'a, T: StreamType> {
     pub(crate) cursor: &'a mut ResumeCursor,
     pub(crate) stream: &'a SharedStream<T>,
-    pub(crate) playhead: &'a dyn PlayheadWrite,
     pub(crate) emit: Option<&'a DeferredBus<AudioLaneEvent>>,
 }
 
@@ -144,6 +143,10 @@ impl ActiveDecode {
             announced_hold: None,
             stage_error: None,
         })
+    }
+
+    pub(crate) fn seal_visible_origin(&mut self) {
+        self.active.seal_visible_origin(self.gapless_mode);
     }
 
     pub(crate) fn discontinuity(&self) -> crate::SourceDiscontinuity {
@@ -205,6 +208,9 @@ impl ActiveDecode {
             &mut chunk,
             self.active.pending_head_skip_mut().as_deref(),
         )?;
+        self.active.observe_visible_origin(&chunk);
+        chunk.meta.visible_origin = self.active.visible_origin();
+        chunk.meta.source_revision = self.discontinuity_revision;
         cursor.record(&chunk);
         if let Some(observer) = &mut self.observer {
             let _observation = observer.try_observe(&chunk);
@@ -1017,6 +1023,7 @@ mod tests {
             generation: generation(spec),
             transition,
             join: PromotionJoin::HardCut,
+            resume_head: crate::SourceEnd::new(0, spec.sample_rate),
         }));
         assert_eq!(decode.discontinuity().revision(), initial);
 
@@ -1026,6 +1033,7 @@ mod tests {
             generation: incoming,
             transition,
             join: PromotionJoin::HardCut,
+            resume_head: crate::SourceEnd::new(0, spec.sample_rate),
         }));
         assert_ne!(decode.discontinuity().revision(), initial);
         let shifted = decode.discontinuity().revision();
@@ -1034,6 +1042,7 @@ mod tests {
             generation: generation(incoming_spec),
             transition,
             join: PromotionJoin::HardCut,
+            resume_head: crate::SourceEnd::new(0, incoming_spec.sample_rate),
         }));
         assert_eq!(decode.discontinuity().spec(), &incoming_spec);
         assert_ne!(decode.discontinuity().revision(), shifted);
