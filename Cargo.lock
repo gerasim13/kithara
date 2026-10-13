@@ -4685,12 +4685,12 @@ dependencies = [
  "num-traits",
  "proptest",
  "serde",
- "serde_yaml_ng",
  "serial_test",
  "thiserror 2.0.21",
  "tracing",
  "unimock",
  "wasm-bindgen-test",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -4726,11 +4726,11 @@ dependencies = [
  "ringbuf",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "thiserror 2.0.21",
  "tracing",
  "unimock",
  "wasm-bindgen-test",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -4799,13 +4799,13 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "tempfile",
  "tracing",
  "tracing-log",
  "tracing-subscriber",
  "tracing-wasm",
  "url",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -4814,7 +4814,7 @@ version = "0.0.1-alpha5"
 dependencies = [
  "kithara-test-utils",
  "kithara-workspace-hack",
- "serde_yaml_ng",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -4830,12 +4830,12 @@ dependencies = [
  "kithara-ui",
  "kithara-workspace-hack",
  "serde",
- "serde_yaml_ng",
  "tempfile",
  "thiserror 2.0.21",
  "url",
  "webbrowser",
  "windows-native-keyring-store",
+ "yaml_serde",
  "zbus-secret-service-keyring-store",
 ]
 
@@ -4873,12 +4873,12 @@ dependencies = [
  "rand 0.10.3",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "thiserror 2.0.21",
  "unimock",
  "url",
  "uuid",
  "wasm-bindgen-test",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -4930,13 +4930,13 @@ dependencies = [
  "rkyv",
  "same-file",
  "serde",
- "serde_yaml_ng",
  "sha2",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
  "url",
  "wasm-bindgen-test",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -4972,12 +4972,12 @@ dependencies = [
  "num-traits",
  "ringbuf",
  "serde",
- "serde_yaml_ng",
  "thiserror 2.0.21",
  "tracing",
  "unimock",
  "url",
  "wasm-bindgen-test",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -5020,11 +5020,11 @@ dependencies = [
  "rten-tensor",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "sha2",
  "smallvec",
  "thiserror 2.0.21",
  "unimock",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -5065,10 +5065,10 @@ dependencies = [
  "kithara-workspace-hack",
  "ringbuf",
  "serde",
- "serde_yaml_ng",
  "thiserror 2.0.21",
  "tower-http 0.7.1",
  "tracing",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -5103,10 +5103,10 @@ dependencies = [
  "kithara-test-utils",
  "kithara-workspace-hack",
  "serde",
- "serde_yaml_ng",
  "thiserror 2.0.21",
  "tracing",
  "wasm-bindgen-test",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -5174,7 +5174,6 @@ dependencies = [
  "opus",
  "re_mp4",
  "serde",
- "serde_yaml_ng",
  "smallvec",
  "symphonia",
  "symphonia-core",
@@ -5185,6 +5184,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -5216,8 +5216,8 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde",
- "serde_yaml_ng",
  "syn 3.0.6",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -5274,11 +5274,11 @@ dependencies = [
  "kithara-test-utils",
  "kithara-workspace-hack",
  "serde",
- "serde_yaml_ng",
  "thunderdome",
  "tracing",
  "url",
  "wasm-bindgen-test",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -5512,12 +5512,12 @@ dependencies = [
  "kithara-test-utils",
  "kithara-workspace-hack",
  "serde",
- "serde_yaml_ng",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
  "url",
  "wasm-bindgen-test",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -5662,13 +5662,13 @@ dependencies = [
  "kithara-test-utils",
  "kithara-workspace-hack",
  "serde",
- "serde_yaml_ng",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
  "unimock",
  "url",
  "wasm-bindgen-test",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -5849,7 +5849,6 @@ dependencies = [
  "num-traits",
  "reqwest",
  "serde",
- "serde_yaml_ng",
  "thiserror 2.0.21",
  "tower-layer",
  "tower-service",
@@ -5858,6 +5857,7 @@ dependencies = [
  "wasm-bindgen-test",
  "wreq",
  "wreq-util",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -5962,13 +5962,13 @@ dependencies = [
  "ringbuf",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "sha2",
  "smallvec",
  "thiserror 2.0.21",
  "tracing",
  "unimock",
  "url",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -6017,10 +6017,10 @@ dependencies = [
  "kithara-workspace-hack",
  "rand 0.10.3",
  "serde",
- "serde_yaml_ng",
  "smallvec",
  "thiserror 2.0.21",
  "tracing",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -6106,10 +6106,10 @@ dependencies = [
  "num-traits",
  "rubato",
  "serde",
- "serde_yaml_ng",
  "smallvec",
  "thiserror 2.0.21",
  "tracing",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -6378,7 +6378,6 @@ dependencies = [
  "pollster 1.0.1",
  "ron",
  "serde",
- "serde_yaml_ng",
  "skrifa 0.37.0",
  "tempfile",
  "thiserror 2.0.21",
@@ -6388,6 +6387,7 @@ dependencies = [
  "vello",
  "window_clipboard",
  "winit",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -6583,10 +6583,10 @@ dependencies = [
  "kithara-workspace-hack",
  "rayon",
  "serde",
- "serde_yaml_ng",
  "thiserror 2.0.21",
  "tracing",
  "wasm-bindgen-test",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -6818,6 +6818,12 @@ dependencies = [
  "plain",
  "redox_syscall 0.9.4",
 ]
+
+[[package]]
+name = "libyaml-rs"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e126dda6f34391ab7b444f9922055facc83c07a910da3eb16f1e4d9c45dc777"
 
 [[package]]
 name = "lilt"
@@ -9912,19 +9918,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_yaml_ng"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b4db627b98b36d4203a7b458cf3573730f2bb591b28871d916dfa9efabfd41f"
-dependencies = [
- "indexmap",
- "itoa",
- "ryu",
- "serde",
- "unsafe-libyaml",
-]
-
-[[package]]
 name = "serial_test"
 version = "4.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11631,12 +11624,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "unsafe-libyaml"
-version = "0.2.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
-
-[[package]]
 name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13205,7 +13192,6 @@ dependencies = [
  "rustdoc-types",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "sha2",
  "signal-hook",
  "syn 3.0.6",
@@ -13215,6 +13201,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uniffi_bindgen",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -13222,6 +13209,19 @@ name = "y4m"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
+
+[[package]]
+name = "yaml_serde"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33b729a08a9a6be689bbad3e2bf8015926db54b6622cc89c3a5f7dc174b9e918"
+dependencies = [
+ "indexmap",
+ "itoa",
+ "libyaml-rs",
+ "ryu",
+ "serde",
+]
 
 [[package]]
 name = "yansi"
