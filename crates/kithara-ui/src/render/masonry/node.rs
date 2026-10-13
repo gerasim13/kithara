@@ -518,7 +518,7 @@ impl Node {
     }
 
     pub(crate) fn text_size(&mut self) -> Option<Size> {
-        self.layout.leaf().and_then(|leaf| leaf.text_size())
+        self.layout.leaf().and_then(Leaf::text_size)
     }
 
     /// Offers the input to the stepping surface this flow declares, answering

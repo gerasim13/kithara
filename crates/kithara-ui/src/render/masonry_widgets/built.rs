@@ -80,7 +80,7 @@ impl From<solve::Size<solve::Length>> for Natural {
 
 /// One child of a stage: the block hiding it, whether it floats above the
 /// stage, and its box.
-type StageChild = (Option<Rc<BlockState>>, bool, Natural);
+type StageChild<T = Natural> = (Option<Rc<BlockState>>, bool, T);
 
 pub(crate) struct StageSize {
     size: Option<SizeSpec>,
@@ -491,7 +491,7 @@ impl<Action> MasonryNode<Action> {
 
     pub(in crate::render) fn stage(
         size: Option<SizeSpec>,
-        children: Vec<(Option<Rc<BlockState>>, bool, Self)>,
+        children: Vec<StageChild<Self>>,
     ) -> Self {
         let (sized, nodes) = children
             .into_iter()

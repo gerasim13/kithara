@@ -330,10 +330,10 @@ impl HostedEngine {
             (self.map_event)(event)
         });
         Routed {
+            outcome,
+            drag,
             repaint,
             focused,
-            drag,
-            outcome,
         }
     }
 
