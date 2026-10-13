@@ -147,12 +147,12 @@ impl AppleAudioFileDemuxer {
     {
         let file = match (open_mode, codec) {
             (SourceOpenMode::Segmented(end), _) => {
-                AppleAudioFile::open_segmented(source, hint, end)?
+                AppleAudioFile::open_segmented(source, hint, end, pools)?
             }
             (SourceOpenMode::Streaming, AudioCodec::Flac | AudioCodec::Pcm) => {
-                AppleAudioFile::open_sized_streaming(source, hint)?
+                AppleAudioFile::open_sized_streaming(source, hint, pools)?
             }
-            _ => AppleAudioFile::open(source, hint)?,
+            _ => AppleAudioFile::open(source, hint, pools)?,
         };
         let mut asbd = file.data_format;
         let matches_codec = match codec {
@@ -543,20 +543,23 @@ impl AppleAudioFileDemuxer {
 mod tests {
     use std::{
         io::{self, Cursor, Error, ErrorKind, Read, Seek, SeekFrom},
-        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+        sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     };
 
     use kithara_platform::sync::Arc;
     use kithara_stream::{
         AudioCodec, ContainerFormat, NotReadyCause, PendingReason, SourcePhase, StreamPending,
     };
-    use kithara_test_fixtures::{fixtures::tone_wav, unit_fixtures::flac_saw};
+    use kithara_test_fixtures::{
+        assets::signal_profile_flac_flac_96000_2ch_24bit, fixtures::tone_wav,
+        unit_fixtures::flac_saw,
+    };
     use kithara_test_utils::kithara;
 
     use super::{AppleAudioFileDemuxer, Duration, SourceOpenMode};
     use crate::{
         codec::CodecPriming,
-        demuxer::{DemuxOutcome, Demuxer},
+        demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
     };
 
     #[kithara::test]
@@ -615,7 +618,7 @@ mod tests {
     struct NotReadySource {
         inner: Cursor<Vec<u8>>,
         notify_not_ready: Option<Arc<AtomicBool>>,
-        ready: u64,
+        ready: Arc<AtomicU64>,
     }
 
     impl NotReadySource {
@@ -624,7 +627,7 @@ mod tests {
             Self {
                 inner,
                 notify_not_ready,
-                ready,
+                ready: Arc::new(AtomicU64::new(ready)),
             }
         }
     }
@@ -634,9 +637,10 @@ mod tests {
             let pos = self.inner.position();
             let want = u64::try_from(buf.len())
                 .map_err(|_| Error::other("NotReadySource request exceeds u64"))?;
-            // `probe_read` waits on the WHOLE requested range — a request
-            // crossing the delivery boundary fails outright, it is never
-            if pos.saturating_add(want) > self.ready {
+            // `probe_read` waits on the whole requested range; a request crossing
+            // the delivery boundary fails instead of returning a partial read.
+            let ready = self.ready.load(Ordering::Acquire);
+            if pos.saturating_add(want) > ready {
                 if let Some(notify_not_ready) = &self.notify_not_ready {
                     notify_not_ready.store(true, Ordering::Release);
                 }
@@ -787,6 +791,196 @@ mod tests {
             produced > 0,
             "should decode the ready prefix before parking"
         );
+    }
+
+    #[kithara::test(native)]
+    fn flac_seek_into_a_waiting_packet_resumes_when_bytes_arrive() {
+        let bytes = signal_profile_flac_flac_96000_2ch_24bit().bytes().to_vec();
+        let total = u64::try_from(bytes.len()).expect("fixture length fits in u64");
+        let prefix = 96 * 1024;
+        assert!(total > prefix, "the fixture must exceed its ready prefix");
+        let boundary = Arc::new(AtomicBool::new(false));
+        let source = NotReadySource::new(bytes, prefix, Some(Arc::clone(&boundary)));
+        let ready = Arc::clone(&source.ready);
+        let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
+            Box::new(source),
+            AudioCodec::Flac,
+            Some(ContainerFormat::Flac),
+            SourceOpenMode::Streaming,
+        )
+        .expect("streaming FLAC open");
+        assert_eq!(dx.track_info().sample_rate, 96_000);
+        assert_eq!(dx.track_info().channels, 2);
+        assert_eq!(dx.duration(), Some(Duration::from_secs(6)));
+
+        let target = Duration::from_secs(1);
+        for index in 0..4 {
+            let outcome = dx.next_frame().expect("ready startup frame");
+            let DemuxOutcome::Frame(frame) = outcome else {
+                panic!("startup frame {index} must be ready, got {outcome:?}");
+            };
+            assert!(frame.pts + frame.duration < target);
+        }
+        assert!(
+            !boundary.load(Ordering::Acquire),
+            "startup reads must stay inside the ready prefix"
+        );
+
+        let seek_pending = match dx.seek(target, CodecPriming::default()) {
+            Ok(DemuxSeekOutcome::Landed { .. }) => {
+                let outcome = dx.next_frame().expect("target frame status");
+                assert!(
+                    matches!(outcome, DemuxOutcome::Pending(PendingReason::NotReady(_))),
+                    "the unavailable target must stay pending, got {outcome:?}"
+                );
+                false
+            }
+            Err(error) => {
+                assert!(
+                    matches!(error.pending_reason(), Some(PendingReason::NotReady(_))),
+                    "the unavailable seek must preserve its pending reason, got {error:?}"
+                );
+                true
+            }
+            Ok(outcome) => panic!("seek inside the track must not end it, got {outcome:?}"),
+        };
+        assert!(
+            boundary.load(Ordering::Acquire),
+            "the target read must reach the unavailable bytes"
+        );
+
+        ready.store(total, Ordering::Release);
+        if seek_pending {
+            assert!(matches!(
+                dx.seek(target, CodecPriming::default())
+                    .expect("resumed seek"),
+                DemuxSeekOutcome::Landed { .. }
+            ));
+        }
+        let outcome = dx.next_frame().expect("released target frame");
+        let DemuxOutcome::Frame(frame) = outcome else {
+            panic!("the same decoder must resume after its bytes arrive, got {outcome:?}");
+        };
+        assert!(!frame.data.is_empty());
+        assert!(frame.pts <= target && frame.pts + frame.duration > target);
+    }
+
+    #[kithara::test(native)]
+    fn indexed_flac_packet_resumes_when_its_bytes_are_unavailable() {
+        let bytes = signal_profile_flac_flac_96000_2ch_24bit().bytes().to_vec();
+        let total = u64::try_from(bytes.len()).expect("fixture length fits in u64");
+        let source = NotReadySource::new(bytes, total, None);
+        let ready = Arc::clone(&source.ready);
+        let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
+            Box::new(source),
+            AudioCodec::Flac,
+            Some(ContainerFormat::Flac),
+            SourceOpenMode::Streaming,
+        )
+        .expect("streaming FLAC open");
+        let indexed_through = Duration::from_secs(2);
+        loop {
+            let outcome = dx.next_frame().expect("available FLAC packet");
+            let DemuxOutcome::Frame(frame) = outcome else {
+                panic!("the fully available prefix must produce a packet, got {outcome:?}");
+            };
+            if frame.pts >= indexed_through {
+                break;
+            }
+        }
+        let target = Duration::from_secs(1);
+        dx.seek(target, CodecPriming::default())
+            .expect("seek to an indexed packet");
+        ready.store(64 * 1024, Ordering::Release);
+        let outcome = dx.next_frame().expect("unavailable indexed packet status");
+        assert!(
+            matches!(outcome, DemuxOutcome::Pending(PendingReason::NotReady(_))),
+            "an indexed packet with unavailable bytes must stay pending, got {outcome:?}"
+        );
+        ready.store(total, Ordering::Release);
+        let outcome = dx.next_frame().expect("released indexed packet");
+        let DemuxOutcome::Frame(frame) = outcome else {
+            panic!("the same native index must resume its packet, got {outcome:?}");
+        };
+        assert!(!frame.data.is_empty());
+        assert!(frame.pts <= target && frame.pts + frame.duration > target);
+    }
+
+    #[kithara::test(native)]
+    fn streaming_flac_walk_and_indexed_seeks_preserve_every_packet() {
+        let bytes = signal_profile_flac_flac_96000_2ch_24bit().bytes().to_vec();
+        let mut complete = AppleAudioFileDemuxer::open_for_with_mode(
+            Box::new(Cursor::new(bytes.clone())),
+            AudioCodec::Flac,
+            Some(ContainerFormat::Flac),
+            SourceOpenMode::Complete,
+        )
+        .expect("complete FLAC open");
+        let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
+            Box::new(Cursor::new(bytes)),
+            AudioCodec::Flac,
+            Some(ContainerFormat::Flac),
+            SourceOpenMode::Streaming,
+        )
+        .expect("streaming FLAC open");
+        let mut packets = Vec::new();
+        loop {
+            match dx.next_frame().expect("fully available native packet") {
+                DemuxOutcome::Frame(frame) => {
+                    assert!(!frame.data.is_empty());
+                    let expected = complete.next_frame().expect("complete reference packet");
+                    let DemuxOutcome::Frame(expected) = expected else {
+                        panic!("streaming read must match the complete file, got {expected:?}");
+                    };
+                    assert_eq!(frame.pts, expected.pts);
+                    assert_eq!(frame.duration, expected.duration);
+                    assert_eq!(
+                        frame.data.len(),
+                        expected.data.len(),
+                        "native packet length at {:?}",
+                        frame.pts
+                    );
+                    assert_eq!(frame.data, expected.data);
+                    assert!(
+                        packets.len() < 200,
+                        "native walk must reach the fixture EOF"
+                    );
+                    packets.push((frame.pts, frame.duration, frame.data.to_vec()));
+                }
+                DemuxOutcome::Eof => break,
+                outcome @ DemuxOutcome::Pending(_) => {
+                    panic!("available data must produce a packet or EOF, got {outcome:?}")
+                }
+            }
+        }
+        assert!(matches!(
+            complete.next_frame().expect("complete reference EOF"),
+            DemuxOutcome::Eof
+        ));
+        let (last_pts, last_duration, _) = packets.last().expect("fixture packets");
+        let duration = Duration::from_secs(6);
+        assert_eq!(dx.duration(), Some(duration));
+        assert!(*last_pts < duration && *last_pts + *last_duration >= duration);
+        assert!(matches!(
+            dx.next_frame().expect("stable natural EOF"),
+            DemuxOutcome::Eof
+        ));
+        for seconds in [1, 4, 0, 5, 2] {
+            let target = Duration::from_secs(seconds);
+            let expected = packets
+                .iter()
+                .find(|(pts, duration, _)| *pts <= target && *pts + *duration > target)
+                .expect("indexed target packet");
+            dx.seek(target, CodecPriming::default())
+                .expect("seek inside the complete index");
+            let outcome = dx.next_frame().expect("read indexed packet");
+            let DemuxOutcome::Frame(actual) = outcome else {
+                panic!("indexed target must produce its packet, got {outcome:?}");
+            };
+            assert_eq!(actual.pts, expected.0);
+            assert_eq!(actual.duration, expected.1);
+            assert_eq!(actual.data, expected.2);
+        }
     }
 
     /// Streaming source that counts `seek(End)` calls — one per `get_size`
