@@ -191,6 +191,7 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
     let track = TrackConfig::for_audio(config)
         .audio_buffer_chunks(NonZeroUsize::new(2).expect("lane capacity"))
         .preload_chunks(NonZeroUsize::MIN)
+        .block_on_underrun(true)
         .warp(warp)
         .build();
     factory.insert(

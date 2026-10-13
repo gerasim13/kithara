@@ -1,13 +1,12 @@
-use std::{fs, num::NonZeroUsize, path::Path, sync::Mutex};
+use std::{fs, num::NonZeroUsize, path::Path};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
     download::DownloaderEvent,
-    events::EventBus,
+    events::{EventBus, RecvError},
     file::{File, FileConfig, FileEvent},
     platform::{
-        sync::Arc,
         thread,
         time::Duration,
         tokio::task::{spawn, spawn_blocking},
@@ -39,18 +38,12 @@ mod consts {
 
 type TestAudio = LaneAudio<Stream<File<TestPools>>, TestPools>;
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 struct LiveStats {
     read_progress_events: usize,
     request_started_events: usize,
     request_completed_events: usize,
     errors: usize,
-}
-
-impl LiveStats {
-    fn snapshot(&self) -> Self {
-        self.clone()
-    }
 }
 
 fn file_count_and_size(path: &Path) -> (u64, u64) {
@@ -76,10 +69,6 @@ fn file_count_and_size(path: &Path) -> (u64, u64) {
     let mut bytes = 0;
     walk(path, &mut files, &mut bytes);
     (files, bytes)
-}
-
-fn snapshot(stats: &Arc<Mutex<LiveStats>>) -> LiveStats {
-    stats.lock().expect("stats lock poisoned").snapshot()
 }
 
 fn next_chunk(audio: &mut TestAudio, stage: &str) -> Option<AudioChunk> {
@@ -254,10 +243,40 @@ async fn live_stress_real_mp3_seek_read_cache(
             .build()
     };
 
+    let bus = EventBus::default();
+    let mut events = bus.subscribe::<TestEvent>();
+    let events_task = spawn(async move {
+        let mut stats = LiveStats::default();
+        loop {
+            let event = match events.recv().await {
+                Ok(envelope) => envelope.event,
+                Err(RecvError::Closed) => break,
+                Err(error) => panic!("stats receiver lost events: {error}"),
+            };
+            match event {
+                TestEvent::File(FileEvent::ReadProgress { .. }) => {
+                    stats.read_progress_events = stats.read_progress_events.saturating_add(1);
+                }
+                TestEvent::File(FileEvent::Error { .. })
+                | TestEvent::Downloader(DownloaderEvent::RequestFailed { .. }) => {
+                    stats.errors = stats.errors.saturating_add(1);
+                }
+                TestEvent::Downloader(DownloaderEvent::RequestStarted { .. }) => {
+                    stats.request_started_events = stats.request_started_events.saturating_add(1);
+                }
+                TestEvent::Downloader(DownloaderEvent::RequestCompleted { .. }) => {
+                    stats.request_completed_events =
+                        stats.request_completed_events.saturating_add(1);
+                }
+                _ => {}
+            }
+        }
+        stats
+    });
     let file_config = FileConfig::for_src(url.into())
         .store(store)
         .pools(pools.clone())
-        .events(EventBus::default())
+        .events(bus)
         .build();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let mut audio = kithara_integration_tests::mock::load_audio(
@@ -272,31 +291,6 @@ async fn live_stress_real_mp3_seek_read_cache(
     )
     .await
     .expect("audio creation");
-    let stats = Arc::new(Mutex::new(LiveStats::default()));
-    let stats_bg = Arc::clone(&stats);
-    let mut events = audio.event_bus().subscribe();
-    let events_task = spawn(async move {
-        while let Ok(event) = events.recv().await.map(|env| env.event) {
-            let mut locked = stats_bg.lock().expect("stats lock poisoned");
-            match event {
-                TestEvent::File(FileEvent::ReadProgress { .. }) => {
-                    locked.read_progress_events = locked.read_progress_events.saturating_add(1);
-                }
-                TestEvent::File(FileEvent::Error { .. })
-                | TestEvent::Downloader(DownloaderEvent::RequestFailed { .. }) => {
-                    locked.errors = locked.errors.saturating_add(1);
-                }
-                TestEvent::Downloader(DownloaderEvent::RequestStarted { .. }) => {
-                    locked.request_started_events = locked.request_started_events.saturating_add(1);
-                }
-                TestEvent::Downloader(DownloaderEvent::RequestCompleted { .. }) => {
-                    locked.request_completed_events =
-                        locked.request_completed_events.saturating_add(1);
-                }
-                _ => {}
-            }
-        }
-    });
     // The blocking read phases must NOT run on the test runtime thread: with
     // block_on_underrun the read parks the thread, and on the current-thread
     // runtime that starves the drive/fetch tasks that feed it. preload()
@@ -330,7 +324,14 @@ async fn live_stress_real_mp3_seek_read_cache(
     .await
     .expect("read phase join");
 
-    let final_stats = snapshot(&stats);
+    if !ephemeral {
+        let (files, bytes) = file_count_and_size(temp_dir.path());
+        assert!(files > 0, "expected cache files on disk, found none");
+        assert!(bytes > 0, "expected non-empty cache files");
+    }
+
+    drop(audio);
+    let final_stats = events_task.await.expect("event collection must complete");
     assert_eq!(
         final_stats.errors, 0,
         "expected no file download/read errors during stress"
@@ -343,13 +344,4 @@ async fn live_stress_real_mp3_seek_read_cache(
         transfer_events > 0,
         "the stats task must observe the file's transfer events"
     );
-
-    if !ephemeral {
-        let (files, bytes) = file_count_and_size(temp_dir.path());
-        assert!(files > 0, "expected cache files on disk, found none");
-        assert!(bytes > 0, "expected non-empty cache files");
-    }
-
-    drop(audio);
-    let _ = events_task.await;
 }
