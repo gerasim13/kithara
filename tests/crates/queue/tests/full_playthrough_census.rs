@@ -26,6 +26,7 @@ use kithara::{
     platform::{
         sync::Arc,
         time::{self, Duration},
+        tokio::task,
     },
     play::ResourceSrc,
     queue::{AdvanceReason, Queue, QueueConfig, QueueControl, QueueEvent, Transition},
@@ -37,6 +38,7 @@ use kithara_integration_tests::{
     event::TestEvent,
     fixture_protocol::PcmPattern,
     offline::{LOCAL_LOAD_DEADLINE, OfflinePlayer, OfflinePlayerOptions},
+    smoothing,
     test_defaults::packaged_content_frames,
     usdt_trace::{self, ProbeEvent},
     waits::wait_for_loader_done_event,
@@ -388,14 +390,21 @@ async fn build_queue(
     })
 }
 
-/// Pace each block so the decode worker runs between them; without the yield
-/// the worker never refills the ring and the queue starves mid-track.
-fn render_block_duration() -> Duration {
+/// Hand the runtime back between blocks so the decode worker runs between
+/// them; without the yield the worker never refills the ring and the queue
+/// starves mid-track. On the virtual clock the pause is one block long, which
+/// keeps time in step with the audio rendered. A real clock needs no pause:
+/// `block_on_underrun` already holds each render until its audio is decoded,
+/// and a sleep there only adds the timer's granularity to every block.
+async fn pace_block() {
     if cfg!(feature = "flash") {
         let frames = u32::try_from(BLOCK_FRAMES).expect("render block size fits u32");
-        Duration::from_secs_f64(f64::from(frames) / f64::from(SAMPLE_RATE))
+        time::sleep(Duration::from_secs_f64(
+            f64::from(frames) / f64::from(SAMPLE_RATE),
+        ))
+        .await;
     } else {
-        Duration::from_millis(1)
+        task::yield_runnable().await;
     }
 }
 
@@ -410,7 +419,6 @@ struct QueueLog {
 
 #[kithara::flash(true)]
 async fn play_to_the_end(census: &Census) -> (Vec<f32>, QueueLog) {
-    let block_duration = render_block_duration();
     let mut receiver = census.queue.subscribe();
     let mut log = QueueLog::default();
     let mut rendered = Vec::new();
@@ -438,7 +446,7 @@ async fn play_to_the_end(census: &Census) -> (Vec<f32>, QueueLog) {
             }
         }
 
-        time::sleep(block_duration).await;
+        pace_block().await;
 
         if log.ended {
             break;
@@ -704,10 +712,10 @@ async fn census_provenance(
 /// carries none of these, so a census over one runs the provenance half
 /// alone.
 ///
-/// `no_block`: seconds of frame classification over the whole take, after the
-/// last await and over captured samples only. It occupies the poll it runs in
-/// the way the budget is meant to catch, but there is no product work left to
-/// starve.
+/// `no_block`: frame classification over the whole take and an analysis of
+/// its opening second, after the last await and over captured samples only.
+/// It occupies the poll it runs in the way the budget is meant to catch, but
+/// there is no product work left to starve.
 #[kithara::allow_block]
 fn census_acoustics(take: &Take) {
     let rendered = take.rendered.as_slice();
@@ -738,15 +746,23 @@ fn census_acoustics(take: &Take) {
          quantised to: run={silence} frames, one render block is {BLOCK_FRAMES}"
     );
 
-    let report = CochleaReport::measure(played, CHANNELS, SAMPLE_RATE);
+    let peak = 20.0 * f64::from(smoothing::peak(played)).log10();
     let track_peak_dbfs = 20.0 * f64::from(CENSUS_LEVEL).log10();
-    let peak = report
-        .sample_peak_dbfs
-        .expect("a played take carries a sample peak");
     assert!(
         peak <= track_peak_dbfs + PEAK_BAND_DB,
         "a crossfade must fade the two tracks against each other rather than sum \
          them: peak={peak} dBFS, one track plays at {track_peak_dbfs} dBFS"
+    );
+
+    // Leading silence is decided by the first analysis windows, which span
+    // milliseconds: the opening second answers it exactly as the whole take
+    // would, without the full analysis of everything after it.
+    let opening_samples =
+        usize::try_from(SAMPLE_RATE).expect("sample rate fits usize") * usize::from(CHANNELS);
+    let report = CochleaReport::measure(
+        &played[..played.len().min(opening_samples)],
+        CHANNELS,
+        SAMPLE_RATE,
     );
     assert_eq!(
         report.leading_silence_ms, 0.0,
