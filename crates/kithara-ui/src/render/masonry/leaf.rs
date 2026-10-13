@@ -21,6 +21,8 @@ use super::{
     shader::ShaderLeaf,
     vis::VisLeaf,
 };
+#[cfg(any(feature = "iced", test))]
+use crate::shaping::TextResources;
 use crate::{
     backends::VelloBackend,
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform, replay},
@@ -33,7 +35,7 @@ use crate::{
         CustomSkin, HostLayer, Published, ReadValue, WindowCommand, WindowLayerProgram,
         document::Ctx, shader::ShaderDeclaration,
     },
-    shaping::{TextContext, TextResources},
+    shaping::TextContext,
     skin::TextRoleSkin,
     solve::{Length, Size},
 };
@@ -571,10 +573,12 @@ impl WindowLayerProgram for DragProgram {
         )
     }
 
+    #[cfg(any(feature = "iced", test))]
     fn resources(&self) -> Option<&TextResources> {
         None
     }
 
+    #[cfg(any(feature = "iced", test))]
     fn size(&self) -> Size<Length> {
         Size::new(Length::Fill, Length::Fill)
     }

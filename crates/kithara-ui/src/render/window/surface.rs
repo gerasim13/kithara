@@ -1,22 +1,26 @@
 #[cfg(feature = "iced")]
 use iced::Element;
 
+#[cfg(feature = "iced")]
+use crate::{draw::Pt, render::WindowLayerProgram, shaping::TextResources, solve::Size};
 use crate::{
-    draw::{DrawList, Pt, Rect},
+    draw::{DrawList, Rect},
     interact::CursorShape,
-    render::{HostLayer, LayerHit, WindowCommand, WindowEdge, WindowLayerProgram},
-    shaping::TextResources,
-    solve::{Length, Size},
+    render::{HostLayer, LayerHit, WindowCommand, WindowEdge},
+    solve::Length,
 };
 
 pub(crate) struct WindowSurface {
     cursor: CursorShape,
+    #[cfg(feature = "iced")]
     height: Length,
+    #[cfg(feature = "iced")]
     width: Length,
     command: WindowCommand,
 }
 
 impl WindowSurface {
+    #[cfg(feature = "iced")]
     pub(crate) const fn drag() -> Self {
         Self {
             command: WindowCommand::Drag,
@@ -115,6 +119,7 @@ impl WindowSurface {
         )
     }
 
+    #[cfg(feature = "iced")]
     const fn program(&self) -> SurfaceProgram {
         SurfaceProgram {
             command: self.command,
@@ -124,10 +129,12 @@ impl WindowSurface {
         }
     }
 
-    pub(crate) const fn resize(edge: WindowEdge, width: Length, height: Length) -> Self {
+    pub(crate) const fn resize(edge: WindowEdge, _width: Length, _height: Length) -> Self {
         Self {
-            width,
-            height,
+            #[cfg(feature = "iced")]
+            width: _width,
+            #[cfg(feature = "iced")]
+            height: _height,
             command: WindowCommand::Resize(edge),
             cursor: resize_cursor(edge),
         }
@@ -141,13 +148,17 @@ impl<'a> crate::render::Widget<'a> for WindowSurface {
     }
 }
 
+#[cfg(feature = "iced")]
 struct SurfaceProgram {
     cursor: CursorShape,
+    #[cfg(feature = "iced")]
     height: Length,
+    #[cfg(feature = "iced")]
     width: Length,
     command: WindowCommand,
 }
 
+#[cfg(feature = "iced")]
 impl WindowLayerProgram for SurfaceProgram {
     type State = ();
 
@@ -159,10 +170,12 @@ impl WindowLayerProgram for SurfaceProgram {
         )
     }
 
+    #[cfg(feature = "iced")]
     fn resources(&self) -> Option<&TextResources> {
         None
     }
 
+    #[cfg(feature = "iced")]
     fn size(&self) -> Size<Length> {
         Size::new(self.width, self.height)
     }
@@ -177,7 +190,7 @@ const fn resize_cursor(edge: WindowEdge) -> CursorShape {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "iced"))]
 mod tests {
     use iced::{event, window::RedrawRequest};
     use kithara_test_utils::kithara;

@@ -44,6 +44,7 @@ impl Engine {
             .handle(&mut self.components, input, targets, now)
     }
 
+    #[cfg(feature = "iced")]
     pub(crate) fn has_pressed_item(&self) -> bool {
         self.components
             .iter()
@@ -81,6 +82,7 @@ impl Engine {
             .and_then(RetainedComponent::picker_snapshot)
     }
 
+    #[cfg(any(feature = "iced", test))]
     pub(crate) fn pressed_item_index(&self, path: &str) -> Option<usize> {
         self.item_pressed(path).flatten()
     }
@@ -120,6 +122,7 @@ impl Engine {
     }
 
     /// Whether the focused component edits text, so pasted text belongs to it.
+    #[cfg(feature = "iced")]
     pub(crate) fn editing_text(&self) -> bool {
         self.router.focused_path().is_some_and(|path| {
             self.components
@@ -136,6 +139,7 @@ impl Engine {
             .and_then(|component| component.text_input_snapshot(focused))
     }
 
+    #[cfg(feature = "iced")]
     pub(crate) fn text_input_snapshots(&self) -> Vec<(String, TextInputSnapshot)> {
         let focused = self.router.focused_path();
         self.components

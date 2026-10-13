@@ -1,3 +1,5 @@
+#[cfg(feature = "iced")]
+use crate::solve::Length;
 use crate::{
     atoms::{
         button::VisualState,
@@ -8,7 +10,7 @@ use crate::{
     render::Skin,
     shaping::TextContext,
     skin::{ColorRole, FrameSkin, TextRoleSkin},
-    solve::{Length, Size},
+    solve::Size,
 };
 
 /// The word a module's footer carries, in the one role both hosts shape it in.
@@ -113,6 +115,7 @@ impl ControlPainter for ChromeLabel {
         self.paint(list, text, data, bounds);
     }
 
+    #[cfg(feature = "iced")]
     fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
         Size::new(Length::Shrink, Length::Fill)
     }

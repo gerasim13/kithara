@@ -70,6 +70,7 @@ impl<A> LayerHit<A> {
     }
 }
 
+#[cfg(any(feature = "iced", test))]
 pub(crate) fn handle<A: Copy>(
     layers: &[HostLayer<A>],
     input: Input<'_>,
@@ -83,6 +84,7 @@ pub(crate) fn handle<A: Copy>(
         .unwrap_or(Outcome::IGNORED)
 }
 
+#[cfg(any(feature = "iced", test))]
 pub(crate) fn cursor<A>(layers: &[HostLayer<A>], pointer: Option<Pt>) -> CursorShape {
     layers
         .iter()

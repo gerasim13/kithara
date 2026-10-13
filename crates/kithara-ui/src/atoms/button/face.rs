@@ -1,3 +1,5 @@
+#[cfg(feature = "iced")]
+use crate::solve::Size;
 use crate::{
     atoms::icon::mark::Marked,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
@@ -6,7 +8,7 @@ use crate::{
     render::{Mark, Skin},
     shaping::{GlyphRun, TextContext},
     skin::{FrameSkin, TextRoleSkin},
-    solve::{Length, Size},
+    solve::Length,
 };
 
 /// What a document asks a button to be, before a skin resolves it.
@@ -137,6 +139,7 @@ impl Button {
 
     /// The box it asks for. Only the width is its own: every button fills the
     /// height of the row it sits in.
+    #[cfg(feature = "iced")]
     pub(crate) fn declared(&self) -> Size<Length> {
         Size::new(self.width.length(), Length::Fill)
     }

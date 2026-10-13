@@ -2,9 +2,11 @@ use std::{f32::consts::PI, ops::Range};
 
 use num_traits::ToPrimitive;
 
+#[cfg(any(feature = "iced", test))]
+use crate::draw::DrawList;
 use crate::{
     atoms::icon::mark::Marked,
-    draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, TRANSPARENT, Transform},
+    draw::{DrawListBuilder, Pt, Rect, Rgba, TRANSPARENT, Transform},
     module::IconName,
     render::{Skin, TreeRow},
     shaping::TextContext,
@@ -81,6 +83,7 @@ impl Tree {
         paint_scrollbar(list, self.rows.len(), &self.skin, viewport, offset);
     }
 
+    #[cfg(any(feature = "iced", test))]
     pub(crate) fn row_commands(
         &self,
         text: &mut TextContext,

@@ -3,15 +3,17 @@ use std::cell::RefCell;
 #[cfg(feature = "iced")]
 use iced::Element;
 
+#[cfg(any(feature = "iced", test))]
+use crate::solve::{Length, Size};
 use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform},
     interact::CursorShape,
     render::{HostLayer, LayerHit, Skin, WindowCommand, WindowLayerProgram},
     shaping::{TextContext, TextResources},
     skin::TextRoleSkin,
-    solve::{Length, Size},
 };
 
+#[cfg(feature = "iced")]
 #[derive(bon::Builder)]
 pub(crate) struct TitleBar<'label, 'skin> {
     skin: &'skin Skin,
@@ -113,10 +115,12 @@ impl WindowLayerProgram for TitleProgram {
         )
     }
 
+    #[cfg(any(feature = "iced", test))]
     fn resources(&self) -> Option<&TextResources> {
         Some(&self.resources)
     }
 
+    #[cfg(any(feature = "iced", test))]
     fn size(&self) -> Size<Length> {
         Size::new(Length::Fill, Length::Fill)
     }

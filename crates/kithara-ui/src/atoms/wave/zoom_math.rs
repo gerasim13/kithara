@@ -87,6 +87,7 @@ pub(crate) fn norm_to_x(norm: f32, window: &Range<f32>, width: f32) -> f32 {
     (norm - window.start) / (window.end - window.start) * width
 }
 
+#[cfg(any(feature = "iced", test))]
 pub(crate) fn x_to_norm(x: f32, window: &Range<f32>, width: f32) -> Option<f32> {
     (width > 0.0).then(|| {
         (x / width)

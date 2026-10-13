@@ -1,3 +1,5 @@
+#[cfg(any(feature = "iced", test))]
+use crate::solve::{Length, Size};
 use crate::{
     atoms::design::quad::{center_y, quad},
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
@@ -5,7 +7,6 @@ use crate::{
     render::Skin,
     shaping::TextContext,
     skin::{TelemetrySkin, TextRoleSkin},
-    solve::{Length, Size},
 };
 
 /// One formatted number, centred in its box and framed only when the document
@@ -36,6 +37,7 @@ impl Telemetry {
     }
 
     /// A framed reading fills its row; a bare one is as wide as its digits.
+    #[cfg(any(feature = "iced", test))]
     pub(crate) const fn declared(&self) -> Size<Length> {
         if self.framed {
             Size::new(Length::Fill, Length::Fill)

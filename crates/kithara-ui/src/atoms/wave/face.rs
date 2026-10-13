@@ -107,12 +107,14 @@ impl Wave {
         }
     }
 
+    #[cfg(feature = "iced")]
     pub(crate) const fn hero(&self) -> bool {
         matches!(self.style, WaveStyle::Hero)
     }
 
     /// Where the naming panel sits, so a host can tell whether the pointer is
     /// on it.
+    #[cfg(any(feature = "iced", test))]
     pub(crate) fn overlay_bounds(&self, data: &Drawn, bounds: Rect) -> Rect {
         self.face(data).overlay_bounds(bounds)
     }
@@ -133,6 +135,7 @@ impl Drawn {
     /// What a reading shows when there is nothing to show.
     const EM_DASH: &str = "\u{2014}";
 
+    #[cfg(feature = "iced")]
     pub(crate) fn has_waveform(&self) -> bool {
         self.waveform
             .as_ref()

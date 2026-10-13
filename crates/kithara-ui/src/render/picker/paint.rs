@@ -109,6 +109,7 @@ impl PickerMenu {
     }
 }
 
+#[cfg(any(feature = "iced", test))]
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(super) struct PickerPaint<'a> {
@@ -119,6 +120,7 @@ pub(super) struct PickerPaint<'a> {
     items: Vec<&'a str>,
 }
 
+#[cfg(any(feature = "iced", test))]
 impl<'a> PickerPaint<'a> {
     pub(super) const fn new(items: Vec<&'a str>, selected: Option<usize>, skin: &'a Skin) -> Self {
         Self {

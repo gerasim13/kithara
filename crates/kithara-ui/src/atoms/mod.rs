@@ -15,6 +15,7 @@ pub(crate) mod readout;
 pub(crate) mod search;
 pub(crate) mod tab;
 pub(crate) mod table;
+#[cfg(feature = "iced")]
 pub(crate) mod text;
 pub(crate) mod text_input;
 pub(crate) mod toggle;

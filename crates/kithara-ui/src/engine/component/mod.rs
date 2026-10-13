@@ -9,10 +9,13 @@ mod segmented;
 mod text_input;
 mod wave;
 
+#[cfg(feature = "iced")]
 pub(crate) use item::ItemComponent;
 pub(crate) use picker::PickerSnapshot;
+#[cfg(feature = "iced")]
 pub(crate) use retained::Component;
 pub(in crate::engine) use retained::RetainedComponent;
 pub(crate) use scalar::scalar_value;
+#[cfg(feature = "iced")]
 pub(crate) use scroll::ScrollState;
 pub(crate) use text_input::TextInputSnapshot;

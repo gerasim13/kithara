@@ -708,6 +708,7 @@ impl TablePlan {
         }
     }
 
+    #[cfg(feature = "iced")]
     pub(crate) fn columns(&self) -> Vec<ColumnLayout> {
         self.picture.borrow().columns().to_vec()
     }
@@ -759,6 +760,7 @@ impl TablePlan {
         plan
     }
 
+    #[cfg(feature = "iced")]
     pub(crate) fn row_count(&self) -> usize {
         self.picture.borrow().rows().len()
     }

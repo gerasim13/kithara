@@ -379,4 +379,12 @@ pub enum UiDocError {
         #[source]
         source: Box<crate::render::SheetError>,
     },
+    /// A skin-declared Lottie source could not be parsed or exceeded its bounds.
+    #[cfg(feature = "render")]
+    #[error("{origin}: artwork {name:?} is invalid: {reason}")]
+    Artwork {
+        origin: SourceUri,
+        name: String,
+        reason: String,
+    },
 }

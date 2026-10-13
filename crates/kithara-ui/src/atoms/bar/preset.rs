@@ -1,5 +1,7 @@
 use num_traits::ToPrimitive;
 
+#[cfg(any(feature = "iced", test))]
+use crate::solve::{Length, Size};
 use crate::{
     atoms::{
         button::VisualState,
@@ -10,7 +12,6 @@ use crate::{
     render::Skin,
     shaping::TextContext,
     skin::{GlobalBarSkin, TextRoleSkin},
-    solve::{Length, Size},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -85,6 +86,7 @@ impl Preset {
         (count > 0.0 && width > gaps).then_some((width - gaps) / count)
     }
 
+    #[cfg(any(feature = "iced", test))]
     pub(crate) fn declared(&self) -> Size<Length> {
         Size::new(
             Length::Fixed(self.metrics.selector_width),

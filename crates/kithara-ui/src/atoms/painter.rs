@@ -1,3 +1,5 @@
+#[cfg(feature = "iced")]
+use crate::solve::{Length, length};
 use crate::{
     atoms::{
         bar::preset::{Preset, PresetData},
@@ -15,7 +17,7 @@ use crate::{
     interact::Hit,
     render::Mark,
     shaping::TextContext,
-    solve::{Length, Size, length},
+    solve::Size,
 };
 
 /// Transient per-cell state owned by an indexed control adapter.
@@ -82,6 +84,7 @@ pub(crate) trait ControlPainter: Clone + PartialEq {
     /// A share of the row is the one length a document cannot state — `Dim` has
     /// no portion, and the portions in this repository all come from the skin —
     /// so it is said once here rather than once per host.
+    #[cfg(feature = "iced")]
     fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
         Size::new(Length::Fill, Length::Fill)
     }
@@ -134,6 +137,7 @@ impl ControlPainter for TabLarge {
     /// A tab is as wide as its own word: a strip of tabs is a row of headings,
     /// not a set of equal columns, so a tab that filled its share would move
     /// its neighbours whenever a word changed.
+    #[cfg(feature = "iced")]
     fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
         Self::declared_length(self.height())
     }
@@ -194,6 +198,7 @@ impl ControlPainter for Button {
         self.paint(list, text, &data.label, data.active, bounds, state);
     }
 
+    #[cfg(feature = "iced")]
     fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
         self.declared()
     }
@@ -258,6 +263,7 @@ impl ControlPainter for Preset {
         self.hit_index(data, hit.area(), hit.inside()?)
     }
 
+    #[cfg(feature = "iced")]
     fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
         self.declared()
     }
@@ -298,6 +304,7 @@ impl ControlPainter for Summary {
 
     /// A deck's headline takes the box its skin names: it is as wide as the
     /// words it holds, not a share of the row it stands in.
+    #[cfg(feature = "iced")]
     fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
         let size = self.metrics().summary_size;
         Size::new(length(size.w), length(size.h))
@@ -323,6 +330,7 @@ impl ControlPainter for Telemetry {
         self.paint(list, text, &self.format(*data), bounds);
     }
 
+    #[cfg(feature = "iced")]
     fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
         self.declared()
     }

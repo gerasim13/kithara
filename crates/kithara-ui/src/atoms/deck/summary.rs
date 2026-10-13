@@ -13,7 +13,7 @@ use crate::{
 #[derive(Clone, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct Summary {
-    #[field(get, vis = "pub(crate)", copy)]
+    #[cfg_attr(feature = "iced", field(get, vis = "pub(crate)", copy))]
     metrics: DeckSkin,
     style: DeckSummaryStyle,
     panel: Rgba,

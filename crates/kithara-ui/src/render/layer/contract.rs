@@ -2,6 +2,9 @@ use crate::{
     draw::{Pt, Rect},
     interact::{Input, Outcome},
     render::{HostLayer, WindowCommand},
+};
+#[cfg(any(feature = "iced", test))]
+use crate::{
     shaping::TextResources,
     solve::{Length, Size},
 };
@@ -20,8 +23,10 @@ pub(crate) trait WindowLayerProgram {
         pointer: Option<Pt>,
     ) -> HostLayer<WindowCommand>;
 
+    #[cfg(any(feature = "iced", test))]
     fn resources(&self) -> Option<&TextResources>;
 
+    #[cfg(any(feature = "iced", test))]
     fn size(&self) -> Size<Length>;
 
     fn update(

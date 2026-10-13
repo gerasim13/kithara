@@ -24,6 +24,7 @@ pub(crate) struct Lottie<'a> {
 
 #[cfg(feature = "render")]
 mod host {
+    use kithara_platform::sync::Arc;
     use num_traits::cast::AsPrimitive;
 
     use super::Lottie;
@@ -32,7 +33,7 @@ mod host {
     use crate::{
         atoms::picture::lottie::{Lottie as Face, Standing},
         expand::Binding,
-        lottie::builtin_artwork,
+        lottie::Artwork,
         render::{
             Ctx, ReadValue, Skin,
             controls::{Draws, Reading},
@@ -49,7 +50,7 @@ mod host {
                 .unwrap_or(self.artwork);
 
             Some(standing(
-                read.ctx.ui.resolve(name),
+                read.skin.artwork(read.ctx.ui.resolve(name)).cloned(),
                 self.seconds,
                 seconds(read.value),
             ))
@@ -68,18 +69,22 @@ mod host {
             read: Reading<'_>,
             endpoint: Option<&str>,
         ) -> Option<DataRefresh<Standing>> {
-            let artwork = read.ctx.ui.resolve(self.artwork).to_owned();
+            let artwork = read
+                .skin
+                .artwork(read.ctx.ui.resolve(self.artwork))
+                .cloned();
             let active_artwork = self
                 .active_artwork
-                .map(|name| read.ctx.ui.resolve(name).to_owned());
+                .and_then(|name| read.skin.artwork(read.ctx.ui.resolve(name)).cloned());
             let flag = read.ctx.endpoint(self.active).map(ToOwned::to_owned);
             let endpoint = endpoint?.to_owned();
             let pass = self.seconds;
             Some(Box::new(move |data, ctx| {
                 let showing = active_artwork
-                    .as_deref()
+                    .as_ref()
                     .filter(|_| flag.as_deref().is_some_and(|flag| flagged(ctx.get(flag))))
-                    .unwrap_or(&artwork);
+                    .cloned()
+                    .or_else(|| artwork.clone());
                 let next = standing(showing, pass, seconds(ctx.get(&endpoint).as_ref()));
                 if next == *data {
                     return false;
@@ -107,11 +112,11 @@ mod host {
         }
     }
 
-    fn standing(name: &str, pass: f32, seconds: f32) -> Standing {
-        let artwork = builtin_artwork(name);
-
+    fn standing(artwork: Option<Arc<Artwork>>, pass: f32, seconds: f32) -> Standing {
         Standing {
-            frame: artwork.map_or(0.0, |artwork| artwork.frame_at(seconds, pass)),
+            frame: artwork
+                .as_ref()
+                .map_or(0.0, |artwork| artwork.frame_at(seconds, pass)),
             artwork,
         }
     }
@@ -131,7 +136,7 @@ mod host {
         }
 
         fn frame(name: &str, pass: f32, seconds: f32) -> f64 {
-            standing(name, pass, seconds).frame
+            standing(crate::lottie::builtin_artwork(name).cloned(), pass, seconds).frame
         }
 
         #[kithara::test]

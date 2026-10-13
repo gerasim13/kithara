@@ -609,7 +609,6 @@ impl<Action> MasonryNode<Action> {
         self.window = Some(tracker);
     }
 
-    #[cfg(feature = "capture")]
     pub(crate) fn widget_id(&self) -> WidgetId {
         self.widget.id()
     }

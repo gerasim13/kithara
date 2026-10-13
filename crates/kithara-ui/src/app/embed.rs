@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
+
 use kithara_platform::{sync::Arc, time::Duration};
 use masonry::{
-    app::{RenderRootOptions, WindowSizePolicy},
-    core::{CursorIcon, PointerEvent, TextEvent, WindowEvent},
+    app::{RenderRootOptions, RenderRootSignal, WindowSizePolicy},
+    core::{CursorIcon, Handled, PointerEvent, TextEvent, WindowEvent},
     dpi::{PhysicalPosition, PhysicalSize},
     kurbo::Affine,
     theme::default_property_set,
@@ -14,21 +16,20 @@ use masonry::{
     },
     vello::Scene,
 };
-#[cfg(feature = "capture")]
 use num_traits::cast::AsPrimitive;
 
 use super::{
     frame::Frame,
     neutral::{App, Config, RunError},
 };
-#[cfg(feature = "capture")]
-use crate::draw::Rect;
 use crate::{
     compile::{CompiledUi, compile},
-    draw::{PoolStats, Rgba},
+    draw::{PoolStats, Rect, Rgba},
     error::UiDocError,
     ids::SourceUri,
-    interact::{Input, PointerPhase, ScrollAxis, masonry::masonry_text_event},
+    interact::{
+        Input, PointerButton, PointerInput, PointerPhase, ScrollAxis, masonry::masonry_text_event,
+    },
     module::ViewSet,
     render::{
         Published, Reads, Skin, UiEvent, WindowCommand,
@@ -56,6 +57,7 @@ pub struct Ui<'config, Application> {
     root: MasonryRoot<Published>,
     state: MasonryState,
     pointer: PhysicalPosition<f64>,
+    buttons: BTreeMap<u64, PointerButtons>,
     size: PhysicalSize<u32>,
     screens: Screens,
     /// What every document of this host is compiled against, built once so
@@ -115,6 +117,7 @@ where
             view,
             commands: Vec::new(),
             pointer: PhysicalPosition::new(0.0, 0.0),
+            buttons: BTreeMap::new(),
         })
     }
 
@@ -183,8 +186,8 @@ where
 
     /// Feeds one neutral input event in. Whatever the document publishes in
     /// response is applied to the application before this returns.
-    pub fn input(&mut self, input: Input<'_>) {
-        match input {
+    pub fn input(&mut self, input: Input<'_>) -> Handled {
+        let handled = match input {
             Input::Pointer(pointer) => {
                 if let Some(at) = pointer.at {
                     self.pointer = PhysicalPosition::new(
@@ -192,9 +195,8 @@ where
                         f64::from(at.y) * self.scale,
                     );
                 }
-                if let Some(event) = self.pointer_event(pointer.phase, pointer.clicks) {
-                    self.pointer_input(event);
-                }
+                self.pointer_event(pointer)
+                    .map_or(Handled::No, |event| self.pointer_input(event))
             }
             Input::Wheel(scroll) => {
                 let (x, y) = (
@@ -208,56 +210,85 @@ where
                 };
                 self.pointer_input(PointerEvent::Scroll(PointerScrollEvent {
                     delta,
-                    pointer: pointer_info(),
-                    state: pointer_state(self.pointer, false, self.scale, 1),
-                }));
+                    pointer: pointer_info(PointerId::PRIMARY),
+                    state: pointer_state(self.pointer, PointerButtons::new(), self.scale, 1),
+                }))
             }
             Input::KeyPressed { .. }
             | Input::KeyReleased { .. }
             | Input::InputMethod(_)
             | Input::ModifiersChanged(_) => {
-                if let Some(event) = masonry_text_event(input) {
-                    self.text(event);
-                }
+                masonry_text_event(input).map_or(Handled::No, |event| self.text(event))
             }
-        }
+        };
         self.settle();
+        handled
     }
 
     /// The pointer leaving the window ends every hover beneath it; without this the control it left
     /// would keep drawing itself lit.
-    fn pointer_event(&self, phase: PointerPhase, clicks: u8) -> Option<PointerEvent> {
+    fn pointer_event(&mut self, input: PointerInput) -> Option<PointerEvent> {
         let at = self.pointer;
         let scale = self.scale;
-        match phase {
+        let pointer = pointer_info(PointerId::new(input.id.0.checked_add(1)?)?);
+        let button = pointer_button(input.button);
+        let mut buttons = self.buttons.get(&input.id.0).copied().unwrap_or_default();
+        match input.phase {
+            PointerPhase::Down => {
+                if let Some(button) = button {
+                    buttons.insert(button);
+                }
+                self.buttons.insert(input.id.0, buttons);
+            }
+            PointerPhase::Up | PointerPhase::DoubleClick => {
+                if let Some(button) = button {
+                    buttons.remove(button);
+                }
+                if buttons.is_empty() {
+                    self.buttons.remove(&input.id.0);
+                } else {
+                    self.buttons.insert(input.id.0, buttons);
+                }
+            }
+            PointerPhase::Cancel => {
+                self.buttons.remove(&input.id.0);
+            }
+            _ => {}
+        }
+        match input.phase {
             PointerPhase::Down => Some(PointerEvent::Down(PointerButtonEvent {
-                button: Some(MasonryPointerButton::Primary),
-                pointer: pointer_info(),
-                state: pointer_state(at, true, scale, clicks),
+                button,
+                pointer,
+                state: pointer_state(at, buttons, scale, input.clicks),
             })),
-            PointerPhase::Up => Some(PointerEvent::Up(PointerButtonEvent {
-                button: Some(MasonryPointerButton::Primary),
-                pointer: pointer_info(),
-                state: pointer_state(at, false, scale, clicks),
-            })),
-            PointerPhase::Move => Some(PointerEvent::Move(PointerUpdate {
-                pointer: pointer_info(),
-                current: pointer_state(at, false, scale, clicks),
-                coalesced: Vec::new(),
-                predicted: Vec::new(),
-            })),
-            PointerPhase::Leave => Some(PointerEvent::Leave(pointer_info())),
-            PointerPhase::Cancel
-            | PointerPhase::DoubleClick
-            | PointerPhase::LongPress
-            | PointerPhase::MoveLongPress => None,
+            PointerPhase::Up | PointerPhase::DoubleClick => {
+                Some(PointerEvent::Up(PointerButtonEvent {
+                    button,
+                    pointer,
+                    state: pointer_state(at, buttons, scale, input.clicks),
+                }))
+            }
+            PointerPhase::Move | PointerPhase::MoveLongPress => {
+                Some(PointerEvent::Move(PointerUpdate {
+                    pointer,
+                    current: pointer_state(at, buttons, scale, input.clicks),
+                    coalesced: Vec::new(),
+                    predicted: Vec::new(),
+                }))
+            }
+            PointerPhase::Leave => Some(PointerEvent::Leave(pointer)),
+            PointerPhase::Cancel => Some(PointerEvent::Cancel(pointer)),
+            PointerPhase::LongPress => None,
         }
     }
 
-    fn pointer_input(&mut self, event: PointerEvent) {
-        if let Err(error) = self.root.handle_pointer_event(event) {
-            tracing::error!(%error, "masonry pointer");
-        }
+    fn pointer_input(&mut self, event: PointerEvent) -> Handled {
+        self.root
+            .handle_pointer_event(event)
+            .unwrap_or_else(|error| {
+                tracing::error!(%error, "masonry pointer");
+                Handled::Yes
+            })
     }
 
     /// Resolves one control's document path to the rect its layout gave it, in
@@ -267,7 +298,6 @@ where
     /// returns instead of computing a pixel by hand: a scenario clicks it,
     /// and a capture photographs it. A control a hidden block stashed takes
     /// an empty box.
-    #[cfg(feature = "capture")]
     pub fn rect_of(&self, path: &str) -> Option<Rect> {
         let id = self.state.widget_id(path)?;
         let widget = self.root.root().get_widget(id)?;
@@ -408,10 +438,11 @@ where
         std::mem::take(&mut self.commands)
     }
 
-    fn text(&mut self, event: TextEvent) {
-        if let Err(error) = self.root.handle_text_event(event) {
+    fn text(&mut self, event: TextEvent) -> Handled {
+        self.root.handle_text_event(event).unwrap_or_else(|error| {
             tracing::error!(%error, "masonry text");
-        }
+            Handled::Yes
+        })
     }
 
     /// The state the shown screen keeps for itself.
@@ -432,7 +463,9 @@ where
             pub fn complete_frame(&mut self) -> bool;
             /// Whether the widget holding the keyboard takes text input, so a
             /// paste the window reads belongs to it.
-            pub(crate) fn editing_text(&self) -> bool;
+            pub fn editing_text(&self) -> bool;
+            /// Takes requests for IME, clipboard and other external host actions.
+            pub fn take_platform_signals(&mut self) -> Vec<RenderRootSignal>;
             /// Reports whether the next retained frame would change the picture.
             pub fn needs_frame(&self) -> bool;
             /// Takes the cursor the document last asked its window to show.
@@ -621,7 +654,6 @@ fn mount<Application>(
 where
     Application: App,
 {
-    #[cfg(feature = "capture")]
     state.clear_paths();
     let skin = app.skin();
     let node = app.reads(|reads| {
@@ -645,19 +677,35 @@ fn root_options(size: PhysicalSize<u32>, scale_factor: f64) -> RenderRootOptions
     }
 }
 
-fn pointer_info() -> PointerInfo {
+fn pointer_info(id: PointerId) -> PointerInfo {
     PointerInfo {
-        pointer_id: Some(PointerId::PRIMARY),
+        pointer_id: Some(id),
         persistent_device_id: None,
-        pointer_type: PointerType::Mouse,
+        pointer_type: if id.is_primary_pointer() {
+            PointerType::Mouse
+        } else {
+            PointerType::Unknown
+        },
     }
 }
 
-fn pointer_state(at: PhysicalPosition<f64>, pressed: bool, scale: f64, clicks: u8) -> PointerState {
-    let mut buttons = PointerButtons::new();
-    if pressed {
-        buttons.insert(MasonryPointerButton::Primary);
+fn pointer_button(button: Option<PointerButton>) -> Option<MasonryPointerButton> {
+    match button {
+        None | Some(PointerButton::Primary) => Some(MasonryPointerButton::Primary),
+        Some(PointerButton::Secondary) => Some(MasonryPointerButton::Secondary),
+        Some(PointerButton::Auxiliary) => Some(MasonryPointerButton::Auxiliary),
+        Some(PointerButton::Back) => Some(MasonryPointerButton::X1),
+        Some(PointerButton::Forward) => Some(MasonryPointerButton::X2),
+        Some(PointerButton::Other(_)) => None,
     }
+}
+
+fn pointer_state(
+    at: PhysicalPosition<f64>,
+    buttons: PointerButtons,
+    scale: f64,
+    clicks: u8,
+) -> PointerState {
     PointerState {
         position: at,
         buttons,

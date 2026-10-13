@@ -123,6 +123,7 @@ iced_renderer = { workspace = true }
 iced_runtime = { workspace = true }
 iced_tiny_skia = { workspace = true }
 iced_wgpu = { workspace = true }
+naga-vello = { workspace = true }
 png = { workspace = true }
 ron = { workspace = true }
 serde_yaml_ng = { workspace = true }

@@ -81,6 +81,7 @@ impl ScrollState {
         self.clamp_offset();
     }
 
+    #[cfg(feature = "iced")]
     pub(crate) fn sync_offset(&mut self, offset: f32) {
         self.offset = offset.clamp(0.0, self.max_offset());
     }

@@ -1,13 +1,13 @@
 use std::sync::LazyLock;
 
+use kithara_platform::sync::Arc;
 use num_traits::cast::AsPrimitive;
 use velato::Composition;
 
 /// One artwork, read once.
 ///
-/// Reading a Lottie is parsing a document, so it is done at most once per name
-/// for the life of the process and every drawing borrows the result. What a
-/// frame costs is the emitting, which is per frame by nature.
+/// A skin or application catalog parses its Lottie document once and shares
+/// the immutable result between drawings. Emitting the drawing costs work per frame.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct Artwork {
@@ -16,6 +16,13 @@ pub struct Artwork {
 }
 
 impl Artwork {
+    /// Parses one owned artwork for a skin or application resource catalog.
+    ///
+    /// # Errors
+    /// Returns the Lottie parser's error when the supplied JSON is malformed.
+    pub fn parse(bytes: &[u8]) -> Result<Self, impl std::error::Error + Send + Sync> {
+        Composition::from_slice(bytes).map(|composition| Self { composition })
+    }
     /// Which frame of this artwork stands `seconds` into a pass of `pass`.
     ///
     /// Wraps, so a clock that keeps running keeps playing. A pass of nothing at
@@ -27,7 +34,7 @@ impl Artwork {
         if !pass.is_finite() || pass <= 0.0 || !seconds.is_finite() || span <= 0.0 {
             return frames.start;
         }
-        let through = f64::from(seconds / pass).rem_euclid(1.0);
+        let through = (f64::from(seconds) / f64::from(pass)).rem_euclid(1.0);
 
         span.mul_add(through, frames.start)
     }
@@ -47,7 +54,7 @@ impl Artwork {
 /// An artwork the toolkit does not ship draws nothing, which is what an unbound
 /// control does everywhere else.
 #[must_use]
-pub fn builtin_artwork(name: &str) -> Option<&'static Artwork> {
+pub fn builtin_artwork(name: &str) -> Option<&'static Arc<Artwork>> {
     /// The artwork the toolkit ships, named the way a document names a sprite
     /// sheet.
     const PULSE: &str = "pulse";
@@ -55,9 +62,9 @@ pub fn builtin_artwork(name: &str) -> Option<&'static Artwork> {
     /// two to switch between.
     const SPARK: &str = "spark";
 
-    static PULSE_ARTWORK: LazyLock<Option<Artwork>> =
+    static PULSE_ARTWORK: LazyLock<Option<Arc<Artwork>>> =
         LazyLock::new(|| read(include_str!("../assets/lottie/pulse.json")));
-    static SPARK_ARTWORK: LazyLock<Option<Artwork>> =
+    static SPARK_ARTWORK: LazyLock<Option<Arc<Artwork>>> =
         LazyLock::new(|| read(include_str!("../assets/lottie/spark.json")));
 
     match name {
@@ -67,9 +74,9 @@ pub fn builtin_artwork(name: &str) -> Option<&'static Artwork> {
     }
 }
 
-fn read(text: &str) -> Option<Artwork> {
-    Composition::from_slice(text.as_bytes())
+fn read(text: &str) -> Option<Arc<Artwork>> {
+    Artwork::parse(text.as_bytes())
         .inspect_err(|error| tracing::error!(%error, "the built-in artwork did not read"))
         .ok()
-        .map(|composition| Artwork { composition })
+        .map(Arc::new)
 }

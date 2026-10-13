@@ -39,15 +39,17 @@ mod window;
 pub use address::{Node, Scope, Walk};
 pub use document::{Clock, Ctx, PlacedMount, Snap};
 pub(crate) use drag::{Carried, DragSession};
+#[cfg(feature = "iced")]
+pub(crate) use event::carry_event;
 pub use event::{Carry, ControlAction, Published, UiEvent, WindowCommand, WindowEdge, WriteValue};
-pub(crate) use event::{CarryStep, carry_event, control_event, span_event};
-pub(crate) use hosted::{HostedControlPlan, Resolving};
+pub(crate) use event::{CarryStep, control_event, span_event};
+pub(crate) use hosted::HostedControlPlan;
+#[cfg(feature = "iced")]
+pub(crate) use hosted::Resolving;
 pub(crate) use icons::Mark;
 #[cfg(feature = "iced")]
 pub use immediate::LayoutPreview;
-pub(crate) use layer::{
-    HostLayer, LayerHit, ModalChrome, WindowLayerProgram, place_popover, tick_marks,
-};
+pub(crate) use layer::{HostLayer, LayerHit, ModalChrome, WindowLayerProgram, place_popover};
 pub use model::{
     Badge, PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, StereoLevels, TableCell,
     TableRow, TableValue, TreeRow, WaveBucket, WaveformView,
@@ -57,7 +59,9 @@ pub(crate) use picker::{picker_hits, picker_selected_index};
 pub use picture::{Pictures, Sheet, SheetError};
 pub use skin::{CrossfaderLabels, CustomSkin, Skin};
 pub(crate) use text_input::text_input_layout;
-pub(crate) use window::{DragGhost, TitleBar, WindowControls, WindowSurface};
+pub(crate) use window::{DragGhost, WindowSurface};
+#[cfg(feature = "iced")]
+pub(crate) use window::{TitleBar, WindowControls};
 #[cfg(feature = "iced")]
 pub(crate) use {
     controls::{ChromeLeaf, Marked, Marks, Probe, chrome_leaf, header_chevron, tree_rows},
@@ -65,7 +69,7 @@ pub(crate) use {
         Anchored, Custom, MiniWave, Modal, ModuleChrome, Placement, Text, Tree, Viewport,
         WheelSurface, corner_radius, drop_outline, frame_overlay,
     },
-    layer::{draw_host_layer, window_layer, window_layers},
+    layer::{draw_host_layer, tick_marks, window_layer, window_layers},
     picker::{hosted_picker_overlay, scope_picker, sync_picker},
     placed::placed,
     skin::IcedSkin,

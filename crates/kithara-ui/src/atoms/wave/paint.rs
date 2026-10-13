@@ -50,6 +50,7 @@ impl WavePaint<'_> {
         matches!(self.style, WaveStyle::Hero)
     }
 
+    #[cfg(any(feature = "iced", test))]
     pub(crate) fn overlay_bounds(&self, bounds: Rect) -> Rect {
         overlay::strip(bounds, self.metrics.overlay)
     }

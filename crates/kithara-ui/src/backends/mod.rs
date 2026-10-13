@@ -1,10 +1,10 @@
-#[cfg(all(test, feature = "masonry"))]
+#[cfg(all(test, feature = "masonry", feature = "iced"))]
 pub(crate) mod conformance;
 #[cfg(feature = "iced")]
 mod iced_canvas;
 #[cfg(feature = "vello")]
 mod image;
-#[cfg(all(test, feature = "masonry"))]
+#[cfg(all(test, feature = "masonry", feature = "iced"))]
 mod lottie;
 #[cfg(all(feature = "masonry", any(test, feature = "capture")))]
 mod readback;

@@ -6,11 +6,15 @@ use crate::{
     interact::{CursorShape, Hit, Input, Outcome, PointerPhase},
     module::WindowControlsStyle,
     render::{HostLayer, LayerHit, Skin, WindowCommand, WindowLayerProgram},
-    shaping::TextResources,
     skin::{FrameSkin, WindowControlSkin},
+};
+#[cfg(any(feature = "iced", test))]
+use crate::{
+    shaping::TextResources,
     solve::{Length, Size},
 };
 
+#[cfg(feature = "iced")]
 #[derive(bon::Builder)]
 pub(crate) struct WindowControls<'skin> {
     skin: &'skin Skin,
@@ -44,6 +48,7 @@ pub(crate) struct ControlsProgram {
     frame_color: Option<Rgba>,
     color: Rgba,
     hover_color: Rgba,
+    #[cfg(any(feature = "iced", test))]
     resources: TextResources,
     controls: WindowControlSkin,
     stroke_width: f32,
@@ -77,11 +82,13 @@ impl ControlsProgram {
             frame_color,
             color: skin.rgba(skin.window.icon_color),
             hover_color: skin.rgba(skin.window.icon_hover_color),
+            #[cfg(any(feature = "iced", test))]
             resources: skin.text_resources().clone(),
             stroke_width: skin.window.icon_stroke_width,
         }
     }
 
+    #[cfg(any(feature = "iced", test))]
     fn height(&self) -> Length {
         match self.controls {
             WindowControlSkin::Close {
@@ -221,6 +228,7 @@ impl ControlsProgram {
         }
     }
 
+    #[cfg(any(feature = "iced", test))]
     fn width(&self) -> f32 {
         match self.controls {
             WindowControlSkin::Buttons {
@@ -348,10 +356,12 @@ impl WindowLayerProgram for ControlsProgram {
         )
     }
 
+    #[cfg(any(feature = "iced", test))]
     fn resources(&self) -> Option<&TextResources> {
         Some(&self.resources)
     }
 
+    #[cfg(any(feature = "iced", test))]
     fn size(&self) -> Size<Length> {
         Size::new(Length::Fixed(self.width()), self.height())
     }
