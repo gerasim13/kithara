@@ -197,7 +197,7 @@ async fn a_readiness_wait_keeps_the_range_that_parked_the_decoder() {
     assert_eq!(parked_range, 100..627);
 
     assert_eq!(
-        source_phase_for_wait_context(&shared, &WaitContext::Playback),
+        source_phase_for_wait_context(&shared, &WaitContext::ChunkGate(None)),
         SourcePhase::WaitingDemand,
     );
     shared.flush_demand();

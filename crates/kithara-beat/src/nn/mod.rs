@@ -1,6 +1,9 @@
 mod api;
+mod backend;
 mod config;
 mod consts;
+#[cfg(feature = "cuda")]
+mod cuda;
 mod inference;
 mod mel;
 #[cfg(feature = "embed-model")]
@@ -9,6 +12,7 @@ mod postprocess;
 mod runtime;
 
 pub use api::{BeatError, BeatThis};
+pub use backend::BeatBackend;
 pub use config::{BeatConfig, BeatConfigPatch};
 #[cfg(feature = "embed-model")]
 pub use models::{BEAT_MODEL_BYTES, BEAT_MODEL_TAG, MEL_MODEL_BYTES};

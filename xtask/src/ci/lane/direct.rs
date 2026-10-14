@@ -768,7 +768,7 @@ label = "run"
         run_in(&args, &ctx, &anywhere).expect("a suite the next job reuses whole passes");
     }
 
-    /// A checkout on branch `topic`, one commit past `origin/main`, that
+    /// A checkout on branch `topic`, one commit past the pipeline's base, that
     /// changed `changed`, declaring one lane whose step runs the touched suite
     /// through a `just` that records whether it ran. The `workspace` lane is
     /// the default and `tooling` owns `xtask/`.
@@ -797,7 +797,8 @@ label = "run"
                 ],
             );
         };
-        git(root, &["checkout", "-qb", "main"]);
+        let base = env::var("KITHARA_TOUCHED_BASE").unwrap_or_else(|_| "main".to_owned());
+        git(root, &["checkout", "-qb", &base]);
         commit("base");
         git(
             root,
@@ -808,7 +809,10 @@ label = "run"
                 root.to_str().expect("a UTF-8 root"),
             ],
         );
-        git(root, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        git(
+            root,
+            &["update-ref", &format!("refs/remotes/origin/{base}"), "HEAD"],
+        );
         git(root, &["checkout", "-qb", "topic"]);
         let path = root.join(changed);
         fs::create_dir_all(path.parent().expect("a changed file has a directory")).unwrap();

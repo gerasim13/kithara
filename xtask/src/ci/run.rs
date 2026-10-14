@@ -807,7 +807,6 @@ mod tests {
         for kind in [
             PipelineKind::MergeRequest,
             PipelineKind::Quarantine,
-            PipelineKind::Branch,
             PipelineKind::Main,
             PipelineKind::Platforms,
             PipelineKind::Nightly,
@@ -828,6 +827,26 @@ mod tests {
                 "{kind:?} must run the explicit gate"
             );
         }
+    }
+
+    /// A branch push and a draft pull request are not judged in full: the one
+    /// Mac host ran the whole Apple suite for every one of them.
+    #[test]
+    fn a_branch_runs_the_apple_gate_over_what_it_touched() {
+        let (args, _) = gate("apple-test", PipelineKind::Branch);
+
+        assert_eq!(
+            args,
+            [
+                "test",
+                "run",
+                "--touched",
+                "--flash=on",
+                "--no-block=on",
+                "--profile",
+                "ci"
+            ]
+        );
     }
 
     #[test]
@@ -1167,7 +1186,8 @@ mod tests {
     /// The iOS simulator suite runs on one Mac mini and nowhere else, so no
     /// other lane answers for that surface. A `.judged` lane only reports, and
     /// a rule set without the quarantine kind skips the pipeline that judges an
-    /// imported pull request — together they let an iOS regression merge.
+    /// imported pull request — together they let an iOS regression merge. A
+    /// branch push or a draft pull request is not judged in full and skips it.
     #[test]
     fn the_ios_suite_blocks_every_pipeline_that_judges_a_change() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1187,8 +1207,8 @@ mod tests {
             "the iOS suite reports instead of blocking"
         );
         assert!(
-            ios_test.contains(".rules-verify-and-branch"),
-            "the iOS suite skips a pipeline kind that judges a change"
+            ios_test.contains("- .rules-verify\n"),
+            "the iOS suite must take the rule set of the pipelines that judge a change"
         );
 
         let common = fs::read_to_string(root.join(".gitlab/ci/common.yml"))
