@@ -244,10 +244,7 @@ nextest_profile = "stress"
 default_filter = "all()"
 default_count = 50
 max_count = 1000
-# Most stressed tests wait on a clock rather than compute: at one test per
-# core the stress host kept 1.7 to 4.5 of its 8 cores busy, and a night was
-# bound by how many tests ran at once, not by the processor.
-test_threads = "24"
+test_threads = "num-cpus"
 max_test_threads = 256
 # A directory of this run's own, inside the checkout it builds. Sharing the
 # machine's target directory cost five runs a whole lane: something else on the
