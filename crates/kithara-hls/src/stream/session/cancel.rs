@@ -19,8 +19,8 @@ impl SessionCancel {
         let lookahead = RwLock::new(fetch.child());
         Self {
             root,
-            lookahead,
             fetch,
+            lookahead,
         }
     }
 

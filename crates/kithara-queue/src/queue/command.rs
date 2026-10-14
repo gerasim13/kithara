@@ -256,7 +256,13 @@ where
             }
         }
     }
+}
 
+impl<S, F> Queue<S, F>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    F: TrackFactory<S>,
+{
     fn pause_at(
         &mut self,
         at: When<SessionFrame>,

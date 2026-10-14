@@ -310,6 +310,30 @@ where
         Ok(sent)
     }
 
+    /// Step 3: a deadline entry may not precede what this pass can deliver.
+    pub(in crate::queue) fn transition_entry(
+        &self,
+        index: usize,
+        bound: Bound,
+    ) -> Result<Option<SessionFrame>, PlayError> {
+        let earliest = self.earliest()?;
+        let active = self.active.get(index).ok_or(PlayError::NoActiveSlot)?;
+        let Some(frame) = active.track.entry(bound) else {
+            return Ok(None);
+        };
+        Ok(if frame < earliest {
+            active.track.entry(Bound::AtOrAfter(earliest))
+        } else {
+            Some(frame)
+        })
+    }
+}
+
+impl<S, F> Queue<S, F>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    F: TrackFactory<S>,
+{
     pub(in crate::queue) fn accept_load(&mut self, index: usize, seq: Seq) {
         let Some(active) = self.active.get_mut(index) else {
             return;
@@ -409,23 +433,5 @@ where
             self.cancel_target(out).map_err(play_error)?;
         }
         Ok(())
-    }
-
-    /// Step 3: a deadline entry may not precede what this pass can deliver.
-    pub(in crate::queue) fn transition_entry(
-        &self,
-        index: usize,
-        bound: Bound,
-    ) -> Result<Option<SessionFrame>, PlayError> {
-        let earliest = self.earliest()?;
-        let active = self.active.get(index).ok_or(PlayError::NoActiveSlot)?;
-        let Some(frame) = active.track.entry(bound) else {
-            return Ok(None);
-        };
-        Ok(if frame < earliest {
-            active.track.entry(Bound::AtOrAfter(earliest))
-        } else {
-            Some(frame)
-        })
     }
 }
