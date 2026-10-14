@@ -1,14 +1,14 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_audio::{AudioReadError, AudioSource, SeekOutcome, TrackStep};
-use kithara_command::{Batch, ChannelConfig, Outcome, Sender, Seq, When, channel};
+use kithara_command::{Batch, ChannelConfig, Outcome, Rejection, Sender, Seq, When, channel};
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId, SourceSpan};
 use kithara_test_utils::kithara;
 use kithara_warp::{SpeedCurve, Warp, WarpConfig, WarpRenderer};
 
 use crate::{
-    LaneCommand, LaneFrame, LaneProtocol,
+    LaneCommand, LaneFrame, LaneProtocol, LaneRefusal,
     lane::Lane,
     test_pools::{TestPools, pools, sample_buffer},
 };
@@ -114,6 +114,45 @@ impl LaneFixture {
     fn admit_preload(&mut self) {
         self.admit();
         self.admit();
+    }
+}
+
+/// Media has no PCM before its visible origin, so a segment positioned ahead of
+/// it enters at that origin. Inside the media a segment still enters exactly
+/// where it was positioned.
+#[kithara::test]
+#[case::ahead_of_the_media(Duration::ZERO, None)]
+#[case::inside_the_media(
+    Duration::from_millis(500),
+    Some(LaneRefusal::MissedEntry { at: Duration::from_millis(500) })
+)]
+fn a_segment_positioned_ahead_of_the_visible_origin_enters_there(
+    #[case] from: Duration,
+    #[case] refusal: Option<LaneRefusal>,
+) {
+    let visible_origin = Duration::from_millis(13);
+    let mut fixture = LaneFixture::new();
+    let segment = SegmentId::FIRST.next();
+    let seq = fixture.begin_at(segment, from);
+    fixture.entry = AudioChunkInfo {
+        visible_origin: Some(visible_origin),
+        ..entering(fixture.spec, seq, visible_origin)
+    };
+    fixture.admit_preload();
+
+    let receipt = fixture.sender.receipts().next().expect("readiness verdict");
+    assert_eq!(receipt.seq(), seq);
+    let outcome = receipt.outcome();
+    match refusal {
+        None => assert!(
+            matches!(outcome, Outcome::Applied { data, .. } if data.ready == Some(segment)),
+            "first PCM at the visible origin enters a segment positioned ahead of it: {outcome:?}"
+        ),
+        Some(expected) => assert!(
+            matches!(outcome, Outcome::Rejected(Rejection::Refused(refused)) if *refused == expected),
+            "first PCM at the visible origin misses a segment positioned inside the media: \
+             {outcome:?}"
+        ),
     }
 }
 

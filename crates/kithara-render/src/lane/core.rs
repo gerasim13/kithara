@@ -133,11 +133,16 @@ struct Entry {
 }
 
 impl Entry {
+    /// Media has no PCM before its visible origin, so a segment positioned ahead
+    /// of it enters at that origin.
     fn admits(self, meta: &AudioChunkInfo) -> bool {
+        let at = meta
+            .visible_origin
+            .map_or(self.at, |origin| origin.max(self.at));
         meta.source_span.is_some_and(|span| {
             span.render_revision() == self.revision
                 && AudioSpec::new(meta.spec.channels, span.sample_rate())
-                    .frame_at(self.at)
+                    .frame_at(at)
                     .is_ok_and(|frame| frame == span.start())
         })
     }
