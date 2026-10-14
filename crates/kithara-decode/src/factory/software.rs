@@ -119,3 +119,32 @@ where
         other => Err(DecodeError::UnsupportedCodec { codec: other }),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use kithara_test_fixtures::{assets::signal_mp3_track_sine440_187s, without_xing_frame};
+    use kithara_test_utils::kithara;
+
+    use crate::{
+        DecoderBackend, DecoderConfig, DecoderFactory,
+        test_pools::{TestPools, pools},
+    };
+
+    #[kithara::test]
+    fn software_factory_estimates_headerless_mp3_duration() {
+        let bytes = without_xing_frame(signal_mp3_track_sine440_187s().bytes());
+        let config: DecoderConfig<kithara_resampler::NoResamplerBackend, TestPools> =
+            DecoderConfig::builder()
+                .backend(DecoderBackend::Symphonia)
+                .pools(pools())
+                .build();
+        let decoder = DecoderFactory::create_with_probe(Cursor::new(bytes), Some("mp3"), config)
+            .expect("headerless MP3 opens through the software factory");
+        let duration = decoder
+            .duration()
+            .expect("headerless MP3 needs bitrate estimation during reader construction");
+        assert!((180.0..190.0).contains(&duration.as_secs_f64()));
+    }
+}

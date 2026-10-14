@@ -23,7 +23,7 @@ impl std::fmt::Debug for Pictures {
         formatter
             .debug_struct("Pictures")
             .field("sheets", &self.sheets)
-            .field("artworks", &self.artworks.keys().collect::<Vec<_>>())
+            .field("artworks", &self.artworks.keys())
             .finish()
     }
 }

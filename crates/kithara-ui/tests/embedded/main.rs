@@ -4,6 +4,7 @@
 
 use std::sync::LazyLock;
 
+use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use kithara_ui::{
     app::{App, Config, Handled, RenderRootSignal, Ui},
@@ -121,7 +122,7 @@ fn mounted<'a>(registry: &'a MapEndpoints, resolver: &'a MemResolver) -> Ui<'a, 
         1.0,
     )
     .unwrap_or_else(|error| panic!("fixture must mount: {error}"));
-    ui.frame(std::time::Duration::from_millis(16));
+    ui.frame(Duration::from_millis(16));
     ui.render()
         .unwrap_or_else(|error| panic!("fixture must lay out: {error}"));
     ui.complete_frame();
@@ -228,7 +229,7 @@ fn embedded_optional_table_projects_only_while_shown_and_scrolls_after_reopening
             ui.input(Input::Pointer(mouse(phase, Some(at))));
         }
         assert_eq!(ui.app().active, shown);
-        ui.frame(std::time::Duration::from_millis(16));
+        ui.frame(Duration::from_millis(16));
         ui.render()
             .unwrap_or_else(|error| panic!("optional table must render: {error}"));
         ui.complete_frame();

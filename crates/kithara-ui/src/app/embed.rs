@@ -374,6 +374,49 @@ where
         self.render().map(Into::into)
     }
 
+    /// Takes what the document asked its window to do since the last call. A
+    /// document that draws its own title bar asks to be dragged, minimised,
+    /// maximised or closed this way; a host with no window can ignore it.
+    pub fn take_window_commands(&mut self) -> Vec<WindowCommand> {
+        std::mem::take(&mut self.commands)
+    }
+
+    fn text(&mut self, event: TextEvent) -> Handled {
+        self.root.handle_text_event(event).unwrap_or_else(|error| {
+            tracing::error!(%error, "masonry text");
+            Handled::Yes
+        })
+    }
+
+    delegate::delegate! {
+        to self.root {
+            /// Satisfies the redraw signals covered by a frame the host completed.
+            ///
+            /// Returns whether another frame should follow. Every unrelated
+            /// platform signal remains queued on the retained root.
+            pub fn complete_frame(&mut self) -> bool;
+            /// Whether the widget holding the keyboard takes text input, so a
+            /// paste the window reads belongs to it.
+            pub fn editing_text(&self) -> bool;
+            /// Takes requests for IME, clipboard and other external host actions.
+            pub fn take_platform_signals(&mut self) -> Vec<RenderRootSignal>;
+            /// Reports whether the next retained frame would change the picture.
+            pub fn needs_frame(&self) -> bool;
+            /// Takes the cursor the document last asked its window to show.
+            ///
+            /// A host that owns a window applies it; a host without one can
+            /// drop it, but takes it either way so the queue stays bounded.
+            pub fn take_cursor(&mut self) -> Option<CursorIcon>;
+        }
+    }
+}
+
+/// How the screen this host shows follows the application and the state the
+/// document keeps for itself.
+impl<Application> Ui<'_, Application>
+where
+    Application: App,
+{
     /// Turns one flag the screen keeps for itself, and shows what that changed.
     ///
     /// A flag turned here comes from the application rather than from a press,
@@ -430,20 +473,6 @@ where
         self.turn().map(|_| ())
     }
 
-    /// Takes what the document asked its window to do since the last call. A
-    /// document that draws its own title bar asks to be dragged, minimised,
-    /// maximised or closed this way; a host with no window can ignore it.
-    pub fn take_window_commands(&mut self) -> Vec<WindowCommand> {
-        std::mem::take(&mut self.commands)
-    }
-
-    fn text(&mut self, event: TextEvent) -> Handled {
-        self.root.handle_text_event(event).unwrap_or_else(|error| {
-            tracing::error!(%error, "masonry text");
-            Handled::Yes
-        })
-    }
-
     /// The state the shown screen keeps for itself.
     ///
     /// An application may read what a document turned for itself without
@@ -453,35 +482,6 @@ where
         &self.view
     }
 
-    delegate::delegate! {
-        to self.root {
-            /// Satisfies the redraw signals covered by a frame the host completed.
-            ///
-            /// Returns whether another frame should follow. Every unrelated
-            /// platform signal remains queued on the retained root.
-            pub fn complete_frame(&mut self) -> bool;
-            /// Whether the widget holding the keyboard takes text input, so a
-            /// paste the window reads belongs to it.
-            pub fn editing_text(&self) -> bool;
-            /// Takes requests for IME, clipboard and other external host actions.
-            pub fn take_platform_signals(&mut self) -> Vec<RenderRootSignal>;
-            /// Reports whether the next retained frame would change the picture.
-            pub fn needs_frame(&self) -> bool;
-            /// Takes the cursor the document last asked its window to show.
-            ///
-            /// A host that owns a window applies it; a host without one can
-            /// drop it, but takes it either way so the queue stays bounded.
-            pub fn take_cursor(&mut self) -> Option<CursorIcon>;
-        }
-    }
-}
-
-/// How the screen this host shows follows the application and the state the
-/// document keeps for itself.
-impl<Application> Ui<'_, Application>
-where
-    Application: App,
-{
     /// Mounts the screen the cache is showing, in place of the tree standing.
     ///
     /// Drops state the newly shown screen does not name, rather than keeping it to answer for a

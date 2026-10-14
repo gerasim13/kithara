@@ -148,6 +148,7 @@ async fn a_real_source_cancellation_reaches_only_its_queue_entry_once() {
     let config = AudioConfig::<File<TestPools>, NoResamplerBackend>::for_stream(file)
         .audio_buffer_chunks(2)
         .preload_chunks(NonZeroUsize::MIN)
+        .block_on_underrun(true)
         .build();
     assert!(
         config.cancel().is_none(),
