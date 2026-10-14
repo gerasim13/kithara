@@ -816,8 +816,9 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
         ("apple:xcframework", ".rules-verify-and-branch", false),
         ("apple:ios", ".rules-verify", false),
         // The simulator suite blocks rather than reports: no other host can
-        // answer for the iOS surface.
-        ("apple:ios-test", ".rules-verify-and-branch", false),
+        // answer for the iOS surface. A draft is a branch and leaves it to the
+        // review that follows.
+        ("apple:ios-test", ".rules-verify", false),
     ] {
         assert_active_review_job(&config, job, owner, judged);
     }
@@ -1016,6 +1017,57 @@ fn dispatch_does_not_reserve_the_host_while_children_run() {
 /// on every run that does not set it, and a rule reads that as a value: a
 /// release run naming no platform started the platform matrix beside the
 /// release.
+/// The bridge starts a draft pull request's run with
+/// `KITHARA_QUARANTINE_DRAFT`. It is a branch in what it runs and a quarantine
+/// in what it may trust, and the quarantine dispatcher leaves it alone.
+#[test]
+fn a_draft_pull_request_runs_as_a_branch_under_quarantine_trust() {
+    let dispatch = yaml(workspace_root().join(".gitlab-ci.yml"));
+    let dispatch = mapping(&dispatch, "the dispatch pipeline");
+    let rules = |job: &str| {
+        mapping(
+            dispatch.get(job).expect("the dispatcher exists"),
+            "a dispatcher",
+        )
+        .get("rules")
+        .and_then(Value::as_sequence)
+        .expect("dispatcher rules are a sequence")
+        .clone()
+    };
+
+    let branch = rules("dispatch:branch");
+    let draft = mapping(&branch[0], "the draft rule");
+    assert_eq!(
+        draft.get("if").and_then(Value::as_str),
+        Some(
+            "$CI_PIPELINE_SOURCE == \"api\" && $KITHARA_QUARANTINE_SHA && \
+             $KITHARA_QUARANTINE_DRAFT == \"1\""
+        )
+    );
+    assert_eq!(
+        draft["variables"]["KITHARA_CACHE_TRUST"].as_str(),
+        Some("quarantine")
+    );
+
+    let quarantine = rules("dispatch:quarantine");
+    assert_exact_rule(
+        mapping(&quarantine[0], "the draft refusal"),
+        "$KITHARA_QUARANTINE_DRAFT == \"1\"",
+        Some("never"),
+    );
+}
+
+/// `--touched` measures a branch from the default branch, which on `GitLab` is
+/// not `main`.
+#[test]
+fn a_touched_run_measures_from_the_default_branch() {
+    let pipeline = yaml(workspace_root().join(".gitlab/ci/pipeline.yml"));
+    assert_eq!(
+        pipeline["variables"]["KITHARA_TOUCHED_BASE"].as_str(),
+        Some("$CI_DEFAULT_BRANCH")
+    );
+}
+
 #[test]
 fn a_run_variable_reaches_the_child_only_through_the_trigger() {
     let document = yaml(workspace_root().join(".gitlab-ci.yml"));

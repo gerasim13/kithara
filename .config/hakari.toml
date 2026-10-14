@@ -50,6 +50,7 @@ workspace-members = [
   "kithara-core-test-fixtures",
   "kithara-decode-tests",
   "kithara-devtools",
+  "kithara-devtools-trace-format",
   "kithara-dsp-tests",
   "kithara-effects-tests",
   "kithara-ffi",

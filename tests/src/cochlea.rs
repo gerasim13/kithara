@@ -1,13 +1,17 @@
 use cochlea_features::{
-    Audio, ProbeOpts, SegmentOpts, TempoOpts, estimate_tempo, probe, segment_timeline,
+    Audio, ProbeOpts, SegmentOpts, TempoOpts, TempoReport, estimate_tempo, probe, segment_timeline,
 };
-use num_traits::cast;
 use serde::Serialize;
 
 const BEAT_MARKER_RATIO: f32 = 0.65;
 const BEATS_PER_BAR: usize = 4;
 const DOWNBEAT_MARKER_RATIO: f32 = 0.9;
 const MARKER_CLUSTER_MS: usize = 100;
+const ONSET_MATCH_MS: f64 = 20.0;
+const ONSET_NORMALIZATION_MS: f32 = 20.0;
+const NORMALIZED_ONSET_RMS: f32 = 20.0;
+const PERIOD_SEARCH_FRACTION: f64 = 0.05;
+const TEMPO_BANDS: [(f64, f64); 4] = [(30.0, 60.0), (60.0, 120.0), (120.0, 240.0), (240.0, 300.0)];
 const SECONDS_PER_MINUTE: f64 = 60.0;
 const TEMPO_TOLERANCE_BPM: f64 = 0.5;
 const WINDOW_MS: f64 = 5.0;
@@ -235,13 +239,9 @@ fn synchronization_failures_with(
         "synchronization oracle needs a positive finite BPM"
     );
     assert!(!tracks.is_empty(), "synchronization oracle needs a track");
-
     let mut failures = Vec::new();
     let channel_count = usize::from(channels);
-    let beat_period: usize =
-        cast((f64::from(sample_rate) * SECONDS_PER_MINUTE / target_bpm).round())
-            .unwrap_or(1)
-            .max(1);
+    let mut beat_period = f64::from(sample_rate) * SECONDS_PER_MINUTE / target_bpm;
     let mut phases = Vec::with_capacity(tracks.len());
     let mut bar_offsets = Vec::with_capacity(tracks.len());
     for (index, &samples) in tracks.iter().enumerate() {
@@ -250,33 +250,55 @@ fn synchronization_failures_with(
             "track {index} must contain complete frames"
         );
 
-        let (markers, downbeats) = marked_rhythm_markers(samples, channels, sample_rate);
+        let (mut markers, mut downbeats) = marked_rhythm_markers(samples, channels, sample_rate);
         let marker_debug = markers.iter().take(8).copied().collect::<Vec<_>>();
-        let Some(&first) = markers.first() else {
-            failures.push(format!("{label}: track {index} has no exact beat markers"));
-            continue;
-        };
-        let Some(marker_period) = markers.windows(2).map(|pair| pair[1] - pair[0]).min() else {
-            failures.push(format!("{label}: track {index} has no detected tempo"));
-            continue;
-        };
+        let marker_period = markers.windows(2).map(|pair| pair[1] - pair[0]).min();
+        let mut exact_lattice = !estimate;
         if estimate {
-            let tempo = estimate_tempo(
-                &Audio {
-                    samples: samples.to_vec(),
-                    channels,
-                    sample_rate,
-                },
-                &TempoOpts::default(),
-            );
-            match tempo.bpm {
-                Some(actual) if (actual - target_bpm).abs() <= TEMPO_TOLERANCE_BPM => {}
-                Some(actual) => failures.push(format!(
+            let Some((mut actual, tempo)) = estimated_rhythm(samples, channels, sample_rate) else {
+                failures.push(format!("{label}: track {index} has no exact beat markers"));
+                continue;
+            };
+            let period = f64::from(sample_rate) * SECONDS_PER_MINUTE / actual;
+            exact_lattice = marker_period.is_some_and(|marker_period| {
+                let marker_period = marker_period as f64;
+                (marker_period - period).abs() < period * PERIOD_SEARCH_FRACTION
+                    && markers.windows(2).all(|pair| {
+                        let gap = (pair[1] - pair[0]) as f64;
+                        let beats = (gap / marker_period).round();
+                        beats >= 1.0 && (gap - beats * marker_period).abs() <= beats
+                    })
+            });
+            if exact_lattice && let Some(marker_period) = marker_period {
+                let beats = markers
+                    .windows(2)
+                    .map(|pair| ((pair[1] - pair[0]) as f64 / marker_period as f64).round())
+                    .sum::<f64>();
+                let span = (markers[markers.len() - 1] - markers[0]) as f64;
+                actual = f64::from(sample_rate) * SECONDS_PER_MINUTE * beats / span;
+            }
+            if index == 0 {
+                beat_period = f64::from(sample_rate) * SECONDS_PER_MINUTE / actual;
+            }
+            if (actual - target_bpm).abs() > TEMPO_TOLERANCE_BPM {
+                failures.push(format!(
                     "{label}: track {index} estimated tempo is {actual:.3} BPM, expected {target_bpm:.3} +/- {TEMPO_TOLERANCE_BPM:.3}; markers={marker_debug:?}",
-                )),
-                None => failures.push(format!("{label}: track {index} has no detected tempo")),
+                ));
+            }
+            if !exact_lattice {
+                let envelope = rms_envelope(samples, channel_count, sample_rate);
+                markers = localized_grid(&tempo.beats_ms, &envelope, sample_rate);
+                downbeats = localized_grid(&tempo.downbeats_ms, &envelope, sample_rate);
             }
         } else {
+            if markers.is_empty() {
+                failures.push(format!("{label}: track {index} has no exact beat markers"));
+                continue;
+            }
+            let Some(marker_period) = marker_period else {
+                failures.push(format!("{label}: track {index} has no detected tempo"));
+                continue;
+            };
             let marker_bpm = f64::from(sample_rate) * SECONDS_PER_MINUTE / marker_period as f64;
             if (marker_bpm - target_bpm).abs() > TEMPO_TOLERANCE_BPM {
                 failures.push(format!(
@@ -284,28 +306,36 @@ fn synchronization_failures_with(
                 ));
             }
         }
-        if let Some(pair) = markers
-            .windows(2)
-            .find(|pair| pair[1] - pair[0] == marker_period.saturating_mul(2))
+        if exact_lattice
+            && let Some(marker_period) = marker_period
+            && let Some(pair) = markers
+                .windows(2)
+                .find(|pair| (pair[1] - pair[0]) as f64 / marker_period as f64 >= 1.5)
         {
             failures.push(format!(
                 "{label}: track {index} is missing a rhythmic event before frame {}",
                 pair[1],
             ));
         }
-        phases.push(first % beat_period);
+        phases.push(markers);
 
-        let Some(&first_downbeat) = downbeats.first() else {
+        if downbeats.is_empty() {
             failures.push(format!(
                 "{label}: track {index} has no exact downbeat markers"
             ));
             continue;
-        };
-        bar_offsets.push((first_downbeat - first) / marker_period % BEATS_PER_BAR);
+        }
+        bar_offsets.push(downbeats);
     }
 
     if phases.len() == tracks.len() {
-        let spread = circular_spread(&mut phases, beat_period);
+        let Some(spread) = phase_spread(&phases, beat_period) else {
+            failures.push(format!(
+                "{label}: tracks have no common beat phase reference"
+            ));
+            return failures;
+        };
+        let spread = spread.round() as usize;
         if spread > 0 {
             let suffix = if spread == 1 { "" } else { "s" };
             failures.push(format!(
@@ -314,7 +344,13 @@ fn synchronization_failures_with(
         }
     }
     if bar_offsets.len() == tracks.len() {
-        let spread = circular_spread(&mut bar_offsets, BEATS_PER_BAR);
+        let Some(spread) = phase_spread(&bar_offsets, beat_period * BEATS_PER_BAR as f64) else {
+            failures.push(format!(
+                "{label}: tracks have no common downbeat phase reference"
+            ));
+            return failures;
+        };
+        let spread = (spread / beat_period).round() as usize;
         if spread > 0 {
             let suffix = if spread == 1 { "" } else { "s" };
             failures.push(format!(
@@ -323,6 +359,182 @@ fn synchronization_failures_with(
         }
     }
     failures
+}
+
+fn refined_tempo(tempo: &TempoReport) -> Option<f64> {
+    tempo.bpm?;
+    if tempo.beats_ms.len() < 2 {
+        return None;
+    }
+    let center = (tempo.beats_ms.len() - 1) as f64 / 2.0;
+    let mut covariance = 0.0;
+    let mut variance = 0.0;
+    for (index, timestamp) in tempo.beats_ms.iter().enumerate() {
+        let centered_index = index as f64 - center;
+        covariance += centered_index * timestamp;
+        variance += centered_index * centered_index;
+    }
+    let period_ms = covariance / variance;
+    (period_ms.is_finite() && period_ms > 0.0).then(|| SECONDS_PER_MINUTE * 1_000.0 / period_ms)
+}
+
+fn onset_audio(samples: &[f32], channels: u16, sample_rate: u32) -> Audio {
+    let mut normalized = samples.to_vec();
+    let gain = 1.0 - (-1_000.0 / (ONSET_NORMALIZATION_MS * sample_rate as f32)).exp();
+    let mut power = 0.0;
+    for frame in normalized.chunks_exact_mut(usize::from(channels)) {
+        let energy = frame.iter().map(|sample| sample * sample).sum::<f32>() / f32::from(channels);
+        power += gain * (energy - power);
+        for sample in frame {
+            *sample *= NORMALIZED_ONSET_RMS / power.max(1e-5).sqrt();
+        }
+    }
+    Audio {
+        samples: normalized,
+        channels,
+        sample_rate,
+    }
+}
+
+fn estimated_rhythm(
+    samples: &[f32],
+    channels: u16,
+    sample_rate: u32,
+) -> Option<(f64, TempoReport)> {
+    let audio = onset_audio(samples, channels, sample_rate);
+    let onsets = probe(&audio, &ProbeOpts::default()).onsets.times_ms;
+    if onsets.len() < 2 {
+        return None;
+    }
+    let envelope = rms_envelope(samples, usize::from(channels), sample_rate);
+    let mut best = None;
+    let mut best_score = 0.0;
+    for (min_bpm, max_bpm) in TEMPO_BANDS {
+        let band = estimate_tempo(
+            &audio,
+            &TempoOpts::default()
+                .with_min_bpm(min_bpm)
+                .with_max_bpm(max_bpm),
+        );
+        for candidate in band.candidates {
+            let grid = estimate_tempo(
+                &audio,
+                &TempoOpts::default()
+                    .with_min_bpm(candidate.bpm * 0.98)
+                    .with_max_bpm(candidate.bpm * 1.02),
+            );
+            let matches = onsets
+                .iter()
+                .filter(|onset| {
+                    grid.beats_ms
+                        .iter()
+                        .any(|beat| (beat - **onset).abs() < ONSET_MATCH_MS)
+                })
+                .count();
+            let coverage = matches as f64 / onsets.len() as f64;
+            let Some(rough_bpm) = refined_tempo(&grid) else {
+                continue;
+            };
+            let Some((bpm, correlation)) = refine_period(&envelope, sample_rate, rough_bpm) else {
+                continue;
+            };
+            let score = candidate.salience * coverage * coverage * correlation.max(0.0);
+            if score > best_score {
+                best_score = score;
+                best = Some((bpm, grid));
+            }
+        }
+    }
+    best
+}
+
+fn rms_envelope(samples: &[f32], channels: usize, sample_rate: u32) -> Vec<f64> {
+    let gain = 1.0 - (-1_000.0 / f64::from(sample_rate)).exp();
+    let mut power = 0.0;
+    samples
+        .chunks_exact(channels)
+        .map(|frame| {
+            let energy = frame
+                .iter()
+                .map(|sample| f64::from(*sample).powi(2))
+                .sum::<f64>()
+                / channels as f64;
+            power += gain * (energy - power);
+            power.max(0.0).sqrt()
+        })
+        .collect()
+}
+
+fn envelope_correlation(
+    envelope: &[f64],
+    lag: usize,
+    frames: usize,
+    step: usize,
+    mean: f64,
+) -> f64 {
+    let mut product = 0.0;
+    let mut left_power = 0.0;
+    let mut right_power = 0.0;
+    for frame in (0..frames).step_by(step) {
+        let left = envelope[frame] - mean;
+        let right = envelope[frame + lag] - mean;
+        product += left * right;
+        left_power += left * left;
+        right_power += right * right;
+    }
+    product / (left_power * right_power).sqrt()
+}
+
+fn refine_period(envelope: &[f64], sample_rate: u32, bpm: f64) -> Option<(f64, f64)> {
+    let center = (f64::from(sample_rate) * SECONDS_PER_MINUTE * 2.0 / bpm).round() as usize;
+    let radius = (center as f64 * PERIOD_SEARCH_FRACTION).ceil() as usize;
+    let step = (sample_rate as usize / 1_000).max(1);
+    let frames = envelope.len().checked_sub(center + radius + step + 1)?;
+    let mean = envelope.iter().sum::<f64>() / envelope.len() as f64;
+    let score = |lag| envelope_correlation(envelope, lag, frames, step, mean);
+    let mut best = center;
+    let mut best_score = f64::NEG_INFINITY;
+    for lag in (center.saturating_sub(radius)..=center + radius).step_by(step) {
+        let correlation = score(lag);
+        if correlation > best_score {
+            best = lag;
+            best_score = correlation;
+        }
+    }
+    let coarse = best;
+    for lag in coarse.saturating_sub(step).max(1)..=coarse + step {
+        let correlation = score(lag);
+        if correlation > best_score {
+            best = lag;
+            best_score = correlation;
+        }
+    }
+    let left = score(best - 1);
+    let right = score(best + 1);
+    let curvature = left - 2.0 * best_score + right;
+    if !curvature.is_finite() || curvature >= 0.0 {
+        return None;
+    }
+    let lag = best as f64 + (0.5 * (left - right) / curvature).clamp(-1.0, 1.0);
+    Some((
+        f64::from(sample_rate) * SECONDS_PER_MINUTE * 2.0 / lag,
+        best_score,
+    ))
+}
+
+fn localized_grid(grid: &[f64], envelope: &[f64], sample_rate: u32) -> Vec<usize> {
+    let radius = (ONSET_MATCH_MS * f64::from(sample_rate) / 1_000.0) as usize;
+    grid.iter()
+        .filter_map(|timestamp| {
+            let center = (timestamp * f64::from(sample_rate) / 1_000.0).round() as usize;
+            let start = center.saturating_sub(radius).max(1);
+            let end = (center + radius).min(envelope.len());
+            (start..end).max_by(|left, right| {
+                (envelope[*left] - envelope[*left - 1])
+                    .total_cmp(&(envelope[*right] - envelope[*right - 1]))
+            })
+        })
+        .collect()
 }
 
 /// Whether any analysis window before `frame` sits at or below Cochlea's silence floor.
@@ -406,15 +618,37 @@ fn rhythm_markers(samples: &[f32], channels: usize, sample_rate: u32) -> (Vec<us
     (beats, downbeats)
 }
 
-fn circular_spread(phases: &mut [usize], period: usize) -> usize {
-    phases.sort_unstable();
-    let inner_gap = phases
-        .windows(2)
-        .map(|pair| pair[1] - pair[0])
-        .max()
-        .unwrap_or(0);
-    let wrap_gap = period - phases[phases.len() - 1] + phases[0];
-    period - inner_gap.max(wrap_gap)
+fn phase_spread(events: &[Vec<usize>], period: f64) -> Option<f64> {
+    let start = events.iter().map(|frames| frames[0]).max().unwrap_or(0);
+    let end = events
+        .iter()
+        .map(|frames| frames[frames.len() - 1])
+        .min()
+        .unwrap_or(start);
+    events[0]
+        .iter()
+        .copied()
+        .filter(|reference| (start..=end).contains(reference))
+        .map(|reference| {
+            let mut phases = events
+                .iter()
+                .map(|frames| {
+                    let frame = frames
+                        .iter()
+                        .min_by_key(|frame| frame.abs_diff(reference))
+                        .map_or(reference, |frame| *frame);
+                    (frame as f64 - reference as f64).rem_euclid(period)
+                })
+                .collect::<Vec<_>>();
+            phases.sort_by(f64::total_cmp);
+            let wrap_gap = period - phases[phases.len() - 1] + phases[0];
+            let gap = phases
+                .windows(2)
+                .map(|pair| pair[1] - pair[0])
+                .fold(wrap_gap, f64::max);
+            period - gap
+        })
+        .reduce(f64::max)
 }
 
 fn cochlea_failures(
@@ -520,6 +754,155 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+
+    fn pulse_train(sample_rate: u32, bpm: f64) -> Vec<f32> {
+        let beat_frames = f64::from(sample_rate) * SECONDS_PER_MINUTE / bpm;
+        let leading_frames = sample_rate as usize / 4;
+        let pulse_frames = sample_rate as usize / 50;
+        let frame_count = leading_frames + (beat_frames * 6.0).ceil() as usize;
+        let mut samples = vec![0.0; frame_count];
+        for beat in 0..6 {
+            let start = leading_frames + (beat as f64 * beat_frames).round() as usize;
+            let amplitude = if beat % BEATS_PER_BAR == 0 { 0.9 } else { 0.7 };
+            for offset in 0..pulse_frames {
+                let phase = std::f32::consts::TAU * 1_000.0 * offset as f32 / sample_rate as f32;
+                samples[start + offset] =
+                    amplitude * phase.cos() * (1.0 - offset as f32 / pulse_frames as f32);
+            }
+        }
+        samples
+    }
+
+    #[kithara::test(native)]
+    #[case::cd_rate(44_100)]
+    #[case::render_rate(48_000)]
+    fn tempo_oracle_resolves_127_bpm_between_onset_bins(#[case] sample_rate: u32) {
+        let samples = pulse_train(sample_rate, 127.0);
+        let failures = synchronization_failures(
+            "fractional onset period",
+            &[&samples],
+            1,
+            sample_rate,
+            127.0,
+        );
+        assert!(failures.is_empty(), "{failures:?}");
+    }
+
+    #[kithara::test(native)]
+    #[case::cd_slow(44_100, 126.0)]
+    #[case::cd_fast(44_100, 128.0)]
+    #[case::render_slow(48_000, 126.0)]
+    #[case::render_fast(48_000, 128.0)]
+    #[case::half_tempo(48_000, 63.5)]
+    #[case::cd_just_slow(44_100, 126.49)]
+    #[case::cd_just_fast(44_100, 127.51)]
+    #[case::render_just_slow(48_000, 126.49)]
+    #[case::render_just_fast(48_000, 127.51)]
+    fn tempo_oracle_rejects_real_drift_and_the_wrong_octave(
+        #[case] sample_rate: u32,
+        #[case] actual_bpm: f64,
+    ) {
+        let samples = pulse_train(sample_rate, actual_bpm);
+        let failures =
+            synchronization_failures("wrong PCM tempo", &[&samples], 1, sample_rate, 127.0);
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert!(failures[0].contains("estimated tempo is"), "{failures:?}");
+    }
+
+    #[kithara::test(native)]
+    fn tempo_oracle_rejects_silence() {
+        let samples = vec![0.0; 48_000 * 3];
+        assert_eq!(
+            synchronization_failures("silence", &[&samples], 1, 48_000, 127.0),
+            ["silence: track 0 has no exact beat markers"],
+        );
+    }
+
+    #[kithara::test(native)]
+    #[case::cd_rate(44_100)]
+    #[case::render_rate(48_000)]
+    fn synchronization_rejects_missing_irregular_and_accumulating_pulses(#[case] sample_rate: u32) {
+        let complete = pulse_train(sample_rate, 127.0);
+        let period = f64::from(sample_rate) * SECONDS_PER_MINUTE / 127.0;
+        let lead = sample_rate as usize / 4;
+        let width = sample_rate as usize / 50;
+        for perturbation in 0..3 {
+            let mut changed = vec![0.0; complete.len()];
+            for beat in 0..6 {
+                let start = lead + (beat as f64 * period).round() as usize;
+                if perturbation == 0 && beat == 3 {
+                    continue;
+                }
+                let offset = match perturbation {
+                    1 if beat == 3 => sample_rate as usize / 500,
+                    2 => beat * beat * sample_rate as usize / 2_000,
+                    _ => 0,
+                };
+                changed[start + offset..start + offset + width]
+                    .copy_from_slice(&complete[start..start + width]);
+            }
+            let failures = synchronization_failures(
+                "irregular control",
+                &[&complete, &changed],
+                1,
+                sample_rate,
+                127.0,
+            );
+            assert!(
+                !failures.is_empty(),
+                "perturbation {perturbation} at {sample_rate} was accepted"
+            );
+        }
+    }
+
+    #[kithara::test(native)]
+    fn phase_oracle_uses_a_common_frame_despite_different_retained_markers() {
+        let sample_rate = 44_100;
+        let complete = pulse_train(sample_rate, 127.0);
+        let mut retained = complete.clone();
+        retained[..sample_rate as usize / 2].fill(0.0);
+        assert!(
+            synchronization_failures(
+                "retained markers",
+                &[&complete, &retained],
+                1,
+                sample_rate,
+                127.0
+            )
+            .is_empty()
+        );
+        let shifted = [vec![0.0], retained].concat();
+        assert_eq!(
+            synchronization_failures(
+                "shifted markers",
+                &[&complete, &shifted],
+                1,
+                sample_rate,
+                127.0
+            ),
+            [
+                "shifted markers: beat phase spread is 1 frame",
+                "shifted markers: tracks have no common downbeat phase reference",
+            ]
+        );
+    }
+
+    #[kithara::test(native)]
+    fn phase_oracle_rejects_disjoint_regular_markers() {
+        let sample_rate = 48_000;
+        let complete = pulse_train(sample_rate, 120.0);
+        let shifted = [vec![0.0; sample_rate as usize * 4 + 1], complete.clone()].concat();
+        assert_eq!(
+            marked_synchronization_failures(
+                "disjoint markers",
+                &[&complete, &shifted],
+                1,
+                sample_rate,
+                120.0,
+            ),
+            ["disjoint markers: tracks have no common beat phase reference"]
+        );
+    }
 
     #[kithara::test(native, flash(false))]
     fn comparator_rejects_one_missing_quantum_and_one_clipped_frame(cochlea_control: Vec<f32>) {

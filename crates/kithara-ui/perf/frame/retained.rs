@@ -63,9 +63,15 @@ impl FrameHost for Retained<'_> {
 
     fn interact(&mut self, step: Step) {
         match step {
-            Step::Move(at) => self.ui.input(packet(PointerPhase::Move, Some(at))),
-            Step::Press => self.ui.input(packet(PointerPhase::Down, None)),
-            Step::Release => self.ui.input(packet(PointerPhase::Up, None)),
+            Step::Move(at) => {
+                self.ui.input(packet(PointerPhase::Move, Some(at)));
+            }
+            Step::Press => {
+                self.ui.input(packet(PointerPhase::Down, None));
+            }
+            Step::Release => {
+                self.ui.input(packet(PointerPhase::Up, None));
+            }
             Step::Data => self.reads.bump(),
         }
     }

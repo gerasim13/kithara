@@ -5,7 +5,7 @@ use kithara_apple::audio_toolbox::{
     AudioStreamPacketDescription, AudioToolboxError, SingleAudioBufferList, pod_from_prefix,
 };
 use kithara_bufpool::SampleBuffer;
-use kithara_platform::time::Duration;
+use kithara_platform::time::{Duration, ThreadTime, WallInstant};
 use kithara_signal::AudioSpec;
 use kithara_stream::AudioCodec;
 
@@ -167,11 +167,30 @@ impl AppleCodec {
         let output_format =
             build_pcm_output_format(track.sample_rate, track.channels, target_output_rate);
 
-        let mut converter = AudioConverter::new(&input_format, &output_format).map_err(|err| {
-            DecodeError::BackendStatus {
-                code: audio_toolbox_status(&err),
-                op: "AudioConverterNew",
-            }
+        tracing::debug!(operation = "AudioConverterNew", phase = "begin");
+        let converter_cpu_started =
+            tracing::enabled!(tracing::Level::DEBUG).then(ThreadTime::try_now);
+        let converter_started = WallInstant::now();
+        let created = AudioConverter::new(&input_format, &output_format);
+        let converter_elapsed_us = converter_started.elapsed().as_micros();
+        let (converter_cpu_elapsed_us, converter_cpu_error) = match converter_cpu_started
+            .map(|started| started.and_then(|start| start.try_elapsed()))
+        {
+            Some(Ok(elapsed)) => (Some(elapsed.as_micros()), None),
+            Some(Err(error)) => (None, Some(error)),
+            None => (None, None),
+        };
+        tracing::debug!(
+            operation = "AudioConverterNew",
+            phase = "end",
+            elapsed_us = converter_elapsed_us,
+            cpu_elapsed_us = converter_cpu_elapsed_us,
+            cpu_clock_error = ?converter_cpu_error,
+            succeeded = created.is_ok(),
+        );
+        let mut converter = created.map_err(|err| DecodeError::BackendStatus {
+            code: audio_toolbox_status(&err),
+            op: "AudioConverterNew",
         })?;
 
         if let Some(cookie) = cookie.as_ref().filter(|c| !c.is_empty()) {
@@ -186,7 +205,19 @@ impl AppleCodec {
         }
 
         let (prime_info, resolved_gapless) = if gapless {
+            tracing::debug!(
+                operation = "AudioConverterGetProperty(PrimeInfo)",
+                phase = "begin",
+            );
+            let prime_started = WallInstant::now();
             let prime_info = prime_info_from_converter(&converter);
+            let prime_elapsed_us = prime_started.elapsed().as_micros();
+            tracing::debug!(
+                operation = "AudioConverterGetProperty(PrimeInfo)",
+                phase = "end",
+                elapsed_us = prime_elapsed_us,
+                available = prime_info.is_some(),
+            );
             let probed_gapless = prime_info.and_then(gapless_info_from_prime_info);
             log_gapless_prime_info("init", prime_info, probed_gapless);
             (prime_info, track.gapless.or(probed_gapless))

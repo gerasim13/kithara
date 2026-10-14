@@ -21,7 +21,7 @@ use super::{
         ModalSkin, PopPatch, PopSkin, TablePatch, TableSkin, TelemetryPatch, TelemetrySkin,
         TreePatch, TreeSkin, WavePatch, WaveSkin,
     },
-    pictures::{PictureDoc, PicturePatch},
+    pictures::{PictureDoc, PicturePatch, rebase_sources},
     primitives::{
         ChromePatch, ChromeSkin, LayoutPatch, LayoutSkin, ScrollPatch, ScrollSkin, WindowPatch,
         WindowSkin,
@@ -102,6 +102,10 @@ macro_rules! define_skin_doc {
             /// document may name.
             #[skin(skip_frames, skip_roles)]
             pub pictures: PictureDoc,
+            /// Named Lottie JSON sources owned by this skin.
+            #[serde(default)]
+            #[skin(skip_frames, skip_roles)]
+            pub artworks: BTreeMap<String, String>,
             #[skin(skip_frames, skip_roles)]
             pub schema: String,
             #[skin(skip_frames, skip_roles)]
@@ -173,6 +177,8 @@ macro_rules! define_skin_doc {
             /// name.
             #[serde(default)]
             pub pictures: Option<PicturePatch>,
+            #[serde(default)]
+            pub artworks: Option<BTreeMap<String, String>>,
             /// Restated over every frame the skin inherits, before its own
             /// sections are applied.
             #[serde(default)]
@@ -202,6 +208,9 @@ macro_rules! define_skin_doc {
                 }
                 if let Some(pictures) = patch.pictures {
                     self.pictures.patch(pictures);
+                }
+                if let Some(artworks) = patch.artworks {
+                    self.artworks.extend(artworks);
                 }
                 if let Some(overrides) = patch.overrides {
                     self.overrides.extend(overrides);
@@ -244,6 +253,7 @@ pub fn parse_skin(text: &str, origin: &SourceUri) -> Result<SkinDoc, UiDocError>
     document.palette.validate(origin)?;
     document.custom.validate(origin)?;
     document.pictures.rebase(origin)?;
+    rebase_sources(document.artworks.values_mut(), origin)?;
     Ok(document)
 }
 
@@ -279,6 +289,9 @@ pub fn parse_skin_over(
             })?;
     if let Some(pictures) = patch.pictures.as_mut() {
         pictures.rebase(origin)?;
+    }
+    if let Some(artworks) = patch.artworks.as_mut() {
+        rebase_sources(artworks.values_mut(), origin)?;
     }
     let mut document = base.clone();
     document.apply(patch);

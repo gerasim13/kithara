@@ -11,7 +11,7 @@ fn shipped() -> &'static Artwork {
 fn the_two_shipped_artworks_are_two_drawings() {
     let spark = builtin_artwork("spark").expect("the toolkit ships the spark artwork");
 
-    assert!(!std::ptr::eq(shipped(), spark));
+    assert!(!std::ptr::eq(shipped(), spark.as_ref()));
 }
 
 #[kithara::test]
@@ -45,4 +45,12 @@ fn a_pass_of_no_time_holds_the_first_frame() {
         artwork.frame_at(1.0, 0.0),
         artwork.composition().frames.start
     );
+}
+
+#[kithara::test]
+fn finite_extreme_times_keep_the_frame_inside_the_composition() {
+    let artwork = shipped();
+    let frame = artwork.frame_at(f32::MAX, f32::MIN_POSITIVE);
+    assert!(frame.is_finite());
+    assert!(artwork.composition().frames.contains(&frame));
 }

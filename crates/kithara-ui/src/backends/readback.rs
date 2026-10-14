@@ -1,4 +1,4 @@
-use vello::wgpu::{
+use wgpu_vello::{
     BufferDescriptor, BufferUsages, CommandEncoderDescriptor, Device, Extent3d, MapMode, PollType,
     Queue, TexelCopyBufferInfo, TexelCopyBufferLayout, Texture,
 };

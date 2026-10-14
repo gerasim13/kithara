@@ -26,6 +26,7 @@ pub struct Lease {
     directory: PathBuf,
     heartbeat: Option<Heartbeat>,
     lock: Option<FileLock>,
+    probe: File,
 }
 
 /// A reclaim's hold on a build directory: no lease can be taken while it lives.
@@ -86,6 +87,7 @@ fn take(file: File, path: &Path, deadline: Instant) -> io::Result<Option<Lease>>
         heartbeat: Some(Heartbeat::start(directory.join(HEARTBEAT))?),
         directory,
         lock: Some(lock),
+        probe,
     }))
 }
 
@@ -159,14 +161,20 @@ fn beat(path: &Path) -> io::Result<()> {
 
 impl Drop for Lease {
     /// Stops this holder's heartbeat before releasing its shared lock. Only the
-    /// last holder removes the heartbeat file, under an exclusive eviction lock.
+    /// last holder records completion and removes the heartbeat file, under an
+    /// exclusive eviction lock.
     fn drop(&mut self) {
         if let Some(Heartbeat { stop, beating }) = self.heartbeat.take() {
             drop(stop);
             let _ = beating.join();
         }
         drop(self.lock.take());
-        if let Ok(Some(_last)) = evict(&self.directory) {
+        let lease = self.directory.join(FILE);
+        let fenced = self.probe.try_clone().and_then(|file| fence(file, &lease));
+        if let Ok(Some(_last)) = fenced {
+            if let Err(error) = self.probe.set_modified(SystemTime::now()) {
+                warn!(path = %lease.display(), %error, "lease completion not recorded");
+            }
             let _ = fs::remove_file(self.directory.join(HEARTBEAT));
         }
     }
@@ -176,7 +184,7 @@ impl Drop for Lease {
 mod tests {
     use std::{
         fs, io, thread,
-        time::{Duration, Instant},
+        time::{Duration, Instant, UNIX_EPOCH},
     };
 
     use tempfile::TempDir;
@@ -221,18 +229,25 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let first = hold(temp.path()).unwrap();
         let second = hold(temp.path()).unwrap();
+        let lease_file = open(&temp.path().join(FILE)).unwrap();
+        let started = UNIX_EPOCH + Duration::from_secs(10);
+        lease_file.set_modified(started).unwrap();
 
         drop(first);
         assert!(
             temp.path().join(HEARTBEAT).is_file(),
             "a holder still beats into the directory"
         );
+        assert_eq!(lease_file.metadata().unwrap().modified().unwrap(), started);
+        assert!(evict(temp.path()).unwrap().is_none());
         drop(second);
 
         assert!(
             !temp.path().join(HEARTBEAT).exists(),
             "a directory nobody holds reads as free at once, not after the heartbeat goes stale"
         );
+        assert!(lease_file.metadata().unwrap().modified().unwrap() > started);
+        assert!(evict(temp.path()).unwrap().is_some());
     }
 
     #[test]
@@ -243,6 +258,33 @@ mod tests {
         assert!(evict(temp.path()).unwrap().is_none());
         drop(lease);
         assert!(evict(temp.path()).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_released_holder_does_not_touch_a_replacement_directory() {
+        let temp = TempDir::new().unwrap();
+        let build = temp.path().join("lane");
+        let mut lease = hold(&build).unwrap();
+        let heartbeat = lease.heartbeat.take().unwrap();
+        drop(heartbeat.stop);
+        heartbeat.beating.join().unwrap();
+        drop(lease.lock.take());
+
+        let eviction = evict(&build).unwrap().unwrap();
+        fs::rename(&build, temp.path().join(".evicting-lane")).unwrap();
+        fs::create_dir_all(&build).unwrap();
+        let marker = open(&build.join(FILE)).unwrap();
+        let heartbeat = open(&build.join(HEARTBEAT)).unwrap();
+        let modified = UNIX_EPOCH + Duration::from_secs(10);
+        marker.set_modified(modified).unwrap();
+        heartbeat.set_modified(modified).unwrap();
+        drop(eviction);
+
+        drop(lease);
+
+        assert_eq!(marker.metadata().unwrap().modified().unwrap(), modified);
+        assert!(build.join(HEARTBEAT).is_file());
+        assert_eq!(heartbeat.metadata().unwrap().modified().unwrap(), modified);
     }
 
     #[test]

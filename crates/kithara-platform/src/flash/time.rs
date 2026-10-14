@@ -3,6 +3,7 @@ use std::{
     task::{Context, Poll},
 };
 
+pub use cpu_time::ThreadTime;
 use pin_project_lite::pin_project;
 
 pub use crate::{

@@ -23,6 +23,52 @@ pub(crate) fn this_workspace() -> Metadata {
         .expect("cargo metadata for this workspace")
 }
 
+#[test]
+fn engine_trace_consumers_do_not_build_devtools_commands() {
+    let output = Command::new("cargo")
+        .current_dir(root())
+        .env("CARGO_TERM_COLOR", "always")
+        .args([
+            "tree",
+            "--color",
+            "never",
+            "--locked",
+            "--offline",
+            "-p",
+            "kithara-integration-tests",
+            "-p",
+            "kithara-queue-tests",
+            "--features",
+            "kithara-integration-tests/all",
+            "--target",
+            "x86_64-unknown-linux-gnu",
+            "--edges",
+            "normal,build",
+            "--prefix",
+            "none",
+            "--format",
+            "{p}",
+        ])
+        .output()
+        .expect("resolve engine dependency features");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let tree = String::from_utf8(output.stdout).expect("Cargo dependency tree is UTF-8");
+    let packages = tree
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .collect::<BTreeSet<_>>();
+
+    assert!(
+        !packages.contains("kithara-devtools"),
+        "engine trace consumers must not compile the command crate"
+    );
+    assert!(packages.contains("kithara-devtools-trace-format"));
+}
+
 /// A member's directory relative to the workspace root, with a trailing
 /// slash, the way a lane's `owns` entries spell directories.
 fn member_dir(metadata: &Metadata, package: &Package) -> String {

@@ -21,5 +21,7 @@ pub use mark::{BeatMark, RawBeats};
 #[cfg(feature = "embed-model")]
 pub use nn::{BEAT_MODEL_BYTES, BEAT_MODEL_TAG, MEL_MODEL_BYTES};
 #[cfg(feature = "nn")]
-pub use nn::{BeatConfig, BeatConfigPatch, BeatError, BeatThis};
+pub use nn::{BeatBackend, BeatConfig, BeatConfigPatch, BeatError, BeatThis};
+#[cfg(feature = "cuda")]
+pub use ort;
 mod consts;

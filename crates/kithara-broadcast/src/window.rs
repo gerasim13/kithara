@@ -12,6 +12,9 @@ pub struct PlaylistSnapshot {
     pub playlist: Arc<str>,
     pub segments: Arc<[Segment]>,
     pub is_finished: bool,
+    /// Native leading PCM delay of the current encoder, in input frames.
+    /// Unknown for standalone windows without an encoder.
+    pub encoder_delay_frames: Option<u32>,
 }
 
 impl PlaylistSnapshot {
@@ -109,6 +112,7 @@ impl LiveWindow {
             playlist: Arc::from(self.render()),
             segments: self.segments.iter().cloned().collect(),
             is_finished: self.finished,
+            encoder_delay_frames: None,
         }
     }
 }

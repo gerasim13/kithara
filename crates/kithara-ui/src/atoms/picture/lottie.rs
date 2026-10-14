@@ -1,5 +1,4 @@
-use std::ptr;
-
+use kithara_platform::sync::Arc;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
@@ -14,19 +13,19 @@ use crate::{
 /// The artwork travels with the frame rather than with the painter, because
 /// which artwork a control shows is resolved from the document and a name the
 /// toolkit does not ship resolves to nothing at all.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Standing {
-    pub(crate) artwork: Option<&'static Artwork>,
+    pub(crate) artwork: Option<Arc<Artwork>>,
     pub(crate) frame: f64,
 }
 
-/// An artwork is parsed once for the life of the process, so which one is
-/// standing is a question about identity. Comparing the parsed document instead
+/// An artwork is parsed once for its skin, so which one is standing is a
+/// question about identity. Comparing the parsed document instead
 /// would walk every layer of it to answer what one address already answers.
 impl PartialEq for Standing {
     fn eq(&self, other: &Self) -> bool {
-        let same_artwork = match (self.artwork, other.artwork) {
-            (Some(ours), Some(theirs)) => ptr::eq(ours, theirs),
+        let same_artwork = match (&self.artwork, &other.artwork) {
+            (Some(ours), Some(theirs)) => Arc::ptr_eq(ours, theirs),
             (None, None) => true,
             _ => false,
         };
@@ -55,7 +54,7 @@ impl ControlPainter for Lottie {
         bounds: Rect,
         _state: VisualState,
     ) {
-        let Some(artwork) = data.artwork else {
+        let Some(artwork) = data.artwork.as_ref() else {
             return;
         };
         let frame = data.frame;

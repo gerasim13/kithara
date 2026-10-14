@@ -49,6 +49,9 @@ pub struct BroadcastStatus {
     pub dropped_samples: u64,
     /// Closed media segments published by the packager.
     pub segments: u64,
+    /// Leading decoded PCM frames before this encoder's first input frame.
+    /// The value comes from the native encoder and is refreshed on reconfigure.
+    pub encoder_delay_frames: Option<u32>,
 }
 
 #[derive(Default)]
@@ -302,11 +305,13 @@ impl BroadcastHandle {
     /// What the origin is serving right now.
     #[must_use]
     pub fn status(&self) -> BroadcastStatus {
+        let snapshot = self.origin.snapshot.load();
         BroadcastStatus {
             url: Arc::clone(&self.url),
-            is_live: !self.origin.snapshot.load().is_finished,
+            is_live: !snapshot.is_finished,
             segments: self.counters.segments.load(Ordering::Relaxed),
             dropped_samples: self.counters.dropped.load(Ordering::Relaxed),
+            encoder_delay_frames: snapshot.encoder_delay_frames,
         }
     }
 
@@ -383,6 +388,24 @@ mod tests {
 
     fn start() -> (BroadcastOutput, BroadcastHandle) {
         Broadcast::start(config()).expect("on air")
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn native_encoder_delay_is_available_before_publication_and_after_finish() {
+        let encoder = kithara_encode::StreamEncoder::builder()
+            .backend(kithara_encode::StreamBackend::Fdk)
+            .sample_rate(config().sample_rate)
+            .channels(config().channels)
+            .bit_rate(config().bit_rate)
+            .timescale(config().sample_rate)
+            .build()
+            .expect("same native encoder");
+        let native_delay = encoder.encoder_delay_frames();
+        assert!(native_delay.is_some());
+        let (_output, handle) = start();
+        assert_eq!(handle.status().encoder_delay_frames, native_delay);
+        handle.stop();
+        assert_eq!(handle.status().encoder_delay_frames, native_delay);
     }
 
     #[kithara::test(native, flash(false))]

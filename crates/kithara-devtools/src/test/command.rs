@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 
 use super::{
+    inventory::admit_expected,
     request::TestRequest,
     resolve::{ResolvedLane, resolve},
     selection::{requested, select_lane, validate_config},
@@ -21,7 +22,8 @@ pub struct TestArgs {
     /// Arguments for the configured test command. Recipe-level flags accepted anywhere:
     /// `--lane=<configured-name>`, `--touched`, `--flash=true|false|on|off`, `--no-flash`,
     /// `--loom=true|false|on|off`, `--no-loom`, `--no-block=true|false|on|off`,
-    /// `--load=true|false|on|off`, `--net-backend=<configured-name>`, and `--narrow=<filterset>`.
+    /// `--load=true|false|on|off`, `--net-backend=<configured-name>`, `--narrow=<filterset>`,
+    /// and `--expected-tests=<path>` (UTF-8 TSV: binary ID, tab, full test name per line).
     #[arg(value_name = "ARGS", allow_hyphen_values = true)]
     pub(crate) args: Vec<String>,
 }
@@ -36,7 +38,8 @@ pub(crate) fn run(args: &TestArgs) -> Result<()> {
     let project = ProjectConfig::load(root)?;
     let test = &project.test;
 
-    match plan(test, root, &request)? {
+    let base = touched::base_branch(&|name| std::env::var_os(name));
+    match plan(test, root, &request, &base)? {
         Plan::Touched(selected) if selected.is_empty() => {
             println!("no owned path touched; the nightly sweep covers these lanes");
             Ok(())
@@ -50,15 +53,20 @@ pub(crate) fn run(args: &TestArgs) -> Result<()> {
 }
 
 /// Whether the test command given `args` runs any lane: a `--touched` run
-/// whose branch touched none of its lanes runs nothing.
+/// whose branch touched none of its lanes since it left `base` runs nothing.
 ///
 /// # Errors
 ///
 /// Fails when `args` are not a valid request, the test configuration is
 /// invalid, or git cannot say what the branch touched.
-pub fn selects_any_lane(root: &Path, project: &ProjectConfig, args: &[String]) -> Result<bool> {
+pub fn selects_any_lane(
+    root: &Path,
+    project: &ProjectConfig,
+    args: &[String],
+    base: &str,
+) -> Result<bool> {
     let request = TestRequest::parse(args)?;
-    Ok(match plan(&project.test, root, &request)? {
+    Ok(match plan(&project.test, root, &request, base)? {
         Plan::Touched(selected) => !selected.is_empty(),
         Plan::Lane(_) => true,
     })
@@ -76,10 +84,16 @@ fn plan<'a>(
     test: &'a TestCommandConfig,
     root: &Path,
     request: &'a TestRequest,
+    base: &str,
 ) -> Result<Plan<'a>> {
     validate_config(test)?;
     if request.touched {
-        return Ok(Plan::Touched(touched::lanes(test, root, &request.lanes)?));
+        return Ok(Plan::Touched(touched::lanes(
+            test,
+            root,
+            base,
+            &request.lanes,
+        )?));
     }
     select_lane(test, request).map(Plan::Lane)
 }
@@ -117,13 +131,17 @@ where
 /// Reports build time before the verdict rather than after it: a red lane is exactly when the
 /// build's share of the wall clock needs explaining, and reporting after an early return would
 /// print the number only for lanes that passed.
-fn run_lane(
+pub(super) fn run_lane(
     test: &TestCommandConfig,
     root: &Path,
     lane_name: &str,
     request: &TestRequest,
 ) -> Result<()> {
-    let mut command = lane_command(test, lane_name, request)?;
+    let lane = requested_lane(test, lane_name, request)?;
+    if let Some(path) = &request.expected_tests {
+        admit_expected(&lane, &request.passthrough, root, &root.join(path))?;
+    }
+    let mut command = lane.command(NextestAction::Run, &request.passthrough)?;
     execute(test, root, lane_name, &mut command)
 }
 

@@ -89,7 +89,7 @@ macro_rules! define_skin {
                 let palette = RenderPalette::resolve(&document.palette, origin)?;
                 let base = Self {
                     custom: Arc::new(CustomSkins::resolve(&document.custom, &palette, origin)?),
-                    pictures: Arc::new(Pictures::load(&document.pictures, resolver)?),
+                    pictures: Arc::new(Pictures::load(&document.pictures, &document.artworks, origin, resolver)?),
                     palette,
                     crossfader_labels: CrossfaderLabels {
                         left: text_field(catalog, "crossfader.left_label", origin)?,
@@ -181,6 +181,14 @@ impl Skin {
     #[must_use]
     pub fn sheet(&self, name: &str) -> Option<&Arc<Sheet>> {
         self.pictures.sheet(name)
+    }
+
+    /// A skin-owned Lottie, or one of the toolkit's shipped artworks.
+    #[must_use]
+    pub fn artwork(&self, name: &str) -> Option<&Arc<crate::lottie::Artwork>> {
+        self.pictures
+            .artwork(name)
+            .or_else(|| crate::lottie::builtin_artwork(name))
     }
 }
 
