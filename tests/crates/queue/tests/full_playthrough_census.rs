@@ -805,7 +805,7 @@ fn trace_startup(census: &Census, firings: &[Firing], rendered: &[f32]) {
     for record in observed
         .timeline
         .iter()
-        .filter(|record| record.get("item").and_then(|item| item.as_u64()) == Some(item))
+        .filter(|record| record["item"].as_u64() == Some(item))
         .take(24)
     {
         tracing::info!(
@@ -814,6 +814,7 @@ fn trace_startup(census: &Census, firings: &[Firing], rendered: &[f32]) {
             "queue census startup timeline"
         );
     }
+    drop(observed);
     for firing in firings.iter().filter(|firing| firing.track == item).take(6) {
         tracing::info!(
             target: "kithara_tests::census",
