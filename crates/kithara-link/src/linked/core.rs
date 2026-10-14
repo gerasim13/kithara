@@ -1,34 +1,25 @@
 use std::task::Waker;
 
-use kithara_beat::BeatGridModel;
 use kithara_command::{Rejection, Seq, When};
 use kithara_play::{
     Bound, DeckControl, DeckPass, FadeDir, HostedDeck, Outbox, PlayError, PlayWorker, Player,
     Position, Settled, Track, TrackCommand, TrackReceipt, TrackSettings, TrackSettingsChange,
-    TrackSnapshot, TrackStatus,
+    TrackStatus,
 };
 use kithara_render::{
     bridge::{DeckEvent, DeckPart},
     rt::DeckMixerConfig,
 };
-use kithara_signal::{AudioSpec, FrameCount, SessionFrame};
-use kithara_sync::{SourceGrid, corrected_speed_curve, speed_curve};
-use kithara_warp::{AssetAxis, AssetExtent};
+use kithara_signal::{FrameCount, SessionFrame};
+use kithara_sync::corrected_speed_curve;
 use tracing::warn;
 
 use super::{
     Linked, LinkedPlayer, LinkedSnapshot, SyncMode, SyncStatus, Waiting,
+    geometry::cue_position,
     state::{RunningCorrection, SpeedOperation},
 };
 use crate::{GridAnswer, TempoTrajectory, covers, entry, jump_target};
-
-fn cue_position(track: &TrackSnapshot) -> Position {
-    if matches!(track.status, TrackStatus::Ended { .. }) {
-        Position::ZERO
-    } else {
-        track.position
-    }
-}
 
 impl<P> Linked<P> {
     fn synced_speed(&self, change: TrackSettingsChange) -> Result<(), PlayError> {
@@ -45,14 +36,6 @@ impl<P> Linked<P> {
 }
 
 impl<P> Linked<P> {
-    fn earliest<S>(&self, out: &Outbox<'_, S>) -> Result<SessionFrame, PlayError>
-    where
-        P: Track<S>,
-    {
-        let pass = out.pass().ok_or(PlayError::Untimed)?;
-        Ok(pass.now + self.lead(pass.delivery).unwrap_or(pass.delivery))
-    }
-
     fn play_synced<S>(
         &mut self,
         at: When<SessionFrame>,
@@ -102,52 +85,6 @@ impl<P> Linked<P> {
         self.waiting = None;
         self.start = sent;
         Ok(sent)
-    }
-
-    fn planned<S>(&self, at: SessionFrame) -> Result<(Position, f64), PlayError>
-    where
-        P: Track<S>,
-    {
-        self.inner.planned(at, self.host.sample_rate())
-    }
-
-    fn jump_frame<S>(&self, out: &Outbox<'_, S>) -> Result<SessionFrame, PlayError>
-    where
-        P: Track<S>,
-    {
-        Ok(self.earliest(out)? + self.inner.snapshot().as_ref().declick)
-    }
-
-    fn source<S>(&self, grid: &BeatGridModel) -> Result<SourceGrid, PlayError>
-    where
-        P: Track<S>,
-    {
-        let rate = self.host.sample_rate();
-        let extent = match self.inner.snapshot().as_ref().duration {
-            Some(duration) => AssetExtent::Bounded(
-                u64::try_from(
-                    AudioSpec::new(1, rate)
-                        .frames_for(duration)
-                        .map_err(|_| PlayError::Untimed)?
-                        .get(),
-                )
-                .map_err(|_| PlayError::Untimed)?,
-            ),
-            None => AssetExtent::Unknown,
-        };
-        SourceGrid::new(grid, AssetAxis::new(rate, extent)).ok_or(PlayError::NotReady)
-    }
-
-    fn curve(
-        &self,
-        grid: &SourceGrid,
-        position: Position,
-        at: SessionFrame,
-        landing: Option<(Position, SessionFrame)>,
-    ) -> Result<kithara_warp::SpeedCurve, PlayError> {
-        speed_curve(&self.host, grid, position, at, landing).ok_or_else(|| {
-            PlayError::Internal("Host speed law is not representable on the track axis".into())
-        })
     }
 
     fn record_retime(&mut self, at: SessionFrame, seq: Seq) {
