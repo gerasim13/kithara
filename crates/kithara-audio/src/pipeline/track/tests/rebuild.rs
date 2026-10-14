@@ -260,7 +260,7 @@ impl Decoder for ProfileCountingDecoder {
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, with)]
-struct RouteSignalDecoder {
+pub(super) struct RouteSignalDecoder {
     drops: Arc<Mutex<Vec<u64>>>,
     pcm: Arc<[f32]>,
     gapless: Option<GaplessInfo>,
@@ -274,7 +274,7 @@ struct RouteSignalDecoder {
 }
 
 impl RouteSignalDecoder {
-    fn new(
+    pub(super) fn new(
         route_pcm: &RoutePcm,
         id: u64,
         sample_rate: u32,
@@ -470,7 +470,7 @@ impl TestControl {
 
     /// Publish a new active variant on the source, the way a promoted ABR
     /// switch does. `rebuild::policy::superseded` reads exactly this.
-    fn set_media_info(&self, media_info: MediaInfo) {
+    pub(super) fn set_media_info(&self, media_info: MediaInfo) {
         *self.media_info.lock() = Some(media_info);
     }
 

@@ -22,7 +22,7 @@ use crate::consts;
 struct CacheEntry {
     path: PathBuf,
     size_bytes: u64,
-    /// When a job last took the entry's lease. A directory no job ever leased
+    /// When a job last used the entry's lease. A directory no job ever leased
     /// is left from a layout no lane builds in any more, and dates from the
     /// epoch, before every directory a lane has used.
     used: SystemTime,
@@ -865,6 +865,52 @@ mod tests {
                 .unwrap()
         };
         assert!(date(&used) > date(&idle));
+    }
+
+    #[test]
+    fn a_long_job_finishing_last_keeps_its_cache_over_a_later_short_job() {
+        for lease_dir in [".", "cargo"] {
+            let root = tempfile::tempdir().unwrap();
+            let long = build_dir(root.path(), "long", 4096);
+            let short = build_dir(root.path(), "short", 4096);
+            let running = lease::hold(&long.join(lease_dir)).unwrap();
+            let long_mark = File::options()
+                .write(true)
+                .open(long.join(lease_dir).join(lease::FILE))
+                .unwrap();
+            let long_started = UNIX_EPOCH + Duration::from_secs(10);
+            long_mark.set_modified(long_started).unwrap();
+            drop(lease::hold(&short.join(lease_dir)).unwrap());
+            let short_mark = File::options()
+                .write(true)
+                .open(short.join(lease_dir).join(lease::FILE))
+                .unwrap();
+            let short_finished = UNIX_EPOCH + Duration::from_secs(20);
+            short_mark.set_modified(short_finished).unwrap();
+            assert_eq!(
+                long_mark.metadata().unwrap().modified().unwrap(),
+                long_started
+            );
+            assert_eq!(
+                short_mark.metadata().unwrap().modified().unwrap(),
+                short_finished
+            );
+            assert!(lease::evict(&long.join(lease_dir)).unwrap().is_none());
+
+            drop(running);
+
+            let contents = candidate_entries(root.path()).unwrap();
+            assert!(contents.held.is_empty());
+            assert_eq!(contents.entries.len(), 2);
+            assert_eq!(
+                fs::metadata(long.join("debug/artifact")).unwrap().len(),
+                fs::metadata(short.join("debug/artifact")).unwrap().len()
+            );
+            enforce_budget(&[root.path().to_path_buf()], occupied(root.path()) - 1).unwrap();
+
+            assert!(long.exists(), "the job finishing last lost its cache");
+            assert!(!short.exists(), "the earlier completed cache survived");
+        }
     }
 
     /// Only a job's lease dates an entry. A directory no job ever leased is

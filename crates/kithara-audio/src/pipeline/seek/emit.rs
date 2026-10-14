@@ -66,7 +66,7 @@ pub(crate) fn active_epoch(state: &CurrentFsm) -> Option<u64> {
             WaitContext::Seek(request) => Some(request.seek.epoch),
             WaitContext::ApplySeek(applying) => Some(applying.request.seek.epoch),
             WaitContext::Recreation(recreate) => recreate_epoch(recreate),
-            WaitContext::Playback | WaitContext::PostSeek(_) => None,
+            WaitContext::ChunkGate(_) | WaitContext::Playback | WaitContext::PostSeek(_) => None,
         },
         CurrentFsm::Decoding(_) | CurrentFsm::AtEof(_) | CurrentFsm::Failed(_) => None,
     }

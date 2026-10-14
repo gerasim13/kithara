@@ -17,6 +17,7 @@ beat-backend = ["analysis-beat"]
 # `beat-nn` is the neural backend; one of the three below picks the model it
 # embeds, and the choice is named in the analysis fingerprint.
 beat-nn = ["beat-backend", "kithara-beat/nn"]
+beat-cuda = ["beat-nn", "kithara-beat/cuda"]
 beat-nn-small = ["beat-nn", "kithara-beat/embed-small-model"]
 beat-nn-full = ["beat-nn", "kithara-beat/embed-full-model"]
 beat-nn-full-int8 = ["beat-nn", "kithara-beat/embed-full-int8-model"]

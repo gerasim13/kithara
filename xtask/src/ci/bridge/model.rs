@@ -21,10 +21,34 @@ pub(super) enum VerificationState {
     Rejected,
 }
 
+/// How much of the merge a verification checks.
+///
+/// A draft is still being written: it runs what its change touched, as a
+/// branch push does. A pull request ready for review runs everything.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum Scope {
+    #[default]
+    Full,
+    Draft,
+}
+
+impl Scope {
+    /// The pipeline kind the scope's run is dispatched as.
+    pub(super) const fn kind(self) -> PipelineKind {
+        match self {
+            Self::Full => PipelineKind::Quarantine,
+            Self::Draft => PipelineKind::Branch,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct PullRequest {
     pub(super) number: u64,
     pub(super) head_sha: String,
+    /// Whether GitHub marks it a draft, which scopes its verification.
+    pub(super) scope: Scope,
     /// GitHub login of whoever opened it, matched against the trusted authors
     /// the host configured.
     pub(super) author: String,

@@ -9,16 +9,18 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
-use serde::Deserialize;
 
 use super::{
     blocker::{Blocker, blocker},
     evidence,
 };
+#[cfg(test)]
+use crate::test::validate_inventory_case_count;
 use crate::{
     common::project::{StressEvidenceConfig, StressRenderBudgets},
     consts,
     junit::{CaseTiming, parse_junit_report},
+    test::{TestId, parse_inventory},
     verdict::NotClean,
 };
 
@@ -122,37 +124,9 @@ struct EvidenceProblems {
     total: usize,
 }
 
-pub(crate) type TestId = (String, String);
-
 /// The per-test rates of one lane across the modes that ran it, a column per
 /// mode; the lane is `None` for the comparison of command modes.
 pub(crate) type Comparison = (Option<String>, Vec<(String, BTreeMap<TestId, LaneRate>)>);
-
-#[derive(Debug, Deserialize)]
-struct Inventory {
-    #[serde(rename = "rust-suites")]
-    rust_suites: BTreeMap<String, InventorySuite>,
-}
-
-#[derive(Debug, Deserialize)]
-struct InventorySuite {
-    testcases: BTreeMap<String, InventoryCase>,
-    #[serde(rename = "binary-id")]
-    binary_id: String,
-    status: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct InventoryCase {
-    #[serde(rename = "filter-match")]
-    filter_match: InventoryMatch,
-    ignored: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct InventoryMatch {
-    status: String,
-}
 
 impl EvidenceProblems {
     fn new(row_budget: usize) -> Self {
@@ -557,59 +531,6 @@ pub(crate) fn read_bounded_utf8(path: &Path, max_bytes: u64, artifact: &str) -> 
 
 pub(crate) fn validate_inventory(json: &str) -> Result<()> {
     parse_inventory(json).map(|_| ())
-}
-
-/// A target nextest did not list is inventoried with a skip status and none of its cases, whether
-/// the project's `default-filter` excluded it or the lane's own filter never reached its binary;
-/// the suite is dropped whole rather than filtered case by case.
-fn parse_inventory(json: &str) -> Result<BTreeSet<TestId>> {
-    let inventory: Inventory = serde_json::from_str(json).context("parse stress inventory JSON")?;
-    if inventory.rust_suites.is_empty() {
-        bail!("stress inventory contains no Rust test suites");
-    }
-    let mut tests = BTreeSet::new();
-    let mut inventory_cases = 0usize;
-    for (suite, inventory) in inventory.rust_suites {
-        if suite.trim().is_empty() || inventory.binary_id.trim().is_empty() {
-            bail!("stress inventory contains an empty suite identity");
-        }
-        if suite != inventory.binary_id {
-            bail!("stress inventory suite key does not match its binary-id");
-        }
-        match inventory.status.as_str() {
-            "listed" => {}
-            "skipped-default-filter" | "skipped" => continue,
-            status => bail!("stress inventory suite `{suite}` has unsupported status `{status}`"),
-        }
-        for (name, case) in inventory.testcases {
-            inventory_cases = inventory_cases.saturating_add(1);
-            validate_inventory_case_count(inventory_cases)?;
-            if name.trim().is_empty() {
-                bail!("stress inventory contains an empty test name");
-            }
-            match case.filter_match.status.as_str() {
-                "matches" if !case.ignored => {
-                    tests.insert((suite.clone(), name));
-                }
-                "matches" | "mismatch" => {}
-                status => bail!("stress inventory contains unknown filter status `{status}`"),
-            }
-        }
-    }
-    if tests.is_empty() {
-        bail!("stress inventory contains no runnable selected tests");
-    }
-    Ok(tests)
-}
-
-fn validate_inventory_case_count(count: usize) -> Result<()> {
-    if count > consts::MAX_INVENTORY_CASES {
-        bail!(
-            "stress inventory exceeds the deterministic limit of {MAX_INVENTORY_CASES} testcases",
-            MAX_INVENTORY_CASES = consts::MAX_INVENTORY_CASES
-        );
-    }
-    Ok(())
 }
 
 fn validate_expected_count(expected_count: usize) -> Result<()> {

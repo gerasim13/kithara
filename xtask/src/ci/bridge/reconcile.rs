@@ -14,8 +14,8 @@ use super::{
     git::{GitRepo, Judged},
     ledger::{DefaultBranchStatus, Ledger, LedgerEntry},
     model::{
-        Branches, Direction, PipelineObservation, PullRequest, VerificationState, direction_for,
-        validate_sha,
+        Branches, Direction, PipelineObservation, PullRequest, Scope, VerificationState,
+        direction_for, validate_sha,
     },
 };
 use crate::ci::run::PipelineKind;
@@ -34,7 +34,29 @@ struct VerificationAttempt<'a> {
     head_sha: &'a str,
     base_sha: &'a str,
     attempt: u64,
+    scope: Scope,
     config: &'a BridgeConfig,
+}
+
+/// A verification an open pull request stands on: its head, the base it is
+/// judged against and how much of the merge it checks. Every quarantine branch
+/// that names none of these is left behind.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LiveVerification {
+    head_sha: String,
+    base_sha: String,
+    scope: Scope,
+}
+
+impl LiveVerification {
+    /// Whether `reference` is a branch of this verification, in any naming
+    /// scheme the bridge has used: both abbreviations appear in each.
+    fn names(&self, reference: &str) -> bool {
+        reference.contains(abbreviate(&self.head_sha))
+            && reference.contains(abbreviate(&self.base_sha))
+            && reference.contains(&format!("/{}-", attempt_name(Scope::Draft)))
+                == (self.scope == Scope::Draft)
+    }
 }
 
 struct ReconcileLock {
@@ -184,24 +206,30 @@ impl Bridge {
     fn verify_open_pulls(&self, base_sha: &str) -> Result<()> {
         let ledger = Ledger::new(&self.config.state_dir)?;
         let pulls = self.github.open_pull_requests()?;
-        let live_heads = pulls
-            .iter()
-            .map(|pull| pull.head_sha.clone())
-            .collect::<Vec<_>>();
+        let mut live = Vec::with_capacity(pulls.len());
         for pull in &pulls {
-            if let Err(error) = self.verify_pull(&ledger, pull, base_sha) {
+            let verified_base =
+                verification_base(pull.scope, ledger.latest_base(&pull.head_sha)?, base_sha);
+            if let Err(error) = self.verify_pull(&ledger, pull, &verified_base) {
                 warn!(
                     pull_number = pull.number,
                     head_sha = %pull.head_sha,
-                    %base_sha,
+                    base_sha = %verified_base,
                     %error,
                     "GitLab verification tick failed without changing its verdict"
                 );
             }
+            let scope = ledger
+                .get(&pull.head_sha, &verified_base)?
+                .map_or(pull.scope, |entry| entry.scope);
+            live.push(LiveVerification {
+                head_sha: pull.head_sha.clone(),
+                base_sha: verified_base,
+                scope,
+            });
         }
         if let Err(error) = sweep_quarantine_refs(
-            base_sha,
-            &live_heads,
+            &live,
             || self.repo.gitlab_quarantine_refs(&self.gitlab),
             |reference| self.gitlab.cancel_pipelines(reference),
             |refs| self.repo.delete_gitlab(&self.gitlab, refs),
@@ -235,7 +263,7 @@ impl Bridge {
             self.repo
                 .weakening_control_paths(base_sha, &pull.head_sha)?
         };
-        let entry = ledger.reserve(&pull.head_sha, base_sha)?;
+        let entry = ledger.reserve(&pull.head_sha, base_sha, pull.scope)?;
         if reject_control_changes(
             pull.number,
             &pull.head_sha,
@@ -254,10 +282,11 @@ impl Bridge {
             head_sha: &pull.head_sha,
             base_sha,
             attempt: entry.attempt,
+            scope: entry.scope,
             config: &self.config,
         };
         let Some(pipeline_id) = entry.pipeline_id else {
-            let reference = quarantine_ref(&pull.head_sha, base_sha, entry.attempt);
+            let reference = quarantine_ref(&pull.head_sha, base_sha, entry.attempt, entry.scope);
             // The base is merged in either way; trust decides only whether the
             // pull request keeps its own CI configuration on top of it.
             let judged = match self
@@ -288,7 +317,7 @@ impl Bridge {
                 ledger.last_pass(&pull.head_sha, base_sha)?.as_deref(),
                 || {
                     self.gitlab
-                        .create_pipeline(&reference, &pull.head_sha, base_sha)
+                        .create_pipeline(&reference, &pull.head_sha, base_sha, entry.scope)
                 },
                 |attempt, pipeline_id| {
                     ledger.attach(&pull.head_sha, base_sha, attempt, pipeline_id)
@@ -306,7 +335,10 @@ impl Bridge {
             self.github.report_status(
                 &pull.head_sha,
                 "pending",
-                &pending_description(&self.config.github_branch, base_sha, last_pass.as_deref()),
+                &scoped(
+                    entry.scope,
+                    pending_description(&self.config.github_branch, base_sha, last_pass.as_deref()),
+                ),
                 Some(&self.config.gitlab_pipeline_url(pipeline_id)),
             )?;
             ledger.announce(&pull.head_sha, base_sha, entry.attempt, pipeline_id)?;
@@ -316,10 +348,7 @@ impl Bridge {
         observe_verification(
             &attempt,
             pipeline_id,
-            |id| {
-                self.gitlab
-                    .pipeline_observation(id, PipelineKind::Quarantine)
-            },
+            |id| self.gitlab.pipeline_observation(id, entry.scope.kind()),
             |sha, state, detail, url| self.github.report_status(sha, state, detail, url),
             |id, state, detail| {
                 ledger.finish(&pull.head_sha, base_sha, entry.attempt, id, state, detail)
@@ -470,12 +499,41 @@ fn pending_description(github_branch: &str, base_sha: &str, last_pass: Option<&s
 /// any pipeline whose variables disagree. The name only has to address one
 /// branch, and the rule that starts these runs matches the `quarantine/`
 /// prefix alone.
-fn quarantine_ref(head_sha: &str, base_sha: &str, attempt: u64) -> String {
+fn quarantine_ref(head_sha: &str, base_sha: &str, attempt: u64, scope: Scope) -> String {
     format!(
-        "quarantine/gh/{}-{}/attempt-{attempt}",
+        "quarantine/gh/{}-{}/{}-{attempt}",
         abbreviate(head_sha),
-        abbreviate(base_sha)
+        abbreviate(base_sha),
+        attempt_name(scope)
     )
+}
+
+/// The last segment of a verification branch, before its attempt number. A
+/// draft's run is named apart, so a draft marked ready leaves it behind.
+const fn attempt_name(scope: Scope) -> &'static str {
+    match scope {
+        Scope::Full => "attempt",
+        Scope::Draft => "draft-attempt",
+    }
+}
+
+/// The base a pull request is judged against. One ready for review follows
+/// the default branch; a draft stays on the base it was last judged against
+/// until its author pushes, so a moving default branch does not queue every
+/// draft again.
+fn verification_base(scope: Scope, latest: Option<String>, current: &str) -> String {
+    match (scope, latest) {
+        (Scope::Draft, Some(latest)) => latest,
+        (Scope::Draft, None) | (Scope::Full, _) => current.to_owned(),
+    }
+}
+
+/// A status description, marked when it speaks for a draft's narrower run.
+fn scoped(scope: Scope, detail: String) -> String {
+    match scope {
+        Scope::Full => detail,
+        Scope::Draft => format!("Draft, touched tests only: {detail}"),
+    }
 }
 
 /// Twelve hex digits, the width git itself grows to on a repository this size.
@@ -491,32 +549,19 @@ fn abbreviate(sha: &str) -> &str {
 /// moving leaves the old branch behind: the base moves when main advances, and
 /// the head moves whenever the author pushes. Judging the base alone left the
 /// second kind standing - nine of them held slots at once on a runner that
-/// takes one job at a time, ahead of the runs people were waiting on. Each
-/// scheme spells both halves out abbreviated or in full, so matching the
-/// abbreviation covers all of them without parsing any.
-fn superseded_quarantine_refs<'a>(
-    refs: &'a [String],
-    base_sha: &str,
-    live_heads: &[String],
-) -> Vec<&'a str> {
-    let base = abbreviate(base_sha);
+/// takes one job at a time, ahead of the runs people were waiting on. A draft
+/// keeps the base it was judged against, and once it is ready its draft run is
+/// left behind too.
+fn superseded_quarantine_refs<'a>(refs: &'a [String], live: &[LiveVerification]) -> Vec<&'a str> {
     refs.iter()
         .map(String::as_str)
         .filter(|reference| {
             reference.starts_with("quarantine/")
-                && (!reference.contains(base) || !names_a_live_head(reference, live_heads))
+                && !live
+                    .iter()
+                    .any(|verification| verification.names(reference))
         })
         .collect()
-}
-
-/// Whether an open pull request still stands on the head this branch names.
-///
-/// Matching the abbreviation the way the base is matched covers every naming
-/// scheme the bridge has used without parsing any of them.
-fn names_a_live_head(reference: &str, live_heads: &[String]) -> bool {
-    live_heads
-        .iter()
-        .any(|head| reference.contains(abbreviate(head)))
 }
 
 /// Cancel and drop the verification branches nothing will name again.
@@ -533,14 +578,13 @@ fn names_a_live_head(reference: &str, live_heads: &[String]) -> bool {
 /// its pipeline still queues is the state this exists to prevent, and the ref
 /// left in place is what the next tick finds it by.
 fn sweep_quarantine_refs(
-    base_sha: &str,
-    live_heads: &[String],
+    live: &[LiveVerification],
     list: impl FnOnce() -> Result<Vec<String>>,
     cancel: impl Fn(&str) -> Result<()>,
     delete: impl FnOnce(&[&str]) -> Result<()>,
 ) -> Result<()> {
     let listed = list()?;
-    let superseded = superseded_quarantine_refs(&listed, base_sha, live_heads);
+    let superseded = superseded_quarantine_refs(&listed, live);
     if superseded.is_empty() {
         return Ok(());
     }
@@ -550,7 +594,6 @@ fn sweep_quarantine_refs(
     delete(&superseded)?;
     info!(
         dropped = superseded.len(),
-        %base_sha,
         "verification branches nothing will name again cancelled and removed"
     );
     Ok(())
@@ -582,7 +625,10 @@ fn start_verification(
     report(
         attempt.head_sha,
         "pending",
-        &pending_description(&attempt.config.github_branch, attempt.base_sha, last_pass),
+        &scoped(
+            attempt.scope,
+            pending_description(&attempt.config.github_branch, attempt.base_sha, last_pass),
+        ),
         Some(&attempt.config.gitlab_pipeline_url(pipeline_id)),
     )?;
     announce(attempt.attempt, pipeline_id)
@@ -660,22 +706,31 @@ fn observe_verification(
     match observe(pipeline_id)? {
         PipelineObservation::Running => Ok(()),
         PipelineObservation::Succeeded => {
-            let detail =
-                format!("GitLab pipeline {pipeline_id} passed merged with {branch} {base}");
+            let detail = scoped(
+                attempt.scope,
+                format!("GitLab pipeline {pipeline_id} passed merged with {branch} {base}"),
+            );
             report(attempt.head_sha, "success", &detail, Some(&url))?;
             finish(pipeline_id, VerificationState::Verified, Some(detail))
         }
         PipelineObservation::Cancelled => {
-            let detail = format!(
-                "GitLab pipeline {pipeline_id} was stopped; a new run against {branch} {base} \
-                 will be started"
+            let detail = scoped(
+                attempt.scope,
+                format!(
+                    "GitLab pipeline {pipeline_id} was stopped; a new run against {branch} {base} \
+                     will be started"
+                ),
             );
             report(attempt.head_sha, "pending", &detail, Some(&url))?;
             release(pipeline_id)
         }
         PipelineObservation::Failed(status) => {
-            let detail = format!(
-                "GitLab pipeline {pipeline_id} finished with {status} merged with {branch} {base}"
+            let detail = scoped(
+                attempt.scope,
+                format!(
+                    "GitLab pipeline {pipeline_id} finished with {status} merged with {branch} \
+                     {base}"
+                ),
             );
             let github_state = if status == "failed" {
                 "failure"
@@ -781,6 +836,7 @@ mod tests {
                     head_sha: "head",
                     base_sha: consts::STATUS_BASE,
                     attempt: 1,
+                    scope: Scope::Full,
                     config: &status_config(),
                 },
                 &discovered,
@@ -830,6 +886,7 @@ mod tests {
                     head_sha: "head",
                     base_sha: consts::STATUS_BASE,
                     attempt: 1,
+                    scope: Scope::Full,
                     config: &status_config(),
                 },
                 &discovered,
@@ -873,6 +930,7 @@ mod tests {
                 head_sha: "head",
                 base_sha: consts::STATUS_BASE,
                 attempt: 1,
+                scope: Scope::Full,
                 config: &status_config(),
             },
             42,
@@ -1429,6 +1487,7 @@ mod tests {
                 head_sha: head,
                 base_sha: "base",
                 attempt: 3,
+                scope: Scope::Full,
                 config: &status_config(),
             },
             &[],
@@ -1478,6 +1537,7 @@ mod tests {
                 head_sha: "head",
                 base_sha: "base",
                 attempt: 1,
+                scope: Scope::Full,
                 config: &status_config(),
             },
             42,
@@ -1502,6 +1562,7 @@ mod tests {
                 head_sha: "head",
                 base_sha: "base",
                 attempt: 1,
+                scope: Scope::Full,
                 config: &status_config(),
             },
             42,
@@ -1548,6 +1609,7 @@ mod tests {
                     head_sha: "head",
                     base_sha: "base",
                     attempt: 1,
+                    scope: Scope::Full,
                     config: &status_config(),
                 },
                 42,
@@ -1587,6 +1649,7 @@ mod tests {
                 head_sha: "head",
                 base_sha: "base",
                 attempt: 1,
+                scope: Scope::Full,
                 config: &status_config(),
             },
             42,
@@ -1625,6 +1688,7 @@ mod tests {
                 head_sha: "head",
                 base_sha: "base",
                 attempt: 1,
+                scope: Scope::Full,
                 config: &status_config(),
             },
             42,
@@ -1669,11 +1733,11 @@ mod tests {
     #[test]
     fn an_attempt_ref_changes_only_when_retry_advances_the_generation() {
         assert_eq!(
-            quarantine_ref("head", "base", 1),
+            quarantine_ref("head", "base", 1, Scope::Full),
             "quarantine/gh/head-base/attempt-1"
         );
         assert_eq!(
-            quarantine_ref("head", "base", 2),
+            quarantine_ref("head", "base", 2, Scope::Full),
             "quarantine/gh/head-base/attempt-2"
         );
     }
@@ -1686,6 +1750,7 @@ mod tests {
             "1dba4b9b0689ca0e12a88093f7321fb4c432636e",
             "fe3c9e2d92564790b24d9d9d27f6f08d2f39af29",
             1,
+            Scope::Full,
         );
 
         assert_eq!(
@@ -1705,12 +1770,12 @@ mod tests {
         let other_base = "fe3c9e2d00004790b24d9d9d27f6f08d2f39af29";
 
         assert_ne!(
-            quarantine_ref(head, base, 1),
-            quarantine_ref(other_head, base, 1)
+            quarantine_ref(head, base, 1, Scope::Full),
+            quarantine_ref(other_head, base, 1, Scope::Full)
         );
         assert_ne!(
-            quarantine_ref(head, base, 1),
-            quarantine_ref(head, other_base, 1)
+            quarantine_ref(head, base, 1, Scope::Full),
+            quarantine_ref(head, other_base, 1, Scope::Full)
         );
     }
 
@@ -1718,7 +1783,7 @@ mod tests {
     fn control_path_changes_post_failure_and_reject_without_a_pipeline() {
         let directory = tempfile::tempdir().unwrap();
         let ledger = Ledger::new(directory.path()).unwrap();
-        let entry = ledger.reserve("head", "base").unwrap();
+        let entry = ledger.reserve("head", "base", Scope::Full).unwrap();
         let actions = RefCell::new(Vec::new());
 
         let handled = reject_control_changes(
@@ -1758,7 +1823,7 @@ mod tests {
     fn product_only_changes_continue_to_quarantine() {
         let directory = tempfile::tempdir().unwrap();
         let ledger = Ledger::new(directory.path()).unwrap();
-        let entry = ledger.reserve("head", "base").unwrap();
+        let entry = ledger.reserve("head", "base", Scope::Full).unwrap();
 
         assert!(
             !reject_control_changes(
@@ -1896,7 +1961,7 @@ mod tests {
     fn an_unmergeable_head_is_failed_and_rejected_with_the_reason() {
         let directory = tempfile::tempdir().unwrap();
         let ledger = Ledger::new(directory.path()).unwrap();
-        let entry = ledger.reserve("head", "base").unwrap();
+        let entry = ledger.reserve("head", "base", Scope::Full).unwrap();
         let actions = RefCell::new(Vec::new());
 
         reject_unmergeable(
@@ -1930,26 +1995,121 @@ mod tests {
         );
     }
 
-    fn live_heads() -> Vec<String> {
-        vec![consts::PULL_HEAD.to_owned()]
+    fn open_pulls() -> Vec<LiveVerification> {
+        vec![verification(consts::CURRENT_BASE, Scope::Full)]
+    }
+
+    fn verification(base: &str, scope: Scope) -> LiveVerification {
+        LiveVerification {
+            head_sha: consts::PULL_HEAD.to_owned(),
+            base_sha: base.to_owned(),
+            scope,
+        }
+    }
+
+    #[test]
+    fn a_drafts_branch_is_named_apart_from_a_full_run() {
+        assert_eq!(
+            quarantine_ref("head", "base", 1, Scope::Draft),
+            "quarantine/gh/head-base/draft-attempt-1"
+        );
+        assert_ne!(
+            quarantine_ref("head", "base", 1, Scope::Draft),
+            quarantine_ref("head", "base", 1, Scope::Full)
+        );
+    }
+
+    /// The default branch moving re-queued every open pull request on the one
+    /// Mac host, drafts included. A draft stays where it was judged until its
+    /// author pushes.
+    #[test]
+    fn a_draft_stays_on_the_base_it_was_judged_against() {
+        assert_eq!(
+            verification_base(
+                Scope::Draft,
+                Some(consts::OLDER_BASE.into()),
+                consts::CURRENT_BASE
+            ),
+            consts::OLDER_BASE
+        );
+        assert_eq!(
+            verification_base(Scope::Draft, None, consts::CURRENT_BASE),
+            consts::CURRENT_BASE
+        );
+        assert_eq!(
+            verification_base(
+                Scope::Full,
+                Some(consts::OLDER_BASE.into()),
+                consts::CURRENT_BASE
+            ),
+            consts::CURRENT_BASE
+        );
+    }
+
+    #[test]
+    fn a_drafts_run_against_its_own_base_survives_a_moved_default_branch() {
+        let refs = [quarantine_ref(
+            consts::PULL_HEAD,
+            consts::OLDER_BASE,
+            1,
+            Scope::Draft,
+        )];
+
+        assert_eq!(
+            superseded_quarantine_refs(&refs, &[verification(consts::OLDER_BASE, Scope::Draft)]),
+            [] as [&str; 0]
+        );
+    }
+
+    /// A draft marked ready is judged in full; the narrower run it had is
+    /// stopped rather than left holding the Mac.
+    #[test]
+    fn a_drafts_run_is_superseded_once_it_is_ready() {
+        let refs = [quarantine_ref(
+            consts::PULL_HEAD,
+            consts::CURRENT_BASE,
+            1,
+            Scope::Draft,
+        )];
+
+        assert_eq!(
+            superseded_quarantine_refs(&refs, &open_pulls()),
+            [refs[0].as_str()]
+        );
+    }
+
+    #[test]
+    fn a_draft_reports_that_it_ran_only_what_it_touched() {
+        assert_eq!(scoped(Scope::Full, "passed".into()), "passed");
+        assert!(scoped(Scope::Draft, "passed".into()).starts_with("Draft, touched tests only:"));
     }
 
     #[test]
     fn a_quarantine_ref_judged_against_an_older_base_is_superseded() {
-        let refs = [quarantine_ref(consts::PULL_HEAD, consts::OLDER_BASE, 1)];
+        let refs = [quarantine_ref(
+            consts::PULL_HEAD,
+            consts::OLDER_BASE,
+            1,
+            Scope::Full,
+        )];
 
         assert_eq!(
-            superseded_quarantine_refs(&refs, consts::CURRENT_BASE, &live_heads()),
+            superseded_quarantine_refs(&refs, &open_pulls()),
             [refs[0].as_str()]
         );
     }
 
     #[test]
     fn a_quarantine_ref_judged_against_the_current_base_is_kept() {
-        let refs = [quarantine_ref(consts::PULL_HEAD, consts::CURRENT_BASE, 2)];
+        let refs = [quarantine_ref(
+            consts::PULL_HEAD,
+            consts::CURRENT_BASE,
+            2,
+            Scope::Full,
+        )];
 
         assert_eq!(
-            superseded_quarantine_refs(&refs, consts::CURRENT_BASE, &live_heads()),
+            superseded_quarantine_refs(&refs, &open_pulls()),
             [] as [&str; 0]
         );
     }
@@ -1959,7 +2119,7 @@ mod tests {
         let refs = ["develop".to_owned(), "laba/419-connectivity".to_owned()];
 
         assert_eq!(
-            superseded_quarantine_refs(&refs, consts::CURRENT_BASE, &live_heads()),
+            superseded_quarantine_refs(&refs, &open_pulls()),
             [] as [&str; 0]
         );
     }
@@ -1973,21 +2133,20 @@ mod tests {
         )];
 
         assert_eq!(
-            superseded_quarantine_refs(&refs, consts::CURRENT_BASE, &live_heads()),
+            superseded_quarantine_refs(&refs, &open_pulls()),
             [refs[0].as_str()]
         );
     }
 
     #[test]
     fn a_sweep_drops_every_branch_a_moved_base_left_behind() {
-        let stale = quarantine_ref(consts::PULL_HEAD, consts::OLDER_BASE, 1);
-        let live = quarantine_ref(consts::PULL_HEAD, consts::CURRENT_BASE, 2);
+        let stale = quarantine_ref(consts::PULL_HEAD, consts::OLDER_BASE, 1, Scope::Full);
+        let live = quarantine_ref(consts::PULL_HEAD, consts::CURRENT_BASE, 2, Scope::Full);
         let listed = vec![stale.clone(), live, "develop".to_owned()];
         let deleted = RefCell::new(Vec::new());
 
         sweep_quarantine_refs(
-            consts::CURRENT_BASE,
-            &live_heads(),
+            &open_pulls(),
             || Ok(listed),
             |_| Ok(()),
             |refs| {
@@ -2007,13 +2166,13 @@ mod tests {
         let called = Cell::new(false);
 
         sweep_quarantine_refs(
-            consts::CURRENT_BASE,
-            &live_heads(),
+            &open_pulls(),
             || {
                 Ok(vec![quarantine_ref(
                     consts::PULL_HEAD,
                     consts::CURRENT_BASE,
                     1,
+                    Scope::Full,
                 )])
             },
             |_| Ok(()),
@@ -2038,20 +2197,26 @@ mod tests {
             consts::RETIRED_HEAD,
             consts::CURRENT_BASE,
             1,
+            Scope::Full,
         )];
 
         assert_eq!(
-            superseded_quarantine_refs(&refs, consts::CURRENT_BASE, &live_heads()),
+            superseded_quarantine_refs(&refs, &open_pulls()),
             [refs[0].as_str()]
         );
     }
 
     #[test]
     fn a_quarantine_ref_for_an_open_pull_requests_head_is_kept() {
-        let refs = [quarantine_ref(consts::PULL_HEAD, consts::CURRENT_BASE, 1)];
+        let refs = [quarantine_ref(
+            consts::PULL_HEAD,
+            consts::CURRENT_BASE,
+            1,
+            Scope::Full,
+        )];
 
         assert_eq!(
-            superseded_quarantine_refs(&refs, consts::CURRENT_BASE, &live_heads()),
+            superseded_quarantine_refs(&refs, &open_pulls()),
             [] as [&str; 0]
         );
     }
@@ -2061,14 +2226,13 @@ mod tests {
     /// taken by a commit nobody will merge.
     #[test]
     fn a_sweep_cancels_the_run_of_every_branch_it_drops() {
-        let stale = quarantine_ref(consts::RETIRED_HEAD, consts::CURRENT_BASE, 1);
-        let live = quarantine_ref(consts::PULL_HEAD, consts::CURRENT_BASE, 1);
+        let stale = quarantine_ref(consts::RETIRED_HEAD, consts::CURRENT_BASE, 1, Scope::Full);
+        let live = quarantine_ref(consts::PULL_HEAD, consts::CURRENT_BASE, 1, Scope::Full);
         let listed = vec![stale.clone(), live, "develop".to_owned()];
         let cancelled = RefCell::new(Vec::new());
 
         sweep_quarantine_refs(
-            consts::CURRENT_BASE,
-            &live_heads(),
+            &open_pulls(),
             || Ok(listed),
             |reference| {
                 cancelled.borrow_mut().push(reference.to_owned());
