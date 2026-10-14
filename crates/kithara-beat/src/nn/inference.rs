@@ -9,6 +9,7 @@ use crate::nn::cuda::CudaModel;
 use crate::nn::{
     api::BeatError,
     backend::BeatBackend,
+    config::BeatConfig,
     consts,
     runtime::{RtenModel, Tensor},
 };
@@ -35,26 +36,28 @@ enum PredictorModel {
     Cuda(CudaModel),
 }
 
-/// Load the beat model from ONNX bytes.
-impl TryFrom<(BeatBackend, &[u8])> for BeatPredictor {
-    type Error = BeatError;
-
-    fn try_from((backend, bytes): (BeatBackend, &[u8])) -> Result<Self, BeatError> {
+impl BeatPredictor {
+    /// Load the beat model from ONNX bytes using the selected runtime.
+    pub(crate) fn new(
+        bytes: &[u8],
+        config: &BeatConfig,
+        #[cfg(feature = "cuda")] environment: Option<&ort::environment::Environment>,
+    ) -> Result<Self, BeatError> {
         Ok(Self {
-            model: match backend {
+            model: match config.backend() {
                 BeatBackend::Cpu => {
                     PredictorModel::Cpu(Box::new(RtenModel::try_from(("beat", bytes))?))
                 }
                 #[cfg(feature = "cuda")]
-                BeatBackend::Cuda { device_id } => {
-                    PredictorModel::Cuda(CudaModel::try_from((bytes, device_id))?)
-                }
+                BeatBackend::Cuda { device_id } => PredictorModel::Cuda(CudaModel::new(
+                    bytes,
+                    device_id,
+                    environment.ok_or(BeatError::CudaEnvironmentMissing)?,
+                )?),
             },
         })
     }
-}
 
-impl BeatPredictor {
     /// Predict beats from a full mel spectrogram `[1, T, 128]`.
     ///
     /// Returns `(beat_logits, downbeat_logits)`, each of length T.

@@ -1,5 +1,8 @@
+use serde::{Deserialize, Serialize};
+
 /// Runtime for the chunked beat model; mel extraction always uses `RTen` on CPU.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum BeatBackend {
     /// `RTen` CPU inference; requires no external inference runtime.

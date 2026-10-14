@@ -1,14 +1,12 @@
 use bon::bon;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
+use kithara_config::ConfigOwner;
 use thiserror::Error;
 
 use crate::{
     detector::{BeatDetectError, BeatDetector},
     mark::RawBeats,
-    nn::{
-        backend::BeatBackend, config::BeatConfig, inference::BeatPredictor, mel::MelExtractor,
-        postprocess::PeakPicker,
-    },
+    nn::{config::BeatConfig, inference::BeatPredictor, mel::MelExtractor, postprocess},
 };
 
 #[derive(Debug, Error)]
@@ -21,18 +19,26 @@ pub enum BeatError {
     #[error("buffer allocation failed: {0}")]
     Buffer(#[from] PoolError),
     #[cfg(feature = "cuda")]
+    #[error("CUDA runtime library failed: {0}")]
+    CudaLibrary(#[from] ort::LoadDynamicError),
+    #[cfg(feature = "cuda")]
     #[error("CUDA runtime failed: {0}")]
     Cuda(#[from] ort::Error),
+    #[cfg(feature = "cuda")]
+    #[error("CUDA requires a caller-owned ONNX Runtime environment")]
+    CudaEnvironmentMissing,
 }
 
 /// `beat_this` NN detector: mel, chunked inference, then peak picking.
+#[derive(ConfigOwner)]
+#[config_owner(config)]
 pub struct BeatThis<S>
 where
     S: HasPool<f32>,
 {
     predictor: BeatPredictor,
     mel: MelExtractor,
-    picker: PeakPicker,
+    config: BeatConfig,
     pools: PoolRegion<S>,
 }
 
@@ -45,20 +51,26 @@ where
     ///
     /// # Errors
     /// [`BeatError::ModelLoad`] when either model fails to parse.
-    /// With `cuda`, runtime/provider errors are returned as `BeatError::Cuda`.
+    /// With `cuda`, a missing environment is `BeatError::CudaEnvironmentMissing`
+    /// and runtime/provider errors are `BeatError::Cuda`.
     #[builder]
     pub fn new(
         mel_model: &[u8],
         beat_model: &[u8],
         pools: PoolRegion<S>,
         #[builder(default)] config: BeatConfig,
-        #[builder(default)] backend: BeatBackend,
+        #[cfg(feature = "cuda")] environment: Option<&ort::environment::Environment>,
     ) -> Result<Self, BeatError> {
         Ok(Self {
             pools,
             mel: MelExtractor::try_from(mel_model)?,
-            predictor: BeatPredictor::try_from((backend, beat_model))?,
-            picker: PeakPicker::new(config),
+            predictor: BeatPredictor::new(
+                beat_model,
+                &config,
+                #[cfg(feature = "cuda")]
+                environment,
+            )?,
+            config,
         })
     }
 
@@ -70,7 +82,7 @@ where
     pub fn analyze(&self, mono_22050: &[f32]) -> Result<RawBeats, BeatError> {
         let mel = self.mel.extract(mono_22050, &self.pools)?;
         let (beat_logits, downbeat_logits) = self.predictor.predict(&mel, &self.pools)?;
-        let (beats, downbeats) = self.picker.decode(&beat_logits, &downbeat_logits)?;
+        let (beats, downbeats) = postprocess::decode(&beat_logits, &downbeat_logits, &self.config)?;
         Ok(RawBeats { beats, downbeats })
     }
 }

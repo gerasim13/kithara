@@ -37,14 +37,19 @@ let raw: RawBeats = bt.analyze(&mono_22050)?;
 - `BeatThis::builder()` — load models from bytes (caller chooses embed vs file
   vs download), inject a sample-capable pool facade, and pick the decoding policy.
 - `BeatThis::analyze(&mono_22050)` — run the mel, inference and peak-pick pipeline.
-- `BeatBackend` — select the beat predictor runtime through `.backend(...)`.
+- `BeatBackend` — select the predictor runtime in `BeatConfig::builder().backend(...)`.
   `Cpu` is the default. With `cuda`, use `BeatBackend::Cuda { device_id: 0 }`.
+  Load one caller-owned `ort::environment::Environment` from the configured
+  library path and supply `.environment(&environment)` to the detector builder.
   Mel extraction remains RTen CPU because its FFT model is unchanged; peak
   picking and output buffers also remain on CPU. CUDA provider registration
   errors are returned without switching the predictor to CPU. ONNX Runtime
   may place shape/control operators on CPU; model kernel placement and complete
   analysis latency must be measured before claiming acceleration.
-- `BeatConfig` — peak threshold, max-pool half-width, dedup width. The defaults
+- `BeatConfig` — predictor backend, CUDA runtime library path, peak threshold,
+  max-pool half-width, and dedup width. The detector retains this configuration;
+  `ConfigOwner::config` exposes the same immutable settings used by prediction
+  and peak picking. The numerical defaults
   are the values the golden fixtures are held to; see [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-beat) before moving
   them.
 - `RawBeats { beats, downbeats }` — pooled output positions in seconds, sorted
@@ -66,11 +71,25 @@ let raw: RawBeats = bt.analyze(&mono_22050)?;
 ## Features
 
 - `cuda` — optional ONNX Runtime GPU predictor using the same ONNX model bytes.
-  Supply compatible native ONNX Runtime, CUDA and cuDNN libraries; configure
-  `ORT_DYLIB_PATH` before the first runtime call when it is outside the dynamic
-  library search path. No runtime binary is downloaded by this feature. Each
+  Supply compatible native ONNX Runtime, CUDA and cuDNN libraries. Native library
+  resolution preserves the standard `ORT_DYLIB_PATH` behavior unless
+  `BeatConfig::builder().ort_library_path(...)` names an explicit override.
+  The configuration resolves the path at construction, using the environment
+  source from `kithara-config`, and the
+  detector retains that resolved configuration. ONNX Runtime loads one library
+  per process; configure it before any other runtime use and use the same library
+  for every detector. The crate re-exports `ort`, so the caller creates its native
+  resource with `ort::init_from(config.ort_library_path())?.build()?`, retains it
+  across detector replacement, and passes `.environment(&environment)` to each
+  detector builder. Each session retains an SDK handle to that same environment.
+  Native resource destruction happens when all caller and session handles drop.
+  No runtime binary is downloaded by this feature. Each
   detector owns one session and serializes its CUDA model calls. CPU-only
   builds retain the existing RTen path and require no ONNX Runtime library.
+  CUDA construction without the native resource returns
+  `BeatError::CudaEnvironmentMissing`. Native loading returns `ort::LoadDynamicError`,
+  convertible to `BeatError::CudaLibrary`; session and provider failures return
+  `BeatError::Cuda`.
 - `embed-small-model`, `embed-full-model`, `embed-full-int8-model` — exactly one
   of these exposes `MEL_MODEL_BYTES` / `BEAT_MODEL_BYTES` / `BEAT_MODEL_TAG`, so
   FFI/mobile builds need no asset plumbing. Off by default. The build script

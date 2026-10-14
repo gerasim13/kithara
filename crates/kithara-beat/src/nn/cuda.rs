@@ -1,8 +1,9 @@
-use std::{collections::HashMap, env, path::PathBuf};
+use std::collections::HashMap;
 
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::sync::Mutex;
 use ort::{
+    environment::Environment,
     ep::CUDA,
     session::{
         Session,
@@ -19,39 +20,32 @@ pub(crate) struct CudaModel {
     session: Mutex<Session>,
 }
 
-impl TryFrom<(&[u8], i32)> for CudaModel {
-    type Error = BeatError;
-
-    fn try_from((bytes, device_id): (&[u8], i32)) -> Result<Self, Self::Error> {
+impl CudaModel {
+    pub(crate) fn new(
+        bytes: &[u8],
+        device_id: i32,
+        environment: &Environment,
+    ) -> Result<Self, BeatError> {
         Ok(Self {
-            session: Mutex::new(Self::builder(device_id)?.commit_from_memory(bytes)?),
+            session: Mutex::new(Self::builder(device_id, environment)?.commit_from_memory(bytes)?),
         })
     }
-}
 
-impl CudaModel {
-    pub(crate) fn builder(device_id: i32) -> ort::Result<SessionBuilder> {
-        let path = env::var_os("ORT_DYLIB_PATH")
-            .filter(|path| !path.is_empty())
-            .map_or_else(
-                || {
-                    PathBuf::from(format!(
-                        "{}onnxruntime{}",
-                        env::consts::DLL_PREFIX,
-                        env::consts::DLL_SUFFIX
-                    ))
-                },
-                PathBuf::from,
-            );
-        ort::init_from(path)?.commit();
-        Ok(Session::builder()?
+    pub(crate) fn builder(
+        device_id: i32,
+        environment: &Environment,
+    ) -> Result<SessionBuilder, BeatError> {
+        Ok(Session::builder(environment)?
             .with_execution_providers([CUDA::default()
                 .with_device_id(device_id)
                 .with_tf32(false)
                 .build()
-                .error_on_failure()])?
-            .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_intra_threads(1)?)
+                .error_on_failure()])
+            .map_err(ort::Error::from)?
+            .with_optimization_level(GraphOptimizationLevel::Level3)
+            .map_err(ort::Error::from)?
+            .with_intra_threads(1)
+            .map_err(ort::Error::from)?)
     }
 
     pub(crate) fn run<S>(
@@ -87,29 +81,37 @@ impl CudaModel {
 
 #[cfg(all(test, feature = "embed-small-model"))]
 mod tests {
-    use std::{env, fs, path::PathBuf};
+    use std::fs;
 
+    use kithara_config::path_from_env;
     use kithara_platform::sync::Mutex;
     use kithara_test_utils::kithara;
     use serde_json::Value;
     use smallvec::smallvec;
 
     use super::CudaModel;
-    use crate::{BEAT_MODEL_BYTES, nn::runtime::Tensor, test_pools::pools};
+    use crate::{
+        BEAT_MODEL_BYTES,
+        nn::{config::BeatConfig, runtime::Tensor},
+        test_pools::pools,
+    };
 
     #[kithara::test(native, flash(false))]
     #[ignore = "requires NVIDIA GPU/runtime and KITHARA_BEAT_CUDA_PROFILE_DIR"]
     fn native_cuda_model_profile_contains_compute_kernels() {
-        let directory = PathBuf::from(
-            env::var_os("KITHARA_BEAT_CUDA_PROFILE_DIR")
-                .expect("explicit profile artifact directory"),
-        );
+        let directory = path_from_env("KITHARA_BEAT_CUDA_PROFILE_DIR")
+            .expect("explicit profile artifact directory");
         assert!(
             directory.is_absolute(),
             "profile artifacts need an absolute path"
         );
         fs::create_dir_all(&directory).expect("profile directory");
-        let session = CudaModel::builder(0)
+        let config = BeatConfig::default();
+        let environment = ort::init_from(config.ort_library_path())
+            .expect("configured native library")
+            .build()
+            .expect("caller-owned runtime environment");
+        let session = CudaModel::builder(0, &environment)
             .expect("CUDA session builder")
             .with_profiling(directory.join(format!("beat-this-cuda-{}", std::process::id())))
             .expect("profile enabled")
