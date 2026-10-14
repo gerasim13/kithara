@@ -147,6 +147,14 @@ impl Source {
 }
 
 impl AudioSession for Source {
+    fn media_origin(&self) -> Option<Duration> {
+        self.media_origin
+    }
+
+    fn visible_origin(&self) -> Option<Duration> {
+        self.visible_origin
+    }
+
     fn duration(&self) -> Option<Duration> {
         let reports = self.reports?;
         let frames = if self.refines && self.at > 0 {
@@ -437,7 +445,9 @@ pub(super) fn assert_reader_visible_length_basis(analysis_pcm: &'static [f32]) {
         .duration_for(1105)
         .expect("media origin is representable");
     for visible_origin in [None, Some(original_visible_origin)] {
-        let mut reader = Source::new(analysis_pcm, 132_829).reporting(Some(132_300));
+        let mut reader = Source::new(analysis_pcm, 132_829)
+            .reporting(Some(132_300))
+            .flooring(529);
         reader.at = 529;
         reader.chunk = 44_100;
         reader.media_origin = Some(media_origin);
@@ -452,36 +462,37 @@ pub(super) fn assert_reader_visible_length_basis(analysis_pcm: &'static [f32]) {
             NonZeroU32::MIN,
         );
 
+        if visible_origin.is_some() {
+            assert_eq!(pass.node.tick(), TickResult::Progress);
+            assert_eq!(
+                pass.calls(),
+                [Call::Seek { to: 0, landed: 529 }],
+                "a known raw extent schedules before decoding"
+            );
+            assert!(
+                pass.results.borrow().is_none(),
+                "seeking does not claim decoded coverage"
+            );
+        }
         assert_eq!(pass.node.tick(), TickResult::Progress);
         let before = pass.analysis();
         assert_eq!(
             before.extent(),
-            None,
-            "the length arrived before its original visible basis"
+            visible_origin.map(|_| 132_829),
+            "only the original visible basis translates the reported length"
         );
         assert_eq!(
             before.coverage().iter().collect::<Vec<_>>(),
             [&(529..44_629)]
         );
-        assert_eq!(pass.calls(), [Call::Chunk { at: 529 }]);
         if visible_origin.is_some() {
-            assert_eq!(pass.node.tick(), TickResult::Progress);
             assert_eq!(
                 pass.calls(),
-                [
-                    Call::Chunk { at: 529 },
-                    Call::Seek {
-                        to: 44_629,
-                        landed: 44_629,
-                    },
-                ],
-                "learning the raw extent schedules its actual widest gap"
+                [Call::Seek { to: 0, landed: 529 }, Call::Chunk { at: 529 },],
+                "coverage starts at the actual source landing"
             );
-            assert_eq!(
-                pass.analysis().coverage().iter().collect::<Vec<_>>(),
-                [&(529..44_629)],
-                "seeking does not claim decoded coverage"
-            );
+        } else {
+            assert_eq!(pass.calls(), [Call::Chunk { at: 529 }]);
         }
         assert_eq!(pass.node.tick(), TickResult::Progress);
         let after = pass.analysis();
@@ -494,7 +505,7 @@ pub(super) fn assert_reader_visible_length_basis(analysis_pcm: &'static [f32]) {
         assert_eq!(
             targets(&pass.calls()),
             if visible_origin.is_some() {
-                vec![44_629]
+                vec![0]
             } else {
                 Vec::new()
             },

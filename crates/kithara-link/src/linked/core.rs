@@ -415,10 +415,17 @@ impl<S, P: Track<S>> Player<S> for Linked<P> {
             }
             TrackCommand::Play { at } => self.play_synced(at, out),
             TrackCommand::Seek { to } => {
-                if !matches!(
-                    self.inner.snapshot().as_ref().status,
-                    TrackStatus::Playing { .. }
-                ) {
+                let status = self.inner.snapshot().as_ref().status;
+                if status == TrackStatus::Loading && self.cue.is_some() {
+                    self.cue = Some(to);
+                    if let Some(Waiting::Load { required } | Waiting::Play { required, .. }) =
+                        self.waiting.as_mut()
+                    {
+                        *required = to;
+                    }
+                    return Ok(None);
+                }
+                if !matches!(status, TrackStatus::Playing { .. }) {
                     let sent = self.inner.apply(TrackCommand::Seek { to }, out)?;
                     if let Some(start) = self.start {
                         self.start_caller.get_or_insert(start);

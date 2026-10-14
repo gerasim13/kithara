@@ -95,17 +95,11 @@ where
             _ => None,
         };
         if let Some(id) = id {
-            let record = self
-                .tracks
+            self.tracks
                 .records()
                 .iter()
                 .find(|record| record.id == id)
                 .ok_or(QueueError::UnknownTrackId(id))?;
-            if matches!(command, QueueCommand::Select { .. })
-                && matches!(record.status, TrackStatus::Failed(_))
-            {
-                return Err(QueueError::NotReady(id));
-            }
         }
         Ok(())
     }
@@ -293,6 +287,30 @@ where
         output: Option<&OutputSnapshot>,
         out: &mut Outbox<'_, S>,
     ) -> Result<Option<Seq>, QueueError> {
+        let requested = self
+            .target
+            .filter(|target| !target.auto)
+            .map(|target| (target.to, target.transition))
+            .or_else(|| self.current.map(|id| (id, Transition::None)));
+        if let Some((id, transition)) = requested
+            && self
+                .tracks
+                .records()
+                .iter()
+                .any(|record| record.id == id && matches!(record.status, TrackStatus::Failed(_)))
+        {
+            return self.request_transition(
+                TransitionRequest {
+                    id,
+                    transition,
+                    reason: AdvanceReason::UserSelect,
+                    auto: false,
+                    playing: true,
+                },
+                output,
+                out,
+            );
+        }
         if self.active_current_index().is_some() {
             if self.pending_handover.is_some()
                 && let Some(target) = self.target.as_mut()

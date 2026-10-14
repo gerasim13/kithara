@@ -1372,8 +1372,7 @@ async fn render_until_b_with_late_variant_switch(
         {
             let switch_frame = frames_from_secs(duration - 2.5, SAMPLE_RATE);
             if progress.rendered_frames() >= switch_frame {
-                let handle = harness
-                    .player()
+                let handle = queue
                     .current_abr_handle()
                     .expect("track A HLS stream must expose AbrHandle");
                 handle

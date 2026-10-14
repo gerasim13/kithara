@@ -1,3 +1,4 @@
+use kithara_platform::time::Duration;
 use kithara_play::{DeckEvent, Slot};
 
 use super::*;
@@ -75,29 +76,105 @@ async fn eof_after_queue_end_does_not_restart_from_first_track() {
 }
 
 #[kithara::test(tokio)]
+#[kithara::flash(io)]
+#[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn play_retries_the_current_track_after_its_prefetch_failed() {
+    use std::{future::Future, task::Poll};
+
+    use kithara_command::{Batch, ChannelConfig, Outcome, Rejection, channel};
+    use kithara_play::mock;
+    use kithara_render::{Dispatched, DispatcherCommand, LoadRefusal};
+    use kithara_signal::AudioSpec;
+
     let (mut queue, mut rig, dir) = empty_queue();
     let id = TrackId::allocate();
+    let path = dir.path().join("retry.wav");
+    let source = path.to_str().expect("fixture path").to_owned();
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(
             queue,
             QueueCommand::Append {
                 id,
-                source: TrackSource::Uri(
-                    dir.path()
-                        .join("entry.wav")
-                        .to_str()
-                        .expect("fixture path")
-                        .to_owned(),
-                ),
+                source: TrackSource::Uri(source.clone()),
             },
             out,
         )
         .expect("open queue accepts a track");
     });
-    queue
-        .tracks
-        .set_status(id, TrackStatus::Failed("network offline".into()));
+    rig.opens.drain();
+    let mut due = rig.opens.next_due((), 1).expect("initial source load");
+    let failed_seq = due.seq();
+    let command = due.commands_mut().pop().expect("one source load");
+    assert!(matches!(command, DispatcherCommand::Load(_)));
+    assert!(due.commands().is_empty());
+    due.defer();
+    let refusal = {
+        let _io = kithara_platform::flash::real_io();
+        let (mut sender, inbox) = channel(ChannelConfig::builder().build());
+        sender
+            .send(
+                When::Next,
+                Batch {
+                    basis: Vec::new(),
+                    commands: vec![command],
+                },
+            )
+            .expect("actual dispatcher accepts the source load");
+        let mut dispatcher = std::pin::pin!(kithara_render::dispatch(inbox));
+        let receipt = std::future::poll_fn(|context| {
+            hang_tick!();
+            let _ = dispatcher.as_mut().poll(context);
+            if let Some(receipt) = sender.receipts().next() {
+                hang_reset!();
+                Poll::Ready(receipt)
+            } else {
+                Poll::Pending
+            }
+        })
+        .await;
+        let (outcome, _) = receipt.into();
+        let Outcome::Rejected(Rejection::Refused(refusal @ LoadRefusal::Open(_))) = outcome else {
+            panic!("the unavailable source must fail to open: {outcome:?}");
+        };
+        refusal
+    };
+    rig.opens
+        .resume(failed_seq, (), ())
+        .expect("initial owner load")
+        .refuse(refusal);
+    let receipt = rig
+        .dispatcher
+        .receipts()
+        .next()
+        .expect("actual load refusal");
+    with_outbox(&mut queue, &mut rig, |queue, out| {
+        Player::settle(queue, TrackReceipt::Loaded(receipt), out)
+    });
+    assert!(matches!(
+        queue.track(id).expect("retained source").status,
+        TrackStatus::Failed(_)
+    ));
+    for _ in 0..3 {
+        tick_fixture(&mut queue, &mut rig);
+    }
+    rig.opens.drain();
+    loop {
+        let Some(due) = rig.opens.next_due((), 1) else {
+            break;
+        };
+        hang_tick!();
+        match due.commands() {
+            [DispatcherCommand::Release(_)] => due.apply(Dispatched::Released),
+            [DispatcherCommand::SetPriority(_, _)] => due.apply(Dispatched::Prioritized),
+            _ => panic!("a failed source must not reopen before an explicit Play"),
+        }
+        let receipt = rig.dispatcher.receipts().next().expect("cleanup receipt");
+        with_outbox(&mut queue, &mut rig, |queue, out| {
+            Player::settle(queue, TrackReceipt::Loaded(receipt), out)
+        });
+        hang_reset!();
+    }
+    std::fs::copy(dir.path().join("entry.wav"), &path).expect("restore the requested source");
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(queue, QueueCommand::Play { at: When::Next }, out)
     })
@@ -107,6 +184,33 @@ async fn play_retries_the_current_track_after_its_prefetch_failed() {
         .expect("play must retain selection while retrying the failed track");
     assert_eq!(pending.to, id);
     assert_eq!(pending.playing, true);
+    let retry_seq = queue
+        .incoming_index(id)
+        .and_then(|index| queue.active.get(index))
+        .and_then(|active| active.load)
+        .expect("Play opens the retained source again")
+        .seq();
+    assert_ne!(retry_seq, failed_seq, "Play must start a new open");
+    let loaded = crate::mock::loaded_request(&mut rig, retry_seq).await;
+    assert_eq!(loaded.opened.pcm.src().as_ref(), source);
+    assert_eq!(
+        loaded.opened.pcm.spec(),
+        AudioSpec::new(2, mock::SAMPLE_RATE)
+    );
+    assert!(
+        loaded
+            .opened
+            .duration
+            .is_some_and(|duration| !duration.is_zero())
+    );
+    answer_loaded(&mut queue, &mut rig, loaded);
+    crate::mock::finish(&mut queue, &mut rig);
+    assert_eq!(queue.current, Some(id));
+    assert_eq!(
+        queue.track(id).expect("played source").status,
+        TrackStatus::Consumed
+    );
+    assert!(queue.target.is_none());
 }
 
 #[kithara::test(tokio)]

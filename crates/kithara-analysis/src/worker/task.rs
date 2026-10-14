@@ -451,17 +451,19 @@ where
 
         match self.phase {
             TaskPhase::Decode => {
+                let visible_origin = match self.analyzers.as_ref() {
+                    Some(analyzers) => analyzers.visible_origin(),
+                    None => self.reader.visible_origin(),
+                };
                 let mut detector = detector;
                 let Ok(drained) = self.drain(builder, detector.as_deref_mut()) else {
                     self.phase = TaskPhase::Done;
                     return TickResult::Progress;
                 };
-                let raw_end = self.reader.duration().and_then(|length| {
-                    self.analyzers
-                        .as_ref()?
-                        .visible_origin()?
-                        .checked_add(length)
-                });
+                let raw_end = self
+                    .reader
+                    .duration()
+                    .and_then(|length| visible_origin?.checked_add(length));
                 self.extent.claim(raw_end, self.rate);
                 let result = self.step(builder, detector.as_deref_mut());
                 if self.is_ending() || self.due() || self.beat_dirty {

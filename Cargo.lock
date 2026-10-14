@@ -6064,6 +6064,7 @@ dependencies = [
  "bytes",
  "kithara",
  "kithara-app",
+ "kithara-command",
  "kithara-devtools",
  "kithara-integration-tests",
  "kithara-test-dylib",

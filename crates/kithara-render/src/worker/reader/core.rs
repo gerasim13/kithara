@@ -127,17 +127,20 @@ impl PcmReceiver {
     /// Raw coordinate of track-media zero from the next immutable PCM packet.
     #[must_use]
     pub fn media_origin(&self) -> Option<Duration> {
-        match self.forward.try_peek()? {
-            PcmPacket::Chunk(chunk) => chunk.meta.media_origin,
-            PcmPacket::Failed { .. } => None,
-        }
+        self.next_chunk_info()?.media_origin
     }
 
     /// Original visible source position published by the decoded-source owner.
     #[must_use]
     pub fn visible_origin(&self) -> Option<Duration> {
+        self.next_chunk_info()?.visible_origin
+    }
+
+    /// Immutable metadata of the next admitted producer packet.
+    #[must_use]
+    pub fn next_chunk_info(&self) -> Option<kithara_signal::AudioChunkInfo> {
         match self.forward.try_peek()? {
-            PcmPacket::Chunk(chunk) => chunk.meta.visible_origin,
+            PcmPacket::Chunk(chunk) => Some(chunk.meta),
             PcmPacket::Failed { .. } => None,
         }
     }

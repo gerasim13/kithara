@@ -114,7 +114,11 @@ async fn provider_tempo_controls_measure_without_sync(
                 "{:?} deck {deck} native {native_bpm} target {target}",
                 prepared.0
             );
-            let measured = synchronization_failures(&label, &[&pcm], CHANNELS, 48_000, target);
+            let measured = if prepared.0.has_score_markers() {
+                marked_synchronization_failures(&label, &[&pcm], CHANNELS, 48_000, target)
+            } else {
+                synchronization_failures(&label, &[&pcm], CHANNELS, 48_000, target)
+            };
             let (markers, downbeats) =
                 kithara_integration_tests::cochlea::marked_rhythm_markers(&pcm, CHANNELS, 48_000);
             eprintln!(
@@ -192,16 +196,8 @@ async fn run_with_decoder(
             "{} {provider:?}: deck {audible_deck} capture must contain six complete beats",
             case.id,
         );
-        if matches!(
-            provider,
-            Provider::Synthetic
-                | Provider::Mp3Same
-                | Provider::Mp3Distinct
-                | Provider::HlsMp3(_)
-                | Provider::HlsSame(_)
-        ) {
-            request_failures.extend(harness.grid_binding_failures(case).await);
-        }
+        request_failures.extend(harness.grid_binding_failures(case).await);
+        request_failures.extend(harness.grid_anchor_failures(case, None).await);
         tracks.push(pcm);
         request_failures.append(&mut harness.failures);
         drop(harness);

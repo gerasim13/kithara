@@ -4,7 +4,7 @@ use kithara_audio::FailureSource;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_decode::TrackMetadata;
 use kithara_platform::{maybe_send::WasmSend, sync::Arc, time::Duration};
-use kithara_signal::{AudioChunk, AudioSpec, SegmentId, SessionFrame, SourceSpan};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, SegmentId, SessionFrame, SourceSpan};
 use kithara_test_macros as kithara;
 use kithara_warp::{PresentationFrontier, RenderContext, WarpMapRevision};
 
@@ -103,6 +103,12 @@ impl PlayerResource {
     #[must_use]
     pub fn visible_origin(&self) -> Option<Duration> {
         self.visible_origin
+    }
+
+    /// Immutable next-producer metadata, independent of the consumed raw mark.
+    #[must_use]
+    pub fn next_chunk_info(&self) -> Option<AudioChunkInfo> {
+        self.consumer.get().receiver.next_chunk_info()
     }
 
     #[must_use]

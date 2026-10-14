@@ -98,7 +98,13 @@ where
             .settings(self.config.settings.crossfade())
             .validate()
             .map_err(PlayError::from)?;
+        let failed = self
+            .tracks
+            .records()
+            .iter()
+            .any(|record| record.id == id && matches!(record.status, TrackStatus::Failed(_)));
         if !auto
+            && !failed
             && self.current == Some(id)
             && self.pending_handover.is_none_or(|pending| {
                 reason == AdvanceReason::UserSelect
@@ -118,6 +124,7 @@ where
                 .map_err(Into::into);
         }
         if !auto
+            && !failed
             && self
                 .target
                 .is_some_and(|target| target.to == id && !target.auto)
@@ -202,6 +209,9 @@ where
         }
         if !target.auto
             && self.current == Some(target.to)
+            && !self.tracks.records().iter().any(|record| {
+                record.id == target.to && matches!(record.status, TrackStatus::Failed(_))
+            })
             && self.incoming_index(target.to).is_none()
             && let Some(index) = self.active_current_index()
         {
@@ -387,7 +397,12 @@ where
                 }
             }
             self.release_track(index, out)?;
-            if wanted {
+            if wanted
+                && (self.target.is_some_and(|target| target.auto)
+                    || !self.tracks.records().iter().any(|record| {
+                        record.id == id && matches!(record.status, TrackStatus::Failed(_))
+                    }))
+            {
                 self.target = None;
             }
         } else if wanted {

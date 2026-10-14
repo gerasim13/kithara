@@ -1098,8 +1098,9 @@ async fn prepare_deck(
         .discriminator(format!("{}-deck-{deck_index}-playback", case.label))
         .build(),
     ));
+    let reference_worker = PlayWorker::new(PlayWorkerConfig::builder(pool_region.clone()).build());
     let reference = super::reference::open_reference(
-        &worker,
+        &reference_worker,
         &src,
         matches!(media, Media::Hls),
         case.host_rate,

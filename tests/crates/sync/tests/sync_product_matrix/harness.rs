@@ -787,7 +787,11 @@ impl ProductHarness {
         failures
     }
 
-    pub(crate) async fn grid_anchor_failures(&mut self, case: SyncCase) -> Vec<String> {
+    pub(crate) async fn grid_anchor_failures(
+        &mut self,
+        case: SyncCase,
+        required_placements: Option<usize>,
+    ) -> Vec<String> {
         use kithara::play::Settled;
         use kithara_integration_tests::offline::linked::LinkReceiptOrigin;
 
@@ -798,6 +802,13 @@ impl ProductHarness {
         let mut failures = Vec::new();
         let mut evidence = Vec::new();
         let stagger_seconds = 3.0 / 8.0 * 60.0 / case.start_bpm();
+        let required_placements = required_placements.or_else(|| {
+            (!case.paused).then_some(if super::binding::sync_precedes_seek(case.order) {
+                2
+            } else {
+                1
+            })
+        });
         for (index, deck) in self.decks.iter().enumerate() {
             let item = deck.current().expect("selected anchor track").id;
             let ArtifactSource::Value(model) = self.provider.beat_grid(index) else {
@@ -813,20 +824,20 @@ impl ProductHarness {
                     .ok_or_else(|| "no actual consumed anchor slot".to_owned())?;
                 let placements = observation.placements.iter()
                     .filter(|placement| placement.item == item).collect::<Vec<_>>();
-                if placements.len() != 2 {
+                if required_placements.is_some_and(|required| placements.len() != required) {
                     return Err(format!(
-                        "one sounding Sync and one Seek require two admitted relocations, found {}",
-                        placements.len()
+                        "expected {:?} admitted relocations, found {}",
+                        required_placements, placements.len()
                     ));
                 }
                 let mut bindings = Vec::new();
                 for (ordinal, placement) in placements.iter().enumerate() {
-                    let required = if ordinal + 1 == placements.len() {
-                        requested
-                    } else {
+                    let required = super::binding::relocation_request(
+                        case.order, ordinal + 1 == placements.len(), requested,
                         placement.planned.as_ref()
-                            .map_err(|error| format!("pre-emission source projection failed: {error}"))?.0
-                    };
+                            .map(|projected| projected.0)
+                            .map_err(|error| format!("pre-emission source projection failed: {error}")),
+                    )?;
                     let lead = placement.delivery.get()
                         .checked_add(placement.before.ring_depth.get())
                         .and_then(|lead| lead.checked_add(placement.before.engine_latency.get()))
@@ -834,7 +845,7 @@ impl ProductHarness {
                         .ok_or_else(|| "placement lead does not fit the Host frame axis".to_owned())?;
                     let expected_at = placement.now + kithara::signal::FrameCount::new(lead);
                     let anchor = super::binding::select_nearest(
-                        &model, evaluation_rate, selection_grid, required, expected_at,
+                        &model, evaluation_rate, selection_grid, required, expected_at, 4,
                     )?;
                     let errors = anchor.command_failures(
                         &model, evaluation_rate, selection_grid, placement.to, placement.at,

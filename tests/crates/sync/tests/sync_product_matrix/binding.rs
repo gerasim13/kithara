@@ -1,3 +1,5 @@
+use std::num::NonZeroU16;
+
 use kithara::{
     beat::BeatGridModel,
     platform::time::Duration,
@@ -82,16 +84,6 @@ pub(super) fn check(
         .position
         .checked_sub(media_origin)
         .ok_or_else(|| "consumed raw position is before media zero".to_owned())?;
-    let meter = model
-        .as_raw()
-        .meter
-        .ok_or_else(|| "source grid has no declared meter".to_owned())?;
-    if meter.beats_per_bar.get() != host_beats_per_bar {
-        return Err(
-            "direct four-beat binding proof requires the same declared source/Host meter"
-                .to_owned(),
-        );
-    }
     let source_grid = BeatGridSnapshot::model(
         BeatGridId::allocate().map_err(|error| error.to_string())?,
         BeatGridRevision::first(),
@@ -111,10 +103,9 @@ pub(super) fn check(
         return Err("consumed session frame has no published Host beat".to_owned());
     };
     let observed_host_beat = f64::from(*observed_host_beat.value().value());
-    let bar = f64::from(host_beats_per_bar);
-    let origin: f64 = meter.origin_beat_ordinal.as_();
-    let phase = (source_beat - origin).rem_euclid(bar);
-    let host_beat = ((observed_host_beat - phase) / bar).round() * bar + phase;
+    let (origin, source_stride, host_stride) = phase_axes(model, host_beats_per_bar)?;
+    let phase = (source_beat - origin).rem_euclid(source_stride);
+    let host_beat = ((observed_host_beat - phase) / host_stride).round() * host_stride + phase;
     let host_target = MapPoint::new(
         host_grid.stamp(),
         Beat::new(host_beat).map_err(|error| error.to_string())?,
@@ -152,24 +143,49 @@ pub(super) struct SelectedBinding {
     pub(super) frame: SessionFrame,
 }
 
-/// Selects the nearest in-phase position of the constant-120, four-beat fixture.
+pub(super) fn sync_precedes_seek(order: OperationOrder) -> bool {
+    order
+        .operations()
+        .iter()
+        .take_while(|operation| !matches!(operation, Operation::Seek))
+        .any(|operation| matches!(operation, Operation::Sync))
+}
+
+pub(super) fn relocation_request(
+    order: OperationOrder,
+    last: bool,
+    requested: Duration,
+    projected: Result<Duration, String>,
+) -> Result<Duration, String> {
+    if last && sync_precedes_seek(order) {
+        Ok(requested)
+    } else {
+        projected
+    }
+}
+
+/// Selects the nearest declared source position with the future Host phase.
 pub(super) fn select_nearest(
     model: &BeatGridModel,
     evaluation_rate: NonZeroU32,
     host_grid: &BeatGridSnapshot,
     requested: Duration,
     frame: SessionFrame,
+    host_beats_per_bar: u16,
 ) -> Result<SelectedBinding, String> {
-    let origin = fixture_origin(model)?;
+    let (origin, source_stride, host_stride) = phase_axes(model, host_beats_per_bar)?;
     let source_grid = declared_source_grid(model, evaluation_rate)?;
     let requested_position = media_position(requested, evaluation_rate)?;
     let requested_beat = grid_beat_at(&source_grid, requested_position)?;
     let host_beat = grid_beat_at(host_grid, MapPosition::Session(frame))?;
-    let phase = host_beat.rem_euclid(4.0) + origin;
-    let earlier = phase + ((requested_beat - phase) / 4.0).floor() * 4.0;
-    let candidates = [earlier, earlier + 4.0]
+    let host_phase = host_beat.rem_euclid(host_stride);
+    if host_phase >= source_stride {
+        return Err("future Host phase has no matching declared source phase".to_owned());
+    }
+    let phase = host_phase + origin;
+    let earlier = phase + ((requested_beat - phase) / source_stride).floor() * source_stride;
+    let candidates = [earlier, earlier + source_stride]
         .into_iter()
-        .filter(|beat| *beat >= 0.0)
         .map(|beat| {
             source_media_at(&source_grid, evaluation_rate, beat)
                 .map(|media| media.map(|media| (beat, media)))
@@ -190,28 +206,36 @@ pub(super) fn select_nearest(
     })
 }
 
-/// Binds the first declared downbeat at or after cue to the earliest Host entry.
+/// Binds the first declared strong beat at or after cue to the earliest Host entry.
 pub(super) fn select_entry(
     model: &BeatGridModel,
     evaluation_rate: NonZeroU32,
     host_grid: &BeatGridSnapshot,
     cue: Duration,
     bound: SessionFrame,
+    host_beats_per_bar: u16,
 ) -> Result<SelectedBinding, String> {
-    let origin = fixture_origin(model)?;
-    let downbeat = model
-        .as_raw()
-        .downbeats
-        .iter()
-        .find(|beat| beat.at >= cue.as_secs_f64())
-        .ok_or_else(|| "cue has no declared following downbeat".to_owned())?;
-    let media = Duration::try_from_secs_f64(downbeat.at).map_err(|error| error.to_string())?;
+    let (origin, source_stride, host_stride) = phase_axes(model, host_beats_per_bar)?;
+    let raw = model.as_raw();
+    let at = if raw.meter.is_some() {
+        raw.downbeats
+            .iter()
+            .map(|beat| beat.at)
+            .find(|at| *at >= cue.as_secs_f64())
+    } else {
+        raw.beats
+            .iter()
+            .map(|beat| beat.at)
+            .find(|at| *at >= cue.as_secs_f64())
+    }
+    .ok_or_else(|| "cue has no declared following strong beat".to_owned())?;
+    let media = Duration::try_from_secs_f64(at).map_err(|error| error.to_string())?;
     let source_grid = declared_source_grid(model, evaluation_rate)?;
     let source_beat = grid_beat_at(&source_grid, media_position(media, evaluation_rate)?)?;
     let bound_beat = grid_beat_at(host_grid, MapPosition::Session(bound))?;
-    let phase = (source_beat - origin).rem_euclid(4.0);
-    let earlier = phase + ((bound_beat - phase) / 4.0).floor() * 4.0;
-    let candidates = [earlier, earlier + 4.0]
+    let phase = (source_beat - origin).rem_euclid(source_stride);
+    let earlier = phase + ((bound_beat - phase) / host_stride).floor() * host_stride;
+    let candidates = [earlier, earlier + host_stride]
         .into_iter()
         .map(|beat| session_frame_at(host_grid, beat).map(|frame| (beat, frame)))
         .collect::<Result<Vec<_>, _>>()?;
@@ -304,24 +328,17 @@ impl SelectedBinding {
     }
 }
 
-fn fixture_origin(model: &BeatGridModel) -> Result<f64, String> {
-    let raw = model.as_raw();
-    let meter = raw
-        .meter
-        .ok_or_else(|| "selected binding has no declared source meter".to_owned())?;
-    if meter.beats_per_bar.get() != 4
-        || raw.bpm != 120.0
-        || raw.beats.windows(2).any(|pair| {
-            let previous: f64 = pair[0].ordinal.as_();
-            let next: f64 = pair[1].ordinal.as_();
-            pair[1].at - pair[0].at != (next - previous) * 0.5
-        })
-    {
-        return Err(
-            "selected binding requires the declared constant-120, four-beat fixture".to_owned(),
-        );
-    }
-    Ok(meter.origin_beat_ordinal.as_())
+fn phase_axes(model: &BeatGridModel, host_beats_per_bar: u16) -> Result<(f64, f64, f64), String> {
+    let host_stride = NonZeroU16::new(host_beats_per_bar)
+        .ok_or_else(|| "Host meter must be non-zero".to_owned())?;
+    Ok(match model.as_raw().meter {
+        Some(meter) => (
+            meter.origin_beat_ordinal.as_(),
+            f64::from(meter.beats_per_bar.get()),
+            f64::from(host_stride.get()),
+        ),
+        None => (0.0, 1.0, 1.0),
+    })
 }
 
 fn declared_source_grid(
@@ -432,7 +449,7 @@ async fn supplied_grids_bind_consumed_pcm_marks_to_the_host(
     harness.ride_tempo(case).await;
     let pcm = harness.capture(case).await;
     let mut failures = harness.grid_binding_failures(case).await;
-    failures.extend(harness.grid_anchor_failures(case).await);
+    failures.extend(harness.grid_anchor_failures(case, Some(2)).await);
     drop(harness);
     failures.extend(synchronization_failures(
         "supplementary PCM",
@@ -588,6 +605,7 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
         &host_grid,
         Duration::from_secs(4),
         frame,
+        4,
     )
     .expect("selected source position");
     assert_eq!(selected.media, Duration::from_secs(4));
@@ -600,6 +618,30 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
             .expect("exact selected command")
             .is_empty()
     );
+    let prior = Duration::from_secs(2);
+    let requested = relocation_request(SYNC_SEEK_PLAY.order, true, selected.media, Ok(prior))
+        .expect("Seek request survives the final Play");
+    let after_play = select_nearest(&model, evaluation_rate, &host_grid, requested, frame, 4)
+        .expect("requested Seek selects its own source pair");
+    assert_eq!(after_play.source_beat, 8.0);
+    assert!(
+        after_play
+            .command_failures(&model, evaluation_rate, &host_grid, selected.media, frame)
+            .expect("requested Seek command after Play")
+            .is_empty()
+    );
+    assert_eq!(
+        after_play
+            .command_failures(&model, evaluation_rate, &host_grid, prior, frame)
+            .expect("prior projection cannot replace the requested Seek")
+            .len(),
+        1
+    );
+    let sync_request = relocation_request(SYNC_SEEK_PLAY.order, false, selected.media, Ok(prior))
+        .expect("earlier Sync uses its pre-emission projection");
+    let sync = select_nearest(&model, evaluation_rate, &host_grid, sync_request, frame, 4)
+        .expect("Sync selects the projected source pair");
+    assert_eq!(sync.source_beat, 4.0);
     let consumed = SlotSnapshot {
         state: SlotState::Playing,
         mark: Some(SlotMark {
@@ -766,6 +808,7 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
         &host_grid,
         Duration::from_secs(5),
         frame,
+        4,
     )
     .expect("equidistant source positions");
     assert_eq!(
@@ -779,6 +822,7 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
         &host_grid,
         Duration::ZERO,
         SessionFrame::new(73_500),
+        4,
     )
     .expect("nearest nonnegative source position");
     assert_eq!(nonnegative.media, Duration::from_millis(1_500));
@@ -789,6 +833,7 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
         &host_grid,
         Duration::from_millis(5_250),
         frame,
+        4,
     )
     .expect("selected paused entry");
     assert_eq!(entry.media, Duration::from_secs(6));
@@ -845,6 +890,7 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
         &host_grid,
         Duration::from_millis(5_250),
         next_frame,
+        4,
     )
     .expect("entry after the previous Host downbeat");
     assert_eq!(after.source_beat, 12.0);

@@ -2,7 +2,11 @@ use std::convert::Infallible;
 #[cfg(panic = "unwind")]
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use kithara_platform::time::Duration;
+use kithara_platform::{
+    thread,
+    time::{Duration, timeout},
+    tokio::sync::oneshot,
+};
 use kithara_test_utils::kithara;
 #[cfg(panic = "unwind")]
 use ringbuf::traits::Consumer;
@@ -35,9 +39,7 @@ fn await_plain_answers(sender: &mut crate::Sender<Test>, expected: &[Seq]) {
         }
         if answered.len() < expected.len() {
             hang_park!(
-                |remaining: Duration| kithara_platform::thread::park_timeout(
-                    remaining.min(Duration::from_millis(1))
-                ),
+                |remaining: Duration| thread::park_timeout(remaining.min(Duration::from_millis(1))),
                 format!(
                     "inbox teardown answered {} of {} admitted batches",
                     answered.len(),
@@ -50,17 +52,19 @@ fn await_plain_answers(sender: &mut crate::Sender<Test>, expected: &[Seq]) {
     assert_eq!(sender.receipts().count(), 0, "no duplicate answer");
 }
 
-#[kithara::test]
+#[kithara::test(native, tokio, browser)]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
-fn sends_racing_inbox_drop_are_answered_exactly_once() {
+async fn sends_racing_inbox_drop_are_answered_exactly_once() {
     let _real_io = kithara_platform::flash::real_io();
     let (sender, inbox) = crate::channel::<Test>(crate::ChannelConfig::builder().build());
-    let (started, receiving) = std::sync::mpsc::channel();
+    let (started, receiving) = oneshot::channel();
+    let (done, completed) = oneshot::channel();
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1), ctx = String)]
     fn hammer_sends(
         mut sender: crate::Sender<Test>,
-        started: std::sync::mpsc::Sender<()>,
+        started: oneshot::Sender<()>,
     ) -> (crate::Sender<Test>, Vec<Seq>) {
+        let mut started = Some(started);
         let mut admitted = Vec::new();
         loop {
             hang_tick!(format!(
@@ -77,14 +81,14 @@ fn sends_racing_inbox_drop_are_answered_exactly_once() {
                 Ok(seq) => {
                     admitted.push(seq);
                     hang_reset!();
-                    if admitted.len() == 1 {
+                    if let Some(started) = started.take() {
                         started.send(()).expect("closer is waiting");
                     }
                 }
                 Err(crate::SendError::Closed(_)) => break,
                 Err(crate::SendError::Full(_)) => {
                     hang_park!(
-                        |remaining: Duration| kithara_platform::thread::park_timeout(
+                        |remaining: Duration| thread::park_timeout(
                             remaining.min(Duration::from_millis(1))
                         ),
                         "sender awaits inbox closure".to_owned()
@@ -95,24 +99,21 @@ fn sends_racing_inbox_drop_are_answered_exactly_once() {
         }
         (sender, admitted)
     }
-    let worker = std::thread::spawn(move || hammer_sends(sender, started));
-    hang_park!(
-        |remaining| receiving
-            .recv_timeout(remaining)
-            .expect("sender reaches its first admission"),
-        "sender has not reached its first admission".to_owned()
-    );
+    drop(thread::spawn(move || {
+        assert!(done.send(hammer_sends(sender, started)).is_ok());
+    }));
+    hang_tick!("sender has not reached its first admission".to_owned());
+    timeout(__hang_detector.remaining(), receiving)
+        .await
+        .expect("sender reaches its first admission within the watchdog budget")
+        .expect("sender reaches its first admission");
     hang_reset!();
     drop(inbox);
-    while !worker.is_finished() {
-        hang_park!(
-            |remaining: Duration| kithara_platform::thread::park_timeout(
-                remaining.min(Duration::from_millis(1))
-            ),
-            "sender has not left the closed channel".to_owned()
-        );
-    }
-    let (mut sender, admitted) = worker.join().expect("sender must not panic");
+    hang_tick!("sender has not left the closed channel".to_owned());
+    let (mut sender, admitted) = timeout(__hang_detector.remaining(), completed)
+        .await
+        .expect("sender leaves the closed channel within the watchdog budget")
+        .expect("sender must not panic");
     assert!(!admitted.is_empty());
     await_plain_answers(&mut sender, &admitted);
 }

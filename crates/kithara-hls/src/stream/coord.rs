@@ -198,7 +198,6 @@ where
     /// Retire the incoming session before seeking the active source.
     pub(crate) fn prepare_for_seek(&self) {
         self.cancel_incoming_for_seek();
-        self.active_session().rearm_fetches();
         if !self.active().layout_seek_invariant() {
             self.reset_for_seek();
         }
@@ -1621,16 +1620,20 @@ pub(super) mod tests {
     }
 
     #[kithara::test]
-    fn prepare_for_seek_retires_active_fetches_without_retiring_the_session() {
+    fn seek_preserves_active_fetches_until_their_bytes_commit() {
         let (coord, _bus, ctx, _abr) = switch_coord_sized(AbrReason::ManualOverride, 6);
         coord.variants[0].rebuild(&ctx, 0);
-        let commands = coord.dispatch_active(&ctx, 6);
+        let mut commands = coord.dispatch_active(&ctx, 6);
         assert_eq!(commands.len(), 6);
 
-        coord.prepare_for_seek();
+        let anchor = coord
+            .seek_time_anchor(Duration::from_secs(4))
+            .expect("same-variant seek")
+            .expect("seek anchor");
+        assert_eq!(anchor.segment_index, Some(2));
 
         assert!(commands.iter().all(|command| {
-            command
+            !command
                 .cancel()
                 .expect("session fetch has cancellation")
                 .is_cancelled()
@@ -1641,12 +1644,24 @@ pub(super) mod tests {
                 .wait_range(0..1, Some(Duration::ZERO)),
             Ok(WaitOutcome::Interrupted)
         ));
-        drop(commands);
-        coord.variants[0].rebuild(&ctx, 4);
-        let replacement = coord.dispatch_active(&ctx, 6);
-        assert!(!replacement.is_empty());
-        assert!(replacement.iter().all(|command| {
-            !command
+        let command = commands
+            .iter_mut()
+            .find(|command| v0_seg_idx(command) == 2)
+            .expect("the original target fetch");
+        let mut writer = command.take_writer().expect("original body writer");
+        writer(&[7; 100]).expect("post-seek body delivery");
+        command.take_on_complete().expect("original completion")(100, None, None);
+        let mut bytes = [0; 8];
+        assert!(matches!(
+            coord
+                .read_at(anchor.byte_offset, &mut bytes)
+                .expect("cached target"),
+            ReadOutcome::Bytes(_)
+        ));
+        assert_eq!(bytes, [7; 8]);
+        coord.active_session().abort();
+        assert!(commands.iter().all(|command| {
+            command
                 .cancel()
                 .expect("session fetch has cancellation")
                 .is_cancelled()

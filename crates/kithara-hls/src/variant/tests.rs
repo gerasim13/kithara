@@ -1375,7 +1375,7 @@ fn incoming_session_dispatches_only_the_decoder_construction_window() {
     )
     .expect("incoming session");
 
-    let commands = session.dispatch_constructing(&ctx, 10);
+    let mut commands = session.dispatch_constructing(&ctx, 10);
 
     assert_eq!(
         commands.len(),
@@ -1389,9 +1389,37 @@ fn incoming_session_dispatches_only_the_decoder_construction_window() {
     // transferred the decoder primes through it, and a session still pinned to
     // the window it was *built* from stops serving those reads: its staged span
     // freezes and the outgoing frontier it is chasing walks away for good.
-    let after_transfer = session.dispatch(&ctx, 10);
+    let mut after_transfer = session.dispatch(&ctx, 10);
     assert_eq!(after_transfer.len(), 5, "the rest of the variant");
     assert!(queue_seg_indices(&v).is_empty());
+
+    let anchor = kithara_stream::ByteMap::anchor_at_time(&session, Duration::from_secs(12))
+        .expect("profiled seek")
+        .expect("seek anchor");
+    assert_eq!(anchor.segment_index, Some(6));
+    assert_eq!(session.position(), anchor.byte_offset);
+    assert!(commands.iter().chain(&after_transfer).all(|command| {
+        !command
+            .cancel()
+            .expect("profiled fetch cancellation")
+            .is_cancelled()
+    }));
+    let command = commands
+        .iter_mut()
+        .chain(&mut after_transfer)
+        .find(|command| command.url() == v.segments()[6].url())
+        .expect("the original target fetch");
+    let mut writer = command.take_writer().expect("original body writer");
+    writer(&[9; 100]).expect("post-seek body delivery");
+    command.take_on_complete().expect("original completion")(100, None, None);
+    assert!(v.segments()[6].state().is_loaded());
+    let mut bytes = [0; 8];
+    assert!(matches!(
+        v.read_at(anchor.byte_offset, &mut bytes)
+            .expect("cached target"),
+        ReadOutcome::Bytes(_)
+    ));
+    assert_eq!(bytes, [9; 8]);
 }
 
 /// The construction pack is not just *emitted* — landing it is what makes the
@@ -2384,14 +2412,14 @@ fn raw_byte_seek_registers_lazy_exact_demand_only_after_cursor_moves() {
     assert_eq!(cmds[0].url().clone(), v.segments()[0].url().clone());
     assert_eq!(cmds[1].url().clone(), v.segments()[1].url().clone());
     assert_eq!(cmds[2].url().clone(), v.segments()[2].url().clone());
-    session.rearm_fetches();
+    session.seek_to_byte(576);
     for command in &cmds {
         assert!(
             !command
                 .cancel()
                 .expect("size probe cancellation")
                 .is_cancelled(),
-            "seek rearming must preserve in-flight exact size discovery"
+            "a seek must preserve in-flight exact size discovery"
         );
     }
     let cmds = session.dispatch(&ctx, 3);

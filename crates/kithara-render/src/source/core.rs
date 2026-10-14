@@ -745,6 +745,8 @@ where
             fn seek(&mut self, position: Duration) -> Result<SeekOutcome, AudioReadError>;
             fn set_host_sample_rate(&mut self, rate: NonZeroU32);
             fn host_sample_rate(&self) -> Option<NonZeroU32>;
+            fn media_origin(&self) -> Option<Duration>;
+            fn visible_origin(&self) -> Option<Duration>;
             fn retire_chunk(&self, chunk: AudioChunk);
             fn finish_deferred(&mut self);
             fn warm_up(&mut self);

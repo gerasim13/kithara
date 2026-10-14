@@ -85,6 +85,10 @@ pub trait AudioSession {
     fn media_origin(&self) -> Option<Duration> {
         None
     }
+    /// Original raw coordinate of the first visible PCM frame.
+    fn visible_origin(&self) -> Option<Duration> {
+        None
+    }
 
     /// Get total duration (if known).
     fn duration(&self) -> Option<Duration>;

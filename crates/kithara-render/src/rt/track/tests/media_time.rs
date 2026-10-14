@@ -15,8 +15,10 @@ fn musical_origin_follows_consumed_pcm_instead_of_the_next_producer_packet(
     let mut ring = PacketRing::new(spec, Duration::from_secs(2), 4);
     let mut old = chunk(spec, SegmentId::FIRST, 0, old_origin + 500, &[0.25; 8]);
     old.meta.media_origin = Some(Duration::from_millis(old_origin));
+    old.meta.visible_origin = Some(Duration::from_millis(old_origin + 10));
     let mut next = chunk(spec, SegmentId::FIRST, 4, next_origin + 504, &[0.75; 8]);
     next.meta.media_origin = Some(Duration::from_millis(next_origin));
+    next.meta.visible_origin = Some(Duration::from_millis(next_origin + 10));
     ring.push(PcmPacket::Chunk(Box::new(old)));
     ring.push(PcmPacket::Chunk(Box::new(next)));
     let mut resource = PlayerResource::new(
@@ -25,6 +27,18 @@ fn musical_origin_follows_consumed_pcm_instead_of_the_next_producer_packet(
         &pools(),
     )
     .expect("resource");
+    let prepared = resource.next_chunk_info().expect("admitted preload packet");
+    assert_eq!(
+        prepared.media_origin,
+        Some(Duration::from_millis(old_origin))
+    );
+    assert_eq!(
+        prepared.visible_origin,
+        Some(Duration::from_millis(old_origin + 10))
+    );
+    assert_eq!(resource.media_origin(), None);
+    assert_eq!(resource.visible_origin(), None);
+    assert!(resource.mark(SessionFrame::new(0)).is_none());
     let mut budget = 8;
     resource.refresh_mark(&mut budget);
     assert_eq!(
@@ -39,6 +53,15 @@ fn musical_origin_follows_consumed_pcm_instead_of_the_next_producer_packet(
     assert_eq!(
         resource.consumer.get().receiver.media_origin(),
         Some(Duration::from_millis(next_origin)),
+    );
+    let prepared = resource.next_chunk_info().expect("next admitted packet");
+    assert_eq!(
+        prepared.media_origin,
+        Some(Duration::from_millis(next_origin))
+    );
+    assert_eq!(
+        prepared.visible_origin,
+        Some(Duration::from_millis(next_origin + 10))
     );
     assert_eq!(
         resource.media_origin(),

@@ -16,7 +16,7 @@ impl Provider {
     pub(crate) fn beat_grid(self, deck: usize) -> ArtifactSource<BeatGridModel> {
         match self {
             Self::Library(names) => {
-                ArtifactSource::Value(Arc::new(library_grid(names[deck % names.len()])))
+                ArtifactSource::Value(Arc::new(analysed_grid(names[deck % names.len()])))
             }
             Self::Rhythm(names) => {
                 let name =
@@ -38,38 +38,11 @@ impl Provider {
     /// The second deck `deck`'s track opens at for `start`.
     pub(crate) fn start_seconds(self, deck: usize, start: Start) -> f64 {
         let grid = match self {
-            Self::Library(names) => Some(library_grid(names[deck % names.len()])),
+            Self::Library(names) => Some(analysed_grid(names[deck % names.len()])),
             _ => None,
         };
         start.seconds(grid.as_ref())
     }
-}
-
-// Ruling: spec 4.5 needs strong beats for preparation; Newtechno's named phrase at beat 64 supplies the fixture's four-beat bar phase, not the conflicting detector votes.
-fn library_grid(name: &str) -> BeatGridModel {
-    let grid = analysed_grid(name);
-    if name != NEWTECHNO[0] {
-        return grid;
-    }
-    let Start::Beat(origin_beat_ordinal) = NEWTECHNO_PHRASE else {
-        panic!("Newtechno phrase is named by its analysed beat");
-    };
-    let mut raw = grid.as_raw().clone();
-    raw.meter = Some(kithara::beat::Meter {
-        beats_per_bar: std::num::NonZeroU16::new(4).expect("fixture meter"),
-        origin_beat_ordinal,
-    });
-    raw.downbeats = raw
-        .beats
-        .iter()
-        .filter(|beat| (beat.ordinal - origin_beat_ordinal).rem_euclid(4) == 0)
-        .map(|beat| kithara::beat::GridDownbeat {
-            at: beat.at,
-            beat_ordinal: beat.ordinal,
-            confidence: None,
-        })
-        .collect();
-    BeatGridModel::try_from(raw).expect("fixture phrase anchors a valid four-beat grid")
 }
 
 pub(crate) type PreparedSources = (Provider, TestServerHelper, Vec<String>);

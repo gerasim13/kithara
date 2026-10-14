@@ -77,7 +77,11 @@ where
                 self.release_track(index, out)?;
             }
         }
-        if incoming.is_some() || self.current != Some(target.to) {
+        if (incoming.is_some() || self.current != Some(target.to))
+            && !self.tracks.records().iter().any(|record| {
+                record.id == target.to && matches!(record.status, TrackStatus::Failed(_))
+            })
+        {
             self.tracks.set_status(
                 target.to,
                 if consumed {

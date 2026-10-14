@@ -253,6 +253,7 @@ where
             let initial = AudioChunkInfo {
                 spec,
                 media_origin: audio.media_origin(),
+                visible_origin: audio.visible_origin(),
                 timestamp: position,
                 end_timestamp: position,
                 ..AudioChunkInfo::default()

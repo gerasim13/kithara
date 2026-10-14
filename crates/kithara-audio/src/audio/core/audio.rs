@@ -89,6 +89,9 @@ impl<S> Audio<S> {
             /// Original raw coordinate of track-media zero.
             #[must_use]
             pub fn media_origin(&self) -> Option<Duration>;
+            /// Original raw coordinate of the first visible PCM frame.
+            #[must_use]
+            pub fn visible_origin(&self) -> Option<Duration>;
         }
         to self.playhead {
             /// Current committed source position.
@@ -451,6 +454,7 @@ impl<S> AudioSession for Audio<S> {
         to self {
             fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
             fn media_origin(&self) -> Option<Duration>;
+            fn visible_origin(&self) -> Option<Duration>;
             fn duration(&self) -> Option<Duration>;
             fn is_preloaded(&self) -> bool;
             fn metadata(&self) -> &TrackMetadata;
@@ -504,6 +508,8 @@ impl<S: 'static> AudioSource for Audio<S> {
     delegate::delegate! {
         to self {
             fn set_host_sample_rate(&mut self, rate: NonZeroU32);
+            fn media_origin(&self) -> Option<Duration>;
+            fn visible_origin(&self) -> Option<Duration>;
         }
         to self.source {
             fn host_sample_rate(&self) -> Option<NonZeroU32>;

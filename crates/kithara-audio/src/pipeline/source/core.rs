@@ -117,6 +117,9 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
     fn media_origin(&self) -> Option<Duration> {
         self.decode.active().media_origin()
     }
+    fn visible_origin(&self) -> Option<Duration> {
+        self.decode.active().visible_origin()
+    }
     fn discontinuity(&self) -> Option<crate::SourceDiscontinuity> {
         Some(self.decode.discontinuity())
     }

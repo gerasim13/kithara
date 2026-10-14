@@ -32,6 +32,10 @@ pub trait AudioSource: Send + 'static {
     fn media_origin(&self) -> Option<Duration> {
         None
     }
+    /// Original raw coordinate of the first visible PCM frame.
+    fn visible_origin(&self) -> Option<Duration> {
+        None
+    }
     /// Current decoder-format or frame-coordinate discontinuity.
     fn discontinuity(&self) -> Option<SourceDiscontinuity> {
         None

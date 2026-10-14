@@ -69,6 +69,9 @@ pub struct LinkObservation {
     pub cues: Vec<(TrackId, Seq)>,
     pub starts: Vec<(TrackId, Seq)>,
     pub commands: Vec<(TrackId, Seq)>,
+    pub seeks: Vec<(TrackId, LinkReceiptOrigin, Seq)>,
+    pub seek_applied: Vec<(TrackId, Seq, bool)>,
+    pub source_clocks: Vec<(TrackId, kithara::signal::AudioChunkInfo)>,
     pub dispatcher: Vec<(Seq, LinkVerdict)>,
     pub deck: Vec<(Seq, LinkVerdict)>,
     pub ready_cues: Vec<(TrackId, Seq)>,
@@ -179,6 +182,30 @@ where
     fn tick(&mut self, now: SessionFrame, out: &mut Outbox<'_, S>) {
         self.inner.tick(now, out);
         let item = self.inner.snapshot().item;
+        let pending_seeks: Vec<_> = {
+            let observation = self.observation.lock();
+            observation
+                .seeks
+                .iter()
+                .filter_map(|&(owner, origin, seq)| {
+                    (owner == item
+                        && origin == LinkReceiptOrigin::Lane
+                        && !observation
+                            .seek_applied
+                            .iter()
+                            .any(|&(owner, answered, _)| owner == item && answered == seq))
+                    .then_some(seq)
+                })
+                .collect()
+        };
+        for seq in pending_seeks {
+            if let Some(applied) = self.inner.speed_applied(seq) {
+                self.observation
+                    .lock()
+                    .seek_applied
+                    .push((item, seq, applied));
+            }
+        }
         let pending_placements = {
             let observation = self.observation.lock();
             observation
@@ -245,6 +272,13 @@ where
             self.trace("command", details, out);
         }
         let loading = matches!(command, TrackCommand::Load { .. });
+        let seek_origin = matches!(command, TrackCommand::Seek { .. }).then(|| {
+            if self.inner.snapshot().attached {
+                LinkReceiptOrigin::Deck
+            } else {
+                LinkReceiptOrigin::Lane
+            }
+        });
         let aligned = matches!(command, TrackCommand::Align { .. });
         let placement = out.pass().and_then(|pass| {
             let before = self.inner.snapshot();
@@ -273,6 +307,14 @@ where
         }
         let seq = result?;
         if let Some(seq) = seq
+            && let Some(origin) = seek_origin
+        {
+            self.observation
+                .lock()
+                .seeks
+                .push((self.inner.snapshot().item, origin, seq));
+        }
+        if let Some(seq) = seq
             && let Some(((to, planned), at, now, delivery, before, consumed)) = placement
         {
             let item = before.item;
@@ -300,6 +342,18 @@ where
     }
 
     fn settle(&mut self, receipt: TrackReceipt<'_, S>, out: &mut Outbox<'_, S>) -> Settled {
+        if let TrackReceipt::Loaded(receipt) = &receipt
+            && let Outcome::Applied {
+                data: kithara_render::Dispatched::Loaded(loaded),
+                ..
+            } = receipt.outcome()
+            && let Some(clock) = loaded.opened.pcm.next_chunk_info()
+        {
+            self.observation
+                .lock()
+                .source_clocks
+                .push((self.inner.snapshot().item, clock));
+        }
         let origin =
             matches!(receipt, TrackReceipt::Deck { .. }).then_some(LinkReceiptOrigin::Deck);
         if let TrackReceipt::Deck {

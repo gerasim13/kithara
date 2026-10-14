@@ -259,11 +259,13 @@ where
     }
 
     pub(super) fn selectable_ids(&self) -> Vec<TrackId> {
+        let cursor = self.navigation_cursor();
         self.tracks
             .records()
             .iter()
             .filter(|record| {
                 self.current == Some(record.id)
+                    || cursor == Some(record.id)
                     || !matches!(
                         record.status,
                         crate::TrackStatus::Cancelled | crate::TrackStatus::Failed(_)

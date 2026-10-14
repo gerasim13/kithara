@@ -298,9 +298,37 @@ async fn finish_disarms_and_ignores_stale_ticket() {
     );
 }
 
+async fn selected_source_clock() -> (
+    Queue<TestPools>,
+    mock::DeckRig<TestPools>,
+    TestTempDir,
+    kithara_signal::AudioChunkInfo,
+) {
+    let (mut queue, _, _, mut rig, dir) = pending_selection();
+    let seq = queue
+        .active
+        .iter()
+        .find_map(|active| active.load)
+        .expect("selected load")
+        .seq();
+    let loaded = crate::mock::loaded_request(&mut rig, seq).await;
+    let clock = loaded
+        .opened
+        .pcm
+        .next_chunk_info()
+        .expect("selected source's admitted PCM");
+    assert!(
+        clock.media_origin.is_some() && clock.visible_origin.is_some(),
+        "the selected WAV publishes its original source clock"
+    );
+    answer_loaded(&mut queue, &mut rig, loaded);
+    crate::mock::finish(&mut queue, &mut rig);
+    (queue, rig, dir, clock)
+}
+
 #[kithara::test(tokio)]
 async fn only_the_accepted_seek_receipt_relinquishes_the_requested_position() {
-    let (mut queue, _, _, mut rig, _dir) = crate::mock::selected().await;
+    let (mut queue, mut rig, _dir, clock) = selected_source_clock().await;
     let before = queue.control().position_seconds();
     let first = with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(
@@ -368,10 +396,19 @@ async fn only_the_accepted_seek_receipt_relinquishes_the_requested_position() {
         })
         .expect("seek segment");
     batch.commands = applied.commands;
-    queue.deck.mixer.slots[usize::from(slot.get())].mark = Some(SlotMark {
+    let raw_position = clock
+        .media_origin
+        .expect("selected source's media zero")
+        .checked_add(Duration::from_secs_f64(before.expect("fixture position")))
+        .expect("fixture raw position");
+    let snapshot = &mut queue.deck.mixer.slots[usize::from(slot.get())];
+    snapshot.media_origin = clock.media_origin;
+    snapshot.visible_origin = clock.visible_origin;
+    snapshot.position = raw_position.as_secs_f64();
+    snapshot.mark = Some(SlotMark {
         session: SessionFrame::new(256),
         lane: LaneFrame { segment, frame: 0 },
-        position: Duration::from_secs_f64(before.expect("fixture position")),
+        position: raw_position,
     });
     with_outbox(&mut queue, &mut rig, |queue, out| {
         let current = queue.active_current_index().expect("selected track");
@@ -400,7 +437,7 @@ async fn only_the_accepted_seek_receipt_relinquishes_the_requested_position() {
 #[kithara::test(tokio)]
 #[kithara::hang_watchdog]
 async fn an_applied_seek_keeps_its_target_until_the_matching_render_mark() {
-    let (mut queue, _, _, mut rig, _dir) = crate::mock::selected().await;
+    let (mut queue, mut rig, _dir, clock) = selected_source_clock().await;
     let requested = Position::try_from_secs_f64(2.0).expect("requested seek");
     let sent = with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::apply(queue, QueueCommand::Seek { to: requested }, out)
@@ -441,24 +478,34 @@ async fn an_applied_seek_keeps_its_target_until_the_matching_render_mark() {
         .snapshot()
         .slot
         .expect("current slot");
-    queue.deck.mixer.slots[usize::from(slot.get())].position = 0.25;
-    queue.deck.mixer.slots[usize::from(slot.get())].mark = Some(SlotMark {
+    let origin = clock.media_origin.expect("selected source's media zero");
+    let raw_position = origin
+        .checked_add(Duration::from_secs_f64(0.25))
+        .expect("old fixture raw position");
+    let snapshot = &mut queue.deck.mixer.slots[usize::from(slot.get())];
+    snapshot.media_origin = clock.media_origin;
+    snapshot.visible_origin = clock.visible_origin;
+    snapshot.position = raw_position.as_secs_f64();
+    snapshot.mark = Some(SlotMark {
         session: SessionFrame::new(256),
         lane: LaneFrame {
             segment: kithara_signal::SegmentId::FIRST,
             frame: 0,
         },
-        position: Duration::from_secs_f64(0.25),
+        position: raw_position,
     });
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::tick(queue, SessionFrame::new(256), out);
     });
     assert_eq!(queue.control().position_seconds(), Some(2.0));
-    queue.deck.mixer.slots[usize::from(slot.get())].position = 2.25;
+    let raw_position = origin
+        .checked_add(Duration::from_secs_f64(2.25))
+        .expect("matching fixture raw position");
+    queue.deck.mixer.slots[usize::from(slot.get())].position = raw_position.as_secs_f64();
     queue.deck.mixer.slots[usize::from(slot.get())].mark = Some(SlotMark {
         session: SessionFrame::new(384),
         lane: LaneFrame { segment, frame: 0 },
-        position: Duration::from_secs_f64(2.25),
+        position: raw_position,
     });
     with_outbox(&mut queue, &mut rig, |queue, out| {
         Player::tick(queue, SessionFrame::new(384), out);

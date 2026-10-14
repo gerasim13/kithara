@@ -253,7 +253,6 @@ where
                 "active HLS session does not carry a decoder reader profile",
             ))));
         };
-        self.cancel.rearm();
         let next = self.variant.prepare_reader(*profile, position)?;
         let anchor = next.anchor();
         *preparation.lock() = next;
@@ -361,8 +360,6 @@ where
     delegate::delegate! {
         to self.cancel {
             pub(crate) fn abort(&self);
-            #[call(rearm)]
-            pub(crate) fn rearm_fetches(&self);
             /// Retire this session's look-ahead fetches — queued and in
             /// flight — while keeping the owed window live. Called when an
             /// incoming variant slot is installed: the capacity those fetches

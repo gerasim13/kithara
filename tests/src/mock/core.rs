@@ -653,6 +653,20 @@ impl<T, S> AudioRead for LaneAudio<T, S> {
 }
 
 impl<T, S> AudioSession for LaneAudio<T, S> {
+    fn media_origin(&self) -> Option<Duration> {
+        match self.chunk.as_ref() {
+            Some(chunk) => chunk.meta.media_origin,
+            None => self.pcm.media_origin(),
+        }
+    }
+
+    fn visible_origin(&self) -> Option<Duration> {
+        match self.chunk.as_ref() {
+            Some(chunk) => chunk.meta.visible_origin,
+            None => self.pcm.visible_origin(),
+        }
+    }
+
     delegate::delegate! {
         to self.pcm {
             fn duration(&self) -> Option<Duration>;

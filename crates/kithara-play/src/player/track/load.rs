@@ -79,8 +79,9 @@ impl<S> PlayerImpl<S> {
                     self.ready = Some(SegmentId::FIRST);
                 }
                 self.duration = loaded.opened.duration;
-                self.visible_origin = loaded.opened.pcm.visible_origin();
-                self.media_origin = loaded.opened.pcm.media_origin();
+                let prepared = loaded.opened.pcm.next_chunk_info();
+                self.visible_origin = prepared.and_then(|meta| meta.visible_origin);
+                self.media_origin = prepared.and_then(|meta| meta.media_origin);
                 self.abr = loaded.opened.abr.clone();
                 self.metadata = loaded.opened.metadata.clone();
                 if let Some(loading) = self.loading.as_mut() {
