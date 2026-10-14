@@ -469,9 +469,10 @@ pub(super) fn promotion_readiness(
         };
     let active_spec = active.blender_profile().spec();
     let active_rate = active_spec.sample_rate.get();
+    // PCM staged before the incoming origin is its priming: the span covers content from zero.
     let Some(incoming_first_time) = content_time(
         incoming_rate,
-        incoming_first,
+        incoming_first.max(incoming_origin),
         incoming_rate,
         incoming_origin,
     ) else {
