@@ -44,6 +44,13 @@ pub(crate) struct Fmp4SegmentDemuxer<S> {
     /// the codec's own declared pre-roll, which is what [`warmup_backoff`]
     /// subtracts. Cleared by the first segment parsed after the seek.
     seek_skip_to: Option<Duration>,
+    /// Time the landing segment's first frame must not start after.
+    ///
+    /// The layout places segments by the running sum of their playlist
+    /// durations, which are rounded, so the segment it names for a time can
+    /// start after that time by its own decode time. Cleared by the first
+    /// segment parsed after the seek that starts in time.
+    seek_reach: Option<Duration>,
     seek_target: Option<SegmentDescriptor>,
     /// Host pool region. Each segment cursor draws its read buffer
     /// from here and returns it on drop, so a steady-state decode loop
@@ -99,28 +106,56 @@ where
         EnsureCursor::Ready
     }
 
+    /// Fill and parse the cursor's segment. After a seek, a segment whose own
+    /// first frame starts after [`Self::seek_reach`] hands the cursor to the
+    /// segment before it; the index only descends, so the walk ends at the
+    /// first segment.
     fn fill_cursor(&mut self) -> DecodeResult<FillStatus> {
-        let cursor = self
-            .cursor
-            .as_mut()
-            .expect("BUG: ensure_cursor must run before fill_cursor");
-        if cursor.frames.is_some() {
-            return Ok(FillStatus::Ready);
-        }
-        let segments = self.segments.as_ref();
-        let status = fill_segment_buffer(
-            &mut self.source,
-            &mut cursor.read,
-            LiveRange::Segment(segments, cursor.segment_index),
-        )?;
-        if matches!(status, FillStatus::Ready) {
+        loop {
+            let cursor = self
+                .cursor
+                .as_mut()
+                .expect("BUG: ensure_cursor must run before fill_cursor");
+            if cursor.frames.is_some() {
+                return Ok(FillStatus::Ready);
+            }
+            let segments = self.segments.as_ref();
+            let status = fill_segment_buffer(
+                &mut self.source,
+                &mut cursor.read,
+                LiveRange::Segment(segments, cursor.segment_index),
+            )?;
+            if matches!(status, FillStatus::Pending(_)) {
+                return Ok(status);
+            }
             let frames = parse_segment_frames(&self.init, &cursor.read.buffer)?;
+            let starts_late = self.seek_reach.is_some_and(|reach| {
+                frames.first().is_some_and(|frame| {
+                    ticks_to_duration(frame.decode_time, self.init.timescale) > reach
+                })
+            });
+            if starts_late
+                && let Some(earlier) = cursor
+                    .segment_index
+                    .checked_sub(1)
+                    .and_then(|index| segments.segment_at_index(index))
+            {
+                self.next_segment_index = cursor.segment_index;
+                *cursor = SegmentCursor {
+                    read: SegmentReadState::new(earlier.byte_range, self.pools.get::<u8>()),
+                    frames: None,
+                    segment_index: earlier.segment_index,
+                    variant_index: earlier.variant_index,
+                };
+                continue;
+            }
+            self.seek_reach = None;
             let next_index = self.seek_skip_to.take().map_or(0, |skip| {
                 frame_at_or_before(&frames, skip, self.init.timescale)
             });
             cursor.frames = Some(DecodedFrames { frames, next_index });
+            return Ok(status);
         }
-        Ok(status)
     }
 
     /// Parse the init segment selected by the source's [`kithara_stream::Source::byte_map`].
@@ -160,6 +195,7 @@ where
             cursor: None,
             seek_target: None,
             seek_skip_to: None,
+            seek_reach: None,
             pending: Some(PendingReason::Retry),
         })
     }
@@ -291,6 +327,7 @@ where
             && desc.decode_time >= duration
         {
             self.seek_skip_to = None;
+            self.seek_reach = None;
             return Ok(DemuxSeekOutcome::PastEof { duration });
         }
         let landed_byte = desc.byte_range.start;
@@ -318,6 +355,7 @@ where
             self.track_info.sample_rate,
         );
         self.seek_skip_to = skip_to.filter(|skip| *skip > landed_at);
+        self.seek_reach = Some(seek_target);
         self.seek_target = Some(desc);
         Ok(DemuxSeekOutcome::Landed {
             landed_at,

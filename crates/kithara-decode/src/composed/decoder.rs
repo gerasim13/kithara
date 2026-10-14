@@ -332,7 +332,7 @@ where
                 self.codec.flush()?;
                 self.head_strip = HeadStrip::default();
                 self.zero_frame_count = 0;
-                self.pending_seek_target = (landed_at < pos).then_some(pos);
+                self.pending_seek_target = Some(pos);
                 self.frame_offset = self.spec.frame_at(landed_at).unwrap_or(u64::MAX);
                 self.resync_frame_offset_to_pts = true;
                 self.timeline_gap_frames = 0;
