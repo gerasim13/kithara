@@ -11,7 +11,7 @@ use kithara_bufpool::HasPool;
 use kithara_command::{Inbox, Protocol, Seq};
 use kithara_dsp::param::SmootherConfig;
 use kithara_platform::time::Duration;
-use kithara_signal::{AudioChunk, AudioSpec, FrameCount, SegmentId};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SegmentId};
 use kithara_warp::{SpeedCurve, StretchKind, WarpRenderer};
 use num_traits::ToPrimitive;
 
@@ -47,6 +47,14 @@ pub enum LaneCommand {
     },
 }
 
+/// Why a lane cannot present a prepared segment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LaneRefusal {
+    /// The segment's first admitted PCM does not start at the source position the
+    /// segment was positioned to, under the segment's render revision.
+    MissedEntry { at: Duration },
+}
+
 /// Latency of the resulting engine and the segment whose preload is admitted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LaneApplied {
@@ -58,7 +66,7 @@ impl Protocol for LaneProtocol {
     type Applied = LaneApplied;
     type Clock = LaneFrame;
     type Command = LaneCommand;
-    type Refusal = Infallible;
+    type Refusal = LaneRefusal;
     type Target = Infallible;
 
     fn frames_since(at: LaneFrame, start: LaneFrame) -> Option<u64> {
@@ -117,10 +125,29 @@ pub struct LaneSetup {
     pub declick: SmootherConfig,
 }
 
+/// The source position and render revision the first PCM of a positioned segment carries.
+#[derive(Clone, Copy)]
+struct Entry {
+    at: Duration,
+    revision: u64,
+}
+
+impl Entry {
+    fn admits(self, meta: &AudioChunkInfo) -> bool {
+        meta.source_span.is_some_and(|span| {
+            span.render_revision() == self.revision
+                && AudioSpec::new(meta.spec.channels, span.sample_rate())
+                    .frame_at(self.at)
+                    .is_ok_and(|frame| frame == span.start())
+        })
+    }
+}
+
 struct Preparation {
     seq: Seq,
     at: LaneFrame,
     latency: FrameCount,
+    entry: Option<Entry>,
 }
 
 pub(crate) struct Lane {
@@ -199,12 +226,36 @@ impl Lane {
         }
     }
 
-    pub(crate) fn admitted(&mut self) {
-        if let Preload::Filling(admitted) = &mut self.preload {
-            *admitted = admitted.saturating_add(1);
-            if *admitted >= self.preload_chunks.get() {
-                self.finish_preload();
-            }
+    /// Counts one admitted chunk of the current segment. The first one proves or
+    /// disproves that the segment entered where it was positioned.
+    pub(crate) fn admitted(&mut self, meta: &AudioChunkInfo) {
+        let Preload::Filling(admitted) = &mut self.preload else {
+            return;
+        };
+        let entering = *admitted == 0;
+        *admitted = admitted.saturating_add(1);
+        let filled = *admitted >= self.preload_chunks.get();
+        if entering
+            && let Some(entry) = self.pending.as_ref().and_then(|pending| pending.entry)
+            && !entry.admits(meta)
+        {
+            self.refuse_pending(LaneRefusal::MissedEntry { at: entry.at });
+        }
+        if filled {
+            self.finish_preload();
+        }
+    }
+
+    fn refuse_pending(&mut self, refusal: LaneRefusal) {
+        if let Some(pending) = self.pending.take()
+            && let Some(due) = self.inbox.resume(pending.seq, pending.at, pending.at)
+        {
+            tracing::warn!(
+                seq = pending.seq.get(),
+                ?refusal,
+                "lane preparation refused"
+            );
+            due.refuse(refusal);
         }
     }
 
@@ -266,6 +317,7 @@ impl Lane {
             let revision = due.seq().get();
             let at = due.at();
             let mut segment = None;
+            let mut entry = None;
             let mut restored_same = false;
             let mut cancelled_deferred = None;
             for command in due.commands() {
@@ -315,6 +367,7 @@ impl Lane {
                             |(cursor, _)| cursor,
                         );
                         let from = restored.map_or(*from, |(_, position)| position);
+                        entry = Some(Entry { at: from, revision });
                         self.position = Some(landing_position(
                             source
                                 .seek(from)
@@ -333,6 +386,7 @@ impl Lane {
                         self.parked = None;
                         source.set_host_sample_rate(*rate);
                         warp.reset();
+                        entry = None;
                         self.cursor = LaneFrame {
                             segment: *id,
                             frame: 0,
@@ -352,7 +406,12 @@ impl Lane {
                 let seq = due.defer();
                 self.finish_pending(None);
                 self.preload = Preload::Filling(0);
-                self.pending = Some(Preparation { seq, at, latency });
+                self.pending = Some(Preparation {
+                    seq,
+                    at,
+                    latency,
+                    entry,
+                });
             } else {
                 due.apply(LaneApplied {
                     engine_latency: latency,

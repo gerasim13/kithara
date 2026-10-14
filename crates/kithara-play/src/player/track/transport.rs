@@ -1,7 +1,7 @@
 use kithara_command::{Outcome, Seq, When};
 use kithara_config::{ConfigOwner, LiveConfig};
 use kithara_render::{
-    LaneCommand,
+    LaneCommand, LaneRefusal,
     bridge::{DeckPart, Fade, Slot},
 };
 use kithara_signal::SessionFrame;
@@ -374,7 +374,11 @@ impl<S> PlayerImpl<S> {
                 if speed {
                     self.speed_answers.push_back((
                         receipt.seq(),
-                        Err(rejection(reason, |never| match *never {})),
+                        Err(rejection(reason, |refusal| match *refusal {
+                            LaneRefusal::MissedEntry { at } => {
+                                PlayError::SeekFailed { position: at }
+                            }
+                        })),
                     ));
                 }
                 warn!(?reason, "lane command was rejected");

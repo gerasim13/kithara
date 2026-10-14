@@ -100,7 +100,7 @@ where
             #[must_use]
             pub const fn position(&self) -> Option<Duration>;
             /// Records successful admission of the current segment's chunk.
-            pub fn admitted(&mut self);
+            pub fn admitted(&mut self, meta: &AudioChunkInfo);
             pub(crate) fn upstream_parked(&mut self);
             pub(crate) fn finish_preload(&mut self);
             pub(crate) fn finish_segment(&mut self);

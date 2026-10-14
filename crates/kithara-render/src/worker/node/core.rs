@@ -142,7 +142,7 @@ where
                             self.source.commit_source_end(end, meta);
                         }
                         if !meta.end_of_track && meta.frames > 0 {
-                            self.source.admitted();
+                            self.source.admitted(&meta);
                         }
                         kithara::probe_event!(chunk_admitted, segment = meta.segment.get());
                     }

@@ -32,6 +32,20 @@ pub(super) use crate::mock::ScriptedSource;
 pub(super) fn produced() -> TrackStep<AudioChunk> {
     TrackStep::Produced(Fetch::data(empty_chunk(&pools())))
 }
+/// Where [`segment`] positions the source.
+pub(in crate::worker) const SEGMENT_FROM: Duration = Duration::from_secs(1);
+/// The first chunk a source produces once it landed at `at`.
+fn produced_at(at: Duration) -> TrackStep<AudioChunk> {
+    let spec = empty_chunk(&pools()).spec();
+    let frame = spec.frame_at(at).expect("representable landing");
+    TrackStep::Produced(Fetch::data(chunk(
+        spec,
+        SegmentId::FIRST,
+        0,
+        frame,
+        &[0.0, 0.0],
+    )))
+}
 pub(in crate::worker) fn segment(lane: &mut Sender<LaneProtocol>) -> SegmentId {
     let id = SegmentId::FIRST.next();
     lane.send(
@@ -40,7 +54,7 @@ pub(in crate::worker) fn segment(lane: &mut Sender<LaneProtocol>) -> SegmentId {
             basis: Vec::new(),
             commands: vec![LaneCommand::Segment {
                 id,
-                from: Duration::from_secs(1),
+                from: SEGMENT_FROM,
                 speed: kithara_warp::SpeedCurve::Constant(1.0),
             }],
         },
@@ -358,7 +372,11 @@ async fn decoder_node_preload_gate_stays_shut_below_the_chunk_quota() {
 
 #[kithara::test(tokio)]
 async fn decoder_node_seek_rearms_preload_gate() {
-    let source = ScriptedSource::new([produced(), TrackStep::StateChanged, produced()]);
+    let source = ScriptedSource::new([
+        produced(),
+        TrackStep::StateChanged,
+        produced_at(SEGMENT_FROM),
+    ]);
     let (mut node, mut receiver, mut lane) = prepared_node(source, 1, 1).await;
     assert_eq!(node.tick(), TickResult::Progress);
     assert!(node.source.is_preloaded(), "first chunk opens preload");
